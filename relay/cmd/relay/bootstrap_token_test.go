@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
@@ -174,6 +175,7 @@ func TestBootstrapToken_RefusesADisabledFoundingAdmin(t *testing.T) {
 	if !strings.Contains(stderr, "disabled") {
 		t.Errorf("stderr does not explain the refusal: %s", stderr)
 	}
+	requireEmptyTrail(t, storePath)
 
 	// It also did not re-enable the Account as a side effect.
 	st2, err := store.Open(storePath)
@@ -237,4 +239,63 @@ func TestBootstrapToken_TTLAndUsageErrors(t *testing.T) {
 		t.Errorf("%d tokens carry an expiry, want exactly the -ttl one", bounded)
 	}
 	_ = stdout
+}
+
+func TestBootstrapToken_RecordsTheMintAttributedToLocalHost(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "relay.db")
+
+	code, stdout, stderr := runBootstrap(t, "-store-path", storePath)
+	if code != 0 {
+		t.Fatalf("exit %d; stderr = %s", code, stderr)
+	}
+	credential := strings.TrimSpace(stdout)
+	secretHalf := strings.TrimPrefix(credential, accounts.TokenPrefix)
+
+	st, err := store.Open(storePath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer st.Close() //nolint:errcheck
+	ctx := context.Background()
+	admin, _ := st.Accounts().GetByName(ctx, accounts.FoundingAdminName)
+	toks, err := st.APITokens().TokensByAccount(ctx, admin.ID)
+	if err != nil || len(toks) != 1 {
+		t.Fatalf("tokens = %v (err %v), want one", toks, err)
+	}
+
+	recs := trailOf(t, storePath)
+	if len(recs) != 1 {
+		t.Fatalf("trail has %d records, want exactly one api_token_mint", len(recs))
+	}
+	requireHostLeverRecord(t, recs[0], audit.KindAPITokenMint, credential, secretHalf)
+	if !strings.Contains(recs[0].Reason, admin.ID) || !strings.Contains(recs[0].Reason, toks[0].ID) {
+		t.Errorf("Reason = %q, want it to name the Account %s and token %s", recs[0].Reason, admin.ID, toks[0].ID)
+	}
+}
+
+func TestBootstrapToken_AnUnrecordableMintIssuesNoToken(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "relay.db")
+	collideAuditID(t, storePath)
+
+	code, stdout, stderr := runBootstrap(t, "-store-path", storePath)
+	if code == 0 {
+		t.Fatal("a mint whose record could not be written succeeded")
+	}
+	if strings.TrimSpace(stdout) != "" {
+		t.Errorf("a credential was printed although no token was issued: %q", stdout)
+	}
+	if !strings.Contains(stderr, "No token was minted") {
+		t.Errorf("stderr does not say no token was minted: %s", stderr)
+	}
+
+	st, err := store.Open(storePath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer st.Close() //nolint:errcheck
+	ctx := context.Background()
+	admin, _ := st.Accounts().GetByName(ctx, accounts.FoundingAdminName)
+	if toks, err := st.APITokens().TokensByAccount(ctx, admin.ID); err != nil || len(toks) != 0 {
+		t.Errorf("tokens = %v (err %v), want none", toks, err)
+	}
 }

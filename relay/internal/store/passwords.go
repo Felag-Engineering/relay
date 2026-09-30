@@ -31,16 +31,20 @@ var _ accounts.PasswordRepository = (*sqlitePasswords)(nil)
 // it is enforced by the schema, so this cannot be bypassed by a caller that
 // forgets to check first. (Store.Open enables foreign_keys — see store.go.)
 func (r *sqlitePasswords) SetPassword(ctx context.Context, accountID string, h accounts.PasswordHash) error {
+	return setPasswordExec(ctx, r.db, accountID, h, r.now())
+}
+
+func setPasswordExec(ctx context.Context, ex execer, accountID string, h accounts.PasswordHash, now time.Time) error {
 	if h.IsZero() {
 		return fmt.Errorf("store: refusing to store an empty password hash for account %q", accountID)
 	}
-	_, err := r.db.ExecContext(ctx, `
+	_, err := ex.ExecContext(ctx, `
 		INSERT INTO account_passwords (account_id, password_hash, updated_at)
 		VALUES (?, ?, ?)
 		ON CONFLICT(account_id) DO UPDATE SET
 			password_hash = excluded.password_hash,
 			updated_at    = excluded.updated_at`,
-		accountID, h.Encoded(), r.now().UTC().Format(time.RFC3339Nano))
+		accountID, h.Encoded(), now.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		if isForeignKeyViolation(err) {
 			return accounts.ErrNotFound
@@ -74,9 +78,20 @@ func (r *sqlitePasswords) GetPassword(ctx context.Context, accountID string) (ac
 // there is not an error: the postcondition ("this Account has no local
 // password") holds either way.
 func (r *sqlitePasswords) ClearPassword(ctx context.Context, accountID string) error {
-	if _, err := r.db.ExecContext(ctx,
-		`DELETE FROM account_passwords WHERE account_id = ?`, accountID); err != nil {
-		return fmt.Errorf("store: clear account password: %w", err)
+	_, err := clearPasswordExec(ctx, r.db, accountID)
+	return err
+}
+
+// clearPasswordExec reports whether a row was actually removed.
+func clearPasswordExec(ctx context.Context, ex execer, accountID string) (bool, error) {
+	res, err := ex.ExecContext(ctx,
+		`DELETE FROM account_passwords WHERE account_id = ?`, accountID)
+	if err != nil {
+		return false, fmt.Errorf("store: clear account password: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: clear account password: %w", err)
+	}
+	return n > 0, nil
 }

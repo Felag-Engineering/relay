@@ -282,7 +282,7 @@ func TestActivity_KindsOfFamilyIsTotalAndNeverEmpty(t *testing.T) {
 }
 
 // TestActivity_AccessFamiliesAreNotKinds pins the seam D17 split the audit
-// vocabulary at: kindOf sends every one of Access's 13 kinds to rowAccess,
+// vocabulary at: kindOf sends every one of Access's 15 kinds to rowAccess,
 // which is deliberately absent from rowKindOrder and from
 // activityTrailKinds.
 func TestActivity_AccessFamiliesAreNotKinds(t *testing.T) {
@@ -299,8 +299,8 @@ func TestActivity_AccessFamiliesAreNotKinds(t *testing.T) {
 			t.Errorf("activityTrailKinds contains Access kind %q", k)
 		}
 	}
-	if n != 13 {
-		t.Fatalf("the loop classified %d Access kinds, want exactly 13 — the assertions above proved "+
+	if n != 15 {
+		t.Fatalf("the loop classified %d Access kinds, want exactly 15 — the assertions above proved "+
 			"nothing about the rest of the vocabulary", n)
 	}
 
@@ -349,7 +349,7 @@ func TestActivity_EnrollmentTokensStayOnActivity(t *testing.T) {
 
 // TestActivity_ShowsNoAccessRowForAnyRole is spec 04's "No sign-in, step-up,
 // Account or API Token row appears here, for any role" acceptance line,
-// store-backed against the same 13-kind trail access_test.go seeds, plus a
+// store-backed against the same 15-kind trail access_test.go seeds, plus a
 // fakeQueries variant proving the seam itself narrows to nothing rather than
 // merely that nothing renders.
 func TestActivity_ShowsNoAccessRowForAnyRole(t *testing.T) {

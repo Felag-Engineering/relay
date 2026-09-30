@@ -21,6 +21,14 @@ package main
 // taken while it runs — the same reason invariant 11 makes every Relay secret
 // a PATH rather than a value. There is deliberately no flag that takes one.
 //
+// # The audit record
+//
+// Every set or clear writes one audit record (password_set / password_clear),
+// attributed to the principal local-host rather than to any Account, in the
+// SAME transaction as the change (#782). If the record cannot be written the
+// password is left unchanged: a credential change the trail cannot show is not
+// made. The record names the Account and never the password or its hash.
+//
 // It never starts a server, never opens a listener, and never reads the
 // Relay's startup config.
 
@@ -32,8 +40,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
 
@@ -53,6 +64,11 @@ Requires read/write access to the Relay's store file, which is root-owned.
 Safe to run while the Relay is running; the new password takes effect on the
 next sign-in, and sessions already open are unaffected.
 
+Every set or clear is recorded on the audit trail (password_set /
+password_clear), attributed to local-host rather than to any Account, and the
+record never carries the password. If the record cannot be written, the
+password is left unchanged.
+
 Flags:
   -store-path <path>      Path to the Relay's store (same value as the Relay's
                           -store-path). Required.
@@ -63,6 +79,10 @@ Flags:
                           The Account keeps its API Tokens and its role; it can
                           simply no longer sign in to the Console.
 `
+
+// notChangedNote follows any failure at or after the write: the change and its
+// audit record are one transaction, so a failure leaves the password as it was.
+const notChangedNote = "The password was not changed: a change that cannot be recorded on the audit trail is not made."
 
 // runConsolePasswordCommand implements the subcommand. It returns the process
 // exit code rather than calling os.Exit, so it is testable.
@@ -125,11 +145,20 @@ func runConsolePasswordCommand(args []string, stdin, stdout, stderr *os.File) in
 	}
 
 	if *clear {
-		if err := st.Passwords().ClearPassword(ctx, acct.ID); err != nil {
+		err := st.ClearPasswordRecorded(ctx, acct.ID, func(removed bool) (audit.Record, error) {
+			id, err := hostAuditID()
+			if err != nil {
+				return audit.Record{}, fmt.Errorf("generate audit record id: %w", err)
+			}
+			return auditsink.HostPasswordClearRecord(id, time.Now(), acct.ID, acct.Name, removed)
+		})
+		if err != nil {
 			fmt.Fprintf(stderr, "relay console-password: clear: %v\n", err)
+			fmt.Fprintln(stderr, notChangedNote)
 			return 1
 		}
 		fmt.Fprintf(stderr, "Removed the Console password for %s (%s). It keeps its role and its API Tokens.\n", acct.Name, acct.ID)
+		fmt.Fprintf(stderr, "Recorded on the audit trail as %s, attributed to %s.\n", audit.KindPasswordClear, audit.PrincipalLocalHost)
 		fmt.Fprintln(stderr, "Sessions already open are unaffected — disable the Account to end those.")
 		return 0
 	}
@@ -160,12 +189,26 @@ func runConsolePasswordCommand(args []string, stdin, stdout, stderr *os.File) in
 		fmt.Fprintf(stderr, "relay console-password: hash: %v\n", err)
 		return 1
 	}
-	if err := st.Passwords().SetPassword(ctx, acct.ID, hash); err != nil {
+	id, err := hostAuditID()
+	if err != nil {
+		fmt.Fprintf(stderr, "relay console-password: generate audit record id: %v\n", err)
+		fmt.Fprintln(stderr, notChangedNote)
+		return 1
+	}
+	rec, err := auditsink.HostPasswordSetRecord(id, time.Now(), acct.ID, acct.Name)
+	if err != nil {
+		fmt.Fprintf(stderr, "relay console-password: %v\n", err)
+		fmt.Fprintln(stderr, notChangedNote)
+		return 1
+	}
+	if err := st.SetPasswordRecorded(ctx, acct.ID, hash, rec); err != nil {
 		fmt.Fprintf(stderr, "relay console-password: set: %v\n", err)
+		fmt.Fprintln(stderr, notChangedNote)
 		return 1
 	}
 
 	fmt.Fprintf(stderr, "Set the Console password for %s (%s), role %s.\n", acct.Name, acct.ID, acct.Role)
+	fmt.Fprintf(stderr, "Recorded on the audit trail as %s, attributed to %s.\n", audit.KindPasswordSet, audit.PrincipalLocalHost)
 	if !acct.Enabled {
 		// Worth saying plainly rather than letting them discover it at the
 		// sign-in page, where every failure looks the same on purpose.

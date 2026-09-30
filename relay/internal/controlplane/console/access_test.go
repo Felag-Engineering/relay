@@ -83,12 +83,14 @@ func accessStoreDeps(t *testing.T) (Deps, *auditsink.Sink, *store.Store, capabil
 	return d, sink, st, actor
 }
 
-// seedAccessTrail writes the 13 Access records plus the two Enrollment Token
+// seedAccessTrail writes the 15 Access records plus the two Enrollment Token
 // records Activity keeps, through the REAL writers: sink.RecordLogin for the
 // seven login/step-up kinds, shaped exactly as consoleauth/service.go emits
 // them, sink.RecordAccountAdmin for the six account/api-token kinds
-// (attributed to actor, naming accessFixtureSubject), and st.Audit().Append
-// directly for the two Enrollment Token kinds neither writer produces.
+// (attributed to actor, naming accessFixtureSubject), the auditsink host-lever
+// builders for the two password kinds (attributed to local-host), and
+// st.Audit().Append directly for those and the two Enrollment Token kinds
+// neither writer produces.
 func seedAccessTrail(t *testing.T, sink *auditsink.Sink, st *store.Store, actor capability.Principal) {
 	t.Helper()
 	ctx := context.Background()
@@ -146,6 +148,20 @@ func seedAccessTrail(t *testing.T, sink *auditsink.Sink, st *store.Store, actor 
 	for _, e := range admins {
 		if err := sink.RecordAccountAdmin(ctx, actor, e); err != nil {
 			t.Fatalf("RecordAccountAdmin(%v): %v", e.Kind, err)
+		}
+	}
+
+	set, err := auditsink.HostPasswordSetRecord("fixture-password-set", testNow, accessFixtureSubject, accessFixtureSubject)
+	if err != nil {
+		t.Fatalf("HostPasswordSetRecord: %v", err)
+	}
+	clr, err := auditsink.HostPasswordClearRecord("fixture-password-clear", testNow, accessFixtureSubject, accessFixtureSubject, true)
+	if err != nil {
+		t.Fatalf("HostPasswordClearRecord: %v", err)
+	}
+	for _, rec := range []audit.Record{set, clr} {
+		if err := st.Audit().Append(ctx, rec); err != nil {
+			t.Fatalf("Append(%s): %v", rec.Kind, err)
 		}
 	}
 
@@ -257,8 +273,8 @@ func TestAccess_AnAdminAnswersWhoSignedInFailedAndChangedAnAccount(t *testing.T)
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/access").Body.String()
 	content := contentOf(body)
 
-	if n := strings.Count(content, `<article class="ev"`); n != 13 {
-		t.Fatalf("the page rendered %d articles, want exactly 13 — the 13 Access records, none of "+
+	if n := strings.Count(content, `<article class="ev"`); n != 15 {
+		t.Fatalf("the page rendered %d articles, want exactly 15 — the 15 Access records, none of "+
 			"the 2 Enrollment Token records seeded alongside them:\n%s", n, content)
 	}
 	for _, kind := range accessKindOrder {
@@ -283,10 +299,29 @@ func TestAccess_AnAdminAnswersWhoSignedInFailedAndChangedAnAccount(t *testing.T)
 		}
 	}
 
+	// A host-lever row is told by its attribution (the local-host principal),
+	// not by its kind: it is the one account row with no verified chip.
+	hostRows := 0
 	for _, a := range accessArticlesOfKind(content, accessAccount) {
+		if strings.Contains(a, "<code>"+audit.PrincipalLocalHost+"</code>") {
+			hostRows++
+			if strings.Contains(a, `data-trust="verified"`) {
+				t.Errorf("a host-lever row carries a verified chip — no Account's credential proves root on the host:\n%s", a)
+			}
+			if strings.Contains(a, "no Account named") {
+				t.Errorf("a host-lever row says \"no Account named\", which reads as a failed sign-in:\n%s", a)
+			}
+			if !strings.Contains(a, "the Relay host") {
+				t.Errorf("a host-lever row does not name the Relay host:\n%s", a)
+			}
+			continue
+		}
 		if !strings.Contains(a, `data-trust="verified"`) {
 			t.Errorf("an account row does not carry a verified Actor chip:\n%s", a)
 		}
+	}
+	if hostRows != 2 {
+		t.Errorf("%d host-lever account rows rendered, want the 2 password rows", hostRows)
 	}
 	for _, a := range accessArticlesOfKind(content, accessAPIToken) {
 		if !strings.Contains(a, `data-trust="verified"`) {
@@ -621,13 +656,14 @@ func TestAccess_AThrottledAttemptIsDrawnAsThrottledNotFailed(t *testing.T) {
 	}
 }
 
-// TestAccess_VocabularyIsExactlySpec20s hand-pins the 13 kinds by family,
-// spec 20's Row kinds table: 4 sign-in, 3 step-up, 4 account, 2 api-token.
+// TestAccess_VocabularyIsExactlySpec20s hand-pins the 15 kinds by family,
+// spec 20's Row kinds table: 4 sign-in, 3 step-up, 6 account, 2 api-token.
 func TestAccess_VocabularyIsExactlySpec20s(t *testing.T) {
 	want := map[accessKind][]string{
-		accessSignIn:   {audit.KindLoginSucceeded, audit.KindLoginFailed, audit.KindLoginThrottled, audit.KindLogout},
-		accessStepUp:   {audit.KindStepUp, audit.KindStepUpFailed, audit.KindStepUpThrottled},
-		accessAccount:  {audit.KindAccountCreate, audit.KindAccountRole, audit.KindAccountEnable, audit.KindAccountDisable},
+		accessSignIn: {audit.KindLoginSucceeded, audit.KindLoginFailed, audit.KindLoginThrottled, audit.KindLogout},
+		accessStepUp: {audit.KindStepUp, audit.KindStepUpFailed, audit.KindStepUpThrottled},
+		accessAccount: {audit.KindAccountCreate, audit.KindAccountRole, audit.KindAccountEnable, audit.KindAccountDisable,
+			audit.KindPasswordSet, audit.KindPasswordClear},
 		accessAPIToken: {audit.KindAPITokenMint, audit.KindAPITokenRevoke},
 	}
 	for family, kinds := range want {
@@ -643,8 +679,8 @@ func TestAccess_VocabularyIsExactlySpec20s(t *testing.T) {
 		}
 	}
 
-	if len(accessAllKinds) != 13 {
-		t.Errorf("accessAllKinds has %d kinds, want exactly 13", len(accessAllKinds))
+	if len(accessAllKinds) != 15 {
+		t.Errorf("accessAllKinds has %d kinds, want exactly 15", len(accessAllKinds))
 	}
 	if containsString(accessAllKinds, audit.KindTokenMint) || containsString(accessAllKinds, audit.KindTokenRevoke) {
 		t.Error("accessAllKinds contains an Enrollment Token kind — those stay on Activity")
@@ -827,5 +863,34 @@ func TestAccess_StepUpFailureKindsRenderDistinctly(t *testing.T) {
 			}
 			seen[got] = tc.kind
 		})
+	}
+}
+
+// TestAccess_AHostLeverRowNamesTheHost pins how a record with no verified
+// Account is drawn: an act by root on the Relay host names the host, and only
+// the local-host principal earns that. Every other unverified row keeps "no
+// Account named".
+func TestAccess_AHostLeverRowNamesTheHost(t *testing.T) {
+	q := &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindAPITokenMint, Principal: audit.PrincipalLocalHost, Timestamp: testNow,
+			Reason: "account_id=acct-1 api_token_id=tok-1"},
+		{Kind: audit.KindPasswordClear, Principal: audit.PrincipalLocalHost, Timestamp: testNow,
+			Reason: "account_id=acct-1 name=admin removed=false"},
+		{Kind: audit.KindLoginFailed, Timestamp: testNow},
+	}}
+	content := contentOf(get(t, newTestHandler(accessDeps(q), accounts.RoleAdmin), "/console/access").Body.String())
+
+	for _, needle := range []string{"minted an API Token", "cleared a Console password (none was set)"} {
+		a := accessArticleContaining(t, content, needle)
+		if !strings.Contains(a, "the Relay host") || !strings.Contains(a, "<code>local-host</code>") {
+			t.Errorf("the %q row does not name the Relay host:\n%s", needle, a)
+		}
+		if strings.Contains(a, `data-trust="verified"`) || strings.Contains(a, "no Account named") {
+			t.Errorf("the %q row is drawn as a verified or unnamed actor:\n%s", needle, a)
+		}
+	}
+	failed := accessArticleContaining(t, content, "failed a Console sign-in")
+	if !strings.Contains(failed, "no Account named") || strings.Contains(failed, "the Relay host") {
+		t.Errorf("a login_failed row with no principal must keep \"no Account named\":\n%s", failed)
 	}
 }

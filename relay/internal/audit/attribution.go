@@ -6,6 +6,12 @@ import (
 	"strings"
 )
 
+// PrincipalLocalHost is the Principal (and Verified.AccountName, with an empty
+// AccountID) of an act performed by root on the Relay host itself: the freeze
+// signal (capability.localHostPrincipal) and the host credential levers
+// (#782). It is not an Account and holds no role.
+const PrincipalLocalHost = "local-host"
+
 // Attribution is the identity carried on every audit record, in **two
 // structurally distinct lanes** (ADR-0027 decision 10, #300; docs/specs/approval.md).
 //

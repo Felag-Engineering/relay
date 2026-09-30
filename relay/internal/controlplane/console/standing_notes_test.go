@@ -141,13 +141,15 @@ func TestAccess_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
 	body := get(t, newTestHandler(accessDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/access").Body.String()
 	inside, outside := splitAbout(t, body)
 	mustBeStanding(t, inside, outside,
-		"Password changes and the first API Token are not on the trail.",
-		"(#782)",
+		"Changes made on the Relay host name the host, not an Account.",
 		"OAuth sign-ins are not listed.",
 		"There is no filter by the changed Account.",
 		"Every Refresh is an audited read",
 		"limited to admins in the Console only",
 	)
+	if strings.Contains(body, "not on the trail") {
+		t.Error("the Access screen still says something is not on the trail")
+	}
 }
 
 func TestAccess_SituationalMessagesStayVisible(t *testing.T) {
