@@ -12,39 +12,16 @@ import (
 	"testing"
 )
 
-// ingress_guard_test.go pins the issue's own central claim (#504): exactly
-// two files under relay/ may ever populate a registry.Report's node-space
-// label map, so a third writer has to argue with a test rather than slip
-// past review.
+// ingress_guard_test.go pins (#504) that exactly two files under relay/ may
+// populate a registry.Report's node-space label map, so a third writer has to
+// argue with a test rather than slip past review.
 //
-// # Why this is a backstop, not the enforcement
-//
-// registry.Report.nodeLabels is UNEXPORTED (registry.go). The only way to
-// set it from outside package registry is registry.Report.WithNodeLabels — a
-// bare field assignment (`rep.NodeLabels = someMap`) is a COMPILE ERROR from
-// any other package, not a convention a reviewer has to notice was broken.
-// That is what actually closes the gap an earlier version of this guard had:
-// matching only a `registry.Report{... NodeLabels: ...}` composite literal
-// misses the structurally-equivalent
-//
-//	rep := registry.Report{NodeID: id}
-//	rep.NodeLabels = someMap
-//
-// idiom entirely — a field-assignment writer would have slipped past
-// silently. Unexporting the field removes that idiom from the language
-// itself for every package outside registry; this test is what is left to
-// police, which is a plain function call (WithNodeLabels) that Go's export
-// rules cannot restrict to a caller list on their own.
-//
-// # What this test actually walks
-//
-// Every .go file under relay/ (this module's root), excluding _test.go
-// files, that contains a call whose selector is named WithNodeLabels. The
-// name match (rather than a full type-checked call) mirrors the style of the
-// richer no_dispatch guards (console/mcp/api no_dispatch_test.go): a name
-// distinctive enough that no other legitimate method should ever be spelled
-// the same way is enforced structurally through naming discipline, exactly
-// as this package's own doc records for other checks.
+// This is a backstop. registry.Report.nodeLabels is unexported, so a field
+// assignment from another package is a compile error; what Go's export rules
+// cannot restrict to a caller list is the WithNodeLabels call itself, which is
+// what this walks: every non-test .go file under relay/ containing a call
+// whose selector is named WithNodeLabels. Matching by name mirrors the
+// no_dispatch guards.
 func withNodeLabelsCallers(root string) (files []string, err error) {
 	fset := token.NewFileSet()
 	seen := map[string]bool{}
