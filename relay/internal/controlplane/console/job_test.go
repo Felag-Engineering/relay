@@ -1005,7 +1005,7 @@ func TestJob_CancelResultSaysWhichIsWhich(t *testing.T) {
 		"sent and then stopped",
 		"still in flight",
 		"best-effort",
-		"where its Node is connected",
+		"if its Node is connected",
 		"keep the outcome they really had",
 	} {
 		if !strings.Contains(body, want) {

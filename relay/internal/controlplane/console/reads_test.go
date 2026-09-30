@@ -1107,7 +1107,7 @@ func TestReads_AFailedAggregateIsAbsentNotZero(t *testing.T) {
 	if !strings.Contains(body, "The exact refusal count could not be computed") {
 		t.Error("the page does not say the refusal count is missing")
 	}
-	if strings.Contains(body, "The three figures are exact over the") {
+	if strings.Contains(body, "These three figures are exact over the") {
 		t.Error("the page still claims the refusal figures are exact")
 	}
 	// And the row that contradicts the zero is still there, which is the whole

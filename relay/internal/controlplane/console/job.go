@@ -1098,7 +1098,7 @@ var jobTmpl = newScreen("job", `
   </div>
   <div class="jhrow">
     {{template "trust-chip" (trust .Principal .Verified)}}{{template "kind-label" .RequesterKind}}
-    {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}<span class="dim">on behalf of — caller-claimed, nothing checked it</span>{{end}}
+    {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}<span class="dim">on behalf of (claimed by the caller, not checked)</span>{{end}}
     {{if .ApprovalHref}}released by approval <a href="{{.ApprovalHref}}"><code>{{short .ApprovalID}}</code></a>{{end}}
     {{with .GrantID}}<span class="grant" title="A human approved a window this plan fell inside, not this plan.">grant {{short .}}</span>{{end}}
   </div>
@@ -1114,18 +1114,18 @@ var jobTmpl = newScreen("job", `
 {{with .Approval}}
 <section class="jobapproval" aria-label="Approval">
   <p>gated by rule {{if .Rules}}<code>{{join ", " .Rules}}</code>{{else}}no gate rule recorded{{end}}</p>
-  <p>{{if gt .Required 0}}<b>{{.Signed}}</b> of {{.Required}} {{plural .Required "approval" "approvals"}}{{else}}no quorum recorded{{end}}{{if .Short}} <span class="gap">the record holds fewer approvals than the rule required — this page does not know why the Job was released</span>{{end}}</p>
+  <p>{{if gt .Required 0}}<b>{{.Signed}}</b> of {{.Required}} {{plural .Required "approval" "approvals"}}{{else}}no quorum recorded{{end}}{{if .Short}} <span class="gap">The record holds fewer approvals than the rule required. This page cannot tell why the Job was released.</span>{{end}}</p>
   {{if .ParkedByDiffers}}<p>approval parked by {{template "trust-chip" (trust .ParkedBy .ParkedByVerified)}} <span class="dim">{{if .ViaGrant}}— the Account that requested the Grant{{else}}— not the Account that requested this Job; the approval was released on its plan hash{{end}}</span></p>{{end}}
   {{range .Deciders}}
   <div class="decider">
     {{template "trust-chip" (trust .Account .Verified)}}{{template "kind-label" .Kind}}
     <span>{{if eq .At "not recorded"}}approved, time not recorded{{else}}approved {{.At}}{{end}}</span> <code>{{.Channel}}</code>
-    {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}<span class="dim">answering for — asserted by the deciding client, nothing checked it</span>{{end}}
+    {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}<span class="dim">answering for (claimed by the deciding client, not checked)</span>{{end}}
     {{with .Reason}}<span class="dim">{{.}}</span>{{end}}
   </div>
   {{end}}
   {{if not .Deciders}}<p class="dim">no approving decision recorded</p>{{end}}
-  {{with .Summary}}<p class="summary"><b>What the Relay showed the approver</b> <span class="dim">— Relay-authored, stored when the approval was requested, not re-rendered</span><br>{{.}}</p>{{end}}
+  {{with .Summary}}<p class="summary"><b>What the Relay showed the approver</b> <span class="dim">(Relay-authored, stored when the approval was requested and shown exactly as stored)</span><br>{{.}}</p>{{end}}
   {{if .ViaGrant}}<p class="note">These approvers approved a Grant — a window this plan fell inside — not this plan. The summary above describes the window.</p>{{end}}
 </section>
 {{end}}
@@ -1147,23 +1147,23 @@ record wrote it at the time, shown only where it did; on an approval, machine me
 recorded as human&rdquo;</p>
 
 {{template "plan" .Plan}}
-<p class="note">This is the Plan the Job was dispatched against, not a fresh one: the fan-out was
-fixed when the Tasks were created and does not move while the Job runs.
+<p class="note">This is the Plan as it stood at dispatch, not a fresh one. The set of Nodes was fixed
+when the Tasks were created and does not change while the Job runs.
 {{if not .PlanHashKnown}}
 {{if .TrailError}}The dispatch record could not be read, so whether this dispatch was gated by an approval is not known here.
-{{else if .GrantID}}This dispatch was released by a Grant. The Grant's approval committed to a window, not to this plan, so no plan hash was retained for it — and the Job's own id is not one.
+{{else if .GrantID}}This dispatch was released by a Grant. The Grant's approval covered a window, not this plan, so no plan hash was retained for it. The Job's own id is not a plan hash.
 {{else if or .ApprovalError .ApprovalReaderMissing}}The approval record could not be read here, so the plan hash it committed to is not shown.
 {{else if .ApprovalID}}The approval record holds no plan hash, so none is shown here.
 {{else if not .DispatchFound}}{{if .InFlight}}The dispatch record is not written yet, so whether it was gated is not known.{{else}}No dispatch record was found for this Job, so whether it was gated is not known.{{end}}
 {{else}}This dispatch was not gated by an approval, so no plan hash was retained
-for it — and the Job's own id is not one.
+for it. The Job's own id is not a plan hash.
 {{end}}
 {{end}}</p>
 
 {{if .TrailError}}
-<p class="gap">The dispatch record for this Job could not be read, so what was asked for — the
-arguments, the on-behalf-of claim, and any approval — is missing from the header above. The
-outcomes below are unaffected: they come from the Tasks, not from the trail.</p>
+<p class="gap">The dispatch record for this Job could not be read. What was asked for is missing
+from the header above: the arguments, the on-behalf-of claim, and any approval. The outcomes below
+are unaffected, because they come from the Tasks, not from the audit trail.</p>
 {{end}}
 
 {{if .CancelRequest}}
@@ -1177,9 +1177,9 @@ outcomes below are unaffected: they come from the Tasks, not from the trail.</p>
   <p>No Task reads cancelled.</p>
   {{end}}
   {{if .InFlight}}
-  <p><b>{{.InFlight}}</b> still in flight. Each one already sent was asked to stop where its Node is connected
-  — best-effort — and each will report what actually happened, which may be its real outcome if it finished
-  first.</p>
+  <p><b>{{.InFlight}}</b> still in flight. Each Task already sent was asked to stop if its Node is connected.
+  This is best-effort: each one will report what actually happened, which may be its real outcome if it
+  finished first.</p>
   {{end}}
   <p>Tasks that had already finished keep the outcome they really had.</p>
 </div>
@@ -1192,11 +1192,11 @@ missing above. The groups below are unaffected: they come from the Tasks, not fr
 {{if .Bar.Total}}{{template "outcome-bar" .Bar}}{{end}}
 
 {{if .ReadClass}}
-<p class="gap"><b>This was a read.</b> Reading is exfiltration, so what left the Node is audited and
-what it said is not: the audit trail keeps this Job&#39;s outcomes and timings and never its output
-(ADR-0025). What the daemon sent does still live on the Task rows until the Job is collected, and is
-readable through <code>GET /api/v1/jobs/{job_id}</code> &mdash; but nothing on this page will show
-it, at any age, because a screen that did would become the durable place read output is read from.</p>
+<p class="gap"><b>This was a read.</b> A read carries data off the Node, so the audit trail records
+that it happened and never what it returned: it keeps this Job&#39;s outcomes and timings and never
+its output. What the daemon sent still sits on the Task rows until the Job is collected, and is
+readable through <code>GET /api/v1/jobs/{job_id}</code>. This page never shows it, at any age, so
+the Console can never become a lasting place to read that output from.</p>
 {{end}}
 
 {{range .Groups}}
@@ -1205,7 +1205,7 @@ it, at any age, because a screen that did would become the durable place read ou
     <span class="chip outcome" data-outcome="{{.Label}}">{{.Label}}</span>
     <b>{{.Count}}</b> {{plural .Count "Node" "Nodes"}}
     {{if .Elided}}<span class="dim">{{if .Listed}}{{.Listed}} of {{.Count}} listed{{else}}none listed{{end}}</span>{{end}}
-    {{if eq .Label "success"}}<span class="dim">the mode — collapsed, because it is the least informative thing here</span>{{end}}
+    {{if eq .Label "success"}}<span class="dim">the usual result, folded so the exceptions stand out</span>{{end}}
   </summary>
 
   {{if .RowsError}}
