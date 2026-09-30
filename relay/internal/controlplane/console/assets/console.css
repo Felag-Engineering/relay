@@ -1658,7 +1658,7 @@ dl.kv dd { min-width: 0; }
 [data-live-region][data-queued="yes"] .newq:hover { text-decoration: none; border-color: var(--accent-hover); color: var(--accent-hover); }
 .newqcount { font-weight: var(--weight-normal); color: var(--text-second); }
 
-/* The Agents screen's one sentence about calls made from this Console. It
+/* The Agents screen's one sentence about reads made from this Console. It
  * qualifies the feed below it, so it is quiet note text, not a dashed box. */
 .consolecalls { font-size: var(--text-xs); color: var(--text-muted); }
 

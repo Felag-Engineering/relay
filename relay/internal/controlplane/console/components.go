@@ -625,6 +625,10 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 	// every Operation declares a risk class (ADR-0012), and the class is what
 	// chooses the cap.
 	"risk": jobs.RiskClassName,
+	// plural is screen.go's one template plural (the word alone, never the
+	// number — TestPluralFamiliesKeepOppositeContracts), shared so a
+	// component cannot render "1 Nodes matched".
+	"plural": screenFuncs["plural"],
 }).Parse(`
 {{define "label-chip"}}<span class="chip lbl" data-ns="{{.Namespace}}"{{if .SecurityLane}} data-lane="security"{{end}}{{if .Attention}} data-sev="attention"{{end}} title="{{.}}"><span class="ns">{{.Namespace}}:</span>{{.Key}}{{if .Value}}<span class="eq">=</span>{{.Value}}{{end}}</span>{{end}}
 
@@ -667,7 +671,7 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
   </div>
   <div class="planfan">
     <code class="selector">{{if .Selector}}{{.Selector}}{{else}}{{.SelectorNote}}{{end}}</code>
-    <span class="fanmath">{{.Matched}} Nodes matched{{if .Cap}} &middot; cap {{.Cap}}{{end}}</span>
+    <span class="fanmath">{{.Matched}} {{plural .Matched "Node" "Nodes"}} matched{{if .Cap}} &middot; cap {{.Cap}}{{end}}</span>
     {{if .OverCap}}<span class="overcap">over the {{.RiskClass | risk}} cap &mdash; this Job will not dispatch</span>{{end}}
   </div>
   {{if .Verdicts}}<div class="planverdicts"><b>{{.AllowedCount}}</b> would run &middot; <b>{{.DeniedCount}}</b> would be denied</div>{{end}}
