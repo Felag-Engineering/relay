@@ -514,15 +514,19 @@ fuzz-daemon:
 # Thin convenience wrappers over `docker compose` for the laptop dev fleet
 # (docs/dev-fleet.md). NOT part of build/test/lint and never invoked by CI —
 # the hermetic gate must never depend on Docker. Nothing else depends on these
-# targets; docs/dev-fleet.md documents the raw commands too.
+# targets; docs/dev-fleet.md documents the raw commands too. The fleet is
+# docker-compose.demo.yml, named explicitly: the root docker-compose.yml is the
+# single-Relay deployment stack, not a fleet.
+DEV_FLEET_COMPOSE := docker compose -f docker-compose.demo.yml
+
 dev-fleet-up:
-	docker compose up --build -d
+	$(DEV_FLEET_COMPOSE) up --build -d
 
 dev-fleet-down:
-	docker compose down
+	$(DEV_FLEET_COMPOSE) down
 
 dev-fleet-logs:
-	docker compose logs -f
+	$(DEV_FLEET_COMPOSE) logs -f
 
 # Export the fleet's CA cert and BOTH control-plane credentials (the founding
 # admin's and dev-approver's) to the gitignored ./.dev-fleet/ so a host-side MCP

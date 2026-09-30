@@ -25,7 +25,7 @@ test -n "${PASSWORD}" || { echo "console-password: CONSOLE_ADMIN_PASSWORD is uns
 # (RELAY_PUBLISH_ADDR) it is a known password in front of a fleet-execution
 # surface. Refuse it there rather than trust the reader of the docs. Failing
 # here leaves the Console account with no password, so it cannot be signed in
-# to — fail closed. Keep this literal in step with docker-compose.yml's default.
+# to — fail closed. Keep this literal in step with docker-compose.demo.yml's default.
 DEFAULT_PASSWORD="admin1234567"
 case "${RELAY_PUBLISH_ADDR:-127.0.0.1}" in
     127.* | localhost | ::1 | "[::1]") ;;

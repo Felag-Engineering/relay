@@ -304,13 +304,13 @@ fi
 # precheck — before `down` or `up`.
 run -- reset
 check "P1-guard-admits-unset-project" 1 \
-    "log_contains:compose -p relay-demo -f $REPO_ROOT/docker-compose.yml --profile demo config" \
+    "log_contains:compose -p relay-demo -f $REPO_ROOT/docker-compose.demo.yml --profile demo config" \
     "log_not_contains: down" "log_not_contains: up"
 
 # P2: same, with COMPOSE_PROJECT_NAME explicitly set to relay-demo.
 run COMPOSE_PROJECT_NAME=relay-demo -- reset
 check "P2-guard-admits-explicit-project" 1 \
-    "log_contains:compose -p relay-demo -f $REPO_ROOT/docker-compose.yml --profile demo config" \
+    "log_contains:compose -p relay-demo -f $REPO_ROOT/docker-compose.demo.yml --profile demo config" \
     "log_not_contains: down" "log_not_contains: up"
 
 # P3 (review finding 2): `config --images` SUCCEEDS but prints nothing. The
@@ -349,7 +349,7 @@ check "P5-foreign-worktree-refuses" 2 refuses \
 # name, `image inspect` succeeding, no foreign port owner), so reset reaches
 # `check_volume_names_scoped` — where `dc config --format json` reports a
 # volume that does NOT resolve to a relay-demo_-prefixed name (as a top-level
-# `name:`/`external:` override on docker-compose.yml's volumes: could cause).
+# `name:`/`external:` override on docker-compose.demo.yml's volumes: could cause).
 # Must refuse before `down -v` ever runs.
 run STUB_COMPOSE_IMAGES_RC=0 STUB_COMPOSE_IMAGES_OUT=relay-demo-relay \
     STUB_IMAGE_INSPECT_RC=0 \
@@ -379,13 +379,13 @@ check "SEC3-reset-wait-seconds-leading-zero-refused" 2 refuses empty_log
 
 # --- Build pulls the image-only services; reset and up never pull ---
 
-COMPOSE_PREFIX="compose -p relay-demo -f $REPO_ROOT/docker-compose.yml --profile demo"
-COMPOSE_OAUTH_PREFIX="compose -p relay-demo -f $REPO_ROOT/docker-compose.yml -f $REPO_ROOT/docker-compose.oauth.yml --profile demo"
+COMPOSE_PREFIX="compose -p relay-demo -f $REPO_ROOT/docker-compose.demo.yml --profile demo"
+COMPOSE_OAUTH_PREFIX="compose -p relay-demo -f $REPO_ROOT/docker-compose.demo.yml -f $REPO_ROOT/docker-compose.oauth.yml --profile demo"
 
 # B1: `build` builds, THEN pulls every service that has no build section
 # (`--ignore-buildable`), fetching only what is missing. Without the pull a
 # fresh engine builds cleanly and reset's image precheck then fails on the
-# curl one-shots' image. The build names docker-compose.yml alone; the pull
+# curl one-shots' image. The build names docker-compose.demo.yml alone; the pull
 # names the OAuth overlay too (#351), so one build also fetches the identity
 # provider's image and an OAuth fleet is startable on a fresh engine.
 run STUB_COMPOSE_OK="build pull" -- build
@@ -437,7 +437,7 @@ check "B6-oauth-up-never-pulls" 1 \
 
 # --- The demo fleet's approval gate ---
 
-# G1: every compose call the script makes hands docker-compose.yml the demo
+# G1: every compose call the script makes hands docker-compose.demo.yml the demo
 # fleet's in-band gate — even when the caller's shell exported the default
 # fleet's gate — so the demo Relay can never start on the wrong one. B4 above
 # reaches down and up; this re-runs it with the conflicting value exported.
@@ -453,7 +453,7 @@ check "G1-reset-pins-the-demo-gate" 1 \
     "log_not_contains:DEV_FLEET_APPROVAL_GATE_CONFIG=<unset>"
 
 # G2: the path the script pins is one the relay image actually bakes, from a
-# fixture that exists, and docker-compose.yml actually reads the variable
+# fixture that exists, and docker-compose.demo.yml actually reads the variable
 # (defaulting to the default fleet's gate). A mismatch anywhere in that chain
 # would crash-loop the demo Relay (the gate loader is fail-closed) or quietly
 # run it on the default gate.
@@ -472,8 +472,8 @@ if ! grep -qxF "COPY --chmod=0644 docker/fixtures/approval-gates.demo.json ${dem
     fail=$((fail + 1))
 fi
 if ! grep -qF 'RELAY_APPROVAL_GATE_CONFIG: "${DEV_FLEET_APPROVAL_GATE_CONFIG:-/etc/relay/approval-gates.json}"' \
-    "$REPO_ROOT/docker-compose.yml"; then
-    echo "FAIL: G2: docker-compose.yml does not select the gate with DEV_FLEET_APPROVAL_GATE_CONFIG, defaulting to the default fleet's gate" >&2
+    "$REPO_ROOT/docker-compose.demo.yml"; then
+    echo "FAIL: G2: docker-compose.demo.yml does not select the gate with DEV_FLEET_APPROVAL_GATE_CONFIG, defaulting to the default fleet's gate" >&2
     fail=$((fail + 1))
 fi
 # --- The OAuth overlay (#351): opt-in by a flag, never by the environment ---
@@ -489,11 +489,11 @@ check "O1-up-extra-argument-refused" 2 refuses "log_not_contains:compose -p"
 # missing IdP image stops reset before `down -v`, like any other image.
 run -- reset --oauth
 check "O2-reset-oauth-prechecks-with-the-overlay" 1 \
-    "log_contains:compose -p relay-demo -f $REPO_ROOT/docker-compose.yml -f $REPO_ROOT/docker-compose.oauth.yml --profile demo config --images" \
+    "log_contains:compose -p relay-demo -f $REPO_ROOT/docker-compose.demo.yml -f $REPO_ROOT/docker-compose.oauth.yml --profile demo config --images" \
     "log_not_contains: down" "log_not_contains: up"
 
 # O3: plain `reset` never names the overlay before its wipe — the default
-# fleet is exactly docker-compose.yml.
+# fleet is exactly docker-compose.demo.yml.
 run -- reset
 check "O3-plain-reset-precheck-names-no-overlay" 1 "log_not_contains:docker-compose.oauth.yml"
 
@@ -513,7 +513,7 @@ run STUB_COMPOSE_IMAGES_RC=0 STUB_COMPOSE_IMAGES_OUT=relay-demo-relay \
 check "O5-plain-reset-ignores-idp-port" 1 "log_not_contains:publish=8180"
 
 # O7: plain `reset` WIPES with the overlay named — so a previous --oauth run's
-# IdP and its volume go too — but BRINGS UP with docker-compose.yml alone.
+# IdP and its volume go too — but BRINGS UP with docker-compose.demo.yml alone.
 # `down` is made to succeed so reset reaches `up`; `up` fails, stopping it.
 run STUB_COMPOSE_IMAGES_RC=0 STUB_COMPOSE_IMAGES_OUT=relay-demo-relay \
     STUB_IMAGE_INSPECT_RC=0 \

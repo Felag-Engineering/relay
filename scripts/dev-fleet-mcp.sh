@@ -26,6 +26,13 @@ ADMIN_CRED="${STATE_DIR}/control-credential"
 APPROVER_CRED="${STATE_DIR}/approver-credential"
 BASE="${BASE:-https://localhost:9443}"
 
+# `init` reads the fleet with bare `docker compose`. The fleets live in
+# docker-compose.demo.yml; the root docker-compose.yml is the single-Relay
+# deployment stack and has none of the services `init` reads. So default to
+# the fleet file — the same project `make dev-fleet-up` starts. A caller that
+# has already chosen (scripts/demo-fleet.sh exports its own) keeps its choice.
+export COMPOSE_FILE="${COMPOSE_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/docker-compose.demo.yml}"
+
 # The Relay's server cert SAN is `relay` (the in-fleet DNS name), not localhost.
 # --resolve maps the name to loopback so TLS is VERIFIED against the real CA
 # rather than skipped with -k. A dev script that teaches "just use -k" is a bad
