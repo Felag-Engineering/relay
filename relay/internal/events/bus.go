@@ -12,12 +12,10 @@ import (
 
 const (
 	// defaultMaxEvents and defaultMaxAge are the retention bounds every
-	// production Bus uses (acceptance criterion, #416): a per-publisher ring
-	// holds at most 1,000 events, or 10 minutes of them, whichever comes
-	// first. WithRetention overrides both, for tests only — per invariant
-	// 11 (Relay config is operator-set and unreachable from any API) there
-	// is deliberately no flag or RELAY_* env var for either bound, and
-	// never a route that could change them.
+	// production Bus uses (#416): a per-publisher ring holds at most 1,000
+	// events or 10 minutes of them, whichever comes first. WithRetention
+	// overrides both, for tests only — per invariant 11 there is deliberately
+	// no flag, RELAY_* env var or route for either bound.
 	defaultMaxEvents = 1000
 	defaultMaxAge    = 10 * time.Minute
 
@@ -93,11 +91,9 @@ func NewBus(opts ...Option) *Bus {
 
 	epochBytes := make([]byte, 8)
 	if _, err := rand.Read(epochBytes); err != nil {
-		// crypto/rand.Read on the standard Reader only fails if the OS
-		// entropy source is broken, which is unrecoverable — the same
-		// composition-root-wiring-bug treatment enroll.randomNodeID and
-		// capability.defaultID give the identical failure mode, except
-		// NewBus's signature has no error to return.
+		// Only fails if the OS entropy source is broken, which is
+		// unrecoverable; same treatment as enroll.randomNodeID and
+		// capability.defaultID, but NewBus has no error to return.
 		panic("events: mint epoch: " + err.Error())
 	}
 	b.epoch = hex.EncodeToString(epochBytes)

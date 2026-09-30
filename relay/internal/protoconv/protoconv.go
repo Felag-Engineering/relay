@@ -1,6 +1,6 @@
 // Package protoconv is the single proto-aware seam that translates relayv1
 // wire types into registry domain types. It lives outside registry because
-// registry intentionally carries no proto dependency (registry.go:25-26).
+// registry intentionally carries no proto dependency.
 package protoconv
 
 import (
@@ -34,11 +34,10 @@ func FactsFromProto(pf *relayv1.Facts) registry.Facts {
 // does NOT decide what to do on failure — callers keep their own
 // drop-vs-reject policy (Hello omits the label, Enroll rejects the request).
 //
-// TAKING THE VALUE IS THE POINT: a caller can no longer check the key and
-// forget the value, because doing so no longer compiles. Before #504 this
-// only validated the key; the measured payload — a `node:role` value of
-// "web, relay:quarantine=on" — passed straight through and rendered as two
-// Selector predicates, the second spelled relay:.
+// Taking the value is the point: a caller cannot check the key and forget the
+// value. Before #504 only the key was validated, so a `node:role` value of
+// "web, relay:quarantine=on" rendered as two Selector predicates, the second
+// spelled relay:.
 func ParseNodeLabel(key, value string) (bare string, ok bool) {
 	if !strings.HasPrefix(key, "node:") {
 		return "", false
