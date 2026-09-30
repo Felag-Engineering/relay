@@ -238,8 +238,8 @@ must persist `cert_not_after` first (#440).
 Activity already renders Job rows and filters to them, so a separate Jobs destination was a
 duplicate list to keep consistent with the first one. Removed before anyone builds it twice.
 
-**Job detail remains its own page**, reached from any dispatch row in Activity, from a Node's
-recent Tasks, and from the agent stream. Dropping the list does not drop the record.
+**Job detail remains its own page**, reached from any dispatch row in Activity and from a Node's
+recent Tasks. (The agent stream it was also reached from was folded into Activity, 2026-09-29.) Dropping the list does not drop the record.
 
 ### D7. Policy as its own nav item — **RESOLVED 2026-08-24: keeps its slot**
 
@@ -250,9 +250,9 @@ screen operators return to.
 ### Resulting navigation — nine destinations, three groups
 
 ```
-Observe      Fleet · Agents · Activity
+Observe      Fleet · Activity
 Act          Run · Policy · Approvals
-Administer   Add Nodes · Accounts · Incident
+Administer   Add Nodes · Accounts · Access · Incident
 ```
 
 ### D15. CSP violation reporting — **DEFERRED (#460)**
@@ -310,6 +310,37 @@ pre-ADR design notes that predate it — `docs/design/console-wireframe-brief.md
 record: rewriting them would make the 2026-08-07 planning session appear to have used a word it
 did not, and a naive sweep would rename the shared Plan renderer and the Plan blocks this ruling
 keeps. Each carries a reader note in its header pointing here instead.
+
+### D17. Agents folded into Activity; Access split out — **RESOLVED 2026-09-29 (owner)**
+
+**What:** the Agents screen (03) and Activity (04) were split by grain: Agents listed one row per
+tool call for recently active Accounts, and Activity listed one row per Job plus every non-dispatch
+event, sign-ins and Account changes included. In use, that split did not match the questions people
+bring. "What did the agents do?" was on one screen, and "who signed in?" was mixed into the other,
+with the fleet's changes.
+
+**Ruling (owner, 2026-09-29):**
+
+1. **Activity is the call-grained feed.** It absorbs the Agents stream, and a dispatching call's
+   row is its Job, so one `mutate` across thousands of Nodes stays one row. The Agents screen is
+   retired; its list of recently active Accounts survives as a strip and `?account=` filter on
+   Activity ([04](04-activity.md)).
+2. **Reads are hidden by default**, one click away, and reads made from this Console stay left out
+   within them unless asked for.
+3. **The split is by the reader's question.** Activity keeps approvals, freeze, Node revokes and
+   Enrollment Tokens, because they change the fleet. Sign-ins, step-up, Account changes and API
+   Token mints and revokes move to a new admin-only screen, **Access** ([20](20-access.md)),
+   because they change who can get in.
+4. **Access is admin-only in the Console only.** The route is not mounted below `admin`; the
+   records stay on the audit read lane under its existing role rules, so the Control API is
+   unchanged. Making the records themselves admin-only would be a capability-layer decision, and it
+   was not taken.
+5. **Password changes are not on the trail**, because the host-side `relay console-password` (and
+   `relay bootstrap-token`) write no audit record. Raised as
+   [#782](https://github.com/Felag-Engineering/gleipnir-relay/issues/782), independent of this
+   redesign.
+
+The navigation stays at nine destinations: Agents leaves Observe, and Access joins Administer.
 
 ## Prerequisites that already exist as issues
 

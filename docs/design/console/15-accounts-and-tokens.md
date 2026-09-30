@@ -52,7 +52,8 @@ stricter than the window model and is what invariant 10 permits an adapter to be
 
 Accounts listed with kind (**human** or **machine**), role (`viewer` / `operator` / `admin`),
 state, last authentication, and — for machine Accounts — the time of its last tool call, linking to
-the agent stream (spec 03). There is no "connected" state to show: the MCP transport is stateless
+Activity scoped to that Account ([04](04-activity.md), `?account=`). Its sign-ins and the changes
+made to it are on [20 — Access](20-access.md). There is no "connected" state to show: the MCP transport is stateless
 (ADR-0028), so an Account is *active recently* or not, never *connected*.
 
 Each row's write controls follow the form-control rule in `00-foundations.md`: the role change

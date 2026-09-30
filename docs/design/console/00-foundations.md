@@ -202,8 +202,7 @@ identity the Relay authenticated.
 **Where a kind label is drawn beside the actor of a record, it is read from that record as it was
 written, and never looked up from the Account registry's current kind.** Where the record carries
 no kind, no label is drawn and nothing is inferred in its place. This is the owner decision of
-2026-09-08 (#540) recorded in [03](03-agent-sessions.md) under "Kind (machine or human) is not on
-the rail": a registry read reports the Account's kind today, so an Account converted later would
+2026-09-08 (#540) recorded in [04](04-activity.md) under "Kind is never read from the registry": a registry read reports the Account's kind today, so an Account converted later would
 retroactively relabel its own history. The Accounts screen ([15](15-accounts-and-tokens.md)) is
 the one surface that describes Accounts as they are now; it reads the registry's current kind
 because that is its subject, and draws it in the same treatment because it is the same fact.
@@ -336,14 +335,15 @@ Nine destinations in three groups. The grouping is load-bearing: it makes the mo
 makes the absence of a settings section visible.
 
 ```
-Observe      Fleet · Agents · Activity
+Observe      Fleet · Activity
 Act          Run · Policy · Approvals
-Administer   Add Nodes · Accounts · Incident
+Administer   Add Nodes · Accounts · Access · Incident
 ```
 
 There is no `Jobs` destination (D6): Activity renders Job rows and filters to them. **Job detail is
-still its own page**, reached from any dispatch row, from a Node's recent Tasks, and from the agent
-stream.
+still its own page**, reached from any dispatch row in Activity and from a Node's recent Tasks. The
+Agents screen was folded into Activity on 2026-09-29 ([04](04-activity.md)), and Access
+([20](20-access.md)) took the destination it left.
 
 Role and configuration change the nav **structurally, not cosmetically**. A `viewer` sees a
 smaller Console; with `console_execution = off`, Run is absent, not disabled. ADR-0026's insight

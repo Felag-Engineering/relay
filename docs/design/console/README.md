@@ -27,7 +27,7 @@ Numbers are identifiers, not sequence. Build in this order:
 1. **[11 — Console shell](11-console-shell.md)** and **[12 — Login](12-login.md)**. Everything
    mounts into the shell, and the shell's CSP/CSRF/session work is security-critical per ADR-0026.
 2. The v0.6.0 read surfaces: [01](01-fleet-view.md), [02](02-node-detail.md),
-   [04](04-activity.md), [13](13-job-detail.md), [03](03-agent-sessions.md) (stream only),
+   [04](04-activity.md), [13](13-job-detail.md),
    [14](14-approval-queue.md) (read only), [08](08-approval-object.md) (read only),
    [10](10-day-one.md), [17](17-read-egress.md).
 3. The v0.7.0 mutating surfaces, once step-up exists:
@@ -35,6 +35,7 @@ Numbers are identifiers, not sequence. Build in this order:
    [06](06-policy-author.md), [07](07-policy-fix-from-deny.md), then
    [05](05-composer-and-preflight.md) — the composer last, behind the step-up and approval machinery it
    depends on.
+   [20](20-access.md) lands with or after [15](15-accounts-and-tokens.md), the Accounts screen it sits beside.
    [18](18-settings.md) and [19](19-approval-rules.md) follow step-up and store-backed settings
    (#590); neither mounts until its backend exists.
 
@@ -60,8 +61,7 @@ landed by hand, ahead of the loop.
 | 12 | [Login](12-login.md) | v0.6.0 | — |
 | 1 | [Fleet view](01-fleet-view.md) | v0.6.0 | no (tagging is v0.7.0) |
 | 2 | [Node detail](02-node-detail.md) | v0.6.0 | no (`relay:` writes are v0.7.0) |
-| 3 | [Agent activity](03-agent-sessions.md) | v0.6.0 stream / v0.7.0 Cancel | Cancel only (v0.7.0) |
-| 4 | [Activity](04-activity.md) | v0.6.0 | no |
+| 4 | [Activity](04-activity.md) | v0.6.0 stream / v0.7.0 Cancel | Cancel only (v0.7.0) |
 | 13 | [Job detail](13-job-detail.md) | v0.6.0 record / v0.7.0 Cancel | Cancel only (v0.7.0) |
 | 17 | [Read egress](17-read-egress.md) | v0.6.0 | no |
 | 10 | [Day one](10-day-one.md) | v0.6.0 | no |
@@ -69,12 +69,14 @@ landed by hand, ahead of the loop.
 | 8 | [Approval object](08-approval-object.md) | v0.6.0 read / v0.7.0 decide | mixed |
 | 15 | [Accounts and API tokens](15-accounts-and-tokens.md) | v0.7.0 | yes |
 | 9 | [Add Nodes](09-add-nodes.md) | v0.7.0 | yes |
+| 20 | [Access](20-access.md) | v0.7.0 | no — `admin` only |
 | 16 | [Incident](16-incident-ladder.md) | v0.7.0 | yes |
 | 6 | [Policy Catalog](06-policy-author.md) | v0.7.0 | **no — generate-and-copy only** |
 | 7 | [Policy fix, from a deny](07-policy-fix-from-deny.md) | v0.7.0 | **no — generate-and-copy only** |
 | 5 | [Composer and Preflight](05-composer-and-preflight.md) | v0.7.0 | yes |
 
-Specs 11–17 have no artboard; the wireframes cover 1–10 plus the shared-grammar sheet.
+[03](03-agent-sessions.md) is retired: it was folded into 04 on 2026-09-29 (D17). Specs 11–20 have
+no artboard; the wireframes cover 1–10 plus the shared-grammar sheet.
 
 ## Sequencing
 
@@ -96,8 +98,9 @@ are ADRs yet; several need to be — see [`99-open-decisions.md`](99-open-decisi
 | **No scheduled or repeated reads.** Every read is a deliberate, audited act | 03, 04, 01 |
 | Upgrade handling is **progress only** — the Console never offers to push a daemon upgrade | 01 |
 | The composer is reachable **from the nav and contextually** from a filtered fleet view | 01, 05 |
-| Live stream and audit trail are **one surface** (Activity), Job-grained | 04 |
-| Agent activity is a **separate, call-grained, per-Account surface** with different retention — there are no sessions (ADR-0028) | 03 |
+| Live stream and audit trail are **one surface** (Activity), call-grained, where a dispatching call's row is its Job (D17, 2026-09-29) | 04 |
+| ~~Agent activity is a separate, call-grained, per-Account surface~~ — folded into Activity (D17); there are still no sessions (ADR-0028) | 04 |
+| Sign-ins, step-up, Account changes and API Tokens are **Access**, `admin` only in the Console (D17) | 20 |
 | **No hold-before-dispatch timer.** Interruption is cancellation (ADR-0013) | 03 |
 | **Plan editing resets quorum**; approvers do not amend | 05, 08 |
 | Policy authoring is **generate-and-copy**; the Relay never transmits Policy. Since 2026-09-18, 06 arranges first-party catalog fragments (`docs/specs/policy-catalog.md`) and emits no allow rule | 06, 07 |

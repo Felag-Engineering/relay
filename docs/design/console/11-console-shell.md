@@ -24,7 +24,6 @@ One template, three regions.
 │              │                                                            │
 │ OBSERVE      │ content                                                    │
 │  Fleet       │                                                            │
-│  Agents      │                                                            │
 │  Activity    │                                                            │
 │ ACT          │                                                            │
 │  Run         │                                                            │
@@ -33,6 +32,7 @@ One template, three regions.
 │ ADMINISTER   │                                                            │
 │  Add Nodes   │                                                            │
 │  Accounts    │                                                            │
+│  Access      │                                                            │
 │  Incident    │                                                            │
 │              │                                                            │
 │ signed in as │                                                            │
@@ -47,8 +47,9 @@ The banner slot sits **above** the topbar and is empty in the common case. See
 **Do not render a nav item and then refuse the route.** The nav is generated from the routes this
 process actually mounted for this Account's role. Consequences:
 
-- A `viewer` gets a **structurally smaller** nav — Run, Policy, Add Nodes, Accounts and Incident
-  simply are not there.
+- A `viewer` gets a **structurally smaller** nav — Run, Policy, Add Nodes, Accounts, Access and
+  Incident simply are not there. Access is `admin`-only ([20](20-access.md)), so an `operator`
+  does not see it either.
 - With `console_execution = off` (v0.7.0, spec 05), Run is absent because the route was never
   mounted, not because a check refused it. The flag itself arrives with the composer; in v0.6.0
   there is no execution route for it to gate.
