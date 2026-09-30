@@ -65,3 +65,10 @@
 !/.claude/README.md
 !/.claude/commands/
 !/.claude/agents/
+
+# Compose interpolation files. Never commit one: Compose reads a `.env` beside a
+# compose file silently, so a committed one would change the deployment stack's
+# bind addresses or RELAY_ENV_FILE on the next pull-and-deploy
+# (docs/operations/relay-install.md, section 7).
+.env
+/deploy/compose/.env

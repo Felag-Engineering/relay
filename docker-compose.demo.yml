@@ -1,10 +1,16 @@
 # Relay dev fleet — DEV-ONLY (docs/dev-fleet.md).
 #
-# NOT the deployment stack. The root docker-compose.yml is that: one Relay
-# service and nothing else (docs/operations/relay-install.md). This file is
-# never read unless it is named, so every command for this fleet carries
+# NOT the deployment stack. deploy/compose/docker-compose.yml is that: one
+# Relay service and nothing else (docs/operations/relay-install.md, section
+# 7). There is deliberately no docker-compose.yml at the repo root, so this
+# file is never read unless it is named: every command for this fleet carries
 # `-f docker-compose.demo.yml` — `make dev-fleet-*` and scripts/demo-fleet.sh
 # (`make demo-*`) name it for you.
+#
+# Every Relay build below names `target: dev-fleet` explicitly: the default
+# (last) stage of docker/relay.Dockerfile is the fixture-free, non-root
+# `runtime` image, and this fleet needs the dev image with its baked gates.
+# That is the one non-comment change made when this file was split off.
 #
 # One `relay` container plus three `relay-daemon` containers by default (nine
 # under `--profile demo`, see below) that auto-enroll over CA-pinned mTLS and
@@ -65,6 +71,7 @@ services:
     build:
       context: .
       dockerfile: docker/relay.Dockerfile
+      target: dev-fleet
     restart: unless-stopped
     environment:
       # Node-plane gRPC listener (relay-daemon dial-home).
@@ -166,6 +173,7 @@ services:
     build:
       context: .
       dockerfile: docker/relay.Dockerfile
+      target: dev-fleet
     user: "0:0"
     restart: "no"
     depends_on:
@@ -250,6 +258,7 @@ services:
     build:
       context: .
       dockerfile: docker/relay.Dockerfile
+      target: dev-fleet
     user: "0:0"
     restart: "no"
     depends_on:

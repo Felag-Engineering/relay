@@ -8,11 +8,12 @@ compose profile built on top of it has its own runbook — see
 [The demo profile](#the-demo-profile).
 
 Both fleets are `docker-compose.demo.yml` at the repository root, and every command below
-names it with `-f` (the `make dev-fleet-*` targets do it for you). The root
-`docker-compose.yml` is something else: the single-Relay deployment stack, with no
-relay-daemons and no fixtures, documented in
-[Running it with Docker Compose](operations/relay-install.md#7-running-it-with-docker-compose).
-A bare `docker compose up` in the checkout starts that, not this fleet.
+names it with `-f` (the `make dev-fleet-*` targets do it for you). There is deliberately no
+`docker-compose.yml` at the root, so a bare `docker compose up` there does nothing. The
+single-Relay deployment stack, with no relay-daemons and no fixtures, is
+`deploy/compose/docker-compose.yml`, documented in
+[Running it with Docker Compose](operations/relay-install.md#7-running-it-with-docker-compose)
+— and it must never run on a machine that holds a development checkout like this one.
 
 > **DEV-ONLY — no production posture.** This environment ships committed
 > credentials and a fixture Policy for convenience, runs everything on one host,

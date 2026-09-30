@@ -27,8 +27,8 @@ APPROVER_CRED="${STATE_DIR}/approver-credential"
 BASE="${BASE:-https://localhost:9443}"
 
 # `init` reads the fleet with bare `docker compose`. The fleets live in
-# docker-compose.demo.yml; the root docker-compose.yml is the single-Relay
-# deployment stack and has none of the services `init` reads. So default to
+# docker-compose.demo.yml, and the repo root has no docker-compose.yml (a
+# bare `docker compose` there finds nothing, or a parent directory's). So default to
 # the fleet file — the same project `make dev-fleet-up` starts. A caller that
 # has already chosen (scripts/demo-fleet.sh exports its own) keeps its choice.
 export COMPOSE_FILE="${COMPOSE_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/docker-compose.demo.yml}"

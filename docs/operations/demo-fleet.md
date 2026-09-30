@@ -864,9 +864,8 @@ the demo fleet and wipe its volumes, run `docker compose -p relay-demo` with bot
 and `--profile demo down -v` directly, from the checkout root — never a bare
 `docker compose -f docker-compose.demo.yml --profile demo down -v`, which names its
 project after the checkout directory, not `relay-demo`, and leaves the demo fleet's
-volumes behind uncleaned. Name both files: without `-f` Compose reads the root
-`docker-compose.yml`, the single-Relay deployment stack, which knows none of the fleet's
-services; the OAuth overlay is named so that an IdP left from an `--oauth` run goes too,
+volumes behind uncleaned. Name both files: the repository root has no
+`docker-compose.yml`, so without `-f` Compose finds none (or a parent directory's); the OAuth overlay is named so that an IdP left from an `--oauth` run goes too,
 as `make demo-down` does:
 
 ```console

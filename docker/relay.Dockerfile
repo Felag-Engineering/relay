@@ -2,14 +2,15 @@
 #
 # Two targets, one binary:
 #
-#   runtime    the Relay and nothing else, running as an unprivileged user.
-#              The root docker-compose.yml builds this one (`target: runtime`):
-#              the single-host deployment in docs/operations/relay-install.md.
-#              No fixture, gate file or credential is baked into it.
-#   dev-fleet  the LAST stage, so the default for any build that names no
-#              target — docker-compose.demo.yml's. DEV-ONLY: it adds the dev
+#   dev-fleet  DEV-ONLY, and only when named (`target: dev-fleet`, as every
+#              Relay build in docker-compose.demo.yml does): it adds the dev
 #              and demo fleets' approval-gate fixtures and runs as root,
 #              exactly as this image did before the split (docs/dev-fleet.md).
+#   runtime    the LAST stage, so the default for a build that names no
+#              target: the Relay and nothing else, as an unprivileged user.
+#              deploy/compose/docker-compose.yml builds it — the single-host
+#              deployment in docs/operations/relay-install.md, section 7. No
+#              fixture, gate file or credential is baked into it.
 #
 # Neither is a published, reviewed release image yet (#399).
 
@@ -49,26 +50,11 @@ EXPOSE 7654 9443
 # that runs the image.
 ENTRYPOINT ["/usr/local/bin/relay"]
 
-# ---- runtime: the deployment target -------------------------------------------
-# The container expression of relay/packaging/relay.service's `User=relay`: the
-# Relay needs no privilege, so it does not run as root. The UID/GID are fixed so
-# that a file the operator mounts in (a webhook secret must be 0600 and owned
-# by the reading user) can be chowned to a known number on the host.
-#
-# /var/lib/relay is created 0700 and owned by that user, so a fresh named
-# volume mounted there inherits both — the CA key under it is the most
-# sensitive file in the deployment (docs/operations/ca-disaster-recovery.md).
-FROM base AS runtime
-
-RUN addgroup -S -g 10001 relay \
- && adduser -S -D -H -u 10001 -G relay -s /sbin/nologin relay \
- && install -d -o relay -g relay -m 0700 /var/lib/relay
-
-USER 10001:10001
-
-# ---- dev-fleet: DEV-ONLY, the default target ---------------------------------
+# ---- dev-fleet: DEV-ONLY, selected by name ---------------------------------
 # FROM base, not FROM runtime: the dev and demo fleets run the Relay as root,
-# as they always have, and their one-shots rely on it.
+# as they always have, and their one-shots rely on it. Only a build that asks
+# for it by name (`target: dev-fleet`, as every Relay build in
+# docker-compose.demo.yml does) gets this stage and its fixtures.
 FROM base AS dev-fleet
 
 # The approval gate (ADR-0027) arrives WITH THE IMAGE, never over the wire —
@@ -102,3 +88,22 @@ COPY --chmod=0644 docker/fixtures/approval-gates.demo.json /etc/relay/approval-g
 # control plane accepts only per-Account API Tokens, and the dev fleet's first
 # one is minted at runtime by the `credential` service (docker/mint-credential.sh)
 # using this image's own `relay bootstrap-token` subcommand.
+
+# ---- runtime: the deployment target, and the LAST stage -----------------------
+# Last on purpose: a build that names no target gets this fixture-free,
+# non-root image, never the dev fleet's.
+# The container expression of relay/packaging/relay.service's `User=relay`: the
+# Relay needs no privilege, so it does not run as root. The UID/GID are fixed so
+# that a file the operator mounts in (a webhook secret must be 0600 and owned
+# by the reading user) can be chowned to a known number on the host.
+#
+# /var/lib/relay is created 0700 and owned by that user, so a fresh named
+# volume mounted there inherits both — the CA key under it is the most
+# sensitive file in the deployment (docs/operations/ca-disaster-recovery.md).
+FROM base AS runtime
+
+RUN addgroup -S -g 10001 relay \
+ && adduser -S -D -H -u 10001 -G relay -s /sbin/nologin relay \
+ && install -d -o relay -g relay -m 0700 /var/lib/relay
+
+USER 10001:10001

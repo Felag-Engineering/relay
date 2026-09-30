@@ -515,8 +515,8 @@ fuzz-daemon:
 # (docs/dev-fleet.md). NOT part of build/test/lint and never invoked by CI —
 # the hermetic gate must never depend on Docker. Nothing else depends on these
 # targets; docs/dev-fleet.md documents the raw commands too. The fleet is
-# docker-compose.demo.yml, named explicitly: the root docker-compose.yml is the
-# single-Relay deployment stack, not a fleet.
+# docker-compose.demo.yml, named explicitly: there is no docker-compose.yml at
+# the root (the single-Relay deployment stack is deploy/compose/, not a fleet).
 DEV_FLEET_COMPOSE := docker compose -f docker-compose.demo.yml
 
 dev-fleet-up:

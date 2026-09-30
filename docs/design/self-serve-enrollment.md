@@ -199,14 +199,14 @@ Ties E4, E5, E7, E8 together. Four commands, two artifacts.
 Removing `RELAY_CA_BUNDLE_PATH` breaks every existing consumer of the old enrollment
 surface, and E4's falsifier only covers `docker/bootstrap.sh`:
 
-- `docker-compose.yml:171-205` — three daemons wired through
+- `docker-compose.demo.yml` (then `docker-compose.yml`, lines 171-205) — three daemons wired through
   `RELAY_CA_BUNDLE_PATH` + `RELAY_ENROLLMENT_TOKEN`.
 - `docker/daemon-entrypoint.sh` — reads the token from a file into the env var.
 - `relay/cmd/relay/*_e2e_test.go` and `crossbinary_e2e_test.go` — exercise enrollment
   directly.
 
 **Acceptance**
-- `docker compose up` produces an enrolled fleet with no `ca-cert.pem` on any shared
+- `docker compose -f docker-compose.demo.yml up` produces an enrolled fleet with no `ca-cert.pem` on any shared
   volume.
 - The daemon containers never mount CA material; only the join string reaches them.
 

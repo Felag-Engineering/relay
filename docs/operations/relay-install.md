@@ -10,7 +10,7 @@ verification contract this document consumes.
 
 Sections 1–6 are the recommended path: a verified binary under the hardened systemd unit.
 [Section 7](#7-running-it-with-docker-compose) is a second path, for evaluation and a single
-home-lab host — the repository-root `docker-compose.yml` — and says plainly what it keeps
+home-lab host — `deploy/compose/docker-compose.yml` — and says plainly what it keeps
 of that posture and what it does not.
 
 ## 1. Obtain and verify the artifact
@@ -224,12 +224,12 @@ caps, lower the minimum daemon version, or touch the listeners.
 
 ## 7. Running it with Docker Compose
 
-The repository-root [`docker-compose.yml`](../../docker-compose.yml) runs the Relay and
-nothing else: one service, one named volume, no relay-daemons, no helper containers, no
-fixtures and no credentials. It is written to be deployed from a git checkout, by hand or
-by a tool that deploys compose stacks from git (Komodo, for example).
+[`deploy/compose/docker-compose.yml`](../../deploy/compose/docker-compose.yml) runs the
+Relay and nothing else: one service and one data volume. There are no relay-daemons, helper
+containers, fixtures or credentials. It is written to be deployed from a git checkout, by hand
+or by a tool that deploys compose stacks from git (Komodo, for example).
 
-Read these three statements before anything else in this section:
+Read these statements before anything else in this section:
 
 - **It is a second path beside the systemd unit in [section 4](#4-the-packaged-systemd-unit),
   not a replacement for it.** ADR-0033 (decision 5) makes the container the evaluation
@@ -241,57 +241,95 @@ Read these three statements before anything else in this section:
   ([ca-disaster-recovery.md](ca-disaster-recovery.md)).
 - **No human has yet reviewed it as hardened.** It mirrors the unit's posture where Docker can
   express it, as listed below; that is a description, not a review.
+- **Never run it on a host that also holds a development checkout of this repository** — a
+  clone or any of its git worktrees. Every checkout carries this same file with the same
+  project name, `relay`, so a routine `docker compose -f deploy/compose/docker-compose.yml up
+  --build` in *any* of them resolves to the running deployment and replaces it with that
+  checkout's work in progress. The data volume is external (step 1), so no `down -v` can
+  delete the CA and store, but nothing stops the replacement. The deployment host holds one
+  checkout, at the pinned commit you deploy, and nothing else.
 
 It is not the dev fleet. The three-Node dev fleet and the nine-Node demo fleet are
-`docker-compose.demo.yml` ([dev-fleet.md](../dev-fleet.md)); nothing in this stack refers to
-their fixtures, their gates or their committed dev credentials.
+`docker-compose.demo.yml` at the repository root ([dev-fleet.md](../dev-fleet.md)); nothing in
+this stack refers to their fixtures, their gates or their committed dev credentials. There is
+deliberately no `docker-compose.yml` at the repository root.
 
 ### What it keeps of the packaging posture, and what it does not
 
 | Property of `relay/packaging/` | In this stack |
 | --- | --- |
-| Runs as an unprivileged Unix user | **Kept.** The image's `runtime` target (`docker/relay.Dockerfile`) runs as UID/GID `10001` (`relay`), never root. |
+| Runs as an unprivileged Unix user | **Kept.** The image's `runtime` stage (`docker/relay.Dockerfile`, its last and default stage) runs as UID/GID `10001` (`relay`), never root. |
 | Empty capability set, `NoNewPrivileges` | **Kept.** `cap_drop: [ALL]` and `no-new-privileges`. |
 | Read-only filesystem apart from its state | **Kept.** `read_only: true`; the state volume and a private `/tmp` tmpfs are the only writable paths. |
-| State directory `0700`, owned by the Relay's own Unix user | **Kept.** `/var/lib/relay` is created `0700` and owned by `relay` in the image, and a fresh named volume inherits both. The CA key inside it is `0600`. |
-| `TasksMax=512` | **Kept.** `pids_limit: 512`. |
+| State directory `0700`, owned by the Relay's own Unix user | **Kept.** `/var/lib/relay` is created `0700` and owned by `relay` in the image, and an empty volume takes both on first mount. The CA key inside it is `0600`. |
+| `TasksMax=512` | **Kept.** `pids_limit: 512`. No memory limit is set, here or in the unit. |
 | Secrets are file paths, never values | **Kept.** The environment file holds none; a secret (the approval webhook's signing key) is a host file bind-mounted read-only. |
-| Configuration set on the host, unreachable from any API (invariant 11) | **Kept.** The environment file lives on the host, by default at `/etc/relay/relay.env`, outside the checkout. |
-| Root-owned unit file | **Not kept.** The compose file lives in a git checkout. Whoever can change that checkout — or push to the branch a deploy tool pulls — decides the bind addresses, the settings the compose file pins, and the image that gets built. Treat write access to it as root on this host. |
-| Root-owned `EnvironmentFile` read only by the service | **Partly.** The file is read by `docker compose` on the host, as whoever runs it, and its values then sit in the container's environment, where anyone in the `docker` group can read them with `docker inspect`. That is why it must hold no secret. (Membership of the `docker` group is root-equivalent anyway.) |
+| Configuration set by the operator on the host, unreachable from any API (invariant 11) | **Not kept under a git-driven deploy.** No Relay API reaches it, but the deploy path does. Whoever can push to the branch a deploy tool tracks, or use that tool's interface, controls the published ports, the settings the compose file pins, the image that gets built, and `RELAY_ENV_FILE` — so they can point the Relay at a different environment file, one that sets a hostile `RELAY_OAUTH_ISSUER`, on the next deploy. `.env` files are git-ignored so that none can be committed by accident, but that stops an accident, not a push. Deploy a **pinned commit**, with **auto-deploy webhooks off**, and treat write access to that branch and to the deploy tool (Komodo included) as **root on the Relay host**. |
+| Root-owned unit file | **Not kept.** The compose file lives in the checkout; see the row above. |
+| Root-owned `EnvironmentFile` read only by the service | **Partly.** The file is read by `docker compose` on the host, as whoever runs it, and its values then sit in the container's environment, where anyone in the `docker` group can read them with `docker inspect`. That is why it must hold no secret — and note that `RELAY_APPROVAL_WEBHOOK_URL` may itself be a capability URL (a webhook endpoint whose path is its secret); if yours is, it is exposed the same way. Membership of the `docker` group is root-equivalent anyway. |
 | The unit's finer sandboxing (`SystemCallFilter=@system-service`, `ProtectKernel*`, `MemoryDenyWriteExecute`, `RestrictAddressFamilies`, `ProtectProc`) | **Not claimed.** Docker's default seccomp profile and namespaces cover some of the same ground; they are not equivalent and nothing here asserts they are. |
 | A digest-verified release binary (section 1) | **Not kept.** No Relay image is published yet (#399), so the stack builds the image from the checkout's own source. What runs is whatever that checkout contains. Switching to a pinned published image, once one exists, is a one-line change in the compose file. |
-| `Restart=on-failure`, enabled at boot | **`restart: unless-stopped`.** Docker's `on-failure` would not bring the Relay back after a host or Docker restart; `unless-stopped` does, and additionally restarts after a clean exit nobody asked for, which the Relay does not make on its own. |
+| `Restart=on-failure`, enabled at boot | **`restart: unless-stopped`.** Docker's `on-failure` would not bring the Relay back after a host or Docker restart; `unless-stopped` does, and additionally restarts after a clean exit nobody asked for, which the Relay does not make on its own. Neither restarts an *unhealthy* container: watch the health status. |
+
+**Open point for a human: who owns a secret file.** Invariant 11 says a file holding a secret
+"must be root-owned and not world-readable". What the code enforces today is the mode only:
+the Relay refuses a webhook secret file that is group- or world-accessible, so it must be
+`0600` — and a `0600` file is readable only by its owner, so under this stack it must be owned
+by UID `10001`, the Relay's user, and under the systemd unit by the `relay` user. Neither is
+root-owned. The two candidate answers are (a) amend the invariant's wording to "owned by the
+Relay's service user, mode `0600`", which is what both deployments do today, or (b) keep
+root ownership and change how the Relay reads secrets — for example `0640 root:relay` with the
+code accepting group-read by the Relay's own group, or a root-run step that hands the Relay
+the secret. This is not resolved here; the instructions below follow what the code enforces.
 
 ### What it exposes
 
 Two ports, and the stack binds them differently on purpose. Both are set by **Compose
 interpolation variables** — in the shell that runs `docker compose`, in a `.env` file beside
-`docker-compose.yml`, or in a deploy tool's stack environment — **never in the Relay's
-environment file**, which Compose does not read for this.
+the compose file (git-ignored), or in a deploy tool's stack environment — **never in the
+Relay's environment file**, which Compose does not read for this.
 
 | Port | Default binding | Variable | What is reachable there |
 | --- | --- | --- | --- |
 | `7654`, the Node plane | `0.0.0.0` (every IPv4 interface) | `RELAY_NODE_PUBLISH_ADDR` | gRPC over mTLS. relay-daemons on other hosts dial it, which is the point of the stack. Every RPC requires a client certificate issued by the Relay's CA except Enrollment, which requires an Enrollment Token and is rate-limited per source address and globally. |
-| `9443`, the control plane | `127.0.0.1` (host loopback) | `RELAY_PUBLISH_ADDR` | MCP at `/mcp`, the Control API at `/api/v1`, `/metrics`, and the Admin Console at `/console/`. It is an execution surface for whoever holds an API Token or a Console password. |
+| `9443`, the control plane | `127.0.0.1` (host loopback) | `RELAY_PUBLISH_ADDR` | MCP at `/mcp`, the Control API at `/api/v1`, `/metrics`, and — when enabled — the Admin Console at `/console/`. It is an execution surface for whoever holds an API Token or a Console password. |
 
-**Set a Console password before you publish `9443` beyond loopback** — that is step 5 below,
-and the default binding enforces the order. Once it is reachable, anyone on that network can
-attempt a Console sign-in: the throttle deliberately has no hard lockout, and the Relay
-refuses any password shorter than 12 bytes, so length is what protects it. Choose a long one.
+**Set a Console password before you publish `9443` beyond loopback.** Nothing enforces that
+order — the loopback default only makes it the path of least resistance, and step 5 below is
+where it happens. Once `9443` is reachable, anyone on that network can attempt a Console
+sign-in: the throttle deliberately has no hard lockout, and the Relay refuses any password
+shorter than 12 bytes, so length is what protects it. Choose a long one.
+
+**Do not expose `7654` to the internet** unless you must: the global enrollment bucket is
+shared by every source, so anyone who can reach the port can spend it and deny enrollment to
+your own Nodes (Nodes already enrolled are unaffected).
 
 Docker publishes ports with its own firewall rules, which take effect **before** host
 firewalls such as `ufw` or `firewalld` see the traffic. The bind address is the exposure
 control here; a host firewall rule on `7654` or `9443` does not restrict a Docker-published
-port.
+port. Use **Docker Engine 28 or newer**: before 28.0, a port published on `127.0.0.1` was
+reported to be reachable from other hosts on the same layer-2 segment (as reported in Docker's
+28.0 release notes; not verified here).
 
 ### First run
 
-You need Docker Engine with Compose **v2.24 or newer**, a checkout of this repository on the
-Relay host (the image is built from it), and a DNS name for the host that every relay-daemon
-will be able to resolve.
+You need Docker Engine 28+ with Compose **v2.24 or newer**, one checkout of this repository
+on the Relay host at the commit you deploy (the image is built from it; see the warning at
+the top of this section), and a DNS name for the host that every relay-daemon can resolve.
+Run every command below from the checkout root.
 
-**1. Write the environment file.** Start from the same sample the systemd unit uses —
+**1. Create the data volume.** It is declared `external`, so Compose never creates it and no
+`docker compose down -v` can delete it — the CA key and the store live on it:
+
+```console
+$ docker volume create relay-data
+```
+
+Create it empty. On first start Docker copies the image's `/var/lib/relay` into it, owner
+`relay` (UID `10001`) and mode `0700`. To use another name, create that one and set
+`RELAY_DATA_VOLUME` the same way as the bind addresses.
+
+**2. Write the environment file.** Start from the same sample the systemd unit uses —
 [`relay/packaging/relay.env.example`](../../relay/packaging/relay.env.example), kept complete
 by a drift test — rather than a second copy:
 
@@ -304,96 +342,110 @@ $ sudoedit /etc/relay/relay.env
 Set `RELAY_HOSTNAME` to the name relay-daemons will dial. It becomes the server certificate's
 SAN, so it must be the real name: while it is unset or still the sample's
 `relay.example.internal`, the container reports **unhealthy** and
-`docker inspect --format '{{json .State.Health}}' <container>` says why. Everything else is
-optional (blast caps, enrollment rate limits, the minimum daemon version, OAuth, approval
-gates). The file's `chown root:relay` line is for the systemd unit; here the file is read by
-`docker compose`, so keep it `0600` and owned by whoever runs Compose (root, for most deploy
-tools). To keep it elsewhere, set `RELAY_ENV_FILE` the same way as the bind addresses.
+`docker inspect --format '{{json .State.Health}}' <container>` says why. For the Console,
+set `RELAY_CONSOLE_ENABLED=true`; it is off unless you do, as under the unit. Everything else
+is optional (blast caps, enrollment rate limits, the minimum daemon version, OAuth, approval
+gates).
 
-Six settings are **pinned by the compose file and win over the environment file**, because
+The file is **required**: if it is missing, `docker compose` refuses to start the stack
+rather than starting the Relay on defaults with no approval gate, the default blast caps and
+no version gate. The sample's `chown root:relay` line is for the systemd unit; here the file
+is read by `docker compose`, so keep it `0600` and owned by whoever runs Compose (root, for
+most deploy tools). To keep it elsewhere, set `RELAY_ENV_FILE` to an **absolute** path (a
+relative one resolves against `deploy/compose/`).
+
+Five settings are **pinned by the compose file and win over the environment file**, because
 each is tied to the container's layout — its published ports and its volume:
-`RELAY_ADDR`, `RELAY_CONTROL_ENABLED` (on), `RELAY_CONTROL_ADDR`, `RELAY_CA_DIR`,
-`RELAY_STORE_PATH` (`/var/lib/relay/relay.db`) and `RELAY_CONSOLE_ENABLED` (on). The Console
-is on, and has no default credential: nobody can sign in until step 4.
+`RELAY_ADDR`, `RELAY_CONTROL_ENABLED` (on), `RELAY_CONTROL_ADDR`, `RELAY_CA_DIR` and
+`RELAY_STORE_PATH` (`/var/lib/relay/relay.db`).
 
-**2. Bring it up**, from the checkout root:
+**3. Bring it up:**
 
 ```console
-$ docker compose up -d --build
-$ docker compose ps          # wait for relay to be (healthy)
+$ docker compose -f deploy/compose/docker-compose.yml up -d --build
+$ docker compose -f deploy/compose/docker-compose.yml ps   # wait for relay to be (healthy)
 ```
 
 The Relay creates its CA on first start and logs its fingerprint
-(`docker compose logs relay`).
+(`docker compose -f deploy/compose/docker-compose.yml logs relay`).
 
-**3. Mint the founding admin's API Token** — the first control-plane credential, minted
+**4. Mint the founding admin's API Token** — the first control-plane credential, minted
 locally against the store ([control-plane-credential.md](control-plane-credential.md),
-ADR-0023). It is printed once and never stored; put it in a vault at that moment:
+ADR-0023). It is printed once and never stored; put it in a vault at that moment, and hold it
+in `RELAY_TOKEN` for the rest of this procedure without echoing it:
 
 ```console
-$ docker compose exec relay relay bootstrap-token -store-path /var/lib/relay/relay.db
+$ docker compose -f deploy/compose/docker-compose.yml exec relay \
+    relay bootstrap-token -store-path /var/lib/relay/relay.db
+$ read -rs RELAY_TOKEN     # paste the token printed above
 ```
 
 Copy out the Relay's **public** CA certificate, which every client and every relay-daemon
 pins (never `ca-key.pem`):
 
 ```console
-$ docker compose cp relay:/var/lib/relay/ca/ca-cert.pem ./relay-ca-cert.pem
+$ docker compose -f deploy/compose/docker-compose.yml cp \
+    relay:/var/lib/relay/ca/ca-cert.pem ./relay-ca-cert.pem
 ```
 
-**4. Set the Console password** with `relay console-password`. It reads the password from
-standard input, so nothing puts it in a process listing or on disk:
+**5. Set the Console password** (only if you enabled the Console in step 2) with
+`relay console-password`. It reads the password from standard input, so nothing puts it in a
+process listing or on disk:
 
 ```console
 $ read -rs PW && printf '%s\n' "$PW" | \
-    docker compose exec -T relay relay console-password \
-      -store-path /var/lib/relay/relay.db -account founding-admin; unset PW
+    docker compose -f deploy/compose/docker-compose.yml exec -T relay \
+      relay console-password -store-path /var/lib/relay/relay.db -account founding-admin
+$ unset PW
 ```
 
 `founding-admin` is the human admin Account `bootstrap-token` used. Every act in the Console
 is attributed to the Account that signed in, so give each further person their own human
 Account (`POST /api/v1/accounts`) and their own password, rather than sharing this one.
 
-**5. Publish the control plane**, if you want it reachable beyond this host: set
-`RELAY_PUBLISH_ADDR` to the host's LAN address (or `0.0.0.0`) beside `docker-compose.yml`,
-then `docker compose up -d` again. Sign in at `https://<RELAY_HOSTNAME>:9443/console/`. The
-browser warns about the certificate because it chains to the Relay's private CA; trust
-`relay-ca-cert.pem` rather than clicking through.
+Then, if you want the control plane reachable beyond this host, set `RELAY_PUBLISH_ADDR` to
+the host's LAN address (or `0.0.0.0`) and run the `up -d` from step 3 again. Sign in at
+`https://<RELAY_HOSTNAME>:9443/console/`. The browser warns about the certificate because it
+chains to the Relay's private CA; trust `relay-ca-cert.pem` rather than clicking through.
 
 **6. Mint an Enrollment Token** ([enrollment.md](enrollment.md) explains the scope and its
-security meaning — the `relay:` labels it stamps are what the security lane targets):
+security meaning — the `relay:` labels it stamps are what the security lane targets). From
+the Relay host, with `RELAY_TOKEN` from step 4:
 
 ```console
 $ curl --cacert relay-ca-cert.pem \
+    --resolve <RELAY_HOSTNAME>:9443:127.0.0.1 \
     -H "Authorization: Bearer $RELAY_TOKEN" \
     -H 'Content-Type: application/json' \
     -d '{"scope":["relay:env=lab"],"ttl_seconds":86400,"max_uses":10}' \
     https://<RELAY_HOSTNAME>:9443/api/v1/enrollment-tokens
 ```
 
-Before step 5, run it on the Relay host with `--resolve <RELAY_HOSTNAME>:9443:127.0.0.1`, so
-TLS still verifies against the real name.
+`--resolve` dials loopback while TLS still verifies the real name; drop it from any other
+host once the control plane is published.
 
 **7. Point real relay-daemons at it**, one host at a time, following
 [relay-daemon-install.md](relay-daemon-install.md): `RELAY_ADDR` is
 `https://<RELAY_HOSTNAME>:7654`, `RELAY_CA_BUNDLE_PATH` is the `relay-ca-cert.pem` from step
-3, and the Enrollment Token from step 6 is used once, at first start. Each Node's Policy is
+4, and the Enrollment Token from step 6 is used once, at first start. Each Node's Policy is
 its own and is authored on that Node; this stack ships none and can never write one
-(ADR-0002).
+(ADR-0002). Finish with `unset RELAY_TOKEN`.
 
 ### Operating it
+
+Every command here takes `-f deploy/compose/docker-compose.yml`, shortened below to `…`.
 
 - **Approval gates are off: nothing needs approval** until you add a gate. The stack ships no
   gate file, because a gate is Relay configuration the operator writes on the host and a
   committed one would live in the checkout instead. To add one, write the rules
   ([approval-gates.md](approval-gates.md)) to a host file owned by root and not group- or
-  world-writable, uncomment the gate mount in `docker-compose.yml`, and set
+  world-writable, uncomment the gate mount in the compose file, and set
   `RELAY_APPROVAL_GATE_CONFIG=/etc/relay/approval-gates.json` in the environment file. A
   configured gate that cannot be loaded refuses startup rather than running ungated.
 - **The approval webhook's signing secret** is a file: mode `0600`, owned by UID `10001` (the
-  Relay's user inside the image — a file only root can read is unreadable to it), mounted
-  read-only through the commented example in `docker-compose.yml`, and named by
-  `RELAY_APPROVAL_WEBHOOK_SECRET_FILE`. Anything looser refuses startup.
+  Relay's user inside the image — a file only root can read is unreadable to it; see the open
+  point above), mounted read-only through the commented example in the compose file, and
+  named by `RELAY_APPROVAL_WEBHOOK_SECRET_FILE`. Anything looser refuses startup.
 - **OAuth** is off unless you set `RELAY_OAUTH_ISSUER` and its companions in the environment
   file ([control-plane-credential.md](control-plane-credential.md#human-sessions-oauth-21-through-your-idp)).
   The issuer is fetched from inside the container at startup, over HTTPS, trusting Alpine's
@@ -404,15 +456,15 @@ its own and is authored on that Node; this stack ships none and can never write 
   outside the checkout like the environment file does. Do not copy the demo overlay's
   contents: its shared network namespace and plain-HTTP loopback issuer exist only because
   its DEV-ONLY Keycloak runs beside the Relay without TLS.
-- **Freeze** (ADR-0013): `docker compose kill -s USR1 relay` engages it and
-  `docker compose kill -s USR2 relay` releases it, the same host-side lever as
+- **Freeze** (ADR-0013): `docker compose … kill -s USR1 relay` engages it and
+  `docker compose … kill -s USR2 relay` releases it, the same host-side lever as
   [section 5](#5-operational-levers-on-the-relay-host).
-- **Back up the volume.** `relay_relay-data` (named for the `relay` project; a deploy tool
-  that sets its own project name changes the prefix) holds the CA key and the store.
-  `docker compose down -v` destroys both, and every Node must then re-enroll.
-- **Upgrades** are a new checkout and `docker compose up -d --build`. The Relay never pushes
-  binaries to Nodes (ADR-0014).
-- **Project name.** The file sets `name: relay`, so a bare `docker compose` in a checkout
-  never lands in the checkout-directory-named project the dev fleet uses. It still publishes
-  the same host ports as the dev and demo fleets, so only one of the three can run on a
-  host at a time.
+- **Back up the volume** `relay-data`: it holds the CA key and the store. Compose will not
+  delete it; `docker volume rm relay-data` will, and every Node must then re-enroll.
+- **Upgrades** are a checkout of the next pinned commit and `docker compose … up -d --build`.
+  The Relay never pushes binaries to Nodes (ADR-0014).
+- **Project name.** The file sets `name: relay`; a deploy tool's own `-p` overrides it. The
+  name does **not** prevent a collision — every checkout of this repository resolves to the
+  same project, which is why the deployment host must hold no other checkout. The stack also
+  publishes the same host ports as the dev and demo fleets, so only one of the three can run
+  on a host at a time.

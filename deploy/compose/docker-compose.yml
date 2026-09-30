@@ -1,0 +1,164 @@
+# Relay — the single-host Docker Compose deployment.
+#
+# One service, the Relay, and nothing else: no relay-daemons, no helper
+# containers, no fixtures, no credentials. The first-run steps (the data
+# volume, founding admin token, Console password, Enrollment Token, pointing
+# real relay-daemons at it) and the posture it does and does not keep are in
+# docs/operations/relay-install.md, "Running it with Docker Compose". Read that
+# section before exposing anything.
+#
+# This is a SECOND deployment path beside the hardened systemd unit in
+# relay/packaging/, not a replacement for it: ADR-0033 makes the container the
+# evaluation artifact. It has NOT yet been reviewed by a human as hardened. It
+# is a single host with no high-availability claim.
+#
+# NEVER RUN IT ON A HOST THAT ALSO HOLDS A DEVELOPMENT CHECKOUT OF THIS REPO.
+# Every checkout and worktree carries this same file with the same project
+# name, so a routine `docker compose ... up --build` in any of them replaces
+# the running Relay with that checkout's work in progress. (The data volume is
+# external, below, so no `down -v` can delete the CA and store — but that is
+# the only thing it protects.)
+#
+# It lives here, not at the repo root, so that a bare `docker compose` at the
+# root errors instead of doing something surprising. The three-Node dev fleet
+# and the nine-Node demo fleet are docker-compose.demo.yml at the root
+# (DEV-ONLY; docs/dev-fleet.md).
+#
+# Needs Docker Compose v2.24 or newer (the `env_file` long form below) and
+# Docker Engine 28 or newer (see the port notes).
+
+# A fixed project name. A deploy tool that passes its own `-p` (Komodo does)
+# overrides it.
+name: relay
+
+services:
+  relay:
+    # Built from this checkout because no Relay image is published yet (#399).
+    # The context is the repo root, two levels up. Once an image is published,
+    # replace this ONE line with the pinned image, for example
+    #   image: <registry>/relay:<version>@sha256:<digest>
+    # (built from the same Dockerfile's `runtime` stage, so it runs as UID
+    # 10001 and owns /var/lib/relay). `runtime` carries no dev fixture — see
+    # docker/relay.Dockerfile.
+    build: { context: ../.., dockerfile: docker/relay.Dockerfile, target: runtime }
+
+    # Relay configuration, written by the operator on the HOST and never
+    # committed. Start from relay/packaging/relay.env.example — the same sample
+    # the systemd unit uses, kept complete by a drift test — and set
+    # RELAY_HOSTNAME at minimum. No secret VALUE belongs in it: its values end
+    # up in the container's environment, readable with `docker inspect`.
+    # Anything secret is a file path, mounted read-only below.
+    #
+    # REQUIRED: a missing file refuses to start rather than running on
+    # defaults — no approval gate, the default blast caps, no daemon version
+    # gate — which is what a typo in RELAY_ENV_FILE, or a deploy tool without
+    # /etc/relay mounted, would otherwise do silently. RELAY_ENV_FILE is
+    # interpolated from the shell (or a git-ignored `.env` beside this file).
+    env_file:
+      - path: ${RELAY_ENV_FILE:-/etc/relay/relay.env}
+        required: true
+
+    # Pinned here, and they WIN over the env file: each is tied to this
+    # container's layout — the published ports and the volume below — so an
+    # env-file value would only break the stack, not configure it. The Console
+    # is NOT pinned: it is off unless the env file sets
+    # RELAY_CONSOLE_ENABLED=true, as the packaging default is.
+    environment:
+      RELAY_ADDR: ":7654"
+      RELAY_CONTROL_ENABLED: "true"
+      RELAY_CONTROL_ADDR: ":9443"
+      RELAY_CA_DIR: "/var/lib/relay/ca"
+      RELAY_STORE_PATH: "/var/lib/relay/relay.db"
+
+    ports:
+      # NODE PLANE, on every IPv4 interface by default: relay-daemons on other
+      # hosts dial it, which is the point of the stack. Its only RPC that takes
+      # no client certificate is Enrollment, which needs an Enrollment Token
+      # and is rate-limited per source address and globally — so exposing it
+      # to the internet lets anyone exhaust the global bucket and deny
+      # enrollment to your own Nodes.
+      - "${RELAY_NODE_PUBLISH_ADDR:-0.0.0.0}:7654:7654"
+      # CONTROL PLANE (MCP, /api/v1, /metrics, and the Console when enabled)
+      # on host LOOPBACK by default. It is an execution surface for whoever
+      # holds an API Token or a Console password. Set RELAY_PUBLISH_ADDR to a
+      # LAN address (or 0.0.0.0) only after the Console password is set;
+      # nothing enforces that order. Docker-published ports bypass host
+      # firewalls such as ufw, so this binding is the exposure control.
+      - "${RELAY_PUBLISH_ADDR:-127.0.0.1}:9443:9443"
+
+    volumes:
+      # The CA (key included) and the SQLite store: registry, Jobs, audit
+      # trail, Accounts, API Tokens. Back it up; see
+      # docs/operations/ca-disaster-recovery.md.
+      - relay-data:/var/lib/relay
+      # Approval gates (ADR-0027): none by default, so NOTHING NEEDS APPROVAL
+      # until you add one. To add one, write the rules
+      # (docs/operations/approval-gates.md) to a host file owned by root and
+      # not group- or world-writable, uncomment this mount, and set
+      # RELAY_APPROVAL_GATE_CONFIG=/etc/relay/approval-gates.json in the env
+      # file. A configured gate that cannot be loaded refuses startup.
+      # - /etc/relay/approval-gates.json:/etc/relay/approval-gates.json:ro
+      #
+      # Approval webhook signing secret: a FILE, never a value. The Relay
+      # refuses it unless it is readable by its owner alone (mode 0600), and
+      # it must be readable by UID 10001, the Relay's user in the image — so
+      # today it is owned by 10001. That sits in tension with "root-owned" in
+      # AGENTS.md invariant 11; relay-install.md section 7 records it as open.
+      # Set RELAY_APPROVAL_WEBHOOK_SECRET_FILE to the in-container path.
+      # - /etc/relay/approval-webhook.secret:/run/relay/approval-webhook.secret:ro
+
+    # The container form of relay.service's hardening: no capabilities, no
+    # privilege gain, a read-only root filesystem apart from the state volume
+    # and a private /tmp, and the unit's TasksMax. The image already runs as
+    # an unprivileged user (UID 10001). No memory limit is set.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - "no-new-privileges:true"
+    pids_limit: 512
+
+    # relay.service is enabled at boot and restarts on failure. `on-failure`
+    # alone would not bring the Relay back after a host or Docker restart, so
+    # this is the closest match; the one thing it adds is a restart after a
+    # clean exit nobody asked for, which the Relay does not do on its own. It
+    # does not stop an unhealthy container: watch the health status.
+    restart: unless-stopped
+
+    healthcheck:
+      # Refuses an unset RELAY_HOSTNAME or the sample's placeholder, then
+      # completes a TLS 1.3 handshake with each listener, verified against the
+      # Relay's own CA and that hostname, the SAN daemons will check. The
+      # node plane is gRPC, which requires ALPN h2. `docker inspect` on the
+      # container shows the reason when it fails.
+      test:
+        - "CMD"
+        - "sh"
+        - "-c"
+        - >-
+          case "$${RELAY_HOSTNAME:-}" in
+          ""|relay.example.internal)
+          echo "RELAY_HOSTNAME is unset or still the example placeholder"; exit 1;;
+          esac;
+          for p in 7654:h2 9443:http/1.1; do
+          openssl s_client -quiet -no_ign_eof -tls1_3
+          -connect 127.0.0.1:$${p%%:*}
+          -servername "$${RELAY_HOSTNAME}" -verify_hostname "$${RELAY_HOSTNAME}"
+          -CAfile /var/lib/relay/ca/ca-cert.pem -verify_return_error
+          -alpn $${p#*:} </dev/null >/dev/null 2>&1
+          || { echo "TLS handshake failed on port $${p%%:*}"; exit 1; }; done
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  relay-data:
+    # EXTERNAL: created once by the operator (`docker volume create
+    # relay-data`, relay-install.md section 7, step 1) and never by Compose, so
+    # no `docker compose down -v` from anywhere can delete the CA and store.
+    # An empty volume still takes the image's /var/lib/relay ownership and
+    # mode (0700, UID 10001) on first mount.
+    external: true
+    name: ${RELAY_DATA_VOLUME:-relay-data}
