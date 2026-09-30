@@ -342,6 +342,27 @@ with the fleet's changes.
 
 The navigation stays at nine destinations: Agents leaves Observe, and Access joins Administer.
 
+### D18. Running now; the Account filter names an ID — **RESOLVED 2026-09-30 (owner)**
+
+**Why:** once #793 put running Jobs on Activity at their own time, a Job that has run for hours sat
+pages down the stream. The Agents screen had shown every running Job on its first page; retiring
+it (D17) would have lost that.
+
+**Ruling (owner, 2026-09-30):**
+
+1. **Activity gets a "Running now" section** above the stream ([04](04-activity.md)):
+   longest-running first, five per page, paged on its own cursor, following `?account=` and
+   neither the kind chips nor the time window, never reordering under the reader.
+2. **Cancel lives in that section only.** A running Job appears in the section and in the stream;
+   the stream row links to the section's entry, which owns the one Cancel.
+3. **`?account=` names the verified Account ID, never a name**, on Activity and wherever links into
+   it are drawn (the "Who is active" strip, the Accounts screen's last-tool-call link). An entry
+   with no verified ID is listed, unlinked.
+4. **Spec 04's row-kind table names `other`**, which the screen has always shown.
+5. **Raw Exec's tier is made conspicuous everywhere it is drawn**: its chip gets a treatment of
+   its own, and Job detail stops naming an Operation called `raw_exec` as the tier, before the
+   Agents screen is removed.
+
 ## Prerequisites that already exist as issues
 
 ### D8. [#397](https://github.com/Felag-Engineering/gleipnir-relay/issues/397) — three route families have no role gate — **RESOLVED: gates landed**
