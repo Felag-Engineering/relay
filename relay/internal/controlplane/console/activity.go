@@ -23,10 +23,14 @@ package console
 // computed in the aggregate. The cost is FLAT from 3 Nodes to 10,000: the same
 // "bounded by construction, not capped after the fact" doctrine job.go states.
 //
-// Non-dispatch events are first-class rows, not a footnote: approvals, token
-// mints, Freeze transitions and sign-ins are things that happened to the fleet,
-// and an operator who has to look in a second place for "who minted that token"
-// has a trail with a hole in it. They come from capability.QueryAudit.
+// Non-dispatch events are first-class rows, not a footnote: approvals,
+// Enrollment Token mints, Freeze transitions and Node revokes are things
+// that happened to the fleet, and an operator who has to look in a second
+// place for "who minted that token" has a trail with a hole in it. They
+// come from capability.QueryAudit. Sign-ins, step-up, Account changes and
+// API Token mints and revokes are NOT among them — those change who can get
+// in rather than what happened to the fleet, and they are the admin-only
+// Access screen's rows instead (access.go, spec 20, D17).
 //
 // # The two lanes, and their page boundary
 //
@@ -107,22 +111,31 @@ const (
 	rowToken    rowKind = "token"
 	rowNode     rowKind = "node"
 	rowFreeze   rowKind = "freeze"
-	rowAuth     rowKind = "auth"
-	rowAccount  rowKind = "account"
 	rowRead     rowKind = "read"
 	rowRefusal  rowKind = "refusal"
 	rowOther    rowKind = "other"
+
+	// rowAccess is NOT an Activity family: it marks a kind that belongs to
+	// the Access screen (access.go, spec 20) instead — sign-in, step-up,
+	// account and api-token records. It is deliberately never in
+	// rowKindOrder, so no default Kinds filter and no chip filter this
+	// screen sends can ever name one of those 13 kinds, and
+	// ?kind=<an Access family> falls to the unknown-kind case exactly as
+	// ?kind=nonesuch does (spec 04's "not on this screen, for any role").
+	rowAccess rowKind = "access"
 )
 
 // rowKindOrder is every family, in the order the chips render. It is also the
 // set kindsOfFamily must be TOTAL over.
 var rowKindOrder = []rowKind{
-	rowDispatch, rowRead, rowRefusal, rowApproval, rowFreeze,
-	rowNode, rowToken, rowAccount, rowAuth, rowOther,
+	rowDispatch, rowRead, rowRefusal, rowApproval, rowFreeze, rowNode, rowToken, rowOther,
 }
 
 // kindOf maps a trail record onto a row family.
 func kindOf(k string) rowKind {
+	if _, ok := accessKindOf(k); ok {
+		return rowAccess
+	}
 	switch k {
 	case audit.KindDispatch:
 		return rowDispatch
@@ -134,17 +147,17 @@ func kindOf(k string) rowKind {
 		audit.KindApprovalDecided, audit.KindApprovalExpired,
 		audit.KindApprovalPendingObserved:
 		return rowApproval
-	case audit.KindTokenMint, audit.KindTokenRevoke, audit.KindAPITokenMint, audit.KindAPITokenRevoke:
+	// Enrollment Tokens only (audit.KindTokenMint/Revoke): a Node joins or
+	// is revoked with its token. API Tokens (audit.KindAPITokenMint/Revoke)
+	// authenticate a caller instead and are an Access kind, caught by the
+	// accessKindOf check above — the two used to share this family and were
+	// split by D17 (spec 04, spec 20).
+	case audit.KindTokenMint, audit.KindTokenRevoke:
 		return rowToken
 	case audit.KindNodeRevoke:
 		return rowNode
 	case audit.KindFreezeEngage, audit.KindFreezeRelease:
 		return rowFreeze
-	case audit.KindLoginSucceeded, audit.KindLoginFailed, audit.KindLoginThrottled, audit.KindLogout,
-		audit.KindStepUp, audit.KindStepUpFailed, audit.KindStepUpThrottled:
-		return rowAuth
-	case audit.KindAccountCreate, audit.KindAccountRole, audit.KindAccountEnable, audit.KindAccountDisable:
-		return rowAccount
 	default:
 		return rowOther
 	}
@@ -201,17 +214,29 @@ func kindsOfFamily(f rowKind) []string {
 //     being read; one click away through the `read` chip, and their home is
 //     the Read-egress screen.
 //
-// Neither is hidden: both are reachable as their own family.
+// Both are ONE CLICK AWAY, reachable as their own family. activityAccessKinds
+// below is excluded too, but is not: see its own comment.
 var activityLaneExcluded = []string{audit.KindDispatch, audit.KindRead}
 
+// activityAccessKinds is every kind Access (spec 20) owns — accessAllKinds
+// itself, named again here rather than re-derived so the two screens'
+// vocabularies cannot drift apart. Unlike activityLaneExcluded above, these
+// are not on this screen for any role: their home is the admin-only Access
+// screen (spec 04's Grain, D17), not a chip on this one.
+var activityAccessKinds = accessAllKinds
+
 // activityTrailKinds is what the default feed asks the trail lane for:
-// everything except the two above. Derived from audit.Kinds() so that a kind
-// added to internal/audit appears here without anyone remembering to add it.
+// everything except activityLaneExcluded and activityAccessKinds. Derived
+// from audit.Kinds() so that a kind added to internal/audit appears here
+// without anyone remembering to add it.
 var activityTrailKinds = defaultTrailKinds()
 
 func defaultTrailKinds() []string {
 	excluded := map[string]bool{}
 	for _, k := range activityLaneExcluded {
+		excluded[k] = true
+	}
+	for _, k := range activityAccessKinds {
 		excluded[k] = true
 	}
 	var out []string
@@ -406,6 +431,74 @@ var activityWindows = []struct {
 	{"7d", "last 7 days", 7 * 24 * time.Hour},
 }
 
+// timeRange is the relative-window/explicit-range half of a screen's
+// filter, extracted from parseActivityFilter so Activity and Access
+// (access.go) parse one range rather than two that could drift.
+//
+// Window is a relative range ("15m", "1h", "24h", "7d"); Since and Until are
+// the resolved absolute bounds, whether they came from Window or from
+// explicit RFC3339 parameters.
+type timeRange struct {
+	Window       string
+	SinceParam   string
+	UntilParam   string
+	Since, Until time.Time
+}
+
+// parseTimeRange reads a relative window or an explicit range out of the
+// three raw query values, returning a note for anything it could not read.
+//
+// A value it does not understand is DROPPED AND NAMED, never silently
+// applied as something else: a time range that quietly became "everything"
+// is how an auditor concludes an event did not happen. The note strings are
+// load-bearing beyond this file — activity_test.go and standing_notes_test.go
+// match on them byte-identically, and access_test.go will too.
+func parseTimeRange(window, since, until string, now time.Time) (timeRange, []string) {
+	t := timeRange{Window: window, SinceParam: since, UntilParam: until}
+	var notes []string
+
+	// An explicit range beats a relative one, and asking for both is a
+	// contradiction rather than a preference — say so.
+	if t.Window != "" {
+		d, ok := windowDuration(t.Window)
+		switch {
+		case !ok:
+			notes = append(notes, "the time window "+quoted(t.Window)+" is not one this screen offers, so it was ignored")
+			t.Window = ""
+		case t.SinceParam != "" || t.UntilParam != "":
+			notes = append(notes, "both a relative window and an explicit range were given; the explicit range was used")
+			t.Window = ""
+		default:
+			t.Since = now.Add(-d)
+		}
+	}
+	if t.SinceParam != "" {
+		if v, err := time.Parse(time.RFC3339, t.SinceParam); err == nil {
+			t.Since = v
+		} else {
+			notes = append(notes, "since= is not an RFC 3339 timestamp, so it was ignored")
+			t.SinceParam = ""
+		}
+	}
+	if t.UntilParam != "" {
+		if v, err := time.Parse(time.RFC3339, t.UntilParam); err == nil {
+			t.Until = v
+		} else {
+			notes = append(notes, "until= is not an RFC 3339 timestamp, so it was ignored")
+			t.UntilParam = ""
+		}
+	}
+	// The read lane refuses a range that runs backwards. Catching it here
+	// means the operator is told which half was wrong instead of being handed
+	// the seam's validation error.
+	if !t.Since.IsZero() && !t.Until.IsZero() && !t.Until.After(t.Since) {
+		notes = append(notes, "until must be after since; the range was ignored")
+		t.Since, t.Until, t.SinceParam, t.UntilParam, t.Window = time.Time{}, time.Time{}, "", "", ""
+	}
+
+	return t, notes
+}
+
 // parseActivityFilter reads the filter out of the URL, returning a note for
 // anything it could not read.
 //
@@ -420,9 +513,6 @@ func parseActivityFilter(r *http.Request, now time.Time) (activityFilter, string
 		OnBehalfOf: strings.TrimSpace(q.Get("on_behalf_of")),
 		Op:         strings.TrimSpace(q.Get("op")),
 		Outcome:    strings.TrimSpace(q.Get("outcome")),
-		Window:     strings.TrimSpace(q.Get("window")),
-		SinceParam: strings.TrimSpace(q.Get("since")),
-		UntilParam: strings.TrimSpace(q.Get("until")),
 		Q:          q.Get("q"),
 		Job:        lanePos{Cursor: q.Get("jc"), Done: q.Get("jdone") == "1"},
 		Audit:      lanePos{Cursor: q.Get("ac"), Done: q.Get("adone") == "1"},
@@ -443,44 +533,10 @@ func parseActivityFilter(r *http.Request, now time.Time) (activityFilter, string
 		f.Outcome = ""
 	}
 
-	// An explicit range beats a relative one, and asking for both is a
-	// contradiction rather than a preference — say so.
-	if f.Window != "" {
-		d, ok := windowDuration(f.Window)
-		switch {
-		case !ok:
-			notes = append(notes, "the time window "+quoted(f.Window)+" is not one this screen offers, so it was ignored")
-			f.Window = ""
-		case f.SinceParam != "" || f.UntilParam != "":
-			notes = append(notes, "both a relative window and an explicit range were given; the explicit range was used")
-			f.Window = ""
-		default:
-			f.Since = now.Add(-d)
-		}
-	}
-	if f.SinceParam != "" {
-		if t, err := time.Parse(time.RFC3339, f.SinceParam); err == nil {
-			f.Since = t
-		} else {
-			notes = append(notes, "since= is not an RFC 3339 timestamp, so it was ignored")
-			f.SinceParam = ""
-		}
-	}
-	if f.UntilParam != "" {
-		if t, err := time.Parse(time.RFC3339, f.UntilParam); err == nil {
-			f.Until = t
-		} else {
-			notes = append(notes, "until= is not an RFC 3339 timestamp, so it was ignored")
-			f.UntilParam = ""
-		}
-	}
-	// The read lane refuses a range that runs backwards. Catching it here
-	// means the operator is told which half was wrong instead of being handed
-	// the seam's validation error.
-	if !f.Since.IsZero() && !f.Until.IsZero() && !f.Until.After(f.Since) {
-		notes = append(notes, "until must be after since; the range was ignored")
-		f.Since, f.Until, f.SinceParam, f.UntilParam, f.Window = time.Time{}, time.Time{}, "", "", ""
-	}
+	tr, trNotes := parseTimeRange(
+		strings.TrimSpace(q.Get("window")), strings.TrimSpace(q.Get("since")), strings.TrimSpace(q.Get("until")), now)
+	f.Window, f.SinceParam, f.UntilParam, f.Since, f.Until = tr.Window, tr.SinceParam, tr.UntilParam, tr.Since, tr.Until
+	notes = append(notes, trNotes...)
 
 	return f, strings.Join(notes, "; ")
 }
@@ -625,9 +681,10 @@ type activityView struct {
 // rather than an omission: the counts this screen used to print were only ever
 // computable because the entire window was in memory. Counting per family
 // across a paginated trail would take one aggregate query per family, each of
-// which writes its own read record — ten extra rows in the append-only trail
-// to render ten numbers. job.go states the rule this follows: a page that
-// prints a number it did not compute has nothing to offer an operator.
+// which writes its own read record — one extra row in the append-only trail
+// for every number it would print. job.go states the rule this follows: a
+// page that prints a number it did not compute has nothing to offer an
+// operator.
 //
 // The cost, stated: the chips now show every family, including ones with no
 // rows in the current range. They are a map of the vocabulary, not a summary
@@ -1058,9 +1115,9 @@ func eventRowFromTrail(f trailFacts) activityRow {
 // summarize renders the one-line description of a non-dispatch event.
 //
 // It is a switch and not a format string on the record because these events are
-// not variations of one thing: a Freeze release and a sign-in have nothing in
-// common except that they happened, and prose that pretends otherwise reads as
-// machine output rather than as a trail.
+// not variations of one thing: a Freeze release and an Enrollment Token mint
+// have nothing in common except that they happened, and prose that pretends
+// otherwise reads as machine output rather than as a trail.
 func summarize(f trailFacts) string {
 	switch f.Kind {
 	case audit.KindFreezeEngage:
@@ -1075,32 +1132,6 @@ func summarize(f trailFacts) string {
 		return "revoked an Enrollment Token — every Node it enrolled is revoked with it"
 	case audit.KindNodeRevoke:
 		return "revoked Node " + f.NodeID
-	case audit.KindAPITokenMint:
-		return "minted an API Token"
-	case audit.KindAPITokenRevoke:
-		return "revoked an API Token"
-	case audit.KindAccountCreate:
-		return "created an Account"
-	case audit.KindAccountRole:
-		return "changed an Account's role"
-	case audit.KindAccountEnable:
-		return "enabled an Account"
-	case audit.KindAccountDisable:
-		return "disabled an Account"
-	case audit.KindLoginSucceeded:
-		return "signed in to the Console"
-	case audit.KindLoginFailed:
-		return "failed a Console sign-in"
-	case audit.KindLoginThrottled:
-		return "was throttled signing in"
-	case audit.KindLogout:
-		return "signed out"
-	case audit.KindStepUp:
-		return "re-proved presence for a step-up"
-	case audit.KindStepUpFailed:
-		return "failed a step-up re-authentication"
-	case audit.KindStepUpThrottled:
-		return "was throttled re-authenticating for a step-up"
 	case audit.KindApprovalRequested:
 		return "parked a dispatch for approval"
 	case audit.KindApprovalGrantRequested:
@@ -1413,10 +1444,10 @@ narrowed only the other events would silently drop every dispatch row from the p
 <p class="gap"><b>Every reload is an audited read</b>, whether it comes from the reload button, which
 appears above the feed once new events have queued, or from the browser.</p>
 
-<p class="gap"><b>The chips above list every family this Relay records, including empty ones.</b>
+<p class="gap"><b>The chips above list every family this screen shows, including empty ones.</b>
 They carry no counts. Counting each family across the whole trail would take one query per family,
-and each query adds its own record to the append-only trail &mdash; ten extra rows
-to print ten numbers. A page that prints a number it did not compute has nothing to offer an
+and each query adds its own record to the append-only trail &mdash; one extra row
+for every number it would print. A page that prints a number it did not compute has nothing to offer an
 operator reading it during an incident.</p>
 </details>
 

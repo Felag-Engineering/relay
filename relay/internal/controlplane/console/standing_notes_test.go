@@ -105,7 +105,7 @@ func TestActivity_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
 		"The default feed leaves out the trail&#39;s own read records.",
 		"Two row kinds are not built here yet: enrollments and label changes.",
 		"The filter box carries no Selector and no Node.",
-		"The chips above list every family this Relay records, including empty ones.",
+		"The chips above list every family this screen shows, including empty ones.",
 	)
 }
 
@@ -124,6 +124,33 @@ func TestActivity_SituationalMessagesStayVisible(t *testing.T) {
 	// Refine's note is situational: without a Refine term it is not drawn.
 	if strings.Contains(get(t, h, "/console/activity").Body.String(), "matches text within the rows") {
 		t.Error("the Refine note renders when nothing was refined")
+	}
+}
+
+// --- Access -------------------------------------------------------------
+
+func TestAccess_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
+	body := get(t, newTestHandler(accessDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/access").Body.String()
+	inside, outside := splitAbout(t, body)
+	mustBeStanding(t, inside, outside,
+		"Password changes and the first API Token are not on the trail.",
+		"(#782)",
+		"OAuth sign-ins are not listed.",
+		"There is no filter by the changed Account.",
+		"Every Refresh is an audited read",
+		"limited to admins in the Console only",
+	)
+}
+
+func TestAccess_SituationalMessagesStayVisible(t *testing.T) {
+	h := newTestHandler(accessDeps(&fakeQueries{}), accounts.RoleAdmin)
+	for _, tc := range []struct{ path, msg string }{
+		{"/console/access?window=fortnight", "Part of this URL could not be read:"},
+		{"/console/access?kind=nonesuch", "There is no row kind called"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			mustBeSituational(t, get(t, h, tc.path).Body.String(), tc.msg)
+		})
 	}
 }
 

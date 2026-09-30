@@ -1,7 +1,7 @@
 # 20 — Access
 
 **No artboard.** Who got into the control plane, and who changed who can get in. **Admin only.**
-**Milestone v0.7.0.**
+**Milestone v0.6.0.**
 
 **Governing:** ADR-0010, ADR-0025, ADR-0026, invariants #10, #11, `12-login.md`,
 `15-accounts-and-tokens.md`.

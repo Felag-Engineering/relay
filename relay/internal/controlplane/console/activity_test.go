@@ -13,7 +13,6 @@ import (
 	"encoding/csv"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -22,12 +21,9 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
 
 // activityDeps is renderableDeps with a query lane the test controls.
@@ -208,6 +204,17 @@ func TestActivity_EveryAuditKindIsClassified(t *testing.T) {
 	}
 
 	for _, k := range audit.Kinds() {
+		if _, ok := accessKindOf(k); ok {
+			// An Access kind is neither requested nor excluded BY THIS
+			// SCREEN: it is not this screen's vocabulary at all, and it must
+			// not be reachable through any of its chips — see the inverse
+			// sweep below.
+			if requested[k] || excluded[k] {
+				t.Errorf("Access kind %q is also classified on Activity — the two screens must "+
+					"partition the audit vocabulary, not share a kind", k)
+			}
+			continue
+		}
 		if !requested[k] && !excluded[k] {
 			t.Errorf("audit kind %q is neither requested by the default feed nor excluded from it "+
 				"with a reason — it would simply never appear on the trail", k)
@@ -219,110 +226,16 @@ func TestActivity_EveryAuditKindIsClassified(t *testing.T) {
 				"chip would not show it", k, family)
 		}
 	}
-}
 
-// TestActivity_AStepUpIsNotASignIn is #477's Console-rendering seam, run
-// through the REAL auditsink.Sink rather than a fixture built by hand: that
-// is what actually turns a consoleauth.LoginEvent into the audit.Record this
-// package reads, and auditsink.RecordLogin has had no test of its own before
-// this one (the #463/#517/#520 lesson — a fixture built by hand can pass a
-// mapping bug the real seam would not).
-func TestActivity_AStepUpIsNotASignIn(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	sink := auditsink.New(st.Audit())
-	ctx := context.Background()
-
-	if err := sink.RecordLogin(ctx, consoleauth.LoginEvent{
-		Kind: audit.KindLoginSucceeded, Account: "mike", AccountID: "acct-1", Role: "admin",
-	}); err != nil {
-		t.Fatalf("RecordLogin (sign-in): %v", err)
-	}
-	if err := sink.RecordLogin(ctx, consoleauth.LoginEvent{
-		Kind: audit.KindStepUp, Account: "mike", AccountID: "acct-1", Role: "admin",
-		Reason: "step-up re-authentication",
-	}); err != nil {
-		t.Fatalf("RecordLogin (step-up): %v", err)
-	}
-
-	records, err := st.Audit().List(ctx)
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(records) != 2 {
-		t.Fatalf("recorded %d rows, want 2", len(records))
-	}
-
-	var signIn, stepUp trailFacts
-	for _, rec := range records {
-		switch rec.Kind {
-		case audit.KindLoginSucceeded:
-			signIn = factsOfRecord(rec)
-		case audit.KindStepUp:
-			stepUp = factsOfRecord(rec)
-		default:
-			t.Fatalf("unexpected recorded kind %q", rec.Kind)
+	// The inverse: no Activity family's chip may reach an Access kind.
+	// rowAccess not being in rowKindOrder guarantees this structurally;
+	// this pins it by name rather than by construction alone.
+	for _, family := range rowKindOrder {
+		for _, k := range kindsOfFamily(family) {
+			if _, ok := accessKindOf(k); ok {
+				t.Errorf("Activity family %q's chip reaches Access kind %q", family, k)
+			}
 		}
-	}
-
-	if got := kindOf(audit.KindStepUp); got != rowAuth {
-		t.Errorf("kindOf(KindStepUp) = %q, want rowAuth", got)
-	}
-
-	signInSentence, stepUpSentence := summarize(signIn), summarize(stepUp)
-	if stepUpSentence == signInSentence {
-		t.Errorf("a step-up and a sign-in render the same sentence: %q", stepUpSentence)
-	}
-	// Hyphenated, so the raw kind string "step_up" falling through
-	// summarize's default arm cannot satisfy this.
-	if !strings.Contains(stepUpSentence, "step-up") {
-		t.Errorf("summarize(step-up) = %q, does not read as a step-up", stepUpSentence)
-	}
-	if stepUpSentence == audit.KindStepUp {
-		t.Errorf("summarize(step-up) rendered the raw kind string %q", stepUpSentence)
-	}
-}
-
-// TestActivity_StepUpFailureKindsRenderDistinctly covers #477's amendment:
-// three step-up kinds, not one, each classified and each carrying its own
-// sentence. Omitting a summarize case is #562's exact failure mode — the row
-// still lands in rowAuth via the default arm's classification below, and
-// nothing else fails — which is why each case is checked against BOTH its
-// sign-in counterpart and its step-up siblings, not just asserted non-empty.
-func TestActivity_StepUpFailureKindsRenderDistinctly(t *testing.T) {
-	cases := []struct {
-		kind       string
-		signInTwin string
-	}{
-		{audit.KindStepUp, audit.KindLoginSucceeded},
-		{audit.KindStepUpFailed, audit.KindLoginFailed},
-		{audit.KindStepUpThrottled, audit.KindLoginThrottled},
-	}
-	seen := map[string]string{} // sentence -> kind that produced it
-	for _, tc := range cases {
-		t.Run(tc.kind, func(t *testing.T) {
-			if got := kindOf(tc.kind); got != rowAuth {
-				t.Errorf("kindOf(%q) = %q, want rowAuth", tc.kind, got)
-			}
-			got := summarize(trailFacts{Kind: tc.kind})
-			if got == tc.kind {
-				t.Fatalf("summarize(%q) rendered the raw kind string — no case for it in the switch", tc.kind)
-			}
-			if !strings.Contains(got, "step-up") {
-				t.Errorf("summarize(%q) = %q, does not read as a step-up", tc.kind, got)
-			}
-			if twin := summarize(trailFacts{Kind: tc.signInTwin}); got == twin {
-				t.Errorf("summarize(%q) == summarize(%q) == %q; the step-up door must read "+
-					"distinctly from the sign-in door", tc.kind, tc.signInTwin, got)
-			}
-			if by, dup := seen[got]; dup {
-				t.Errorf("summarize(%q) = %q, duplicates summarize(%q)", tc.kind, got, by)
-			}
-			seen[got] = tc.kind
-		})
 	}
 }
 
@@ -356,6 +269,117 @@ func TestActivity_KindsOfFamilyIsTotalAndNeverEmpty(t *testing.T) {
 	// no such family today; the sentinel is what keeps that from mattering.
 	if got := kindsOfFamily(rowKind("no-such-family")); len(got) != 1 || got[0] != noSuchAuditKind {
 		t.Errorf("kindsOfFamily on an unknown family = %v, want the match-nothing sentinel", got)
+	}
+}
+
+// TestActivity_AccessFamiliesAreNotKinds pins the seam D17 split the audit
+// vocabulary at: kindOf sends every one of Access's 13 kinds to rowAccess,
+// which is deliberately absent from rowKindOrder and from
+// activityTrailKinds.
+func TestActivity_AccessFamiliesAreNotKinds(t *testing.T) {
+	n := 0
+	for _, k := range audit.Kinds() {
+		if _, ok := accessKindOf(k); !ok {
+			continue
+		}
+		n++
+		if got := kindOf(k); got != rowAccess {
+			t.Errorf("kindOf(%q) = %q, want rowAccess", k, got)
+		}
+		if containsString(activityTrailKinds, k) {
+			t.Errorf("activityTrailKinds contains Access kind %q", k)
+		}
+	}
+	if n != 13 {
+		t.Fatalf("the loop classified %d Access kinds, want exactly 13 — the assertions above proved "+
+			"nothing about the rest of the vocabulary", n)
+	}
+
+	for _, family := range rowKindOrder {
+		if family == rowAccess {
+			t.Error("rowKindOrder contains rowAccess — it must never be a selectable chip")
+		}
+	}
+}
+
+// TestActivity_EnrollmentTokensStayOnActivity: token_mint and token_revoke
+// join or revoke a Node rather than authenticate a caller, so D17 keeps them
+// on Activity's `token` family — narrowed, after this issue, to exactly the
+// two Enrollment Token kinds (api_token_mint/revoke moved to Access).
+func TestActivity_EnrollmentTokensStayOnActivity(t *testing.T) {
+	want := []string{audit.KindTokenMint, audit.KindTokenRevoke}
+	got := kindsOfFamily(rowToken)
+	if len(got) != len(want) {
+		t.Fatalf("rowToken's kinds = %v, want exactly %v", got, want)
+	}
+	for _, k := range want {
+		if !containsString(got, k) {
+			t.Errorf("rowToken does not contain %q", k)
+		}
+	}
+	for _, apiKind := range []string{audit.KindAPITokenMint, audit.KindAPITokenRevoke} {
+		if containsString(got, apiKind) {
+			t.Errorf("rowToken still contains the API Token kind %q — it moved to Access (spec 20)", apiKind)
+		}
+	}
+
+	q := &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindTokenMint, Timestamp: testNow},
+		{Kind: audit.KindTokenRevoke, Timestamp: testNow},
+	}}
+	for _, path := range []string{"/console/activity", "/console/activity?kind=token"} {
+		body := get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin), path).Body.String()
+		if !strings.Contains(body, "minted an Enrollment Token") {
+			t.Errorf("%s does not render the Enrollment Token mint", path)
+		}
+		if !strings.Contains(body, "revoked an Enrollment Token") {
+			t.Errorf("%s does not render the Enrollment Token revoke", path)
+		}
+	}
+}
+
+// TestActivity_ShowsNoAccessRowForAnyRole is spec 04's "No sign-in, step-up,
+// Account or API Token row appears here, for any role" acceptance line,
+// store-backed against the same 13-kind trail access_test.go seeds, plus a
+// fakeQueries variant proving the seam itself narrows to nothing rather than
+// merely that nothing renders.
+func TestActivity_ShowsNoAccessRowForAnyRole(t *testing.T) {
+	d, sink, st, actor := accessStoreDeps(t)
+	seedAccessTrail(t, sink, st, actor)
+
+	paths := []string{
+		"/console/activity", "/console/activity?kind=auth", "/console/activity?kind=account",
+		"/console/activity?kind=api-token", "/console/activity?kind=sign-in", "/console/activity?kind=step-up",
+		"/console/activity?kind=access",
+	}
+	for _, role := range sessionRoles {
+		h := newTestHandler(d, role)
+		for _, path := range paths {
+			body := get(t, h, path).Body.String()
+			for _, k := range accessAllKinds {
+				if strings.Contains(body, `<span class="evkind">`+k+`<`) {
+					t.Errorf("role=%s %s renders Access kind %q", role, path, k)
+				}
+			}
+			for _, label := range []string{"auth", "account", "api-token", "sign-in", "step-up"} {
+				if strings.Contains(body, `class="kchip on">`+label+`<`) {
+					t.Errorf("role=%s %s draws a current chip labelled %q", role, path, label)
+				}
+			}
+		}
+	}
+
+	fq := &fakeQueries{}
+	h := newTestHandler(activityDeps(fq), accounts.RoleAdmin)
+	for _, path := range paths {
+		get(t, h, path)
+	}
+	for _, f := range fq.auditFilters {
+		for _, k := range f.Kinds {
+			if _, ok := accessKindOf(k); ok {
+				t.Errorf("an Activity request sent Access kind %q to the audit lane", k)
+			}
+		}
 	}
 }
 
@@ -598,12 +622,12 @@ func TestActivity_LiveRegionOnlyWhereTheViewRendersDispatchRows(t *testing.T) {
 		}
 	}
 
-	off := get(t, h, "/console/activity?kind=auth").Body.String()
+	off := get(t, h, "/console/activity?kind=freeze").Body.String()
 	if strings.Contains(off, "data-live-region") {
-		t.Error("?kind=auth renders a live region, but the auth family has no live kind on the stream")
+		t.Error("?kind=freeze renders a live region, but the freeze family has no live kind on the stream")
 	}
 	if strings.Contains(off, "stream.js") || strings.Contains(off, "activity.js") {
-		t.Error("?kind=auth mounts the live scripts for a view that can never update")
+		t.Error("?kind=freeze mounts the live scripts for a view that can never update")
 	}
 	// And day one's off-state sentence must not appear here: it says live
 	// updates are not available on this RELAY, which would be false.
@@ -874,7 +898,7 @@ func TestActivity_SpecConflictsAreStatedRatherThanFaked(t *testing.T) {
 	for _, want := range []string{
 		"The\naudit trail holds no record of either.",
 		"The filter box carries no Selector and no Node.",
-		"list every family this Relay records, including empty ones",
+		"list every family this screen shows, including empty ones",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the screen does not state %q — an omission nobody wrote down reads as an oversight", want)
@@ -1005,9 +1029,7 @@ func TestActivity_TheRiskChipIsOnlyOnRowsThatRan(t *testing.T) {
 		{audit.KindApprovalRequested, true},
 		{audit.KindRead, true},
 		{audit.KindFreezeEngage, false},
-		{audit.KindLoginSucceeded, false},
 		{audit.KindTokenMint, false},
-		{audit.KindAccountRole, false},
 		{audit.KindNodeRevoke, false},
 	} {
 		row := eventRowFromTrail(factsOfRow(capability.AuditRow{Kind: c.kind, Timestamp: testNow}))

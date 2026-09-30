@@ -133,7 +133,7 @@ func TestConsole_ViewerNavigationIsStructurallySmaller(t *testing.T) {
 	// the third person it inconveniences, and this one is worth keeping.
 	nav := navOf(get(t, h, "/console/").Body.String())
 
-	for _, absent := range []string{">Run<", ">Policy<", ">Add Nodes<", ">Accounts<"} {
+	for _, absent := range []string{">Run<", ">Policy<", ">Add Nodes<", ">Accounts<", ">Access<"} {
 		if strings.Contains(nav, absent) {
 			t.Errorf("a viewer's navigation contains %s — it must be structurally smaller, not merely refusing", absent)
 		}

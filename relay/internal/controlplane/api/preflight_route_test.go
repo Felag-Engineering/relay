@@ -179,16 +179,21 @@ func TestConsoleServesNoSeparatePreflightRoute(t *testing.T) {
 	// carries, so the composer PF-21 will build lands under this guard
 	// rather than beside it.
 	want := map[string]bool{
-		"GET /console/{$}":                               true,
-		"GET /console/nodes/{node_id}":                   true,
-		"GET /console/agents":                            true,
-		"GET /console/activity":                          true,
-		"GET /console/jobs/{job_id}":                     true,
-		"GET /console/compare":                           true,
-		"GET /console/reads":                             true,
-		"GET /console/approvals":                         true,
-		"GET /console/approvals/{approval_id}":           true,
-		"GET /console/accounts":                          true,
+		"GET /console/{$}":                     true,
+		"GET /console/nodes/{node_id}":         true,
+		"GET /console/agents":                  true,
+		"GET /console/activity":                true,
+		"GET /console/jobs/{job_id}":           true,
+		"GET /console/compare":                 true,
+		"GET /console/reads":                   true,
+		"GET /console/approvals":               true,
+		"GET /console/approvals/{approval_id}": true,
+		"GET /console/accounts":                true,
+		// Access (spec 20, D17, #785): who signed in and who changed who can
+		// get in, admin-only. A read screen over the audit trail, not a
+		// preflight route — reviewed against PF-1 in the same PR that added
+		// it.
+		"GET /console/access":                            true,
 		"POST /console/accounts/create":                  true,
 		"POST /console/accounts/{account_id}/role":       true,
 		"POST /console/accounts/{account_id}/enabled":    true,

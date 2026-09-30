@@ -203,6 +203,10 @@ var consoleReadAudit = map[string]readAuditRule{
 		// internal/capability, where the fix belongs, in front of a human.
 		tool: "query_audit",
 	},
+	"GET /console/access": {
+		path: "/console/access",
+		tool: "query_audit",
+	},
 
 	// ── The comparison screen (#680) ──────────────────────────────────────
 	"GET /console/compare": {
