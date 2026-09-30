@@ -2,8 +2,9 @@
 # demo-fleet.sh — the demo compose project's fault injector and reset (#622).
 # DEV-ONLY. Nothing in build/test/lint calls this; CI never touches Docker.
 #
-# WHY A FIXED PROJECT. docker-compose.yml carries no top-level `name:`, so a
-# plain `docker compose --profile demo up` names its project after the
+# WHY A FIXED PROJECT. docker-compose.demo.yml carries no top-level `name:`,
+# so a plain `docker compose -f docker-compose.demo.yml --profile demo up`
+# names its project after the
 # checkout directory — different on every clone/worktree, and identical to
 # the default (non-demo) fleet's own project if you happen to run both from
 # the same directory. Reset is the most dangerous command in this file: it
@@ -25,7 +26,7 @@
 # itself). `reset` and `up` also take `--oauth`, which layers
 # docker-compose.oauth.yml on (#351: a DEV-ONLY identity provider, and the
 # Relay's OAuth sign-in turned on). Without it, what reset/up bring up is
-# exactly docker-compose.yml; but `down` and every reset's wipe name the
+# exactly docker-compose.demo.yml; but `down` and every reset's wipe name the
 # overlay too, so they need it to parse (and Compose >= 2.18.0 for `!reset`).
 # `dc()` is the ONLY place in this file that runs `docker compose` —
 # enforced by scripts/demo-fleet-test.sh's static check S1, so a later edit
@@ -46,7 +47,7 @@ die() {
 readonly DEMO_PROJECT="relay-demo"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 readonly REPO_ROOT
-readonly COMPOSE_YML="${REPO_ROOT}/docker-compose.yml"
+readonly COMPOSE_YML="${REPO_ROOT}/docker-compose.demo.yml"
 # The opt-in OAuth overlay (#351): a real identity provider, and the Relay's
 # OAuth resource-server half turned on. Layered on only by `reset --oauth` /
 # `up --oauth` — a command-line flag, never an environment variable, for the
@@ -63,10 +64,10 @@ readonly OAUTH_MARKER_SERVICE="relay-netns"
 # an MCP client can be asked the approval question or answer with
 # approve_request (docs/operations/demo-fleet.md, "The human approver"). A path
 # INSIDE the relay image — docker/relay.Dockerfile bakes it beside the default
-# fleet's gate — handed to docker-compose.yml's DEV_FLEET_APPROVAL_GATE_CONFIG,
+# fleet's gate — handed to docker-compose.demo.yml's DEV_FLEET_APPROVAL_GATE_CONFIG,
 # which selects between the two. By convention only this script sets it, so
 # the default three-Node fleet keeps its out-of-band gate — a convention, not
-# an enforced property (see the comment in docker-compose.yml).
+# an enforced property (see the comment in docker-compose.demo.yml).
 readonly DEMO_APPROVAL_GATE_CONFIG="/etc/relay/approval-gates.demo.json"
 
 # One env=prod web Node and one env=staging web Node; neither is on the #452
@@ -435,7 +436,7 @@ check_ports_not_foreign() {
 }
 
 # `-p relay-demo` pins the PROJECT name, but what `down -v` actually deletes
-# is whatever volume name docker-compose.yml's top-level `volumes:` resolves
+# is whatever volume name docker-compose.demo.yml's top-level `volumes:` resolves
 # to — normally `<project>_<key>`, but a `name:` or `external:` override on a
 # volume there would break that, and `-p` gives no protection against that
 # case. Assert every volume compose resolves to still starts with

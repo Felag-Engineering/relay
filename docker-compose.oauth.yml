@@ -7,10 +7,10 @@
 # `reset`'s wipe, so the IdP stops with the fleet whichever way it came up —
 # which means a plain `make demo-down` / `make demo-reset` now also needs this
 # file to parse (and Compose >= 2.18.0, for `!reset` below). What a plain reset
-# or up BRINGS UP is exactly what docker-compose.yml describes. It layers onto
+# or up BRINGS UP is exactly what docker-compose.demo.yml describes. It layers onto
 # either fleet:
 #
-#   docker compose -f docker-compose.yml -f docker-compose.oauth.yml [--profile demo] ...
+#   docker compose -f docker-compose.demo.yml -f docker-compose.oauth.yml [--profile demo] ...
 #
 # What it adds: a real OpenID Connect identity provider (Keycloak, realm imported
 # from docker/fixtures/keycloak/relay-demo-realm.json) and turns on the Relay's
@@ -38,7 +38,7 @@
 # third container that does nothing else (`relay-netns`, the pattern a Kubernetes
 # pod uses). That container carries the network alias `relay`, so every other
 # service still reaches the Relay at `relay:7654` / `relay:9443` exactly as in
-# docker-compose.yml, and it publishes the ports — a container that shares
+# docker-compose.demo.yml, and it publishes the ports — a container that shares
 # another's namespace cannot publish its own.
 #
 # Why a third container owns the namespace rather than one of the two: a
@@ -93,7 +93,7 @@ services:
         # The name every other service already dials the Relay by.
         aliases: ["relay"]
     ports:
-      # The Relay's two listeners, published exactly as docker-compose.yml
+      # The Relay's two listeners, published exactly as docker-compose.demo.yml
       # publishes them on the `relay` service.
       - "${RELAY_NODE_PUBLISH_ADDR:-127.0.0.1}:7654:7654"
       - "${RELAY_PUBLISH_ADDR:-127.0.0.1}:9443:9443"
@@ -165,7 +165,7 @@ services:
       # email address can ever name one. Keycloak's `preferred_username` is the
       # realm username, which the realm forbids users to edit.
       RELAY_OAUTH_ACCOUNT_CLAIM: "preferred_username"
-      # The Console stays on, as docker-compose.yml sets it: the Console and
+      # The Console stays on, as docker-compose.demo.yml sets it: the Console and
       # OAuth run together. An unauthenticated request off the Console — /mcp
       # included — gets the 401 whose `WWW-Authenticate: Bearer
       # resource_metadata=...` is how a client discovers the sign-in, while a

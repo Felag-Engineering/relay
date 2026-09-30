@@ -17,7 +17,7 @@
 //! this file DOES prove: (a) the daemon's own Policy/Template loader — the
 //! thing that actually gates dispatch — accepts all three fixtures and the
 //! pack, and the allow/deny verdicts the demo relies on are exactly what the
-//! real binary returns (5.1-5.5 below); (b) `docker-compose.yml` and
+//! real binary returns (5.1-5.5 below); (b) `docker-compose.demo.yml` and
 //! `docs/dev-fleet.md` are internally consistent as FILES — additive
 //! profiles, a roster that matches what's documented, Selector cardinalities
 //! that keep an unparked mutate reachable at nine Nodes (5.6-5.9 below). It
@@ -30,7 +30,7 @@
 //! through the compiled binary — `env!("CARGO_BIN_EXE_relay-daemon")` —
 //! exactly like `daemon/tests/shutdown_signal.rs`. 5.6-5.9 (plus
 //! `x_daemon_base_anchor_declares_no_ports_and_no_profiles`, added by #452
-//! review S3) read `../docker-compose.yml` and `../docs/dev-fleet.md` as
+//! review S3) read `../docker-compose.demo.yml` and `../docs/dev-fleet.md` as
 //! plain text; the daemon crate has no relationship to either file, but no
 //! better hermetic home exists for these assertions without standing up a
 //! new package, and co-locating them keeps the compose <-> fixture <->
@@ -635,7 +635,7 @@ fn the_script_has_no_stop_subcommand() {
 // #452: `demo` compose profile additivity and roster consistency.
 //
 // These four tests (5.6-5.9 in the implementation plan) read
-// `../docker-compose.yml` and `../docs/dev-fleet.md` as plain text — they
+// `../docker-compose.demo.yml` and `../docs/dev-fleet.md` as plain text — they
 // prove properties of FILES, never of a running fleet.
 // ---------------------------------------------------------------------------
 
@@ -644,7 +644,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn read_compose_lines() -> Vec<String> {
-    let path = repo_root().join("docker-compose.yml");
+    let path = repo_root().join("docker-compose.demo.yml");
     std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
         .lines()
@@ -676,7 +676,7 @@ fn top_level_span(lines: &[String], key: &str) -> Range<usize> {
     let start = lines
         .iter()
         .position(|l| l.trim_end() == header)
-        .unwrap_or_else(|| panic!("docker-compose.yml has no top-level `{header}` key"));
+        .unwrap_or_else(|| panic!("docker-compose.demo.yml has no top-level `{header}` key"));
     let body_start = start + 1;
     let mut body_end = lines.len();
     for (offset, line) in lines[body_start..].iter().enumerate() {
@@ -706,7 +706,7 @@ fn x_daemon_base_span(lines: &[String]) -> Range<usize> {
     let start = lines
         .iter()
         .position(|l| l.starts_with("x-daemon-base:"))
-        .expect("docker-compose.yml has no `x-daemon-base:` anchor");
+        .expect("docker-compose.demo.yml has no `x-daemon-base:` anchor");
     let body_start = start + 1;
     let mut body_end = lines.len();
     for (offset, line) in lines[body_start..].iter().enumerate() {
@@ -756,7 +756,7 @@ fn parse_compose_services(lines: &[String]) -> Vec<ComposeService> {
         match header_re.captures(line) {
             Some(caps) => headers.push((caps[1].to_string(), i)),
             None => panic!(
-                "docker-compose.yml:{}: unrecognised service-header shape: {line:?} — \
+                "docker-compose.demo.yml:{}: unrecognised service-header shape: {line:?} — \
                  a per-service comment must sit on its own line ABOVE the header, \
                  never trailing on it (#452 review N1)",
                 i + 1
@@ -795,7 +795,9 @@ fn top_level_volume_names(lines: &[String]) -> BTreeSet<String> {
             header_re
                 .captures(l)
                 .unwrap_or_else(|| {
-                    panic!("docker-compose.yml: unrecognised volume-key shape at line {i}: {l:?}")
+                    panic!(
+                        "docker-compose.demo.yml: unrecognised volume-key shape at line {i}: {l:?}"
+                    )
                 })
                 .get(1)
                 .unwrap()
@@ -993,7 +995,7 @@ fn x_daemon_base_anchor_declares_no_ports_and_no_profiles() {
 /// Node that refuses everything.
 ///
 /// The loop below only looks `ROSTER`'s entries *up* in the compose file —
-/// it never asks the converse. #452 review C1: a `docker-compose.yml` daemon
+/// it never asks the converse. #452 review C1: a `docker-compose.demo.yml` daemon
 /// service absent from `ROSTER` was invisible to every test in this file
 /// (`5.8` computes its cardinalities from `ROSTER` alone, never the file —
 /// see its own comment). The `assert_eq!` after the loop closes that: it
@@ -1015,7 +1017,9 @@ fn demo_roster_matches_the_documented_fleet() {
         let svc = services
             .iter()
             .find(|s| s.name == entry.service)
-            .unwrap_or_else(|| panic!("docker-compose.yml has no `{}` service", entry.service));
+            .unwrap_or_else(|| {
+                panic!("docker-compose.demo.yml has no `{}` service", entry.service)
+            });
         let body = &lines[svc.body.clone()];
 
         let hostname = extract_value(body, "hostname:")
@@ -1100,7 +1104,7 @@ fn demo_roster_matches_the_documented_fleet() {
     }
 
     // #452 review C1: the converse of the loop above. Derive the set of
-    // daemon services directly from docker-compose.yml — every service
+    // daemon services directly from docker-compose.demo.yml — every service
     // whose body mounts something at `:/var/lib/relay-daemon`, the mount
     // every daemon service declares regardless of profile — and require it
     // to equal ROSTER's service set exactly. Without this, a compose service
@@ -1123,7 +1127,7 @@ fn demo_roster_matches_the_documented_fleet() {
     let roster_daemons: BTreeSet<String> = ROSTER.iter().map(|e| e.service.to_string()).collect();
     assert_eq!(
         compose_daemons, roster_daemons,
-        "docker-compose.yml declares a daemon service ROSTER doesn't know about (or \
+        "docker-compose.demo.yml declares a daemon service ROSTER doesn't know about (or \
          ROSTER names one the compose file doesn't) — a new daemon service must be \
          added to ROSTER in this file, or it is invisible to every test here (#452 \
          review C1)"
@@ -1136,7 +1140,7 @@ fn demo_roster_matches_the_documented_fleet() {
 /// this is what stops a later roster edit deleting it silently.
 ///
 /// This proves a property of `ROSTER` (the Rust constant above) — it never
-/// reads docker-compose.yml, so on its own it proves nothing about the
+/// reads docker-compose.demo.yml, so on its own it proves nothing about the
 /// COMPOSE FILE (#452 review C1 corrects an earlier version of this comment
 /// that claimed otherwise). `ROSTER` is tied back to the file by 5.7
 /// (`demo_roster_matches_the_documented_fleet`), which checks both that

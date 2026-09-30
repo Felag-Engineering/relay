@@ -1,5 +1,17 @@
 # Relay dev fleet — DEV-ONLY (docs/dev-fleet.md).
 #
+# NOT the deployment stack. deploy/compose/docker-compose.yml is that: one
+# Relay service and nothing else (docs/operations/relay-install.md, section
+# 7). There is deliberately no docker-compose.yml at the repo root, so this
+# file is never read unless it is named: every command for this fleet carries
+# `-f docker-compose.demo.yml` — `make dev-fleet-*` and scripts/demo-fleet.sh
+# (`make demo-*`) name it for you.
+#
+# Every Relay build below names `target: dev-fleet` explicitly: the default
+# (last) stage of docker/relay.Dockerfile is the fixture-free, non-root
+# `runtime` image, and this fleet needs the dev image with its baked gates.
+# That is the one non-comment change made when this file was split off.
+#
 # One `relay` container plus three `relay-daemon` containers by default (nine
 # under `--profile demo`, see below) that auto-enroll over CA-pinned mTLS and
 # are drivable through the control plane (MCP + /api/v1). This is a laptop
@@ -11,7 +23,8 @@
 # a fleet-scale stage demo — varied `node:` labels, a third Policy fixture,
 # and a fan-out that returns `success` beside `denied_by_policy`. It is
 # strictly additive: every one of the six carries `profiles: ["demo"]`, so a
-# plain `docker compose up` still means exactly what it means today, and
+# plain `docker compose -f docker-compose.demo.yml up` still means exactly
+# what it means today, and
 # nothing above `daemon-3` is touched. See "The demo profile" in
 # docs/dev-fleet.md.
 #
@@ -58,6 +71,7 @@ services:
     build:
       context: .
       dockerfile: docker/relay.Dockerfile
+      target: dev-fleet
     restart: unless-stopped
     environment:
       # Node-plane gRPC listener (relay-daemon dial-home).
@@ -85,8 +99,8 @@ services:
       # it is the dev gate above (out-of-band, `dev-approver` only).
       # scripts/demo-fleet.sh sets it, to the demo fleet's in-band gate
       # (docker/fixtures/approval-gates.demo.json). That nothing else sets it
-      # is a CONVENTION, not an enforced property: any bare `docker compose`
-      # — `make dev-fleet-up` included — interpolates it from the caller's
+      # is a CONVENTION, not an enforced property: any `docker compose` of
+      # this file — `make dev-fleet-up` included — interpolates it from the caller's
       # shell or a repo-root .env, so a leftover export or .env line would
       # start the default fleet on the in-band gate. A path that is not in
       # the image fails startup, like any other unloadable gate file.
@@ -159,6 +173,7 @@ services:
     build:
       context: .
       dockerfile: docker/relay.Dockerfile
+      target: dev-fleet
     user: "0:0"
     restart: "no"
     depends_on:
@@ -243,6 +258,7 @@ services:
     build:
       context: .
       dockerfile: docker/relay.Dockerfile
+      target: dev-fleet
     user: "0:0"
     restart: "no"
     depends_on:

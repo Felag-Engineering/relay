@@ -7,6 +7,14 @@ It exists to demo and dogfood the real control path end to end. The nine-Node `d
 compose profile built on top of it has its own runbook — see
 [The demo profile](#the-demo-profile).
 
+Both fleets are `docker-compose.demo.yml` at the repository root, and every command below
+names it with `-f` (the `make dev-fleet-*` targets do it for you). There is deliberately no
+`docker-compose.yml` at the root, so a bare `docker compose up` there does nothing. The
+single-Relay deployment stack, with no relay-daemons and no fixtures, is
+`deploy/compose/docker-compose.yml`, documented in
+[Running it with Docker Compose](operations/relay-install.md#7-running-it-with-docker-compose)
+— and it must never run on a machine that holds a development checkout like this one.
+
 > **DEV-ONLY — no production posture.** This environment ships committed
 > credentials and a fixture Policy for convenience, runs everything on one host,
 > and makes no availability, isolation, or hardening claims. It is **not** a
@@ -77,7 +85,7 @@ Security-relevant choices, made explicit:
   (`docker/mint-credential.sh`). Read it with:
 
   ```console
-  $ docker compose run --rm --no-deps --entrypoint sh credential \
+  $ docker compose -f docker-compose.demo.yml run --rm --no-deps --entrypoint sh credential \
       -c 'cat /credential/control-credential'
   ```
 
@@ -115,7 +123,7 @@ Sign in with:
 | password | `admin1234567` |
 
 Override either with `CONSOLE_ADMIN_NAME` / `CONSOLE_ADMIN_PASSWORD` in the
-environment before `docker compose up`.
+environment before `docker compose -f docker-compose.demo.yml up`.
 
 **Why the password is not shorter.** The Relay refuses any Console password below
 12 bytes (`accounts.MinPasswordBytes`). The sign-in throttle deliberately has no
@@ -145,14 +153,14 @@ decide an approval — those arrive in v0.7.0 behind step-up re-authentication.
 ## Bring the fleet up
 
 ```console
-$ docker compose up --build -d
+$ docker compose -f docker-compose.demo.yml up --build -d
 ```
 
 The Relay starts and creates its CA; `bootstrap` waits for the control API, mints
 the token, and exports the CA cert; then the daemons enroll and go healthy.
 
 ```console
-$ docker compose ps
+$ docker compose -f docker-compose.demo.yml ps
 ```
 
 Wait until `daemon-1`, `daemon-2`, and `daemon-3` are `healthy` (each becomes
@@ -163,14 +171,14 @@ enrollment).
 > both listeners using `openssl s_client`, verified against the Relay's CA. If it
 > never passes, `bootstrap` never starts and no daemon enrolls — check
 > `docker inspect --format '{{json .State.Health}}' <relay container>` and
-> `docker compose logs relay`.
+> `docker compose -f docker-compose.demo.yml logs relay`.
 
 ## Verify N enrolled Nodes
 
 **Quick check (no MCP client needed).** The Relay logs every enrollment:
 
 ```console
-$ docker compose logs relay
+$ docker compose -f docker-compose.demo.yml logs relay
 ```
 
 You should see three Nodes join, each stamped
@@ -284,7 +292,7 @@ schema, webhook, decision endpoint — is
 runs a different, in-band gate (`docker/fixtures/approval-gates.demo.json`), selected by
 `scripts/demo-fleet.sh`; see
 [The human approver](operations/demo-fleet.md#the-human-approver) in its runbook. That nothing
-else selects it is a convention, not an enforced property: `docker-compose.yml` reads the selector,
+else selects it is a convention, not an enforced property: `docker-compose.demo.yml` reads the selector,
 `DEV_FLEET_APPROVAL_GATE_CONFIG`, from the caller's shell or a repo-root `.env`, so if either
 sets it, `make dev-fleet-up` starts this fleet on the demo fleet's in-band gate. Check that
 neither does.
@@ -312,7 +320,7 @@ Security-relevant choices, made explicit:
   gate file fails Relay startup. It never degrades to "nothing needs approval", so a
   broken fixture crash-loops the container instead of quietly disarming the fleet. (If you
   edit the fixture and the `relay` container stops going healthy, read
-  `docker compose logs relay` — the loader says exactly what it objected to.)
+  `docker compose -f docker-compose.demo.yml logs relay` — the loader says exactly what it objected to.)
 - **`requester_allowed` is unset, which is the strict default.** The Account that requested
   a parked dispatch may **not** approve it. That is why `dev-approver` exists: with a
   single Account the fleet could park a dispatch and never release it.
@@ -490,20 +498,20 @@ These commands exercise the MCP Tasks extension end to end; `docs/specs/` carrie
 ## Survive `down` / `up`
 
 ```console
-$ docker compose down
-$ docker compose up -d
+$ docker compose -f docker-compose.demo.yml down
+$ docker compose -f docker-compose.demo.yml up -d
 ```
 
 The CA and the SQLite store persist on `relay-data`, and each daemon's identity
 persists on its private `daemonN-state` volume, so the Nodes come back with the
 **same** `node_id`s and do not re-enroll (enrollment is idempotent — a daemon
-with a persisted identity reuses it). `docker compose logs relay` after the
+with a persisted identity reuses it). `docker compose -f docker-compose.demo.yml logs relay` after the
 restart shows reconnects, not a fresh enrollment storm.
 
 To wipe everything (CA, identities, store) and start clean:
 
 ```console
-$ docker compose down -v
+$ docker compose -f docker-compose.demo.yml down -v
 ```
 
 ## Where to read the audit trail
@@ -513,7 +521,7 @@ one structured log line — carrying the principal, selector, operation/action
 kind, outcome counts, and job ID — to the Relay's logs:
 
 ```console
-$ docker compose logs -f relay
+$ docker compose -f docker-compose.demo.yml logs -f relay
 ```
 
 The durable, full record — including per-Node output — lives only in the
@@ -530,7 +538,7 @@ The nine-Node `demo` compose profile — its roster, the four beats, the injecte
 `make demo-reset`, and resource usage — has a runbook of its own:
 [docs/operations/demo-fleet.md](operations/demo-fleet.md). It runs as its own fixed
 `relay-demo` compose project, so start, stop, reset and clean it up with that runbook's
-`make demo-*` targets and commands — never a bare `docker compose --profile demo …`, which
+`make demo-*` targets and commands — never a bare `docker compose -f docker-compose.demo.yml --profile demo …`, which
 names its project after the checkout directory rather than `relay-demo`. It is purely
 additive to the fleet above (`demo_profile_is_additive`, `daemon/tests/dev_fleet_fixtures.rs`,
 enforces this), and everything in this document's DEV-ONLY banner applies to it with more
@@ -554,7 +562,7 @@ either — see [The nine-Node roster](operations/demo-fleet.md#the-nine-node-ros
 exactly this copy, done six times.
 
 **A new service must declare `profiles: ["demo"]`** (or whichever profile is
-appropriate) **or it changes the default fleet** — a plain `docker compose up`
+appropriate) **or it changes the default fleet** — a plain `docker compose -f docker-compose.demo.yml up`
 picks up every service that omits a `profiles:` key.
 `demo_profile_is_additive` (`daemon/tests/dev_fleet_fixtures.rs`) fails the
 build if a new service forgets it.
@@ -562,7 +570,7 @@ build if a new service forgets it.
 ## Cleanup
 
 ```console
-$ docker compose down -v
+$ docker compose -f docker-compose.demo.yml down -v
 $ rm -rf ./.dev-fleet
 ```
 

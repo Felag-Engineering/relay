@@ -59,7 +59,7 @@ COPY --from=build \
 # image, never over the wire" option.
 #
 # There are now THREE Policy fixtures, all baked into this one image; compose
-# picks which one each daemon reads via RELAY_POLICY_PATH (docker-compose.yml).
+# picks which one each daemon reads via RELAY_POLICY_PATH (docker-compose.demo.yml).
 # The daemon loads only the one file its own RELAY_POLICY_PATH names, so a
 # fixture baked in but unread by the default (non-demo) profile changes
 # nothing about that profile's behaviour:

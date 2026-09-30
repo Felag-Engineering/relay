@@ -283,8 +283,8 @@ Gleipnir's own secret input, and never copy it off the laptop.
 **The demo fleet runs its own gate, and it is in-band.** `make demo-reset` and `make demo-up`
 start the Relay on `docker/fixtures/approval-gates.demo.json`, not on the default fleet's
 `approval-gates.json` ([The approval gate](../dev-fleet.md#the-approval-gate)):
-`scripts/demo-fleet.sh` sets `DEV_FLEET_APPROVAL_GATE_CONFIG`, which `docker-compose.yml` hands
-the Relay as `RELAY_APPROVAL_GATE_CONFIG`. A bare `docker compose --profile demo up` sets
+`scripts/demo-fleet.sh` sets `DEV_FLEET_APPROVAL_GATE_CONFIG`, which `docker-compose.demo.yml` hands
+the Relay as `RELAY_APPROVAL_GATE_CONFIG`. A bare `docker compose -f docker-compose.demo.yml --profile demo up` sets
 nothing and gets the default fleet's out-of-band gate — one more reason to use the `make demo-*`
 targets. Both files are baked into the relay image root-owned `0644`. No API writes either of
 them: gate rules are file-loaded today, so the only way to change them is a new image and a
@@ -670,7 +670,7 @@ flow) — both correct there, and a quick way to tell which mode is up *(predict
 Relay's code; the OAuth half is observed)*.
 
 **The Console and OAuth run together.** The Console is on in both modes, exactly as
-`docker-compose.yml` sets it: an unauthenticated request off the Console — `/mcp` and `/api/v1`
+`docker-compose.demo.yml` sets it: an unauthenticated request off the Console — `/mcp` and `/api/v1`
 included — gets the `401` challenge above, while a browser on `/console/` is still sent to the
 Console's own sign-in, where `admin` signs in as on the plain fleet. The founding admin's,
 `dev-approver`'s and `auto-incident-response`'s API Tokens work exactly as before. Observed on
@@ -801,7 +801,7 @@ daemons — `daemon-4..9` — for a total of nine Nodes with varied `node:` labe
 third, strictly narrower Policy fixture. It exists for a stage demo, where three Nodes
 do not read as a fleet and identical Policies produce no interesting refusal. It is
 purely additive: every service the profile adds carries `profiles: ["demo"]`, so a
-plain `docker compose up` still means exactly what it means there, and nothing in
+plain `docker compose -f docker-compose.demo.yml up` still means exactly what it means there, and nothing in
 `daemon-1..3` is touched (`demo_profile_is_additive`, `daemon/tests/dev_fleet_fixtures.rs`,
 enforces this).
 
@@ -821,7 +821,7 @@ through the guarded `scripts/demo-fleet.sh` (see
 below). It cannot run alongside the default fleet: both publish the same host
 ports, `127.0.0.1:7654` / `9443`.
 
-`make demo-reset` is `docker compose --profile demo down -v` followed by
+`make demo-reset` is `docker compose -f docker-compose.demo.yml --profile demo down -v` followed by
 `up -d --no-build` under the `relay-demo` project name, plus the health and
 credential verification described below. It never builds — run `make
 demo-build` once first (and again after any code change); a missing image is
@@ -836,7 +836,7 @@ clears it. The cost is real and worth stating plainly: `-v` destroys the CA and 
 Node identity, so the next `up` re-enrolls the whole fleet from scratch.
 
 `COMPOSE_PROFILES=demo make dev-fleet-up` looks like the Makefile-shaped
-equivalent, but it is not: `dev-fleet-up` runs a bare `docker compose`, which
+equivalent, but it is not: `dev-fleet-up` runs `docker compose -f docker-compose.demo.yml` with no `-p`, which
 names its project after the checkout directory rather than `relay-demo` — a
 project `make demo-reset` refuses on sight (see
 [The fault, and resetting between takes](#the-fault-and-resetting-between-takes)).
@@ -853,20 +853,24 @@ into the (persisted) volume — it just does not copy them out to
 [The fault, and resetting between takes](#the-fault-and-resetting-between-takes)
 for what `demo-creds` does and does not do). There is no `down` you need to
 remember to run before `make demo-reset`: it wipes first. Never substitute a bare
-`docker compose --profile demo down` / `up` for these targets: it names its project after
+`docker compose -f docker-compose.demo.yml --profile demo down` / `up` for these targets: it names its project after
 the checkout directory rather than `relay-demo`. `make demo-up` brings back all nine
 daemons every time precisely because the fixed project and profile are baked into the
 script rather than typed at the command line.
 
 **Cleanup — stop it and leave it down.** `make demo-reset` also wipes `relay-demo`, but
 brings the fleet straight back up; it is the between-takes reset, not a cleanup. To stop
-the demo fleet and wipe its volumes, run `docker compose -p relay-demo --profile demo
-down -v` directly — never a bare `docker compose --profile demo down -v`, which names its
+the demo fleet and wipe its volumes, run `docker compose -p relay-demo` with both of its files
+and `--profile demo down -v` directly, from the checkout root — never a bare
+`docker compose -f docker-compose.demo.yml --profile demo down -v`, which names its
 project after the checkout directory, not `relay-demo`, and leaves the demo fleet's
-volumes behind uncleaned:
+volumes behind uncleaned. Name both files: the repository root has no
+`docker-compose.yml`, so without `-f` Compose finds none (or a parent directory's); the OAuth overlay is named so that an IdP left from an `--oauth` run goes too,
+as `make demo-down` does:
 
 ```console
-$ docker compose -p relay-demo --profile demo down -v
+$ docker compose -p relay-demo -f docker-compose.demo.yml -f docker-compose.oauth.yml \
+    --profile demo down -v
 $ rm -rf ./.dev-fleet
 ```
 
@@ -1136,7 +1140,7 @@ back.
 **`make demo-reset`** is the reliable way back to the starting state between
 takes — fault cleared, Jobs/approvals/audit/registry cleared (the store lives
 on `relay-data`, wiped by `down -v`), the CA and every credential fresh, and
-every Node healthy — and, unlike a bare `docker compose --profile demo down -v`
+every Node healthy — and, unlike a bare `docker compose -f docker-compose.demo.yml --profile demo down -v`
 / `up`, it never builds (a missing image is refused up front — run
 `make demo-build` once, first) and it verifies rather than assumes:
 
@@ -1194,13 +1198,13 @@ is already published by some other compose project. `demo-reset` refuses once
 more, via a read-only `docker compose config --format json`, if any volume it
 is about to `down -v` does not resolve to a `relay-demo_`-prefixed name — the
 defense against a future `name:`/`external:` override on a volume in
-`docker-compose.yml` quietly pointing `-p relay-demo` at a volume this
+`docker-compose.demo.yml` quietly pointing `-p relay-demo` at a volume this
 checkout does not own. `make test-demo-fleet` (`scripts/demo-fleet-test.sh`,
 in `make verify` and CI) proves every refusal against a stubbed `docker`,
 never a real engine.
 
 A checkout directory literally named `relay-demo` would give the *default*
-(non-demo) fleet's bare `docker compose up` that same project name — an
+(non-demo) fleet's `docker compose -f docker-compose.demo.yml up` (`make dev-fleet-up`) that same project name — an
 unlikely collision, but one more reason to prefer `make demo-build` /
 `make demo-reset` over typing `docker compose` by hand under this profile.
 
@@ -1226,8 +1230,8 @@ same change that adjusts the roster, if adjustment turns out to be needed.
 
 **Procedure:**
 
-1. `docker compose down -v`, then `docker compose --profile demo up --build -d`; wait
-   until `docker compose ps` shows all nine daemons `healthy`; let it settle 60s.
+1. `docker compose -f docker-compose.demo.yml down -v`, then `docker compose -f docker-compose.demo.yml --profile demo up --build -d`;
+   wait until `docker compose -f docker-compose.demo.yml ps` shows all nine daemons `healthy`; let it settle 60s.
 2. **Idle:** three samples 10s apart of
    `docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"`.
    Record total memory, the `relay` container, and one representative web / db /
