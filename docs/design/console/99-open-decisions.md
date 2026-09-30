@@ -363,6 +363,20 @@ it (D17) would have lost that.
    its own, and Job detail stops naming an Operation called `raw_exec` as the tier, before the
    Agents screen is removed.
 
+### D19. A failed sign-in records the typed name only when it is a real Account's — **RESOLVED 2026-09-30 (owner)**
+
+**Why:** a failed sign-in recorded whatever was typed as the username. Someone who types their
+password into that box has had it stored in the audit trail and shown on Access.
+
+**Ruling (owner, 2026-09-30):** record, and show, the typed name only when it matches an existing
+Account; otherwise record no typed text. The check is made when the attempt is recorded, so the
+secret is never stored. The trail may therefore tell "unknown name" from "wrong password" apart
+for a real Account. That is acceptable because only admins read these records, through Access, and
+admins already see every Account. The sign-in **response** stays one indistinguishable refusal in
+message and time (spec 12). Any future surface that reads the audit trail must not return failed
+sign-in records below `admin` ([20](20-access.md)). This reverses the "no which-half indication"
+rule spec 20 carried and `audit.go` states; it does not touch spec 12.
+
 ## Prerequisites that already exist as issues
 
 ### D8. [#397](https://github.com/Felag-Engineering/gleipnir-relay/issues/397) — three route families have no role gate — **RESOLVED: gates landed**
