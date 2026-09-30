@@ -1,0 +1,186 @@
+package console
+
+// refresh_test.go proves 00-foundations.md's "Refreshing a screen" and how
+// specs 03, 04 and 14 apply it: Refresh is a plain link that reloads the
+// screen with its query preserved, and the Console never reloads a screen on
+// a timer.
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+)
+
+// pinnedCSP is the content security policy as it stood before the Refresh
+// control existed; the control must not need it to change.
+const pinnedCSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
+	"connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; " +
+	"form-action 'self'; frame-ancestors 'none'"
+
+func refreshScreens() (Deps, []string) {
+	d := consoleCallsDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{pendingApprovalRequest("ap-1")}}
+	return d, []string{"/console/agents", "/console/approvals"}
+}
+
+func TestRefresh_AgentsAndTheQueueOfferAPlainRefresh(t *testing.T) {
+	d, paths := refreshScreens()
+	h := newTestHandler(d, accounts.RoleAdmin)
+	for _, p := range paths {
+		if !strings.Contains(contentOf(get(t, h, p).Body.String()), `<a class="refreshbtn" href="`+p+`">Refresh</a>`) {
+			t.Errorf("%s has no plain Refresh control", p)
+		}
+	}
+	// The empty queue is the state someone watches while waiting (spec 14).
+	d.Approvals = &fakeApprovals{}
+	if !strings.Contains(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals").Body.String(), `class="refreshbtn"`) {
+		t.Error("the empty queue has no Refresh control")
+	}
+}
+
+// TestRefresh_NoScreenReloadsItselfOnATimer: no rendered screen carries a
+// meta refresh, and the refresh parameter that used to turn one on is gone.
+func TestRefresh_NoScreenReloadsItselfOnATimer(t *testing.T) {
+	d := withExecution(sweepFixture(), true)
+	h := newTestHandler(d, accounts.RoleAdmin)
+	for _, path := range walkableScreens(routesFor(d, accounts.RoleAdmin), fixtureIDs) {
+		sep := "?"
+		if strings.Contains(path, "?") {
+			sep = "&"
+		}
+		body := strings.ToLower(get(t, h, path+sep+"refresh=30").Body.String())
+		if strings.Contains(body, `http-equiv="refresh"`) {
+			t.Errorf("%s reloads itself on a timer", path)
+		}
+		if strings.Contains(body, "refresh=") {
+			t.Errorf("%s carries a refresh parameter on a link", path)
+		}
+	}
+}
+
+// TestRefresh_ControlsPreserveTheQuery: Refresh reloads exactly this view.
+func TestRefresh_ControlsPreserveTheQuery(t *testing.T) {
+	d, _ := refreshScreens()
+	h := newTestHandler(d, accounts.RoleAdmin)
+
+	agents := contentOf(get(t, h, "/console/agents?account=gleipnir-prod&console=show").Body.String())
+	if !strings.Contains(agents, `<a class="refreshbtn" href="/console/agents?account=gleipnir-prod&amp;console=show">Refresh</a>`) {
+		t.Errorf("Agents' Refresh does not keep the Account filter and the Console choice:\n%s", agents)
+	}
+	older := contentOf(get(t, h, "/console/agents?console=show&cursor=0").Body.String())
+	if !strings.Contains(older, `<a class="refreshbtn" href="/console/agents?console=show&amp;cursor=0">Refresh</a>`) {
+		t.Errorf("Agents' Refresh does not keep the page it is on:\n%s", older)
+	}
+
+	queue := contentOf(get(t, h, "/console/approvals?risk=mutate&scope=all").Body.String())
+	if !strings.Contains(queue, `<a class="refreshbtn" href="/console/approvals?risk=mutate&amp;scope=all">Refresh</a>`) {
+		t.Errorf("the queue's Refresh does not keep its filters:\n%s", queue)
+	}
+	unknown := contentOf(get(t, h, "/console/approvals?nonesuch=1").Body.String())
+	if strings.Contains(unknown, "nonesuch") {
+		t.Error("the queue's Refresh echoes a parameter the screen does not understand")
+	}
+}
+
+// TestRefresh_ActivityReloadControlKeepsTheFilter: Activity's control reloads
+// the current filter at its newest page, and says what it counts in plain
+// lower-case words.
+func TestRefresh_ActivityReloadControlKeepsTheFilter(t *testing.T) {
+	d := activityDeps(&fakeQueries{})
+	d.Events = newFakeEvents()
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity?kind=dispatch&op=service.restart&jc=c9").Body.String()
+
+	if !strings.Contains(body, `<a class="newq" href="/console/activity?kind=dispatch&amp;op=service.restart" aria-live="polite">Reload to see new events`) {
+		t.Errorf("the reload control does not keep the filter, or keeps the page position:\n%s", body)
+	}
+	if strings.Contains(body, "JOB EVENTS") {
+		t.Error("the counter's caveat still shouts")
+	}
+}
+
+// TestRefresh_TheApprovalQueueHoldsNoControlButAnchors: the Refresh control
+// adds no form to a screen that had none.
+func TestRefresh_TheApprovalQueueHoldsNoControlButAnchors(t *testing.T) {
+	g := consoleGrant("grant-1", "ap-grant", 200, 20)
+	for name, fa := range map[string]*fakeApprovals{
+		"empty":     {},
+		"populated": {pending: []approval.Request{pendingApprovalRequest("ap-1")}},
+		"grant":     {pending: []approval.Request{grantRequest(g, approval.StatePending)}, grants: []approval.Grant{g}},
+	} {
+		d := renderableDeps()
+		d.Approvals = fa
+		content := contentOf(get(t, newTestHandler(d, accounts.RoleViewer), "/console/approvals").Body.String())
+		for _, tag := range []string{"<form", "<input", "<textarea", "<select", "<button"} {
+			if strings.Contains(content, tag) {
+				t.Errorf("%s: the queue renders %s", name, tag)
+			}
+		}
+	}
+}
+
+// TestRefresh_NoScriptNoStyleCSPUnchanged: the controls add no inline script
+// or style, and the policy every page carries is the one it was before.
+func TestRefresh_NoScriptNoStyleCSPUnchanged(t *testing.T) {
+	d, paths := refreshScreens()
+	d.Events = newFakeEvents()
+	h := newTestHandler(d, accounts.RoleAdmin)
+	for _, p := range append(paths, "/console/activity") {
+		rec := get(t, h, p)
+		if got := rec.Header().Get("Content-Security-Policy"); got != pinnedCSP {
+			t.Errorf("%s: CSP = %q, want the unchanged policy", p, got)
+		}
+		assertCSPClean(t, p, rec.Body.String())
+	}
+}
+
+// TestRefresh_TheDisclosureSaysWhetherAReloadIsAudited: one sentence, in the
+// About disclosure, true to what each screen's reads actually record.
+func TestRefresh_TheDisclosureSaysWhetherAReloadIsAudited(t *testing.T) {
+	d, _ := refreshScreens()
+	d.Events = newFakeEvents()
+	h := newTestHandler(d, accounts.RoleAdmin)
+	for path, note := range map[string]string{
+		"/console/agents":    "<b>Every Refresh is an audited read</b>",
+		"/console/activity":  "<b>Every reload is an audited read</b>",
+		"/console/approvals": "<b>Why reloading this queue leaves no record.</b>",
+	} {
+		inside, outside := splitAbout(t, get(t, h, path).Body.String())
+		mustBeStanding(t, inside, outside, note)
+	}
+}
+
+// TestRefresh_TheQueueStatesItsUnauditedReadBesideRefresh: the limit is a
+// security property, so it is visible beside the control, not only in the
+// disclosure (00-foundations.md; #779).
+func TestRefresh_TheQueueStatesItsUnauditedReadBesideRefresh(t *testing.T) {
+	d, _ := refreshScreens()
+	for name, fa := range map[string]*fakeApprovals{"empty": {}, "populated": d.Approvals.(*fakeApprovals)} {
+		d.Approvals = fa
+		body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals").Body.String()
+		mustBeSituational(t, body, "Reloading this queue is not recorded on the audit trail; that is a known gap (#779).")
+		content := contentOf(body)
+		if strings.Index(content, "refreshlimit") < strings.Index(content, "refreshbtn") {
+			t.Errorf("%s: the sentence is not beside the Refresh control", name)
+		}
+	}
+}
+
+// TestRefresh_AgentsReloadIsAnAuditedReadAndTheQueueIsNot backs the two
+// sentences above with the reads each screen actually makes.
+func TestRefresh_AgentsReloadIsAnAuditedReadAndTheQueueIsNot(t *testing.T) {
+	d, _ := refreshScreens()
+	q := d.Queries.(*fakeQueries)
+	h := newTestHandler(d, accounts.RoleAdmin)
+
+	get(t, h, "/console/agents")
+	if q.auditCalls == 0 {
+		t.Error("an Agents reload made no read through the audited lane")
+	}
+	before := q.auditCalls + q.jobCalls
+	get(t, h, "/console/approvals")
+	if after := q.auditCalls + q.jobCalls; after != before {
+		t.Errorf("the queue made %d read-lane reads; its disclosure says a reload records none", after-before)
+	}
+}

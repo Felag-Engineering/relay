@@ -66,6 +66,22 @@ should not have to find their own item in someone else's list.
 - A default sort by arrival time.
 - Grants split into per-Job rows.
 
+## Refreshing
+
+A request parked by a gate rule must be one click away without the operator hunting for the
+browser's reload button. The queue offers a **Refresh** control, under the rules in
+[`00-foundations.md`](00-foundations.md) ("Refreshing a screen"), in every state the queue renders
+once it is wired — the empty state above all, since that is the state someone watches while waiting
+for a request to arrive. It carries the current filter. Nothing reloads the queue on a timer.
+
+**Reloading the queue is not an audited read — a known gap, tracked in #779 — and the screen says
+so.** Unlike the screens on the read lane, the queue reads the pending Requests and the live
+Approval grants through the capability layer's approval methods, which write no read record, so
+neither a page load nor a Refresh of this queue puts anything on the audit trail. Because that
+limits a security property, one plain sentence beside the Refresh control says it, citing #779;
+the fuller explanation sits in the "About this screen" disclosure. Opening one request is audited:
+the approval object reads its park record through the read lane.
+
 ## States
 
 - **Empty** — say so plainly. An empty approval queue is good news, not a blank screen.

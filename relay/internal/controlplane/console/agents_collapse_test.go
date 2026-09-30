@@ -501,7 +501,7 @@ func TestAgents_ThePageNoteSaysWhatTheCollapseDid(t *testing.T) {
 		if !strings.Contains(body, "are collapsed into") {
 			t.Errorf("no collapse clause on the one page position with nothing else to say:\n%s", body)
 		}
-		if strings.Contains(body, "Showing the most recent") {
+		if strings.Contains(body, "This page holds the most recent") {
 			t.Error("an unscrolled page with no older page still claims a position it does not have")
 		}
 	})
@@ -514,7 +514,7 @@ func TestAgents_ThePageNoteSaysWhatTheCollapseDid(t *testing.T) {
 		if !strings.Contains(body, "are collapsed into") {
 			t.Errorf("no collapse clause on a page that also has an older page:\n%s", body)
 		}
-		if !strings.Contains(body, "Showing the most recent 200 calls. There are older calls.") {
+		if !strings.Contains(body, "This page holds the most recent 200 calls. There are older calls.") {
 			t.Errorf("the position clause did not survive #541's PageNote rewrite:\n%s", body)
 		}
 		if !strings.Contains(body, `href="/console/agents?cursor=c2">Older<`) {
@@ -530,7 +530,7 @@ func TestAgents_ThePageNoteSaysWhatTheCollapseDid(t *testing.T) {
 		if !strings.Contains(body, "are collapsed into") {
 			t.Errorf("no collapse clause on a scrolled page:\n%s", body)
 		}
-		if !strings.Contains(body, "NOT the most recent") {
+		if !strings.Contains(body, "not the most recent calls. This page was reached by following Older") {
 			t.Errorf("the scrolled position clause did not survive #541's PageNote rewrite:\n%s", body)
 		}
 		if !strings.Contains(body, ">Newest<") {

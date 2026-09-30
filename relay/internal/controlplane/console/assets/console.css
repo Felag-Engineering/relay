@@ -1621,6 +1621,47 @@ dl.kv dd { min-width: 0; }
   .evwhen { width: auto; }
 }
 
+/* ==========================================================================
+ * Refresh controls, the Activity reload control, and the Agents screen's
+ * Console-calls sentence (00-foundations.md "Refreshing a screen"; 03, 04, 14).
+ * One block, appended, so nothing above it moves. Every colour is a token.
+ * ========================================================================== */
+
+/* Refresh: a plain anchor that reloads the screen with its query. There is
+ * no timer anywhere in the Console (00-foundations.md). */
+.refreshbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3);
+  margin: 0 0 var(--space-4);
+}
+.refreshbtn {
+  font-size: var(--text-sm); font-weight: var(--weight-medium);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
+  background: var(--bg-surface); color: var(--text-primary);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+.refreshbtn:hover { text-decoration: none; border-color: var(--color-blue); }
+/* The approval queue's one visible sentence that its Refresh is not audited
+ * (#779). It qualifies the control above it, so it is quiet note text. */
+.refreshlimit { font-size: var(--text-xs); color: var(--text-muted); margin: calc(-1 * var(--space-3)) 0 var(--space-4); max-width: 64em; }
+
+/* Activity's queue control, once something has queued: drawn as a button in
+ * the interactive colour so it reads as the thing to click, not as a line of
+ * small print. Still hidden until then, by the [data-queued] rule above. */
+[data-live-region][data-queued="yes"] .newq {
+  display: inline-flex; align-items: baseline; gap: var(--space-2);
+  font-weight: var(--weight-medium);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-blue); border-radius: var(--radius-lg);
+  background: var(--bg-canvas);
+}
+[data-live-region][data-queued="yes"] .newq:hover { text-decoration: none; border-color: var(--accent-hover); color: var(--accent-hover); }
+.newqcount { font-weight: var(--weight-normal); color: var(--text-second); }
+
+/* The Agents screen's one sentence about reads made from this Console. It
+ * qualifies the feed below it, so it is quiet note text, not a dashed box. */
+.consolecalls { font-size: var(--text-xs); color: var(--text-muted); }
+
 /* ===========================================================================
  * Form controls — ONE treatment (00-foundations.md, "Form controls")
  * ===========================================================================

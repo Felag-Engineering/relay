@@ -759,9 +759,9 @@ func handleActivity(d Deps) http.HandlerFunc {
 				Endpoint:    "/console/events?kinds=job",
 				LastEventID: newestJobEventID(d.Events),
 				ShowHref:    f.base(),
-				CountNote: "This counts JOB EVENTS ON THE STREAM, not rows that will appear. " +
-					"The stream is not filtered by this page's filter, and one Job announces " +
-					"itself more than once — created, then completed.",
+				CountNote: "The number counts job events on the stream, not rows that will appear. " +
+					"This page's filter does not narrow the stream. " +
+					"One Job announces itself more than once: when it is created, and again when it completes.",
 			}
 			p.Scripts = []string{"/console/assets/stream.js", "/console/assets/activity.js"}
 		}
@@ -1349,7 +1349,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
         {{if .NodeHref}}<a href="{{.NodeHref}}"><code>{{.NodeID}}</code></a>{{end}}
         {{if and .JobHref (not .OpIsLink)}}<a href="{{.JobHref}}">Job <code>{{short .JobID}}</code></a>{{end}}
         {{with .ApprovalHref}}<a href="{{.}}">approval</a>{{end}}
-        {{with .GrantID}}<span class="grant" title="A batch/window Grant released this — a human approved a window this plan fell inside, not this plan.">grant {{short .}}</span>{{end}}
+        {{with .GrantID}}<span class="grant" title="An Approval grant released this: a human approved a window that this plan fell inside, not this plan itself.">grant {{short .}}</span>{{end}}
       </div>
       {{if .Outcomes.Total}}{{template "outcome-bar" .Outcomes}}{{end}}
       {{if .LiveHandle}}<div class="evliveslot">
@@ -1361,7 +1361,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
     </div>
   </article>
 {{else}}
-  {{if .Exhausted}}<p class="dim">Both lanes have been paged to the end of this filter.
+  {{if .Exhausted}}<p class="dim">There is nothing older for this filter.
   <a href="{{.ResetHref}}">Start again</a>.</p>
   {{else if .Narrowing}}<p class="dim">Nothing matches.</p>
   {{else}}<p class="dim">Nothing has been recorded yet.</p>{{end}}
@@ -1374,16 +1374,15 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
 </div>
 
 {{if .Filter.Q}}
-<p class="gap"><b>Refine</b> is a substring match over the rows already on this page and does NOT
-reach the trail; the fields beside it do.</p>
+<p class="gap"><b>Refine</b> matches text within the rows already on this page. It does not search
+the trail; the other fields do.</p>
 {{end}}
 
 {{if .Filter.Outcome}}
 <p class="gap"><b>Outcome narrows dispatch rows after the page is fetched.</b> A Job has no single
-outcome &mdash; the predicate here is &ldquo;this Job produced at least one
-<code>{{.Filter.Outcome}}</code>&rdquo; &mdash; and the Job query has no outcome column to filter on,
-so a filtered page can come back short while &ldquo;older&rdquo; still leads somewhere. On every
-other row kind the outcome is applied in the query.</p>
+outcome, so this keeps every Job that produced at least one <code>{{.Filter.Outcome}}</code>. The Job
+query cannot filter by outcome, so a filtered page can come back short while &ldquo;Older&rdquo; still
+leads somewhere. For every other row kind, the outcome is applied in the query.</p>
 {{end}}
 
 <details class="about">
@@ -1391,30 +1390,32 @@ other row kind the outcome is applied in the query.</p>
 
 <p class="gap"><b>Each page holds up to {{.JobPageSize}} dispatches and up to {{.AuditPageSize}} other
 events, merged by time.</b>
-{{if or .DispatchOnly .TrailOnly}}This filter runs one lane, so the page boundary is a single instant.
-{{else}}The two lanes page independently, so a page boundary is not a single instant &mdash; following
-&ldquo;older&rdquo; carries both cursors and neither lane restarts.{{end}}</p>
+{{if or .DispatchOnly .TrailOnly}}This filter reads only one of the two, so a page ends at a single moment.
+{{else}}Dispatches and other events are paged separately, so a page does not end at a single moment.
+Following &ldquo;Older&rdquo; continues both from where they stopped; neither starts again.{{end}}</p>
 
 <p class="gap"><b>The default feed leaves out the trail&#39;s own read records.</b> Reading the trail
-WRITES to it &mdash; this page appends one record per lane it queries &mdash; so a feed that included
-them would fill with the operator&#39;s own refreshes. They are one click away as
+writes to it: this page adds a read record each time it fetches dispatches or other events. A feed
+that included them would fill with the operator&#39;s own reloads. They are one click away as
 <a href="/console/activity?kind=read">kind=read</a>, and their home is
 <a href="{{.ReadsHref}}">Read egress</a>. Nothing is hidden.</p>
 
-<p class="gap"><b>Two row kinds the specification asks for cannot be rendered here yet.</b> There is
-no enrollment record and no label record in the audit trail: enrollments exist only on the live event
-seam, for a few minutes (#444), and label management is not built (#430). Splicing that few minutes
-into a feed you can scroll back through would put rows on this screen that vanish as you read, which
-is worse than their absence.</p>
+<p class="gap"><b>Two row kinds are not built here yet: enrollments and label changes.</b> The
+audit trail holds no record of either. An enrollment exists only on the live event stream, for a few
+minutes (#444), and label management is not built (#430). Splicing those few minutes into a feed you can scroll
+back through would put rows on this screen that vanish as you read, which is worse than leaving them
+out.</p>
 
-<p class="gap"><b>The filter box carries no Selector and no Node.</b> Spec 04 asks for both; the Job
-query has a field for neither &mdash; a Job spans its Selector&#39;s whole fan-out, so it has no one
-Node &mdash; and a Node filter that narrowed only the trail would silently drop every dispatch row
-from the page.</p>
+<p class="gap"><b>The filter box carries no Selector and no Node.</b> Neither filter is built yet:
+the Job query has a field for neither. A Job spans its Selector&#39;s whole fan-out, so it has no single Node. A Node filter that
+narrowed only the other events would silently drop every dispatch row from the page.</p>
+
+<p class="gap"><b>Every reload is an audited read</b>, whether it comes from the reload button, which
+appears above the feed once new events have queued, or from the browser.</p>
 
 <p class="gap"><b>The chips above list every family this Relay records, including empty ones.</b>
-They used to carry counts. Counting per family across a paginated trail would take one aggregate
-query each, and each of those appends its own record to the append-only trail &mdash; ten extra rows
+They carry no counts. Counting each family across the whole trail would take one query per family,
+and each query adds its own record to the append-only trail &mdash; ten extra rows
 to print ten numbers. A page that prints a number it did not compute has nothing to offer an
 operator reading it during an incident.</p>
 </details>

@@ -246,6 +246,10 @@ type approvalsView struct {
 	// hiccup must not cost an operator the whole queue at the moment something
 	// in it is expiring.
 	GrantsUnreadable bool
+
+	// Refresh is the manual Refresh control (spec 14, "Refreshing"): this
+	// queue, reloaded with its filter.
+	Refresh Refresh
 }
 
 func handleApprovals(d Deps) http.HandlerFunc {
@@ -266,9 +270,14 @@ func handleApprovals(d Deps) http.HandlerFunc {
 			renderScreen(w, p, approvalsTmpl, approvalsView{})
 			return
 		}
-		// The queue's trail reads (the Scope lines a Grant row carries) go
-		// through the latch, so a queue whose reads cannot be audited is not
-		// served — one rule, no per-screen exception (screen.go).
+		// The queue makes NO read through the audited lane today: the pending
+		// Requests and the live Approval grants below (the Scope lines a
+		// grant row carries) come from d.Approvals, whose methods write no
+		// read record, so neither this page nor a Refresh of it is audited.
+		// That is a known gap, #779, and the screen says so beside Refresh.
+		// The latch is still applied so that any read-lane call added here
+		// later is refused when it cannot be audited, the rule every other
+		// screen follows (screen.go).
 		d, lane := latched(d)
 		ctx := r.Context()
 		reqs, err := d.Approvals.PendingApprovals(ctx)
@@ -282,8 +291,10 @@ func handleApprovals(d Deps) http.HandlerFunc {
 		// it must not 500 over a seam that decorates some of its rows.
 		grants, grantsErr := activeGrantsByRequest(ctx, d)
 		rows := buildApprovalRows(reqs, grants, caller, d.now())
-		v := buildApprovalsView(rows, parseApprovalFilter(r.URL.Query()))
+		f := parseApprovalFilter(r.URL.Query())
+		v := buildApprovalsView(rows, f)
 		v.GrantsUnreadable = grantsErr != nil
+		v.Refresh = newRefresh("/console/approvals", f.query())
 		if refusedUnaudited(w, lane, "the approval queue's audit trail") {
 			return
 		}
@@ -602,12 +613,7 @@ func (f approvalFilter) value(key string) string {
 // lookup key in a URL is an offline-confirmation oracle over a brute-forceable
 // preimage (see approvalRow.shapeKey).
 func (f approvalFilter) with(key, value string) string {
-	q := url.Values{}
-	for _, k := range []string{"who", "op", "risk", "quorum", "scope"} {
-		if v := f.value(k); v != "" {
-			q.Set(k, v)
-		}
-	}
+	q := f.query()
 	if value == "" {
 		q.Del(key)
 	} else {
@@ -617,6 +623,18 @@ func (f approvalFilter) with(key, value string) string {
 		return "/console/approvals"
 	}
 	return "/console/approvals?" + q.Encode()
+}
+
+// query is the filter as URL values — what with() starts from, and what the
+// Refresh control reloads.
+func (f approvalFilter) query() url.Values {
+	q := url.Values{}
+	for _, k := range []string{"who", "op", "risk", "quorum", "scope"} {
+		if v := f.value(k); v != "" {
+			q.Set(k, v)
+		}
+	}
+	return q
 }
 
 // toggle returns the URL that turns this value on, or off when it is already on.
@@ -1700,7 +1718,10 @@ func renderTTL(d time.Duration) string {
 var approvalsTmpl = newScreen("approvals", `
 {{if not .Wired}}
 <p class="dim">The approval queue is not wired into this Console.</p>
-{{else if not .Count}}
+{{else}}
+{{template "refresh" .Refresh}}
+<p class="refreshlimit">Reloading this queue is not recorded on the audit trail; that is a known gap (#779).</p>
+{{if not .Count}}
 <div class="empty">
   <h2>Nothing is waiting.</h2>
   <p>An empty approval queue is good news. When a gate rule parks a dispatch, it appears here with
@@ -1772,6 +1793,15 @@ seeing what you approved. Deciding happens on the request itself, behind step-up
 is asked for on every decision. This Console does not decide a Grant; answer one through the
 Control API.</p>
 {{end}}
+
+<details class="about">
+<summary>About this screen</summary>
+<p class="gap"><b>Why reloading this queue leaves no record.</b> The pending requests and the live
+Approval grants are read through methods that write no read record, so neither opening this queue
+nor a Refresh adds anything to the audit trail. Opening one request is recorded. This is a known
+gap, tracked in #779.</p>
+</details>
+{{end}}
 `)
 
 var approvalTmpl = newScreen("approval", `
@@ -1795,10 +1825,10 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   hash, which means the same action over the same resolved Nodes.{{else}}The two plan hashes differ,
   so something about the scale moved — and this Relay cannot say by how much.{{end}}</p>{{end}}
   {{with .Diff.NotComparable}}<p class="note">Not compared: {{join "; " .}}.</p>{{end}}
-  {{if eq .Diff.Kind "plan"}}<p class="note">The resolved fan-out is not stored on the approval
-  record, and a park creates <b>no Job at all</b> — so there is no Task and no result anywhere to
-  count Nodes from for this record. The count in the sentence below is Relay-authored prose, and
-  this screen never reads a number back out of it.</p>{{end}}
+  {{if eq .Diff.Kind "plan"}}<p class="note">How many Nodes this request covers is not stored on
+  the approval record. A parked request creates <b>no Job at all</b>, so there is no Task and no
+  result to count Nodes from. The count in the sentence below is written by the Relay, and this
+  screen never reads a number back out of it.</p>{{end}}
 {{else}}
   <p class="nodiff">{{.Diff.Absence}}</p>
 {{end}}
@@ -1813,7 +1843,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   </div>
 
   <p class="summary">{{.Summary}}</p>
-  <p class="note">That sentence is written by the Relay, not by the caller. An agent chose the
+  <p class="note">That sentence is written by the Relay, not by the caller. The caller chose the
   Operation; it did not choose one word a human reads about it.</p>
 
   <dl class="kv">
@@ -1838,7 +1868,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   <h3>The Scope</h3>
   {{if .Grant.LegacyNamespacePin}}
   <p class="note"><b>This Grant covers nothing.</b> It was stored before namespace pinning was
-  removed from a Scope (#482) and carries a retired pin (<code>{{.Grant.LegacyNamespacePin}}</code>).
+  removed from a Scope (#482), and carries a retired pin (<code>{{.Grant.LegacyNamespacePin}}</code>).
   Ignoring the pin would widen what it covers, so approving it releases no dispatch; revoke it to
   close it for the record.</p>
   {{else}}
@@ -1984,8 +2014,8 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
     <p class="gap"><b>This Console does not decide a Grant.</b> {{if .GrantUnreadable}}The Grant store
     could not be read, so this Console cannot tell whether this Request authorizes a Scope or a single
     Plan, and will not decide either while that is unknown.{{else}}This Request authorizes a Scope, not
-    one Plan, and spec 08 requires a Grant's Scope to have been expanded at least once before it is
-    approved — this Console does not enforce that yet.{{end}} Answer it through the Control API.</p>
+    one Plan. An Approval grant's Scope must be expanded at least once before it is approved, and this
+    Console does not enforce that yet.{{end}} Answer it through the Control API.</p>
     {{else if .DecideSeamsUnwired}}
     <p class="gap"><b>Deciding is not wired into this Relay's Console.</b> Answer through the Control
     API's decision endpoint instead — the same code path, and the one that always decides.</p>

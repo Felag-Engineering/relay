@@ -21,6 +21,13 @@ does not see the model's intent, and it must never pretend to. That limitation i
 verified record of what was asked beats a narrated account of why, which an agent under prompt
 injection would happily fabricate.
 
+**The lede claims no more than the screen lists.** It says the screen lists calls that reached the
+Relay from outside this Console — which is where an AI-agent's calls arrive, and where a person's
+arrive too when they call through MCP or the Control API — and it keeps the warning that the Relay
+sees the request and never the reasoning. It does not say "every call an AI-agent makes": the
+screen cannot tell an AI-agent from a person using the same surface, and by default it leaves out
+reads made from this Console (below).
+
 ## There are no sessions
 
 The MCP transport is **stateless** (ADR-0028; `Stateless: true`, no `Mcp-Session-Id` — a Job ID
@@ -140,6 +147,64 @@ an audited call, so it is not a call this screen's rail can count — the rail's
 Denied fields stay call-grained. It joins the rail once its dispatch is recorded. An otherwise
 empty rail says so instead of "No Account has called a control surface yet.", since a page
 showing only running Jobs is not truthfully an empty one.
+
+## Reads made from this Console
+
+Most screens this Console renders read through the capability layer's audited read lane (the
+Approvals queue does not; that is a known gap, #779), so most pages the signed-in operator opens are
+themselves calls on the trail (`query_audit`, `list_nodes`, `query_jobs`, …, attributed to their
+own Account). Listed as they are, they fill the feed and the rail within minutes of use and bury
+the AI-agent's calls this screen exists to show. Those page loads are reads, so reads are what this
+rule leaves out.
+
+**Where the Agents screen lists calls and counts them on the rail, a call is left out by default
+only when its audit record says BOTH that its identity was established by a Console session AND
+that it was a read.** The rule is proposed in this change and awaits a human's review of it.
+
+- **"Made from this Console" is read from the record as written**: the authentication method on
+  the verified lane (`console_session`), recorded when the call was made. It means the call was
+  authenticated by a Console session cookie — not that a person was at the keyboard. The rule
+  never reads the Account registry and never reads an Account's kind: the owner decision under
+  "Kind (machine or human) is not on the rail" above (2026-09-08, #540) stands unchanged, and this
+  rule does not depend on it.
+- **"A read" is read from the row itself**: its record kind is the non-dispatching read kind
+  (`read`) AND the risk class the row already renders is `read`. Where the row does not carry
+  enough to tell, it is treated as not a read and stays listed. Nothing else is consulted.
+- **Everything that is not a read stays listed whatever its method**: a mutate-class call, an
+  approval decision, a Cancel, a refusal, a Preflight — including those made from a Console
+  session.
+- **The residual, stated plainly.** Reads made with a stolen Console session cookie, or by
+  software driving an operator's browser, carry the same record as the operator's own page loads.
+  They are left out of this screen by default, are counted in the visible sentence, and are one
+  click away.
+- **The exclusion is never silent.** Where it is in force, one plain sentence beside the feed says
+  that reads made from this Console are left out and how many — of the calls on this page, or,
+  where `?account=` is set, of that Account's calls on this page — and links to the same view with
+  them shown (`?console=show`). Where that parameter is set, the screen lists and counts exactly as
+  it would without this rule, and the sentence offers the way back.
+- **`?account=` composes with it.** An Account filter narrows what the default leaves; with
+  `?console=show` it narrows everything. Every link the screen draws — the rail, Older, Newest,
+  "Show every Account" and Refresh — carries both parameters as it found them.
+- **It is presentation over the fetched page**, like the polling collapse: the lane is asked for
+  the same page with the same filter it always was, and no read is added or widened. The page is
+  still bounded by the most recent 200 audited calls counted *before* the exclusion, so a page can
+  list fewer than 200, and a page of nothing but Console reads lists none while still offering
+  Older. The page note therefore says what the page holds, not what the feed shows, and the
+  sentence's count keeps the arithmetic visible.
+- **The method decides what is listed and is never displayed.** Nothing on this screen says how an
+  actor authenticated.
+- **The Running section is unaffected.** It is read from the Job row, which records no method.
+- **Empty states stay true.** Where the rail, or the feed, is empty because every call on the page
+  — or every call by the filtered Account — was a read made from this Console, it says that,
+  rather than that nobody called.
+
+## Refreshing
+
+The Agents screen offers a **Refresh** control, under the rules in
+[`00-foundations.md`](00-foundations.md) ("Refreshing a screen"): it reloads the screen with
+`?account=` and `?console=` preserved, and nothing reloads it on a timer. The "About this screen"
+disclosure says that every Refresh is an audited read, and that those reads are reads made from
+this Console, so the default above leaves them out of this screen.
 
 ## Interruption
 

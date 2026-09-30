@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"net/url"
 	"sort"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
@@ -540,6 +541,29 @@ type StepUp struct {
 
 // --- Rendering --------------------------------------------------------------
 
+// --- Refresh --------------------------------------------------------------
+
+// Refresh is the manual Refresh control (00-foundations.md, "Refreshing a
+// screen"): a plain link to the same screen with the current query preserved.
+// It is a deliberate act by the operator. The Console never reloads a screen
+// on a timer — the README records the owner decision "No scheduled or
+// repeated reads. Every read is a deliberate, audited act."
+type Refresh struct {
+	// Href reloads the screen exactly as it is.
+	Href string
+}
+
+// newRefresh builds the control for the screen at path, whose own query —
+// every parameter it understands — is q. The caller rebuilds q from the
+// parameters it parsed rather than echoing the raw URL, so a parameter the
+// screen does not know never travels on its links.
+func newRefresh(path string, q url.Values) Refresh {
+	if len(q) == 0 {
+		return Refresh{Href: path}
+	}
+	return Refresh{Href: path + "?" + q.Encode()}
+}
+
 // --- The live region --------------------------------------------------------
 
 // Live is the shell's live-region component (spec 11 line 113 — "incoming
@@ -601,6 +625,10 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 	// every Operation declares a risk class (ADR-0012), and the class is what
 	// chooses the cap.
 	"risk": jobs.RiskClassName,
+	// plural is screen.go's one template plural (the word alone, never the
+	// number — TestPluralFamiliesKeepOppositeContracts), shared so a
+	// component cannot render "1 Nodes matched".
+	"plural": screenFuncs["plural"],
 }).Parse(`
 {{define "label-chip"}}<span class="chip lbl" data-ns="{{.Namespace}}"{{if .SecurityLane}} data-lane="security"{{end}}{{if .Attention}} data-sev="attention"{{end}} title="{{.}}"><span class="ns">{{.Namespace}}:</span>{{.Key}}{{if .Value}}<span class="eq">=</span>{{.Value}}{{end}}</span>{{end}}
 
@@ -643,7 +671,7 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
   </div>
   <div class="planfan">
     <code class="selector">{{if .Selector}}{{.Selector}}{{else}}{{.SelectorNote}}{{end}}</code>
-    <span class="fanmath">{{.Matched}} Nodes matched{{if .Cap}} &middot; cap {{.Cap}}{{end}}</span>
+    <span class="fanmath">{{.Matched}} {{plural .Matched "Node" "Nodes"}} matched{{if .Cap}} &middot; cap {{.Cap}}{{end}}</span>
     {{if .OverCap}}<span class="overcap">over the {{.RiskClass | risk}} cap &mdash; this Job will not dispatch</span>{{end}}
   </div>
   {{if .Verdicts}}<div class="planverdicts"><b>{{.AllowedCount}}</b> would run &middot; <b>{{.DeniedCount}}</b> would be denied</div>{{end}}
@@ -659,11 +687,14 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
     <span class="wmsg" data-when="gap">The live stream fell behind &mdash; reloading.</span>
     <span class="wmsg" data-when="ended">The live stream has stopped. Your session may have ended;
     reload the page to sign in again.</span>
-    <a class="newq" href="{{.ShowHref}}" aria-live="polite">New events on the stream:
-    <b id="live-new-count">0</b> &mdash; reload</a>
+    <a class="newq" href="{{.ShowHref}}" aria-live="polite">Reload to see new events
+    <span class="newqcount">(<b id="live-new-count">0</b> on the stream)</span></a>
   </div>
   {{with .CountNote}}<p class="livenote">{{.}}</p>{{end}}
 </section>{{end}}{{end}}
+
+{{/* refresh: 00-foundations.md, "Refreshing a screen". An anchor, never a timer. */}}
+{{define "refresh"}}<div class="refreshbar"><a class="refreshbtn" href="{{.Href}}">Refresh</a></div>{{end}}
 
 {{define "pin-bar"}}<div class="pinbar">
   <span class="pinlbl">Pinned</span>
@@ -689,6 +720,6 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 {{define "job-cancel"}}<form class="jobcancel" method="post" action="{{.Action}}">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
   <button type="submit">Cancel</button>
-  <span class="jcnote">Cancel stops this Job&#39;s in-flight Tasks and nothing future; the incident ladder is for that.</span>
+  <span class="jcnote">Cancel stops this Job&#39;s in-flight Tasks. It stops nothing that comes later; the incident ladder does that.</span>
 </form>{{end}}
 `))
