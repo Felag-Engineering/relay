@@ -20,6 +20,9 @@ that gets re-decided from scratch in six months.
   rule when built: a Grant used as a *security boundary* must scope by `relay:` labels
   (ADR-0006). Engine candidate: Cedar (#285) — evaluated jointly with the approval-rule
   grammar (v0.5.0) so Relay never hand-rolls two policy engines.
+  **Direction settled 2026-09-30 in ADR-0041 (Proposed):** Grants are Operation × Selector,
+  deny-by-default; picked up with the identity work below, after the demo. Stays here until
+  that milestone exists.
 - **Staged rollout & approval** — first-class rollout spec on Jobs: canary stage → gate
   (`all-success` or `manual-approval` — the v0.5.0 approval mechanism reused as a rollout
   gate) → remainder, executed and audited as one Job. The Job schema's Stages and the
@@ -35,6 +38,9 @@ that gets re-decided from scratch in six months.
   #279.
 - **IdP-federated teams/audiences** — `on_behalf_of` and approval audiences resolved from
   OIDC group claims (direction named in v0.3.0; Relay never grows a native org chart).
+  **Direction settled 2026-09-30 in ADR-0041 (Proposed):** Gleipnir is the directory and Relay
+  pulls a signed copy; teams are groupings of principals; the approver's own identity reaches
+  Relay verified. Deliberately not started before the demo; no milestone yet.
 - **Expectations (runtime health only)** — advisory, scheduled *read-class* checks;
   findings may *propose* a remediation Job routed through the v0.5.0 approval mechanism;
   nothing auto-executes (ADR-0008 stands). The scheduler must be able to construct
