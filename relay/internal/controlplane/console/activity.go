@@ -72,6 +72,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
@@ -107,6 +108,8 @@ type rowKind string
 
 const (
 	rowDispatch rowKind = "dispatch"
+	rowPlan     rowKind = "plan"
+	rowCancel   rowKind = "cancel"
 	rowApproval rowKind = "approval"
 	rowToken    rowKind = "token"
 	rowNode     rowKind = "node"
@@ -128,7 +131,7 @@ const (
 // rowKindOrder is every family, in the order the chips render. It is also the
 // set kindsOfFamily must be TOTAL over.
 var rowKindOrder = []rowKind{
-	rowDispatch, rowRead, rowRefusal, rowApproval, rowFreeze, rowNode, rowToken, rowOther,
+	rowDispatch, rowPlan, rowApproval, rowRefusal, rowRead, rowCancel, rowFreeze, rowNode, rowToken, rowOther,
 }
 
 // kindOf maps a trail record onto a row family.
@@ -139,6 +142,10 @@ func kindOf(k string) rowKind {
 	switch k {
 	case audit.KindDispatch:
 		return rowDispatch
+	case audit.KindPlan:
+		return rowPlan
+	case audit.KindJobCancel:
+		return rowCancel
 	case audit.KindRead:
 		return rowRead
 	case audit.KindRefusal:
@@ -168,9 +175,10 @@ func kindOf(k string) rowKind {
 //
 // Derived, not enumerated, because the two lists would have to agree and only
 // one of them is ever edited. Every audit kind lands in exactly one family by
-// construction, including the ones kindOf does not name — job_cancel and plan
-// both fall to `other`, and `other` is a real, selectable family for exactly
-// that reason.
+// construction, including the ones kindOf does not name. `other` covers only
+// kinds spec 04's Row kinds table does not name (protocol_violation today, and
+// any kind added to internal/audit later), and is a real, selectable family
+// for exactly that reason.
 var kindsByFamily = buildKindsByFamily()
 
 func buildKindsByFamily() map[rowKind][]string {
@@ -324,6 +332,27 @@ type activityRow struct {
 
 	// InFlight is how many of the Job's Tasks have not resolved yet.
 	InFlight int
+
+	// Outcome is a trail row's result chip (callOutcome); empty draws none.
+	Outcome string
+
+	// Running is a Job-lane row with Tasks not yet resolved. It is keyed on
+	// Unresolved, not on State: JobStateRunning is iota 0, so a zero-value
+	// summary reads as running. Job detail gates its Cancel on Unresolved
+	// (job.go), which is what "offered exactly as Job detail's is" means.
+	Running bool
+	// Resolved is Total minus Unresolved, drawn as "resolved of total" on a
+	// Running row.
+	Resolved int
+	// RawExecTier marks a Job whose ActionKind is Raw Exec. It is the ONLY
+	// source of "this is the Raw Exec tier"; it is never inferred from a name.
+	RawExecTier bool
+	// AwaitingRecord is a Running row with no audit-joined field joined yet:
+	// the Job engine writes its dispatch record after the dispatch returns.
+	AwaitingRecord bool
+	// CancelAction is the Cancel form's action, set by the handler after the
+	// fetch and never by the constructors: only it knows the caller's role.
+	CancelAction string
 
 	// Unrecorded marks a dispatch the Relay cannot attribute, and Pending
 	// distinguishes the two reasons — which are DIFFERENT CLAIMS and must not
@@ -575,6 +604,16 @@ func (f activityFilter) base() string { return f.href(lanePos{}, lanePos{}) }
 // href renders the filter back into a URL, with the two lane positions
 // replaced. A zero lanePos drops both of its parameters, which is page one.
 func (f activityFilter) href(job, audit lanePos) string {
+	v := f.query(job, audit)
+	if len(v) == 0 {
+		return "/console/activity"
+	}
+	return "/console/activity?" + v.Encode()
+}
+
+// query is the filter's parameters with the two lane positions replaced, so a
+// control that builds its own URL (Refresh) reuses exactly what href encodes.
+func (f activityFilter) query(job, audit lanePos) url.Values {
 	v := url.Values{}
 	set := func(name, value string) {
 		if value != "" {
@@ -600,10 +639,7 @@ func (f activityFilter) href(job, audit lanePos) string {
 	if audit.Done {
 		set("adone", "1")
 	}
-	if len(v) == 0 {
-		return "/console/activity"
-	}
-	return "/console/activity?" + v.Encode()
+	return v
 }
 
 // narrowing reports whether anything at all was asked for. It is what decides
@@ -675,6 +711,17 @@ type activityView struct {
 	ReadsLeftOutHref string
 
 	Live Live
+
+	// CSRFToken serves the per-row Cancel form on a running Job's row.
+	CSRFToken string
+
+	// Scrolled says this page was reached by following Older; NewestHref is
+	// the way back.
+	Scrolled   bool
+	NewestHref string
+
+	// Refresh reloads this exact view, lane positions included.
+	Refresh Refresh
 }
 
 // kindChip is one family link. It carries NO COUNT, and that is a deletion
@@ -765,6 +812,8 @@ func handleActivity(d Deps) http.HandlerFunc {
 			Outcomes:  outcomeChoices(f.Outcome),
 			Kinds:     kindChips(f),
 		}
+		v.CSRFToken = p.CSRFToken
+		v.Refresh = newRefresh("/console/activity", f.query(f.Job, f.Audit))
 		if f.Kind == "" {
 			for _, c := range v.Kinds {
 				if c.Kind == rowRead {
@@ -789,6 +838,21 @@ func handleActivity(d Deps) http.HandlerFunc {
 			return
 		}
 		v.Rows = rows
+
+		// Cancel follows Job detail literally: a Job with Unresolved Tasks
+		// and a role the route is mounted for. One Job is one row, so this is
+		// at most one control per Job by construction.
+		if cancelOffered(d, accounts.Role(caller.Role)) {
+			for i := range v.Rows {
+				if r := &v.Rows[i]; r.Kind == rowDispatch && r.Running && r.JobID != "" {
+					r.CancelAction = cancelJobAction(r.JobID)
+				}
+			}
+		}
+		v.Scrolled = f.Job != (lanePos{}) || f.Audit != (lanePos{})
+		if v.Scrolled {
+			v.NewestHref = f.base()
+		}
 
 		// BOTH lane positions travel, always, and a lane that came back with
 		// no Next travels as FINISHED rather than as an empty cursor. "Older"
@@ -996,7 +1060,7 @@ func matchesQuery(row activityRow, q string) bool {
 	hay := strings.ToLower(strings.Join([]string{
 		row.EventKind, row.Summary, row.Principal, row.OnBehalfOf, row.Selector,
 		row.NodeID, row.Operation, row.Args, row.JobID, row.Reason, row.ApprovalID, row.GrantID,
-		row.State,
+		row.State, row.Outcome,
 	}, " "))
 	for _, term := range strings.Fields(q) {
 		if !strings.Contains(hay, term) {
@@ -1014,12 +1078,13 @@ func matchesQuery(row activityRow, q string) bool {
 // Task record happened to build the row would say the Job targeted one machine
 // when it targeted many. Per-Node results are on the Job's own page.
 func dispatchRowFromJob(sum capability.JobSummary) activityRow {
+	operation, rawExecTier := jobRowName(sum)
 	row := activityRow{
 		Kind:      rowDispatch,
 		EventKind: audit.KindDispatch,
 		at:        sum.CreatedAt,
 		When:      sum.CreatedAt.UTC().Format("2006-01-02 15:04:05Z"),
-		Operation: jobOperationText(sum.OperationName, sum.ActionKind),
+		Operation: operation,
 		Args:      argsSummary(sum.Args, sum.RawExecArgv),
 		// The DECLARED class, from tasks.risk_class — never this package's
 		// name inference. A Template Operation the Console has never heard of
@@ -1028,6 +1093,9 @@ func dispatchRowFromJob(sum capability.JobSummary) activityRow {
 		Selector:      sum.Selector,
 		FanOut:        sum.Total,
 		InFlight:      sum.Unresolved,
+		Running:       sum.Unresolved > 0,
+		Resolved:      sum.Total - sum.Unresolved,
+		RawExecTier:   rawExecTier,
 		Outcomes:      barFrom(sum.Counts),
 		JobID:         sum.JobID,
 		JobHref:       "/console/jobs/" + sum.JobID,
@@ -1042,8 +1110,21 @@ func dispatchRowFromJob(sum capability.JobSummary) activityRow {
 		row.Risk = jobs.RiskClassName(sum.RiskClass)
 	}
 	row.Summary = row.Operation
+	if row.Summary == "" {
+		// Neither an Operation name nor the Raw Exec ActionKind: say what the
+		// row is rather than render an empty cell.
+		row.Summary = "dispatch"
+	}
 	row.OpIsLink = row.Operation != ""
 	row.LiveHandle = true
+	// "No audit-joined field has been joined yet": JobSummary documents each
+	// of these as LEFT-JOINed from the per-Job dispatch aggregate and empty
+	// until it is written. An empty Selector alone is not the signal, since a
+	// recorded dispatch may legitimately carry one. Cosmetic only: Cancel does
+	// not depend on it.
+	row.AwaitingRecord = row.Running && sum.Selector == "" && len(sum.Args) == 0 &&
+		len(sum.RawExecArgv) == 0 && sum.ApprovalID == "" && sum.GrantID == "" &&
+		sum.OnBehalfOf == ""
 	if sum.ApprovalID != "" {
 		row.ApprovalHref = "/console/approvals/" + sum.ApprovalID
 	}
@@ -1058,8 +1139,40 @@ func dispatchRowFromJob(sum capability.JobSummary) activityRow {
 	return row
 }
 
+// jobRowName names a Job row's Operation, and says whether the Job is the Raw
+// Exec tier. The tier is read from ActionKind FIRST and from nothing else: the
+// conspicuous tier must never be impersonated by a name an Operation author
+// chose. A denied run_operation of an Operation literally named raw_exec
+// becomes a Job (policy denial is a Task outcome), so the collision is
+// reachable, not hypothetical. Every other Operation keeps its bare name.
+func jobRowName(sum capability.JobSummary) (operation string, rawExecTier bool) {
+	switch {
+	case sum.ActionKind == jobs.ActionRawExec:
+		return rawExecActionKind, true
+	case sum.OperationName == rawExecActionKind:
+		return "run_operation · " + sum.OperationName, false
+	default:
+		return sum.OperationName, false
+	}
+}
+
+// trailRowName is jobRowName's trail-lane twin: the tier is read from
+// ActionKind or RawExecArgv first, and an Operation whose name collides with
+// the tier's spelling is prefixed so it cannot impersonate Raw Exec.
+func trailRowName(f trailFacts) (operation string, rawExecTier bool) {
+	switch {
+	case f.ActionKind == rawExecActionKind || len(f.RawExecArgv) > 0:
+		return rawExecActionKind, true
+	case f.OperationName == rawExecActionKind:
+		return "run_operation · " + f.OperationName, false
+	default:
+		return operationText(f), false
+	}
+}
+
 // eventRowFromTrail builds every non-dispatch row from the trail lane.
 func eventRowFromTrail(f trailFacts) activityRow {
+	trailName, trailRawExec := trailRowName(f)
 	row := activityRow{
 		Kind:            kindOf(f.Kind),
 		EventKind:       f.Kind,
@@ -1070,17 +1183,18 @@ func eventRowFromTrail(f trailFacts) activityRow {
 		OnBehalfOf:      f.OnBehalfOf,
 		Selector:        f.Selector,
 		NodeID:          f.NodeID,
-		Operation:       operationText(f),
+		Operation:       trailName,
+		RawExecTier:     trailRawExec,
 		Args:            argsText(f),
 		Reason:          f.Reason,
 		Summary:         summarize(f),
 		ApprovalID:      f.ApprovalID,
 		GrantID:         f.GrantID,
-		State:           approvalStateChip(f),
 		ApprovalAnswer:  f.ApprovalAnswer,
 		DecisionChannel: f.DecisionChannel,
 		PlanHash:        f.PlanHash,
 	}
+	row.Outcome, row.State = callOutcome(f)
 	// The trail carries no declared risk class, so this lane INFERS one — the
 	// one place this package guesses, with its limits written down in
 	// vocab.go. The Job lane above never calls it.
@@ -1094,7 +1208,7 @@ func eventRowFromTrail(f trailFacts) activityRow {
 	// is the whole point. Same set agent history draws it for.
 	risk := riskOf(f)
 	switch row.Kind {
-	case rowDispatch, rowRead, rowRefusal, rowApproval:
+	case rowDispatch, rowRead, rowRefusal, rowApproval, rowPlan, rowCancel:
 		row.Risk = jobs.RiskClassName(risk)
 	}
 	row.ReadClass = risk == jobs.RiskClassRead
@@ -1125,7 +1239,9 @@ func summarize(f trailFacts) string {
 	case audit.KindFreezeRelease:
 		return "released the Freeze"
 	case audit.KindJobCancel:
-		return "cancelled Job " + shortHash(f.JobID)
+		// "cancelled" is a Task outcome word and would claim the Job's fate
+		// (GLOSSARY Cancellation, ADR-0013); the row records only the ask.
+		return "asked to cancel Job " + shortHash(f.JobID)
 	case audit.KindTokenMint:
 		return "minted an Enrollment Token"
 	case audit.KindTokenRevoke:
@@ -1313,6 +1429,14 @@ func csvSafe(v string) string {
 }
 
 var activityTmpl = newScreen("activity", `
+<p class="lede">Calls made to the Relay, as the Relay received them, and what they did to the fleet.
+An AI-agent&#39;s calls arrive over MCP or the Control API, and so does a person&#39;s.
+This screen shows the <b>request</b> and never the reasoning. The Relay sees tool calls, not
+intent, and an account of <em>why</em> is exactly what an AI-agent under prompt injection would
+fabricate.</p>
+
+{{template "refresh" .Refresh}}
+
 <form class="viewbar" method="get" action="/console/activity">
   {{with .Filter.Kind}}<input type="hidden" name="kind" value="{{.}}">{{end}}
   <label class="vlabel" for="account">Principal</label>
@@ -1367,21 +1491,26 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
           {{else}}<span class="unattrib" title="Every dispatch writes an audit record naming the principal that asked for it. This Job finished without one, which is a defect in the trail rather than an anonymous caller.">this dispatch finished with no recorded principal &mdash; the trail should carry one</span>{{end}}
         {{else}}{{template "trust-chip" (trust .Principal .Verified)}}{{template "kind-label" .RequesterKind}}{{end}}
         {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}{{end}}
+        {{if .RawExecTier}}<span class="chip" data-tier="raw_exec">Raw Exec</span>{{end}}
         {{if .OpIsLink}}<a class="evop" href="{{.JobHref}}"><code>{{.Operation}}</code></a>
         {{else}}<span class="evsum">{{.Summary}}</span>{{end}}
         {{with .Risk}}<span class="chip risk" data-risk="{{.}}">{{.}}</span>{{end}}
-        {{with .State}}<span class="chip state" data-state="{{.}}">{{.}}</span>{{end}}
+        {{if .State}}<span class="chip state" data-state="{{.State}}">{{.State}}</span>{{else}}{{with .Outcome}}<span class="chip outcome" data-outcome="{{.}}">{{.}}</span>{{end}}{{end}}
+        {{if .Running}}<span class="chip" data-state="running" title="This Job has Tasks not yet resolved.">running</span>{{end}}
       </div>
       {{with .Args}}<div class="evargs mono">{{.}}</div>{{end}}
       <div class="evmeta">
+        {{if and .Operation (not .OpIsLink)}}<code>{{.Operation}}</code>{{end}}
         {{with .Selector}}<code class="selector">{{.}}</code>{{end}}
         {{if .FanOut}}<span class="fanmath">{{.FanOut}} {{plural .FanOut "Node" "Nodes"}}</span>{{end}}
-        {{if .InFlight}}<span class="overcap">{{.InFlight}} still in flight</span>{{end}}
+        {{if .Running}}<span class="overcap">{{.Resolved}} of {{.FanOut}} Tasks resolved</span>{{end}}
         {{if .NodeHref}}<a href="{{.NodeHref}}"><code>{{.NodeID}}</code></a>{{end}}
         {{if and .JobHref (not .OpIsLink)}}<a href="{{.JobHref}}">Job <code>{{short .JobID}}</code></a>{{end}}
         {{with .ApprovalHref}}<a href="{{.}}">approval</a>{{end}}
         {{with .GrantID}}<span class="grant" title="An Approval grant released this: a human approved a window that this plan fell inside, not this plan itself.">grant {{short .}}</span>{{end}}
+        {{if .CancelAction}}{{template "job-cancel" (cancelControl .CancelAction $.CSRFToken)}}{{end}}
       </div>
+      {{if .AwaitingRecord}}<div class="evnote">Read from the Job record. No dispatch record is joined to it yet; its Selector, arguments and approver appear once one is.</div>{{end}}
       {{if .Outcomes.Total}}{{template "outcome-bar" .Outcomes}}{{end}}
       {{if .LiveHandle}}<div class="evliveslot">
         <span class="evlive" data-when="completed">completed after this page was rendered &mdash; reload to see its outcomes</span>
@@ -1398,6 +1527,8 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
   {{else}}<p class="dim">Nothing has been recorded yet.</p>{{end}}
 {{end}}
 </div>
+
+{{if .Scrolled}}<p class="gap">These are not the most recent events. This page was reached by following Older. <a href="{{.NewestHref}}">Newest</a>.</p>{{end}}
 
 <div class="pager">
   {{with .OlderHref}}<a class="act" href="{{.}}">Older</a>{{end}}
@@ -1441,8 +1572,11 @@ out.</p>
 the Job query has a field for neither. A Job spans its Selector&#39;s whole fan-out, so it has no single Node. A Node filter that
 narrowed only the other events would silently drop every dispatch row from the page.</p>
 
-<p class="gap"><b>Every reload is an audited read</b>, whether it comes from the reload button, which
-appears above the feed once new events have queued, or from the browser.</p>
+<p class="gap"><b>Every Refresh is an audited read</b>, whether it comes from Refresh, from the reload
+button that appears above the feed once new events have queued, or from the browser.</p>
+
+<p class="gap"><b>Cancel is offered on a running Job&#39;s row</b> to the roles that may cancel, exactly
+as on Job detail. A viewer sees running Jobs and is not offered it.</p>
 
 <p class="gap"><b>The chips above list every family this screen shows, including empty ones.</b>
 They carry no counts. Counting each family across the whole trail would take one query per family,

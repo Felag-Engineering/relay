@@ -263,6 +263,89 @@ func approvalStateChip(f trailFacts) string {
 	}
 }
 
+// callOutcome is the ONE result-line vocabulary for a call row, shared by
+// Agents and Activity: the outcome chip word, and for a decision's structured
+// answer the `.chip.state` word instead. It returns "", "" for an event that
+// is not a call (a Freeze, a token, a Node revoke, an expiry, a protocol
+// violation): "unspecified" on a Freeze would claim ignorance about something
+// fully known, so such a row draws no chip.
+//
+// A record with no per-Node outcome renders the zero value as "unspecified",
+// which reads as "we don't know" for an event whose disposition is perfectly
+// well known. Name what actually happened. Two families arrive here, not one.
+// Most never reached a Node at all (a park, a refusal, a metadata-only read).
+// A cancel is the other: it does reach Nodes, but it is not a per-NODE act —
+// it targets a Job by ID, so there is no verdict to render however far it
+// travelled.
+func callOutcome(f trailFacts) (outcome, state string) {
+	switch f.Kind {
+	case audit.KindDispatch:
+		return jobs.OutcomeName(f.Outcome), ""
+	case audit.KindRead:
+		// A metadata-only read is the case this switch was written for and did
+		// not cover: no Node was asked anything, so the chip rendered
+		// "unspecified" over a record whose whole content is known (#517). The
+		// word is chosen and justified at readOutcomeAudited.
+		return readOutcomeAudited, ""
+	case audit.KindRefusal:
+		return "refused", ""
+	case audit.KindApprovalRequested:
+		return "parked", ""
+	case audit.KindApprovalGrantRequested:
+		// #546: not "parked". A park suspends one Plan; this asks for a
+		// window that will release many, and the two chips must differ.
+		return "grant requested", ""
+	case audit.KindApprovalPendingObserved:
+		return "already parked", ""
+	case audit.KindApprovalDecided:
+		// Only RevokeGrant writes a decided record carrying a GrantID
+		// (capability/approval_grant.go). DecideApproval never sets one, so
+		// this is a STRUCTURAL discriminator, not a guess. A revocation is
+		// not a Decision at all in the glossary's sense — nobody answered a
+		// parked Job — so "decided" over it is a category error the record
+		// itself disproves.
+		if f.GrantID != "" {
+			return "revoked", "" // #538, unchanged
+		}
+		// The structured answer (#545), returned as state (the `.chip.state`
+		// group) rather than outcome, so it is never mistaken for one of
+		// this switch's other outcome words.
+		if s := approvalStateChip(f); s != "" {
+			return "", s
+		}
+		return "decided", "" // pre-#545 rows only: no structured answer recorded
+	case audit.KindJobCancel:
+		// A cancel has no per-Node verdict either: RecordCancel records who
+		// asked and which Job, and the per-Task truth is on the Job's own
+		// Tasks (OutcomeCancelled, ADR-0013) — which this row already links
+		// to, so the chip does not have to carry it.
+		//
+		// The word is "requested", and the obvious alternative is the trap.
+		// "cancelled" is a TASK outcome word (jobs.OutcomeName) and, on a row that
+		// names a Job, it claims that Job's fate. Cancellation is best-effort
+		// and honest: a Task that already finished reports its real outcome
+		// and is never retroactively cancelled (ADR-0013, GLOSSARY.md), so a
+		// mostly-finished Job would render as cancelled on the one screen
+		// billed as what the agent actually asked for. "stopped", "aborted"
+		// and "killed" are GLOSSARY.md's rejected synonyms for Cancellation and
+		// are not available at any price.
+		//
+		// "requested" says the one thing the record does carry, and carries
+		// honestly: the stop was asked for. It is not a hedge — CancelJob
+		// writes this row only AFTER the cancel itself succeeded, and records
+		// nothing at all when it fails (capability/service.go) — so an ask
+		// that reached the trail is an ask that landed. What each Task then
+		// did is one click away.
+		return "requested", ""
+	case audit.KindPlan:
+		// Live since #537. Preflight records (audit kind `plan`) were filtered
+		// out of the agent stream by isAgentCall, which left this arm
+		// unreachable: the switch named the case and nothing could enter it.
+		return "preflight", ""
+	}
+	return "", ""
+}
+
 // readOperations is every Operation name this package can call read: the
 // native half DERIVED from opvocab, unioned with the shipped-template half
 // MIRRORED below. It is built once, at var-init, so isReadOperation stays a
