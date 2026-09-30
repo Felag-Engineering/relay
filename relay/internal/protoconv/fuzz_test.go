@@ -22,9 +22,6 @@ import (
 //     property assertion, not just a no-panic check, so any future widening
 //     of the allowlist that reopens a term-splitting or split-shifting byte
 //     is caught here without a new hand-written case.
-//
-// protoconv_test is an external test package (protoconv_test) and capability
-// does not import protoconv, so importing capability here creates no cycle.
 func FuzzParseNodeLabel(f *testing.F) {
 	f.Add("node:role", "web")
 	f.Add("relay:secret", "x")
