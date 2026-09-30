@@ -1661,3 +1661,74 @@ dl.kv dd { min-width: 0; }
 /* The Agents screen's one sentence about calls made from this Console. It
  * qualifies the feed below it, so it is quiet note text, not a dashed box. */
 .consolecalls { font-size: var(--text-xs); color: var(--text-muted); }
+
+/* ===========================================================================
+ * Form controls — ONE treatment (00-foundations.md, "Form controls")
+ * ===========================================================================
+ *
+ * Every input and select a Console form carries looks like the sign-in page's
+ * and the filter bar's: the same tokens, the same radius, the same focus ring.
+ * A form opts in with .ctlform; its fields are styled by descendant selector so
+ * no control's own attributes change (tests pin several of them verbatim).
+ *
+ * Buttons carry the WEIGHT OF WHAT THEY DO TO AUTHORITY. .btn.grant — create
+ * an Account, raise a role, re-enable, mint — is filled in the interactive
+ * colour and always sits beside the password field it spends. .btn.reduce —
+ * disable, revoke — is outlined and quiet. The two are told apart by fill
+ * against outline, which survives greyscale and colour-blindness, and never by
+ * hue alone. A reducing act is never red: red is failure and timeout and
+ * nothing else, and a brake that looks like an alarm is one people hesitate
+ * over. Nothing here removes or shrinks a focus ring; the global
+ * :focus-visible rule still applies, and fields keep the inset ring the
+ * sign-in page and filter bar use. */
+.ctlform { margin: 0; }
+.ctlform .fld { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.ctlform .fldlabel {
+  font-size: var(--text-2xs); letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-muted); font-weight: var(--weight-medium); line-height: 1.4;
+}
+.ctlform input:not([type="hidden"]), .ctlform select {
+  font: inherit; font-size: var(--text-sm);
+  min-height: 34px; padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
+  background: var(--bg-canvas); color: var(--text-primary);
+}
+.ctlform select { padding-right: var(--space-2); }
+.ctlform input:focus, .ctlform select:focus { outline: 2px solid var(--color-blue); outline-offset: -1px; }
+.btn {
+  font: inherit; font-size: var(--text-sm); font-weight: var(--weight-medium);
+  min-height: 34px; padding: var(--space-1) var(--space-4);
+  border: 1px solid transparent; border-radius: var(--radius-lg);
+  cursor: pointer; white-space: nowrap;
+  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+}
+.btn.grant { background: var(--color-blue); border-color: var(--color-blue); color: #fff; }
+.btn.grant:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.reduce { background: transparent; border-color: var(--border-mid); color: var(--text-primary); font-weight: var(--weight-normal); }
+.btn.reduce:hover { background: var(--bg-elevated); border-color: var(--text-muted); }
+
+/* A row's controls: one line each, bottom-aligned so a labelled field and a
+ * bare button share a baseline. The Accounts "Change" cell stacks the role
+ * line over the state line, so the two never interleave at any width. */
+.ctlrow { display: flex; align-items: flex-end; gap: var(--space-2); }
+.ctlrow .fld { flex: none; }
+.ctlrow .fldlabel { white-space: nowrap; }
+.ctlrow input:not([type="hidden"]) { width: 100%; min-width: 11em; }
+.ctlrow select { min-width: 7.5em; }
+.acctchange { min-width: 27rem; }
+.acctchange .ctlrow + .ctlrow { margin-top: var(--space-2); }
+
+/* A standalone form: fields flow left to right and wrap WHOLE, never mid-field,
+ * with the submit button on the same baseline as the last field. */
+.ctlgrid { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3) var(--space-4); margin-top: var(--space-2); }
+.ctlgrid .fld { flex: 1 1 11rem; max-width: 18rem; }
+.ctlgrid .btn { flex: none; }
+/* Below 1280px the Change cell cannot hold a role line on one row beside six
+ * other columns. Fields wrap WHOLE (a label never parts from its control), the
+ * cell narrows, and the table still scrolls inside .tablescroll if it must. */
+@media (max-width: 1279px) {
+  .acctchange { min-width: 16rem; }
+  .ctlrow { flex-wrap: wrap; }
+  .ctlrow .fldlabel { white-space: normal; }
+  .ctlrow .fld { max-width: 100%; }
+}

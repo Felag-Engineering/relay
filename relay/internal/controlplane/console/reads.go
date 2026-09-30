@@ -949,12 +949,11 @@ func readTargetName(operationName, actionKind string, args map[string]string) st
 // could drift apart.
 
 var readsTmpl = newScreen("reads", `
-<p class="lede">Reading is exfiltration by construction: a read result flows to whoever asked, and
-for an AI-agent that means the model provider. This screen is a map of that exposure — <b>who read
-what, from where, and when</b>. It cannot show you the contents, at any age, and it is not going
-to grow the ability to.</p>
-<p class="note">The trail never keeps read output (ADR-0025); what a daemon sent stays on
-the Job&#39;s Task rows until the Job is collected, readable through
+<p class="lede">Every read carries data off a Node to whoever asked, and for an AI-agent that
+includes its model provider. This screen maps that exposure: <b>who read what, from where, and
+when</b>. It cannot show you what was read, at any age, and it will not gain that ability.</p>
+<p class="note">The audit trail never keeps read output. What a daemon sent stays on
+the Job&#39;s Task rows until the Job is collected, and is readable through
 <code>GET /api/v1/jobs/{job_id}</code>, and this page will never show it.</p>
 
 <p class="scoped">
@@ -978,17 +977,16 @@ the Job&#39;s Task rows until the Job is collected, readable through
   {{if .RefusedKnown}}<a class="stat decision" href="#refused"><b>{{.Refused}}</b><span>refused by Policy</span></a>{{end}}
   {{if .EnumKnown}}<div class="stat"><b>{{.Enumerations}}</b><span>control-plane {{plural .Enumerations "enumeration" "enumerations"}}</span></div>{{end}}
 </div>
-<p class="note">Two different numbers on purpose. One <code>file.read</code> across 4,000 Nodes is
-one target and four thousand exposures; which one matters depends on whether you are asking what
-was seen or how far it reached. Enumerations are counted apart from all three: listing the
-registry is exposure — it hands over the shape of your estate — but it is not bytes off a machine,
-and a headline that mixes the two makes both softer than they are.
+<p class="note">Targets and reads are counted separately on purpose. One <code>file.read</code>
+across 4,000 Nodes is one target and four thousand reads: the first says what was seen, the second
+how far it reached. Enumerations are counted apart from all three. Listing the registry exposes the
+shape of your estate, but it takes no bytes off a machine, and mixing the two would blur both.
 <b>Every figure shown above is exact over the audit records timestamped in the {{.Window}} shown,
 except that the read and refusal figures miss a read-class Job created just before it whose records
-land inside it.</b> Each is one aggregate computed over every matching record, not a tally of the
-rows in the tables below. A figure this page did not
-compute — because the query failed, or because the lane was deliberately not queried — is ABSENT
-rather than rendered as a zero, since an exact zero is the strongest claim on this screen.</p>
+land inside it.</b> Each figure is counted over every matching record, not by adding up the rows in
+the tables below. A figure this page did not compute, because the query failed or was deliberately
+not run, is left out rather than shown as zero. An exact zero is the strongest claim on this
+screen.</p>
 {{else if .Measured}}
 <p class="dim">Nothing has been read in this window.</p>
 {{else}}
@@ -1020,16 +1018,15 @@ exposure either way. See the notes below.</p>
     </tbody>
   </table>
   </div>
-  <p class="note">A machine Account whose read volume jumps against its own baseline is the single
-  most useful row this screen can produce, so the trend column compares an Account&#39;s most recent
-  COMPLETE bucket of this window against the mean of the earlier complete ones — its own history,
-  never the fleet&#39;s and never the window total. A bucket clipped by either edge of the window is
-  left out of both sides: it is systematically smaller than a whole one, and comparing a fraction
-  against eleven wholes would hide the very spike this column exists to show. The cost is latency —
-  a spike inside the bucket that is still filling is not marked until it closes.
-  Node reads and enumerations stay in their own columns; the baseline is built from Node reads. The
-  refused column is counted over the refusals LISTED below, so it can be short where that table is;
-  the exact refusal total is the figure above.</p>
+  <p class="note">A machine Account whose read volume jumps against its own baseline is the most
+  useful row on this screen. The trend compares the Account&#39;s most recent complete time bucket in
+  this window with the average of its earlier complete buckets. It uses only the Account&#39;s own
+  history, never the fleet&#39;s and never the window total. A bucket cut off by either edge of the
+  window is left out of both sides, because a partial bucket is smaller than a whole one and would
+  hide the very spike this column is for. The cost is delay: a spike in the bucket still filling is
+  not marked until that bucket closes. The baseline is built from Node reads, and enumerations stay in
+  their own column. The Refused column counts only the refusals listed below, so it can be short
+  where that table is. The exact refusal total is the figure above.</p>
   {{else if .Measured}}<p class="dim">No Account has read anything in this window.</p>
   {{else}}<p class="dim">Not computed.</p>{{end}}
 </section>
@@ -1066,8 +1063,8 @@ exposure either way. See the notes below.</p>
   <h3>Refused by Policy</h3>
   {{if .RefusedCountError}}
   <p class="note"><b>The exact refusal count could not be computed and is not shown.</b> Any
-  refusals listed here are real; how many there were in total is not known on this page, and a zero
-  in its place would have been a claim rather than a measurement.</p>
+  refusals listed here are real. The total is not known on this page, and showing zero in its place
+  would be a claim, not a measurement.</p>
   {{end}}
   {{if .RefusalsError}}
   <p class="note">The refusal rows could not be read, so none is listed below.</p>
@@ -1077,10 +1074,9 @@ exposure either way. See the notes below.</p>
   Node&#39;s Policy in this window, across <b>{{.RefusedTargets}}</b>
   {{plural .RefusedTargets "target" "targets"}} and <b>{{.RefusedNodes}}</b>
   {{plural .RefusedNodes "Node" "Nodes"}}. A refusal is Policy working: something asked and a Node
-  said no, which is the product doing exactly what it is for. The three figures are exact over the
-  window, except that they miss a read-class Job created just before it whose records land inside
-  it; they come from their own aggregate, so a refusal can never be hidden by a table that was too
-  short to reach it.</p>
+  said no. These three figures are exact over the window, except that they miss a read-class Job
+  created just before it whose records land inside it. They are counted on their own, so a refusal
+  can never be hidden by a table too short to reach it.</p>
   {{end}}
   {{if .Refusals}}
   <div class="tablescroll">
@@ -1107,9 +1103,9 @@ exposure either way. See the notes below.</p>
 <section class="panel">
   <h3>Control-plane enumeration and trail queries</h3>
   {{if not .EnumApplies}}
-  <p class="dim">Not shown under an Operation or path filter: an enumeration reads the Relay&#39;s own
-  registry and catalogue, so it carries neither, and a panel that ignored the filter would answer a
-  different question than the rest of this page. The headline carries no enumeration figure for the
+  <p class="dim">Not shown under an Operation or path filter. An enumeration reads the Relay&#39;s own
+  registry and catalogue, so it has no Operation or path to filter on. Ignoring the filter here would
+  answer a different question from the rest of this page. The headline carries no enumeration figure for the
   same reason.</p>
   {{else}}
   {{if .EnumCountError}}<p class="note">The exact enumeration count could not be computed and is not
@@ -1117,9 +1113,9 @@ exposure either way. See the notes below.</p>
   {{if .EnumError}}<p class="note">The enumeration rows could not be read.</p>{{end}}
   {{if .NodeID}}
   <p class="note">Filtered to one Node, like everything else on this page. Most enumerations name no
-  Node at all — only the tools that take one (<code>describe_node</code>, <code>get_job</code>) can
-  match a Node filter — so both this table and the figure above it are narrower here than the
-  window&#39;s enumeration traffic, and deliberately so.</p>
+  Node at all. Only the tools that take one (<code>describe_node</code>, <code>get_job</code>) can
+  match a Node filter, so this table and the figure above it are deliberately narrower here than the
+  window&#39;s full enumeration traffic.</p>
   {{end}}
   {{if .EnumTargets}}
   <div class="tablescroll">
@@ -1138,9 +1134,9 @@ exposure either way. See the notes below.</p>
   {{if .EnumSampled}}<p class="note">The count above is exact; this table is computed over the most
   recent {{.EnumListed}} records in the window.</p>{{end}}
   <p class="note">These read the Relay&#39;s own registry, Operation catalogue and audit trail, never
-  a Node, so they have no reach and no Policy verdict — Policy is a Node&#39;s and there is no Node
-  here. They still disclose: the shape of the estate, its labels, and what the fleet will permit. An
-  agent that enumerates far more than it reads is mapping rather than working.</p>
+  a Node. So they have no reach and no Policy verdict: Policy belongs to a Node, and no Node is
+  involved. They still disclose the shape of the estate, its labels, and what the fleet will permit.
+  An AI-agent that enumerates far more than it reads is mapping the estate rather than working.</p>
   {{else if .EnumKnown}}<p class="dim">Nothing has been enumerated.</p>
   {{else}}<p class="dim">Not computed.</p>{{end}}
   {{end}}
@@ -1153,15 +1149,15 @@ of the read vocabulary here and nothing was counted for it. If that Operation is
 screen is the wrong place to look for it: an Operation filter is intersected with the read-class
 Operations actually observed, never passed through.{{else}}No read-class Job ran in this window, so
 there was no Operation to count reads for.{{end}}
-The Operation filter is what keeps this page reading dispatch records for READS: without one, the
-same query matches every mutate dispatch in the window, so it is not run at all.</p>
+This page counts only read dispatches by filtering on read Operations. Without that filter the same
+query would match every mutate dispatch in the window, so it is not run at all.</p>
 {{end}}
 
 {{if .JobsSampled}}
 <p class="gap"><b>The read vocabulary is drawn from the most recent {{.JobPageSize}}
-read-class Jobs</b> in this window, by their DECLARED risk class. A read Operation used only outside
-that page is missed here, and from every audit figure above. This is the one accuracy cost of the
-audit record not carrying a risk class of its own.</p>
+read-class Jobs</b> in this window, by their declared risk class. A read Operation used only outside
+those Jobs is missed here and from every audit figure above. This is the one accuracy cost of the
+audit record not carrying its own risk class.</p>
 {{end}}
 
 {{if .OpsElided}}
@@ -1180,45 +1176,42 @@ window.</p>
 <details class="about">
 <summary>About this screen</summary>
 
-<p class="gap"><b>The audit trail keeps outcomes and timings and never read output</b> (ADR-0025):
-reading is exfiltration, so what left a Node is audited and what it said is not. That is the precise
-claim, because the stronger one would be false &mdash; what the daemon sent still lives on the Task
-rows until the Job is collected, and is readable through <code>GET /api/v1/jobs/{job_id}</code>.
-Nothing on this page will show it, at any age or aggregation, because a screen that did would become
-the durable place read output is read from.</p>
+<p class="gap"><b>The audit trail keeps outcomes and timings and never read output.</b> A read
+carries data off a Node, so the trail records that it happened and never what it returned. That is
+as far as the claim goes: what the daemon sent still sits on the Task rows until the Job is
+collected, and is readable through <code>GET /api/v1/jobs/{job_id}</code>. This page never shows
+it, at any age or in any total, so the Console can never become a lasting place to read that output
+from.</p>
 
-<p class="gap"><b>A refused read&#39;s deciding rule is not shown, and not for want of looking.</b>
+<p class="gap"><b>A refused read&#39;s deciding rule is not shown here.</b>
 The daemon explains a refusal in the Task&#39;s own output, and for a read-class Task the audit trail
-never retains that output (ADR-0025) — so the rule is absent from the trail by design rather than
-missing by accident. Open the Node to read its effective Policy, which is where the rule lives.
-The trail also cannot say a refusal came from the confidentiality deny-list specifically: it
-records that this Node&#39;s Policy refused, and that is the claim this page makes.</p>
+never keeps that output. So the rule is absent from the trail by design, not by accident. Open the
+Node to read its effective Policy, which is where the rule lives. The trail also cannot say a
+refusal came from the confidentiality deny-list specifically. It records that this Node&#39;s Policy
+refused, and that is the claim this page makes.</p>
 
-<p class="gap"><b>Reading this page is itself a read, and it is counted here.</b> The Relay records a
-read of the trail as a read, so this view wrote {{.Queries}} {{plural .Queries "record" "records"}}
-that the next view of it will count. The enumeration figure above is not merely affected by that
-later — it already includes it: the read lane writes its record BEFORE the query runs, so the
-enumeration aggregate has counted every query this page had already made, itself included. The
-headline figure and the By-principal Enumerations column are computed from that SAME aggregate, so
-the two always agree with each other, however many of this page's own queries the window catches.
-These records are labelled rather than filtered out: hiding them would take a second hardcoded name
-list — the exact smell this screen was rebuilt to remove — and &ldquo;who queried the audit
-trail&rdquo; is legitimately part of read egress.</p>
+<p class="gap"><b>Reading this page is itself a read, and it is counted here.</b> The Relay records
+each query of the audit trail as a read, so this view wrote {{.Queries}} {{plural .Queries "record" "records"}}
+that the next view of it will count. The enumeration figure above does not wait for that: it already includes it.
+Each record is written before its query runs, so the count includes every query this page had made
+so far, itself included. The headline figure and the Enumerations column under By principal come
+from the same count, so they always agree. These records are labelled rather than filtered out.
+Filtering them would need a separately maintained list of names, and &ldquo;who queried the audit
+trail&rdquo; is a real part of read egress.</p>
 
 <p class="gap"><b>The two halves of this page read different clocks.</b> The read vocabulary comes
-from Jobs CREATED in this window; every figure comes from audit records TIMESTAMPED in it, and a
+from Jobs created in this window. Every figure comes from audit records timestamped in it, and a
 Job&#39;s dispatch records are written after the dispatch returns. So a read-class Job created just
-before this window whose records land inside it contributes no Operation to the vocabulary, and its
-reads are missing from every figure above — and if it were the only one, this page would say the
-lane was not queried while matching records existed. Same class of gap as the {{.JobPageSize}}-Job
-page and the {{.OpsCap}}-Operation cap, and it closes when the audit record carries a risk
-class of its own.</p>
+before this window, whose records land inside it, adds no Operation to the vocabulary, and its
+reads are missing from every figure above. If it were the only one, this page would say the lane
+was not queried while matching records existed. It is the same kind of gap as the
+{{.JobPageSize}}-Job limit and the {{.OpsCap}}-Operation cap, and it closes when the audit record
+carries its own risk class.</p>
 
-<p class="gap"><b>Two filters this screen does not offer.</b> Selector filtering, because the read
-lane&#39;s audit filter carries no Selector field and adding one is a change to three packages, not
-to this screen. Export, for the same reason it is not faked: an auditor&#39;s CSV needs its own
-escaping rules and its own tests, and shipping it untested here would be worse than saying it is
-not built. Principal, Operation, Node, path prefix and window all work, and every one of them is
-recorded in the trail as this page&#39;s own search.</p>
+<p class="gap"><b>Two filters this screen does not offer.</b> Selector filtering: the audit query
+behind this page cannot filter by Selector yet. Export: a CSV for auditors needs its own escaping
+rules and its own tests, so it is not built rather than shipped untested. Principal, Operation,
+Node, path prefix and window all work, and each one is recorded in the audit trail as this
+page&#39;s own search.</p>
 </details>
 `)

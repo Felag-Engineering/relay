@@ -55,6 +55,12 @@ state, last authentication, and — for machine Accounts — the time of its las
 the agent stream (spec 03). There is no "connected" state to show: the MCP transport is stateless
 (ADR-0028), so an Account is *active recently* or not, never *connected*.
 
+Each row's write controls follow the form-control rule in `00-foundations.md`: the role change
+(select, password, **Set role**) sits on one line and the state change (**Disable**, or password and
+**Enable**) on the line beneath it. Granting buttons are filled and sit beside the password they
+spend; **Disable** and **Revoke** are outlined and quiet, never red and never the heaviest control
+in the row. Every control keeps its visible label.
+
 Machine Accounts are first-class, not a footnote. On a fleet driven by an AI-agent, the busiest
 principal in the system is a machine Account, and treating it as an edge case is how it ends up
 over-privileged.

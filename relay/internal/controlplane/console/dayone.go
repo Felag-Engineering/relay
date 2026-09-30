@@ -205,9 +205,8 @@ var dayOneTmpl = newScreen("dayone", `
 
   <div class="firststep">
     {{if .CanMint}}
-    <p><b>Add Nodes</b> is not built yet. Its specification is
-    <code>docs/design/console/09-add-nodes.md</code>. It will render an Enrollment Token and the
-    join artifacts together, once.</p>
+    <p><b>Add Nodes</b> is not built yet. When it is, it will show an Enrollment Token and
+    everything a machine needs to join, together and only once.</p>
     {{else}}
     <p>An <code>admin</code> mints the Enrollment Token. Its scope becomes the joining Node&#39;s
     <code>relay:</code> labels, which is the security lane, so it is not a viewer&#39;s to
@@ -262,9 +261,9 @@ var dayOneTmpl = newScreen("dayone", `
 
   {{if not .Watching}}
   <p class="gap"><b>Rejected attempts are not shown yet.</b> A daemon that dials in with a
-  revoked, expired or malformed token is refused by the Relay and does not appear here — this
-  screen currently shows an empty fleet, not the absence of attempts. The enrollment publisher on
-  the event seam is what makes the difference visible.</p>
+  revoked, expired or malformed token is refused by the Relay and does not appear here. So this
+  screen shows an empty fleet, not proof that nothing tried to join. Refused attempts appear here
+  only when this Relay's live updates are available.</p>
   {{end}}
 
   <section class="trust">
@@ -274,9 +273,9 @@ var dayOneTmpl = newScreen("dayone", `
       <dt>CA fingerprint</dt>
       <dd><code title="{{.CAFingerprint}}">{{short .CAFingerprint}}</code>
       <span class="note">This identifies the certificate authority every Node&#39;s certificate
-      chains to, and it survives the server certificate below. It is the value to compare against
-      the one this Relay logged at startup. A daemon today trusts this authority because it was
-      installed with its certificate; pinning this number directly is ADR-0031 and is not built
+      chains to. It stays the same when the server certificate below is re-issued. It is
+      the value to compare against the one this Relay logged at startup. Today a daemon trusts this authority
+      because it was installed with its certificate. Pinning this number directly is not built
       yet.</span></dd>
       <dt>Server certificate</dt>
       <dd><code title="{{.ServerFingerprint}}">{{short .ServerFingerprint}}</code>
@@ -285,8 +284,8 @@ var dayOneTmpl = newScreen("dayone", `
     </dl>
     {{else}}
     <p class="dim">The CA and server-certificate fingerprints are not wired into this Console, so
-    this screen cannot show you what to compare. That is a wiring problem in this Relay, not an
-    absence of certificates.</p>
+    this screen cannot show you what to compare. This is not a certificate problem, and it
+    is not something you can configure: it comes from how this Relay was built.</p>
     {{end}}
   </section>
 

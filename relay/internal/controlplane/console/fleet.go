@@ -743,7 +743,7 @@ func parseFleetFilter(s string) (capability.Selector, error) {
 		// Rendered without the generic lead sentence below: the term DOES
 		// carry a prefix, so "every term needs a namespace prefix" would name
 		// the wrong problem.
-		return capability.Selector{}, filterErr("tag: labels are not resolvable yet — operator-set grouping lands with label management (#430). Filter on node:, relay:, or state: for now.")
+		return capability.Selector{}, filterErr("This Relay cannot filter on tag: labels yet, because it has nowhere to store them (tracked in #430). Filter on node:, relay: or state: instead.")
 	case err != nil:
 		return capability.Selector{}, filterErr("every term needs a namespace prefix, like node:role=web or state:offline. " + strings.TrimPrefix(err.Error(), "capability: "))
 	}
@@ -1418,22 +1418,23 @@ var fleetTmpl = newScreen("fleet", `
 {{end}}
 
 {{if .GroupsElided}}<p class="gap"><b>{{.GroupsElided}} more {{plural .GroupsElided "group is" "groups are"}} not shown.</b>
-This page draws the {{len .Groups}} largest. Narrow the filter, or group by a coarser label key —
-a grouping with hundreds of values is a list of Nodes wearing a different hat.</p>{{end}}
+This page draws the {{len .Groups}} largest. Narrow the filter, or group by a label key with fewer
+values. A grouping with hundreds of values is only a list of Nodes by another name.</p>{{end}}
 
 {{if not .CertExpiryKnown}}
 <p class="gap"><b>{{.CertExpiryUnknown}} {{plural .CertExpiryUnknown "Node" "Nodes"}} here
-{{plural .CertExpiryUnknown "has" "have"}} no recorded validity at all</b>, having enrolled before
-the Relay began storing it, so <code>state:cert-expiring</code> cannot say whether
-{{if eq .CertExpiryUnknown 1}}it is{{else}}they are{{end}} close to lapsing — a clean State column
-for {{if eq .CertExpiryUnknown 1}}this Node{{else}}these Nodes{{end}} is silence, not an all-clear.
-This fills in at the next renewal, which is at most one leaf lifetime away.</p>
+{{plural .CertExpiryUnknown "has" "have"}} no recorded validity at all.</b>
+{{if eq .CertExpiryUnknown 1}}It{{else}}They{{end}} enrolled before the Relay began storing certificate validity, so
+<code>state:cert-expiring</code> cannot say whether {{if eq .CertExpiryUnknown 1}}it is{{else}}they are{{end}}
+close to lapsing. A clean State column for {{if eq .CertExpiryUnknown 1}}this Node{{else}}these Nodes{{end}}
+means unknown, not all-clear. This fills in at the next certificate renewal, at most one
+certificate lifetime away.</p>
 {{end}}
 
 <p class="scopenote">This screen answers only what Relay can honestly answer about a Node: whether
 it is reachable, whether it will take work, what it will permit, and who vouched for it. There are
-no host metrics here and there will not be — reads are pulled as Jobs with a Plan and a blast cap,
-never collected on a schedule.</p>
+no host metrics here, and there will not be. Host data is read on demand as a Job, with a Plan and a
+blast cap, and never collected on a schedule.</p>
 `)
 
 // knownIn is the pin resolver over a Node page a screen has already read.

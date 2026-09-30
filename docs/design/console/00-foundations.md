@@ -284,6 +284,34 @@ a **Refresh** control, so that what is new is one click away without the browser
   timer: [README](README.md) records the owner decision "No scheduled or repeated reads. Every read
   is a deliberate, audited act."
 
+## Form controls — one treatment
+
+Every text input, password input and select in the Console takes **one treatment**, the one the
+sign-in page and the filter bar already carry: the canvas background, a subtle 1px border, the
+control radius, the body font at the size around it, and the one focus ring (2px,
+the interactive colour). Its label is always visible — small upper-case lettering in the muted text
+colour, above or beside the control — and never replaced by a placeholder. Nothing suppresses a
+focus ring, and no control shrinks below the target size it had. There is no second input style for
+a screen that wants one; a form that renders browser defaults is a defect.
+
+Buttons carry **the weight of what they do to authority**, not how dangerous they feel:
+
+| The act | Weight | Treatment |
+|---|---|---|
+| **Grants** authority — create an Account, raise a role, re-enable an Account, mint a credential | primary | filled in the interactive colour, and always beside the password field it spends |
+| **Reduces** authority — disable an Account, lower a role, revoke a credential, cancel | quiet | outlined, no fill, primary text colour |
+| Reads or navigates — apply a filter, sign in | primary | as today |
+
+The two weights are told apart by **fill against outline** — a channel that survives greyscale and
+every colour-vision deficiency — and by the password field that only a granting form carries,
+never by hue alone. A reducing act is **never red** (red is failure and timeout, and nothing else)
+and never the most prominent control in its row: an emergency brake that looks like an alarm is
+one people hesitate over, and one that outweighs the act beside it teaches the wrong reflex. A form
+that can both grant and reduce — setting a role, which raises or lowers — takes the granting
+weight, because it carries the password field and may spend it. Where two answers to one question
+must not be weighted (Approve and Deny, spec 08), both take one neutral treatment and this table
+does not apply.
+
 ## The incident ladder
 
 Three rungs, in ascending order of blast radius. Every screen that offers one must make its

@@ -71,7 +71,7 @@ func TestReads_ExactClaimCarriesItsClockCaveat(t *testing.T) {
 	if j := strings.Index(body[i:], caveat); j < 0 || j > 200 {
 		t.Error("the exact claim is not qualified in the same sentence by what it cannot count")
 	}
-	if !strings.Contains(body, "The three figures are exact over the\n  window, except that they miss a read-class Job") {
+	if !strings.Contains(body, "These three figures are exact over the window, except that they miss a read-class Job") {
 		t.Error("the refusal panel's exact claim carries no clock caveat")
 	}
 }
@@ -81,7 +81,7 @@ func TestReads_ExactClaimCarriesItsClockCaveat(t *testing.T) {
 // its one-sentence form is outside the disclosure, as a quiet note.
 func TestReads_RetainedOutputStatementStaysVisible(t *testing.T) {
 	body := readsBody(t, &fakeQueries{}, "")
-	const sentence = "The trail never keeps read output (ADR-0025); what a daemon sent stays on"
+	const sentence = "The audit trail never keeps read output. What a daemon sent stays on"
 	mustBeSituational(t, body, sentence)
 	if !strings.Contains(body, `<p class="note">`+sentence) {
 		t.Error("the retained-output statement is not drawn as a quiet note")
@@ -98,7 +98,7 @@ func TestVisibleQualifiers_AreNotDashedBoxes(t *testing.T) {
 	reads := contentOf(readsBody(t, &fakeQueries{}, ""))
 	for _, c := range []struct{ page, sentence string }{
 		{activity, readsLeftOut},
-		{reads, "The trail never keeps read output"},
+		{reads, "The audit trail never keeps read output."},
 	} {
 		i := strings.Index(c.page, c.sentence)
 		if i < 0 {

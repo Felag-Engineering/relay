@@ -134,7 +134,7 @@ func TestReads_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
 	inside, outside := splitAbout(t, body)
 	mustBeStanding(t, inside, outside,
 		"The audit trail keeps outcomes and timings and never read output",
-		"deciding rule is not shown, and not for want of looking.",
+		"deciding rule is not shown here.",
 		"Reading this page is itself a read, and it is counted here.",
 		"The two halves of this page read different clocks.",
 		"Two filters this screen does not offer.",
