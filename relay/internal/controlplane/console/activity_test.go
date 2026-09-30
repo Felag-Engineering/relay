@@ -256,13 +256,22 @@ func TestActivity_KindsOfFamilyIsTotalAndNeverEmpty(t *testing.T) {
 		}
 	}
 
-	// `other` is the case that makes this real rather than hypothetical:
-	// kindOf names neither job_cancel nor plan, so both fall through to it.
+	// plan and job_cancel are families of their own (spec 04, Row kinds), and
+	// `other` no longer covers them.
+	if got := kindOf(audit.KindPlan); got != rowPlan {
+		t.Errorf("kindOf(plan) = %q, want %q", got, rowPlan)
+	}
+	if got := kindOf(audit.KindJobCancel); got != rowCancel {
+		t.Errorf("kindOf(job_cancel) = %q, want %q", got, rowCancel)
+	}
 	other := kindsOfFamily(rowOther)
-	for _, want := range []string{audit.KindJobCancel, audit.KindPlan} {
-		if !containsString(other, want) {
-			t.Errorf("the `other` family does not cover %q, which kindOf sends to it", want)
+	for _, notWant := range []string{audit.KindJobCancel, audit.KindPlan} {
+		if containsString(other, notWant) {
+			t.Errorf("the `other` family still covers %q", notWant)
 		}
+	}
+	if !containsString(other, audit.KindProtocolViolation) {
+		t.Error("the `other` family does not cover protocol_violation, which no row family names")
 	}
 
 	// A family with no audit kind at all still narrows to nothing. There is
@@ -496,7 +505,7 @@ func TestActivity_InFlightJobSaysAttributionIsNotYetRecorded(t *testing.T) {
 	if strings.Contains(body, "unattributed") {
 		t.Error("an in-flight Job renders the word \"unattributed\" — the Relay has not looked yet")
 	}
-	if !strings.Contains(body, "3 still in flight") {
+	if !strings.Contains(body, "0 of 3 Tasks resolved") {
 		t.Error("the row does not report how many Tasks have not resolved")
 	}
 }
@@ -1028,6 +1037,8 @@ func TestActivity_TheRiskChipIsOnlyOnRowsThatRan(t *testing.T) {
 		{audit.KindRefusal, true},
 		{audit.KindApprovalRequested, true},
 		{audit.KindRead, true},
+		{audit.KindPlan, true},
+		{audit.KindJobCancel, true},
 		{audit.KindFreezeEngage, false},
 		{audit.KindTokenMint, false},
 		{audit.KindNodeRevoke, false},

@@ -1135,32 +1135,21 @@ func railNote(listed, dropped int, scrolled bool) string {
 // Sign-ins, Freeze transitions and Account changes are control-plane events
 // and belong on Activity. An approval expiring is the clock, not a caller.
 //
-// # Why two of the eight tools are admitted by KIND rather than by family
+// # The eight tools are six families
 //
-// `cancel_job` and the Preflight matched neither arm and so rendered NOWHERE,
+// `cancel_job` and the Preflight once matched neither arm and rendered NOWHERE,
 // against spec 03's first acceptance criterion — every one of the eight tools
 // renders with a request line and a result line (#537). Both are calls in
 // exactly the sense this function means: an Account asked a control surface for
-// something and the Relay recorded the ask. A cancel is the one act spec 03
-// puts a CONTROL for on this very screen, so its record belonging here is not a
-// stretch; and the Preflight is the trust-critical case spec 03 asks to be badged —
-// an agent saying what it would run is the request an operator most wants read.
-//
-// They are named as KINDS because kindOf (activity.go) maps both to rowOther,
-// and rowOther is not theirs to take: it is Activity's catch-all, the family
-// every audit kind nobody has classified yet falls into, so admitting it
-// wholesale would put a kind added to internal/audit next month on the trust
-// surface with nobody having decided it belonged. Promoting the two to
-// families of their own is the other way to spell this, and it reaches past
-// this screen — the row kind drives Activity's filter chips and decides which
-// rows Activity draws a risk chip on. Narrower change, same result here.
+// something and the Relay recorded the ask. They are now families of their own
+// (rowCancel, rowPlan; spec 04, Row kinds), so they are admitted by family like
+// the rest, and rowOther stays out: it is the catch-all for every audit kind
+// nobody has classified yet, and admitting it would put a kind added to
+// internal/audit next month on the trust surface with nobody having decided it
+// belonged.
 func isAgentCallKind(kind string) bool {
-	switch kind {
-	case audit.KindJobCancel, audit.KindPlan:
-		return true
-	}
 	switch kindOf(kind) {
-	case rowDispatch, rowRead, rowRefusal, rowApproval:
+	case rowDispatch, rowRead, rowRefusal, rowApproval, rowPlan, rowCancel:
 		return kind != audit.KindApprovalExpired
 	default:
 		return false
@@ -1218,7 +1207,6 @@ func agentCallFrom(f trailFacts) agentCall {
 		Selector:   f.Selector,
 		Args:       argsText(f),
 		NodeID:     f.NodeID,
-		Outcome:    jobs.OutcomeName(f.Outcome),
 		JobID:      f.JobID,
 		ReadClass:  f.Kind == audit.KindRead,
 		Dispatch:   kindOf(f.Kind) == rowDispatch,
@@ -1259,79 +1247,7 @@ func agentCallFrom(f trailFacts) agentCall {
 	if kindOf(f.Kind) == rowApproval {
 		c.Reason = f.Reason
 	}
-	// A record with no per-Node outcome renders the zero value as
-	// "unspecified" — which reads as "we don't know" for an event whose
-	// disposition is perfectly well known. Name what actually happened.
-	//
-	// Two families arrive here, not one. Most never reached a Node at all (a
-	// park, a refusal, a metadata-only read). A cancel is the other: it does
-	// reach Nodes, but it is not a per-NODE act — it targets a Job by ID, so
-	// there is no verdict to render however far it travelled.
-	switch f.Kind {
-	case audit.KindRead:
-		// A metadata-only read is the case this switch was written for and did
-		// not cover: no Node was asked anything, so the chip rendered
-		// "unspecified" over a record whose whole content is known (#517). The
-		// word is chosen and justified at readOutcomeAudited (vocab.go).
-		c.Outcome = readOutcomeAudited
-	case audit.KindRefusal:
-		c.Outcome = "refused"
-	case audit.KindApprovalRequested:
-		c.Outcome = "parked"
-	case audit.KindApprovalGrantRequested:
-		// #546: not "parked". A park suspends one Plan; this asks for a
-		// window that will release many, and the two chips must differ.
-		c.Outcome = "grant requested"
-	case audit.KindApprovalPendingObserved:
-		c.Outcome = "already parked"
-	case audit.KindApprovalDecided:
-		// Only RevokeGrant writes a decided record carrying a GrantID
-		// (capability/approval_grant.go). DecideApproval never sets one, so
-		// this is a STRUCTURAL discriminator, not a guess. A revocation is
-		// not a Decision at all in the glossary's sense — nobody answered a
-		// parked Job — so "decided" over it is a category error the record
-		// itself disproves.
-		if f.GrantID != "" {
-			c.Outcome = "revoked" // #538, unchanged
-			break
-		}
-		// The structured answer (#545), rendered as State (the `.chip.state`
-		// group) rather than Outcome, so it is never mistaken for one of
-		// this switch's other outcome words.
-		if s := approvalStateChip(f); s != "" {
-			c.State = s
-			break
-		}
-		c.Outcome = "decided" // pre-#545 rows only: no structured answer recorded
-	case audit.KindJobCancel:
-		// A cancel has no per-Node verdict either: RecordCancel records who
-		// asked and which Job, and the per-Task truth is on the Job's own
-		// Tasks (OutcomeCancelled, ADR-0013) — which this row already links
-		// to, so the chip does not have to carry it.
-		//
-		// The word is "requested", and the obvious alternative is the trap.
-		// "cancelled" is a TASK outcome word (jobs.OutcomeName) and, on a row that
-		// names a Job, it claims that Job's fate. Cancellation is best-effort
-		// and honest: a Task that already finished reports its real outcome
-		// and is never retroactively cancelled (ADR-0013, GLOSSARY.md), so a
-		// mostly-finished Job would render as cancelled on the one screen
-		// billed as what the agent actually asked for. "stopped", "aborted"
-		// and "killed" are GLOSSARY.md's rejected synonyms for Cancellation and
-		// are not available at any price.
-		//
-		// "requested" says the one thing the record does carry, and carries
-		// honestly: the stop was asked for. It is not a hedge — CancelJob
-		// writes this row only AFTER the cancel itself succeeded, and records
-		// nothing at all when it fails (capability/service.go) — so an ask
-		// that reached the trail is an ask that landed. What each Task then
-		// did is one click away.
-		c.Outcome = "requested"
-	case audit.KindPlan:
-		// Live since #537. Preflight records (audit kind `plan`) were filtered out of this screen by
-		// isAgentCall, which left this arm unreachable from buildAgents: the
-		// corrective switch named the case and nothing could enter it.
-		c.Outcome = "preflight"
-	}
+	c.Outcome, c.State = callOutcome(f)
 	return c
 }
 
@@ -1369,8 +1285,8 @@ func agentCallFrom(f trailFacts) agentCall {
 // renders as `cancel_job`: the tool that was called, in the same vocabulary
 // the read rows get from readTargetOf (`get_job`, `list_nodes`) and the
 // dispatch rows get from `run_operation`. Activity calls the same record
-// "cancelled Job 9d41" in prose and carries no Operation for it, so this is
-// that sentence's tool-cell spelling rather than a second name for one record.
+// "asked to cancel Job 9d41" in prose and carries no Operation for it, so this
+// is that sentence's tool-cell spelling rather than a second name for one record.
 //
 // A Preflight needs NO arm here, and that is a decision rather than an omission.
 // A Preflight is `plan: true` on run_operation / raw_exec and not a ninth tool

@@ -5025,22 +5025,28 @@ func TestApprovalDecisionChipSaysApprovedOrDenied(t *testing.T) {
 		}
 	}
 
-	// The OUTCOME chip (data-outcome=...) is an Agents-only vocabulary —
-	// Activity names the same facts in prose (summarize) rather than a chip —
-	// so the revoked/decided fallback assertions are Agents-only.
-	agentsBody := get(t, handler, "/console/agents").Body.String()
-	opsRow := agentRowContaining(t, agentsBody, "ops-console")
-	if n := strings.Count(opsRow, `data-outcome="revoked"`); n != 1 {
-		t.Errorf("ops-console's Agents row carries %d \"revoked\" outcome chips, want exactly 1:\n%s", n, opsRow)
-	}
-	if strings.Contains(opsRow, "chip state") {
-		t.Errorf("ops-console's Agents row (a revocation, not a Decision) carries a state chip:\n%s", opsRow)
-	}
+	// Both screens draw the OUTCOME chip (data-outcome=...) from callOutcome,
+	// so the revoked/decided fallback assertions run against each.
+	for _, page := range []string{"/console/agents", "/console/activity"} {
+		body := get(t, handler, page).Body.String()
+		rowContaining := agentRowContaining
+		if page == "/console/activity" {
+			rowContaining = activityRowContaining
+		}
 
-	legacyRow := agentRowContaining(t, agentsBody, "legacy")
-	if !strings.Contains(legacyRow, `data-outcome="decided"`) {
-		t.Errorf("the answerless legacy Agents row lost its pre-#545 \"decided\" outcome chip — "+
-			"the #487 guard: empty must never render as a value:\n%s", legacyRow)
+		opsRow := rowContaining(t, body, "ops-console")
+		if n := strings.Count(opsRow, `data-outcome="revoked"`); n != 1 {
+			t.Errorf("[%s] ops-console's row carries %d \"revoked\" outcome chips, want exactly 1:\n%s", page, n, opsRow)
+		}
+		if strings.Contains(opsRow, "chip state") {
+			t.Errorf("[%s] ops-console's row (a revocation, not a Decision) carries a state chip:\n%s", page, opsRow)
+		}
+
+		legacyRow := rowContaining(t, body, "legacy")
+		if !strings.Contains(legacyRow, `data-outcome="decided"`) {
+			t.Errorf("[%s] the answerless legacy row lost its pre-#545 \"decided\" outcome chip — "+
+				"the #487 guard: empty must never render as a value:\n%s", page, legacyRow)
+		}
 	}
 
 	css := get(t, handler, "/console/assets/console.css").Body.String()

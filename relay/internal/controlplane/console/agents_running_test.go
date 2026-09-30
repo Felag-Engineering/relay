@@ -21,23 +21,6 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// runningJob is a running Job with one Task resolved of three — a fixture
-// whose Total/Unresolved a test does not have to keep consistent by hand.
-func runningJob(id, requester, accountID string) capability.JobSummary {
-	return capability.JobSummary{
-		JobID:              id,
-		CreatedAt:          testNow,
-		State:              jobs.JobStateRunning,
-		ActionKind:         jobs.ActionOperation,
-		OperationName:      "service.restart",
-		RiskClass:          jobs.RiskClassMutate,
-		Requester:          requester,
-		RequesterAccountID: accountID,
-		Total:              3,
-		Unresolved:         2,
-	}
-}
-
 // ---- AC1: the stream shows a running Job from its Job row, marked running ----
 
 func TestAgents_ARunningJobWithNoDispatchRecordAppearsFromItsJobRow(t *testing.T) {

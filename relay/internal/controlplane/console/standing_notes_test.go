@@ -13,6 +13,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 )
 
 const aboutOpen = `<details class="about">`
@@ -106,6 +107,8 @@ func TestActivity_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
 		"Two row kinds are not built here yet: enrollments and label changes.",
 		"The filter box carries no Selector and no Node.",
 		"The chips above list every family this screen shows, including empty ones.",
+		"Every Refresh is an audited read",
+		"Cancel is offered on a running Job&#39;s row",
 	)
 }
 
@@ -121,6 +124,11 @@ func TestActivity_SituationalMessagesStayVisible(t *testing.T) {
 			mustBeSituational(t, get(t, h, tc.path).Body.String(), tc.msg)
 		})
 	}
+	// The Older-page sentence and the awaiting note are situational too.
+	scrolled := newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin)
+	mustBeSituational(t, get(t, scrolled, "/console/activity?ac=0").Body.String(), "These are not the most recent events.")
+	running := newTestHandler(cancelDeps(&fakeQueries{jobs: []capability.JobSummary{runningJob("job-1", "p", "a")}}, &fakeCanceller{}), accounts.RoleAdmin)
+	mustBeSituational(t, get(t, running, "/console/activity").Body.String(), "No dispatch record is joined to it yet")
 	// Refine's note is situational: without a Refine term it is not drawn.
 	if strings.Contains(get(t, h, "/console/activity").Body.String(), "matches text within the rows") {
 		t.Error("the Refine note renders when nothing was refined")

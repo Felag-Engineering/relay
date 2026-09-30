@@ -242,19 +242,19 @@ Viewers see running Jobs but are never offered Cancel. Token revocation is
 ## Acceptance
 
 - [ ] A Job touching 4,000 Nodes occupies one row that fills in live.
-- [ ] Every one of the eight tools renders with a request line and a result line.
+- [x] Every one of the eight tools renders with a request line and a result line.
 - [ ] An auditor answers "who asked, for whom, who approved, what happened" from this screen in
       one query, with the verified/asserted distinction visible without hovering.
 - [ ] Live updates never reflow a row the user is reading.
 - [ ] Live tail and historical query use the same renderer.
 - [ ] A read row carries no output at any age, and states that.
 - [ ] Polling collapses; an Account making 200 `get_job` calls does not push everything else off.
-- [ ] A `raw_exec` refused by the role gate renders informative-neutral, not as an error.
+- [x] A `raw_exec` refused by the role gate renders informative-neutral, not as an error.
 - [ ] With no Account active in the 15 minutes, the strip says so plainly and does not fabricate
       activity.
 - [ ] No sign-in, step-up, Account or API Token row appears here, for any role.
 - [x] An in-flight dispatch is cancellable from this screen (v0.7.0) and the cancellation is
-      audited. **Met on the Agents screen (#595, #617)**; to carry over when it is folded in.
+      audited. **Met on Activity (#786)**.
 
 ## Jobs
 

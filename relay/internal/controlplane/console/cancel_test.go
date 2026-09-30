@@ -31,6 +31,23 @@ func runningJobSummary(tasks []capability.TaskRow) capability.JobSummary {
 	return sum
 }
 
+// runningJob is a running Job with one Task resolved of three — a fixture
+// whose Total/Unresolved a test does not have to keep consistent by hand.
+func runningJob(id, requester, accountID string) capability.JobSummary {
+	return capability.JobSummary{
+		JobID:              id,
+		CreatedAt:          testNow,
+		State:              jobs.JobStateRunning,
+		ActionKind:         jobs.ActionOperation,
+		OperationName:      "service.restart",
+		RiskClass:          jobs.RiskClassMutate,
+		Requester:          requester,
+		RequesterAccountID: accountID,
+		Total:              3,
+		Unresolved:         2,
+	}
+}
+
 // cancelDeps is jobDeps with the Cancel seam wired.
 func cancelDeps(q *fakeQueries, c JobCanceller) Deps {
 	d := jobDeps(q)

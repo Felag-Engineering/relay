@@ -22,7 +22,7 @@ const pinnedCSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-
 func refreshScreens() (Deps, []string) {
 	d := consoleCallsDeps()
 	d.Approvals = &fakeApprovals{pending: []approval.Request{pendingApprovalRequest("ap-1")}}
-	return d, []string{"/console/agents", "/console/approvals"}
+	return d, []string{"/console/agents", "/console/activity", "/console/approvals"}
 }
 
 func TestRefresh_AgentsAndTheQueueOfferAPlainRefresh(t *testing.T) {
@@ -81,6 +81,11 @@ func TestRefresh_ControlsPreserveTheQuery(t *testing.T) {
 	unknown := contentOf(get(t, h, "/console/approvals?nonesuch=1").Body.String())
 	if strings.Contains(unknown, "nonesuch") {
 		t.Error("the queue's Refresh echoes a parameter the screen does not understand")
+	}
+
+	activity := contentOf(get(t, h, "/console/activity?kind=approval&window=24h&ac=0").Body.String())
+	if !strings.Contains(activity, `<a class="refreshbtn" href="/console/activity?ac=0&amp;kind=approval&amp;window=24h">Refresh</a>`) {
+		t.Errorf("Activity's Refresh does not keep its filters and page position:\n%s", activity)
 	}
 
 	access := contentOf(get(t, h, "/console/access?kind=sign-in&failures=1&window=24h").Body.String())
@@ -148,7 +153,7 @@ func TestRefresh_TheDisclosureSaysWhetherAReloadIsAudited(t *testing.T) {
 	h := newTestHandler(d, accounts.RoleAdmin)
 	for path, note := range map[string]string{
 		"/console/agents":    "<b>Every Refresh is an audited read</b>",
-		"/console/activity":  "<b>Every reload is an audited read</b>",
+		"/console/activity":  "<b>Every Refresh is an audited read</b>",
 		"/console/approvals": "<b>Why reloading this queue leaves no record.</b>",
 		"/console/access":    "<b>Every Refresh is an audited read</b>",
 	} {
@@ -188,5 +193,15 @@ func TestRefresh_AgentsReloadIsAnAuditedReadAndTheQueueIsNot(t *testing.T) {
 	get(t, h, "/console/approvals")
 	if after := q.auditCalls + q.jobCalls; after != before {
 		t.Errorf("the queue made %d read-lane reads; its disclosure says a reload records none", after-before)
+	}
+}
+
+// TestRefresh_ActivityReloadIsAnAuditedRead backs Activity's disclosure
+// sentence with the reads the screen actually makes.
+func TestRefresh_ActivityReloadIsAnAuditedRead(t *testing.T) {
+	q := &fakeQueries{}
+	get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin), "/console/activity")
+	if q.auditCalls+q.jobCalls == 0 {
+		t.Error("an Activity reload made no read through the audited lane")
 	}
 }

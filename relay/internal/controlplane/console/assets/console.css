@@ -1228,6 +1228,8 @@ dl.kv {
  * flipped — see activityRow.LiveHandle. */
 .ev[data-jobstate="completed"] .evlive[data-when="completed"],
 .ev[data-jobstate="cancelled"] .evlive[data-when="cancelled"] { visibility: visible; }
+/* A Job the live client has marked finished no longer offers a Cancel that means anything. */
+.ev[data-jobstate] .jobcancel { visibility: hidden; }
 
 .pager { display: flex; gap: var(--space-4); align-items: baseline; margin: var(--space-4) 0; font-size: var(--text-sm); }
 
