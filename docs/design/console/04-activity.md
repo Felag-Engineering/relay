@@ -48,7 +48,7 @@ revokes are **not** on this screen. They are on [20 — Access](20-access.md).
 
 | Kind | Carries |
 |---|---|
-| `dispatch` | Operation + args, risk badge, requester chips, Selector with resolved fan-out, plan hash, approver if it was parked, live outcome counts, Job link, Cancel while running (v0.7.0) |
+| `dispatch` | Operation + args, risk badge, requester chips, Selector with resolved fan-out, plan hash, approver if it was parked, live outcome counts, Job link; while running, a running marker linking to its entry in [Running now](#running-now), which holds Cancel |
 | `plan` | a Preflight: the arguments, the grouped verdicts and `would_be_rejected`, and a line saying nothing executed and each Node's own engine answered. Its badge is distinct, because it is the trust-critical case |
 | `approval` | what is parked, quorum state, TTL, a link to decide; an in-band elicitation (ADR-0029) with the deciding identity as a verified chip once decided |
 | `refusal` | the capability layer's refusal, rendered slate and informative, never as an error — the role gate refusing `raw_exec` to a non-`admin`, for one |
@@ -57,6 +57,7 @@ revokes are **not** on this screen. They are on [20 — Access](20-access.md).
 | `freeze` | engage or release, by whom, held for how long, with the reason |
 | `node` | a Node revoked, by whom |
 | `token` | an Enrollment Token minted or revoked: by whom, its scope, uses and expiry |
+| `other` | any record kind no family above claims — today a Node's `protocol_violation`, and any kind added to the trail before this table names it. Attributed like every row, so it is listed and filterable, never dropped |
 
 The tool surface is eight tools: `list_nodes`, `describe_node`, `list_operations`, `get_job`,
 `run_operation`, `raw_exec`, `cancel_job`, `approve_request`. A Preflight is `plan: true` on
@@ -65,8 +66,38 @@ follows (GLOSSARY.md) — not a separate tool.
 
 **A running Job before its dispatch is recorded (#617).** A Job still running with no dispatch
 audit row yet shows as a **Running** row, sourced only from the Job row: requester, Operation,
-risk class, resolved/total and Cancel. Selector, arguments and approver appear once the dispatch
-record is written, because they are audit-joined.
+risk class and resolved/total. Selector, arguments and approver appear once the dispatch record is
+written, because they are audit-joined. Its Cancel is in [Running now](#running-now), like every
+running Job's.
+
+## Running now
+
+A section above the stream lists the Jobs still running, **longest-running first**, five at a
+time. It exists so that a running Job is never out of sight, however far back in the history it
+started: the stream is ordered by time, so a Job that has run for hours sits pages down it.
+
+- **Each entry** carries the Operation (with the Raw Exec tier drawn exactly as on the stream),
+  the verified requester, how long it has been running, resolved/total, a link to Job detail, and
+  **Cancel**.
+- **Cancel lives here and only here.** A running Job appears twice on the page — once here and
+  once in the stream at its own time — and spec 04 draws exactly one Cancel per Job per page, so
+  the section owns it. The stream's row says the Job is running and links up to its entry. Cancel
+  is gated by `cancelOffered` exactly as Job detail's is ([13](13-job-detail.md)); viewers see the
+  section but are never offered Cancel.
+- **It pages on its own.** Its cursor (`?rc=`) is independent of the stream's, so paging one never
+  moves the other, and it always says how many are running in all ("12 running · 1–5").
+- **It follows `?account=` and nothing else.** The kind chips and the time window narrow the
+  stream, never this section: an old running Job is the reason the section exists, so no window
+  may hide one.
+- **It does not reorder under the reader.** For one page load the section holds the same entries.
+  A Job that finishes is marked finished in place and its Cancel is hidden, without reflowing
+  anything; Jobs that start later arrive through Refresh and the "new events" control, per "Live
+  but stable" below.
+- **One audited read.** The section is one running-only Job read through the capability layer's
+  read lane (ADR-0025) — the read the Agents screen made before it was retired, not a new kind of
+  read.
+- **Empty is said plainly.** With nothing running, the section says "Nothing is running", and
+  under `?account=` it says that Account has nothing running.
 
 ## Identity on every row
 
@@ -99,7 +130,10 @@ every row, as the trust chip. `00-foundations.md`, [13](13-job-detail.md) and
 ## Who is active
 
 A strip above the stream lists each Account with a call in the last **15 minutes**: name, role,
-first and last call, call count, mutate count. Selecting one scopes the stream to it (`?account=`).
+first and last call, call count, mutate count. Selecting one scopes the stream to it
+(`?account=`, which names the **verified Account ID**, never a name: a name can later belong to a
+different Account, an ID never does). An entry with no verified Account ID is listed but not
+linked.
 It is how an operator sees who is driving right now.
 
 **There are no sessions.** The MCP transport is stateless (ADR-0028; `Stateless: true`, no
@@ -117,7 +151,7 @@ recent call on the page is older than 15 minutes drops off the strip, and the st
 dropped. On this screen "window" means the 15 minutes and nothing else; the page is called the
 page, never the window.
 
-**Running rows do not count on the strip (#617).** They are read from the Job row, not from an
+**Running rows, and Running now's entries, do not count on the strip (#617).** They are read from the Job row, not from an
 audited call, so the strip's fields stay call-grained. A Job joins the strip once its dispatch is
 recorded. An otherwise empty strip over a page showing only running Jobs says so, rather than
 saying nobody has called.
@@ -219,9 +253,9 @@ unknown row kind, what an outcome filter does to the page, and the read sentence
 retroactive cancel, and the cancelled Task ID stays deduped so at-most-once still holds
 (ADR-0013, invariant #4).
 
-Cancel sits on a running dispatch row (v0.7.0), gated by `cancelOffered` exactly as Job detail's
-is ([13](13-job-detail.md)). A Job with several dispatch rows on the page still draws exactly one.
-Viewers see running Jobs but are never offered Cancel. Token revocation is
+Cancel sits in [Running now](#running-now) (v0.7.0), gated by `cancelOffered` exactly as Job
+detail's is ([13](13-job-detail.md)), and a Job draws exactly one on the page wherever else it
+appears. Viewers see running Jobs but are never offered Cancel. Token revocation is
 [15](15-accounts-and-tokens.md); Freeze is [16](16-incident-ladder.md).
 
 ## Must not appear
@@ -254,7 +288,14 @@ Viewers see running Jobs but are never offered Cancel. Token revocation is
       activity.
 - [ ] No sign-in, step-up, Account or API Token row appears here, for any role.
 - [x] An in-flight dispatch is cancellable from this screen (v0.7.0) and the cancellation is
-      audited. **Met on Activity (#786)**.
+      audited. **Met on Activity (#786)**; the control moves into Running now with that section.
+- [ ] A running Job of any age is visible on the first page, in Running now, longest-running
+      first, whatever the time window or kind filter.
+- [ ] Each running Job draws exactly one Cancel on the page, in Running now; its stream row links
+      to it.
+- [ ] Paging Running now never moves the stream, and paging the stream never moves Running now.
+- [ ] A Job that finishes while the page is open is marked finished in place; the section never
+      reorders under the reader.
 
 ## Jobs
 
