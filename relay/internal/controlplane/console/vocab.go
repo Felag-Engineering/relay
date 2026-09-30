@@ -73,6 +73,12 @@ type trailFacts struct {
 	// must never fill this field.
 	Role       string
 	OnBehalfOf string
+	// Source is the peer address the Relay recorded for this identity,
+	// VERIFIED lane only (audit.Verified.Source / capability.VerifiedIdentity.
+	// Source). Access renders it on sign-in rows only (spec 20's Row kinds
+	// table lists a source address for `sign-in` and not for the other
+	// families).
+	Source string
 
 	Selector      string
 	JobID         string
@@ -108,6 +114,7 @@ func factsOfRecord(rec audit.Record) trailFacts {
 		VerifiedAccountID:   rec.Attribution.Verified.AccountID,
 		Role:                rec.Attribution.Verified.Role,
 		OnBehalfOf:          rec.Attribution.Asserted.OnBehalfOf,
+		Source:              rec.Attribution.Verified.Source,
 		Selector:            rec.Selector,
 		JobID:               rec.JobID,
 		NodeID:              rec.NodeID,
@@ -135,6 +142,7 @@ func factsOfRow(row capability.AuditRow) trailFacts {
 		VerifiedAccountID:   row.Verified.AccountID,
 		Role:                row.Verified.Role,
 		OnBehalfOf:          row.Asserted.OnBehalfOf,
+		Source:              row.Verified.Source,
 		Selector:            row.Selector,
 		JobID:               row.JobID,
 		NodeID:              row.NodeID,

@@ -357,6 +357,19 @@ func Routes(d Deps) []Route {
 		// (agents.go), so it is also the idiom this Console has.
 		{"GET", "/console/accounts", NavEntry{NavAdminister, "Accounts", 20}, accounts.RoleAdmin, handleAccounts},
 
+		// Access (spec 20, D17): who signed in, who failed to, and who
+		// changed an Account or minted it a credential — admin only. MinRole
+		// admin is a Console-only narrowing (invariant 10, subtractive only):
+		// the records stay on the audit read lane under its existing role
+		// rules, and the handler sends every request to
+		// capability.Service.QueryAudit with the caller unchanged. The path
+		// owns itself exclusively; because this route constrainsReach(),
+		// Register also mounts methodMismatch on the bare "/console/access",
+		// which collides with nothing else in this table
+		// (TestConsole_RegisterMountsEveryRouteWithoutPatternConflict picks
+		// it up).
+		{"GET", "/console/access", NavEntry{NavAdminister, "Access", 30}, accounts.RoleAdmin, handleAccess},
+
 		// Accounts, write half (#655, accounts_write.go): the Console's
 		// third, fourth, fifth, sixth and seventh write routes. All five at
 		// accounts.RoleAdmin, which is exactly the floor

@@ -1553,6 +1553,25 @@ details.scope > dl, details.scope > p, details.scope > ul { margin-left: var(--s
 .chip.state[data-state="denied"]   { border-width: 2px; border-color: var(--text-second); font-weight: var(--weight-medium); }
 .chip.state[data-state="expired"]  { color: var(--inert); border-color: var(--inert); border-style: dotted; }
 
+/* An AUTHENTICATION attempt is not a Task outcome either, and a failed
+ * sign-in or step-up must not borrow --failure red: it is a refused
+ * credential, not a denied_by_policy verdict, and spec 20 is explicit that
+ * this screen never says which half was wrong. Same neutral family and same
+ * border-weight-and-style vocabulary as .chip.state above; "succeeded" takes
+ * the base rule and needs no modifier.
+ *
+ * Throttled is drawn differently from failed — dotted and --inert, the same
+ * treatment .chip.state gives "expired" — because it was refused before any
+ * credential was even compared. It is not a guess that came back wrong, and
+ * pairing it with the "failed" weight would count a throttle as an attempt,
+ * which spec 20 says it is not. */
+.chip.attempt {
+  background: transparent; color: var(--text-second); border-color: var(--border-mid);
+  font-weight: var(--weight-normal);
+}
+.chip.attempt[data-attempt="failed"]    { border-width: 2px; border-color: var(--text-second); font-weight: var(--weight-medium); }
+.chip.attempt[data-attempt="throttled"] { color: var(--inert); border-color: var(--inert); border-style: dotted; }
+
 /* --- The approval card on a phone ----------------------------------------
  *
  * Spec 08: "renders legibly at 390px wide with no horizontal scroll and 44px

@@ -226,6 +226,7 @@ func TestConsole_OnlyLoginAndItsAssetsAreReachableUnauthenticated(t *testing.T) 
 		"/console/approvals",
 		"/console/nodes/add",
 		"/console/accounts",
+		"/console/access",
 		"/console/incident",
 		"/console/nodes/node-1",
 		"/console/jobs/job-1",

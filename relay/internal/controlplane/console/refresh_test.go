@@ -82,6 +82,11 @@ func TestRefresh_ControlsPreserveTheQuery(t *testing.T) {
 	if strings.Contains(unknown, "nonesuch") {
 		t.Error("the queue's Refresh echoes a parameter the screen does not understand")
 	}
+
+	access := contentOf(get(t, h, "/console/access?kind=sign-in&failures=1&window=24h").Body.String())
+	if !strings.Contains(access, `<a class="refreshbtn" href="/console/access?failures=1&amp;kind=sign-in&amp;window=24h">Refresh</a>`) {
+		t.Errorf("Access' Refresh does not keep its filters:\n%s", access)
+	}
 }
 
 // TestRefresh_ActivityReloadControlKeepsTheFilter: Activity's control reloads
@@ -145,6 +150,7 @@ func TestRefresh_TheDisclosureSaysWhetherAReloadIsAudited(t *testing.T) {
 		"/console/agents":    "<b>Every Refresh is an audited read</b>",
 		"/console/activity":  "<b>Every reload is an audited read</b>",
 		"/console/approvals": "<b>Why reloading this queue leaves no record.</b>",
+		"/console/access":    "<b>Every Refresh is an audited read</b>",
 	} {
 		inside, outside := splitAbout(t, get(t, h, path).Body.String())
 		mustBeStanding(t, inside, outside, note)
