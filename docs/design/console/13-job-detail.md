@@ -23,8 +23,7 @@ timestamps; Job state.
 kind label, `human` or `machine` (`00-foundations.md`). **Where Job detail shows its requester's
 kind, it is read from the kind the Job row recorded for its requester when the Job was created,
 and from nothing else** — never from the Account registry's current kind (owner decision of
-2026-09-08, #540, recorded in [03](03-agent-sessions.md) under "Kind (machine or human) is not on
-the rail"). A Job that recorded no kind shows no label; in particular, a Job whose requester is
+2026-09-08, #540, recorded in [04](04-activity.md) under "Kind is never read from the registry"). A Job that recorded no kind shows no label; in particular, a Job whose requester is
 drawn from its dispatch audit record because the Job row carries none gets no label, since that
 record carries no kind either. In the approval section, **each approving decider's chip is
 followed by a kind label read from that Decision's own record** of whether its decider was human —
