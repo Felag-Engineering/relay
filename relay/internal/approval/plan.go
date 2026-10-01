@@ -109,6 +109,9 @@ func HashPlan(act jobs.Action, nodeIDs []string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// ActionKindName renders k as its persisted and wire name: "operation" or
+// "raw_exec". ActionUnspecified, and any out-of-range value, renders as
+// "unspecified" rather than panicking; ParseActionKind is the inverse.
 func ActionKindName(k jobs.ActionKind) string {
 	switch k {
 	case jobs.ActionOperation:

@@ -89,6 +89,14 @@ type Selector struct {
 var ErrSelectorTagUnsupported = errors.New(
 	"capability: tag: selectors are not resolvable yet — operator-set grouping lands with label management (#430)")
 
+// ParseSelector parses a comma-separated Selector such as
+// "node:role=web,state:online" into its Predicates. Every surface parses
+// through this one function, so what a term means and which terms are refused
+// is decided here and nowhere else (invariant 10).
+//
+// An empty (or all-whitespace) string is the empty Selector. A malformed term,
+// an unknown namespace prefix and any tag: term are errors rather than silently
+// dropped terms — see the tag: arm below for why a refusal beats an empty match.
 func ParseSelector(s string) (Selector, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
