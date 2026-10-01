@@ -12,6 +12,12 @@ package main
 // it; the subcommand grants no authority that local root did not already have,
 // it only makes the intended path an obvious one-liner instead of a SQL edit.
 //
+// Minting writes one api_token_mint audit record, attributed to the principal
+// local-host rather than to any Account, in the SAME transaction as the token
+// (#782). If the record cannot be written no token is issued: a credential the
+// trail cannot show is not issued. The record names the token's public ID and
+// never its value.
+//
 // It never starts a server, never opens a listener, and never reads the
 // Relay's startup config.
 
@@ -23,8 +29,30 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
+
+// recordedTokens makes TokenService.Mint write its audit record in the same
+// transaction as the token. The token's ID exists only inside Mint, so the
+// record is built at CreateToken time; every other method delegates.
+type recordedTokens struct {
+	accounts.TokenRepository
+	st *store.Store
+}
+
+func (r recordedTokens) CreateToken(ctx context.Context, t accounts.APIToken) error {
+	id, err := hostAuditID()
+	if err != nil {
+		return fmt.Errorf("generate audit record id: %w", err)
+	}
+	rec, err := auditsink.HostAPITokenMintRecord(id, time.Now(), t.AccountID, t.ID)
+	if err != nil {
+		return err
+	}
+	return r.st.CreateAPITokenRecorded(ctx, t, rec)
+}
 
 // bootstrapTokenUsage is printed for -h and on a usage error.
 const bootstrapTokenUsage = `Usage: relay bootstrap-token -store-path <path> [-name <label>] [-ttl <duration>]
@@ -38,6 +66,10 @@ running this again and revoking the old token.
 
 Requires read/write access to the Relay's store file, which is root-owned.
 Safe to run while the Relay is running.
+
+The mint is recorded on the audit trail (api_token_mint), attributed to
+local-host rather than to any Account, and the record never carries the token.
+If the record cannot be written, no token is issued.
 
 Flags:
   -store-path <path>    Path to the Relay's store (same value as the Relay's
@@ -104,15 +136,17 @@ func runBootstrapTokenCommand(args []string, stdout, stderr *os.File) int {
 		return 1
 	}
 
-	tokenSvc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
+	tokenSvc := accounts.NewTokenService(recordedTokens{TokenRepository: st.APITokens(), st: st}, st.Accounts(), nil)
 	tok, plaintext, err := tokenSvc.Mint(ctx, admin.ID, *name, *ttl)
 	if err != nil {
 		fmt.Fprintf(stderr, "relay bootstrap-token: mint: %v\n", err)
+		fmt.Fprintln(stderr, "No token was minted: a credential that cannot be recorded on the audit trail is not issued.")
 		return 1
 	}
 
 	// Diagnostics to stderr; the credential alone to stdout.
 	fmt.Fprintf(stderr, "Minted API Token %s for account %s (%s).\n", tok.ID, admin.Name, admin.ID)
+	fmt.Fprintf(stderr, "Recorded on the audit trail as %s, attributed to %s.\n", audit.KindAPITokenMint, audit.PrincipalLocalHost)
 	if tok.ExpiresAt.IsZero() {
 		fmt.Fprintln(stderr, "This token does not expire. Revoke it once your real Accounts have tokens:")
 	} else {

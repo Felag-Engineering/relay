@@ -154,6 +154,16 @@ const (
 	KindAccountRole    = "account_role"
 	KindAccountEnable  = "account_enable"
 	KindAccountDisable = "account_disable"
+
+	// KindPasswordSet and KindPasswordClear record a Console password set or
+	// removed for a human Account (#782). Today they are written only by the
+	// host-side `relay console-password` lever, attributed to
+	// PrincipalLocalHost; the record names the Account and NEVER the password
+	// or its hash. Two kinds (set vs clear) for the same reason
+	// account_enable/account_disable are two.
+	KindPasswordSet   = "password_set"
+	KindPasswordClear = "password_clear"
+
 	// The Console's human authentication lane (#418,
 	// docs/design/console/12-login.md). Every attempt is recorded, successful
 	// or not — this is the first link in the chain the UI advisory requires
@@ -246,6 +256,8 @@ var allKinds = []string{
 	KindAccountRole,
 	KindAccountEnable,
 	KindAccountDisable,
+	KindPasswordSet,
+	KindPasswordClear,
 	KindLoginSucceeded,
 	KindLoginFailed,
 	KindLoginThrottled,
@@ -325,6 +337,8 @@ var notAnAuthFailureKinds = []string{
 	KindAccountRole,
 	KindAccountEnable,
 	KindAccountDisable,
+	KindPasswordSet,
+	KindPasswordClear,
 	KindLoginSucceeded,
 	KindLogout,
 	KindStepUp,

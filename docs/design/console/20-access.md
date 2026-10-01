@@ -26,8 +26,8 @@ gives them to the person who acts on them, an admin, in one place.
 |---|---|---|
 | `sign-in` | `login_succeeded`, `login_failed`, `login_throttled`, `logout` | the Account where the record names one, the outcome, the source address |
 | `step-up` | `step_up`, `step_up_failed`, `step_up_throttled` | the session's Account, the outcome |
-| `account` | `account_create`, `account_role`, `account_enable`, `account_disable` | who acted, on which Account, and the change (new role, enabled, disabled) |
-| `api-token` | `api_token_mint`, `api_token_revoke` | who acted, for which Account, the token's ID — never its value |
+| `account` | `account_create`, `account_role`, `account_enable`, `account_disable`, `password_set`, `password_clear` | who acted, on which Account, and the change (new role, enabled, disabled, password set or removed — never the password) |
+| `api-token` | `api_token_mint`, `api_token_revoke` | who acted, for which Account, the token's ID — never its value; a mint by `relay bootstrap-token` is the same kind |
 
 **A failed sign-in or step-up says it failed and nothing more.** Its record deliberately carries no
 indication of which half was wrong, because a trail that separated "unknown Account" from "wrong
@@ -37,11 +37,14 @@ reconstruct that distinction from anything else.
 **A throttled attempt is not a failed one.** It was refused before any credential was compared, so
 it is drawn as throttled and never counted as a guess.
 
-**Where a password is set, it is a row here.** Today it is not: passwords are set only by the
-host-side `relay console-password` command, which writes no audit record, and neither does
-`relay bootstrap-token` (#782). Until #782 lands, the "About this screen" disclosure says that
-password changes and the first API Token are not on the trail, and the screen does not imply
-otherwise.
+**Where a password is set, it is a row here.** Passwords are set or removed only by the host-side
+`relay console-password` command, and the first API Token is minted by `relay bootstrap-token`; each
+writes its record in the same transaction as the change, so a change that cannot be recorded is not
+made (#782). Those rows are attributed to `local-host` (the host lever the freeze signal also
+records), not to any Account, and the screen draws them as the Relay host rather than as a verified
+or asserted chip. A `password_clear` on an Account that had no password is still a row; its record
+says `removed=false` and the screen says none was set, so the trail never claims a removal that did
+not happen.
 
 **Enrollment Tokens are not here.** They join Nodes rather than authenticate callers, so they stay
 on [04 — Activity](04-activity.md) with the fleet's other membership events. Conflating the two in
@@ -63,9 +66,11 @@ of the capability layer, not of this screen, and it has not been taken.
 ## Identity on every row
 
 The verified/asserted grammar from `00-foundations.md`. The actor of an `account` or `api-token`
-row is verified: the Relay authenticated it. The subject — the Account created, changed or given a
+row is verified: the Relay authenticated it. The exception is a host-lever row, which names
+`local-host` as its actor: root on the Relay host, which no Account's credential proves, so it is
+neither a verified nor an asserted chip. The subject — the Account created, changed or given a
 token — is drawn from the record as written. Today that record names the subject by Account ID, and
-by name only on `account_create`; an `api_token_revoke` names only the token. Where the screen
+by name only on `account_create` and on the host password rows; an `api_token_revoke` names only the token. Where the screen
 shows a subject's name that the record does not carry, it would be a registry lookup reporting
 the Account as it is now, the problem [04](04-activity.md) describes under "Kind is never read from
 the registry". **Whether to resolve a subject's ID to its current name is open**, and until it is
@@ -98,4 +103,4 @@ disclosure says so rather than offering a filter that would search the page and 
 - [ ] A non-admin gets a 404 for the route and no nav item.
 - [ ] A failed sign-in carries no indication of which half was wrong.
 - [ ] A throttled attempt is drawn as throttled and is not counted as a failure.
-- [ ] Until #782 lands, the screen says password changes are not on the trail.
+- [ ] A password set or removed with `relay console-password`, and a token minted with `relay bootstrap-token`, is a row here attributed to `local-host`.

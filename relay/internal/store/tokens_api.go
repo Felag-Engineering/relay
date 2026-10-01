@@ -21,7 +21,11 @@ var _ accounts.TokenRepository = (*sqliteAPITokens)(nil)
 
 // CreateToken stores a newly minted token.
 func (r *sqliteAPITokens) CreateToken(ctx context.Context, t accounts.APIToken) error {
-	_, err := r.db.ExecContext(ctx, `
+	return createTokenExec(ctx, r.db, t)
+}
+
+func createTokenExec(ctx context.Context, ex execer, t accounts.APIToken) error {
+	_, err := ex.ExecContext(ctx, `
 		INSERT INTO api_tokens (id, account_id, name, secret_hash, created_at, expires_at, last_used_at, revoked_at)
 		VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
 		t.ID, t.AccountID, t.Name, t.SecretHash,

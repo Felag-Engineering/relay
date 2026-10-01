@@ -68,15 +68,15 @@ var accessKindOrder = []accessKind{accessSignIn, accessStepUp, accessAccount, ac
 // other audit kind — Activity's home, or (for a kind neither package names)
 // its `other` family.
 //
-// This is the explicit switch over the 13 kinds spec 20's Row kinds table
-// names (4 sign-in + 3 step-up + 4 account + 2 api-token; audit.go's
+// This is the explicit switch over the 15 kinds spec 20's Row kinds table
+// names (4 sign-in + 3 step-up + 6 account + 2 api-token; audit.go's
 // declaration order), and it is the ONE place this package names them: every
 // derived list below comes from walking audit.Kinds() through this function,
 // so Access and Activity (kindOf's own first case) partition the audit
 // vocabulary by construction rather than by two lists that have to agree.
 //
-// Forward risk, not closed by anything here: a future auth kind (#782's
-// password_set, say) added to internal/audit without a case here falls to
+// Forward risk, not closed by anything here: a future auth kind added to
+// internal/audit without a case here falls to
 // Activity's `other` family instead of failing loudly. A name-based rule
 // (a "_failed" suffix, say) was tried for a neighbouring question and
 // rejected — see internal/audit's authFailureKinds doc for why it missed the
@@ -87,7 +87,8 @@ func accessKindOf(k string) (accessKind, bool) {
 		return accessSignIn, true
 	case audit.KindStepUp, audit.KindStepUpFailed, audit.KindStepUpThrottled:
 		return accessStepUp, true
-	case audit.KindAccountCreate, audit.KindAccountRole, audit.KindAccountEnable, audit.KindAccountDisable:
+	case audit.KindAccountCreate, audit.KindAccountRole, audit.KindAccountEnable, audit.KindAccountDisable,
+		audit.KindPasswordSet, audit.KindPasswordClear:
 		return accessAccount, true
 	case audit.KindAPITokenMint, audit.KindAPITokenRevoke:
 		return accessAPIToken, true
@@ -126,7 +127,7 @@ func buildAccessKindsByFamily() map[accessKind][]string {
 }
 
 // accessAllKinds is the union accessKindOf admits, in audit.Kinds() order —
-// 13 kinds today, under the read lane's 32-kind cap. What ?kind= with no
+// 15 kinds today, under the read lane's 32-kind cap. What ?kind= with no
 // value asks the trail for.
 var accessAllKinds = buildAccessAllKinds()
 
@@ -151,7 +152,7 @@ func buildAccessAllKinds() []string {
 // screen asks only the first.
 var accessFailureKinds = []string{audit.KindLoginFailed, audit.KindStepUpFailed}
 
-// accessSummary renders the per-kind sentence for one of the 13 Access
+// accessSummary renders the per-kind sentence for one of the 15 Access
 // kinds. MOVED, unchanged, from activity.go's summarize — this is the one
 // place either screen spells these sentences.
 func accessSummary(f trailFacts) string {
@@ -178,6 +179,15 @@ func accessSummary(f trailFacts) string {
 		return "enabled an Account"
 	case audit.KindAccountDisable:
 		return "disabled an Account"
+	case audit.KindPasswordSet:
+		return "set a Console password"
+	case audit.KindPasswordClear:
+		// A -clear on an Account with no password is still recorded; the
+		// record says so, and so does the sentence.
+		if strings.Contains(f.Reason, "removed=false") {
+			return "cleared a Console password (none was set)"
+		}
+		return "removed a Console password"
 	case audit.KindAPITokenMint:
 		return "minted an API Token"
 	case audit.KindAPITokenRevoke:
@@ -223,6 +233,12 @@ type accessRow struct {
 	// separate Verified flag — Actor != "" already means verified.
 	Actor string
 
+	// HostLever is set only when the record names no verified Account AND its
+	// Principal is audit.PrincipalLocalHost: an act by root on the Relay host,
+	// neither a verified Account nor an asserted claim, so it gets neither
+	// chip.
+	HostLever string
+
 	// Asserted is f.OnBehalfOf: what was typed on a sign-in or step-up,
 	// rendered as a separate, dashed chip exactly on a failed or throttled
 	// attempt as on a successful one.
@@ -261,6 +277,8 @@ func accessRowFrom(f trailFacts) accessRow {
 	}
 	if f.VerifiedAccountID != "" {
 		row.Actor = principalText(f)
+	} else if f.Principal == audit.PrincipalLocalHost {
+		row.HostLever = f.Principal
 	}
 	if family == accessSignIn {
 		row.Source = f.Source
@@ -586,7 +604,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
     <div class="evwhen"><time datetime="{{.When}}">{{.When}}</time><span class="evkind">{{.EventKind}}</span></div>
     <div class="evbody">
       <div class="evhead">
-        {{if .Actor}}{{template "trust-chip" (trust .Actor true)}}{{else}}<span class="dim">no Account named</span>{{end}}
+        {{if .Actor}}{{template "trust-chip" (trust .Actor true)}}{{else if .HostLever}}<span class="dim">the Relay host</span> <code>{{.HostLever}}</code>{{else}}<span class="dim">no Account named</span>{{end}}
         {{with .Asserted}}{{template "trust-chip" (trust . false)}}{{end}}
         <span class="evsum">{{.Summary}}</span>
         {{with .Attempt}}<span class="chip attempt" data-attempt="{{.}}">{{.}}</span>{{end}}
@@ -612,10 +630,11 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
 
 <p class="gap"><b>Each page holds up to {{.PageSize}} records</b>, newest first.</p>
 
-<p class="gap"><b>Password changes and the first API Token are not on the trail.</b> A password is set
-only by the host-side <code>relay console-password</code> command, and the first API Token by
-<code>relay bootstrap-token</code>. Neither writes an audit record yet (#782), so this screen cannot
-show them.</p>
+<p class="gap"><b>Changes made on the Relay host name the host, not an Account.</b> A Console password is
+set or removed only by the host-side <code>relay console-password</code> command, and the first API
+Token is minted by <code>relay bootstrap-token</code>. Their rows name <code>local-host</code>: whoever
+ran them had root on the Relay host, which no Account's credential proves. They never carry the
+password or the token.</p>
 
 <p class="gap"><b>OAuth sign-ins are not listed.</b> An OAuth sign-in happens at the identity provider,
 not at the Relay, which sees only the authenticated calls that follow it. This screen lists Console
