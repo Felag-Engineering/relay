@@ -18,6 +18,7 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"html/template"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -1406,7 +1408,7 @@ func TestAccountsWrite_AnUnwiredAccountReaderOffersNothingAndPanicsNowhere(t *te
 		form url.Values
 	}{
 		{createAccountAction(), url.Values{"name": {"newbie"}, "kind": {"human"}, "role": {"viewer"}, "password": {"p"}}},
-		{setAccountRoleAction(targetViewerID), url.Values{"role": {"viewer"}, "password": {"p"}}},
+		{setAccountRoleAction(targetViewerID), url.Values{"role": {"operator"}, "password": {"p"}}},
 		{setAccountEnabledAction(targetViewerID), url.Values{"enabled": {"false"}}},
 		{mintAPITokenAction(targetOperatorID), url.Values{"name": {"t"}, "ttl": {"30d"}, "password": {"p"}}},
 		{revokeAPITokenAction(targetLiveToken), url.Values{}},
@@ -1741,9 +1743,8 @@ func accountsWriteBody(t *testing.T, query string) string {
 // is visible in the HTML, not only in the handler. An enabled row's Disable
 // control has no password field; a disabled row's Enable form has one.
 func TestAccountsWrite_TheStateControlAsymmetryIsInTheMarkup(t *testing.T) {
-	body := accountsWriteBody(t, "")
-
-	disable := formWithAction(t, body, setAccountEnabledAction(targetViewerID))
+	// The controls render only in the selected Account's panel (#830).
+	disable := formWithAction(t, accountsWriteBody(t, "?account=ana"), setAccountEnabledAction(targetViewerID))
 	if strings.Contains(disable, `type="password"`) {
 		t.Errorf("the Disable control carries a password field — disabling is the durable "+
 			"off-switch and can only reduce:\n%s", disable)
@@ -1752,7 +1753,7 @@ func TestAccountsWrite_TheStateControlAsymmetryIsInTheMarkup(t *testing.T) {
 		t.Errorf("the Disable control does not submit enabled=false:\n%s", disable)
 	}
 
-	enable := formWithAction(t, body, setAccountEnabledAction(targetDisabledID))
+	enable := formWithAction(t, accountsWriteBody(t, "?account=retired-ci"), setAccountEnabledAction(targetDisabledID))
 	if !strings.Contains(enable, `type="password"`) {
 		t.Errorf("the Enable form carries no password field — re-enabling a disabled Account "+
 			"is privilege-granting:\n%s", enable)
@@ -1767,6 +1768,105 @@ func TestAccountsWrite_TheStateControlAsymmetryIsInTheMarkup(t *testing.T) {
 	if strings.Contains(revoke, `type="password"`) {
 		t.Errorf("the Revoke control carries a password field — revocation is the incident "+
 			"instrument and only ever reduces:\n%s", revoke)
+	}
+}
+
+// TestAccountsWrite_TheAccountListIsReadOnly: no Account's role or state
+// control renders on the list; they live in the selected Account's panel (#830).
+func TestAccountsWrite_TheAccountListIsReadOnly(t *testing.T) {
+	body := accountsWriteBody(t, "")
+	for _, a := range sweepAccounts().accounts {
+		for _, action := range []string{setAccountRoleAction(a.ID), setAccountEnabledAction(a.ID)} {
+			if strings.Contains(body, `action="`+action+`"`) {
+				t.Errorf("the list carries a form posting to %s — the list is read-only", action)
+			}
+		}
+	}
+	if strings.Contains(body, `<th scope="col">Change</th>`) {
+		t.Error("the list still carries a Change column")
+	}
+	if !strings.Contains(body, `action="`+createAccountAction()+`"`) {
+		t.Error("the create form is gone from the screen")
+	}
+}
+
+// TestAccountsWrite_EveryRoleSelectPreselectsTheCurrentRoleAndCannotSubmitIt:
+// each role-change form shows the Account's current role as a disabled,
+// empty-value placeholder in a required select, so a browser will not submit
+// it and a non-validating client posts no role at all (#830).
+func TestAccountsWrite_EveryRoleSelectPreselectsTheCurrentRoleAndCannotSubmitIt(t *testing.T) {
+	cases := []struct {
+		query, id, role string
+		raise, lower    bool
+	}{
+		{"?account=ana", targetViewerID, "viewer", true, false},
+		{"?account=mike", targetAdminID, "admin", false, true},
+		{"?account=gleipnir-prod", targetOperatorID, "operator", true, true},
+	}
+	for _, tc := range cases {
+		body := accountsWriteBody(t, tc.query)
+		forms := regexp.MustCompile(`(?s)<form[^>]*action="`+regexp.QuoteMeta(setAccountRoleAction(tc.id))+`".*?</form>`).
+			FindAllString(body, -1)
+		if len(forms) == 0 {
+			t.Fatalf("%s: no role form found for %s", tc.query, tc.id)
+		}
+		var raise, lower int
+		for _, f := range forms {
+			if !strings.Contains(f, `<select name="role" required>`) {
+				t.Errorf("%s: the role select is not required:\n%s", tc.query, f)
+			}
+			if got := len(regexp.MustCompile(`<option[^>]* selected`).FindAllString(f, -1)); got != 1 {
+				t.Errorf("%s: %d selected options, want exactly 1:\n%s", tc.query, got, f)
+			}
+			if !strings.Contains(f, `<option value="" selected disabled>`+tc.role+` (current)</option>`) {
+				t.Errorf("%s: the current role is not the disabled placeholder:\n%s", tc.query, f)
+			}
+			if strings.Contains(f, `<option value="`+tc.role+`"`) {
+				t.Errorf("%s: the current role is offered as a target:\n%s", tc.query, f)
+			}
+			if strings.Contains(f, `type="password"`) {
+				raise++
+			} else {
+				lower++
+			}
+		}
+		if (raise == 1) != tc.raise || (lower == 1) != tc.lower || raise > 1 || lower > 1 {
+			t.Errorf("%s: %d Raise and %d Lower forms, want raise=%v lower=%v",
+				tc.query, raise, lower, tc.raise, tc.lower)
+		}
+	}
+}
+
+// TestAccountsWrite_TheSignedInAccountsPanelSaysWhyItCannotChange: the
+// signed-in Account's own panel offers no role or state control and states the
+// capability layer's refusal instead; its API Tokens stay manageable (#830).
+func TestAccountsWrite_TheSignedInAccountsPanelSaysWhyItCannotChange(t *testing.T) {
+	d := sweepFixture()
+	fa := sweepAccounts()
+	fa.accounts = append(fa.accounts, accounts.Account{
+		ID: testAccountID(accounts.RoleAdmin), Name: testAccountName(accounts.RoleAdmin),
+		Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+	})
+	d.Accounts = fa
+	d.AccountAdmin = &fakeAccountAdmin{}
+	d.Auth = &fakeAuth{}
+
+	self := testAccountID(accounts.RoleAdmin)
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/accounts?account="+testAccountName(accounts.RoleAdmin))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, template.HTMLEscapeString(selfTargetRefusal)) {
+		t.Errorf("the panel does not say why it cannot change:\n%s", contentOf(body))
+	}
+	for _, action := range []string{setAccountRoleAction(self), setAccountEnabledAction(self)} {
+		if strings.Contains(body, `action="`+action+`"`) {
+			t.Errorf("the signed-in Account's panel offers a form posting to %s", action)
+		}
+	}
+	if !strings.Contains(body, `action="`+mintAPITokenAction(self)+`"`) {
+		t.Error("the signed-in Account's panel lost its mint form")
 	}
 }
 
@@ -1941,6 +2041,33 @@ func TestAccountsWrite_ACapabilityRefusalIsRenderedNotReinterpreted(t *testing.T
 					contentOf(rec.Body.String()))
 			}
 		})
+	}
+}
+
+// TestAccountsWrite_AnUnchangedOrMissingRoleIsRefusedAndNeverWrites: a role
+// the target already holds, or none at all, is a 400 that reaches neither the
+// step-up nor the capability layer (#830).
+func TestAccountsWrite_AnUnchangedOrMissingRoleIsRefusedAndNeverWrites(t *testing.T) {
+	x := newWriteFix(t, nil)
+	for _, tc := range []struct {
+		name string
+		id   string
+		form url.Values
+	}{
+		{"admin to admin", targetAdminID, url.Values{"role": {"admin"}}},
+		{"viewer to viewer", targetViewerID, url.Values{"role": {"viewer"}, "password": {"p"}}},
+		{"no role", targetViewerID, url.Values{}},
+	} {
+		rec := x.post(t, setAccountRoleAction(tc.id), tc.form)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400; body %s", tc.name, rec.Code, contentOf(rec.Body.String()))
+		}
+	}
+	if len(x.admin.roles) != 0 {
+		t.Errorf("SetAccountRole was called %d times for a refused request", len(x.admin.roles))
+	}
+	if len(x.auth.stepUpCalls) != 0 {
+		t.Errorf("step-up was attempted %d times for a refused request", len(x.auth.stepUpCalls))
 	}
 }
 
@@ -2221,6 +2348,59 @@ func TestAccountsWrite_EveryWriteRecordsItsOwnAuditKindThroughTheRealLane(t *tes
 	}
 	if attributed != 6 {
 		t.Errorf("found %d administrative records to attribute, want 6", attributed)
+	}
+}
+
+// TestAccountsWrite_SelfDemoteAndSelfDisableAreRefusedThroughTheRealCapabilityLayer
+// proves the Console reaches the capability seam with a populated
+// Principal.AccountID on the real session lane (#830): a hand-built POST to
+// change or disable the signed-in Account is refused with the capability
+// layer's own sentence, audited as a refusal, and writes nothing. The same-role
+// case shows the Console's unchanged-role refusal does not pre-empt it.
+func TestAccountsWrite_SelfDemoteAndSelfDisableAreRefusedThroughTheRealCapabilityLayer(t *testing.T) {
+	x := newRealWriteFix(t)
+	ctx := context.Background()
+	want := template.HTMLEscapeString(selfTargetRefusal)
+
+	for _, tc := range []struct {
+		name string
+		path string
+		form url.Values
+	}{
+		{"demote", setAccountRoleAction(x.actor.ID), url.Values{"role": {"operator"}}},
+		{"same role", setAccountRoleAction(x.actor.ID), url.Values{"role": {"admin"}, "password": {realWritePassword}}},
+		{"disable", setAccountEnabledAction(x.actor.ID), url.Values{"enabled": {"false"}}},
+	} {
+		rec := x.post(t, tc.path, tc.form)
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("%s: status = %d, want 409; body %s", tc.name, rec.Code, contentOf(rec.Body.String()))
+		}
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("%s: the refusal is not the capability layer's sentence:\n%s", tc.name, contentOf(rec.Body.String()))
+		}
+	}
+
+	got, err := x.trail.Accounts().Get(ctx, x.actor.ID)
+	if err != nil {
+		t.Fatalf("re-read the acting Account: %v", err)
+	}
+	if got.Role != accounts.RoleAdmin || !got.Enabled {
+		t.Errorf("the acting Account is now %s, enabled=%v — a refused act wrote", got.Role, got.Enabled)
+	}
+	kinds := x.kinds(t)
+	refusals := 0
+	for _, k := range kinds {
+		if k == audit.KindRefusal {
+			refusals++
+		}
+	}
+	if refusals != 3 {
+		t.Errorf("trail carries %d refusal records, want exactly one per refused request (3): %v", refusals, kinds)
+	}
+	for _, k := range []string{audit.KindAccountRole, audit.KindAccountDisable} {
+		if containsKind(kinds, k) {
+			t.Errorf("the trail carries a %s record for a refused act: %v", k, kinds)
+		}
 	}
 }
 

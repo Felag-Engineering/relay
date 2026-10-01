@@ -56,11 +56,15 @@ Activity scoped to that Account ([04](04-activity.md), `?account=`). Its sign-in
 made to it are on [20 — Access](20-access.md). There is no "connected" state to show: the MCP transport is stateless
 (ADR-0028), so an Account is *active recently* or not, never *connected*.
 
-Each row's write controls follow the form-control rule in `00-foundations.md`: the role change
-(select, password, **Set role**) sits on one line and the state change (**Disable**, or password and
-**Enable**) on the line beneath it. Granting buttons are filled and sit beside the password they
-spend; **Disable** and **Revoke** are outlined and quiet, never red and never the heaviest control
-in the row. Every control keeps its visible label.
+The list is read-only. Selecting an Account opens its panel, which holds its role and state
+controls above its API Tokens, following the form-control rule in `00-foundations.md`. A role
+change is split by what it does to authority: **Raise role** (the roles above the current one,
+with the password, filled) and **Lower role** (the roles below it, no password, outlined). Each
+select shows the Account's current role, preselected and not submittable, so nothing changes
+without an explicit choice; the server refuses a missing or unchanged role. The state change is as
+before: **Disable** is outlined; the password and **Enable** are filled. Granting buttons sit beside
+the password they spend; **Disable**, **Lower role** and **Revoke** are outlined and quiet, never
+red. Every control keeps its visible label.
 
 Machine Accounts are first-class, not a footnote. On a fleet driven by an AI-agent, the busiest
 principal in the system is a machine Account, and treating it as an edge case is how it ends up
@@ -112,7 +116,11 @@ authenticates nowhere; re-enabling is a privilege-granting act and takes step-up
 
 ## States
 
-- **Self** — an Account cannot change its own role or delete itself. Say why; do not hide it.
+- **Self** — an Account cannot change its own role or disable itself. On the signed-in Account's
+  own panel no role or state control is offered: the panel states the role and state and says why
+  in place of the controls, never omitting them silently. The capability layer refuses a self role
+  change or self-disable, and would refuse a hand-built request too. Its API Tokens stay
+  manageable.
 - **Last admin** — refuse to remove the final `admin`, explicitly.
 - **`viewer`** — does not see this screen at all. Owner decision, `2026-09-19`: a `viewer` sees
   the fleet, not administrative settings. The route is not mounted below `admin`, so it answers

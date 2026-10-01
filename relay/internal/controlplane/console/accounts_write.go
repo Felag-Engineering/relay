@@ -58,7 +58,8 @@ package console
 //     a viewer to operator RAISE with no step-up. The cap is on the ceiling,
 //     not on the direction.
 //   - It can NEVER be used for self-elevation. capability.ErrSelfTargeted
-//     refuses p.AccountID == id unconditionally, before the store is touched —
+//     (decided by capability.SelfTargeted) refuses a role change on the
+//     caller's own Account unconditionally, before the store is touched —
 //     and self-elevation by a hijacked admin session is precisely ADR-0009's
 //     named risk. This race does not reach it.
 //   - The last-admin guard does NOT help here. It is a count over enabled
@@ -66,7 +67,9 @@ package console
 //     because a reader will otherwise assume it contains this.
 //
 // What IS in place: roleChangeCouldGrant fails closed on an invalid role on
-// either side, and a FAILED read demands step-up rather than skipping it.
+// either side, and a FAILED read demands step-up rather than skipping it. The
+// unchanged-role refusal rides the same read and, like the raise/lower
+// decision, does not apply when the read fails.
 //
 // # The mint response, and the one field a secret may occupy
 //
@@ -282,6 +285,10 @@ func stepUpProved(d Deps, w http.ResponseWriter, r *http.Request, pg Page, undon
 // increase what the target Account may do. It is the only place this package
 // decides whether a role change is a raise, and it decides it about the TARGET
 // Account's own old and new role — never about the caller's.
+//
+// accounts.go also calls it at RENDER time, to split the offered targets into
+// Raise and Lower. That is presentation only: the handler re-decides from the
+// stored role, so a tampered form cannot skip step-up.
 //
 // Written to FAIL CLOSED. accounts.Role.AtLeast returns false when EITHER side
 // is invalid, so the natural spelling — `to.AtLeast(from) && to != from` —
@@ -519,6 +526,12 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 // comes from d.Accounts.Account — see this file's header for the bounded
 // TOCTOU residual that read carries, and roleChangeCouldGrant for why an
 // unknown role on either side is treated as a raise.
+//
+// A submission of the role the target already holds is refused here, writing
+// nothing and auditing nothing. That is Console-only narrowing: the Control API
+// still accepts, and audits, a no-op role change. A self-targeted request
+// skips this check and falls through, so the capability layer refuses AND
+// audits it (ErrSelfTargeted).
 func handleSetAccountRole(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		caller, pg, ok := writePrelude(d, w, r, "Accounts")
@@ -545,6 +558,10 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 		target, readErr := d.Accounts.Account(r.Context(), caller, id)
 		couldGrant := true
 		if readErr == nil {
+			if !capability.SelfTargeted(caller, id) && role == target.Role {
+				badRequest(w, pg, "That is already this Account's role. The role was not changed.")
+				return
+			}
 			couldGrant = roleChangeCouldGrant(target.Role, role)
 		}
 		if couldGrant && !stepUpProved(d, w, r, pg, "The role was not changed.") {

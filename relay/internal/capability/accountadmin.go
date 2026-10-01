@@ -61,6 +61,14 @@ var ErrAccountsUnavailable = errors.New("capability: account administration is n
 // refuseControl exactly like a role-floor denial.
 var ErrSelfTargeted = errors.New("capability: an account cannot change its own role or disable itself")
 
+// SelfTargeted reports whether accountID names the acting Principal itself — the one test
+// behind ErrSelfTargeted. Exported so a surface can consume the rule (for example to not offer
+// a control that would only be refused) rather than re-derive it (invariant 10). Both sides
+// must be non-empty: a Principal with no AccountID is never "self".
+func SelfTargeted(p Principal, accountID string) bool {
+	return p.AccountID != "" && p.AccountID == accountID
+}
+
 // Accounts lists every Account (#653). Authorized at ControlAccountRead;
 // records nothing on success (see this file's header).
 func (s *Service) Accounts(ctx context.Context, p Principal) ([]accounts.Account, error) {
@@ -127,7 +135,7 @@ func (s *Service) SetAccountRole(ctx context.Context, p Principal, id string, ro
 	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAccountRole); err != nil {
 		return s.refuseControl(ctx, p, err)
 	}
-	if p.AccountID != "" && p.AccountID == id {
+	if SelfTargeted(p, id) {
 		return s.refuseControl(ctx, p, ErrSelfTargeted)
 	}
 
@@ -167,7 +175,7 @@ func (s *Service) SetAccountEnabled(ctx context.Context, p Principal, id string,
 	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, act); err != nil {
 		return s.refuseControl(ctx, p, err)
 	}
-	if !enabled && p.AccountID != "" && p.AccountID == id {
+	if !enabled && SelfTargeted(p, id) {
 		return s.refuseControl(ctx, p, ErrSelfTargeted)
 	}
 

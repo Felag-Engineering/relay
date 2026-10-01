@@ -1720,7 +1720,7 @@ dl.kv dd { min-width: 0; }
  * Buttons carry the WEIGHT OF WHAT THEY DO TO AUTHORITY. .btn.grant — create
  * an Account, raise a role, re-enable, mint — is filled in the interactive
  * colour and always sits beside the password field it spends. .btn.reduce —
- * disable, revoke — is outlined and quiet. The two are told apart by fill
+ * disable, lower a role, revoke — is outlined and quiet. The two are told apart by fill
  * against outline, which survives greyscale and colour-blindness, and never by
  * hue alone. A reducing act is never red: red is failure and timeout and
  * nothing else, and a brake that looks like an alarm is one people hesitate
@@ -1753,27 +1753,30 @@ dl.kv dd { min-width: 0; }
 .btn.reduce { background: transparent; border-color: var(--border-mid); color: var(--text-primary); font-weight: var(--weight-normal); }
 .btn.reduce:hover { background: var(--bg-elevated); border-color: var(--text-muted); }
 
-/* A row's controls: one line each, bottom-aligned so a labelled field and a
- * bare button share a baseline. The Accounts "Change" cell stacks the role
- * line over the state line, so the two never interleave at any width. */
+/* A control line: one line each, bottom-aligned so a labelled field and a
+ * bare button share a baseline. The selected Account's control block stacks
+ * the Raise, Lower and state lines, so they never interleave at any width. */
 .ctlrow { display: flex; align-items: flex-end; gap: var(--space-2); }
 .ctlrow .fld { flex: none; }
 .ctlrow .fldlabel { white-space: nowrap; }
 .ctlrow input:not([type="hidden"]) { width: 100%; min-width: 11em; }
 .ctlrow select { min-width: 7.5em; }
-.acctchange { min-width: 27rem; }
 .acctchange .ctlrow + .ctlrow { margin-top: var(--space-2); }
+/* A role change cannot submit until a different role is chosen: its select is
+ * required and preselects the current role as a disabled placeholder (#830).
+ * The button reads as inactive while the form is invalid; native validation
+ * still blocks the submit and says why, so this is presentation, not the
+ * control. */
+.rolechange:invalid .btn { opacity: 0.5; }
 
 /* A standalone form: fields flow left to right and wrap WHOLE, never mid-field,
  * with the submit button on the same baseline as the last field. */
 .ctlgrid { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3) var(--space-4); margin-top: var(--space-2); }
 .ctlgrid .fld { flex: 1 1 11rem; max-width: 18rem; }
 .ctlgrid .btn { flex: none; }
-/* Below 1280px the Change cell cannot hold a role line on one row beside six
- * other columns. Fields wrap WHOLE (a label never parts from its control), the
- * cell narrows, and the table still scrolls inside .tablescroll if it must. */
+/* Below 1280px a control line cannot hold on one row. Fields wrap WHOLE (a
+ * label never parts from its control). */
 @media (max-width: 1279px) {
-  .acctchange { min-width: 16rem; }
   .ctlrow { flex-wrap: wrap; }
   .ctlrow .fldlabel { white-space: normal; }
   .ctlrow .fld { max-width: 100%; }
