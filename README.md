@@ -162,4 +162,9 @@ real-hardware proof.
 - **[docs/operations/ca-disaster-recovery.md](docs/operations/ca-disaster-recovery.md)** — CA key custody, backups, and the "burn it down" compromise runbook.
 - **[docs/operations/daemon-privilege-posture.md](docs/operations/daemon-privilege-posture.md)** — the hardened `systemd` unit and per-Operation privilege map for running relay-daemon in production.
 - **[docs/operations/version-stamping.md](docs/operations/version-stamping.md)** — what a build reports for `--version`, and how the daemon's version feeds the ADR-0014 `min-daemon-version` gate.
+- **[docs/operations/release-artifacts.md](docs/operations/release-artifacts.md)** — release artifact naming, pinning, and verify-then-install.
+- **[docs/operations/control-plane-credential.md](docs/operations/control-plane-credential.md)** — the API Token a control-plane caller presents, and why Relay's config can grant none.
+- **[docs/operations/approval-gates.md](docs/operations/approval-gates.md)** — which dispatches wait for a human before they run, and where that is configured (ADR-0027).
+- **[docs/operations/audit-output-retention.md](docs/operations/audit-output-retention.md)** — what the audit trail keeps of a Task's output: full for `mutate`, metadata-only for `read`.
+- **[docs/operations/demo-fleet.md](docs/operations/demo-fleet.md)** — the nine-Node `demo` profile of the dev fleet as a runbook: roster, beats, fault injection.
 - **[docs/deferred.md](docs/deferred.md)** — work agreed in principle and not yet specified. Each gets an ADR when picked up.
