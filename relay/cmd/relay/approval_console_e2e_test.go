@@ -160,7 +160,7 @@ func consoleSignIn(t *testing.T, client *http.Client, f *relayFixture, username,
 func TestApprovalCallout_ConsoleDecideRun(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutates, WithConfig(func(c *Config) { c.ConsoleEnabled = true }))
 
-	// The requester is a MACHINE Account — the agent side of the callout —
+	// The requester is a MACHINE Account — the AI-agent side of the callout —
 	// so the human deciding below is unambiguously a SECOND party, never the
 	// requester answering their own request.
 	requester := mintAccount(t, f, "gleipnir-prod", accounts.KindMachine, accounts.RoleAdmin)

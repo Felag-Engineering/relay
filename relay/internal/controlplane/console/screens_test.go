@@ -3185,7 +3185,7 @@ func TestAgents_PlanModeRendersAsACallNamingTheToolItPlanned(t *testing.T) {
 	}
 	// The request line: a Plan says what it WOULD have run, arguments and all.
 	if !strings.Contains(body, "unit=nginx") {
-		t.Error("a Plan row does not render the arguments the agent proposed — the request " +
+		t.Error("a Plan row does not render the arguments the AI-agent proposed — the request " +
 			"line is the whole reason plan mode is on this screen")
 	}
 	// Risk is inferred by riskOf like every other row, and a planned mutate is
