@@ -16,12 +16,12 @@ package console
 //
 // # Why a failed sign-in or step-up reconstructs nothing
 //
-// consoleauth.LoginEvent never names the Account on a failure, on purpose:
-// a trail that distinguished "unknown Account" from "wrong password" would
-// be an enumeration oracle readable by anyone with audit read access. This
-// screen does not work the distinction out from anything else either —
-// accessAttempt has exactly three answers (succeeded, failed, throttled)
-// and no fourth that says which half was wrong.
+// A failed or throttled sign-in records the typed name only when it is a
+// real Account's (D19): a name box can hold a password. This screen draws
+// what the record carries and never resolves it against the registry, so a
+// record with no typed name is drawn as "a name that is not an Account".
+// accessAttempt still has exactly three answers (succeeded, failed,
+// throttled) and no fourth that says which half was wrong.
 //
 // # Why there is no subject filter
 //
@@ -240,9 +240,14 @@ type accessRow struct {
 	HostLever string
 
 	// Asserted is f.OnBehalfOf: what was typed on a sign-in or step-up,
-	// rendered as a separate, dashed chip exactly on a failed or throttled
-	// attempt as on a successful one.
+	// rendered as a separate, dashed chip. On a failed or throttled sign-in it
+	// is present only when the name was a real Account's (D19); when absent on
+	// those kinds, NotAnAccount says so in the asserted slot.
 	Asserted string
+
+	// NotAnAccount is set only on a login_failed or login_throttled row whose
+	// record carries no asserted name (D19).
+	NotAnAccount bool
 
 	Summary string
 
@@ -280,6 +285,7 @@ func accessRowFrom(f trailFacts) accessRow {
 	} else if f.Principal == audit.PrincipalLocalHost {
 		row.HostLever = f.Principal
 	}
+	row.NotAnAccount = (f.Kind == audit.KindLoginFailed || f.Kind == audit.KindLoginThrottled) && f.OnBehalfOf == ""
 	if family == accessSignIn {
 		row.Source = f.Source
 	}
@@ -605,7 +611,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
     <div class="evbody">
       <div class="evhead">
         {{if .Actor}}{{template "trust-chip" (trust .Actor true)}}{{else if .HostLever}}<span class="dim">the Relay host</span> <code>{{.HostLever}}</code>{{else}}<span class="dim">no verified Account</span>{{end}}
-        {{with .Asserted}}{{template "trust-chip" (trust . false)}}{{end}}
+        {{with .Asserted}}{{template "trust-chip" (trust . false)}}{{else}}{{if .NotAnAccount}}<span class="dim">a name that is not an Account</span>{{end}}{{end}}
         <span class="evsum">{{.Summary}}</span>
         {{with .Attempt}}<span class="chip attempt" data-attempt="{{.}}">{{.}}</span>{{end}}
       </div>
@@ -644,10 +650,14 @@ sign-ins.</p>
 written into the record's free-text reason, which the audit query cannot filter on. The Actor filter
 matches the Account that acted.</p>
 
-<p class="gap"><b>A failed sign-in or step-up says it failed and nothing more.</b> The record does not
-say whether the Account or the password was wrong, and this screen does not work it out from anything
-else. A throttled attempt was refused before any credential was compared, so it is shown as throttled
-and is not a failure.</p>
+<p class="gap"><b>A failed sign-in shows the name typed only when it is a real Account's name.</b> Any
+other text may be a password typed into the wrong box, so it is never recorded and the row says "a name
+that is not an Account". The person signing in is never told which half was wrong. A failed step-up
+always names the session's own Account. A throttled attempt was refused before any credential was
+compared, so it is shown as throttled and is not a failure. Records written before this rule was
+introduced keep whatever was typed, so on an older failed sign-in the name shown is only what the
+caller entered: it may not be an Account, and it may be text typed into the wrong box. An older record
+with no name also reads "a name that is not an Account".</p>
 
 <p class="gap"><b>Every Refresh is an audited read</b>, like every read made from this Console.</p>
 
