@@ -202,7 +202,7 @@ fn raw_exec_verdicts_match_the_web_db_split() {
     }
 
     // There is deliberately no `stop` subcommand at all, and no Policy allow
-    // for one — the agent must be able to repair the fleet and never to
+    // for one — the AI-agent must be able to repair the fleet and never to
     // break it (the fault is injected out of band by #622).
     for policy in [&fx.policy_web, &fx.policy_db] {
         let (code, out) = policy_check(&[
@@ -624,7 +624,7 @@ fn the_script_has_no_stop_subcommand() {
 
     assert!(
         !script.contains("stop)"),
-        "dev-fleet-service gained a `stop)` case arm; the agent must be able to \
+        "dev-fleet-service gained a `stop)` case arm; the AI-agent must be able to \
          repair the fleet and never to break it (the fault is injected out of \
          band by #622) — if `stop` is now intentional, the Policy allow needs \
          updating too, in both policy.web.toml and policy.db.toml"
