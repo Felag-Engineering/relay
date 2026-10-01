@@ -268,7 +268,7 @@ func registerApprovalTools(srv *sdkmcp.Server, decider ApprovalDecider) {
 // what to do about it.
 //
 // The domain's errors are deliberately not collapsed into one "refused": an
-// agent that reads "already decided" should stop, one that reads "plan changed"
+// AI-agent that reads "already decided" should stop, one that reads "plan changed"
 // should re-read the queue, and one that reads "requires out-of-band" must send
 // a human elsewhere entirely. Same refusal, three different next actions.
 func renderApprovalError(err error) error {

@@ -146,7 +146,7 @@ func ParseSelector(s string) (Selector, error) {
 			// cannot work. Surfaces render this string verbatim (the Console's
 			// fallback lead, MCP's "invalid selector" wrap, the Control API's
 			// problem detail), so a stale list here reaches an operator and an
-			// agent alike.
+			// AI-agent alike.
 			return Selector{}, fmt.Errorf(
 				"capability: selector term %q has no node:, relay:, or state: prefix", term)
 		}
