@@ -159,7 +159,7 @@ func ParseRiskClassName(s string) jobs.RiskClass {
 //
 // It is built HERE, from the Relay's own resolved state, and never from
 // anything the requesting AI-agent supplied as prose. That is the structural
-// answer to the approval-view fidelity gap: the agent chooses the Action, but
+// answer to the approval-view fidelity gap: the AI-agent chooses the Action, but
 // it does not get to choose the words describing the Action, so it cannot
 // truncate, soften, or misrepresent what it is asking for (ADR-0027).
 type PlanSummary struct {

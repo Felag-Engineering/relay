@@ -118,7 +118,7 @@ func (m *sqliteMCPTasks) RecordStatus(ctx context.Context, id string, status mcp
 // alone written. ADR-0028 is explicit: a cancel arrives over the MCP session,
 // which is the AI's own channel, and if it could act on the approval object the
 // requesting session would hold a lever over a decision reserved for
-// out-of-band humans. An agent must not be able to withdraw a request the
+// out-of-band humans. An AI-agent must not be able to withdraw a request the
 // moment it senses a denial coming, erasing the evidence a human was about to
 // rule on.
 //

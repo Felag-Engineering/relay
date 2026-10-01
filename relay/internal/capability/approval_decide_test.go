@@ -402,7 +402,7 @@ func TestNotifierFiresOncePerPark(t *testing.T) {
 // means a Request was CREATED. Re-driving the same Plan is how a caller polls
 // while waiting, so N attempts at one parked Plan must leave exactly one
 // approval_requested record — the polls land under approval_pending_observed,
-// naming the same request, so an agent hammering a parked request stays
+// naming the same request, so an AI-agent hammering a parked request stays
 // visible without inflating the count of asks.
 func TestRedriveAuditsPendingObservedNotRequested(t *testing.T) {
 	reg := registry.NewInMemory()

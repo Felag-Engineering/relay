@@ -196,7 +196,7 @@ func (stubOpsLister) Operations() []opvocab.Descriptor { return opvocab.Operatio
 // The defect these guard: an unknown or misspelled arg name was passed
 // straight through as an opaque map. A misspelled REQUIRED arg then defaulted
 // to empty and the daemon's rejection surfaced as outcome=denied_by_policy —
-// which the tool description tells the agent to answer with describe_node +
+// which the tool description tells the AI-agent to answer with describe_node +
 // narrow + retry, a loop a malformed call can never exit. These prove the
 // malformed call now fails fast, before dispatch, with a legible error.
 
@@ -376,7 +376,7 @@ func TestPendingApproval_IsOmittedOnANormalDispatch(t *testing.T) {
 
 // TestPendingApproval_CarriesNoWayToApprove is the structural half of
 // ADR-0027 restated at the wire: the parked result points a HUMAN at the
-// authenticated Control API endpoint and gives the agent nothing it could use
+// authenticated Control API endpoint and gives the AI-agent nothing it could use
 // to answer for itself. The complementary guard is no_decision_test.go, which
 // stops this package from ever gaining a decision path at all.
 func TestPendingApproval_CarriesNoWayToApprove(t *testing.T) {
@@ -389,7 +389,7 @@ func TestPendingApproval_CarriesNoWayToApprove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	// A token, credential, or approve-flag reaching the agent's channel would
+	// A token, credential, or approve-flag reaching the AI-agent's channel would
 	// hand the requester the answer to its own request.
 	for _, forbidden := range []string{"token", "credential", "secret", "\"approve\""} {
 		if strings.Contains(strings.ToLower(string(b)), forbidden) {

@@ -251,7 +251,7 @@ func TestResolveTaskRefusesAnotherAccount(t *testing.T) {
 
 // TestCancelParkedTaskLeavesTheApprovalPending is the security boundary of this
 // issue. A cancel arrives over the AI's own session; if it could withdraw the
-// pending approval, an agent could yank a request back the moment it sensed a
+// pending approval, an AI-agent could yank a request back the moment it sensed a
 // denial coming, erasing the evidence a human was about to rule on.
 func TestCancelParkedTaskLeavesTheApprovalPending(t *testing.T) {
 	s, approvals, _, disp, _ := taskFixture(t)

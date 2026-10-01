@@ -107,7 +107,7 @@ type ApprovalAuthorizer interface {
 }
 
 // ApprovalNotice is what an ApprovalNotifier is told about a freshly parked
-// dispatch. Every field is Relay-authored (ADR-0027): the requesting agent
+// dispatch. Every field is Relay-authored (ADR-0027): the requesting AI-agent
 // supplies the Action, never the words describing it.
 //
 // It carries no credential, no token, and no captured output. Summary DOES

@@ -323,7 +323,7 @@ func (g Grant) Progress() string {
 // — the text an approver reads before agreeing to it.
 //
 // Like Summarize for a single Plan, this is written HERE from the Relay's own
-// state and never from anything the requester supplied as prose. The agent
+// state and never from anything the requester supplied as prose. The AI-agent
 // proposes the scope; it does not get to choose the words describing it, so it
 // cannot make a broad grant read as a narrow one (ADR-0027).
 func SummarizeScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string {

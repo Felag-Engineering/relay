@@ -264,7 +264,7 @@ func registerApprovalTools(srv *sdkmcp.Server, decider ApprovalDecider) {
 	})
 }
 
-// renderApprovalError maps a decision refusal to a message that tells the agent
+// renderApprovalError maps a decision refusal to a message that tells the AI-agent
 // what to do about it.
 //
 // The domain's errors are deliberately not collapsed into one "refused": an

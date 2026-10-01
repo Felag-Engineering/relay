@@ -69,7 +69,7 @@ var (
 	// a Request it made itself.
 	//
 	// This is ADR-0027's confirmation ladder made structural: rung 2
-	// (self-confirmation) is HUMAN REQUESTERS ONLY, because an agent confirming
+	// (self-confirmation) is HUMAN REQUESTERS ONLY, because an AI-agent confirming
 	// its own proposal is not a confirmation — it is the same actor answering
 	// twice. So a machine requester's minimum rung is 3, and it is enforced
 	// here rather than left to `requester_allowed`: that knob is operator

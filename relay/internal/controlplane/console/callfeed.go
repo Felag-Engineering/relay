@@ -22,7 +22,7 @@ import (
 // dot and nothing else, so the header's "active" claim was never enforced — a
 // page of nothing but stale calls listed every Account with an inactive dot
 // rather than listing none. Fifteen minutes, per spec 04, Who is active — long
-// enough that an agent thinking between calls does not blink out, short enough
+// enough that an AI-agent thinking between calls does not blink out, short enough
 // that "active" means something.
 const activeWindow = 15 * time.Minute
 
