@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -904,6 +905,49 @@ func TestConsole_StylesheetIsActuallyServed(t *testing.T) {
 	page := f.do(t, httptest.NewRequest(http.MethodGet, LoginPath, nil)).Body.String()
 	if !strings.Contains(page, `href="/console/assets/console.css"`) {
 		t.Error("the sign-in page does not link the stylesheet")
+	}
+}
+
+// TestConsole_BrandAssetsAreServedAndCurrent guards the wordmark and favicon
+// the same way TestConsole_StylesheetIsActuallyServed guards the stylesheet:
+// by the bytes served, not the status, because a missing image is a broken
+// icon in the corner rather than a failure anyone sees in a log.
+//
+// It also pins the Console's copies to docs/brand/, the source of truth. The
+// Console must serve its own copies (the content security policy admits images
+// only from this origin, and go:embed cannot reach outside the package), and a
+// copy nobody checks is a copy that drifts.
+func TestConsole_BrandAssetsAreServedAndCurrent(t *testing.T) {
+	f := newLoginFixture(t)
+
+	for _, name := range []string{"relay-icon.svg", "relay-wordmark-light.svg", "relay-wordmark-dark.svg"} {
+		rec := f.do(t, httptest.NewRequest(http.MethodGet, "/console/assets/brand/"+name, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200", name, rec.Code)
+		}
+		want, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "docs", "brand", name))
+		if err != nil {
+			t.Fatalf("read docs/brand/%s: %v", name, err)
+		}
+		if rec.Body.String() != string(want) {
+			t.Errorf("the Console's assets/brand/%s differs from docs/brand/%s; copy it across", name, name)
+		}
+	}
+
+	// And both shells point at them: the sign-in page here, the layout below.
+	page := f.do(t, httptest.NewRequest(http.MethodGet, LoginPath, nil)).Body.String()
+	shell := httptest.NewRecorder()
+	Render(shell, Page{Title: "t"})
+	for where, body := range map[string]string{"sign-in page": page, "layout": shell.Body.String()} {
+		for _, ref := range []string{
+			`rel="icon" type="image/svg+xml" href="/console/assets/brand/relay-icon.svg"`,
+			`srcset="/console/assets/brand/relay-wordmark-light.svg"`,
+			`src="/console/assets/brand/relay-wordmark-dark.svg" alt="Relay"`,
+		} {
+			if !strings.Contains(body, ref) {
+				t.Errorf("the %s does not carry %s", where, ref)
+			}
+		}
 	}
 }
 

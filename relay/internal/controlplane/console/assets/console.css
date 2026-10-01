@@ -367,6 +367,18 @@ code, pre, .mono { font-family: var(--font-mono); }
   letter-spacing: -0.02em;
   color: var(--text-primary);
 }
+/* The wordmark is an image (assets/brand/, mirrored from docs/brand/), picked
+ * by the same prefers-color-scheme signal as the palette: the <picture> in the
+ * markup serves the light variant under `light` and the dark one otherwise.
+ * Its teal cursor is brand, inside the image, and is not one of the six
+ * meanings above. */
+.brand img {
+  display: inline-block;
+  height: var(--space-5);
+  width: auto;
+  vertical-align: text-bottom;
+}
+.loginbox .brand img { height: var(--space-8); }
 .brand span {
   font-size: var(--text-2xs);
   letter-spacing: 0.14em;

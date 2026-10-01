@@ -229,6 +229,7 @@ redefines one; if a task appears to require one, stop and flag it.
 /docs/adr/           architecture decision records — the *why*.
 /docs/agents/        per-repo configuration agent skills read (tracker, labels, domain rules).
 /docs/api/           Control API reference and OpenAPI surface.
+/docs/brand/         the relay_ wordmark and icon (SVG + PNG) and how to use them.
 /docs/design/        console/ is the Console's live per-screen specification, cited from source;
                      the rest is pre-ADR design for work not yet decided.
 /docs/operations/    operator-facing runbooks: install, enrollment, upgrades, recovery, demo fleet.

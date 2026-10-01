@@ -1,5 +1,12 @@
 # Relay
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/relay-wordmark-dark.svg">
+    <img src="docs/brand/relay-wordmark-light.svg" alt="Relay" width="360">
+  </picture>
+</p>
+
 A fleet-administration control plane. A lightweight, non-AI daemon (the **relay-daemon**)
 runs on every managed Linux server, dials home to a central **Relay**, and holds a
 persistent connection open. Through that connection the Relay runs typed administrative

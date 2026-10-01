@@ -119,12 +119,13 @@ var layoutTmpl = template.Must(template.New("layout").Parse(`<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} &mdash; Relay Console</title>
 <link rel="stylesheet" href="/console/assets/console.css">
+<link rel="icon" type="image/svg+xml" href="/console/assets/brand/relay-icon.svg">
 </head>
 <body hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'>
 <a class="skiplink" href="#content">Skip to content</a>
 <div class="app">
   {{if not .Focus}}<aside class="nav">
-    <div class="brand"><b>Relay</b> <span>console</span></div>
+    <div class="brand"><picture><source media="(prefers-color-scheme: light)" srcset="/console/assets/brand/relay-wordmark-light.svg"><img src="/console/assets/brand/relay-wordmark-dark.svg" alt="Relay"></picture> <span>console</span></div>
     <nav class="navgroups" aria-label="Console">
     {{range .Nav}}
     <h2 class="navsec" id="navsec-{{.Slug}}">{{.Group}}</h2>
