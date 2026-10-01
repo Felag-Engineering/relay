@@ -308,8 +308,8 @@ func TestAccess_AnAdminAnswersWhoSignedInFailedAndChangedAnAccount(t *testing.T)
 			if strings.Contains(a, `data-trust="verified"`) {
 				t.Errorf("a host-lever row carries a verified chip — no Account's credential proves root on the host:\n%s", a)
 			}
-			if strings.Contains(a, "no Account named") {
-				t.Errorf("a host-lever row says \"no Account named\", which reads as a failed sign-in:\n%s", a)
+			if strings.Contains(a, "no verified Account") {
+				t.Errorf("a host-lever row says \"no verified Account\", which reads as a failed sign-in:\n%s", a)
 			}
 			if !strings.Contains(a, "the Relay host") {
 				t.Errorf("a host-lever row does not name the Relay host:\n%s", a)
@@ -333,8 +333,8 @@ func TestAccess_AnAdminAnswersWhoSignedInFailedAndChangedAnAccount(t *testing.T)
 	if strings.Contains(failed, `data-trust="verified"`) {
 		t.Error("a login_failed row carries a verified chip — a failed attempt names no Account")
 	}
-	if !strings.Contains(failed, "no Account named") {
-		t.Errorf("a login_failed row does not say \"no Account named\":\n%s", failed)
+	if !strings.Contains(failed, "no verified Account") {
+		t.Errorf("a login_failed row does not say \"no verified Account\":\n%s", failed)
 	}
 
 	// The window and the explicit range both reach the lane.
@@ -869,7 +869,7 @@ func TestAccess_StepUpFailureKindsRenderDistinctly(t *testing.T) {
 // TestAccess_AHostLeverRowNamesTheHost pins how a record with no verified
 // Account is drawn: an act by root on the Relay host names the host, and only
 // the local-host principal earns that. Every other unverified row keeps "no
-// Account named".
+// verified Account".
 func TestAccess_AHostLeverRowNamesTheHost(t *testing.T) {
 	q := &fakeQueries{rows: []capability.AuditRow{
 		{Kind: audit.KindAPITokenMint, Principal: audit.PrincipalLocalHost, Timestamp: testNow,
@@ -885,12 +885,12 @@ func TestAccess_AHostLeverRowNamesTheHost(t *testing.T) {
 		if !strings.Contains(a, "the Relay host") || !strings.Contains(a, "<code>local-host</code>") {
 			t.Errorf("the %q row does not name the Relay host:\n%s", needle, a)
 		}
-		if strings.Contains(a, `data-trust="verified"`) || strings.Contains(a, "no Account named") {
-			t.Errorf("the %q row is drawn as a verified or unnamed actor:\n%s", needle, a)
+		if strings.Contains(a, `data-trust="verified"`) || strings.Contains(a, "no verified Account") {
+			t.Errorf("the %q row is drawn as a verified or unverified actor:\n%s", needle, a)
 		}
 	}
 	failed := accessArticleContaining(t, content, "failed a Console sign-in")
-	if !strings.Contains(failed, "no Account named") || strings.Contains(failed, "the Relay host") {
-		t.Errorf("a login_failed row with no principal must keep \"no Account named\":\n%s", failed)
+	if !strings.Contains(failed, "no verified Account") || strings.Contains(failed, "the Relay host") {
+		t.Errorf("a login_failed row with no principal must keep \"no verified Account\":\n%s", failed)
 	}
 }

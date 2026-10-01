@@ -228,7 +228,7 @@ type accessRow struct {
 	// Actor is set ONLY when f.VerifiedAccountID != "" — principalText(f),
 	// drawn as a verified chip. A record with no verified Account (every
 	// failed or throttled sign-in and step-up, by design) leaves this empty
-	// and the template draws a dim "no Account named" instead: a bare
+	// and the template draws a dim "no verified Account" instead: a bare
 	// Principal string is never promoted to a verified chip. There is no
 	// separate Verified flag — Actor != "" already means verified.
 	Actor string
@@ -604,7 +604,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
     <div class="evwhen"><time datetime="{{.When}}">{{.When}}</time><span class="evkind">{{.EventKind}}</span></div>
     <div class="evbody">
       <div class="evhead">
-        {{if .Actor}}{{template "trust-chip" (trust .Actor true)}}{{else if .HostLever}}<span class="dim">the Relay host</span> <code>{{.HostLever}}</code>{{else}}<span class="dim">no Account named</span>{{end}}
+        {{if .Actor}}{{template "trust-chip" (trust .Actor true)}}{{else if .HostLever}}<span class="dim">the Relay host</span> <code>{{.HostLever}}</code>{{else}}<span class="dim">no verified Account</span>{{end}}
         {{with .Asserted}}{{template "trust-chip" (trust . false)}}{{end}}
         <span class="evsum">{{.Summary}}</span>
         {{with .Attempt}}<span class="chip attempt" data-attempt="{{.}}">{{.}}</span>{{end}}
