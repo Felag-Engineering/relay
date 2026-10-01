@@ -58,10 +58,11 @@ package console
 // where the boundary falls, never an inventory of editable values.
 //
 // The write half landed in #655 (accounts_write.go), so this file now renders
-// forms as well as rows. What stays absent is a role or PERMISSION editor of
-// any kind — the three roles are ADR-0010's closed set and a custom-permission
-// builder is a second authorization model — and any Relay configuration
-// whatsoever. The one place a minted credential appears is
+// forms as well as rows. The forms for an existing Account render only in the
+// SELECTED Account's panel; the list is read-only (#830). What stays absent is
+// a role or PERMISSION editor of any kind — the three roles are ADR-0010's
+// closed set and a custom-permission builder is a second authorization model —
+// and any Relay configuration whatsoever. The one place a minted credential appears is
 // accounts_write.go's mint response, never this screen.
 
 import (
@@ -103,6 +104,10 @@ type accountsView struct {
 
 	Tokens           []tokenRow
 	TokensUnreadable bool
+
+	// Change is the selected Account's role and state controls (#830). Nil
+	// when nothing is selected or the write half is not wired.
+	Change *accountChange
 
 	// SelectedMintAction is the selected Account's mint form action (#655),
 	// empty when nothing is selected or the write half is not wired. The
@@ -170,23 +175,38 @@ type accountRow struct {
 	// missing. Current marks the Account the token panel is about.
 	Machine bool
 	Current bool
+}
 
-	// The per-row write actions (#655). The ACTIONS, not the raw id, so an
-	// Account id never lands in a rendered form VALUE — the id is in the
-	// path, escaped once by the builder that made it. Empty when the write
-	// half is not wired.
+// accountChange is the selected Account's role and state controls (#830). Built
+// only for the SELECTED Account when the write half is wired; the list carries
+// none.
+//
+// The ACTIONS, not the raw id, so an Account id never lands in a rendered form
+// VALUE — the id is in the path, escaped once by the builder that made it.
+type accountChange struct {
+	// Role is the held role, shown as the disabled "(current)" option.
+	Role string
+	// State is the display word for the Account's state.
+	State string
+	// Enabled decides which form renders, Disable or Enable. The asymmetry
+	// (Disable needs no password, Enable does) is in the markup, not here.
+	Enabled       bool
 	RoleAction    string
 	EnabledAction string
 
-	// Enabled drives which of the two state controls renders: an enabled row
-	// gets a Disable button with no password field, a disabled row gets an
-	// Enable form with a required one. The asymmetry is in the markup, not
-	// only in the handler.
-	Enabled bool
+	// RaiseRoles are the roles above the held one (Raise role: password,
+	// .btn.grant); LowerRoles the roles below it (Lower role: no password,
+	// .btn.reduce). Presentation only: handleSetAccountRole re-decides raise
+	// vs lower from the stored role.
+	RaiseRoles []string
+	LowerRoles []string
 
-	// OtherRoles is the two roles this Account does not hold, so the per-row
-	// role select offers a change and never a no-op.
-	OtherRoles []string
+	// Self is capability.SelfTargeted(caller, selected.ID): the capability layer
+	// would refuse every change here, so no control renders and SelfNote says
+	// why (spec 15 States, "Say why"). Narrowing only: the refusal stays the
+	// capability layer's, and a hand-built POST is still refused there.
+	Self     bool
+	SelfNote string // = selfTargetRefusal
 }
 
 // tokenRow is one API Token, as far as a screen is ever allowed to see one.
@@ -363,15 +383,9 @@ func handleAccounts(d Deps) http.HandlerFunc {
 				// links to the wrong Account (#467).
 				Href:         "/console/accounts?" + url.Values{"account": {a.Name}}.Encode(),
 				LastCallHref: "/console/activity?" + url.Values{"account": {a.ID}}.Encode(),
-				Enabled:      a.Enabled,
 			}
 			if row.Machine {
 				row.LastCallAt = lastCallByAccountID[a.ID]
-			}
-			if v.Write != nil {
-				row.RoleAction = setAccountRoleAction(a.ID)
-				row.EnabledAction = setAccountEnabledAction(a.ID)
-				row.OtherRoles = rolesOtherThan(a.Role)
 			}
 			v.Accounts = append(v.Accounts, row)
 
@@ -383,6 +397,18 @@ func handleAccounts(d Deps) http.HandlerFunc {
 		if v.SelectedFound {
 			if v.Write != nil {
 				v.SelectedMintAction = mintAPITokenAction(selected.ID)
+				raise, lower := roleTargets(selected.Role)
+				v.Change = &accountChange{
+					Role:          string(selected.Role),
+					State:         accountState(selected.Enabled),
+					Enabled:       selected.Enabled,
+					RoleAction:    setAccountRoleAction(selected.ID),
+					EnabledAction: setAccountEnabledAction(selected.ID),
+					RaiseRoles:    raise,
+					LowerRoles:    lower,
+					Self:          capability.SelfTargeted(caller, selected.ID),
+					SelfNote:      selfTargetRefusal,
+				}
 			}
 			tokens, tokErr := d.Accounts.APITokens(r.Context(), caller, selected.ID)
 			switch {
@@ -432,16 +458,24 @@ func allRoleNames() []string {
 	return []string{string(accounts.RoleViewer), string(accounts.RoleOperator), string(accounts.RoleAdmin)}
 }
 
-// rolesOtherThan is the closed role set minus the one held, so a per-row role
-// select offers a change and never a no-op.
-func rolesOtherThan(held accounts.Role) []string {
-	var out []string
+// roleTargets splits the closed role set, minus the one held, into the roles a
+// change would RAISE to and the roles it would LOWER to. Presentation only —
+// it decides which form offers which target, and handleSetAccountRole
+// re-decides from the stored role. It reuses roleChangeCouldGrant, so an
+// invalid held role fails closed: every target lands in raise and costs a
+// password.
+func roleTargets(held accounts.Role) (raise, lower []string) {
 	for _, r := range allRoleNames() {
-		if r != string(held) {
-			out = append(out, r)
+		if r == string(held) {
+			continue
+		}
+		if roleChangeCouldGrant(held, accounts.Role(r)) {
+			raise = append(raise, r)
+		} else {
+			lower = append(lower, r)
 		}
 	}
-	return out
+	return raise, lower
 }
 
 // ttlOptions projects the mint form's closed lifetime vocabulary
@@ -478,12 +512,13 @@ var accountsTmpl = newScreen("accounts", `
 authenticate as one.{{if .Write}} Every act on this screen that could increase what a principal may
 do &mdash; creating an Account, raising a role, re-enabling a disabled one, minting a token &mdash;
 costs your password in the same request. Disabling, lowering a role and revoking a token only ever
-reduce, so they do not.{{else}} Reading this page changes nothing: creating, disabling and re-roling
+reduce, so they do not. Select an Account to change its role or state, or to manage its API
+Tokens.{{else}} Reading this page changes nothing: creating, disabling and re-roling
 an Account, and minting or revoking a token, are not wired into this Relay's Console.{{end}}</p>
 
 <div class="tablescroll">
 <table class="rows">
-  <thead><tr><th scope="col">Account</th><th scope="col">Kind</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">Last authentication</th><th scope="col">Last tool call</th>{{if .Write}}<th scope="col">Change</th>{{end}}</tr></thead>
+  <thead><tr><th scope="col">Account</th><th scope="col">Kind</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">Last authentication</th><th scope="col">Last tool call</th></tr></thead>
   <tbody>
   {{range .Accounts}}
     <tr>
@@ -493,38 +528,6 @@ an Account, and minting or revoking a token, are not wired into this Relay's Con
       <td>{{.State}}</td>
       <td>{{stamp .LastAuthAt}}</td>
       <td>{{if .Machine}}{{if .LastCallAt.IsZero}}<span class="dim">no tool call in the last {{$.CallPage}} recorded calls</span>{{else}}<a href="{{.LastCallHref}}">{{stamp .LastCallAt}}</a>{{end}}{{end}}</td>
-      {{if $.Write}}
-      <td class="acctchange">
-        <form class="ctlform ctlrow" method="post" action="{{.RoleAction}}">
-          <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
-          <label class="fld"><span class="fldlabel">Role</span>
-            <select name="role">
-              {{range .OtherRoles}}<option value="{{.}}">{{.}}</option>{{end}}
-            </select>
-          </label>
-          <label class="fld"><span class="fldlabel">Password &mdash; required to raise a role</span>
-            <input name="password" type="password" autocomplete="current-password">
-          </label>
-          <button class="btn grant" type="submit">Set role</button>
-        </form>
-        {{if .Enabled}}
-        <form class="ctlform ctlrow" method="post" action="{{.EnabledAction}}">
-          <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
-          <input type="hidden" name="enabled" value="false">
-          <button class="btn reduce" type="submit">Disable</button>
-        </form>
-        {{else}}
-        <form class="ctlform ctlrow" method="post" action="{{.EnabledAction}}">
-          <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
-          <input type="hidden" name="enabled" value="true">
-          <label class="fld"><span class="fldlabel">Password &mdash; required to re-enable</span>
-            <input name="password" type="password" autocomplete="current-password" required>
-          </label>
-          <button class="btn grant" type="submit">Enable</button>
-        </form>
-        {{end}}
-      </td>
-      {{end}}
     </tr>
   {{end}}
   </tbody>
@@ -570,6 +573,61 @@ the last {{.CallPage}} recorded calls only, so an Account that called earlier th
 absent from the window rather than as never having called.</p>
 
 {{if .Selected}}
+{{with .Change}}{{$c := .}}
+<section class="panel">
+  <h3>Role and state &mdash; {{$.SelectedName}}</h3>
+  <p>Role <b>{{.Role}}</b>, {{.State}}.</p>
+  {{if .Self}}
+  <p class="note">This is the Account you are signed in as. {{.SelfNote}}</p>
+  {{else}}
+  <div class="acctchange">
+    {{with .RaiseRoles}}
+    <form class="ctlform ctlrow rolechange" method="post" action="{{$c.RoleAction}}" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
+      <label class="fld"><span class="fldlabel">Raise role to</span>
+        <select name="role" required>
+          <option value="" selected disabled>{{$c.Role}} (current)</option>
+          {{range .}}<option value="{{.}}">{{.}}</option>{{end}}
+        </select>
+      </label>
+      <label class="fld"><span class="fldlabel">Your password &mdash; required to raise a role</span>
+        <input name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <button class="btn grant" type="submit">Raise role</button>
+    </form>
+    {{end}}
+    {{with .LowerRoles}}
+    <form class="ctlform ctlrow rolechange" method="post" action="{{$c.RoleAction}}" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
+      <label class="fld"><span class="fldlabel">Lower role to</span>
+        <select name="role" required>
+          <option value="" selected disabled>{{$c.Role}} (current)</option>
+          {{range .}}<option value="{{.}}">{{.}}</option>{{end}}
+        </select>
+      </label>
+      <button class="btn reduce" type="submit">Lower role</button>
+    </form>
+    {{end}}
+    {{if $c.Enabled}}
+    <form class="ctlform ctlrow" method="post" action="{{$c.EnabledAction}}">
+      <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
+      <input type="hidden" name="enabled" value="false">
+      <button class="btn reduce" type="submit">Disable</button>
+    </form>
+    {{else}}
+    <form class="ctlform ctlrow" method="post" action="{{$c.EnabledAction}}">
+      <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
+      <input type="hidden" name="enabled" value="true">
+      <label class="fld"><span class="fldlabel">Password &mdash; required to re-enable</span>
+        <input name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <button class="btn grant" type="submit">Enable</button>
+    </form>
+    {{end}}
+  </div>
+  {{end}}
+</section>
+{{end}}
 <section class="panel">
   {{if .SelectedFound}}
   <h3>API Tokens &mdash; {{.SelectedName}}</h3>

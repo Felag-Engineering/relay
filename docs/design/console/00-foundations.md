@@ -306,7 +306,8 @@ every colour-vision deficiency — and by the password field that only a grantin
 never by hue alone. A reducing act is **never red** (red is failure and timeout, and nothing else)
 and never the most prominent control in its row: an emergency brake that looks like an alarm is
 one people hesitate over, and one that outweighs the act beside it teaches the wrong reflex. A form
-that can both grant and reduce — setting a role, which raises or lowers — takes the granting
+that can both grant and reduce — setting a role, which raises or lowers (the Accounts screen
+splits it into Raise and Lower instead, spec 15) — takes the granting
 weight, because it carries the password field and may spend it. Where two answers to one question
 must not be weighted (Approve and Deny, spec 08), both take one neutral treatment and this table
 does not apply.

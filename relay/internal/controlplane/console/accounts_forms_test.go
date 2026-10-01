@@ -21,7 +21,7 @@ var (
 
 // accountsFormsBodies renders the screen's content twice with the write half
 // wired: once with the machine Account that holds a live token selected (role,
-// Disable, create, mint and Revoke forms) and once with the disabled Account
+// Raise, Lower, Disable, create, mint and Revoke forms) and once with the disabled Account
 // selected (its Enable form), so every write form is covered between them.
 func accountsFormsBodies(t *testing.T) []string {
 	t.Helper()
@@ -47,11 +47,13 @@ func TestAccountsForms_EveryWriteFormTakesTheSharedControlStyle(t *testing.T) {
 
 // TestAccountsForms_ButtonWeightFollowsWhatTheActDoesToAuthority is the
 // foundations table, as markup: the granting acts are filled (.btn.grant) and
-// the reducing ones quiet (.btn.reduce). Set role takes the granting weight
-// because it may raise, and carries the password field to prove it.
+// the reducing ones quiet (.btn.reduce). The role change is split so no form
+// both grants and reduces: Raise role is filled and carries the password field
+// to prove it, Lower role is outlined and carries none.
 func TestAccountsForms_ButtonWeightFollowsWhatTheActDoesToAuthority(t *testing.T) {
 	want := map[string]string{
-		"Set role":       "btn grant",
+		"Raise role":     "btn grant",
+		"Lower role":     "btn reduce",
 		"Enable":         "btn grant",
 		"Create Account": "btn grant",
 		"Mint API Token": "btn grant",
@@ -160,6 +162,10 @@ func TestAccountsForms_TheStylesheetWeighsGrantAboveReduce(t *testing.T) {
 		if strings.Contains(d, "--failure") || strings.Contains(d, "--color-red") {
 			t.Errorf("%s borrows the failure colour — red is failure and timeout and nothing else: %q", sel, d)
 		}
+	}
+	invalid := decls(".rolechange:invalid .btn")
+	if !strings.Contains(invalid, "opacity") {
+		t.Errorf("a role-change form that cannot submit yet does not read as inactive: %q", invalid)
 	}
 	focus := decls(".ctlform input:focus, .ctlform select:focus")
 	if !strings.Contains(focus, "outline: 2px solid var(--color-blue)") {

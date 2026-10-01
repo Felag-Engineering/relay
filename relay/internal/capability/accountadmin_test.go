@@ -424,3 +424,23 @@ func TestAccountAdmin_LastAdminRefusalSurvivesTheRealStore(t *testing.T) {
 		t.Errorf("admin = %+v after refused calls, want an untouched enabled admin", got)
 	}
 }
+
+func TestSelfTargeted_RequiresBothSidesNonEmptyAndEqual(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		principal string
+		id        string
+		want      bool
+	}{
+		{"same account", "acct-1", "acct-1", true},
+		{"another account", "acct-1", "acct-2", false},
+		{"both empty", "", "", false},
+		{"principal without an account", "", "acct-1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SelfTargeted(Principal{AccountID: tc.principal}, tc.id); got != tc.want {
+				t.Errorf("SelfTargeted(%q, %q) = %v, want %v", tc.principal, tc.id, got, tc.want)
+			}
+		})
+	}
+}
