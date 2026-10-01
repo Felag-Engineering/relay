@@ -55,10 +55,11 @@ or asserted chip. A `password_clear` on an Account that had no password is still
 says `removed=false` and the screen says none was set, so the trail never claims a removal that did
 not happen.
 
-**Enrollment Tokens are not here.** They join Nodes rather than authenticate callers, so they stay
-on [04 — Activity](04-activity.md) with the fleet's other membership events. Conflating the two in
-one list would mix fleet growth with credential issuance, the same reason the trail keeps their
-kinds apart.
+**Enrollment Tokens are not here.** They join Nodes rather than authenticate callers.
+Conflating the two in one list would mix fleet growth with credential issuance, the same reason
+the trail keeps their kinds apart. Their mints and revokes stay on the audit trail. Activity no
+longer draws them either (owner decision, 2026-10-01, #829), and giving fleet events a home is
+follow-up work.
 
 ## Who may see it
 
@@ -104,7 +105,8 @@ disclosure says so rather than offering a filter that would search the page and 
 - A typed name on a failed sign-in that is not a real Account's name — it may be a password.
 - Anything that tells the person signing in which half was wrong: that stays one refusal
   ([12](12-login.md)).
-- Tool calls or fleet events — those are [04 — Activity](04-activity.md).
+- Tool calls — those are [04 — Activity](04-activity.md). Fleet events (Freeze transitions, Node
+  revokes, Enrollment Tokens) are not here either; they are on the audit trail.
 - Any control. Disabling an Account and revoking a token are [15](15-accounts-and-tokens.md).
 
 ## Acceptance

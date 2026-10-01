@@ -59,7 +59,7 @@ func TestPluralFamiliesKeepOppositeContracts(t *testing.T) {
 	// failure #550 documents is arithmetic that reads fine in isolation, so
 	// "contains the count" is not enough — "3 3 calls" contains it too.
 	t.Run("a Go call site renders one count", func(t *testing.T) {
-		got := collapseNote(3, 2, "strip")
+		got := collapseNote(3, 2)
 		if !strings.Contains(got, "3 calls") {
 			t.Errorf("collapseNote lost its count: %q", got)
 		}

@@ -37,8 +37,8 @@ disabled (ADR-0026, spec 11). Administer becomes Add Nodes · Accounts · Incide
 
 Each row shows the current value and its default. **No history, no "last changed by"** — the
 owner decided against it. Every change is still an audit record (ADR-0010's amendment; R15's
-compensating control), so it appears on Activity like any other act; this screen does not
-re-present it.
+compensating control), so it is on the audit trail like any other act (Activity lists tool calls only, owner
+decision 2026-10-01, #829); this screen does not re-present it.
 
 Gate rules are not here — spec 19.
 

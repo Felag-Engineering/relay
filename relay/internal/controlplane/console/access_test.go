@@ -285,7 +285,7 @@ func TestAccess_AnAdminAnswersWhoSignedInFailedAndChangedAnAccount(t *testing.T)
 	}
 	for _, evkind := range []string{audit.KindTokenMint, audit.KindTokenRevoke} {
 		if strings.Contains(content, `<span class="evkind">`+evkind+`<`) {
-			t.Errorf("an Enrollment Token record (%q) rendered on Access — its home is Activity", evkind)
+			t.Errorf("an Enrollment Token record (%q) rendered on Access — it is not an Access kind; it stays on the audit trail", evkind)
 		}
 	}
 
@@ -835,7 +835,7 @@ func TestAccess_VocabularyIsExactlySpec20s(t *testing.T) {
 		t.Errorf("accessAllKinds has %d kinds, want exactly 15", len(accessAllKinds))
 	}
 	if containsString(accessAllKinds, audit.KindTokenMint) || containsString(accessAllKinds, audit.KindTokenRevoke) {
-		t.Error("accessAllKinds contains an Enrollment Token kind — those stay on Activity")
+		t.Error("accessAllKinds contains an Enrollment Token kind — it joins a Node and is not an Access kind")
 	}
 }
 

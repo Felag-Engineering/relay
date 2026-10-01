@@ -104,7 +104,7 @@ func TestActivity_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
 	mustBeStanding(t, inside, outside,
 		"Each page holds up to",
 		"The default feed leaves out the trail&#39;s own read records.",
-		"Two row kinds are not built here yet: enrollments and label changes.",
+		"This screen lists tool calls and nothing else.",
 		"The filter box carries no Selector and no Node.",
 		"The chips above list every family this screen shows, including empty ones.",
 		"Every Refresh is an audited read",

@@ -17,6 +17,12 @@ which carry arguments but **never** read results; Cancel through the capability 
 "what was asked of the control plane, and what did it do to the fleet?". Access answers "who got
 in, and who changed who can get in?")*
 
+*(Owner decision, 2026-10-01, #829: Activity is a log of the tool calls that went through the
+control plane, and nothing else. The "Who is active" strip, the rows for fleet events that are not
+tool calls (freeze transitions, Node revokes, Enrollment Token mints and revokes, and any other
+record kind), their kind chips, and the live region's pulsing dot were removed. Those events stay
+on the audit trail. Giving them a home is a follow-up, not this screen.)*
+
 ## What this screen is for
 
 An operator earns trust in an AI-driven control plane by **watching it work**. This is the surface
@@ -40,8 +46,10 @@ row is that Job**: it fills in live and expands to Tasks on demand. One `mutate`
 therefore still occupies one row, not 2,214. A naive Task-grained tail would become unreadable
 exactly when something important is happening.
 
-Fleet events that are not tool calls are rows too: freeze transitions, Node revokes, and
-Enrollment Token mints and revokes. Sign-ins, step-up, Account changes and API Token mints and
+**Only tool calls are rows.** Freeze transitions, Node revokes, Enrollment Token mints and
+revokes, and every record kind that is not a tool call (a Node's protocol_violation, and any kind
+added to the trail before this screen classifies it) are not on this screen. They remain on the
+audit trail, and surfacing them is follow-up work. Sign-ins, step-up, Account changes and API Token mints and
 revokes are **not** on this screen. They are on [20 — Access](20-access.md).
 
 ## Row kinds
@@ -54,10 +62,9 @@ revokes are **not** on this screen. They are on [20 — Access](20-access.md).
 | `refusal` | the capability layer's refusal, rendered slate and informative, never as an error — the role gate refusing `raw_exec` to a non-`admin`, for one |
 | `read` | the arguments and a metadata-only result line that explicitly says the output is not retained |
 | `cancel` | which Job, by whom |
-| `freeze` | engage or release, by whom, held for how long, with the reason |
-| `node` | a Node revoked, by whom |
-| `token` | an Enrollment Token minted or revoked: by whom, its scope, uses and expiry |
-| `other` | any record kind no family above claims — today a Node's `protocol_violation`, and any kind added to the trail before this table names it. Attributed like every row, so it is listed and filterable, never dropped |
+
+A record kind no family above claims is not drawn here. It stays on the audit trail (owner
+decision, 2026-10-01, which reverses D18 point 4's other row).
 
 The tool surface is eight tools: `list_nodes`, `describe_node`, `list_operations`, `get_job`,
 `run_operation`, `raw_exec`, `cancel_job`, `approve_request`. A Preflight is `plan: true` on
@@ -127,34 +134,17 @@ security-relevant distinction — verified authentication versus a claimed ident
 every row, as the trust chip. `00-foundations.md`, [13](13-job-detail.md) and
 [15](15-accounts-and-tokens.md) cite this decision here.
 
-## Who is active
-
-A strip above the stream lists each Account with a call in the last **15 minutes**: name, role,
-first and last call, call count, mutate count. Selecting one scopes the stream to it
-(`?account=`, which names the **verified Account ID**, never a name: a name can later belong to a
-different Account, an ID never does). An entry with no verified Account ID is listed but not
-linked.
-It is how an operator sees who is driving right now.
+## There are no sessions
 
 **There are no sessions.** The MCP transport is stateless (ADR-0028; `Stateless: true`, no
 `Mcp-Session-Id` — a Job ID is the durable handle). Every tool call is an independent,
-authenticated request. *Active* means "has made a call within 15 minutes", never "connected".
-There is no connect time, no idle state, and nothing to disconnect. Stopping one actor today is
-revoking its API Tokens ([15](15-accounts-and-tokens.md)) or Freeze
+authenticated request. There is no connect time, no idle state, and nothing to disconnect.
+Stopping one actor today is revoking its API Tokens ([15](15-accounts-and-tokens.md)) or Freeze
 ([16](16-incident-ladder.md)); suspension is deferred (ADR-0035, not adopted; #443).
 
-**The strip is scoped twice, and says so.** Membership is the 15 minutes: an Account not seen in
-that long is not listed. The numbers beside a listed Account are counted over the fetched
-**page**, the same page the stream renders, so every entry is verifiable by scrolling to its rows.
-The stream itself is never filtered by the 15 minutes: it is the history. An Account whose most
-recent call on the page is older than 15 minutes drops off the strip, and the strip says how many
-dropped. On this screen "window" means the 15 minutes and nothing else; the page is called the
-page, never the window.
-
-**Running rows, and Running now's entries, do not count on the strip (#617).** They are read from the Job row, not from an
-audited call, so the strip's fields stay call-grained. A Job joins the strip once its dispatch is
-recorded. An otherwise empty strip over a page showing only running Jobs says so, rather than
-saying nobody has called.
+(The "Who is active" strip that stood here, which listed Accounts with a call in the last 15
+minutes, was removed by owner decision, 2026-10-01, #829. `?account=` scoping stays: see
+Filtering and export.)
 
 ## Reads
 
@@ -196,13 +186,13 @@ that its identity was established by a Console session AND that it was a read.**
   set, of that Account's calls on this page — and links to the same view with them shown
   (`?console=show`). With that parameter set, the screen lists and counts exactly as it would
   without this rule, and the sentence offers the way back.
-- **It composes with every other filter.** Every link the screen draws — the strip, Older, Newest,
+- **It composes with every other filter.** Every link the screen draws — Older, Newest,
   "Show every Account" and Refresh — carries `?account=` and `?console=` as it found them.
 - **It is presentation over the fetched page.** The lane is asked for the same page with the same
   filter it always was; no read is added or widened. The page note says what the page holds, not
   what the feed shows, and the sentence's count keeps the arithmetic visible.
 - **The method decides what is listed and is never displayed.**
-- **Empty states stay true.** Where the strip or the feed is empty only because every call on the
+- **Empty states stay true.** Where the feed is empty only because every call on the
   page was a read made from this Console, it says that, rather than that nobody called.
 
 ## Polling
@@ -212,8 +202,7 @@ row carrying the count of calls it stands for (#541). Equivalence is the whole r
 just Account and tool: a poll of a different Job, a different outcome or a different risk class
 never joins a run, and a `raw_exec` between two runs of `get_job` polls stays its own row. Runs
 must be **consecutive**: collapsing non-adjacent calls would reorder the trail, which on an
-audit-facing screen is worse than the crowding it fixes. The strip keeps counting calls, never
-rendered rows, and a collapsed row carries its own count. The page note says how much was
+audit-facing screen is worse than the crowding it fixes. A collapsed row carries its own count. The page note says how much was
 collapsed. This is presentation over the fetched page only: it does not reach back past the page
 boundary.
 
@@ -232,15 +221,25 @@ announces itself more than once. The control is a Refresh in the sense of `00-fo
 says that every reload is an audited read, and that those reads are reads made from this Console,
 so the default above leaves them out.
 
+The live region states its condition in words alone ("Live.", "The live stream is not
+connected.", and the rest). It draws no pulsing dot or other animated indicator (owner decision,
+2026-10-01).
+
 ## Filtering and export
 
-Kind chips, a mutate-only toggle, a hide-polling toggle, and one filter box over principal,
+Kind chips, one per row kind above, a mutate-only toggle, a hide-polling toggle, and one filter box over principal,
 Operation, arguments, Selector, outcome, Node and plan hash. The same filters apply to the live
 tail and to history. Time controls: live tail, a relative window, an explicit range. Export for an
-auditor.
+auditor. The export carries the same tool-call rows as the screen, so Freeze transitions, Node revokes,
+Enrollment Token mints and revokes and `protocol_violation` are not in it; they remain on the audit trail
+(owner decision, 2026-10-01, #829), and a home for them is follow-up work.
+
+`?account=` scopes the stream and Running now to one Account. It names the **verified Account
+ID**, never a name, because a name can later belong to a different Account and an ID never does.
+The Accounts screen's last-call link uses it ([15](15-accounts-and-tokens.md)).
 
 The screen's standing notes — how a page is bounded, the reasoning behind leaving read records
-out, the row kinds and filter fields it cannot offer yet, why the kind chips carry no counts — sit
+out, that it lists tool calls only, the filter fields it cannot offer yet, why the kind chips carry no counts — sit
 in the closed "About this screen" disclosure at its foot (`00-foundations.md`). The messages a
 request provokes stay visible where they render: a part of the URL that could not be read, an
 unknown row kind, what an outcome filter does to the page, and the read sentences above.
@@ -270,6 +269,10 @@ appears. Viewers see running Jobs but are never offered Cancel. Token revocation
   prompts, or conversation content — the Relay does not have them and must not invent a place for
   them.
 - A scheduled or automatic replay of any call.
+- Rows for fleet events that are not tool calls (freeze transitions, Node revokes, Enrollment
+  Token mints and revokes, protocol_violation), or a kind chip for one. They are on the audit
+  trail.
+- A pulsing or animated live indicator. The live region says its state in words.
 - A Disconnect, End session, or Suspend control, or the word "connected" — nothing they would act
   on exists.
 
@@ -284,8 +287,10 @@ appears. Viewers see running Jobs but are never offered Cancel. Token revocation
 - [ ] A read row carries no output at any age, and states that.
 - [x] Polling collapses; an Account making 200 `get_job` calls does not push everything else off.
 - [x] A `raw_exec` refused by the role gate renders informative-neutral, not as an error.
-- [x] With no Account active in the 15 minutes, the strip says so plainly and does not fabricate
-      activity.
+- [x] Only tool-call rows appear: no freeze, Node revoke, Enrollment Token or other row, and no
+      chip for one.
+- [x] There is no Who-is-active strip; ?account= still scopes the stream and Running now.
+- [x] The live region carries no pulsing dot; its text states its condition.
 - [ ] No sign-in, step-up, Account or API Token row appears here, for any role.
 - [x] An in-flight dispatch is cancellable from this screen (v0.7.0) and the cancellation is
       audited. **Met on Activity (#786)**; the control moves into Running now with that section.

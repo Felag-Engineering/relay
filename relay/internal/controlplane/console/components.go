@@ -681,7 +681,6 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 {{define "live-region"}}{{if .Wired}}<section class="live" data-live-region data-live="down"
          data-events="{{.Endpoint}}" data-last-event-id="{{.LastEventID}}">
   <div class="livehead">
-    <span class="pulse" aria-hidden="true"></span>
     <span class="wmsg" data-when="on">Live.</span>
     <span class="wmsg" data-when="down">The live stream is not connected.</span>
     <span class="wmsg" data-when="gap">The live stream fell behind &mdash; reloading.</span>

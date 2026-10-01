@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -195,9 +196,11 @@ func TestActivity_AuditorAnswersAllFourFromOneRow(t *testing.T) {
 	}
 }
 
-// TestActivity_EveryAuditKindIsClassified. A kind added to internal/audit and
-// classified nowhere would silently never appear on the surface billed as the
-// trail, and nothing else would notice.
+// TestActivity_EveryAuditKindIsClassified. Every audit kind is exactly one of:
+// an Access kind (Access's, never this screen's), a kind in activityNonCallKinds
+// (on the trail, deliberately not drawn here), or a tool-call kind whose family
+// is in rowKindOrder. A kind added to internal/audit and classified in none of
+// them fails here, so it is neither silently hidden nor silently shown.
 func TestActivity_EveryAuditKindIsClassified(t *testing.T) {
 	excluded := map[string]bool{}
 	for _, k := range activityLaneExcluded {
@@ -210,6 +213,13 @@ func TestActivity_EveryAuditKindIsClassified(t *testing.T) {
 		}
 		requested[k] = true
 	}
+	nonCall := map[string]bool{}
+	for _, k := range activityNonCallKinds {
+		nonCall[k] = true
+		if _, ok := accessKindOf(k); ok {
+			t.Errorf("%q is in activityNonCallKinds and is an Access kind", k)
+		}
+	}
 
 	for _, k := range audit.Kinds() {
 		if _, ok := accessKindOf(k); ok {
@@ -217,18 +227,32 @@ func TestActivity_EveryAuditKindIsClassified(t *testing.T) {
 			// SCREEN: it is not this screen's vocabulary at all, and it must
 			// not be reachable through any of its chips — see the inverse
 			// sweep below.
-			if requested[k] || excluded[k] {
+			if requested[k] || excluded[k] || nonCall[k] {
 				t.Errorf("Access kind %q is also classified on Activity — the two screens must "+
 					"partition the audit vocabulary, not share a kind", k)
 			}
+			continue
+		}
+		if nonCall[k] {
+			if got := kindOf(k); got != rowNotACall {
+				t.Errorf("non-call kind %q maps to family %q, want rowNotACall", k, got)
+			}
+			if requested[k] || excluded[k] {
+				t.Errorf("non-call kind %q is also requested or excluded by the default feed", k)
+			}
+			continue
+		}
+		family := kindOf(k)
+		if !slices.Contains(rowKindOrder, family) {
+			t.Errorf("audit kind %q is classified nowhere (family %q): classify it: a tool-call family, "+
+				"or activityNonCallKinds", k, family)
 			continue
 		}
 		if !requested[k] && !excluded[k] {
 			t.Errorf("audit kind %q is neither requested by the default feed nor excluded from it "+
 				"with a reason — it would simply never appear on the trail", k)
 		}
-		// And it is reachable through some family's chip.
-		family := kindOf(k)
+		// And it is reachable through its family's chip.
 		if !containsString(kindsOfFamily(family), k) {
 			t.Errorf("audit kind %q maps to family %q, whose kind list does not contain it — the "+
 				"chip would not show it", k, family)
@@ -264,22 +288,18 @@ func TestActivity_KindsOfFamilyIsTotalAndNeverEmpty(t *testing.T) {
 		}
 	}
 
-	// plan and job_cancel are families of their own (spec 04, Row kinds), and
-	// `other` no longer covers them.
+	// plan and job_cancel are families of their own (spec 04, Row kinds).
 	if got := kindOf(audit.KindPlan); got != rowPlan {
 		t.Errorf("kindOf(plan) = %q, want %q", got, rowPlan)
 	}
 	if got := kindOf(audit.KindJobCancel); got != rowCancel {
 		t.Errorf("kindOf(job_cancel) = %q, want %q", got, rowCancel)
 	}
-	other := kindsOfFamily(rowOther)
-	for _, notWant := range []string{audit.KindJobCancel, audit.KindPlan} {
-		if containsString(other, notWant) {
-			t.Errorf("the `other` family still covers %q", notWant)
+	// A kind no family claims, and a Node's protocol_violation, are not drawn.
+	for _, k := range []string{audit.KindProtocolViolation, "no-such-kind"} {
+		if got := kindOf(k); got != rowNotACall {
+			t.Errorf("kindOf(%q) = %q, want rowNotACall", k, got)
 		}
-	}
-	if !containsString(other, audit.KindProtocolViolation) {
-		t.Error("the `other` family does not cover protocol_violation, which no row family names")
 	}
 
 	// A family with no audit kind at all still narrows to nothing. There is
@@ -316,41 +336,37 @@ func TestActivity_AccessFamiliesAreNotKinds(t *testing.T) {
 		if family == rowAccess {
 			t.Error("rowKindOrder contains rowAccess — it must never be a selectable chip")
 		}
+		if family == rowNotACall {
+			t.Error("rowKindOrder contains rowNotACall — it must never be a selectable chip")
+		}
 	}
 }
 
-// TestActivity_EnrollmentTokensStayOnActivity: token_mint and token_revoke
-// join or revoke a Node rather than authenticate a caller, so D17 keeps them
-// on Activity's `token` family — narrowed, after this issue, to exactly the
-// two Enrollment Token kinds (api_token_mint/revoke moved to Access).
-func TestActivity_EnrollmentTokensStayOnActivity(t *testing.T) {
-	want := []string{audit.KindTokenMint, audit.KindTokenRevoke}
-	got := kindsOfFamily(rowToken)
-	if len(got) != len(want) {
-		t.Fatalf("rowToken's kinds = %v, want exactly %v", got, want)
+// TestActivity_FleetEventsAreNotFamilies: Activity lists tool calls only (spec
+// 04, Grain). Freeze transitions, Node revokes, Enrollment Token events and
+// protocol_violation stay on the trail, are never requested, and ?kind= cannot
+// reach them.
+func TestActivity_FleetEventsAreNotFamilies(t *testing.T) {
+	want := []rowKind{rowDispatch, rowPlan, rowApproval, rowRefusal, rowRead, rowCancel}
+	if !slices.Equal(rowKindOrder, want) {
+		t.Errorf("rowKindOrder = %v, want exactly %v", rowKindOrder, want)
 	}
-	for _, k := range want {
-		if !containsString(got, k) {
-			t.Errorf("rowToken does not contain %q", k)
+	for _, k := range activityNonCallKinds {
+		if got := kindOf(k); got != rowNotACall {
+			t.Errorf("kindOf(%q) = %q, want rowNotACall", k, got)
+		}
+		if containsString(activityTrailKinds, k) {
+			t.Errorf("activityTrailKinds requests the non-call kind %q", k)
 		}
 	}
-	for _, apiKind := range []string{audit.KindAPITokenMint, audit.KindAPITokenRevoke} {
-		if containsString(got, apiKind) {
-			t.Errorf("rowToken still contains the API Token kind %q — it moved to Access (spec 20)", apiKind)
+	for _, kind := range []string{"freeze", "node", "token", "other"} {
+		q := &fakeQueries{}
+		body := get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin), "/console/activity?kind="+kind).Body.String()
+		if !strings.Contains(body, "There is no row kind called") {
+			t.Errorf("?kind=%s is not refused as an unknown row kind", kind)
 		}
-	}
-
-	q := &fakeQueries{rows: []capability.AuditRow{
-		{Kind: audit.KindTokenMint, Timestamp: testNow},
-		{Kind: audit.KindTokenRevoke, Timestamp: testNow},
-	}}
-	for _, path := range []string{"/console/activity", "/console/activity?kind=token"} {
-		body := get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin), path).Body.String()
-		if !strings.Contains(body, "minted an Enrollment Token") {
-			t.Errorf("%s does not render the Enrollment Token mint", path)
-		}
-		if !strings.Contains(body, "revoked an Enrollment Token") {
-			t.Errorf("%s does not render the Enrollment Token revoke", path)
+		if q.auditCalls != 0 || q.jobCalls != 0 {
+			t.Errorf("?kind=%s queried the trail (%d) or the Jobs (%d)", kind, q.auditCalls, q.jobCalls)
 		}
 	}
 }
@@ -406,7 +422,7 @@ func TestActivity_ShowsNoAccessRowForAnyRole(t *testing.T) {
 func TestActivity_UnknownKindQueriesNothing(t *testing.T) {
 	q := &fakeQueries{
 		jobs: []capability.JobSummary{{JobID: "job-1", CreatedAt: testNow}},
-		rows: []capability.AuditRow{{Kind: audit.KindFreezeEngage, Timestamp: testNow}},
+		rows: []capability.AuditRow{{Kind: audit.KindRefusal, Timestamp: testNow}},
 	}
 	body := get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin), "/console/activity?kind=everything").Body.String()
 
@@ -639,14 +655,20 @@ func TestActivity_LiveRegionOnlyWhereTheViewRendersDispatchRows(t *testing.T) {
 		if !strings.Contains(body, `data-events="/console/events?kinds=job"`) {
 			t.Errorf("%s does not name the stream it watches", path)
 		}
+		if strings.Contains(body, `class="pulse"`) {
+			t.Errorf("%s draws a pulsing dot in the live region", path)
+		}
+		if !strings.Contains(body, `data-when="on">Live.`) {
+			t.Errorf("%s does not state its live condition in words", path)
+		}
 	}
 
-	off := get(t, h, "/console/activity?kind=freeze").Body.String()
+	off := get(t, h, "/console/activity?kind=refusal").Body.String()
 	if strings.Contains(off, "data-live-region") {
-		t.Error("?kind=freeze renders a live region, but the freeze family has no live kind on the stream")
+		t.Error("?kind=refusal renders a live region, but the refusal family has no live kind on the stream")
 	}
 	if strings.Contains(off, "stream.js") || strings.Contains(off, "activity.js") {
-		t.Error("?kind=freeze mounts the live scripts for a view that can never update")
+		t.Error("?kind=refusal mounts the live scripts for a view that can never update")
 	}
 	// And day one's off-state sentence must not appear here: it says live
 	// updates are not available on this RELAY, which would be false.
@@ -910,15 +932,15 @@ func TestActivity_RelativeWindowResolvesAgainstTheRenderClock(t *testing.T) {
 	}
 }
 
-// TestActivity_SpecConflictsAreStatedRatherThanFaked. Spec 04's table asks for
-// enroll and label rows and its filter box asks for Selector and Node. None of
-// those has a backing record or field. The screen says so instead of rendering
-// something that looks like them.
+// TestActivity_SpecConflictsAreStatedRatherThanFaked. Spec 04's filter box asks
+// for Selector and Node, and neither has a backing field. The screen says so
+// instead of rendering something that looks like them, and says it lists tool
+// calls and nothing else.
 func TestActivity_SpecConflictsAreStatedRatherThanFaked(t *testing.T) {
 	body := get(t, newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/activity").Body.String()
 
 	for _, want := range []string{
-		"The\naudit trail holds no record of either.",
+		"This screen lists tool calls and nothing else.",
 		"The filter box carries no Selector and no Node.",
 		"list every family this screen shows, including empty ones",
 	} {
@@ -983,7 +1005,7 @@ func (q *endlessQueries) DescribeNode(context.Context, capability.Principal, str
 func (q *endlessQueries) QueryAudit(_ context.Context, _ capability.Principal, _ capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error) {
 	q.auditCalls++
 	return capability.AuditPage{
-		Rows: []capability.AuditRow{{Kind: audit.KindFreezeEngage, Timestamp: testNow}},
+		Rows: []capability.AuditRow{{Kind: audit.KindRefusal, Timestamp: testNow}},
 		Next: "ac-next", Limit: page.Limit,
 	}, nil
 }
@@ -1019,29 +1041,6 @@ func (q *endlessQueries) RecordEventSubscription(_ context.Context, _ capability
 	return kinds, nil
 }
 
-// TestActivity_AProtocolViolationRendersASentence is #638's Console
-// assertion: without summarize's KindProtocolViolation case, the row would
-// render as the bare token "protocol_violation" — the fate every other kind
-// on this surface gets a sentence instead of.
-func TestActivity_AProtocolViolationRendersASentence(t *testing.T) {
-	row := eventRowFromTrail(factsOfRow(capability.AuditRow{
-		Kind:      audit.KindProtocolViolation,
-		NodeID:    "node-1",
-		Reason:    "rule=relay_only_outcome reported_outcome=OUTCOME_VERSION_REFUSED task_id=task-1",
-		Timestamp: testNow,
-	}))
-	if row.Summary == audit.KindProtocolViolation {
-		t.Errorf("row.Summary = %q, want a sentence, not the bare kind token", row.Summary)
-	}
-	const want = "a Node reported something the wire contract does not permit"
-	if row.Summary != want {
-		t.Errorf("row.Summary = %q, want %q", row.Summary, want)
-	}
-	if row.Kind != rowOther {
-		t.Errorf("row.Kind = %q, want rowOther", row.Kind)
-	}
-}
-
 // TestActivity_TheRiskChipIsOnlyOnRowsThatRan. riskOf answers "mutate" for
 // anything it does not recognise, because mutate is the safe direction for an
 // unrecognised OPERATION. A Freeze engage is not an unrecognised Operation, it
@@ -1058,8 +1057,6 @@ func TestActivity_TheRiskChipIsOnlyOnRowsThatRan(t *testing.T) {
 		{audit.KindPlan, true},
 		{audit.KindJobCancel, true},
 		{audit.KindFreezeEngage, false},
-		{audit.KindTokenMint, false},
-		{audit.KindNodeRevoke, false},
 	} {
 		row := eventRowFromTrail(factsOfRow(capability.AuditRow{Kind: c.kind, Timestamp: testNow}))
 		if got := row.Risk != ""; got != c.want {
@@ -1165,7 +1162,7 @@ func (q *scriptedQueries) QueryAudit(_ context.Context, _ capability.Principal, 
 		// would pass whatever the page did.
 		Rows: []capability.AuditRow{{
 			ID: "a-" + q.cursorFor(i), Selector: "sel-" + q.cursorFor(i),
-			Kind: audit.KindFreezeEngage, Timestamp: testNow.Add(-time.Duration(i) * time.Minute),
+			Kind: audit.KindRefusal, Timestamp: testNow.Add(-time.Duration(i) * time.Minute),
 		}},
 		Limit: page.Limit,
 	}

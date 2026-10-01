@@ -105,12 +105,6 @@ func TestActivity_PollingCollapsesWithinThePage(t *testing.T) {
 	if !strings.Contains(blocks[1], `<span class="chip calls"`) || !strings.Contains(blocks[1], ">x49<") {
 		t.Errorf("the folded row has no x49 chip:\n%s", blocks[1])
 	}
-	if n := stripCallCount(t, body, "poller"); n != 49 {
-		t.Errorf("the strip counts %d calls for the poller, want 49", n)
-	}
-	if n := stripCallCount(t, body, "other"); n != 1 {
-		t.Errorf("the strip counts %d calls for the other Account, want 1", n)
-	}
 	if !strings.Contains(body, `class="vcount">50 events<`) {
 		t.Errorf("the viewbar does not count the 50 calls:\n%s", body)
 	}
@@ -232,25 +226,6 @@ func TestActivity_JobRowsNeverCollapse(t *testing.T) {
 	}
 }
 
-func TestActivity_TheStripCountsCallsNotCollapsedRows(t *testing.T) {
-	who := apiIdentity("acct-1", "alice", "operator")
-	q := &fakeQueries{rows: []capability.AuditRow{
-		refusalBy(who, time.Second, "same"), refusalBy(who, 2*time.Second, "same"), refusalBy(who, 3*time.Second, "same"),
-		refusalBy(who, 4*time.Second, "different"),
-	}}
-	body := activityAs(t, q, "/console/activity")
-
-	if got := rowCalls(t, body); len(got) != 2 {
-		t.Fatalf("rows = %v, want 2 rendered rows", got)
-	}
-	if n := stripCallCount(t, body, "alice"); n != 4 {
-		t.Errorf("the strip counts %d, want 4 calls", n)
-	}
-	if !strings.Contains(stripSection(t, body), "4 mutate") {
-		t.Errorf("the strip's mutate count is not the sum of calls:\n%s", stripSection(t, body))
-	}
-}
-
 func TestActivity_ACollapsedRowSaysHowManyCallsAndOverWhatSpan(t *testing.T) {
 	who := apiIdentity("acct-1", "alice", "operator")
 	q := &fakeQueries{rows: []capability.AuditRow{
@@ -276,8 +251,11 @@ func TestActivity_TheCollapseNoteSaysWhatTheCollapseDid(t *testing.T) {
 	who := apiIdentity("acct-1", "alice", "operator")
 	q := &fakeQueries{rows: []capability.AuditRow{refusalBy(who, time.Second, "same"), refusalBy(who, 2*time.Second, "same")}}
 	body := activityAs(t, q, "/console/activity")
-	if !strings.Contains(body, "2 calls on this page are collapsed into 1 row, each saying how many calls it stands for. The strip still counts every call.") {
+	if !strings.Contains(body, "2 calls on this page are collapsed into 1 row, each saying how many calls it stands for.") {
 		t.Errorf("the collapse note is missing:\n%s", body)
+	}
+	if strings.Contains(body, "The strip still counts every call") {
+		t.Error("the collapse note names a strip that no longer exists")
 	}
 	if body := activityAs(t, &fakeQueries{rows: q.rows[:1]}, "/console/activity"); strings.Contains(body, "are collapsed into") {
 		t.Error("a page that collapsed nothing says it collapsed something")
@@ -419,9 +397,8 @@ func TestActivityCollapseKey_CoversEveryExportedField(t *testing.T) {
 
 	same := base
 	same.at = testNow
-	same.role = "admin"
 	if key, _ := activityCollapseKey(same); key != baseKey {
-		t.Error("the unexported at and role are in the key")
+		t.Error("the unexported at is in the key")
 	}
 }
 

@@ -1,29 +1,16 @@
 package console
 
-// callfeed.go is Activity's call-feed code (spec 04): the "Who is active"
-// strip, the polling collapse, and the reads-made-from-this-Console
-// exclusion.
+// callfeed.go is Activity's call-feed code (spec 04): the polling collapse
+// and the reads-made-from-this-Console exclusion.
 //
 // Each is presentation over a page the read lane already returned. None of them
 // adds a query, widens a filter or changes a page size.
 
 import (
-	"sort"
-	"time"
-
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
-
-// activeWindow is the strip's (or rail's) MEMBERSHIP rule (#540): an Account
-// with no call in the last 15 minutes drops off it entirely. It used to color a
-// dot and nothing else, so the header's "active" claim was never enforced — a
-// page of nothing but stale calls listed every Account with an inactive dot
-// rather than listing none. Fifteen minutes, per spec 04, Who is active — long
-// enough that an AI-agent thinking between calls does not blink out, short enough
-// that "active" means something.
-const activeWindow = 15 * time.Minute
 
 // consoleParam and consoleShow spell the one link that lists reads made
 // from a Console session. Only the exact value shows them; anything else is
@@ -116,126 +103,11 @@ func foldedSummary[T any](rows []T, calls func(T) int) (foldedCalls, foldedRows 
 }
 
 // collapseNote is the sentence saying what the collapse did to the page, or ""
-// when it folded nothing. counter names what still counts every call: "rail" on
-// Agents, "strip" on Activity.
-func collapseNote(foldedCalls, foldedRows int, counter string) string {
+// when it folded nothing.
+func collapseNote(foldedCalls, foldedRows int) string {
 	if foldedRows == 0 {
 		return ""
 	}
 	return countOf(foldedCalls, "call", "calls") + " on this page are collapsed into " +
-		countOf(foldedRows, "row", "rows") + ", each saying how many calls it stands for. " +
-		"The " + counter + " still counts every call."
-}
-
-// stripCall is one call as the strip counts it. Key groups calls into an
-// entry; Name and Verified are what the entry shows.
-type stripCall struct {
-	Key, Name string
-	Verified  bool
-	Role      string
-	Mutate    bool
-	Denied    bool
-	At        time.Time
-}
-
-// stripEntry is one Account (or asserted principal) on the strip.
-type stripEntry struct {
-	Key, Name string
-	Verified  bool
-	// Role is the verified role at the entry's most recent role-carrying call
-	// ON THIS PAGE — empty renders nothing. Sourced ONLY from the verified lane
-	// and cleared unless Verified is true: an asserted-lane role must never
-	// occupy this position beside the trust chip (#540).
-	Role    string
-	Calls   int
-	Mutates int
-	Denied  int
-	// FirstSeen is the earliest call on this page, EMPTY when it would render
-	// the identical TEXT as LastSeen (timeSince buckets by whole minutes, so two
-	// calls 20s apart both read "12m ago" and showing both reads as a bug rather
-	// than as two calls).
-	FirstSeen string
-	LastSeen  string
-	Current   bool
-	// Href is left empty by buildStrip: each screen links its own way.
-	Href string
-}
-
-// buildStrip rolls one page's calls up per Key.
-//
-// calls arrive NEWEST FIRST on both screens. Precedence, stated because the
-// two screens' keys differ:
-//
-//   - Name and Verified come from the FIRST call seen for a Key and never
-//     change, so they are the Key's newest call on the page. For Agents the Key
-//     is the name, so this is the first row seen; for Activity's "id:" keys an
-//     Account renamed mid-page is listed under its newest name.
-//   - Role comes from the newest call (by At) carrying a role, so a role change
-//     mid-page shows the later authority and one role-less call later in the
-//     page does not blank it. It is cleared unless Verified.
-//   - Calls, Mutates and Denied count calls, never rendered rows; FirstSeen and
-//     LastSeen are the earliest and latest At.
-//   - Membership: an entry whose last call is more than activeWindow before now
-//     is dropped and counted in dropped. The feed itself is never time-filtered.
-//   - Entries sort busiest first, then by Name, then by Key.
-func buildStrip(calls []stripCall, current string, now time.Time) (entries []stripEntry, dropped int) {
-	type acc struct {
-		stripEntry
-		first, last, roleAt time.Time
-	}
-	byKey := map[string]*acc{}
-	for _, c := range calls {
-		a, seen := byKey[c.Key]
-		if !seen {
-			a = &acc{stripEntry: stripEntry{Key: c.Key, Name: c.Name, Verified: c.Verified}}
-			byKey[c.Key] = a
-		}
-		a.Calls++
-		if c.Denied {
-			a.Denied++
-		}
-		if c.Mutate {
-			a.Mutates++
-		}
-		if a.first.IsZero() || c.At.Before(a.first) {
-			a.first = c.At
-		}
-		if c.At.After(a.last) {
-			a.last = c.At
-		}
-		if c.Role != "" && c.At.After(a.roleAt) {
-			a.Role, a.roleAt = c.Role, c.At
-		}
-	}
-
-	entries = make([]stripEntry, 0, len(byKey))
-	for _, a := range byKey {
-		// Membership, not a dot colour: every field below is computed only for
-		// an entry that survives this.
-		if now.Sub(a.last) > activeWindow {
-			dropped++
-			continue
-		}
-		a.LastSeen = timeSince(a.last, now)
-		if first := timeSince(a.first, now); first != a.LastSeen {
-			a.FirstSeen = first
-		}
-		// Belt-and-braces: a call carrying a verified role with no verified
-		// name cannot put a role on an asserted entry.
-		if !a.Verified {
-			a.Role = ""
-		}
-		a.Current = a.Key == current
-		entries = append(entries, a.stripEntry)
-	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		if entries[i].Calls != entries[j].Calls {
-			return entries[i].Calls > entries[j].Calls
-		}
-		if entries[i].Name != entries[j].Name {
-			return entries[i].Name < entries[j].Name
-		}
-		return entries[i].Key < entries[j].Key
-	})
-	return entries, dropped
+		countOf(foldedRows, "row", "rows") + ", each saying how many calls it stands for."
 }

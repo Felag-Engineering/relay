@@ -134,6 +134,16 @@ func TestActivity_FreshRelaySaysNothingHappenedRatherThanNothingMatches(t *testi
 // Criterion 2: both fingerprints are shown.
 // ---------------------------------------------------------------------------
 
+// TestDayOne_WatchKeepsItsLiveIndicator: day one's watch panel still draws the
+// pulse, which is why console.css keeps the .pulse rules although Activity's
+// live region no longer does (#829).
+func TestDayOne_WatchKeepsItsLiveIndicator(t *testing.T) {
+	body := get(t, newTestHandler(dayOneDeps(), accounts.RoleAdmin), "/console/").Body.String()
+	if !strings.Contains(body, `<span class="pulse"`) {
+		t.Error("day one's watch panel draws no pulse")
+	}
+}
+
 func TestDayOne_ShowsTheFingerprintsAMachineNeeds(t *testing.T) {
 	body := contentOf(get(t, newTestHandler(dayOneDeps(), accounts.RoleAdmin), "/console/").Body.String())
 
