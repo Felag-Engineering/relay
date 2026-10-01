@@ -56,7 +56,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"sort"
 	"strconv"
 	"time"
 
@@ -66,15 +65,6 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// activeWindow is the rail's MEMBERSHIP rule (#540): an Account with no call
-// in the last 15 minutes drops off the rail entirely. It used to color a dot
-// and nothing else, so the header's "active" claim was never enforced — a
-// page of nothing but stale calls listed every Account with an inactive dot
-// rather than listing none. Fifteen minutes, per spec 03 — long enough that
-// an agent thinking between calls does not blink out, short enough that
-// "active" means something.
-const activeWindow = 15 * time.Minute
-
 // agentsPageSize is this screen's page size, replacing auditWindow at the
 // same number (200) deliberately: the only change an operator sees is that
 // the note becomes true and an Older link exists where the trail has more.
@@ -83,31 +73,9 @@ const activeWindow = 15 * time.Minute
 // mint or a Freeze transition only to be discarded by isAgentCallKind.
 const agentsPageSize = 200
 
-type agentAccount struct {
-	Name     string
-	Verified bool
-	// Role is the verified role at the Account's most recent role-carrying
-	// call ON THIS PAGE — empty renders nothing (see buildAgents). Sourced
-	// ONLY from the verified lane and cleared unless Verified is true: an
-	// asserted-lane role must never occupy this position beside the trust
-	// chip (#540).
-	Role    string
-	Calls   int
-	Mutates int
-	Denied  int
-	// FirstSeen is the earliest call on this page, EMPTY when it would
-	// render the identical TEXT as LastSeen (timeSince buckets by whole
-	// minutes, so two calls 20s apart both read "12m ago" and showing both
-	// reads as a bug rather than as two calls).
-	FirstSeen string
-	LastSeen  string
-	// Active is gone (#540): every listed entry is active by construction
-	// now that activeWindow is a membership filter rather than a dot
-	// colour, and a field that is always true is the same shape of false
-	// claim this ticket removes.
-	Current bool
-	Href    string
-}
+// agentAccount is one rail entry. Agents keys the strip by Account name, so
+// Key is always Name here.
+type agentAccount = stripEntry
 
 type agentCall struct {
 	When       string
@@ -242,7 +210,7 @@ type agentRunning struct {
 // stops being readable.
 //
 // The first row of a deny run is unfoldable anyway because Deny is a
-// POINTER and two rows never share one — sameCall's == would already see
+// POINTER and two rows never share one — callKey's == would already see
 // them as different values. That protection does NOT reach the RepeatDeny
 // rows behind the first: after the deny-prose pass, a second and third deny
 // of the same Operation and rule both carry {Deny: nil, RepeatDeny: true}
@@ -252,11 +220,11 @@ func collapsible(c agentCall) bool {
 	return c.Deny == nil && !c.RepeatDeny
 }
 
-// sameCall reports whether a and b would render identically apart from the
-// span they cover.
+// callKey is the row a call folds under: two calls render identically apart
+// from the span they cover exactly when their keys are ==.
 //
 // The key is the WHOLE rendered row minus When/Calls/FirstWhen — copied and
-// zeroed on both sides, then compared with Go's ==. Risk cannot be dropped
+// zeroed, then compared with Go's ==. Risk cannot be dropped
 // from the key because there is no per-field check to forget one from; the
 // compiler enforces the same discipline on every future field. If agentCall
 // ever gains a slice or map field, this stops compiling — that is the
@@ -265,13 +233,12 @@ func collapsible(c agentCall) bool {
 // and say why in a comment when you do.
 //
 // The fields set AFTER collapse — CancelAction, Running — are always zero
-// when sameCall runs: collapseRuns runs before either is assigned
+// when callKey runs: collapseRuns runs before either is assigned
 // (handleAgents), so there is nothing here to zero for them, unlike
 // When/Calls/FirstWhen above.
-func sameCall(a, b agentCall) bool {
-	a.When, a.Calls, a.FirstWhen = "", 0, ""
-	b.When, b.Calls, b.FirstWhen = "", 0, ""
-	return a == b
+func callKey(c agentCall) agentCall {
+	c.When, c.Calls, c.FirstWhen = "", 0, ""
+	return c
 }
 
 // collapseRuns folds each run of CONSECUTIVE, collapsible, identical calls
@@ -289,7 +256,7 @@ func sameCall(a, b agentCall) bool {
 // about.
 //
 // The merge gates on three conditions, all required: collapsible(prev),
-// collapsible(cur), and sameCall(prev, cur). sameCall alone is not enough —
+// collapsible(cur), and callKey(prev) == callKey(cur). The key alone is not enough —
 // it would rely on Deny's pointer identity, which only tells the FIRST deny
 // row in a run apart from a would-be twin; the RepeatDeny rows behind it
 // carry no pointer at all and would compare equal to each other without the
@@ -303,19 +270,12 @@ func sameCall(a, b agentCall) bool {
 // Builds into a fresh slice (calls[:0:0]) rather than appending in place, so
 // the caller's backing array is never aliased by a shorter result.
 func collapseRuns(calls []agentCall) []agentCall {
-	out := calls[:0:0]
-	for _, c := range calls {
-		if len(out) > 0 {
-			prev := &out[len(out)-1]
-			if collapsible(*prev) && collapsible(c) && sameCall(*prev, c) {
-				prev.Calls++
-				prev.FirstWhen = c.When
-				continue
-			}
-		}
-		out = append(out, c)
-	}
-	return out
+	return foldRuns(calls,
+		func(c agentCall) (agentCall, bool) { return callKey(c), collapsible(c) },
+		func(run *agentCall, older agentCall) {
+			run.Calls += older.Calls
+			run.FirstWhen = older.When
+		})
 }
 
 // collapseSummary reports how much of the rendered stream collapseRuns
@@ -325,13 +285,7 @@ func collapseRuns(calls []agentCall) []agentCall {
 // so foldedCalls is always 0 or >= 2, never 1, which pageNote's grammar
 // ("are collapsed") depends on.
 func collapseSummary(calls []agentCall) (foldedCalls, foldedRows int) {
-	for _, c := range calls {
-		if c.Calls > 1 {
-			foldedCalls += c.Calls
-			foldedRows++
-		}
-	}
-	return foldedCalls, foldedRows
+	return foldedSummary(calls, func(c agentCall) int { return c.Calls })
 }
 
 // pageNote is the feed's ONE sentence explaining the page's position (older
@@ -361,9 +315,7 @@ func pageNote(foldedCalls, foldedRows, pageSize int, older, scrolled bool) strin
 		clause = "This page holds the most recent " + strconv.Itoa(pageSize) + " calls. There are older calls."
 	}
 	if foldedRows > 0 {
-		collapse := countOf(foldedCalls, "call", "calls") + " on this page are collapsed into " +
-			countOf(foldedRows, "row", "rows") + ", each saying how many calls it stands for. " +
-			"The rail still counts every call."
+		collapse := collapseNote(foldedCalls, foldedRows, "rail")
 		if clause == "" {
 			clause = collapse
 		} else {
@@ -464,73 +416,6 @@ type agentsView struct {
 
 	// Refresh is the manual Refresh control (spec 03, "Refreshing").
 	Refresh Refresh
-}
-
-// consoleParam and consoleShow spell the one link that lists reads made
-// from a Console session. Only the exact value shows them; anything else is
-// the default, which the page states beside the feed either way.
-const (
-	consoleParam = "console"
-	consoleShow  = "show"
-)
-
-// consoleRead reports whether the default leaves this call out (spec 03,
-// "Reads made from this Console" — a rule proposed in this change and
-// awaiting a human's review). BOTH halves must hold, and each is read from
-// the row as the lane returned it, never from anything else:
-//
-//   - made from a Console session: the verified lane's Method is what the
-//     authentication boundary recorded when the call was made
-//     (capability.AuthMethodConsoleSession). It proves a Console session
-//     cookie authenticated the call — not that a person was at the keyboard.
-//     A stolen cookie, or software driving an operator's browser, records
-//     the same thing, which is why only reads are ever left out.
-//   - a read: the record kind is audit.KindRead (the non-dispatching read
-//     tools this Console's own page loads are recorded as) AND riskOf — the
-//     one inference behind the risk chip the row renders — answers read.
-//     Where the row cannot tell, the answer is "not a read" and the call
-//     stays listed: a mutate, an approval decision, a Cancel, a refusal or a
-//     Preflight is never left out, whatever its method.
-//
-// Nothing here reads the Account registry or an Account's kind: #540's
-// reasoning (spec 03, "Kind (machine or human) is not on the rail") stands,
-// and this rule does not depend on it. The method is never rendered; it
-// decides what is listed and nothing else.
-func consoleRead(row capability.AuditRow) bool {
-	if capability.AuthMethod(row.Verified.Method) != capability.AuthMethodConsoleSession {
-		return false
-	}
-	if row.Kind != audit.KindRead {
-		return false
-	}
-	return riskOf(factsOfRow(row)) == jobs.RiskClassRead
-}
-
-// withoutConsoleReads drops the page's Console-session reads, preserving
-// order. It reports how many it dropped, and — for the ?account= view — how
-// many calls the named Account has on the page and how many of those it
-// dropped, naming Accounts exactly as buildAgents does (principalText).
-//
-// It is presentation over the page the lane already returned, like
-// collapseRuns: the query, its filter and its page size are untouched, so
-// no read is added or widened.
-func withoutConsoleReads(rows []capability.AuditRow, account string) (kept []capability.AuditRow, dropped, accountCalls, accountDropped int) {
-	kept = make([]capability.AuditRow, 0, len(rows))
-	for _, row := range rows {
-		mine := account != "" && principalText(factsOfRow(row)) == account
-		if mine {
-			accountCalls++
-		}
-		if consoleRead(row) {
-			dropped++
-			if mine {
-				accountDropped++
-			}
-			continue
-		}
-		kept = append(kept, row)
-	}
-	return kept, dropped, accountCalls, accountDropped
 }
 
 // agentsLink is the part of this screen's URL every link it draws carries:
@@ -916,45 +801,12 @@ func runningToolName(sum capability.JobSummary) string {
 // TheRailAgreesPerAccountWhenAnAccountDropsOff, whose existing fixtures
 // collapse nothing and so cannot tell the two forms apart themselves.
 func buildAgents(rows []capability.AuditRow, account string, now time.Time) ([]agentAccount, []agentCall, int) {
-	type acc struct {
-		agentAccount
-		first  time.Time
-		last   time.Time
-		roleAt time.Time
-	}
-	byAccount := map[string]*acc{}
+	var stripCalls []stripCall
 	var calls []agentCall
 
 	for _, row := range rows {
 		f := factsOfRow(row)
 		name := principalText(f)
-		a, seen := byAccount[name]
-		if !seen {
-			a = &acc{agentAccount: agentAccount{
-				Name: name,
-				// f.VerifiedAccountID, not row.Verified.AccountID: the
-				// projection is the lane's single reading, and reading the row
-				// directly here is the same fork the Role read below must not
-				// introduce (agentCallFrom already reads it this way).
-				Verified: f.VerifiedAccountID != "",
-				// url.Values, not concatenation: an Account name is a principal
-				// string this package does not constrain, and html/template's URL
-				// normaliser leaves & # = alone. "bob&co:operator" concatenated
-				// yields ?account=bob plus a stray parameter, so the rail links
-				// to the wrong Account (#467). Same idiom as compare.go.
-				Href: "/console/agents?" + url.Values{"account": {name}}.Encode(),
-			}}
-			byAccount[name] = a
-		}
-		a.Calls++
-		// Unconditional, where this used to be the second arm of a switch whose
-		// first arm counted read-class records into a Reads field. Nothing
-		// writes a KindRead record with an Outcome (auditsink.RecordRead sets
-		// none), so no record changes lane; the switch was hiding a denied read
-		// from the Denied count for no reason a reader could see.
-		if row.Outcome == jobs.OutcomeDeniedByPolicy {
-			a.Denied++
-		}
 		// The mutate count is mutate-class CALLS, counted through the same one
 		// inference as the per-row chip (riskOf, vocab.go) — so the rail's "3
 		// mutate" is by construction the number of rows below it chipped
@@ -992,23 +844,25 @@ func buildAgents(rows []capability.AuditRow, account string, now time.Time) ([]a
 		// idea of a read — rather than the safe-direction default falling the
 		// convenient way, which is worth saying out loud because the two are
 		// indistinguishable in the code.
-		if riskOf(f) == jobs.RiskClassMutate {
-			a.Mutates++
-		}
-		if a.first.IsZero() || f.Timestamp.Before(a.first) {
-			a.first = f.Timestamp
-		}
-		if f.Timestamp.After(a.last) {
-			a.last = f.Timestamp
-		}
-		// Role is taken from the NEWEST row that carries a verified role:
-		// Verified.Role is "the authority the Account held at that moment"
-		// (vocab.go), so a role change mid-page must show the later
-		// authority, and a single unverified row later in the page must not
-		// blank a role a verified one already established.
-		if f.Role != "" && f.Timestamp.After(a.roleAt) {
-			a.Role, a.roleAt = f.Role, f.Timestamp
-		}
+		stripCalls = append(stripCalls, stripCall{
+			Key:  name,
+			Name: name,
+			// f.VerifiedAccountID, not row.Verified.AccountID: the projection is
+			// the lane's single reading, and reading the row directly here is the
+			// same fork the Role read must not introduce (agentCallFrom already
+			// reads it this way).
+			Verified: f.VerifiedAccountID != "",
+			Role:     f.Role,
+			Mutate:   riskOf(f) == jobs.RiskClassMutate,
+			// Unconditional, where this used to be the second arm of a switch
+			// whose first arm counted read-class records into a Reads field.
+			// Nothing writes a KindRead record with an Outcome
+			// (auditsink.RecordRead sets none), so no record changes lane; the
+			// switch was hiding a denied read from the Denied count for no reason
+			// a reader could see.
+			Denied: row.Outcome == jobs.OutcomeDeniedByPolicy,
+			At:     f.Timestamp,
+		})
 
 		if account == "" || account == name {
 			calls = append(calls, agentCallFrom(f))
@@ -1047,40 +901,15 @@ func buildAgents(rows []capability.AuditRow, account string, now time.Time) ([]a
 	// exactly the rows the feed renders.
 	calls = collapseRuns(calls)
 
-	var dropped int
-	out := make([]agentAccount, 0, len(byAccount))
-	for _, a := range byAccount {
-		// THE FIX: membership, not a dot colour. An Account whose most
-		// recent call on this page is older than 15 minutes drops off the
-		// rail before its entry is even built — every field below is
-		// computed only for an Account that survives this.
-		if now.Sub(a.last) > activeWindow {
-			dropped++
-			continue
-		}
-		a.LastSeen = timeSince(a.last, now)
-		if first := timeSince(a.first, now); first != a.LastSeen {
-			a.FirstSeen = first
-		}
-		// Belt-and-braces: a row carrying a verified role with no verified
-		// name cannot put a role on an asserted entry. Role is sourced only
-		// from the verified lane (vocab.go) and this is the second guard on
-		// that rule, not the only one.
-		if !a.Verified {
-			a.Role = ""
-		}
-		a.Current = a.Name == account
-		out = append(out, a.agentAccount)
+	out, dropped := buildStrip(stripCalls, account, now)
+	for i := range out {
+		// url.Values, not concatenation: an Account name is a principal string
+		// this package does not constrain, and html/template's URL normaliser
+		// leaves & # = alone. "bob&co:operator" concatenated yields ?account=bob
+		// plus a stray parameter, so the rail links to the wrong Account (#467).
+		// Same idiom as compare.go.
+		out[i].Href = "/console/agents?" + url.Values{"account": {out[i].Name}}.Encode()
 	}
-	// Busiest first, then name. "Active first" used to be the sort's job;
-	// now every listed entry is active by construction, so the filter above
-	// does that work instead.
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Calls != out[j].Calls {
-			return out[i].Calls > out[j].Calls
-		}
-		return out[i].Name < out[j].Name
-	})
 	return out, calls, dropped
 }
 
