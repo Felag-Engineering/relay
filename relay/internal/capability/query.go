@@ -12,7 +12,7 @@ import (
 
 // query.go is the capability layer's read-lane vocabulary (#441): the
 // filtered, paginated, aggregating query surface over the audit trail and
-// over Jobs/Tasks, so the Console's Activity, Job detail, agent history, and
+// over Jobs/Tasks, so the Console's Activity, Job detail, AI-agent history, and
 // read-egress screens — and any future /api/v1 audit route — share ONE
 // seam (invariant 10) instead of each materialising the whole trail.
 //
