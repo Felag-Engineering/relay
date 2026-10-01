@@ -128,8 +128,8 @@ amending ADR says it amends — each of those must record the amendment on its o
 
 ### Known gaps between these invariants and the code
 
-Found by adversarial review — the first two on 2026-09-08, the third during a spec migration on
-2026-09-21 — and left in place deliberately: correcting invariant text needs an ADR amendment in
+Found by adversarial review (2026-09-08) and during a spec migration (2026-09-21), and left in
+place deliberately: correcting invariant text needs an ADR amendment in
 front of a human, which is a separate change.
 **Until that lands, believe this table over the invariant text above.**
 
@@ -140,7 +140,7 @@ and that rule is the only thing keeping it honest.
 | # | The clause | What is actually true today | Tracked |
 |---|---|---|---|
 | 7 | `tag:`'s writer, and `relay:`'s | `tag:` has **no storage on the Node record and no write path**, so nothing can be written to the namespace the invariant says an operator writes. Since #561 a `tag:` term is **refused at parse** with a recognisable sentinel rather than silently matching nothing, identically on every surface — so the gap is now an honest refusal instead of a false negative. `relay:` labels are stamped at enrollment today; the Relay actions that write them afterwards (quarantine engage and lift, `quarantine-node.md`) are unbuilt, so quarantine by either `relay:` or `tag:` does not exist yet. Behaviour detail in `docs/specs/selectors-and-labels.md`. | #430 |
-| 10 | Console execution | The Console does **not** execute yet. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today — except the read gap in the next row. | #438 |
+| 10 | Console execution | The Console does **not** execute yet. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today. | #438 |
 
 ### Writing or amending an invariant
 
@@ -222,7 +222,9 @@ redefines one; if a task appears to require one, stop and flag it.
 /daemon/packaging/   relay-daemon systemd unit, example EnvironmentFile, shipped Template catalog.
 /daemon/fuzz/        cargo-fuzz targets and corpus for the daemon.
 /docker/             Dockerfiles, entrypoints, and fixtures for the local Docker fleet;
-                     docker-compose.yml at the root composes it.
+                     docker-compose.demo.yml at the root composes it (there is no root
+                     docker-compose.yml), with docker-compose.oauth.yml as the opt-in overlay.
+/deploy/compose/     the single-Relay deployment stack, split from the dev fleet (#783).
 /scripts/            CI gates and repo tooling (docs checks, spec coverage, security surface).
 /docs/adr/           architecture decision records — the *why*.
 /docs/agents/        per-repo configuration agent skills read (tracker, labels, domain rules).
