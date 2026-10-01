@@ -91,12 +91,12 @@ count below is for nine.
 ### Credentials for Gleipnir (copy-paste)
 
 **One machine Account per named AI-agent.** The demo's agent is `auto-incident-response`, and
-it gets a machine Account of that name, so the agent's own name is the **verified** actor on
-every audit row it causes — not a shared `gleipnir` Account that every agent would hide behind.
-A second agent gets its own Account and its own API Token: re-run the block below with another
+it gets a machine Account of that name, so the AI-agent's own name is the **verified** actor on
+every audit row it causes — not a shared `gleipnir` Account that every AI-agent would hide behind.
+A second AI-agent gets its own Account and its own API Token: re-run the block below with another
 name in `AGENT=` on its first line. That is the only edit.
 
-**The Account name is not the client name.** The Account is the agent's and its name is free to
+**The Account name is not the client name.** The Account is the AI-agent's and its name is free to
 choose. But the MCP client must still **declare its client name as `gleipnir`** in the request's
 `clientInfo`, because the Relay asks the approval question in-band only of a client name it
 recognises (AP-78): `gleipnir` on any session, `claude-code` only on an OAuth session of a human
@@ -115,7 +115,7 @@ as the decision's asserted `on_behalf_of` (the audit row's `asserted_on_behalf_o
 verified `auto-incident-response` with method `api_token`.
 
 **Re-run this after every reset.** `make demo-reset` runs `down -v`, which destroys the store:
-the agent's machine Account, its API Token, and the CA all die with it. After running the
+the AI-agent's machine Account, its API Token, and the CA all die with it. After running the
 block below, make Gleipnir pick up the new token and the new CA. How Gleipnir reloads them
 (restart, or otherwise) is Gleipnir's own runbook to document
 ([gleipnir#933](https://github.com/Felag-Engineering/gleipnir/issues/933)) — most clients read a
@@ -185,7 +185,7 @@ The role choice, stated plainly:
   `requester_allowed` says, Relay refuses a machine Account's answer to its own request
   (`approval.ErrMachineSelfDecision`) unless it arrives in-band carrying a non-blank asserted
   name — the `approver` on `approve_request`, or the responder on an answered approval
-  question — which is recorded as an assertion beside the agent's verified Account
+  question — which is recorded as an assertion beside the AI-agent's verified Account
   (`auto-incident-response`), never as verified. Relay cannot tell whether a human gave that name: an AI-agent steered by prompt
   injection could call `approve_request` with a made-up name and release its own request. That
   is the accepted client-integrity assumption of in-band approval
@@ -197,7 +197,7 @@ The role choice, stated plainly:
   [control-plane-credential.md](control-plane-credential.md) states. An operator also cannot mint
   an API Token for anyone through the Control API. See
   [The human approver](#the-human-approver) for who may decide what under the demo gate.
-- **What operator can do, and what it costs.** Raw Exec is admin-only, so the agent's
+- **What operator can do, and what it costs.** Raw Exec is admin-only, so the AI-agent's
   `operator` Account cannot request the Raw Exec repair of the fault — the presenter drives that one by hand (see
   [Triggering and clearing the fault](#triggering-and-clearing-the-fault)). But Gleipnir can
   discover the fault with a read (`file.read`) and repair it with a gated mutate of its own:
@@ -218,14 +218,14 @@ The role choice, stated plainly:
   Beat (d) is unaffected: both of its Selectors are fan-out 1, so it runs with no human, and
   `operator` is enough to run it.
 - **`role: "admin"` is the alternative**, and its trade-off is named rather than hidden: it lets
-  the agent request the Raw Exec repair itself, and a Raw Exec is decided at `admin` too — the
+  the AI-agent request the Raw Exec repair itself, and a Raw Exec is decided at `admin` too — the
   floor for deciding is the floor for requesting. Account and API-Token administration are
   admin-only and not human-only (`authz.requiredControlRole`; the owner decision to narrow them
   is recorded there as open), so a machine admin can also mint API Tokens for other Accounts.
-  It is not free for approvals either: under the demo gate an `admin` agent Account can release
+  It is not free for approvals either: under the demo gate an `admin` AI-agent Account can release
   its own Raw Exec exactly as an `operator` one can release its own Operation — an in-band
   answer carrying a name it supplied itself — so with `admin`, every Raw Exec on this fleet is
-  one the agent could request and release alone (see `kind: "machine"` above and
+  one the AI-agent could request and release alone (see `kind: "machine"` above and
   [The human approver](#the-human-approver)). If you choose `admin`, change `"operator"` to
   `"admin"` in the create body above. **A human should confirm this choice** before a presenter
   relies on it, and the Gleipnir-side runbook
@@ -307,12 +307,12 @@ is emitted and `approve_request` is refused as too weak a channel.
 - **No audience** means any Account whose role clears the decision floor, which is the floor
   the Action needed to be requested: `operator` for an Operation, `admin` for a Raw Exec. So
   `dev-approver` (human, admin), the founding admin (human, admin) and the Console's `admin`
-  (human, admin) may each decide any request here. The agent's `operator` Account
+  (human, admin) may each decide any request here. The AI-agent's `operator` Account
   (`auto-incident-response`) may decide a gated Operation, and never a Raw Exec; so may
   `demo-user`, the OAuth fleet's human operator.
 - **`requester_allowed: true`** means the requester may fill the slot. A **human** requester —
   the founding admin driving a Raw Exec by hand — may approve its own parked dispatch. A
-  **machine** requester — the agent's Account, `auto-incident-response` — may too, provided its
+  **machine** requester — the AI-agent's Account, `auto-incident-response` — may too, provided its
   in-band answer carries a non-blank asserted name, recorded beside that verified Account. Relay cannot tell whether a
   human gave that name; a prompt-injected AI-agent could supply a made-up one and release its
   own request (see `kind: "machine"` above).
@@ -489,7 +489,7 @@ Three ways to clear it:
   a fault repair; see there for what was observed)*. `node:role=web` alone would reach all six
   web Nodes in one call, which is also fine: the restart is idempotent.
 - **On stage, by hand:** the Raw Exec restart, parked under `demo-raw-exec-always-needs-a-human`.
-  With the agent's Account at `operator` (the default), the presenter requests
+  With the AI-agent's Account at `operator` (the default), the presenter requests
   it by hand as the founding admin, using the same fleet-wide selector as beat (c) below so both
   faulted Nodes (`daemon-4`, `env=prod`; `daemon-6`, `env=staging`) clear in one call — a
   narrower Selector such as `node:role=web, node:env=prod` would only reach `daemon-4`:
@@ -502,7 +502,7 @@ Three ways to clear it:
   Then decide it by any of the three ways in [The human approver](#the-human-approver) that an
   `admin` can use — for example `approve_request` as the founding admin itself (the gate lets
   the requester decide), or the Control API as `dev-approver` — and re-issue the call unchanged
-  *(predicted)*. If the agent asks for Raw Exec on its `operator` Account,
+  *(predicted)*. If the AI-agent asks for Raw Exec on its `operator` Account,
   the Relay refuses it on role before any gate or Node sees it — say so, so the presenter is not
   surprised.
 - **Between takes:** `make demo-reset`.
@@ -531,7 +531,7 @@ Independent checks for the presenter, as literal commands:
   Expected *(predicted)*: `9 Nodes, 9 connected`. It reads `result.structuredContent.nodes`, the
   same path `check_nodes_healthy` reads.
 - `scripts/dev-fleet-mcp.sh api GET /api/v1/approvals`: an empty `approvals` array.
-- Re-run the [agent credential block](#credentials-for-gleipnir-copy-paste), then the
+- Re-run the [AI-agent credential block](#credentials-for-gleipnir-copy-paste), then the
   approvals curl above with the NEW token: `200` with an empty `approvals` array. Negative
   check: a token saved from before the reset must now be refused, because the store was wiped —
   expected `401` *(predicted)*. Save the old token to a scratch file outside the repo only if you
@@ -678,7 +678,7 @@ Console's own sign-in, where `admin` signs in as on the plain fleet. The foundin
 challenge above, `GET /console/` a `303` to `/console/login`, `admin` signed in; a
 `demo-user` authorization-code + PKCE sign-in was accepted for `list_nodes`; Claude Code (isolated
 config) went from needing authentication to `connected` through the sign-in above; and both
-approval stories — the agent's with responder `mrapp`, and `demo-user`'s on the OAuth session —
+approval stories — the AI-agent's with responder `mrapp`, and `demo-user`'s on the OAuth session —
 ran their Jobs and read back as described in this section.
 
 #### Between takes
@@ -946,7 +946,7 @@ saw.** Each beat below is marked *(tested)* for the half a hermetic test covers,
 
 Observed since, by hand on a live demo fleet (2026-09-29), and nothing more: under the
 in-band demo gate, a client named `gleipnir` on an API Token (then a shared `gleipnir` machine
-Account; now the agent's own, `auto-incident-response`) was asked the approval question
+Account; now the AI-agent's own, `auto-incident-response`) was asked the approval question
 and its answered retry ran the Job; an unrecognised client got `pending_approval`, answered
 with `approve_request`, re-issued, and ran; and `service.restart` of `nginx` on a web Node,
 through the `systemctl` shim, exited `0`. The beats below were not re-run under that gate.
