@@ -7,11 +7,13 @@ has the wolf-and-chain badge. Relay and Gleipnir share a palette, not a crest.
 
 | File | Use |
 |---|---|
-| `relay-wordmark-light.svg` / `.png` | On light backgrounds: near-black `relay`, teal `#0a8276` cursor |
-| `relay-wordmark-dark.svg` / `.png` | On dark backgrounds: cream `#ece6da` `relay`, teal `#4fb3a8` cursor |
-| `relay-icon.svg`, `relay-icon-512.png`, `relay-icon-32.png` | Square spaces (favicon, avatar, app icon): cream `r_` on a teal `#0a8276` rounded square; works on either background |
+| `relay-wordmark-light.svg` | On light backgrounds: near-black `relay`, teal `#0a8276` cursor |
+| `relay-wordmark-dark.svg` | On dark backgrounds: cream `#ece6da` `relay`, teal `#4fb3a8` cursor |
+| `relay-icon.svg` | Square spaces (favicon, avatar, app icon): cream `r_` on a teal `#0a8276` rounded square; works on either background |
 
-Prefer the SVGs. The PNGs are transparent exports for places that cannot take SVG.
+The SVGs are the only committed form. Where a PNG is needed (an avatar upload, a slide,
+a tool that will not take SVG), export one from the SVG at the size it needs rather than
+committing it: a committed raster is a second copy that nothing keeps in step.
 
 ## Rules
 
