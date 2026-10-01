@@ -29,7 +29,7 @@ Numbers are identifiers, not sequence. Build in this order:
 2. The v0.6.0 read surfaces: [01](01-fleet-view.md), [02](02-node-detail.md),
    [04](04-activity.md), [13](13-job-detail.md),
    [14](14-approval-queue.md) (read only), [08](08-approval-object.md) (read only),
-   [10](10-day-one.md), [17](17-read-egress.md), [20](20-access.md) (admin only).
+   [10](10-day-one.md), [20](20-access.md) (admin only).
 3. The v0.7.0 mutating surfaces, once step-up exists:
    [15](15-accounts-and-tokens.md), [09](09-add-nodes.md), [16](16-incident-ladder.md),
    [06](06-policy-author.md), [07](07-policy-fix-from-deny.md), then
@@ -62,7 +62,6 @@ landed by hand, ahead of the loop.
 | 2 | [Node detail](02-node-detail.md) | v0.6.0 | no (`relay:` writes are v0.7.0) |
 | 4 | [Activity](04-activity.md) | v0.6.0 stream / v0.7.0 Cancel | Cancel only (v0.7.0) |
 | 13 | [Job detail](13-job-detail.md) | v0.6.0 record / v0.7.0 Cancel | Cancel only (v0.7.0) |
-| 17 | [Read egress](17-read-egress.md) | v0.6.0 | no |
 | 20 | [Access](20-access.md) | v0.6.0 | no — `admin` only |
 | 10 | [Day one](10-day-one.md) | v0.6.0 | no |
 | 14 | [Approval queue](14-approval-queue.md) | v0.6.0 read / v0.7.0 decide | mixed |
@@ -74,7 +73,9 @@ landed by hand, ahead of the loop.
 | 7 | [Policy fix, from a deny](07-policy-fix-from-deny.md) | v0.7.0 | **no — generate-and-copy only** |
 | 5 | [Composer and Preflight](05-composer-and-preflight.md) | v0.7.0 | yes |
 
-[03](03-agent-sessions.md) is retired: it was folded into 04 on 2026-09-29 (D17). Specs 11–20 have
+[03](03-agent-sessions.md) is retired: it was folded into 04 on 2026-09-29 (D17).
+[17](17-read-egress.md) is retired: dropped on 2026-10-01 (owner decision, D11); Activity (04)
+carries read-class calls. Specs 11–20 have
 no artboard; the wireframes cover 1–10 plus the shared-grammar sheet.
 
 ## Sequencing

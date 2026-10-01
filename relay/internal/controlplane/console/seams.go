@@ -44,8 +44,9 @@ package console
 // are one aggregate row and its Task rows are small per-outcome pages, so
 // the screen is bounded by construction at 10,000 Nodes rather than capped
 // after the fact. Read egress (#425) migrated next and reads nothing else
-// either. Activity (#422) followed, reading BOTH halves of the lane: its
-// dispatch rows come from QueryJobs one row per Job at any fan-out, and
+// either (the screen was retired on 2026-10-01). Activity (#422) followed,
+// reading BOTH halves of the lane: its dispatch rows come from QueryJobs one
+// row per Job at any fan-out, and
 // everything else from QueryAudit. #450 then added the lane's REGISTRY half
 // and moved the fleet listing and node detail onto it, which is what made
 // those two screens audited (ADR-0025) rather than merely bounded. #542
@@ -188,10 +189,11 @@ type AccountReader interface {
 // above — nothing here dispatches or decides, and the narrowed method set is
 // what keeps this package's grip on the capability layer to reads only.
 //
-// Job detail (#423) was its first consumer, read egress (#425) its second,
-// Activity (#422) its third, and agent history (#542) its fourth. Landing the
-// seam ahead of any screen using it is what let all four be built against
-// one settled contract instead of four independently-guessed ones.
+// Job detail (#423) was its first consumer, read egress (#425, retired
+// 2026-10-01) its second, Activity (#422) its third, and agent history (#542)
+// its fourth. Landing the seam ahead of any screen using it is what let all
+// four be built against one settled contract instead of four
+// independently-guessed ones.
 //
 // #450 added the REGISTRY half — ListNodes and DescribeNode. They are on this
 // seam because a read that goes through the capability layer is audited by
@@ -212,8 +214,6 @@ type QueryReader interface {
 	DescribeNode(ctx context.Context, p capability.Principal, nodeID string) (capability.NodeDetail, error)
 
 	QueryAudit(ctx context.Context, p capability.Principal, f capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error)
-	AuditCounts(ctx context.Context, p capability.Principal, f capability.AuditFilter, bucket time.Duration) ([]capability.PrincipalBucket, error)
-	AuditReach(ctx context.Context, p capability.Principal, f capability.AuditFilter) (capability.Reach, error)
 	QueryJobs(ctx context.Context, p capability.Principal, f capability.JobFilter, page capability.PageRequest) (capability.JobPage, error)
 	QueryTasks(ctx context.Context, p capability.Principal, f capability.TaskFilter, page capability.PageRequest) (capability.TaskPage, error)
 

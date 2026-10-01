@@ -231,8 +231,7 @@ func kindsOfFamily(f rowKind) []string {
 //   - read — the trail's OWN read records, including the two this screen
 //     writes on every page view (capability's read lane records every query).
 //     Left out of the default feed so the screen does not fill with itself
-//     being read; one click away through the `read` chip, and their home is
-//     the Read-egress screen.
+//     being read; one click away through the `read` chip.
 //
 // Both are ONE CLICK AWAY, reachable as their own family. activityAccessKinds
 // below is excluded too, but is not: see its own comment.
@@ -756,7 +755,6 @@ type activityView struct {
 	OlderHref  string
 	ResetHref  string
 	ExportHref string
-	ReadsHref  string
 
 	// ReadsLeftOutHref is set ONLY when no kind filter is set — the one case
 	// in which the feed leaves the `read` family out (activityLaneExcluded).
@@ -905,7 +903,6 @@ func handleActivity(d Deps) http.HandlerFunc {
 			// Clear resets every filter, account and console included, so it is
 			// deliberately not among the links that keep them (spec 04).
 			ResetHref:     "/console/activity",
-			ReadsHref:     "/console/reads",
 			Narrowing:     f.narrowing(),
 			Windows:       windowChoices(f.Window),
 			Outcomes:      outcomeChoices(f.Outcome),
@@ -1652,16 +1649,16 @@ func summarize(f trailFacts) string {
 		// and Operation catalogue.
 		//
 		// These rendered as the bare word "read" — no target, no Node, no
-		// outcome — while the very same records drove the Read-egress screen's
-		// enumeration panel. The trail had the fact and this surface, which is
-		// billed as the trail, declined to say it.
+		// outcome — while the very same records drove the since-retired
+		// Read-egress screen's enumeration panel. The trail had the fact and
+		// this surface, which is billed as the trail, declined to say it.
 		//
 		// readTargetOf is reused rather than reimplemented, and that is the
 		// point: the first attempt here read ActionKind, which is empty on
 		// these records — the tool name lives in OperationName — so Activity
-		// said "the registry" while Read egress said "list_nodes" about the
-		// same audit row. Two screens naming one thing two ways is how an
-		// operator stops trusting either.
+		// said "the registry" while the Read-egress screen, retired
+		// 2026-10-01, said "list_nodes" about the same audit row. Two screens
+		// naming one thing two ways is how an operator stops trusting either.
 		return "enumerated " + readTargetOf(f)
 	case audit.KindProtocolViolation:
 		return "a Node reported something the wire contract does not permit"
@@ -1840,8 +1837,7 @@ fabricate.</p>
   {{range .Kinds}}<a class="kchip{{if .Current}} on{{end}}" href="{{.Href}}">{{.Kind}}</a>{{end}}
 </div>
 {{with .ReadsLeftOutHref}}<p class="kindnote">Read records &mdash; every Account&#39;s enumeration and
-every read of this trail &mdash; are left out of this feed: <a href="{{.}}">show them</a>, or see
-<a href="{{$.ReadsHref}}">Read egress</a>.</p>{{end}}
+every read of this trail &mdash; are left out of this feed: <a href="{{.}}">show them</a>.</p>{{end}}
 
 {{if .UnknownKind}}
 <p class="gap"><b>There is no row kind called &ldquo;{{.UnknownKind}}&rdquo;.</b> Nothing was queried:
@@ -1994,8 +1990,7 @@ Following &ldquo;Older&rdquo; continues both from where they stopped; neither st
 <p class="gap"><b>The default feed leaves out the trail&#39;s own read records.</b> Reading the trail
 writes to it: this page adds a read record each time it fetches dispatches or other events. A feed
 that included them would fill with the operator&#39;s own reloads. They are one click away as
-<a href="{{.ReadKindHref}}">kind=read</a>, and their home is
-<a href="{{.ReadsHref}}">Read egress</a>. Nothing is hidden.</p>
+<a href="{{.ReadKindHref}}">kind=read</a>. Nothing is hidden.</p>
 
 <p class="gap"><b>Two row kinds are not built here yet: enrollments and label changes.</b> The
 audit trail holds no record of either. An enrollment exists only on the live event stream, for a few

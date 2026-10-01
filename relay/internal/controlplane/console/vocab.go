@@ -23,11 +23,12 @@ package console
 // node detail's deny explanation. (Job detail and read egress used to be
 // callers too, but #490/#497 moved both onto the DECLARED class carried by
 // capability.TaskRow/JobFilter, so they no longer infer anything and are not
-// listed here.) Three answers is three chances to drift, and the drift would
-// be invisible: each screen would look right in isolation. So the inference
-// lives in one function with its limits written down, and the real fix —
-// putting the declared class on the audit record — replaces this file rather
-// than hunting for the places that guessed.
+// listed here; the read-egress screen has since been retired, 2026-10-01.)
+// Three answers is three chances to drift, and the drift would be invisible: each
+// screen would look right in isolation. So the inference lives in one function
+// with its limits written down, and the real fix — putting the declared class
+// on the audit record — replaces this file rather than hunting for the places
+// that guessed.
 
 import (
 	"sort"
@@ -46,7 +47,7 @@ import (
 // It exists because the trail reaches this package as TWO types: audit.Record,
 // for what has not migrated onto the read lane — after #542, that is node
 // detail's Recent Tasks panel and its node_revoke lookup, and nothing else —
-// and capability.AuditRow, for every screen that has (Activity, read egress,
+// and capability.AuditRow, for every screen that has (Activity,
 // agent history). The copy functions below — what an Operation is called,
 // what it was asked to do, who asked — must not fork along that seam. A
 // second spelling of "enumerated list_nodes" is exactly how two screens come
@@ -192,13 +193,45 @@ func principalText(f trailFacts) string {
 
 // readTargetOf names WHAT was read, in the terms an operator would search for.
 //
-// The naming itself lives in reads.go's readTargetName, which iterates
+// The naming itself lives in readTargetName, below, which iterates
 // audit.TargetArgKeys so that this package and the store's reach aggregate
 // agree on what counts as one target — see that function for the precedence
 // order and the one residual divergence. This wrapper exists so that both
 // families of record reach that core through the same projection.
 func readTargetOf(f trailFacts) string {
 	return readTargetName(f.OperationName, f.ActionKind, f.Args)
+}
+
+// readTargetName names WHAT was read, in the terms an operator would search
+// for. It is the shared core that readTargetOf, above, reaches.
+//
+// It iterates audit.TargetArgKeys rather than a local list, because the store
+// builds the COALESCE behind its reach aggregate from that same slice
+// (internal/store/auditquery.go's reachTargetExpr): the trail lane and the
+// store agree on what one target is only while both read one slice.
+//
+// ONE RESIDUAL DIVERGENCE, deliberately kept: the store's COALESCE stops at
+// the first key PRESENT and this stops at the first key present and NON-EMPTY,
+// so a Record carrying an explicitly empty `path` alongside a `unit` would key
+// differently on the two sides. The non-empty rule is what Activity renders
+// today, and no catalog Operation carries two of these keys, so the case is
+// not reachable — but it is the kind of thing that becomes reachable quietly.
+func readTargetName(operationName, actionKind string, args map[string]string) string {
+	if operationName == "" {
+		if actionKind != "" {
+			return actionKind
+		}
+		return "registry read"
+	}
+	// The path argument is the interesting half of a file read. Where an
+	// Operation has one, the target is "operation path" so that two reads of
+	// different files do not collapse into one row.
+	for _, key := range audit.TargetArgKeys {
+		if v, ok := args[key]; ok && v != "" {
+			return operationName + " " + v
+		}
+	}
+	return operationName
 }
 
 // readOutcomeAudited is the outcome word for a metadata-only read record.
@@ -366,10 +399,9 @@ func callOutcome(f trailFacts) (outcome, state string) {
 // A customer-authored Template Operation is in neither half and is therefore
 // treated as a mutate — the safe direction for the risk chip, since it
 // over-states blast radius rather than under-stating it. This is a change
-// from the literal it replaces: the old list also fed the read-egress screen,
-// where the same default under-counted exposure. That screen no longer reads
-// this set — reads.go derives its vocabulary from the Job's DECLARED
-// RiskClass — so the only residual bias this set introduces is in the chip,
+// from the literal it replaces: the old list also fed the
+// since-retired read-egress screen, where the same default under-counted
+// exposure. The only residual bias this set introduces is in the chip,
 // the note, and denyExplanation's fallback sentence, and it errs safe there.
 //
 // A Node-local template that REUSES one of the seven shipped names with a

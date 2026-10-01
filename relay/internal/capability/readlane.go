@@ -85,7 +85,7 @@ func (s *Service) QueryAudit(ctx context.Context, p Principal, f AuditFilter, pa
 }
 
 // AuditCounts returns f's matching Records grouped by verified Account and
-// by time bucket — read egress's per-principal trend.
+// by time bucket.
 //
 // f must carry a bounded Since/Until window (validateWindow) and bucket is
 // floored to MinAuditBucket (clampBucket) — F1, #441 cycle-2 security
@@ -110,7 +110,7 @@ func (s *Service) AuditCounts(ctx context.Context, p Principal, f AuditFilter, b
 }
 
 // AuditReach returns f's call count, distinct-target count, and
-// distinct-Node count — read egress's "how far did this reach" summary.
+// distinct-Node count: how far a query's matching Records reached.
 //
 // f must carry a bounded Since/Until window (validateWindow) — F1, #441
 // cycle-2 security review: AuditReach has no LIMIT either, and its

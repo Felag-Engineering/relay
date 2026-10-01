@@ -253,10 +253,10 @@ never deleted: it keeps its substance and stays one click away, and only words t
 old position ("below", "above") change with it. Situational messages are never
 collapsed or hidden; they render where they always have, because the operator needs them for the
 thing in front of them. **When a note's class is in doubt, it is situational and stays visible.**
-A note that states a property the Console must be visibly bound by is never collapsed. Two are
-named: Node detail's "there is no path from this screen to this Node's Policy" (invariant 2), and
-Read egress's statement that read output still sits on a Job's Task rows, is readable through the
-Job read, and is never shown by the Console (ADR-0025). A note that qualifies a claim the screen
+A note that states a property the Console must be visibly bound by is never collapsed. One is
+named: Node detail's "there is no path from this screen to this Node's Policy" (invariant 2).
+(Read egress's ADR-0025 statement was the second; that screen was retired on 2026-10-01, see
+[17](17-read-egress.md).) A note that qualifies a claim the screen
 visibly makes — "every figure is exact", "this is the feed" — is situational too, because hiding
 it makes the visible claim stronger than the truth.
 

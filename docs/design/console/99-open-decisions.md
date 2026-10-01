@@ -576,7 +576,11 @@ Two consequences worth recording as deviations rather than leaving them to be di
 
 ## Proposed, not specified
 
-### D11. A read-egress view — **RESOLVED 2026-08-24: specified as [17](17-read-egress.md)**
+### D11. A read-egress view — **RESOLVED 2026-08-24: specified as [17](17-read-egress.md); REVERSED 2026-10-01**
+
+**Reversed 2026-10-01 (owner decision):** the screen is dropped. Activity ([04](04-activity.md))
+is the single log of control-plane traffic; read-class calls appear there as `read` and
+read-class `dispatch` rows. [17](17-read-egress.md) is retired.
 
 ADR-0021 says reading is exfiltration by construction; ADR-0022 builds a 25-path confidentiality
 deny-list around it; ADR-0025 makes every read auditable and fails the read closed if the audit

@@ -352,8 +352,8 @@ func TestConsoleEvents_B5_FailsClosedBeforeSubscribing(t *testing.T) {
 }
 
 // B6: a role this Relay does not recognise is refused before the record is
-// ever written — recording a 403 would count a non-access in read egress's
-// enumeration, which is not what a refusal is.
+// ever written — recording a 403 would record a non-access as a read in the
+// trail, which is not what a refusal is.
 //
 // MUT move the RecordEventSubscription call above the role check -> this
 // test goes red.

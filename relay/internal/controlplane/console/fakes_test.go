@@ -159,17 +159,10 @@ const errQueryFailed = constErr("the query lane failed")
 // Filters, limits and cursors are HONOURED, and every filter and page limit
 // is recorded: a fake that ignored the page size would let a "renders no list
 // at 10,000" test pass while the real screen fetched ten thousand rows, and a
-// fake that ignored Operations would let read egress's join guard rot
-// silently. Nothing here strips output either — the real QueryTasks does, and
+// fake that ignored Operations would let a join guard rot silently. Nothing
+// here strips output either — the real QueryTasks does, and
 // a test that wants to prove the Console gates on the declared risk class
 // needs a seam that hands the bytes over anyway.
-//
-// AuditReach's DistinctTargets is computed with THE SAME key function the
-// screen uses, which makes the headline and the table agree BY CONSTRUCTION.
-// That is convenient and it is also exactly what hides the one divergence
-// worth knowing about: the store's COALESCE stops at the first target key
-// PRESENT and readTargetName stops at the first one NON-EMPTY. Only a
-// store-level test can see that; nothing here can.
 type fakeQueries struct {
 	jobs  []capability.JobSummary
 	tasks []capability.TaskRow
@@ -179,27 +172,15 @@ type fakeQueries struct {
 	// fixtures that do not care.
 	taskJobID string
 
-	jobsErr   error
-	tasksErr  error
-	auditErr  error
-	reachErr  error
-	countsErr error
+	jobsErr  error
+	tasksErr error
+	auditErr error
 
-	// reachStub and countsStub answer the two AGGREGATE methods with canned
-	// values, per filter. The aggregates are the page's exact figures and the
-	// pages below them are deliberately short, so a test that needs "the
-	// headline says 3 and the sample holds 1" cannot express itself through
-	// rows alone — the in-memory computation would make the two agree.
-	reachStub  func(capability.AuditFilter) capability.Reach
-	countsStub func(capability.AuditFilter) []capability.PrincipalBucket
-
-	// The PER-FILTER failure hooks. reachErr/auditErr/countsErr above are
+	// auditErrOn is the PER-FILTER failure hook. auditErr above is
 	// all-or-nothing, which cannot express the case that matters: ONE query
-	// of nine failing while the rest succeed. A screen's graceful-degradation
-	// branches are only reachable — and only assertable — through these.
-	reachErrOn  func(capability.AuditFilter) bool
-	auditErrOn  func(capability.AuditFilter) bool
-	countsErrOn func(capability.AuditFilter) bool
+	// failing while the rest succeed. A screen's graceful-degradation
+	// branches are only reachable — and only assertable — through this.
+	auditErrOn func(capability.AuditFilter) bool
 	// jobsErrOn is the Job lane's twin: it fails ONE Job read (Running now's,
 	// say) while the stream's succeeds.
 	jobsErrOn func(capability.JobFilter) bool
@@ -207,17 +188,11 @@ type fakeQueries struct {
 	jobCalls   int
 	auditCalls int
 
-	// The recorded filters. Read egress asserts on these: that no
-	// dispatch-kind filter ever carries an empty Operations list, that a
-	// scoped page scopes EVERY filter, and that an over-long caller value
-	// never reaches the lane at all. Activity asserts on them too: a screen
+	// The recorded filters. Activity asserts on them: a screen
 	// that applied a filter in Go after fetching an unfiltered page renders
 	// identically and paginates wrongly, and nothing but this would notice.
 	auditFilters []capability.AuditFilter
 	jobFilters   []capability.JobFilter
-	reachFilters []capability.AuditFilter
-	countFilters []capability.AuditFilter
-	buckets      []time.Duration
 
 	// auditPages and jobPages record every PageRequest in full, so a test can
 	// assert that "older" carried BOTH lanes' cursors. auditLimits and
@@ -380,74 +355,6 @@ func (f *fakeQueries) QueryAudit(_ context.Context, _ capability.Principal, filt
 		next = strconv.Itoa(start + page.Limit)
 	}
 	return capability.AuditPage{Rows: limitRows(out, page.Limit), Next: next, Limit: page.Limit}, nil
-}
-
-func (f *fakeQueries) AuditCounts(_ context.Context, _ capability.Principal, filter capability.AuditFilter, bucket time.Duration) ([]capability.PrincipalBucket, error) {
-	f.countFilters = append(f.countFilters, filter)
-	f.buckets = append(f.buckets, bucket)
-	if f.countsErr != nil {
-		return nil, f.countsErr
-	}
-	if f.countsErrOn != nil && f.countsErrOn(filter) {
-		return nil, errQueryFailed
-	}
-	if f.countsStub != nil {
-		return f.countsStub(filter), nil
-	}
-	type key struct {
-		accountID string
-		start     time.Time
-	}
-	counts := map[key]*capability.PrincipalBucket{}
-	var order []key
-	for _, row := range f.matching(filter) {
-		k := key{accountID: row.Verified.AccountID, start: row.Timestamp.Truncate(bucket)}
-		b, seen := counts[k]
-		if !seen {
-			b = &capability.PrincipalBucket{
-				AccountID: k.accountID, AccountName: row.Verified.AccountName, Start: k.start,
-			}
-			counts[k] = b
-			order = append(order, k)
-		}
-		b.Count++
-	}
-	out := make([]capability.PrincipalBucket, 0, len(order))
-	for _, k := range order {
-		out = append(out, *counts[k])
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].AccountID != out[j].AccountID {
-			return out[i].AccountID < out[j].AccountID
-		}
-		return out[i].Start.Before(out[j].Start)
-	})
-	return out, nil
-}
-
-func (f *fakeQueries) AuditReach(_ context.Context, _ capability.Principal, filter capability.AuditFilter) (capability.Reach, error) {
-	f.reachFilters = append(f.reachFilters, filter)
-	if f.reachErr != nil {
-		return capability.Reach{}, f.reachErr
-	}
-	if f.reachErrOn != nil && f.reachErrOn(filter) {
-		return capability.Reach{}, errQueryFailed
-	}
-	if f.reachStub != nil {
-		return f.reachStub(filter), nil
-	}
-	targets, nodes := map[string]bool{}, map[string]bool{}
-	reach := capability.Reach{}
-	for _, row := range f.matching(filter) {
-		reach.Calls++
-		targets[readTargetOf(factsOfRow(row))] = true
-		if row.NodeID != "" {
-			nodes[row.NodeID] = true
-		}
-	}
-	reach.DistinctTargets = len(targets)
-	reach.DistinctNodes = len(nodes)
-	return reach, nil
 }
 
 // ListNodes and DescribeNode are the lane's registry half (#450).

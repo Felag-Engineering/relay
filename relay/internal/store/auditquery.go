@@ -159,8 +159,7 @@ func (a *sqliteAudit) Query(ctx context.Context, q audit.Query, limit int, curso
 }
 
 // CountsByPrincipal implements audit.QueryRepository: q's matching Records,
-// grouped by verified Account and by a fixed-width time bucket, ascending —
-// read egress's per-principal trend (docs/design/console/17-read-egress.md).
+// grouped by verified Account and by a fixed-width time bucket, ascending.
 func (a *sqliteAudit) CountsByPrincipal(ctx context.Context, q audit.Query, bucket time.Duration) ([]audit.Bucket, error) {
 	conds, args, err := buildAuditWhere(q)
 	if err != nil {
@@ -262,10 +261,10 @@ func reachTargetExpr() (string, error) {
 }
 
 // ReachCounts implements audit.QueryRepository: q's call count, distinct
-// targets, and distinct Nodes — read egress's "how far did this reach"
-// summary. NULL/empty node_id is excluded from the distinct-Node count via
-// the CASE, matching COUNT(DISTINCT ...)'s own NULL-skipping so an unset
-// Node never counts as one.
+// targets, and distinct Nodes: how far its matching Records reached.
+// NULL/empty node_id is excluded from the distinct-Node count via the CASE,
+// matching COUNT(DISTINCT ...)'s own NULL-skipping so an unset Node never
+// counts as one.
 //
 // Residual (F6, #441 cycle-2 security review): this evaluates a 4-way
 // json_extract COALESCE per row with no index and no LIMIT, so even a filter

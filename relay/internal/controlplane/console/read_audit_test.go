@@ -159,10 +159,6 @@ var consoleReadAudit = map[string]readAuditRule{
 		path: "/console/activity",
 		tool: "query_jobs",
 	},
-	"GET /console/reads": {
-		path: "/console/reads",
-		tool: "query_jobs",
-	},
 	"GET /console/approvals": {
 		path: "/console/approvals",
 		// The queue reads the approval seam first and the trail only for a
@@ -542,20 +538,23 @@ func TestConsole_AnUnauditableReadRefusesTheScreen(t *testing.T) {
 	}
 }
 
-// TestConsole_ReadEgressCountsAConsoleRead is the third acceptance line: a
-// Console read is counted beside an AI-agent's, not in a lane of its own.
+// TestConsole_ActivityNamesAConsoleRead is the third acceptance line: a
+// Console read is counted beside an AI-agent's, not in a lane of its own — it
+// shows in Activity's read kind.
 //
 // The record is REAL — produced by driving the fleet listing through the real
 // lane and sink — and is then projected onto the read lane's row type and fed
-// to the read-egress screen. That is the join this test exists to prove: the
-// filter read egress uses for enumerations (Kinds: [KindRead]) matches what a
-// Console read writes, and the name it renders is the tool that wrote it.
+// to Activity. That is the join this test exists to prove: a Console read is
+// a KindRead record, and the name Activity renders is the tool that wrote it.
+// Reads made from a Console session are hidden by default (callfeed.go); the
+// test authenticates with a Bearer token, so the record is not one, and asks
+// for console=show to pin the display rule rather than lean on that.
 //
 // This is also the check #463/#517/#520 each wanted and did not have. All
 // three were records rendering wrongly, and all three survived a fixture built
 // as an audit.Record literal — a literal agrees with the renderer by
 // construction, because the same person wrote both.
-func TestConsole_ReadEgressCountsAConsoleRead(t *testing.T) {
+func TestConsole_ActivityNamesAConsoleRead(t *testing.T) {
 	trail := &recordingTrail{}
 	get(t, newTestHandler(realLaneDeps(trail), accounts.RoleAdmin), "/console/")
 
@@ -565,11 +564,10 @@ func TestConsole_ReadEgressCountsAConsoleRead(t *testing.T) {
 	}
 	real := reads[0]
 
-	// The vocabulary check, on the real record: read egress buckets a
-	// KindRead record as a control-plane enumeration, and names it through
-	// readTargetName.
+	// The vocabulary check, on the real record: Activity's read kind selects
+	// on Kind, and the name comes through readTargetName.
 	if real.Kind != audit.KindRead {
-		t.Fatalf("record Kind = %q, want %q — read egress's enumeration filter selects on Kind",
+		t.Fatalf("record Kind = %q, want %q — Activity's read kind selects on Kind",
 			real.Kind, audit.KindRead)
 	}
 	if got := readTargetOf(factsOfRecord(real)); got != "list_nodes" {
@@ -581,13 +579,22 @@ func TestConsole_ReadEgressCountsAConsoleRead(t *testing.T) {
 	// the store's query lane projects it.
 	d := renderableDeps()
 	d.Queries = &fakeQueries{rows: []capability.AuditRow{rowOfRecord(real)}}
-	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/reads").Body.String()
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity?kind=read&console=show").Body.String()
 
-	if !strings.Contains(body, "list_nodes") {
-		t.Errorf("read egress does not name the Console's own read:\n%s", body)
+	// The layout prints the signed-in account on every page, so attribution is
+	// checked inside the row, not against the whole body.
+	content := contentOf(body)
+	at := strings.Index(content, "enumerated list_nodes")
+	if at < 0 {
+		t.Fatalf("Activity does not name the Console's own read:\n%s", content)
 	}
-	if !strings.Contains(body, testAccountName(accounts.RoleAdmin)) {
-		t.Error("read egress does not attribute the Console's read to the human who made it")
+	start := strings.LastIndex(content[:at], `<article class="ev"`)
+	end := strings.Index(content[at:], "</article>")
+	if start < 0 || end < 0 {
+		t.Fatalf("the read is not rendered as a feed row:\n%s", content)
+	}
+	if row := content[start : at+end]; !strings.Contains(row, testAccountName(accounts.RoleAdmin)) {
+		t.Errorf("Activity does not attribute the Console's read to the human who made it:\n%s", row)
 	}
 }
 
@@ -925,5 +932,55 @@ func TestActivity_RunningNowIsExactlyOneMoreAuditedRead(t *testing.T) {
 	}
 	if !isRunningNow(jobReads[0]) || !strings.Contains(jobReads[0].Selector, "count=matching") {
 		t.Errorf("the one Job read's selector = %q, want running, oldest first, counted", jobReads[0].Selector)
+	}
+}
+
+// TestReadTargetName_FollowsTheTrailsOwnPrecedence.
+//
+// The store builds AuditReach's distinct-target COALESCE from
+// audit.TargetArgKeys (internal/store/auditquery.go's reachTargetExpr). A
+// divergent order here makes the Console name a read target differently from how
+// the reach aggregate counts it.
+//
+// The second half REORDERS audit.TargetArgKeys and asserts the naming follows.
+// That is what distinguishes "reads the shared slice" from "happens to hold a
+// byte-identical copy of it" — a copied literal passes every assertion built
+// from the slice's current contents.
+func TestReadTargetName_FollowsTheTrailsOwnPrecedence(t *testing.T) {
+	if len(audit.TargetArgKeys) < 2 {
+		t.Fatalf("audit.TargetArgKeys = %v — this test proves a PRECEDENCE order and "+
+			"needs at least two keys to have one. A shorter list means the trail "+
+			"changed shape and this test must be rewritten, not skipped.",
+			audit.TargetArgKeys)
+	}
+	first, second := audit.TargetArgKeys[0], audit.TargetArgKeys[1]
+
+	args := map[string]string{first: "/etc/hosts", second: "nginx"}
+	if got := readTargetName("file.read", "", args); got != "file.read /etc/hosts" {
+		t.Errorf("readTargetName = %q, want the first key in audit.TargetArgKeys to win", got)
+	}
+	if got := readTargetName("file.read", "", map[string]string{second: "nginx"}); got != "file.read nginx" {
+		t.Errorf("readTargetName = %q, want the second key when the first is absent", got)
+	}
+	// An explicitly EMPTY value falls through to the next key. This is the one
+	// documented divergence from the store's COALESCE, which stops at the
+	// first key PRESENT; it is unreachable today because no catalog Operation
+	// carries two of these keys.
+	if got := readTargetName("file.read", "", map[string]string{first: "", second: "nginx"}); got != "file.read nginx" {
+		t.Errorf("readTargetName = %q, want an empty first key to fall through", got)
+	}
+
+	// Reordered. A local copy of the key list does not move.
+	//
+	// Hazard: this mutates a package-level var owned by another package and restores
+	// it with t.Cleanup. That is only sound while nothing runs
+	// concurrently with it — do not add t.Parallel to this test, or to any
+	// test that reads audit.TargetArgKeys, without replacing this seam.
+	original := audit.TargetArgKeys
+	t.Cleanup(func() { audit.TargetArgKeys = original })
+	audit.TargetArgKeys = []string{second, first}
+	if got := readTargetName("file.read", "", args); got != "file.read nginx" {
+		t.Errorf("readTargetName = %q after reordering audit.TargetArgKeys — readTargetName holds its "+
+			"own copy of the precedence order, which is exactly how it drifts from the store's COALESCE", got)
 	}
 }

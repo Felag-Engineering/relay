@@ -184,7 +184,6 @@ func TestConsoleServesNoSeparatePreflightRoute(t *testing.T) {
 		"GET /console/activity":                true,
 		"GET /console/jobs/{job_id}":           true,
 		"GET /console/compare":                 true,
-		"GET /console/reads":                   true,
 		"GET /console/approvals":               true,
 		"GET /console/approvals/{approval_id}": true,
 		"GET /console/accounts":                true,

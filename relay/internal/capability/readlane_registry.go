@@ -47,12 +47,11 @@ import (
 //
 // They also have to render correctly where they land. tool becomes
 // audit.Record.OperationName, which console/vocab.go's readTargetOf feeds to
-// readTargetName on three screens — the Activity trail, read egress, and node
-// detail. A KindRead record carries no Args, so readTargetName returns the
-// name verbatim: "list_nodes" and "describe_node" read there exactly as the
-// same records from MCP already do. (#463, #517 and #520 were each a case of
-// these records rendering wrongly; the fix for all three was to make one
-// vocabulary, not two.)
+// readTargetName on the Activity trail and node detail. A KindRead record
+// carries no Args, so readTargetName returns the name verbatim: "list_nodes"
+// and "describe_node" read there exactly as the same records from MCP already
+// do. (#463, #517 and #520 were each a case of these records rendering
+// wrongly; the fix for all three was to make one vocabulary, not two.)
 //
 // toolListOperations joined with #680 on the same terms: it is the MCP
 // tool's own name because ADR-0025's question is "who probed this Node's

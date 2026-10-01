@@ -4,8 +4,7 @@ package console
 // "who got in, and who changed who can get in?" admin-only, in the Console
 // only (D17 ruling 4).
 //
-// The store-backed fixtures here mirror read_audit_test.go's realLaneDeps and
-// reads_test.go's TestReads_EnumerationHeadlineAndPrincipalTableAreOneSnapshot:
+// The store-backed fixtures here mirror read_audit_test.go's realLaneDeps:
 // a fakeQueries answers instantly and cannot prove what the REAL writers
 // (auditsink.Sink.RecordLogin, RecordAccountAdmin) actually put on the trail,
 // which is exactly the #463/#517/#520 failure mode — a fixture built by hand
@@ -51,7 +50,7 @@ func accessDeps(q *fakeQueries) Deps {
 
 // accessStoreDeps is a Console wired to a REAL *capability.Service over a
 // REAL *auditsink.Sink and *auditquery.Queries, built exactly like
-// TestReads_EnumerationHeadlineAndPrincipalTableAreOneSnapshot (reads_test.go)
+// read_audit_test.go's realLaneDeps
 // — the fixture that reproduces the read lane's own ordering rather than
 // answering instantly. Returns the sink and store a test seeds through, and
 // the acting admin Principal every seeded account/api-token record is

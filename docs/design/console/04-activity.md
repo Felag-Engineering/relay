@@ -162,7 +162,8 @@ saying nobody has called.
 `list_nodes`, `describe_node` and `get_job` calls, and every read of the trail — would otherwise
 bury the calls that change something. One plain sentence under the kind chips, drawn while no kind
 filter is set, says read records are left out, and links to them (the `read` chip, keeping the
-other filters) and to [17 — Read egress](17-read-egress.md). Where a kind filter is set, no
+other filters). Activity is the only screen over these records; the Read egress screen
+([17](17-read-egress.md)) was retired on 2026-10-01. Where a kind filter is set, no
 sentence is drawn. The reasoning stays in the disclosure.
 
 Read **calls** are audited — who, which tool, what they asked for, when — and an unauditable read

@@ -1,6 +1,7 @@
 package console
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -144,9 +145,8 @@ func TestConsole_ViewerNavigationIsStructurallySmaller(t *testing.T) {
 		}
 	}
 
-	// Observe lists only the screens that exist. Derived from Nav, not from
-	// HTML, and bounded by a superset rather than an exact list, so it holds
-	// whether or not Read egress has been removed yet.
+	// Observe lists exactly Fleet and Activity: Agents (#787) and Read egress
+	// (#828) were both retired into Activity. Derived from Nav, not from HTML.
 	observe := map[string]bool{}
 	for _, section := range Nav(withExecution(renderableDeps(), true), accounts.RoleViewer, "") {
 		if section.Group != NavObserve {
@@ -163,9 +163,9 @@ func TestConsole_ViewerNavigationIsStructurallySmaller(t *testing.T) {
 	}
 	for label := range observe {
 		switch label {
-		case "Fleet", "Activity", "Read egress":
+		case "Fleet", "Activity":
 		default:
-			t.Errorf("Observe lists %q, which is not one of Fleet, Activity or Read egress", label)
+			t.Errorf("Observe lists %q, which is not one of Fleet or Activity", label)
 		}
 	}
 }
@@ -679,6 +679,64 @@ func TestConsole_NavDrawsNoLinkTheSessionCannotReach(t *testing.T) {
 	}
 	if navItems == 0 {
 		t.Fatal("the sweep found zero nav items — it is not running")
+	}
+}
+
+// retiredReadsLink matches a link to the retired Read egress screen without
+// matching a longer path that merely starts with the same letters.
+var retiredReadsLink = regexp.MustCompile(`/console/reads(["'?/#&]|$)`)
+
+// TestConsole_ReadEgressIsRetired: the Read egress screen was dropped on
+// 2026-10-01 (owner decision) — Activity is the single log of control-plane
+// traffic. /console/reads answers the Console's ORDINARY 404 for every role,
+// the nav no longer offers it, and no rendered screen links to it.
+func TestConsole_ReadEgressIsRetired(t *testing.T) {
+	d := withExecution(sweepFixture(), true)
+
+	walked := 0
+	for _, role := range sessionRoles {
+		h := newTestHandler(d, role)
+
+		// Byte-identical to an unmounted path's page: the ordinary 404, not a
+		// bespoke "this moved" page and not a redirect.
+		want := get(t, h, "/console/nonesuch")
+		if want.Code != http.StatusNotFound {
+			t.Fatalf("role %s: /console/nonesuch = %d, want 404", role, want.Code)
+		}
+		for _, path := range []string{"/console/reads", "/console/reads/", "/console/reads?window=7d&principal=acct-1"} {
+			got := get(t, h, path)
+			if got.Code != http.StatusNotFound {
+				t.Errorf("role %s: GET %s = %d, want 404", role, path, got.Code)
+				continue
+			}
+			if !bytes.Equal(got.Body.Bytes(), want.Body.Bytes()) {
+				t.Errorf("role %s: GET %s is not the Console's ordinary 404 page", role, path)
+			}
+		}
+
+		reachable := routesFor(d, role)
+		for _, r := range reachable {
+			if r.Path == "/console/reads" {
+				t.Errorf("role %s: the route table still mounts %s", role, r.Path)
+			}
+		}
+		if nav := navOf(get(t, h, "/console/").Body.String()); strings.Contains(nav, "Read egress") {
+			t.Errorf("role %s: the navigation still offers Read egress", role)
+		}
+
+		for _, path := range walkableScreens(reachable, fixtureIDs) {
+			walked++
+			if body := get(t, h, path).Body.String(); retiredReadsLink.MatchString(body) {
+				t.Errorf("role %s: %s links to the retired /console/reads", role, path)
+			}
+		}
+		// The kind note, drawn only with a filter kept.
+		if body := get(t, h, "/console/activity?account=acct-9").Body.String(); retiredReadsLink.MatchString(body) {
+			t.Errorf("role %s: Activity's read-records note links to the retired /console/reads", role)
+		}
+	}
+	if walked == 0 {
+		t.Fatal("the sweep walked zero screens — it is not running")
 	}
 }
 

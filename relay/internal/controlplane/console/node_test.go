@@ -695,8 +695,8 @@ func tasksPanelOf(body string) string {
 // Spec 02 defines the panel as Tasks dispatched to the Node, denies included
 // — not reads ABOUT the Node. This proves the panel now filters to
 // KindDispatch, that denies still render, and that the audit trail itself is
-// untouched: those reads are still there for Activity, Agents and Read
-// egress to show, this panel just does not list them.
+// untouched: those reads are still there for Activity and Agents to
+// show, this panel just does not list them.
 func TestNode_RecentTasksListsTasksNotControlPlaneReads(t *testing.T) {
 	repo := &captureRepo{}
 	ctx := context.Background()

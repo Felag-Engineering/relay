@@ -279,8 +279,7 @@ func readFailed(w http.ResponseWriter, err error, what string) {
 //
 // The rule is one rule with no per-screen exception: a Console page whose read
 // cannot be audited refuses to render. Several screens cannot express that
-// through their return values, and deliberately so — read egress runs nine
-// queries and marks the sections it could not fill, the approval object
+// through their return values, and deliberately so — the approval object
 // renders "the trail could not be read" beside a card it CAN render. That
 // graceful degradation is right for a store that failed and wrong for a trail
 // that cannot record: the first is a partial page, the second is a page the
@@ -322,16 +321,6 @@ func (l *auditLatch) DescribeNode(ctx context.Context, p capability.Principal, n
 
 func (l *auditLatch) QueryAudit(ctx context.Context, p capability.Principal, f capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error) {
 	res, err := l.QueryReader.QueryAudit(ctx, p, f, page)
-	return res, l.latch(err)
-}
-
-func (l *auditLatch) AuditCounts(ctx context.Context, p capability.Principal, f capability.AuditFilter, bucket time.Duration) ([]capability.PrincipalBucket, error) {
-	res, err := l.QueryReader.AuditCounts(ctx, p, f, bucket)
-	return res, l.latch(err)
-}
-
-func (l *auditLatch) AuditReach(ctx context.Context, p capability.Principal, f capability.AuditFilter) (capability.Reach, error) {
-	res, err := l.QueryReader.AuditReach(ctx, p, f)
 	return res, l.latch(err)
 }
 

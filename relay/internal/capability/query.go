@@ -12,8 +12,8 @@ import (
 
 // query.go is the capability layer's read-lane vocabulary (#441): the
 // filtered, paginated, aggregating query surface over the audit trail and
-// over Jobs/Tasks, so the Console's Activity, Job detail, AI-agent history, and
-// read-egress screens — and any future /api/v1 audit route — share ONE
+// over Jobs/Tasks, so the Console's Activity, Job detail, and AI-agent history
+// screens — and any future /api/v1 audit route — share ONE
 // seam (invariant 10) instead of each materialising the whole trail.
 //
 // Every type here MIRRORS internal/audit's and internal/jobs' read-lane
@@ -115,8 +115,8 @@ type AuditPage struct {
 }
 
 // PrincipalBucket is one principal's Record count within one time bucket —
-// capability's mirror of audit.Bucket, backing read egress's "trend against
-// own baseline".
+// capability's mirror of audit.Bucket. No Console screen has consumed
+// these aggregates since the Read-egress screen was retired (2026-10-01).
 type PrincipalBucket struct {
 	AccountID   string
 	AccountName string
@@ -556,11 +556,14 @@ type AuditQuery interface {
 	QueryAudit(ctx context.Context, f AuditFilter, page PageRequest) (AuditPage, error)
 
 	// AuditCounts returns f's matching Records grouped by verified Account
-	// and by time bucket — read egress's per-principal trend.
+	// and by time bucket. No Console screen has consumed it since the
+	// Read-egress screen was retired (2026-10-01).
 	AuditCounts(ctx context.Context, f AuditFilter, bucket time.Duration) ([]PrincipalBucket, error)
 
 	// AuditReach returns f's call count, distinct-target count, and
-	// distinct-Node count — read egress's "how far did this reach" summary.
+	// distinct-Node count: how far a query's matching Records reached. No
+	// Console screen has consumed it since the Read-egress screen was
+	// retired (2026-10-01).
 	AuditReach(ctx context.Context, f AuditFilter) (Reach, error)
 }
 
