@@ -147,7 +147,7 @@ var readWindows = []readWindow{
 }
 
 // readWindowDefault is the window an operator gets without asking. Spec 17's
-// question is "what has this agent read this week".
+// question is "what has this AI-agent read this week".
 const readWindowDefault = "7d"
 
 // readsFilter is the whole caller-controlled surface of this screen, resolved

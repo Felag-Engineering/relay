@@ -335,7 +335,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 		}
 
 		// Channel is a constant here, never read from the request body: the
-		// Console carries a browser credential the requesting agent session
+		// Console carries a browser credential the requesting AI-agent session
 		// does not hold, which is the definition of out-of-band (ADR-0027).
 		_, err := d.Decide.DecideApproval(r.Context(), caller, capability.ApprovalDecision{
 			RequestID: id,

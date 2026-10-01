@@ -74,7 +74,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 )
 
-// accountsCallPage is how many recorded agent calls this screen looks back
+// accountsCallPage is how many recorded AI-agent calls this screen looks back
 // over for each machine Account's last call. It is rendered into the copy, so
 // the honest-absence sentence states the real number rather than a rounded
 // one.
