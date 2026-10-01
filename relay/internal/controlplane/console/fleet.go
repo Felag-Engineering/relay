@@ -1039,13 +1039,29 @@ func appendTerm(filter, term string) string {
 
 func buildFacets(nodes []fleetNode, link linkContext) []facet {
 	var out []facet
+	for _, build := range []func([]fleetNode, linkContext) (facet, bool){
+		stateFacet,
+		daemonVersionFacet,
+		policyFingerprintFacet,
+		templateSetFacet,
+		nodeRoleFacet,
+	} {
+		if f, ok := build(nodes, link); ok {
+			out = append(out, f)
+		}
+	}
+	return out
+}
 
-	// The State facet mixes two namespaces on purpose — an operator scanning for
-	// "what is wrong here" wants derived conditions and declared fences in one
-	// list — so each row renders as its own CHIP and the namespace stays
-	// visible. Both `relay:` fences and `state:` markers resolve as a Selector
-	// term (#414); `revoked` alone does not, because it is not a label at all.
-	stateFacet := facet{Title: "State"}
+// stateFacet builds the State facet; false when no Node contributes a value.
+//
+// The State facet mixes two namespaces on purpose — an operator scanning for
+// "what is wrong here" wants derived conditions and declared fences in one
+// list — so each row renders as its own CHIP and the namespace stays
+// visible. Both `relay:` fences and `state:` markers resolve as a Selector
+// term (#414); `revoked` alone does not, because it is not a label at all.
+func stateFacet(nodes []fleetNode, link linkContext) (facet, bool) {
+	stateRows := facet{Title: "State"}
 	stateCounts := map[string]int{}
 	stateChip := map[string]Label{}
 	for _, n := range nodes {
@@ -1064,7 +1080,7 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 	}
 	for term, count := range stateCounts {
 		if term == fencedRevoked {
-			stateFacet.Values = append(stateFacet.Values,
+			stateRows.Values = append(stateRows.Values,
 				facetValue{Label: term, Count: count, Fenced: term})
 			continue
 		}
@@ -1074,22 +1090,27 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 			v.Targetable = true
 			v.Href = link.href(term)
 		}
-		stateFacet.Values = append(stateFacet.Values, v)
+		stateRows.Values = append(stateRows.Values, v)
 	}
-	if len(stateFacet.Values) > 0 {
-		sortFacet(&stateFacet)
-		out = append(out, stateFacet)
+	if len(stateRows.Values) == 0 {
+		return facet{}, false
 	}
+	sortFacet(&stateRows)
+	return stateRows, true
+}
 
-	// Daemon version is self-reported (registry.Node.DaemonVersion, copied
-	// straight out of Hello — tunnel.go) and has the IDENTICAL bypass the
-	// fingerprint facets below had: no short hash, so the raw value went
-	// straight into the href. It is also validFactValue's own documented
-	// example of the injection (nodestate.go's doc comment uses
-	// `"1.4.2, tag:x=y"`), so leaving it out would leave the exemplar live.
-	// The map is already keyed by the full value with no sentinels, so no
-	// re-keying is needed here — only routing the term through nodestate.Facts
-	// instead of concatenating it.
+// daemonVersionFacet builds the Daemon version facet; false when no Node contributes a value.
+//
+// Daemon version is self-reported (registry.Node.DaemonVersion, copied
+// straight out of Hello — tunnel.go) and has the IDENTICAL bypass the
+// fingerprint facets below had: no short hash, so the raw value went
+// straight into the href. It is also validFactValue's own documented
+// example of the injection (nodestate.go's doc comment uses
+// `"1.4.2, tag:x=y"`), so leaving it out would leave the exemplar live.
+// The map is already keyed by the full value with no sentinels, so no
+// re-keying is needed here — only routing the term through nodestate.Facts
+// instead of concatenating it.
+func daemonVersionFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 	versions := map[string]int{}
 	versionTerms := map[string]string{}
 	versionRefused := false
@@ -1106,26 +1127,32 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 			versionRefused = true
 		}
 	}
-	if f := facetFrom("Daemon version", versions, link, func(k string) (string, string, bool) {
+	f := facetFrom("Daemon version", versions, link, func(k string) (string, string, bool) {
 		term := versionTerms[k]
 		return k, term, term != ""
-	}); len(f.Values) > 0 {
-		if versionRefused {
-			f.Hint = facetRefusalHint
-		}
-		out = append(out, f)
+	})
+	if len(f.Values) == 0 {
+		return facet{}, false
 	}
+	if versionRefused {
+		f.Hint = facetRefusalHint
+	}
+	return f, true
+}
 
-	// Policy fingerprint is BUCKETED by the FULL self-reported value, not the
-	// short hash — the short hash is only ever a display convenience
-	// (shortHash, in render below). Bucketing by the truncated form let a
-	// hostile value sharing twelve characters with an honest one either
-	// hijack the honest bucket's link (last-writer-wins over the nodes slice)
-	// or poison its count; keying by the full value makes both impossible,
-	// because a Node can only ever share a bucket with another Node reporting
-	// the SAME full value. This facet has no sentinel values, so — unlike the
-	// template-set facet below — the raw full value is a safe map key with no
-	// further discrimination needed.
+// policyFingerprintFacet builds the Policy fingerprint facet; false when no Node contributes a value.
+//
+// Policy fingerprint is BUCKETED by the FULL self-reported value, not the
+// short hash — the short hash is only ever a display convenience
+// (shortHash, in render below). Bucketing by the truncated form let a
+// hostile value sharing twelve characters with an honest one either
+// hijack the honest bucket's link (last-writer-wins over the nodes slice)
+// or poison its count; keying by the full value makes both impossible,
+// because a Node can only ever share a bucket with another Node reporting
+// the SAME full value. This facet has no sentinel values, so — unlike the
+// template-set facet below — the raw full value is a safe map key with no
+// further discrimination needed.
+func policyFingerprintFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 	policies := map[string]int{}
 	policyTerms := map[string]string{}
 	policyRefused := false
@@ -1139,30 +1166,36 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 			policyRefused = true
 		}
 	}
-	if f := facetFrom("Policy fingerprint", policies, link, func(k string) (string, string, bool) {
+	f := facetFrom("Policy fingerprint", policies, link, func(k string) (string, string, bool) {
 		term := policyTerms[k]
 		return shortHash(k), term, term != ""
-	}); len(f.Values) > 0 {
-		if policyRefused {
-			f.Hint = facetRefusalHint
-		}
-		out = append(out, f)
+	})
+	if len(f.Values) == 0 {
+		return facet{}, false
 	}
+	if policyRefused {
+		f.Hint = facetRefusalHint
+	}
+	return f, true
+}
 
-	// The template-set facet, in its specified slot. Omitting it left question
-	// two of the four ("will it take work?") with no fleet-level answer for
-	// template vocabulary: `state:template-unloadable` was countable, but the
-	// fingerprint that says WHICH set is installed — and therefore whether a
-	// rollout is half-landed — was nowhere.
-	//
-	// This map mixes real values with two closed-vocabulary sentinels, so —
-	// unlike the Policy fingerprint facet above — bucketing by the raw full
-	// value is NOT safe on its own: the sentinel literal "none installed" is
-	// itself a legal (if unlikely) self-reported string, and a Node reporting
-	// it verbatim would key into the genuine "no templates installed" bucket
-	// and inflate its count. templateValueKey and the two sentinel consts
-	// below give the two kinds of key disjoint PREFIXES, so that collision is
-	// structurally unreachable rather than merely unlikely.
+// templateSetFacet builds the Template set facet; false when no Node contributes a value.
+//
+// The template-set facet, in its specified slot. Omitting it left question
+// two of the four ("will it take work?") with no fleet-level answer for
+// template vocabulary: `state:template-unloadable` was countable, but the
+// fingerprint that says WHICH set is installed — and therefore whether a
+// rollout is half-landed — was nowhere.
+//
+// This map mixes real values with two closed-vocabulary sentinels, so —
+// unlike the Policy fingerprint facet above — bucketing by the raw full
+// value is NOT safe on its own: the sentinel literal "none installed" is
+// itself a legal (if unlikely) self-reported string, and a Node reporting
+// it verbatim would key into the genuine "no templates installed" bucket
+// and inflate its count. templateValueKey and the two sentinel consts
+// below give the two kinds of key disjoint PREFIXES, so that collision is
+// structurally unreachable rather than merely unlikely.
+func templateSetFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 	templates := map[string]int{}
 	templateTerms := map[string]string{}
 	templateRefused := false
@@ -1181,7 +1214,7 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 			templates[templateSentinelNoneInstalled]++
 		}
 	}
-	if f := facetFrom("Template set", templates, link, func(k string) (string, string, bool) {
+	f := facetFrom("Template set", templates, link, func(k string) (string, string, bool) {
 		switch k {
 		case templateSentinelUnloadable:
 			// "unloadable" maps to the marker term, not a fact: the fingerprint
@@ -1194,22 +1227,28 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 			full := strings.TrimPrefix(k, templateValuePrefix)
 			return shortHash(full), templateTerms[k], templateTerms[k] != ""
 		}
-	}); len(f.Values) > 0 {
-		if templateRefused {
-			f.Hint = facetRefusalHint
-		}
-		out = append(out, f)
+	})
+	if len(f.Values) == 0 {
+		return facet{}, false
 	}
+	if templateRefused {
+		f.Hint = facetRefusalHint
+	}
+	return f, true
+}
 
-	// node:role's value is now well-formed BY CONSTRUCTION at ingress
-	// (registry.WellFormedLabel, applied by protoconv.ParseNodeLabel —
-	// #504): every node: label stored in the registry has already been
-	// refused if it could render as more than one Selector term, so
-	// "node:role=" + k below is safe for exactly that reason, at the one
-	// gate that protects the registry, the Control API and MCP too, not just
-	// this renderer. Naming the predicate here rather than re-deriving the
-	// argument is deliberate — a second, Console-local validation path is
-	// precisely the fork #488 exists to remove.
+// nodeRoleFacet builds the node:role facet; false when no Node contributes a value.
+//
+// node:role's value is now well-formed BY CONSTRUCTION at ingress
+// (registry.WellFormedLabel, applied by protoconv.ParseNodeLabel —
+// #504): every node: label stored in the registry has already been
+// refused if it could render as more than one Selector term, so
+// "node:role=" + k below is safe for exactly that reason, at the one
+// gate that protects the registry, the Control API and MCP too, not just
+// this renderer. Naming the predicate here rather than re-deriving the
+// argument is deliberate — a second, Console-local validation path is
+// precisely the fork #488 exists to remove.
+func nodeRoleFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 	roles := map[string]int{}
 	for _, n := range nodes {
 		for _, l := range n.Labels {
@@ -1218,20 +1257,17 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 			}
 		}
 	}
-	if f := facetFrom("node:role", roles, link, func(k string) (string, string, bool) {
+	f := facetFrom("node:role", roles, link, func(k string) (string, string, bool) {
 		return k, "node:role=" + k, true
-	}); len(f.Values) > 0 {
-		out = append(out, f)
-	}
-
-	return out
+	})
+	return f, len(f.Values) > 0
 }
 
 // facetRefusalHint is the facet rail's one visible line explaining why some
 // of a facet's values render as text instead of a link (facet.Hint,
 // :195-ish, styled .fhint in assets/console.css).
 //
-// Driven by a REFUSAL bool at each of the three call sites above, never by
+// Driven by a REFUSAL bool at each of the three facet builders above, never by
 // `!Targetable`: "none installed" is also unlinkable, and there is nothing
 // wrong with that value — this hint would be a lie about it. It is only ever
 // true when nodestate rejected a self-reported value outright.
