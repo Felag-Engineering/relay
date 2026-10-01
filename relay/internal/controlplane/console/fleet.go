@@ -42,20 +42,32 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
-// wallBucket is one of the four colours in the pixel wall.
+// wallBucket is one bucket of the pixel wall: four colours, plus one hollow
+// cell for a Node that has not reported.
 //
-// FOUR, and not five. Preattentive vision — the "pop-out" that lets you find
+// FOUR colours, and not five. Preattentive vision — the "pop-out" that lets you find
 // the odd cell in four thousand without reading anything — handles about four
 // categories and then collapses. A fifth bucket does not add information; it
 // destroys the property the wall exists for. The deviation table beneath names
 // which is which, and the wall's only job is to make the one quarantined Node in
 // a 4,000-Node group findable without reading a word.
+//
+// "Not reported" is not a fifth hue. It is a hollow cell — an outline with no
+// fill — on the fill-versus-outline channel, which is separate from hue, so
+// the four-hue pop-out argument survives. Without it an unreported Node is
+// drawn as a filled green "normal" cell, which is the false reassurance #833
+// reported.
 type wallBucket string
 
 const (
 	wallNormal    wallBucket = "normal"
 	wallDrift     wallBucket = "drift"
 	wallAttention wallBucket = "attention"
+
+	// wallUnreported is a Node with no recorded Hello: no daemon version or no
+	// Policy fingerprint. A Console presentation bucket only — not a state:
+	// value and not a Selector term (owner decision on #833, 2026-10-01).
+	wallUnreported wallBucket = "unreported"
 
 	// wallFenced is "a person deliberately took this Node out of the fleet" —
 	// BOTH lower rungs of the incident ladder, quarantine and revoke.
@@ -102,6 +114,11 @@ type fleetNode struct {
 	// against a machine nobody will ever reach again.
 	Revoked   bool
 	RevokedAt string
+
+	// Unreported is true when the registry holds no recorded Hello for this
+	// Node (see unreported). Such a Node is never counted as current or
+	// permitted.
+	Unreported bool
 
 	PolicyFingerprint   string
 	TemplateFingerprint string
@@ -215,6 +232,9 @@ type fleetGroup struct {
 	Revoked     int
 	Unloadable  int
 	OffMode     int
+	// Unreported counts Nodes with no recorded Hello (see unreported). They
+	// are counted here once and never in OffMode.
+	Unreported int
 	// Expiring counts state:cert-expiring — the identity-alarm marker #414
 	// adds a threshold for. A marker no rollup counts is a half-landed
 	// marker: it would render on the row but never surface in the card's
@@ -284,7 +304,7 @@ type fleetView struct {
 	// never an inline style: the content security policy discards those.
 	CellSize string
 
-	// Legend is the four buckets with their counts — what the colours mean,
+	// Legend is the five buckets with their counts — what the colours mean,
 	// beside the thing they colour.
 	Legend []wallLegend
 
@@ -556,6 +576,7 @@ func buildWall(v *fleetView, groups []namedGroup) {
 	}{
 		{wallFenced, bucketLabel(wallFenced)},
 		{wallAttention, bucketLabel(wallAttention)},
+		{wallUnreported, bucketLabel(wallUnreported)},
 		{wallDrift, bucketLabel(wallDrift)},
 		{wallNormal, bucketLabel(wallNormal)},
 	} {
@@ -586,6 +607,19 @@ func cellSize(n int) string {
 	}
 }
 
+// unreported reports whether the registry holds no recorded Hello for n: no
+// daemon version or no Policy fingerprint. A Node with no recorded version
+// cannot be called current, and one with no recorded fingerprint cannot be
+// called permitted.
+//
+// A Console presentation bucket only. It is NOT a state: value, not a
+// Selector term, and never placed in nodestate — the owner's decision of
+// 2026-10-01 on #833, which leaves the closed state: vocabulary (invariant 7)
+// untouched. Node detail uses this same function.
+func unreported(n registry.Node) bool {
+	return n.DaemonVersion == "" || n.PolicyFingerprint == ""
+}
+
 // newFleetNode projects one registry record into a row.
 func newFleetNode(d Deps, n registry.Node) fleetNode {
 	in := nodestate.Input{Node: n, Now: d.now(), CertExpiringWithin: d.CertExpiringWithin}
@@ -606,6 +640,7 @@ func newFleetNode(d Deps, n registry.Node) fleetNode {
 		PolicyFingerprint:   n.PolicyFingerprint,
 		TemplateFingerprint: n.TemplateSetFingerprint,
 		DaemonVersion:       n.DaemonVersion,
+		Unreported:          unreported(n),
 	}
 
 	if fn.Revoked {
@@ -637,6 +672,15 @@ func newFleetNode(d Deps, n registry.Node) fleetNode {
 		fn.Bucket = wallFenced
 	case nodestate.Attention(in):
 		fn.Bucket = wallAttention
+	// Unreported sits BELOW attention: offline comes from the tunnel and
+	// cert-expiring from the certificate, neither depends on Hello, and both
+	// are live alarms the hollow cell must never mask. An unreported Node that
+	// also raises an attention marker stays amber; it is still counted in
+	// fleetGroup.Unreported and still carries the "not reported" chip. It sits
+	// above drift because it is the larger unknown: no recorded Hello means no
+	// basis to call the Node current or permitted at all.
+	case fn.Unreported:
+		fn.Bucket = wallUnreported
 	case n.TemplateSetFingerprint == nodestate.TemplateUnloadable:
 		fn.Bucket = wallDrift
 	default:
@@ -660,6 +704,9 @@ func newFleetNode(d Deps, n registry.Node) fleetNode {
 	if fn.Revoked {
 		sig = append(sig, "revoked")
 	}
+	if fn.Unreported {
+		sig = append(sig, "unreported")
+	}
 	fn.signature = strings.Join(sig, "+")
 	return fn
 }
@@ -672,6 +719,8 @@ func bucketLabel(b wallBucket) string {
 		return "fenced by a person"
 	case wallAttention:
 		return "needs attention"
+	case wallUnreported:
+		return "not reported"
 	case wallDrift:
 		return "drift"
 	default:
@@ -876,7 +925,13 @@ func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext)
 		if n.Revoked {
 			g.Revoked++
 		}
-		if modeFingerprint != "" && n.PolicyFingerprint != modeFingerprint {
+		if n.Unreported {
+			g.Unreported++
+		}
+		// A Node with no recorded fingerprint is not "on a different Policy
+		// fingerprint". It is not reported, and it is counted once, in
+		// g.Unreported.
+		if modeFingerprint != "" && n.PolicyFingerprint != "" && n.PolicyFingerprint != modeFingerprint {
 			g.OffMode++
 		}
 	}
@@ -932,8 +987,19 @@ func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext)
 	switch {
 	case deviating == 0:
 		g.ModeLine = "every Node here is reachable, current and permitted — no state label anywhere in this group."
+	case normal == 0 && g.Unreported > 0:
+		g.ModeLine = "no Node in this group can be called reachable, current and permitted: " +
+			countOf(g.Unreported, "Node has", "Nodes have") + " not reported a daemon version or Policy fingerprint."
 	case normal == 0:
 		g.ModeLine = "every Node in this group carries at least one state label."
+	case g.Unreported > 0:
+		not := "so it is not counted as current or permitted."
+		if g.Unreported > 1 {
+			not = "so they are not counted as current or permitted."
+		}
+		g.ModeLine = countOf(normal, "other Node carries", "other Nodes carry") +
+			" no state label at all — reachable, current, permitted. " +
+			countOf(g.Unreported, "Node has", "Nodes have") + " not reported, " + not
 	default:
 		g.ModeLine = countOf(normal, "Node carries", "Nodes carry") +
 			" no state label at all — reachable, current, permitted."
@@ -1133,20 +1199,27 @@ func daemonVersionFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 	versionRefused := false
 	for _, n := range nodes {
 		if n.DaemonVersion == "" {
+			// Counted, not skipped, so the facet sums to the group's Node count.
+			versions[factSentinelUnreported]++
 			continue
 		}
-		versions[n.DaemonVersion]++
+		key := facetValueKey(n.DaemonVersion)
+		versions[key]++
 		// Harmless last-writer-wins: every Node reporting the same version
 		// produces the same term, because nodestate.Facts is a pure function
 		// of the value.
-		versionTerms[n.DaemonVersion] = n.versionTerm
+		versionTerms[key] = n.versionTerm
 		if n.versionTerm == "" {
 			versionRefused = true
 		}
 	}
 	f := facetFrom("Daemon version", versions, link, func(k string) (string, string, bool) {
+		if k == factSentinelUnreported {
+			// Absence is not a label — there is nothing to target.
+			return "not reported", "", false
+		}
 		term := versionTerms[k]
-		return k, term, term != ""
+		return strings.TrimPrefix(k, facetValuePrefix), term, term != ""
 	})
 	if len(f.Values) == 0 {
 		return facet{}, false
@@ -1166,26 +1239,31 @@ func daemonVersionFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 // hijack the honest bucket's link (last-writer-wins over the nodes slice)
 // or poison its count; keying by the full value makes both impossible,
 // because a Node can only ever share a bucket with another Node reporting
-// the SAME full value. This facet has no sentinel values, so — unlike the
-// template-set facet below — the raw full value is a safe map key with no
-// further discrimination needed.
+// the SAME full value. The facet has one sentinel, "not reported", for a Node
+// with no recorded fingerprint; real values are keyed through facetValueKey so
+// a Node self-reporting the literal "not reported" never joins the sentinel row.
 func policyFingerprintFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 	policies := map[string]int{}
 	policyTerms := map[string]string{}
 	policyRefused := false
 	for _, n := range nodes {
 		if n.PolicyFingerprint == "" {
+			policies[factSentinelUnreported]++
 			continue
 		}
-		policies[n.PolicyFingerprint]++
-		policyTerms[n.PolicyFingerprint] = n.policyTerm
+		key := facetValueKey(n.PolicyFingerprint)
+		policies[key]++
+		policyTerms[key] = n.policyTerm
 		if n.policyTerm == "" {
 			policyRefused = true
 		}
 	}
 	f := facetFrom("Policy fingerprint", policies, link, func(k string) (string, string, bool) {
+		if k == factSentinelUnreported {
+			return "not reported", "", false
+		}
 		term := policyTerms[k]
-		return shortHash(k), term, term != ""
+		return shortHash(strings.TrimPrefix(k, facetValuePrefix)), term, term != ""
 	})
 	if len(f.Values) == 0 {
 		return facet{}, false
@@ -1209,7 +1287,7 @@ func policyFingerprintFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 // value is NOT safe on its own: the sentinel literal "none installed" is
 // itself a legal (if unlikely) self-reported string, and a Node reporting
 // it verbatim would key into the genuine "no templates installed" bucket
-// and inflate its count. templateValueKey and the two sentinel consts
+// and inflate its count. facetValueKey and the sentinel consts
 // below give the two kinds of key disjoint PREFIXES, so that collision is
 // structurally unreachable rather than merely unlikely.
 func templateSetFacet(nodes []fleetNode, link linkContext) (facet, bool) {
@@ -1221,7 +1299,7 @@ func templateSetFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 		case n.TemplateFingerprint == nodestate.TemplateUnloadable:
 			templates[templateSentinelUnloadable]++
 		case n.TemplateFingerprint != "":
-			key := templateValueKey(n.TemplateFingerprint)
+			key := facetValueKey(n.TemplateFingerprint)
 			templates[key]++
 			templateTerms[key] = n.templateTerm
 			if n.templateTerm == "" {
@@ -1241,7 +1319,7 @@ func templateSetFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 			// Absence is not a label — there is nothing to target.
 			return "none installed", "", false
 		default:
-			full := strings.TrimPrefix(k, templateValuePrefix)
+			full := strings.TrimPrefix(k, facetValuePrefix)
 			return shortHash(full), templateTerms[k], templateTerms[k] != ""
 		}
 	})
@@ -1290,29 +1368,33 @@ func nodeRoleFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 // true when nodestate rejected a self-reported value outright.
 const facetRefusalHint = "One reported value is not a link: it carries a comma, whitespace or a namespace prefix, so a Selector cannot express it."
 
-// templateValuePrefix and the two sentinel consts below key the template-set
-// facet's counts map. These two key spaces are DISJOINT BY CONSTRUCTION: every
-// real key is built by templateValueKey, the ONLY place a fingerprint becomes
-// a key, and begins with templateValuePrefix; every sentinel key is one of
-// the two literals below and begins with sentinelPrefix instead. Whatever a
-// Node sends — including the literal "none installed" — it can only ever
-// reach the value space, never the sentinel space, because nothing outside
-// this file ever calls templateValueKey with anything but
-// templateValuePrefix in front of it. Both sides are prefixed, not only the
-// sentinels, so the invariant survives someone later editing one constant
-// without noticing the other.
+// facetValuePrefix and the sentinel consts below key the counts map of the
+// three self-reported value facets: Daemon version, Policy fingerprint and
+// Template set. A facet's real values and its sentinels are DISJOINT KEY
+// SPACES BY CONSTRUCTION: every real key is built by facetValueKey, the ONLY
+// place a self-reported value becomes a key, and begins with facetValuePrefix;
+// every sentinel key is one of the literals below and begins with
+// sentinelPrefix instead. Whatever a Node sends — including the literals
+// "none installed" or "not reported" — it can only ever reach the value space,
+// never the sentinel space, because nothing outside this file ever builds a
+// key with anything but facetValuePrefix in front of it. Both sides are
+// prefixed, not only the sentinels, so the invariant survives someone later
+// editing one constant without noticing the other.
 const (
-	templateValuePrefix = "v:"
+	facetValuePrefix = "v:"
 
 	sentinelPrefix                = "s:"
 	templateSentinelUnloadable    = sentinelPrefix + "unloadable"
 	templateSentinelNoneInstalled = sentinelPrefix + "none-installed"
+	// factSentinelUnreported is a Node with no recorded daemon version or
+	// Policy fingerprint, in the facet for that field.
+	factSentinelUnreported = sentinelPrefix + "unreported"
 )
 
-// templateValueKey is the ONLY way a template-set fingerprint becomes a key
-// in the template-set facet's counts map — see the key-space comment above.
-func templateValueKey(fingerprint string) string {
-	return templateValuePrefix + fingerprint
+// facetValueKey is the ONLY way a self-reported value becomes a key in a
+// value facet's counts map — see the key-space comment above.
+func facetValueKey(value string) string {
+	return facetValuePrefix + value
 }
 
 // fencedRevoked is how the State facet names revocation. Not a label — a
@@ -1416,6 +1498,7 @@ var fleetTmpl = newScreen("fleet", `
     {{if .Unloadable}}<span class="gdev drift">{{.Unloadable}} template-unloadable</span>{{end}}
     {{if .Quarantined}}<span class="gdev quar">{{.Quarantined}} quarantined</span>{{end}}
     {{if .Revoked}}<span class="gdev quar">{{.Revoked}} revoked</span>{{end}}
+    {{if .Unreported}}<span class="gdev">{{.Unreported}} not reported</span>{{end}}
     {{if .OffMode}}<span class="gdev drift">{{.OffMode}} on a different Policy fingerprint</span>{{end}}
     {{if not .Open}}<span class="gdev calm">no deviations</span>{{end}}
   </header>
@@ -1454,9 +1537,10 @@ var fleetTmpl = newScreen("fleet", `
             <td><a href="{{.Href}}{{$.Pin.Query}}" class="nodeid">{{.ID}}</a>{{with .Hostname}}<div class="sub">{{.}}</div>{{end}}</td>
             <td><div class="statecell">{{if .Revoked}}<span class="chip fenced" title="Revoked {{.RevokedAt}}. The record is kept so the Node stays investigable.">revoked</span>{{end}}
               {{if .Quarantined}}<span class="chip fenced" title="Quarantined by an admin. Reversible.">quarantined</span>{{end}}
+              {{if .Unreported}}<span class="chip unreported" title="The Relay holds no recorded Hello for this Node: no daemon version or no Policy fingerprint. Not a state: label, and not targetable.">not reported</span>{{end}}
               {{range .States}}{{template "label-chip" .}}{{end}}</div></td>
             <td><div class="lblcell">{{range .Labels}}{{template "label-chip" .}}{{end}}</div></td>
-            <td><code title="{{.PolicyFingerprint}}">{{short .PolicyFingerprint}}</code></td>
+            <td>{{if .PolicyFingerprint}}<code title="{{.PolicyFingerprint}}">{{short .PolicyFingerprint}}</code>{{else}}<span class="dim">not reported</span>{{end}}</td>
             <td class="num">{{.LastSeen}}</td>
           </tr>
         {{end}}

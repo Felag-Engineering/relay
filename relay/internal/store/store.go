@@ -95,7 +95,8 @@ const busyTimeoutMillis = 5000
 
 // sqliteDSN builds the modernc.org/sqlite DSN for path, with foreign_keys and
 // a busy_timeout applied through the driver's _pragma query parameter rather
-// than a one-shot db.Exec. Both pragmas are per-connection SQLite state: a
+// than a one-shot db.Exec, and _txlock=immediate so every transaction takes
+// the write lock at BEGIN. Both pragmas are per-connection SQLite state: a
 // pragma run once through Exec applies only to whichever connection the pool
 // happens to hand back, and is silently lost on any connection database/sql
 // opens afterwards (to replace one it discarded, or to grow the pool). The
@@ -115,6 +116,16 @@ const busyTimeoutMillis = 5000
 // starting with "//", and resolves a relative path against the working
 // directory, matching sql.Open on a plain path.
 //
+// _txlock=immediate makes every transaction database/sql begins as
+// "BEGIN IMMEDIATE", taking the write lock at BEGIN. busy_timeout does not
+// cover a deferred transaction's read-to-write upgrade: SQLite returns
+// SQLITE_BUSY at once (SQLITE_BUSY_SNAPSHOT in WAL mode) instead of invoking
+// the busy handler, so a Hello upsert racing another process failed fast
+// (#833). A read-only transaction must opt out with sql.TxOptions{ReadOnly:
+// true}. SetMaxOpenConns(1) serialises only this process; "relay
+// bootstrap-token" and "relay console-password" open the same file from
+// another process, so cross-process safety is busy_timeout plus IMMEDIATE.
+//
 // sqliteDSN assumes a POSIX path (as does the rest of this package and its
 // production deployment target); it has not been exercised against a
 // Windows-style path such as a DOS drive letter or UNC prefix.
@@ -127,6 +138,7 @@ func sqliteDSN(path string) (string, error) {
 	q := url.Values{}
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeoutMillis))
+	q.Add("_txlock", "immediate")
 
 	u := url.URL{Path: abs}
 	return "file:" + u.EscapedPath() + "?" + q.Encode(), nil
@@ -137,10 +149,10 @@ func sqliteDSN(path string) (string, error) {
 // a single connection so SQLite's single-writer constraint is never raced,
 // and applies every embedded migration that has not yet been applied.
 //
-// foreign_keys and busy_timeout are set through the DSN (sqliteDSN) rather
-// than a one-shot Exec, because they are per-connection: every connection
-// the pool opens, including one opened to replace a discarded connection,
-// gets both. journal_mode=WAL is different — it is a property of the
+// foreign_keys, busy_timeout and _txlock=immediate are set through the DSN
+// (sqliteDSN) rather than a one-shot Exec, because they are per-connection:
+// every connection the pool opens, including one opened to replace a
+// discarded connection, gets all three. journal_mode=WAL is different — it is a property of the
 // database file itself, so once one connection sets it every later
 // connection to that file is already in WAL — and is applied once below with
 // a plain Exec.
@@ -167,7 +179,9 @@ func Open(path string, opts ...Option) (*Store, error) {
 	// A single connection is the simplest correctness guarantee for the
 	// write path at this stage: SQLite allows only one writer at a time, and
 	// serializing all access through one *sql.DB connection avoids
-	// SQLITE_BUSY races without a connection-pool-aware retry strategy.
+	// SQLITE_BUSY races within this process (cross-process safety is
+	// busy_timeout plus _txlock=immediate, see sqliteDSN) without a
+	// connection-pool-aware retry strategy.
 	db.SetMaxOpenConns(1)
 
 	// sql.Open is lazy and never dials, so a bad DSN or a failing

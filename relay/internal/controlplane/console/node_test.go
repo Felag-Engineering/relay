@@ -782,3 +782,78 @@ func repeat(s string, n int) []string {
 	}
 	return out
 }
+
+// --- #833: an unreported Node's Policy snapshot is rendered with facts only ---
+
+// unreportedNodeBody renders node-web-1 with the given recorded fields and a
+// captured snapshot whose own fingerprint is "sha256:snapfp".
+func unreportedNodeBody(t *testing.T, version, fingerprint string) string {
+	t.Helper()
+	d := withFleet(renderableDeps(), registry.Node{
+		NodeID: "node-web-1", NodeLabels: map[string]string{"env": "prod"},
+		DaemonVersion: version, PolicyFingerprint: fingerprint,
+		LastSeen: testNow.Add(-4 * time.Second), Connected: true,
+	})
+	d = withPolicy(d, map[string]policyview.Snapshot{"node-web-1": reportedSnapshot(policyview.Snapshot{
+		AllowedOperations: []string{"service.restart"},
+		PolicyFingerprint: "sha256:snapfp",
+	}, testNow.Add(-90*time.Second))})
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
+	panel := policyPanelOf(body)
+	if panel == "" {
+		t.Fatal("no effective-Policy panel rendered")
+	}
+	return panel
+}
+
+func TestNode_UnreportedSnapshotStatesFactsNotAVerdict(t *testing.T) {
+	panel := unreportedNodeBody(t, "0.6.0", "")
+	for _, want := range []string{
+		"Not corroborated by a recorded Hello",
+		shortHash("sha256:snapfp"),
+		"no Hello-recorded Policy fingerprint",
+		"cannot be cross-checked",
+		"not count this Node as current or permitted",
+		"The Relay never evaluates Policy", // the rule text (QRY-7) is still there
+		"service.restart",
+	} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("panel lacks %q", want)
+		}
+	}
+	if strings.Contains(panel, "daemon version or Policy fingerprint") {
+		t.Error("panel names the daemon version as missing, but only the fingerprint is")
+	}
+	for _, banned := range []string{"effective Policy until", "Do not treat", "unconfirmed"} {
+		if strings.Contains(panel, banned) {
+			t.Errorf("panel contains the verdict phrasing %q", banned)
+		}
+	}
+}
+
+func TestNode_UnreportedVersionAloneAlsoCaveats(t *testing.T) {
+	panel := unreportedNodeBody(t, "", "aaaa111122223333")
+	if !strings.Contains(panel, "Not corroborated by a recorded Hello") {
+		t.Error("a missing daemon version alone did not raise the caveat")
+	}
+	if !strings.Contains(panel, "no Hello-recorded daemon version") {
+		t.Error("the caveat does not name the daemon version")
+	}
+	if strings.Contains(panel, "cannot be cross-checked") {
+		t.Error("the fingerprint is recorded, so the cross-check claim must not appear")
+	}
+}
+
+func TestNode_ReportedNodeHasNoCaveat(t *testing.T) {
+	d := withPolicy(fleetFixture(), map[string]policyview.Snapshot{"node-web-1": reportedSnapshot(policyview.Snapshot{
+		AllowedOperations: []string{"service.restart"},
+	}, testNow.Add(-90*time.Second))})
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
+	panel := policyPanelOf(body)
+	if panel == "" {
+		t.Fatal("no effective-Policy panel rendered")
+	}
+	if strings.Contains(panel, "Not corroborated") {
+		t.Error("a Node with a recorded version and fingerprint carries the caveat")
+	}
+}
