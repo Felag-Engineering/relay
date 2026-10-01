@@ -7,12 +7,15 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
@@ -52,6 +55,10 @@ type loginFixture struct {
 	// leaked CSRF cookie — walks the table this fixture actually serves,
 	// rather than reconstructing one that could silently drift from it.
 	deps Deps
+
+	// st is the store behind the fixture, kept so an audited fixture's
+	// records can be read back.
+	st *store.Store
 }
 
 type testClock struct{ t time.Time }
@@ -68,6 +75,16 @@ func newLoginFixture(t *testing.T) *loginFixture {
 // newLoginFixture does not wire by default (#595's fakeCanceller and a
 // running Job). mutate may be nil, in which case this is newLoginFixture.
 func newLoginFixtureWith(t *testing.T, mutate func(*Deps)) *loginFixture {
+	return buildLoginFixture(t, false, mutate)
+}
+
+// newAuditedLoginFixture is newLoginFixture with a REAL audit sink behind the
+// sign-in service, for a test that reads what a sign-in recorded.
+func newAuditedLoginFixture(t *testing.T) *loginFixture {
+	return buildLoginFixture(t, true, nil)
+}
+
+func buildLoginFixture(t *testing.T, audited bool, mutate func(*Deps)) *loginFixture {
 	t.Helper()
 
 	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
@@ -93,8 +110,12 @@ func newLoginFixtureWith(t *testing.T, mutate func(*Deps)) *loginFixture {
 
 	clk := &testClock{t: time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)}
 	sessions := consoleauth.NewStore(consoleauth.WithClock(clk.now))
+	var auditor consoleauth.Auditor
+	if audited {
+		auditor = auditsink.New(st.Audit(), auditsink.WithClock(clk.now))
+	}
 	svc := consoleauth.NewService(st.Accounts(), st.Passwords(), sessions,
-		consoleauth.NewThrottle(consoleauth.WithThrottleClock(clk.now)), nil)
+		consoleauth.NewThrottle(consoleauth.WithThrottleClock(clk.now)), auditor)
 
 	authn := controlplane.NewAuthenticator(
 		roleVerifier{role: accounts.RoleAdmin},
@@ -126,6 +147,7 @@ func newLoginFixtureWith(t *testing.T, mutate func(*Deps)) *loginFixture {
 		mike:      mike,
 		clk:       clk,
 		deps:      d,
+		st:        st,
 	}
 }
 
@@ -485,6 +507,90 @@ func TestConsole_SignInIsIndistinguishableAcrossFailures(t *testing.T) {
 		if bodies[i] != bodies[0] {
 			t.Error("two different sign-in failures rendered different pages: the form enumerates Accounts")
 		}
+	}
+}
+
+// usernameValueAttr masks the value a throttled re-render echoes into the
+// username input to its own submitter (#640), by design.
+var usernameValueAttr = regexp.MustCompile(`(?s)(id="username".*?value=")[^"]*(")`)
+
+// TestConsole_FailedSignInRecordsDifferByD19WhileResponsesDoNot is the one
+// boundary where both halves of D19 are observable: the sign-in RESPONSE is
+// identical whether or not the typed name is an Account, while the stored
+// RECORD keeps the name only when it is one.
+func TestConsole_FailedSignInRecordsDifferByD19WhileResponsesDoNot(t *testing.T) {
+	const secret = "d19-secret-typed-as-a-name"
+
+	// maskedBody drops the two legitimately-varying parts of a page: the CSRF
+	// token and, on a throttled page, the echoed username.
+	maskedBody := func(body string) string {
+		body = usernameValueAttr.ReplaceAllString(body, `${1}NAME${2}`)
+		return csrfTokenPattern.ReplaceAllString(body, `value="TOKEN"`)
+	}
+	records := func(f *loginFixture, kind string) audit.Record {
+		t.Helper()
+		all, err := f.st.Audit().List(context.Background())
+		if err != nil {
+			t.Fatalf("list audit records: %v", err)
+		}
+		var found []audit.Record
+		for _, r := range all {
+			if r.Kind == kind {
+				found = append(found, r)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("got %d %s records, want exactly 1", len(found), kind)
+		}
+		r := found[0]
+		r.ID, r.Timestamp = "", time.Time{}
+		return r
+	}
+
+	for _, tc := range []struct {
+		name string
+		kind string
+		code int
+		// attempts is how many times each name is submitted: a throttle is
+		// the immediate second attempt.
+		attempts int
+	}{
+		{"a failed sign-in", audit.KindLoginFailed, http.StatusUnauthorized, 1},
+		{"a throttled sign-in", audit.KindLoginThrottled, http.StatusTooManyRequests, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			realFix := newAuditedLoginFixture(t)
+			otherFix := newAuditedLoginFixture(t)
+			var a, b *httptest.ResponseRecorder
+			for i := 0; i < tc.attempts; i++ {
+				var cookiesA, cookiesB []*http.Cookie
+				a, cookiesA = realFix.signIn(t, "mike", "not the password")
+				b, cookiesB = otherFix.signIn(t, secret, "anything")
+				for _, c := range [][]*http.Cookie{cookiesA, cookiesB} {
+					if cookieNamed(c, consoleauth.SessionCookieName) != nil {
+						t.Error("a refused sign-in set a session cookie")
+					}
+				}
+			}
+			if a.Code != tc.code || b.Code != tc.code {
+				t.Fatalf("statuses = %d and %d, want both %d", a.Code, b.Code, tc.code)
+			}
+			if maskedBody(a.Body.String()) != maskedBody(b.Body.String()) {
+				t.Error("the two responses differ: the sign-in response enumerates Accounts")
+			}
+
+			recA, recB := records(realFix, tc.kind), records(otherFix, tc.kind)
+			if got := recA.Attribution.Asserted.OnBehalfOf; got != "mike" {
+				t.Errorf("the real Account's %s record names %q, want \"mike\"", tc.kind, got)
+			}
+			if got := recB.Attribution.Asserted.OnBehalfOf; got != "" {
+				t.Errorf("the other name's %s record kept %q, want no typed text", tc.kind, got)
+			}
+			recA.Attribution.Asserted.OnBehalfOf = ""
+			if !reflect.DeepEqual(recA, recB) {
+				t.Errorf("the two %s records differ in more than the asserted name:\n%+v\n%+v", tc.kind, recA, recB)
+			}
+		})
 	}
 }
 

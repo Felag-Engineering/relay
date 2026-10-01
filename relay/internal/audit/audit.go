@@ -169,15 +169,22 @@ const (
 	// or not — this is the first link in the chain the UI advisory requires
 	// end-to-end: login -> action -> audit record.
 	//
-	// KindLoginFailed deliberately carries NO indication of which half was
-	// wrong. A trail that recorded "unknown account" separately from "wrong
-	// password" would be the same enumeration oracle the login response
-	// refuses to be, readable by anyone with audit access.
+	// KindLoginFailed records the typed name only when it is an existing
+	// Account's name, and no typed text otherwise (D19,
+	// docs/design/console/99-open-decisions.md), because a name box can hold
+	// a password. That lets the trail tell "a name that is not an Account"
+	// from a wrong password for a real one. That is acceptable because the
+	// trail's only reader is an admin through Access (spec 20), who already
+	// sees every Account; the sign-in RESPONSE stays one refusal (spec 12).
+	// Any future surface that reads the trail must not return these records
+	// below admin. The verified lane still names no Account on a failure.
 	//
 	// KindLoginThrottled is distinct from KindLoginFailed because nothing was
 	// checked: the attempt was refused before any credential was compared, so
 	// counting it as a failure would overstate how many guesses were actually
-	// made.
+	// made. The same D19 rule governs its asserted name; deciding that a name
+	// is real is a registry lookup, not a credential comparison, so a
+	// throttled attempt is still never counted as a guess.
 	KindLoginSucceeded = "login_succeeded"
 	KindLoginFailed    = "login_failed"
 	KindLoginThrottled = "login_throttled"
@@ -201,11 +208,9 @@ const (
 	// action (ADR-0009). Distinct from KindLoginSucceeded so a kind-filtered
 	// consumer can tell "signed in" from "re-proved presence mid-session".
 	//
-	// KindStepUpFailed carries no indication of which half was wrong, for the
-	// same enumeration reason KindLoginFailed states above: a step-up runs
-	// against the session's own Account, but a trail that named it anyway
-	// would still be the oracle the login response refuses to be, readable by
-	// anyone with audit access.
+	// KindStepUpFailed carries no indication of which half was wrong: a
+	// step-up runs against the session's own Account, so its verified lane is
+	// empty and its asserted name is that Account's, never typed text.
 	//
 	// KindStepUpThrottled is distinct from KindStepUpFailed because nothing
 	// was checked, for the same reason KindLoginThrottled is distinct from

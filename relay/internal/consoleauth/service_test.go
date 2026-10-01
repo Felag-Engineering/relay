@@ -66,7 +66,45 @@ type fixture struct {
 	clk *clock
 }
 
+// countingAccounts counts GetByName calls, so a test can pin how many
+// existence lookups a sign-in makes.
+type countingAccounts struct {
+	accounts.Repository
+	mu     sync.Mutex
+	byName int
+}
+
+func (c *countingAccounts) GetByName(ctx context.Context, name string) (accounts.Account, error) {
+	c.mu.Lock()
+	c.byName++
+	c.mu.Unlock()
+	return c.Repository.GetByName(ctx, name)
+}
+
+func (c *countingAccounts) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.byName
+}
+
 func newFixture(t *testing.T, opts ...consoleauth.ServiceOption) *fixture {
+	t.Helper()
+	return buildFixture(t, nil, opts...)
+}
+
+func newFixtureCounting(t *testing.T) (*fixture, *countingAccounts) {
+	t.Helper()
+	var counter *countingAccounts
+	f := buildFixture(t, func(r accounts.Repository) accounts.Repository {
+		counter = &countingAccounts{Repository: r}
+		return counter
+	})
+	return f, counter
+}
+
+// buildFixture is newFixture's body; wrap, when set, decorates the Account
+// repository the Service reads.
+func buildFixture(t *testing.T, wrap func(accounts.Repository) accounts.Repository, opts ...consoleauth.ServiceOption) *fixture {
 	t.Helper()
 
 	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
@@ -94,8 +132,12 @@ func newFixture(t *testing.T, opts ...consoleauth.ServiceOption) *fixture {
 	clk := newClock()
 	sessions := consoleauth.NewStore(consoleauth.WithClock(clk.now))
 	throttle := consoleauth.NewThrottle(consoleauth.WithThrottleClock(clk.now))
+	repo := accounts.Repository(st.Accounts())
+	if wrap != nil {
+		repo = wrap(repo)
+	}
 	return &fixture{
-		svc:      consoleauth.NewService(st.Accounts(), st.Passwords(), sessions, throttle, rec, opts...),
+		svc:      consoleauth.NewService(repo, st.Passwords(), sessions, throttle, rec, opts...),
 		sessions: sessions,
 		audit:    rec,
 		accounts: st.Accounts(),
@@ -150,17 +192,23 @@ func TestLogin_EveryFailureIsIndistinguishable(t *testing.T) {
 
 	// Each case gets its own fixture so one case's failures cannot throttle
 	// the next.
-	cases := map[string]func(t *testing.T, f *fixture) consoleauth.Attempt{
-		"an unknown username": func(_ *testing.T, _ *fixture) consoleauth.Attempt {
+	//
+	// wantName is what the record keeps of the typed name (D19): the name of
+	// any existing Account, whatever its kind or state, else nothing.
+	cases := map[string]struct {
+		setup    func(t *testing.T, f *fixture) consoleauth.Attempt
+		wantName string
+	}{
+		"an unknown username": {func(_ *testing.T, _ *fixture) consoleauth.Attempt {
 			return attempt("no-such-person", testPassword)
-		},
-		"a wrong password": func(_ *testing.T, _ *fixture) consoleauth.Attempt {
+		}, ""},
+		"a wrong password": {func(_ *testing.T, _ *fixture) consoleauth.Attempt {
 			return attempt("mike", "not the password")
-		},
-		"an empty password": func(_ *testing.T, _ *fixture) consoleauth.Attempt {
+		}, "mike"},
+		"an empty password": {func(_ *testing.T, _ *fixture) consoleauth.Attempt {
 			return attempt("mike", "")
-		},
-		"a disabled Account": func(t *testing.T, f *fixture) consoleauth.Attempt {
+		}, "mike"},
+		"a disabled Account": {func(t *testing.T, f *fixture) consoleauth.Attempt {
 			// A second enabled admin, so disabling mike below does not trip
 			// the last-enabled-admin guard (#653) this test is not about —
 			// it is about a disabled Account's login failing indistinguishably.
@@ -173,8 +221,8 @@ func TestLogin_EveryFailureIsIndistinguishable(t *testing.T) {
 				t.Fatalf("disable account: %v", err)
 			}
 			return attempt("mike", testPassword)
-		},
-		"an Account with no local password": func(t *testing.T, f *fixture) consoleauth.Attempt {
+		}, "mike"},
+		"an Account with no local password": {func(t *testing.T, f *fixture) consoleauth.Attempt {
 			other, err := f.accounts.Create(ctx, accounts.Account{
 				Name: "passwordless", Kind: accounts.KindHuman, Role: accounts.RoleViewer, Enabled: true,
 			})
@@ -183,8 +231,8 @@ func TestLogin_EveryFailureIsIndistinguishable(t *testing.T) {
 			}
 			_ = other
 			return attempt("passwordless", testPassword)
-		},
-		"a machine Account": func(t *testing.T, f *fixture) consoleauth.Attempt {
+		}, "passwordless"},
+		"a machine Account": {func(t *testing.T, f *fixture) consoleauth.Attempt {
 			// The Console establishes a per-HUMAN identity. A machine Account
 			// has no business holding a browser session even if a password
 			// somehow exists for it.
@@ -196,20 +244,21 @@ func TestLogin_EveryFailureIsIndistinguishable(t *testing.T) {
 			}
 			_ = bot
 			return attempt("gleipnir", testPassword)
-		},
+		}, "gleipnir"},
 	}
 
-	for name, setup := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
-			a := setup(t, f)
+			a := tc.setup(t, f)
 
 			_, _, err := f.svc.Login(ctx, a)
 			if !errors.Is(err, consoleauth.ErrBadCredentials) {
 				t.Fatalf("Login = %v, want ErrBadCredentials (every failure must be indistinguishable)", err)
 			}
-			// And the audit record must not say which half was wrong either:
-			// a trail readable by every viewer is an enumeration oracle too.
+			// The response is one refusal. The record is not: it keeps the
+			// typed name only when it is a real Account's (D19), its reader
+			// being an admin who already sees every Account.
 			last := f.audit.last()
 			if last.Kind != audit.KindLoginFailed {
 				t.Errorf("audited kind = %q, want %q", last.Kind, audit.KindLoginFailed)
@@ -220,7 +269,212 @@ func TestLogin_EveryFailureIsIndistinguishable(t *testing.T) {
 			if last.Reason != "invalid credentials" {
 				t.Errorf("audited reason = %q, want the one non-oracular reason", last.Reason)
 			}
+			if last.SubmittedName != tc.wantName {
+				t.Errorf("audited submitted name = %q, want %q", last.SubmittedName, tc.wantName)
+			}
 		})
+	}
+}
+
+// A failed sign-in records the typed name only when it is an existing
+// Account's (D19): a name box can hold a password, so text that matches no
+// Account is never stored.
+func TestLogin_AFailedSignInRecordsTheNameOnlyWhenItIsAnAccounts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("a password-like string typed as the name is not recorded", func(t *testing.T) {
+		f := newFixture(t)
+		const typed = "correct horse battery staple"
+		if _, _, err := f.svc.Login(ctx, attempt(typed, "whatever")); !errors.Is(err, consoleauth.ErrBadCredentials) {
+			t.Fatalf("Login = %v, want ErrBadCredentials", err)
+		}
+		if got := f.audit.last().SubmittedName; got != "" {
+			t.Errorf("SubmittedName = %q, want no typed text for a name that is not an Account", got)
+		}
+	})
+
+	t.Run("a real Account's name is recorded as the Account's own", func(t *testing.T) {
+		f := newFixture(t)
+		if _, _, err := f.svc.Login(ctx, attempt("  MIKE ", "wrong")); !errors.Is(err, consoleauth.ErrBadCredentials) {
+			t.Fatalf("Login = %v, want ErrBadCredentials", err)
+		}
+		if got := f.audit.last().SubmittedName; got != "mike" {
+			t.Errorf("SubmittedName = %q, want the Account's name %q, not the typed bytes", got, "mike")
+		}
+	})
+}
+
+// A throttled attempt follows the same rule, and is still never counted as a
+// guess: deciding that a name is real is a registry lookup, not a credential
+// comparison.
+func TestLogin_AThrottledSignInRecordsTheNameOnlyWhenItIsAnAccounts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	for _, tc := range []struct{ typed, want string }{
+		{"no-such-person", ""},
+		{"mike", "mike"},
+	} {
+		t.Run(tc.typed, func(t *testing.T) {
+			f := newFixture(t)
+			if _, _, err := f.svc.Login(ctx, attempt(tc.typed, "wrong")); !errors.Is(err, consoleauth.ErrBadCredentials) {
+				t.Fatalf("first Login = %v, want ErrBadCredentials", err)
+			}
+			_, _, err := f.svc.Login(ctx, attempt(tc.typed, "wrong"))
+			var throttled *consoleauth.ThrottledError
+			if !errors.As(err, &throttled) {
+				t.Fatalf("immediate retry = %v, want a ThrottledError", err)
+			}
+			last := f.audit.last()
+			if last.Kind != audit.KindLoginThrottled {
+				t.Fatalf("audited kind = %q, want %q", last.Kind, audit.KindLoginThrottled)
+			}
+			if last.SubmittedName != tc.want {
+				t.Errorf("SubmittedName = %q, want %q", last.SubmittedName, tc.want)
+			}
+			failed := 0
+			for _, e := range f.audit.all() {
+				if e.Kind == audit.KindLoginFailed {
+					failed++
+				}
+			}
+			if failed != 1 {
+				t.Errorf("%d login_failed records, want 1: a throttled attempt is not a guess", failed)
+			}
+		})
+	}
+}
+
+// The existence lookup D19 adds must run once on every attempt, before
+// anything branches on its result, so its cost cannot depend on whether the
+// name is an Account. It is pinned as a call count rather than a wall-clock
+// measurement: timing is flaky on shared CI (precedent: accounts'
+// TestVerifyNothing_DoesTheSameWorkAsARealVerification), and the KDF burn
+// (VerifyNothing) remains what equalises the failed path's credential work.
+//
+// This does NOT claim the whole failed path is work-identical: the
+// GetPassword read happens only for an enabled human Account, which is
+// outside this test's scope. The throttled branch's timing is padded to a
+// floor instead; see TestLogin_AThrottledRefusalWaitsOutTheSameFloorWhateverTheName.
+func TestLogin_TheExistenceLookupIsUnconditional(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tests := map[string]func(f *fixture) error{
+		"unknown name, failed": func(f *fixture) error {
+			_, _, err := f.svc.Login(ctx, attempt("no-such-person", "wrong"))
+			return err
+		},
+		"real name, wrong password": func(f *fixture) error {
+			_, _, err := f.svc.Login(ctx, attempt("mike", "wrong"))
+			return err
+		},
+		"unknown name, throttled": func(f *fixture) error {
+			_, _, _ = f.svc.Login(ctx, attempt("no-such-person", "wrong"))
+			_, _, err := f.svc.Login(ctx, attempt("no-such-person", "wrong"))
+			return err
+		},
+		"real name, throttled": func(f *fixture) error {
+			_, _, _ = f.svc.Login(ctx, attempt("mike", "wrong"))
+			_, _, err := f.svc.Login(ctx, attempt("mike", "wrong"))
+			return err
+		},
+		"real name, success": func(f *fixture) error {
+			_, _, err := f.svc.Login(ctx, attempt("mike", testPassword))
+			return err
+		},
+	}
+	wantThrottled := map[string]bool{
+		"unknown name, throttled": true,
+		"real name, throttled":    true,
+	}
+	// Attempts made before the measured one in a case, so its delta is the
+	// last Login only.
+	priorAttempts := map[string]int{
+		"unknown name, throttled": 1,
+		"real name, throttled":    1,
+	}
+
+	for name, run := range tests {
+		t.Run(name, func(t *testing.T) {
+			f, counter := newFixtureCounting(t)
+			before := counter.count()
+			err := run(f)
+			var throttled *consoleauth.ThrottledError
+			switch {
+			case wantThrottled[name]:
+				if !errors.As(err, &throttled) {
+					t.Errorf("Login = %v, want a ThrottledError", err)
+				}
+			case name == "real name, success":
+				if err != nil {
+					t.Errorf("Login = %v, want success", err)
+				}
+			default:
+				if !errors.Is(err, consoleauth.ErrBadCredentials) {
+					t.Errorf("Login = %v, want ErrBadCredentials", err)
+				}
+			}
+			if got, want := counter.count()-before, 1+priorAttempts[name]; got != want {
+				t.Errorf("GetByName ran %d times, want exactly one per attempt (%d)", got, want)
+			}
+		})
+	}
+}
+
+// On the throttled branch the lookup is the only Account-dependent work, so a
+// found row could be told from no row by 429 latency. The refusal is padded to
+// ThrottledFloor from the start of Login whatever the lookup found. The sleeper
+// is injected, so nothing here waits for real; the fixture clock does not
+// advance, so the whole floor is owed. A non-throttled attempt pays no floor:
+// its time is the KDF's.
+func TestLogin_AThrottledRefusalWaitsOutTheSameFloorWhateverTheName(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	for _, name := range []string{"mike", "no-such-person"} {
+		t.Run(name, func(t *testing.T) {
+			var waits []time.Duration
+			f := newFixture(t, consoleauth.WithThrottledSleep(func(_ context.Context, d time.Duration) error {
+				waits = append(waits, d)
+				return nil
+			}))
+
+			if _, _, err := f.svc.Login(ctx, attempt(name, "wrong")); !errors.Is(err, consoleauth.ErrBadCredentials) {
+				t.Fatalf("first Login = %v, want ErrBadCredentials", err)
+			}
+			if len(waits) != 0 {
+				t.Fatalf("a failed (not throttled) attempt waited %v, want no floor", waits)
+			}
+
+			_, _, err := f.svc.Login(ctx, attempt(name, "wrong"))
+			var throttled *consoleauth.ThrottledError
+			if !errors.As(err, &throttled) {
+				t.Fatalf("second Login = %v, want a ThrottledError", err)
+			}
+			if len(waits) != 1 || waits[0] != consoleauth.ThrottledFloor {
+				t.Errorf("throttled refusal waited %v, want exactly [%v]", waits, consoleauth.ThrottledFloor)
+			}
+		})
+	}
+}
+
+// A success records what was typed, as it always has; D19 changes only what a
+// failure keeps.
+func TestLogin_ASuccessfulSignInStillRecordsWhatWasTyped(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+
+	if _, _, err := f.svc.Login(context.Background(), attempt("  MIKE ", testPassword)); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	last := f.audit.last()
+	if last.Kind != audit.KindLoginSucceeded {
+		t.Fatalf("audited kind = %q, want %q", last.Kind, audit.KindLoginSucceeded)
+	}
+	if last.SubmittedName != "  MIKE " {
+		t.Errorf("SubmittedName = %q, want what was typed", last.SubmittedName)
 	}
 }
 

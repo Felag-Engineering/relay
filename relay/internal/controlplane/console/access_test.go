@@ -12,13 +12,14 @@ package console
 // passing a mapping bug the real seam would not.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -102,7 +103,7 @@ func seedAccessTrail(t *testing.T, sink *auditsink.Sink, st *store.Store, actor 
 			SubmittedName: actor.Account, Method: consoleauth.MethodPassword, Source: accessFixtureSource,
 		},
 		{
-			Kind: audit.KindLoginFailed, SubmittedName: "nobody", Method: consoleauth.MethodPassword,
+			Kind: audit.KindLoginFailed, SubmittedName: "", Method: consoleauth.MethodPassword,
 			Source: accessFixtureSource, Reason: "invalid credentials",
 		},
 		{
@@ -336,6 +337,18 @@ func TestAccess_AnAdminAnswersWhoSignedInFailedAndChangedAnAccount(t *testing.T)
 	if !strings.Contains(failed, "no verified Account") {
 		t.Errorf("a login_failed row does not say \"no verified Account\":\n%s", failed)
 	}
+	if !strings.Contains(failed, "a name that is not an Account") || strings.Contains(failed, `data-trust="asserted"`) {
+		t.Errorf("a login_failed row with no typed name must say \"a name that is not an Account\" "+
+			"and draw no asserted chip:\n%s", failed)
+	}
+	throttled := accessArticleContaining(t, content, "was throttled signing in")
+	if !strings.Contains(throttled, "no verified Account") || !strings.Contains(throttled, `data-trust="asserted"`) {
+		t.Errorf("a login_throttled row for a real Account's name must say \"no verified Account\" "+
+			"and carry the asserted chip:\n%s", throttled)
+	}
+	if strings.Contains(throttled, "a name that is not an Account") {
+		t.Errorf("a login_throttled row that carries a name says it is not an Account:\n%s", throttled)
+	}
 
 	// The window and the explicit range both reach the lane.
 	windowQ := &fakeQueries{}
@@ -489,25 +502,23 @@ func TestAccess_ANonAdminGets404AndNoNavEntry(t *testing.T) {
 	}
 }
 
-// assertedChipText masks the caller-supplied text an asserted trust chip
-// carries, so two renders that legitimately differ only in what was typed
-// (or when) can be compared byte-for-byte.
-var assertedChipText = regexp.MustCompile(
-	`(data-trust="asserted" title="The caller claimed this\. Nothing checked it\.">)[^<]*(<)`)
-
-func maskAssertedChip(s string) string { return assertedChipText.ReplaceAllString(s, "${1}MASKED${2}") }
-
 // accessEnumerationBannedWords is the vocabulary a failed sign-in or step-up
-// must never use — the enumeration oracle spec 20 and consoleauth.LoginEvent
-// both forbid.
+// must never use. After D19 the trail may tell the halves apart; only the
+// sign-in RESPONSE and this screen's wording may not.
 var accessEnumerationBannedWords = []string{"unknown", "no such", "does not exist", "wrong password", "not found"}
 
-// TestAccess_AFailedSignInCarriesNoWhichHalfIndication is spec 20's fourth
-// acceptance line, driven through a REAL consoleauth.Service so the
-// enumeration oracle is tested against what the service ACTUALLY emits
-// (consoleauth.LoginEvent's own doc), not a fixture shaped by hand.
-func TestAccess_AFailedSignInCarriesNoWhichHalfIndication(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
+// TestAccess_AFailedSignInShowsTheNameOnlyWhenItIsARealAccounts is spec 20's
+// fourth acceptance line: "A failed sign-in for a real Account's name shows
+// that name; one for any other name shows no typed text, and the name is
+// absent from the stored record, not only from the page." It is driven
+// through a REAL consoleauth.Service, sink and SQLite store, and proves the
+// absence at the decoded records, the raw database bytes, and the rendered
+// page.
+func TestAccess_AFailedSignInShowsTheNameOnlyWhenItIsARealAccounts(t *testing.T) {
+	const secret = "d19-secret-typed-as-a-name"
+
+	dbPath := filepath.Join(t.TempDir(), "relay.db")
+	st, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -546,9 +557,16 @@ func TestAccess_AFailedSignInCarriesNoWhichHalfIndication(t *testing.T) {
 	}
 	clk.advance(consoleauth.DefaultAccountMaxDelay)
 	if _, _, err := svc.Login(ctx, consoleauth.Attempt{
-		Name: "nobody", Password: accounts.NewPassword("anything"), Source: accessFixtureSource,
+		Name: secret, Password: accounts.NewPassword("anything"), Source: accessFixtureSource,
 	}); !errors.Is(err, consoleauth.ErrBadCredentials) {
-		t.Fatalf("Login(nobody, anything) = %v, want ErrBadCredentials", err)
+		t.Fatalf("Login(secret, anything) = %v, want ErrBadCredentials", err)
+	}
+	// Immediately again, with no advance: refused as throttled.
+	var throttled *consoleauth.ThrottledError
+	if _, _, err := svc.Login(ctx, consoleauth.Attempt{
+		Name: secret, Password: accounts.NewPassword("anything"), Source: accessFixtureSource,
+	}); !errors.As(err, &throttled) {
+		t.Fatalf("Login(secret) retried at once = %v, want a ThrottledError", err)
 	}
 	clk.advance(consoleauth.DefaultAccountMaxDelay)
 
@@ -558,20 +576,100 @@ func TestAccess_AFailedSignInCarriesNoWhichHalfIndication(t *testing.T) {
 	d.Queries = svcCap
 	d.Now = func() time.Time { return testNow }
 
-	body := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/access?kind=sign-in").Body.String())
-	var fails []string
-	for _, a := range accessArticlesOfKind(body, accessSignIn) {
-		if strings.Contains(a, "failed a Console sign-in") {
-			fails = append(fails, a)
+	// The page read writes its own read-audit records, so every assertion on
+	// the store below comes after it.
+	page := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/access?kind=sign-in").Body.String()
+	body := contentOf(page)
+
+	// The store, decoded.
+	records, err := st.Audit().List(ctx)
+	if err != nil {
+		t.Fatalf("list audit records: %v", err)
+	}
+	counts := map[string]int{}
+	for _, r := range records {
+		encoded, err := json.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal record: %v", err)
+		}
+		if bytes.Contains(encoded, []byte(secret)) {
+			t.Errorf("a stored %s record holds the secret typed as a name: %s", r.Kind, encoded)
+		}
+		switch r.Kind {
+		case audit.KindLoginFailed, audit.KindLoginThrottled:
+			counts[r.Kind]++
+			wantName := ""
+			if r.Kind == audit.KindLoginFailed && counts[r.Kind] == 1 {
+				wantName = "mike" // the first failure was mike's
+			}
+			if got := r.Attribution.Asserted.OnBehalfOf; got != wantName {
+				t.Errorf("%s #%d stored asserted name %q, want %q", r.Kind, counts[r.Kind], got, wantName)
+			}
 		}
 	}
-	if len(fails) != 2 {
-		t.Fatalf("got %d login_failed articles, want 2:\n%s", len(fails), body)
+	if counts[audit.KindLoginFailed] != 2 || counts[audit.KindLoginThrottled] != 1 {
+		t.Fatalf("stored %d login_failed and %d login_throttled records, want 2 and 1",
+			counts[audit.KindLoginFailed], counts[audit.KindLoginThrottled])
 	}
-	a1, a2 := maskAssertedChip(fails[0]), maskAssertedChip(fails[1])
-	if a1 != a2 {
-		t.Errorf("the two failed sign-ins are not byte-identical once the submitted name is "+
-			"masked:\n%s\n---\n%s", a1, a2)
+
+	// The store, raw: the database file and its WAL, with a positive control
+	// proving the scan can see records at all.
+	var raw []byte
+	for _, path := range []string{dbPath, dbPath + "-wal"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) && strings.HasSuffix(path, "-wal") {
+				continue
+			}
+			t.Fatalf("read %s: %v", path, err)
+		}
+		raw = append(raw, data...)
+	}
+	if !bytes.Contains(raw, []byte("invalid credentials")) {
+		t.Fatal("the raw scan cannot see stored records: its positive control was not found")
+	}
+	if bytes.Contains(raw, []byte(secret)) {
+		t.Error("the secret typed as a name is present in the raw database bytes")
+	}
+
+	// The page.
+	if strings.Contains(page, secret) {
+		t.Error("the secret typed as a name appears in the rendered page")
+	}
+	var fails, throttles []string
+	for _, a := range accessArticlesOfKind(body, accessSignIn) {
+		switch {
+		case strings.Contains(a, "failed a Console sign-in"):
+			fails = append(fails, a)
+		case strings.Contains(a, "was throttled signing in"):
+			throttles = append(throttles, a)
+		}
+	}
+	if len(fails) != 2 || len(throttles) != 1 {
+		t.Fatalf("got %d login_failed and %d login_throttled articles, want 2 and 1:\n%s", len(fails), len(throttles), body)
+	}
+	var realFail, otherFails []string
+	for _, a := range append(append([]string{}, fails...), throttles...) {
+		if strings.Contains(a, `data-trust="asserted" title="The caller claimed this. Nothing checked it.">mike<`) {
+			realFail = append(realFail, a)
+		} else {
+			otherFails = append(otherFails, a)
+		}
+	}
+	if len(realFail) != 1 || strings.Contains(realFail[0], "a name that is not an Account") {
+		t.Errorf("mike's failed sign-in must show the asserted chip \"mike\" and no D19 text:\n%v", realFail)
+	}
+	if len(otherFails) != 2 {
+		t.Fatalf("got %d rows for the secret, want its failure and its throttle", len(otherFails))
+	}
+	for _, a := range otherFails {
+		if strings.Contains(a, `data-trust="asserted"`) {
+			t.Errorf("a row for a name that is not an Account draws an asserted chip:\n%s", a)
+		}
+		if !strings.Contains(a, "no verified Account") || !strings.Contains(a, "a name that is not an Account") {
+			t.Errorf("a row for a name that is not an Account must say both \"no verified Account\" "+
+				"and \"a name that is not an Account\":\n%s", a)
+		}
 	}
 	for _, article := range fails {
 		lower := strings.ToLower(article)
@@ -617,6 +715,60 @@ func TestAccess_AFailedSignInCarriesNoWhichHalfIndication(t *testing.T) {
 		if strings.Contains(lower, word) {
 			t.Errorf("the step-up failure article contains the banned word %q:\n%s", word, failedStepUp)
 		}
+	}
+}
+
+// TestAccess_NotAnAccountIsDrawnOnlyInTheAssertedSlotOfSignInFailuresAndThrottles
+// pins where D19's wording goes: the verified slot keeps "no verified
+// Account", and the asserted slot says the typed text was not an Account's,
+// only on a sign-in failure or throttle that carries no name.
+func TestAccess_NotAnAccountIsDrawnOnlyInTheAssertedSlotOfSignInFailuresAndThrottles(t *testing.T) {
+	const d19 = "a name that is not an Account"
+	mikeAsserted := capability.Assertions{OnBehalfOf: "mike"}
+
+	q := &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindLoginFailed, Timestamp: testNow},
+		{Kind: audit.KindLoginThrottled, Timestamp: testNow},
+		{Kind: audit.KindStepUpFailed, Timestamp: testNow},
+		{Kind: audit.KindLoginSucceeded, Timestamp: testNow},
+		{Kind: audit.KindAPITokenMint, Principal: audit.PrincipalLocalHost, Timestamp: testNow},
+		{Kind: audit.KindAccountCreate, Timestamp: testNow,
+			Verified: capability.VerifiedIdentity{AccountID: "acct-1", AccountName: "admin"}},
+		{Kind: audit.KindLoginFailed, Timestamp: testNow, Asserted: mikeAsserted, Reason: "typed-mike"},
+	}}
+	content := contentOf(get(t, newTestHandler(accessDeps(q), accounts.RoleAdmin), "/console/access").Body.String())
+
+	for _, needle := range []string{"failed a Console sign-in", "was throttled signing in"} {
+		matched := 0
+		for _, a := range accessArticles(content) {
+			if !strings.Contains(a, needle) || strings.Contains(a, "typed-mike") {
+				continue
+			}
+			matched++
+			if strings.Contains(a, `data-trust="asserted"`) {
+				t.Errorf("a %q row with no name draws an asserted chip:\n%s", needle, a)
+			}
+			verified, asserted := strings.Index(a, "no verified Account"), strings.Index(a, d19)
+			if verified < 0 || asserted < 0 || verified > asserted {
+				t.Errorf("a %q row with no name must say \"no verified Account\" then %q:\n%s", needle, d19, a)
+			}
+		}
+		if matched == 0 {
+			t.Errorf("no %q row without a name was drawn", needle)
+		}
+	}
+
+	for _, needle := range []string{
+		"failed a step-up re-authentication", "signed in to the Console", "minted an API Token", "created an Account",
+	} {
+		if a := accessArticleContaining(t, content, needle); strings.Contains(a, d19) {
+			t.Errorf("a %q row says %q:\n%s", needle, d19, a)
+		}
+	}
+
+	named := accessArticleContaining(t, content, "typed-mike")
+	if !strings.Contains(named, `data-trust="asserted"`) || strings.Contains(named, d19) {
+		t.Errorf("a login_failed row with a name must show the asserted chip and not %q:\n%s", d19, named)
 	}
 }
 
@@ -892,5 +1044,10 @@ func TestAccess_AHostLeverRowNamesTheHost(t *testing.T) {
 	failed := accessArticleContaining(t, content, "failed a Console sign-in")
 	if !strings.Contains(failed, "no verified Account") || strings.Contains(failed, "the Relay host") {
 		t.Errorf("a login_failed row with no principal must keep \"no verified Account\":\n%s", failed)
+	}
+	for _, needle := range []string{"minted an API Token", "cleared a Console password (none was set)"} {
+		if a := accessArticleContaining(t, content, needle); strings.Contains(a, "a name that is not an Account") {
+			t.Errorf("the host-lever %q row says a name is not an Account:\n%s", needle, a)
+		}
 	}
 }

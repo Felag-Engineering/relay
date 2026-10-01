@@ -611,13 +611,13 @@ func (s *Sink) append(ctx context.Context, rec audit.Record) error {
 // A SUCCESSFUL sign-in has a verified identity, so it fills the verified lane
 // exactly as any other authenticated act does. A FAILED one has no verified
 // identity at all — that is what failing means — so the verified lane carries
-// only the source, and what the caller typed goes in the ASSERTED lane, where
+// only the source, and what the caller claimed goes in the ASSERTED lane, where
 // unauthenticated claims belong.
 //
-// That split is not bookkeeping. A trail that recorded the submitted username
-// as though it were an Account would let anyone with audit read access
-// enumerate Accounts by watching which names come back, which is the same
-// oracle the login response refuses to be — just readable at leisure.
+// The asserted lane carries what consoleauth hands it. On a failed or
+// throttled sign-in that is the matched Account's name or nothing (D19),
+// decided in consoleauth when the attempt is recorded. Nothing a failure
+// carries lands in the verified lane.
 func (s *Sink) RecordLogin(ctx context.Context, e consoleauth.LoginEvent) error {
 	rec := audit.Record{
 		Timestamp: s.now(),
@@ -633,10 +633,10 @@ func (s *Sink) RecordLogin(ctx context.Context, e consoleauth.LoginEvent) error 
 				Source:      e.Source,
 			},
 			Asserted: audit.Asserted{
-				// The submitted name, bounded like every other asserted field:
-				// an unauthenticated caller must not be able to size an audit
-				// record (the #255/#258 unbounded-field lesson), and this one
-				// is reachable by anyone who can reach the sign-in form.
+				// Bounded like every other asserted field: a successful
+				// sign-in still records exactly what was typed, and the sink
+				// must not trust its caller to have bounded it (the #255/#258
+				// unbounded-field lesson).
 				OnBehalfOf: truncate(e.SubmittedName, audit.MaxAssertedFieldBytes),
 			},
 		},

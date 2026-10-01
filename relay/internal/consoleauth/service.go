@@ -115,19 +115,19 @@ type LoginEvent struct {
 	Kind string
 
 	// Account and AccountID identify the acting Account. Both are empty on a
-	// failure, ALWAYS — including a failure against an Account that exists.
-	//
-	// That is deliberate and it costs something real: a trail that named the
-	// Account would answer "who is being guessed at" directly. It would also
-	// be a user-enumeration oracle for anyone with audit read access, which
-	// on this product includes every viewer. SubmittedName below carries what
-	// was typed, in the asserted lane where a claim belongs.
+	// failure, ALWAYS — including a failure against an Account that exists:
+	// nobody proved anything, so the verified lane names nobody.
+	// SubmittedName below carries the claim, in the asserted lane, and on a
+	// failure only when it is a real Account's name (D19).
 	Account   string
 	AccountID string
 	Role      string
 
-	// SubmittedName is what the caller typed. Caller-controlled and untrusted:
-	// it belongs to the asserted lane and is never matched against an Account.
+	// SubmittedName belongs to the asserted lane. On a success it is what was
+	// typed. On a failed or throttled sign-in it is the name of the existing
+	// Account the typed text matched, or "" when it matched none (D19): a name
+	// box can hold a password, so text that is not an Account's name is never
+	// stored. On step-up it is the session's own Account.
 	SubmittedName string
 
 	// Method is how the identity was established (MethodPassword, MethodOIDC).
@@ -163,7 +163,25 @@ type Service struct {
 	audit     Auditor
 
 	stepUpWindow time.Duration
+	sleep        func(ctx context.Context, d time.Duration) error
 }
+
+// ThrottledFloor is the least time a throttled sign-in refusal takes,
+// measured from the start of Login.
+//
+// It exists for D19: Login looks the typed name up before the throttle check
+// (the audit record must carry an existing Account's name), and on the
+// throttled branch that lookup is the only Account-dependent work before the
+// refusal. A found row costs a little more than no row, so without a floor
+// repeated 429 timings could reveal whether a name is an Account. The floor
+// sits well above a registry lookup's normal cost, so the refusal's duration
+// no longer depends on what the lookup found.
+//
+// It is deliberately NOT KDF work: the throttle exists partly to cap KDF
+// cost, and burning a derivation on a refusal would make throttling a CPU
+// amplifier. It covers only the throttled branch. It does not cover the failed
+// branch, which the KDF dominates, nor a lookup slower than the floor itself.
+const ThrottledFloor = 50 * time.Millisecond
 
 // now reads the SESSION STORE's clock, never one of its own. See Store.Now:
 // two clocks that can disagree about a session's age is how a step-up check
@@ -172,6 +190,29 @@ func (s *Service) now() time.Time { return s.sessions.Now() }
 
 // ServiceOption configures a Service.
 type ServiceOption func(*Service)
+
+// WithThrottledSleep replaces how Login waits out ThrottledFloor, so tests
+// need not sleep for real. The function must honour ctx and return its error
+// when cancelled. Production never sets it.
+func WithThrottledSleep(sleep func(ctx context.Context, d time.Duration) error) ServiceOption {
+	return func(s *Service) {
+		if sleep != nil {
+			s.sleep = sleep
+		}
+	}
+}
+
+// sleepFor waits d or until ctx is done, whichever is first.
+func sleepFor(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 // WithStepUpWindow overrides how recently a human must have proved presence
 // for a step-up-gated action. Non-positive keeps the default.
@@ -211,6 +252,7 @@ func NewService(
 		throttle:     throttle,
 		audit:        auditor,
 		stepUpWindow: DefaultStepUpWindow,
+		sleep:        sleepFor,
 	}
 	for _, o := range opts {
 		o(s)
@@ -231,26 +273,43 @@ func (s *Service) StepUpWindow() time.Duration { return s.stepUpWindow }
 // burn a KDF run, record the failure, audit, return ErrBadCredentials — so
 // that an unknown username, a disabled Account, a machine Account, an Account
 // with no password, a corrupt hash, and a wrong password are indistinguishable
-// in message, in timing, and in the audit trail. The temptation to
-// short-circuit any of them (an early return for "no such account" is the
-// obvious one) is the bug this arrangement exists to prevent.
+// in message and in timing. The temptation to short-circuit any of them (an
+// early return for "no such account" is the obvious one) is the bug this
+// arrangement exists to prevent.
+//
+// The audit trail is the one place that now tells them apart, and only as D19
+// says: a failure records the typed name when it is an existing Account's and
+// no typed text otherwise. That existence lookup runs first, on every attempt
+// and before anything branches on its result. What that does and does not
+// buy: the lookup is unconditional; the throttled branch is padded to
+// ThrottledFloor so a found row cannot be told from no row by how fast the
+// refusal returns; the failed branch is dominated by the KDF, and still has
+// the pre-existing GetPassword asymmetry for an enabled human Account, which
+// this change neither introduces nor fixes.
 func (s *Service) Login(ctx context.Context, a Attempt) (SessionID, Session, error) {
+	start := s.now()
 	name := accounts.NormalizeName(a.Name)
+	existing, found := s.lookup(ctx, name)
+	submitted := recordableName(existing, found)
 
 	if wait := s.throttle.Check(a.Source, name); wait > 0 {
 		if err := s.recordLogin(ctx, LoginEvent{
 			Kind:          auditKindLoginThrottled,
-			SubmittedName: a.Name,
+			SubmittedName: submitted,
 			Method:        MethodPassword,
 			Source:        a.Source,
 			Reason:        fmt.Sprintf("refused before any credential was checked; next attempt accepted in %s", ceilSecond(wait)),
 		}); err != nil {
 			return SessionID{}, Session{}, err
 		}
+		// A cancelled ctx ends the wait early; the refusal is still the answer.
+		if remaining := ThrottledFloor - s.now().Sub(start); remaining > 0 {
+			_ = s.sleep(ctx, remaining)
+		}
 		return SessionID{}, Session{}, &ThrottledError{RetryAfter: wait}
 	}
 
-	acct, hash, ok := s.resolve(ctx, name)
+	acct, hash, ok := s.credential(ctx, existing, found)
 	if !ok || !hash.Verify(a.Password) {
 		// The equal-time burn for every non-verification failure. When the
 		// Account resolved, hash.Verify has already done a real derivation and
@@ -262,7 +321,7 @@ func (s *Service) Login(ctx context.Context, a Attempt) (SessionID, Session, err
 		s.throttle.Fail(a.Source, name)
 		if err := s.recordLogin(ctx, LoginEvent{
 			Kind:          auditKindLoginFailed,
-			SubmittedName: a.Name,
+			SubmittedName: submitted,
 			Method:        MethodPassword,
 			Source:        a.Source,
 			Reason:        "invalid credentials",
@@ -481,11 +540,40 @@ func (s *Service) RequireStepUp(id SessionID) error {
 // resolve looks up the Account and its password hash, collapsing every reason
 // a sign-in cannot proceed into a single false.
 //
-// The collapse happens HERE, below the caller, on purpose: Login cannot
+// The collapse happens HERE, below the caller, on purpose: the caller cannot
 // accidentally branch on a distinction it never receives.
 func (s *Service) resolve(ctx context.Context, name string) (accounts.Account, accounts.PasswordHash, bool) {
+	acct, found := s.lookup(ctx, name)
+	return s.credential(ctx, acct, found)
+}
+
+// lookup is the existence check: exactly one registry read. Any error,
+// ErrNotFound or a store failure, reports not found, so a failure fails
+// toward recording nothing.
+func (s *Service) lookup(ctx context.Context, name string) (accounts.Account, bool) {
 	acct, err := s.accounts.GetByName(ctx, name)
 	if err != nil {
+		return accounts.Account{}, false
+	}
+	return acct, true
+}
+
+// recordableName is the only text a failed or throttled sign-in may put in the
+// asserted lane: an existing Account's own name, whatever its kind or state,
+// else nothing (D19, spec 20 "Row kinds"). It is decided when the attempt is
+// recorded, so a secret typed into the name box is never stored. It returns
+// the registry's value, never the caller's bytes.
+func recordableName(acct accounts.Account, found bool) string {
+	if !found {
+		return ""
+	}
+	return acct.Name
+}
+
+// credential decides whether the looked-up Account may sign in and fetches its
+// password hash, collapsing every reason it may not into a single false.
+func (s *Service) credential(ctx context.Context, acct accounts.Account, found bool) (accounts.Account, accounts.PasswordHash, bool) {
+	if !found {
 		return accounts.Account{}, accounts.PasswordHash{}, false
 	}
 	if !acct.Enabled {
