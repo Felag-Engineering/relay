@@ -1,0 +1,143 @@
+package console
+
+// callfeed_test.go proves the code the Agents screen and Activity share
+// (callfeed.go): run folding, the strip builder, the collapse sentence and the
+// Console-read rule. Each screen's own behaviour over it is proved beside that
+// screen.
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+)
+
+// TestConsoleRead_ARowThatCannotTellIsNotARead: both halves come from the
+// row, and a row that does not say it was a read stays listed.
+func TestConsoleRead_ARowThatCannotTellIsNotARead(t *testing.T) {
+	for name, row := range map[string]capability.AuditRow{
+		"no kind":             {Verified: consoleActor},
+		"unknown kind":        {Kind: "something_new", Verified: consoleActor},
+		"read kind, raw argv": {Kind: audit.KindRead, RawExecArgv: []string{"/bin/true"}, Verified: consoleActor},
+		"read, not console": {Kind: audit.KindRead, OperationName: "list_nodes",
+			Verified: capability.VerifiedIdentity{AccountName: "x", Method: string(capability.AuthMethodAPIToken)}},
+		"read, no method": {Kind: audit.KindRead, OperationName: "list_nodes"},
+	} {
+		if consoleRead(row) {
+			t.Errorf("%s: treated as a Console-session read", name)
+		}
+	}
+	if !consoleRead(capability.AuditRow{Kind: audit.KindRead, OperationName: "list_nodes", Verified: consoleActor}) {
+		t.Error("a Console-session read is not recognised")
+	}
+}
+
+// TestCollapseNote_SpeaksWhenThereIsSomethingToSay: "" when nothing folded,
+// otherwise the counts and the noun for what still counts every call. With
+// "rail" it is the clause Agents' page note has always carried.
+func TestCollapseNote_SpeaksWhenThereIsSomethingToSay(t *testing.T) {
+	if got := collapseNote(0, 0, "strip"); got != "" {
+		t.Errorf("collapseNote with nothing folded = %q, want empty", got)
+	}
+	got := collapseNote(7, 2, "strip")
+	want := "7 calls on this page are collapsed into 2 rows, each saying how many calls it stands for. " +
+		"The strip still counts every call."
+	if got != want {
+		t.Errorf("collapseNote = %q, want %q", got, want)
+	}
+	if rail := collapseNote(2, 1, "rail"); !strings.Contains(pageNote(2, 1, 200, false, false), rail) {
+		t.Errorf("collapseNote(rail) %q is not the clause Agents' pageNote prints", rail)
+	}
+}
+
+// TestFoldRuns_ConsecutiveOnly: A, A, B, A folds to A(2), B, A — a match is
+// only ever sought against the last row already kept — and a row whose key
+// says it may not fold never does.
+func TestFoldRuns_ConsecutiveOnly(t *testing.T) {
+	type row struct {
+		key   string
+		calls int
+	}
+	key := func(r row) (string, bool) { return r.key, r.key != "never" }
+	fold := func(run *row, older row) { run.calls += older.calls }
+	got := foldRuns([]row{{"A", 1}, {"A", 1}, {"B", 1}, {"A", 1}}, key, fold)
+	if len(got) != 3 || got[0] != (row{"A", 2}) || got[1] != (row{"B", 1}) || got[2] != (row{"A", 1}) {
+		t.Errorf("foldRuns = %+v, want A(2), B, A", got)
+	}
+	got = foldRuns([]row{{"never", 1}, {"never", 1}}, key, fold)
+	if len(got) != 2 {
+		t.Errorf("rows whose key says they may not fold were folded: %+v", got)
+	}
+	if got := foldRuns([]row(nil), key, fold); len(got) != 0 {
+		t.Errorf("foldRuns over nothing = %+v", got)
+	}
+}
+
+func TestFoldedSummary_CountsOnlyRowsThatFoldedSomething(t *testing.T) {
+	calls := func(n int) int { return n }
+	fc, fr := foldedSummary([]int{1, 4, 1, 3}, calls)
+	if fc != 7 || fr != 2 {
+		t.Errorf("foldedSummary = (%d, %d), want (7, 2)", fc, fr)
+	}
+	if fc, fr := foldedSummary([]int{1, 1}, calls); fc != 0 || fr != 0 {
+		t.Errorf("foldedSummary over unfolded rows = (%d, %d), want (0, 0)", fc, fr)
+	}
+}
+
+// TestBuildStrip_NameAndVerifiedFromTheFirstCallRoleFromTheNewest: calls
+// arrive newest-first, so the first call for a Key is its newest. A Key renamed
+// mid-page is listed under its newest name; the role is the newest one any call
+// carried and is never kept for an entry that is not verified.
+func TestBuildStrip_NameAndVerifiedFromTheFirstCallRoleFromTheNewest(t *testing.T) {
+	now := testNow
+	at := func(s int) time.Time { return now.Add(-time.Duration(s) * time.Second) }
+	entries, dropped := buildStrip([]stripCall{
+		{Key: "id:1", Name: "alice2", Verified: true, At: at(1)},
+		{Key: "id:1", Name: "alice", Verified: true, Role: "admin", At: at(5)},
+		{Key: "id:1", Name: "alice", Verified: true, Role: "operator", At: at(9)},
+		{Key: "name:x", Name: "x", Verified: false, Role: "admin", At: at(2)},
+	}, "", now)
+	if dropped != 0 || len(entries) != 2 {
+		t.Fatalf("entries = %+v, dropped = %d", entries, dropped)
+	}
+	a := entries[0]
+	if a.Name != "alice2" || !a.Verified || a.Calls != 3 {
+		t.Errorf("entry = %+v, want alice2, verified, 3 calls", a)
+	}
+	if a.Role != "admin" {
+		t.Errorf("role = %q, want the newest role-bearing call's (admin)", a.Role)
+	}
+	if entries[1].Role != "" {
+		t.Errorf("an unverified entry kept a role: %q", entries[1].Role)
+	}
+}
+
+// TestBuildStrip_OrdersBusiestFirstThenNameThenKey: two entries with equal
+// counts and equal names still order deterministically, and membership drops an
+// entry whose last call is outside the window.
+func TestBuildStrip_OrdersBusiestFirstThenNameThenKey(t *testing.T) {
+	now := testNow
+	recent := now.Add(-time.Minute)
+	entries, dropped := buildStrip([]stripCall{
+		{Key: "id:b", Name: "same", Verified: true, At: recent},
+		{Key: "id:a", Name: "same", Verified: true, At: recent},
+		{Key: "id:busy", Name: "zed", Verified: true, At: recent},
+		{Key: "id:busy", Name: "zed", Verified: true, At: recent},
+		{Key: "id:old", Name: "old", Verified: true, At: now.Add(-activeWindow - time.Second)},
+	}, "id:a", now)
+	var keys []string
+	for _, e := range entries {
+		keys = append(keys, e.Key)
+	}
+	if strings.Join(keys, ",") != "id:busy,id:a,id:b" {
+		t.Errorf("order = %v, want id:busy, id:a, id:b", keys)
+	}
+	if dropped != 1 {
+		t.Errorf("dropped = %d, want 1", dropped)
+	}
+	if !entries[1].Current || entries[0].Current || entries[2].Current {
+		t.Errorf("Current is not exactly the current Key: %+v", entries)
+	}
+}

@@ -55,6 +55,16 @@ package console
 // DOES NOT REPAINT LIVE. A Job that finishes while the page is open says so, in
 // place, and the counts arrive on the explicit reload.
 //
+// # The strip, the collapse and Console reads
+//
+// Shared with the Agents screen and kept in callfeed.go. The order is fixed:
+// reads made from a Console session are left out in the fetch (fetchActivity),
+// then the strip counts the calls that remain, then consecutive identical rows
+// fold, and only then does Cancel attach, so the strip counts calls and never
+// rendered rows and each running Job keeps exactly one Cancel. The strip's
+// sentences are scoped to the page and the filter, never the fleet, because
+// this feed is always filtered (activityStripNote).
+//
 // # There is no Jobs destination
 //
 // This screen filtered to dispatch IS the Jobs list (open decision D6), and it
@@ -65,8 +75,10 @@ package console
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -326,6 +338,23 @@ type activityRow struct {
 	// rather than rendering an empty <code> element linking somewhere.
 	OpIsLink bool
 
+	// AccountID is the verified Account ID, empty when none was verified. It is
+	// exported ONLY so it joins the collapse key (activityCollapseKey): two
+	// Accounts sharing a display name must never fold into one row. It is never
+	// rendered.
+	AccountID string
+
+	// role is the verified role at this call, trail rows only. It feeds the
+	// strip; it is neither rendered nor part of the collapse key.
+	role string
+
+	// Calls is how many calls this row stands for: 1 unless the collapse folded
+	// a run of consecutive identical rows into it. FirstWhen is the When of the
+	// OLDEST call in such a run, in the same absolute UTC format as When, and is
+	// set only when Calls is above 1.
+	Calls     int
+	FirstWhen string
+
 	// Outcomes are the per-Job rollup: the segmented bar and its key.
 	Outcomes OutcomeBar
 	FanOut   int
@@ -349,6 +378,9 @@ type activityRow struct {
 	RawExecTier bool
 	// AwaitingRecord is a Running row with no audit-joined field joined yet:
 	// the Job engine writes its dispatch record after the dispatch returns.
+	// Cancel does not depend on it, but the strip does: a Job joins the strip
+	// once its dispatch is recorded (spec 04, "Who is active"), so
+	// activityStrip leaves an AwaitingRecord row off.
 	AwaitingRecord bool
 	// CancelAction is the Cancel form's action, set by the handler after the
 	// fetch and never by the constructors: only it knows the caller's role.
@@ -424,6 +456,11 @@ type activityFilter struct {
 	// would guarantee it and the read lane's disagree about what
 	// `outcome:denied` means.
 	Q string
+
+	// ShowConsole is ?console=show: reads made from a Console session are
+	// listed and counted instead of left out (spec 04, "Reads made from this
+	// Console"). It widens the view, so narrowing ignores it.
+	ShowConsole bool
 
 	// Job and Audit are each lane's own position. See lanePos: a cursor
 	// alone cannot say "this lane is finished", and an empty one means
@@ -537,14 +574,15 @@ func parseTimeRange(window, since, until string, now time.Time) (timeRange, []st
 func parseActivityFilter(r *http.Request, now time.Time) (activityFilter, string) {
 	q := r.URL.Query()
 	f := activityFilter{
-		Kind:       strings.TrimSpace(q.Get("kind")),
-		Account:    strings.TrimSpace(q.Get("account")),
-		OnBehalfOf: strings.TrimSpace(q.Get("on_behalf_of")),
-		Op:         strings.TrimSpace(q.Get("op")),
-		Outcome:    strings.TrimSpace(q.Get("outcome")),
-		Q:          q.Get("q"),
-		Job:        lanePos{Cursor: q.Get("jc"), Done: q.Get("jdone") == "1"},
-		Audit:      lanePos{Cursor: q.Get("ac"), Done: q.Get("adone") == "1"},
+		Kind:        strings.TrimSpace(q.Get("kind")),
+		Account:     strings.TrimSpace(q.Get("account")),
+		OnBehalfOf:  strings.TrimSpace(q.Get("on_behalf_of")),
+		Op:          strings.TrimSpace(q.Get("op")),
+		Outcome:     strings.TrimSpace(q.Get("outcome")),
+		Q:           q.Get("q"),
+		ShowConsole: q.Get(consoleParam) == consoleShow,
+		Job:         lanePos{Cursor: q.Get("jc"), Done: q.Get("jdone") == "1"},
+		Audit:       lanePos{Cursor: q.Get("ac"), Done: q.Get("adone") == "1"},
 	}
 
 	var notes []string
@@ -629,6 +667,9 @@ func (f activityFilter) query(job, audit lanePos) url.Values {
 	set("since", f.SinceParam)
 	set("until", f.UntilParam)
 	set("q", f.Q)
+	if f.ShowConsole {
+		set(consoleParam, consoleShow)
+	}
 	set("jc", job.Cursor)
 	set("ac", audit.Cursor)
 	// Carried as their own parameters so that "finished" survives the round
@@ -722,6 +763,41 @@ type activityView struct {
 
 	// Refresh reloads this exact view, lane positions included.
 	Refresh Refresh
+
+	// Strip is the "Who is active" strip and StripNote the one sentence
+	// explaining an empty or partial one. Both are scoped to this page and this
+	// filter, never the fleet: see activityStripNote.
+	Strip     []stripEntry
+	StripNote string
+
+	// AllAccountsHref is this view with ?account= cleared and everything else
+	// kept. It is the only strip-area link that clears the filter.
+	AllAccountsHref string
+
+	// ReadKindHref is this view filtered to the read family, keeping account
+	// and console; the About disclosure links to it.
+	ReadKindHref string
+
+	// ReadsExcluded says the filter does not select read records, so the strip
+	// cannot list an Account that only read.
+	ReadsExcluded bool
+
+	// ConsoleInForce says the filter selects read records, which is the only
+	// case in which reads made from this Console can be on the page at all, so
+	// the page states the rule. ShowConsole is ?console=show. ConsoleLeftOut is
+	// how many of PageCalls calls the default left out; AllConsoleReads says
+	// that was every one of them.
+	ConsoleInForce    bool
+	ShowConsole       bool
+	ConsoleLeftOut    int
+	PageCalls         int
+	AllConsoleReads   bool
+	ConsoleToggleHref string
+
+	// CollapseNote says what the collapse did to the page; EventCount is the
+	// calls the rendered rows stand for, which is what the viewbar counts.
+	CollapseNote string
+	EventCount   int
 }
 
 // kindChip is one family link. It carries NO COUNT, and that is a deletion
@@ -793,6 +869,8 @@ func handleActivity(d Deps) http.HandlerFunc {
 			return
 		}
 
+		readKind := f
+		readKind.Kind = string(rowRead)
 		v := activityView{
 			Filter:        f,
 			Note:          note,
@@ -805,12 +883,16 @@ func handleActivity(d Deps) http.HandlerFunc {
 			// matches" would be a lie about the filter rather than about the
 			// position, so it gets its own sentence.
 			Exhausted: known && !ranJob && !ranTrail,
-			ResetHref: "/console/activity",
-			ReadsHref: "/console/reads",
-			Narrowing: f.narrowing(),
-			Windows:   windowChoices(f.Window),
-			Outcomes:  outcomeChoices(f.Outcome),
-			Kinds:     kindChips(f),
+			// Clear resets every filter, account and console included, so it is
+			// deliberately not among the links that keep them (spec 04).
+			ResetHref:     "/console/activity",
+			ReadsHref:     "/console/reads",
+			Narrowing:     f.narrowing(),
+			Windows:       windowChoices(f.Window),
+			Outcomes:      outcomeChoices(f.Outcome),
+			Kinds:         kindChips(f),
+			ReadKindHref:  readKind.base(),
+			ReadsExcluded: !slices.Contains(activityLaneKinds(f), audit.KindRead),
 		}
 		v.CSRFToken = p.CSRFToken
 		v.Refresh = newRefresh("/console/activity", f.query(f.Job, f.Audit))
@@ -827,7 +909,7 @@ func handleActivity(d Deps) http.HandlerFunc {
 			return
 		}
 
-		rows, jobNext, auditNext, err := fetchActivity(r.Context(), d, caller, f, ranJob, trailKinds,
+		fetch, err := fetchActivity(r.Context(), d, caller, f, ranJob, trailKinds,
 			capability.PageRequest{Limit: jobPageSize, Cursor: f.Job.Cursor},
 			capability.PageRequest{Limit: auditPageSize, Cursor: f.Audit.Cursor})
 		if err != nil {
@@ -837,21 +919,56 @@ func handleActivity(d Deps) http.HandlerFunc {
 		if refusedUnaudited(w, lane, "the audit and Job query lane") {
 			return
 		}
-		v.Rows = rows
+		jobNext, auditNext := fetch.JobNext, fetch.AuditNext
+		v.Rows = fetch.Rows
+
+		// What the filter SELECTS decides whether the Console-read rule is
+		// stated, not which lane this page position happened to run, so an Older
+		// page whose trail lane is finished still states it.
+		v.ShowConsole = f.ShowConsole
+		v.ConsoleInForce = !v.ReadsExcluded
+		v.ConsoleLeftOut, v.PageCalls = fetch.ConsoleLeftOut, fetch.PageCalls
+		v.AllConsoleReads = v.ConsoleLeftOut > 0 && v.ConsoleLeftOut == v.PageCalls
+		toggle := f
+		toggle.ShowConsole = !f.ShowConsole
+		v.ConsoleToggleHref = toggle.href(f.Job, f.Audit)
+		everyone := f
+		everyone.Account = ""
+		v.AllAccountsHref = everyone.base()
+		v.Scrolled = f.Job != (lanePos{}) || f.Audit != (lanePos{})
+		if v.Scrolled {
+			v.NewestHref = f.base()
+		}
+
+		// The strip counts CALLS over the rows left after the Console
+		// exclusion and the Refine, so it runs BEFORE the collapse, which folds
+		// rows and must never change a count.
+		var dropped, awaiting, unrecorded int
+		v.Strip, dropped, awaiting, unrecorded = activityStrip(v.Rows, f, d.now())
+		v.StripNote = activityStripNote(activityStripFacts{
+			Listed: len(v.Strip), Dropped: dropped,
+			Scrolled: v.Scrolled, Exhausted: v.Exhausted, AccountScoped: f.Account != "",
+			Awaiting: awaiting, Unrecorded: unrecorded,
+			ConsoleLeftOut: v.ConsoleLeftOut, PageCalls: v.PageCalls,
+		})
+
+		v.Rows = collapseActivityRows(v.Rows)
+		fc, fr := foldedSummary(v.Rows, func(r activityRow) int { return r.Calls })
+		v.CollapseNote = collapseNote(fc, fr, "strip")
+		for _, r := range v.Rows {
+			v.EventCount += r.Calls
+		}
 
 		// Cancel follows Job detail literally: a Job with Unresolved Tasks
-		// and a role the route is mounted for. One Job is one row, so this is
-		// at most one control per Job by construction.
+		// and a role the route is mounted for. One Job is one row, and a
+		// dispatch row is never folded, so this is at most one control per Job
+		// by construction.
 		if cancelOffered(d, accounts.Role(caller.Role)) {
 			for i := range v.Rows {
 				if r := &v.Rows[i]; r.Kind == rowDispatch && r.Running && r.JobID != "" {
 					r.CancelAction = cancelJobAction(r.JobID)
 				}
 			}
-		}
-		v.Scrolled = f.Job != (lanePos{}) || f.Audit != (lanePos{})
-		if v.Scrolled {
-			v.NewestHref = f.base()
 		}
 
 		// BOTH lane positions travel, always, and a lane that came back with
@@ -891,6 +1008,181 @@ func handleActivity(d Deps) http.HandlerFunc {
 	}
 }
 
+// activityCollapseKey is the collapse's key for one row, and whether the row
+// may fold at all.
+//
+// The key is every exported field of the row except When, FirstWhen, Calls and
+// CancelAction: a superset of what the template renders. encoding/json
+// serialises exactly the exported fields and html/template can only read
+// exported fields, so any field the template renders is in the key by
+// construction, with no hand-kept list. Some exported fields are not rendered
+// (AccountID and Resolved among them); including them can only stop a fold,
+// never cause one. The unexported at and role are left out, and neither is
+// rendered. activityRow holds slices (Outcomes.Segments), so == cannot compare
+// rows the way it compares agentCall.
+//
+// A Job row stands for one Job, carries the live handle and carries Cancel, so
+// it never folds. A denial is the highest-information row on a trust surface
+// and never folds either (Agents' rule); on this screen a denied outcome
+// reaches the feed mainly on Job rows, which the first rule already excludes,
+// so this is the guard for any trail row that renders one. A Marshal error is
+// "not collapsible": an error never causes a fold.
+func activityCollapseKey(r activityRow) (string, bool) {
+	if r.Kind == rowDispatch || r.Outcome == jobs.OutcomeName(jobs.OutcomeDeniedByPolicy) {
+		return "", false
+	}
+	r.When, r.FirstWhen, r.Calls, r.CancelAction = "", "", 0, ""
+	b, err := json.Marshal(r)
+	if err != nil {
+		return "", false
+	}
+	return string(b), true
+}
+
+// collapseActivityRows folds each run of CONSECUTIVE identical rows (#541,
+// spec 04, "Polling") into one row carrying its call count. Rows arrive
+// newest-first, so the row folded in is older and FirstWhen ends up the oldest
+// call's When. See foldRuns for why it never reaches past an adjacent row.
+func collapseActivityRows(rows []activityRow) []activityRow {
+	return foldRuns(rows, activityCollapseKey, func(run *activityRow, older activityRow) {
+		run.Calls += older.Calls
+		run.FirstWhen = older.When
+	})
+}
+
+// activityStrip builds the "Who is active" strip from the page's rows, counting
+// calls and never rendered rows, and reports the rows it left off.
+//
+// Two kinds of row are left off. A running Job whose dispatch is not recorded
+// yet (AwaitingRecord) is not an audited call yet: "a Job joins the strip once
+// its dispatch is recorded" (spec 04). A Job with no recorded requester has no
+// caller to list, and the row itself already surfaces the defect. Every other
+// row counts, including a trail row whose principal is "unattributed": a row
+// the Relay cannot attribute is a bug to surface, not a blank, so it is listed
+// as an entry with no link.
+//
+// Entries are keyed by verified Account ID (D18); an asserted principal is
+// keyed by its text under a different prefix, so the two never merge. An entry
+// with no verified ID is listed and not linked. Every linked entry, the
+// current one included, links to this view scoped to it at page one, keeping
+// every other filter and console: "Show every Account" is the only
+// link that clears the account.
+func activityStrip(rows []activityRow, f activityFilter, now time.Time) (entries []stripEntry, dropped, awaiting, unrecorded int) {
+	riskMutate := jobs.RiskClassName(jobs.RiskClassMutate)
+	var calls []stripCall
+	for _, r := range rows {
+		if r.Kind == rowDispatch && r.AwaitingRecord {
+			awaiting++
+			continue
+		}
+		if r.Unrecorded && !r.AwaitingRecord {
+			unrecorded++
+			continue
+		}
+		key := "name:" + r.Principal
+		if r.AccountID != "" {
+			key = "id:" + r.AccountID
+		}
+		calls = append(calls, stripCall{
+			Key:      key,
+			Name:     r.Principal,
+			Verified: r.AccountID != "",
+			Role:     r.role,
+			// What the row's own risk chip says, so the strip and the rows agree.
+			Mutate: r.Risk == riskMutate,
+			At:     r.at,
+		})
+	}
+	current := ""
+	if f.Account != "" {
+		current = "id:" + f.Account
+	}
+	entries, dropped = buildStrip(calls, current, now)
+	for i := range entries {
+		e := &entries[i]
+		if !e.Verified {
+			continue
+		}
+		scoped := f
+		scoped.Account = strings.TrimPrefix(e.Key, "id:")
+		scoped.Job, scoped.Audit = lanePos{}, lanePos{}
+		e.Href = scoped.base()
+	}
+	return entries, dropped, awaiting, unrecorded
+}
+
+// activityStripFacts is everything activityStripNote speaks from.
+type activityStripFacts struct {
+	Listed, Dropped                    int
+	Scrolled, Exhausted, AccountScoped bool
+	Awaiting, Unrecorded               int
+	ConsoleLeftOut, PageCalls          int
+}
+
+// activityStripNote is the strip's ONE sentence explaining an empty or partial
+// strip.
+//
+// Activity's strip never speaks for the fleet. Its feed never holds every call:
+// the Access kinds are never on this screen (D17), read records are left out
+// whenever no kind filter is set (activityLaneExcluded; every Console page load
+// is one), and any kind filter narrows. So "reads are excluded or the filter
+// narrows" holds for every filter Activity accepts, and the fleet-wide
+// sentences railNote prints on Agents ("No Account has called a control surface
+// yet.", "No Account has called in the last 15 minutes.") would be claims about
+// the fleet made from a filtered page. Every sentence here is scoped to "this
+// page" or "this filter".
+//
+// CONTRACT: "" only when Listed is positive and Dropped is 0. There is
+// deliberately no unfiltered arm: a future filter that selects every call must
+// add one and say why.
+func activityStripNote(n activityStripFacts) string {
+	accountsText := countOf(n.Dropped, "Account", "Accounts")
+	var note string
+	consoleArm := false
+	switch {
+	case n.Listed > 0 && n.Dropped == 0:
+		return ""
+	case n.Listed > 0:
+		note = accountsText + " called on this page but not in the last 15 minutes, so the strip does not " +
+			"list them — their calls are below."
+	case n.Dropped > 0 && !n.Scrolled:
+		note = "No Account on this page has called in the last 15 minutes. " + accountsText +
+			" called earlier — their calls are below."
+	case n.Dropped > 0:
+		note = "No Account on this page has called in the last 15 minutes, which is expected on a page " +
+			"reached by following Older — these are historical calls. " + accountsText +
+			" called on this page; their calls are below."
+	case n.Awaiting > 0 || n.Unrecorded > 0:
+		note = "No Account has a recorded call on this page"
+		if n.Awaiting > 0 {
+			note += " yet"
+		}
+		note += "."
+		if n.Awaiting > 0 {
+			note += " Running Jobs whose dispatch is not recorded yet are shown below and join the strip once it is."
+		}
+		if n.Unrecorded > 0 {
+			note += " Jobs below with no recorded requester have no caller to list."
+		}
+	case n.ConsoleLeftOut > 0 && n.ConsoleLeftOut == n.PageCalls:
+		consoleArm = true
+		note = "Every call on this page is a read made from this Console, and those are left out."
+		if n.AccountScoped {
+			note = "Every call by this Account on this page is a read made from this Console, and those are left out."
+		}
+	case n.Exhausted || n.PageCalls == 0:
+		note = "This page holds no calls."
+	default:
+		// Calls were fetched, and the Refine, alone or with a partial Console
+		// exclusion, removed all of them.
+		note = "No call on this page matches this filter."
+	}
+	if n.ConsoleLeftOut > 0 && !consoleArm {
+		note += " Reads made from this Console are not counted."
+	}
+	return note
+}
+
 // activityLaneKinds is activityLanes' trail half, for the export — which
 // always starts at page one and therefore never skips a lane for position.
 func activityLaneKinds(f activityFilter) []string {
@@ -922,10 +1214,30 @@ func activityLanes(f activityFilter) (jobLane bool, trailKinds []string, known b
 	}
 }
 
+// activityFetch is what one fetchActivity call returns.
+type activityFetch struct {
+	Rows []activityRow
+
+	JobNext, AuditNext string
+
+	// ConsoleLeftOut is how many fetched trail rows the Console-read default
+	// dropped, out of PageCalls: every call the two lanes returned, counted
+	// before the Console exclusion and before the Refine. Under ?account= the
+	// lanes are already scoped to that Account, so both are its calls.
+	ConsoleLeftOut, PageCalls int
+}
+
 // fetchActivity runs the active lanes and merges them, newest first.
+//
+// Reads made from a Console session are left out here, over the page the trail
+// lane already returned (spec 04): the query, its filter and its page size are
+// untouched, so no read is added or widened. It is done on the AuditRow,
+// before eventRowFromTrail, because the authentication method is only there.
 func fetchActivity(ctx context.Context, d Deps, caller capability.Principal, f activityFilter,
 	jobLane bool, trailKinds []string, jobPage, auditPage capability.PageRequest,
-) (rows []activityRow, jobNext, auditNext string, err error) {
+) (activityFetch, error) {
+	var out activityFetch
+	var rows []activityRow
 	if jobLane {
 		page, err := d.Queries.QueryJobs(ctx, caller, capability.JobFilter{
 			RequesterAccountID: f.Account,
@@ -935,7 +1247,7 @@ func fetchActivity(ctx context.Context, d Deps, caller capability.Principal, f a
 			Until:              f.Until,
 		}, jobPage)
 		if err != nil {
-			return nil, "", "", err
+			return activityFetch{}, err
 		}
 		outcome := outcomeFromLabel(f.Outcome)
 		for _, sum := range page.Jobs {
@@ -946,9 +1258,10 @@ func fetchActivity(ctx context.Context, d Deps, caller capability.Principal, f a
 			if outcome != nil && sum.Counts[*outcome] == 0 {
 				continue
 			}
+			out.PageCalls++
 			rows = append(rows, dispatchRowFromJob(sum))
 		}
-		jobNext = page.Next
+		out.JobNext = page.Next
 	}
 
 	if len(trailKinds) > 0 {
@@ -965,12 +1278,17 @@ func fetchActivity(ctx context.Context, d Deps, caller capability.Principal, f a
 		}
 		page, err := d.Queries.QueryAudit(ctx, caller, filter, auditPage)
 		if err != nil {
-			return nil, "", "", err
+			return activityFetch{}, err
 		}
+		out.PageCalls += len(page.Rows)
 		for _, row := range page.Rows {
+			if !f.ShowConsole && consoleRead(row) {
+				out.ConsoleLeftOut++
+				continue
+			}
 			rows = append(rows, eventRowFromTrail(factsOfRow(row)))
 		}
-		auditNext = page.Next
+		out.AuditNext = page.Next
 	}
 
 	if f.Q != "" {
@@ -986,7 +1304,8 @@ func fetchActivity(ctx context.Context, d Deps, caller capability.Principal, f a
 	// Both lanes return newest-first, so a stable sort by time interleaves
 	// them without disturbing either lane's own order among equal timestamps.
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].at.After(rows[j].at) })
-	return rows, jobNext, auditNext, nil
+	out.Rows = rows
+	return out, nil
 }
 
 func kindChips(f activityFilter) []kindChip {
@@ -1101,6 +1420,8 @@ func dispatchRowFromJob(sum capability.JobSummary) activityRow {
 		JobHref:       "/console/jobs/" + sum.JobID,
 		Principal:     sum.Requester,
 		Verified:      sum.RequesterAccountID != "",
+		AccountID:     sum.RequesterAccountID,
+		Calls:         1,
 		RequesterKind: verifiedKind(sum.RequesterAccountID != "", sum.RequesterKind),
 		OnBehalfOf:    sum.OnBehalfOf,
 		ApprovalID:    sum.ApprovalID,
@@ -1120,8 +1441,8 @@ func dispatchRowFromJob(sum capability.JobSummary) activityRow {
 	// "No audit-joined field has been joined yet": JobSummary documents each
 	// of these as LEFT-JOINed from the per-Job dispatch aggregate and empty
 	// until it is written. An empty Selector alone is not the signal, since a
-	// recorded dispatch may legitimately carry one. Cosmetic only: Cancel does
-	// not depend on it.
+	// recorded dispatch may legitimately carry one. Cancel does not depend on
+	// it; the strip does (activityStrip).
 	row.AwaitingRecord = row.Running && sum.Selector == "" && len(sum.Args) == 0 &&
 		len(sum.RawExecArgv) == 0 && sum.ApprovalID == "" && sum.GrantID == "" &&
 		sum.OnBehalfOf == ""
@@ -1180,6 +1501,8 @@ func eventRowFromTrail(f trailFacts) activityRow {
 		When:            f.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
 		Principal:       principalText(f),
 		Verified:        f.VerifiedAccountID != "",
+		AccountID:       f.VerifiedAccountID,
+		Calls:           1,
 		OnBehalfOf:      f.OnBehalfOf,
 		Selector:        f.Selector,
 		NodeID:          f.NodeID,
@@ -1195,6 +1518,10 @@ func eventRowFromTrail(f trailFacts) activityRow {
 		PlanHash:        f.PlanHash,
 	}
 	row.Outcome, row.State = callOutcome(f)
+	// Verified lane only: an asserted role must never reach the strip (#540).
+	if f.VerifiedAccountID != "" {
+		row.role = f.Role
+	}
 	// The trail carries no declared risk class, so this lane INFERS one — the
 	// one place this package guesses, with its limits written down in
 	// vocab.go. The Job lane above never calls it.
@@ -1324,6 +1651,9 @@ var activityCSVHeader = []string{
 func writeActivityCSV(ctx context.Context, w http.ResponseWriter, lane *auditLatch, d Deps, caller capability.Principal,
 	f activityFilter, jobLane bool, trailKinds []string,
 ) {
+	// The export is the fetched rows, not the screen: it includes reads made
+	// from this Console and never collapses, so its closing line stays true.
+	f.ShowConsole = true
 	var rows []activityRow
 	// Each lane walks from page one to ITS OWN end. A lane that runs out is
 	// zeroed rather than re-driven with an empty cursor: an empty cursor is
@@ -1346,19 +1676,19 @@ func writeActivityCSV(ctx context.Context, w http.ResponseWriter, lane *auditLat
 		if !runTrail {
 			kinds = nil
 		}
-		page, jobNext, auditNext, err := fetchActivity(ctx, d, caller, f, runJob, kinds,
+		page, err := fetchActivity(ctx, d, caller, f, runJob, kinds,
 			capability.PageRequest{Limit: jobPageSize, Cursor: job.Cursor},
 			capability.PageRequest{Limit: auditPageSize, Cursor: aud.Cursor})
 		if err != nil {
 			readFailed(w, err, "the audit and Job query lane")
 			return
 		}
-		rows = append(rows, page...)
+		rows = append(rows, page.Rows...)
 		if runJob {
-			job = lanePos{Cursor: jobNext, Done: jobNext == ""}
+			job = lanePos{Cursor: page.JobNext, Done: page.JobNext == ""}
 		}
 		if runTrail {
-			aud = lanePos{Cursor: auditNext, Done: auditNext == ""}
+			aud = lanePos{Cursor: page.AuditNext, Done: page.AuditNext == ""}
 		}
 	}
 
@@ -1439,6 +1769,7 @@ fabricate.</p>
 
 <form class="viewbar" method="get" action="/console/activity">
   {{with .Filter.Kind}}<input type="hidden" name="kind" value="{{.}}">{{end}}
+  {{if .Filter.ShowConsole}}<input type="hidden" name="console" value="show">{{end}}
   <label class="vlabel" for="account">Principal</label>
   <input id="account" name="account" value="{{.Filter.Account}}" placeholder="Account id" spellcheck="false" autocomplete="off">
   <label class="vlabel" for="on_behalf_of">On behalf of</label>
@@ -1458,7 +1789,7 @@ fabricate.</p>
   <label class="vlabel" for="q">Refine</label>
   <input id="q" name="q" value="{{.Filter.Q}}" placeholder="substring, this page only" spellcheck="false" autocomplete="off">
   <button type="submit">Apply</button>
-  {{if .Rows}}<span class="vcount">{{len .Rows}} {{plural (len .Rows) "event" "events"}}</span>{{end}}
+  {{if .Rows}}<span class="vcount">{{.EventCount}} {{plural .EventCount "event" "events"}}</span>{{end}}
   <a class="act" href="{{.ResetHref}}">Clear</a>
 </form>
 
@@ -1478,11 +1809,32 @@ filter that quietly widens is how an auditor comes to read the whole trail belie
 slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>.</p>
 {{else}}
 
+{{if .ConsoleInForce}}
+<p class="scoped consolecalls">{{if .ShowConsole -}}
+  Reads made from this Console are shown. <a href="{{.ConsoleToggleHref}}">Leave them out</a>.
+{{- else -}}
+  Reads made from this Console are left out{{if .ConsoleLeftOut}}: {{.ConsoleLeftOut}} of the {{.PageCalls}} {{plural .PageCalls "call" "calls"}}{{if .Filter.Account}} by this Account{{end}} on this page{{end}}. <a href="{{.ConsoleToggleHref}}">Show them</a>.
+{{- end}}</p>
+{{end}}
+{{if .Filter.Account}}<p class="scoped">Showing one Account only. <a href="{{.AllAccountsHref}}">Show every Account</a>.</p>{{end}}
+
+<section class="whoactive" aria-label="Who is active">
+  <div class="ftitle">{{if .Scrolled}}Accounts on this page{{else}}Who is active{{end}} <span class="phint">Accounts on this page with a call in the last 15 minutes. The numbers count the calls on this page. Mutate counts what was asked, including refused, parked and preflight calls. A collapsed row counts every call it stands for. A running Job is counted once its dispatch is recorded.{{if .ReadsExcluded}} Read records are left out of this view, so an Account that only read is not listed.{{end}}</span></div>
+  {{range .Strip}}
+  {{if .Href}}<a class="arow{{if .Current}} on{{end}}" href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>
+    {{template "stripentry" .}}
+  </a>{{else}}<div class="arow unlinked" title="No verified Account ID is recorded for these calls, so the stream cannot be scoped to them.">
+    {{template "stripentry" .}}
+  </div>{{end}}
+  {{end}}
+  {{with .StripNote}}<p class="dim">{{.}}</p>{{end}}
+</section>
+
 {{template "live-region" .Live}}
 
 <div class="feed">
 {{range .Rows}}
-  <article class="ev" data-kind="{{.Kind}}"{{if .LiveHandle}} data-job-id="{{.JobID}}"{{end}}>
+  <article class="ev" data-kind="{{.Kind}}"{{if .LiveHandle}} data-job-id="{{.JobID}}"{{end}} data-calls="{{.Calls}}">
     <div class="evwhen"><time datetime="{{.When}}">{{.When}}</time><span class="evkind">{{.EventKind}}</span></div>
     <div class="evbody">
       <div class="evhead">
@@ -1497,6 +1849,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
         {{with .Risk}}<span class="chip risk" data-risk="{{.}}">{{.}}</span>{{end}}
         {{if .State}}<span class="chip state" data-state="{{.State}}">{{.State}}</span>{{else}}{{with .Outcome}}<span class="chip outcome" data-outcome="{{.}}">{{.}}</span>{{end}}{{end}}
         {{if .Running}}<span class="chip" data-state="running" title="This Job has Tasks not yet resolved.">running</span>{{end}}
+        {{if gt .Calls 1}}<span class="chip calls" title="Consecutive identical calls, collapsed for display. Each one is on the audit trail and each counts on the strip.">x{{.Calls}}</span>{{end}}
       </div>
       {{with .Args}}<div class="evargs mono">{{.}}</div>{{end}}
       <div class="evmeta">
@@ -1518,15 +1871,19 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
       </div>{{end}}
       {{with .Reason}}<div class="evreason">{{.}}</div>{{end}}
       {{if .ReadClass}}<div class="evnote">Output was not retained. Nothing here will show it later.</div>{{end}}
+      {{if gt .Calls 1}}<div class="evnote">{{.Calls}} consecutive identical calls, {{.FirstWhen}} to {{.When}}. Each one is on the audit trail and each counts on the strip. Only the display is collapsed.</div>{{end}}
     </div>
   </article>
 {{else}}
-  {{if .Exhausted}}<p class="dim">There is nothing older for this filter.
+  {{if .AllConsoleReads}}<p class="dim">{{if .Filter.Account}}This Account has no calls on this page other than reads made from this Console.{{else}}No calls on this page other than reads made from this Console.{{end}}</p>
+  {{else if .Exhausted}}<p class="dim">There is nothing older for this filter.
   <a href="{{.ResetHref}}">Start again</a>.</p>
   {{else if .Narrowing}}<p class="dim">Nothing matches.</p>
   {{else}}<p class="dim">Nothing has been recorded yet.</p>{{end}}
 {{end}}
 </div>
+
+{{with .CollapseNote}}<p class="gap">{{.}}</p>{{end}}
 
 {{if .Scrolled}}<p class="gap">These are not the most recent events. This page was reached by following Older. <a href="{{.NewestHref}}">Newest</a>.</p>{{end}}
 
@@ -1559,7 +1916,7 @@ Following &ldquo;Older&rdquo; continues both from where they stopped; neither st
 <p class="gap"><b>The default feed leaves out the trail&#39;s own read records.</b> Reading the trail
 writes to it: this page adds a read record each time it fetches dispatches or other events. A feed
 that included them would fill with the operator&#39;s own reloads. They are one click away as
-<a href="/console/activity?kind=read">kind=read</a>, and their home is
+<a href="{{.ReadKindHref}}">kind=read</a>, and their home is
 <a href="{{.ReadsHref}}">Read egress</a>. Nothing is hidden.</p>
 
 <p class="gap"><b>Two row kinds are not built here yet: enrollments and label changes.</b> The
@@ -1573,7 +1930,16 @@ the Job query has a field for neither. A Job spans its Selector&#39;s whole fan-
 narrowed only the other events would silently drop every dispatch row from the page.</p>
 
 <p class="gap"><b>Every Refresh is an audited read</b>, whether it comes from Refresh, from the reload
-button that appears above the feed once new events have queued, or from the browser.</p>
+button that appears above the feed once new events have queued, or from the browser. Those reads are
+reads made from this Console, which this screen leaves out of the shown reads unless you ask for them.</p>
+
+<p class="gap"><b>There are no sessions.</b> The MCP transport is stateless, so every call is an
+independent authenticated request. There is no connection to show and nothing to disconnect.
+Stopping one actor is revoking its API Tokens, or the Freeze.</p>
+
+<p class="gap"><b>The export is the fetched rows, not the screen.</b> It includes reads made from
+this Console and never collapses consecutive calls, so an auditor&#39;s file holds every row this Relay
+returned for the filter.</p>
 
 <p class="gap"><b>Cancel is offered on a running Job&#39;s row</b> to the roles that may cancel, exactly
 as on Job detail. A viewer sees running Jobs and is not offered it.</p>
@@ -1586,4 +1952,9 @@ operator reading it during an incident.</p>
 </details>
 
 {{end}}
+
+{{/* One strip entry's body, shared by its linked and unlinked forms so the two cannot drift apart. No dot and no "live": there are no sessions to be connected to (spec 04, Must not appear). */}}
+{{define "stripentry"}}<span class="aname">{{template "trust-chip" (trust .Name .Verified)}}{{with .Role}}<span class="arole" title="The role the Relay authenticated this Account with at its most recent call on this page.">{{.}}</span>{{end}}</span>
+    <span class="astats"><b>{{.Calls}}</b> {{plural .Calls "call" "calls"}}{{if .Mutates}} · {{.Mutates}} mutate{{end}}</span>
+    <span class="asub">{{with .FirstSeen}}first {{.}} · {{end}}last {{.LastSeen}}</span>{{end}}
 `)

@@ -302,26 +302,6 @@ func TestAgents_OnlyConsoleSessionReadsAreLeftOut(t *testing.T) {
 	}
 }
 
-// TestConsoleRead_ARowThatCannotTellIsNotARead: both halves come from the
-// row, and a row that does not say it was a read stays listed.
-func TestConsoleRead_ARowThatCannotTellIsNotARead(t *testing.T) {
-	for name, row := range map[string]capability.AuditRow{
-		"no kind":             {Verified: consoleActor},
-		"unknown kind":        {Kind: "something_new", Verified: consoleActor},
-		"read kind, raw argv": {Kind: audit.KindRead, RawExecArgv: []string{"/bin/true"}, Verified: consoleActor},
-		"read, not console": {Kind: audit.KindRead, OperationName: "list_nodes",
-			Verified: capability.VerifiedIdentity{AccountName: "x", Method: string(capability.AuthMethodAPIToken)}},
-		"read, no method": {Kind: audit.KindRead, OperationName: "list_nodes"},
-	} {
-		if consoleRead(row) {
-			t.Errorf("%s: treated as a Console-session read", name)
-		}
-	}
-	if !consoleRead(capability.AuditRow{Kind: audit.KindRead, OperationName: "list_nodes", Verified: consoleActor}) {
-		t.Error("a Console-session read is not recognised")
-	}
-}
-
 // TestAgents_AFilteredAccountWhoseCallsWereAllLeftOutSaysSo: under
 // ?account=, the sentence counts that Account's calls, and an empty feed
 // does not claim the Account has none.

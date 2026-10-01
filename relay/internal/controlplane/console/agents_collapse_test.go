@@ -287,7 +287,7 @@ func TestAgents_TheCollapseKeyIsTheWholeRenderedRow(t *testing.T) {
 				fv.SetBool(!fv.Bool())
 			default:
 				t.Fatalf("the collapse-key sweep cannot vary field %s (kind %s) — decide whether "+
-					"it belongs in sameCall's key and extend this sweep to cover it, rather than "+
+					"it belongs in callKey's key and extend this sweep to cover it, rather than "+
 					"leaving it silently unswept", field.Name, fv.Kind())
 			}
 			out := collapseRuns([]agentCall{a, b})
@@ -303,7 +303,7 @@ func TestAgents_TheCollapseKeyIsTheWholeRenderedRow(t *testing.T) {
 // denied dispatches on the SAME Node and Operation. After the deny-prose pass
 // (buildAgents' seenDeny loop, which runs BEFORE the collapse) rows 2 and 3
 // are both {Deny: nil, RepeatDeny: true} and would otherwise compare EQUAL —
-// this fixture is what DISCRIMINATES collapsible from sameCall alone. Two
+// this fixture is what DISCRIMINATES collapsible from callKey alone. Two
 // rows would not discriminate: the first row's non-nil Deny pointer makes it
 // unequal to either of the others regardless of collapsible, so the fixture
 // needs a THIRD row to prove the guard extends past the first.

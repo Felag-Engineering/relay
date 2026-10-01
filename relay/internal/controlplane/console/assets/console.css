@@ -1248,6 +1248,18 @@ dl.kv {
 .arole { font-size: var(--text-2xs); color: var(--text-muted); margin-left: var(--space-1); }
 .agentfeed { flex: 1; min-width: 0; }
 
+/* --- Who is active (Activity) --------------------------------------------- */
+.whoactive {
+  display: flex; flex-wrap: wrap; gap: var(--space-2); background: var(--bg-surface);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-section);
+  padding: var(--space-3); margin-bottom: var(--space-4);
+}
+.whoactive .ftitle, .whoactive > p { flex-basis: 100%; }
+.whoactive > p { margin: 0; }
+.whoactive .arow { grid-template-columns: 1fr; min-width: 180px; }
+.whoactive .astats, .whoactive .asub { grid-column: 1; }
+.arow.unlinked:hover { background: none; }
+
 /* Below this width the 252px rail and the feed cannot both hold a 64-character
  * node id, and the id is the widest unbreakable token on the screen. The rail
  * goes above the feed rather than beside it, which hands the feed the full

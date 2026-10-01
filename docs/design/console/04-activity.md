@@ -282,9 +282,9 @@ appears. Viewers see running Jobs but are never offered Cancel. Token revocation
 - [ ] Live updates never reflow a row the user is reading.
 - [ ] Live tail and historical query use the same renderer.
 - [ ] A read row carries no output at any age, and states that.
-- [ ] Polling collapses; an Account making 200 `get_job` calls does not push everything else off.
+- [x] Polling collapses; an Account making 200 `get_job` calls does not push everything else off.
 - [x] A `raw_exec` refused by the role gate renders informative-neutral, not as an error.
-- [ ] With no Account active in the 15 minutes, the strip says so plainly and does not fabricate
+- [x] With no Account active in the 15 minutes, the strip says so plainly and does not fabricate
       activity.
 - [ ] No sign-in, step-up, Account or API Token row appears here, for any role.
 - [x] An in-flight dispatch is cancellable from this screen (v0.7.0) and the cancellation is
