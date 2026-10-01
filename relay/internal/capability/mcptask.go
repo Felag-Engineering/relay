@@ -30,7 +30,7 @@ import (
 // arrives over the MCP session, which is the AI's own channel, and if it could
 // withdraw or decide a pending approval the requesting session would hold a
 // lever over exactly the decision ADR-0027 exists to keep off that channel: an
-// agent could yank a request back the moment it sensed a denial coming, erasing
+// AI-agent could yank a request back the moment it sensed a denial coming, erasing
 // the evidence a human was about to rule on.
 
 // MCPTaskStore is the task-handle persistence this layer needs. It mirrors
