@@ -125,6 +125,14 @@ is a link and this screen has no mutating route.
   revoked by a token cascade now shows the derived cause instead of falling through to the "no
   revocation record" branch (#557); the causative-record rule is unchanged, and a Node already
   revoked when the cascade reaches it keeps its original record.
+- **Unreported Node** — the same predicate as the fleet view: no recorded daemon version, or no
+  recorded Policy fingerprint. When a Policy snapshot was captured on the tunnel anyway, the panel
+  still renders it, as the Node's daemon-reported Policy, and states the facts: the snapshot's own
+  fingerprint, and which recorded field the Relay lacks. When the fingerprint is missing it adds
+  that the snapshot cannot be cross-checked against the fingerprint the fleet is compared by; when
+  only the daemon version is missing it makes no cross-check claim. Either way it says the Console
+  does not count the Node as current or permitted. The Fingerprints panel keeps saying "not
+  reported".
 - **`viewer`** — no label actions, no "Run here".
 - **`console_execution = off`** — "Run here" is absent.
 

@@ -51,17 +51,28 @@ gained a `state:` label. The operator's daily question is what changed, not what
 **Rollup cards**, one per value of the grouping key, headlined with the customer's own name for
 it. Healthy groups compress to a single line. Only deviating groups show detail.
 
-**Pixel wall**, inside an opened group: one tiny cell per Node. Four buckets only — normal, drift,
-needs attention, quarantined — because preattentive vision handles about four, and the table names
-which. Click a cell to open that Node.
+**Pixel wall**, inside an opened group: one tiny cell per Node. Four colour buckets only — normal,
+drift, needs attention, quarantined — because preattentive vision handles about four, and the table
+names which. A Node with no recorded Hello (no daemon version or no Policy fingerprint) is a
+**hollow "not reported" cell**: an outline with no fill, on the fill-versus-outline channel rather
+than a fifth hue, so the four-hue argument survives. Without it such a Node would be drawn as a
+filled "normal" cell, which is false reassurance. A cell takes the first bucket that applies:
+quarantined, then needs attention, then not reported, then drift, then normal. An offline or
+cert-expiring Node therefore stays amber even when it is also unreported. Click a cell to open that
+Node.
 
 **Facet rail**, showing value distributions as counts. The facets *are* the summary statistics.
-Ordered: `state:`, daemon version, Policy fingerprint, template set, `node:role`.
+Ordered: `state:`, daemon version, Policy fingerprint, template set, `node:role`. The daemon
+version and Policy fingerprint facets each carry an explicit "not reported" row, so every value
+facet sums to the group's Node count. That row is not a link: absence is not a label.
 
 **Deviation table**, sorted **anomaly-first by rarity, never alphabetically**. The weird Node is
 row one. Columns: liveness dot + name · **State** · Labels · Policy fingerprint · Last seen.
 Below it, the ladder: "*N* more deviate the same way — expand", then the mode as one calm line
-("3,993 Nodes carry no `state:` label at all — reachable, current, permitted").
+("3,993 Nodes carry no `state:` label at all — reachable, current, permitted"). The mode line never
+counts a "not reported" Node as reachable, current or permitted: it says how many Nodes have not
+reported and that they are not counted, and uses "other Nodes" for the rest. The card header shows
+the count in a neutral style ("1 not reported"), not amber.
 
 ## Filtering and targeting
 
@@ -98,10 +109,12 @@ Rendered in the State column and counted on the rollup card.
 | `state:template-unloadable` | template set failed to load; vocabulary empty, fail closed | grey |
 | `state:cert-expiring` | identity certificate near expiry and not renewed; the Node drops off silently if ignored | amber |
 | `relay:quarantine` | deliberately fenced; a declared label, not derived | indigo |
+| not reported | no recorded Hello: no daemon version or no Policy fingerprint. A Console presentation bucket, not a `state:` label, and not targetable (owner decision on #833) | hollow cell, neutral chip |
 
 **Drift is not among them** and deliberately so — see `99-open-decisions.md` D1. A fingerprint
 "behind the fleet" is fleet-relative and would invert mid-rollout. Drift is shown two ways
-instead: as a count on the rollup card ("12 on a different Policy fingerprint" — an observation),
+instead: as a count on the rollup card ("12 on a different Policy fingerprint" — an observation,
+counted only over Nodes that reported a fingerprint),
 and as the fingerprint distribution in the facet rail. Acting on it means targeting the value:
 `state:policy-fingerprint=4b18…c02`. Clicking the facet fills that into the filter, which is the
 whole interaction.

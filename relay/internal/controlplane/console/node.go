@@ -127,6 +127,19 @@ type nodeView struct {
 	Policy         *policyview.Snapshot
 	PolicyReported bool
 
+	// A Policy snapshot captured on the tunnel is rendered whatever the
+	// registry holds (QRY-7). These three say that the registry holds no
+	// Hello-recorded daemon version or Policy fingerprint for the Node, so the
+	// Console states that fact and does not count the Node as current or
+	// permitted. They make no claim about what the Node's effective Policy is.
+	//
+	// PolicyUncorroborated is set only when a snapshot is shown and the Node is
+	// unreported by the same predicate Fleet uses; the other two name which
+	// recorded field is missing.
+	PolicyUncorroborated  bool
+	VersionUnrecorded     bool
+	FingerprintUnrecorded bool
+
 	// PolicyReportedAt and PolicyReportedAgo are when the RELAY received this
 	// report, from policyview's own clock. Both stay empty for a snapshot with
 	// no receipt time, which the panel says out loud — a zero time rendered
@@ -381,6 +394,11 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 		snap := detail.Policy
 		v.Policy = &snap
 		v.PolicyReported = true
+		if unreported(n) {
+			v.PolicyUncorroborated = true
+			v.VersionUnrecorded = n.DaemonVersion == ""
+			v.FingerprintUnrecorded = n.PolicyFingerprint == ""
+		}
 		if !snap.ReportedAt.IsZero() {
 			v.PolicyReportedAt = snap.ReportedAt.UTC().Format("2006-01-02 15:04:05Z")
 			v.PolicyReportedAgo = nodestate.Since(snap.ReportedAt, d.now())
@@ -652,6 +670,12 @@ var nodeTmpl = newScreen("node", `
     <section class="panel">
       <h3>Effective Policy</h3>
       {{if .PolicyReported}}
+        {{if .PolicyUncorroborated}}
+        <p class="gap"><b>Not corroborated by a recorded Hello.</b>
+        {{if .Policy.PolicyFingerprint}}This snapshot carries its own Policy fingerprint, <code title="{{.Policy.PolicyFingerprint}}">{{short .Policy.PolicyFingerprint}}</code>.{{else}}This snapshot carries no Policy fingerprint of its own.{{end}}
+        {{if .FingerprintUnrecorded}}The Relay holds no Hello-recorded Policy fingerprint{{if .VersionUnrecorded}} and no daemon version{{end}} for this Node, so this snapshot cannot be cross-checked against the fingerprint the fleet is compared by, and the Console does not count this Node as current or permitted.
+        {{else}}The Relay holds no Hello-recorded daemon version for this Node, so the Console does not count it as current or permitted.{{end}}</p>
+        {{end}}
         <p class="note">Answered by <b>this Node's own engine</b> and received by the Relay
         {{if .PolicyReportedAt}}at <b>{{.PolicyReportedAt}}</b>, {{.PolicyReportedAgo}} ago{{else}}at <b>a time that was not recorded</b>{{end}}.
         That is a receipt time, not a query time: the snapshot is captured when the Node connects,

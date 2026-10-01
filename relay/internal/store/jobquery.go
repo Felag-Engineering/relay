@@ -267,7 +267,9 @@ func (q *sqliteJobQueries) QueryJobs(ctx context.Context, filter jobs.JobQuery, 
 		matching int
 	)
 	if filter.CountMatching {
-		tx, err := q.db.BeginTx(ctx, nil)
+		// A snapshot read: it must not take the write lock now that write
+		// transactions begin IMMEDIATE (sqliteDSN, #833).
+		tx, err := q.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		if err != nil {
 			return jobs.JobPage{}, fmt.Errorf("query jobs: begin: %w", err)
 		}

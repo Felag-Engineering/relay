@@ -550,8 +550,8 @@ func contentOf(body string) string {
 func TestFleet_SmallHealthyFleetStillShowsItsNodes(t *testing.T) {
 	d := renderableDeps()
 	d = withFleet(d, []registry.Node{
-		{NodeID: "node-a", NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same", Connected: true},
-		{NodeID: "node-b", NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same", Connected: true},
+		{NodeID: "node-a", NodeLabels: map[string]string{"role": "web"}, DaemonVersion: "0.6.0", PolicyFingerprint: "same", Connected: true},
+		{NodeID: "node-b", NodeLabels: map[string]string{"role": "web"}, DaemonVersion: "0.6.0", PolicyFingerprint: "same", Connected: true},
 	}...)
 
 	v := buildFleetView(d, fleetNodes(d), "", "role")
@@ -582,7 +582,7 @@ func TestFleet_LargeHealthyGroupStillCompresses(t *testing.T) {
 	for i := 0; i < legibleGroup+10; i++ {
 		id := "node-" + strconv.Itoa(i)
 		nodes = append(nodes, registry.Node{
-			NodeID: id, NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same", Connected: true,
+			NodeID: id, NodeLabels: map[string]string{"role": "web"}, DaemonVersion: "0.6.0", PolicyFingerprint: "same", Connected: true,
 		})
 	}
 	d := renderableDeps()
@@ -1063,7 +1063,7 @@ func TestFleet_EveryWallBucketHasAColour(t *testing.T) {
 	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
 		"/console/assets/console.css").Body.String()
 
-	for _, b := range []wallBucket{wallNormal, wallDrift, wallAttention, wallFenced} {
+	for _, b := range []wallBucket{wallNormal, wallDrift, wallAttention, wallFenced, wallUnreported} {
 		rule := `.cell[data-bucket="` + string(b) + `"]`
 		if !strings.Contains(css, rule) {
 			t.Errorf("no stylesheet rule for %s — cells in this bucket render with no colour, "+
@@ -1494,20 +1494,23 @@ func TestFleet_ASelfReportedSentinelDoesNotJoinTheSentinelBucket(t *testing.T) {
 
 	// The fixture assertions above only show that TODAY's prefixes ("v:" vs
 	// "s:") keep "none installed" out of the sentinel bucket. If someone later
-	// collapsed templateValuePrefix and sentinelPrefix to the same string —
+	// collapsed facetValuePrefix and sentinelPrefix to the same string —
 	// exactly the edit the key-space comment on the consts warns against —
 	// those assertions would still pass, because the fixture value has a space
 	// ("none installed") and the sentinel has a hyphen ("none-installed"), so
 	// the strings would still differ even with identical prefixes. Pin the
 	// structural property directly rather than relying on that coincidence.
-	if strings.HasPrefix(templateSentinelUnloadable, templateValuePrefix) {
-		t.Errorf("templateSentinelUnloadable %q carries the value prefix %q", templateSentinelUnloadable, templateValuePrefix)
+	if strings.HasPrefix(templateSentinelUnloadable, facetValuePrefix) {
+		t.Errorf("templateSentinelUnloadable %q carries the value prefix %q", templateSentinelUnloadable, facetValuePrefix)
 	}
-	if strings.HasPrefix(templateSentinelNoneInstalled, templateValuePrefix) {
-		t.Errorf("templateSentinelNoneInstalled %q carries the value prefix %q", templateSentinelNoneInstalled, templateValuePrefix)
+	if strings.HasPrefix(factSentinelUnreported, facetValuePrefix) {
+		t.Errorf("factSentinelUnreported %q carries the value prefix %q", factSentinelUnreported, facetValuePrefix)
 	}
-	if got := templateValueKey("none installed"); !strings.HasPrefix(got, templateValuePrefix) {
-		t.Errorf("templateValueKey(%q) = %q, want it to carry the value prefix %q", "none installed", got, templateValuePrefix)
+	if strings.HasPrefix(templateSentinelNoneInstalled, facetValuePrefix) {
+		t.Errorf("templateSentinelNoneInstalled %q carries the value prefix %q", templateSentinelNoneInstalled, facetValuePrefix)
+	}
+	if got := facetValueKey("none installed"); !strings.HasPrefix(got, facetValuePrefix) {
+		t.Errorf("facetValueKey(%q) = %q, want it to carry the value prefix %q", "none installed", got, facetValuePrefix)
 	}
 }
 
@@ -2674,7 +2677,7 @@ func TestFleet_EveryWallBucketIsVisible(t *testing.T) {
 		name   string
 		tokens map[string]string
 	}{{"dark", dark}, {"light", light}} {
-		for _, bucket := range []string{"--wall-normal", "--wall-drift", "--wall-attention", "--wall-fenced"} {
+		for _, bucket := range []string{"--wall-normal", "--wall-drift", "--wall-attention", "--wall-fenced", "--wall-unreported"} {
 			fg, ok := resolveToken(theme.tokens, bucket)
 			if !ok {
 				t.Errorf("%s theme does not resolve %s to a colour", theme.name, bucket)
@@ -4268,6 +4271,281 @@ func TestConsoleCSS_AuditedAndRequestedOutcomesHaveTheirOwnTreatment(t *testing.
 					t.Errorf("%s borrows %s — a %s outcome is neither a failure nor a success",
 						sel, borrowed, outcome)
 				}
+			}
+		}
+	}
+}
+
+// --- #833: a Node that has not reported is never current or permitted --------
+
+// unreportedFleet is the dev-node-5 shape from #833: three healthy prod Nodes
+// plus one connected Node with no daemon version and no Policy fingerprint.
+func unreportedFleet() Deps {
+	healthy := func(id string) registry.Node {
+		return registry.Node{
+			NodeID: id, NodeLabels: map[string]string{"env": "prod"},
+			DaemonVersion: "0.6.0", PolicyFingerprint: "aaaa111122223333", Connected: true,
+		}
+	}
+	return withFleet(renderableDeps(),
+		healthy("node-1"), healthy("node-2"), healthy("node-3"),
+		registry.Node{NodeID: "node-5", NodeLabels: map[string]string{"env": "prod"}, Connected: true},
+	)
+}
+
+func legendCount(v fleetView, b wallBucket) int {
+	for _, l := range v.Legend {
+		if l.Bucket == b {
+			return l.Count
+		}
+	}
+	return 0
+}
+
+func TestFleet_UnreportedNodeIsNeitherNormalNorCalledCurrent(t *testing.T) {
+	d := unreportedFleet()
+	v := buildFleetView(d, fleetNodes(d), "", "env")
+	g := v.Groups[0]
+
+	if len(g.Deviations) == 0 || g.Deviations[0].ID != "node-5" {
+		t.Fatalf("deviations = %+v, want node-5 first", g.Deviations)
+	}
+	if n := g.Deviations[0]; n.Bucket != wallUnreported || !n.Unreported {
+		t.Errorf("node-5 bucket = %q, Unreported = %v; want the unreported bucket", n.Bucket, n.Unreported)
+	}
+	if got := legendCount(v, wallUnreported); got != 1 {
+		t.Errorf("legend unreported = %d, want 1", got)
+	}
+	if got := legendCount(v, wallNormal); got != 3 {
+		t.Errorf("legend normal = %d, want 3", got)
+	}
+	sum := 0
+	for _, l := range v.Legend {
+		sum += l.Count
+	}
+	if sum != v.Matched {
+		t.Errorf("legend sums to %d, Matched = %d", sum, v.Matched)
+	}
+	if g.Unreported != 1 || g.OffMode != 0 {
+		t.Errorf("Unreported = %d, OffMode = %d; want 1 and 0 (never counted twice)", g.Unreported, g.OffMode)
+	}
+	if strings.Contains(g.ModeLine, "every Node here is reachable") {
+		t.Errorf("mode line calls an unreported Node current: %q", g.ModeLine)
+	}
+	if !strings.Contains(g.ModeLine, "not counted as current or permitted") {
+		t.Errorf("mode line does not say the unreported Node is not counted: %q", g.ModeLine)
+	}
+	if !strings.Contains(g.ModeLine, "3 other Nodes carry no state label") {
+		t.Errorf("mode line = %q, want the \"other Nodes\" wording", g.ModeLine)
+	}
+}
+
+// TestFleet_OfflineUnreportedNodeStaysAttention: offline comes from the
+// tunnel, not from Hello, so an unreported Node that is also offline stays
+// amber. The fixture must stay offline AND unreported: adding a version to make
+// this test pass is forbidden.
+func TestFleet_OfflineUnreportedNodeStaysAttention(t *testing.T) {
+	d := withFleet(renderableDeps(),
+		registry.Node{NodeID: "node-off", NodeLabels: map[string]string{"env": "prod"}, Connected: false})
+	g := buildFleetView(d, fleetNodes(d), "", "env").Groups[0]
+
+	n := g.Deviations[0]
+	if n.Bucket != wallAttention {
+		t.Errorf("bucket = %q, want attention", n.Bucket)
+	}
+	if !n.Unreported || g.Unreported != 1 {
+		t.Errorf("Unreported = %v, group %d; want it still counted", n.Unreported, g.Unreported)
+	}
+	offline := false
+	for _, s := range n.States {
+		offline = offline || s.Key == string(nodestate.MarkerOffline)
+	}
+	if !offline {
+		t.Errorf("row states = %+v, want the offline chip", n.States)
+	}
+}
+
+func TestFleet_FencedOutranksUnreported(t *testing.T) {
+	d := withFleet(renderableDeps(),
+		registry.Node{NodeID: "node-rev", NodeLabels: map[string]string{"env": "prod"}, RevokedAt: testNow})
+	g := buildFleetView(d, fleetNodes(d), "", "env").Groups[0]
+	if got := g.Deviations[0].Bucket; got != wallFenced {
+		t.Errorf("bucket = %q, want fenced", got)
+	}
+	if g.Unreported != 1 {
+		t.Errorf("Unreported = %d, want a revoked unreported Node still counted", g.Unreported)
+	}
+}
+
+func TestFleet_AllUnreportedGroupClaimsNoOneIsCurrent(t *testing.T) {
+	d := withFleet(renderableDeps(),
+		registry.Node{NodeID: "a", NodeLabels: map[string]string{"env": "prod"}, Connected: true},
+		registry.Node{NodeID: "b", NodeLabels: map[string]string{"env": "prod"}, Connected: true},
+	)
+	g := buildFleetView(d, fleetNodes(d), "", "env").Groups[0]
+	if !strings.HasPrefix(g.ModeLine, "no Node in this group can be called reachable, current and permitted") {
+		t.Errorf("mode line = %q", g.ModeLine)
+	}
+	if strings.Contains(g.ModeLine, "carries at least one state label") {
+		t.Errorf("mode line = %q, must not use the all-labelled wording", g.ModeLine)
+	}
+	if g.OffMode != 0 {
+		t.Errorf("OffMode = %d, want 0", g.OffMode)
+	}
+}
+
+func TestFleet_UnreportedIsNotCountedOffMode(t *testing.T) {
+	n := func(id, fp string) registry.Node {
+		return registry.Node{NodeID: id, NodeLabels: map[string]string{"env": "prod"},
+			DaemonVersion: "0.6.0", PolicyFingerprint: fp, Connected: true}
+	}
+	d := withFleet(renderableDeps(), n("a", "A"), n("b", "A"), n("c", "B"), n("d", ""))
+	g := buildFleetView(d, fleetNodes(d), "", "env").Groups[0]
+	if g.OffMode != 1 || g.Unreported != 1 {
+		t.Errorf("OffMode = %d, Unreported = %d; want 1 (only B) and 1", g.OffMode, g.Unreported)
+	}
+}
+
+func TestFleet_VersionWithoutFingerprintIsUnreported(t *testing.T) {
+	d := withFleet(renderableDeps(),
+		registry.Node{NodeID: "a", NodeLabels: map[string]string{"env": "prod"},
+			DaemonVersion: "0.6.0", PolicyFingerprint: "A", Connected: true},
+		registry.Node{NodeID: "b", NodeLabels: map[string]string{"env": "prod"},
+			DaemonVersion: "0.6.0", Connected: true},
+	)
+	g := buildFleetView(d, fleetNodes(d), "", "env").Groups[0]
+	if g.Unreported != 1 || g.OffMode != 0 {
+		t.Errorf("Unreported = %d, OffMode = %d; want 1 and 0", g.Unreported, g.OffMode)
+	}
+	ver := facetRowCount(g, "Daemon version", "0.6.0")
+	pol := facetRowCount(g, "Policy fingerprint", "not reported")
+	if ver != 2 || pol != 1 {
+		t.Errorf("version row = %d, Policy not-reported row = %d; want 2 and 1", ver, pol)
+	}
+}
+
+func facetRowCount(g fleetGroup, title, label string) int {
+	for _, f := range g.Facets {
+		if f.Title != title {
+			continue
+		}
+		for _, v := range f.Values {
+			if v.Label == label {
+				return v.Count
+			}
+		}
+	}
+	return -1
+}
+
+func TestFleet_ValueFacetsSumToTheGroupCount(t *testing.T) {
+	d := unreportedFleet()
+	g := buildFleetView(d, fleetNodes(d), "", "env").Groups[0]
+	for _, title := range []string{"Daemon version", "Policy fingerprint", "Template set"} {
+		found := false
+		for _, f := range g.Facets {
+			if f.Title != title {
+				continue
+			}
+			found = true
+			sum := 0
+			for _, v := range f.Values {
+				sum += v.Count
+			}
+			if sum != g.Count {
+				t.Errorf("%s facet sums to %d, group has %d Nodes", title, sum, g.Count)
+			}
+			if title == "Template set" {
+				continue
+			}
+			for _, v := range f.Values {
+				if v.Label != "not reported" {
+					continue
+				}
+				if v.Count != 1 || v.Targetable || v.Href != "" || v.Term != "" || f.Hint != "" {
+					t.Errorf("%s not-reported row = %+v, hint %q; want count 1, not a link, no hint", title, v, f.Hint)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("no %s facet", title)
+		}
+	}
+}
+
+func TestFleet_SelfReportedSentinelLiteralCannotJoinTheUnreportedRow(t *testing.T) {
+	n := func(id, ver, fp string) registry.Node {
+		return registry.Node{NodeID: id, NodeLabels: map[string]string{"env": "prod"},
+			DaemonVersion: ver, PolicyFingerprint: fp, Connected: true}
+	}
+	d := withFleet(renderableDeps(),
+		n("a", "not reported", "not reported"),
+		n("b", "s:unreported", "s:unreported"),
+		n("c", "", ""),
+	)
+	g := buildFleetView(d, fleetNodes(d), "", "env").Groups[0]
+	for _, title := range []string{"Daemon version", "Policy fingerprint"} {
+		for _, f := range g.Facets {
+			if f.Title != title {
+				continue
+			}
+			if len(f.Values) != 3 {
+				t.Errorf("%s has %d rows, want 3 distinct: %+v", title, len(f.Values), f.Values)
+			}
+			for _, v := range f.Values {
+				if v.Count != 1 {
+					t.Errorf("%s row %q has count %d, want 1", title, v.Label, v.Count)
+				}
+			}
+		}
+	}
+}
+
+func TestFleet_UnreportedRendersAsHollowCellChipAndHeaderCount(t *testing.T) {
+	body := get(t, newTestHandler(unreportedFleet(), accounts.RoleAdmin), "/console/?group=env").Body.String()
+	for _, want := range []string{
+		`data-bucket="unreported"`, "1 not reported", `class="chip unreported"`,
+		`<span class="dim">not reported</span>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %q", want)
+		}
+	}
+	for _, banned := range []string{"every Node here is reachable, current and permitted", "on a different Policy fingerprint"} {
+		if strings.Contains(body, banned) {
+			t.Errorf("body contains %q", banned)
+		}
+	}
+}
+
+func TestFleet_UnreportedCellIsHollowNotAFifthHue(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+	ruleOf := func(sel string) string {
+		// The leading newline anchors the selector to the start of a rule, so the
+		// base rule is not mistaken for the longer xs rule that contains it.
+		i := strings.Index(css, "\n"+sel+" ")
+		if i < 0 {
+			t.Fatalf("no rule for %s", sel)
+		}
+		rest := css[i:]
+		return rest[:strings.Index(rest, "}")]
+	}
+	rule := ruleOf(`.cell[data-bucket="unreported"]`)
+	if !strings.Contains(rule, "background: transparent") || !strings.Contains(rule, "box-shadow: inset") {
+		t.Errorf("unreported cell is not hollow: %s", rule)
+	}
+	if xs := ruleOf(`.wall[data-size="xs"] .cell[data-bucket="unreported"]`); !strings.Contains(xs, "inset 0 0 0 1px") {
+		t.Errorf("xs unreported ring is not 1px: %s", xs)
+	}
+	dark, light := splitThemes(t, css)
+	for name, tokens := range map[string]map[string]string{"dark": dark, "light": light} {
+		if _, ok := tokens["--wall-unreported"]; !ok {
+			t.Errorf("%s theme does not define --wall-unreported", name)
+		}
+		for _, other := range []string{"--wall-drift", "--wall-normal"} {
+			if tokens["--wall-unreported"] == tokens[other] {
+				t.Errorf("%s: --wall-unreported equals %s", name, other)
 			}
 		}
 	}
