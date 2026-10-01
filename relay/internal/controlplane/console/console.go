@@ -91,7 +91,7 @@ type Deps struct {
 	// DescribeNode, the same audited door the fleet listing and node detail
 	// have used since #450. There is no unaudited registry door left.
 	//
-	// Audit is down to one screen too: #542 moved agent history onto Queries,
+	// Audit is down to one screen too: #542 moved AI-agent history onto Queries,
 	// leaving node detail's Recent Tasks panel and its node_revoke lookup as
 	// the only reader of the whole trail through this seam.
 	Audit     AuditReader
