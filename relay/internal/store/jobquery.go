@@ -93,6 +93,39 @@ func jobOutcomeSumColumns() []string {
 // column is named here, so paginating a Job list can never become a path to
 // captured output.
 func jobQuerySelect(filter jobs.JobQuery) (stmt string, args []any) {
+	from, args := jobQueryFrom(filter, true)
+	stmt = `SELECT j.job_id, j.created_at,
+	COALESCE(t.total, 0), COALESCE(t.unresolved, 0),
+	t.action_kind, t.operation_name, t.risk_class,
+	` + strings.Join(jobOutcomeColumnRefs(), ", ") + `,
+	a.selector, j.requester_account_id, j.requester_account_name, j.requester_kind,
+	a.on_behalf_of, a.approval_id, a.grant_id, a.args, a.raw_exec_argv
+` + from
+	return stmt, args
+}
+
+// jobQueryCount renders the COUNT(*) over exactly the Jobs jobQuerySelect
+// would return for filter, before paging. It shares jobQueryFrom and
+// buildJobWhere with the page query, so the two cannot describe different
+// filters. The audit aggregate is joined only when a condition reads it
+// (jobWhereUsesAudit): it is the costly operand — every dispatch row in the
+// trail — and the count selects no column from it. The args are the full
+// bound list, WHERE arguments included.
+func jobQueryCount(filter jobs.JobQuery) (stmt string, args []any) {
+	from, args := jobQueryFrom(filter, jobWhereUsesAudit(filter))
+	conds, whereArgs := buildJobWhere(filter)
+	stmt = `SELECT COUNT(*) ` + from
+	if len(conds) > 0 {
+		stmt += ` WHERE ` + strings.Join(conds, " AND ")
+	}
+	return stmt, append(args, whereArgs...)
+}
+
+// jobQueryFrom renders the FROM clause shared by the page and the count:
+// jobs LEFT JOINed to the Task aggregate and, when withAudit, the audit
+// aggregate. It returns the arguments bound inside it. See jobQuerySelect for
+// why both joins are LEFT and why job_id is pushed into each.
+func jobQueryFrom(filter jobs.JobQuery, withAudit bool) (from string, args []any) {
 	// kind = 'dispatch' is still load-bearing, even though the requester no
 	// longer comes from this join (#616): capability's CancelJob writes
 	// job_id-carrying KindRefusal and KindJobCancel audit rows too, and the
@@ -103,15 +136,12 @@ func jobQuerySelect(filter jobs.JobQuery) (stmt string, args []any) {
 	if filter.JobID != "" {
 		taskWhere = "\n\tWHERE job_id = ?"
 		auditWhere += "\n\t\tAND job_id = ?"
-		args = []any{filter.JobID, filter.JobID}
+		args = []any{filter.JobID}
+		if withAudit {
+			args = append(args, filter.JobID)
+		}
 	}
-	stmt = `SELECT j.job_id, j.created_at,
-	COALESCE(t.total, 0), COALESCE(t.unresolved, 0),
-	t.action_kind, t.operation_name, t.risk_class,
-	` + strings.Join(jobOutcomeColumnRefs(), ", ") + `,
-	a.selector, j.requester_account_id, j.requester_account_name, j.requester_kind,
-	a.on_behalf_of, a.approval_id, a.grant_id, a.args, a.raw_exec_argv
-FROM jobs j
+	from = `FROM jobs j
 LEFT JOIN (
 	SELECT job_id,
 		COUNT(*) AS total,
@@ -122,7 +152,9 @@ LEFT JOIN (
 		` + strings.Join(jobOutcomeSumColumns(), ",\n\t\t") + `
 	FROM tasks` + taskWhere + `
 	GROUP BY job_id
-) t ON t.job_id = j.job_id
+) t ON t.job_id = j.job_id`
+	if withAudit {
+		from += `
 LEFT JOIN (
 	SELECT job_id, MIN(selector) AS selector,
 		MIN(asserted_on_behalf_of) AS on_behalf_of, MIN(approval_id) AS approval_id, MIN(grant_id) AS grant_id,
@@ -130,7 +162,8 @@ LEFT JOIN (
 	FROM audit` + auditWhere + `
 	GROUP BY job_id
 ) a ON a.job_id = j.job_id`
-	return stmt, args
+	}
+	return from, args
 }
 
 // jobOutcomeColumnRefs renders "COALESCE(t.o0, 0), COALESCE(t.o1, 0), ..."
@@ -146,31 +179,106 @@ func jobOutcomeColumnRefs() []string {
 	return refs
 }
 
+// jobCursorOldestTag marks an oldest-first cursor. Such a cursor is
+// three-part (tag, created_at, job_id) while a newest-first one is two-part,
+// so a cursor minted in one direction is refused in the other rather than
+// silently walking the wrong way.
+const jobCursorOldestTag = "asc"
+
+// jobCreatedAtFixedWidth is a SQL expression rendering j.created_at as
+// auditTimeLayout text: nine fractional digits, always 30 bytes, so a byte
+// comparison of it is a chronological one.
+//
+// It exists because jobs.created_at is stored as time.RFC3339Nano, which
+// trims trailing zeros ("...:01Z" sorts after "...:01.5Z"). Only formatTime
+// writes the column, always in UTC with a "Z" suffix, so the stored spellings
+// are exactly: seconds only, or seconds plus 1-9 fractional digits. Characters
+// 1-19 are the seconds; the rest is "Z" or ".digitsZ", stripped to its digits
+// and right-padded with zeros. Oldest-first only: newest-first keeps ordering
+// by the raw column (the same latent defect, tracked separately).
+const jobCreatedAtFixedWidth = `(substr(j.created_at, 1, 19) || '.' || ` +
+	`substr(replace(replace(substr(j.created_at, 20), 'Z', ''), '.', '') || '000000000', 1, 9) || 'Z')`
+
 // QueryJobs implements jobs.QueryRepository: one page of JobSummary rows
-// matching filter, newest (CreatedAt) first, keyset-paginated on
-// (created_at, job_id) exactly as auditquery.go's Query is on (ts, audit_id).
+// matching filter, in filter.Order's direction (newest (CreatedAt) first by
+// default), keyset-paginated on (created_at, job_id) exactly as
+// auditquery.go's Query is on (ts, audit_id).
+//
+// Oldest-first is chronological even though created_at is trimmed
+// RFC3339Nano text: it orders and pages on jobCreatedAtFixedWidth, and its
+// cursor carries that fixed-width key. Newest-first still orders the raw text
+// and so still inverts within a second (the defect audittime.go names,
+// tracked separately); its SQL and cursor are unchanged.
+//
+// With filter.CountMatching the page and the count of matching Jobs are read
+// in one transaction, so they describe one snapshot; otherwise no
+// transaction is opened and the path is the one every caller had before #795.
 func (q *sqliteJobQueries) QueryJobs(ctx context.Context, filter jobs.JobQuery, limit int, cursor string) (jobs.JobPage, error) {
 	limit = clampPageSize(limit)
 
 	stmt, args := jobQuerySelect(filter)
 	conds, whereArgs := buildJobWhere(filter)
 	args = append(args, whereArgs...)
-	if cursor != "" {
-		lastCreatedAt, lastJobID, err := decodeCursor2(cursor, jobs.ErrInvalidCursor)
-		if err != nil {
-			return jobs.JobPage{}, err
+
+	// The total ignores paging, so it never sees the cursor condition.
+	countStmt, countArgs := jobQueryCount(filter)
+
+	var orderBy string
+	switch filter.Order {
+	case jobs.JobOrderNewestFirst:
+		orderBy = ` ORDER BY j.created_at DESC, j.job_id DESC LIMIT ?`
+		if cursor != "" {
+			lastCreatedAt, lastJobID, err := decodeCursor2(cursor, jobs.ErrInvalidCursor)
+			if err != nil {
+				return jobs.JobPage{}, err
+			}
+			conds = append(conds, `(j.created_at < ? OR (j.created_at = ? AND j.job_id < ?))`)
+			args = append(args, lastCreatedAt, lastCreatedAt, lastJobID)
 		}
-		conds = append(conds, `(j.created_at < ? OR (j.created_at = ? AND j.job_id < ?))`)
-		args = append(args, lastCreatedAt, lastCreatedAt, lastJobID)
+	case jobs.JobOrderOldestFirst:
+		orderBy = ` ORDER BY ` + jobCreatedAtFixedWidth + ` ASC, j.job_id ASC LIMIT ?`
+		if cursor != "" {
+			tag, lastCreatedAt, lastJobID, err := decodeCursor3(cursor, jobs.ErrInvalidCursor)
+			if err != nil {
+				return jobs.JobPage{}, err
+			}
+			if tag != jobCursorOldestTag {
+				return jobs.JobPage{}, jobs.ErrInvalidCursor
+			}
+			lastKey, err := normalizeAuditTimeText(lastCreatedAt)
+			if err != nil {
+				return jobs.JobPage{}, fmt.Errorf("%w: %v", jobs.ErrInvalidCursor, err)
+			}
+			conds = append(conds, `(`+jobCreatedAtFixedWidth+` > ? OR (`+jobCreatedAtFixedWidth+` = ? AND j.job_id > ?))`)
+			args = append(args, lastKey, lastKey, lastJobID)
+		}
+	default:
+		return jobs.JobPage{}, fmt.Errorf("query jobs: unknown order %d", filter.Order)
 	}
 
 	if len(conds) > 0 {
 		stmt += ` WHERE ` + strings.Join(conds, " AND ")
 	}
-	stmt += ` ORDER BY j.created_at DESC, j.job_id DESC LIMIT ?`
+	stmt += orderBy
 	args = append(args, limit+1)
 
-	rows, err := q.db.QueryContext(ctx, stmt, args...)
+	var (
+		db       queryer = q.db
+		matching int
+	)
+	if filter.CountMatching {
+		tx, err := q.db.BeginTx(ctx, nil)
+		if err != nil {
+			return jobs.JobPage{}, fmt.Errorf("query jobs: begin: %w", err)
+		}
+		defer tx.Rollback() //nolint:errcheck
+		db = tx
+		if err := db.QueryRowContext(ctx, countStmt, countArgs...).Scan(&matching); err != nil {
+			return jobs.JobPage{}, fmt.Errorf("count jobs: %w", err)
+		}
+	}
+
+	rows, err := db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return jobs.JobPage{}, fmt.Errorf("query jobs: %w", err)
 	}
@@ -192,7 +300,7 @@ func (q *sqliteJobQueries) QueryJobs(ctx context.Context, filter jobs.JobQuery, 
 		return jobs.JobPage{}, fmt.Errorf("iterate jobs: %w", err)
 	}
 
-	page := jobs.JobPage{Limit: limit}
+	page := jobs.JobPage{Limit: limit, Matching: matching}
 	hasMore := len(fetched) > limit
 	if hasMore {
 		fetched = fetched[:limit]
@@ -203,9 +311,25 @@ func (q *sqliteJobQueries) QueryJobs(ctx context.Context, filter jobs.JobQuery, 
 	}
 	if hasMore && len(fetched) > 0 {
 		last := fetched[len(fetched)-1]
-		page.Next = encodeCursor2(last.createdAt, last.summary.JobID)
+		if filter.Order == jobs.JobOrderOldestFirst {
+			key, err := normalizeAuditTimeText(last.createdAt)
+			if err != nil {
+				return jobs.JobPage{}, fmt.Errorf("cursor for job %q: %w", last.summary.JobID, err)
+			}
+			page.Next = encodeCursor3(jobCursorOldestTag, key, last.summary.JobID)
+		} else {
+			page.Next = encodeCursor2(last.createdAt, last.summary.JobID)
+		}
 	}
 	return page, nil
+}
+
+// jobWhereUsesAudit reports whether buildJobWhere emits a condition on the
+// audit aggregate (alias a). Keep it beside buildJobWhere: a condition added
+// there that reads `a.` must be reflected here, or the count fails loudly with
+// "no such column" (TestJobQuery_CountMatchesPagingEveryFilter).
+func jobWhereUsesAudit(filter jobs.JobQuery) bool {
+	return filter.OnBehalfOf != ""
 }
 
 // buildJobWhere translates a jobs.JobQuery into parameterised SQL conditions

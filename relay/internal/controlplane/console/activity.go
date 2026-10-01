@@ -378,13 +378,15 @@ type activityRow struct {
 	RawExecTier bool
 	// AwaitingRecord is a Running row with no audit-joined field joined yet:
 	// the Job engine writes its dispatch record after the dispatch returns.
-	// Cancel does not depend on it, but the strip does: a Job joins the strip
-	// once its dispatch is recorded (spec 04, "Who is active"), so
-	// activityStrip leaves an AwaitingRecord row off.
+	// The strip depends on it, Cancel does not (Cancel lives in Running now):
+	// a Job joins the strip once its dispatch is recorded (spec 04, "Who is
+	// active"), so activityStrip leaves an AwaitingRecord row off.
 	AwaitingRecord bool
-	// CancelAction is the Cancel form's action, set by the handler after the
-	// fetch and never by the constructors: only it knows the caller's role.
-	CancelAction string
+	// RunningHref is where a Running row links up to: its entry in Running
+	// now when the Job is on that section's current page, else the section.
+	// Set by the handler after the fetch and never by the constructors.
+	// Cancel lives in Running now and not on this row.
+	RunningHref string
 
 	// Unrecorded marks a dispatch the Relay cannot attribute, and Pending
 	// distinguishes the two reasons — which are DIFFERENT CLAIMS and must not
@@ -467,6 +469,10 @@ type activityFilter struct {
 	// "start from the top".
 	Job   lanePos
 	Audit lanePos
+
+	// Running is Running now's own position (?rc=, ?ro=), independent of
+	// Job and Audit: paging one never moves the other.
+	Running runningPos
 }
 
 // lanePos is where one lane is, and whether it has anywhere left to go.
@@ -583,6 +589,12 @@ func parseActivityFilter(r *http.Request, now time.Time) (activityFilter, string
 		ShowConsole: q.Get(consoleParam) == consoleShow,
 		Job:         lanePos{Cursor: q.Get("jc"), Done: q.Get("jdone") == "1"},
 		Audit:       lanePos{Cursor: q.Get("ac"), Done: q.Get("adone") == "1"},
+		Running:     runningPos{Cursor: q.Get("rc")},
+	}
+	// ro only numbers Running now's range, so one that cannot be read, is out
+	// of bounds, or has no cursor to number from, is dropped without a note.
+	if ro, err := strconv.Atoi(q.Get("ro")); err == nil && ro > 0 && ro <= maxRunningOffset && f.Running.Cursor != "" {
+		f.Running.Offset = ro
 	}
 
 	var notes []string
@@ -672,6 +684,10 @@ func (f activityFilter) query(job, audit lanePos) url.Values {
 	}
 	set("jc", job.Cursor)
 	set("ac", audit.Cursor)
+	set("rc", f.Running.Cursor)
+	if f.Running.Offset > 0 {
+		set("ro", strconv.Itoa(f.Running.Offset))
+	}
 	// Carried as their own parameters so that "finished" survives the round
 	// trip. Without them the next request reads an empty cursor as page one.
 	if job.Done {
@@ -753,8 +769,11 @@ type activityView struct {
 
 	Live Live
 
-	// CSRFToken serves the per-row Cancel form on a running Job's row.
+	// CSRFToken serves Running now's Cancel forms.
 	CSRFToken string
+
+	// RunningNow is the section above the stream (activity_runningnow.go).
+	RunningNow runningNowView
 
 	// Scrolled says this page was reached by following Older; NewestHref is
 	// the way back.
@@ -919,6 +938,14 @@ func handleActivity(d Deps) http.HandlerFunc {
 		if refusedUnaudited(w, lane, "the audit and Job query lane") {
 			return
 		}
+		rn, err := fetchRunningNow(r.Context(), d, caller, f)
+		if err != nil {
+			readFailed(w, err, "the audit and Job query lane")
+			return
+		}
+		if refusedUnaudited(w, lane, "the audit and Job query lane") {
+			return
+		}
 		jobNext, auditNext := fetch.JobNext, fetch.AuditNext
 		v.Rows = fetch.Rows
 
@@ -934,6 +961,9 @@ func handleActivity(d Deps) http.HandlerFunc {
 		v.ConsoleToggleHref = toggle.href(f.Job, f.Audit)
 		everyone := f
 		everyone.Account = ""
+		// Running now follows ?account=, so its set changes with it and its
+		// old position means nothing under the new one.
+		everyone.Running = runningPos{}
 		v.AllAccountsHref = everyone.base()
 		v.Scrolled = f.Job != (lanePos{}) || f.Audit != (lanePos{})
 		if v.Scrolled {
@@ -960,14 +990,23 @@ func handleActivity(d Deps) http.HandlerFunc {
 		}
 
 		// Cancel follows Job detail literally: a Job with Unresolved Tasks
-		// and a role the route is mounted for. One Job is one row, and a
-		// dispatch row is never folded, so this is at most one control per Job
-		// by construction.
-		if cancelOffered(d, accounts.Role(caller.Role)) {
-			for i := range v.Rows {
-				if r := &v.Rows[i]; r.Kind == rowDispatch && r.Running && r.JobID != "" {
-					r.CancelAction = cancelJobAction(r.JobID)
-				}
+		// and a role the route is mounted for. It is drawn in Running now and
+		// nowhere on the stream, so a Job draws at most one per page by
+		// construction, whichever pages the two are on. A stream row links up
+		// to its entry when the entry is on this page, else to the section.
+		v.RunningNow = buildRunningNow(rn, f, d.now(), cancelOffered(d, accounts.Role(caller.Role)))
+		inRunningNow := map[string]bool{}
+		for _, e := range v.RunningNow.Entries {
+			inRunningNow[e.JobID] = true
+		}
+		for i := range v.Rows {
+			r := &v.Rows[i]
+			if r.Kind != rowDispatch || !r.Running || r.JobID == "" {
+				continue
+			}
+			r.RunningHref = "#running-now"
+			if inRunningNow[r.JobID] {
+				r.RunningHref = "#rn-" + r.JobID
 			}
 		}
 
@@ -987,11 +1026,12 @@ func handleActivity(d Deps) http.HandlerFunc {
 		}
 		v.ExportHref = f.base() + exportSuffix(f)
 
-		// The live region, only where the current view actually renders
-		// dispatch rows. A screen with no live seam — or a filter with no
-		// live kind in it — must not load a script that sits there queueing
-		// events the view would never show.
-		if d.Events != nil && ranJob {
+		// The live region, only where the current view renders something the
+		// client can flip: dispatch rows, or Running now's entries (a Job
+		// finishing is marked in place there, whatever the kind filter). A
+		// screen with no live seam — or a view with neither — must not load a
+		// script that sits there queueing events nothing would show.
+		if d.Events != nil && (ranJob || len(v.RunningNow.Entries) > 0) {
 			v.Live = Live{
 				Wired:       true,
 				Endpoint:    "/console/events?kinds=job",
@@ -1011,8 +1051,8 @@ func handleActivity(d Deps) http.HandlerFunc {
 // activityCollapseKey is the collapse's key for one row, and whether the row
 // may fold at all.
 //
-// The key is every exported field of the row except When, FirstWhen, Calls and
-// CancelAction: a superset of what the template renders. encoding/json
+// The key is every exported field of the row except When, FirstWhen and Calls:
+// a superset of what the template renders. encoding/json
 // serialises exactly the exported fields and html/template can only read
 // exported fields, so any field the template renders is in the key by
 // construction, with no hand-kept list. Some exported fields are not rendered
@@ -1021,17 +1061,17 @@ func handleActivity(d Deps) http.HandlerFunc {
 // rendered. activityRow holds slices (Outcomes.Segments), so == cannot compare
 // rows the way it compares agentCall.
 //
-// A Job row stands for one Job, carries the live handle and carries Cancel, so
-// it never folds. A denial is the highest-information row on a trust surface
-// and never folds either (Agents' rule); on this screen a denied outcome
-// reaches the feed mainly on Job rows, which the first rule already excludes,
-// so this is the guard for any trail row that renders one. A Marshal error is
+// A Job row stands for one Job and carries the live handle, so it never
+// folds. A denial is the highest-information row on a trust surface and never
+// folds either (Agents' rule); on this screen a denied outcome reaches the
+// feed mainly on Job rows, which the first rule already excludes, so this is
+// the guard for any trail row that renders one. A Marshal error is
 // "not collapsible": an error never causes a fold.
 func activityCollapseKey(r activityRow) (string, bool) {
 	if r.Kind == rowDispatch || r.Outcome == jobs.OutcomeName(jobs.OutcomeDeniedByPolicy) {
 		return "", false
 	}
-	r.When, r.FirstWhen, r.Calls, r.CancelAction = "", "", 0, ""
+	r.When, r.FirstWhen, r.Calls = "", "", 0
 	b, err := json.Marshal(r)
 	if err != nil {
 		return "", false
@@ -1106,6 +1146,7 @@ func activityStrip(rows []activityRow, f activityFilter, now time.Time) (entries
 		scoped := f
 		scoped.Account = strings.TrimPrefix(e.Key, "id:")
 		scoped.Job, scoped.Audit = lanePos{}, lanePos{}
+		scoped.Running = runningPos{}
 		e.Href = scoped.base()
 	}
 	return entries, dropped, awaiting, unrecorded
@@ -1818,6 +1859,43 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
 {{end}}
 {{if .Filter.Account}}<p class="scoped">Showing one Account only. <a href="{{.AllAccountsHref}}">Show every Account</a>.</p>{{end}}
 
+<section class="runningnow" id="running-now" aria-label="Running now">
+  <div class="ftitle">Running now <span class="phint">Jobs still running, longest-running first. Not narrowed by the kind chips or the time window.</span></div>
+  {{with .RunningNow}}
+  {{if .Entries}}<p class="rncount">{{.Matching}} running{{if .From}} &middot; {{.From}}&ndash;{{.To}}{{end}}</p>
+  <ol class="rnlist">
+  {{range .Entries}}
+    <li class="rnentry" id="{{.Anchor}}" data-rn-job-id="{{.JobID}}">
+      <div class="evhead">
+        {{if .Principal}}{{template "trust-chip" (trust .Principal .Verified)}}{{template "kind-label" .RequesterKind}}
+        {{else}}<span class="dim">attribution is recorded when the dispatch completes</span>{{end}}
+        {{if .RawExecTier}}<span class="chip" data-tier="raw_exec">Raw Exec</span>{{end}}
+        {{if .Operation}}<a class="evop" href="{{.JobHref}}"><code>{{.Operation}}</code></a>
+        {{else}}<span class="evsum">{{.Summary}}</span>{{end}}
+      </div>
+      <div class="evmeta">
+        <time datetime="{{.Started}}">running for {{.RunningFor}}</time>
+        <span class="overcap">{{.Resolved}} of {{.Total}} Tasks resolved</span>
+        <a href="{{.JobHref}}">Job <code>{{short .JobID}}</code></a>
+        {{if .CancelAction}}{{template "job-cancel" (cancelControl .CancelAction $.CSRFToken)}}{{end}}
+      </div>
+      <div class="rnliveslot">
+        <span class="rnlive" data-when="completed">finished after this page was rendered &mdash; reload to see its outcomes</span>
+        <span class="rnlive" data-when="cancelled">cancelled after this page was rendered &mdash; reload to see its outcomes</span>
+      </div>
+    </li>
+  {{end}}
+  </ol>
+  {{else if .Paged}}<p class="dim">Nothing further is running. <a href="{{.FirstHref}}">Longest-running first</a>.</p>
+  {{else if .AccountScoped}}<p class="dim">This Account has nothing running.</p>
+  {{else}}<p class="dim">Nothing is running.</p>{{end}}
+  {{if or .NextHref (and .FirstHref .Entries)}}<div class="pager">
+    {{with .NextHref}}<a class="act" href="{{.}}">Next longest-running</a>{{end}}
+    {{if .Entries}}{{with .FirstHref}}<a href="{{.}}">Longest-running first</a>{{end}}{{end}}
+  </div>{{end}}
+  {{end}}
+</section>
+
 <section class="whoactive" aria-label="Who is active">
   <div class="ftitle">{{if .Scrolled}}Accounts on this page{{else}}Who is active{{end}} <span class="phint">Accounts on this page with a call in the last 15 minutes. The numbers count the calls on this page. Mutate counts what was asked, including refused, parked and preflight calls. A collapsed row counts every call it stands for. A running Job is counted once its dispatch is recorded.{{if .ReadsExcluded}} Read records are left out of this view, so an Account that only read is not listed.{{end}}</span></div>
   {{range .Strip}}
@@ -1861,7 +1939,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
         {{if and .JobHref (not .OpIsLink)}}<a href="{{.JobHref}}">Job <code>{{short .JobID}}</code></a>{{end}}
         {{with .ApprovalHref}}<a href="{{.}}">approval</a>{{end}}
         {{with .GrantID}}<span class="grant" title="An Approval grant released this: a human approved a window that this plan fell inside, not this plan itself.">grant {{short .}}</span>{{end}}
-        {{if .CancelAction}}{{template "job-cancel" (cancelControl .CancelAction $.CSRFToken)}}{{end}}
+        {{with .RunningHref}}<a class="rnlink" href="{{.}}">in Running now</a>{{end}}
       </div>
       {{if .AwaitingRecord}}<div class="evnote">Read from the Job record. No dispatch record is joined to it yet; its Selector, arguments and approver appear once one is.</div>{{end}}
       {{if .Outcomes.Total}}{{template "outcome-bar" .Outcomes}}{{end}}
@@ -1941,8 +2019,8 @@ Stopping one actor is revoking its API Tokens, or the Freeze.</p>
 this Console and never collapses consecutive calls, so an auditor&#39;s file holds every row this Relay
 returned for the filter.</p>
 
-<p class="gap"><b>Cancel is offered on a running Job&#39;s row</b> to the roles that may cancel, exactly
-as on Job detail. A viewer sees running Jobs and is not offered it.</p>
+<p class="gap"><b>Cancel is offered in Running now</b> to the roles that may cancel, exactly
+as on Job detail. A running Job&#39;s row in the stream links up to it. A viewer sees running Jobs and is not offered it.</p>
 
 <p class="gap"><b>The chips above list every family this screen shows, including empty ones.</b>
 They carry no counts. Counting each family across the whole trail would take one query per family,

@@ -62,7 +62,9 @@ func TestActivity_ARecordedDispatchWithAnEmptySelectorIsNotAwaiting(t *testing.T
 
 func TestActivity_AResolvedJobIsNeitherMarkedRunningNorCancellable(t *testing.T) {
 	sum := runningJob("job-1", "gleipnir-prod", "acct-1")
-	sum.Unresolved = 0
+	// A resolved Job is Complete; the zero State is Running (iota 0), and
+	// Running now lists by State.
+	sum.Unresolved, sum.State = 0, jobs.JobStateComplete
 	q := &fakeQueries{jobs: []capability.JobSummary{sum}}
 	body := activityRunning(t, q, accounts.RoleAdmin, "/console/activity")
 
@@ -135,6 +137,11 @@ type pagedJobs struct {
 }
 
 func (p pagedJobs) QueryJobs(ctx context.Context, who capability.Principal, f capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {
+	// Running now's read lists the old running Job on its first page, which
+	// is the point: it is out of the stream's first page and never out of sight.
+	if f.Order == jobs.JobOrderOldestFirst {
+		return capability.JobPage{Jobs: []capability.JobSummary{p.older}, Limit: page.Limit, Matching: 1}, nil
+	}
 	if page.Cursor == "" {
 		sum := runningJob("job-new", "gleipnir-prod", "acct-1")
 		sum.Unresolved = 0
@@ -143,21 +150,36 @@ func (p pagedJobs) QueryJobs(ctx context.Context, who capability.Principal, f ca
 	return capability.JobPage{Jobs: []capability.JobSummary{p.older}, Limit: page.Limit}, nil
 }
 
-func TestActivity_ARunningJobOnAnOlderPageStillOffersCancel(t *testing.T) {
+// A running Job far back in the stream is never out of sight: Running now
+// holds it, with its one Cancel, on the first page; once the stream reaches
+// its row (the Older page) that row links up and carries no Cancel.
+func TestActivity_ARunningJobOnAnOlderPageIsInRunningNowWithItsOneCancel(t *testing.T) {
 	q := pagedJobs{fakeQueries: &fakeQueries{}, older: runningJob("job-old", "gleipnir-prod", "acct-1")}
 	d := cancelDeps(q.fakeQueries, &fakeCanceller{})
 	d.Queries = q
 	h := newTestHandler(d, accounts.RoleAdmin)
 
 	first := get(t, h, "/console/activity").Body.String()
-	if strings.Contains(first, "job-old") || strings.Contains(first, `class="jobcancel"`) {
-		t.Fatal("the newest page already shows the old running Job")
+	section, stream := splitRunningNow(t, first)
+	if strings.Contains(stream, "job-old") {
+		t.Fatal("the newest page of the stream already shows the old running Job")
 	}
+	if !strings.Contains(section, "job-old") || strings.Count(section, `class="jobcancel"`) != 1 {
+		t.Error("the old running Job is not in Running now on the first page with its one Cancel")
+	}
+
 	older := unescapeHref(t, hrefContaining(t, first, "jc=jc-2"))
 	body := get(t, h, older).Body.String()
-
-	if !strings.Contains(body, "job-old") || strings.Count(body, `class="jobcancel"`) != 1 {
-		t.Error("a running Job reached by following Older does not offer Cancel")
+	section, stream = splitRunningNow(t, body)
+	if strings.Count(body, `action="/console/jobs/job-old/cancel"`) != 1 || !strings.Contains(section, `action="/console/jobs/job-old/cancel"`) {
+		t.Error("on the Older page the old running Job does not draw exactly one Cancel, in Running now")
+	}
+	row := activityRowContaining(t, stream, `data-job-id="job-old"`)
+	if strings.Contains(row, `class="jobcancel"`) {
+		t.Error("the stream row of a running Job carries a Cancel")
+	}
+	if !strings.Contains(row, `href="#rn-job-old"`) {
+		t.Errorf("the stream row does not link up to its Running now entry:\n%s", row)
 	}
 }
 
@@ -243,8 +265,13 @@ func TestActivity_ViewerSeesTheRunningJobButNoCancel(t *testing.T) {
 	if strings.Contains(body, `class="jobcancel"`) {
 		t.Error("a viewer is offered Cancel")
 	}
-	if q.jobCalls != 1 {
-		t.Errorf("QueryJobs calls = %d, want 1", q.jobCalls)
+	// The stream's read, and Running now's: the viewer is offered no Cancel
+	// but still reads both.
+	if q.jobCalls != 2 {
+		t.Fatalf("QueryJobs calls = %d, want 2", q.jobCalls)
+	}
+	if !isRunningNowRead(q.jobFilters[1]) {
+		t.Errorf("the second Job read is not Running now's: %+v", q.jobFilters[1])
 	}
 }
 
@@ -302,15 +329,20 @@ func TestActivity_NonDispatchRowsNamingAJobDrawNoCancel(t *testing.T) {
 			{Kind: audit.KindRead, JobID: "job-1", OperationName: "get_job", Principal: "p", Timestamp: testNow},
 		},
 	}
-	body := activityRunning(t, q, accounts.RoleAdmin, "/console/activity?kind=cancel")
-	if strings.Contains(body, `class="jobcancel"`) {
-		t.Error("a cancel row draws a Cancel control")
+	// Running now ignores the kind chips, so the running Job's one Cancel is
+	// on these pages too — in the section. The assertion is aimed at the
+	// stream: no row in it draws one.
+	for _, kind := range []string{"cancel", "read"} {
+		body := activityRunning(t, q, accounts.RoleAdmin, "/console/activity?kind="+kind)
+		section, stream := splitRunningNow(t, body)
+		if strings.Contains(stream, `class="jobcancel"`) {
+			t.Errorf("a %s row draws a Cancel control", kind)
+		}
+		if n := strings.Count(section, `class="jobcancel"`); n != 1 {
+			t.Errorf("?kind=%s: Running now draws %d Cancel controls for the running Job, want 1", kind, n)
+		}
 	}
-	body = activityRunning(t, q, accounts.RoleAdmin, "/console/activity?kind=read")
-	if strings.Contains(body, `class="jobcancel"`) {
-		t.Error("a read row draws a Cancel control")
-	}
-	body = activityRunning(t, q, accounts.RoleAdmin, "/console/activity")
+	body := activityRunning(t, q, accounts.RoleAdmin, "/console/activity")
 	if n := strings.Count(body, `class="jobcancel"`); n != 1 {
 		t.Errorf("the feed draws %d Cancel controls for one running Job, want 1", n)
 	}
@@ -320,22 +352,28 @@ func TestActivity_RunningStateComesFromTheOneJobLaneRead(t *testing.T) {
 	q := &fakeQueries{jobs: []capability.JobSummary{runningJob("job-1", "gleipnir-prod", "acct-1")}}
 	activityRunning(t, q, accounts.RoleAdmin, "/console/activity")
 
-	if q.jobCalls != 1 || q.auditCalls != 1 {
-		t.Fatalf("reads = %d Job, %d audit; want exactly 1 of each", q.jobCalls, q.auditCalls)
+	if q.jobCalls != 2 || q.auditCalls != 1 {
+		t.Fatalf("reads = %d Job, %d audit; want the stream's and Running now's Job reads and 1 audit", q.jobCalls, q.auditCalls)
 	}
 	if q.jobFilters[0].State != nil {
 		t.Errorf("QueryJobs filter State = %v, want none: running comes from the row's own Unresolved", q.jobFilters[0].State)
+	}
+	if !isRunningNowRead(q.jobFilters[1]) {
+		t.Errorf("the second Job read is not Running now's: %+v", q.jobFilters[1])
 	}
 	if len(q.subscriptionKinds) != 0 {
 		t.Errorf("subscriptionKinds = %v, want none", q.subscriptionKinds)
 	}
 }
 
-func TestActivity_ANonDispatchFilterMakesNoJobRead(t *testing.T) {
+func TestActivity_ANonDispatchFilterMakesOnlyTheRunningNowRead(t *testing.T) {
 	q := &fakeQueries{jobs: []capability.JobSummary{runningJob("job-1", "gleipnir-prod", "acct-1")}}
 	activityRunning(t, q, accounts.RoleAdmin, "/console/activity?kind=approval")
-	if q.jobCalls != 0 {
-		t.Errorf("QueryJobs calls = %d, want 0", q.jobCalls)
+	if q.jobCalls != 1 {
+		t.Fatalf("QueryJobs calls = %d, want 1: the stream makes none, Running now ignores the kind", q.jobCalls)
+	}
+	if !isRunningNowRead(q.jobFilters[0]) {
+		t.Errorf("the one Job read is not Running now's: %+v", q.jobFilters[0])
 	}
 }
 

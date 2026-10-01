@@ -25,7 +25,23 @@ const feed = {
   },
 };
 
-const world = dom.install({}, { "[data-live-region]": region, ".feed": feed });
+// Running now: one entry for a Job only it holds, and one for a Job that is
+// also a stream row. Its entries carry data-rn-job-id, never data-job-id.
+const onlyInRunningNow = dom.makeElement("entry", {});
+const alsoInRunningNow = dom.makeElement("entry", {});
+const runningNow = {
+  querySelector(selector) {
+    if (selector === '.rnentry[data-rn-job-id="job-running"]') return onlyInRunningNow;
+    if (selector === '.rnentry[data-rn-job-id="job-here"]') return alsoInRunningNow;
+    return null;
+  },
+};
+
+const world = dom.install({}, {
+  "[data-live-region]": region,
+  ".feed": feed,
+  ".runningnow": runningNow,
+});
 
 require(path.join(assets, "stream.js"));
 require(path.join(assets, "activity.js"));
@@ -47,6 +63,24 @@ dom.check(counter.textContent === "0", "a Job already on screen was counted as a
 dom.check(
   region.getAttribute("data-queued") === null,
   "a Job already on screen marked the region as having queued events"
+);
+
+// A Job in both places is marked in both.
+dom.check(
+  alsoInRunningNow.getAttribute("data-jobstate") === "completed",
+  "a Job in the feed and in Running now was not marked in its Running now entry"
+);
+
+// --- a Job only Running now holds is marked there, and does not queue -------
+world.emit("job", "evt-2b", JSON.stringify({ job_id: "job-running", transition: "cancelled" }));
+dom.check(
+  onlyInRunningNow.getAttribute("data-jobstate") === "cancelled",
+  "a finishing Job in Running now was not marked in place"
+);
+dom.check(counter.textContent === "0", "a Job held by Running now was counted as a new event");
+dom.check(
+  region.getAttribute("data-queued") === null,
+  "a Job held by Running now marked the region as having queued events"
 );
 
 // --- a Job that is NOT on screen queues, never splices ---------------------

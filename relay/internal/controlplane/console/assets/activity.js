@@ -14,7 +14,9 @@
 // outcome counts a row is made of. So it does exactly two things:
 //
 //   1. a Job already on screen that FINISHES gets one data-jobstate attribute,
-//      revealing a sentence the SERVER already rendered into the row. Nothing
+//      on its stream row and on its Running now entry (both, when it is in
+//      both), revealing a sentence the SERVER already rendered there and
+//      hiding the entry's Cancel. Nothing
 //      moves, nothing reflows (foundations rule 6), and the outcome bar does
 //      NOT repaint — repainting it would mean re-implementing NewOutcomeBar's
 //      minority floor and grow quantisation in JavaScript, which is the second
@@ -32,6 +34,7 @@
   }
 
   var feed = document.querySelector(".feed");
+  var runningNow = document.querySelector(".runningnow");
 
   function onJob(job) {
     if (!job || !job.job_id) {
@@ -42,13 +45,25 @@
     // issued, but which ARRIVES OVER A NETWORK. A selector built from an
     // unescaped remote string is a selector a remote string can rewrite.
     var row = null;
-    if (feed && window.CSS && typeof window.CSS.escape === "function") {
-      row = feed.querySelector('.ev[data-job-id="' + window.CSS.escape(job.job_id) + '"]');
+    var entry = null;
+    if (window.CSS && typeof window.CSS.escape === "function") {
+      var id = window.CSS.escape(job.job_id);
+      if (feed) {
+        row = feed.querySelector('.ev[data-job-id="' + id + '"]');
+      }
+      if (runningNow) {
+        entry = runningNow.querySelector('.rnentry[data-rn-job-id="' + id + '"]');
+      }
     }
 
-    if (row && (job.transition === "completed" || job.transition === "cancelled")) {
+    if ((row || entry) && (job.transition === "completed" || job.transition === "cancelled")) {
       // IN PLACE. Nothing moves.
-      row.setAttribute("data-jobstate", job.transition);
+      if (row) {
+        row.setAttribute("data-jobstate", job.transition);
+      }
+      if (entry) {
+        entry.setAttribute("data-jobstate", job.transition);
+      }
       return;
     }
 

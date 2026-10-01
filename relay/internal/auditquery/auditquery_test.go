@@ -338,6 +338,22 @@ func TestMapping_JobFilterCarriesOnBehalfOf(t *testing.T) {
 	}
 }
 
+func TestMapping_JobFilterCarriesOrderAndCount(t *testing.T) {
+	got := toJobQuery(capability.JobFilter{Order: jobs.JobOrderOldestFirst, CountMatching: true})
+	if got.Order != jobs.JobOrderOldestFirst || !got.CountMatching {
+		t.Errorf("toJobQuery = %+v — dropping either asks the store for a different page than the Console named", got)
+	}
+	if zero := toJobQuery(capability.JobFilter{}); zero.Order != jobs.JobOrderNewestFirst || zero.CountMatching {
+		t.Errorf("a zero filter maps to %+v, want newest first with no count", zero)
+	}
+}
+
+func TestMapping_JobPageCarriesMatching(t *testing.T) {
+	if got := fromJobPage(jobs.JobPage{Matching: 12, Next: "n", Limit: 5}); got.Matching != 12 || got.Next != "n" || got.Limit != 5 {
+		t.Errorf("fromJobPage = %+v, want Matching 12 carried with Next and Limit", got)
+	}
+}
+
 // TestCapabilityJobSummary_HasNoOutputField mirrors the store-side guard on
 // the seam the Console actually reads. ADR-0025: a Job list is not a path to
 // captured output, at any age.

@@ -834,6 +834,11 @@ func (emptyJobQuery) QueryJobs(_ context.Context, f capability.JobFilter, _ capa
 	if f.JobID != "" && f.JobID != auditFixtureJob {
 		return capability.JobPage{}, nil
 	}
+	// The fixture Job is Complete, so a running-only read (Running now's)
+	// finds nothing — the same answer the real store gives.
+	if f.State != nil && *f.State != jobs.JobStateComplete {
+		return capability.JobPage{}, nil
+	}
 	return capability.JobPage{Jobs: []capability.JobSummary{{
 		JobID:     auditFixtureJob,
 		CreatedAt: testNow,
@@ -875,3 +880,54 @@ type stringWriter struct{ b *strings.Builder }
 func (w *stringWriter) Header() http.Header         { return http.Header{} }
 func (w *stringWriter) Write(p []byte) (int, error) { return w.b.Write(p) }
 func (w *stringWriter) WriteHeader(int)             {}
+
+// TestActivity_RunningNowIsExactlyOneMoreAuditedRead is spec 04's "one audited
+// read" for Running now, and the issue's "no new capability call": through the
+// real lane, the section adds one query_jobs record whose selector says what
+// was asked (running only, oldest first, with a count), and no tool name the
+// page did not already record.
+func TestActivity_RunningNowIsExactlyOneMoreAuditedRead(t *testing.T) {
+	count := func(t *testing.T, path string) (jobReads []audit.Record, tools map[string]int) {
+		t.Helper()
+		trail := &recordingTrail{}
+		rec := get(t, newTestHandler(realLaneDeps(trail), accounts.RoleAdmin), path)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, rec.Code)
+		}
+		tools = map[string]int{}
+		for _, r := range trail.ofKind(audit.KindRead) {
+			tools[r.OperationName]++
+			if r.OperationName == "query_jobs" {
+				jobReads = append(jobReads, r)
+			}
+		}
+		return jobReads, tools
+	}
+	isRunningNow := func(r audit.Record) bool {
+		return strings.Contains(r.Selector, "state=running") && strings.Contains(r.Selector, "order=oldest_first")
+	}
+
+	jobReads, tools := count(t, "/console/activity")
+	if tools["query_jobs"] != 2 || tools["query_audit"] != 1 || len(tools) != 2 {
+		t.Fatalf("the default feed recorded %v, want query_jobs x2 and query_audit x1 and nothing else", tools)
+	}
+	n := 0
+	for _, r := range jobReads {
+		if isRunningNow(r) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d of the query_jobs records are Running now's, want exactly 1", n)
+	}
+
+	jobReads, tools = count(t, "/console/activity?kind=freeze")
+	// A trail-only kind makes no stream Job read, so the one query_jobs record
+	// IS Running now's; the trail lane's query_audit is what it always wrote.
+	if tools["query_jobs"] != 1 || tools["query_audit"] != 1 || len(tools) != 2 {
+		t.Fatalf("?kind=freeze recorded %v, want exactly query_jobs x1 (Running now's) and query_audit x1", tools)
+	}
+	if !isRunningNow(jobReads[0]) || !strings.Contains(jobReads[0].Selector, "count=matching") {
+		t.Errorf("the one Job read's selector = %q, want running, oldest first, counted", jobReads[0].Selector)
+	}
+}

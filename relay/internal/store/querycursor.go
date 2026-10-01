@@ -28,10 +28,32 @@ func decodeCursor2(cursor string, invalid error) (a, b string, err error) {
 		return "", "", fmt.Errorf("%w: %v", invalid, decErr)
 	}
 	a, b, ok := strings.Cut(string(raw), "\x00")
-	if !ok || a == "" || b == "" {
+	if !ok || a == "" || b == "" || strings.Contains(b, "\x00") {
 		return "", "", invalid
 	}
 	return a, b, nil
+}
+
+// encodeCursor3 is the opaque three-part cursor: base64url(a + "\x00" + b +
+// "\x00" + c). jobquery.go's oldest-first cursor uses it, so a cursor minted
+// in one direction can never parse in the other.
+func encodeCursor3(a, b, c string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(a + "\x00" + b + "\x00" + c))
+}
+
+// decodeCursor3 is encodeCursor3's inverse. invalid is returned (wrapped)
+// when cursor does not decode to base64, or does not split into exactly
+// three non-empty parts.
+func decodeCursor3(cursor string, invalid error) (a, b, c string, err error) {
+	raw, decErr := base64.RawURLEncoding.DecodeString(cursor)
+	if decErr != nil {
+		return "", "", "", fmt.Errorf("%w: %v", invalid, decErr)
+	}
+	parts := strings.Split(string(raw), "\x00")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", "", invalid
+	}
+	return parts[0], parts[1], parts[2], nil
 }
 
 // encodeCursor1 is the opaque single-value cursor used for keyset pagination

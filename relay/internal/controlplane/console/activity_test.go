@@ -93,8 +93,11 @@ func TestActivity_DispatchFilterIsTheJobsListAndQueriesNothingElse(t *testing.T)
 	q := &fakeQueries{}
 	get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin), "/console/activity?kind=dispatch")
 
-	if q.jobCalls != 1 {
-		t.Errorf("?kind=dispatch made %d Job queries, want exactly 1", q.jobCalls)
+	// The Jobs list's one read, and Running now's.
+	if q.jobCalls != 2 {
+		t.Errorf("?kind=dispatch made %d Job queries, want exactly 2 (the list and Running now)", q.jobCalls)
+	} else if isRunningNowRead(q.jobFilters[0]) || !isRunningNowRead(q.jobFilters[1]) {
+		t.Errorf("?kind=dispatch's Job reads are not [the list, Running now]: %+v", q.jobFilters)
 	}
 	if q.auditCalls != 0 {
 		t.Errorf("?kind=dispatch queried the audit lane %d times — the Jobs list must not read the "+
@@ -104,9 +107,11 @@ func TestActivity_DispatchFilterIsTheJobsListAndQueriesNothingElse(t *testing.T)
 	// And the unfiltered feed runs both.
 	both := &fakeQueries{}
 	get(t, newTestHandler(activityDeps(both), accounts.RoleAdmin), "/console/activity")
-	if both.jobCalls != 1 || both.auditCalls != 1 {
-		t.Errorf("the unfiltered feed made %d Job and %d audit queries, want 1 of each",
+	if both.jobCalls != 2 || both.auditCalls != 1 {
+		t.Errorf("the unfiltered feed made %d Job and %d audit queries, want 2 (the stream's and Running now's) and 1",
 			both.jobCalls, both.auditCalls)
+	} else if isRunningNowRead(both.jobFilters[0]) || !isRunningNowRead(both.jobFilters[1]) {
+		t.Errorf("the unfiltered feed's Job reads are not [the stream, Running now]: %+v", both.jobFilters)
 	}
 }
 
@@ -124,8 +129,11 @@ func TestActivity_FiltersReachTheSeamRatherThanThePage(t *testing.T) {
 	get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin),
 		"/console/activity?account=acc-1&op=service.restart&on_behalf_of=agent-7&since="+since+"&until="+until)
 
-	if len(q.jobFilters) != 1 || len(q.auditFilters) != 1 {
-		t.Fatalf("got %d Job and %d audit filters, want 1 of each", len(q.jobFilters), len(q.auditFilters))
+	if len(q.jobFilters) != 2 || len(q.auditFilters) != 1 {
+		t.Fatalf("got %d Job and %d audit filters, want the stream's and Running now's, and 1", len(q.jobFilters), len(q.auditFilters))
+	}
+	if !isRunningNowRead(q.jobFilters[1]) || q.jobFilters[1].RequesterAccountID != "acc-1" {
+		t.Errorf("the second Job read is not Running now's, scoped to the Account alone: %+v", q.jobFilters[1])
 	}
 	jf, af := q.jobFilters[0], q.auditFilters[0]
 
@@ -556,9 +564,11 @@ func TestActivity_PageStatesItsTwoLaneBoundary(t *testing.T) {
 // unfiltered one.
 func TestActivity_OutcomeOnTheJobLaneSaysWhatItCosts(t *testing.T) {
 	q := &fakeQueries{jobs: []capability.JobSummary{
-		{JobID: "job-denied", CreatedAt: testNow, OperationName: "service.restart",
+		// Both are finished, so Complete: the zero State is Running (iota 0),
+		// and a running Job is in Running now whatever the outcome filter says.
+		{JobID: "job-denied", CreatedAt: testNow, OperationName: "service.restart", State: jobs.JobStateComplete,
 			Counts: map[jobs.Outcome]int{jobs.OutcomeDeniedByPolicy: 1, jobs.OutcomeSuccess: 9}, Total: 10},
-		{JobID: "job-clean", CreatedAt: testNow, OperationName: "service.restart",
+		{JobID: "job-clean", CreatedAt: testNow, OperationName: "service.restart", State: jobs.JobStateComplete,
 			Counts: map[jobs.Outcome]int{jobs.OutcomeSuccess: 10}, Total: 10},
 	}}
 	body := get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin),
@@ -889,11 +899,14 @@ func TestActivity_RelativeWindowResolvesAgainstTheRenderClock(t *testing.T) {
 	q := &fakeQueries{}
 	get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin), "/console/activity?window=1h")
 
-	if len(q.jobFilters) != 1 {
-		t.Fatalf("got %d Job filters, want 1", len(q.jobFilters))
+	if len(q.jobFilters) != 2 {
+		t.Fatalf("got %d Job filters, want the stream's and Running now's", len(q.jobFilters))
 	}
 	if want := testNow.Add(-time.Hour); !q.jobFilters[0].Since.Equal(want) {
 		t.Errorf("window=1h resolved to Since=%v, want %v", q.jobFilters[0].Since, want)
+	}
+	if !isRunningNowRead(q.jobFilters[1]) {
+		t.Errorf("the window narrowed Running now: %+v", q.jobFilters[1])
 	}
 }
 
@@ -983,7 +996,12 @@ func (q *endlessQueries) AuditReach(context.Context, capability.Principal, capab
 	return capability.Reach{}, nil
 }
 
-func (q *endlessQueries) QueryJobs(_ context.Context, _ capability.Principal, _ capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {
+func (q *endlessQueries) QueryJobs(_ context.Context, _ capability.Principal, f capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {
+	// Running now's read is not the stream lane this fake scripts: answered
+	// empty and left out of its bookkeeping.
+	if f.Order == jobs.JobOrderOldestFirst {
+		return capability.JobPage{Limit: page.Limit}, nil
+	}
 	q.jobCalls++
 	return capability.JobPage{
 		Jobs: []capability.JobSummary{{JobID: "job-1", CreatedAt: testNow}},
@@ -1114,7 +1132,12 @@ func (q *scriptedQueries) pageIndex(cursor string) int {
 
 func (q *scriptedQueries) cursorFor(i int) string { return "p" + strconv.Itoa(i) }
 
-func (q *scriptedQueries) QueryJobs(_ context.Context, _ capability.Principal, _ capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {
+func (q *scriptedQueries) QueryJobs(_ context.Context, _ capability.Principal, f capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {
+	// Running now's read is not a stream page: answered empty and left out of
+	// the stream's cursor bookkeeping.
+	if f.Order == jobs.JobOrderOldestFirst {
+		return capability.JobPage{Limit: page.Limit}, nil
+	}
 	q.jobCursors = append(q.jobCursors, page.Cursor)
 	i := q.pageIndex(page.Cursor)
 	if i >= q.jobPageCount {
@@ -1276,6 +1299,8 @@ func TestActivity_ExhaustedPositionSaysSoRatherThanNothingMatches(t *testing.T) 
 func TestActivity_UnattributableFinishedJobDoesNotPromiseAnAttribution(t *testing.T) {
 	q := &fakeQueries{jobs: []capability.JobSummary{{
 		JobID: "job-orphan", CreatedAt: testNow, OperationName: "service.restart",
+		// Finished, so Complete: the zero State is Running (iota 0).
+		State: jobs.JobStateComplete,
 		Total: 3, Unresolved: 0, Counts: map[jobs.Outcome]int{jobs.OutcomeSuccess: 3},
 	}}}
 	body := get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin), "/console/activity?kind=dispatch").Body.String()
@@ -1326,7 +1351,8 @@ func TestActivity_OverlongOnBehalfOfIsNamedNotForwarded(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "on_behalf_of is longer than") {
 		t.Error("the page does not say which value was too long")
 	}
-	if len(q.jobFilters) != 1 || q.jobFilters[0].OnBehalfOf != "" {
+	// The stream's read and Running now's: neither may carry the value.
+	if len(q.jobFilters) != 2 || q.jobFilters[0].OnBehalfOf != "" || q.jobFilters[1].OnBehalfOf != "" {
 		t.Errorf("an over-long value reached the seam: %+v", q.jobFilters)
 	}
 }

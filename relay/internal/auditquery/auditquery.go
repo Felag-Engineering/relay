@@ -206,6 +206,8 @@ func toJobQuery(f capability.JobFilter) jobs.JobQuery {
 		OnBehalfOf:         f.OnBehalfOf,
 		Since:              f.Since,
 		Until:              f.Until,
+		Order:              f.Order,
+		CountMatching:      f.CountMatching,
 	}
 }
 
@@ -278,7 +280,7 @@ func fromJobPage(p jobs.JobPage) capability.JobPage {
 	for i, j := range p.Jobs {
 		out[i] = fromJobSummary(j)
 	}
-	return capability.JobPage{Jobs: out, Next: p.Next, Limit: p.Limit}
+	return capability.JobPage{Jobs: out, Next: p.Next, Limit: p.Limit, Matching: p.Matching}
 }
 
 func toTaskQuery(f capability.TaskFilter) jobs.TaskQuery {
