@@ -215,12 +215,15 @@ func TestAccounts_AMachineAccountWithNoCallSaysSoInWords(t *testing.T) {
 	}
 }
 
-func TestAccounts_AMachineAccountsLastCallLinksToItsAgentStream(t *testing.T) {
+func TestAccounts_AMachineAccountsLastCallLinksToActivityScopedToItsID(t *testing.T) {
 	body := get(t, newTestHandler(accountsFixture(), accounts.RoleAdmin), accountsPath).Body.String()
 	row := rowFor(t, body, "gleipnir-prod")
 
-	if !strings.Contains(row, `href="/console/agents?account=gleipnir-prod"`) {
-		t.Errorf("the last tool call does not link to this Account's agent stream (spec 03). Row:\n%s", row)
+	if !strings.Contains(row, `href="/console/activity?account=`+sweepMachineAccountID+`"`) {
+		t.Errorf("the last tool call does not link to Activity scoped to this Account's ID (spec 15 Rows). Row:\n%s", row)
+	}
+	if strings.Contains(row, "/console/activity?account=gleipnir-prod") {
+		t.Errorf("the last tool call link names the Account, not its ID (D18). Row:\n%s", row)
 	}
 	if strings.Contains(row, "no tool call") {
 		t.Error("an Account WITH a call on the page rendered the honest-absence copy instead")
@@ -228,26 +231,26 @@ func TestAccounts_AMachineAccountsLastCallLinksToItsAgentStream(t *testing.T) {
 }
 
 // TestAccounts_AnAccountNameIsURLEncodedInEveryLink is the #467 regression, on
-// this screen's two links. An Account name is a principal string this package
+// this screen's two links. An Account name or id is a string this package
 // does not constrain, and "bob&co" concatenated into a query yields a link to
 // a different Account entirely.
 func TestAccounts_AnAccountNameIsURLEncodedInEveryLink(t *testing.T) {
 	d := accountsFixture()
 	d.Accounts = &fakeAccounts{accounts: []accounts.Account{{
-		ID: "acct-amp", Name: "bob&co", Kind: accounts.KindMachine,
+		ID: "acct&co", Name: "bob&co", Kind: accounts.KindMachine,
 		Role: accounts.RoleOperator, Enabled: true,
 	}}}
-	// With a call on the page, so the agent-stream link is actually rendered
+	// With a call on the page, so the Activity link is actually rendered
 	// — the encoding of a link that never draws proves nothing.
 	d.Queries = &fakeQueries{rows: []capability.AuditRow{{
 		Kind: audit.KindRead, OperationName: "list_nodes", Timestamp: testNow.Add(-time.Minute),
-		Verified: capability.VerifiedIdentity{AccountID: "acct-amp", AccountName: "bob&co"},
+		Verified: capability.VerifiedIdentity{AccountID: "acct&co", AccountName: "bob&co"},
 	}}}
 
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), accountsPath).Body.String()
 	for _, want := range []string{
 		"/console/accounts?account=bob%26co",
-		"/console/agents?account=bob%26co",
+		"/console/activity?account=acct%26co",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("a name containing & is not URL-encoded in %q — the link reaches the wrong "+
@@ -267,7 +270,7 @@ func TestAccounts_AHumanAccountHasNoLastToolCallCell(t *testing.T) {
 	if strings.Contains(row, "no tool call") {
 		t.Errorf("a human Account renders the machine-only absence copy. Row:\n%s", row)
 	}
-	if strings.Contains(row, "/console/agents?account=") {
+	if strings.Contains(row, "/console/activity?account=") {
 		t.Errorf("a human Account renders a last-tool-call link. Row:\n%s", row)
 	}
 }
@@ -483,7 +486,7 @@ func TestAccounts_DayOneShowsTheFoundingAdmin(t *testing.T) {
 		t.Error("the founding admin's never-authenticated row rendered a zero time")
 	}
 	// Human, so the machine-only column is empty for it.
-	if strings.Contains(row, "no tool call") || strings.Contains(row, "/console/agents?account=") {
+	if strings.Contains(row, "no tool call") || strings.Contains(row, "/console/activity?account=") {
 		t.Error("the founding admin is human and must have no last-tool-call cell")
 	}
 }
@@ -639,5 +642,83 @@ func TestAccounts_LastAuthenticationAndLastToolCallAreDifferentColumns(t *testin
 	// last-authentication stamp and no tool-call cell at all.
 	if row := rowFor(t, body, "mike"); !strings.Contains(row, "2026-08-25 10:00:00Z") {
 		t.Errorf("a human Account's last authentication is not rendered. Row:\n%s", row)
+	}
+}
+
+// TestAccounts_TheLastCallFilterNamesEveryAgentCallKind pins agentCallKinds as
+// DERIVED from audit.Kinds() through isAgentCallKind, never hand-listed — the
+// same shape buildKindsByFamily (activity.go) uses. A hand-list can go stale
+// the moment a new Kind is classified by isAgentCallKind and nobody remembers
+// to add it to a second list.
+func TestAccounts_TheLastCallFilterNamesEveryAgentCallKind(t *testing.T) {
+	var want []string
+	for _, k := range audit.Kinds() {
+		if isAgentCallKind(k) {
+			want = append(want, k)
+		}
+	}
+	// Comparing against the SAME derivation the test names would make this
+	// test satisfiable by nil == nil, which is exactly the fail-open finding
+	// buildAgentCallKinds' own panic guards against. Pin non-emptiness here
+	// too, so a mutation that makes isAgentCallKind fall through for
+	// everything cannot pass by having both sides agree on empty.
+	if len(agentCallKinds) == 0 {
+		t.Fatal("agentCallKinds is empty — an empty Kinds filter matches EVERY " +
+			"row (capability.AuditFilter's zero-value semantics), which would put " +
+			"login, token, Account and Freeze records on the AI-agent call surface")
+	}
+	if !reflect.DeepEqual(agentCallKinds, want) {
+		t.Fatalf("agentCallKinds = %v, want the kinds isAgentCallKind admits, %v", agentCallKinds, want)
+	}
+	for _, k := range agentCallKinds {
+		switch k {
+		case audit.KindApprovalExpired:
+			t.Error("agentCallKinds includes approval_expired — an expiry is the clock, not a caller")
+		case audit.KindLoginSucceeded, audit.KindLoginFailed, audit.KindFreezeEngage:
+			t.Errorf("agentCallKinds includes %s — a control-plane event is not an AI-agent call", k)
+		}
+	}
+}
+
+// TestAccounts_TheLastCallReadAsksForAgentCallKindsOnly proves the Kinds
+// filter reaches the lane: the Accounts handler's one QueryAudit carries
+// agentCallKinds. Without it, a login is on the last-call surface.
+func TestAccounts_TheLastCallReadAsksForAgentCallKindsOnly(t *testing.T) {
+	q := &fakeQueries{}
+	d := accountsFixture()
+	d.Queries = q
+
+	get(t, newTestHandler(d, accounts.RoleAdmin), accountsPath)
+
+	if q.auditCalls != 1 {
+		t.Fatalf("QueryAudit was called %d times, want exactly 1", q.auditCalls)
+	}
+	if !reflect.DeepEqual(q.auditFilters[0].Kinds, agentCallKinds) {
+		t.Errorf("QueryAudit filter Kinds = %v, want %v", q.auditFilters[0].Kinds, agentCallKinds)
+	}
+}
+
+// TestAccounts_AControlPlaneEventIsNotAToolCall: a verified login for the
+// machine Account is on the trail but is not a tool call, so the last-call
+// cell must keep saying there is none.
+func TestAccounts_AControlPlaneEventIsNotAToolCall(t *testing.T) {
+	d := accountsFixture()
+	d.Queries = &fakeQueries{rows: []capability.AuditRow{{
+		Kind:      audit.KindLoginSucceeded,
+		Timestamp: testNow.Add(-time.Minute),
+		Verified: capability.VerifiedIdentity{
+			AccountID:   sweepMachineAccountID,
+			AccountName: "gleipnir-prod",
+			Role:        string(accounts.RoleOperator),
+		},
+	}}}
+
+	row := rowFor(t, get(t, newTestHandler(d, accounts.RoleAdmin), accountsPath).Body.String(), "gleipnir-prod")
+
+	if !strings.Contains(row, "no tool call in the last") {
+		t.Errorf("a login rendered as the Account's last tool call. Row:\n%s", row)
+	}
+	if strings.Contains(row, "/console/activity?account=") {
+		t.Errorf("the last-call cell links to Activity although the Account made no tool call. Row:\n%s", row)
 	}
 }

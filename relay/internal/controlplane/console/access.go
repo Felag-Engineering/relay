@@ -105,7 +105,7 @@ func accessKindOf(k string) (accessKind, bool) {
 // empty family would make accessLaneKinds hand capability.AuditFilter an
 // empty Kinds slice for that chip, which matches EVERY row on the trail
 // rather than none (AuditFilter's zero-value contract) — the one direction a
-// filter must never fail. agents.go's buildAgentCallKinds takes the same
+// filter must never fail. accounts.go's buildAgentCallKinds takes the same
 // posture over its own lane.
 var accessKindsByFamily = buildAccessKindsByFamily()
 

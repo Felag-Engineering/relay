@@ -467,7 +467,7 @@ func (a readAuditor) RecordRead(ctx context.Context, e mcp.ReadEvent) error {
 //
 // Unlike readAuditor, it does NOT fail closed on a missing Principal — it
 // publishes with an empty Account and logs a warning instead. Dropping the
-// event would hide a tool call from the trust surface entirely (spec 03),
+// event would hide a tool call from the trust surface entirely (spec 04),
 // which is worse than rendering it unattributed; and /mcp is always behind
 // Authenticator.Middleware, so the missing-Principal branch is unreachable
 // in production.

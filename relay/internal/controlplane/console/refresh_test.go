@@ -22,10 +22,10 @@ const pinnedCSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-
 func refreshScreens() (Deps, []string) {
 	d := consoleCallsDeps()
 	d.Approvals = &fakeApprovals{pending: []approval.Request{pendingApprovalRequest("ap-1")}}
-	return d, []string{"/console/agents", "/console/activity", "/console/approvals"}
+	return d, []string{"/console/activity", "/console/approvals"}
 }
 
-func TestRefresh_AgentsAndTheQueueOfferAPlainRefresh(t *testing.T) {
+func TestRefresh_ActivityAndTheQueueOfferAPlainRefresh(t *testing.T) {
 	d, paths := refreshScreens()
 	h := newTestHandler(d, accounts.RoleAdmin)
 	for _, p := range paths {
@@ -64,15 +64,6 @@ func TestRefresh_NoScreenReloadsItselfOnATimer(t *testing.T) {
 func TestRefresh_ControlsPreserveTheQuery(t *testing.T) {
 	d, _ := refreshScreens()
 	h := newTestHandler(d, accounts.RoleAdmin)
-
-	agents := contentOf(get(t, h, "/console/agents?account=gleipnir-prod&console=show").Body.String())
-	if !strings.Contains(agents, `<a class="refreshbtn" href="/console/agents?account=gleipnir-prod&amp;console=show">Refresh</a>`) {
-		t.Errorf("Agents' Refresh does not keep the Account filter and the Console choice:\n%s", agents)
-	}
-	older := contentOf(get(t, h, "/console/agents?console=show&cursor=0").Body.String())
-	if !strings.Contains(older, `<a class="refreshbtn" href="/console/agents?console=show&amp;cursor=0">Refresh</a>`) {
-		t.Errorf("Agents' Refresh does not keep the page it is on:\n%s", older)
-	}
 
 	queue := contentOf(get(t, h, "/console/approvals?risk=mutate&scope=all").Body.String())
 	if !strings.Contains(queue, `<a class="refreshbtn" href="/console/approvals?risk=mutate&amp;scope=all">Refresh</a>`) {
@@ -152,7 +143,6 @@ func TestRefresh_TheDisclosureSaysWhetherAReloadIsAudited(t *testing.T) {
 	d.Events = newFakeEvents()
 	h := newTestHandler(d, accounts.RoleAdmin)
 	for path, note := range map[string]string{
-		"/console/agents":    "<b>Every Refresh is an audited read</b>",
 		"/console/activity":  "<b>Every Refresh is an audited read</b>",
 		"/console/approvals": "<b>Why reloading this queue leaves no record.</b>",
 		"/console/access":    "<b>Every Refresh is an audited read</b>",
@@ -178,17 +168,14 @@ func TestRefresh_TheQueueStatesItsUnauditedReadBesideRefresh(t *testing.T) {
 	}
 }
 
-// TestRefresh_AgentsReloadIsAnAuditedReadAndTheQueueIsNot backs the two
-// sentences above with the reads each screen actually makes.
-func TestRefresh_AgentsReloadIsAnAuditedReadAndTheQueueIsNot(t *testing.T) {
+// TestRefresh_TheQueueReloadIsNotAnAuditedRead backs the queue's disclosure
+// sentence above with the reads the screen actually makes; Activity's own
+// reload is proved below.
+func TestRefresh_TheQueueReloadIsNotAnAuditedRead(t *testing.T) {
 	d, _ := refreshScreens()
 	q := d.Queries.(*fakeQueries)
 	h := newTestHandler(d, accounts.RoleAdmin)
 
-	get(t, h, "/console/agents")
-	if q.auditCalls == 0 {
-		t.Error("an Agents reload made no read through the audited lane")
-	}
 	before := q.auditCalls + q.jobCalls
 	get(t, h, "/console/approvals")
 	if after := q.auditCalls + q.jobCalls; after != before {

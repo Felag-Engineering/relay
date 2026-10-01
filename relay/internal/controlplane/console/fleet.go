@@ -968,6 +968,23 @@ func countOf(n int, one, many string) string {
 	return strconv.Itoa(n) + " " + many
 }
 
+func timeSince(t, now time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return strconv.Itoa(int(d.Minutes())) + "m ago"
+	case d < 24*time.Hour:
+		return strconv.Itoa(int(d.Hours())) + "h ago"
+	default:
+		return strconv.Itoa(int(d.Hours()/24)) + "d ago"
+	}
+}
+
 // modalValue returns the most common non-empty value of f across nodes, or ""
 // when nothing is reported.
 //

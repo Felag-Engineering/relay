@@ -1,9 +1,8 @@
 package console
 
-// callfeed.go is the code the Agents screen and Activity share: the "Who is
-// active" strip (or rail), the polling collapse, and the reads-made-from-this-
-// Console exclusion. Activity is the screen these belong to (spec 04); Agents
-// still calls them until it is removed (#787).
+// callfeed.go is Activity's call-feed code (spec 04): the "Who is active"
+// strip, the polling collapse, and the reads-made-from-this-Console
+// exclusion.
 //
 // Each is presentation over a page the read lane already returned. None of them
 // adds a query, widens a filter or changes a page size.
@@ -63,33 +62,6 @@ func consoleRead(row capability.AuditRow) bool {
 		return false
 	}
 	return riskOf(factsOfRow(row)) == jobs.RiskClassRead
-}
-
-// withoutConsoleReads drops the page's Console-session reads, preserving
-// order. It reports how many it dropped, and — for the ?account= view — how
-// many calls the named Account has on the page and how many of those it
-// dropped, naming Accounts exactly as buildAgents does (principalText).
-//
-// It is presentation over the page the lane already returned, like
-// collapseRuns: the query, its filter and its page size are untouched, so
-// no read is added or widened.
-func withoutConsoleReads(rows []capability.AuditRow, account string) (kept []capability.AuditRow, dropped, accountCalls, accountDropped int) {
-	kept = make([]capability.AuditRow, 0, len(rows))
-	for _, row := range rows {
-		mine := account != "" && principalText(factsOfRow(row)) == account
-		if mine {
-			accountCalls++
-		}
-		if consoleRead(row) {
-			dropped++
-			if mine {
-				accountDropped++
-			}
-			continue
-		}
-		kept = append(kept, row)
-	}
-	return kept, dropped, accountCalls, accountDropped
 }
 
 // foldRuns folds each run of CONSECUTIVE rows that share a key into one row,

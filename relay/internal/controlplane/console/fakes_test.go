@@ -1238,3 +1238,58 @@ func sweepAccounts() *fakeAccounts {
 // page. Distinctive on purpose: a substring search for it cannot match the
 // rest of the Console by accident.
 const sweepTokenSecretHash = "secret-hash-must-never-render-9f2c"
+
+// consoleCallsRows is one page mixing an AI-agent's calls (API Token) with
+// the signed-in operator's own page loads (Console session). The operator's
+// reads name tools the AI-agent never calls, so a substring test cannot confuse
+// the two.
+func consoleCallsRows() []capability.AuditRow {
+	agent := capability.VerifiedIdentity{
+		AccountID: "acct-agent", AccountName: "gleipnir-prod", Role: "operator",
+		Method: string(capability.AuthMethodAPIToken),
+	}
+	operator := capability.VerifiedIdentity{
+		AccountID: "acct-mike", AccountName: "mike", Role: "admin",
+		Method: string(capability.AuthMethodConsoleSession),
+	}
+	at := func(s int) time.Time { return testNow.Add(-time.Duration(s) * time.Second) }
+	return []capability.AuditRow{
+		{Kind: audit.KindRead, OperationName: "query_audit", Timestamp: at(5), Verified: operator},
+		{Kind: audit.KindRead, OperationName: "query_jobs", Timestamp: at(6), Verified: operator},
+		{Kind: audit.KindDispatch, ActionKind: "operation", OperationName: "service.restart",
+			JobID: "job-9", NodeID: "node-a", Outcome: jobs.OutcomeSuccess, Timestamp: at(30), Verified: agent},
+		{Kind: audit.KindRead, OperationName: "query_tasks", Timestamp: at(40), Verified: operator},
+		{Kind: audit.KindRead, OperationName: "list_nodes", Timestamp: at(60), Verified: agent},
+	}
+}
+
+func consoleCallsDeps() Deps {
+	d := renderableDeps()
+	d.Queries = &fakeQueries{rows: consoleCallsRows()}
+	return d
+}
+
+// consoleActor is a Console-session identity: what a session cookie
+// establishes, whoever or whatever is driving the browser.
+var consoleActor = capability.VerifiedIdentity{
+	AccountID: "acct-mike", AccountName: "mike", Role: "admin",
+	Method: string(capability.AuthMethodConsoleSession),
+}
+
+// countingAccounts counts every call into the Account registry seam.
+type countingAccounts struct{ calls int }
+
+func (c *countingAccounts) Accounts(context.Context, capability.Principal) ([]accounts.Account, error) {
+	c.calls++
+	return nil, nil
+}
+
+func (c *countingAccounts) Account(context.Context, capability.Principal, string) (accounts.Account, error) {
+	c.calls++
+	return accounts.Account{}, nil
+}
+
+func (c *countingAccounts) APITokens(context.Context, capability.Principal, string) ([]accounts.APIToken, error) {
+	c.calls++
+	return nil, nil
+}

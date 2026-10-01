@@ -1,6 +1,6 @@
 package console
 
-// callfeed_test.go proves the code the Agents screen and Activity share
+// callfeed_test.go proves Activity's call-feed code
 // (callfeed.go): run folding, the strip builder, the collapse sentence and the
 // Console-read rule. Each screen's own behaviour over it is proved beside that
 // screen.
@@ -35,8 +35,7 @@ func TestConsoleRead_ARowThatCannotTellIsNotARead(t *testing.T) {
 }
 
 // TestCollapseNote_SpeaksWhenThereIsSomethingToSay: "" when nothing folded,
-// otherwise the counts and the noun for what still counts every call. With
-// "rail" it is the clause Agents' page note has always carried.
+// otherwise the counts and the noun for what still counts every call.
 func TestCollapseNote_SpeaksWhenThereIsSomethingToSay(t *testing.T) {
 	if got := collapseNote(0, 0, "strip"); got != "" {
 		t.Errorf("collapseNote with nothing folded = %q, want empty", got)
@@ -46,9 +45,6 @@ func TestCollapseNote_SpeaksWhenThereIsSomethingToSay(t *testing.T) {
 		"The strip still counts every call."
 	if got != want {
 		t.Errorf("collapseNote = %q, want %q", got, want)
-	}
-	if rail := collapseNote(2, 1, "rail"); !strings.Contains(pageNote(2, 1, 200, false, false), rail) {
-		t.Errorf("collapseNote(rail) %q is not the clause Agents' pageNote prints", rail)
 	}
 }
 

@@ -301,8 +301,8 @@ type activityRow struct {
 	// everywhere else: on a Job that recorded none, and on every non-dispatch
 	// row, whose audit record carries no kind. It is NEVER looked up from the
 	// Account registry, which would report the Account's kind today and
-	// relabel history once an Account is converted (#540; 03-agent-sessions.md,
-	// "Kind (machine or human) is not on the rail").
+	// relabel history once an Account is converted (#540; 04-activity.md,
+	// "Kind is never read from the registry").
 	RequesterKind string
 
 	Selector string

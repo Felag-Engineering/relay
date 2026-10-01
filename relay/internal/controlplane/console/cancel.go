@@ -1,7 +1,7 @@
 package console
 
-// cancel.go is the Console's Cancel control (#595, specs 13 and 03): a form
-// on Job detail and on the Agents stream that asks the capability layer to
+// cancel.go is the Console's Cancel control (#595, specs 13 and 04): a form
+// on Job detail and on Activity that asks the capability layer to
 // stop a Job's Tasks.
 //
 // This was the Console's FIRST route to reach the capability layer's WRITE

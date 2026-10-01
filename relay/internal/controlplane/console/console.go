@@ -279,7 +279,6 @@ func Routes(d Deps) []Route {
 		// path reaches THAT catch-all's styled 404 rather than this handler.
 		{"GET", "/console/{$}", NavEntry{NavObserve, "Fleet", 10}, accounts.RoleViewer, handleFleet},
 		{"GET", "/console/nodes/{node_id}", NavEntry{}, accounts.RoleViewer, handleNode},
-		{"GET", "/console/agents", NavEntry{NavObserve, "Agents", 20}, accounts.RoleViewer, handleAgents},
 		{"GET", "/console/activity", NavEntry{NavObserve, "Activity", 30}, accounts.RoleViewer, handleActivity},
 		{"GET", "/console/jobs/{job_id}", NavEntry{}, accounts.RoleViewer, handleJob},
 
@@ -353,8 +352,8 @@ func Routes(d Deps) []Route {
 		// {account_id} route would make every constrained LITERAL under
 		// /console/accounts/ a registration-time panic — the
 		// "/console/nodes/add" shape documented above — and the write half
-		// wants exactly such literals. Agents already selects this way
-		// (agents.go), so it is also the idiom this Console has.
+		// wants exactly such literals. Activity filters the same way
+		// (?account=), so it is also the idiom this Console has.
 		{"GET", "/console/accounts", NavEntry{NavAdminister, "Accounts", 20}, accounts.RoleAdmin, handleAccounts},
 
 		// Access (spec 20, D17): who signed in, who failed to, and who

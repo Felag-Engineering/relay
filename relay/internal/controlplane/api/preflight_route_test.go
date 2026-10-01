@@ -181,7 +181,6 @@ func TestConsoleServesNoSeparatePreflightRoute(t *testing.T) {
 	want := map[string]bool{
 		"GET /console/{$}":                     true,
 		"GET /console/nodes/{node_id}":         true,
-		"GET /console/agents":                  true,
 		"GET /console/activity":                true,
 		"GET /console/jobs/{job_id}":           true,
 		"GET /console/compare":                 true,

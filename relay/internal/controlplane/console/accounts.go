@@ -37,7 +37,8 @@ package console
 // on accounts.Account — LastSeenAt is last AUTHENTICATION, which the screen
 // renders separately — so it comes from the audit trail: ONE QueryAudit over
 // agentCallKinds, with the newest call per Account taken from that single
-// page, which is the idiom agents.go already uses.
+// page, one page, newest call per
+// Account.
 //
 // The cost is stated on screen rather than hidden. An Account whose most
 // recent call is older than the page renders "no tool call in the last N
@@ -70,6 +71,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 )
@@ -157,8 +159,9 @@ type accountRow struct {
 	LastAuthAt time.Time
 	LastCallAt time.Time
 
-	// LastCallHref points at this Account's own slice of the agent stream
-	// (spec 03). Href selects this Account on this screen.
+	// LastCallHref points at Activity scoped to this Account by its verified
+	// ID (spec 15 Rows; spec 04 ?account=; D18: an ID, never a name). Href
+	// selects this Account on this screen.
 	LastCallHref string
 	Href         string
 
@@ -292,8 +295,8 @@ func handleAccounts(d Deps) http.HandlerFunc {
 		}
 
 		// Keyed on the VERIFIED Account id, which is the join the trail
-		// supports; the LINK below uses the name, which is what
-		// /console/agents?account= filters on (agents.go). The page is
+		// supports. The link below carries the same id, which is what
+		// /console/activity?account= filters on (D18). The page is
 		// newest-first by contract (capability.AuditPage), and this takes the
 		// maximum anyway so the cell cannot come to depend on that ordering.
 		lastCallByAccountID := map[string]time.Time{}
@@ -359,7 +362,7 @@ func handleAccounts(d Deps) http.HandlerFunc {
 				// constrained by this package, and "bob&co" concatenated
 				// links to the wrong Account (#467).
 				Href:         "/console/accounts?" + url.Values{"account": {a.Name}}.Encode(),
-				LastCallHref: "/console/agents?" + url.Values{"account": {a.Name}}.Encode(),
+				LastCallHref: "/console/activity?" + url.Values{"account": {a.ID}}.Encode(),
 				Enabled:      a.Enabled,
 			}
 			if row.Machine {
@@ -641,3 +644,75 @@ absent from the window rather than as never having called.</p>
   <p class="note">{{.Ceiling}}</p>
 </section>
 `)
+
+// isAgentCallKind reports whether an audit Kind describes a call somebody
+// made THROUGH a control surface, as opposed to something the Relay did.
+//
+// It is the SOURCE of the last-tool-call read's kind filter (agentCallKinds
+// below), not a per-row test: it runs once per audit Kind at var-init, and the
+// Kinds filter does the selecting in SQL.
+//
+// Sign-ins, Freeze transitions and Account changes are control-plane events
+// and belong on Activity. An approval expiring is the clock, not a caller.
+//
+// # The eight tools are six families
+//
+// `cancel_job` and the Preflight once matched neither arm and rendered NOWHERE,
+// against the retired Agents screen's first acceptance criterion — every one
+// of the eight tools renders with a request line and a result line (#537). Both are calls in
+// exactly the sense this function means: an Account asked a control surface for
+// something and the Relay recorded the ask. They are now families of their own
+// (rowCancel, rowPlan; spec 04, Row kinds), so they are admitted by family like
+// the rest, and rowOther stays out: it is the catch-all for every audit kind
+// nobody has classified yet, and admitting it would put a kind added to
+// internal/audit next month on the trust surface with nobody having decided it
+// belonged.
+func isAgentCallKind(kind string) bool {
+	switch kindOf(kind) {
+	case rowDispatch, rowRead, rowRefusal, rowApproval, rowPlan, rowCancel:
+		return kind != audit.KindApprovalExpired
+	default:
+		return false
+	}
+}
+
+// agentCallKinds is the last-tool-call read's kind filter, DERIVED from audit.Kinds()
+// through isAgentCallKind rather than hand-listed — the same derived-not-
+// enumerated shape buildKindsByFamily (activity.go) uses. Deriving it means
+// the filter and the predicate cannot drift, and a kind added to
+// internal/audit is classified by isAgentCallKind rather than by a second
+// hand-kept list nobody remembers to update.
+//
+// Eight kinds today, against AuditFilter.validate's cap of 32.
+// approval_expired stays excluded exactly as isAgentCallKind decides.
+var agentCallKinds = buildAgentCallKinds()
+
+// buildAgentCallKinds panics if isAgentCallKind admits nothing.
+//
+// This is not a defensive nicety. capability.AuditFilter's documented
+// zero-value semantics are that an EMPTY Kinds slice matches EVERY ROW, not
+// none — the same trap noSuchAuditKind (activity.go) exists to prevent for
+// row families. An empty agentCallKinds would therefore not narrow the filter
+// to nothing, it would silently WIDEN it to the whole trail: login, token
+// mint, Account and Freeze records — including login_failed's asserted
+// submitted usernames — would land on this read's trust surface into the
+// last-tool-call read. A future refactor of kindOf that
+// renamed a row family and left isAgentCallKind's switch matching nothing
+// would produce exactly that, silently, with every existing test still
+// green. A Relay that cannot derive its own AI-agent-call kind set must not
+// start serving this read with a filter that means "everything".
+func buildAgentCallKinds() []string {
+	var out []string
+	for _, k := range audit.Kinds() {
+		if isAgentCallKind(k) {
+			out = append(out, k)
+		}
+	}
+	if len(out) == 0 {
+		panic("console: isAgentCallKind admits no audit kind at all — an empty " +
+			"agentCallKinds would match EVERY row (capability.AuditFilter's " +
+			"empty-Kinds-matches-all semantics), putting login, token, Account " +
+			"and Freeze records on the AI-agent call filter")
+	}
+	return out
+}

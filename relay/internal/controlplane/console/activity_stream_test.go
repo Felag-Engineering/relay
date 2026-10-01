@@ -303,7 +303,7 @@ func TestActivity_ResultChipIsDrawnOnlyForCalls(t *testing.T) {
 			t.Errorf("callOutcome(%s) = %q, %q; an event that is not a call draws no chip", k, o, s)
 		}
 	}
-	// What agentCallFrom said before callOutcome moved out of it.
+	// What the retired Agents screen's outcome chip said (callOutcome), pinned.
 	for k, want := range map[string]string{
 		audit.KindRead: "audited", audit.KindRefusal: "refused", audit.KindApprovalRequested: "parked",
 		audit.KindApprovalGrantRequested: "grant requested", audit.KindApprovalPendingObserved: "already parked",
@@ -314,8 +314,8 @@ func TestActivity_ResultChipIsDrawnOnlyForCalls(t *testing.T) {
 		if k == audit.KindDispatch {
 			f.Outcome = jobs.OutcomeSuccess
 		}
-		if got := agentCallFrom(f).Outcome; got != want {
-			t.Errorf("agentCallFrom(%s).Outcome = %q, want %q", k, got, want)
+		if got, _ := callOutcome(f); got != want {
+			t.Errorf("callOutcome(%s) outcome = %q, want %q", k, got, want)
 		}
 	}
 }

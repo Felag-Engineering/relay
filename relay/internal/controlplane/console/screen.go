@@ -65,7 +65,7 @@ var screenFuncs = template.FuncMap{
 	"join": func(sep string, xs []string) string { return strings.Join(xs, sep) },
 
 	// cancelControl builds a JobCancel for a per-row template (#595): a
-	// screen that draws a row per Job — the Agents stream — cannot
+	// screen that draws a row per Job — Activity — cannot
 	// pre-build one JobCancel per row in the handler without duplicating
 	// cancelJobAction's escaping there too, so the template does it here
 	// instead, at the one place both screens already call
@@ -182,7 +182,7 @@ func renderNotFound(d Deps, w http.ResponseWriter, r *http.Request) {
 		Account: pr.Account,
 		Role:    role,
 		// currentPath "" rather than r.URL.Path: a refused in-role nav route
-		// (say /console/agents refused by methodMismatch) must not highlight
+		// (say /console/accounts refused by methodMismatch) must not highlight
 		// that nav item while an unmounted path renders the identical page.
 		Nav:       Nav(d, role, ""),
 		CSRFToken: token,

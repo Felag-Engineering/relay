@@ -176,10 +176,6 @@ var consoleReadAudit = map[string]readAuditRule{
 		path: "/console/approvals/" + auditFixtureApproval,
 		tool: "query_audit",
 	},
-	"GET /console/agents": {
-		path: "/console/agents",
-		tool: "query_audit",
-	},
 	"GET /console/accounts": {
 		path: "/console/accounts",
 		// WHAT THIS ROW COVERS, AND WHAT IT DOES NOT. The tool named is the
