@@ -60,7 +60,7 @@ cited_outside=$(grep -rhoIE 'ADR-[0-9]{4}\b|/[0-9]{4}-[a-z0-9-]+\.md' "${CITING[
                 | grep -oE '[0-9]{4}' | sort -u)
 for f in docs/adr/[0-9]*.md; do
   n=$(adr_number "$f")
-  printf '%s\n' "$cited_outside" | grep -qx "$n" \
+  grep -qx "$n" <<<"$cited_outside" \
     || warn "$f: ADR-$n is cited nowhere outside docs/adr/ (orphan)"
 done
 
@@ -111,7 +111,7 @@ if [ -n "$needed" ]; then
     skip "milestone check: gh api could not list $repo milestones (unauthenticated or offline), so they were NOT verified"
   else
     while IFS=$'\t' read -r spec title; do
-      printf '%s\n' "$titles" | grep -qxF -- "$title" \
+      grep -qxF -- "$title" <<<"$titles" \
         || err "$spec: Designed, not built names milestone \"$title\", which is not a milestone on $repo"
     done <<< "$needed"
   fi

@@ -74,8 +74,8 @@ for spec in "$SPEC_DIR"/*.md; do
   proof_ids=$(awk '/^### What proves each claim/{f=1;next} /^###? /{f=0} f' "$spec" \
               | grep -E "^\| *$prefix-[0-9]+ *\|" | awk -F'|' '{gsub(/ /,"",$2); print $2}')
   for id in $proof_ids; do
-    printf '%s\n' $current_ids | grep -qx "$id" || {
-      if printf '%s\n' $designed_ids | grep -qx "$id"; then err "$name: proof row cites $id, which is still Designed, not built"
+    grep -qx "$id" <<<"$(printf '%s\n' $current_ids)" || {
+      if grep -qx "$id" <<<"$(printf '%s\n' $designed_ids)"; then err "$name: proof row cites $id, which is still Designed, not built"
       else err "$name: proof row cites $id, which no claim defines"; fi; }
   done
 
@@ -94,12 +94,18 @@ for spec in "$SPEC_DIR"/*.md; do
   # and nothing listed there is still defined.
   retired_ids=$(section "$spec" Retired | grep -oE "\*\*$prefix-[0-9]+\*\*" | tr -d '*')
   max=$(printf '%s\n' $current_ids $designed_ids | grep . | cut -d- -f2 | sort -n | tail -1)
+  # The ID lists are matched through a here-string, never `printf | grep -q`: under pipefail,
+  # grep -q exits on its first match while printf may still be writing, printf dies of
+  # SIGPIPE, and the pipeline fails although the ID was found — a false "neither defined
+  # nor listed" that only fires when the scheduler loses the race (seen in CI on #809).
+  all_ids=$(printf '%s\n' $current_ids $designed_ids $retired_ids)
+  live_ids=$(printf '%s\n' $current_ids $designed_ids)
   for i in $(seq 1 "${max:-0}"); do
-    printf '%s\n' $current_ids $designed_ids $retired_ids | grep -qx "$prefix-$i" \
+    grep -qx "$prefix-$i" <<<"$all_ids" \
       || err "$name: $prefix-$i is neither defined nor listed under ## Retired"
   done
   for id in $retired_ids; do
-    printf '%s\n' $current_ids $designed_ids | grep -qx "$id" && err "$name: $id is listed under ## Retired but still defined"
+    grep -qx "$id" <<<"$live_ids" && err "$name: $id is listed under ## Retired but still defined"
   done
 
   # 3g. Every `<name>.md` mentioned resolves to a spec or a known root doc
