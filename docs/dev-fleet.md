@@ -446,7 +446,7 @@ never had.
 
 ### Why `start|restart|status` and not `stop`
 
-The agent must be able to repair the fleet and never to break it; the fault is injected out
+The AI-agent must be able to repair the fleet and never to break it; the fault is injected out
 of band (see [The fault, and resetting between takes](operations/demo-fleet.md#the-fault-and-resetting-between-takes)
 in the demo runbook). The script has no `stop` subcommand and the
 Policy has no allow for one, so both layers say the same thing.

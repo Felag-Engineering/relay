@@ -76,7 +76,7 @@ The AI framing is not a separate concern. A jailbroken AI-agent is simply the mo
 demanding instance of the general problem — untiring, fast, plausible, and wrong. A design
 that holds against it holds against a compromised human operator with stolen credentials,
 because the architecture never asked who was asking in the first place. Designing for the
-hostile agent is what makes the ordinary case safe.
+hostile AI-agent is what makes the ordinary case safe.
 
 ## Who Relay defends against
 
