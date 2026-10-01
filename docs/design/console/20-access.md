@@ -24,15 +24,24 @@ gives them to the person who acts on them, an admin, in one place.
 
 | Kind | Records | Carries |
 |---|---|---|
-| `sign-in` | `login_succeeded`, `login_failed`, `login_throttled`, `logout` | the Account where the record names one, the outcome, the source address |
+| `sign-in` | `login_succeeded`, `login_failed`, `login_throttled`, `logout` | the Account where the record names one, the outcome, the source address; on a failed or throttled attempt, the name typed **only where it is a real Account's name** |
 | `step-up` | `step_up`, `step_up_failed`, `step_up_throttled` | the session's Account, the outcome |
 | `account` | `account_create`, `account_role`, `account_enable`, `account_disable`, `password_set`, `password_clear` | who acted, on which Account, and the change (new role, enabled, disabled, password set or removed — never the password) |
 | `api-token` | `api_token_mint`, `api_token_revoke` | who acted, for which Account, the token's ID — never its value; a mint by `relay bootstrap-token` is the same kind |
 
-**A failed sign-in or step-up says it failed and nothing more.** Its record deliberately carries no
-indication of which half was wrong, because a trail that separated "unknown Account" from "wrong
-password" would be an enumeration oracle readable by anyone with audit access. The screen does not
-reconstruct that distinction from anything else.
+**A failed sign-in records the name typed only where it is a real Account's name** (owner
+decision, 2026-09-30, D19). A person who types their password into the username box has typed a
+secret, and a trail that kept every typed name would store it. So the name is recorded, and drawn,
+only when it matches an existing Account at the time of the attempt; otherwise the record carries
+no typed text and the row says "a name that is not an Account". The check is made **when the
+attempt is recorded**, not when this screen draws it, so the secret is never stored anywhere.
+
+This does let the trail tell "unknown name" from "wrong password" apart for a real Account, which
+the trail previously refused to do. That is acceptable because of **who reads it**: only an admin,
+through this screen, and an admin already sees every Account on [15](15-accounts-and-tokens.md).
+The distinction never reaches the person signing in: the sign-in response stays one message in
+one time for every failure ([12](12-login.md), "No user enumeration"). A failed **step-up** is
+unaffected — it always runs against the session's own Account.
 
 **A throttled attempt is not a failed one.** It was refused before any credential was compared, so
 it is drawn as throttled and never counted as a guess.
@@ -57,11 +66,12 @@ kinds apart.
 as a path that was never mounted — a 403 would itself disclose that the screen exists. It is absent
 from a non-admin's nav, following the nav rule in [11](11-console-shell.md).
 
-**This narrows the Console only, and says so (owner decision, 2026-09-29).** The records this
-screen lists remain on the audit read lane under its existing role rules, so the Control API
-returns them to any Account those rules already allow. Hiding a screen is a narrowing an adapter
-may make on its own (invariant 10). Making the records themselves admin-only would be a decision
-of the capability layer, not of this screen, and it has not been taken.
+**This narrows the Console only, and says so (owner decision, 2026-09-29).** Hiding a screen is a
+narrowing an adapter may make on its own (invariant 10). Today no Control API or MCP route reads
+the audit trail, so this screen is the only reader of these records. **Where any other surface
+comes to read the audit trail, it must not return failed sign-in records below `admin`**: they
+now say which names are real Accounts (D19). That restriction would be the capability layer's to
+make, and it is part of that change, not a later one.
 
 ## Identity on every row
 
@@ -91,7 +101,9 @@ disclosure says so rather than offering a filter that would search the page and 
 ## Must not appear
 
 - A password, a password hash, or any part of an API Token's value, at any age.
-- Any split of a failed sign-in or step-up into "unknown Account" and "wrong password".
+- A typed name on a failed sign-in that is not a real Account's name — it may be a password.
+- Anything that tells the person signing in which half was wrong: that stays one refusal
+  ([12](12-login.md)).
 - Tool calls or fleet events — those are [04 — Activity](04-activity.md).
 - Any control. Disabling an Account and revoking a token are [15](15-accounts-and-tokens.md).
 
@@ -101,6 +113,8 @@ disclosure says so rather than offering a filter that would search the page and 
       credential" from this screen, for a chosen time range.
 - [ ] A subject is shown as its record names it; nothing on a row is read from the registry.
 - [ ] A non-admin gets a 404 for the route and no nav item.
-- [ ] A failed sign-in carries no indication of which half was wrong.
+- [ ] A failed sign-in for a real Account's name shows that name; one for any other name shows no
+      typed text, and the name is absent from the stored record, not only from the page.
+- [ ] The sign-in response is still byte- and time-indistinguishable across every failure.
 - [ ] A throttled attempt is drawn as throttled and is not counted as a failure.
 - [ ] A password set or removed with `relay console-password`, and a token minted with `relay bootstrap-token`, is a row here attributed to `local-host`.
