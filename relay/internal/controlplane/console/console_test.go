@@ -133,15 +133,108 @@ func TestConsole_ViewerNavigationIsStructurallySmaller(t *testing.T) {
 	// the third person it inconveniences, and this one is worth keeping.
 	nav := navOf(get(t, h, "/console/").Body.String())
 
-	for _, absent := range []string{">Run<", ">Policy<", ">Add Nodes<", ">Accounts<", ">Access<"} {
+	for _, absent := range []string{">Run<", ">Policy<", ">Add Nodes<", ">Accounts<", ">Access<", ">Agents<"} {
 		if strings.Contains(nav, absent) {
 			t.Errorf("a viewer's navigation contains %s — it must be structurally smaller, not merely refusing", absent)
 		}
 	}
-	for _, present := range []string{">Fleet<", ">Agents<", ">Activity<", ">Read egress<"} {
+	for _, present := range []string{">Fleet<", ">Activity<"} {
 		if !strings.Contains(nav, present) {
 			t.Errorf("a viewer's navigation is missing %s, which a viewer may read", present)
 		}
+	}
+
+	// Observe lists only the screens that exist. Derived from Nav, not from
+	// HTML, and bounded by a superset rather than an exact list, so it holds
+	// whether or not Read egress has been removed yet.
+	observe := map[string]bool{}
+	for _, section := range Nav(withExecution(renderableDeps(), true), accounts.RoleViewer, "") {
+		if section.Group != NavObserve {
+			continue
+		}
+		for _, item := range section.Items {
+			observe[item.Label] = true
+		}
+	}
+	for _, want := range []string{"Fleet", "Activity"} {
+		if !observe[want] {
+			t.Errorf("Observe is missing %s", want)
+		}
+	}
+	for label := range observe {
+		switch label {
+		case "Fleet", "Activity", "Read egress":
+		default:
+			t.Errorf("Observe lists %q, which is not one of Fleet, Activity or Read egress", label)
+		}
+	}
+}
+
+// TestConsole_AgentsScreenIsNotMounted: the Agents screen was retired into
+// Activity (#787, spec 04). /console/agents is a path that was never mounted,
+// so it answers the Console's ordinary 404 for every role, and there is no
+// redirect: a redirect would advertise the old path.
+func TestConsole_AgentsScreenIsNotMounted(t *testing.T) {
+	const retired = "/console/agents"
+	for _, role := range []accounts.Role{accounts.RoleViewer, accounts.RoleOperator, accounts.RoleAdmin} {
+		for _, execution := range []bool{false, true} {
+			d := withExecution(sweepFixture(), execution)
+			for _, r := range append(routesFor(d, role), Routes(d)...) {
+				if r.Path == retired {
+					t.Errorf("%s/execution=%v: a route is mounted at %s", role, execution, retired)
+				}
+			}
+
+			h := newTestHandler(d, role)
+			for _, path := range []string{retired, retired + "?account=" + sweepMachineAccountID} {
+				if got := get(t, h, path).Code; got != http.StatusNotFound {
+					t.Errorf("%s/execution=%v: GET %s = %d, want 404 and never a redirect", role, execution, path, got)
+				}
+			}
+
+			nav := navOf(get(t, h, "/console/").Body.String())
+			if strings.Contains(nav, ">Agents<") {
+				t.Errorf("%s/execution=%v: the navigation still names Agents", role, execution)
+			}
+			for _, present := range []string{">Fleet<", ">Activity<"} {
+				if !strings.Contains(nav, present) {
+					t.Errorf("%s/execution=%v: the navigation is missing %s", role, execution, present)
+				}
+			}
+		}
+	}
+}
+
+// TestConsole_NoRenderedScreenLinksToTheRetiredAgentsScreen: no link anywhere
+// in the Console points at /console/agents (#787). The screens are derived from
+// the route table, like the other exhaustive sweeps, so a screen added later
+// is covered. The 404 page is walked too, since it renders the navigation.
+func TestConsole_NoRenderedScreenLinksToTheRetiredAgentsScreen(t *testing.T) {
+	const retired = "/console/agents"
+	d := withExecution(sweepFixture(), true)
+	ok := 0
+	for _, role := range sessionRoles {
+		h := newTestHandler(d, role)
+		paths := append(walkableScreens(routesFor(d, role), fixtureIDs), retired)
+		for _, path := range paths {
+			rec := get(t, h, path)
+			if rec.Code == http.StatusOK {
+				ok++
+			}
+			if strings.Contains(rec.Body.String(), retired) {
+				t.Errorf("%s: GET %s renders a reference to %s", role, path, retired)
+			}
+		}
+	}
+	if ok == 0 {
+		t.Fatal("no screen rendered 200, so this guard is not running")
+	}
+
+	// Non-vacuity: the link Accounts used to point at the retired screen from
+	// is rendered, and now goes to Activity.
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/accounts").Body.String()
+	if want := "/console/activity?account=" + sweepMachineAccountID; !strings.Contains(body, want) {
+		t.Errorf("the Accounts screen does not render %q, so the sweep never met the repointed link", want)
 	}
 }
 

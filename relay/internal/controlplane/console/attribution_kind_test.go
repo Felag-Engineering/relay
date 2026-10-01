@@ -4,7 +4,7 @@ package console
 // label"): the word human or machine beside a requester or an approver, read
 // ONLY from the record as it was written — the Job row's requester_kind, a
 // Decision's DeciderHuman — and never looked up from the Account registry
-// (#540; 03-agent-sessions.md, "Kind (machine or human) is not on the rail").
+// (#540; 04-activity.md, "Kind is never read from the registry").
 
 import (
 	"go/ast"

@@ -496,7 +496,7 @@ func factRows(n registry.Node) []nodeFact {
 // Only dispatch records describe something that happened ON this Node —
 // Recent Tasks is Tasks dispatched to this Node, denies included (spec 02).
 // Control-plane reads ABOUT the Node (describe_node, get_job) are still
-// written to the trail and still appear on Activity, Agents and Read egress;
+// written to the trail and still appear on Activity and Read egress;
 // this panel just does not list them (#640). A refusal is Relay-side —
 // nothing reached the machine — and belongs on Activity, where it is
 // attributed to the principal who was refused rather than to the Node that

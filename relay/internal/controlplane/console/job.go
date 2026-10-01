@@ -314,7 +314,7 @@ type jobView struct {
 	// nothing else — not the dispatch record (which carries no kind), and
 	// never the Account registry, which would report the Account's kind
 	// today and relabel history once an Account is converted (#540;
-	// 03-agent-sessions.md, "Kind (machine or human) is not on the rail").
+	// 04-activity.md, "Kind is never read from the registry").
 	// A Job whose Principal fell back to the dispatch record has no recorded
 	// requester on its row, so this is empty for it too.
 	RequesterKind string
@@ -1078,20 +1078,6 @@ func jobStateText(st jobs.JobState) string {
 		return "running"
 	}
 	return "complete"
-}
-
-// jobOperationText names what ran. It is kept for the Agents screen alone
-// (deleted with it in #787) and does not guard the tier against an Operation
-// named raw_exec; Job detail uses jobRowName. Raw Exec has no Operation name by
-// definition, and the ActionKind is how the Job knows it was one.
-func jobOperationText(name string, kind jobs.ActionKind) string {
-	if name != "" {
-		return name
-	}
-	if kind == jobs.ActionRawExec {
-		return rawExecActionKind
-	}
-	return ""
 }
 
 var jobTmpl = newScreen("job", `

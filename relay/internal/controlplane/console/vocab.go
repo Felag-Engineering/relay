@@ -56,10 +56,7 @@ import (
 // It carries NO Stdout, Stderr or Truncated field, at any age (ADR-0025).
 // That is why denyExplanation below still takes an audit.Record: it reads
 // rec.Stderr, which is precisely what this type must not have, and node
-// detail's Recent Tasks is the one caller left. Agent history's own deny
-// prose reads off trailFacts alone (denyRuleOffLane, below) for exactly that
-// reason — capability.AuditRow has no Stderr to read, and riskOf works from
-// trailFacts already because both lanes need it.
+// detail's Recent Tasks is the one caller left.
 type trailFacts struct {
 	Kind      string
 	Principal string
@@ -68,9 +65,9 @@ type trailFacts struct {
 	VerifiedAccountID   string
 	// Role is the authority the Account held AT THAT MOMENT, VERIFIED lane
 	// only (GLOSSARY.md's Attribution). Empty means the Relay authenticated no
-	// role for this record, and nothing may substitute one — see agents.go's
-	// buildAgents for why the asserted lane's "account:role" principal string
-	// must never fill this field.
+	// role for this record, and nothing may substitute one: the asserted
+	// lane's "account:role" principal string is a claim the caller made, not an
+	// authority the Relay authenticated, so it must never fill this field.
 	Role       string
 	OnBehalfOf string
 	// Source is the peer address the Relay recorded for this identity,
@@ -237,8 +234,7 @@ const readOutcomeAudited = "audited"
 
 // approvalStateChip names the outcome of a KindApprovalDecided record in
 // #498's four-value `.chip.state` vocabulary ("approved"/"denied"), the ONE
-// naming function so Agents and Activity cannot spell the answer two
-// different ways.
+// naming function, so no screen can spell the answer two different ways.
 //
 // Three-way, in this order:
 //
@@ -263,8 +259,8 @@ func approvalStateChip(f trailFacts) string {
 	}
 }
 
-// callOutcome is the ONE result-line vocabulary for a call row, shared by
-// Agents and Activity: the outcome chip word, and for a decision's structured
+// callOutcome is the ONE result-line vocabulary for a call row, used by
+// Activity: the outcome chip word, and for a decision's structured
 // answer the `.chip.state` word instead. It returns "", "" for an event that
 // is not a call (a Freeze, a token, a Node revoke, an expiry, a protocol
 // violation): "unspecified" on a Freeze would claim ignorance about something
@@ -489,70 +485,6 @@ func denyText(stderr []byte, reason string, readClass bool) string {
 			"the rule."
 	}
 	return "The daemon refused this Operation and did not report the deciding rule."
-}
-
-// denyRuleOffLane renders Deny.Rule for a row that reached this package
-// through the read lane (capability.AuditRow) rather than through
-// audit.Record — agent history, since #542.
-//
-// It cannot call denyText the way denyExplanation does, because denyText's
-// last resort — "The daemon refused this Operation and did not report the
-// deciding rule" — is FALSE on this lane for a denied MUTATE-class row. That
-// sentence is only true when the trail genuinely has nothing: on the WHOLE
-// trail a mutate-class denial's verdict lives in Stderr, and denyText's
-// fallback fires only once that is checked and empty. capability.AuditRow
-// never carries Stderr AT ALL (query.go's own doc comment; adding it back is
-// the acceptance criterion #441 exists to forbid), so calling denyText here
-// would report "not recorded" over a rule the trail IS holding — on the
-// Job's own Tasks, which this row already links to via JobHref. That is the
-// exact failure family #463/#517/#520 were each about: a screen asserting a
-// negative the record does not support.
-//
-// So this function answers the same question a different way, in the same
-// three-case shape as denyText but never reaching for Stderr at all, and
-// never calling denyText itself:
-//
-//   - f.Reason, when the row carries one. This is the SAME first check
-//     denyText makes, just spelled without the stderr argument the lane has
-//     nothing to pass.
-//   - A read-class sentence SCOPED TO THIS LANE, when riskOf(f) says this was
-//     a read. It does NOT call denyText(nil, "", true): that sentence asserts
-//     what the TRAIL holds ("not recorded in the trail"), and that assertion
-//     is an inference away from being false. riskOf is documented as fallible
-//     in exactly one direction (above) — a Node-local Template Operation that
-//     reuses a shipped read name at mutate class (#475) — and in that case the
-//     daemon's verdict IS on the trail, in Stderr, which the pre-migration
-//     code self-corrected for by checking stderr before ever reaching this
-//     sentence (denyText's own case order). This lane has no stderr to check,
-//     so it must not assert a negative about the trail at all; it says only
-//     what THIS SCREEN's rows carry — nothing, ever, for a read-class Task
-//     (ADR-0025) — and where to look if anything was reported.
-//   - A parallel sentence for the mutate-class remainder, naming WHERE the
-//     rule actually is rather than claiming it is nowhere: this lane's rows
-//     carry no daemon output at any age, but the Task the row's JobHref
-//     points at still does, until the Job is collected (job.go).
-//
-// THE LOSS IS REAL: an operator reading agent history sees a pointer to the
-// rule instead of the rule itself, where node detail (still on
-// denyExplanation, still reading the whole trail) shows it verbatim. That
-// asymmetry is deliberate and stays until node detail's own Recent Tasks
-// panel migrates onto this same lane, at which point the same trade recurs
-// there rather than being solved by growing AuditRow a field #441 named as
-// the thing it must never have.
-func denyRuleOffLane(f trailFacts) string {
-	if f.Reason != "" {
-		return f.Reason
-	}
-	if riskOf(f) == jobs.RiskClassRead {
-		return "This screen's rows carry no daemon output for a read-class Task, at any\n" +
-			"age (ADR-0025) — reading is exfiltration, so what left the Node is audited and\n" +
-			"what it said is not. If the daemon reported a rule, it is on the Job this row\n" +
-			"links to, on that Job's own Tasks, retained until the Job is collected — open\n" +
-			"the Job to see it."
-	}
-	return "The daemon's verdict is not on this lane's rows: this screen carries no\n" +
-		"daemon output at any age (ADR-0025). It is on the Job this row links to, on that\n" +
-		"Job's own Tasks, retained until the Job is collected — open the Job to see it."
 }
 
 // argsSummary renders what was asked for: Raw Exec's argv, or an Operation's
