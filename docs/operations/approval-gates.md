@@ -181,7 +181,7 @@ On top of the role floor, the domain refuses a decision that:
 
 The machine rule is not `requester_allowed` restated. That knob is *your*
 configuration; this one is structural. ADR-0027's confirmation ladder puts
-self-confirmation at rung 2 and makes rung 2 **human-only**, because an agent
+self-confirmation at rung 2 and makes rung 2 **human-only**, because an AI-agent
 confirming its own proposal is the same actor answering twice — so a
 misconfigured `requester_allowed: true` can never hand an AI-agent its own
 approval.
@@ -273,7 +273,7 @@ released request is what a re-drive finds, not the grant, so the grant does
 not run it a second time. After the deadline the same call parks for a fresh
 approval rather than replaying the old one forever.
 
-## How an agent waits: three envelopes, one decision
+## How an AI-agent waits: three envelopes, one decision
 
 An operator meeting this system for the first time should be clear that the
 paragraphs below are about **how a caller learns it must wait and how it finds
@@ -320,7 +320,7 @@ And what it explicitly does **not** change:
   dispatch is still parked, the approval request stays pending, stays in the
   queue, and stays decidable; a re-drive of the same Plan re-attaches to it. A
   cancel arrives over the AI's own session, and if it could withdraw a pending
-  request an agent could pull one back the moment it sensed a denial coming —
+  request an AI-agent could pull one back the moment it sensed a denial coming —
   erasing the evidence a human was about to rule on. If a Job already exists,
   cancelling goes through the ordinary Job-cancel path with its ordinary
   honest-cancel semantics.
