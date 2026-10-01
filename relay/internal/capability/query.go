@@ -150,6 +150,17 @@ type JobFilter struct {
 	// never a LIKE, mirroring AuditFilter.OnBehalfOf and jobs.JobQuery's.
 	OnBehalfOf   string
 	Since, Until time.Time
+
+	// Order is the list's direction and the one the page cursor walks. The
+	// zero value is newest first; oldest first over running Jobs is
+	// longest-running first. A cursor minted in one direction is refused in
+	// the other.
+	Order jobs.JobOrder
+
+	// CountMatching asks for JobPage.Matching, computed inside the same
+	// audited read. It narrows nothing. The zero value asks for no count,
+	// which is every caller before #795.
+	CountMatching bool
 }
 
 // JobSummary is one row of a Job list — capability's mirror of
@@ -199,11 +210,16 @@ type JobSummary struct {
 	Unresolved int
 }
 
-// JobPage is one page of JobSummary, cursor-paginated newest first.
+// JobPage is one page of JobSummary, cursor-paginated in JobFilter.Order's
+// direction.
 type JobPage struct {
 	Jobs  []JobSummary
 	Next  string
 	Limit int
+
+	// Matching is the number of Jobs matching the filter, ignoring paging.
+	// It is zero unless JobFilter.CountMatching was set.
+	Matching int
 }
 
 // TaskFilter is a single Job's Task list filter — capability's mirror of
@@ -552,8 +568,8 @@ type AuditQuery interface {
 // Satisfied by internal/auditquery.Queries, the adapter to
 // internal/jobs.QueryRepository.
 type JobQuery interface {
-	// QueryJobs returns one page of JobSummary matching f, newest
-	// (CreatedAt) first.
+	// QueryJobs returns one page of JobSummary matching f, in f.Order's
+	// direction (newest CreatedAt first by default).
 	QueryJobs(ctx context.Context, f JobFilter, page PageRequest) (JobPage, error)
 
 	// QueryTasks returns one page of TaskRow for f.JobID, optionally

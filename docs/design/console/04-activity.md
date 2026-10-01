@@ -289,12 +289,12 @@ appears. Viewers see running Jobs but are never offered Cancel. Token revocation
 - [ ] No sign-in, step-up, Account or API Token row appears here, for any role.
 - [x] An in-flight dispatch is cancellable from this screen (v0.7.0) and the cancellation is
       audited. **Met on Activity (#786)**; the control moves into Running now with that section.
-- [ ] A running Job of any age is visible on the first page, in Running now, longest-running
+- [x] A running Job of any age is visible on the first page, in Running now, longest-running
       first, whatever the time window or kind filter.
-- [ ] Each running Job draws exactly one Cancel on the page, in Running now; its stream row links
+- [x] Each running Job draws exactly one Cancel on the page, in Running now; its stream row links
       to it.
-- [ ] Paging Running now never moves the stream, and paging the stream never moves Running now.
-- [ ] A Job that finishes while the page is open is marked finished in place; the section never
+- [x] Paging Running now never moves the stream, and paging the stream never moves Running now.
+- [x] A Job that finishes while the page is open is marked finished in place; the section never
       reorders under the reader.
 
 ## Jobs

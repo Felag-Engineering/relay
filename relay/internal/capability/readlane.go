@@ -132,8 +132,9 @@ func (s *Service) AuditReach(ctx context.Context, p Principal, f AuditFilter) (R
 	return s.auditQ.AuditReach(ctx, f)
 }
 
-// QueryJobs returns one page of JobSummary matching f, newest (CreatedAt)
-// first.
+// QueryJobs returns one page of JobSummary matching f, in f.Order's direction
+// (newest CreatedAt first by default). A requested count is part of this one
+// audited read, not a second.
 func (s *Service) QueryJobs(ctx context.Context, p Principal, f JobFilter, page PageRequest) (JobPage, error) {
 	if s.jobQ == nil {
 		return JobPage{}, ErrQueriesUnavailable
@@ -392,6 +393,9 @@ func (f JobFilter) validate() error {
 	if err := validateJobID(f.JobID); err != nil {
 		return err
 	}
+	if f.Order != jobs.JobOrderNewestFirst && f.Order != jobs.JobOrderOldestFirst {
+		return fmt.Errorf("%w: unknown job order", ErrInvalidFilter)
+	}
 	return validateOnBehalfOf(f.OnBehalfOf)
 }
 
@@ -456,6 +460,14 @@ func (f JobFilter) summary() string {
 	}
 	if !f.Until.IsZero() {
 		field("until", f.Until.UTC().Format(time.RFC3339))
+	}
+	// Recorded only when non-default, so the trail says what was asked while
+	// every pre-#795 caller's recorded selector stays byte-identical.
+	if f.Order == jobs.JobOrderOldestFirst {
+		field("order", "oldest_first")
+	}
+	if f.CountMatching {
+		field("count", "matching")
 	}
 	return s.String()
 }

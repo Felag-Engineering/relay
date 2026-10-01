@@ -108,7 +108,7 @@ func TestActivity_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
 		"The filter box carries no Selector and no Node.",
 		"The chips above list every family this screen shows, including empty ones.",
 		"Every Refresh is an audited read",
-		"Cancel is offered on a running Job&#39;s row",
+		"Cancel is offered in Running now",
 	)
 }
 

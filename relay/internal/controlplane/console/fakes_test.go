@@ -200,6 +200,9 @@ type fakeQueries struct {
 	reachErrOn  func(capability.AuditFilter) bool
 	auditErrOn  func(capability.AuditFilter) bool
 	countsErrOn func(capability.AuditFilter) bool
+	// jobsErrOn is the Job lane's twin: it fails ONE Job read (Running now's,
+	// say) while the stream's succeeds.
+	jobsErrOn func(capability.JobFilter) bool
 
 	jobCalls   int
 	auditCalls int
@@ -528,6 +531,9 @@ func (f *fakeQueries) QueryJobs(_ context.Context, _ capability.Principal, filte
 	if f.jobsErr != nil {
 		return capability.JobPage{}, f.jobsErr
 	}
+	if f.jobsErrOn != nil && f.jobsErrOn(filter) {
+		return capability.JobPage{}, errQueryFailed
+	}
 	var out []capability.JobSummary
 	for _, j := range f.jobs {
 		switch {
@@ -542,9 +548,49 @@ func (f *fakeQueries) QueryJobs(_ context.Context, _ capability.Principal, filte
 			out = append(out, j)
 		}
 	}
+	if filter.Order == jobs.JobOrderOldestFirst {
+		return oldestFirstJobPage(out, filter, page)
+	}
 	kept := limitRows(out, page.Limit)
 	next := nextCursor(f.jobNext, page.Cursor, len(kept) < len(out))
 	return capability.JobPage{Jobs: kept, Next: next, Limit: page.Limit}, nil
+}
+
+// oldestFirstJobPage answers an oldest-first read the way the real lane does:
+// ascending by (CreatedAt, JobID), paged by a fake offset cursor ("rn:<n>"),
+// with the matching total counted before paging when it was asked for. The
+// stub cursor jobNext belongs to the newest-first stream and is not honoured
+// here. A cursor that is not one this fake minted is refused, as the real lane
+// refuses a foreign one, rather than reset to page one.
+func oldestFirstJobPage(matches []capability.JobSummary, filter capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {
+	sorted := append([]capability.JobSummary(nil), matches...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if !sorted[i].CreatedAt.Equal(sorted[j].CreatedAt) {
+			return sorted[i].CreatedAt.Before(sorted[j].CreatedAt)
+		}
+		return sorted[i].JobID < sorted[j].JobID
+	})
+	out := capability.JobPage{Limit: page.Limit}
+	if filter.CountMatching {
+		out.Matching = len(sorted)
+	}
+	offset := 0
+	if page.Cursor != "" {
+		n, ok := strings.CutPrefix(page.Cursor, "rn:")
+		var err error
+		if offset, err = strconv.Atoi(n); !ok || err != nil {
+			return capability.JobPage{}, capability.ErrInvalidCursor
+		}
+	}
+	if offset > len(sorted) {
+		offset = len(sorted)
+	}
+	rest := sorted[offset:]
+	out.Jobs = limitRows(rest, page.Limit)
+	if len(out.Jobs) < len(rest) {
+		out.Next = "rn:" + strconv.Itoa(offset+len(out.Jobs))
+	}
+	return out, nil
 }
 
 func (f *fakeQueries) QueryTasks(_ context.Context, _ capability.Principal, filter capability.TaskFilter, page capability.PageRequest) (capability.TaskPage, error) {

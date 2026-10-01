@@ -32,6 +32,16 @@ const (
 	JobStateComplete
 )
 
+// JobOrder is a Job list's direction. The zero value is newest first, which
+// every caller before #795 relies on. Oldest first over running Jobs means
+// longest-running first, because CreatedAt is the only start time a Job has.
+type JobOrder int
+
+const (
+	JobOrderNewestFirst JobOrder = iota
+	JobOrderOldestFirst
+)
+
 // JobQuery is the Job list's filter. Every non-zero field ANDs; the zero
 // value matches every Job.
 type JobQuery struct {
@@ -69,6 +79,14 @@ type JobQuery struct {
 	// Since and Until bound CreatedAt, half-open [Since, Until). The zero
 	// value on either side is unbounded.
 	Since, Until time.Time
+
+	// Order is the list's direction, and the direction the page cursor
+	// walks. The zero value is newest first.
+	Order JobOrder
+
+	// CountMatching asks for JobPage.Matching. It is a request, not a
+	// filter: it narrows nothing, and costs one COUNT over the same filter.
+	CountMatching bool
 }
 
 // JobSummary is one row of a Job list: everything a list screen needs
@@ -128,11 +146,16 @@ type JobSummary struct {
 	Unresolved int
 }
 
-// JobPage is one page of JobSummary rows, cursor-paginated newest first.
+// JobPage is one page of JobSummary rows, cursor-paginated in
+// JobQuery.Order's direction.
 type JobPage struct {
 	Jobs  []JobSummary
 	Next  string
 	Limit int
+
+	// Matching is the number of Jobs matching the query, ignoring limit and
+	// cursor. It is zero unless JobQuery.CountMatching was set.
+	Matching int
 }
 
 // TaskQuery is a single Job's Task list filter.
@@ -197,9 +220,11 @@ type TaskPage struct {
 // append-vs-query reasoning audit.QueryRepository states: this interface can
 // only read.
 type QueryRepository interface {
-	// QueryJobs returns one page of JobSummary rows matching q, newest
-	// (CreatedAt) first. limit <= 0 defaults; cursor is opaque, and a
-	// malformed or foreign one is an error rather than a silent reset.
+	// QueryJobs returns one page of JobSummary rows matching q, in
+	// q.Order's direction (newest CreatedAt first by default). limit <= 0
+	// defaults; cursor is opaque, and a malformed or foreign one is an error
+	// rather than a silent reset. That includes a cursor minted in the other
+	// direction: ErrInvalidCursor.
 	QueryJobs(ctx context.Context, q JobQuery, limit int, cursor string) (JobPage, error)
 
 	// QueryTasks returns one page of TaskSummary rows for q.JobID, optionally

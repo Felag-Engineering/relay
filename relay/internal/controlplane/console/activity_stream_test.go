@@ -25,8 +25,9 @@ func TestActivity_AsksForOneBoundedPagePerLane(t *testing.T) {
 	q := &fakeQueries{}
 	activityAs(t, q, "/console/activity")
 
-	if len(q.jobLimits) != 1 || q.jobLimits[0] != jobPageSize {
-		t.Errorf("Job lane limits = %v, want [%d]", q.jobLimits, jobPageSize)
+	// The stream's page, then Running now's (activity_runningnow.go).
+	if len(q.jobLimits) != 2 || q.jobLimits[0] != jobPageSize || q.jobLimits[1] != runningNowPageSize {
+		t.Errorf("Job lane limits = %v, want [%d %d]", q.jobLimits, jobPageSize, runningNowPageSize)
 	}
 	if len(q.auditLimits) != 1 || q.auditLimits[0] != auditPageSize {
 		t.Errorf("audit lane limits = %v, want [%d]", q.auditLimits, auditPageSize)

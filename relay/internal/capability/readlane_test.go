@@ -320,6 +320,55 @@ func TestReadLane_NilSeamReturnsError(t *testing.T) {
 	}
 }
 
+// TestReadLane_QueryJobsPassesOrderAndCountThrough (#795): the direction and
+// the count request reach the seam untouched, and they ride the ONE read the
+// lane records — the count is part of that read, not a second.
+func TestReadLane_QueryJobsPassesOrderAndCountThrough(t *testing.T) {
+	svc, _, jobQ, audit := readLaneFixture(t)
+	jobQ.jobsResult = JobPage{Matching: 12}
+	running := jobs.JobStateRunning
+	f := JobFilter{State: &running, Order: jobs.JobOrderOldestFirst, CountMatching: true}
+
+	page, err := svc.QueryJobs(context.Background(), testPrincipal, f, PageRequest{Limit: 5})
+	if err != nil {
+		t.Fatalf("QueryJobs: %v", err)
+	}
+	if jobQ.gotJobFilter.Order != jobs.JobOrderOldestFirst || !jobQ.gotJobFilter.CountMatching {
+		t.Errorf("the seam was handed %+v, want Order and CountMatching unchanged", jobQ.gotJobFilter)
+	}
+	if page.Matching != 12 {
+		t.Errorf("Matching = %d, want the seam's 12 passed back", page.Matching)
+	}
+	if len(audit.readCalls) != 1 || audit.readCalls[0].Tool != toolQueryJobs {
+		t.Errorf("RecordRead calls = %+v, want exactly one query_jobs", audit.readCalls)
+	}
+}
+
+func TestJobFilter_RefusesAnUnknownOrder(t *testing.T) {
+	svc, _, jobQ, audit := readLaneFixture(t)
+
+	_, err := svc.QueryJobs(context.Background(), testPrincipal, JobFilter{Order: jobs.JobOrder(99)}, PageRequest{})
+	if !errors.Is(err, ErrInvalidFilter) {
+		t.Fatalf("an unknown order: err = %v, want ErrInvalidFilter", err)
+	}
+	if jobQ.jobsCalled || len(audit.readCalls) != 0 {
+		t.Errorf("a refused filter reached the seam (%v) or was recorded (%d)", jobQ.jobsCalled, len(audit.readCalls))
+	}
+}
+
+// The read record says what was asked. A filter that asks for neither the
+// order nor the count records exactly what it did before #795.
+func TestJobFilter_SummaryRecordsOrderAndCountOnlyWhenAsked(t *testing.T) {
+	running := jobs.JobStateRunning
+	if got := (JobFilter{State: &running, RequesterAccountID: "acct-1"}).summary(); got != "state=running;requester=acct-1" {
+		t.Errorf("a default filter's summary = %q, want it unchanged by #795", got)
+	}
+	got := JobFilter{State: &running, Order: jobs.JobOrderOldestFirst, CountMatching: true}.summary()
+	if got != "state=running;order=oldest_first;count=matching" {
+		t.Errorf("summary = %q, want the order and count named", got)
+	}
+}
+
 // TestReadLane_AuditCounts_RejectsUnboundedFilter is F1's headline case
 // (#441 cycle-2 security review): AuditFilter{} — a legal match-everything
 // filter for QueryAudit — must be refused by AuditCounts before it ever

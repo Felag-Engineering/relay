@@ -225,6 +225,9 @@ func TestActivity_DispatchRowCarriesTheKindTheJobRecorded(t *testing.T) {
 				JobID: "job-1", CreatedAt: testNow, OperationName: "service.restart",
 				RiskClass: jobs.RiskClassMutate, Requester: "gleipnir", RequesterAccountID: "acct-1",
 				RequesterKind: tc.recorded, Total: 1,
+				// Every Task resolved, so Complete: the zero State is Running
+				// (iota 0), and a running Job would also draw in Running now.
+				State:  jobs.JobStateComplete,
 				Counts: map[jobs.Outcome]int{jobs.OutcomeSuccess: 1},
 			}}}
 			body := get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin), "/console/activity?kind=dispatch").Body.String()
