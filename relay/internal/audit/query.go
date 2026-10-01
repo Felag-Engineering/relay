@@ -36,7 +36,7 @@ type Query struct {
 	OnBehalfOf string
 
 	// Operations restricts to these operation_name values. Read-class
-	// dispatch selection (e.g. read egress's own catalog) is a caller-
+	// dispatch selection (e.g. a screen's own catalog) is a caller-
 	// supplied list rather than a stored risk class — the audit table has no
 	// risk_class column (D5, issue #441 plan); adding one is a separate,
 	// worthwhile issue.
@@ -113,8 +113,7 @@ type Page struct {
 }
 
 // Bucket is one principal's Record count within one time bucket —
-// CountsByPrincipal's aggregate, backing read egress's "trend against own
-// baseline" (docs/design/console/17-read-egress.md).
+// CountsByPrincipal's aggregate.
 type Bucket struct {
 	AccountID   string
 	AccountName string
@@ -123,9 +122,7 @@ type Bucket struct {
 }
 
 // Reach is ReachCounts' aggregate over a Query: how many calls, how many
-// distinct targets, and how many distinct Nodes it touched. Backs read
-// egress's "1 target / 3 Nodes" framing (docs/design/console/17-read-egress.md;
-// the exact regression this fixes is console/reads.go's own accounting).
+// distinct targets, and how many distinct Nodes it touched.
 type Reach struct {
 	Calls           int
 	DistinctTargets int
@@ -135,10 +132,10 @@ type Reach struct {
 // TargetArgKeys is the precedence order that names WHAT a read touched: the
 // first of these Args keys present on a Record is the read's target.
 // This is the one definition: issue #425 repointed the Console at it, so
-// console/reads.go's readTargetName iterates this slice, and
+// console/vocab.go's readTargetName iterates this slice, and
 // internal/store/auditquery.go's reachTargetExpr builds its COALESCE from
-// it. A divergence would make read egress's headline and its table disagree
-// about how many distinct things were read.
+// it. A divergence would make the Console name a read target differently
+// from how the reach aggregate counts it.
 var TargetArgKeys = []string{"path", "file", "unit", "service"}
 
 // ErrInvalidCursor is returned when a caller-supplied cursor cannot be
@@ -187,11 +184,10 @@ type QueryRepository interface {
 
 	// CountsByPrincipal returns q's matching Records grouped by verified
 	// Account and by time bucket (bucket width in wall-clock time), ordered
-	// bucket-ascending — read egress's per-principal trend.
+	// bucket-ascending.
 	CountsByPrincipal(ctx context.Context, q Query, bucket time.Duration) ([]Bucket, error)
 
 	// ReachCounts returns the call count, distinct-target count, and
-	// distinct-Node count for q's matching Records — read egress's "how far
-	// did this reach" summary.
+	// distinct-Node count for q's matching Records: how far they reached.
 	ReachCounts(ctx context.Context, q Query) (Reach, error)
 }

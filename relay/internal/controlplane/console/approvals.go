@@ -78,12 +78,6 @@ const expiryPressure = 15 * time.Minute
 // maxApprovalFilterBytes bounds every value this screen reads off its own
 // query string.
 //
-// Deliberately separate from reads.go's maxFilterValueBytes, which happens to
-// carry the same number for an unrelated reason: that one bounds values BEFORE
-// they reach the read lane, and this one bounds values that reach no seam at
-// all. One constant would tie two independent policies together and make one
-// of the two doc comments false the first time either moved.
-//
 // A value longer than this is DROPPED rather than truncated: a truncated
 // filter would silently match something the operator did not type. None of
 // these values reaches a seam — they are compared in memory against rows the
@@ -1170,7 +1164,7 @@ func handleApproval(d Deps) http.HandlerFunc {
 // Grant released (see releasedJobPages). That is the design working, and it
 // matches Job detail. Do not "optimise" the audit away — but do keep the count
 // bounded and honest, because each of those reads is also this principal's own
-// exposure on the read-egress screen.
+// exposure in the trail's read records (Activity, kind=read).
 func buildApprovalView(ctx context.Context, d Deps, caller capability.Principal, req approval.Request, now time.Time, csrfToken string) approvalView {
 	ttl := req.ExpiresAt.Sub(now)
 	lapsed := req.State == approval.StatePending && req.PastDeadline(now)
@@ -1361,11 +1355,12 @@ func buildGrantCard(ctx context.Context, d Deps, caller capability.Principal, g 
 //
 // THE PAGE SIZE IS THE MAXIMUM ON PURPOSE, and it is a security property rather
 // than a performance one. Every QueryAudit writes its own read-audit record
-// (ADR-0025, fail-closed) and every one of those lands on the read-egress
-// screen as this principal's own exposure. At 50 rows a page, one grant card
-// cost twenty appends and inflated that principal's read count twentyfold per
-// view — a viewer refreshing the URL was a 20x amplifier on an append-only
-// table and on a security screen. At 500 the same 1,000-row trail costs two.
+// (ADR-0025, fail-closed) and every one of those lands in the trail's
+// read records (Activity, kind=read) as this principal's own exposure. At 50
+// rows a page, one grant card cost twenty appends and inflated that
+// principal's read count twentyfold per view — a viewer refreshing the URL was
+// a 20x amplifier on an append-only table and on a security screen. At 500 the
+// same 1,000-row trail costs two.
 //
 // The obvious further "optimisation" — stop as soon as a page contributes no
 // new Job — MUST NOT be made: with 500 rows to a page and a wide dispatch, a

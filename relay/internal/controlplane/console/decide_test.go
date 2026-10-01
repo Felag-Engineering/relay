@@ -114,7 +114,7 @@ func TestDecide_TheFormNamesWhatTheStepUpAuthorises(t *testing.T) {
 }
 
 // TestDecide_ApproveAndDenyAreVisuallyIdentical asserts spec 08 item 5 the
-// same way TestReads_DecisionColourIsDefinedInTheStylesheet asserts the deny
+// same way the retired Read-egress screen's stylesheet test asserted its deny
 // grammar: from the STYLESHEET, because a class applied with no rule behind
 // it — or a rule that quietly diverges per button — renders as ordinary
 // text and nothing in Go can see it from the markup alone.

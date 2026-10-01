@@ -164,28 +164,6 @@ func TestAccess_SituationalMessagesStayVisible(t *testing.T) {
 	}
 }
 
-// --- Read egress ------------------------------------------------------------
-
-func TestReads_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
-	body := readsBody(t, &fakeQueries{}, "")
-	inside, outside := splitAbout(t, body)
-	mustBeStanding(t, inside, outside,
-		"The audit trail keeps outcomes and timings and never read output",
-		"deciding rule is not shown here.",
-		"Reading this page is itself a read, and it is counted here.",
-		"The two halves of this page read different clocks.",
-		"Two filters this screen does not offer.",
-	)
-}
-
-func TestReads_SituationalMessagesStayVisible(t *testing.T) {
-	// No read-class Job in the window: the lane was not queried, and the page
-	// says so where the operator is reading, not behind a click.
-	mustBeSituational(t, readsBody(t, &fakeQueries{}, ""), "The audit lane was not queried for Node reads.")
-	// A window this page does not offer is a note about THIS request.
-	mustBeSituational(t, readsBody(t, &fakeQueries{}, "window=fortnight"), "The window asked for is not one of")
-}
-
 // --- Day one ----------------------------------------------------------------
 
 func TestDayOne_StandingNoteIsInOneClosedDisclosure(t *testing.T) {

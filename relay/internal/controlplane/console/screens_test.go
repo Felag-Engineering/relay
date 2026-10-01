@@ -1965,7 +1965,7 @@ func TestConsole_ShipsNoEmoji(t *testing.T) {
 	for _, path := range []string{
 		"/console/assets/console.css",
 		"/console/", "/console/activity",
-		"/console/reads", "/console/approvals", "/console/login",
+		"/console/approvals", "/console/login",
 		"/console/nodes/node-web-1", "/console/compare?nodes=node-web-1,node-web-2",
 	} {
 		body := get(t, h, path).Body.String()
@@ -2024,15 +2024,14 @@ func TestConsole_EveryRenderedWeightHasAFace(t *testing.T) {
 	// the anchor is asserted first — otherwise a layout edit as small as
 	// adding an attribute to <main> silently restores that vacuity.
 	//
-	// Every screen below renders bold in its own content today (13/5/8/5),
+	// Every screen below renders bold in its own content today (13/5/10),
 	// so this is a conjunction: it catches ONE screen losing its emphasis,
 	// which a some-screen-somewhere check cannot. Not every screen belongs
 	// here — the approvals queue is empty under this fixture and correctly
-	// renders no bold at all — but each of these four does.
+	// renders no bold at all — but each of these three does.
 	for _, path := range []string{
 		"/console/",
 		"/console/nodes/node-web-1",
-		"/console/reads",
 		"/console/activity",
 	} {
 		rr := get(t, h, path)
@@ -2274,19 +2273,19 @@ func TestLayout_AccountFooterIsNotNavigation(t *testing.T) {
 // by Job. The other family — the non-dispatching tools — fell through to the
 // default branch of summarize and rendered as the bare word "read": no target,
 // no Node, no outcome, on the surface billed as the audit trail. The same
-// records were meanwhile driving the Read-egress screen's enumeration panel,
-// so the trail had the fact and this screen declined to say it.
+// records were meanwhile driving the since-retired Read-egress screen's
+// enumeration panel, so the trail had the fact and this screen declined to say it.
 //
 // The cross-screen half is the point and it is why this survives the move to
-// the read lane: Activity now reads capability.AuditRow and Read egress still
-// reads audit.Record, so the two would name one record two ways unless BOTH
-// went through readTargetOf on the shared trailFacts.
+// the read lane: Activity reads capability.AuditRow while other screens read
+// audit.Record, so they would name one record two ways unless BOTH went
+// through readTargetOf on the shared trailFacts.
 func TestActivity_ControlPlaneReadsSayWhatWasRead(t *testing.T) {
 	// Both shapes the trail actually produces. The real records carry the tool
 	// in OperationName; ActionKind is the older shape and is empty on them.
 	// The first fix here read ActionKind only, so Activity said "the registry"
-	// while Read egress said "list_nodes" about the same row — which is why
-	// both screens now go through readTargetOf.
+	// while the Read-egress screen, since retired, said "list_nodes" about the
+	// same row — which is why every screen goes through readTargetOf.
 	recs := []audit.Record{
 		{Kind: audit.KindRead, OperationName: "list_nodes", Timestamp: testNow},
 		{Kind: audit.KindRead, OperationName: "list_operations", Timestamp: testNow},
@@ -2310,16 +2309,15 @@ func TestActivity_ControlPlaneReadsSayWhatWasRead(t *testing.T) {
 		t.Error("a read fell back to the generic name although the record names its tool")
 	}
 
-	// The two screens must name the same record the same way. They read the
-	// same trail through two different types, and an operator who sees "the
+	// Screens must name the same record the same way. They read the same
+	// trail through two different types, and an operator who sees "the
 	// registry" on one and "list_nodes" on the other stops trusting both.
-	// Read egress reads the query lane now, not this trail, so the
-	// cross-check is against the shared naming core both screens go through
-	// rather than against the other screen's view.
+	// The cross-check is against the shared naming core every screen goes
+	// through rather than against another screen's view.
 	for _, rec := range recs {
 		want := readTargetOf(factsOfRecord(rec))
 		if !strings.Contains(body, "enumerated "+want) {
-			t.Errorf("Read egress names this record %q and Activity does not", want)
+			t.Errorf("the shared naming core names this record %q and Activity does not", want)
 		}
 	}
 }
@@ -3562,8 +3560,9 @@ func TestApproval_ReleasedJobsAreListedOnTheCard(t *testing.T) {
 	}
 
 	// Every QueryAudit writes its own read-audit record (ADR-0025), and each of
-	// those lands on the read-egress screen as this principal's own exposure.
-	// 600 rows at the maximum page size is TWO reads; at the default page size
+	// those lands in the trail's read records (Activity, kind=read) as this
+	// principal's own exposure. 600 rows at the maximum page size is TWO
+	// reads; at the default page size
 	// it was thirteen, and a viewer refreshing this URL was an amplifier on an
 	// append-only table and on a security screen at the same time.
 	if q.auditCalls != 2 {

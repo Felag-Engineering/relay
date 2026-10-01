@@ -291,7 +291,6 @@ func Routes(d Deps) []Route {
 		// No Nav entry: it is reached from a pin bar, like node detail and Job
 		// detail, not from the menu.
 		{"GET", "/console/compare", NavEntry{}, accounts.RoleViewer, handleCompare},
-		{"GET", "/console/reads", NavEntry{NavObserve, "Read egress", 40}, accounts.RoleViewer, handleReads},
 
 		// Policy Author (spec 06), Add Nodes (spec 09) and Incident (spec 16)
 		// are v0.7.0 screens, not built yet (#464). They do

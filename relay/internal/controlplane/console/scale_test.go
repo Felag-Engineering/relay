@@ -346,3 +346,7 @@ func TestJob_TenThousandNodesRenderWithoutAList(t *testing.T) {
 		}
 	})
 }
+
+// squashSpace collapses runs of whitespace, so an assertion about a SENTENCE
+// survives the template being re-wrapped.
+func squashSpace(s string) string { return strings.Join(strings.Fields(s), " ") }

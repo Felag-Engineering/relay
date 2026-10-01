@@ -45,7 +45,7 @@ package console
 // recorded calls" — never blank, never a zero, and never a claim that it has
 // never called. Two alternatives were rejected in #654: one QueryAudit per
 // machine Account (correct for arbitrarily old calls, but it writes N read
-// records per page view, inflating the very trail Read egress renders), and a
+// records per page view, inflating the very trail Activity renders), and a
 // LastToolCallByAccount method on the read lane (the right answer, and scope
 // this issue should not absorb).
 //

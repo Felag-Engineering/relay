@@ -580,9 +580,9 @@ func TestAuditQuery_CountsByPrincipal_ParsesFractionalTimestamps(t *testing.T) {
 	}
 }
 
-// TestAuditQuery_ReachCounts is the console/reads.go:55-62 regression: one
-// file.read across 3 Nodes is 1 target / 3 Nodes, and the COALESCE order
-// matches audit.TargetArgKeys.
+// TestAuditQuery_ReachCounts is the regression the retired Read-egress
+// screen's own accounting once had: one file.read across 3 Nodes is 1 target /
+// 3 Nodes, and the COALESCE order matches audit.TargetArgKeys.
 func TestAuditQuery_ReachCounts(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()
