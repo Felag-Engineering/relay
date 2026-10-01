@@ -342,6 +342,12 @@ with the fleet's changes.
 
 The navigation stays at nine destinations: Agents leaves Observe, and Access joins Administer.
 
+*Amended 2026-10-01 (owner, #829):* point 1's strip is gone. Activity keeps the `?account=`
+filter and Running now, but no longer lists recently active Accounts. Point 3 no longer holds for
+Activity: freeze transitions, Node revokes and Enrollment Token mints and revokes are not drawn
+there, because Activity lists tool calls only. They stay on the audit trail, and giving them a
+home is follow-up work. The Access half of point 3 is unchanged ([04](04-activity.md), Grain).
+
 ### D18. Running now; the Account filter names an ID — **RESOLVED 2026-09-30 (owner)**
 
 **Why:** once #793 put running Jobs on Activity at their own time, a Job that has run for hours sat
@@ -362,6 +368,11 @@ it (D17) would have lost that.
 5. **Raw Exec's tier is made conspicuous everywhere it is drawn**: its chip gets a treatment of
    its own, and Job detail stops naming an Operation called `raw_exec` as the tier, before the
    Agents screen is removed.
+
+*Amended 2026-10-01 (owner, #829):* point 4 is reversed. Activity draws no `other` row, and a
+record kind no tool-call family claims stays on the audit trail without being drawn. In point 3,
+the "Who is active" strip no longer exists; `?account=` still names the verified Account ID, and
+the Accounts screen's last-tool-call link still uses it.
 
 ### D19. A failed sign-in records the typed name only when it is a real Account's — **RESOLVED 2026-09-30 (owner)**
 

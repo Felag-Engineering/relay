@@ -924,11 +924,11 @@ func TestActivity_RunningNowIsExactlyOneMoreAuditedRead(t *testing.T) {
 		t.Errorf("%d of the query_jobs records are Running now's, want exactly 1", n)
 	}
 
-	jobReads, tools = count(t, "/console/activity?kind=freeze")
+	jobReads, tools = count(t, "/console/activity?kind=refusal")
 	// A trail-only kind makes no stream Job read, so the one query_jobs record
 	// IS Running now's; the trail lane's query_audit is what it always wrote.
 	if tools["query_jobs"] != 1 || tools["query_audit"] != 1 || len(tools) != 2 {
-		t.Fatalf("?kind=freeze recorded %v, want exactly query_jobs x1 (Running now's) and query_audit x1", tools)
+		t.Fatalf("?kind=refusal recorded %v, want exactly query_jobs x1 (Running now's) and query_audit x1", tools)
 	}
 	if !isRunningNow(jobReads[0]) || !strings.Contains(jobReads[0].Selector, "count=matching") {
 		t.Errorf("the one Job read's selector = %q, want running, oldest first, counted", jobReads[0].Selector)

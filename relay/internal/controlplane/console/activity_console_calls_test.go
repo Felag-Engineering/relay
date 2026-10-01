@@ -33,14 +33,15 @@ func consoleReadsOnly(n int) []capability.AuditRow {
 	return rows
 }
 
-// feedAndStripOf is the strip and the feed, without the one sentence about
-// Console reads whose count legitimately differs.
-func feedAndStripOf(t *testing.T, content string) string {
+// activityFeedOf is the feed, without the one sentence about Console reads whose count
+// legitimately differs. It slices from <div class="feed"> because the strip that
+// used to precede the feed is gone (#829), so nothing above the feed is included.
+func activityFeedOf(t *testing.T, content string) string {
 	t.Helper()
-	i := strings.Index(content, `<section class="whoactive"`)
+	i := strings.Index(content, `<div class="feed"`)
 	j := strings.Index(content, `<div class="pager">`)
 	if i < 0 || j < i {
-		t.Fatalf("no strip and feed in body:\n%s", content)
+		t.Fatalf("no feed in body:\n%s", content)
 	}
 	return content[i:j]
 }
@@ -56,9 +57,6 @@ func TestActivity_ConsoleSessionReadsAreLeftOutByDefault(t *testing.T) {
 	if !strings.Contains(body, "list_nodes") {
 		t.Error("the AI-agent's read is missing")
 	}
-	if names := stripNames(t, body); len(names) != 1 || names[0] != "gleipnir-prod" {
-		t.Errorf("strip lists %v, want only the Account that read from outside this Console", names)
-	}
 }
 
 func TestActivity_ConsoleSessionReadsAreListedWithTheParameter(t *testing.T) {
@@ -69,18 +67,15 @@ func TestActivity_ConsoleSessionReadsAreListedWithTheParameter(t *testing.T) {
 			t.Errorf("with ?console=show, %s is not listed", tool)
 		}
 	}
-	if names := stripNames(t, shown); len(names) != 2 {
-		t.Errorf("with ?console=show the strip lists %v, want both Accounts", names)
-	}
 
-	// "Exactly as it does today": the strip and feed equal what the screen
+	// "Exactly as it does today": the feed equals what the screen
 	// renders over the same page with no Console-session reads to leave out.
 	stripped := consoleCallsRows()
 	for i := range stripped {
 		stripped[i].Verified.Method = ""
 	}
 	plain := contentOf(activityAs(t, &fakeQueries{rows: stripped}, "/console/activity?kind=read&console=show"))
-	if feedAndStripOf(t, shown) != feedAndStripOf(t, plain) {
+	if activityFeedOf(t, shown) != activityFeedOf(t, plain) {
 		t.Error("with ?console=show the feed differs from the same page with nothing to leave out")
 	}
 }
@@ -227,14 +222,14 @@ func TestActivity_OnlyConsoleSessionReadsAreLeftOut(t *testing.T) {
 	}
 }
 
-func TestActivity_AStripEmptiedByTheDefaultSaysWhy(t *testing.T) {
+func TestActivity_AFeedEmptiedByTheDefaultSaysWhy(t *testing.T) {
 	body := contentOf(activityAs(t, &fakeQueries{rows: consoleCallsRows()[:2]}, "/console/activity?kind=read"))
 
-	if note := stripNoteOf(t, body); note != "Every call on this page is a read made from this Console, and those are left out." {
-		t.Errorf("the strip does not say why it is empty: %q", note)
+	if !strings.Contains(body, "No calls on this page other than reads made from this Console.") {
+		t.Errorf("the feed does not say why it is empty:\n%s", body)
 	}
-	if strings.Contains(body, "No Account has called a control surface yet.") {
-		t.Error("the strip claims nobody called, when the operator did from this Console")
+	if strings.Contains(body, "nobody called") {
+		t.Error("the page claims nobody called, when the operator did from this Console")
 	}
 }
 
@@ -244,7 +239,6 @@ func TestActivity_AnAllExcludedPageReadsCoherently(t *testing.T) {
 
 	order := []string{
 		"Reads made from this Console are left out: 3 of the 3 calls on this page.",
-		"Every call on this page is a read made from this Console, and those are left out.",
 		"No calls on this page other than reads made from this Console.",
 		">Older<",
 	}
@@ -266,9 +260,6 @@ func TestActivity_APartlyExcludedPageRefinedToNothingDoesNotBlameTheConsole(t *t
 		Timestamp: testNow.Add(-time.Minute), Verified: apiIdentity("acct-a", "a", "operator")})
 	body := contentOf(activityAs(t, &fakeQueries{rows: rows}, "/console/activity?kind=read&q=zz-nomatch"))
 
-	if note := stripNoteOf(t, body); note != "No call on this page matches this filter. Reads made from this Console are not counted." {
-		t.Errorf("note = %q", note)
-	}
 	if !strings.Contains(body, "Nothing matches.") {
 		t.Errorf("the feed does not show the narrowing arm:\n%s", body)
 	}
@@ -281,9 +272,6 @@ func TestActivity_APartlyExcludedPageRefinedToNothingDoesNotBlameTheConsole(t *t
 
 func TestActivity_AFilteredAccountWhoseCallsWereAllLeftOutSaysSo(t *testing.T) {
 	body := contentOf(activityAs(t, consoleCallsQueries(), "/console/activity?kind=read&account=acct-mike"))
-	if note := stripNoteOf(t, body); note != "Every call by this Account on this page is a read made from this Console, and those are left out." {
-		t.Errorf("note = %q", note)
-	}
 	if !strings.Contains(body, "This Account has no calls on this page other than reads made from this Console.") {
 		t.Errorf("the empty feed does not say why:\n%s", body)
 	}
@@ -407,6 +395,6 @@ func TestActivity_EveryLinkCarriesAccountAndConsole(t *testing.T) {
 
 	check(t, "/console/activity?kind=read&account=acct-1&console=show",
 		`>Older</a>`, `class="refreshbtn"`, `class="kchip`, `Export this filter as CSV`,
-		`class="arow on"`, `kind=read</a>`, `Show every Account`, `Leave them out`)
+		`kind=read</a>`, `Show every Account`, `Leave them out`)
 	check(t, "/console/activity?kind=read&account=acct-1&console=show&ac=next", `>Newest</a>`)
 }

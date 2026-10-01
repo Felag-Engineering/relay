@@ -636,20 +636,6 @@ func TestOutcomeBar_SegmentsCarryAVisibleWeight(t *testing.T) {
 	}
 }
 
-// TestActivity_NodeRevokeKeepsItsNode is the surviving, falsifiable half of the
-// old "a Job row carries no single Node" test. A Job row cannot name a Node —
-// capability.JobSummary has no such field, so the assertion became a tautology
-// once the dispatch lane moved to QueryJobs. A node_revoke IS about one Node
-// and must keep its link, and that can still break.
-func TestActivity_NodeRevokeKeepsItsNode(t *testing.T) {
-	row := eventRowFromTrail(factsOfRow(capability.AuditRow{
-		Kind: audit.KindNodeRevoke, NodeID: "n3", Timestamp: testNow,
-	}))
-	if row.NodeID != "n3" || row.NodeHref != "/console/nodes/n3" {
-		t.Errorf("the node_revoke row lost its Node: %+v", row)
-	}
-}
-
 // TestVocab_RiskClassInference is the guard for the pair of errors the dev fleet
 // exposed at once: `file.read` rendered as a mutate, and a parked `raw_exec`
 // rendered as a read.

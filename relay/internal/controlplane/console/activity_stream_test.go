@@ -57,22 +57,84 @@ func TestActivity_TheDefaultFeedRequestsEveryCallKind(t *testing.T) {
 	}
 }
 
-func TestActivity_FleetEventsAreRowsAndAccessEventsAreNot(t *testing.T) {
+// TestActivity_OnlyToolCallsAreRows: Activity is a log of tool calls (spec 04,
+// Grain). Fleet events that are not tool calls, and Access events, are not
+// drawn, and the seam never asks for them.
+func TestActivity_OnlyToolCallsAreRows(t *testing.T) {
 	q := &fakeQueries{rows: []capability.AuditRow{
 		{Kind: audit.KindFreezeEngage, Principal: "alice:operator", Timestamp: testNow},
+		{Kind: audit.KindFreezeRelease, Principal: "alice:operator", Timestamp: testNow},
 		{Kind: audit.KindNodeRevoke, NodeID: "node-7", Principal: "alice:operator", Timestamp: testNow},
 		{Kind: audit.KindTokenMint, Principal: "alice:operator", Timestamp: testNow},
+		{Kind: audit.KindTokenRevoke, Principal: "alice:operator", Timestamp: testNow},
+		{Kind: audit.KindProtocolViolation, NodeID: "node-7", Timestamp: testNow},
 		{Kind: audit.KindLoginSucceeded, Principal: "alice:operator", Timestamp: testNow},
+		refusalBy(apiIdentity("acct-1", "alice", "operator"), time.Second, "r"),
 	}}
 	body := activityAs(t, q, "/console/activity")
 
-	for _, k := range []string{audit.KindFreezeEngage, audit.KindNodeRevoke, audit.KindTokenMint} {
-		if !strings.Contains(body, `<span class="evkind">`+k+`</span>`) {
-			t.Errorf("the %s row did not render", k)
+	if !strings.Contains(body, `<span class="evkind">`+audit.KindRefusal+`</span>`) {
+		t.Error("the refusal row did not render")
+	}
+	for _, k := range append([]string{audit.KindLoginSucceeded}, activityNonCallKinds...) {
+		if strings.Contains(body, `<span class="evkind">`+k+`</span>`) {
+			t.Errorf("a %s row rendered on Activity", k)
 		}
 	}
-	if strings.Contains(body, audit.KindLoginSucceeded) {
-		t.Error("a sign-in rendered on Activity; it belongs to Access")
+	content := contentOf(body)
+	for _, banned := range []string{"Relay-wide Freeze", "minted an Enrollment Token", "revoked an Enrollment Token", "revoked Node"} {
+		if strings.Contains(content, banned) {
+			t.Errorf("the page says %q, a fleet event Activity does not draw", banned)
+		}
+	}
+	for i, f := range q.auditFilters {
+		for _, k := range activityNonCallKinds {
+			if containsString(f.Kinds, k) {
+				t.Errorf("audit read %d asks for the non-call kind %q", i, k)
+			}
+		}
+	}
+	for _, chip := range []string{"freeze", "node", "token", "other"} {
+		if strings.Contains(body, "kind="+chip+`"`) || strings.Contains(body, "kind="+chip+"&") {
+			t.Errorf("the page draws a kind chip for %q", chip)
+		}
+	}
+
+	q.auditFilters = nil
+	activityAs(t, q, "/console/activity?format=csv")
+	if len(q.auditFilters) == 0 {
+		t.Fatal("the export read nothing from the trail")
+	}
+	for _, f := range q.auditFilters {
+		for _, k := range activityNonCallKinds {
+			if containsString(f.Kinds, k) {
+				t.Errorf("the export asks for the non-call kind %q", k)
+			}
+		}
+	}
+}
+
+// TestActivity_RendersNoWhoIsActiveStrip: the strip was removed (spec 04, owner
+// decision 2026-10-01), and ?account= still scopes the stream.
+func TestActivity_RendersNoWhoIsActiveStrip(t *testing.T) {
+	for _, path := range []string{"/console/activity", "/console/activity?account=acct-1", "/console/activity?ac=0"} {
+		q := &fakeQueries{rows: []capability.AuditRow{
+			refusalBy(apiIdentity("acct-1", "alice", "operator"), time.Minute, "r"),
+		}}
+		body := activityAs(t, q, path)
+		for _, banned := range []string{`class="whoactive"`, "Who is active", "Accounts on this page", `class="arow`} {
+			if strings.Contains(body, banned) {
+				t.Errorf("%s draws %q", path, banned)
+			}
+		}
+		if path == "/console/activity?account=acct-1" {
+			if !strings.Contains(body, "Show every Account") {
+				t.Error("the Account filter no longer offers Show every Account")
+			}
+			if len(q.auditFilters) == 0 || q.auditFilters[0].AccountID != "acct-1" {
+				t.Errorf("the Account filter was not applied to the stream: %+v", q.auditFilters)
+			}
+		}
 	}
 }
 

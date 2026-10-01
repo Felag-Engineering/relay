@@ -222,22 +222,21 @@ func TestActivity_RunningNowEntryIsMarkedFinishedInPlace(t *testing.T) {
 
 	// Under a kind with no live rows the section is still live while
 	// something is running, and nothing mounts when nothing is.
-	freeze := get(t, h, "/console/activity?kind=freeze").Body.String()
-	if !strings.Contains(freeze, "data-live-region") || !strings.Contains(freeze, `src="/console/assets/activity.js"`) {
-		t.Error("?kind=freeze with a running Job does not mount the live region for Running now")
+	refusal := get(t, h, "/console/activity?kind=refusal").Body.String()
+	if !strings.Contains(refusal, "data-live-region") || !strings.Contains(refusal, `src="/console/assets/activity.js"`) {
+		t.Error("?kind=refusal with a running Job does not mount the live region for Running now")
 	}
 	idle := cancelDeps(&fakeQueries{}, &fakeCanceller{})
 	idle.Events = newFakeEvents()
-	off := get(t, newTestHandler(idle, accounts.RoleAdmin), "/console/activity?kind=freeze").Body.String()
+	off := get(t, newTestHandler(idle, accounts.RoleAdmin), "/console/activity?kind=refusal").Body.String()
 	if strings.Contains(off, "data-live-region") || strings.Contains(off, "activity.js") {
-		t.Error("?kind=freeze with nothing running mounts a live region for a view that can never update")
+		t.Error("?kind=refusal with nothing running mounts a live region for a view that can never update")
 	}
 }
 
 func TestActivity_RunningNowFollowsAccountAndNothingElse(t *testing.T) {
 	fleet := runningFleet(7, "acct-1")
 	for i := range fleet {
-		// Within the strip's 15 minutes, so the Account is listed and linked.
 		fleet[i].CreatedAt = testNow.Add(-time.Duration(i+1) * time.Minute)
 		// So the stream's ?outcome=success keeps these rows.
 		fleet[i].Counts = map[jobs.Outcome]int{jobs.OutcomeSuccess: 1}
@@ -273,15 +272,6 @@ func TestActivity_RunningNowFollowsAccountAndNothingElse(t *testing.T) {
 	}
 	if href := unescapeHref(t, everyone[1]); strings.Contains(href, "rc=") || strings.Contains(href, "ro=") || strings.Contains(href, "account=") {
 		t.Errorf("Show every Account %q keeps Running now's position or the Account", href)
-	}
-	strip := regexp.MustCompile(`class="arow[^"]*" href="([^"]*)"`).FindAllStringSubmatch(body, -1)
-	if len(strip) == 0 {
-		t.Fatal("the strip lists no Account to link to")
-	}
-	for _, m := range strip {
-		if href := unescapeHref(t, m[1]); strings.Contains(href, "rc=") || strings.Contains(href, "ro=") {
-			t.Errorf("a strip link %q keeps Running now's position under a different Account", href)
-		}
 	}
 }
 
@@ -388,7 +378,7 @@ func TestActivity_AFailedOrUnauditableRunningNowReadRefusesThePage(t *testing.T)
 	// The stream's read succeeds here; only an unauditable Running now read
 	// can refuse the page, through the latch.
 	unaudited := &fakeQueries{jobsErr: errors.Join(capability.ErrReadUnaudited, errQueryFailed)}
-	rec = get(t, newTestHandler(cancelDeps(unaudited, &fakeCanceller{}), accounts.RoleViewer), "/console/activity?kind=freeze")
+	rec = get(t, newTestHandler(cancelDeps(unaudited, &fakeCanceller{}), accounts.RoleViewer), "/console/activity?kind=refusal")
 	if rec.Code == http.StatusOK {
 		t.Fatal("an unauditable Running now read still served the page (ADR-0025 decision 4)")
 	}

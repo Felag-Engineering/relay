@@ -23,14 +23,14 @@ package console
 // computed in the aggregate. The cost is FLAT from 3 Nodes to 10,000: the same
 // "bounded by construction, not capped after the fact" doctrine job.go states.
 //
-// Non-dispatch events are first-class rows, not a footnote: approvals,
-// Enrollment Token mints, Freeze transitions and Node revokes are things
-// that happened to the fleet, and an operator who has to look in a second
-// place for "who minted that token" has a trail with a hole in it. They
-// come from capability.QueryAudit. Sign-ins, step-up, Account changes and
-// API Token mints and revokes are NOT among them — those change who can get
-// in rather than what happened to the fleet, and they are the admin-only
-// Access screen's rows instead (access.go, spec 20, D17).
+// Only tool calls are rows: dispatches, and the approvals, refusals,
+// Preflights, reads and cancels that come from capability.QueryAudit.
+// Freeze transitions, Node revokes, Enrollment Token events and other
+// non-call records stay on the trail without being drawn here (spec 04,
+// Grain; owner decision 2026-10-01). Sign-ins, step-up, Account changes and
+// API Token mints and revokes are NOT among them either — those change who
+// can get in rather than what happened to the fleet, and they are the
+// admin-only Access screen's rows instead (access.go, spec 20, D17).
 //
 // # The two lanes, and their page boundary
 //
@@ -55,15 +55,12 @@ package console
 // DOES NOT REPAINT LIVE. A Job that finishes while the page is open says so, in
 // place, and the counts arrive on the explicit reload.
 //
-// # The strip, the collapse and Console reads
+// # The collapse and Console reads
 //
-// Shared with the Agents screen and kept in callfeed.go. The order is fixed:
+// Kept in callfeed.go. The order is fixed:
 // reads made from a Console session are left out in the fetch (fetchActivity),
-// then the strip counts the calls that remain, then consecutive identical rows
-// fold, and only then does Cancel attach, so the strip counts calls and never
-// rendered rows and each running Job keeps exactly one Cancel. The strip's
-// sentences are scoped to the page and the filter, never the fleet, because
-// this feed is always filtered (activityStripNote).
+// then consecutive identical rows fold, and only then does Cancel attach, so
+// each running Job keeps exactly one Cancel.
 //
 // # There is no Jobs destination
 //
@@ -123,12 +120,8 @@ const (
 	rowPlan     rowKind = "plan"
 	rowCancel   rowKind = "cancel"
 	rowApproval rowKind = "approval"
-	rowToken    rowKind = "token"
-	rowNode     rowKind = "node"
-	rowFreeze   rowKind = "freeze"
 	rowRead     rowKind = "read"
 	rowRefusal  rowKind = "refusal"
-	rowOther    rowKind = "other"
 
 	// rowAccess is NOT an Activity family: it marks a kind that belongs to
 	// the Access screen (access.go, spec 20) instead — sign-in, step-up,
@@ -138,12 +131,31 @@ const (
 	// ?kind=<an Access family> falls to the unknown-kind case exactly as
 	// ?kind=nonesuch does (spec 04's "not on this screen, for any role").
 	rowAccess rowKind = "access"
+
+	// rowNotACall is NOT an Activity family either: it marks a trail record
+	// that is not a tool call — Freeze transitions, Node revokes, Enrollment
+	// Token events, protocol_violation, and any kind nobody has classified
+	// (spec 04, Grain; owner decision 2026-10-01). Like rowAccess it is never
+	// in rowKindOrder, so it is never a chip, never in the default Kinds and
+	// never reachable by ?kind=, which falls to the unknown-kind case.
+	rowNotACall rowKind = "not-a-call"
 )
 
 // rowKindOrder is every family, in the order the chips render. It is also the
 // set kindsOfFamily must be TOTAL over.
 var rowKindOrder = []rowKind{
-	rowDispatch, rowPlan, rowApproval, rowRefusal, rowRead, rowCancel, rowFreeze, rowNode, rowToken, rowOther,
+	rowDispatch, rowPlan, rowApproval, rowRefusal, rowRead, rowCancel,
+}
+
+// activityNonCallKinds are the trail kinds this screen deliberately does not
+// draw: records of fleet events that are not tool calls. They stay on the
+// audit trail. The list is hand-kept on purpose, so that
+// TestActivity_EveryAuditKindIsClassified fails on a kind nobody classified
+// rather than a new kind quietly landing in either place.
+var activityNonCallKinds = []string{
+	audit.KindFreezeEngage, audit.KindFreezeRelease,
+	audit.KindNodeRevoke, audit.KindTokenMint, audit.KindTokenRevoke,
+	audit.KindProtocolViolation,
 }
 
 // kindOf maps a trail record onto a row family.
@@ -166,19 +178,9 @@ func kindOf(k string) rowKind {
 		audit.KindApprovalDecided, audit.KindApprovalExpired,
 		audit.KindApprovalPendingObserved:
 		return rowApproval
-	// Enrollment Tokens only (audit.KindTokenMint/Revoke): a Node joins or
-	// is revoked with its token. API Tokens (audit.KindAPITokenMint/Revoke)
-	// authenticate a caller instead and are an Access kind, caught by the
-	// accessKindOf check above — the two used to share this family and were
-	// split by D17 (spec 04, spec 20).
-	case audit.KindTokenMint, audit.KindTokenRevoke:
-		return rowToken
-	case audit.KindNodeRevoke:
-		return rowNode
-	case audit.KindFreezeEngage, audit.KindFreezeRelease:
-		return rowFreeze
 	default:
-		return rowOther
+		// Fails closed: a kind no tool-call family claims is not drawn.
+		return rowNotACall
 	}
 }
 
@@ -187,10 +189,8 @@ func kindOf(k string) rowKind {
 //
 // Derived, not enumerated, because the two lists would have to agree and only
 // one of them is ever edited. Every audit kind lands in exactly one family by
-// construction, including the ones kindOf does not name. `other` covers only
-// kinds spec 04's Row kinds table does not name (protocol_violation today, and
-// any kind added to internal/audit later), and is a real, selectable family
-// for exactly that reason.
+// construction, including the ones kindOf does not name. Kinds outside
+// rowKindOrder's families (Access, not-a-call) are mapped but never requested.
 var kindsByFamily = buildKindsByFamily()
 
 func buildKindsByFamily() map[rowKind][]string {
@@ -244,10 +244,10 @@ var activityLaneExcluded = []string{audit.KindDispatch, audit.KindRead}
 // screen (spec 04's Grain, D17), not a chip on this one.
 var activityAccessKinds = accessAllKinds
 
-// activityTrailKinds is what the default feed asks the trail lane for:
-// everything except activityLaneExcluded and activityAccessKinds. Derived
-// from audit.Kinds() so that a kind added to internal/audit appears here
-// without anyone remembering to add it.
+// activityTrailKinds is what the default feed asks the trail lane for: the
+// tool-call families' kinds, except activityLaneExcluded and
+// activityAccessKinds. A new audit kind does not appear here automatically: it
+// must be classified, and TestActivity_EveryAuditKindIsClassified enforces it.
 var activityTrailKinds = defaultTrailKinds()
 
 func defaultTrailKinds() []string {
@@ -260,7 +260,7 @@ func defaultTrailKinds() []string {
 	}
 	var out []string
 	for _, k := range audit.Kinds() {
-		if !excluded[k] {
+		if !excluded[k] && slices.Contains(rowKindOrder, kindOf(k)) {
 			out = append(out, k)
 		}
 	}
@@ -343,10 +343,6 @@ type activityRow struct {
 	// rendered.
 	AccountID string
 
-	// role is the verified role at this call, trail rows only. It feeds the
-	// strip; it is neither rendered nor part of the collapse key.
-	role string
-
 	// Calls is how many calls this row stands for: 1 unless the collapse folded
 	// a run of consecutive identical rows into it. FirstWhen is the When of the
 	// OLDEST call in such a run, in the same absolute UTC format as When, and is
@@ -377,9 +373,7 @@ type activityRow struct {
 	RawExecTier bool
 	// AwaitingRecord is a Running row with no audit-joined field joined yet:
 	// the Job engine writes its dispatch record after the dispatch returns.
-	// The strip depends on it, Cancel does not (Cancel lives in Running now):
-	// a Job joins the strip once its dispatch is recorded (spec 04, "Who is
-	// active"), so activityStrip leaves an AwaitingRecord row off.
+	// The template draws its evnote for it.
 	AwaitingRecord bool
 	// RunningHref is where a Running row links up to: its entry in Running
 	// now when the Job is on that section's current page, else the section.
@@ -781,22 +775,16 @@ type activityView struct {
 	// Refresh reloads this exact view, lane positions included.
 	Refresh Refresh
 
-	// Strip is the "Who is active" strip and StripNote the one sentence
-	// explaining an empty or partial one. Both are scoped to this page and this
-	// filter, never the fleet: see activityStripNote.
-	Strip     []stripEntry
-	StripNote string
-
 	// AllAccountsHref is this view with ?account= cleared and everything else
-	// kept. It is the only strip-area link that clears the filter.
+	// kept: the Show every Account link.
 	AllAccountsHref string
 
 	// ReadKindHref is this view filtered to the read family, keeping account
 	// and console; the About disclosure links to it.
 	ReadKindHref string
 
-	// ReadsExcluded says the filter does not select read records, so the strip
-	// cannot list an Account that only read.
+	// ReadsExcluded says the filter does not select read records, so reads
+	// made from this Console cannot be on the page.
 	ReadsExcluded bool
 
 	// ConsoleInForce says the filter selects read records, which is the only
@@ -967,21 +955,9 @@ func handleActivity(d Deps) http.HandlerFunc {
 			v.NewestHref = f.base()
 		}
 
-		// The strip counts CALLS over the rows left after the Console
-		// exclusion and the Refine, so it runs BEFORE the collapse, which folds
-		// rows and must never change a count.
-		var dropped, awaiting, unrecorded int
-		v.Strip, dropped, awaiting, unrecorded = activityStrip(v.Rows, f, d.now())
-		v.StripNote = activityStripNote(activityStripFacts{
-			Listed: len(v.Strip), Dropped: dropped,
-			Scrolled: v.Scrolled, Exhausted: v.Exhausted, AccountScoped: f.Account != "",
-			Awaiting: awaiting, Unrecorded: unrecorded,
-			ConsoleLeftOut: v.ConsoleLeftOut, PageCalls: v.PageCalls,
-		})
-
 		v.Rows = collapseActivityRows(v.Rows)
 		fc, fr := foldedSummary(v.Rows, func(r activityRow) int { return r.Calls })
-		v.CollapseNote = collapseNote(fc, fr, "strip")
+		v.CollapseNote = collapseNote(fc, fr)
 		for _, r := range v.Rows {
 			v.EventCount += r.Calls
 		}
@@ -1054,7 +1030,7 @@ func handleActivity(d Deps) http.HandlerFunc {
 // exported fields, so any field the template renders is in the key by
 // construction, with no hand-kept list. Some exported fields are not rendered
 // (AccountID and Resolved among them); including them can only stop a fold,
-// never cause one. The unexported at and role are left out, and neither is
+// never cause one. The unexported at is left out, and is not
 // rendered. activityRow holds slices (Outcomes.Segments), so == cannot compare
 // rows the way it compares agentCall.
 //
@@ -1085,140 +1061,6 @@ func collapseActivityRows(rows []activityRow) []activityRow {
 		run.Calls += older.Calls
 		run.FirstWhen = older.When
 	})
-}
-
-// activityStrip builds the "Who is active" strip from the page's rows, counting
-// calls and never rendered rows, and reports the rows it left off.
-//
-// Two kinds of row are left off. A running Job whose dispatch is not recorded
-// yet (AwaitingRecord) is not an audited call yet: "a Job joins the strip once
-// its dispatch is recorded" (spec 04). A Job with no recorded requester has no
-// caller to list, and the row itself already surfaces the defect. Every other
-// row counts, including a trail row whose principal is "unattributed": a row
-// the Relay cannot attribute is a bug to surface, not a blank, so it is listed
-// as an entry with no link.
-//
-// Entries are keyed by verified Account ID (D18); an asserted principal is
-// keyed by its text under a different prefix, so the two never merge. An entry
-// with no verified ID is listed and not linked. Every linked entry, the
-// current one included, links to this view scoped to it at page one, keeping
-// every other filter and console: "Show every Account" is the only
-// link that clears the account.
-func activityStrip(rows []activityRow, f activityFilter, now time.Time) (entries []stripEntry, dropped, awaiting, unrecorded int) {
-	riskMutate := jobs.RiskClassName(jobs.RiskClassMutate)
-	var calls []stripCall
-	for _, r := range rows {
-		if r.Kind == rowDispatch && r.AwaitingRecord {
-			awaiting++
-			continue
-		}
-		if r.Unrecorded && !r.AwaitingRecord {
-			unrecorded++
-			continue
-		}
-		key := "name:" + r.Principal
-		if r.AccountID != "" {
-			key = "id:" + r.AccountID
-		}
-		calls = append(calls, stripCall{
-			Key:      key,
-			Name:     r.Principal,
-			Verified: r.AccountID != "",
-			Role:     r.role,
-			// What the row's own risk chip says, so the strip and the rows agree.
-			Mutate: r.Risk == riskMutate,
-			At:     r.at,
-		})
-	}
-	current := ""
-	if f.Account != "" {
-		current = "id:" + f.Account
-	}
-	entries, dropped = buildStrip(calls, current, now)
-	for i := range entries {
-		e := &entries[i]
-		if !e.Verified {
-			continue
-		}
-		scoped := f
-		scoped.Account = strings.TrimPrefix(e.Key, "id:")
-		scoped.Job, scoped.Audit = lanePos{}, lanePos{}
-		scoped.Running = runningPos{}
-		e.Href = scoped.base()
-	}
-	return entries, dropped, awaiting, unrecorded
-}
-
-// activityStripFacts is everything activityStripNote speaks from.
-type activityStripFacts struct {
-	Listed, Dropped                    int
-	Scrolled, Exhausted, AccountScoped bool
-	Awaiting, Unrecorded               int
-	ConsoleLeftOut, PageCalls          int
-}
-
-// activityStripNote is the strip's ONE sentence explaining an empty or partial
-// strip.
-//
-// Activity's strip never speaks for the fleet. Its feed never holds every call:
-// the Access kinds are never on this screen (D17), read records are left out
-// whenever no kind filter is set (activityLaneExcluded; every Console page load
-// is one), and any kind filter narrows. So "reads are excluded or the filter
-// narrows" holds for every filter Activity accepts, and the fleet-wide
-// sentences railNote prints on Agents ("No Account has called a control surface
-// yet.", "No Account has called in the last 15 minutes.") would be claims about
-// the fleet made from a filtered page. Every sentence here is scoped to "this
-// page" or "this filter".
-//
-// CONTRACT: "" only when Listed is positive and Dropped is 0. There is
-// deliberately no unfiltered arm: a future filter that selects every call must
-// add one and say why.
-func activityStripNote(n activityStripFacts) string {
-	accountsText := countOf(n.Dropped, "Account", "Accounts")
-	var note string
-	consoleArm := false
-	switch {
-	case n.Listed > 0 && n.Dropped == 0:
-		return ""
-	case n.Listed > 0:
-		note = accountsText + " called on this page but not in the last 15 minutes, so the strip does not " +
-			"list them — their calls are below."
-	case n.Dropped > 0 && !n.Scrolled:
-		note = "No Account on this page has called in the last 15 minutes. " + accountsText +
-			" called earlier — their calls are below."
-	case n.Dropped > 0:
-		note = "No Account on this page has called in the last 15 minutes, which is expected on a page " +
-			"reached by following Older — these are historical calls. " + accountsText +
-			" called on this page; their calls are below."
-	case n.Awaiting > 0 || n.Unrecorded > 0:
-		note = "No Account has a recorded call on this page"
-		if n.Awaiting > 0 {
-			note += " yet"
-		}
-		note += "."
-		if n.Awaiting > 0 {
-			note += " Running Jobs whose dispatch is not recorded yet are shown below and join the strip once it is."
-		}
-		if n.Unrecorded > 0 {
-			note += " Jobs below with no recorded requester have no caller to list."
-		}
-	case n.ConsoleLeftOut > 0 && n.ConsoleLeftOut == n.PageCalls:
-		consoleArm = true
-		note = "Every call on this page is a read made from this Console, and those are left out."
-		if n.AccountScoped {
-			note = "Every call by this Account on this page is a read made from this Console, and those are left out."
-		}
-	case n.Exhausted || n.PageCalls == 0:
-		note = "This page holds no calls."
-	default:
-		// Calls were fetched, and the Refine, alone or with a partial Console
-		// exclusion, removed all of them.
-		note = "No call on this page matches this filter."
-	}
-	if n.ConsoleLeftOut > 0 && !consoleArm {
-		note += " Reads made from this Console are not counted."
-	}
-	return note
 }
 
 // activityLaneKinds is activityLanes' trail half, for the export — which
@@ -1479,8 +1321,8 @@ func dispatchRowFromJob(sum capability.JobSummary) activityRow {
 	// "No audit-joined field has been joined yet": JobSummary documents each
 	// of these as LEFT-JOINed from the per-Job dispatch aggregate and empty
 	// until it is written. An empty Selector alone is not the signal, since a
-	// recorded dispatch may legitimately carry one. Cancel does not depend on
-	// it; the strip does (activityStrip).
+	// recorded dispatch may legitimately carry one. The template draws its
+	// no-dispatch-record-yet note from it.
 	row.AwaitingRecord = row.Running && sum.Selector == "" && len(sum.Args) == 0 &&
 		len(sum.RawExecArgv) == 0 && sum.ApprovalID == "" && sum.GrantID == "" &&
 		sum.OnBehalfOf == ""
@@ -1556,10 +1398,6 @@ func eventRowFromTrail(f trailFacts) activityRow {
 		PlanHash:        f.PlanHash,
 	}
 	row.Outcome, row.State = callOutcome(f)
-	// Verified lane only: an asserted role must never reach the strip (#540).
-	if f.VerifiedAccountID != "" {
-		row.role = f.Role
-	}
 	// The trail carries no declared risk class, so this lane INFERS one — the
 	// one place this package guesses, with its limits written down in
 	// vocab.go. The Job lane above never calls it.
@@ -1594,25 +1432,15 @@ func eventRowFromTrail(f trailFacts) activityRow {
 // summarize renders the one-line description of a non-dispatch event.
 //
 // It is a switch and not a format string on the record because these events are
-// not variations of one thing: a Freeze release and an Enrollment Token mint
+// not variations of one thing: an approval decision and a Cancel
 // have nothing in common except that they happened, and prose that pretends
 // otherwise reads as machine output rather than as a trail.
 func summarize(f trailFacts) string {
 	switch f.Kind {
-	case audit.KindFreezeEngage:
-		return "engaged the Relay-wide Freeze — no new Tasks dispatch"
-	case audit.KindFreezeRelease:
-		return "released the Freeze"
 	case audit.KindJobCancel:
 		// "cancelled" is a Task outcome word and would claim the Job's fate
 		// (GLOSSARY Cancellation, ADR-0013); the row records only the ask.
 		return "asked to cancel Job " + shortHash(f.JobID)
-	case audit.KindTokenMint:
-		return "minted an Enrollment Token"
-	case audit.KindTokenRevoke:
-		return "revoked an Enrollment Token — every Node it enrolled is revoked with it"
-	case audit.KindNodeRevoke:
-		return "revoked Node " + f.NodeID
 	case audit.KindApprovalRequested:
 		return "parked a dispatch for approval"
 	case audit.KindApprovalGrantRequested:
@@ -1660,8 +1488,6 @@ func summarize(f trailFacts) string {
 		// 2026-10-01, said "list_nodes" about the same audit row. Two screens
 		// naming one thing two ways is how an operator stops trusting either.
 		return "enumerated " + readTargetOf(f)
-	case audit.KindProtocolViolation:
-		return "a Node reported something the wire contract does not permit"
 	default:
 		return f.Kind
 	}
@@ -1892,18 +1718,6 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
   {{end}}
 </section>
 
-<section class="whoactive" aria-label="Who is active">
-  <div class="ftitle">{{if .Scrolled}}Accounts on this page{{else}}Who is active{{end}} <span class="phint">Accounts on this page with a call in the last 15 minutes. The numbers count the calls on this page. Mutate counts what was asked, including refused, parked and preflight calls. A collapsed row counts every call it stands for. A running Job is counted once its dispatch is recorded.{{if .ReadsExcluded}} Read records are left out of this view, so an Account that only read is not listed.{{end}}</span></div>
-  {{range .Strip}}
-  {{if .Href}}<a class="arow{{if .Current}} on{{end}}" href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>
-    {{template "stripentry" .}}
-  </a>{{else}}<div class="arow unlinked" title="No verified Account ID is recorded for these calls, so the stream cannot be scoped to them.">
-    {{template "stripentry" .}}
-  </div>{{end}}
-  {{end}}
-  {{with .StripNote}}<p class="dim">{{.}}</p>{{end}}
-</section>
-
 {{template "live-region" .Live}}
 
 <div class="feed">
@@ -1923,7 +1737,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
         {{with .Risk}}<span class="chip risk" data-risk="{{.}}">{{.}}</span>{{end}}
         {{if .State}}<span class="chip state" data-state="{{.State}}">{{.State}}</span>{{else}}{{with .Outcome}}<span class="chip outcome" data-outcome="{{.}}">{{.}}</span>{{end}}{{end}}
         {{if .Running}}<span class="chip" data-state="running" title="This Job has Tasks not yet resolved.">running</span>{{end}}
-        {{if gt .Calls 1}}<span class="chip calls" title="Consecutive identical calls, collapsed for display. Each one is on the audit trail and each counts on the strip.">x{{.Calls}}</span>{{end}}
+        {{if gt .Calls 1}}<span class="chip calls" title="Consecutive identical calls, collapsed for display. Each one is on the audit trail.">x{{.Calls}}</span>{{end}}
       </div>
       {{with .Args}}<div class="evargs mono">{{.}}</div>{{end}}
       <div class="evmeta">
@@ -1945,7 +1759,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
       </div>{{end}}
       {{with .Reason}}<div class="evreason">{{.}}</div>{{end}}
       {{if .ReadClass}}<div class="evnote">Output was not retained. Nothing here will show it later.</div>{{end}}
-      {{if gt .Calls 1}}<div class="evnote">{{.Calls}} consecutive identical calls, {{.FirstWhen}} to {{.When}}. Each one is on the audit trail and each counts on the strip. Only the display is collapsed.</div>{{end}}
+      {{if gt .Calls 1}}<div class="evnote">{{.Calls}} consecutive identical calls, {{.FirstWhen}} to {{.When}}. Each one is on the audit trail. Only the display is collapsed.</div>{{end}}
     </div>
   </article>
 {{else}}
@@ -1992,11 +1806,8 @@ writes to it: this page adds a read record each time it fetches dispatches or ot
 that included them would fill with the operator&#39;s own reloads. They are one click away as
 <a href="{{.ReadKindHref}}">kind=read</a>. Nothing is hidden.</p>
 
-<p class="gap"><b>Two row kinds are not built here yet: enrollments and label changes.</b> The
-audit trail holds no record of either. An enrollment exists only on the live event stream, for a few
-minutes (#444), and label management is not built (#430). Splicing those few minutes into a feed you can scroll
-back through would put rows on this screen that vanish as you read, which is worse than leaving them
-out.</p>
+<p class="gap"><b>This screen lists tool calls and nothing else.</b> Freeze transitions, Node
+revokes, Enrollment Token mints and revokes, and enrollments are on the audit trail, not here.</p>
 
 <p class="gap"><b>The filter box carries no Selector and no Node.</b> Neither filter is built yet:
 the Job query has a field for neither. A Job spans its Selector&#39;s whole fan-out, so it has no single Node. A Node filter that
@@ -2026,8 +1837,4 @@ operator reading it during an incident.</p>
 
 {{end}}
 
-{{/* One strip entry's body, shared by its linked and unlinked forms so the two cannot drift apart. No dot and no "live": there are no sessions to be connected to (spec 04, Must not appear). */}}
-{{define "stripentry"}}<span class="aname">{{template "trust-chip" (trust .Name .Verified)}}{{with .Role}}<span class="arole" title="The role the Relay authenticated this Account with at its most recent call on this page.">{{.}}</span>{{end}}</span>
-    <span class="astats"><b>{{.Calls}}</b> {{plural .Calls "call" "calls"}}{{if .Mutates}} · {{.Mutates}} mutate{{end}}</span>
-    <span class="asub">{{with .FirstSeen}}first {{.}} · {{end}}last {{.LastSeen}}</span>{{end}}
 `)
