@@ -82,6 +82,7 @@ relay/cmd/relay/bootstrap_token.go
 relay/cmd/relay/console_password.go
 relay/cmd/relay/control_surfaces.go
 relay/cmd/relay/dispatch_wiring.go
+relay/cmd/relay/host_audit.go
 relay/cmd/relay/tunnel.go
 daemon/src/cancel.rs
 daemon/src/scheduler.rs
