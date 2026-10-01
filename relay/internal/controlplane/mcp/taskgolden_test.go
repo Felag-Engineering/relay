@@ -562,6 +562,6 @@ func TestGolden_CreateForANonCapableClient(t *testing.T) {
 		t.Errorf("matched_rules = %v, want the rule that parked it named", parked["matched_rules"])
 	}
 	if next, _ := parked["next_step"].(string); next == "" {
-		t.Error("next_step is empty; an agent reading this result needs to be told that waiting is correct")
+		t.Error("next_step is empty; an AI-agent reading this result needs to be told that waiting is correct")
 	}
 }

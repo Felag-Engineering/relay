@@ -1008,7 +1008,7 @@ var agentCallKinds = buildAgentCallKinds()
 // "every call an AI-agent makes" heading. A future refactor of kindOf that
 // renamed a row family and left isAgentCallKind's switch matching nothing
 // would produce exactly that, silently, with every existing test still
-// green. A Relay that cannot derive its own agent-call kind set must not
+// green. A Relay that cannot derive its own AI-agent-call kind set must not
 // start serving this screen with a filter that means "everything".
 func buildAgentCallKinds() []string {
 	var out []string

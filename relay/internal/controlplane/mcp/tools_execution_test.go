@@ -211,7 +211,7 @@ func TestBuildOperationAction_MisspelledRequiredArgIsRejected(t *testing.T) {
 	msg := err.Error()
 	for _, want := range []string{"unitt", "unit", "list_operations"} {
 		if !strings.Contains(msg, want) {
-			t.Errorf("error %q must mention %q so the agent can correct the misspelling", msg, want)
+			t.Errorf("error %q must mention %q so the AI-agent can correct the misspelling", msg, want)
 		}
 	}
 }
@@ -350,7 +350,7 @@ func TestDispatch_ParkIsAResultNotAnError(t *testing.T) {
 		t.Errorf("expires_at = %q, want RFC 3339 UTC", pa.ExpiresAt)
 	}
 	if pa.NextStep == "" {
-		t.Error("next_step is empty; an agent with no guidance retries in a loop")
+		t.Error("next_step is empty; an AI-agent with no guidance retries in a loop")
 	}
 
 	// Nothing ran, so nothing may look like it did.
