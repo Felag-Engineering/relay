@@ -2257,7 +2257,7 @@ func TestConsole_EveryRenderedWeightHasAFace(t *testing.T) {
 	// skipped past (#673: the skip turned a shrunken UI into a pass).
 	//
 	// Scoped to the screen CONTENT, because layoutTmpl renders <b> in the
-	// brand and the signed-in-as footer of EVERY page: a whole-body check
+	// signed-in-as footer of EVERY page: a whole-body check
 	// passes on the chrome alone and can never fail. contentOf falls back
 	// to the whole body when its <main id="content"> anchor is missing, so
 	// the anchor is asserted first — otherwise a layout edit as small as
