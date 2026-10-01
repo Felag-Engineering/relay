@@ -328,7 +328,7 @@ const (
 	// inflate until "how many approvals were asked for" needs de-duplication to
 	// answer — and would bury a genuine second request among the polls. Kept as
 	// a record at all (rather than silently dropped, as the notifier correctly
-	// does) because an agent hammering a parked request is something an auditor
+	// does) because an AI-agent hammering a parked request is something an auditor
 	// plausibly wants to see; it just isn't a repeat ask.
 	AuditKindApprovalPendingObserved
 

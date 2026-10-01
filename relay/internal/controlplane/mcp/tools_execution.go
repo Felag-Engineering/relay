@@ -201,7 +201,7 @@ func renderRunError(err error) error {
 //   - an unknown Operation name → "unknown operation";
 //   - an unknown ARGUMENT name (e.g. a misspelled "unitt") — otherwise silently
 //     dropped, leaving the required arg empty so the daemon reports
-//     denied_by_policy, which sends the agent into describe_node/narrow/retry
+//     denied_by_policy, which sends the AI-agent into describe_node/narrow/retry
 //     loops it can never exit because the request was malformed, not forbidden;
 //   - a missing REQUIRED argument — otherwise the same empty-value denial.
 //
@@ -291,7 +291,7 @@ func tightenExecInputSchema[In any]() *schema.Schema {
 // A PARKED dispatch (ADR-0027) is the one non-nil error from Run that is not a
 // refusal, and it is rendered as a successful result carrying
 // pending_approval — see PendingApprovalOutput for why reporting it as a tool
-// error would actively mislead the agent that receives it. The parked value
+// error would actively mislead the AI-agent that receives it. The parked value
 // is ALSO returned directly (nil otherwise), so a caller can decide whether
 // to render a question instead (elicit.go) without re-deriving it from the
 // rendered output.
@@ -326,8 +326,8 @@ func dispatch(ctx context.Context, exec Executor, results JobResultReader, p cap
 	return RunOrPlanOutput{JobID: out.JobID, Results: out.Results}, nil, nil
 }
 
-// renderParked projects a capability.ParkedError into the agent-facing
-// pending_approval result. Every field is Relay-authored: the agent chose the
+// renderParked projects a capability.ParkedError into the AI-agent-facing
+// pending_approval result. Every field is Relay-authored: the AI-agent chose the
 // Action, but none of the words describing it (ADR-0027).
 func renderParked(parked *capability.ParkedError) *PendingApprovalOutput {
 	rules := parked.Rules

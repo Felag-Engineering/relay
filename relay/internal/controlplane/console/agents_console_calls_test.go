@@ -22,7 +22,7 @@ import (
 
 // consoleCallsRows is one page mixing an AI-agent's calls (API Token) with
 // the signed-in operator's own page loads (Console session). The operator's
-// reads name tools the agent never calls, so a substring test cannot confuse
+// reads name tools the AI-agent never calls, so a substring test cannot confuse
 // the two.
 func consoleCallsRows() []capability.AuditRow {
 	agent := capability.VerifiedIdentity{

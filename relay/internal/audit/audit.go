@@ -83,7 +83,7 @@ const (
 	// — re-driving is how a caller polls while waiting for a decision, and an
 	// agent polling every few seconds must not inflate the count of asks or
 	// bury a genuine second request among its polls. The polling itself stays
-	// on the record under this kind: an auditor plausibly wants to see an agent
+	// on the record under this kind: an auditor plausibly wants to see an AI-agent
 	// hammering a parked request, just not filed as repeat asks.
 	KindApprovalPendingObserved = "approval_pending_observed"
 

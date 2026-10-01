@@ -87,7 +87,7 @@ func TestMCPTask_AnotherAccountCannotResolveIt(t *testing.T) {
 
 // TestMCPTask_CancelDoesNotTouchTheApprovalRequest is ADR-0028's security
 // boundary: a cancel arrives over the AI's own session, so it may end the
-// client's polling contract and nothing more. An agent must not be able to yank
+// client's polling contract and nothing more. An AI-agent must not be able to yank
 // a request back the moment it senses a denial coming.
 func TestMCPTask_CancelDoesNotTouchTheApprovalRequest(t *testing.T) {
 	st, _ := openTestStore(t)

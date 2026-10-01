@@ -50,7 +50,7 @@ type Principal struct {
 	//     any Job, but a machine Account may cancel only a Job whose recorded
 	//     requester is itself.
 	//   - ADR-0027's confirmation ladder, whose rung 2 (self-confirmation) is
-	//     human-requesters-only, because an agent confirming its own proposal
+	//     human-requesters-only, because an AI-agent confirming its own proposal
 	//     is the same actor answering twice.
 	//
 	// The empty value means "unknown", and every check written against this

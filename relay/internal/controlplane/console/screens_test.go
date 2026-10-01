@@ -3121,7 +3121,7 @@ func TestAgents_CancelOutcomeIsRequestedNotUnspecified(t *testing.T) {
 // TestAgents_PlanModeRendersAsACallNamingTheToolItPlanned.
 //
 // The other half of #537: KindPlan reached this screen through no arm of
-// isAgentCall, so a Plan — an agent stating what it WOULD run, which is the
+// isAgentCall, so a Plan — an AI-agent stating what it WOULD run, which is the
 // trust-critical case spec 03 singles out — appeared nowhere on the trust
 // surface. It also left agentCallFrom's `case audit.KindPlan` arm unreachable
 // from buildAgents: a corrective switch naming a case nothing could enter.
@@ -3189,7 +3189,7 @@ func TestAgents_PlanModeRendersAsACallNamingTheToolItPlanned(t *testing.T) {
 			"line is the whole reason plan mode is on this screen")
 	}
 	// Risk is inferred by riskOf like every other row, and a planned mutate is
-	// still a mutate: what the agent asked for is the signal, and the outcome
+	// still a mutate: what the AI-agent asked for is the signal, and the outcome
 	// chip is what says it did not run.
 	for _, c := range calls {
 		if c.Risk != jobs.RiskClassName(jobs.RiskClassMutate) {

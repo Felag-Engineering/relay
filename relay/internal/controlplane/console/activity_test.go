@@ -153,7 +153,7 @@ func TestActivity_FiltersReachTheSeamRatherThanThePage(t *testing.T) {
 // verified/asserted distinction visible WITHOUT HOVERING.
 //
 // Two chips, never one. The Relay authenticated the requester; the caller
-// merely CLAIMED the on-behalf-of, and a jailbroken agent can claim anything —
+// merely CLAIMED the on-behalf-of, and a jailbroken AI-agent can claim anything —
 // the whole point of the grammar is that its claim cannot be made to look like
 // something the Relay checked.
 func TestActivity_AuditorAnswersAllFourFromOneRow(t *testing.T) {

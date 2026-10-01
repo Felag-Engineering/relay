@@ -547,7 +547,7 @@ func TestConsole_AnUnauditableReadRefusesTheScreen(t *testing.T) {
 }
 
 // TestConsole_ReadEgressCountsAConsoleRead is the third acceptance line: a
-// Console read is counted beside an agent's, not in a lane of its own.
+// Console read is counted beside an AI-agent's, not in a lane of its own.
 //
 // The record is REAL — produced by driving the fleet listing through the real
 // lane and sink — and is then projected onto the read lane's row type and fed

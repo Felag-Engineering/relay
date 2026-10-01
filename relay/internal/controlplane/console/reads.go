@@ -286,10 +286,10 @@ type readTarget struct {
 	// Nodes is DISTINCT Nodes, not records carrying a Node id. The first build
 	// counted records, so `file.read /etc/shadow` run five times across three
 	// machines read "15 Nodes" on a three-Node fleet — a number larger than the
-	// fleet, on the screen whose entire job is to say how far an agent reached.
+	// fleet, on the screen whose entire job is to say how far an AI-agent reached.
 	Nodes int
 	// Refused counts reads a Node's Policy denied. These are the most
-	// interesting rows on the screen: an agent repeatedly asking for something
+	// interesting rows on the screen: an AI-agent repeatedly asking for something
 	// the deny-list refuses is either misconfigured or probing, and both are
 	// worth a look.
 	Refused int
@@ -364,7 +364,7 @@ type readsView struct {
 	// read lane's own trail queries, which read the Relay's own registry and
 	// catalogue and never touch a Node.
 	//
-	// Both are exposure and both are counted — knowing an agent enumerated a
+	// Both are exposure and both are counted — knowing an AI-agent enumerated a
 	// 10,000-Node estate four hundred times is worth a look. They are reported
 	// SEPARATELY because blending them makes each number mean less: a
 	// headline of "13 read calls / 6 distinct targets" that mixes

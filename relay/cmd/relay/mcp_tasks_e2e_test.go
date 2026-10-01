@@ -165,7 +165,7 @@ func TestMCPTasks_PollAParkedDispatchThroughToCompletion(t *testing.T) {
 }
 
 // TestMCPTasks_CancelAParkedTaskLeavesTheApprovalDecidable is the security
-// property, proven end to end over the AI's own channel: an agent may withdraw
+// property, proven end to end over the AI's own channel: an AI-agent may withdraw
 // its own interest and may not touch the decision a human is being asked for.
 func TestMCPTasks_CancelAParkedTaskLeavesTheApprovalDecidable(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutates)

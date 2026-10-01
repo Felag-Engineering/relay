@@ -249,7 +249,7 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 // PRESERVATION, not a claim that admin is already the strongest role (that
 // conflates authority breadth with PERSISTENCE: a machine admin minting a
 // Token converts a transient session compromise into durable access that
-// outlives revoking the agent's own credential, exactly ADR-0009's concern).
+// outlives revoking the AI-agent's own credential, exactly ADR-0009's concern).
 // These nine routes are shipped, and
 // TestIdentityAPI_AccountTokenAuthenticatesAndRevocationCutsAccess and
 // TestIdentityAPI_SelfDisableAndSelfRoleAreRefused both drive them as MACHINE

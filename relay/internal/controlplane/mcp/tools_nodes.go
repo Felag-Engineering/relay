@@ -115,7 +115,7 @@ func templateVocabularyOutput(snap nodevocab.Snapshot, reported bool) TemplateVo
 //
 // tag: parses as an error too, and the schema below says so (#560). It used
 // to be advertised without a caveat while resolving to nothing, which handed
-// an agent HTTP 200 and an empty list for a namespace that is simply not
+// an AI-agent HTTP 200 and an empty list for a namespace that is simply not
 // implemented — a false negative given to the caller least able to notice it.
 type listNodesInput struct {
 	Selector string `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on, state:offline'. Every term must carry a node:, relay:, or state: prefix. tag: is a valid namespace in the model but is NOT resolvable yet — it has no storage until label management lands (#430) — so a tag: term is refused outright rather than matching nothing; do not filter on it. state: is a closed, Relay-derived vocabulary (ADR-0034): the boolean markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint=. Empty or omitted matches every Node."`

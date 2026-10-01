@@ -18,7 +18,7 @@ package console
 // The REQUEST, never the reasoning. The Relay sees tool calls; it does not see
 // the model's intent and must never pretend to. That is a feature rather than a
 // limitation: a verified record of what was asked beats a narrated account of
-// why, which an agent under prompt injection would fabricate happily and
+// why, which an AI-agent under prompt injection would fabricate happily and
 // convincingly.
 //
 // # Why this is not the Activity screen
@@ -821,7 +821,7 @@ func buildAgents(rows []capability.AuditRow, account string, now time.Time) ([]a
 		// screen is the request and never the result ("as the Relay received
 		// it", above) and the rail's other counters already read that way —
 		// Denied is a subset of Calls, not a column beside it. On a trust
-		// surface an attempted mutate is the signal: a compromised agent
+		// surface an attempted mutate is the signal: a compromised AI-agent
 		// probing a fleet and being refused every time must not read quieter
 		// than an honest one. What actually RAN is Activity's question, at Job
 		// grain, where an outcome means something.

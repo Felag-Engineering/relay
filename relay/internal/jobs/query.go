@@ -62,7 +62,7 @@ type JobQuery struct {
 	// on-behalf-of value. Joined from the audit trail, and matched EXACTLY —
 	// never a prefix and never a LIKE, mirroring audit.Query.OnBehalfOf. The
 	// asserted lane is caller-claimed and nothing checked it; a fuzzy match
-	// over it would let one agent's claim answer a question asked about
+	// over it would let one AI-agent's claim answer a question asked about
 	// another's.
 	OnBehalfOf string
 

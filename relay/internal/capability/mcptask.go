@@ -71,7 +71,7 @@ type TaskView struct {
 	JobID             string
 
 	// Summary is the Relay-authored description of what is waiting — the same
-	// text the approver sees, never anything the requesting agent wrote.
+	// text the approver sees, never anything the requesting AI-agent wrote.
 	Summary string
 
 	// PlanHash lets a caller correlate the handle with the parked dispatch and

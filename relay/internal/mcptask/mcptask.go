@@ -94,7 +94,7 @@ const (
 	// StatusCancelled: the client withdrew its interest via tasks/cancel.
 	//
 	// Per ADR-0028 the approval Request stays pending until a human decides it
-	// or it expires; an agent cannot yank it back.
+	// or it expires; an AI-agent cannot yank it back.
 	StatusCancelled
 )
 

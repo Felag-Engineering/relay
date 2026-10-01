@@ -46,7 +46,7 @@ import (
 // The rule is enforced in the capability layer (capability/mcptask.go), not
 // here, but it is worth stating at the surface that requests it: a
 // `tasks/cancel` arrives over the MCP session. If it could withdraw or decide
-// the pending approval, the requesting agent would hold a lever over the one
+// the pending approval, the requesting AI-agent would hold a lever over the one
 // decision ADR-0027 exists to keep off its channel — it could yank a request
 // back the instant it sensed a denial coming, erasing the evidence a human was
 // about to rule on. So cancelling ends the CLIENT'S interest: a running Job is
@@ -118,7 +118,7 @@ type TaskResult struct {
 	PollIntervalMs int64 `json:"pollIntervalMs"`
 
 	// StatusMessage is the Relay-authored description of what is waiting — the
-	// same text the approver reads. Carried so the agent holding this handle
+	// same text the approver reads. Carried so the AI-agent holding this handle
 	// tells its operator what the human is being asked, verbatim, rather than
 	// paraphrasing a plan it did not author.
 	StatusMessage string `json:"statusMessage,omitempty"`

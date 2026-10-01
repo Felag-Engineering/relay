@@ -476,13 +476,13 @@ func decodeResult(t *testing.T, res *sdkmcp.CallToolResult, out any) {
 // surface the issue is actually about.
 //
 // Before this, list_nodes advertised tag: in its schema and answered a tag:
-// filter with a successful, EMPTY Node list — which an agent reads as "no Node
+// filter with a successful, EMPTY Node list — which an AI-agent reads as "no Node
 // carries that tag" rather than "this namespace is not implemented". Asserting
 // only that the parser refuses the term would not have caught that, because
 // the defect was that the surface turned a false predicate into a 200.
 //
 // So this asserts the tool ERRORS, and that the message names the namespace
-// and the issue that will make it resolvable — an agent that cannot tell
+// and the issue that will make it resolvable — an AI-agent that cannot tell
 // "unimplemented" from "matched nothing" is the whole complaint.
 func TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty(t *testing.T) {
 	ts := newTestServer(t)

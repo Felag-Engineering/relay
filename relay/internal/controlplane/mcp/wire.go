@@ -418,7 +418,7 @@ type AnswerRefusalOutput struct {
 // on the authenticated Control API endpoint, riding a credential this MCP
 // session does not hold (ADR-0027) — that separation is the entire guarantee,
 // and it is enforced structurally by no_decision_test.go. DecisionPath is
-// therefore a POINTER for a human to follow, not a capability the agent can
+// therefore a POINTER for a human to follow, not a capability the AI-agent can
 // exercise.
 type PendingApprovalOutput struct {
 	// Status is the constant "pending_approval", so a client branches on a
@@ -438,7 +438,7 @@ type PendingApprovalOutput struct {
 	// doc: a pointer, never a capability of this session.
 	DecisionPath string `json:"decision_path" jsonschema:"The Control API route where an authorized human can answer this request. Do not approve this yourself; surface it to a human."`
 
-	// NextStep is plain-language guidance for the agent holding this result.
+	// NextStep is plain-language guidance for the AI-agent holding this result.
 	NextStep string `json:"next_step" jsonschema:"What to do next."`
 
 	// TaskID is the MCP task handle attached to this park (#374, SEP-2663), or
@@ -468,10 +468,10 @@ type PendingApprovalOutput struct {
 // pendingApprovalNextStep is the fixed guidance every parked result carries.
 //
 // It is spelled out rather than left implicit because the failure mode it
-// prevents is specific and expensive: an agent that reads a park as a
+// prevents is specific and expensive: an AI-agent that reads a park as a
 // transient error retries, and each retry finds the SAME pending request by
 // plan hash (so it neither duplicates the request nor makes progress) while
-// burning the operator's attention. Telling the agent plainly that waiting is
+// burning the operator's attention. Telling the AI-agent plainly that waiting is
 // correct, and that re-driving is how an approved Plan proceeds, is cheaper
 // than any amount of inference.
 const pendingApprovalNextStep = "Do not retry in a loop and do not treat this as an error. " +

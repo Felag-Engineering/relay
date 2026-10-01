@@ -181,7 +181,7 @@ func TestParseSelectorTagRefusalIsASentinel(t *testing.T) {
 //
 // Every surface renders this string verbatim -- the Console's fallback lead,
 // MCP's "invalid selector" wrap, the Control API's problem detail -- so a
-// stale namespace list here advertises tag: to the operator and the agent for
+// stale namespace list here advertises tag: to the operator and the AI-agent for
 // any ordinary typo, which is the exact false advertisement this issue exists
 // to remove. It was stale in the first version of this change and no test saw
 // it, because they all exercised the tag:-prefixed path.

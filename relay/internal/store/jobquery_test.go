@@ -646,7 +646,7 @@ func TestJobQuery_OnBehalfOfFilterSelects(t *testing.T) {
 	}
 
 	// Exact, never a prefix: the asserted lane is caller-claimed, and a fuzzy
-	// match over it would let one agent's claim answer a question asked about
+	// match over it would let one AI-agent's claim answer a question asked about
 	// another's.
 	none, err := st.JobQueries().QueryJobs(ctx, jobs.JobQuery{OnBehalfOf: "agent"}, 0, "")
 	if err != nil {

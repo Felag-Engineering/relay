@@ -289,7 +289,7 @@ type activityRow struct {
 
 	// Principal and Verified are the trust chip. OnBehalfOf is the asserted
 	// lane and is rendered as a SEPARATE, dashed chip — never merged into the
-	// verified one. A jailbroken agent can assert anything it likes; the whole
+	// verified one. A jailbroken AI-agent can assert anything it likes; the whole
 	// point of the two-chip grammar is that it cannot make its claim look like
 	// something the Relay checked.
 	Principal  string

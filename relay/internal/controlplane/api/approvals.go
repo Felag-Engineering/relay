@@ -20,7 +20,7 @@ import (
 // gated dispatch is proposed over one channel (an AI-agent's MCP session, an
 // IaC pipeline's API call) and answered over this one, which requires an
 // Account credential the requesting session does not hold. That is what puts
-// the proposing agent structurally outside the trust path: a jailbroken harness
+// the proposing AI-agent structurally outside the trust path: a jailbroken harness
 // can ask for anything and cannot answer for anybody.
 //
 // Three consequences are load-bearing and are enforced elsewhere on purpose:
@@ -77,7 +77,7 @@ type decisionResponse struct {
 
 // approvalResponse is a parked dispatch as an approver sees it.
 //
-// Summary is the RELAY-AUTHORED description — the agent chose the Action, but
+// Summary is the RELAY-AUTHORED description — the AI-agent chose the Action, but
 // not one word a human reads about it (ADR-0027). A surface must render this
 // text, never re-derive its own from the fields around it: three places now
 // render a Plan (plan mode, this queue, the Console composer), and a Plan that

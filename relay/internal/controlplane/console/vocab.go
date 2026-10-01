@@ -8,12 +8,12 @@ package console
 // Every Operation declares a risk class (ADR-0012, invariant 13) and the class
 // chooses the blast cap — but audit.Record does not carry it. It carries the
 // Operation NAME, the ActionKind, and the kind of record. So a screen that wants
-// to say "this was a read" has to work it out, and the first build of the agent
+// to say "this was a read" has to work it out, and the first build of the AI-agent
 // stream worked it out wrongly in both directions at once: `file.read` rendered
 // as `mutate`, and a parked `raw_exec` rendered as `read`.
 //
 // Both errors are worse than they look. The risk chip is how an operator reads
-// the blast radius of what an agent just did, and a Raw Exec — which ALWAYS
+// the blast radius of what an AI-agent just did, and a Raw Exec — which ALWAYS
 // takes the mutate cap, without exception (ADR-0012) — displayed as a read is
 // the single most misleading thing this Console could say.
 //
@@ -326,7 +326,7 @@ func callOutcome(f trailFacts) (outcome, state string) {
 		// and honest: a Task that already finished reports its real outcome
 		// and is never retroactively cancelled (ADR-0013, GLOSSARY.md), so a
 		// mostly-finished Job would render as cancelled on the one screen
-		// billed as what the agent actually asked for. "stopped", "aborted"
+		// billed as what the AI-agent actually asked for. "stopped", "aborted"
 		// and "killed" are GLOSSARY.md's rejected synonyms for Cancellation and
 		// are not available at any price.
 		//
