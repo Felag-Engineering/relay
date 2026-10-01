@@ -1573,7 +1573,7 @@ func eventRowFromTrail(f trailFacts) activityRow {
 	// unrecognised OPERATION — an answer that is right for its question and
 	// meaningless as a badge on a sign-in. Labelling every row on the trail
 	// `mutate` would teach an operator to ignore the chip on the rows where it
-	// is the whole point. Same set agent history draws it for.
+	// is the whole point. Same set AI-agent history draws it for.
 	risk := riskOf(f)
 	switch row.Kind {
 	case rowDispatch, rowRead, rowRefusal, rowApproval, rowPlan, rowCancel:
