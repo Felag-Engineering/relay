@@ -97,7 +97,12 @@ Fingerprints panel are the readable form of `state:policy-fingerprint=` and
 ## Pin to compare
 
 Select 2–3 Nodes for a side-by-side diff of Facts and effective Policy. This is the "why did only
-this one deny" flow in a single screen, and it is the reason Facts earn a detail page at all.
+this one deny" flow in a single screen, and it is the reason Facts earn a detail page at all. Nodes
+are pinned from this page's header or from any Fleet row (spec 01).
+
+The pin bar appears on Fleet, Node detail and Compare. Off the Compare screen it always shows
+"Compare these Nodes", disabled with "Pin 1 more to compare" below two pins, so one pin is never a
+dead end. On a Node's own page its chip reads "this Node" and is not a link to the page already open.
 
 **Not implemented: the Facts half.** No Fact but the hostname appears off Node detail, and the hostname only as a name (the v0.6.0
 acceptance criterion below), and a second screen diffing hostname/os/kernel/arch/ip would be the
@@ -106,7 +111,8 @@ Policy — what is comparable ACROSS Nodes for a divergence question — and
 `TestCompare_RendersNoFact` is the guard that keeps the promise true. The hostname appears only as
 the heading naming each column, as it does on a fleet row; nothing else self-reported is on the
 screen and nothing self-reported is compared. The pin set travels in the query string, so pinning
-is a link and this screen has no mutating route.
+is a link here and a GET form on Fleet; neither writes anything, and no screen has a mutating route
+for it.
 
 ## Must not appear
 
