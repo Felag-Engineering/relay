@@ -608,11 +608,11 @@ one that was mistyped, and either is worth knowing.</p>
   <tbody>
     {{range .FingerprintRows}}<tr{{if .Differs}} data-diff="1"{{end}}>
       <th scope="row">{{.Key}}</th>
-      {{range .Values}}<td><code>{{.}}</code></td>{{end}}
+      {{range $i, $v := .Values}}<td data-label="{{(index $.Columns $i).ID}}"><code>{{$v}}</code></td>{{end}}
     </tr>{{end}}
     {{range .PolicyRows}}<tr{{if .Differs}} data-diff="1"{{end}}>
       <th scope="row">{{.Key}}</th>
-      {{range .Values}}<td><pre>{{.}}</pre></td>{{end}}
+      {{range $i, $v := .Values}}<td data-label="{{(index $.Columns $i).ID}}"><pre>{{$v}}</pre></td>{{end}}
     </tr>{{end}}
   </tbody>
 </table>

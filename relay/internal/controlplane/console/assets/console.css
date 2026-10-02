@@ -349,8 +349,10 @@ code, pre, .mono { font-family: var(--font-mono); }
 /* Visually hidden, still announced. The stylesheet had no such utility, which
  * is a large part of why the tables ended up with unnamed columns and the
  * liveness dot ended up encoded in colour alone: there was no cheap way to give
- * something a name without also giving it a box. */
-.vh {
+ * something a name without also giving it a box. The phone menu's checkbox
+ * (.navtoggle) shares it: display:none on desktop, and at phone width it must
+ * stay focusable while showing nothing. */
+.vh, .navtoggle {
   position: absolute; width: 1px; height: 1px;
   padding: 0; margin: -1px; overflow: hidden;
   clip-path: inset(50%); white-space: nowrap; border: 0;
@@ -395,8 +397,9 @@ code, pre, .mono { font-family: var(--font-mono); }
   font-weight: var(--weight-medium);
 }
 /* The navigation proper, inside the sidebar but not the whole of it: the
- * account footer below is not somewhere you navigate to. .nav stays the flex
- * column so .navfoot's margin-top:auto still pins it to the bottom. */
+ * account footer below is not somewhere you navigate to. .navbody is the flex
+ * column that holds it and .navfoot, so .navfoot's margin-top:auto still pins
+ * the footer to the bottom. */
 .navgroups { display: block; }
 /* An <h2>, so the three groupings reach a screen reader as headings rather
  * than as styled divs — the grouping is the teaching (nav.go), and it used to
@@ -442,6 +445,16 @@ code, pre, .mono { font-family: var(--font-mono); }
 }
 .navfoot b { color: var(--text-second); font-weight: var(--weight-medium); }
 .navfoot form { margin: var(--space-2) 0 0; }
+
+/* The phone menu fold's desktop defaults. They MUST stay above the 800px block
+ * below: the phone rules there override these at equal specificity by coming
+ * later (TestConsole_PhoneLayoutRulesLiveInTheirBreakpoints enforces it).
+ * .navbody keeps the column layout so .navfoot's margin-top:auto still pins it;
+ * .navtop vanishes from layout so the brand sits where it always did. */
+.navtoggle { display: none; }
+.navtop { display: contents; }
+.navbtn { display: none; }
+.navbody { display: flex; flex-direction: column; flex: 1; }
 
 /* A button, not a link: signing out is a POST, and a mutating action reachable
  * by GET is a CSRF hole no token scheme repairs. Styled as a link because that
@@ -1631,8 +1644,8 @@ dl.kv dd { min-width: 0; }
  * content, which is how Fleet and Activity ended up 493px wide and Node
  * detail 643px, with the Node table clipped out of view entirely on Fleet.
  * The shell stacks instead of scrolling sideways: the nav moves above the
- * content, in normal document flow rather than as a drawer — a JS toggle
- * would need a script, and the content security policy admits none inline.
+ * content and folds behind a Menu label tied to a hidden checkbox — still no
+ * script, which the content security policy would not admit inline.
  * Every wide table already scrolls INSIDE its own .tablescroll/.devtable
  * container (see the "Tables" section above); this block is what stops the
  * DOCUMENT itself from scrolling, so those containers are reachable at all.
@@ -1643,8 +1656,23 @@ dl.kv dd { min-width: 0; }
   .app { flex-direction: column; }
   .nav {
     width: auto; border-right: 0; border-bottom: 1px solid var(--border-subtle);
-    padding: var(--space-3) 0;
+    padding: var(--space-2) 0;
   }
+  .navtop {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 var(--space-4);
+  }
+  .navtop .brand { padding: 0; }
+  .navbtn {
+    display: inline-flex; align-items: center; min-height: 44px;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
+    font-size: var(--text-sm); color: var(--text-second); cursor: pointer;
+  }
+  .navtoggle { display: block; }
+  .navbody { display: none; }
+  .navtoggle:checked ~ .navbody { display: block; }
+  .navtoggle:focus-visible ~ .navtop .navbtn { outline: 2px solid var(--color-blue); outline-offset: 2px; }
   /* .navgroups stays block (unchanged from the desktop rule above): each
    * h2.navsec heading has to stay paired with its own ul.navlist directly
    * below it — layout.go renders them as flat siblings, one heading then one
@@ -1780,4 +1808,57 @@ dl.kv dd { min-width: 0; }
   .ctlrow { flex-wrap: wrap; }
   .ctlrow .fldlabel { white-space: normal; }
   .ctlrow .fld { max-width: 100%; }
+}
+
+/* --- Filter fields and phone cards (#832) -----------------------------------
+ * Each filter label and its control are one .vfield unit, so wrapping moves
+ * them together. Appended last, so the 600px block follows the 1279px one. */
+.viewbar { align-items: flex-end; }
+.vfield { display: flex; flex-direction: column; gap: var(--space-1); flex: 1 1 12rem; min-width: 0; }
+.vfield.wide { flex: 3 1 20rem; }
+.vfield input, .vfield select { flex: none; width: 100%; min-width: 0; }
+
+/* Below 600px the Fleet and Accounts tables reflow to cards: each row is a
+ * block and each cell names itself from data-label, never from nth-child.
+ * Cells stay display:block, never flex/grid, which would take them out of
+ * table layout. The header row stays for screen readers, hidden as .vh does
+ * (that rule applies at every width, so it is repeated here for thead). */
+@media (max-width: 600px) {
+  .vfield, .vfield.wide { flex-basis: 100%; }
+  table.cards, table.cards tbody, table.cards tr, table.cards td { display: block; }
+  table.cards caption, .cmp caption { display: block; width: 100%; text-align: left; padding: var(--space-1) var(--space-3); }
+  table.cards thead {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+  table.cards tr { padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }
+  table.cards td { border: 0; padding: var(--space-1) var(--space-3); text-align: left; overflow-x: auto; }
+  table.cards td[data-label]::before {
+    content: attr(data-label); display: block;
+    font-size: var(--text-2xs); letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--text-muted); font-weight: var(--weight-medium);
+  }
+  table.cards td[data-label]:empty::before { content: none; }
+  table.cards td.livecell { float: left; }
+  table.cards td.num { white-space: normal; }
+
+  /* Compare stacks: each Node's column header becomes a legend line and each
+   * value cell names its Node by ID (never hostname, which is self-reported). */
+  .cmp, .cmp thead, .cmp tbody, .cmp tr, .cmp th, .cmp td { display: block; }
+  /* The empty corner header is hidden as .vh does (that rule applies at every
+   * width, so it is repeated here), keeping it for screen readers. */
+  .cmp thead tr th[scope="col"]:first-child {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+  .cmp th[scope="row"] { white-space: normal; width: auto; }
+  .cmp td { overflow-x: auto; }
+  .cmp td[data-label]::before {
+    content: attr(data-label); display: block;
+    font-size: var(--text-2xs); letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--text-muted); font-weight: var(--weight-medium);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
 }

@@ -475,8 +475,9 @@ func TestAccounts_DayOneShowsTheFoundingAdmin(t *testing.T) {
 		// moment somebody is reading this screen in a hurry.
 		"enabled",
 		// stamp's zero rendering. Nobody has signed in yet, and the row must
-		// say that rather than printing the zero time.
-		"<td>—</td>",
+		// say that rather than printing the zero time. Matched as ">—</td>"
+		// because each cell now opens with a data-label attribute.
+		">—</td>",
 	} {
 		if !strings.Contains(row, want) {
 			t.Errorf("the founding admin's row does not render %q. Row:\n%s", want, row)
@@ -619,7 +620,7 @@ func TestAccounts_ADisabledAccountSaysDisabledInWords(t *testing.T) {
 	if row := rowFor(t, body, "mike"); !strings.Contains(row, "enabled") {
 		t.Errorf("an enabled Account does not say so in words. Row:\n%s", row)
 	}
-	for _, banned := range []string{"<td>true</td>", "<td>false</td>"} {
+	for _, banned := range []string{">true</td>", ">false</td>"} {
 		if strings.Contains(body, banned) {
 			t.Errorf("the table rendered %q — a bare boolean is not a state an operator can read", banned)
 		}
