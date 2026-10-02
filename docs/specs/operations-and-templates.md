@@ -136,7 +136,7 @@ from those validators, so what a caller is told and what the daemon enforces can
 
 - **Invariant 1 / ADR-0001** — nothing on the wire can compose or escalate a command. For
   Templates this rests on the single quoting path and standalone slots; for Natives, on argv.
-- **Invariant 13 / ADR-0012** — every Operation declares a risk class, and it chooses the cap.
+- **Invariant 13 / ADR-0012** — every Operation declares a risk class, and it chooses the cap. *(Invariant 13 amended 2026-10-02, ADR-0042: a Template Operation's class is Node-reported, and a dispatch takes the most restrictive class the Nodes it reaches report.)*
   Binds through the most-restrictive rule and the daemon's class check.
 - **Invariant 5 / ADR-0004** — the blast cap is enforced on the Relay before dispatch, over the
   Nodes remaining after exclusion.

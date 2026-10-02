@@ -167,12 +167,13 @@ func (s *Service) QueryJobs(ctx context.Context, p Principal, f JobFilter, page 
 // deliberately treated as mutate ("a guardrail must fail safe"), but for
 // OUTPUT RETENTION that direction is inverted — an unrecognised or
 // unspecified class must default to STRIPPING the bytes, not keeping them.
-// tasks.risk_class is NOT NULL and written from the Operation catalog today,
-// so RiskClassUnspecified is not reachable through this path yet, but a
-// future schema or catalog change must not silently turn a permissive
-// default into a read-output leak. This deliberately diverges from
-// auditsink.go:219's `!= RiskClassRead` (retain-unless-Read): that call site
-// is unchanged by this issue.
+// tasks.risk_class is NOT NULL: written from the Native catalog, as mutate for
+// Raw Exec, and for a Template Operation from that Task's OWN Node's reported
+// class, normalised to read or mutate (ADR-0042) — so RiskClassUnspecified is
+// not reachable through this path yet, but a future schema or catalog change
+// must not silently turn a permissive default into a read-output leak. This
+// deliberately diverges from auditsink.go's `!= RiskClassRead`
+// (retain-unless-Read): that call site is unchanged by this issue.
 func (s *Service) QueryTasks(ctx context.Context, p Principal, f TaskFilter, page PageRequest) (TaskPage, error) {
 	if s.jobQ == nil {
 		return TaskPage{}, ErrQueriesUnavailable

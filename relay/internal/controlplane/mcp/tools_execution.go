@@ -194,9 +194,11 @@ func renderRunError(err error) error {
 	return fmt.Errorf("mcp: dispatch failed: %w", err)
 }
 
-// buildOperationAction looks up name in ops' vocabulary for its declared
-// RiskClass (ADR-0012), validates the argument NAMES against that Operation's
-// published arg_constraints, and builds the resulting jobs.Action.
+// buildOperationAction looks up a Native name in ops' vocabulary for its
+// declared RiskClass (ADR-0012), validates the argument NAMES against that
+// Operation's published arg_constraints, and builds the resulting
+// jobs.Action. Any other name is a Template Operation, forwarded unclassified
+// (see the last paragraph).
 //
 // The name checks are a thin **legibility pre-check** before ever reaching Run,
 // never a second Policy decision (ADR-0002/0011, invariant 12): the daemon's
@@ -204,7 +206,6 @@ func renderRunError(err error) error {
 // argument VALUES. What this catches is the failure mode where a malformed call
 // is indistinguishable from a forbidden one (#345):
 //
-//   - an unknown Operation name → "unknown operation";
 //   - an unknown ARGUMENT name (e.g. a misspelled "unitt") — otherwise silently
 //     dropped, leaving the required arg empty so the daemon reports
 //     denied_by_policy, which sends the AI-agent into describe_node/narrow/retry

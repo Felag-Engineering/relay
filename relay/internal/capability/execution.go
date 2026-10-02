@@ -325,8 +325,9 @@ type pendingTask struct {
 }
 
 // dispatchOne carries one persisted (Pending) Task through the rest of its
-// dispatch-state lifecycle: outdated -> MarkVersionRefused (terminal, never
-// sent, ADR-0014); offline -> MarkUnreachable (terminal, never sent);
+// dispatch-state lifecycle: excluded from a Template dispatch ->
+// MarkUnsupported (terminal, never sent, ADR-0042); outdated ->
+// MarkVersionRefused (terminal, never sent, ADR-0014); offline -> MarkUnreachable (terminal, never sent);
 // connected -> MarkDispatched, then Conduit.Dispatch. A send error leaves the
 // Task Dispatched (never Resolved) so it surfaces via TaskRepository.InFlight()
 // for restart reconciliation, and is reported honestly as OutcomeFailure

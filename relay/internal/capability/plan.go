@@ -139,19 +139,25 @@ func (e *jobEngine) query(ctx context.Context, d dispatch) (planResult, error) {
 // dispatch would currently be refused (ADR-0011/0013).
 //
 // Order mirrors Run except for the Freeze/cap treatment:
-//  1. resolve the Selector — identical resolution to Run (parity for #121).
+//  1. resolve the Selector — identical resolution to Run (parity for #121) —
+//     and, for a Template Operation, its class and fan-out (ADR-0042),
+//     exactly as Run does.
 //  2. authorize p against act/sel — GATES (returns an error, audited as a
 //     refusal): a caller not permitted to ASK must not learn per-Node
 //     deciding rules (invariant 3).
 //  3. note whether the Selector matched no Nodes — advisory only, reported
 //     as NoNodesMatched; Run refuses the same condition as no_nodes_matched,
 //     after authorization, so a Policy preflight and a real run agree.
+//     Otherwise refuse an unknown or malformed Template call, as Run does,
+//     and report each Node excluded from a Template dispatch as
+//     unsupported without querying it.
 //  4. read Frozen — advisory only; a read error is swallowed (never fails
 //     the Plan) since Frozen here is informational, not a guardrail.
 //  5. check the blast cap — reported as CapExceeded data, not an error; the
 //     query fan-out is skipped in that case (real dispatch would touch
 //     nothing over-cap, so there is nothing useful to probe).
-//  6. query every matched Node through the sealed dispatcher seam.
+//  6. query every matched Node not excluded in step 3 through the sealed
+//     dispatcher seam.
 //  7. audit as AuditKindPlan — Principal/Selector/Action only, no
 //     JobID/Results (no Job/Task rows were ever created).
 func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.Action) (PlanResult, error) {

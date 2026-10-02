@@ -722,7 +722,7 @@ func TestRun_TemplateApprovalGateMatchesTheResolvedClass(t *testing.T) {
 // Template. If either changes before the re-drive, the plan hash differs and
 // the dispatch parks again rather than releasing against an approval that
 // described something else (ADR-0027's drift rule, ADR-0042).
-func TestRun_TemplateApprovalReparksWhenTheReportingSetOrClassChanges(t *testing.T) {
+func TestRun_TemplateApprovalReparksWhenTheReportingSetChanges(t *testing.T) {
 	store := newMemApprovals()
 	vocab := staticVocab{
 		"node-a": {Templates: []nodevocab.Template{mutateTemplate("svc.restart")}},
@@ -755,5 +755,148 @@ func TestRun_TemplateApprovalReparksWhenTheReportingSetOrClassChanges(t *testing
 	}
 	if !disp.called {
 		t.Error("the approved plan did not release")
+	}
+}
+
+// --- Code-review gaps -------------------------------------------------------
+
+// The class half of the drift rule: an approval given while every Node
+// reported read does not release the dispatch once one Node reports mutate.
+func TestRun_TemplateApprovalReparksWhenAReportedClassChanges(t *testing.T) {
+	store := newMemApprovals()
+	vocab := staticVocab{
+		"node-a": {Templates: []nodevocab.Template{readTemplate("svc.thing")}},
+		"node-b": {Templates: []nodevocab.Template{readTemplate("svc.thing")}},
+	}
+	s, disp := templateApprovalFixture(t, []string{"node-a", "node-b"}, vocab, gateEverything(t, 1), store)
+
+	_, err := s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.thing", nil))
+	var first *ParkedError
+	if !errors.As(err, &first) {
+		t.Fatalf("first Run err = %v, want a park", err)
+	}
+	store.approve(t, first.RequestID, "acct-ana", "ana", apNow)
+
+	vocab["node-b"] = nodevocab.Snapshot{Templates: []nodevocab.Template{mutateTemplate("svc.thing")}}
+	_, err = s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.thing", nil))
+	var second *ParkedError
+	if !errors.As(err, &second) || second.PlanHash == first.PlanHash {
+		t.Fatalf("Run after node-b flipped to mutate: err = %v, want a fresh park with a different plan hash", err)
+	}
+	if disp.called {
+		t.Fatal("an approval given under read released a dispatch that resolved to mutate")
+	}
+}
+
+// A malformed Template call from a caller who may not ask is refused as
+// unauthorized: its slots are not disclosed before authorization.
+func TestRun_MalformedTemplateFromUnauthorizedCallerIsUnauthorized(t *testing.T) {
+	reg := seedNodes(t, 1)
+	var log []string
+	vocab := staticVocab{"node-0": {Templates: []nodevocab.Template{readTemplate("log.tail", "unit")}}}
+	svc, f := newTemplateTestService(t, reg, connectedConduit(&log, "node-0"), vocab, &spyCapChecker{})
+	authzErr := errors.New("denied for test")
+	f.authz.err = authzErr
+
+	_, err := svc.Run(context.Background(), Principal{Account: "mallory"}, webSelector(), templateAction("log.tail", map[string]string{"unitt": "x"}))
+	var mal *MalformedCallError
+	if !errors.Is(err, authzErr) || errors.As(err, &mal) {
+		t.Fatalf("err = %v, want the authorization refusal and not a malformed-call one", err)
+	}
+}
+
+// A preflight's cap check counts only the Nodes a run would dispatch.
+func TestPlan_TemplateCapCountsTheRemainingNodes(t *testing.T) {
+	reg := seedNodes(t, 3)
+	var log []string
+	capc := &spyCapChecker{}
+	vocab := staticVocab{
+		"node-0": {Templates: []nodevocab.Template{readTemplate("svc.status")}},
+		"node-1": {Templates: []nodevocab.Template{readTemplate("svc.status")}},
+		"node-2": {},
+	}
+	svc, _ := newTemplateTestService(t, reg, connectedConduit(&log, "node-0", "node-1", "node-2"), vocab, capc)
+	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("svc.status", nil))
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if capc.gotMatched != 2 || capc.gotClass != jobs.RiskClassRead {
+		t.Errorf("cap saw (%s, %d), want (read, 2)", jobs.RiskClassName(capc.gotClass), capc.gotMatched)
+	}
+	if pr.Matched != 3 {
+		t.Errorf("Matched = %d, want all 3 matched Nodes reported", pr.Matched)
+	}
+}
+
+// A Template preflight whose Selector matches nothing reports NoNodesMatched
+// (PF-5), never an unknown operation.
+func TestPlan_TemplateZeroMatchReportsNoNodesMatched(t *testing.T) {
+	reg := seedNodes(t, 1)
+	var log []string
+	svc, _ := newTemplateTestService(t, reg, connectedConduit(&log), staticVocab{}, &spyCapChecker{})
+	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "db"}}}
+	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, sel, templateAction("svc.status", nil))
+	if err != nil {
+		t.Fatalf("Plan err = %v, want NoNodesMatched reported as data", err)
+	}
+	if !pr.NoNodesMatched {
+		t.Error("NoNodesMatched = false, want true")
+	}
+}
+
+// Exclusion takes precedence over the version gate: an outdated Node that
+// does not report the Template reads unsupported, not version_refused — it
+// was never a dispatch target at all.
+func TestRun_ExclusionTakesPrecedenceOverTheVersionGate(t *testing.T) {
+	reg := registry.NewInMemory(registry.WithMinDaemonVersion("1.2.0"))
+	for id, version := range map[string]string{"node-new": "1.2.0", "node-old": "1.0.0"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id, DaemonVersion: version}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
+			t.Fatalf("Upsert(%s): %v", id, err)
+		}
+	}
+	var log []string
+	vocab := staticVocab{"node-new": {Templates: []nodevocab.Template{readTemplate("svc.status")}}}
+	svc, _ := newTemplateTestService(t, reg, connectedConduit(&log, "node-new", "node-old"), vocab, &spyCapChecker{})
+
+	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("svc.status", nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, r := range results {
+		if r.NodeID == "node-old" && r.Outcome != jobs.OutcomeUnsupported {
+			t.Errorf("node-old outcome = %v, want unsupported", r.Outcome)
+		}
+	}
+}
+
+// JobEvent counts every matched Node, excluded ones included: the Job has a
+// Task for each.
+func TestRun_TemplateJobEventsCountExcludedNodes(t *testing.T) {
+	reg := seedNodes(t, 3)
+	var log []string
+	events := &spyJobEventSink{}
+	jobsRepo, tasksRepo := testEngineStore(t)
+	svc := New(reg,
+		WithAuthorizer(&spyAuthorizer{}),
+		WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(&spyAuditSink{}),
+		WithFreeze(&fakeFreezeStore{}),
+		WithExecution(jobsRepo, tasksRepo, connectedConduit(&log, "node-0", "node-1", "node-2")),
+		WithJobEvents(events),
+		WithTemplateVocabulary(staticVocab{"node-0": {Templates: []nodevocab.Template{readTemplate("svc.status")}}}),
+	)
+	if _, err := svc.Run(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("svc.status", nil)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(events.events) != 2 {
+		t.Fatalf("job events = %d, want created + completed", len(events.events))
+	}
+	for _, ev := range events.events {
+		if ev.Nodes != 3 {
+			t.Errorf("%v event Nodes = %d, want 3 (one dispatched, two excluded)", ev.Transition, ev.Nodes)
+		}
+	}
+	if got := events.events[1].Outcomes[jobs.OutcomeUnsupported]; got != 2 {
+		t.Errorf("completed event counts %d unsupported, want 2", got)
 	}
 }

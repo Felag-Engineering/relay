@@ -64,9 +64,9 @@ const TemplateNotInVocabularyReason = "not dispatched: this Node does not report
 // since the vocabulary cache is in memory. Distinct from
 // TemplateNotInVocabularyReason so a caller can tell "this Node does not have
 // it" from "this Node has not told us" (ADR-0042).
-const TemplateNotReportedReason = "not dispatched: the Relay holds no Template vocabulary report for this Node " +
-	"(it has not reported since the Relay started), so the Relay cannot see whether it has this Template " +
-	"and sent it nothing (ADR-0042)."
+const TemplateNotReportedReason = "not dispatched: the Relay holds no current Template vocabulary report for this " +
+	"Node (none since the Relay started, or one older than the Node's latest connection), so the Relay cannot " +
+	"see whether it has this Template and sent it nothing (ADR-0042)."
 
 // excludedNode is one matched Node left out of a Template dispatch, with the
 // Relay-authored reason recorded on its unsupported Task.
@@ -139,7 +139,7 @@ func (s *Service) resolveAction(act jobs.Action, matched []registry.Node) resolv
 			continue
 		}
 		out.nodes = append(out.nodes, n)
-		out.nodeClass[n.NodeID] = mostRestrictiveClass([]nodevocab.Template{t})
+		out.nodeClass[n.NodeID] = reportedClass(t)
 		supporting = append(supporting, t)
 	}
 
@@ -190,11 +190,21 @@ func findTemplate(snap nodevocab.Snapshot, name string) (nodevocab.Template, boo
 // looser class.
 func mostRestrictiveClass(templates []nodevocab.Template) jobs.RiskClass {
 	for _, t := range templates {
-		if jobs.RiskClass(t.RiskClass) != jobs.RiskClassRead {
+		if reportedClass(t) != jobs.RiskClassRead {
 			return jobs.RiskClassMutate
 		}
 	}
 	return jobs.RiskClassRead
+}
+
+// reportedClass is one Node's report of t's class, read the safe way: read
+// only if it says exactly read, and mutate for anything else, including an
+// unspecified or out-of-range value.
+func reportedClass(t nodevocab.Template) jobs.RiskClass {
+	if jobs.RiskClass(t.RiskClass) == jobs.RiskClassRead {
+		return jobs.RiskClassRead
+	}
+	return jobs.RiskClassMutate
 }
 
 // slotNames returns t's slot names, sorted, so two Templates are compared as
@@ -269,7 +279,8 @@ func (e *UnknownOperationError) Error() string {
 	fmt.Fprintf(&b, "unknown operation %q: it is not a Native Operation, and none of the %d matched Node(s) "+
 		"reports it as a Template Operation", e.Operation, e.Matched)
 	if e.NotReported > 0 {
-		fmt.Fprintf(&b, " (%d of them have not reported their Template vocabulary since the Relay started)", e.NotReported)
+		fmt.Fprintf(&b, " (%d of them have no current Template vocabulary report: none since the Relay started, "+
+			"or one older than the Node's latest connection)", e.NotReported)
 	}
 	b.WriteString(". See list_operations — with a node_id for that Node's Template Operations.")
 	return b.String()

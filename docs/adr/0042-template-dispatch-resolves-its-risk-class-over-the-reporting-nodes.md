@@ -22,7 +22,8 @@ pass under every rule that keys on `mutate`.
   receives a name outside the Native vocabulary builds a Template Action with **no** risk class
   and hands it to the capability layer, which fills it in after Selector resolution. The
   capability layer refuses a Template Action that arrives already carrying a class, so an
-  adapter cannot decide one even by mistake (invariant 10). A structural test holds this.
+  adapter cannot decide one even by mistake (invariant 10). Tests hold this at the capability
+  layer (a preset class is refused) and on both adapters (a Template Action leaves them unclassified).
 
 - **Most-restrictive wins, over the Nodes that report the Template.** The dispatch is `read`
   only if every remaining Node reports the Template as `read`; any other report — `mutate`,
@@ -128,6 +129,13 @@ pass under every rule that keys on `mutate`.
 - **Resolving the class in each adapter.** Forbidden outright by invariant 10.
 
 ## Consequences
+
+- **Invariant 13 is amended in place** (owner decision 2026-10-02). It said the class "is
+  security-relevant contract (`/proto`)", which a Node-reported class no longer is. It now reads:
+  the class is security-relevant contract that no caller can set or loosen, and where it is
+  reported by Nodes rather than fixed in `/proto`, a dispatch takes the most restrictive class
+  the Nodes it reaches report. The threat model's invariant-13 row is rewritten to match, and
+  the residual risk above is register entry **R28**.
 
 - ADR-0021 is amended: Templates are dispatchable on every execution surface, by name, through
   the capability layer, under the rules above.

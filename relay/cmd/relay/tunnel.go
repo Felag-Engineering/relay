@@ -270,10 +270,11 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 			if ps := m.GetPolicy(); ps != nil && s.policy != nil {
 				s.policy.Set(nodeID, snapshotFromProto(ps))
 			}
-			// Capture a reported TemplateSnapshot into the
-			// nodevocab.Cache (#291; a dispatch input since ADR-0042). Same posture as the PolicySnapshot
-			// capture above: it RECORDS a report-only daemon value for
-			// discovery, and can never set or modify the Node's templates
+			// Capture a reported TemplateSnapshot into the nodevocab.Cache
+			// (#291). Same posture as the PolicySnapshot capture above: it
+			// RECORDS a report-only daemon value — for discovery, and since
+			// ADR-0042 as the input to a Template dispatch's fan-out and
+			// class — and can never set or modify the Node's templates
 			// (ADR-0002, ADR-0021). Keyed by the cert-derived nodeID, never a
 			// wire value.
 			if ts := m.GetTemplates(); ts != nil && s.vocab != nil {
@@ -360,8 +361,8 @@ func snapshotFromProto(ps *relayv1.PolicySnapshot) policyview.Snapshot {
 // vocabFromProto converts a daemon-reported relayv1.TemplateSnapshot into the
 // proto-free nodevocab.Snapshot the vocabulary cache stores, keeping that
 // package proto-free (mirrors snapshotFromProto's role for policyview).
-// Display-only: this conversion never validates a slot, renders a body (there
-// is no body on the wire), or decides anything (ADR-0011, invariant 12).
+// This conversion never validates a slot, renders a body (there is no body on
+// the wire), or decides anything (ADR-0011, invariant 12).
 func vocabFromProto(ts *relayv1.TemplateSnapshot) nodevocab.Snapshot {
 	templates := make([]nodevocab.Template, 0, len(ts.GetTemplates()))
 	for _, t := range ts.GetTemplates() {

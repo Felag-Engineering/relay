@@ -273,7 +273,7 @@ table. It is the step's Job refusing, reported as that Job's outcome, and it hal
   `admin` with step-up re-authentication, audited. Both must appear in `relay-configuration.md`'s
   operator-settings table when this capability is designed.
 - **Invariant 13** — each step's risk class is declared contract and selects its cap and its gate
-  rule.
+  rule. *(Invariant 13 amended 2026-10-02, ADR-0042: a Template Operation's class is Node-reported, and a dispatch takes the most restrictive class the Nodes it reaches report.)*
 
 ## Seams and proof
 

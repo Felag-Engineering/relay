@@ -481,10 +481,13 @@ func (s *Service) stateEval() StateEval {
 }
 
 // Run is the pipeline every surface must call to act on Nodes: check the
-// Freeze, resolve the Selector, authorize the Principal, refuse a Selector
-// that matched no Nodes, check the blast-radius cap, dispatch, then audit —
-// in that order. The Freeze gate, authorize, the no-Nodes-matched check, and
-// the cap check each short-circuit the remaining stages on error (no
+// Freeze, resolve the Selector, resolve a Template Operation's class and
+// fan-out (ADR-0042, computing only), authorize the Principal, refuse a
+// Selector that matched no Nodes, refuse an unknown or malformed Template
+// call, check the blast-radius cap, consult the approval gate, dispatch, then
+// audit — in that order. The Freeze gate, authorize, the no-Nodes-matched
+// check, the Template refusal and the cap check each short-circuit the
+// remaining stages on error (no
 // dispatch — nothing was executed), but each refusal is itself audited
 // (recordRefusal) — refusals are the most interesting audit events
 // (acceptance criterion for #102). Once dispatch is attempted, the audit

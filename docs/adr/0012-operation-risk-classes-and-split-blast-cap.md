@@ -76,3 +76,7 @@ still `/proto` contract. A Template's class is not: it is declared in each Node'
 reported by that Node, so ADR-0042 resolves it in the capability layer over the Nodes that
 report the Template — `read` only if every one of them reports `read`, otherwise `mutate` —
 and writes down the residual risk of believing them.
+
+Invariant 13 is amended in place on the same date to match: the class is security-relevant
+contract no caller can set or loosen, and where Nodes report it, a dispatch takes the most
+restrictive class the Nodes it reaches report.

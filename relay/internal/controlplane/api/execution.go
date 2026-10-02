@@ -364,9 +364,11 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 // Action construction
 // ---------------------------------------------------------------------------
 
-// buildOperationAction resolves name in the native Operation vocabulary for its
-// declared risk class (ADR-0012), validates the argument NAMES, and builds the
-// jobs.Action.
+// buildOperationAction resolves a Native name in the Operation vocabulary for
+// its declared risk class (ADR-0012), validates the argument NAMES, and builds
+// the jobs.Action. Any other name is a Template Operation and is forwarded
+// with no class and no argument check: the capability layer decides both
+// (ADR-0042, invariant 10).
 //
 // Both checks are fail-fast legibility pre-checks, never a second Policy
 // decision (ADR-0002/0011, invariant 12): the daemon's live engine remains the

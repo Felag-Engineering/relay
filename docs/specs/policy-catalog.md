@@ -56,7 +56,7 @@ untrue.
 - **Invariant 10** — the Console screen is an adapter. The capability layer decides who may open
   it and serves the Node counts it shows, through the read lane.
 - **Invariant 13 / ADR-0012** — each catalog fragment declares its highest risk class, and the
-  screen groups by it.
+  screen groups by it. *(Invariant 13 amended 2026-10-02, ADR-0042: a Template Operation's class is Node-reported, and a dispatch takes the most restrictive class the Nodes it reaches report.)*
 - **Invariant 14 / ADR-0014** — a fragment's required daemon release is advisory to the operator;
   the Relay never upgrades a daemon to meet it.
 - **Invariant 1 / ADR-0001** — no catalog fragment enables Raw Exec.

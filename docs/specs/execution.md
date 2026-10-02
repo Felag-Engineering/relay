@@ -334,7 +334,7 @@ for Raw Exec, which is the opposite of what the design wants.
   dispatch, not for hypotheticals. A matched-but-disconnected Node yields a Relay-side
   `unknown(offline)` conclusion rather than a guess.
 - **Invariant 13** (ADR-0012) — the risk class is declared contract in `/proto` and selects
-  the cap; Raw Exec always takes the mutate cap.
+  the cap; Raw Exec always takes the mutate cap. *(Invariant 13 amended 2026-10-02, ADR-0042: a Template Operation's class is Node-reported, and a dispatch takes the most restrictive class the Nodes it reaches report.)*
 - **Invariant 7** (ADR-0006/0020/0034) — binds through Selector resolution: the security lane
   targets `relay:` and only `relay:`.
 - **ADR-0004 — needs amending.** Halt-on-first-failure for `mutate` Jobs, and client-level
