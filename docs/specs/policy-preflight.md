@@ -171,7 +171,9 @@ A preflight refuses in fewer cases than a dispatch, and the difference is the po
   adapter; where it executes, it preflights before every apply, and a `mutate` apply is
   additionally step-up-gated (PF-21, ADR-0026 decisions 2 and 3).
 - **Invariant 13** — the risk class is declared contract and selects which cap the preflight
-  reports against (PF-16). *(Invariant 13 amended 2026-10-02, ADR-0042: a Template Operation's class is Node-reported, and a dispatch takes the most restrictive class the Nodes it reaches report.)*
+  reports against (PF-16). *(Invariant 13 amended 2026-10-02, ADR-0042: a Template Operation's
+  class is Node-reported, and a dispatch takes the most restrictive class the Nodes it reaches
+  report.)*
 - **ADR-0013** — Freeze halts dispatch and deliberately does not halt preflights (PF-3).
 - **ADR-0021** — the per-Node vocabulary, which is why `unsupported` is a verdict (PF-11).
 - **ADR-0042** — how a Template Operation's fan-out and risk class are decided over the Nodes that
