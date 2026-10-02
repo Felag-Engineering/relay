@@ -189,9 +189,8 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 			return
 		}
 
-		id := r.PathValue("approval_id")
-		if id == "" || len(id) > maxApprovalIDBytes {
-			http.NotFound(w, r)
+		id, ok := pathID(w, r, "approval_id", maxApprovalIDBytes)
+		if !ok {
 			return
 		}
 
@@ -234,8 +233,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 		// direction: the boolean must never be inferred from silence.
 		answer := r.PostFormValue("answer")
 		if answer != "approve" && answer != "deny" {
-			w.WriteHeader(http.StatusBadRequest)
-			renderScreen(w, pg, decideResultTmpl, decideResultView{
+			renderDecideResult(w, pg, http.StatusBadRequest, decideResultView{
 				Heading: "This form did not carry a recognisable answer. Nothing was decided.",
 			})
 			return
@@ -243,8 +241,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 
 		planHash := r.PostFormValue("plan_hash")
 		if planHash == "" || len(planHash) > maxPlanHashBytes {
-			w.WriteHeader(http.StatusBadRequest)
-			renderScreen(w, pg, decideResultTmpl, decideResultView{
+			renderDecideResult(w, pg, http.StatusBadRequest, decideResultView{
 				Heading: "A decision binds to the Plan it was shown (ADR-0027), and this form carried no usable plan hash. Nothing was decided.",
 			})
 			return
@@ -252,8 +249,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 
 		reason := r.PostFormValue("reason")
 		if len(reason) > maxDecideReasonBytes {
-			w.WriteHeader(http.StatusBadRequest)
-			renderScreen(w, pg, decideResultTmpl, decideResultView{
+			renderDecideResult(w, pg, http.StatusBadRequest, decideResultView{
 				Heading: "That reason is too long (over 1024 bytes). Nothing was decided.",
 			})
 			return
@@ -261,8 +257,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 
 		password := r.PostFormValue("password")
 		if password == "" {
-			w.WriteHeader(http.StatusUnauthorized)
-			renderScreen(w, pg, decideResultTmpl, decideResultView{
+			renderDecideResult(w, pg, http.StatusUnauthorized, decideResultView{
 				Heading: "Step-up re-authentication is required to decide an approval. Nothing was decided.",
 			})
 			return
@@ -281,8 +276,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 		case grantIsAPlan:
 			// Proceed — this Request authorizes a Plan, not a Scope.
 		case grantFound:
-			w.WriteHeader(http.StatusConflict)
-			renderScreen(w, pg, decideResultTmpl, decideResultView{
+			renderDecideResult(w, pg, http.StatusConflict, decideResultView{
 				Heading: "This Request authorizes a Scope, not one Plan. Spec 08 requires a Grant's " +
 					"Scope to have been expanded before it is approved, this Console does not enforce " +
 					"that yet, so it will not decide one. Answer it through the Control API.",
@@ -291,8 +285,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 			})
 			return
 		default: // grantUnreadable
-			w.WriteHeader(http.StatusConflict)
-			renderScreen(w, pg, decideResultTmpl, decideResultView{
+			renderDecideResult(w, pg, http.StatusConflict, decideResultView{
 				Heading: "The Grant store could not be read, so this Console cannot tell whether this " +
 					"Request authorizes a Scope or a single Plan, and will not decide either while that " +
 					"is unknown.",
@@ -309,16 +302,13 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 			case isThrottled(err):
 				wait, _ := consoleauth.Throttled(err)
 				w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
-				w.WriteHeader(http.StatusTooManyRequests)
-				renderScreen(w, pg, decideResultTmpl, decideResultView{Heading: throttleMessage(wait)})
+				renderDecideResult(w, pg, http.StatusTooManyRequests, decideResultView{Heading: throttleMessage(wait)})
 			case errors.Is(err, consoleauth.ErrBadCredentials):
-				w.WriteHeader(http.StatusUnauthorized)
-				renderScreen(w, pg, decideResultTmpl, decideResultView{
+				renderDecideResult(w, pg, http.StatusUnauthorized, decideResultView{
 					Heading: "That password did not match. Nothing was decided.",
 				})
 			case errors.Is(err, consoleauth.ErrNoSession):
-				w.WriteHeader(http.StatusUnauthorized)
-				renderScreen(w, pg, decideResultTmpl, decideResultView{
+				renderDecideResult(w, pg, http.StatusUnauthorized, decideResultView{
 					Heading:       "Your session has ended. Nothing was decided.",
 					ApprovalHref:  LoginPath,
 					ApprovalLabel: "Sign in again.",
@@ -326,8 +316,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 			default:
 				slog.Error("console step-up for an approval decision returned an error",
 					"approval_id", id, "error", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				renderScreen(w, pg, decideResultTmpl, decideResultView{
+				renderDecideResult(w, pg, http.StatusInternalServerError, decideResultView{
 					Heading: "The Relay could not verify your password. Nothing was decided.",
 				})
 			}
@@ -361,20 +350,17 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 		// escaped.
 		switch {
 		case errors.Is(err, approval.ErrNotFound):
-			w.WriteHeader(http.StatusNotFound)
-			renderScreen(w, pg, decideResultTmpl, decideResultView{
+			renderDecideResult(w, pg, http.StatusNotFound, decideResultView{
 				Heading: "No approval request with the id " + id + " appears in this Relay's records.",
 			})
 		case errors.Is(err, authz.ErrUnauthorized), errors.Is(err, approval.ErrNotInAudience):
-			w.WriteHeader(http.StatusForbidden)
-			renderScreen(w, pg, decideResultTmpl, decideResultView{
+			renderDecideResult(w, pg, http.StatusForbidden, decideResultView{
 				Heading:       "The Relay refused this decision: " + err.Error() + ".",
 				ApprovalHref:  decideApprovalPageHref(id),
 				ApprovalLabel: "Back to this Request.",
 			})
 		case errors.Is(err, approval.ErrPlanChanged):
-			w.WriteHeader(http.StatusConflict)
-			renderScreen(w, pg, decideResultTmpl, decideResultView{
+			renderDecideResult(w, pg, http.StatusConflict, decideResultView{
 				Heading: "The Plan moved since this page was rendered; reload and read it again — " +
 					"your answer was not recorded.",
 				ApprovalHref:  decideApprovalPageHref(id),
@@ -383,8 +369,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 		case errors.Is(err, approval.ErrNotPending), errors.Is(err, approval.ErrRequesterExcluded),
 			errors.Is(err, approval.ErrMachineSelfDecision), errors.Is(err, approval.ErrDuplicateDecider),
 			errors.Is(err, approval.ErrWeakChannel):
-			w.WriteHeader(http.StatusConflict)
-			renderScreen(w, pg, decideResultTmpl, decideResultView{
+			renderDecideResult(w, pg, http.StatusConflict, decideResultView{
 				Heading:       "The Relay refused this decision: " + err.Error() + ".",
 				ApprovalHref:  decideApprovalPageHref(id),
 				ApprovalLabel: "Back to this Request.",
@@ -409,8 +394,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 			// require it is "could not CONFIRM", not "did not happen".
 			slog.Error("console decide-approval request returned an error",
 				"approval_id", id, "error", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			renderScreen(w, pg, decideResultTmpl, decideResultView{
+			renderDecideResult(w, pg, http.StatusInternalServerError, decideResultView{
 				Heading:       "The Relay could not confirm this decision was fully recorded. Reload this Request before answering again.",
 				ApprovalHref:  decideApprovalPageHref(id),
 				ApprovalLabel: "Reload this Request.",
@@ -433,6 +417,13 @@ type decideResultView struct {
 	Heading       string
 	ApprovalHref  string
 	ApprovalLabel string
+}
+
+// renderDecideResult answers a decision POST with the result card at the given
+// status. The status is written before the body so no refusal can render as 200.
+func renderDecideResult(w http.ResponseWriter, pg Page, status int, v decideResultView) {
+	w.WriteHeader(status)
+	renderScreen(w, pg, decideResultTmpl, v)
 }
 
 var decideResultTmpl = newScreen("decide-result", `
