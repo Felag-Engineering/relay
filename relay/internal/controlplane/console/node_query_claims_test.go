@@ -48,7 +48,7 @@ func lanePanelDeps(t *testing.T, reg *registry.InMemory, opts ...capability.Opti
 // page, shaped exactly like policyPanelOf, so an assertion about the panel is
 // not satisfied by the same words appearing elsewhere on the page.
 func fingerprintPanelOf(body string) string {
-	const open = "<h3>Fingerprints</h3>"
+	const open = "<h3>Fingerprints "
 	i := strings.Index(body, open)
 	if i < 0 {
 		return ""
@@ -103,8 +103,8 @@ func TestNode_FingerprintPanelReportsThePeerCounts(t *testing.T) {
 		if !strings.Contains(panel, "2 Nodes report this") {
 			t.Errorf("Fingerprints panel = %s\nwant the Policy fingerprint's peer count %q", panel, "2 Nodes report this")
 		}
-		if !strings.Contains(panel, "1 Node report this") {
-			t.Errorf("Fingerprints panel = %s\nwant the template-set fingerprint's peer count %q", panel, "1 Node report this")
+		if !strings.Contains(panel, "1 Node reports this") {
+			t.Errorf("Fingerprints panel = %s\nwant the template-set fingerprint's peer count %q", panel, "1 Node reports this")
 		}
 		// The counts sit beside the fingerprints they count.
 		for _, fp := range []string{"aaaa", "tttt"} {
@@ -130,7 +130,7 @@ func TestNode_FingerprintPanelReportsThePeerCounts(t *testing.T) {
 		}
 		// An empty fingerprint is not something the other three silent Nodes
 		// "share" — the panel must not report a count at all.
-		if strings.Contains(panel, "report this") {
+		if strings.Contains(panel, "report this") || strings.Contains(panel, "reports this") {
 			t.Errorf("Fingerprints panel = %s\nreports a peer count for a Node that reported no fingerprint", panel)
 		}
 	})

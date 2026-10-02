@@ -1017,7 +1017,6 @@ a.chiplink:hover .chip.trust { box-shadow: 0 0 0 1px var(--color-accent); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--attention); }
 .dot[data-live="on"] { background: var(--ok); }
 
-.scopenote { margin-top: var(--space-8); font-size: var(--text-xs); color: var(--text-muted); max-width: 64em; line-height: 1.7; }
 
 /* --- Day one -------------------------------------------------------------- */
 .dayone { max-width: 48em; }

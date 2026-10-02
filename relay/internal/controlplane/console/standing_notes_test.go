@@ -14,6 +14,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 )
 
 const aboutOpen = `<details class="about">`
@@ -109,6 +110,7 @@ func TestActivity_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
 		"The chips above list every family this screen shows, including empty ones.",
 		"Every Refresh is an audited read",
 		"Cancel is offered in Running now",
+		"This screen shows the request and never the reasoning.",
 	)
 }
 
@@ -252,4 +254,108 @@ func TestApprovals_DecidingCopySaysWhatIsTrue(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestFleet_StandingNoteIsInOneClosedDisclosure(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), fleetPath).Body.String()
+	inside, outside := splitAbout(t, body)
+	mustBeStanding(t, inside, outside, "There are no host metrics here, and there will not be.")
+}
+
+func TestFleet_NoMatchEmptyStateIsSituational(t *testing.T) {
+	h := newTestHandler(fleetFixture(), accounts.RoleAdmin)
+	const heading = "No Nodes match this Selector."
+
+	body := get(t, h, fleetPath+"?filter=node:role=nonesuch&group=-").Body.String()
+	mustBeSituational(t, body, heading)
+	if !strings.Contains(body, `href="/console/?group=-"`) {
+		t.Errorf("the Clear link does not keep the grouping:\n%s", contentOf(body))
+	}
+
+	for _, q := range []string{"?filter=node:role=nonesuch", "?filter=node:role=nonesuch&group=-"} {
+		got := get(t, h, fleetPath+q).Body.String()
+		if !strings.Contains(got, heading) {
+			t.Errorf("%s: the empty state is missing", q)
+		}
+		for _, stray := range []string{`class="group`, "every Node here is reachable", "no deviations", `class="systemstate"`} {
+			if strings.Contains(got, stray) {
+				t.Errorf("%s: %q renders beneath the empty state", q, stray)
+			}
+		}
+	}
+
+	for _, path := range []string{fleetPath, fleetPath + "?filter=tag:pci"} {
+		if got := get(t, h, path).Body.String(); strings.Contains(got, heading) {
+			t.Errorf("%s renders the empty state, but its fleet is not empty", path)
+		}
+	}
+}
+
+func TestNode_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
+	d := withPolicy(fleetFixture(), map[string]policyview.Snapshot{"node-web-1": reportedSnapshot(policyview.Snapshot{
+		AllowedOperations: []string{"service.restart"},
+	}, testNow.Add(-90*time.Second))})
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
+	inside, outside := splitAbout(t, body)
+	mustBeStanding(t, inside, outside,
+		"Who writes each label namespace.",
+		"The fingerprints are compared, not trusted.",
+		"Facts appear here and nowhere else.",
+	)
+}
+
+func TestNode_MandatedNotesStayVisible(t *testing.T) {
+	d := withPolicy(fleetFixture(), map[string]policyview.Snapshot{"node-web-1": reportedSnapshot(policyview.Snapshot{
+		AllowedOperations: []string{"service.restart"},
+	}, testNow.Add(-90*time.Second))})
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
+	for _, msg := range []string{
+		"There is no path from this screen to this Node's Policy",
+		"receipt time, not a query time",
+		"cannot store tag: labels yet",
+		"self-reported · this page only",
+		"reported by the daemon",
+	} {
+		mustBeSituational(t, body, msg)
+	}
+	_, outside := splitAbout(t, body)
+	for _, ns := range []string{"<b>node:</b>", "<b>tag:</b>", "<b>relay:</b>", "<b>state:</b>"} {
+		if !strings.Contains(outside, ns) {
+			t.Errorf("the visible legend does not name %s", ns)
+		}
+	}
+	for _, claim := range []string{"security-lane", "security lane"} {
+		if strings.Contains(body, claim) {
+			t.Errorf("the Node detail page makes a security-lane claim (%q)", claim)
+		}
+	}
+}
+
+func TestAccounts_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
+	body := get(t, newTestHandler(accountsFixture(), accounts.RoleAdmin), accountsPath).Body.String()
+	inside, outside := splitAbout(t, body)
+	mustBeStanding(t, inside, outside,
+		"What a role means.",
+		"Granting costs your password; reducing does not.",
+		"What the two time columns mean.",
+	)
+	mustBeSituational(t, body, "cannot sign in until a password is set")
+	for i := 0; ; {
+		j := strings.Index(body[i:], "agent call trail")
+		if j < 0 {
+			break
+		}
+		at := i + j
+		if at < 3 || body[at-3:at] != "AI-" {
+			t.Errorf("a bare %q is rendered", "agent call trail")
+		}
+		i = at + 1
+	}
+}
+
+func TestAccounts_NotWiredSentenceStaysVisible(t *testing.T) {
+	d := accountsFixture()
+	d.AccountAdmin = nil
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), accountsPath).Body.String()
+	mustBeSituational(t, body, "are not wired into this Relay")
 }

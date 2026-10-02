@@ -1715,7 +1715,7 @@ var approvalsTmpl = newScreen("approvals", `
 <p class="dim">The approval queue is not wired into this Console.</p>
 {{else}}
 {{template "refresh" .Refresh}}
-<p class="refreshlimit">Reloading this queue is not recorded on the audit trail; that is a known gap (#779).</p>
+<p class="refreshlimit">Reloading this queue is not recorded on the audit trail; that is a known gap.</p>
 {{if not .Count}}
 <div class="empty">
   <h2>Nothing is waiting.</h2>
@@ -1794,7 +1794,7 @@ Control API.</p>
 <p class="gap"><b>Why reloading this queue leaves no record.</b> The pending requests and the live
 Approval grants are read through methods that write no read record, so neither opening this queue
 nor a Refresh adds anything to the audit trail. Opening one request is recorded. This is a known
-gap, tracked in #779.</p>
+gap.</p>
 </details>
 {{end}}
 `)
@@ -1863,7 +1863,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   <h3>The Scope</h3>
   {{if .Grant.LegacyNamespacePin}}
   <p class="note"><b>This Grant covers nothing.</b> It was stored before namespace pinning was
-  removed from a Scope (#482), and carries a retired pin (<code>{{.Grant.LegacyNamespacePin}}</code>).
+  removed from a Scope on 2026-09-16, and carries a retired pin (<code>{{.Grant.LegacyNamespacePin}}</code>).
   Ignoring the pin would widen what it covers, so approving it releases no dispatch; revoke it to
   close it for the record.</p>
   {{else}}

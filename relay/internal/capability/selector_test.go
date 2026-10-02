@@ -144,7 +144,7 @@ func TestParseSelector(t *testing.T) {
 //
 // It matters because surfaces RECOGNISE this error rather than re-deciding the
 // rule: the Console's parseFleetFilter renders its own sentence for it and the
-// generic "every term needs a namespace prefix" lead for everything else. If
+// capability's own detail for everything else. If
 // the refusal stopped wrapping the sentinel, that errors.Is would silently
 // fall through and the fleet filter would tell an operator their prefixed term
 // has no prefix.

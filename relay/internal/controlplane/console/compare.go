@@ -457,7 +457,7 @@ func fingerprintText(v string) string {
 func templateText(v string) string {
 	switch v {
 	case "":
-		return "none installed"
+		return "no templates installed"
 	case nodestate.TemplateUnloadable:
 		return "unloadable — the local template set failed to load"
 	default:

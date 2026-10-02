@@ -605,11 +605,10 @@ var nodeTmpl = newScreen("node", `
   {{range .Labels}}{{template "label-chip" .}}{{end}}
   {{range .States}}{{template "label-chip" .}}{{end}}
   <span class="labelnote">
-    <b>node:</b> set by the machine's config management, immutable to the Relay ·
-    <b>tag:</b> set by operators through the control plane, immutable to the Node, and never a valid
-    security-lane target; this Relay cannot store tag: labels yet (#430), so none appear here ·
-    <b>relay:</b> set by the Relay, immutable to the Node, and the only namespace the security lane may target ·
-    <b>state:</b> derived from this record, set by nobody
+    <b>node:</b> set by the machine ·
+    <b>tag:</b> set by operators; this Relay cannot store tag: labels yet, so none appear ·
+    <b>relay:</b> set by the Relay, never by the Node ·
+    <b>state:</b> derived, set by nobody
   </span>
 </div>
 
@@ -650,34 +649,26 @@ var nodeTmpl = newScreen("node", `
     </section>
 
     <section class="panel">
-      <h3>Fingerprints</h3>
+      <h3>Fingerprints <span class="phint">reported by the daemon</span></h3>
       <dl>
         <dt>Policy</dt>
         <dd>{{if .PolicyFingerprint}}{{with .PolicyFingerprintHref}}<a href="{{.}}">{{end}}<code title="{{.PolicyFingerprint}}">{{short .PolicyFingerprint}}</code>{{if .PolicyFingerprintHref}}</a>{{end}}
-          <span class="dim">{{.PolicyShared}} {{plural .PolicyShared "Node" "Nodes"}} report this</span>
+          <span class="dim">{{.PolicyShared}} {{plural .PolicyShared "Node reports" "Nodes report"}} this</span>
         {{else}}<span class="dim">not reported</span>{{end}}</dd>
         <dt>Template set</dt>
         <dd>{{if .TemplateUnloadable}}{{with .TemplateUnloadableHref}}<a href="{{.}}">{{end}}<span class="chip lbl" data-ns="state"><span class="ns">state:</span>template-unloadable</span>{{if .TemplateUnloadableHref}}</a>{{end}}
           <span class="dim">the Node's local template set failed to load; its template vocabulary is empty and it fails closed</span>
         {{else if .TemplateFingerprint}}{{with .TemplateFingerprintHref}}<a href="{{.}}">{{end}}<code title="{{.TemplateFingerprint}}">{{short .TemplateFingerprint}}</code>{{if .TemplateFingerprintHref}}</a>{{end}}
-          <span class="dim">{{.TemplateShared}} {{plural .TemplateShared "Node" "Nodes"}} report this</span>
+          <span class="dim">{{.TemplateShared}} {{plural .TemplateShared "Node reports" "Nodes report"}} this</span>
         {{else}}<span class="dim">no templates installed</span>{{end}}</dd>
       </dl>
-      <p class="note">To confirm a rollout landed, check that these values match. That is a string
-      comparison, not trust. The Relay reports what the daemon says it loaded and never sets either.
-      Each value links to every Node reporting the same one, through the Selector
-      <code>state:policy-fingerprint=</code> or <code>state:template-fingerprint=</code>. A value a
-      Selector cannot express is shown without a link rather than trimmed to fit.</p>
     </section>
 
     <section class="panel">
-      <h3>Facts <span class="phint">this page only</span></h3>
+      <h3>Facts <span class="phint">self-reported · this page only</span></h3>
       {{if .Facts}}
       <dl>{{range .Facts}}<dt>{{.Key}}</dt><dd>{{.Value}}</dd>{{end}}</dl>
       {{else}}<p class="dim">This Node has not reported any Facts.</p>{{end}}
-      <p class="note">Self-reported by the daemon. Facts appear here and nowhere else: they are
-      not on a fleet row, not in a facet, and never targetable. A compromised Node can report
-      anything it likes, so targeting is on labels, whose namespaces have enforced writers.</p>
     </section>
   </div>
 
@@ -693,8 +684,7 @@ var nodeTmpl = newScreen("node", `
         {{end}}
         <p class="note">Answered by <b>this Node's own engine</b> and received by the Relay
         {{if .PolicyReportedAt}}at <b>{{.PolicyReportedAt}}</b>, {{.PolicyReportedAgo}} ago{{else}}at <b>a time that was not recorded</b>{{end}}.
-        That is a receipt time, not a query time: the snapshot is captured when the Node connects,
-        so this is what the Node said then.
+        That is a receipt time, not a query time: a Node reports its Policy when it connects.
         The Relay never evaluates Policy and has no code path that writes it.</p>
         <div class="polblock">
           <div class="polrow"><span class="pk">raw exec</span>
@@ -758,4 +748,21 @@ var nodeTmpl = newScreen("node", `
     </section>
   </div>
 </div>
+
+<details class="about">
+<summary>About this screen</summary>
+<p class="gap"><b>Who writes each label namespace.</b>
+<b>node:</b> set by the machine's config management, immutable to the Relay ·
+<b>tag:</b> set by operators through the control plane, immutable to the Node; this Relay cannot store tag: labels yet, so none appear here ·
+<b>relay:</b> set by the Relay, immutable to the Node ·
+<b>state:</b> derived from this record, set by nobody</p>
+<p class="gap"><b>The fingerprints are compared, not trusted.</b> To confirm a rollout landed, check that these values match. That is a string
+comparison, not trust. The Relay reports what the daemon says it loaded and never sets either.
+Each value links to every Node reporting the same one, through the Selector
+<code>state:policy-fingerprint=</code> or <code>state:template-fingerprint=</code>. A value a
+Selector cannot express is shown without a link rather than trimmed to fit.</p>
+<p class="gap"><b>Facts appear here and nowhere else.</b> Self-reported by the daemon, they are
+not on a fleet row, not in a facet, and never targetable. A compromised Node can report
+anything it likes, so targeting is on labels, whose namespaces have enforced writers.</p>
+</details>
 `)

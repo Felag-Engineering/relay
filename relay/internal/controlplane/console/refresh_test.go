@@ -160,7 +160,7 @@ func TestRefresh_TheQueueStatesItsUnauditedReadBesideRefresh(t *testing.T) {
 	for name, fa := range map[string]*fakeApprovals{"empty": {}, "populated": d.Approvals.(*fakeApprovals)} {
 		d.Approvals = fa
 		body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals").Body.String()
-		mustBeSituational(t, body, "Reloading this queue is not recorded on the audit trail; that is a known gap (#779).")
+		mustBeSituational(t, body, "Reloading this queue is not recorded on the audit trail; that is a known gap.")
 		content := contentOf(body)
 		if strings.Index(content, "refreshlimit") < strings.Index(content, "refreshbtn") {
 			t.Errorf("%s: the sentence is not beside the Refresh control", name)

@@ -219,18 +219,71 @@ func TestFleet_UnresolvableNamespacesAreRefusedByName(t *testing.T) {
 	if v.Matched != len(fleetNodes(d)) {
 		t.Errorf("%s blanked the fleet — a rejected filter must leave the fleet on screen", term)
 	}
-	if !strings.Contains(v.FilterError, "#") {
-		t.Errorf("the refusal for %q does not name the issue that will fix it: %q", term, v.FilterError)
+	if trackerRef.MatchString(v.FilterError) {
+		t.Errorf("the refusal for %q carries a tracker reference: %q", term, v.FilterError)
+	}
+	if !strings.HasPrefix(v.FilterError, "This Relay cannot filter on tag: labels yet") {
+		t.Errorf("the refusal for %q does not say why: %q", term, v.FilterError)
 	}
 	// The refusal must NOT carry the generic lead sentence. Since #560 the rule
 	// lives in capability.ParseSelector and this screen only RECOGNISES the
 	// sentinel; if that recognition is lost, the term falls through to the
-	// generic arm, which prepends "every term needs a namespace prefix" and
-	// appends the capability error verbatim. That reads as a missing prefix on
-	// a term that plainly has one — and because the appended text still
-	// contains "#430", the assertion above alone cannot see the difference.
-	if strings.Contains(v.FilterError, "needs a namespace prefix") {
+	// generic arm, which reports the capability error as a missing prefix on a
+	// term that plainly has one.
+	if strings.Contains(v.FilterError, "prefix") {
 		t.Errorf("the refusal for %q names the wrong problem — the term HAS a prefix: %q", term, v.FilterError)
+	}
+}
+
+// TestFleet_GenericFilterRefusalIsOneCapitalisedSentence: the capability
+// layer's own detail is rendered once, sentence-cased, with one example.
+func TestFleet_GenericFilterRefusalIsOneCapitalisedSentence(t *testing.T) {
+	d := fleetFixture()
+	v := buildFleetView(d, fleetNodes(d), "foo", "-")
+	msg := v.FilterError
+	if msg == "" || msg[0] < 'A' || msg[0] > 'Z' {
+		t.Errorf("the refusal does not start upper-case: %q", msg)
+	}
+	if n := strings.Count(msg, `"foo"`); n != 1 {
+		t.Errorf("the refusal names the term %d times, want once: %q", n, msg)
+	}
+	if n := strings.Count(msg, "prefix"); n != 1 {
+		t.Errorf("the refusal says %q %d times, want once: %q", "prefix", n, msg)
+	}
+	if strings.Contains(msg, "every term needs") {
+		t.Errorf("the refusal still carries the old lead: %q", msg)
+	}
+}
+
+func TestFleet_DriftChipNamesNodesAndFingerprints(t *testing.T) {
+	var nodes []registry.Node
+	for i, fp := range []string{"aaaa", "aaaa", "bbbb", "cccc"} {
+		nodes = append(nodes, registry.Node{
+			NodeID: fmt.Sprintf("node-%d", i), NodeLabels: map[string]string{"role": "web"},
+			PolicyFingerprint: fp, DaemonVersion: "0.6.0", Connected: true, LastSeen: testNow,
+		})
+	}
+	d := withFleet(renderableDeps(), nodes...)
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), fleetPath+"?group=role").Body.String()
+	if !strings.Contains(body, "4 Nodes on 3 Policy fingerprints") {
+		t.Errorf("the drift chip does not read %q:\n%s", "4 Nodes on 3 Policy fingerprints", contentOf(body))
+	}
+	if strings.Contains(body, "on a different Policy fingerprint") {
+		t.Error("the drift chip still uses the ambiguous wording")
+	}
+}
+
+func TestFleet_PlaceholderIsAResolvableSelector(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), fleetPath).Body.String()
+	const example = "node:role=web, state:offline"
+	if !strings.Contains(body, `placeholder="e.g. `+example+`"`) {
+		t.Error("the filter placeholder is not the resolvable example")
+	}
+	if strings.Contains(body, `placeholder="node:role=web, relay:quarantine=on"`) || strings.Contains(body, `placeholder="e.g. node:role=web, relay:quarantine=on"`) {
+		t.Error("the filter placeholder still suggests a Selector that matches nothing")
+	}
+	if _, err := capability.ParseSelector(example); err != nil {
+		t.Errorf("the placeholder example does not parse: %v", err)
 	}
 }
 
@@ -1217,7 +1270,7 @@ func TestFleet_TemplateSetFacetExists(t *testing.T) {
 	}
 	// "no templates installed" and "the template set failed to load" are
 	// different facts and must not collapse.
-	if got["unloadable"] != 1 || got["none installed"] != 1 {
+	if got["unloadable"] != 1 || got["no templates installed"] != 1 {
 		t.Errorf("unloadable and none-installed collapsed: %v", got)
 	}
 	if got[shortHash("aaaa1111")] != 2 {
@@ -1396,12 +1449,12 @@ func TestFleet_ACollidingShortHashDoesNotHijackTheHonestBucket(t *testing.T) {
 // TestFleet_ASelfReportedSentinelDoesNotJoinTheSentinelBucket is the
 // regression guard for the sentinel key-space fix: the template-set facet's
 // counts map mixes real fingerprints with two closed-vocabulary sentinels
-// ("unloadable", "none installed"), and re-keying the real branch by the FULL
+// ("unloadable", "no templates installed"), and re-keying the real branch by the FULL
 // value — needed to close the short-hash collision above — would put a
 // self-reported string straight into the sentinel key space unless the
 // sentinel keys live somewhere a raw value structurally cannot reach.
 //
-// HEAD satisfies "a self-reported 'none installed' cannot join the sentinel
+// HEAD satisfies "a self-reported 'no templates installed' cannot join the sentinel
 // bucket" only INCIDENTALLY: the sentinel key on HEAD is the 14-character
 // literal "none installed", and the real branch keys by shortHash, which
 // truncates anything a Node reports over 12 characters to "none install…"
@@ -1415,7 +1468,7 @@ func TestFleet_ASelfReportedSentinelDoesNotJoinTheSentinelBucket(t *testing.T) {
 		{NodeID: "node-genuine", Connected: true},
 		// A Node self-reporting the sentinel's own operator-facing words as if
 		// they were a template-set fingerprint.
-		{NodeID: "node-hostile", Connected: true, TemplateSetFingerprint: "none installed"},
+		{NodeID: "node-hostile", Connected: true, TemplateSetFingerprint: "no templates installed"},
 	}...)
 
 	v := buildFleetView(d, fleetNodes(d), "", "-")
@@ -1433,7 +1486,7 @@ func TestFleet_ASelfReportedSentinelDoesNotJoinTheSentinelBucket(t *testing.T) {
 	sum := 0
 	for i := range tf.Values {
 		sum += tf.Values[i].Count
-		if tf.Values[i].Label == "none installed" {
+		if tf.Values[i].Label == "no templates installed" {
 			sentinelRow = &tf.Values[i]
 			continue
 		}
@@ -1443,12 +1496,12 @@ func TestFleet_ASelfReportedSentinelDoesNotJoinTheSentinelBucket(t *testing.T) {
 		t.Errorf("facet counts sum to %d, want %d (one row per Node)", sum, len(fleetNodes(d)))
 	}
 	if sentinelRow == nil || sentinelRow.Count != 1 {
-		t.Fatalf("want exactly one Node in the genuine 'none installed' bucket; got %+v", tf.Values)
+		t.Fatalf("want exactly one Node in the genuine 'no templates installed' bucket; got %+v", tf.Values)
 	}
 	if hostileRow == nil {
 		t.Fatal("the self-reported literal did not get its own row — it was merged into the sentinel bucket")
 	}
-	if hostileRow.Label == "none installed" {
+	if hostileRow.Label == "no templates installed" {
 		t.Errorf("the self-reported literal's row shares the sentinel's exact label %q", hostileRow.Label)
 	}
 	if hostileRow.Targetable || hostileRow.Href != "" {
@@ -4496,7 +4549,7 @@ func TestFleet_UnreportedRendersAsHollowCellChipAndHeaderCount(t *testing.T) {
 			t.Errorf("body lacks %q", want)
 		}
 	}
-	for _, banned := range []string{"every Node here is reachable, current and permitted", "on a different Policy fingerprint"} {
+	for _, banned := range []string{"every Node here is reachable, current and permitted", "Policy fingerprint</span>", "Policy fingerprints</span>"} {
 		if strings.Contains(body, banned) {
 			t.Errorf("body contains %q", banned)
 		}

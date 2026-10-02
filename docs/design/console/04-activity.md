@@ -242,7 +242,7 @@ The Principal box takes the Account's ID, and its placeholder says so. Looking a
 is deferred until an audited Account-read path exists (#659): the registry read it needs is one no
 audit record covers.
 
-The screen's standing notes — how a page is bounded, the reasoning behind leaving read records
+The screen's standing notes — why it shows the request and never the reasoning, how a page is bounded, the reasoning behind leaving read records
 out, that it lists tool calls only, the filter fields it cannot offer yet, why the kind chips carry no counts — sit
 in the closed "About this screen" disclosure at its foot (`00-foundations.md`). The messages a
 request provokes stay visible where they render: a part of the URL that could not be read, an
