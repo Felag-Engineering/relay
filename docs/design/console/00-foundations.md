@@ -236,6 +236,15 @@ nothing here is editable. Note the limit honestly: both listeners share one cert
 (ADR-0031), so once the Relay's leaf actually lapses the Console is unreachable too. The banner is
 a warning ahead of the event and can never be the only alarm.
 
+### Identifiers render verbatim
+
+Node ids, token ids, fingerprints, label keys and values, Account and token names and Operation
+names are case-sensitive and are never case-transformed, wherever they sit. An upper-cased eyebrow,
+caption, heading or table header resets case on the identifier (`<code>`, or the font-neutral
+`.ident` wrapper inside prose); the identifier never gives way. In a table or feed a long
+identifier scrolls with its container and is never broken; in a card it may soft-wrap, because a
+card's value is read rather than compared column against column.
+
 ## Standing notes and situational messages
 
 Screens carry prose that says what they cannot do. Two kinds, told apart by one rule:

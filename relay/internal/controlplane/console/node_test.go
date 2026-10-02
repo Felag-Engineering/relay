@@ -570,7 +570,7 @@ func TestCompare_MarksDifferencesAndNeverAdjudicatesThem(t *testing.T) {
 	}
 	// The rows that agree are not marked. A screen where everything is marked
 	// tells you nothing.
-	if strings.Count(body, `data-diff="1"`) >= strings.Count(body, `<th scope="row">`) {
+	if strings.Count(body, `data-diff="1"`) >= strings.Count(body, `<th scope="row" class="cmpkey">`) {
 		t.Error("every row was marked as differing — the operations row is identical on both Nodes")
 	}
 	for _, verdict := range []string{
@@ -643,7 +643,7 @@ func TestCompare_RendersNoFact(t *testing.T) {
 	// makes of it. It is not a dimension being diffed, and the note on the
 	// screen claims exactly that and no more.
 	for _, key := range []string{"hostname", "os", "kernel", "arch", "ip"} {
-		if strings.Contains(body, `<th scope="row">`+key+`</th>`) {
+		if strings.Contains(strings.ToLower(body), `<th scope="row" class="cmpkey">`+key+`</th>`) {
 			t.Errorf("the comparison diffs the Fact %q as a row", key)
 		}
 	}
@@ -855,5 +855,106 @@ func TestNode_ReportedNodeHasNoCaveat(t *testing.T) {
 	}
 	if strings.Contains(panel, "Not corroborated") {
 		t.Error("a Node with a recorded version and fingerprint carries the caveat")
+	}
+}
+
+// TestCompare_RendersMixedCaseNodeIDsVerbatimInsideAnIdentifierClass: a Node ID
+// is case-sensitive hex, and the column heading that holds it sits in an
+// upper-cased th. The ID must reach the page as given, inside the identifier
+// class the stylesheet exempts from text-transform, and the heading must carry
+// the class that resets the case for the hostname and connection lines too.
+func TestCompare_RendersMixedCaseNodeIDsVerbatimInsideAnIdentifierClass(t *testing.T) {
+	d := renderableDeps()
+	d = withFleet(d, []registry.Node{
+		{NodeID: "node-AbCd01", Connected: true},
+		{NodeID: "node-eFgH02", Connected: true},
+	}...)
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/compare?nodes=node-AbCd01,node-eFgH02").Body.String()
+
+	for _, id := range []string{"node-AbCd01", "node-eFgH02"} {
+		if !strings.Contains(body, `class="nodeid">`+id+`</a>`) {
+			t.Errorf("the Node ID %q is not rendered verbatim inside class=\"nodeid\"", id)
+		}
+	}
+	if !strings.Contains(body, `<th scope="col" class="cmpnode">`) {
+		t.Error("the Node column heading does not carry cmpnode, so the heading's uppercase reaches the hostname and connection lines")
+	}
+}
+
+// TestCompare_RowKeysShareOneCase: the row keys render verbatim now, so the
+// source case is the displayed case. Every key starts upper-case, and the rule
+// name after Allow/Deny is an identifier and keeps its own case.
+func TestCompare_RowKeysShareOneCase(t *testing.T) {
+	d := renderableDeps()
+	d = withFleet(d, []registry.Node{
+		{NodeID: "n1", Connected: true},
+		{NodeID: "n2", Connected: true},
+	}...)
+	d = withPolicy(d, map[string]policyview.Snapshot{
+		"n1": reportedSnapshot(policyview.Snapshot{
+			OperationRules: []policyview.OperationRule{{Name: "service.Restart", AllowedArgs: [][]string{{"nginx"}}}},
+			DenyRules:      []policyview.DenyRule{{Name: "file.Read", Args: [][]string{{"/etc/shadow"}}}},
+		}, testNow),
+		"n2": reportedSnapshot(policyview.Snapshot{}, testNow),
+	})
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/compare?nodes=n1,n2").Body.String()
+
+	const open = `<th scope="row" class="cmpkey">`
+	keys := 0
+	for rest := body; ; {
+		i := strings.Index(rest, open)
+		if i < 0 {
+			break
+		}
+		rest = rest[i+len(open):]
+		key := rest[:strings.Index(rest, "</th>")]
+		keys++
+		if first := key[:1]; first != strings.ToUpper(first) || first == strings.ToLower(first) {
+			t.Errorf("row key %q does not start with an upper-case letter", key)
+		}
+	}
+	if keys == 0 {
+		t.Fatal("no row keys rendered — this test is not running")
+	}
+	for _, want := range []string{open + "Allow service.Restart</th>", open + "Deny file.Read</th>"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the rule name was recased or the row is missing: want %q", want)
+		}
+	}
+}
+
+// TestNode_IdentityValuesWrapInsideTheirCard: the Node ID heading and the
+// Identity card's values soft-wrap rather than overflowing. The CSS reaches
+// them by class, so a string pin on both halves catches the markup moving and
+// the rule silently ceasing to apply.
+func TestNode_IdentityValuesWrapInsideTheirCard(t *testing.T) {
+	d := fleetFixture()
+	d = withFleet(d, registry.Node{
+		NodeID: "node-web-1", Connected: true, DaemonVersion: "0.6.0",
+		EnrollingTokenID: "tok-9f8e7d6c5b4a39281706f5e4d3c2b1a0ffee",
+	})
+	h := newTestHandler(d, accounts.RoleAdmin)
+
+	body := get(t, h, "/console/nodes/node-web-1").Body.String()
+	for _, want := range []string{
+		`<code class="nodeid big">`,
+		`<dl class="kv wrapid">`,
+		`<dd><code>tok-9f8e7d6c5b4a39281706f5e4d3c2b1a0ffee</code></dd>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("node detail does not contain %q", want)
+		}
+	}
+
+	css := get(t, h, "/console/assets/console.css").Body.String()
+	for _, want := range []string{
+		".nodehead .nodeid { white-space: normal; overflow-wrap: anywhere;",
+		"dl.wrapid dd code { overflow-wrap: anywhere; }",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("console.css does not contain %q", want)
+		}
 	}
 }

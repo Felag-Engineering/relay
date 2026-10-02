@@ -997,7 +997,12 @@ func handleActivity(d Deps) http.HandlerFunc {
 		if jobNext != "" || auditNext != "" {
 			v.OlderHref = f.href(nextJob, nextAudit)
 		}
-		v.ExportHref = f.base() + exportSuffix(f)
+		// writeActivityCSV walks the same fetchActivity from page one with
+		// ShowConsole forced on, so with no rows, no left-out Console reads
+		// and no further page the file would be empty: offer no link to it.
+		if v.Scrolled || len(v.Rows) > 0 || v.ConsoleLeftOut > 0 || v.OlderHref != "" {
+			v.ExportHref = f.base() + exportSuffix(f)
+		}
 
 		// The live region, only where the current view renders something the
 		// client can flip: dispatch rows, or Running now's entries (a Job

@@ -329,6 +329,14 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
  * The more specific input and .cell rules below keep their own offsets. (#473) */
 :focus-visible { outline: 2px solid var(--color-blue); outline-offset: 2px; }
 code, pre, .mono { font-family: var(--font-mono); }
+/* Identifiers (Node ids, token ids, fingerprints, label keys and values, Account
+ * and token names, Operation names) are case-sensitive and render verbatim.
+ * text-transform is inherited, so a value DECLARED on the identifier element beats
+ * any uppercase inherited from a th, label, h3 or eyebrow ancestor. .ident is the
+ * font-neutral wrapper for an identifier sitting inside prose (a caption, a panel
+ * heading) and carries no other declaration.
+ * TestConsole_IdentifiersAreNeverCaseTransformed pins this, here and in the templates. */
+code, pre, kbd, samp, .mono, .nodeid, .ident { text-transform: none; }
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: var(--radius-xs); }
 
@@ -936,6 +944,8 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
  * longer a token an operator can select, copy, or compare at a glance, and
  * comparing identifiers is most of what this table is for. */
 .devtable { flex: 1; min-width: 0; padding: var(--space-4) var(--space-5); overflow-x: auto; }
+/* Column headings are short words; none should wrap ("Last seen" did). */
+.devtable th { white-space: nowrap; }
 /* A real <caption>: on a page that can carry forty tables, an unnamed table is
  * forty identical announcements. text-align is explicit because a caption
  * centres by default. */
@@ -1048,7 +1058,7 @@ tr.attnrow td { background: var(--attention-bg); }
 .newq b { font-variant-numeric: tabular-nums; }
 
 .attempts { list-style: none; padding: 0; margin: var(--space-3) 0 0; }
-.attempt {
+.attemptrow {
   display: flex; gap: var(--space-3); align-items: baseline; flex-wrap: wrap;
   padding: var(--space-2) 0; border-top: 1px solid var(--border-subtle);
   font-size: var(--text-sm); color: var(--text-second);
@@ -1062,19 +1072,19 @@ tr.attnrow td { background: var(--attention-bg); }
   background: var(--bg-elevated); color: var(--text-second); border: 1px solid var(--border-subtle);
   flex: none;
 }
-.attempt[data-outcome="accepted"] .aout { color: var(--text-primary); }
+.attemptrow[data-outcome="accepted"] .aout { color: var(--text-primary); }
 .areason { color: var(--text-primary); }
 .atok code, .asrc, .awhen { font-size: var(--text-xs); color: var(--text-muted); }
 .awhen { margin-left: auto; font-family: var(--font-mono); }
 
 /* The fingerprints. The CA value comes first because it is the one to compare
  * and pin; the leaf is beside it, labelled as rotating (ADR-0031). */
-.trust { margin: var(--space-6) 0; }
-.trust h3 {
+.trustpins { margin: var(--space-6) 0; }
+.trustpins h3 {
   margin: 0 0 var(--space-3); font-size: var(--text-2xs); letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--text-muted); font-weight: var(--weight-semibold);
 }
-.trust .note { display: block; margin-top: var(--space-1); }
+.trustpins .note { display: block; margin-top: var(--space-1); }
 
 /* A stated gap. Deliberately NOT amber: a gap in what the product records is
  * not an alarm about the fleet, and colouring it as one would spend attention
@@ -1113,6 +1123,10 @@ details.about > .gap { border: 0; background: transparent; padding: 0; margin: v
 
 /* --- Node detail ---------------------------------------------------------- */
 .nodehead { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
+/* anywhere, not break-word: it lowers the flex item's min-content width, which is what
+ * stops a 37-character Node id widening the page at 390px. See the card exception
+ * note above dl.wrapid. */
+.nodehead .nodeid { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
 .seen { font-size: var(--text-sm); color: var(--text-second); }
 .labelrow {
   display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap;
@@ -1156,16 +1170,20 @@ details.about > .gap { border: 0; background: transparent; padding: 0; margin: v
 /* A differing row is marked with WEIGHT and a border, not a new hue. Six
  * meanings is the whole colour budget and "these two strings are not equal" is
  * not one of them — nor is it a judgement about either Node. */
-.cmp th[scope="row"] {
+.cmp th.cmpkey {
   text-transform: none; letter-spacing: 0; font-family: var(--font-mono);
-  font-size: var(--text-xs); white-space: nowrap; vertical-align: top; width: 1%;
+  font-size: var(--text-xs); white-space: normal; vertical-align: top; width: 1%; min-width: 9rem;
 }
+/* The Node column heading holds the Node id, the hostname and the connection lines, all
+ * of which would inherit th's uppercase and tracking; the tracking alone adds ~50px to
+ * a 37-character id. */
+.cmp th.cmpnode { text-transform: none; letter-spacing: 0; }
 .cmp td pre, .cmp td code {
   margin: 0; font-family: var(--font-mono); font-size: var(--text-xs);
   white-space: pre-wrap; word-break: break-all; color: var(--text-second);
 }
 .cmp tr[data-diff="1"] { background: var(--bg-elevated); }
-.cmp tr[data-diff="1"] th[scope="row"] { color: var(--text-primary); font-weight: var(--weight-semibold); border-left: 2px solid var(--border-mid); }
+.cmp tr[data-diff="1"] th.cmpkey { color: var(--text-primary); font-weight: var(--weight-semibold); border-left: 2px solid var(--border-mid); }
 .cmp tr[data-diff="1"] td pre, .cmp tr[data-diff="1"] td code { color: var(--text-primary); font-weight: var(--weight-medium); }
 
 .panels { display: flex; gap: var(--space-4); align-items: flex-start; flex-wrap: wrap; }
@@ -1186,6 +1204,16 @@ dd code, .frow code { font-family: var(--font-mono); font-size: var(--text-sm); 
 dl.kv {
   grid-template-columns: 140px 1fr; gap: var(--space-2) var(--space-5);
 }
+/* Node detail's Identity & enrollment panel renders two adjacent dl.kv blocks; without
+ * a gap the last row of the first and the first row of the second sit closer than
+ * every other row. */
+dl.kv + dl.kv { margin-top: var(--space-2); }
+/* A deliberate exception to "the identifier is never broken": in a TABLE or FEED the
+ * container moves (.devtable, .tablescroll, the event-row backstop, .planhash); in a CARD
+ * a value is read, not compared column against column, and a scroller would hide most of
+ * the one identifier the card exists to show. A soft wrap inserts no character, so
+ * double-click, select and copy still yield the whole token. */
+dl.wrapid dd code { overflow-wrap: anywhere; }
 /* Per-row, not per-dl (#640 cycle 2 review, BLOCKING 2): the approval card's
    "requested by" and "plan hash" rows share ONE dl.kv (approvals.go), and
    code.planhash's dd is a horizontal scroll container — align-items: baseline
@@ -1231,6 +1259,8 @@ dl.kv {
 .kchip:hover { text-decoration: none; border-color: var(--color-blue); }
 
 .feed { display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-section); overflow: hidden; }
+/* The empty-state paragraph sits directly in .feed; pad it like an .ev row. */
+.feed > p.dim { margin: 0; padding: var(--space-3) var(--space-4); }
 .ev { display: flex; gap: var(--space-4); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }
 .ev:last-child { border-bottom: 0; }
 .evwhen { width: 180px; flex: none; display: flex; flex-direction: column; gap: 2px; }
@@ -1343,6 +1373,9 @@ dl.kv {
  * pushing the document. min-width:0 is what lets a flex item shrink below its
  * content at all — without it overflow-x never engages. */
 .evhead, .evmeta, .denyhead { min-width: 0; overflow-x: auto; }
+/* The record line (account_id=... api_token_id=...) breaks at the spaces between pairs; a
+ * single token wider than the row scrolls inside it rather than past it. */
+.evreason { min-width: 0; overflow-x: auto; }
 .scoped { font-size: var(--text-sm); color: var(--text-second); margin: 0 0 var(--space-3); }
 
 section.panel { margin-top: var(--space-4); }
@@ -1359,12 +1392,6 @@ section.panel { margin-top: var(--space-4); }
 /* The verified/asserted key (#455): explained in visible text, not only in
  * the chip's title attribute, which a touch device and a printout cannot see. */
 .lanekey { font-size: var(--text-xs); color: var(--text-muted); margin-bottom: var(--space-4); }
-/* The dayone rule ".trust { margin: var(--space-6) 0; }" also matches every
- * ".chip.trust" on the page (that selector's specificity applies everywhere,
- * not only on day one's own section) and would otherwise stack a 24px margin
- * onto every sample and decider chip these sections render. Scoped here
- * rather than by rescoping the dayone rule, which styles another screen. */
-.jobhead .chip.trust, .jobapproval .chip.trust, .lanekey .chip.trust { margin: 0; }
 /* .jobcancel is slate, never red (#595): a cancel is an ordinary, cheap-to-ask
  * control, not an alarm — the same reasoning that keeps a Policy deny slate
  * rather than red on this same screen. */
@@ -1857,7 +1884,7 @@ dl.kv dd { min-width: 0; }
   .cmp td { overflow-x: auto; }
   .cmp td[data-label]::before {
     content: attr(data-label); display: block;
-    font-size: var(--text-2xs); letter-spacing: 0.1em; text-transform: uppercase;
+    font-family: var(--font-mono); font-size: var(--text-2xs); letter-spacing: 0; text-transform: none;
     color: var(--text-muted); font-weight: var(--weight-medium);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }

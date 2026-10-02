@@ -602,7 +602,7 @@ var nodeTmpl = newScreen("node", `
   <div class="pcol">
     <section class="panel">
       <h3>Identity &amp; enrollment</h3>
-      <dl class="kv">
+      <dl class="kv wrapid">
         <dt>node id</dt><dd><code>{{.ID}}</code></dd>
         <dt>certificate</dt><dd><code title="{{.CertFingerprint}}">{{short .CertFingerprint}}</code></dd>
         <dt>enrolled via</dt><dd>{{if .EnrollingToken}}<code>{{.EnrollingToken}}</code>{{else}}<span class="dim">not recorded</span>{{end}}</dd>

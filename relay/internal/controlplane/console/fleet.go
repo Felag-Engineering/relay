@@ -152,6 +152,12 @@ type fleetNode struct {
 	signature string
 }
 
+// hasStateCell reports whether the State cell for n renders anything. It must
+// change whenever the statecell template does.
+func (n fleetNode) hasStateCell() bool {
+	return n.Revoked || n.Quarantined || n.Unreported || len(n.States) > 0
+}
+
 // facetValue is one row in the facet rail.
 type facetValue struct {
 	Label string
@@ -213,6 +219,10 @@ type facet struct {
 	Title  string
 	Values []facetValue
 
+	// LabelKey is true when Title is a label key (an identifier) rather than
+	// a facet name, and so renders as code, verbatim.
+	LabelKey bool
+
 	// Hint is one VISIBLE line explaining why this facet's values are not
 	// links. It replaced a per-row `title` attribute, which a keyboard user
 	// never sees and a touch user cannot reach — an explanation nobody can read
@@ -243,6 +253,11 @@ type fleetGroup struct {
 
 	Facets     []facet
 	Deviations []fleetNode
+
+	// ShowState is false when no row in this group's table draws anything in
+	// the State cell (hasStateCell), so an all-empty State column does not
+	// take width on every row.
+	ShowState bool
 
 	// ModeLine is the calm sentence beneath the deviations: how many Nodes
 	// carry nothing at all. It is deliberately the last thing on the card —
@@ -982,6 +997,12 @@ func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext)
 		g.Elided = len(g.Deviations) - deviationRows
 		g.Deviations = g.Deviations[:deviationRows]
 	}
+	for _, n := range g.Deviations {
+		if n.hasStateCell() {
+			g.ShowState = true
+			break
+		}
+	}
 
 	normal := len(nodes) - deviating
 	switch {
@@ -1355,6 +1376,7 @@ func nodeRoleFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 	f := facetFrom("node:role", roles, link, func(k string) (string, string, bool) {
 		return k, "node:role=" + k, true
 	})
+	f.LabelKey = true
 	return f, len(f.Values) > 0
 }
 
@@ -1483,7 +1505,7 @@ var fleetTmpl = newScreen("fleet", `
   </div>
   <div class="wall" data-size="{{.CellSize}}" role="img" aria-label="{{.WallTotal}} Nodes: {{range .Legend}}{{.Count}} {{.Label}}. {{end}}Individual Nodes are listed in the tables below.">
     {{range .Wall}}<div class="wallgroup">
-      {{if $.GroupBy}}<span class="walllabel" aria-hidden="true">{{.Key}}</span>{{end}}
+      {{if $.GroupBy}}<span class="walllabel" aria-hidden="true"><span class="ident">{{.Key}}</span></span>{{end}}
       <div class="wallcells">{{range .Nodes}}<a class="cell" data-bucket="{{.Bucket}}" href="{{.Href}}{{$.Pin.Query}}" tabindex="-1" aria-hidden="true" title="{{.ID}}{{with .Hostname}} — {{.}}{{end}} · {{.BucketLabel}}"></a>{{end}}</div>
     </div>{{end}}
   </div>
@@ -1512,7 +1534,7 @@ var fleetTmpl = newScreen("fleet", `
     <div class="facets">
       {{range .Facets}}
       <div class="facet">
-        <div class="ftitle">{{.Title}}</div>
+        <div class="ftitle">{{if .LabelKey}}<code>{{.Title}}</code>{{else}}{{.Title}}{{end}}</div>
         {{range .Values}}
         <div class="frow">
           {{if .Fenced}}<span class="chip fenced">{{.Fenced}}</span>
@@ -1528,21 +1550,22 @@ var fleetTmpl = newScreen("fleet", `
 
     <div class="devtable">
       <table class="cards">
-        <caption class="tcap">{{if .ListsWholeFleet}}Every Node in {{.Key}}, oddest first.{{else}}Deviating Nodes in {{.Key}}, rarest first.{{end}}</caption>
+        <caption class="tcap">{{if .ListsWholeFleet}}Every Node in <span class="ident">{{.Key}}</span>, oddest first.{{else}}Deviating Nodes in <span class="ident">{{.Key}}</span>, rarest first.{{end}}</caption>
         <thead><tr>
           <th scope="col"><span class="vh">Reachable</span></th>
-          <th scope="col">Node</th><th scope="col">State</th><th scope="col">Labels</th>
+          <th scope="col">Node</th>{{if .ShowState}}<th scope="col">State</th>{{end}}<th scope="col">Labels</th>
           <th scope="col">Policy</th><th scope="col">Last seen</th>
         </tr></thead>
         <tbody>
+        {{$showState := .ShowState}}
         {{range .Deviations}}
           <tr>
             <td class="livecell"><span class="dot" data-live="{{if .Connected}}on{{else}}off{{end}}" role="img" aria-label="{{if .Connected}}connected{{else}}not connected{{end}}"></span></td>
             <td data-label="Node"><a href="{{.Href}}{{$.Pin.Query}}" class="nodeid">{{.ID}}</a>{{with .Hostname}}<div class="sub">{{.}}</div>{{end}}</td>
-            <td data-label="State"><div class="statecell">{{if .Revoked}}<span class="chip fenced" title="Revoked {{.RevokedAt}}. The record is kept so the Node stays investigable.">revoked</span>{{end}}
+            {{if $showState}}<td data-label="State"><div class="statecell">{{if .Revoked}}<span class="chip fenced" title="Revoked {{.RevokedAt}}. The record is kept so the Node stays investigable.">revoked</span>{{end}}
               {{if .Quarantined}}<span class="chip fenced" title="Quarantined by an admin. Reversible.">quarantined</span>{{end}}
               {{if .Unreported}}<span class="chip unreported" title="The Relay holds no recorded Hello for this Node: no daemon version or no Policy fingerprint. Not a state: label, and not targetable.">not reported</span>{{end}}
-              {{range .States}}{{template "label-chip" .}}{{end}}</div></td>
+              {{range .States}}{{template "label-chip" .}}{{end}}</div></td>{{end}}
             <td data-label="Labels"><div class="lblcell">{{range .Labels}}{{template "label-chip" .}}{{end}}</div></td>
             <td data-label="Policy">{{if .PolicyFingerprint}}<code title="{{.PolicyFingerprint}}">{{short .PolicyFingerprint}}</code>{{else}}<span class="dim">not reported</span>{{end}}</td>
             <td class="num" data-label="Last seen">{{.LastSeen}}</td>

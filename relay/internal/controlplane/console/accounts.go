@@ -575,7 +575,7 @@ absent from the window rather than as never having called.</p>
 {{if .Selected}}
 {{with .Change}}{{$c := .}}
 <section class="panel">
-  <h3>Role and state &mdash; {{$.SelectedName}}</h3>
+  <h3>Role and state &mdash; <span class="ident">{{$.SelectedName}}</span></h3>
   <p>Role <b>{{.Role}}</b>, {{.State}}.</p>
   {{if .Self}}
   <p class="note">This is the Account you are signed in as. {{.SelfNote}}</p>
@@ -630,7 +630,7 @@ absent from the window rather than as never having called.</p>
 {{end}}
 <section class="panel">
   {{if .SelectedFound}}
-  <h3>API Tokens &mdash; {{.SelectedName}}</h3>
+  <h3>API Tokens &mdash; <span class="ident">{{.SelectedName}}</span></h3>
   {{if .TokensUnreadable}}
   <p class="note">The API Tokens for this Account could not be read. The table above is unaffected:
   it comes from a different read.</p>

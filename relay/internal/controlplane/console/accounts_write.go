@@ -823,7 +823,7 @@ func handleRevokeAPIToken(d Deps) http.HandlerFunc {
 // the only time it will ever appear.
 var accountsMintedTmpl = newScreen("accounts-minted", `
 <section class="panel">
-  <h3>API Token minted &mdash; {{.TokenName}}{{with .AccountName}} for {{.}}{{end}}</h3>
+  <h3>API Token minted &mdash; <span class="ident">{{.TokenName}}</span>{{with .AccountName}} for <span class="ident">{{.}}</span>{{end}}</h3>
   <p><b>Copy this now.</b> This is the only time this Relay will show it. It is stored as a hash and
   cannot be recovered &mdash; if it is lost, revoke this token and mint another.</p>
   <p><code>{{.Token}}</code></p>

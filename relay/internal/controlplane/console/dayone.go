@@ -238,7 +238,7 @@ var dayOneTmpl = newScreen("dayone", `
 
     <ul class="attempts" id="dayone-attempts">
       {{range .Attempts}}
-      <li class="attempt" data-outcome="{{if .Accepted}}accepted{{else}}rejected{{end}}">
+      <li class="attemptrow" data-outcome="{{if .Accepted}}accepted{{else}}rejected{{end}}">
         <span class="aout">{{if .Accepted}}accepted{{else}}refused{{end}}</span>
         <span class="areason">{{.Reason}}</span>
         <span class="atok"><code>{{.TokenID}}</code></span>
@@ -249,7 +249,7 @@ var dayOneTmpl = newScreen("dayone", `
     </ul>
 
     <template id="dayone-attempt-row">
-      <li class="attempt" data-outcome="rejected">
+      <li class="attemptrow" data-outcome="rejected">
         <span class="aout">refused</span>
         <span class="areason"></span>
         <span class="atok"><code></code></span>
@@ -266,7 +266,7 @@ var dayOneTmpl = newScreen("dayone", `
   only when this Relay's live updates are available.</p>
   {{end}}
 
-  <section class="trust">
+  <section class="trustpins">
     <h3>What a machine needs in order to trust this Relay</h3>
     {{if .TrustWired}}
     <dl class="kv">
