@@ -189,7 +189,7 @@ func TestDayOne_ServerFingerprintIsNotPresentedAsAPin(t *testing.T) {
 		t.Error("the server leaf is rendered before the CA fingerprint — the CA is the value to pin " +
 			"and belongs first")
 	}
-	if !strings.Contains(body, "re-issued") || !strings.Contains(body, "not what you pin") {
+	if !strings.Contains(body, "re-issued") || !strings.Contains(body, "not what the CA bundle pins") {
 		t.Error("the server certificate is not labelled as rotating and not-for-pinning (ADR-0031)")
 	}
 }

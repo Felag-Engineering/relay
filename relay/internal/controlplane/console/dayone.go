@@ -268,7 +268,7 @@ var dayOneTmpl = newScreen("dayone", `
       <span class="note">A daemon trusts this authority because it was installed with the CA bundle.</span></dd>
       <dt>Server certificate</dt>
       <dd><code title="{{.ServerFingerprint}}">{{short .ServerFingerprint}}</code>
-      <span class="note">This Console&#39;s certificate, re-issued about daily; not what you pin.</span></dd>
+      <span class="note">This Console&#39;s certificate, re-issued about daily; not what the CA bundle pins.</span></dd>
     </dl>
     {{else}}
     <p class="dim">The CA and server-certificate fingerprints are not wired into this Console.</p>

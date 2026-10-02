@@ -1823,7 +1823,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   </div>
 
   <p class="summary">{{.Summary}}</p>
-  <p class="note">The Relay wrote that sentence; the caller chose what it describes, not its words.</p>
+  <p class="note">The Relay wrote that sentence; its Operation names and quoted values are the caller&#39;s.</p>
 
   <dl class="kv">
     <dt class="baseline">requested by</dt><dd class="baseline">{{template "trust-chip" (trust .Requester .Verified)}}</dd>

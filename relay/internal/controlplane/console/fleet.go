@@ -1694,7 +1694,7 @@ var fleetTmpl = newScreen("fleet", `
 </section>
 {{end}}
 
-{{if .GroupsElided}}<p class="gap"><b>{{.GroupsElided}} more {{plural .GroupsElided "group is" "groups are"}} not shown</b>; this page draws only the {{len .Groups}} largest, so narrow the filter.</p>{{end}}
+{{if .GroupsElided}}<p class="gap"><b>{{.GroupsElided}} {{plural .GroupsElided "group is" "groups are"}} not shown</b>; the page draws the {{len .Groups}} largest; narrow the filter or group by fewer values.</p>{{end}}
 
 {{if not .CertExpiryKnown}}
 <p class="gap"><b>{{.CertExpiryUnknown}} {{plural .CertExpiryUnknown "Node has" "Nodes have"}} no recorded validity at all</b>; for {{plural .CertExpiryUnknown "it" "them"}}, a clean State column means unknown, not all-clear.</p>

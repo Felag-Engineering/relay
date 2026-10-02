@@ -19,16 +19,28 @@ package console
 //     capped per element. A <p> is measured by default, whatever its class, so
 //     a new paragraph is a note until somebody argues otherwise below.
 //   - bounded: data, or the annotation of a value. Capped per element, not
-//     budgeted.
+//     budgeted: a bounded p.<class> (p.dim, p.back, ...) can hold a note of up
+//     to maxNoteWords that no screen budget counts. That is a residual of this
+//     guard, stated here rather than hidden.
 //   - exempt: recorded data a Relay author did not write (an approval summary,
 //     a diff row) or a sentence the capability layer owns (the deny block's
-//     BoundaryExplanation).
+//     BoundaryExplanation). An exempt element's template source may hold no
+//     literal word on any branch: only actions (and a diff row's arrow), so
+//     the exemption cannot shelter a label somebody wrote.
 //   - a value: text inside td, dd, dt, th, code, pre, a, label or a heading is
 //     a datum or a name, not prose. <dd> is exempt on purpose: it is a value
 //     cell, and a note placed in one is the one place this guard cannot see it.
 //   - unclassified: ANY other run of eight or more words — in an <li>, a
 //     <summary>, a <div>, a bare container — fails the test. A new kind of
 //     element cannot carry prose past the budget by being new.
+//
+// Inline tags (b, i, em, span, ...) with no class of their own are transparent:
+// text split by them is one run, so a bolded lead clause cannot be what keeps
+// a sentence under the eight-word floor.
+//
+// The source scan treats everything inside <details class="about"> as
+// accounted for: it is measured on the rendered page (one paragraph, at most
+// maxAboutWords), not per element in source.
 //
 // Class names are matched on the element that carries them (tag.class), never
 // by the class alone, so a <span> cannot borrow what a <p> is allowed.
@@ -116,6 +128,18 @@ var boundedClasses = map[string]string{
 	"span.unattrib": "what stands in the requester slot when the trail recorded none: a value, a trail defect named",
 	"span.overcap":  "a Plan's over-cap verdict: a state, drawn where the cap arithmetic is",
 	"ul.truths":     "Day one's state facts (each li of ul.truths)",
+	// Header lines of values: counts, state names and a timestamp, no sentence.
+	// Surfaced when inline tags stopped splitting a run (#849 cycle 3).
+	"div.sshead":   "Fleet wall header: a count, a grouping key and a timestamp",
+	"header.ghead": "a Fleet group header: its key and a count per state",
+	"div.nodehead": "Node detail header: liveness, last seen, revoked stamp and the Run/Pin links",
+}
+
+// sourceCapExempt are bounded classes whose template source is not held to
+// maxSourceWords: the longest branch path lights every optional chip at once,
+// and each chip is a count and a state name. The rendered cap still applies.
+var sourceCapExempt = map[string]string{
+	"header.ghead": "one optional chip per state, each a count and a state name",
 }
 
 // exemptClasses are not measured at all, keyed by "tag.class". denynote is
@@ -228,6 +252,15 @@ var blockTags = map[string]bool{
 	"dl": true, "dt": true, "dd": true, "table": true, "caption": true, "form": true, "br": true,
 }
 
+// inlineTags are transparent to a run of prose: a bolded lead clause, an
+// emphasised word or a span splits no sentence in two, so their text joins the
+// enclosing element's run. An inline tag that carries a measured, bounded or
+// exempt class is not transparent: it is classified in its own right.
+var inlineTags = map[string]bool{
+	"b": true, "i": true, "em": true, "strong": true, "span": true, "small": true,
+	"abbr": true, "time": true, "s": true, "u": true, "mark": true, "q": true, "cite": true,
+}
+
 // countWords counts tokens holding a letter or a digit, so "·" and "—" are
 // not words and a rendered timestamp is two.
 func countWords(s string) int {
@@ -299,11 +332,16 @@ func proseOf(content string) (elems []proseElem, unclassified []string, err erro
 		if accountedFor() {
 			return
 		}
-		if len(stack) == 0 {
-			rootText.WriteString(s)
+		// The run belongs to the nearest enclosing element that is not a bare
+		// inline one: `<li><b>seven words</b> <i>seven</i></li>` is one run.
+		for i := len(stack) - 1; i >= 0; i-- {
+			if inlineTags[stack[i].tag] && stack[i].kind == kindNone {
+				continue
+			}
+			stack[i].own.WriteString(s)
 			return
 		}
-		stack[len(stack)-1].own.WriteString(s)
+		rootText.WriteString(s)
 	}
 	reportRun := func(e *openElem) {
 		text := strings.Join(strings.Fields(e.own.String()), " ")
@@ -524,10 +562,35 @@ func TestCopyBudget_CounterMeasuresWhatItShould(t *testing.T) {
 		"a span in a li":     `<ul><li><span>` + long + `</span></li></ul>`,
 		"text at the root":   long,
 		"a nested bare span": `<div class="wrap"><div><span>` + long + `</span></div></div>`,
+		"a lead clause split by inline tags": `<ul><li><b>one two three four five six seven</b> <i>one two three four five six seven</i> ` +
+			`<em>one two three four five six seven</em> <span>one two three four five six</span></li></ul>`,
 	} {
 		if _, unclassified, err := proseOf(snippet); err != nil || len(unclassified) == 0 {
 			t.Errorf("%s: a 26-word run went unreported (unclassified=%v, err=%v)", name, unclassified, err)
 		}
+	}
+	// The same split-by-inline-tags prose, in template source, where no fixture
+	// renders it: every branch is read, so an {{if false}} body is no hiding place.
+	split := `<ul><li><b>one two three four five six seven</b> <i>one two three four five six seven</i> ` +
+		`<em>one two three four five six seven</em> <span>one two three four five six</span></li></ul>`
+	for name, text := range map[string]string{
+		"source, always":       split,
+		"source, {{if false}}": `{{if false}}` + split + `{{end}}`,
+	} {
+		if runs := templateRuns(templateSource{"fixture.go", 1, text}); len(runs) == 0 {
+			t.Errorf("%s: a 27-word run split by inline tags went unreported in template source", name)
+		}
+	}
+	// Inline tags join a run; they do not make a short one long. A bounded span
+	// inside a li is accounted for by its own class and stays out of the run.
+	if _, unclassified, _ := proseOf(`<ul><li><b>one two three</b> <i>four five six seven</i></li></ul>`); len(unclassified) != 0 {
+		t.Errorf("a seven-word run split by inline tags was reported: %v", unclassified)
+	}
+	if runs := templateRuns(templateSource{"fixture.go", 1, `<ul><li><b>one two three</b> <i>four five six seven</i></li></ul>`}); len(runs) != 0 {
+		t.Errorf("a seven-word source run split by inline tags was reported: %v", runs)
+	}
+	if _, unclassified, _ := proseOf(`<ul><li><b>one two three four</b> <span class="dim">one two three four five six seven eight</span></li></ul>`); len(unclassified) != 0 {
+		t.Errorf("a bounded span was folded into the surrounding run: %v", unclassified)
 	}
 	// A measured element in single quotes counts, and a long p.mode is measured
 	// as a bounded element for the per-element cap rather than skipped.
@@ -1068,9 +1131,10 @@ func longestPath(t *testing.T, where, fragment string) (int, string) {
 // sourceElement is one measured or bounded element found in template source.
 type sourceElement struct {
 	where, tag, class, inner string
+	exempt                   bool
 }
 
-// templateElements finds every measured and bounded element in src, outside
+// templateElements finds every measured, bounded and exempt element in src, outside
 // About disclosures, and returns its inner fragment.
 func templateElements(t *testing.T, src templateSource) []sourceElement {
 	t.Helper()
@@ -1124,7 +1188,7 @@ func templateElements(t *testing.T, src templateSource) []sourceElement {
 			continue
 		}
 		kind, class := classify(tag, classes, ancestors, false)
-		if kind != kindMeasured && kind != kindBounded && kind != kindDenynote {
+		if kind != kindMeasured && kind != kindBounded && kind != kindDenynote && kind != kindExempt {
 			continue
 		}
 		// Pair the open tag with its close by same-name depth.
@@ -1146,7 +1210,7 @@ func templateElements(t *testing.T, src templateSource) []sourceElement {
 		if end < 0 {
 			t.Fatalf("%s: <%s class=%q> has no matching </%s> — the source scan cannot measure it", where(m[0]), tag, class, tag)
 		}
-		out = append(out, sourceElement{where(m[0]), tag, class, text[m[1]:end]})
+		out = append(out, sourceElement{where(m[0]), tag, class, text[m[1]:end], kind == kindExempt})
 	}
 	return out
 }
@@ -1161,37 +1225,48 @@ func templateRuns(src templateSource) []string {
 	text := blank(tmplComment, src.text)
 	masked := maskActions(text)
 	type frame struct {
-		tag       string
-		classes   []string
-		accounted bool
+		tag         string
+		classes     []string
+		accounted   bool
+		transparent bool // a bare inline tag: it neither ends nor starts a run
 	}
 	var stack []frame
 	var out []string
-	pos := 0
-	flush := func(end int) {
-		if len(stack) > 0 && stack[len(stack)-1].accounted {
-			return
-		}
-		seg := strings.Join(strings.Fields(html.UnescapeString(masked[pos:end])), " ")
+	var run strings.Builder
+	runStart, pos := 0, 0
+	flush := func() {
+		seg := strings.Join(strings.Fields(html.UnescapeString(run.String())), " ")
 		if n := countWords(seg); n >= minUnclassifiedRun {
 			out = append(out, fmt.Sprintf("%s:%d: a %d-word run no measured class collects: %q",
-				src.file, src.line+strings.Count(text[:pos], "\n"), n, seg))
+				src.file, src.line+strings.Count(text[:runStart], "\n"), n, seg))
 		}
+		run.Reset()
 	}
 	for _, m := range copyTag.FindAllStringSubmatchIndex(masked, -1) {
-		flush(m[0])
+		if len(stack) == 0 || !stack[len(stack)-1].accounted {
+			if run.Len() == 0 {
+				runStart = pos
+			}
+			run.WriteString(masked[pos:m[0]])
+		}
 		pos = m[1]
 		closing := masked[m[2]:m[3]] == "/"
 		tag := strings.ToLower(masked[m[4]:m[5]])
 		if voidTags[tag] {
+			flush()
 			continue
 		}
 		if closing {
+			transparent := false
 			for j := len(stack) - 1; j >= 0; j-- {
 				if stack[j].tag == tag {
+					transparent = stack[j].transparent
 					stack = stack[:j]
 					break
 				}
+			}
+			if !transparent {
+				flush()
 			}
 			continue
 		}
@@ -1204,10 +1279,42 @@ func templateRuns(src templateSource) []string {
 		}
 		about := tag == "details" && len(classes) > 0 && classes[0] == "about"
 		kind, _ := classify(tag, classes, ancestors, false)
-		stack = append(stack, frame{tag, classes, accounted || about || kind != kindNone})
+		transparent := inlineTags[tag] && kind == kindNone && !valueTags[tag]
+		if !transparent {
+			flush()
+		}
+		stack = append(stack, frame{tag, classes, accounted || about || kind != kindNone, transparent})
 	}
-	flush(len(masked))
+	if len(stack) == 0 || !stack[len(stack)-1].accounted {
+		if run.Len() == 0 {
+			runStart = pos
+		}
+		run.WriteString(masked[pos:])
+	}
+	flush()
 	return out
+}
+
+// requireNoLiteralWords fails when an exempt element's template source holds a
+// literal word on any branch. An exemption is for recorded data the Relay's
+// authors did not write, so what the template adds around the data is exactly
+// what the exemption must not hide: a label belongs in a measured element
+// beside it. Template actions and the "→" of a diff row are the only content.
+func requireNoLiteralWords(t *testing.T, e sourceElement) {
+	t.Helper()
+	for _, path := range branchTexts(t, e.where, e.inner) {
+		var words []string
+		for _, f := range strings.Fields(html.UnescapeString(strings.ReplaceAll(anyTag.ReplaceAllString(path, " "), "→", " "))) {
+			if f != "X" { // a template action
+				words = append(words, f)
+			}
+		}
+		if literal := strings.Join(words, " "); countWords(literal) > 0 {
+			t.Errorf("%s: exempt <%s class=%q> carries Console-authored words, which the exemption would hide: %q — move them into a measured element",
+				e.where, e.tag, e.class, literal)
+			return
+		}
+	}
 }
 
 func TestCopyBudget_EveryTemplateNoteIsShortOnEveryPath(t *testing.T) {
@@ -1215,11 +1322,19 @@ func TestCopyBudget_EveryTemplateNoteIsShortOnEveryPath(t *testing.T) {
 	if len(sources) < 15 {
 		t.Fatalf("found %d template literals, want the whole Console's — the source scan is not finding them", len(sources))
 	}
-	elements := 0
+	elements, exempts := 0, 0
 	var corpus strings.Builder
 	for _, src := range sources {
 		for _, e := range templateElements(t, src) {
+			if e.exempt {
+				exempts++
+				requireNoLiteralWords(t, e)
+				continue
+			}
 			elements++
+			if sourceCapExempt[e.tag+"."+e.class] != "" {
+				continue
+			}
 			if n, text := longestPath(t, e.where, e.inner); n > maxSourceWords {
 				t.Errorf("%s: <%s class=%q> renders %d words on its longest branch, over %d: %q",
 					e.where, e.tag, e.class, n, maxSourceWords, text)
@@ -1256,6 +1371,9 @@ func TestCopyBudget_EveryTemplateNoteIsShortOnEveryPath(t *testing.T) {
 				}
 			}
 		}
+	}
+	if exempts < 2 {
+		t.Fatalf("found %d exempt template elements, want at least 2 (p.summary, p.diffchange) — the exemption check is not finding them", exempts)
 	}
 	if elements < 60 {
 		t.Fatalf("measured %d template elements, want at least 60 — the source scan has stopped finding notes", elements)
@@ -1501,8 +1619,8 @@ func TestCopyBudget_RuledQualifiersStillRender(t *testing.T) {
 			"This Console&#39;s certificate, re-issued about daily", newTestHandler(dayOneDeps(), accounts.RoleAdmin)},
 		{"cert provenance: the expiry is unknown", "/console/nodes/node-web-1",
 			"so its expiry is unknown until its next renewal", newTestHandler(sweepFixture(), accounts.RoleAdmin)},
-		{"the summary is the Relay's wording, though the caller chose its content", "/console/approvals/ap-1",
-			"the caller chose what it describes, not its words", h},
+		{"the summary is the Relay's wording, but its Operation names and quoted values are the caller's", "/console/approvals/ap-1",
+			"its Operation names and quoted values are the caller&#39;s", h},
 		{"a missing park record leaves the Selector and arguments unknown, not empty", "/console/approvals/ap-1",
 			"so the Selector and arguments are unknown, not empty", h},
 		{"approval residual risk: the audience is a union", "/console/approvals/ap-grant",

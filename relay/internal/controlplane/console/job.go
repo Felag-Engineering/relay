@@ -1122,7 +1122,7 @@ var jobTmpl = newScreen("job", `
   </div>
   {{end}}
   {{if not .Deciders}}<p class="dim">no approving decision recorded</p>{{end}}
-  {{with .Summary}}<p class="summary"><b>What the Relay showed the approver</b> <span class="dim">(Relay-authored, stored when the approval was requested and shown exactly as stored)</span><br>{{.}}</p>{{end}}
+  {{with .Summary}}<p class="note">What the Relay showed the approver, as stored when the approval was requested:</p><p class="summary">{{.}}</p>{{end}}
   {{if .ViaGrant}}<p class="note">These approvers approved an Approval grant&#39;s window, not this plan; the summary describes the window.</p>{{end}}
 </section>
 {{end}}
