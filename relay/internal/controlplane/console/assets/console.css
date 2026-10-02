@@ -8,8 +8,10 @@
  * that drives Relay — and an operator moving between them must not feel they
  * have changed tools. The tokens below are lifted from Gleipnir's
  * `frontend/src/tokens.css` VERBATIM: the same warm parchment/forest palette,
- * the same hearth accent, the same IBM Plex pairing, the same 4px spacing
- * scale. Where a value differs from Gleipnir's, that is a bug, not a choice.
+ * the same IBM Plex pairing, the same 4px spacing scale. Where a value differs
+ * from Gleipnir's, that is a bug, not a choice — with one deliberate
+ * exception: the interactive accent is the Relay brand teal, not Gleipnir's
+ * hearth (owner decision, 2026-10-01).
  *
  * Dark is the default, as it is there. Light arrives on `prefers-color-scheme:
  * light` — the Console has no theme switcher because it has no JavaScript, so
@@ -33,7 +35,7 @@
  *   purple  the security lane (relay:)   --color-purple
  *   slate   a Policy decision was made   --text-second on --bg-elevated
  *   grey    drift and inertness          --text-muted
- *   hearth  interactive — never semantic --color-blue (warm; the name is historical)
+ *   teal    interactive — never semantic --color-accent (the Relay brand teal)
  *   red     failure and timeout          --color-red
  *
  * Green is success and is deliberately quiet: success is the mode, and the mode
@@ -125,7 +127,13 @@
   --text-second: #a8a090;
   --text-primary: #e4ddd2;
 
-  --color-blue: #d4915a;
+  /* The interactive accent: the Relay brand teal, the dark wordmark's cursor
+   * (owner decision, 2026-10-01). See TestConsole_AccentPairsClearAA. */
+  --color-accent: #4fb3a8;
+  --accent-text: var(--color-accent);
+  /* Text drawn on an accent fill. A literal on purpose: it equals --bg-canvas
+   * today, but button text must not move if the canvas is retuned. */
+  --on-accent: #141a16;
   --color-orange: #e0a26e;
   --color-amber: #f0c830;
   --color-green: #4ade6a;
@@ -134,8 +142,8 @@
   --color-teal: #34d399;
   --color-info: #40c8e0;
 
-  --accent-hover: #e0a26e;
-  --accent-muted: rgba(212, 145, 90, 0.14);
+  --accent-hover: #6cc5bb;
+  --accent-muted: rgba(79, 179, 168, 0.14);
 
   --sidebar-width: 212px;
 
@@ -266,7 +274,11 @@
     --text-muted: #645f54;
     --text-second: #5c5848;
     --text-primary: #2c2a24;
-    --color-blue: #b8733e;
+    --color-accent: #0a8276;
+    /* The accent as TEXT. The brand teal is 3.41 to 4.43:1 as text on the
+     * light grounds; this step is 4.64:1 at its tightest, on --bg-subtle. */
+    --accent-text: #086b61;
+    --on-accent: #ffffff;
     --color-orange: #c07a48;
     --color-amber: #a88608;
     --color-green: #1a9640;
@@ -274,8 +286,8 @@
     --color-purple: #6d3cc7;
     --color-teal: #0a8276;
     --color-info: #1a8ea0;
-    --accent-hover: #c07a48;
-    --accent-muted: rgba(184, 115, 62, 0.12);
+    --accent-hover: #065a52;
+    --accent-muted: rgba(10, 130, 118, 0.12);
 
     --attention-bg: rgba(168, 134, 8, 0.10);
     --attention-line: rgba(168, 134, 8, 0.34);
@@ -321,13 +333,13 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
-a { color: var(--color-blue); text-decoration: none; }
+a { color: var(--accent-text); text-decoration: none; }
 a:hover { color: var(--accent-hover); text-decoration: underline; }
 
 /* One visible focus ring for everything focusable. The UA default is faint on the
  * dark theme, and links, nav items, buttons and summaries had no rule of their own.
  * The more specific input and .cell rules below keep their own offsets. (#473) */
-:focus-visible { outline: 2px solid var(--color-blue); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 code, pre, .mono { font-family: var(--font-mono); }
 /* Identifiers (Node ids, token ids, fingerprints, label keys and values, Account
  * and token names, Operation names) are case-sensitive and render verbatim.
@@ -388,8 +400,7 @@ code, pre, kbd, samp, .mono, .nodeid, .ident { text-transform: none; }
 /* The wordmark is an image (assets/brand/, mirrored from docs/brand/), picked
  * by the same prefers-color-scheme signal as the palette: the <picture> in the
  * markup serves the light variant under `light` and the dark one otherwise.
- * Its teal cursor is brand, inside the image, and is not one of the six
- * meanings above. */
+ * Its teal cursor is the interactive accent, by owner decision 2026-10-01. */
 .brand img {
   display: inline-block;
   height: var(--space-5);
@@ -401,7 +412,7 @@ code, pre, kbd, samp, .mono, .nodeid, .ident { text-transform: none; }
   font-size: var(--text-2xs);
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--color-blue);
+  color: var(--accent-text);
   font-weight: var(--weight-medium);
 }
 /* The navigation proper, inside the sidebar but not the whole of it: the
@@ -441,7 +452,7 @@ code, pre, kbd, samp, .mono, .nodeid, .ident { text-transform: none; }
   background: var(--bg-elevated);
   color: var(--text-primary);
   font-weight: var(--weight-medium);
-  box-shadow: inset 2px 0 0 var(--color-blue);
+  box-shadow: inset 2px 0 0 var(--color-accent);
 }
 .navfoot {
   margin-top: auto;
@@ -469,7 +480,7 @@ code, pre, kbd, samp, .mono, .nodeid, .ident { text-transform: none; }
  * is what it is to the operator. */
 .linkbtn {
   background: none; border: 0; padding: 0; font: inherit;
-  color: var(--color-blue); cursor: pointer;
+  color: var(--accent-text); cursor: pointer;
 }
 .linkbtn:hover { color: var(--accent-hover); text-decoration: underline; }
 
@@ -530,12 +541,12 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
   border-radius: var(--radius-lg);
   background: var(--bg-canvas); color: var(--text-primary);
 }
-.loginbox input:focus { outline: 2px solid var(--color-blue); outline-offset: -1px; background: var(--bg-surface); }
+.loginbox input:focus { outline: 2px solid var(--color-accent); outline-offset: -1px; background: var(--bg-surface); }
 .loginbox button[type="submit"] {
   font: inherit; font-weight: var(--weight-medium);
   margin-top: var(--space-1); padding: var(--space-3);
   border: 0; border-radius: var(--radius-lg);
-  background: var(--color-blue); color: #fff; cursor: pointer;
+  background: var(--color-accent); color: var(--on-accent); cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out);
 }
 .loginbox button[type="submit"]:hover { background: var(--accent-hover); }
@@ -798,7 +809,7 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
   background: var(--bg-canvas); color: var(--text-primary);
 }
 .viewbar input::placeholder { color: var(--text-muted); }
-.viewbar input:focus, .viewbar select:focus { outline: 2px solid var(--color-blue); outline-offset: -1px; }
+.viewbar input:focus, .viewbar select:focus { outline: 2px solid var(--color-accent); outline-offset: -1px; }
 .viewbar select {
   font: inherit; font-size: var(--text-sm); padding: var(--space-2) var(--space-2);
   border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
@@ -807,7 +818,7 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
 .viewbar button {
   font: inherit; font-size: var(--text-sm); font-weight: var(--weight-medium);
   padding: var(--space-2) var(--space-4);
-  border: 0; border-radius: var(--radius-lg); background: var(--color-blue); color: #fff; cursor: pointer;
+  border: 0; border-radius: var(--radius-lg); background: var(--color-accent); color: var(--on-accent); cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out);
 }
 .viewbar button:hover { background: var(--accent-hover); }
@@ -892,7 +903,7 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
 .wall[data-size="sm"] .cell { width: 9px;  height: 9px; }
 .wall[data-size="xs"] .cell { width: 6px;  height: 6px; border-radius: 1px; }
 .wall[data-size="xs"] .wallcells { gap: 2px; }
-.cell:hover { outline: 2px solid var(--color-blue); outline-offset: 1px; }
+.cell:hover { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 /* Cells are tabindex="-1" and aria-hidden: clickable with a mouse, invisible to
  * the tab order and to assistive technology, because ten thousand nameless tab
  * stops is not access — it is an obstacle course. The wall carries one
@@ -902,7 +913,7 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
  *
  * The focus ring stays anyway. A tabindex="-1" element still takes focus when
  * clicked, and an element that can hold focus should be able to show it. */
-.cell:focus-visible { outline: 2px solid var(--color-blue); outline-offset: 2px; }
+.cell:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 /* Normal is a QUIET neutral, not a green. Most Nodes are normal, and a wall of
  * four thousand saturated cells is a wall in which nothing pops — which is the
  * one thing the wall has to do. */
@@ -1010,7 +1021,7 @@ tr.attnrow td { background: var(--attention-bg); }
 .firststep { margin: var(--space-6) 0; }
 .firststep .primary {
   display: inline-block; padding: var(--space-2) var(--space-5);
-  background: var(--color-blue); color: #fff; border-radius: var(--radius-lg);
+  background: var(--color-accent); color: var(--on-accent); border-radius: var(--radius-lg);
   font-weight: var(--weight-medium);
 }
 .firststep .primary:hover { background: var(--accent-hover); text-decoration: none; }
@@ -1020,9 +1031,9 @@ tr.attnrow td { background: var(--attention-bg); }
   border: 1px solid var(--border-subtle); border-radius: var(--radius-section); margin: var(--space-6) 0;
 }
 .watchhead { display: flex; gap: var(--space-3); align-items: baseline; flex-wrap: wrap; }
-/* Hearth: interactive, never semantic. The live indicator is the one
+/* The accent: interactive, never semantic. The live indicator is the one
  * non-semantic use of the accent and it is called out in the colour budget. */
-.pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--color-blue); flex: none; }
+.pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--color-accent); flex: none; }
 @media (prefers-reduced-motion: no-preference) {
   .pulse { animation: gPulse 2s ease-in-out infinite; }
   @keyframes gPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
@@ -1050,10 +1061,10 @@ tr.attnrow td { background: var(--attention-bg); }
 [data-live-region][data-live="off"] .wmsg[data-when="off"] { display: inline; }
 
 /* The queue control (spec 11: incoming events queue behind an explicit
- * control). Hidden until something is queued, and blue because it is
- * interactive — the colour budget gives blue to interaction and this is the
+ * control). Hidden until something is queued, and the accent because it is
+ * interactive — the colour budget gives the accent to interaction and this is the
  * only thing on the region a person clicks. */
-.newq { display: none; font-size: var(--text-sm); color: var(--color-blue); margin-left: auto; }
+.newq { display: none; font-size: var(--text-sm); color: var(--accent-text); margin-left: auto; }
 [data-live-region][data-queued="yes"] .newq { display: inline; }
 .newq b { font-variant-numeric: tabular-nums; }
 
@@ -1136,9 +1147,9 @@ details.about > .gap { border: 0; background: transparent; padding: 0; margin: v
 .labelnote { flex-basis: 100%; font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-2); line-height: 1.7; }
 .labelnote b { color: var(--text-second); font-family: var(--font-mono); font-weight: var(--weight-medium); }
 
-/* A header action. Hearth, because it is interactive and never semantic — the
+/* A header action. The accent, because it is interactive and never semantic — the
  * colour budget spends this hue on "you can click it" and on nothing else. */
-.act { font-size: var(--text-sm); color: var(--color-blue); }
+.act { font-size: var(--text-sm); color: var(--accent-text); }
 .act.dim { color: var(--text-muted); }
 
 /* --- Pin to compare ------------------------------------------------------- */
@@ -1256,7 +1267,7 @@ dl.wrapid dd code { overflow-wrap: anywhere; }
 .kchip b { font-variant-numeric: tabular-nums; color: var(--text-primary); }
 .kchip.on { background: var(--text-primary); color: var(--bg-canvas); border-color: var(--text-primary); }
 .kchip.on b { color: var(--bg-canvas); }
-.kchip:hover { text-decoration: none; border-color: var(--color-blue); }
+.kchip:hover { text-decoration: none; border-color: var(--color-accent); }
 
 .feed { display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-section); overflow: hidden; }
 /* The empty-state paragraph sits directly in .feed; pad it like an .ev row. */
@@ -1337,7 +1348,7 @@ dl.wrapid dd code { overflow-wrap: anywhere; }
 }
 .arow { display: grid; grid-template-columns: 10px 1fr; gap: 3px var(--space-2); padding: var(--space-2); border-radius: var(--radius-lg); color: inherit; }
 .arow:hover { background: var(--bg-elevated); text-decoration: none; }
-.arow.on { background: var(--bg-elevated); box-shadow: inset 2px 0 0 var(--color-blue); }
+.arow.on { background: var(--bg-elevated); box-shadow: inset 2px 0 0 var(--color-accent); }
 .arow .dot { grid-row: 1; margin-top: 5px; }
 .astats, .asub { grid-column: 2; font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .astats b { color: var(--text-primary); }
@@ -1424,7 +1435,7 @@ section.panel { margin-top: var(--space-4); }
   padding: var(--space-4) var(--space-5);
   transition: border-color var(--duration-fast) var(--ease-out);
 }
-.qrow:hover { text-decoration: none; border-color: var(--color-blue); }
+.qrow:hover { text-decoration: none; border-color: var(--color-accent); }
 /* Expiry pressure is the one countdown in the Console that earns its keep. */
 .qrow.urgent { border-left-color: var(--attention); background: var(--attention-bg); }
 .qrow.lapsed { border-left-color: var(--inert); opacity: 0.7; }
@@ -1699,7 +1710,7 @@ dl.kv dd { min-width: 0; }
   .navtoggle { display: block; }
   .navbody { display: none; }
   .navtoggle:checked ~ .navbody { display: block; }
-  .navtoggle:focus-visible ~ .navtop .navbtn { outline: 2px solid var(--color-blue); outline-offset: 2px; }
+  .navtoggle:focus-visible ~ .navtop .navbtn { outline: 2px solid var(--color-accent); outline-offset: 2px; }
   /* .navgroups stays block (unchanged from the desktop rule above): each
    * h2.navsec heading has to stay paired with its own ul.navlist directly
    * below it — layout.go renders them as flat siblings, one heading then one
@@ -1741,7 +1752,7 @@ dl.kv dd { min-width: 0; }
   background: var(--bg-surface); color: var(--text-primary);
   transition: border-color var(--duration-fast) var(--ease-out);
 }
-.refreshbtn:hover { text-decoration: none; border-color: var(--color-blue); }
+.refreshbtn:hover { text-decoration: none; border-color: var(--color-accent); }
 /* The approval queue's one visible sentence that its Refresh is not audited
  * (#779). It qualifies the control above it, so it is quiet note text. */
 .refreshlimit { font-size: var(--text-xs); color: var(--text-muted); margin: calc(-1 * var(--space-3)) 0 var(--space-4); max-width: 64em; }
@@ -1753,7 +1764,7 @@ dl.kv dd { min-width: 0; }
   display: inline-flex; align-items: baseline; gap: var(--space-2);
   font-weight: var(--weight-medium);
   padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--color-blue); border-radius: var(--radius-lg);
+  border: 1px solid var(--color-accent); border-radius: var(--radius-lg);
   background: var(--bg-canvas);
 }
 [data-live-region][data-queued="yes"] .newq:hover { text-decoration: none; border-color: var(--accent-hover); color: var(--accent-hover); }
@@ -1795,7 +1806,7 @@ dl.kv dd { min-width: 0; }
   background: var(--bg-canvas); color: var(--text-primary);
 }
 .ctlform select { padding-right: var(--space-2); }
-.ctlform input:focus, .ctlform select:focus { outline: 2px solid var(--color-blue); outline-offset: -1px; }
+.ctlform input:focus, .ctlform select:focus { outline: 2px solid var(--color-accent); outline-offset: -1px; }
 .btn {
   font: inherit; font-size: var(--text-sm); font-weight: var(--weight-medium);
   min-height: 34px; padding: var(--space-1) var(--space-4);
@@ -1803,7 +1814,7 @@ dl.kv dd { min-width: 0; }
   cursor: pointer; white-space: nowrap;
   transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
 }
-.btn.grant { background: var(--color-blue); border-color: var(--color-blue); color: #fff; }
+.btn.grant { background: var(--color-accent); border-color: var(--color-accent); color: var(--on-accent); }
 .btn.grant:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn.reduce { background: transparent; border-color: var(--border-mid); color: var(--text-primary); font-weight: var(--weight-normal); }
 .btn.reduce:hover { background: var(--bg-elevated); border-color: var(--text-muted); }

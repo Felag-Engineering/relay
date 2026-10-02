@@ -150,7 +150,7 @@ func TestAccountsForms_TheStylesheetWeighsGrantAboveReduce(t *testing.T) {
 	}
 
 	grant := decls(".btn.grant")
-	if !strings.Contains(grant, "background: var(--color-blue)") {
+	if !strings.Contains(grant, "background: var(--color-accent)") {
 		t.Errorf(".btn.grant is not filled in the interactive colour: %q", grant)
 	}
 	reduce := decls(".btn.reduce")
@@ -168,7 +168,7 @@ func TestAccountsForms_TheStylesheetWeighsGrantAboveReduce(t *testing.T) {
 		t.Errorf("a role-change form that cannot submit yet does not read as inactive: %q", invalid)
 	}
 	focus := decls(".ctlform input:focus, .ctlform select:focus")
-	if !strings.Contains(focus, "outline: 2px solid var(--color-blue)") {
+	if !strings.Contains(focus, "outline: 2px solid var(--color-accent)") {
 		t.Errorf("the shared field focus rule does not draw the Console's focus ring: %q", focus)
 	}
 }

@@ -103,7 +103,7 @@ approval card. They must occupy **different visual channels**:
 | Slate | a Policy decision was made | denies, and nothing else |
 | Grey | drift and inertness | `state:template-unloadable`, fingerprint distributions in facets |
 | Green | reachable, and it worked | liveness dot, `success` outcome, the pixel wall's `normal` bucket |
-| Blue | interactive | links, primary buttons, the live indicator — never semantic |
+| Teal (the Relay brand teal) | interactive | links, primary buttons, focus rings, the live indicator — never semantic |
 | Muted red | failure and timeout | nothing else, ever |
 
 **Green was added on 2026-08-27 (owner decision).** It had been in the product
@@ -122,6 +122,19 @@ as calm.
 **Green never means "healthy" in general** — Relay does not know whether a
 machine is healthy, only whether it answered (see "The four questions"). It means
 reachable, or it worked. Nothing else may take it.
+
+**Interactive is the brand teal, by owner decision on 2026-10-01.** This table
+said Blue while the stylesheet drew Gleipnir's terracotta hearth, which sat beside
+the attention amber and failed AA: white on the dark primary button at 2.63:1,
+white on the light primary button at 3.78:1, light link text on the surface at
+3.56:1. The accent is now the Relay mark's teal (`#0a8276` light, `#4fb3a8` dark),
+the one deliberate departure from the Gleipnir palette. Every text and fill
+pairing it takes must clear 4.5:1 in both themes, so light link text uses a
+darker step of the teal and the dark primary button carries dark text. It stays
+distinct from green by role and shape rather than by colour: green is a state
+fill (the liveness dot, the `success` chip, the wall's cells), while the accent
+is text, outlines, buttons and the one live dot, which sits on a screen with no
+liveness dot. `TestConsole_AccentPairsClearAA` enforces the contrast rule.
 
 ### Luminance is a second channel, not decoration
 
