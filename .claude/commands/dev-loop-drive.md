@@ -43,12 +43,13 @@ Tick decision (after Setup):
 
 **Pacing (when driven by dynamic `/loop`):** after a WAVE tick or a CI-fix push →
 short wakeup (~5 min, CI needs to run); VERIFY with checks still pending → ~5–10 min;
-wave settled / waiting only on human merges → 20–30 min; DONE / STUCK / budget / stall →
-**stop the loop** (ScheduleWakeup `stop: true` in dynamic mode; in fixed-interval mode,
-state plainly in the final message that the loop should be stopped). Ticks never overlap:
-turns in a session run serially, so a fixed-interval firing that lands mid-tick just
-queues and runs after — harmless, since ticks are idempotent — but dynamic pacing avoids
-the pileup entirely, which is why it's the recommended invocation.
+wave settled / waiting only on human merges, or halted by `loop:halt` → 20–30 min (a
+halted drive resumes on the first tick after a human clears the label); DONE / STUCK /
+budget / stall → **stop the loop** (ScheduleWakeup `stop: true` in dynamic mode; in
+fixed-interval mode, state plainly in the final message that the loop should be stopped).
+Ticks never overlap: turns in a session run serially, so a fixed-interval firing that
+lands mid-tick just queues and runs after — harmless, since ticks are idempotent — but
+dynamic pacing avoids the pileup entirely, which is why it's the recommended invocation.
 
 ### How to run it
 
@@ -85,6 +86,15 @@ Parse `$ARGUMENTS`:
 
 ## Setup (every tick)
 
+0. **Halt check (always first).**
+   ```bash
+   gh issue list --label loop:halt --state open --limit 1 --json number -q 'length'
+   ```
+   **Non-zero → stop immediately.** Print `halted: loop:halt is set on #N` and end the
+   tick. Do not take the lease, do not rewrite or comment on TRACK, do not rerun CI or push
+   a fix, do not start an issue. This is the same halt label `/dev-loop-queue`,
+   `/dev-loop-parallel` and `/pr-respond` check (`docs/agents/routines.md`). Never remove
+   the `loop:halt` label yourself — only a human clears it.
 1. Verify `gh auth status` succeeds; if not, stop and tell the user.
 2. Resolve the milestone and `GH_USER=$(gh api user --jq .login)`.
 3. Resolve **TRACK** (per `--track` / reuse-or-create above). On create:
@@ -341,3 +351,5 @@ No ping yet: the wave pings when it *settles*, verified.
    cadence; terminal classes stop the loop rather than spinning.
 10. **Report honestly.** The dashboard must show what was deferred, stopped, capped, or
     blocked; never imply a wave covered issues it skipped.
+11. **Honor `loop:halt`, and never clear it.** Every tick checks it first (Setup step 0)
+    and does nothing else while it is set.
