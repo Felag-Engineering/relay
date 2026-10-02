@@ -34,9 +34,9 @@ package console
 //     <summary>, a <div>, a bare container — fails the test. A new kind of
 //     element cannot carry prose past the budget by being new.
 //
-// Inline tags (b, i, em, span, ...) with no class of their own are transparent:
-// text split by them is one run, so a bolded lead clause cannot be what keeps
-// a sentence under the eight-word floor.
+// Inline tags (b, i, em, span, ...) with no measured, bounded or exempt class
+// are transparent: text split by them is one run, so a bolded lead clause
+// cannot be what keeps a sentence under the eight-word floor.
 //
 // The source scan treats everything inside <details class="about"> as
 // accounted for: it is measured on the rendered page (one paragraph, at most
@@ -128,18 +128,14 @@ var boundedClasses = map[string]string{
 	"span.unattrib": "what stands in the requester slot when the trail recorded none: a value, a trail defect named",
 	"span.overcap":  "a Plan's over-cap verdict: a state, drawn where the cap arithmetic is",
 	"ul.truths":     "Day one's state facts (each li of ul.truths)",
-	// Header lines of values: counts, state names and a timestamp, no sentence.
-	// Surfaced when inline tags stopped splitting a run (#849 cycle 3).
-	"div.sshead":   "Fleet wall header: a count, a grouping key and a timestamp",
-	"header.ghead": "a Fleet group header: its key and a count per state",
-	"div.nodehead": "Node detail header: liveness, last seen, revoked stamp and the Run/Pin links",
-}
-
-// sourceCapExempt are bounded classes whose template source is not held to
-// maxSourceWords: the longest branch path lights every optional chip at once,
-// and each chip is a count and a state name. The rendered cap still applies.
-var sourceCapExempt = map[string]string{
-	"header.ghead": "one optional chip per state, each a count and a state name",
+	// Leaves of header lines that are values: counts, state names and a
+	// timestamp, no sentence. Surfaced when inline tags stopped splitting a run
+	// (#849 cycle 3). The header containers are deliberately not bounded, so a
+	// note nested in one is still measured.
+	"span.ssline": "Fleet wall header: a count and a grouping key",
+	"span.gcount": "a Fleet group's Node count",
+	"span.gdev":   "a Fleet group header chip: a count and a state name",
+	"span.seen":   "Node detail header: liveness and last seen",
 }
 
 // exemptClasses are not measured at all, keyed by "tag.class". denynote is
@@ -566,7 +562,7 @@ func TestCopyBudget_CounterMeasuresWhatItShould(t *testing.T) {
 			`<em>one two three four five six seven</em> <span>one two three four five six</span></li></ul>`,
 	} {
 		if _, unclassified, err := proseOf(snippet); err != nil || len(unclassified) == 0 {
-			t.Errorf("%s: a 26-word run went unreported (unclassified=%v, err=%v)", name, unclassified, err)
+			t.Errorf("%s: a 27-word run went unreported (unclassified=%v, err=%v)", name, unclassified, err)
 		}
 	}
 	// The same split-by-inline-tags prose, in template source, where no fixture
@@ -1332,9 +1328,6 @@ func TestCopyBudget_EveryTemplateNoteIsShortOnEveryPath(t *testing.T) {
 				continue
 			}
 			elements++
-			if sourceCapExempt[e.tag+"."+e.class] != "" {
-				continue
-			}
 			if n, text := longestPath(t, e.where, e.inner); n > maxSourceWords {
 				t.Errorf("%s: <%s class=%q> renders %d words on its longest branch, over %d: %q",
 					e.where, e.tag, e.class, n, maxSourceWords, text)
