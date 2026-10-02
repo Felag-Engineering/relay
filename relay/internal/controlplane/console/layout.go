@@ -50,9 +50,13 @@ type Banner struct {
 // Page is everything the layout needs. Handlers build one and call Render;
 // they never assemble HTML by hand.
 type Page struct {
-	Title   string
-	Account string
-	Role    accounts.Role
+	Title string
+	// TitleSelfReported is true only when Title is a value the Relay did not
+	// establish (a Node's hostname). The layout then never draws it as plain,
+	// verified-looking text.
+	TitleSelfReported bool
+	Account           string
+	Role              accounts.Role
 
 	Nav    []NavSection
 	Banner *Banner
@@ -112,12 +116,12 @@ type Page struct {
 	Content template.HTML
 }
 
-var layoutTmpl = template.Must(template.New("layout").Parse(`<!doctype html>
+var layoutTmpl = template.Must(template.New("layout").Funcs(template.FuncMap{"selfReportedTitle": func() string { return selfReportedTitle }}).Parse(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Title}} &mdash; Relay Console</title>
+<title>{{.Title}}{{if .TitleSelfReported}} (self-reported){{end}} &mdash; Relay Console</title>
 <link rel="stylesheet" href="/console/assets/console.css">
 <link rel="icon" type="image/svg+xml" href="/console/assets/brand/relay-icon.svg">
 </head>
@@ -151,7 +155,7 @@ var layoutTmpl = template.Must(template.New("layout").Parse(`<!doctype html>
   </aside>{{end}}
   <div class="col">
     {{with .Banner}}<div class="banner" data-kind="{{.Kind}}"><b>{{.Text}}</b> <span>{{.Detail}}</span></div>{{end}}
-    <header class="topbar"><h1>{{.Title}}</h1></header>
+    <header class="topbar"><h1>{{if .TitleSelfReported}}<span class="selfrep" title="{{selfReportedTitle}}">{{.Title}}</span> <span class="selfreptag">self-reported</span>{{else}}{{.Title}}{{end}}</h1></header>
     <main id="content">{{.Content}}</main>
   </div>
 </div>

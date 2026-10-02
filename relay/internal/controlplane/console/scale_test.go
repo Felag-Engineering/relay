@@ -87,7 +87,7 @@ func TestFleet_TenThousandNodesRenderWithoutAList(t *testing.T) {
 			t.Errorf("rendered only %d <tr> — a page with no table at all", rows)
 		}
 
-		// One anchor per LISTED Node — the direct measurement of "is this a
+		// One Node ID per LISTED Node — the direct measurement of "is this a
 		// list of the fleet".
 		listed := strings.Count(body, `class="nodeid"`)
 		if listed > 4*deviationRows {

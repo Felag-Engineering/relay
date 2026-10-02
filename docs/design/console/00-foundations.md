@@ -94,6 +94,17 @@ approval card. They must occupy **different visual channels**:
   differentiated; `relay:` is filled, distinct in hue, and carries a lock; `state:` carries the
   tint of its severity behind its mono prefix.
 
+**Self-reported names.** Where a self-reported value is the visual primary naming an object — a
+Node's hostname on a Fleet row and in the Node detail heading — it takes the trust lane's outline
+treatment (a dashed underline, never a fill, never a trust chip), and the word "self-reported" is
+visible where it is read: the heading itself, the Fleet table's Node column header (below 600px,
+where the header is hidden, the Node cell's own label), and every row's accessible name. The
+verified identifier is always drawn beside it in mono, so two Nodes claiming one hostname stay
+distinguishable. Only RFC 1123 hostname characters qualify; anything else, a value shaped like a
+Node ID (`node-` then only hex), or nothing, falls back to the Node ID. Where a self-reported value is secondary to the verified ID
+(Compare's column heading), the screen states it in prose instead. Selectors, links, pins and
+`?account=` always use verified IDs. Owner decision, 2026-10-01, #835 (D20).
+
 ## Colour budget — the entire allowance
 
 | Colour | Means | Used on |

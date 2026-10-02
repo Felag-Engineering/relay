@@ -82,7 +82,10 @@ the count in a neutral style ("1 not reported"), not amber.
 those are the same set, which is the point: everything filterable is a label in one of four
 namespaces, so the contextual "Run against these" can never be handed a set it cannot express.
 
-Facts (OS, kernel, hostname, IP, packages) are **not** filterable and **not** on the row. If an
+Facts (OS, kernel, hostname, IP, packages) are **not** filterable, and none is on the
+row except the hostname. The hostname names the Node as the row's self-reported visual primary,
+above the verified Node ID (`00-foundations.md`, "Self-reported names"; D20). The row links by Node
+ID, and the hostname is never filterable or targetable. If an
 operator wants to target on OS, their config management stamps `node:os=ubuntu`. The discriminator
 is the configuration-management scope rule (AGENTS.md, *Out of realm*): *what Ansible could check in check-mode is out of realm*.
 

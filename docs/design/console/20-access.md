@@ -79,7 +79,9 @@ make, and it is part of that change, not a later one.
 The verified/asserted grammar from `00-foundations.md`. The actor of an `account` or `api-token`
 row is verified: the Relay authenticated it. The exception is a host-lever row, which names
 `local-host` as its actor: root on the Relay host, which no Account's credential proves, so it is
-neither a verified nor an asserted chip. The subject — the Account created, changed or given a
+neither a verified nor an asserted chip. The verified actor chip links to this screen filtered by
+that Account's ID, and the dashed chip appears only when the claimed name differs from the
+verified one, or when the attempt failed or was throttled. The subject — the Account created, changed or given a
 token — is drawn from the record as written. Today that record names the subject by Account ID, and
 by name only on `account_create` and on the host password rows; an `api_token_revoke` names only the token. Where the screen
 shows a subject's name that the record does not carry, it would be a registry lookup reporting
@@ -94,7 +96,10 @@ says that OAuth sign-ins are not among them.
 ## Filtering and refresh
 
 Kind chips, an Account filter over the **actor**, a failures-only toggle, and time controls: a
-relative window and an explicit range. There is no filter by **subject** yet: the subject is
+relative window and an explicit range. The Actor box takes the Account's ID (D18), and its placeholder
+says so. Looking an Account up by name is deferred until an audited Account-read path exists
+(#659): the registry read it needs is one no audit record covers. Rows are never read from the
+registry. There is no filter by **subject** yet: the subject is
 written into the record's free-text reason, which the audit query seam cannot filter on. The
 disclosure says so rather than offering a filter that would search the page and call it history. It follows the Refresh rules in `00-foundations.md`
 ("Refreshing a screen"): a deliberate click, never a timer, and every reload is an audited read.

@@ -15,7 +15,7 @@ incident ladder's first rung sits: setting or removing `relay:quarantine`.
 ## Layout
 
 ```
-Fleet / prod / web-0442        ● online, last seen 12s      [▷ Run here] [Pin to compare]
+Fleet / prod / web-0442 ┄self-reported┄   node id 4e05a1c9-…(full ID, never truncated)   ● online, last seen 12s      [▷ Run here] [Pin to compare]
 ─────────────────────────────────────────────────────────────────────────────────────────
 [relay:quarantine] [node:env=prod] [node:role=web] [tag:pci] [state:outdated]      
                                           [Edit tag: labels] [Remove quarantine · admin+step-up]
@@ -40,14 +40,20 @@ point: renewal is cert-authenticated and preserves `node_id`, so the chain back 
 unbroken. None of the certificate fields are persisted today — `registry.Node` carries only the
 fingerprint — so this panel depends on #440 landing first.
 
+**Heading** — the H1 is the Node's hostname, marked self-reported, with the verified node id
+beneath it in mono. With no usable hostname (including one shaped like a Node ID) the H1 is the full Node ID, never a truncated one, and
+it is not repeated beneath. (D20)
+
 **Fingerprints** — Policy and template-set, each with how many Nodes in the fleet share it. That
 comparison is the whole value: confirming a rollout landed is string equality, not trust. Template
 set may read the literal `unloadable`, which means the Node's local template set failed to load
 and its template vocabulary is empty (fail closed).
 
-**Facts** — OS, kernel, arch, hostname, IP, package count. Self-reported. **This page only:** not
-on a fleet row, not in a facet, never targetable. Label the panel so an implementer does not
-"helpfully" surface them elsewhere.
+**Facts** — OS, kernel, arch, hostname, IP, package count. Self-reported. **In full on this page only.**
+The hostname alone also names the Node, as the heading here and on a fleet row, marked
+self-reported beside the verified Node ID (D20), and as Compare's column heading. No Fact is in a
+facet, filterable or targetable. Label the panel so an implementer does not "helpfully" surface the
+others elsewhere.
 
 **Package count is not on the wire.** `registry.Facts` mirrors `relayv1.Facts` and neither carries
 one, so adding it is a `/proto` change plus a daemon change — contract-first and escalated, not a
@@ -93,7 +99,7 @@ Fingerprints panel are the readable form of `state:policy-fingerprint=` and
 Select 2–3 Nodes for a side-by-side diff of Facts and effective Policy. This is the "why did only
 this one deny" flow in a single screen, and it is the reason Facts earn a detail page at all.
 
-**Not implemented: the Facts half.** Facts appear on Node detail and nowhere else (the v0.6.0
+**Not implemented: the Facts half.** No Fact but the hostname appears off Node detail, and the hostname only as a name (the v0.6.0
 acceptance criterion below), and a second screen diffing hostname/os/kernel/arch/ip would be the
 second page they live on whatever it was called. `/console/compare` diffs fingerprints and reported
 Policy — what is comparable ACROSS Nodes for a divergence question — and
@@ -157,7 +163,9 @@ is a link and this screen has no mutating route.
       **Not implemented (#430).** `tag:` has no storage on `registry.Node` yet, so no chip renders
       and no control exists. The label explainer says so rather than leaving the namespace unnamed.
 - [x] No surface anywhere writes a `node:` or `state:` label.
-- [x] Facts appear on this page and no other. **One qualification.** `/console/compare` diffs no
+- [x] Facts appear on this page and no other. **Two qualifications.** First, the hostname is the
+      self-reported visual primary of a fleet row and of this page's heading, always beside the
+      verified Node ID and never filterable or targetable (D20). Second, `/console/compare` diffs no
       Fact — os, kernel, arch and ip are absent from it entirely, and `TestCompare_RendersNoFact`
       asserts that, including that none is a row key. It does render each Node's HOSTNAME as the
       heading identifying its column, which is the use a fleet row already makes of one

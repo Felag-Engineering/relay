@@ -85,7 +85,7 @@ func TestFleet_PhoneCardsLabelEveryCell(t *testing.T) {
 		}
 	}
 	got := labelsOf(table)
-	for _, want := range []string{"Node", "State", "Last seen"} {
+	for _, want := range []string{"Node · hostname self-reported", "State", "Last seen"} {
 		if !got[want] {
 			t.Errorf("no Fleet cell is labelled %q; labels: %v", want, got)
 		}

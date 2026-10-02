@@ -388,6 +388,13 @@ message and time (spec 12). Any future surface that reads the audit trail must n
 sign-in records below `admin` ([20](20-access.md)). This reverses the "no which-half indication"
 rule spec 20 carried and `audit.go` states; it does not touch spec 12.
 
+### D20. Hostname is the visual primary — **RESOLVED 2026-10-01 (owner)**
+
+**Ruling (owner, 2026-10-01, #835):** the hostname is the visual primary on Fleet rows and the Node
+detail H1, with the verified Node ID beneath it in mono. The hostname is marked self-reported per
+the verified/asserted grammar in `00-foundations.md`. Selectors, links and `?account=`/Node
+references keep using verified IDs.
+
 ## Prerequisites that already exist as issues
 
 ### D8. [#397](https://github.com/Felag-Engineering/gleipnir-relay/issues/397) — three route families have no role gate — **RESOLVED: gates landed**

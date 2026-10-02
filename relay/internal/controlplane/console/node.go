@@ -241,10 +241,19 @@ func handleNode(d Deps) http.HandlerFunc {
 		}
 		n := detail.Node
 
-		p, ok := page(d, w, r, shortHash(n.NodeID))
+		// The hostname is self-reported, so it leads only when it is plainly a
+		// hostname; otherwise the heading is the full Node ID, never a truncated
+		// one that could not tell two Nodes apart.
+		host := primaryHostname(n.Facts.Hostname)
+		title := host
+		if host == "" {
+			title = n.NodeID
+		}
+		p, ok := page(d, w, r, title)
 		if !ok {
 			return
 		}
+		p.TitleSelfReported = host != ""
 		p.Banner = banner(d, r)
 		pins, _ := parsePins(r.URL.Query().Get("pin"))
 		known, err := pinsKnown(ctx, d, caller, n.NodeID, pins)
@@ -300,7 +309,7 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 
 	v := nodeView{
 		ID:                  n.NodeID,
-		Hostname:            n.Facts.Hostname,
+		Hostname:            primaryHostname(n.Facts.Hostname),
 		Connected:           n.Connected,
 		LastSeen:            nodestate.Since(n.LastSeen, d.now()),
 		LastSeenAbs:         n.LastSeen.UTC().Format("2006-01-02 15:04:05Z"),
@@ -575,8 +584,7 @@ var nodeTmpl = newScreen("node", `
        .seen says "last seen X ago" there instead, so the dot cannot be decorative in one state
        and named in the other. */}}
   <span class="dot" data-live="{{if .Connected}}on{{else}}off{{end}}" role="img" aria-label="{{if .Connected}}connected{{else}}not connected{{end}}"></span>
-  <code class="nodeid big">{{.ID}}</code>
-  {{with .Hostname}}<span class="sub">{{.}}</span>{{end}}
+  {{if .Hostname}}<span class="dim">node id</span> <code class="nodeid" title="The identity this Node's certificate proves.">{{.ID}}</code>{{end}}
   <span class="seen" title="{{.LastSeenAbs}}">{{if .Connected}}connected{{else}}last seen {{.LastSeen}} ago{{end}}</span>
   {{if .Revoked}}<span class="chip outcome" data-outcome="cancelled">revoked {{.RevokedAt}}</span>{{end}}
   {{with .RunHref}}<a class="act" href="{{.}}">Run here</a>{{end}}

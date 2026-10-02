@@ -46,6 +46,10 @@ var screenFuncs = template.FuncMap{
 	"risk":    jobs.RiskClassName,
 	"outcome": jobs.OutcomeName,
 
+	// selfReportedTitle is the tooltip on a self-reported name drawn as a
+	// visual primary (identity.go).
+	"selfReportedTitle": func() string { return selfReportedTitle },
+
 	// short truncates a fingerprint to something an eye can compare. Full
 	// values stay in the title attribute — the point of a fingerprint on a
 	// fleet screen is "same or different", which is a 12-character question.

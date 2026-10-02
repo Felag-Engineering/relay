@@ -233,6 +233,10 @@ type accessRow struct {
 	// separate Verified flag — Actor != "" already means verified.
 	Actor string
 
+	// ActorHref is set exactly when Actor is set: it filters this screen by
+	// the VERIFIED Account ID (D18), never by name.
+	ActorHref string
+
 	// HostLever is set only when the record names no verified Account AND its
 	// Principal is audit.PrincipalLocalHost: an act by root on the Relay host,
 	// neither a verified Account nor an asserted claim, so it gets neither
@@ -240,9 +244,12 @@ type accessRow struct {
 	HostLever string
 
 	// Asserted is f.OnBehalfOf: what was typed on a sign-in or step-up,
-	// rendered as a separate, dashed chip. On a failed or throttled sign-in it
-	// is present only when the name was a real Account's (D19); when absent on
-	// those kinds, NotAnAccount says so in the asserted slot.
+	// rendered as a separate, dashed chip. It is set only when the claim says
+	// something the verified chip does not: no verified Account, a failed or
+	// throttled attempt, or a name that differs (byte for byte) from the
+	// verified one. On a failed or throttled sign-in it is present only when
+	// the name was a real Account's (D19); when absent on those kinds,
+	// NotAnAccount says so in the asserted slot.
 	Asserted string
 
 	// NotAnAccount is set only on a login_failed or login_throttled row whose
@@ -275,7 +282,6 @@ func accessRowFrom(f trailFacts) accessRow {
 		EventKind: f.Kind,
 		at:        f.Timestamp,
 		When:      f.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
-		Asserted:  f.OnBehalfOf,
 		Summary:   accessSummary(f),
 		Attempt:   accessAttempt(f.Kind),
 		Record:    f.Reason,
@@ -284,6 +290,11 @@ func accessRowFrom(f trailFacts) accessRow {
 		row.Actor = principalText(f)
 	} else if f.Principal == audit.PrincipalLocalHost {
 		row.HostLever = f.Principal
+	}
+	attempt := accessAttempt(f.Kind)
+	if f.OnBehalfOf != "" && (f.VerifiedAccountID == "" || attempt == "failed" || attempt == "throttled" ||
+		f.OnBehalfOf != f.VerifiedAccountName) {
+		row.Asserted = f.OnBehalfOf
 	}
 	row.NotAnAccount = (f.Kind == audit.KindLoginFailed || f.Kind == audit.KindLoginThrottled) && f.OnBehalfOf == ""
 	if family == accessSignIn {
@@ -390,6 +401,14 @@ func (f accessFilter) withKind(k accessKind) accessFilter {
 	} else {
 		f.Kind = string(k)
 	}
+	f.Cursor = ""
+	return f
+}
+
+// withAccount returns the filter narrowed to one verified Account ID, with no
+// cursor — what the actor chip on a row links to.
+func (f accessFilter) withAccount(id string) accessFilter {
+	f.Account = id
 	f.Cursor = ""
 	return f
 }
@@ -558,7 +577,12 @@ func handleAccess(d Deps) http.HandlerFunc {
 		}
 
 		for _, row := range pg.Rows {
-			v.Rows = append(v.Rows, accessRowFrom(factsOfRow(row)))
+			facts := factsOfRow(row)
+			ar := accessRowFrom(facts)
+			if facts.VerifiedAccountID != "" {
+				ar.ActorHref = f.withAccount(facts.VerifiedAccountID).base()
+			}
+			v.Rows = append(v.Rows, ar)
 		}
 		if pg.Next != "" {
 			v.OlderHref = f.href(pg.Next)
@@ -575,7 +599,7 @@ var accessTmpl = newScreen("access", `
   {{if .Filter.Failures}}<input type="hidden" name="failures" value="1">{{end}}
   <div class="vfield">
     <label class="vlabel" for="account">Actor</label>
-    <input id="account" name="account" value="{{.Filter.Account}}" placeholder="Account id" spellcheck="false" autocomplete="off">
+    <input id="account" name="account" value="{{.Filter.Account}}" placeholder="e.g. acct-…" spellcheck="false" autocomplete="off">
   </div>
   <div class="vfield">
     <label class="vlabel" for="window">When</label>
@@ -586,11 +610,11 @@ var accessTmpl = newScreen("access", `
   </div>
   <div class="vfield">
     <label class="vlabel" for="since">Since</label>
-    <input id="since" name="since" value="{{.Filter.SinceParam}}" placeholder="2026-08-20T00:00:00Z" spellcheck="false" autocomplete="off">
+    <input id="since" name="since" value="{{.Filter.SinceParam}}" placeholder="e.g. 2026-08-20T00:00:00Z" spellcheck="false" autocomplete="off">
   </div>
   <div class="vfield">
     <label class="vlabel" for="until">Until</label>
-    <input id="until" name="until" value="{{.Filter.UntilParam}}" placeholder="2026-08-26T00:00:00Z" spellcheck="false" autocomplete="off">
+    <input id="until" name="until" value="{{.Filter.UntilParam}}" placeholder="e.g. 2026-08-26T00:00:00Z" spellcheck="false" autocomplete="off">
   </div>
   <button type="submit">Apply</button>
   <a class="act" href="{{.ResetHref}}">Clear</a>
@@ -618,7 +642,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
     <div class="evwhen"><time datetime="{{.When}}">{{.When}}</time><span class="evkind">{{.EventKind}}</span></div>
     <div class="evbody">
       <div class="evhead">
-        {{if .Actor}}{{template "trust-chip" (trust .Actor true)}}{{else if .HostLever}}<span class="dim">the Relay host</span> <code>{{.HostLever}}</code>{{else}}<span class="dim">no verified Account</span>{{end}}
+        {{if .Actor}}<a class="chiplink" href="{{.ActorHref}}">{{template "trust-chip" (trust .Actor true)}}</a>{{else if .HostLever}}<span class="dim">the Relay host</span> <code>{{.HostLever}}</code>{{else}}<span class="dim">no verified Account</span>{{end}}
         {{with .Asserted}}{{template "trust-chip" (trust . false)}}{{else}}{{if .NotAnAccount}}<span class="dim">a name that is not an Account</span>{{end}}{{end}}
         <span class="evsum">{{.Summary}}</span>
         {{with .Attempt}}<span class="chip attempt" data-attempt="{{.}}">{{.}}</span>{{end}}
