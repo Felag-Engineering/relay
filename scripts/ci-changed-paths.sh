@@ -4,11 +4,17 @@
 # pull request that cannot affect them, which is most of what a docs-only PR costs.
 #
 #   code=false  every changed path is documentation nothing builds or tests reads:
-#               docs/ (except docs/api/, which the OpenAPI gates read), .claude/, and
-#               top-level *.md. Anything else — including a path this script has never
-#               heard of — is code.
+#               docs/, .claude/, and top-level *.md. Anything else — including a path
+#               this script has never heard of — is code. So is every docs/ path a code
+#               job reads: docs/api/ (the OpenAPI gates), and the files the Go and Rust
+#               tests open — docs/design/console/ and docs/specs/accounts-and-access.md
+#               (the Console's About-docs tests), docs/brand/ (the Console's brand-asset
+#               test), docs/operations/demo-fleet.md (the daemon's dev-fleet fixtures).
+#               A new test that reads under docs/ adds its path below.
 #   proto=false nothing under proto/ or the generated relay/internal/relay/v1/ changed,
-#               and neither did the Makefile or CI machinery that runs the proto gates.
+#               and neither did the Makefile, relay/go.mod (the proto job's Go version
+#               and the Makefile's GOTOOLCHAIN), scripts/proto-tools-check.sh (both proto
+#               gates' prerequisite), or the CI machinery that runs the proto gates.
 #
 # Fails OPEN: a push (main is the backstop), a missing diff, or any error runs every job.
 # A skipped gate is only safe when the change provably cannot reach it.
@@ -46,14 +52,16 @@ proto=false
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   case "$f" in
-    docs/api/*)                               code=true ;;
+    docs/api/* | docs/design/console/* | docs/brand/* | docs/operations/demo-fleet.md \
+      | docs/specs/accounts-and-access.md)    code=true ;;
     docs/* | .claude/*)                       ;;
     */*)                                      code=true ;;
     *.md)                                     ;;
     *)                                        code=true ;;
   esac
   case "$f" in
-    proto/* | relay/internal/relay/v1/* | Makefile | .github/workflows/ci.yml | .github/actions/* | scripts/ci-changed-paths.sh)
+    proto/* | relay/internal/relay/v1/* | Makefile | relay/go.mod | .github/workflows/ci.yml \
+      | .github/actions/* | scripts/ci-changed-paths.sh | scripts/proto-tools-check.sh)
       proto=true ;;
   esac
 done <<<"$files"
