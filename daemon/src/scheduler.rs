@@ -206,6 +206,7 @@ mod tests {
 
     fn make_task(action: task_request::Action) -> TaskRequest {
         TaskRequest {
+            risk_class: 0,
             task_id: "t".to_string(),
             timeout_seconds: 5,
             action: Some(action),
@@ -227,6 +228,7 @@ mod tests {
 
     fn make_no_action_task() -> TaskRequest {
         TaskRequest {
+            risk_class: 0,
             task_id: "t".to_string(),
             timeout_seconds: 5,
             action: None,

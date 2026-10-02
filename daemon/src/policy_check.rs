@@ -1178,6 +1178,7 @@ deny = ["secret"]
 
             // Actual dispatch of the equivalent TaskRequest.
             let task = TaskRequest {
+                risk_class: 0,
                 task_id: format!("policy-check-parity-{i}"),
                 timeout_seconds: 5,
                 action: Some(task_action),

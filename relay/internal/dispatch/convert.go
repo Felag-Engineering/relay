@@ -18,13 +18,16 @@ import (
 )
 
 // taskRequest converts a persisted Task into the wire TaskRequest sent down
-// the Node's Tunnel. RiskClass is deliberately NOT sent: it is not a
-// TaskRequest field on the wire — blast-radius classification is a Relay-side
-// concern (ADR-0012), already spent by the time a Task reaches dispatch.
+// the Node's Tunnel. RiskClass travels with it (ADR-0042): the class this
+// Task was dispatched under — for a Template, the class this Node itself
+// reported — so the daemon can refuse a Task dispatched as read whose action
+// it now classifies as mutate. jobs.RiskClass mirrors relayv1.RiskClass
+// value for value.
 func taskRequest(t jobs.Task) *relayv1.TaskRequest {
 	tr := &relayv1.TaskRequest{
 		TaskId:         t.ID,
 		TimeoutSeconds: t.TimeoutSeconds,
+		RiskClass:      relayv1.RiskClass(t.Action.RiskClass),
 	}
 	switch t.Action.Kind {
 	case jobs.ActionOperation:

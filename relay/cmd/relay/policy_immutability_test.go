@@ -163,7 +163,7 @@ func TestWireCarriesNoCallerIdentity(t *testing.T) {
 	// addition OR a rename inside Operation/RawExec must be named explicitly
 	// here to pass, not just caught by the regex.
 	protowalk.AssertExactTopLevelFieldSet(t, (&relayv1.TaskRequest{}).ProtoReflect().Descriptor(),
-		map[string]bool{"task_id": true, "operation": true, "raw_exec": true, "timeout_seconds": true})
+		map[string]bool{"task_id": true, "operation": true, "raw_exec": true, "timeout_seconds": true, "risk_class": true})
 	protowalk.AssertExactTopLevelFieldSet(t, (&relayv1.PolicyQuery{}).ProtoReflect().Descriptor(),
 		map[string]bool{"query_id": true, "operation": true, "raw_exec": true})
 	protowalk.AssertExactTopLevelFieldSet(t, (&relayv1.Operation{}).ProtoReflect().Descriptor(),

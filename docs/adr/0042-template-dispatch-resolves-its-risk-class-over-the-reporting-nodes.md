@@ -87,12 +87,20 @@ pass under every rule that keys on `mutate`.
   in-memory and is still refreshed only by the Node's own report on (re)connect; nothing on the
   Relay writes a Node's vocabulary (invariant 2 applies to Templates verbatim, per ADR-0021).
 
-- **The class travels with the Task, and the daemon checks it.** The Task carries the class the
-  Relay dispatched it under, and a daemon whose own Template declares `mutate` refuses a Task
-  dispatched as `read`. This closes the window between a Node's report and the Task's arrival —
-  a Policy reload that turns a `read` Template into a `mutate` one. It is a `/proto` change and
-  lands as its own change after the Relay-side resolution; until it lands, the window is a
-  known gap, tracked on #626.
+- **The class travels with the Task, and the daemon checks it.** The Task carries the class it
+  was recorded under — for a Template, that Node's own reported class, deliberately not the
+  Job's most-restrictive one — and a daemon whose own vocabulary declares the action `mutate`
+  refuses a Task dispatched as `read`. Templates load once per daemon process, so the window
+  this closes is a daemon restart with a changed catalog between the report the Relay
+  resolved against and the Task's arrival (a Task parked for approval can wait a long time).
+  It is a `/proto` change and lands as its own change after the Relay-side resolution (#626,
+  landed 2026-10-02). The refusal is checked after the vocabulary and before Policy — and
+  before the Task queues for the serial mutate lane — so a name the Node does not have is
+  still `unsupported`; it is reported as a `failure` that executed nothing and spends the Task
+  ID like a Policy deny; and a Task carrying no class (an older Relay) is not checked. An
+  older daemon ignores the field, so the check holds only where the daemon is at least this
+  release; the minimum-daemon-version gate (invariant 14) is what makes it fleet-wide.
+  (Details confirmed by the owner 2026-10-02.)
 
 ## Residual risk
 

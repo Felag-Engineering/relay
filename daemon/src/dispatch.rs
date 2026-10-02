@@ -1,4 +1,5 @@
-//! Task dispatch pipeline — dedup → Policy → execute (ADR-0002, ADR-0004).
+//! Task dispatch pipeline — dedup → class check → Policy → execute (ADR-0002,
+//! ADR-0004, ADR-0042).
 //!
 //! Wires the already-merged primitives (Policy engine, executor, Native
 //! Operations, Raw Exec, DedupStore) into a single entry point that an inbound
@@ -9,8 +10,11 @@
 //!    the pipeline. A denied Task also consumes a dedup marker, so a retry
 //!    with the same task_id always returns the benign already-processed result
 //!    even if the first run was denied by Policy.
-//! 2. Policy gate — deny-before-execute (ADR-0002 invariant #3, deny-by-default).
-//! 3. Execute — only if Policy allows.
+//! 2. Class check — a Task dispatched as `read` whose action this Node
+//!    classifies `mutate` is refused without executing (ADR-0042). Like a
+//!    Policy deny, it consumes the dedup marker.
+//! 3. Policy gate — deny-before-execute (ADR-0002 invariant #3, deny-by-default).
+//! 4. Execute — only if Policy allows.
 
 use std::future::Future;
 use std::time::Duration;
@@ -23,8 +27,8 @@ use crate::config::MAX_OUTPUT_BYTES;
 use crate::dedup::DedupStore;
 use crate::executor::{execute, ExecRequest};
 use crate::gen::{
-    policy_query, task_request, Operation, Outcome, PolicyQuery, PolicyVerdict, TaskRequest,
-    TaskResult,
+    policy_query, task_request, Operation, Outcome, PolicyQuery, PolicyVerdict, RiskClass,
+    TaskRequest, TaskResult,
 };
 use crate::not_executed::{denied_by_policy_result, not_executed, not_executed_after};
 #[cfg(test)]
@@ -65,7 +69,7 @@ const MAX_TIMEOUT: Duration = Duration::from_secs(300);
 // Public dispatch entry
 // ---------------------------------------------------------------------------
 
-/// Ordered dispatch pipeline: dedup → schedule → Policy → execute.
+/// Ordered dispatch pipeline: dedup → class check → schedule → Policy → execute.
 ///
 /// Wraps [`dispatch_scheduled_with_runner`] with the real [`execute`] runner.
 /// The scheduler acquires a concurrency slot keyed off the Task's ADR-0012 risk
@@ -178,6 +182,13 @@ where
         .run_once(&task.task_id, move || async move {
             let effective = effective_timeout(task.timeout_seconds);
             let deadline = received_at + effective;
+            // A class-mismatched Task is refused BEFORE it queues: it will
+            // never run, so it must not wait in the serial mutate lane behind
+            // real work and time out instead of explaining itself (ADR-0042).
+            // Inside run_once, so it consumes the marker like a Policy deny.
+            if class_mismatch(task, templates) {
+                return class_mismatch_result(task.task_id.clone());
+            }
             // Classify against the per-Node vocabulary: a `mutate` Template
             // Operation must take the serial lane exactly like a native one
             // (ADR-0004/0012), and an unknown name stays conservatively mutate.
@@ -349,6 +360,13 @@ where
     Fut: Future<Output = TaskResult> + Send + 'static,
 {
     let task_id = task.task_id.clone();
+
+    // Before Policy, after the vocabulary: a Task dispatched as `read` whose
+    // action this Node classifies as `mutate` is refused without executing
+    // (ADR-0042). See `class_mismatch`.
+    if class_mismatch(task, templates) {
+        return class_mismatch_result(task_id);
+    }
 
     match &task.action {
         Some(task_request::Action::RawExec(raw)) => {
@@ -624,6 +642,52 @@ fn unsupported_result(task_id: String) -> TaskResult {
     not_executed(task_id, Outcome::Unsupported, UNSUPPORTED_REASON)
 }
 
+/// The stderr reason on a Task refused because it was dispatched as `read`
+/// while this Node classifies its action as `mutate` (ADR-0042). A fixed
+/// string, like [`UNSUPPORTED_REASON`]: it echoes nothing caller-controlled.
+pub(crate) const CLASS_MISMATCH_REASON: &str =
+    "dispatched as read, but this Node's own vocabulary declares this action mutate (its Template \
+     catalog changed, by a daemon restart, after the report the Relay resolved against); nothing \
+     executed and Policy was not consulted. This Task ID is now spent: dispatch it again as a new \
+     Job and the Relay will re-resolve its class";
+
+/// Whether `task` was dispatched as `read` while this Node classifies its
+/// action as `mutate` (ADR-0042, invariant 13).
+///
+/// The Relay resolves a Template's class from the Nodes' own reports; this is
+/// the Node holding the Relay to the class it is about to run under. Templates
+/// load once per process, so the window this closes is a daemon restart with a
+/// changed catalog between the report the Relay resolved against and the
+/// Task's arrival (a Task parked for approval can wait a long time). Only a declared `read` is checked: a declared
+/// `mutate` is stricter than anything, and an unspecified class (an older
+/// Relay) makes no claim. A name outside this Node's vocabulary is not a
+/// mismatch — it is `unsupported`, answered later by the normal path. Raw Exec
+/// is always `mutate` (ADR-0012).
+fn class_mismatch(task: &TaskRequest, templates: &TemplateSet) -> bool {
+    if task.risk_class() != RiskClass::Read {
+        return false;
+    }
+    let own = match &task.action {
+        Some(task_request::Action::RawExec(_)) => Some(RiskClass::Mutate),
+        Some(task_request::Action::Operation(op)) => {
+            resolve(&registry::REGISTRY, templates, &op.name).map(|e| e.risk())
+        }
+        None => None,
+    };
+    matches!(own, Some(class) if class != RiskClass::Read)
+}
+
+/// Synthesizes the `OUTCOME_FAILURE` result for a class-mismatched Task: a
+/// never-executed protocol refusal, like the overloaded and missing-action
+/// ones, which the proto's FAILURE comment covers.
+fn class_mismatch_result(task_id: String) -> TaskResult {
+    tracing::warn!(
+        task_id = %task_id,
+        "Task dispatched as read, but this Node classifies its action as mutate; refusing"
+    );
+    failure_result(task_id, CLASS_MISMATCH_REASON.as_bytes())
+}
+
 /// Synthesizes an `OUTCOME_FAILURE` result for protocol errors.
 fn failure_result(task_id: String, stderr: &[u8]) -> TaskResult {
     not_executed(task_id, Outcome::Failure, stderr)
@@ -704,6 +768,7 @@ mod tests {
         let mut args = std::collections::HashMap::new();
         args.insert(OP_ARG_PATH.to_string(), path.to_string());
         TaskRequest {
+            risk_class: 0,
             task_id: task_id.to_string(),
             timeout_seconds: 5,
             action: Some(task_request::Action::Operation(crate::gen::Operation {
@@ -717,6 +782,7 @@ mod tests {
         let mut args = std::collections::HashMap::new();
         args.insert(OP_ARG_UNIT.to_string(), unit.to_string());
         TaskRequest {
+            risk_class: 0,
             task_id: task_id.to_string(),
             timeout_seconds: 5,
             action: Some(task_request::Action::Operation(crate::gen::Operation {
@@ -733,6 +799,7 @@ mod tests {
             args.insert(OP_ARG_VERSION.to_string(), version.to_string());
         }
         TaskRequest {
+            risk_class: 0,
             task_id: task_id.to_string(),
             timeout_seconds: 5,
             action: Some(task_request::Action::Operation(crate::gen::Operation {
@@ -744,6 +811,7 @@ mod tests {
 
     fn make_task_system_facts(task_id: &str) -> TaskRequest {
         TaskRequest {
+            risk_class: 0,
             task_id: task_id.to_string(),
             timeout_seconds: 5,
             action: Some(task_request::Action::Operation(crate::gen::Operation {
@@ -755,6 +823,7 @@ mod tests {
 
     fn make_task_raw_exec(task_id: &str, argv: Vec<String>) -> TaskRequest {
         TaskRequest {
+            risk_class: 0,
             task_id: task_id.to_string(),
             timeout_seconds: 5,
             action: Some(task_request::Action::RawExec(crate::gen::RawExec { argv })),
@@ -1522,6 +1591,7 @@ deny = ["secret"]
                 label: "no-rule (system.facts, no Policy rule)",
                 query: make_policy_query_operation("q-no-rule", operations::SYSTEM_FACTS, "", ""),
                 task: TaskRequest {
+                    risk_class: 0,
                     task_id: "identity-no-rule".to_string(),
                     timeout_seconds: 5,
                     action: Some(task_request::Action::Operation(crate::gen::Operation {
@@ -2702,6 +2772,7 @@ allowed_args = [["*"]]
         let mut args = std::collections::HashMap::new();
         args.insert("path".to_string(), "/var".to_string());
         let task = TaskRequest {
+            risk_class: 0,
             task_id: "t-unsupported-parity".to_string(),
             timeout_seconds: 5,
             action: Some(task_request::Action::Operation(crate::gen::Operation {
@@ -2734,6 +2805,260 @@ allowed_args = [["*"]]
     //       daemon-side (OUTCOME_FAILURE), NEVER spawning — even when Policy
     //       allowed the raw value (the template's stricter second gate).
     // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // Class carried on the Task (ADR-0042): a Task dispatched as `read` whose
+    // action this Node classifies as `mutate` is refused before Policy and
+    // never runs; every other combination proceeds as before.
+    // -----------------------------------------------------------------------
+
+    fn class_test_templates() -> TemplateSet {
+        use crate::operations::template::{RiskClassDef, TemplateDef};
+        TemplateSet::for_test(&[
+            TemplateDef {
+                name: "svc.restart".to_string(),
+                risk_class: RiskClassDef::Mutate,
+                body: "echo restart".to_string(),
+                slots: vec![],
+            },
+            TemplateDef {
+                name: "svc.status".to_string(),
+                risk_class: RiskClassDef::Read,
+                body: "echo status".to_string(),
+                slots: vec![],
+            },
+        ])
+    }
+
+    fn class_test_task(name: &str, class: RiskClass) -> TaskRequest {
+        TaskRequest {
+            task_id: format!("t-class-{name}-{}", class.as_str_name()),
+            timeout_seconds: 5,
+            action: Some(task_request::Action::Operation(crate::gen::Operation {
+                name: name.to_string(),
+                args: std::collections::HashMap::new(),
+            })),
+            risk_class: class as i32,
+        }
+    }
+
+    /// Runs `task` through the production gate with an allow-all Policy for
+    /// the class-test names, returning the result and whether the runner ran.
+    async fn run_class_test(task: &TaskRequest) -> (TaskResult, bool) {
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "svc.restart"
+allowed_args = []
+
+[[operation]]
+name = "svc.status"
+allowed_args = []
+
+[raw_exec]
+allow = ["^/bin/true$"]
+"#,
+        )
+        .expect("policy parses");
+        let templates = class_test_templates();
+        let ran = Arc::new(Mutex::new(false));
+        let r = ran.clone();
+        let run = move |req: ExecRequest| {
+            *r.lock().unwrap() = true;
+            let task_id = req.task_id.clone();
+            async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 0,
+                }
+            }
+        };
+        let result =
+            evaluate_and_execute(task, Duration::from_secs(5), &policy, &templates, run, None)
+                .await;
+        let ran = *ran.lock().unwrap();
+        (result, ran)
+    }
+
+    #[tokio::test]
+    async fn task_dispatched_as_read_for_a_mutate_template_is_refused_and_never_runs() {
+        let (result, ran) = run_class_test(&class_test_task("svc.restart", RiskClass::Read)).await;
+        assert_eq!(result.outcome, Outcome::Failure as i32);
+        assert_eq!(
+            String::from_utf8_lossy(&result.stderr),
+            CLASS_MISMATCH_REASON
+        );
+        assert!(!ran, "a class-mismatched Task must never reach the runner");
+    }
+
+    #[tokio::test]
+    async fn task_dispatched_as_read_for_a_mutate_native_is_refused() {
+        let mut task = make_task_service_restart("t-class-native", "nginx");
+        task.risk_class = RiskClass::Read as i32;
+        let (result, ran) = run_class_test(&task).await;
+        assert_eq!(
+            String::from_utf8_lossy(&result.stderr),
+            CLASS_MISMATCH_REASON
+        );
+        assert!(!ran);
+    }
+
+    #[tokio::test]
+    async fn raw_exec_dispatched_as_read_is_refused() {
+        let mut task = make_task_raw_exec("t-class-raw", vec!["/bin/true".to_string()]);
+        task.risk_class = RiskClass::Read as i32;
+        let (result, ran) = run_class_test(&task).await;
+        assert_eq!(
+            String::from_utf8_lossy(&result.stderr),
+            CLASS_MISMATCH_REASON
+        );
+        assert!(!ran);
+    }
+
+    #[tokio::test]
+    async fn matching_stricter_or_unspecified_classes_run() {
+        for task in [
+            class_test_task("svc.restart", RiskClass::Mutate),
+            class_test_task("svc.status", RiskClass::Read),
+            class_test_task("svc.status", RiskClass::Mutate),
+            class_test_task("svc.restart", RiskClass::Unspecified),
+        ] {
+            let (result, ran) = run_class_test(&task).await;
+            assert_eq!(
+                result.outcome,
+                Outcome::Success as i32,
+                "{}: stderr {:?}",
+                task.task_id,
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert!(ran, "{} did not run", task.task_id);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unknown_name_dispatched_as_read_is_unsupported_not_a_mismatch() {
+        let (result, ran) = run_class_test(&class_test_task("not.here", RiskClass::Read)).await;
+        assert_eq!(result.outcome, Outcome::Unsupported as i32);
+        assert!(!ran);
+    }
+
+    /// Through the production entry (`dispatch_scheduled_with_runner`): the
+    /// refusal happens, it happens without queueing behind the mutate lane,
+    /// and it spends the Task ID — a resend of the same ID is deduplicated,
+    /// not re-checked and not run (ADR-0004 at-most-once).
+    #[tokio::test]
+    async fn class_mismatch_on_the_production_path_spends_the_task_id() {
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "svc.restart"
+allowed_args = []
+"#,
+        )
+        .expect("policy parses");
+        let state_dir = TempDir::created("class-mismatch-dedup");
+        let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
+        let mut services = test_services(policy, dedup);
+        services.templates = class_test_templates();
+
+        // Hold the serial mutate lane: a mismatched Task must not wait on it.
+        let _held = services
+            .scheduler
+            .acquire(
+                crate::scheduler::Class::Mutate,
+                tokio::time::Instant::now() + Duration::from_secs(60),
+                &mut None::<oneshot::Receiver<()>>,
+            )
+            .await
+            .expect("acquire mutate lane");
+
+        let ran = Arc::new(Mutex::new(false));
+        let make_run = |ran: Arc<Mutex<bool>>| {
+            move |req: ExecRequest| {
+                *ran.lock().unwrap() = true;
+                let task_id = req.task_id.clone();
+                async move {
+                    TaskResult {
+                        task_id,
+                        outcome: Outcome::Success as i32,
+                        exit_code: 0,
+                        stdout: vec![],
+                        stderr: vec![],
+                        truncated: false,
+                        duration_millis: 0,
+                    }
+                }
+            }
+        };
+        let task = class_test_task("svc.restart", RiskClass::Read);
+
+        let first = tokio::time::timeout(
+            Duration::from_secs(5),
+            dispatch_scheduled_with_runner(
+                &task,
+                &services,
+                tokio::time::Instant::now(),
+                make_run(ran.clone()),
+                None,
+            ),
+        )
+        .await
+        .expect("a mismatched Task must be refused without waiting for the mutate lane");
+        assert_eq!(first.outcome, Outcome::Failure as i32);
+        assert_eq!(
+            String::from_utf8_lossy(&first.stderr),
+            CLASS_MISMATCH_REASON
+        );
+
+        let second = dispatch_scheduled_with_runner(
+            &task,
+            &services,
+            tokio::time::Instant::now(),
+            make_run(ran.clone()),
+            None,
+        )
+        .await;
+        assert_ne!(
+            String::from_utf8_lossy(&second.stderr),
+            CLASS_MISMATCH_REASON,
+            "a resend of the same Task ID must be deduplicated, not re-checked"
+        );
+        assert!(!*ran.lock().unwrap(), "neither send may run");
+    }
+
+    #[tokio::test]
+    async fn class_check_edge_cases() {
+        // A read Native declared read is not a mismatch.
+        let mut file_read = make_task_file_read("t-class-file-read", "/etc/hostname");
+        file_read.risk_class = RiskClass::Read as i32;
+        let (result, _) = run_class_test(&file_read).await;
+        assert_ne!(
+            String::from_utf8_lossy(&result.stderr),
+            CLASS_MISMATCH_REASON
+        );
+
+        // An out-of-range class reads as unspecified: not checked.
+        let mut garbage = class_test_task("svc.restart", RiskClass::Read);
+        garbage.risk_class = 7;
+        let (result, ran) = run_class_test(&garbage).await;
+        assert_eq!(result.outcome, Outcome::Success as i32);
+        assert!(ran);
+
+        // No action, declared read: still the missing-action protocol error.
+        let mut empty = class_test_task("svc.restart", RiskClass::Read);
+        empty.action = None;
+        let (result, ran) = run_class_test(&empty).await;
+        assert_eq!(
+            String::from_utf8_lossy(&result.stderr),
+            "missing task action"
+        );
+        assert!(!ran);
+    }
 
     use crate::operations::template::{self, RiskClassDef, SlotDef, SlotType, TemplateDef};
 
@@ -3073,12 +3398,17 @@ mod proptests {
             arb_task_id(),
             any::<i32>(),
             prop_oneof![arb_action().prop_map(Some), Just(None)],
+            // Unspecified, read, mutate, and anything else (ADR-0042).
+            prop_oneof![Just(0), Just(1), Just(2), any::<i32>()],
         )
-            .prop_map(|(task_id, timeout_seconds, action)| TaskRequest {
-                task_id,
-                timeout_seconds,
-                action,
-            })
+            .prop_map(
+                |(task_id, timeout_seconds, action, risk_class)| TaskRequest {
+                    risk_class,
+                    task_id,
+                    timeout_seconds,
+                    action,
+                },
+            )
     }
 
     proptest! {
@@ -3124,6 +3454,24 @@ mod proptests {
                 prop_assert!(
                     recorded_snapshot.is_none(),
                     "a Deny must never reach the runner"
+                );
+            }
+
+            // ADR-0042: a Task declared read for a mutate action (a mutate
+            // Native, or Raw Exec) is refused and never reaches the runner,
+            // whatever else it carries.
+            let mutate_action = match &task.action {
+                Some(task_request::Action::RawExec(_)) => true,
+                Some(task_request::Action::Operation(op)) => {
+                    op.name == operations::SERVICE_RESTART || op.name == operations::PKG_INSTALL
+                }
+                None => false,
+            };
+            if task.risk_class() == RiskClass::Read && mutate_action {
+                prop_assert!(recorded_snapshot.is_none(), "a class-mismatched Task must never run");
+                prop_assert_eq!(
+                    String::from_utf8_lossy(&result.stderr).to_string(),
+                    CLASS_MISMATCH_REASON.to_string()
                 );
             }
 
