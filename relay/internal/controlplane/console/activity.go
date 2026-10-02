@@ -1641,15 +1641,15 @@ fabricate.</p>
   {{if .Filter.ShowConsole}}<input type="hidden" name="console" value="show">{{end}}
   <div class="vfield">
     <label class="vlabel" for="account">Principal</label>
-    <input id="account" name="account" value="{{.Filter.Account}}" placeholder="Account id" spellcheck="false" autocomplete="off">
+    <input id="account" name="account" value="{{.Filter.Account}}" placeholder="e.g. acct-…" spellcheck="false" autocomplete="off">
   </div>
   <div class="vfield">
     <label class="vlabel" for="on_behalf_of">On behalf of</label>
-    <input id="on_behalf_of" name="on_behalf_of" value="{{.Filter.OnBehalfOf}}" placeholder="asserted" spellcheck="false" autocomplete="off">
+    <input id="on_behalf_of" name="on_behalf_of" value="{{.Filter.OnBehalfOf}}" placeholder="e.g. alice@example.com" spellcheck="false" autocomplete="off">
   </div>
   <div class="vfield">
     <label class="vlabel" for="op">Operation</label>
-    <input id="op" name="op" value="{{.Filter.Op}}" placeholder="service.restart" spellcheck="false" autocomplete="off">
+    <input id="op" name="op" value="{{.Filter.Op}}" placeholder="e.g. service.restart" spellcheck="false" autocomplete="off">
   </div>
   <div class="vfield">
     <label class="vlabel" for="outcome">Outcome</label>
@@ -1667,7 +1667,7 @@ fabricate.</p>
   </div>
   <div class="vfield">
     <label class="vlabel" for="q">Refine</label>
-    <input id="q" name="q" value="{{.Filter.Q}}" placeholder="substring, this page only" spellcheck="false" autocomplete="off">
+    <input id="q" name="q" value="{{.Filter.Q}}" placeholder="e.g. nginx (this page only)" spellcheck="false" autocomplete="off">
   </div>
   <button type="submit">Apply</button>
   {{if .Rows}}<span class="vcount">{{.EventCount}} {{plural .EventCount "event" "events"}}</span>{{end}}

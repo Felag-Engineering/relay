@@ -93,7 +93,7 @@ are ADRs yet; several need to be — see [`99-open-decisions.md`](99-open-decisi
 | Decision | Where it bites |
 |---|---|
 | A fourth Label namespace, **`state:`** — Relay-derived, nobody sets it, targetable, never a security-lane target | 01, 02, 05, 00 |
-| **Facts are detail-view only** — not on a row, not in a facet, never targetable | 01, 02 |
+| **Facts are detail-view only** — not in a facet, never targetable; the hostname alone names a Node on a fleet row and the Node heading, marked self-reported beside the verified ID (D20) | 01, 02, 00 |
 | The fleet view answers **four questions** and nothing else; no collected metrics, ever | 01 |
 | **No scheduled or repeated reads.** Every read is a deliberate, audited act | 03, 04, 01 |
 | Upgrade handling is **progress only** — the Console never offers to push a daemon upgrade | 01 |

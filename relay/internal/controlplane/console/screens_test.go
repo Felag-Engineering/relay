@@ -115,9 +115,9 @@ func TestFleet_EmptyRegistryRendersDayOneNotAnEmptyTable(t *testing.T) {
 func TestFleet_NoFactAppearsOnARowOrInAFacet(t *testing.T) {
 	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
 
-	// Hostnames are the one Fact permitted on a row, as a subtitle under the
-	// node id — they are how an operator recognises a machine. Everything else
-	// must be absent.
+	// Hostnames are the one Fact permitted on a row, as the row's visual
+	// primary, marked self-reported, above the verified Node ID — they are how
+	// an operator recognises a machine. Everything else must be absent.
 	for _, fact := range []string{"debian", "6.1.0", "x86_64"} {
 		if strings.Contains(body, fact) {
 			t.Errorf("the fleet view rendered the Fact %q — Facts belong on node detail and nowhere else", fact)

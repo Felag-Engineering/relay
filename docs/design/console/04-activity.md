@@ -238,6 +238,9 @@ Enrollment Token mints and revokes and `protocol_violation` are not in it; they 
 `?account=` scopes the stream and Running now to one Account. It names the **verified Account
 ID**, never a name, because a name can later belong to a different Account and an ID never does.
 The Accounts screen's last-call link uses it ([15](15-accounts-and-tokens.md)).
+The Principal box takes the Account's ID, and its placeholder says so. Looking an Account up by name
+is deferred until an audited Account-read path exists (#659): the registry read it needs is one no
+audit record covers.
 
 The screen's standing notes — how a page is bounded, the reasoning behind leaving read records
 out, that it lists tool calls only, the filter fields it cannot offer yet, why the kind chips carry no counts — sit

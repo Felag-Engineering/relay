@@ -641,7 +641,7 @@ func newFleetNode(d Deps, n registry.Node) fleetNode {
 
 	fn := fleetNode{
 		ID:       n.NodeID,
-		Hostname: n.Facts.Hostname,
+		Hostname: primaryHostname(n.Facts.Hostname),
 		// Href carries NO query string, and must not start: the template
 		// appends the pin with fleetView.Pin.Query, which begins with "?".
 		// A parameter added here would silently produce "...?a=b?pin=...".
@@ -1475,7 +1475,7 @@ var fleetTmpl = newScreen("fleet", `
 <form class="viewbar" method="get" action="/console/">
   <div class="vfield wide">
     <label class="vlabel" for="filter">Filter</label>
-    <input id="filter" name="filter" value="{{.Filter}}" placeholder="node:role=web, relay:quarantine=on" spellcheck="false" autocomplete="off">
+    <input id="filter" name="filter" value="{{.Filter}}" placeholder="e.g. node:role=web, relay:quarantine=on" spellcheck="false" autocomplete="off">
   </div>
   <div class="vfield">
     <label class="vlabel" for="group">Group by</label>
@@ -1553,7 +1553,7 @@ var fleetTmpl = newScreen("fleet", `
         <caption class="tcap">{{if .ListsWholeFleet}}Every Node in <span class="ident">{{.Key}}</span>, oddest first.{{else}}Deviating Nodes in <span class="ident">{{.Key}}</span>, rarest first.{{end}}</caption>
         <thead><tr>
           <th scope="col"><span class="vh">Reachable</span></th>
-          <th scope="col">Node</th>{{if .ShowState}}<th scope="col">State</th>{{end}}<th scope="col">Labels</th>
+          <th scope="col">Node <span class="selfreptag">hostname self-reported</span></th>{{if .ShowState}}<th scope="col">State</th>{{end}}<th scope="col">Labels</th>
           <th scope="col">Policy</th><th scope="col">Last seen</th>
         </tr></thead>
         <tbody>
@@ -1561,7 +1561,7 @@ var fleetTmpl = newScreen("fleet", `
         {{range .Deviations}}
           <tr>
             <td class="livecell"><span class="dot" data-live="{{if .Connected}}on{{else}}off{{end}}" role="img" aria-label="{{if .Connected}}connected{{else}}not connected{{end}}"></span></td>
-            <td data-label="Node"><a href="{{.Href}}{{$.Pin.Query}}" class="nodeid">{{.ID}}</a>{{with .Hostname}}<div class="sub">{{.}}</div>{{end}}</td>
+            <td data-label="Node{{if .Hostname}} · hostname self-reported{{end}}"><a href="{{.Href}}{{$.Pin.Query}}" class="noderef">{{with .Hostname}}<span class="selfrep" title="{{selfReportedTitle}}">{{.}}<span class="vh"> (self-reported)</span></span> {{end}}<code class="nodeid">{{.ID}}</code></a></td>
             {{if $showState}}<td data-label="State"><div class="statecell">{{if .Revoked}}<span class="chip fenced" title="Revoked {{.RevokedAt}}. The record is kept so the Node stays investigable.">revoked</span>{{end}}
               {{if .Quarantined}}<span class="chip fenced" title="Quarantined by an admin. Reversible.">quarantined</span>{{end}}
               {{if .Unreported}}<span class="chip unreported" title="The Relay holds no recorded Hello for this Node: no daemon version or no Policy fingerprint. Not a state: label, and not targetable.">not reported</span>{{end}}

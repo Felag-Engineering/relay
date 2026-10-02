@@ -925,8 +925,9 @@ func TestCompare_RowKeysShareOneCase(t *testing.T) {
 	}
 }
 
-// TestNode_IdentityValuesWrapInsideTheirCard: the Node ID heading and the
-// Identity card's values soft-wrap rather than overflowing. The CSS reaches
+// TestNode_IdentityValuesWrapInsideTheirCard: the Node ID beneath the hostname
+// heading, the H1 that carries the Node ID when no hostname leads, and the
+// Identity card's values all soft-wrap rather than overflowing. The CSS reaches
 // them by class, so a string pin on both halves catches the markup moving and
 // the rule silently ceasing to apply.
 func TestNode_IdentityValuesWrapInsideTheirCard(t *testing.T) {
@@ -934,12 +935,14 @@ func TestNode_IdentityValuesWrapInsideTheirCard(t *testing.T) {
 	d = withFleet(d, registry.Node{
 		NodeID: "node-web-1", Connected: true, DaemonVersion: "0.6.0",
 		EnrollingTokenID: "tok-9f8e7d6c5b4a39281706f5e4d3c2b1a0ffee",
+		Facts:            registry.Facts{Hostname: "web-1"},
 	})
 	h := newTestHandler(d, accounts.RoleAdmin)
 
 	body := get(t, h, "/console/nodes/node-web-1").Body.String()
 	for _, want := range []string{
-		`<code class="nodeid big">`,
+		`<div class="nodehead">`,
+		`<code class="nodeid" title="The identity this Node`,
 		`<dl class="kv wrapid">`,
 		`<dd><code>tok-9f8e7d6c5b4a39281706f5e4d3c2b1a0ffee</code></dd>`,
 	} {
@@ -951,6 +954,7 @@ func TestNode_IdentityValuesWrapInsideTheirCard(t *testing.T) {
 	css := get(t, h, "/console/assets/console.css").Body.String()
 	for _, want := range []string{
 		".nodehead .nodeid { white-space: normal; overflow-wrap: anywhere;",
+		"letter-spacing: -0.02em; margin: 0;\n  overflow-wrap: anywhere; min-width: 0;",
 		"dl.wrapid dd code { overflow-wrap: anywhere; }",
 	} {
 		if !strings.Contains(css, want) {
