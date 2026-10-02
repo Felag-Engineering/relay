@@ -885,13 +885,22 @@ func parseFleetFilter(s string) (capability.Selector, error) {
 	case errors.Is(err, capability.ErrSelectorTagUnsupported):
 		// Rendered in this screen's own words: the term DOES carry a prefix, so
 		// the generic arm below would name the wrong problem.
-		return capability.Selector{}, filterErr("This Relay cannot filter on tag: labels yet, because it has nowhere to store them. Filter on node:, relay: or state: instead.")
+		return capability.Selector{}, filterErr(tagFilterRefusal)
 	case err != nil:
 		msg := sentenceCase(strings.TrimPrefix(err.Error(), "capability: "))
-		return capability.Selector{}, filterErr(msg + ". A term looks like node:role=web or state:offline.")
+		return capability.Selector{}, filterErr(msg + filterTermExample)
 	}
 	return sel, nil
 }
+
+// tagFilterRefusal is the Fleet view's rendering of the capability layer's
+// tag: sentinel. The term does carry a prefix, so the generic parse-error
+// wording would name the wrong problem.
+const tagFilterRefusal = "This Relay cannot filter on tag: labels yet; filter on node:, relay: or state: instead."
+
+// filterTermExample follows any other parse error, so the operator sees the
+// shape a term takes.
+const filterTermExample = ". A term looks like node:role=web."
 
 // sentenceCase upper-cases a leading ASCII lower-case letter. A message that
 // opens with a quoted term is left as it is.
@@ -1478,7 +1487,7 @@ func nodeRoleFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 // `!Targetable`: "no templates installed" is also unlinkable, and there is nothing
 // wrong with that value — this hint would be a lie about it. It is only ever
 // true when nodestate rejected a self-reported value outright.
-const facetRefusalHint = "One reported value is not a link: it carries a comma, whitespace or a namespace prefix, so a Selector cannot express it."
+const facetRefusalHint = "One reported value is not a link: a Selector cannot express it."
 
 // facetValuePrefix and the sentinel consts below key the counts map of the
 // three self-reported value facets: Daemon version, Policy fingerprint and
@@ -1662,7 +1671,7 @@ var fleetTmpl = newScreen("fleet", `
             <td data-label="Node{{if .Hostname}} · hostname self-reported{{end}}"><a href="{{.Href}}{{$.Pin.Query}}" class="noderef">{{with .Hostname}}<span class="selfrep" title="{{selfReportedTitle}}">{{.}}<span class="vh"> (self-reported)</span></span> {{end}}<code class="nodeid">{{.ID}}</code></a></td>
             {{if $showState}}<td data-label="State"><div class="statecell">{{if .Revoked}}<span class="chip fenced" title="Revoked {{.RevokedAt}}. The record is kept so the Node stays investigable.">revoked</span>{{end}}
               {{if .Quarantined}}<span class="chip fenced" title="Quarantined by an admin. Reversible.">quarantined</span>{{end}}
-              {{if .Unreported}}<span class="chip unreported" title="The Relay holds no recorded Hello for this Node: no daemon version or no Policy fingerprint. Not a state: label, and not targetable.">not reported</span>{{end}}
+              {{if .Unreported}}<span class="chip unreported" title="Missing a recorded daemon version or Policy fingerprint; not a state: label, not targetable.">not reported</span>{{end}}
               {{range .States}}{{template "label-chip" .}}{{end}}</div></td>{{end}}
             <td data-label="Labels"><div class="lblcell">{{range .Labels}}{{template "label-chip" .}}{{end}}</div></td>
             <td data-label="Policy">{{if .PolicyFingerprint}}<code title="{{.PolicyFingerprint}}">{{short .PolicyFingerprint}}</code>{{else}}<span class="dim">not reported</span>{{end}}</td>
@@ -1685,26 +1694,15 @@ var fleetTmpl = newScreen("fleet", `
 </section>
 {{end}}
 
-{{if .GroupsElided}}<p class="gap"><b>{{.GroupsElided}} more {{plural .GroupsElided "group is" "groups are"}} not shown.</b>
-This page draws the {{len .Groups}} largest. Narrow the filter, or group by a label key with fewer
-values. A grouping with hundreds of values is only a list of Nodes by another name.</p>{{end}}
+{{if .GroupsElided}}<p class="gap"><b>{{.GroupsElided}} more {{plural .GroupsElided "group is" "groups are"}} not shown</b>; narrow the filter or group by a key with fewer values.</p>{{end}}
 
 {{if not .CertExpiryKnown}}
-<p class="gap"><b>{{.CertExpiryUnknown}} {{plural .CertExpiryUnknown "Node" "Nodes"}} here
-{{plural .CertExpiryUnknown "has" "have"}} no recorded validity at all.</b>
-{{if eq .CertExpiryUnknown 1}}It{{else}}They{{end}} enrolled before the Relay began storing certificate validity, so
-<code>state:cert-expiring</code> cannot say whether {{if eq .CertExpiryUnknown 1}}it is{{else}}they are{{end}}
-close to lapsing. A clean State column for {{if eq .CertExpiryUnknown 1}}this Node{{else}}these Nodes{{end}}
-means unknown, not all-clear. This fills in at the next certificate renewal, at most one
-certificate lifetime away.</p>
+<p class="gap"><b>{{.CertExpiryUnknown}} {{plural .CertExpiryUnknown "Node has" "Nodes have"}} no recorded validity at all</b>; for {{plural .CertExpiryUnknown "it" "them"}}, a clean State column means unknown, not all-clear.</p>
 {{end}}
 
 <details class="about">
 <summary>About this screen</summary>
-<p class="gap"><b>There are no host metrics here, and there will not be.</b> This screen answers
-only what Relay can honestly answer about a Node: whether it is reachable, whether it will take
-work, what it will permit, and who vouched for it. Host data is read on demand as a Job, with a
-Plan and a blast cap, and never collected on a schedule.</p>
+<p class="gap"><b>There are no host metrics here, and there will not be.</b>{{template "about-docs" "fleet"}}</p>
 </details>
 `)
 

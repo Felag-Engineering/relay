@@ -109,7 +109,7 @@ func TestJob_UnverifiedRequesterGetsNoKind(t *testing.T) {
 func TestKindKeys_SayWhatMachineMeansOnADecision(t *testing.T) {
 	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
 	job := jobBody(t, jobDeps(&fakeQueries{jobs: []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)}, tasks: tasks}), jobPath(""))
-	if key := section(t, job, `<p class="lanekey">`, `</p>`); !strings.Contains(key, "not\nrecorded as human") {
+	if key := section(t, job, `<p class="lanekey"><span class="kind">`, `</p>`); !strings.Contains(key, "machine means &ldquo;not recorded as human&rdquo;") {
 		t.Errorf("Job detail's key does not say what machine means on a decision:\n%s", key)
 	}
 
@@ -119,7 +119,7 @@ func TestKindKeys_SayWhatMachineMeansOnADecision(t *testing.T) {
 	d := renderableDeps()
 	d.Approvals = &fakeApprovals{pending: []approval.Request{req}}
 	card := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-1").Body.String())
-	if !strings.Contains(card, "<b>machine</b> means &ldquo;not recorded as\n  human&rdquo;") {
+	if !strings.Contains(card, "<b>machine</b> means &ldquo;not recorded as human&rdquo;") {
 		t.Error("the approval object's key does not say what machine means on a decision")
 	}
 }

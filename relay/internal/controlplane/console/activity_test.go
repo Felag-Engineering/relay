@@ -561,16 +561,13 @@ func TestActivity_OlderLinkCarriesBothLaneCursors(t *testing.T) {
 
 // TestActivity_PageStatesItsTwoLaneBoundary. The merge is never truncated, so
 // the page cannot claim to be an instant — and it must say so rather than let
-// an operator infer it.
+// an operator infer it. The About says the two lanes are paged separately; what
+// that does to a page's boundary, and the single-lane case, are recorded in
+// 04-activity.md (TestAbout_DeletedStandingNotesLiveInTheDocs).
 func TestActivity_PageStatesItsTwoLaneBoundary(t *testing.T) {
 	both := get(t, newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/activity").Body.String()
-	if !strings.Contains(both, "a page does not end at a single moment") {
-		t.Error("the two-lane feed does not state that its page boundary is not an instant")
-	}
-
-	one := get(t, newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/activity?kind=dispatch").Body.String()
-	if !strings.Contains(one, "a page ends at a single moment") {
-		t.Error("a single-lane filter does not say its page boundary IS an instant")
+	if !strings.Contains(both, "other events, paged separately.") {
+		t.Error("the two-lane feed does not state that its two lanes are paged separately")
 	}
 }
 
@@ -596,7 +593,7 @@ func TestActivity_OutcomeOnTheJobLaneSaysWhatItCosts(t *testing.T) {
 	if strings.Contains(body, "job-clean") {
 		t.Error("a Job with no deny survived ?outcome=denied_by_policy")
 	}
-	if !strings.Contains(body, "Outcome narrows dispatch rows after the page is fetched") {
+	if !strings.Contains(body, "Outcome keeps every Job with at least one <code>denied_by_policy</code> Task</b>, so a filtered page can come back short") {
 		t.Error("the page does not say that the dispatch outcome filter is applied after the fetch — " +
 			"an operator would read a short page as 'this is everything'")
 	}
@@ -693,10 +690,13 @@ func TestActivity_LiveCounterSaysWhatItCounts(t *testing.T) {
 	d.Events = newFakeEvents()
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity").Body.String()
 
-	if !strings.Contains(body, "counts job events on the stream, not rows that will appear") {
+	if !strings.Contains(body, "Counts job events, not rows") {
 		t.Error("the live counter does not say that it counts stream events rather than rows")
 	}
-	if !strings.Contains(body, "One Job announces itself more than once") {
+	if !strings.Contains(body, "does not narrow them") {
+		t.Error("the live counter does not say this page's filter does not narrow it")
+	}
+	if !strings.Contains(body, "a Job announces itself more than once") {
 		t.Error("the live counter does not admit that it double-counts")
 	}
 	if !strings.Contains(body, `id="live-new-count"`) {
@@ -933,19 +933,24 @@ func TestActivity_RelativeWindowResolvesAgainstTheRenderClock(t *testing.T) {
 }
 
 // TestActivity_SpecConflictsAreStatedRatherThanFaked. Spec 04's filter box asks
-// for Selector and Node, and neither has a backing field. The screen says so
-// instead of rendering something that looks like them, and says it lists tool
-// calls and nothing else.
+// for Selector and Node, and neither has a backing field. The screen renders
+// nothing that looks like them, and its About says which events are on the
+// audit trail rather than here. Why the filter box has no Selector or Node, and
+// why the chips carry no counts, are written down in 04-activity.md rather than
+// on the screen (#849; TestAbout_DeletedStandingNotesLiveInTheDocs).
 func TestActivity_SpecConflictsAreStatedRatherThanFaked(t *testing.T) {
 	body := get(t, newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/activity").Body.String()
 
-	for _, want := range []string{
-		"This screen lists tool calls and nothing else.",
-		"The filter box carries no Selector and no Node.",
-		"list every family this screen shows, including empty ones",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("the screen does not state %q — an omission nobody wrote down reads as an oversight", want)
+	if !strings.Contains(body, "Enrollment Token events and enrollments are on the audit trail, not here.") {
+		t.Error("the screen does not say which events are on the audit trail rather than here — " +
+			"an omission nobody wrote down reads as an oversight")
+	}
+	if !strings.Contains(body, `name="op"`) {
+		t.Fatal("the filter box did not render, so the absence of a field proves nothing")
+	}
+	for _, field := range []string{`name="selector"`, `name="node"`} {
+		if strings.Contains(body, field) {
+			t.Errorf("the filter box renders %s, which no Job query field backs", field)
 		}
 	}
 }

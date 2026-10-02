@@ -1064,7 +1064,7 @@ func TestFleet_CertExpiringMarkerFires(t *testing.T) {
 // the gap is fleet-wide. The fixture sets validity on none of its four.
 func TestFleet_NamesTheNodesWithNoRecordedValidity(t *testing.T) {
 	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
-	if !strings.Contains(body, "4 Nodes here") || !strings.Contains(body, "no recorded validity at all") {
+	if !strings.Contains(body, "<b>4 Nodes have no recorded validity at all</b>") {
 		t.Error("the note does not count the Nodes whose certificate validity is unrecorded")
 	}
 }
@@ -1768,7 +1768,7 @@ func TestNode_ReportedPolicyComesFromTheDaemonsOwnEngine(t *testing.T) {
 	if !strings.Contains(body, "this Node's own engine") {
 		t.Error("the panel does not say the answer came from the Node's own engine")
 	}
-	if !strings.Contains(body, "has no code path that writes it") {
+	if !strings.Contains(body, "the Relay never writes it") {
 		t.Error("the panel does not state that the Relay cannot write Policy (ADR-0002, invariant 2)")
 	}
 	// The rules render verbatim. A paraphrased rule is a rule an operator has
@@ -3464,8 +3464,20 @@ func TestApproval_ScopeIsAClosedDisclosure(t *testing.T) {
 	if strings.Contains(content, `<details class="scope" open`) {
 		t.Error("the Scope disclosure is open by default, which gives away the attention it exists to buy")
 	}
-	if !strings.Contains(content, "Approving a Grant requires expanding this Scope at least once") {
+	if !strings.Contains(content, "Expand the Scope before approving; nothing enforces that yet") {
 		t.Error("the card does not state the rule")
+	}
+	// The presence twins of the legacy-pinned card's absence checks
+	// (TestApproval_LegacyNamespacePinnedGrantCardReadsAsCoveringNothing):
+	// without them, those checks would pass whatever this card said.
+	if !strings.Contains(content, "pre-approves every dispatch inside these walls") {
+		t.Error("the card does not say approving its Scope pre-approves every dispatch inside it")
+	}
+	// The audience half is the owner-accepted residual risk (ADR-0027
+	// amendment 2026-09-16; approval/grant.go mergeStricter): the approver must
+	// be told the audience is the loosest part, not the strictest.
+	if !strings.Contains(content, "Count, channel, requester exclusion and TTL are the strictest any covered dispatch faces; the audience is their union.") {
+		t.Error("the card does not say how its quorum was derived, audience union included")
 	}
 	if !strings.Contains(content, "at most <b>200</b> Nodes per dispatch") {
 		t.Error("the Scope disclosure does not carry the fan-out ceiling")
@@ -3485,7 +3497,7 @@ func TestApproval_LegacyNamespacePinnedGrantCardReadsAsCoveringNothing(t *testin
 
 	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-grant").Body.String())
 
-	if !strings.Contains(content, "This Grant covers nothing.") {
+	if !strings.Contains(content, "This Approval grant covers nothing") {
 		t.Error("a legacy namespace-pinned grant's card does not say it covers nothing")
 	}
 	if !strings.Contains(content, "retired pin") || !strings.Contains(content, "<code>node</code>") {
@@ -3494,8 +3506,8 @@ func TestApproval_LegacyNamespacePinnedGrantCardReadsAsCoveringNothing(t *testin
 	if strings.Contains(content, "pre-approves every dispatch inside these walls") {
 		t.Error("a legacy-pinned grant's card still claims to pre-approve dispatches")
 	}
-	if strings.Contains(content, "widest admissible dispatch") {
-		t.Error("a legacy-pinned grant's card still claims a quorum derived at this Scope's widest admissible dispatch")
+	if strings.Contains(content, "the audience is their union") {
+		t.Error("a legacy-pinned grant's card still claims a quorum derived from the dispatches its Scope covers")
 	}
 }
 
@@ -3707,7 +3719,7 @@ func TestApprovals_AGrantStoreFailureDoesNotCostTheQueue(t *testing.T) {
 	if !strings.Contains(content, "restart nginx on 3 Nodes") {
 		t.Error("the queue lost its rows because the Grant store failed")
 	}
-	if !strings.Contains(content, "The Grant store could not be read") {
+	if !strings.Contains(content, "The Approval grant store could not be read") {
 		t.Error("the queue degraded silently — a row that is a Grant now renders without saying its Scope is missing")
 	}
 }
@@ -3896,7 +3908,7 @@ func TestApproval_AnUnreadableGrantStoreIsItsOwnState(t *testing.T) {
 
 	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-grant").Body.String())
 
-	if !strings.Contains(content, "the Grant store did not answer") {
+	if !strings.Contains(content, "Approval grant store did not answer") {
 		t.Error("an unreadable Grant store is not stated on the card")
 	}
 	if strings.Contains(content, "none recorded") {

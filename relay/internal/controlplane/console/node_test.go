@@ -35,7 +35,7 @@ import (
 // assertion about what the panel says is not satisfied by the same words
 // appearing in the page header.
 func policyPanelOf(body string) string {
-	const open = "<h3>Effective Policy</h3>"
+	const open = "<h3>Effective Policy"
 	i := strings.Index(body, open)
 	if i < 0 {
 		return ""
@@ -233,24 +233,29 @@ func TestNode_FingerprintLinksTargetTheSameValueAsASelector(t *testing.T) {
 	}
 }
 
-// TestNode_LabelRowNamesAllFourNamespaces: invariant 7's grammar is four
-// namespaces with four different writers, and the explainer taught three.
-func TestNode_LabelRowNamesAllFourNamespaces(t *testing.T) {
+// TestNode_LabelRowNamesEveryNamespaceAChipCanCarry: invariant 7's grammar is
+// four namespaces with four different writers. The explainer names the three a
+// chip on this screen can carry, and says relay: is never the Node's to write.
+// It does not name tag:, because no tag: label can exist yet and a key for a
+// namespace that cannot appear is copy without data (02, "Labels"; #849).
+func TestNode_LabelRowNamesEveryNamespaceAChipCanCarry(t *testing.T) {
 	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/nodes/node-db-1").Body.String()
 
-	for _, ns := range []string{"<b>node:</b>", "<b>tag:</b>", "<b>relay:</b>", "<b>state:</b>"} {
+	for _, ns := range []string{"<b>node:</b>", "<b>relay:</b>", "<b>state:</b>"} {
 		if !strings.Contains(body, ns) {
 			t.Errorf("the label explainer does not name %s", ns)
 		}
+	}
+	if !strings.Contains(body, "<b>relay:</b> by the Relay, never the Node") {
+		t.Error("the label explainer does not say relay: labels are never the Node's to write (invariant 7)")
+	}
+	if strings.Contains(body, "<b>tag:</b>") {
+		t.Error("the label explainer names tag:, a namespace no chip on this screen can carry yet")
 	}
 	// The security lane is `relay:` and only `relay:`. A tag rendered into it
 	// is the one confusion the grammar exists to prevent.
 	if strings.Contains(body, `data-ns="tag" data-lane="security"`) {
 		t.Error("a tag: chip rendered in the security lane")
-	}
-	// And the explainer is honest about there being no tag storage yet.
-	if !strings.Contains(body, "cannot store tag: labels yet") {
-		t.Error("the explainer does not say tag: labels have no storage yet")
 	}
 	// And no tracker number is put in front of an operator.
 	if m := trackerRef.FindString(html.UnescapeString(body)); m != "" {
@@ -322,6 +327,12 @@ func TestNode_RevokedNodeRendersItsRevocationRecord(t *testing.T) {
 	if !strings.Contains(body, "revoked before the endpoint accepted one") {
 		t.Error("the page does not explain why a pre-#487 record shows no reason")
 	}
+	// The Node has more Task records than the window holds, so the page says
+	// older ones are not shown — the presence twin of the connected-Node
+	// absence check in TestNode_RecentTasksListsTasksNotControlPlaneReads.
+	if !strings.Contains(body, "Older Tasks are not shown") {
+		t.Error("a Node with more Task records than the window holds does not say older ones are not shown")
+	}
 
 	// And a post-#487 record renders the reason the operator actually gave.
 	withReason := append([]audit.Record(nil), recs...)
@@ -357,7 +368,7 @@ func TestNode_RevokedNodeRendersItsRevocationRecord(t *testing.T) {
 	// And a revoked Node whose trail holds nothing says so.
 	d.Audit = fakeAudit{}
 	quiet := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-gone").Body.String()
-	if !strings.Contains(quiet, "The audit trail holds no record of this revocation") {
+	if !strings.Contains(quiet, "the audit trail holds no record of who revoked this Node") {
 		t.Error("a revoked Node with no audit record rendered nothing about the revocation")
 	}
 }
@@ -1011,7 +1022,7 @@ func TestNode_UnreportedSnapshotStatesFactsNotAVerdict(t *testing.T) {
 		"no Hello-recorded Policy fingerprint",
 		"cannot be cross-checked",
 		"not count this Node as current or permitted",
-		"The Relay never evaluates Policy", // the rule text (QRY-7) is still there
+		"this Node's own engine, never the Relay", // the rule text (QRY-7) is still there
 		"service.restart",
 	} {
 		if !strings.Contains(panel, want) {

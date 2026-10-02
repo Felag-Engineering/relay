@@ -528,7 +528,7 @@ func parseTimeRange(window, since, until string, now time.Time) (timeRange, []st
 		d, ok := windowDuration(t.Window)
 		switch {
 		case !ok:
-			notes = append(notes, "the time window "+quoted(t.Window)+" is not one this screen offers, so it was ignored")
+			notes = append(notes, "the time window "+quoted(t.Window)+" is not offered here, so it was ignored")
 			t.Window = ""
 		case t.SinceParam != "" || t.UntilParam != "":
 			notes = append(notes, "both a relative window and an explicit range were given; the explicit range was used")
@@ -730,12 +730,6 @@ type activityView struct {
 	// "everything", which is the one direction a filter must never fail.
 	UnknownKind string
 
-	// DispatchOnly and TrailOnly say which lanes ran, which is what makes the
-	// page boundary note honest — with one lane the boundary IS a single
-	// instant.
-	DispatchOnly bool
-	TrailOnly    bool
-
 	// Exhausted says both lanes have already been paged to their end.
 	Exhausted bool
 
@@ -778,10 +772,6 @@ type activityView struct {
 	// AllAccountsHref is this view with ?account= cleared and everything else
 	// kept: the Show every Account link.
 	AllAccountsHref string
-
-	// ReadKindHref is this view filtered to the read family, keeping account
-	// and console; the About disclosure links to it.
-	ReadKindHref string
 
 	// ReadsExcluded says the filter does not select read records, so reads
 	// made from this Console cannot be on the page.
@@ -874,15 +864,11 @@ func handleActivity(d Deps) http.HandlerFunc {
 			return
 		}
 
-		readKind := f
-		readKind.Kind = string(rowRead)
 		v := activityView{
 			Filter:        f,
 			Note:          note,
 			JobPageSize:   jobPageSize,
 			AuditPageSize: auditPageSize,
-			DispatchOnly:  ranJob && !ranTrail,
-			TrailOnly:     !ranJob && ranTrail,
 			// Both lanes finished. Only reachable by hand-editing the URL —
 			// the "Older" link is not drawn in this state — but "nothing
 			// matches" would be a lie about the filter rather than about the
@@ -895,7 +881,6 @@ func handleActivity(d Deps) http.HandlerFunc {
 			Windows:       windowChoices(f.Window),
 			Outcomes:      outcomeChoices(f.Outcome),
 			Kinds:         kindChips(f),
-			ReadKindHref:  readKind.base(),
 			ReadsExcluded: !slices.Contains(activityLaneKinds(f), audit.KindRead),
 		}
 		v.CSRFToken = p.CSRFToken
@@ -1015,9 +1000,7 @@ func handleActivity(d Deps) http.HandlerFunc {
 				Endpoint:    "/console/events?kinds=job",
 				LastEventID: newestJobEventID(d.Events),
 				ShowHref:    f.base(),
-				CountNote: "The number counts job events on the stream, not rows that will appear. " +
-					"This page's filter does not narrow the stream. " +
-					"One Job announces itself more than once: when it is created, and again when it completes.",
+				CountNote:   liveCountNote,
 			}
 			p.Scripts = []string{"/console/assets/stream.js", "/console/assets/activity.js"}
 		}
@@ -1025,6 +1008,11 @@ func handleActivity(d Deps) http.HandlerFunc {
 		renderScreen(w, p, activityTmpl, v)
 	}
 }
+
+// liveCountNote qualifies the live region's counter (04-activity.md, "Live but
+// stable"): it counts the kinds=job stream, which this page's filter does not
+// narrow and on which one Job appears more than once.
+const liveCountNote = "Counts job events, not rows; this page's filter does not narrow them, and a Job announces itself more than once."
 
 // activityCollapseKey is the collapse's key for one row, and whether the row
 // may fold at all.
@@ -1628,7 +1616,7 @@ func csvSafe(v string) string {
 }
 
 var activityTmpl = newScreen("activity", `
-<p class="lede">Calls made to the Relay, as the Relay received them, and what they did to the fleet.</p>
+<p class="lede">Calls the Relay received, and what they did to the fleet.</p>
 
 {{template "refresh" .Refresh}}
 
@@ -1675,27 +1663,23 @@ var activityTmpl = newScreen("activity", `
 <div class="kindbar">
   {{range .Kinds}}<a class="kchip{{if .Current}} on{{end}}" href="{{.Href}}">{{.Kind}}</a>{{end}}
 </div>
-{{with .ReadsLeftOutHref}}<p class="kindnote">Read records &mdash; every Account&#39;s enumeration and
-every read of this trail &mdash; are left out of this feed: <a href="{{.}}">show them</a>.</p>{{end}}
+{{with .ReadsLeftOutHref}}<p class="kindnote">Read records are left out of this feed: <a href="{{.}}">show them</a>.</p>{{end}}
 
 {{if .UnknownKind}}
-<p class="gap"><b>There is no row kind called &ldquo;{{.UnknownKind}}&rdquo;.</b> Nothing was queried:
-an unrecognised filter narrows to nothing here rather than falling back to everything, because a
-filter that quietly widens is how an auditor comes to read the whole trail believing it is one
-slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>.</p>
+<p class="gap"><b>There is no row kind called &ldquo;{{.UnknownKind}}&rdquo;</b>, so nothing was queried: <a href="{{.ResetHref}}">clear the filter</a>.</p>
 {{else}}
 
 {{if .ConsoleInForce}}
 <p class="scoped consolecalls">{{if .ShowConsole -}}
   Reads made from this Console are shown. <a href="{{.ConsoleToggleHref}}">Leave them out</a>.
 {{- else -}}
-  Reads made from this Console are left out{{if .ConsoleLeftOut}}: {{.ConsoleLeftOut}} of the {{.PageCalls}} {{plural .PageCalls "call" "calls"}}{{if .Filter.Account}} by this Account{{end}} on this page{{end}}. <a href="{{.ConsoleToggleHref}}">Show them</a>.
+  Reads made from this Console are left out{{if .ConsoleLeftOut}}: {{.ConsoleLeftOut}} of the {{.PageCalls}} {{plural .PageCalls "call" "calls"}} on this page{{end}}. <a href="{{.ConsoleToggleHref}}">Show them</a>.
 {{- end}}</p>
 {{end}}
 {{if .Filter.Account}}<p class="scoped">Showing one Account only. <a href="{{.AllAccountsHref}}">Show every Account</a>.</p>{{end}}
 
 <section class="runningnow" id="running-now" aria-label="Running now">
-  <div class="ftitle">Running now <span class="phint">Jobs still running, longest-running first. Not narrowed by the kind chips or the time window.</span></div>
+  <div class="ftitle">Running now <span class="phint">Longest-running first; not narrowed by the kind chips or the time window.</span></div>
   {{with .RunningNow}}
   {{if .Entries}}<p class="rncount">{{.Matching}} running{{if .From}} &middot; {{.From}}&ndash;{{.To}}{{end}}</p>
   <ol class="rnlist">
@@ -1741,7 +1725,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
       <div class="evhead">
         {{if .Unrecorded}}
           {{if .Pending}}<span class="dim">attribution is recorded when the dispatch completes</span>
-          {{else}}<span class="unattrib" title="Every dispatch writes an audit record naming the principal that asked for it. This Job finished without one, which is a defect in the trail rather than an anonymous caller.">this dispatch finished with no recorded principal &mdash; the trail should carry one</span>{{end}}
+          {{else}}<span class="unattrib" title="Every dispatch records who asked; this gap is a trail defect, not an anonymous caller.">this dispatch finished with no recorded principal &mdash; the trail should carry one</span>{{end}}
         {{else}}{{template "trust-chip" (trust .Principal .Verified)}}{{template "kind-label" .RequesterKind}}{{end}}
         {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}{{end}}
         {{if .RawExecTier}}<span class="chip" data-tier="raw_exec">Raw Exec</span>{{end}}
@@ -1761,18 +1745,18 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
         {{if .NodeHref}}<a href="{{.NodeHref}}"><code>{{.NodeID}}</code></a>{{end}}
         {{if and .JobHref (not .OpIsLink)}}<a href="{{.JobHref}}">Job <code>{{short .JobID}}</code></a>{{end}}
         {{with .ApprovalHref}}<a href="{{.}}">approval</a>{{end}}
-        {{with .GrantID}}<span class="grant" title="An Approval grant released this: a human approved a window that this plan fell inside, not this plan itself.">grant {{short .}}</span>{{end}}
+        {{with .GrantID}}<span class="grant" title="An Approval grant released this: a human approved a window, not this plan.">grant {{short .}}</span>{{end}}
         {{with .RunningHref}}<a class="rnlink" href="{{.}}">in Running now</a>{{end}}
       </div>
-      {{if .AwaitingRecord}}<div class="evnote">Read from the Job record. No dispatch record is joined to it yet; its Selector, arguments and approver appear once one is.</div>{{end}}
+      {{if .AwaitingRecord}}<div class="evnote">No dispatch record is joined to it yet, so its Selector, arguments and approver are not shown.</div>{{end}}
       {{if .Outcomes.Total}}{{template "outcome-bar" .Outcomes}}{{end}}
       {{if .LiveHandle}}<div class="evliveslot">
         <span class="evlive" data-when="completed">completed after this page was rendered &mdash; reload to see its outcomes</span>
         <span class="evlive" data-when="cancelled">cancelled after this page was rendered &mdash; reload to see its outcomes</span>
       </div>{{end}}
       {{with .Reason}}<div class="evreason">{{.}}</div>{{end}}
-      {{if .ReadClass}}<div class="evnote">Output was not retained. Nothing here will show it later.</div>{{end}}
-      {{if gt .Calls 1}}<div class="evnote">{{.Calls}} consecutive identical calls, {{.FirstWhen}} to {{.When}}. Each one is on the audit trail. Only the display is collapsed.</div>{{end}}
+      {{if .ReadClass}}<div class="evnote">Output was not retained; nothing here will show it later.</div>{{end}}
+      {{if gt .Calls 1}}<div class="evnote">{{.Calls}} consecutive identical calls, {{.FirstWhen}} to {{.When}}; each one is on the audit trail.</div>{{end}}
     </div>
   </article>
 {{else}}
@@ -1786,7 +1770,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
 
 {{with .CollapseNote}}<p class="gap">{{.}}</p>{{end}}
 
-{{if .Scrolled}}<p class="gap">These are not the most recent events. This page was reached by following Older. <a href="{{.NewestHref}}">Newest</a>.</p>{{end}}
+{{if .Scrolled}}<p class="gap">These are not the most recent events. <a href="{{.NewestHref}}">Newest</a>.</p>{{end}}
 
 <div class="pager">
   {{with .OlderHref}}<a class="act" href="{{.}}">Older</a>{{end}}
@@ -1794,64 +1778,16 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
 </div>
 
 {{if .Filter.Q}}
-<p class="gap"><b>Refine</b> matches text within the rows already on this page. It does not search
-the trail; the other fields do.</p>
+<p class="gap"><b>Refine</b> matches text within the rows already on this page; it does not search the trail.</p>
 {{end}}
 
 {{if .Filter.Outcome}}
-<p class="gap"><b>Outcome narrows dispatch rows after the page is fetched.</b> A Job has no single
-outcome, so this keeps every Job that produced at least one <code>{{.Filter.Outcome}}</code>. The Job
-query cannot filter by outcome, so a filtered page can come back short while &ldquo;Older&rdquo; still
-leads somewhere. For every other row kind, the outcome is applied in the query.</p>
+<p class="gap"><b>Outcome keeps every Job with at least one <code>{{.Filter.Outcome}}</code> Task</b>, so a filtered page can come back short.</p>
 {{end}}
 
 <details class="about">
 <summary>About this screen</summary>
-
-<p class="gap"><b>This screen shows the request and never the reasoning.</b>
-An AI-agent&#39;s calls arrive over MCP or the Control API, and so does a person&#39;s.
-The Relay sees tool calls, not
-intent, and an account of <em>why</em> is exactly what an AI-agent under prompt injection would
-fabricate.</p>
-
-<p class="gap"><b>Each page holds up to {{.JobPageSize}} dispatches and up to {{.AuditPageSize}} other
-events, merged by time.</b>
-{{if or .DispatchOnly .TrailOnly}}This filter reads only one of the two, so a page ends at a single moment.
-{{else}}Dispatches and other events are paged separately, so a page does not end at a single moment.
-Following &ldquo;Older&rdquo; continues both from where they stopped; neither starts again.{{end}}</p>
-
-<p class="gap"><b>The default feed leaves out the trail&#39;s own read records.</b> Reading the trail
-writes to it: this page adds a read record each time it fetches dispatches or other events. A feed
-that included them would fill with the operator&#39;s own reloads. They are one click away as
-<a href="{{.ReadKindHref}}">kind=read</a>. Nothing is hidden.</p>
-
-<p class="gap"><b>This screen lists tool calls and nothing else.</b> Freeze transitions, Node
-revokes, Enrollment Token mints and revokes, and enrollments are on the audit trail, not here.</p>
-
-<p class="gap"><b>The filter box carries no Selector and no Node.</b> Neither filter is built yet:
-the Job query has a field for neither. A Job spans its Selector&#39;s whole fan-out, so it has no single Node. A Node filter that
-narrowed only the other events would silently drop every dispatch row from the page.</p>
-
-<p class="gap"><b>Every Refresh is an audited read</b>, whether it comes from Refresh, from the reload
-button that appears above the feed once new events have queued, or from the browser. Those reads are
-reads made from this Console, which this screen leaves out of the shown reads unless you ask for them.</p>
-
-<p class="gap"><b>There are no sessions.</b> The MCP transport is stateless, so every call is an
-independent authenticated request. There is no connection to show and nothing to disconnect.
-Stopping one actor is revoking its API Tokens, or the Freeze.</p>
-
-<p class="gap"><b>The export is the fetched rows, not the screen.</b> It includes reads made from
-this Console and never collapses consecutive calls, so an auditor&#39;s file holds every row this Relay
-returned for the filter.</p>
-
-<p class="gap"><b>Cancel is offered in Running now</b> to the roles that may cancel, exactly
-as on Job detail. A running Job&#39;s row in the stream links up to it. A viewer sees running Jobs and is not offered it.</p>
-
-<p class="gap"><b>The chips above list every family this screen shows, including empty ones.</b>
-They carry no counts. Counting each family across the whole trail would take one query per family,
-and each query adds its own record to the append-only trail &mdash; one extra row
-for every number it would print. A page that prints a number it did not compute has nothing to offer an
-operator reading it during an incident.</p>
+<p class="gap">Each page holds up to {{.JobPageSize}} dispatches and {{.AuditPageSize}} other events, paged separately. <b>Every Refresh is an audited read</b> made from this Console. Freeze transitions, Node revokes, Enrollment Token events and enrollments are on the audit trail, not here.{{template "about-docs" "activity"}}</p>
 </details>
 
 {{end}}

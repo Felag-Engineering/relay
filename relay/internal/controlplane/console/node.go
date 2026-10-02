@@ -579,8 +579,8 @@ func nodeTaskFrom(rec audit.Record) (nodeTask, bool) {
 var nodeMissingTmpl = newScreen("nodemissing", `
 <div class="placeholder">
   <p>No Node with the id <code>{{.}}</code> is in this Relay's registry.</p>
-  <p>A revoked Node keeps its record and stays readable; an id that was never enrolled has none.
-  <a href="/console/">Back to the fleet</a>.</p>
+  <p>A revoked Node stays readable; an id that was never enrolled has none.</p>
+  <p><a href="/console/">Back to the fleet</a>.</p>
 </div>
 `)
 
@@ -604,12 +604,7 @@ var nodeTmpl = newScreen("node", `
 <div class="labelrow">
   {{range .Labels}}{{template "label-chip" .}}{{end}}
   {{range .States}}{{template "label-chip" .}}{{end}}
-  <span class="labelnote">
-    <b>node:</b> set by the machine ·
-    <b>tag:</b> set by operators; this Relay cannot store tag: labels yet, so none appear ·
-    <b>relay:</b> set by the Relay, never by the Node ·
-    <b>state:</b> derived, set by nobody
-  </span>
+  <span class="labelnote"><b>node:</b> set by the Node · <b>relay:</b> by the Relay, never the Node · <b>state:</b> derived</span>
 </div>
 
 <div class="panels">
@@ -623,15 +618,14 @@ var nodeTmpl = newScreen("node", `
         <dt>daemon</dt><dd>{{if .DaemonVersion}}<code>{{.DaemonVersion}}</code>{{else}}<span class="dim">not reported</span>{{end}}</dd>
       </dl>
       {{if .Revoked}}
-      <p class="gap"><b>This Node was revoked at {{.RevokedAt}}.</b>
-      {{if .RevocationRecorded}}The trail attributes it to <b>{{.RevokedBy}}</b>{{if .RevocationReason}},
-      who gave the reason <q>{{.RevocationReason}}</q>.
-      {{else}} and records no reason: this Node was revoked before the endpoint accepted one.
+      {{if .RevocationRecorded}}{{if .RevocationReason}}
+      <p class="gap"><b>Revoked at {{.RevokedAt}}</b> by <b>{{.RevokedBy}}</b>, who gave the reason <q>{{.RevocationReason}}</q>.</p>
+      {{else}}
+      <p class="gap"><b>Revoked at {{.RevokedAt}}</b> by <b>{{.RevokedBy}}</b>, with no reason: this Node was revoked before the endpoint accepted one.</p>
+      {{end}}{{else}}
+      <p class="gap"><b>Revoked at {{.RevokedAt}}</b>; the audit trail holds no record of who revoked this Node.</p>
       {{end}}
-      {{else}}The audit trail holds no record of this revocation. The registry keeps the time even
-      when the trail was not recording, so who revoked this Node cannot be answered from here.{{end}}
-      The Node's record is kept on purpose, so the machine and its history stay investigable. Its
-      certificate is revoked, and this Node cannot reconnect.</p>
+      <p class="note">Its record is kept for investigation; its certificate is revoked and it cannot reconnect.</p>
       {{end}}
       {{if .CertProvenanceKnown}}
       <dl class="kv">
@@ -640,12 +634,8 @@ var nodeTmpl = newScreen("node", `
         <dt>renewals</dt><dd>{{.RenewalCount}}{{if .LastRenewedAt}} <span class="dim">last {{.LastRenewedAt}}</span>{{else}} <span class="dim">never renewed</span>{{end}}</dd>
       </dl>
       {{else}}
-      <p class="gap"><b>This Node's certificate provenance is not recorded.</b> It enrolled before
-      the Relay began storing certificate validity, so there is no expiry to compare a clock
-      against. It fills in at this Node's next certificate renewal, at most one certificate lifetime away.</p>
+      <p class="gap"><b>This Node's certificate provenance is not recorded</b>, so its expiry is unknown until its next renewal.</p>
       {{end}}
-      <p class="note">Renewal is certificate-authenticated and preserves the node id, so this
-      identity chains unbroken back to the Enrollment Token above.</p>
     </section>
 
     <section class="panel">
@@ -662,10 +652,11 @@ var nodeTmpl = newScreen("node", `
           <span class="dim">{{.TemplateShared}} {{plural .TemplateShared "Node reports" "Nodes report"}} this</span>
         {{else}}<span class="dim">no templates installed</span>{{end}}</dd>
       </dl>
+      <p class="note">These counts are observation, never evidence of equal Policy or trust.</p>
     </section>
 
     <section class="panel">
-      <h3>Facts <span class="phint">self-reported · this page only</span></h3>
+      <h3>Facts <span class="phint">self-reported · never used for targeting</span></h3>
       {{if .Facts}}
       <dl>{{range .Facts}}<dt>{{.Key}}</dt><dd>{{.Value}}</dd>{{end}}</dl>
       {{else}}<p class="dim">This Node has not reported any Facts.</p>{{end}}
@@ -674,18 +665,16 @@ var nodeTmpl = newScreen("node", `
 
   <div class="pcol wide">
     <section class="panel">
-      <h3>Effective Policy</h3>
+      <h3>Effective Policy <span class="phint">from this Node's own engine, never the Relay</span></h3>
       {{if .PolicyReported}}
         {{if .PolicyUncorroborated}}
-        <p class="gap"><b>Not corroborated by a recorded Hello.</b>
-        {{if .Policy.PolicyFingerprint}}This snapshot carries its own Policy fingerprint, <code title="{{.Policy.PolicyFingerprint}}">{{short .Policy.PolicyFingerprint}}</code>.{{else}}This snapshot carries no Policy fingerprint of its own.{{end}}
-        {{if .FingerprintUnrecorded}}The Relay holds no Hello-recorded Policy fingerprint{{if .VersionUnrecorded}} and no daemon version{{end}} for this Node, so this snapshot cannot be cross-checked against the fingerprint the fleet is compared by, and the Console does not count this Node as current or permitted.
-        {{else}}The Relay holds no Hello-recorded daemon version for this Node, so the Console does not count it as current or permitted.{{end}}</p>
+        <p class="gap"><b>Not corroborated by a recorded Hello:</b> the Relay holds no Hello-recorded {{if .FingerprintUnrecorded}}Policy fingerprint{{if .VersionUnrecorded}} and no daemon version{{end}}{{else}}daemon version{{end}}.</p>
+        {{if .Policy.PolicyFingerprint}}<p class="note">This snapshot carries its own Policy fingerprint, <code title="{{.Policy.PolicyFingerprint}}">{{short .Policy.PolicyFingerprint}}</code>.</p>
+        {{else}}<p class="note">This snapshot carries no Policy fingerprint of its own.</p>{{end}}
+        {{if .FingerprintUnrecorded}}<p class="note">It cannot be cross-checked, and the Console does not count this Node as current or permitted.</p>
+        {{else}}<p class="note">The Console does not count this Node as current or permitted.</p>{{end}}
         {{end}}
-        <p class="note">Answered by <b>this Node's own engine</b> and received by the Relay
-        {{if .PolicyReportedAt}}at <b>{{.PolicyReportedAt}}</b>, {{.PolicyReportedAgo}} ago{{else}}at <b>a time that was not recorded</b>{{end}}.
-        That is a receipt time, not a query time: a Node reports its Policy when it connects.
-        The Relay never evaluates Policy and has no code path that writes it.</p>
+        <p class="note">Received {{if .PolicyReportedAt}}at <b>{{.PolicyReportedAt}}</b>, {{.PolicyReportedAgo}} ago{{else}}at <b>a time that was not recorded</b>{{end}}: a receipt time, not a query time.</p>
         <div class="polblock">
           <div class="polrow"><span class="pk">raw exec</span>
             {{if .Policy.RawExecEnabled}}<span class="chip risk" data-risk="mutate">enabled</span>{{else}}<span class="chip risk">disabled</span>{{end}}</div>
@@ -701,17 +690,11 @@ var nodeTmpl = newScreen("node", `
           {{end}}
         </div>
         {{if .PolicyStale}}
-        <p class="gap"><b>This Node is offline, so this panel cannot be refreshed.</b> It is the last
-        thing its engine reported{{with .PolicyReportedAt}}, at {{.}}{{end}}, and nothing has asked
-        it since. A snapshot is taken only when a Node connects.</p>
+        <p class="gap"><b>This Node is offline, so this panel cannot be refreshed.</b></p>
         {{end}}
-        <p class="gap">There is no path from this screen to this Node's Policy: Policy is rooted
-        on the machine and the Relay is not one of its writers.</p>
+        <p class="gap">There is no path from this screen to this Node's Policy; the Relay never writes it.</p>
       {{else}}
         <p class="dim">This Node has not reported its Policy since the Relay last started.</p>
-        <p class="note">The Console shows nothing rather than an answer remembered from before the
-        Relay last started. Operators check this panel before deciding a Task is safe, so a view that
-        might be out of date without saying so is worse than none.</p>
       {{end}}
     </section>
 
@@ -737,9 +720,7 @@ var nodeTmpl = newScreen("node", `
         </tbody>
       </table>
       </div>
-      {{if .TasksElided}}<p class="gap">Older Tasks are not shown. This page lists the most
-      recent {{len .Tasks}}, and the audit trail has more. Filtered history is on
-      <a href="/console/activity">Activity</a>.</p>{{end}}
+      {{if .TasksElided}}<p class="gap">Older Tasks are not shown; filtered history is on <a href="/console/activity">Activity</a>.</p>{{end}}
       {{else if .AuditWired}}
       <p class="dim">No Tasks have run on this Node.</p>
       {{else}}
@@ -749,20 +730,4 @@ var nodeTmpl = newScreen("node", `
   </div>
 </div>
 
-<details class="about">
-<summary>About this screen</summary>
-<p class="gap"><b>Who writes each label namespace.</b>
-<b>node:</b> set by the machine's config management, immutable to the Relay ·
-<b>tag:</b> set by operators through the control plane, immutable to the Node; this Relay cannot store tag: labels yet, so none appear here ·
-<b>relay:</b> set by the Relay, immutable to the Node ·
-<b>state:</b> derived from this record, set by nobody</p>
-<p class="gap"><b>The fingerprints are compared, not trusted.</b> To confirm a rollout landed, check that these values match. That is a string
-comparison, not trust. The Relay reports what the daemon says it loaded and never sets either.
-Each value links to every Node reporting the same one, through the Selector
-<code>state:policy-fingerprint=</code> or <code>state:template-fingerprint=</code>. A value a
-Selector cannot express is shown without a link rather than trimmed to fit.</p>
-<p class="gap"><b>Facts appear here and nowhere else.</b> Self-reported by the daemon, they are
-not on a fleet row, not in a facet, and never targetable. A compromised Node can report
-anything it likes, so targeting is on labels, whose namespaces have enforced writers.</p>
-</details>
 `)

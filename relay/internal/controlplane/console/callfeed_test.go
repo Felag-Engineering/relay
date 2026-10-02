@@ -39,7 +39,7 @@ func TestCollapseNote_SpeaksWhenThereIsSomethingToSay(t *testing.T) {
 		t.Errorf("collapseNote with nothing folded = %q, want empty", got)
 	}
 	got := collapseNote(7, 2)
-	want := "7 calls on this page are collapsed into 2 rows, each saying how many calls it stands for."
+	want := "7 calls on this page are collapsed into 2 rows."
 	if got != want {
 		t.Errorf("collapseNote = %q, want %q", got, want)
 	}

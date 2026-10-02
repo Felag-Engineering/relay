@@ -281,9 +281,11 @@ Screens carry prose that says what they cannot do. Two kinds, told apart by one 
 
 Where a screen has standing notes, they are drawn together in **one disclosure at the foot of the
 screen, closed by default**, labelled in plain words ("About this screen"), and built from a native
-`<details>`/`<summary>` so it needs no script under the strict CSP. A standing note is moved there,
-never deleted: it keeps its substance and stays one click away, and only words that pointed at its
-old position ("below", "above") change with it. Situational messages are never
+`<details>`/`<summary>` so it needs no script under the strict CSP. Every visible note is **one sentence,
+at most ~15 words**. A standing note may be shortened or **deleted** when its substance is already
+in the docs, or is implied by the data it sits next to. The "About this screen" disclosure holds at
+most a short paragraph per screen and links to the docs for the rest. The invariant-2 note and any
+note that qualifies a visible claim stay visible (still one sentence). Situational messages are never
 collapsed or hidden; they render where they always have, because the operator needs them for the
 thing in front of them. **When a note's class is in doubt, it is situational and stays visible.**
 A note that states a property the Console must be visibly bound by is never collapsed. One is

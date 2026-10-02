@@ -154,7 +154,7 @@ func handleCancelJob(d Deps) http.HandlerFunc {
 			slog.Error("console cancel request returned an error", "job_id", jobID, "error", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			renderScreen(w, pg, cancelResultTmpl, cancelResultView{
-				Heading:  "The cancel returned an error. Some Tasks may already have been stopped.",
+				Heading:  "The cancel returned an error. Some Tasks may already have been cancelled.",
 				JobHref:  "/console/jobs/" + url.PathEscape(jobID),
 				JobLabel: "Open the Job to see where each one is.",
 			})

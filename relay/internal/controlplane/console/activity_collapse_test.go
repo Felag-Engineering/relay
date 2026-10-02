@@ -108,7 +108,7 @@ func TestActivity_PollingCollapsesWithinThePage(t *testing.T) {
 	if !strings.Contains(body, `class="vcount">50 events<`) {
 		t.Errorf("the viewbar does not count the 50 calls:\n%s", body)
 	}
-	if !strings.Contains(body, "49 calls on this page are collapsed into 1 row, each saying how many calls it stands for.") {
+	if !strings.Contains(body, "49 calls on this page are collapsed into 1 row.") {
 		t.Errorf("the collapse note is missing or wrong:\n%s", body)
 	}
 	assertEveryAuditLimitIs(t, q, auditPageSize)
@@ -239,7 +239,7 @@ func TestActivity_ACollapsedRowSaysHowManyCallsAndOverWhatSpan(t *testing.T) {
 	if callsOfRow(t, b) != 3 || !strings.Contains(b, ">x3<") {
 		t.Errorf("the row does not say it stands for 3 calls:\n%s", b)
 	}
-	if !strings.Contains(b, "3 consecutive identical calls, 2026-08-25 11:59:57Z to 2026-08-25 11:59:59Z.") {
+	if !strings.Contains(b, "3 consecutive identical calls, 2026-08-25 11:59:57Z to 2026-08-25 11:59:59Z;") {
 		t.Errorf("the row does not give its absolute span:\n%s", b)
 	}
 	if strings.Contains(b, "ago") {
@@ -251,7 +251,7 @@ func TestActivity_TheCollapseNoteSaysWhatTheCollapseDid(t *testing.T) {
 	who := apiIdentity("acct-1", "alice", "operator")
 	q := &fakeQueries{rows: []capability.AuditRow{refusalBy(who, time.Second, "same"), refusalBy(who, 2*time.Second, "same")}}
 	body := activityAs(t, q, "/console/activity")
-	if !strings.Contains(body, "2 calls on this page are collapsed into 1 row, each saying how many calls it stands for.") {
+	if !strings.Contains(body, "2 calls on this page are collapsed into 1 row.") {
 		t.Errorf("the collapse note is missing:\n%s", body)
 	}
 	if strings.Contains(body, "The strip still counts every call") {

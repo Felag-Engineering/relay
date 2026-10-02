@@ -155,7 +155,7 @@ func TestActivity_AnOlderPageDoesNotClaimToBeTheMostRecent(t *testing.T) {
 	q := &fakeQueries{rows: []capability.AuditRow{{Kind: audit.KindRefusal, Principal: "p", Timestamp: testNow}}}
 	older := activityAs(t, q, "/console/activity?ac=0")
 
-	if !strings.Contains(older, "These are not the most recent events. This page was reached by following Older.") {
+	if !strings.Contains(older, "These are not the most recent events.") {
 		t.Error("a scrolled page does not say it is not the most recent")
 	}
 	if !strings.Contains(older, `<a href="/console/activity">Newest</a>`) {
@@ -349,7 +349,7 @@ func TestActivity_ARoleGateRefusalIsNeutral(t *testing.T) {
 func TestActivity_TheLedeClaimsCallsThatReachedTheRelay(t *testing.T) {
 	body := activityAs(t, &fakeQueries{}, "/console/activity")
 
-	if !strings.Contains(body, "as the Relay received them") {
+	if !strings.Contains(body, "Calls the Relay received") {
 		t.Error("the lede does not say the calls are as the Relay received them")
 	}
 	for _, banned := range []string{"every call an AI-agent makes", "connected"} {

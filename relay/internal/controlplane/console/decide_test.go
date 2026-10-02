@@ -862,7 +862,7 @@ func TestDecide_AGrantRequestOffersNoControlAndThePostIsRefused(t *testing.T) {
 			mutate: func(a *fakeApprovals) {
 				a.grantsErr = errQueryFailed
 			},
-			heading: "Grant store could not be read",
+			heading: "Approval grant store could not be read",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

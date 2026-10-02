@@ -72,7 +72,9 @@ which, because "queried 12s ago" would be a claim nothing supports. **Not implem
 what-if".** A `PolicyQuery` is a live request through the capability layer's dispatch path, which
 v0.6.0's "zero mutating routes" excludes; it belongs with the composer (spec 05) in v0.7.0. The
 Policy Catalog link is role-gated to `operator` today; it follows PC-8 (`viewer`) when spec 06
-lands.
+lands. Where no snapshot has been received since the Relay last started, the panel says so in one
+sentence and renders nothing else: an answer remembered from before a restart could be out of date
+without saying so, and operators read this panel before deciding a Task is safe (#849).
 
 **Recent Tasks** — time, Operation with arguments, outcome chip, Job link. Include denies; they
 are the most informative rows here. Read-class rows say "output not retained" (ADR-0025).
@@ -80,7 +82,8 @@ are the most informative rows here. Read-class rows say "output not retained" (A
 ## Labels
 
 All four namespaces on one row, visually distinct per `00-foundations.md`, with a one-line
-explainer of who sets each. Two actions, both v0.7.0:
+explainer of who sets each namespace a chip can carry here (`node:`, `relay:`, `state:`); `tag:` is
+not named while no `tag:` label can exist (#849). Two actions, both v0.7.0:
 
 - **Add and remove `tag:` labels on this Node** — `operator`, standard auth, no step-up, audited.
   The bulk form is on the Fleet view (spec 01).
@@ -167,7 +170,8 @@ for it.
       is read-only, so there is no set/remove control on this screen at any role.
 - [ ] Editing a `tag:` label demands `operator` and no step-up.
       **Not implemented (#430).** `tag:` has no storage on `registry.Node` yet, so no chip renders
-      and no control exists. The label explainer says so rather than leaving the namespace unnamed.
+      and no control exists. The label explainer does not name it: no `tag:` chip can render, and a key
+      for a namespace that cannot appear is copy without data (#849).
 - [x] No surface anywhere writes a `node:` or `state:` label.
 - [x] Facts appear on this page and no other. **Two qualifications.** First, the hostname is the
       self-reported visual primary of a fleet row and of this page's heading, always beside the

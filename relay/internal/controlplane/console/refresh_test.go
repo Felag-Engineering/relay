@@ -144,7 +144,7 @@ func TestRefresh_TheDisclosureSaysWhetherAReloadIsAudited(t *testing.T) {
 	h := newTestHandler(d, accounts.RoleAdmin)
 	for path, note := range map[string]string{
 		"/console/activity":  "<b>Every Refresh is an audited read</b>",
-		"/console/approvals": "<b>Why reloading this queue leaves no record.</b>",
+		"/console/approvals": "<b>Opening this queue or a Refresh writes no read record</b>",
 		"/console/access":    "<b>Every Refresh is an audited read</b>",
 	} {
 		inside, outside := splitAbout(t, get(t, h, path).Body.String())

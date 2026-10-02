@@ -154,7 +154,8 @@ bury the calls that change something. One plain sentence under the kind chips, d
 filter is set, says read records are left out, and links to them (the `read` chip, keeping the
 other filters). Activity is the only screen over these records; the Read egress screen
 ([17](17-read-egress.md)) was retired on 2026-10-01. Where a kind filter is set, no
-sentence is drawn. The reasoning stays in the disclosure.
+sentence is drawn. The reasoning is this section; the screen states only that sentence and its
+link (#849).
 
 Read **calls** are audited — who, which tool, what they asked for, when — and an unauditable read
 fails closed (ADR-0025). Read **output** is never retained. A read row says so, and no detail view
@@ -242,9 +243,20 @@ The Principal box takes the Account's ID, and its placeholder says so. Looking a
 is deferred until an audited Account-read path exists (#659): the registry read it needs is one no
 audit record covers.
 
-The screen's standing notes — why it shows the request and never the reasoning, how a page is bounded, the reasoning behind leaving read records
-out, that it lists tool calls only, the filter fields it cannot offer yet, why the kind chips carry no counts — sit
-in the closed "About this screen" disclosure at its foot (`00-foundations.md`). The messages a
+The screen's "About this screen" disclosure (`00-foundations.md`) holds one short paragraph: how a
+page is bounded, that every Refresh is an audited read made from this Console, and which events are
+on the audit trail rather than here. The rest is recorded here and not repeated on the screen (#849).
+A page holds up to a fixed number of dispatches and, separately, of other events, merged by time;
+the two lanes page separately, so a page does not end at a single moment, and Older continues each
+lane from where it stopped (a filter that reads only one lane does end at a single moment). The
+filter box offers no Selector and no Node field yet: the Job query has a field for neither, a Job
+spans its Selector's whole fan-out and so has no single Node, and a Node filter that narrowed only
+the other events would silently drop every dispatch row. The export is the fetched rows, not the
+screen: it includes reads made from this Console and never collapses consecutive calls. The kind
+chips carry no counts: counting each family across the whole trail would take one query per family,
+and each query appends its own read record to the trail. Why the screen shows the request and never
+the reasoning is stated above; why read records are left out is under Reads; that there are no
+sessions is its own section. The messages a
 request provokes stay visible where they render: a part of the URL that could not be read, an
 unknown row kind, what an outcome filter does to the page, and the read sentences above.
 

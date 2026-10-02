@@ -83,13 +83,16 @@ import (
 // one.
 const accountsCallPage = 200
 
-// policyCeilingNote is the sentence the role block must not lose: a role is a
+// policyCeilingNote is the sentence the screen must not lose: a role is a
 // ceiling on what the RELAY will ask for, and every Node's own Policy is the
-// ceiling on what actually runs (ADR-0002, invariant 2).
-const policyCeilingNote = "A role bounds what this Relay will ask a Node to do. " +
-	"It never widens what a Node will accept: each Node's own Policy is evaluated " +
-	"on the Node, by the Node, and is always the real ceiling. No role on this " +
-	"screen can raise it, and it cannot be changed from here."
+// ceiling on what actually runs (ADR-0002, invariant 2). What each role may do
+// is ADR-0010's and GLOSSARY.md's, not this screen's (#849).
+const policyCeilingNote = "A role bounds what this Relay will ask of a Node; each Node's own Policy is the real ceiling."
+
+// selfPanelNote is why the signed-in Account's own panel carries no control.
+// The refusal page's fuller sentence, selfTargetRefusal, is the capability
+// layer's refusal; this is the panel's one-line rendering of the same rule.
+const selfPanelNote = "An Account cannot change its own role or disable itself; another admin must."
 
 // accountsView is the whole screen.
 type accountsView struct {
@@ -115,9 +118,8 @@ type accountsView struct {
 	// Account, and the panel is the only part of this screen that is.
 	SelectedMintAction string
 
-	CallPage  int
-	RoleNotes []roleNote
-	Ceiling   string
+	CallPage int
+	Ceiling  string
 
 	// Write is nil when the write half is not wired (#655, accounts_write.go):
 	// no form of any kind renders, which is the honest-absence posture every
@@ -206,7 +208,7 @@ type accountChange struct {
 	// why (spec 15 States, "Say why"). Narrowing only: the refusal stays the
 	// capability layer's, and a hand-built POST is still refused there.
 	Self     bool
-	SelfNote string // = selfTargetRefusal
+	SelfNote string // = selfPanelNote
 }
 
 // tokenRow is one API Token, as far as a screen is ever allowed to see one.
@@ -235,29 +237,6 @@ type tokenRow struct {
 	// write half is not wired. A NAME, an id and a path — still no field a
 	// secret could occupy.
 	RevokeAction string
-}
-
-// roleNote is one role, described by the boundary it sits on.
-type roleNote struct {
-	Role  string
-	Means string
-}
-
-// roleNotes is the "what a role means" block: boundaries, in prose.
-//
-// Deliberately not a permission matrix and deliberately not editable (spec
-// 15's "Must not appear", invariant 11). It names where the two lines that
-// matter fall — running an Operation at all, and Raw Exec plus the security
-// lane's own label namespace — and stops there.
-var roleNotes = []roleNote{
-	{string(accounts.RoleViewer), "May read: the fleet, Jobs, the audit trail. It can ask this Relay " +
-		"to show it things and can never ask a Node to do anything."},
-	{string(accounts.RoleOperator), "May additionally run structured Operations — the typed vocabulary, " +
-		"where the command is fixed by the Operation's author and an argument can never change " +
-		"which command runs."},
-	{string(accounts.RoleAdmin), "May additionally use Raw Exec — the caller-supplied, Policy-gated " +
-		"exception to that vocabulary — and write the relay: labels the security lane targets. " +
-		"It also administers this control plane, which is what makes this screen admin-only."},
 }
 
 func handleAccounts(d Deps) http.HandlerFunc {
@@ -351,10 +330,9 @@ func handleAccounts(d Deps) http.HandlerFunc {
 		}
 
 		v := accountsView{
-			Selected:  r.URL.Query().Get("account"),
-			CallPage:  accountsCallPage,
-			RoleNotes: roleNotes,
-			Ceiling:   policyCeilingNote,
+			Selected: r.URL.Query().Get("account"),
+			CallPage: accountsCallPage,
+			Ceiling:  policyCeilingNote,
 		}
 		if accountsOffered(d) {
 			v.Write = &accountsWriteControls{
@@ -407,7 +385,7 @@ func handleAccounts(d Deps) http.HandlerFunc {
 					RaiseRoles:    raise,
 					LowerRoles:    lower,
 					Self:          capability.SelfTargeted(caller, selected.ID),
-					SelfNote:      selfTargetRefusal,
+					SelfNote:      selfPanelNote,
 				}
 			}
 			tokens, tokErr := d.Accounts.APITokens(r.Context(), caller, selected.ID)
@@ -508,9 +486,7 @@ var accountsRefusedTmpl = newScreen("accounts-refused", `
 `)
 
 var accountsTmpl = newScreen("accounts", `
-<p class="lede">Every identity that can reach this control plane, and the credentials that
-authenticate as one.{{if not .Write}} Reading this page changes nothing: creating, disabling and re-roling
-an Account, and minting or revoking a token, are not wired into this Relay's Console.{{end}}</p>
+{{if not .Write}}<p class="note">Account and token changes are not wired into this Relay&#39;s Console.</p>{{end}}
 
 <div class="tablescroll">
 <table class="rows cards">
@@ -557,10 +533,7 @@ an Account, and minting or revoking a token, are not wired into this Relay's Con
     </div>
     <button class="btn grant" type="submit">Create Account</button>
   </form>
-  <p class="note">A <b>human</b> Account created here cannot sign in until a password is set for it
-  with <code>relay console-password</code> on the Relay host. Nothing on this screen can set one:
-  that lever is local and root-owned on purpose, for the same reason
-  <code>relay bootstrap-token</code> is.</p>
+  <p class="note">A <b>human</b> Account cannot sign in until a password is set with <code>relay console-password</code>.</p>
 </section>
 {{end}}
 
@@ -568,9 +541,9 @@ an Account, and minting or revoking a token, are not wired into this Relay's Con
 {{with .Change}}{{$c := .}}
 <section class="panel">
   <h3>Role and state &mdash; <span class="ident">{{$.SelectedName}}</span></h3>
-  <p>Role <b>{{.Role}}</b>, {{.State}}.</p>
+  <p class="rolestate">Role <b>{{.Role}}</b>, {{.State}}.</p>
   {{if .Self}}
-  <p class="note">This is the Account you are signed in as. {{.SelfNote}}</p>
+  <p class="note">{{.SelfNote}}</p>
   {{else}}
   <div class="acctchange">
     {{with .RaiseRoles}}
@@ -624,8 +597,7 @@ an Account, and minting or revoking a token, are not wired into this Relay's Con
   {{if .SelectedFound}}
   <h3>API Tokens &mdash; <span class="ident">{{.SelectedName}}</span></h3>
   {{if .TokensUnreadable}}
-  <p class="note">The API Tokens for this Account could not be read. The table above is unaffected:
-  it comes from a different read.</p>
+  <p class="note">This Account&#39;s API Tokens could not be read; the table above is unaffected.</p>
   {{else if .Tokens}}
   <div class="tablescroll">
   <table class="rows">
@@ -652,9 +624,7 @@ an Account, and minting or revoking a token, are not wired into this Relay's Con
     </tbody>
   </table>
   </div>
-  <p class="note">A token&#39;s secret exists once, at the moment it is minted, and this Relay stores
-  only a hash of it. Nothing on this screen can show it or recover it. Revocation is immediate and
-  permanent — there is no un-revoke.</p>
+  <p class="note">Revocation is immediate and permanent; there is no un-revoke.</p>
   {{else}}
   <p class="dim">This Account has no API Tokens.</p>
   {{end}}
@@ -690,18 +660,7 @@ an Account, and minting or revoking a token, are not wired into this Relay's Con
 
 <details class="about">
 <summary>About this screen</summary>
-{{if .Write}}<p class="gap"><b>Granting costs your password; reducing does not.</b> Every act on this screen that could increase what a principal may
-do &mdash; creating an Account, raising a role, re-enabling a disabled one, minting a token &mdash;
-costs your password in the same request. Disabling, lowering a role and revoking a token only ever
-reduce, so they do not. Select an Account to change its role or state, or to manage its API
-Tokens.</p>
-{{end}}<p class="gap"><b>What a role means.</b></p>
-{{range .RoleNotes}}<p class="gap"><b>{{.Role}}</b> &mdash; {{.Means}}</p>{{end}}
-<p class="gap">{{.Ceiling}}</p>
-<p class="gap"><b>What the two time columns mean.</b> Last authentication is the most recent time this Account proved who it was — a
-sign-in, or a token accepted. Last tool call is read from the AI-agent call trail and looks back over
-the last {{.CallPage}} recorded calls only, so an Account that called earlier than that reads as
-absent from the window rather than as never having called.</p>
+<p class="gap">{{.Ceiling}}{{template "about-docs" "accounts"}}</p>
 </details>
 `)
 

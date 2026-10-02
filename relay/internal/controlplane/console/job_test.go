@@ -327,7 +327,7 @@ func TestJob_ReadClassCarriesNoOutputAtAnyAge(t *testing.T) {
 	if strings.Contains(body, secret) {
 		t.Fatal("a read-class Task's captured output rendered — read output is never retained, at any age")
 	}
-	if !strings.Contains(body, "This was a read.") {
+	if !strings.Contains(body, "This was a read</b>, so its output is never shown here") {
 		t.Error("the page does not say the output was never kept")
 	}
 
@@ -622,6 +622,12 @@ func TestJob_JobIdIsNotPresentedAsAPlanHash(t *testing.T) {
 	if !strings.Contains(body, "no plan hash was retained") {
 		t.Error("the page does not say why there is no plan hash")
 	}
+	// The presence twin of every "not gated by an approval" absence check in
+	// this file: on a genuinely ungated dispatch the phrase renders, so those
+	// checks fail if any of their pages starts saying it.
+	if !strings.Contains(body, "This dispatch was not gated by an approval") {
+		t.Error("an ungated dispatch does not say it was not gated by an approval")
+	}
 	// With an approval bound, the REAL hash appears — the approval is the only
 	// thing in the Relay that retains one.
 	d := jobDeps(&fakeQueries{
@@ -675,7 +681,7 @@ func TestJob_ExpandedGroupIsBoundedToo(t *testing.T) {
 	if !strings.Contains(body, "of 1000 listed") {
 		t.Error("an expanded group does not say how many of the group it listed")
 	}
-	if !strings.Contains(body, "computed over the") {
+	if !strings.Contains(body, "what follows covers the") {
 		t.Error("a sampled group does not say its clustering is over the listed rows only")
 	}
 	for _, limit := range q.taskLimits {
@@ -1004,6 +1010,7 @@ func TestJob_CancelResultSaysWhichIsWhich(t *testing.T) {
 		"never sent",
 		"sent and then stopped",
 		"still in flight",
+		"asked to cancel",
 		"best-effort",
 		"if its Node is connected",
 		"keep the outcome they really had",
@@ -1051,8 +1058,8 @@ func TestJob_NoCancelClaimWithoutAnAuditedRequest(t *testing.T) {
 	if strings.Contains(body, "Cancel requested") {
 		t.Error("the page claims a cancel was requested with no audited record of one")
 	}
-	if strings.Contains(body, "asked to stop") {
-		t.Error(`the page renders "asked to stop" with no audited cancel request behind it`)
+	if strings.Contains(body, "asked to cancel") {
+		t.Error(`the page renders "asked to cancel" with no audited cancel request behind it`)
 	}
 }
 
@@ -1551,7 +1558,7 @@ func TestJob_MissingApprovalReaderIsStatedDistinctly(t *testing.T) {
 	}
 	body := jobBody(t, jobDeps(q), jobPath("")) // jobDeps wires no approval seam
 
-	if !strings.Contains(body, "approval reader is not available on this Console") {
+	if !strings.Contains(body, "approval reader is not available here") {
 		t.Error("a Console with no approval seam wired does not say so distinctly")
 	}
 	if strings.Contains(body, "not gated by an approval") {
@@ -1573,7 +1580,7 @@ func TestJob_UnreadableDispatchRecordDoesNotClaimUngated(t *testing.T) {
 	}
 	body := jobBody(t, jobDeps(q), jobPath(""))
 
-	if !strings.Contains(body, "whether this dispatch was gated by an approval is not known") {
+	if !strings.Contains(body, "whether an approval gated this is unknown") {
 		t.Error("an unreadable dispatch record does not say whether the Job was gated is unknown")
 	}
 	if strings.Contains(body, "not gated by an approval") {
