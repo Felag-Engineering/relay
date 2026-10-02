@@ -293,6 +293,10 @@ colour, above or beside the control — and never replaced by a placeholder. Not
 focus ring, and no control shrinks below the target size it had. There is no second input style for
 a screen that wants one; a form that renders browser defaults is a defect.
 
+A label and its control are **one unit**: they sit in a single wrapper, label above control, so
+wrapping a filter bar at any width moves them together and a label is never left beside a different
+field.
+
 Buttons carry **the weight of what they do to authority**, not how dangerous they feel:
 
 | The act | Weight | Treatment |
@@ -349,6 +353,15 @@ Agents screen was folded into Activity on 2026-09-29 ([04](04-activity.md)), and
 Role and configuration change the nav **structurally, not cosmetically**. A `viewer` sees a
 smaller Console; with `console_execution = off`, Run is absent, not disabled. ADR-0026's insight
 is that *absent* beats *forbidden* — do not ship a greyed-out execution surface.
+
+## Narrow width
+
+At 800px and below the shell stacks: the nav sits above the content and, with the signed-in block,
+folds behind a **Menu** control (a label tied to a hidden checkbox, so it needs no script; a
+keyboard user toggles it with Space). Below 600px the Fleet deviation table and the Accounts table
+reflow to cards, each cell carrying its own column name, and Compare stacks its Nodes, each value
+labelled by Node ID. No page scrolls sideways; a wide table that remains scrolls inside its own
+container.
 
 ## Hard prerequisite: E2a
 

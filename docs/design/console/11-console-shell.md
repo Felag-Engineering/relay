@@ -42,6 +42,11 @@ One template, three regions.
 The banner slot sits **above** the topbar and is empty in the common case. See
 `00-foundations.md` for its three conditions.
 
+At 800px and below the nav and the signed-in block fold behind a **Menu** toggle, closed by default,
+so the page title and content start near the top of a phone. The toggle is a checkbox and label —
+the content security policy admits no inline script — and the sign-out form inside it is unchanged.
+See `00-foundations.md`, "Narrow width".
+
 ## The nav is built from what is actually mounted
 
 **Do not render a nav item and then refuse the route.** The nav is generated from the routes this

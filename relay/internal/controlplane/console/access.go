@@ -573,17 +573,25 @@ var accessTmpl = newScreen("access", `
 <form class="viewbar" method="get" action="/console/access">
   {{with .Filter.Kind}}<input type="hidden" name="kind" value="{{.}}">{{end}}
   {{if .Filter.Failures}}<input type="hidden" name="failures" value="1">{{end}}
-  <label class="vlabel" for="account">Actor</label>
-  <input id="account" name="account" value="{{.Filter.Account}}" placeholder="Account id" spellcheck="false" autocomplete="off">
-  <label class="vlabel" for="window">When</label>
-  <select id="window" name="window">
-    <option value="">all recorded time</option>
-    {{range .Windows}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
-  </select>
-  <label class="vlabel" for="since">Since</label>
-  <input id="since" name="since" value="{{.Filter.SinceParam}}" placeholder="2026-08-20T00:00:00Z" spellcheck="false" autocomplete="off">
-  <label class="vlabel" for="until">Until</label>
-  <input id="until" name="until" value="{{.Filter.UntilParam}}" placeholder="2026-08-26T00:00:00Z" spellcheck="false" autocomplete="off">
+  <div class="vfield">
+    <label class="vlabel" for="account">Actor</label>
+    <input id="account" name="account" value="{{.Filter.Account}}" placeholder="Account id" spellcheck="false" autocomplete="off">
+  </div>
+  <div class="vfield">
+    <label class="vlabel" for="window">When</label>
+    <select id="window" name="window">
+      <option value="">all recorded time</option>
+      {{range .Windows}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+    </select>
+  </div>
+  <div class="vfield">
+    <label class="vlabel" for="since">Since</label>
+    <input id="since" name="since" value="{{.Filter.SinceParam}}" placeholder="2026-08-20T00:00:00Z" spellcheck="false" autocomplete="off">
+  </div>
+  <div class="vfield">
+    <label class="vlabel" for="until">Until</label>
+    <input id="until" name="until" value="{{.Filter.UntilParam}}" placeholder="2026-08-26T00:00:00Z" spellcheck="false" autocomplete="off">
+  </div>
   <button type="submit">Apply</button>
   <a class="act" href="{{.ResetHref}}">Clear</a>
 </form>

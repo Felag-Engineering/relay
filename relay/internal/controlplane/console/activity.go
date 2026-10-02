@@ -1634,24 +1634,36 @@ fabricate.</p>
 <form class="viewbar" method="get" action="/console/activity">
   {{with .Filter.Kind}}<input type="hidden" name="kind" value="{{.}}">{{end}}
   {{if .Filter.ShowConsole}}<input type="hidden" name="console" value="show">{{end}}
-  <label class="vlabel" for="account">Principal</label>
-  <input id="account" name="account" value="{{.Filter.Account}}" placeholder="Account id" spellcheck="false" autocomplete="off">
-  <label class="vlabel" for="on_behalf_of">On behalf of</label>
-  <input id="on_behalf_of" name="on_behalf_of" value="{{.Filter.OnBehalfOf}}" placeholder="asserted" spellcheck="false" autocomplete="off">
-  <label class="vlabel" for="op">Operation</label>
-  <input id="op" name="op" value="{{.Filter.Op}}" placeholder="service.restart" spellcheck="false" autocomplete="off">
-  <label class="vlabel" for="outcome">Outcome</label>
-  <select id="outcome" name="outcome">
-    <option value="">any outcome</option>
-    {{range .Outcomes}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
-  </select>
-  <label class="vlabel" for="window">When</label>
-  <select id="window" name="window">
-    <option value="">all recorded time</option>
-    {{range .Windows}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
-  </select>
-  <label class="vlabel" for="q">Refine</label>
-  <input id="q" name="q" value="{{.Filter.Q}}" placeholder="substring, this page only" spellcheck="false" autocomplete="off">
+  <div class="vfield">
+    <label class="vlabel" for="account">Principal</label>
+    <input id="account" name="account" value="{{.Filter.Account}}" placeholder="Account id" spellcheck="false" autocomplete="off">
+  </div>
+  <div class="vfield">
+    <label class="vlabel" for="on_behalf_of">On behalf of</label>
+    <input id="on_behalf_of" name="on_behalf_of" value="{{.Filter.OnBehalfOf}}" placeholder="asserted" spellcheck="false" autocomplete="off">
+  </div>
+  <div class="vfield">
+    <label class="vlabel" for="op">Operation</label>
+    <input id="op" name="op" value="{{.Filter.Op}}" placeholder="service.restart" spellcheck="false" autocomplete="off">
+  </div>
+  <div class="vfield">
+    <label class="vlabel" for="outcome">Outcome</label>
+    <select id="outcome" name="outcome">
+      <option value="">any outcome</option>
+      {{range .Outcomes}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+    </select>
+  </div>
+  <div class="vfield">
+    <label class="vlabel" for="window">When</label>
+    <select id="window" name="window">
+      <option value="">all recorded time</option>
+      {{range .Windows}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+    </select>
+  </div>
+  <div class="vfield">
+    <label class="vlabel" for="q">Refine</label>
+    <input id="q" name="q" value="{{.Filter.Q}}" placeholder="substring, this page only" spellcheck="false" autocomplete="off">
+  </div>
   <button type="submit">Apply</button>
   {{if .Rows}}<span class="vcount">{{.EventCount}} {{plural .EventCount "event" "events"}}</span>{{end}}
   <a class="act" href="{{.ResetHref}}">Clear</a>

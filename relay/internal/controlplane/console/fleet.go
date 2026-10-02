@@ -1451,13 +1451,17 @@ func facetFrom(title string, counts map[string]int, link linkContext, render fun
 
 var fleetTmpl = newScreen("fleet", `
 <form class="viewbar" method="get" action="/console/">
-  <label class="vlabel" for="filter">Filter</label>
-  <input id="filter" name="filter" value="{{.Filter}}" placeholder="node:role=web, relay:quarantine=on" spellcheck="false" autocomplete="off">
-  <label class="vlabel" for="group">Group by</label>
-  <select id="group" name="group">
-    <option value="-"{{if eq .GroupBy ""}} selected{{end}}>nothing</option>
-    {{range .GroupKeys}}<option value="{{.}}"{{if eq $.GroupBy .}} selected{{end}}>node:{{.}}</option>{{end}}
-  </select>
+  <div class="vfield wide">
+    <label class="vlabel" for="filter">Filter</label>
+    <input id="filter" name="filter" value="{{.Filter}}" placeholder="node:role=web, relay:quarantine=on" spellcheck="false" autocomplete="off">
+  </div>
+  <div class="vfield">
+    <label class="vlabel" for="group">Group by</label>
+    <select id="group" name="group">
+      <option value="-"{{if eq .GroupBy ""}} selected{{end}}>nothing</option>
+      {{range .GroupKeys}}<option value="{{.}}"{{if eq $.GroupBy .}} selected{{end}}>node:{{.}}</option>{{end}}
+    </select>
+  </div>
   {{with .Pin.Raw}}<input type="hidden" name="pin" value="{{.}}">{{end}}
   <button type="submit">Apply</button>
   <span class="vcount">{{.Matched}} of {{.Total}} {{plural .Total "Node" "Nodes"}}</span>
@@ -1523,7 +1527,7 @@ var fleetTmpl = newScreen("fleet", `
     </div>
 
     <div class="devtable">
-      <table>
+      <table class="cards">
         <caption class="tcap">{{if .ListsWholeFleet}}Every Node in {{.Key}}, oddest first.{{else}}Deviating Nodes in {{.Key}}, rarest first.{{end}}</caption>
         <thead><tr>
           <th scope="col"><span class="vh">Reachable</span></th>
@@ -1533,15 +1537,15 @@ var fleetTmpl = newScreen("fleet", `
         <tbody>
         {{range .Deviations}}
           <tr>
-            <td><span class="dot" data-live="{{if .Connected}}on{{else}}off{{end}}" role="img" aria-label="{{if .Connected}}connected{{else}}not connected{{end}}"></span></td>
-            <td><a href="{{.Href}}{{$.Pin.Query}}" class="nodeid">{{.ID}}</a>{{with .Hostname}}<div class="sub">{{.}}</div>{{end}}</td>
-            <td><div class="statecell">{{if .Revoked}}<span class="chip fenced" title="Revoked {{.RevokedAt}}. The record is kept so the Node stays investigable.">revoked</span>{{end}}
+            <td class="livecell"><span class="dot" data-live="{{if .Connected}}on{{else}}off{{end}}" role="img" aria-label="{{if .Connected}}connected{{else}}not connected{{end}}"></span></td>
+            <td data-label="Node"><a href="{{.Href}}{{$.Pin.Query}}" class="nodeid">{{.ID}}</a>{{with .Hostname}}<div class="sub">{{.}}</div>{{end}}</td>
+            <td data-label="State"><div class="statecell">{{if .Revoked}}<span class="chip fenced" title="Revoked {{.RevokedAt}}. The record is kept so the Node stays investigable.">revoked</span>{{end}}
               {{if .Quarantined}}<span class="chip fenced" title="Quarantined by an admin. Reversible.">quarantined</span>{{end}}
               {{if .Unreported}}<span class="chip unreported" title="The Relay holds no recorded Hello for this Node: no daemon version or no Policy fingerprint. Not a state: label, and not targetable.">not reported</span>{{end}}
               {{range .States}}{{template "label-chip" .}}{{end}}</div></td>
-            <td><div class="lblcell">{{range .Labels}}{{template "label-chip" .}}{{end}}</div></td>
-            <td>{{if .PolicyFingerprint}}<code title="{{.PolicyFingerprint}}">{{short .PolicyFingerprint}}</code>{{else}}<span class="dim">not reported</span>{{end}}</td>
-            <td class="num">{{.LastSeen}}</td>
+            <td data-label="Labels"><div class="lblcell">{{range .Labels}}{{template "label-chip" .}}{{end}}</div></td>
+            <td data-label="Policy">{{if .PolicyFingerprint}}<code title="{{.PolicyFingerprint}}">{{short .PolicyFingerprint}}</code>{{else}}<span class="dim">not reported</span>{{end}}</td>
+            <td class="num" data-label="Last seen">{{.LastSeen}}</td>
           </tr>
         {{end}}
         </tbody>

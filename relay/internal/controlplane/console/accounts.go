@@ -517,17 +517,17 @@ Tokens.{{else}} Reading this page changes nothing: creating, disabling and re-ro
 an Account, and minting or revoking a token, are not wired into this Relay's Console.{{end}}</p>
 
 <div class="tablescroll">
-<table class="rows">
+<table class="rows cards">
   <thead><tr><th scope="col">Account</th><th scope="col">Kind</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">Last authentication</th><th scope="col">Last tool call</th></tr></thead>
   <tbody>
   {{range .Accounts}}
     <tr>
-      <td>{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{.Href}}">{{.Name}}</a>{{end}}</td>
-      <td><span class="kind" data-kind="{{.Kind}}">{{.Kind}}</span></td>
-      <td>{{.Role}}</td>
-      <td>{{.State}}</td>
-      <td>{{stamp .LastAuthAt}}</td>
-      <td>{{if .Machine}}{{if .LastCallAt.IsZero}}<span class="dim">no tool call in the last {{$.CallPage}} recorded calls</span>{{else}}<a href="{{.LastCallHref}}">{{stamp .LastCallAt}}</a>{{end}}{{end}}</td>
+      <td data-label="Account">{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{.Href}}">{{.Name}}</a>{{end}}</td>
+      <td data-label="Kind"><span class="kind" data-kind="{{.Kind}}">{{.Kind}}</span></td>
+      <td data-label="Role">{{.Role}}</td>
+      <td data-label="State">{{.State}}</td>
+      <td data-label="Last authentication">{{stamp .LastAuthAt}}</td>
+      <td data-label="Last tool call">{{if .Machine}}{{if .LastCallAt.IsZero}}<span class="dim">no tool call in the last {{$.CallPage}} recorded calls</span>{{else}}<a href="{{.LastCallHref}}">{{stamp .LastCallAt}}</a>{{end}}{{end}}</td>
     </tr>
   {{end}}
   </tbody>

@@ -124,8 +124,13 @@ var layoutTmpl = template.Must(template.New("layout").Parse(`<!doctype html>
 <body hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'>
 <a class="skiplink" href="#content">Skip to content</a>
 <div class="app">
+  {{/* The phone menu is a checkbox tied to a label: the CSP allows no inline script, and
+       <details> cannot be kept open on desktop in every browser. The checkbox sits outside
+       every <form> and submits nothing. */}}
   {{if not .Focus}}<aside class="nav">
-    <div class="brand"><picture><source media="(prefers-color-scheme: light)" srcset="/console/assets/brand/relay-wordmark-light.svg"><img src="/console/assets/brand/relay-wordmark-dark.svg" alt="Relay"></picture> <span>console</span></div>
+    <input type="checkbox" id="navtoggle" class="navtoggle" autocomplete="off">
+    <div class="navtop"><div class="brand"><picture><source media="(prefers-color-scheme: light)" srcset="/console/assets/brand/relay-wordmark-light.svg"><img src="/console/assets/brand/relay-wordmark-dark.svg" alt="Relay"></picture> <span>console</span></div><label for="navtoggle" class="navbtn">Menu</label></div>
+    <div class="navbody">
     <nav class="navgroups" aria-label="Console">
     {{range .Nav}}
     <h2 class="navsec" id="navsec-{{.Slug}}">{{.Group}}</h2>
@@ -141,6 +146,7 @@ var layoutTmpl = template.Must(template.New("layout").Parse(`<!doctype html>
         <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
         <button type="submit" class="linkbtn">Sign out</button>
       </form>
+    </div>
     </div>
   </aside>{{end}}
   <div class="col">

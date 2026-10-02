@@ -1959,6 +1959,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
 {{if .Decisions}}
 <section class="panel">
   <h3>Decisions</h3>
+  <div class="tablescroll">
   <table class="rows">
     <thead><tr><th scope="col">Account</th><th scope="col">Answer</th><th scope="col">When</th><th scope="col">Channel</th><th scope="col">Note</th></tr></thead>
     <tbody>
@@ -1973,6 +1974,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
     {{end}}
     </tbody>
   </table>
+  </div>
   <p class="note">The channel is recorded rather than assumed. A decision that arrived over a
   credential the requesting session does not hold is evidence; one that arrived in-band is a
   delivery convenience, and the difference is the whole security property. <b>Human</b> or
