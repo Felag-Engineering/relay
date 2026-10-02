@@ -75,7 +75,8 @@ already ran.**
 2. **Stop the Relay.** No new certificates can be minted while it is down;
    existing Node certs age out within ~14 days regardless of what you do next.
 3. **Retire the old CA.** Move the old `-ca-dir` aside for forensics (do not
-   reuse any of it). Rotate the control-plane credential too
+   reuse any of it). Rotate every API Token too — mint each caller a
+   replacement and revoke the old one
    ([control-plane-credential.md](control-plane-credential.md)) — assume
    everything on the host leaked. Invalidate old CA backups.
 4. **Start the Relay clean.** On a rebuilt (or at minimum re-secured) host,

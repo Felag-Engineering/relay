@@ -66,8 +66,10 @@ $ curl --cacert ca-cert.pem \
      Console, the Control API and MCP, and from Selector matching. A
      security-lane Selector such as `relay:tier=pci/1` will then resolve to
      fewer Nodes than it did before, with nothing logged at the moment it
-     happens. Nothing is deleted and no quarantine can be lost (`quarantine`
-     and `on` are both inside the allowlist), but targeting does change.
+     happens. Nothing is deleted, but targeting does change. The quarantine
+     label, `relay:quarantine=on`, is inside the allowlist, so a Node carrying
+     it keeps it — though today it can only have been stamped at enrollment:
+     engaging and lifting a quarantine are not built yet (#430).
 
   The Relay now tells you which Nodes, at every startup: a one-shot,
   read-only scan logs affected Nodes as `stored label declined on

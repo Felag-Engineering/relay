@@ -57,10 +57,12 @@ $ systemctl status relay
 The control plane authenticates per-Account API Tokens held in the Relay's own
 store ([ADR-0023](../../docs/adr/0023-retire-the-shared-control-plane-credential.md)) — there is
 deliberately no shared secret in the config. Mint the first one after the Relay
-has started once:
+has started once, pointing `-store-path` at the same store the Relay runs with
+(`RELAY_STORE_PATH` in `/etc/relay/relay.env`). The flag is required: the
+subcommand reads neither the `EnvironmentFile` nor `RELAY_STORE_PATH`.
 
 ```console
-$ sudo -u relay relay bootstrap-token
+$ sudo -u relay relay bootstrap-token -store-path /var/lib/relay/relay.db
 ```
 
 The plaintext is printed **once** and never persisted. Put it in a vault at that
@@ -93,12 +95,14 @@ configuration and objects, not between "important" and "unimportant".
 Every credential the Relay needs is given to it as a **file path**:
 
 - the approval webhook's signing secret (`RELAY_APPROVAL_WEBHOOK_SECRET_FILE`),
-- the control-plane credential material,
 - the CA key, under the state directory.
 
 Keep it that way when adding anything. A secret passed as an environment
 variable is a secret in every process listing and every crash dump. The Relay
 refuses to start on a world-readable webhook secret rather than signing with one.
+
+API Tokens are not configuration at all: they live in the store as hashes, and
+the first is minted with `relay bootstrap-token` (above).
 
 ## The state directory
 
