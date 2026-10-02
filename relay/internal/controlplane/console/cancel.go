@@ -109,9 +109,8 @@ func handleCancelJob(d Deps) http.HandlerFunc {
 			unavailable(w, "Job cancellation")
 			return
 		}
-		jobID := r.PathValue("job_id")
-		if jobID == "" || len(jobID) > maxJobIDBytes {
-			http.NotFound(w, r)
+		jobID, ok := pathID(w, r, "job_id", maxJobIDBytes)
+		if !ok {
 			return
 		}
 
