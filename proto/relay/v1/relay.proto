@@ -111,6 +111,14 @@ message TaskRequest {
     RawExec   raw_exec    = 3;   // arbitrary command, gated by Policy regex
   }
   int32  timeout_seconds  = 4;   // Policy may cap the effective value
+  // risk_class is the class the Relay dispatched this Task under (ADR-0012,
+  // ADR-0042): a Native's from /proto, Raw Exec always MUTATE, a Template's
+  // the class this Node itself reported when the dispatch was resolved. The
+  // daemon refuses, without executing, a Task dispatched as READ whose action
+  // it classifies as MUTATE — which closes the window where the Node's Policy
+  // was reloaded between its vocabulary report and this Task's arrival.
+  // UNSPECIFIED (an older Relay) is not checked.
+  RiskClass risk_class    = 5;
 }
 
 // TaskCancel asks the daemon to stop an in-flight Task and kill its process

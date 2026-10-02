@@ -69,20 +69,25 @@ func TestTaskRequest_RawExecRoundTrip(t *testing.T) {
 	}
 }
 
-// TestTaskRequest_RiskClassNeverSent asserts the deliberate omission: Action
-// carries RiskClass but TaskRequest has no such field to receive it — blast
-// classification is spent on the Relay side (ADR-0012) before dispatch.
-func TestTaskRequest_RiskClassNeverSent(t *testing.T) {
-	task := jobs.Task{
-		ID:     "task-3",
-		Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead},
-	}
-	got := taskRequest(task)
-	// TaskRequest has no RiskClass field at all; this test documents the
-	// contract via the type itself compiling without one, plus a proto
-	// round-trip check that no unexpected field leaks the value.
-	if got.GetOperation().GetName() != "system.facts" {
-		t.Errorf("Operation.Name = %q, want system.facts", got.GetOperation().GetName())
+// TestTaskRequest_CarriesItsRiskClass: the class a Task was dispatched under
+// travels with it (ADR-0042), so the daemon can refuse a Task dispatched as
+// read whose action it classifies as mutate. Every class maps value for
+// value — jobs.RiskClass mirrors relayv1.RiskClass — including Raw Exec's
+// mutate and an unspecified class, which the daemon does not check.
+func TestTaskRequest_CarriesItsRiskClass(t *testing.T) {
+	for _, tc := range []struct {
+		act  jobs.Action
+		want relayv1.RiskClass
+	}{
+		{jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}, relayv1.RiskClass_RISK_CLASS_READ},
+		{jobs.Action{Kind: jobs.ActionOperation, OperationName: "svc.restart", RiskClass: jobs.RiskClassMutate}, relayv1.RiskClass_RISK_CLASS_MUTATE},
+		{jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}, RiskClass: jobs.RiskClassMutate}, relayv1.RiskClass_RISK_CLASS_MUTATE},
+		{jobs.Action{Kind: jobs.ActionOperation, OperationName: "legacy"}, relayv1.RiskClass_RISK_CLASS_UNSPECIFIED},
+	} {
+		got := taskRequest(jobs.Task{ID: "task-3", Action: tc.act})
+		if got.GetRiskClass() != tc.want {
+			t.Errorf("taskRequest(%s %s).RiskClass = %v, want %v", jobs.RiskClassName(tc.act.RiskClass), tc.act.OperationName, got.GetRiskClass(), tc.want)
+		}
 	}
 }
 
@@ -329,7 +334,7 @@ func TestWireCarriesNoCallerIdentity(t *testing.T) {
 	// so an addition or a rename inside Operation/RawExec must be named here
 	// to pass, not just caught by the regex.
 	protowalk.AssertExactTopLevelFieldSet(t, (&relayv1.TaskRequest{}).ProtoReflect().Descriptor(),
-		map[string]bool{"task_id": true, "operation": true, "raw_exec": true, "timeout_seconds": true})
+		map[string]bool{"task_id": true, "operation": true, "raw_exec": true, "timeout_seconds": true, "risk_class": true})
 	protowalk.AssertExactTopLevelFieldSet(t, (&relayv1.PolicyQuery{}).ProtoReflect().Descriptor(),
 		map[string]bool{"query_id": true, "operation": true, "raw_exec": true})
 	protowalk.AssertExactTopLevelFieldSet(t, (&relayv1.Operation{}).ProtoReflect().Descriptor(),

@@ -23,8 +23,8 @@ use crate::config::MAX_OUTPUT_BYTES;
 use crate::dedup::DedupStore;
 use crate::executor::{execute, ExecRequest};
 use crate::gen::{
-    policy_query, task_request, Operation, Outcome, PolicyQuery, PolicyVerdict, TaskRequest,
-    TaskResult,
+    policy_query, task_request, Operation, Outcome, PolicyQuery, PolicyVerdict, RiskClass,
+    TaskRequest, TaskResult,
 };
 use crate::not_executed::{denied_by_policy_result, not_executed, not_executed_after};
 #[cfg(test)]
@@ -350,6 +350,17 @@ where
 {
     let task_id = task.task_id.clone();
 
+    // Before Policy, after the vocabulary: a Task dispatched as `read` whose
+    // action this Node classifies as `mutate` is refused without executing
+    // (ADR-0042). See `class_mismatch`.
+    if class_mismatch(task, templates) {
+        tracing::warn!(
+            task_id = %task_id,
+            "Task dispatched as read, but this Node classifies its action as mutate; refusing"
+        );
+        return failure_result(task_id, CLASS_MISMATCH_REASON.as_bytes());
+    }
+
     match &task.action {
         Some(task_request::Action::RawExec(raw)) => {
             // Raw Exec: resolves through the registry's dedicated entry
@@ -624,6 +635,39 @@ fn unsupported_result(task_id: String) -> TaskResult {
     not_executed(task_id, Outcome::Unsupported, UNSUPPORTED_REASON)
 }
 
+/// The stderr reason on a Task refused because it was dispatched as `read`
+/// while this Node classifies its action as `mutate` (ADR-0042). A fixed
+/// string, like [`UNSUPPORTED_REASON`]: it echoes nothing caller-controlled.
+pub(crate) const CLASS_MISMATCH_REASON: &str =
+    "dispatched as read, but this Node's own vocabulary declares this action mutate (for a Template \
+     Operation, its Policy may have been reloaded since the Node reported it); nothing executed and \
+     Policy was not consulted — re-resolve and dispatch again";
+
+/// Whether `task` was dispatched as `read` while this Node classifies its
+/// action as `mutate` (ADR-0042, invariant 13).
+///
+/// The Relay resolves a Template's class from the Nodes' own reports; this is
+/// the Node holding the Relay to the class it is about to run under, which
+/// closes the window where the Node's Policy was reloaded between its report
+/// and the Task's arrival. Only a declared `read` is checked: a declared
+/// `mutate` is stricter than anything, and an unspecified class (an older
+/// Relay) makes no claim. A name outside this Node's vocabulary is not a
+/// mismatch — it is `unsupported`, answered later by the normal path. Raw Exec
+/// is always `mutate` (ADR-0012).
+fn class_mismatch(task: &TaskRequest, templates: &TemplateSet) -> bool {
+    if task.risk_class() != RiskClass::Read {
+        return false;
+    }
+    let own = match &task.action {
+        Some(task_request::Action::RawExec(_)) => Some(RiskClass::Mutate),
+        Some(task_request::Action::Operation(op)) => {
+            resolve(&registry::REGISTRY, templates, &op.name).map(|e| e.risk())
+        }
+        None => None,
+    };
+    matches!(own, Some(class) if class != RiskClass::Read)
+}
+
 /// Synthesizes an `OUTCOME_FAILURE` result for protocol errors.
 fn failure_result(task_id: String, stderr: &[u8]) -> TaskResult {
     not_executed(task_id, Outcome::Failure, stderr)
@@ -704,6 +748,7 @@ mod tests {
         let mut args = std::collections::HashMap::new();
         args.insert(OP_ARG_PATH.to_string(), path.to_string());
         TaskRequest {
+            risk_class: 0,
             task_id: task_id.to_string(),
             timeout_seconds: 5,
             action: Some(task_request::Action::Operation(crate::gen::Operation {
@@ -717,6 +762,7 @@ mod tests {
         let mut args = std::collections::HashMap::new();
         args.insert(OP_ARG_UNIT.to_string(), unit.to_string());
         TaskRequest {
+            risk_class: 0,
             task_id: task_id.to_string(),
             timeout_seconds: 5,
             action: Some(task_request::Action::Operation(crate::gen::Operation {
@@ -733,6 +779,7 @@ mod tests {
             args.insert(OP_ARG_VERSION.to_string(), version.to_string());
         }
         TaskRequest {
+            risk_class: 0,
             task_id: task_id.to_string(),
             timeout_seconds: 5,
             action: Some(task_request::Action::Operation(crate::gen::Operation {
@@ -744,6 +791,7 @@ mod tests {
 
     fn make_task_system_facts(task_id: &str) -> TaskRequest {
         TaskRequest {
+            risk_class: 0,
             task_id: task_id.to_string(),
             timeout_seconds: 5,
             action: Some(task_request::Action::Operation(crate::gen::Operation {
@@ -755,6 +803,7 @@ mod tests {
 
     fn make_task_raw_exec(task_id: &str, argv: Vec<String>) -> TaskRequest {
         TaskRequest {
+            risk_class: 0,
             task_id: task_id.to_string(),
             timeout_seconds: 5,
             action: Some(task_request::Action::RawExec(crate::gen::RawExec { argv })),
@@ -1522,6 +1571,7 @@ deny = ["secret"]
                 label: "no-rule (system.facts, no Policy rule)",
                 query: make_policy_query_operation("q-no-rule", operations::SYSTEM_FACTS, "", ""),
                 task: TaskRequest {
+                    risk_class: 0,
                     task_id: "identity-no-rule".to_string(),
                     timeout_seconds: 5,
                     action: Some(task_request::Action::Operation(crate::gen::Operation {
@@ -2702,6 +2752,7 @@ allowed_args = [["*"]]
         let mut args = std::collections::HashMap::new();
         args.insert("path".to_string(), "/var".to_string());
         let task = TaskRequest {
+            risk_class: 0,
             task_id: "t-unsupported-parity".to_string(),
             timeout_seconds: 5,
             action: Some(task_request::Action::Operation(crate::gen::Operation {
@@ -2734,6 +2785,147 @@ allowed_args = [["*"]]
     //       daemon-side (OUTCOME_FAILURE), NEVER spawning — even when Policy
     //       allowed the raw value (the template's stricter second gate).
     // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // Class carried on the Task (ADR-0042): a Task dispatched as `read` whose
+    // action this Node classifies as `mutate` is refused before Policy and
+    // never runs; every other combination proceeds as before.
+    // -----------------------------------------------------------------------
+
+    fn class_test_templates() -> TemplateSet {
+        use crate::operations::template::{RiskClassDef, TemplateDef};
+        TemplateSet::for_test(&[
+            TemplateDef {
+                name: "svc.restart".to_string(),
+                risk_class: RiskClassDef::Mutate,
+                body: "echo restart".to_string(),
+                slots: vec![],
+            },
+            TemplateDef {
+                name: "svc.status".to_string(),
+                risk_class: RiskClassDef::Read,
+                body: "echo status".to_string(),
+                slots: vec![],
+            },
+        ])
+    }
+
+    fn class_test_task(name: &str, class: RiskClass) -> TaskRequest {
+        TaskRequest {
+            task_id: format!("t-class-{name}-{}", class.as_str_name()),
+            timeout_seconds: 5,
+            action: Some(task_request::Action::Operation(crate::gen::Operation {
+                name: name.to_string(),
+                args: std::collections::HashMap::new(),
+            })),
+            risk_class: class as i32,
+        }
+    }
+
+    /// Runs `task` through the production gate with an allow-all Policy for
+    /// the class-test names, returning the result and whether the runner ran.
+    async fn run_class_test(task: &TaskRequest) -> (TaskResult, bool) {
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "svc.restart"
+allowed_args = []
+
+[[operation]]
+name = "svc.status"
+allowed_args = []
+
+[raw_exec]
+allow = ["^/bin/true$"]
+"#,
+        )
+        .expect("policy parses");
+        let templates = class_test_templates();
+        let ran = Arc::new(Mutex::new(false));
+        let r = ran.clone();
+        let run = move |req: ExecRequest| {
+            *r.lock().unwrap() = true;
+            let task_id = req.task_id.clone();
+            async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 0,
+                }
+            }
+        };
+        let result =
+            evaluate_and_execute(task, Duration::from_secs(5), &policy, &templates, run, None)
+                .await;
+        let ran = *ran.lock().unwrap();
+        (result, ran)
+    }
+
+    #[tokio::test]
+    async fn task_dispatched_as_read_for_a_mutate_template_is_refused_and_never_runs() {
+        let (result, ran) = run_class_test(&class_test_task("svc.restart", RiskClass::Read)).await;
+        assert_eq!(result.outcome, Outcome::Failure as i32);
+        assert_eq!(
+            String::from_utf8_lossy(&result.stderr),
+            CLASS_MISMATCH_REASON
+        );
+        assert!(!ran, "a class-mismatched Task must never reach the runner");
+    }
+
+    #[tokio::test]
+    async fn task_dispatched_as_read_for_a_mutate_native_is_refused() {
+        let mut task = make_task_service_restart("t-class-native", "nginx");
+        task.risk_class = RiskClass::Read as i32;
+        let (result, ran) = run_class_test(&task).await;
+        assert_eq!(
+            String::from_utf8_lossy(&result.stderr),
+            CLASS_MISMATCH_REASON
+        );
+        assert!(!ran);
+    }
+
+    #[tokio::test]
+    async fn raw_exec_dispatched_as_read_is_refused() {
+        let mut task = make_task_raw_exec("t-class-raw", vec!["/bin/true".to_string()]);
+        task.risk_class = RiskClass::Read as i32;
+        let (result, ran) = run_class_test(&task).await;
+        assert_eq!(
+            String::from_utf8_lossy(&result.stderr),
+            CLASS_MISMATCH_REASON
+        );
+        assert!(!ran);
+    }
+
+    #[tokio::test]
+    async fn matching_stricter_or_unspecified_classes_run() {
+        for task in [
+            class_test_task("svc.restart", RiskClass::Mutate),
+            class_test_task("svc.status", RiskClass::Read),
+            class_test_task("svc.status", RiskClass::Mutate),
+            class_test_task("svc.restart", RiskClass::Unspecified),
+        ] {
+            let (result, ran) = run_class_test(&task).await;
+            assert_eq!(
+                result.outcome,
+                Outcome::Success as i32,
+                "{}: stderr {:?}",
+                task.task_id,
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert!(ran, "{} did not run", task.task_id);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unknown_name_dispatched_as_read_is_unsupported_not_a_mismatch() {
+        let (result, ran) = run_class_test(&class_test_task("not.here", RiskClass::Read)).await;
+        assert_eq!(result.outcome, Outcome::Unsupported as i32);
+        assert!(!ran);
+    }
 
     use crate::operations::template::{self, RiskClassDef, SlotDef, SlotType, TemplateDef};
 
@@ -3075,6 +3267,7 @@ mod proptests {
             prop_oneof![arb_action().prop_map(Some), Just(None)],
         )
             .prop_map(|(task_id, timeout_seconds, action)| TaskRequest {
+                risk_class: 0,
                 task_id,
                 timeout_seconds,
                 action,

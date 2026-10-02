@@ -37,7 +37,7 @@ func TestTaskRequest_CarriesNoPreviewFlag(t *testing.T) {
 	md := (&relayv1.TaskRequest{}).ProtoReflect().Descriptor()
 
 	protowalk.AssertExactTopLevelFieldSet(t, md, map[string]bool{
-		"task_id": true, "operation": true, "raw_exec": true, "timeout_seconds": true,
+		"task_id": true, "operation": true, "raw_exec": true, "timeout_seconds": true, "risk_class": true,
 	})
 
 	// Below the top level: a preview bit smuggled inside Operation or

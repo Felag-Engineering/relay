@@ -91,8 +91,10 @@ pass under every rule that keys on `mutate`.
   Relay dispatched it under, and a daemon whose own Template declares `mutate` refuses a Task
   dispatched as `read`. This closes the window between a Node's report and the Task's arrival —
   a Policy reload that turns a `read` Template into a `mutate` one. It is a `/proto` change and
-  lands as its own change after the Relay-side resolution; until it lands, the window is a
-  known gap, tracked on #626.
+  lands as its own change after the Relay-side resolution (#626, landed 2026-10-02). The
+  refusal is checked after the vocabulary and before Policy, so a name the Node does not have
+  is still `unsupported`; it is reported as a `failure` that executed nothing; and a Task
+  carrying no class (an older Relay) is not checked.
 
 ## Residual risk
 

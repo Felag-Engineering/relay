@@ -855,8 +855,16 @@ type TaskRequest struct {
 	//	*TaskRequest_RawExec
 	Action         isTaskRequest_Action `protobuf_oneof:"action"`
 	TimeoutSeconds int32                `protobuf:"varint,4,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"` // Policy may cap the effective value
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// risk_class is the class the Relay dispatched this Task under (ADR-0012,
+	// ADR-0042): a Native's from /proto, Raw Exec always MUTATE, a Template's
+	// the class this Node itself reported when the dispatch was resolved. The
+	// daemon refuses, without executing, a Task dispatched as READ whose action
+	// it classifies as MUTATE — which closes the window where the Node's Policy
+	// was reloaded between its vocabulary report and this Task's arrival.
+	// UNSPECIFIED (an older Relay) is not checked.
+	RiskClass     RiskClass `protobuf:"varint,5,opt,name=risk_class,json=riskClass,proto3,enum=relay.v1.RiskClass" json:"risk_class,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TaskRequest) Reset() {
@@ -926,6 +934,13 @@ func (x *TaskRequest) GetTimeoutSeconds() int32 {
 		return x.TimeoutSeconds
 	}
 	return 0
+}
+
+func (x *TaskRequest) GetRiskClass() RiskClass {
+	if x != nil {
+		return x.RiskClass
+	}
+	return RiskClass_RISK_CLASS_UNSPECIFIED
 }
 
 type isTaskRequest_Action interface {
@@ -2115,12 +2130,14 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"unixMillis\"'\n" +
 	"\x04Ping\x12\x1f\n" +
 	"\vunix_millis\x18\x01 \x01(\x03R\n" +
-	"unixMillis\"\xbe\x01\n" +
+	"unixMillis\"\xf2\x01\n" +
 	"\vTaskRequest\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x123\n" +
 	"\toperation\x18\x02 \x01(\v2\x13.relay.v1.OperationH\x00R\toperation\x12.\n" +
 	"\braw_exec\x18\x03 \x01(\v2\x11.relay.v1.RawExecH\x00R\arawExec\x12'\n" +
-	"\x0ftimeout_seconds\x18\x04 \x01(\x05R\x0etimeoutSecondsB\b\n" +
+	"\x0ftimeout_seconds\x18\x04 \x01(\x05R\x0etimeoutSeconds\x122\n" +
+	"\n" +
+	"risk_class\x18\x05 \x01(\x0e2\x13.relay.v1.RiskClassR\triskClassB\b\n" +
 	"\x06action\"%\n" +
 	"\n" +
 	"TaskCancel\x12\x17\n" +
@@ -2286,29 +2303,30 @@ var file_relay_v1_relay_proto_depIdxs = []int32{
 	18, // 15: relay.v1.Hello.labels:type_name -> relay.v1.Label
 	13, // 16: relay.v1.TaskRequest.operation:type_name -> relay.v1.Operation
 	15, // 17: relay.v1.TaskRequest.raw_exec:type_name -> relay.v1.RawExec
-	29, // 18: relay.v1.Operation.args:type_name -> relay.v1.Operation.ArgsEntry
-	0,  // 19: relay.v1.OperationDescriptor.risk_class:type_name -> relay.v1.RiskClass
-	1,  // 20: relay.v1.TaskResult.outcome:type_name -> relay.v1.Outcome
-	21, // 21: relay.v1.PolicySnapshot.operation_rules:type_name -> relay.v1.OperationRule
-	22, // 22: relay.v1.PolicySnapshot.deny_rules:type_name -> relay.v1.DenyRule
-	26, // 23: relay.v1.OperationRule.allowed_args:type_name -> relay.v1.ArgMatcher
-	26, // 24: relay.v1.DenyRule.args:type_name -> relay.v1.ArgMatcher
-	24, // 25: relay.v1.TemplateSnapshot.templates:type_name -> relay.v1.TemplateDescriptor
-	0,  // 26: relay.v1.TemplateDescriptor.risk_class:type_name -> relay.v1.RiskClass
-	25, // 27: relay.v1.TemplateDescriptor.slots:type_name -> relay.v1.TemplateSlot
-	13, // 28: relay.v1.PolicyQuery.operation:type_name -> relay.v1.Operation
-	15, // 29: relay.v1.PolicyQuery.raw_exec:type_name -> relay.v1.RawExec
-	2,  // 30: relay.v1.Enrollment.Enroll:input_type -> relay.v1.EnrollRequest
-	4,  // 31: relay.v1.Enrollment.Renew:input_type -> relay.v1.RenewRequest
-	6,  // 32: relay.v1.Tunnel.Open:input_type -> relay.v1.DaemonMessage
-	3,  // 33: relay.v1.Enrollment.Enroll:output_type -> relay.v1.EnrollResponse
-	5,  // 34: relay.v1.Enrollment.Renew:output_type -> relay.v1.RenewResponse
-	7,  // 35: relay.v1.Tunnel.Open:output_type -> relay.v1.RelayMessage
-	33, // [33:36] is the sub-list for method output_type
-	30, // [30:33] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	0,  // 18: relay.v1.TaskRequest.risk_class:type_name -> relay.v1.RiskClass
+	29, // 19: relay.v1.Operation.args:type_name -> relay.v1.Operation.ArgsEntry
+	0,  // 20: relay.v1.OperationDescriptor.risk_class:type_name -> relay.v1.RiskClass
+	1,  // 21: relay.v1.TaskResult.outcome:type_name -> relay.v1.Outcome
+	21, // 22: relay.v1.PolicySnapshot.operation_rules:type_name -> relay.v1.OperationRule
+	22, // 23: relay.v1.PolicySnapshot.deny_rules:type_name -> relay.v1.DenyRule
+	26, // 24: relay.v1.OperationRule.allowed_args:type_name -> relay.v1.ArgMatcher
+	26, // 25: relay.v1.DenyRule.args:type_name -> relay.v1.ArgMatcher
+	24, // 26: relay.v1.TemplateSnapshot.templates:type_name -> relay.v1.TemplateDescriptor
+	0,  // 27: relay.v1.TemplateDescriptor.risk_class:type_name -> relay.v1.RiskClass
+	25, // 28: relay.v1.TemplateDescriptor.slots:type_name -> relay.v1.TemplateSlot
+	13, // 29: relay.v1.PolicyQuery.operation:type_name -> relay.v1.Operation
+	15, // 30: relay.v1.PolicyQuery.raw_exec:type_name -> relay.v1.RawExec
+	2,  // 31: relay.v1.Enrollment.Enroll:input_type -> relay.v1.EnrollRequest
+	4,  // 32: relay.v1.Enrollment.Renew:input_type -> relay.v1.RenewRequest
+	6,  // 33: relay.v1.Tunnel.Open:input_type -> relay.v1.DaemonMessage
+	3,  // 34: relay.v1.Enrollment.Enroll:output_type -> relay.v1.EnrollResponse
+	5,  // 35: relay.v1.Enrollment.Renew:output_type -> relay.v1.RenewResponse
+	7,  // 36: relay.v1.Tunnel.Open:output_type -> relay.v1.RelayMessage
+	34, // [34:37] is the sub-list for method output_type
+	31, // [31:34] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_relay_v1_relay_proto_init() }
