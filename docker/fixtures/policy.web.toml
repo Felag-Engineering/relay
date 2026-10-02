@@ -49,9 +49,9 @@ name = "file.read"
 args = [["/etc/shadow"]]
 
 # The demo Template pack's two bodies (docker/fixtures/templates.d/relay-demo)
-# are DEV-ONLY Operations, not yet dispatchable (#626) — the [[operation]]
-# blocks below exist so that, once #626 lands, this Node's structured Policy
-# already covers them. Neither has arguments to constrain.
+# are DEV-ONLY Operations, dispatchable by name through run_operation
+# (ADR-0042, #626); the [[operation]] blocks below are what allow them on this
+# Node. Neither has arguments to constrain.
 [[operation]]
 name = "svc.status"
 allowed_args = []

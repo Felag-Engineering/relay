@@ -86,11 +86,14 @@ type Service struct {
 	auditQ AuditQuery
 	jobQ   JobQuery
 
-	// policyView and nodeVocab are the DISPLAY-ONLY Policy-view and Template-
-	// vocabulary reads (#680, seams.go). Both nil by default: DescribeNode
-	// and ListOperations report *Reported=false for a nil seam rather than an
-	// empty Policy or vocabulary — absence is never rendered as "nothing
-	// restricted" (QRY-7).
+	// policyView and nodeVocab are the Policy-view and Template-vocabulary
+	// reads (#680, seams.go). policyView is display-only. nodeVocab is also
+	// read by template.go to decide a Template dispatch's fan-out and class
+	// (ADR-0042), and by nothing else outside the read lane. Both nil by
+	// default: DescribeNode and ListOperations report *Reported=false for a
+	// nil seam rather than an empty Policy or vocabulary — absence is never
+	// rendered as "nothing restricted" (QRY-7) — and a Template dispatch with
+	// no vocabulary wired excludes every Node rather than dispatching blind.
 	policyView PolicyViewSource
 	nodeVocab  TemplateVocabularySource
 
@@ -270,10 +273,12 @@ func WithPolicyView(source PolicyViewSource) Option {
 	return func(s *Service) { s.policyView = source }
 }
 
-// WithTemplateVocabulary wires the DISPLAY-ONLY Template-vocabulary read
-// (#680): source is typically a *nodevocab.Cache, narrowed to Get only.
-// Absence (the default) means DescribeNode and ListOperations report
-// Reported=false rather than an empty vocabulary.
+// WithTemplateVocabulary wires the Template-vocabulary read (#680): source
+// is typically a *nodevocab.Cache, narrowed to Get only. The read lane
+// displays it, and Template dispatch reads it for fan-out and class
+// (ADR-0042). Absence (the default) means DescribeNode and ListOperations
+// report Reported=false rather than an empty vocabulary, and no Template
+// can be dispatched.
 func WithTemplateVocabulary(source TemplateVocabularySource) Option {
 	if source == nil {
 		panic("capability: WithTemplateVocabulary: source must not be nil")
@@ -476,10 +481,13 @@ func (s *Service) stateEval() StateEval {
 }
 
 // Run is the pipeline every surface must call to act on Nodes: check the
-// Freeze, resolve the Selector, authorize the Principal, refuse a Selector
-// that matched no Nodes, check the blast-radius cap, dispatch, then audit —
-// in that order. The Freeze gate, authorize, the no-Nodes-matched check, and
-// the cap check each short-circuit the remaining stages on error (no
+// Freeze, resolve the Selector, resolve a Template Operation's class and
+// fan-out (ADR-0042, computing only), authorize the Principal, refuse a
+// Selector that matched no Nodes, refuse an unknown or malformed Template
+// call, check the blast-radius cap, consult the approval gate, dispatch, then
+// audit — in that order. The Freeze gate, authorize, the no-Nodes-matched
+// check, the Template refusal and the cap check each short-circuit the
+// remaining stages on error (no
 // dispatch — nothing was executed), but each refusal is itself audited
 // (recordRefusal) — refusals are the most interesting audit events
 // (acceptance criterion for #102). Once dispatch is attempted, the audit
@@ -514,7 +522,16 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 		return nil, s.recordRefusal(ctx, p, sel, act, RefusalFrozen, &FrozenError{})
 	}
 
-	nodes := sel.Resolve(s.reg, s.stateEval())
+	matched := sel.Resolve(s.reg, s.stateEval())
+
+	// A Template Operation's class and fan-out are decided here, over the
+	// matched Nodes' own reports (ADR-0042, template.go). resolveAction only
+	// COMPUTES: its refusal is acted on below, after authorization, so a
+	// caller who may not ask learns nothing about which Nodes carry which
+	// Templates. For a Native Operation or Raw Exec it changes nothing.
+	ra := s.resolveAction(act, matched)
+	act = ra.act
+	nodes := ra.nodes
 
 	// withoutAssertions: an authorization decision must not be able to read
 	// anything the caller asserted (see assertions.go).
@@ -537,10 +554,19 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	//   (d) Service.Plan reports the same condition as NoNodesMatched rather
 	//       than refusing it — ADR-0011: "A Plan never hard-fails on
 	//       guardrails — it reports."
-	if len(nodes) == 0 {
+	if len(matched) == 0 {
 		return nil, s.recordRefusal(ctx, p, sel, act, RefusalNoNodesMatched, &NoNodesMatchedError{Selector: sel.String()})
 	}
 
+	// A Template no matched Node reports, a malformed Template call, or a
+	// Template Action an adapter tried to classify (ADR-0042). Like
+	// no_nodes_matched: after authorization, before the cap, and with no Job.
+	if ra.refusal != nil {
+		return nil, s.recordRefusal(ctx, p, sel, act, ra.refusalKind, ra.refusal)
+	}
+
+	// The cap counts the Nodes that will actually be dispatched: a Node
+	// excluded from a Template dispatch is never sent anything (ADR-0042).
 	if err := s.cap.Check(act.RiskClass, len(nodes)); err != nil {
 		return nil, s.recordRefusal(ctx, p, sel, act, RefusalBlastCap, err)
 	}
@@ -610,6 +636,8 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	}
 
 	d := newDispatch(p, sel, nodes, act)
+	d.excluded = ra.excluded
+	d.nodeClass = ra.nodeClass
 
 	// A single-Plan approval's release is now CLAIMED before dispatch, not
 	// bound after it (AP-77). The join between the approval and the Job it

@@ -64,10 +64,15 @@ Seven differences from execution, each deliberate:
   would-be-rejected with `no_nodes_matched` and no error, where the same real run is refused.
 - **PF-6** **A disconnected Node yields `unknown` (offline) and is never queried.**
 - **PF-7** **The Relay never computes a verdict.** Every `allow` and `deny` is the daemon's live
-  engine's answer and every `unsupported` is the daemon's answer; the Relay consults no Policy
-  view and no cached vocabulary to produce one (invariant 12). `unknown` is the only
-  Relay-side conclusion, and it says exactly that the Relay could not ask — offline, or the
-  query failed.
+  engine's answer. Every `unsupported` is the daemon's answer, except that for a Template
+  Operation a matched Node that does not report the Template is excluded by the Relay and never
+  queried, exactly as a real dispatch excludes it (ADR-0042). The Relay consults no Policy view
+  to produce any verdict, and consults its cached Template vocabulary only to decide a Template
+  Operation's fan-out and risk class — never to produce an `allow` or a `deny` (invariant 12).
+  `unknown` and that exclusion are the only Relay-side conclusions: `unknown` says exactly that
+  the Relay could not ask — offline, or the query failed — and the exclusion that the Relay will
+  not send this Node the Template at all. *(Amended 2026-10-02 for ADR-0042: Template
+  exclusion.)*
 - **PF-8** **A preflight creates nothing.** No Job, no Task, no dedup entry on the daemon. It is
   audited under its own kind (`plan`), never as a dispatch.
 - **PF-23** **The approval gate is never reached.** A preflight of an Action a Gate rule would
@@ -101,7 +106,10 @@ dangerous thing structurally unreachable rather than conditionally skipped.
   as "not known", never as a fabricated allow — and is never a wire value: the daemon only ever
   answers allow, deny or unsupported.
 - **PF-11** `unsupported` is answered by the daemon whose vocabulary lacks the Operation, after
-  being queried; a real dispatch to that Node reports `unsupported` with the same explanation.
+  being queried — or, for a Template Operation, by the Relay without querying, for a matched
+  Node that does not report the Template or has reported no vocabulary at all (ADR-0042).
+  Either way a real dispatch to that Node reports `unsupported` with the same explanation.
+  *(Amended 2026-10-02 for ADR-0042: the Relay-excluded form.)*
 
 `unsupported` and `unknown` are distinct from `deny` and from each other, and collapsing any pair
 would lose information a caller needs. A denial is a Policy decision to argue with; an
@@ -163,9 +171,12 @@ A preflight refuses in fewer cases than a dispatch, and the difference is the po
   adapter; where it executes, it preflights before every apply, and a `mutate` apply is
   additionally step-up-gated (PF-21, ADR-0026 decisions 2 and 3).
 - **Invariant 13** — the risk class is declared contract and selects which cap the preflight
-  reports against (PF-16).
+  reports against (PF-16). *(Invariant 13 amended 2026-10-02, ADR-0042: a Template Operation's class is Node-reported, and a dispatch takes the most restrictive class the Nodes it reaches report.)*
 - **ADR-0013** — Freeze halts dispatch and deliberately does not halt preflights (PF-3).
 - **ADR-0021** — the per-Node vocabulary, which is why `unsupported` is a verdict (PF-11).
+- **ADR-0042** — how a Template Operation's fan-out and risk class are decided over the Nodes that
+  report it; why a preflight excludes a Node that does not report the Template rather than
+  querying it, and reads the cached vocabulary to do so (PF-7, PF-11).
 
 ## Seams and proof
 
@@ -189,11 +200,11 @@ they are the names in the tree. They are renamed by the PR that lands PF-19, not
 | PF-4 | `TestPlanOverCapReportsNotErrors`, `TestMCP_RunOperation_Plan_OverCap_ReportsNotErrors` | capability, MCP |
 | PF-5 | `TestPlanZeroMatchReportsNoNodesMatchedWhileRunRefuses`, `TestMCP_Plan_ZeroMatchReportsWhatARealRunRefuses` | capability, MCP |
 | PF-6 | `TestPlanOfflineNodeIsUnknownNeverQueried`, `TestMCP_RunOperation_Plan_OfflineIsUnknown` | capability, MCP |
-| PF-7 | `TestPreflightNeverConsultsCachedPolicyOrVocabulary` (behavioural, with an armed control showing the cache spies are wired), `TestCachedPolicyAndVocabularyReachOnlyTheDisplayReadLane` (structural: the two cached sources that exist today reach only the display read lane — not a guard against a future cached source) | capability |
+| PF-7 | `TestPreflightNeverConsultsCachedPolicyOrVocabulary` (behavioural, Native Operation: zero cache reads, with an armed control showing the cache spies are wired), `TestPreflightTemplateExclusionNeverDecidesAVerdict` (behavioural, Template Operation: the vocabulary decides only exclusion; every queried Node's verdict is the daemon's even where the cache disagrees; the Policy view is never read), `TestCachedPolicyAndVocabularyReachOnlyTheDisplayReadLane` (structural: the two cached sources reach only the display read lane and, for the vocabulary, `template.go` — not a guard against a future cached source) | capability |
 | PF-8 | `TestPlanReturnsPerNodeVerdictsNoJobOrTask`, `TestMCP_RunOperation_Plan_VerdictsNoExecution`, `TestMCP_RunOperation_Plan_AuditedAsPlanNoJobOrTask`, `policy_query_spawns_no_process_and_records_no_dedup` | capability, MCP, daemon |
 | PF-9 | `TestPolicyQuery_CarriesNoTaskID`, `TestWireCarriesNoCallerIdentity` (exact field sets of `PolicyQuery`, `Operation` and `RawExec`), `TestTaskRequest_CarriesNoPreviewFlag` (second half: `TaskRequest`'s field set and a nested walk that skips enums) | compile-time |
 | PF-10 | `TestPlanReportsUnsupportedDistinctFromDeny`, `TestPlanReturnsPerNodeVerdictsNoJobOrTask` (asserts the deny verdict's `DecidingRule == "deny-rm-rf"`, proving the deciding-rule half) | capability |
-| PF-11 | `plan_and_apply_agree_on_unsupported` | daemon |
+| PF-11 | `plan_and_apply_agree_on_unsupported` (daemon-answered form); `TestPreflightTemplateExclusionNeverDecidesAVerdict`, `TestRun_TemplateExcludesNonReportingNodesAndNeverSendsThem` (Relay-excluded form: the same reason on the verdict and the Task), `TestTemplateDispatchE2E_RunOperationByName` (both halves through MCP against real daemons) | daemon, capability, MCP |
 | PF-12 | `TestMCP_Plan_PlanVsRealRunParity` | MCP |
 | PF-13 | `TestBuildOperationAction_UnknownArgOnAValidCallIsRejected` (name half); value half, three independent links on different Operations rather than one chain: `TestPreflightCarriesAnIllFormedArgumentValueToTheDaemon` (Relay passes the value through unaltered), `TestBuildOperationAction_IllFormedArgValueIsNotRefused` (MCP), `plan_and_apply_agree_on_a_non_canonical_template_path` (daemon) | MCP, capability, daemon |
 | PF-14 | `TestPlanOutdatedNodeGetsRealVerdictAdvisoryOnly`, `TestMCP_RunOperation_Plan_OutdatedAdvisory` | capability, MCP |

@@ -26,6 +26,9 @@ type DaemonConfig struct {
 	PolicyPath string
 	Hostname   string
 	LogWriter  io.Writer
+	// TemplateDir, when set, is the daemon's RELAY_TEMPLATE_DIR: the root it
+	// loads Template Operations from (WriteTemplatePack returns one).
+	TemplateDir string
 }
 
 // DaemonHandle is a launched relay-daemon subprocess. Kill is registered as
@@ -61,6 +64,9 @@ func StartDaemon(t *testing.T, cfg DaemonConfig) *DaemonHandle {
 		// Disable rustls provider conflict on some environments.
 		"RUST_LOG=warn",
 	)
+	if cfg.TemplateDir != "" {
+		env = append(env, "RELAY_TEMPLATE_DIR="+cfg.TemplateDir)
+	}
 
 	h := &DaemonHandle{t: t, cfg: cfg, env: env}
 	h.Launch()

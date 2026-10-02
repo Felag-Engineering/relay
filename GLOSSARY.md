@@ -225,8 +225,10 @@ _Avoid_: version-gated, stale, behind, out of date (for Policy or template drift
 **`unsupported`**:
 The per-Node outcome for an Operation that is not in *that Node's* vocabulary — an unloaded
 Template Operation, or an unknown name. Nothing executed and Policy was never consulted, so it
-is neither a failure (nothing ran) nor a denial (the Node was never asked to decide). A Policy
-preflight reports the same conclusion for the same Node. Vocabulary is per-Node once templates exist;
+is neither a failure (nothing ran) nor a denial (the Node was never asked to decide). It is
+daemon-reported, or Relay-reported for a Node excluded from a Template dispatch because it does
+not report that Template or has not reported its vocabulary at all — never sent a Task
+(ADR-0042). A Policy preflight reports the same conclusion for the same Node. Vocabulary is per-Node once templates exist;
 `list_operations`/`describe_node` report what a given Node actually has (ADR-0021).
 _Avoid_: unknown operation, not found, unimplemented
 

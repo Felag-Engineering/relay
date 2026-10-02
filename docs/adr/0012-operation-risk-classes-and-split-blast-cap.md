@@ -1,6 +1,6 @@
 # Operations declare a risk class (read | mutate); the blast-radius cap splits by class
 
-**Status:** Accepted; amended by ADR-0010.
+**Status:** Accepted; amended by ADR-0010 and ADR-0042.
 
 Every Operation in the vocabulary declares a **risk class** in `/proto` alongside its
 definition: **`read`** (cannot change Node state) or **`mutate`** (can). The Relay's
@@ -68,3 +68,15 @@ accepted; `docs/specs/relay-configuration.md` for the behaviour.
 The caps are a dial an operator turns as confidence in a fleet grows. Requiring a service restart
 to turn it did not make the class of attack it defends against harder — the same Account could
 already dispatch to the existing cap, repeatedly — and it made routine administration worse.
+
+## Amendment (2026-10-02): amended by ADR-0042 — a Template's class is Node-reported
+
+The class still chooses the cap, Raw Exec is still always `mutate`, and a Native's class is
+still `/proto` contract. A Template's class is not: it is declared in each Node's Policy and
+reported by that Node, so ADR-0042 resolves it in the capability layer over the Nodes that
+report the Template — `read` only if every one of them reports `read`, otherwise `mutate` —
+and writes down the residual risk of believing them.
+
+Invariant 13 is amended in place on the same date to match: the class is security-relevant
+contract no caller can set or loosen, and where Nodes report it, a dispatch takes the most
+restrictive class the Nodes it reaches report.

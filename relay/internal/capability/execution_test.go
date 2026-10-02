@@ -643,7 +643,7 @@ func TestEngineDispatchOneTreatsConcurrentCancelAsTerminal(t *testing.T) {
 		t.Fatalf("MarkCancelled: %v", err)
 	}
 
-	res, err := e.dispatchOne(ctx, task, false)
+	res, err := e.dispatchOne(ctx, pendingTask{task: task})
 	if err != nil {
 		t.Fatalf("dispatchOne: %v", err)
 	}
@@ -1052,6 +1052,13 @@ func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 		// Policy decision (invariant 12, ADR-0011).
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview": true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab":  true,
+		// internal/opvocab joined with #626 (ADR-0042): template.go asks it
+		// whether an Operation name is Native — a Template is every name that
+		// is not — and reuses its ValidateArgNames, the one definition of
+		// #345's argument-name check, for Template slots. Stdlib plus jobs
+		// only, no proto, no database/sql, and already a transitive import
+		// through internal/approval, so admitting it opens no new door.
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab": true,
 	}
 	forbidden := map[string]bool{
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1": true,

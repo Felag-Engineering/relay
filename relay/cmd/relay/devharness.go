@@ -53,6 +53,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 )
 
 // harnessState is threaded through every socket handler: deps for
@@ -478,16 +479,20 @@ func harnessRunJob(ctx context.Context, st *harnessState, req harnessRequest) ha
 
 // harnessRunJobAction builds run_job's Action: Raw Exec (if raw_exec is
 // non-empty) ALWAYS takes RiskClassMutate (ADR-0012, invariant 13) regardless
-// of risk_class, enforced here rather than assumed; a structured Operation
-// takes its RiskClass from risk_class ("read" -> RiskClassRead, else Mutate —
-// there is no Relay-side operation->risk-class registry until the v0.0.6 MCP
-// vocabulary).
+// of risk_class, enforced here rather than assumed; a Native Operation takes
+// its RiskClass from risk_class ("read" -> RiskClassRead, else Mutate). A
+// Template Operation (any name opvocab does not know) carries NO class, like
+// every real surface's: the capability layer resolves it from the Nodes'
+// reports and refuses a Template Action that arrives classified (ADR-0042).
 func harnessRunJobAction(req harnessRequest) (jobs.Action, error) {
 	if len(req.RawExec) > 0 {
 		return jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: req.RawExec, RiskClass: jobs.RiskClassMutate}, nil
 	}
 	if req.Operation == "" {
 		return jobs.Action{}, fmt.Errorf("operation or raw_exec is required")
+	}
+	if _, native := opvocab.Lookup(req.Operation); !native {
+		return jobs.Action{Kind: jobs.ActionOperation, OperationName: req.Operation, OperationArgs: req.Args}, nil
 	}
 	class := jobs.RiskClassMutate
 	if req.RiskClass == "read" {

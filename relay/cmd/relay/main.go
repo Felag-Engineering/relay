@@ -688,12 +688,15 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		// state:cert-expiring's warning window (#414, ADR-0034), computed
 		// once above and shared by every surface below.
 		capability.WithCertExpiringWindow(certExpiringWithin),
-		// The DISPLAY-ONLY Policy-view and Template-vocabulary reads (#680,
-		// QRY-28): the same policyCache/vocabCache the Tunnel handler writes
-		// into below (ts), Get-only from this side. Wiring them here is what
-		// lets describe_node/list_operations disclose a Node's Policy and
-		// Template vocabulary through the ONE capability layer, on every
-		// surface, instead of each surface holding its own cache reference.
+		// The Policy-view and Template-vocabulary reads (#680, QRY-28): the
+		// same policyCache/vocabCache the Tunnel handler writes into below
+		// (ts), Get-only from this side. Wiring them here is what lets
+		// describe_node/list_operations disclose a Node's Policy and Template
+		// vocabulary through the ONE capability layer, on every surface,
+		// instead of each surface holding its own cache reference — and, for
+		// vocabCache, what lets a Template Operation be dispatched at all:
+		// the capability layer resolves its fan-out and class from it
+		// (ADR-0042). Without it every Template dispatch is refused.
 		capability.WithPolicyView(policyCache),
 		capability.WithTemplateVocabulary(vocabCache),
 		// The event seam's Job-grained publisher (#416). Appended last so

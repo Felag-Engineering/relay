@@ -1,16 +1,23 @@
-// Package nodevocab holds the Relay's in-memory, thread-safe, DISPLAY-ONLY
-// cache of each Node's daemon-reported Template Operation vocabulary
+// Package nodevocab holds the Relay's in-memory, thread-safe cache of each
+// Node's daemon-reported Template Operation vocabulary
 // (relayv1.TemplateSnapshot; ADR-0021).
 //
-// Display and discovery only. Templates are locally rooted on the Node and
-// remotely-immutable (ADR-0002 applies to them verbatim), and only the
-// daemon's live engine decides whether a given Operation may run (ADR-0011,
-// invariant 12). Nothing in this package validates a parameter, renders a
-// template body, or makes an allow/deny decision — it records what a daemon
-// reported so list_operations/describe_node can tell a caller which
-// Operations a given Node actually has. The template BODY never crosses the
-// wire at all (see relay.proto's TemplateDescriptor), so it cannot be cached
-// here even by accident.
+// Two consumers, and only two. list_operations/describe_node DISPLAY it, so
+// a caller can see which Operations a given Node has. Since ADR-0042 (#626)
+// the capability layer also reads it to decide a Template dispatch's FAN-OUT
+// and RISK CLASS: which matched Nodes are excluded because they do not report
+// the Template, the most restrictive class the rest report, and whether the
+// call's argument names match their slots. It is never read to decide whether
+// an Operation may run: only the daemon's live engine makes an allow/deny
+// decision (ADR-0011, invariant 12, PF-7 as amended). Templates are locally
+// rooted on the Node and remotely-immutable (ADR-0002 applies to them
+// verbatim); nothing in this package validates a parameter value or renders
+// a template body. The template BODY never crosses the wire at all (see
+// relay.proto's TemplateDescriptor), so it cannot be cached here even by
+// accident.
+//
+// A reported class is Node-reported data, and a compromised Node can lie
+// about its own Templates; ADR-0042 records what believing it costs.
 //
 // Proto-free domain mirror, following the policyview / registry.Facts
 // precedent: this package carries no proto dependency. The caller

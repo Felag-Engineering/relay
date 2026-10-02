@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
@@ -52,12 +53,18 @@ func TestPlanReportsUnsupportedDistinctFromDeny(t *testing.T) {
 	}
 	conduit.verdicts["node-1"] = jobs.Verdict{Allowed: true}
 
-	svc, _, _ := newPlanTestService(t, reg, conduit)
+	// Both Nodes REPORT disk.usage to the Relay, so neither is excluded at
+	// resolution (ADR-0042) and both are queried; node-0's daemon then answers
+	// unsupported itself — a report gone stale since the Node sent it.
+	vocab := staticVocab{
+		"node-0": {Templates: []nodevocab.Template{readTemplate("disk.usage")}},
+		"node-1": {Templates: []nodevocab.Template{readTemplate("disk.usage")}},
+	}
+	svc, _ := newTemplateTestService(t, reg, conduit, vocab, &spyCapChecker{})
 
 	act := jobs.Action{
 		Kind:          jobs.ActionOperation,
 		OperationName: "disk.usage",
-		RiskClass:     jobs.RiskClassRead,
 	}
 	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), act)
 	if err != nil {

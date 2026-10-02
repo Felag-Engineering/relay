@@ -50,10 +50,11 @@ type tunnelServer struct {
 	// like reg/conns so existing tests that construct &tunnelServer{} directly
 	// keep compiling; nil in any test that doesn't need the capture.
 	policy *policyview.Cache
-	// vocab is the display-only per-Node Template Operation vocabulary cache
-	// (#291, ADR-0021): the Relay records what a daemon reports in
+	// vocab is the per-Node Template Operation vocabulary cache (#291,
+	// ADR-0021): the Relay records what a daemon reports in
 	// DaemonMessage.templates so describe_node/list_operations can show a
-	// Node's live vocabulary. It never sets a Node's templates, exactly as it
+	// Node's live vocabulary, and so a Template dispatch can resolve its
+	// fan-out and class (ADR-0042). It never sets a Node's templates, exactly as it
 	// never sets Policy (ADR-0002). Nil-guarded like policy/reg/conns.
 	vocab *nodevocab.Cache
 	// sink is set by newServer when Config.ControlEnabled (production
@@ -269,10 +270,11 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 			if ps := m.GetPolicy(); ps != nil && s.policy != nil {
 				s.policy.Set(nodeID, snapshotFromProto(ps))
 			}
-			// Capture a reported TemplateSnapshot into the display-only
-			// nodevocab.Cache (#291). Same posture as the PolicySnapshot
-			// capture above: it RECORDS a report-only daemon value for
-			// discovery, and can never set or modify the Node's templates
+			// Capture a reported TemplateSnapshot into the nodevocab.Cache
+			// (#291). Same posture as the PolicySnapshot capture above: it
+			// RECORDS a report-only daemon value — for discovery, and since
+			// ADR-0042 as the input to a Template dispatch's fan-out and
+			// class — and can never set or modify the Node's templates
 			// (ADR-0002, ADR-0021). Keyed by the cert-derived nodeID, never a
 			// wire value.
 			if ts := m.GetTemplates(); ts != nil && s.vocab != nil {
@@ -357,10 +359,10 @@ func snapshotFromProto(ps *relayv1.PolicySnapshot) policyview.Snapshot {
 }
 
 // vocabFromProto converts a daemon-reported relayv1.TemplateSnapshot into the
-// proto-free nodevocab.Snapshot the display-only cache stores, keeping that
+// proto-free nodevocab.Snapshot the vocabulary cache stores, keeping that
 // package proto-free (mirrors snapshotFromProto's role for policyview).
-// Display-only: this conversion never validates a slot, renders a body (there
-// is no body on the wire), or decides anything (ADR-0011, invariant 12).
+// This conversion never validates a slot, renders a body (there is no body on
+// the wire), or decides anything (ADR-0011, invariant 12).
 func vocabFromProto(ts *relayv1.TemplateSnapshot) nodevocab.Snapshot {
 	templates := make([]nodevocab.Template, 0, len(ts.GetTemplates()))
 	for _, t := range ts.GetTemplates() {

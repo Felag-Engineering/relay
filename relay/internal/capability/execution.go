@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
 // Conduit sends one Task down a connected Node's Tunnel and blocks for its
@@ -195,7 +196,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 		Principal:  d.principal,
 		Selector:   d.selector,
 		Action:     d.action,
-		Nodes:      len(d.nodes),
+		Nodes:      len(d.nodes) + len(d.excluded),
 	})
 
 	stageID, err := e.prefixedID("stage-")
@@ -210,31 +211,57 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	// "one Task per matched Node, unique IDs, persisted before dispatch"
 	// (acceptance criterion 2), and leaves a clean Pending/Dispatched split
 	// on any mid-Job crash.
-	pending := make([]pendingTask, 0, len(d.nodes))
-	for _, n := range d.nodes {
+	//
+	// A Node excluded from a Template dispatch (ADR-0042) gets a Task too,
+	// persisted the same way and then resolved unsupported without ever being
+	// sent — so the Job records every matched Node, and get_job re-reads the
+	// exclusion exactly as it reads any other outcome. Excluded Tasks come
+	// FIRST, so they are resolved before any real Task is dispatched: they
+	// never sit Pending behind a slow fan-out where a concurrent cancel or a
+	// crash could leave them stranded.
+	//
+	// A dispatched Template Task is recorded under its own Node's reported
+	// class (d.nodeClass), which decides whether its output is retained.
+	pending := make([]pendingTask, 0, len(d.nodes)+len(d.excluded))
+	persist := func(n registry.Node, unsupported string) error {
 		taskID, err := e.prefixedID("task-")
 		if err != nil {
-			return dispatchResult{}, fmt.Errorf("capability: generate task id for node %q: %w", n.NodeID, err)
+			return fmt.Errorf("capability: generate task id for node %q: %w", n.NodeID, err)
+		}
+		action := d.action
+		if c, ok := d.nodeClass[n.NodeID]; ok {
+			action.RiskClass = c
 		}
 		task := jobs.Task{
 			ID:             taskID,
 			JobID:          jobID,
 			StageID:        stageID,
 			NodeID:         n.NodeID,
-			Action:         d.action,
+			Action:         action,
 			TimeoutSeconds: d.action.TimeoutSeconds,
 			CreatedAt:      e.now(),
 		}
 		if err := e.tasksRepo.CreateTask(runCtx, task); err != nil {
-			return dispatchResult{}, fmt.Errorf("capability: create task %q for node %q: %w", taskID, n.NodeID, err)
+			return fmt.Errorf("capability: create task %q for node %q: %w", taskID, n.NodeID, err)
 		}
-		pending = append(pending, pendingTask{task: task, outdated: n.Outdated})
+		pending = append(pending, pendingTask{task: task, outdated: n.Outdated, unsupported: unsupported})
+		return nil
+	}
+	for _, x := range d.excluded {
+		if err := persist(x.node, x.reason); err != nil {
+			return dispatchResult{}, err
+		}
+	}
+	for _, n := range d.nodes {
+		if err := persist(n, ""); err != nil {
+			return dispatchResult{}, err
+		}
 	}
 
 	results := make([]NodeResult, 0, len(pending))
 	var errs []error
 	for _, pt := range pending {
-		res, err := e.dispatchOne(runCtx, pt.task, pt.outdated)
+		res, err := e.dispatchOne(runCtx, pt)
 		if err != nil {
 			errs = append(errs, err)
 		}
@@ -245,6 +272,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 			Stdout:    res.Stdout,
 			Stderr:    res.Stderr,
 			Truncated: res.Truncated,
+			RiskClass: pt.task.Action.RiskClass,
 		})
 	}
 
@@ -263,7 +291,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 		Principal:  d.principal,
 		Selector:   d.selector,
 		Action:     d.action,
-		Nodes:      len(d.nodes),
+		Nodes:      len(d.nodes) + len(d.excluded),
 		Outcomes:   outcomes,
 	})
 
@@ -286,14 +314,20 @@ func (e *jobEngine) publishJobEvent(ev JobEvent) {
 // Outdated flag (registry.Node.Outdated, ADR-0014), read at the moment run
 // resolves the Selector — dispatchOne needs it to decide the version gate
 // without re-querying the registry.
+//
+// unsupported, when non-empty, marks a Task whose Node was excluded from a
+// Template dispatch (ADR-0042): it is resolved unsupported with this
+// Relay-authored reason and never sent.
 type pendingTask struct {
-	task     jobs.Task
-	outdated bool
+	task        jobs.Task
+	outdated    bool
+	unsupported string
 }
 
 // dispatchOne carries one persisted (Pending) Task through the rest of its
-// dispatch-state lifecycle: outdated -> MarkVersionRefused (terminal, never
-// sent, ADR-0014); offline -> MarkUnreachable (terminal, never sent);
+// dispatch-state lifecycle: excluded from a Template dispatch ->
+// MarkUnsupported (terminal, never sent, ADR-0042); outdated ->
+// MarkVersionRefused (terminal, never sent, ADR-0014); offline -> MarkUnreachable (terminal, never sent);
 // connected -> MarkDispatched, then Conduit.Dispatch. A send error leaves the
 // Task Dispatched (never Resolved) so it surfaces via TaskRepository.InFlight()
 // for restart reconciliation, and is reported honestly as OutcomeFailure
@@ -313,8 +347,19 @@ type pendingTask struct {
 // the Task already reached a terminal, truthful outcome (Resolved,
 // OutcomeCancelled) — so dispatchOne honors it rather than dispatching an
 // already-cancelled Task or fabricating OutcomeFailure over a real cancel.
-func (e *jobEngine) dispatchOne(ctx context.Context, task jobs.Task, outdated bool) (jobs.Result, error) {
-	if outdated {
+func (e *jobEngine) dispatchOne(ctx context.Context, pt pendingTask) (jobs.Result, error) {
+	task := pt.task
+
+	// Excluded from a Template dispatch before the cap was ever counted
+	// (ADR-0042): never sent, whatever its version or connectivity.
+	if pt.unsupported != "" {
+		if err := e.tasksRepo.MarkUnsupported(ctx, task.ID, pt.unsupported, e.now()); err != nil {
+			return jobs.Result{Outcome: jobs.OutcomeUnsupported}, fmt.Errorf("capability: mark task %q unsupported: %w", task.ID, err)
+		}
+		return jobs.Result{Outcome: jobs.OutcomeUnsupported, Stderr: []byte(pt.unsupported)}, nil
+	}
+
+	if pt.outdated {
 		if err := e.tasksRepo.MarkVersionRefused(ctx, task.ID, e.now()); err != nil {
 			return jobs.Result{Outcome: jobs.OutcomeVersionRefused}, fmt.Errorf("capability: mark task %q version-refused: %w", task.ID, err)
 		}

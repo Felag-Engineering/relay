@@ -1456,3 +1456,45 @@ func TestApprovalAnswerVocabularyMatchesTheDomain(t *testing.T) {
 		t.Errorf("decisionChannel(ChannelInBand) = %q, want %q", decisionChannel(approval.ChannelInBand), approval.ChannelInBand.String())
 	}
 }
+
+// ADR-0042: retention is decided PER RESULT from the class that Node's Task
+// ran under. A Template dispatch whose resolved class is mutate (one Node
+// reported mutate) must still retain nothing from a Node that reported read —
+// otherwise one Node could cause every other Node's read output to be kept
+// (ADR-0025). The mutate Node's own output is the control.
+func TestRecordDispatchRetentionFollowsEachResultsOwnClass(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))))
+	ctx := context.Background()
+
+	secret := []byte("PGPASSWORD=hunter2 /usr/bin/psql -h db.internal")
+	if err := sink.Record(ctx, capability.AuditEntry{
+		Kind:      capability.AuditKindDispatch,
+		Principal: capability.Principal{Account: "gleipnir", Role: "operator"},
+		Action:    jobs.Action{Kind: jobs.ActionOperation, OperationName: "proc.list", RiskClass: jobs.RiskClassMutate},
+		JobID:     "job-mixed",
+		Results: []capability.NodeResult{
+			{NodeID: "honest", Outcome: jobs.OutcomeSuccess, Stdout: secret, RiskClass: jobs.RiskClassRead},
+			{NodeID: "says-mutate", Outcome: jobs.OutcomeSuccess, Stdout: []byte("its own output"), RiskClass: jobs.RiskClassMutate},
+		},
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	recs, err := repo.ByJob(ctx, "job-mixed")
+	if err != nil || len(recs) != 2 {
+		t.Fatalf("ByJob(job-mixed): %v (%d records)", err, len(recs))
+	}
+	for _, r := range recs {
+		switch r.NodeID {
+		case "honest":
+			if len(r.Stdout) != 0 {
+				t.Errorf("the read-reporting Node's output was retained under the dispatch's mutate class: %q", r.Stdout)
+			}
+		case "says-mutate":
+			if string(r.Stdout) != "its own output" {
+				t.Errorf("the mutate-reporting Node's own output = %q, want it retained", r.Stdout)
+			}
+		}
+	}
+}

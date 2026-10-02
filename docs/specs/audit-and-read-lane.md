@@ -140,7 +140,10 @@ spec is rewritten:
   capability but cannot create a parallel decision path.
 - **Invariant 13, Operation risk class:** the `read`/`mutate` distinction used by the retention
   rule is the risk class declared by the Operation contract. It is not a confidentiality label
-  and does not substitute for Policy.
+  and does not substitute for Policy. *(Invariant 13 amended 2026-10-02, ADR-0042: a Template
+  Operation's class is Node-reported. The dispatch takes the most restrictive class for its cap
+  and approval gate, but each Task is recorded under its own Node's class and retention follows
+  that per-Task class, so one Node cannot cause another Node's read output to be retained.)*
 
 Changing retention, the material a read surface may disclose, audit attribution, or the
 fail-closed rule requires human review against ADR-0025 and the governing security boundaries.

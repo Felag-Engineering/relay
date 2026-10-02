@@ -139,29 +139,56 @@ func (e *jobEngine) query(ctx context.Context, d dispatch) (planResult, error) {
 // dispatch would currently be refused (ADR-0011/0013).
 //
 // Order mirrors Run except for the Freeze/cap treatment:
-//  1. resolve the Selector — identical resolution to Run (parity for #121).
+//  1. resolve the Selector — identical resolution to Run (parity for #121) —
+//     and, for a Template Operation, its class and fan-out (ADR-0042),
+//     exactly as Run does.
 //  2. authorize p against act/sel — GATES (returns an error, audited as a
 //     refusal): a caller not permitted to ASK must not learn per-Node
 //     deciding rules (invariant 3).
 //  3. note whether the Selector matched no Nodes — advisory only, reported
 //     as NoNodesMatched; Run refuses the same condition as no_nodes_matched,
 //     after authorization, so a Policy preflight and a real run agree.
+//     Otherwise refuse an unknown or malformed Template call, as Run does,
+//     and report each Node excluded from a Template dispatch as
+//     unsupported without querying it.
 //  4. read Frozen — advisory only; a read error is swallowed (never fails
 //     the Plan) since Frozen here is informational, not a guardrail.
 //  5. check the blast cap — reported as CapExceeded data, not an error; the
 //     query fan-out is skipped in that case (real dispatch would touch
 //     nothing over-cap, so there is nothing useful to probe).
-//  6. query every matched Node through the sealed dispatcher seam.
+//  6. query every matched Node not excluded in step 3 through the sealed
+//     dispatcher seam.
 //  7. audit as AuditKindPlan — Principal/Selector/Action only, no
 //     JobID/Results (no Job/Task rows were ever created).
 func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.Action) (PlanResult, error) {
-	nodes := sel.Resolve(s.reg, s.stateEval())
+	matched := sel.Resolve(s.reg, s.stateEval())
+
+	// The same Template resolution Run makes (ADR-0042), so a preflight and a
+	// real run agree on the class, the cap and which Nodes are excluded.
+	ra := s.resolveAction(act, matched)
+	act = ra.act
+	nodes := ra.nodes
 
 	if err := s.authz.Authorize(withoutAssertions(ctx), p, act, sel); err != nil {
 		return PlanResult{}, s.recordRefusal(ctx, p, sel, act, RefusalUnauthorized, err)
 	}
 
-	noMatch := len(nodes) == 0
+	noMatch := len(matched) == 0
+
+	// An unknown or malformed Template call is not a guardrail to report but a
+	// request that cannot be asked at all, so a preflight refuses it exactly
+	// as a run would. With no Node matched there is nothing to resolve
+	// against, and NoNodesMatched below says so instead.
+	if !noMatch && ra.refusal != nil {
+		return PlanResult{}, s.recordRefusal(ctx, p, sel, act, ra.refusalKind, ra.refusal)
+	}
+
+	// Excluded Nodes are reported unsupported — the outcome a run would give
+	// them — and never queried.
+	excluded := make([]NodeVerdict, 0, len(ra.excluded))
+	for _, x := range ra.excluded {
+		excluded = append(excluded, NodeVerdict{NodeID: x.node.NodeID, Status: VerdictUnsupported, DecidingRule: x.reason, Outdated: x.node.Outdated})
+	}
 
 	frozen, _ := s.freeze.Frozen(ctx)
 
@@ -169,10 +196,10 @@ func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.
 		var ce *CapExceededError
 		errors.As(capErr, &ce)
 		if err := s.audit.Record(ctx, AuditEntry{Kind: AuditKindPlan, Principal: p, Selector: sel, Action: act, Asserted: AssertionsFromContext(ctx)}); err != nil {
-			return PlanResult{Matched: len(nodes), Frozen: frozen, CapExceeded: ce, NoNodesMatched: noMatch},
+			return PlanResult{Matched: len(matched), Frozen: frozen, CapExceeded: ce, NoNodesMatched: noMatch},
 				fmt.Errorf("capability: record audit entry: %w", err)
 		}
-		return PlanResult{Matched: len(nodes), Frozen: frozen, CapExceeded: ce, NoNodesMatched: noMatch}, nil
+		return PlanResult{Matched: len(matched), Frozen: frozen, CapExceeded: ce, NoNodesMatched: noMatch}, nil
 	}
 
 	pr, err := s.disp.query(ctx, newDispatch(p, sel, nodes, act))
@@ -186,8 +213,9 @@ func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.
 		auditErr = fmt.Errorf("capability: record audit entry: %w", auditErr)
 	}
 
+	verdicts := append(pr.verdicts, excluded...)
 	if joined := errors.Join(err, auditErr); joined != nil {
-		return PlanResult{Matched: len(nodes), Frozen: frozen, NoNodesMatched: noMatch, Verdicts: pr.verdicts}, joined
+		return PlanResult{Matched: len(matched), Frozen: frozen, NoNodesMatched: noMatch, Verdicts: verdicts}, joined
 	}
-	return PlanResult{Matched: len(nodes), Frozen: frozen, NoNodesMatched: noMatch, Verdicts: pr.verdicts}, nil
+	return PlanResult{Matched: len(matched), Frozen: frozen, NoNodesMatched: noMatch, Verdicts: verdicts}, nil
 }

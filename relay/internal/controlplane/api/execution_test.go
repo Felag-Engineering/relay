@@ -459,17 +459,68 @@ func TestRunOperation_NoNodesMatchedIs422WithTitleAndSelector(t *testing.T) {
 // denied_by_policy — #345's trap, on this surface too).
 // -----------------------------------------------------------------------
 
+// TestRunOperation_TemplateNameReachesTheCapabilityLayerWithNoClass pins
+// this adapter's half of ADR-0042 (invariant 10): a name outside the Native
+// vocabulary is a Template Operation, and the adapter forwards it with its
+// arguments untouched and NO risk class — the capability layer decides the
+// class over the matched Nodes' own reports, and checks the argument names
+// against their slots. The adapter neither classifies nor rejects it.
+func TestRunOperation_TemplateNameReachesTheCapabilityLayerWithNoClass(t *testing.T) {
+	exec := &fakeExecutor{}
+	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+
+	rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{
+		Selector: "node:role=web", Operation: "svc.status", Args: map[string]string{"unit": "nginx"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	calls := exec.runCalls()
+	if len(calls) != 1 {
+		t.Fatalf("%d Run calls, want 1", len(calls))
+	}
+	act := calls[0].Action
+	if act.Kind != jobs.ActionOperation || act.OperationName != "svc.status" || act.OperationArgs["unit"] != "nginx" {
+		t.Errorf("Action = %+v, want the Template name and its arguments forwarded unchanged", act)
+	}
+	if act.RiskClass != jobs.RiskClassUnspecified {
+		t.Errorf("Action.RiskClass = %s, want unspecified — only the capability layer decides a Template's class", jobs.RiskClassName(act.RiskClass))
+	}
+}
+
+// TestRunOperation_TemplateRefusalsAreBadRequests: the capability layer's
+// unknown-operation and malformed-call refusals (ADR-0042) are malformed
+// input, rendered as the same 400 this adapter gives an unknown Native
+// argument — never a 500, and never a Policy verdict (#345).
+func TestRunOperation_TemplateRefusalsAreBadRequests(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		err     error
+		wantSub string
+	}{
+		{"unknown operation", &capability.UnknownOperationError{Operation: "nope.notreal", Matched: 2}, "unknown operation"},
+		{"malformed call", &capability.MalformedCallError{Operation: "log.tail", Reason: "unknown argument(s) [unitt]"}, "unitt"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &fakeExecutor{runErr: tt.err}
+			h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+			rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Selector: "node:role=web", Operation: "nope.notreal"})
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantSub) {
+				t.Errorf("body %s must carry %q", rec.Body.String(), tt.wantSub)
+			}
+		})
+	}
+}
+
 func TestRunOperation_MalformedInputIsRejectedBeforeDispatch(t *testing.T) {
 	tests := []struct {
 		name    string
 		body    runOperationRequest
 		wantSub string
 	}{
-		{
-			name:    "unknown operation name",
-			body:    runOperationRequest{Operation: "nope.notreal"},
-			wantSub: "unknown operation",
-		},
 		{
 			name:    "misspelled required argument (#345)",
 			body:    runOperationRequest{Operation: "service.restart", Args: map[string]string{"unitt": "nginx"}},

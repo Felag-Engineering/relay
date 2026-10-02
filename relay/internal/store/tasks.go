@@ -107,6 +107,20 @@ func (t *sqliteTasks) MarkVersionRefused(ctx context.Context, taskID string, at 
 	})
 }
 
+// MarkUnsupported transitions a Task from Pending directly to Resolved with
+// jobs.OutcomeUnsupported and Stderr = reason, leaving dispatched_at NULL —
+// the Relay excluded its Node from a Template dispatch (ADR-0042), so the
+// Task was never sent. Returns jobs.ErrTaskNotFound if the Task does not
+// exist, or jobs.ErrInvalidTaskState if it is not currently Pending.
+func (t *sqliteTasks) MarkUnsupported(ctx context.Context, taskID, reason string, at time.Time) error {
+	return t.transition(ctx, taskID, "pending", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state = 'resolved', outcome = ?, stderr = ?, resolved_at = ? WHERE task_id = ?`,
+			int(jobs.OutcomeUnsupported), []byte(reason), formatTime(roundTripTime(at)), taskID)
+		return err
+	})
+}
+
 // MarkCancelled transitions a Task from Pending directly to Resolved with
 // jobs.OutcomeCancelled, leaving dispatched_at NULL — the Task was cancelled
 // before it was ever sent (ADR-0013). Returns jobs.ErrTaskNotFound if the

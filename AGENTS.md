@@ -108,7 +108,9 @@ it needs an ADR, not a quiet workaround.
     (ADR-0011; wording amended 2026-09-20 for ADR-0038)
 13. **Every Operation declares a risk class (`read` | `mutate`)**; blast caps are chosen by
     class, Raw Exec always takes the mutate-cap, and the class is security-relevant contract
-    (`/proto`). (ADR-0012)
+    that no caller can set or loosen. Where the class is reported by Nodes rather than fixed in
+    `/proto`, a dispatch takes the most restrictive class the Nodes it reaches report.
+    (ADR-0012, ADR-0042; amended 2026-10-02)
 14. **The daemon never self-upgrades and the Relay never pushes binaries.** Daemon upgrades
     flow only through the customer's config management; the Relay's lever is the
     dispatch-level minimum-version gate. (ADR-0014)
