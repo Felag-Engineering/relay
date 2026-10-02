@@ -4535,3 +4535,61 @@ func TestFleet_UnreportedCellIsHollowNotAFifthHue(t *testing.T) {
 		}
 	}
 }
+
+// TestFleet_StateColumnOnlyWhenARowHasAState: an all-empty State column took
+// width on every row of a healthy fleet. The column is drawn only when some
+// row in the group draws something in it, and the header and every body row
+// agree on the cell count either way.
+func TestFleet_StateColumnOnlyWhenARowHasAState(t *testing.T) {
+	healthy := func(id string) registry.Node {
+		return registry.Node{NodeID: id, NodeLabels: map[string]string{"role": "web"}, DaemonVersion: "0.6.0", PolicyFingerprint: "same", Connected: true}
+	}
+	cases := []struct {
+		name      string
+		nodes     []registry.Node
+		wantState bool
+	}{
+		{"all clear", []registry.Node{healthy("node-a"), healthy("node-b")}, false},
+		{"one not reported", []registry.Node{healthy("node-a"), {NodeID: "node-b", NodeLabels: map[string]string{"role": "web"}, Connected: true}}, true},
+		{"one revoked", []registry.Node{healthy("node-a"), {NodeID: "node-b", NodeLabels: map[string]string{"role": "web"}, DaemonVersion: "0.6.0", PolicyFingerprint: "same", Connected: true, RevokedAt: testNow.Add(-time.Hour)}}, true},
+		{"one quarantined", []registry.Node{healthy("node-a"), {NodeID: "node-b", NodeLabels: map[string]string{"role": "web"}, RelayLabels: map[string]string{registry.QuarantineKey: registry.QuarantineOn}, DaemonVersion: "0.6.0", PolicyFingerprint: "same", Connected: true}}, true},
+		{"one offline", []registry.Node{healthy("node-a"), {NodeID: "node-b", NodeLabels: map[string]string{"role": "web"}, DaemonVersion: "0.6.0", PolicyFingerprint: "same", LastSeen: testNow.Add(-2 * time.Hour)}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := withFleet(renderableDeps(), tc.nodes...)
+
+			v := buildFleetView(d, fleetNodes(d), "", "role")
+			if got := v.Groups[0].ShowState; got != tc.wantState {
+				t.Fatalf("ShowState = %v, want %v", got, tc.wantState)
+			}
+
+			body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
+			if got := strings.Contains(body, `scope="col">State<`); got != tc.wantState {
+				t.Errorf("State header drawn = %v, want %v", got, tc.wantState)
+			}
+			if got := strings.Contains(body, `class="statecell"`); got != tc.wantState {
+				t.Errorf("State cells drawn = %v, want %v", got, tc.wantState)
+			}
+
+			table := body[strings.Index(body, "<thead>"):]
+			table = table[:strings.Index(table, "</table>")]
+			headers := strings.Count(table, `<th scope="col"`)
+			for _, row := range strings.Split(table, "<tr>")[2:] {
+				if cells := strings.Count(row, "<td"); cells != headers {
+					t.Errorf("a body row has %d cells under %d headers", cells, headers)
+				}
+			}
+		})
+	}
+}
+
+// TestFleet_RoleFacetTitleRendersAsCode: the node:role facet's title is a label
+// key, an identifier, so it renders as code and is never upper-cased with the
+// other facet titles.
+func TestFleet_RoleFacetTitleRendersAsCode(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
+	if !strings.Contains(body, `<div class="ftitle"><code>node:role</code></div>`) {
+		t.Error("the node:role facet title is not rendered as code")
+	}
+}

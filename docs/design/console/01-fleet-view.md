@@ -68,6 +68,8 @@ facet sums to the group's Node count. That row is not a link: absence is not a l
 
 **Deviation table**, sorted **anomaly-first by rarity, never alphabetically**. The weird Node is
 row one. Columns: liveness dot + name · **State** · Labels · Policy fingerprint · Last seen.
+The State column is omitted from a group's table when no row in it draws a state (revoked,
+quarantined, not reported, or a `state:` label).
 Below it, the ladder: "*N* more deviate the same way — expand", then the mode as one calm line
 ("3,993 Nodes carry no `state:` label at all — reachable, current, permitted"). The mode line never
 counts a "not reported" Node as reachable, current or permitted: it says how many Nodes have not

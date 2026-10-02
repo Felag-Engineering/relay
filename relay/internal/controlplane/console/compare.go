@@ -476,15 +476,15 @@ func comparePolicyRows(snaps []*policyview.Snapshot) []compareRow {
 		rows = append(rows, row)
 	}
 
-	add("raw exec", func(s policyview.Snapshot) string {
+	add("Raw Exec", func(s policyview.Snapshot) string {
 		if s.RawExecEnabled {
 			return "enabled"
 		}
 		return "disabled"
 	})
-	add("raw allow", func(s policyview.Snapshot) string { return strings.Join(s.RawAllowPatterns, "\n") })
-	add("raw deny", func(s policyview.Snapshot) string { return strings.Join(s.RawDenyPatterns, "\n") })
-	add("operations", func(s policyview.Snapshot) string { return strings.Join(sortedCopy(s.AllowedOperations), "\n") })
+	add("Raw allow", func(s policyview.Snapshot) string { return strings.Join(s.RawAllowPatterns, "\n") })
+	add("Raw deny", func(s policyview.Snapshot) string { return strings.Join(s.RawDenyPatterns, "\n") })
+	add("Operations", func(s policyview.Snapshot) string { return strings.Join(sortedCopy(s.AllowedOperations), "\n") })
 
 	for _, name := range ruleNames(snaps, func(s policyview.Snapshot) []string {
 		var out []string
@@ -493,7 +493,7 @@ func comparePolicyRows(snaps []*policyview.Snapshot) []compareRow {
 		}
 		return out
 	}) {
-		add("allow "+name, func(s policyview.Snapshot) string {
+		add("Allow "+name, func(s policyview.Snapshot) string {
 			var parts []string
 			for _, r := range s.OperationRules {
 				if r.Name == name {
@@ -511,7 +511,7 @@ func comparePolicyRows(snaps []*policyview.Snapshot) []compareRow {
 		}
 		return out
 	}) {
-		add("deny "+name, func(s policyview.Snapshot) string {
+		add("Deny "+name, func(s policyview.Snapshot) string {
 			var parts []string
 			for _, r := range s.DenyRules {
 				if r.Name == name {
@@ -596,7 +596,7 @@ one that was mistyped, and either is worth knowing.</p>
   <thead>
     <tr>
       <th scope="col"><span class="vh">Dimension</span></th>
-      {{range .Columns}}<th scope="col">
+      {{range .Columns}}<th scope="col" class="cmpnode">
         <span class="dot" data-live="{{if .Connected}}on{{else}}off{{end}}" role="img" aria-label="{{if .Connected}}connected{{else}}not connected{{end}}"></span>
         <a href="{{.Href}}" class="nodeid">{{.ID}}</a>
         {{with .Hostname}}<div class="sub">{{.}}</div>{{end}}
@@ -607,11 +607,11 @@ one that was mistyped, and either is worth knowing.</p>
   </thead>
   <tbody>
     {{range .FingerprintRows}}<tr{{if .Differs}} data-diff="1"{{end}}>
-      <th scope="row">{{.Key}}</th>
+      <th scope="row" class="cmpkey">{{.Key}}</th>
       {{range $i, $v := .Values}}<td data-label="{{(index $.Columns $i).ID}}"><code>{{$v}}</code></td>{{end}}
     </tr>{{end}}
     {{range .PolicyRows}}<tr{{if .Differs}} data-diff="1"{{end}}>
-      <th scope="row">{{.Key}}</th>
+      <th scope="row" class="cmpkey">{{.Key}}</th>
       {{range $i, $v := .Values}}<td data-label="{{(index $.Columns $i).ID}}"><pre>{{$v}}</pre></td>{{end}}
     </tr>{{end}}
   </tbody>

@@ -1433,3 +1433,33 @@ func TestConsoleEvents_FrameIDsCannotBreakFrameStructure(t *testing.T) {
 		}
 	}
 }
+
+// TestActivity_AnEmptyFilterOffersNoExport: the CSV is the filter's rows, so a
+// filter that matches nothing has nothing to export, and offering the download
+// invites an empty file. A page with rows still offers it.
+func TestActivity_AnEmptyFilterOffersNoExport(t *testing.T) {
+	const link = "Export this filter as CSV"
+
+	empty := contentOf(get(t, newTestHandler(dayOneDeps(), accounts.RoleAdmin), "/console/activity?q=nosuchthing").Body.String())
+	if !strings.Contains(empty, "Nothing matches.") {
+		t.Fatal("the filter did not come back empty, so this test proves nothing")
+	}
+	if strings.Contains(empty, link) {
+		t.Error("an empty result offers a CSV export of nothing")
+	}
+
+	withRows := contentOf(get(t, newTestHandler(sweepFixture(), accounts.RoleAdmin), "/console/activity").Body.String())
+	if !strings.Contains(withRows, link) {
+		t.Error("a page with rows no longer offers the CSV export")
+	}
+
+	// Page one shows no row, no Older page exists, but Console reads were left
+	// out: the CSV walks with them shown, so it is not empty and the link stays.
+	leftOut := contentOf(activityAs(t, &fakeQueries{rows: consoleReadsOnly(2)}, "/console/activity?kind=read"))
+	if !strings.Contains(leftOut, "left out") {
+		t.Fatal("no Console reads were left out, so this test proves nothing")
+	}
+	if !strings.Contains(leftOut, link) {
+		t.Error("a page whose rows were all left-out Console reads hides an export that would not be empty")
+	}
+}

@@ -1990,7 +1990,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   <input type="hidden" name="plan_hash" value="{{.PlanHash}}">
   <label for="decide-reason">Reason (optional) — the only part of the record that says why</label>
   <textarea id="decide-reason" name="reason" rows="2"></textarea>
-  <label for="decide-password">{{.Authorising}}</label>
+  <label for="decide-password"><span class="ident">{{.Authorising}}</span></label>
   <input id="decide-password" name="password" type="password" autocomplete="current-password" required>
   <div class="decideanswers">
     <button type="submit" name="answer" value="approve" class="decideanswer">Approve</button>
