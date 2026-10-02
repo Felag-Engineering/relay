@@ -102,7 +102,13 @@ from those validators, so what a caller is told and what the daemon enforces can
 - The Relay refuses a Template name that no targeted Node reports.
 - Otherwise, targeted Nodes that do not report the Template are **excluded before the risk class
   and blast cap are decided**, and appear in the result as `unsupported` without being
-  dispatched. Class and cap are decided over the Nodes that remain.
+  dispatched. Class and cap are decided over the Nodes that remain. A Node the Relay holds no
+  vocabulary report for — one that has not reconnected since the Relay started — is excluded the
+  same way, with a reason that says so; the Relay never dispatches a Template blind (ADR-0042).
+- A call's argument names must match the Template's slots on **every** remaining Node. If those
+  Nodes disagree about the slot set, the call is refused as a vocabulary disagreement rather than
+  sent to some of them (ADR-0042).
+- The capability layer resolves a Template's class; an adapter never does (invariant 10).
 - A Node whose report is stale — the Template removed on reload after it was reported — answers
   `unsupported` from its own daemon. `unsupported` is neither a failure nor a Policy denial.
 
@@ -137,6 +143,8 @@ from those validators, so what a caller is told and what the daemon enforces can
 - **Invariant 8 / ADR-0007** — `/proto` is the single source of truth for the vocabulary.
 - **Invariant 7** — Node-reported facts are forgeable; a Template's reported class is treated as
   one.
+- **ADR-0042** — the class rule, exclusion, slot agreement, and where each is decided. Amends
+  ADR-0021 and ADR-0012.
 - **ADR-0021 — needs amending.** Template definitions move into Policy; template packs and the
   template-set fingerprint are retired; the Native freeze stands.
 - **ADR-0015 — needs amending.** Its trigger has fired: argument schemas move into `/proto` for

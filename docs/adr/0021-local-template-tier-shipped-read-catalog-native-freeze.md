@@ -1,6 +1,6 @@
 # A local Template tier, a shipped read catalog, and a frozen native vocabulary
 
-**Status:** Accepted.
+**Status:** Accepted; amended by ADR-0042.
 
 Template **execution** is separable from template **distribution** (owner decision
 2026-08-03, issue #266). ADR-0001 defined tier 2 — **Template Operations**, operator-authored
@@ -166,3 +166,14 @@ Template Operation from a typo without being told. An unrecognized Operation nam
 `Error` only when the caller supplied a template root (`--templates`, so the whole vocabulary
 is knowable); otherwise it is a `Warning` that names the fix. `--strict` fails on it either
 way, so the IaC gate loses nothing.
+
+## Amendment (2026-10-02): amended by ADR-0042 — how the Relay calls a Template
+
+This ADR made the vocabulary per-Node and built the daemon half; it never said how the Relay
+dispatches a Template, and until #626 no surface could. ADR-0042 settles it: a Template is
+dispatched by name through the capability layer on every execution surface. Nodes that do not
+report it — or that the Relay holds no report for — are excluded as `unsupported` before the
+class, cap and approval gate are decided; the class is the most restrictive the remaining Nodes
+report; argument names are checked against every remaining Node's slots. The per-Node vocabulary
+cache becomes a dispatch input. Template loading, rendering, quoting and Policy parity are
+unchanged.
