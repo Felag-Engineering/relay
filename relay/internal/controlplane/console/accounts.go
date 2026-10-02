@@ -307,10 +307,10 @@ func handleAccounts(d Deps) http.HandlerFunc {
 			capability.AuditFilter{Kinds: agentCallKinds},
 			capability.PageRequest{Limit: accountsCallPage})
 		if err != nil {
-			readFailed(w, err, "the agent call trail")
+			readFailed(w, err, "the AI-agent call trail")
 			return
 		}
-		if refusedUnaudited(w, lane, "the agent call trail") {
+		if refusedUnaudited(w, lane, "the AI-agent call trail") {
 			return
 		}
 
@@ -509,11 +509,7 @@ var accountsRefusedTmpl = newScreen("accounts-refused", `
 
 var accountsTmpl = newScreen("accounts", `
 <p class="lede">Every identity that can reach this control plane, and the credentials that
-authenticate as one.{{if .Write}} Every act on this screen that could increase what a principal may
-do &mdash; creating an Account, raising a role, re-enabling a disabled one, minting a token &mdash;
-costs your password in the same request. Disabling, lowering a role and revoking a token only ever
-reduce, so they do not. Select an Account to change its role or state, or to manage its API
-Tokens.{{else}} Reading this page changes nothing: creating, disabling and re-roling
+authenticate as one.{{if not .Write}} Reading this page changes nothing: creating, disabling and re-roling
 an Account, and minting or revoking a token, are not wired into this Relay's Console.{{end}}</p>
 
 <div class="tablescroll">
@@ -567,10 +563,6 @@ an Account, and minting or revoking a token, are not wired into this Relay's Con
   <code>relay bootstrap-token</code> is.</p>
 </section>
 {{end}}
-<p class="note">Last authentication is the most recent time this Account proved who it was — a
-sign-in, or a token accepted. Last tool call is read from the agent call trail and looks back over
-the last {{.CallPage}} recorded calls only, so an Account that called earlier than that reads as
-absent from the window rather than as never having called.</p>
 
 {{if .Selected}}
 {{with .Change}}{{$c := .}}
@@ -696,11 +688,21 @@ absent from the window rather than as never having called.</p>
 </section>
 {{end}}
 
-<section class="panel">
-  <h3>What a role means</h3>
-  {{range .RoleNotes}}<p><b>{{.Role}}</b> &mdash; {{.Means}}</p>{{end}}
-  <p class="note">{{.Ceiling}}</p>
-</section>
+<details class="about">
+<summary>About this screen</summary>
+{{if .Write}}<p class="gap"><b>Granting costs your password; reducing does not.</b> Every act on this screen that could increase what a principal may
+do &mdash; creating an Account, raising a role, re-enabling a disabled one, minting a token &mdash;
+costs your password in the same request. Disabling, lowering a role and revoking a token only ever
+reduce, so they do not. Select an Account to change its role or state, or to manage its API
+Tokens.</p>
+{{end}}<p class="gap"><b>What a role means.</b></p>
+{{range .RoleNotes}}<p class="gap"><b>{{.Role}}</b> &mdash; {{.Means}}</p>{{end}}
+<p class="gap">{{.Ceiling}}</p>
+<p class="gap"><b>What the two time columns mean.</b> Last authentication is the most recent time this Account proved who it was — a
+sign-in, or a token accepted. Last tool call is read from the AI-agent call trail and looks back over
+the last {{.CallPage}} recorded calls only, so an Account that called earlier than that reads as
+absent from the window rather than as never having called.</p>
+</details>
 `)
 
 // isAgentCallKind reports whether an audit Kind describes a call somebody

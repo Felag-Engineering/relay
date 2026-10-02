@@ -311,8 +311,8 @@ func TestAccess_AnAdminAnswersWhoSignedInFailedAndChangedAnAccount(t *testing.T)
 			if strings.Contains(a, "no verified Account") {
 				t.Errorf("a host-lever row says \"no verified Account\", which reads as a failed sign-in:\n%s", a)
 			}
-			if !strings.Contains(a, "the Relay host") {
-				t.Errorf("a host-lever row does not name the Relay host:\n%s", a)
+			if !strings.Contains(a, "root on the Relay host") {
+				t.Errorf("a host-lever row does not name root on the Relay host:\n%s", a)
 			}
 			continue
 		}

@@ -242,6 +242,11 @@ type fleetGroup struct {
 	Revoked     int
 	Unloadable  int
 	OffMode     int
+	// Fingerprinted and Fingerprints are the drift chip's display counts: Nodes
+	// in the group that reported a Policy fingerprint, and the distinct
+	// fingerprints among them. Unreported Nodes stay out of both.
+	Fingerprinted int
+	Fingerprints  int
 	// Unreported counts Nodes with no recorded Hello (see unreported). They
 	// are counted here once and never in OffMode.
 	Unreported int
@@ -289,6 +294,8 @@ type fleetView struct {
 	// the namespace that is not targetable yet rather than echoing a parser
 	// error.
 	FilterError string
+	// NoMatch is true when a valid filter matched no Node: the empty state.
+	NoMatch bool
 
 	GroupBy   string
 	GroupKeys []string
@@ -482,6 +489,22 @@ func handleFleet(d Deps) http.HandlerFunc {
 	}
 }
 
+// ClearHref is the fleet with the filter dropped and the grouping and pin
+// kept. An explicit "group by nothing" travels as "-", as in linkContext.href,
+// so it survives instead of falling back to the default grouping.
+func (v fleetView) ClearHref() string {
+	q := url.Values{}
+	if v.GroupBy == "" {
+		q.Set("group", "-")
+	} else {
+		q.Set("group", v.GroupBy)
+	}
+	if v.Pin.Raw != "" {
+		q.Set("pin", v.Pin.Raw)
+	}
+	return fleetPath + "?" + q.Encode()
+}
+
 // buildFleetView is the whole screen as a pure function of the fleet, the
 // filter and the grouping. Kept separate from the handler so it is testable
 // against a slice of registry.Node with no HTTP anywhere.
@@ -516,6 +539,7 @@ func buildFleetView(d Deps, nodes []registry.Node, filter, groupBy string) fleet
 		}
 	}
 	v.Matched = len(matched)
+	v.NoMatch = v.FilterOK && strings.TrimSpace(filter) != "" && v.Matched == 0
 
 	v.GroupKeys = groupKeys(nodes)
 	v.GroupBy = chooseGroupBy(groupBy, v.GroupKeys)
@@ -526,6 +550,11 @@ func buildFleetView(d Deps, nodes []registry.Node, filter, groupBy string) fleet
 	}
 
 	groups := groupNodes(fns, v.GroupBy)
+	if v.NoMatch {
+		// The empty state stands alone: a group card or all-clear line
+		// beneath "No Nodes match" would contradict it.
+		groups = nil
+	}
 
 	// "A list is a bug" is a claim about THE PAGE, not about one card. Deciding
 	// it per group meant grouping 10,000 Nodes by a thousand-valued label key
@@ -804,14 +833,23 @@ func parseFleetFilter(s string) (capability.Selector, error) {
 	sel, err := capability.ParseSelector(s)
 	switch {
 	case errors.Is(err, capability.ErrSelectorTagUnsupported):
-		// Rendered without the generic lead sentence below: the term DOES
-		// carry a prefix, so "every term needs a namespace prefix" would name
-		// the wrong problem.
-		return capability.Selector{}, filterErr("This Relay cannot filter on tag: labels yet, because it has nowhere to store them (tracked in #430). Filter on node:, relay: or state: instead.")
+		// Rendered in this screen's own words: the term DOES carry a prefix, so
+		// the generic arm below would name the wrong problem.
+		return capability.Selector{}, filterErr("This Relay cannot filter on tag: labels yet, because it has nowhere to store them. Filter on node:, relay: or state: instead.")
 	case err != nil:
-		return capability.Selector{}, filterErr("every term needs a namespace prefix, like node:role=web or state:offline. " + strings.TrimPrefix(err.Error(), "capability: "))
+		msg := sentenceCase(strings.TrimPrefix(err.Error(), "capability: "))
+		return capability.Selector{}, filterErr(msg + ". A term looks like node:role=web or state:offline.")
 	}
 	return sel, nil
+}
+
+// sentenceCase upper-cases a leading ASCII lower-case letter. A message that
+// opens with a quoted term is left as it is.
+func sentenceCase(s string) string {
+	if s == "" || s[0] < 'a' || s[0] > 'z' {
+		return s
+	}
+	return string(s[0]-'a'+'A') + s[1:]
 }
 
 type filterErr string
@@ -915,6 +953,7 @@ func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext)
 	modeFingerprint := modalValue(nodes, func(n fleetNode) string { return n.PolicyFingerprint })
 
 	sigCount := map[string]int{}
+	distinctFingerprints := map[string]struct{}{}
 	for _, n := range nodes {
 		sigCount[n.signature]++
 	}
@@ -949,7 +988,12 @@ func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext)
 		if modeFingerprint != "" && n.PolicyFingerprint != "" && n.PolicyFingerprint != modeFingerprint {
 			g.OffMode++
 		}
+		if n.PolicyFingerprint != "" {
+			g.Fingerprinted++
+			distinctFingerprints[n.PolicyFingerprint] = struct{}{}
+		}
 	}
+	g.Fingerprints = len(distinctFingerprints)
 
 	g.Facets = buildFacets(nodes, link)
 
@@ -1076,7 +1120,7 @@ func timeSince(t, now time.Time) string {
 // when nothing is reported.
 //
 // The mode is used ONLY to count how many Nodes differ from it, and that count
-// is rendered as an observation ("12 on a different Policy fingerprint"), never
+// is rendered as an observation ("4 Nodes on 3 Policy fingerprints"), never
 // as a state label. See nodestate's package doc for why a fleet-relative label
 // would be wrong.
 func modalValue(nodes []fleetNode, f func(fleetNode) string) string {
@@ -1305,7 +1349,7 @@ func policyFingerprintFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 //
 // This map mixes real values with two closed-vocabulary sentinels, so —
 // unlike the Policy fingerprint facet above — bucketing by the raw full
-// value is NOT safe on its own: the sentinel literal "none installed" is
+// value is NOT safe on its own: the sentinel literal "no templates installed" is
 // itself a legal (if unlikely) self-reported string, and a Node reporting
 // it verbatim would key into the genuine "no templates installed" bucket
 // and inflate its count. facetValueKey and the sentinel consts
@@ -1338,7 +1382,7 @@ func templateSetFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 			return "unloadable", "state:template-unloadable", true
 		case templateSentinelNoneInstalled:
 			// Absence is not a label — there is nothing to target.
-			return "none installed", "", false
+			return "no templates installed", "", false
 		default:
 			full := strings.TrimPrefix(k, facetValuePrefix)
 			return shortHash(full), templateTerms[k], templateTerms[k] != ""
@@ -1385,7 +1429,7 @@ func nodeRoleFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 // :195-ish, styled .fhint in assets/console.css).
 //
 // Driven by a REFUSAL bool at each of the three facet builders above, never by
-// `!Targetable`: "none installed" is also unlinkable, and there is nothing
+// `!Targetable`: "no templates installed" is also unlinkable, and there is nothing
 // wrong with that value — this hint would be a lie about it. It is only ever
 // true when nodestate rejected a self-reported value outright.
 const facetRefusalHint = "One reported value is not a link: it carries a comma, whitespace or a namespace prefix, so a Selector cannot express it."
@@ -1397,7 +1441,7 @@ const facetRefusalHint = "One reported value is not a link: it carries a comma, 
 // place a self-reported value becomes a key, and begins with facetValuePrefix;
 // every sentinel key is one of the literals below and begins with
 // sentinelPrefix instead. Whatever a Node sends — including the literals
-// "none installed" or "not reported" — it can only ever reach the value space,
+// "no templates installed" or "not reported" — it can only ever reach the value space,
 // never the sentinel space, because nothing outside this file ever builds a
 // key with anything but facetValuePrefix in front of it. Both sides are
 // prefixed, not only the sentinels, so the invariant survives someone later
@@ -1475,7 +1519,7 @@ var fleetTmpl = newScreen("fleet", `
 <form class="viewbar" method="get" action="/console/">
   <div class="vfield wide">
     <label class="vlabel" for="filter">Filter</label>
-    <input id="filter" name="filter" value="{{.Filter}}" placeholder="e.g. node:role=web, relay:quarantine=on" spellcheck="false" autocomplete="off">
+    <input id="filter" name="filter" value="{{.Filter}}" placeholder="e.g. node:role=web, state:offline" spellcheck="false" autocomplete="off">
   </div>
   <div class="vfield">
     <label class="vlabel" for="group">Group by</label>
@@ -1492,6 +1536,13 @@ var fleetTmpl = newScreen("fleet", `
 {{if .Pin.Any}}{{template "pin-bar" .Pin}}{{end}}
 
 {{if not .FilterOK}}<div class="filtererr"><b>That filter was not applied.</b> {{.FilterError}}</div>{{end}}
+{{if .NoMatch}}
+<div class="empty">
+  <h2>No Nodes match this Selector.</h2>
+  <p>No Node in this fleet matches every term of <code>{{.Filter}}</code>.
+  <a href="{{.ClearHref}}">Clear the filter</a>.</p>
+</div>
+{{end}}
 
 {{if .Wall}}
 <section class="systemstate">
@@ -1525,7 +1576,7 @@ var fleetTmpl = newScreen("fleet", `
     {{if .Quarantined}}<span class="gdev quar">{{.Quarantined}} quarantined</span>{{end}}
     {{if .Revoked}}<span class="gdev quar">{{.Revoked}} revoked</span>{{end}}
     {{if .Unreported}}<span class="gdev">{{.Unreported}} not reported</span>{{end}}
-    {{if .OffMode}}<span class="gdev drift">{{.OffMode}} on a different Policy fingerprint</span>{{end}}
+    {{if .OffMode}}<span class="gdev drift">{{.Fingerprinted}} {{plural .Fingerprinted "Node" "Nodes"}} on {{.Fingerprints}} Policy {{plural .Fingerprints "fingerprint" "fingerprints"}}</span>{{end}}
     {{if not .Open}}<span class="gdev calm">no deviations</span>{{end}}
   </header>
 
@@ -1595,10 +1646,13 @@ means unknown, not all-clear. This fills in at the next certificate renewal, at 
 certificate lifetime away.</p>
 {{end}}
 
-<p class="scopenote">This screen answers only what Relay can honestly answer about a Node: whether
-it is reachable, whether it will take work, what it will permit, and who vouched for it. There are
-no host metrics here, and there will not be. Host data is read on demand as a Job, with a Plan and a
-blast cap, and never collected on a schedule.</p>
+<details class="about">
+<summary>About this screen</summary>
+<p class="gap"><b>There are no host metrics here, and there will not be.</b> This screen answers
+only what Relay can honestly answer about a Node: whether it is reachable, whether it will take
+work, what it will permit, and who vouched for it. Host data is read on demand as a Job, with a
+Plan and a blast cap, and never collected on a schedule.</p>
+</details>
 `)
 
 // knownIn is the pin resolver over a Node page a screen has already read.

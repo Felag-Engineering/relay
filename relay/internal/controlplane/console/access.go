@@ -642,7 +642,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
     <div class="evwhen"><time datetime="{{.When}}">{{.When}}</time><span class="evkind">{{.EventKind}}</span></div>
     <div class="evbody">
       <div class="evhead">
-        {{if .Actor}}<a class="chiplink" href="{{.ActorHref}}">{{template "trust-chip" (trust .Actor true)}}</a>{{else if .HostLever}}<span class="dim">the Relay host</span> <code>{{.HostLever}}</code>{{else}}<span class="dim">no verified Account</span>{{end}}
+        {{if .Actor}}<a class="chiplink" href="{{.ActorHref}}">{{template "trust-chip" (trust .Actor true)}}</a>{{else if .HostLever}}<span class="dim">root on the Relay host (<code>{{.HostLever}}</code>)</span>{{else}}<span class="dim">no verified Account</span>{{end}}
         {{with .Asserted}}{{template "trust-chip" (trust . false)}}{{else}}{{if .NotAnAccount}}<span class="dim">a name that is not an Account</span>{{end}}{{end}}
         <span class="evsum">{{.Summary}}</span>
         {{with .Attempt}}<span class="chip attempt" data-attempt="{{.}}">{{.}}</span>{{end}}

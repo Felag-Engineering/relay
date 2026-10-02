@@ -1628,11 +1628,7 @@ func csvSafe(v string) string {
 }
 
 var activityTmpl = newScreen("activity", `
-<p class="lede">Calls made to the Relay, as the Relay received them, and what they did to the fleet.
-An AI-agent&#39;s calls arrive over MCP or the Control API, and so does a person&#39;s.
-This screen shows the <b>request</b> and never the reasoning. The Relay sees tool calls, not
-intent, and an account of <em>why</em> is exactly what an AI-agent under prompt injection would
-fabricate.</p>
+<p class="lede">Calls made to the Relay, as the Relay received them, and what they did to the fleet.</p>
 
 {{template "refresh" .Refresh}}
 
@@ -1811,6 +1807,12 @@ leads somewhere. For every other row kind, the outcome is applied in the query.<
 
 <details class="about">
 <summary>About this screen</summary>
+
+<p class="gap"><b>This screen shows the request and never the reasoning.</b>
+An AI-agent&#39;s calls arrive over MCP or the Control API, and so does a person&#39;s.
+The Relay sees tool calls, not
+intent, and an account of <em>why</em> is exactly what an AI-agent under prompt injection would
+fabricate.</p>
 
 <p class="gap"><b>Each page holds up to {{.JobPageSize}} dispatches and up to {{.AuditPageSize}} other
 events, merged by time.</b>

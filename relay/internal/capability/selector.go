@@ -152,9 +152,9 @@ func ParseSelector(s string) (Selector, error) {
 			// namespace: since #560 every tag: term is refused, so listing it
 			// as a way out of a typo would advertise the one prefix that
 			// cannot work. Surfaces render this string verbatim (the Console's
-			// fallback lead, MCP's "invalid selector" wrap, the Control API's
-			// problem detail), so a stale list here reaches an operator and an
-			// AI-agent alike.
+			// fleet filter, sentence-cased, MCP's "invalid selector" wrap, the
+			// Control API's problem detail), so a stale list here reaches an
+			// operator and an AI-agent alike.
 			return Selector{}, fmt.Errorf(
 				"capability: selector term %q has no node:, relay:, or state: prefix", term)
 		}
