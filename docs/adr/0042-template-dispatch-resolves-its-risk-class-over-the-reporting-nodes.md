@@ -29,6 +29,19 @@ pass under every rule that keys on `mutate`.
   unspecified, anything unrecognised — makes the whole dispatch `mutate`. A Node can always
   make a dispatch *stricter*; it cannot make one looser than its peers report.
 
+- **Each Task carries its own Node's class, and output retention follows it.** The dispatch's
+  most-restrictive class drives the cap, the approval gate and the plan hash. It does **not**
+  drive output retention (ADR-0025): there, "stricter" means *keeping more*, so a single Node
+  reporting `mutate` for a Template its peers report `read` would cause every honest Node's
+  read output to be retained in the audit trail and the read lane. Each Task is therefore
+  recorded under the class its own Node reported, and retention is decided per Task. A Node
+  that lies about its class changes the retention of its own output and nobody else's.
+  (Found in security review of the first implementation; owner decision 2026-10-02.)
+
+- **A stale report counts as no report.** A cached vocabulary whose fingerprint differs from
+  the template-set fingerprint the Node's latest `Hello` carried predates a daemon restart; until
+  the new report lands, that Node is excluded as not reported.
+
 - **A Node that does not report the Template is excluded before the class, the cap and the
   approval gate are decided**, and appears in the result as `unsupported`. Nothing is sent to
   it. This covers both a Node whose reported vocabulary lacks the name and a Node the Relay
@@ -90,6 +103,10 @@ pass under every rule that keys on `mutate`.
   exposure is to the Relay's *fan-out* guardrails, not to Policy.
 - **A Node can withhold a Template to be excluded.** Harmless: exclusion only ever reduces what
   runs.
+- **A Node can veto a Template dispatch** by reporting a different slot set for the same name:
+  the slot-agreement rule refuses the whole call rather than send it to some Nodes. Accepted —
+  it only ever prevents a run, and the refusal names the disagreeing Node so the Selector can
+  be narrowed around it.
 - Stronger answers are deliberately not chosen here — a class an operator pins per Template
   name on the Relay, pinning at first observation and alarming on a downgrade, or a Relay floor
   for unknown names. Each is a runtime object or a write path this decision avoids; each stays

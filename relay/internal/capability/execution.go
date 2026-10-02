@@ -215,19 +215,29 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	// A Node excluded from a Template dispatch (ADR-0042) gets a Task too,
 	// persisted the same way and then resolved unsupported without ever being
 	// sent — so the Job records every matched Node, and get_job re-reads the
-	// exclusion exactly as it reads any other outcome.
+	// exclusion exactly as it reads any other outcome. Excluded Tasks come
+	// FIRST, so they are resolved before any real Task is dispatched: they
+	// never sit Pending behind a slow fan-out where a concurrent cancel or a
+	// crash could leave them stranded.
+	//
+	// A dispatched Template Task is recorded under its own Node's reported
+	// class (d.nodeClass), which decides whether its output is retained.
 	pending := make([]pendingTask, 0, len(d.nodes)+len(d.excluded))
 	persist := func(n registry.Node, unsupported string) error {
 		taskID, err := e.prefixedID("task-")
 		if err != nil {
 			return fmt.Errorf("capability: generate task id for node %q: %w", n.NodeID, err)
 		}
+		action := d.action
+		if c, ok := d.nodeClass[n.NodeID]; ok {
+			action.RiskClass = c
+		}
 		task := jobs.Task{
 			ID:             taskID,
 			JobID:          jobID,
 			StageID:        stageID,
 			NodeID:         n.NodeID,
-			Action:         d.action,
+			Action:         action,
 			TimeoutSeconds: d.action.TimeoutSeconds,
 			CreatedAt:      e.now(),
 		}
@@ -237,13 +247,13 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 		pending = append(pending, pendingTask{task: task, outdated: n.Outdated, unsupported: unsupported})
 		return nil
 	}
-	for _, n := range d.nodes {
-		if err := persist(n, ""); err != nil {
+	for _, x := range d.excluded {
+		if err := persist(x.node, x.reason); err != nil {
 			return dispatchResult{}, err
 		}
 	}
-	for _, x := range d.excluded {
-		if err := persist(x.node, x.reason); err != nil {
+	for _, n := range d.nodes {
+		if err := persist(n, ""); err != nil {
 			return dispatchResult{}, err
 		}
 	}
@@ -262,6 +272,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 			Stdout:    res.Stdout,
 			Stderr:    res.Stderr,
 			Truncated: res.Truncated,
+			RiskClass: pt.task.Action.RiskClass,
 		})
 	}
 

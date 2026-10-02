@@ -23,6 +23,16 @@
 //     every remaining Node; Nodes that disagree about the slot set refuse the
 //     call rather than receive it piecemeal. Names only — values are the
 //     daemon's (invariant 12).
+//   - Each Task records ITS OWN Node's reported class, and output retention
+//     (ADR-0025) follows that per-Task class — not the dispatch's. Most-
+//     restrictive is the safe direction for the cap and the approval gate but
+//     the unsafe one for retention: one Node reporting mutate must not cause
+//     every other Node's read output to be kept. A Node can only change the
+//     retention of its own output.
+//   - A cached report whose fingerprint differs from the template-set
+//     fingerprint the Node's latest Hello carried is stale — the daemon has
+//     restarted with a different set and its new report has not landed yet —
+//     and counts as no report at all.
 //
 // resolveAction COMPUTES and never refuses: the caller authorizes first and
 // only then acts on resolvedAction.refusal, so a caller who may not ask
@@ -70,9 +80,15 @@ type excludedNode struct {
 // from it, and — if the dispatch must be refused — why. For a Native
 // Operation or Raw Exec it is the input unchanged with every matched Node
 // dispatched.
+//
+// nodeClass is each dispatched Node's OWN reported class for a Template
+// (nil for a Native Operation or Raw Exec, whose class is the Action's): the
+// class its Task is recorded under, which decides whether its output is
+// retained.
 type resolvedAction struct {
 	act         jobs.Action
 	nodes       []registry.Node
+	nodeClass   map[string]jobs.RiskClass
 	excluded    []excludedNode
 	refusal     error
 	refusalKind RefusalKind
@@ -105,14 +121,14 @@ func (s *Service) resolveAction(act jobs.Action, matched []registry.Node) resolv
 			refusal: &TemplateClassPresetError{Operation: act.OperationName, Class: act.RiskClass}}
 	}
 
-	out := resolvedAction{act: act}
+	out := resolvedAction{act: act, nodeClass: map[string]jobs.RiskClass{}}
 	var (
 		supporting  []nodevocab.Template
 		notReported int
 	)
 	for _, n := range matched {
 		snap, ok := s.templateSnapshot(n.NodeID)
-		if !ok {
+		if !ok || snap.Fingerprint != n.TemplateSetFingerprint {
 			notReported++
 			out.excluded = append(out.excluded, excludedNode{node: n, reason: TemplateNotReportedReason})
 			continue
@@ -123,6 +139,7 @@ func (s *Service) resolveAction(act jobs.Action, matched []registry.Node) resolv
 			continue
 		}
 		out.nodes = append(out.nodes, n)
+		out.nodeClass[n.NodeID] = mostRestrictiveClass([]nodevocab.Template{t})
 		supporting = append(supporting, t)
 	}
 

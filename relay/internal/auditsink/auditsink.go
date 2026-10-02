@@ -242,12 +242,19 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 	// access record.
 	//
 	// Keyed on risk class rather than on a name list, so a Template Operation
-	// added later inherits the posture from its declared class instead of
-	// needing to be remembered here.
-	retainOutput := e.Action.RiskClass != jobs.RiskClassRead
-
+	// inherits the posture from its declared class instead of needing to be
+	// remembered here — and keyed PER RESULT: a Template's Tasks each run
+	// under their own Node's reported class (ADR-0042), so one Node reporting
+	// mutate cannot cause another Node's read output to be retained. A result
+	// with no class of its own falls back to the dispatch's.
 	var errs []error
 	for _, r := range e.Results {
+		class := r.RiskClass
+		if class == jobs.RiskClassUnspecified {
+			class = e.Action.RiskClass
+		}
+		retainOutput := class != jobs.RiskClassRead
+
 		rec := base
 		rec.Kind = audit.KindDispatch
 		rec.NodeID = r.NodeID

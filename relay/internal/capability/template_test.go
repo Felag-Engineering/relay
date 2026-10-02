@@ -7,7 +7,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
@@ -550,5 +552,208 @@ func TestPreflightRefusesAnUnknownTemplate(t *testing.T) {
 	}
 	if len(log) != 0 {
 		t.Errorf("conduit log = %v, want no Node queried", log)
+	}
+}
+
+// --- Review fixes: per-Node class, stale reports, ordering, approval -------
+
+// Each Task is recorded under its OWN Node's reported class, while the cap
+// sees the dispatch's most-restrictive one — so retention (ADR-0025) follows
+// the Node that produced the output.
+func TestRun_TemplateTasksRecordTheirOwnNodesClass(t *testing.T) {
+	reg := seedNodes(t, 2)
+	var log []string
+	capc := &spyCapChecker{}
+	vocab := staticVocab{
+		"node-0": {Templates: []nodevocab.Template{readTemplate("proc.list")}},
+		"node-1": {Templates: []nodevocab.Template{mutateTemplate("proc.list")}},
+	}
+	svc, f := newTemplateTestService(t, reg, connectedConduit(&log, "node-0", "node-1"), vocab, capc)
+
+	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("proc.list", nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if capc.gotClass != jobs.RiskClassMutate {
+		t.Errorf("cap class = %s, want mutate (most restrictive)", jobs.RiskClassName(capc.gotClass))
+	}
+	want := map[string]jobs.RiskClass{"node-0": jobs.RiskClassRead, "node-1": jobs.RiskClassMutate}
+	for _, r := range results {
+		if r.RiskClass != want[r.NodeID] {
+			t.Errorf("result %s class = %s, want %s", r.NodeID, jobs.RiskClassName(r.RiskClass), jobs.RiskClassName(want[r.NodeID]))
+		}
+	}
+	tasks, err := f.tasks.ByJob(context.Background(), results[0].JobID)
+	if err != nil {
+		t.Fatalf("ByJob: %v", err)
+	}
+	for _, task := range tasks {
+		if task.Action.RiskClass != want[task.NodeID] {
+			t.Errorf("task %s recorded class %s, want its own Node's %s", task.NodeID, jobs.RiskClassName(task.Action.RiskClass), jobs.RiskClassName(want[task.NodeID]))
+		}
+	}
+}
+
+// A cached report whose fingerprint differs from the Node's latest Hello is
+// from before a daemon restart; until the new report lands it counts as no
+// report, so a Template whose class changed across the restart cannot be
+// dispatched under the old one.
+func TestResolveAction_StaleReportCountsAsNotReported(t *testing.T) {
+	s := &Service{nodeVocab: staticVocab{
+		"fresh": {Fingerprint: "fp-new", Templates: []nodevocab.Template{readTemplate("svc.status")}},
+		"stale": {Fingerprint: "fp-old", Templates: []nodevocab.Template{readTemplate("svc.status")}},
+	}}
+	nodes := []registry.Node{
+		{NodeID: "fresh", TemplateSetFingerprint: "fp-new"},
+		{NodeID: "stale", TemplateSetFingerprint: "fp-new"},
+	}
+	ra := s.resolveAction(templateAction("svc.status", nil), nodes)
+	if len(ra.nodes) != 1 || ra.nodes[0].NodeID != "fresh" {
+		t.Fatalf("dispatched = %v, want only [fresh]", ra.nodes)
+	}
+	if len(ra.excluded) != 1 || ra.excluded[0].reason != TemplateNotReportedReason {
+		t.Errorf("excluded = %+v, want the stale Node excluded as not reported", ra.excluded)
+	}
+}
+
+// orderCheckingConduit fails the test if any excluded Task is still Pending
+// when the first real Task is dispatched.
+type orderCheckingConduit struct {
+	*fakeConduit
+	t        *testing.T
+	tasks    jobs.TaskRepository
+	excluded string
+}
+
+func (c *orderCheckingConduit) Dispatch(ctx context.Context, nodeID string, task jobs.Task) (jobs.Result, error) {
+	all, err := c.tasks.ByJob(ctx, task.JobID)
+	if err != nil {
+		c.t.Errorf("ByJob during dispatch: %v", err)
+	}
+	for _, other := range all {
+		if other.NodeID == c.excluded && other.State != jobs.DispatchStateResolved {
+			c.t.Errorf("excluded Task for %s was %v when %s was dispatched; it must be resolved first", c.excluded, other.State, nodeID)
+		}
+	}
+	return c.fakeConduit.Dispatch(ctx, nodeID, task)
+}
+
+func TestRun_ExcludedTasksAreResolvedBeforeAnyDispatch(t *testing.T) {
+	reg := seedNodes(t, 2)
+	var log []string
+	jobsRepo, tasksRepo := testEngineStore(t)
+	conduit := &orderCheckingConduit{fakeConduit: connectedConduit(&log, "node-0", "node-1"), t: t, tasks: tasksRepo, excluded: "node-1"}
+	svc := New(reg,
+		WithAuthorizer(&spyAuthorizer{}),
+		WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(&spyAuditSink{}),
+		WithFreeze(&fakeFreezeStore{}),
+		WithExecution(jobsRepo, tasksRepo, conduit),
+		WithTemplateVocabulary(staticVocab{"node-0": {Templates: []nodevocab.Template{readTemplate("svc.status")}}}),
+	)
+	if _, err := svc.Run(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("svc.status", nil)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(log) != 1 || log[0] != "dispatch:node-0" {
+		t.Errorf("conduit log = %v, want exactly one dispatch to node-0", log)
+	}
+}
+
+// templateApprovalFixture is approvalFixture with a Template vocabulary wired.
+func templateApprovalFixture(t *testing.T, nodes []string, vocab TemplateVocabularySource, gate ApprovalGate, store ApprovalStore) (*Service, *spyDispatcher) {
+	t.Helper()
+	reg := registry.NewInMemory()
+	for _, id := range nodes {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("seed registry: %v", err)
+		}
+	}
+	disp := &spyDispatcher{jobID: "job-1"}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}),
+		WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(&spyAuditSink{}),
+		WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
+		WithTemplateVocabulary(vocab),
+		WithClock(func() time.Time { return apNow }),
+	)
+	s.disp = disp
+	return s, disp
+}
+
+// A mutate-keyed approval rule sees the RESOLVED class: an all-read Template
+// dispatch is not gated, and the same dispatch parks as soon as one Node
+// reports the Template mutate.
+func TestRun_TemplateApprovalGateMatchesTheResolvedClass(t *testing.T) {
+	gate, err := approval.NewGate([]approval.Rule{{
+		Name:    "mutates-need-a-human",
+		Match:   approval.Match{RiskClass: jobs.RiskClassMutate},
+		Require: approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+	}})
+	if err != nil {
+		t.Fatalf("NewGate: %v", err)
+	}
+	vocab := staticVocab{
+		"node-a": {Templates: []nodevocab.Template{readTemplate("svc.thing")}},
+		"node-b": {Templates: []nodevocab.Template{readTemplate("svc.thing")}},
+	}
+	s, disp := templateApprovalFixture(t, []string{"node-a", "node-b"}, vocab, gate, newMemApprovals())
+	if _, err := s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.thing", nil)); err != nil {
+		t.Fatalf("all-read Run: %v, want it to proceed ungated", err)
+	}
+	if !disp.called {
+		t.Fatal("all-read Template dispatch did not reach the dispatcher")
+	}
+
+	vocab["node-b"] = nodevocab.Snapshot{Templates: []nodevocab.Template{mutateTemplate("svc.thing")}}
+	disp.called = false
+	_, err = s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.thing", nil))
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("mixed Run err = %v, want a park under the mutate rule", err)
+	}
+	if disp.called {
+		t.Error("a parked dispatch reached the dispatcher")
+	}
+}
+
+// An approval binds the resolved class and the Nodes that report the
+// Template. If either changes before the re-drive, the plan hash differs and
+// the dispatch parks again rather than releasing against an approval that
+// described something else (ADR-0027's drift rule, ADR-0042).
+func TestRun_TemplateApprovalReparksWhenTheReportingSetOrClassChanges(t *testing.T) {
+	store := newMemApprovals()
+	vocab := staticVocab{
+		"node-a": {Templates: []nodevocab.Template{mutateTemplate("svc.restart")}},
+		"node-b": {Templates: []nodevocab.Template{mutateTemplate("svc.restart")}},
+	}
+	s, disp := templateApprovalFixture(t, []string{"node-a", "node-b", "node-c"}, vocab, gateEverything(t, 1), store)
+
+	_, err := s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.restart", nil))
+	var first *ParkedError
+	if !errors.As(err, &first) {
+		t.Fatalf("first Run err = %v, want a park", err)
+	}
+	store.approve(t, first.RequestID, "acct-ana", "ana", apNow)
+
+	// node-c starts reporting the Template: the remaining set changed.
+	vocab["node-c"] = nodevocab.Snapshot{Templates: []nodevocab.Template{mutateTemplate("svc.restart")}}
+	_, err = s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.restart", nil))
+	var second *ParkedError
+	if !errors.As(err, &second) || second.PlanHash == first.PlanHash {
+		t.Fatalf("Run after the reporting set grew: err = %v, want a fresh park with a different plan hash", err)
+	}
+	if disp.called {
+		t.Fatal("an approval for two Nodes released a dispatch to three")
+	}
+
+	// Back to the approved set: it releases.
+	delete(vocab, "node-c")
+	if _, err := s.Run(context.Background(), machineRequester, Selector{}, templateAction("svc.restart", nil)); err != nil {
+		t.Fatalf("re-drive of the approved plan: %v", err)
+	}
+	if !disp.called {
+		t.Error("the approved plan did not release")
 	}
 }

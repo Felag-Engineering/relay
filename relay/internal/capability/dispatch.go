@@ -29,6 +29,12 @@ type dispatch struct {
 	// newDispatch itself.
 	excluded []excludedNode
 
+	// nodeClass is each dispatched Node's own reported class for a Template
+	// (ADR-0042): its Task is recorded under it, so output retention follows
+	// the Node that produced the output rather than the dispatch's
+	// most-restrictive class. Nil for a Native Operation or Raw Exec.
+	nodeClass map[string]jobs.RiskClass
+
 	// jobID is a Job ID reserved — and already bound to the releasing
 	// approval — before dispatch (AP-77). When empty, the dispatcher mints
 	// its own, exactly as before. Set by Service.Run after the release claim
@@ -66,6 +72,15 @@ type NodeResult struct {
 	Stdout    []byte
 	Stderr    []byte
 	Truncated bool
+
+	// RiskClass is the class this Node's Task ran under. For a Native
+	// Operation or Raw Exec it is the Action's; for a Template Operation it
+	// is that Node's OWN reported class, which may be looser than the
+	// dispatch's most-restrictive one (ADR-0042). Output retention keys on
+	// this, never on the dispatch's class, so one Node cannot cause another
+	// Node's read output to be retained (ADR-0025). Unspecified on results
+	// that ran nothing (a reattach, noopDispatcher).
+	RiskClass jobs.RiskClass
 }
 
 // dispatchResult is what dispatcher.run returns: the Job's identity plus its

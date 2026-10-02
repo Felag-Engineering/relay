@@ -634,6 +634,7 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 
 	d := newDispatch(p, sel, nodes, act)
 	d.excluded = ra.excluded
+	d.nodeClass = ra.nodeClass
 
 	// A single-Plan approval's release is now CLAIMED before dispatch, not
 	// bound after it (AP-77). The join between the approval and the Job it
