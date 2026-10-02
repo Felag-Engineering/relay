@@ -662,7 +662,7 @@ var accessTmpl = newScreen("access", `
 
 <details class="about">
 <summary>About this screen</summary>
-<p class="gap"><b>Each page holds up to {{.PageSize}} records</b>, newest first. <b>Every Refresh is an audited read</b>. OAuth sign-ins are not listed. There is no filter by the changed Account. Older failed sign-ins may show whatever was typed, which may not be an Account. This screen is limited to admins in the Console only.{{template "about-docs" "access"}}</p>
+<p class="gap"><b>Each page holds up to {{.PageSize}} records</b>, newest first. <b>Every Refresh is an audited read</b>. OAuth sign-ins are not listed. There is no filter by the changed Account. An older failed sign-in may show text typed into the wrong box, not an Account's name. This screen is limited to admins in the Console only.{{template "about-docs" "access"}}</p>
 </details>
 
 {{end}}

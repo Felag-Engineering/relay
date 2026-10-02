@@ -623,7 +623,7 @@ var compareTmpl = newScreen("compare", `
 </table>
 </div>
 
-<p class="note">Each cell is what that Node's daemon <b>reported</b>; a difference is not a verdict on what will run.</p>
+<p class="note">Each cell is what that Node's daemon <b>reported</b>; this screen never predicts what will run.</p>
 
 {{if .AllPolicyMissing}}
 <p class="gap"><b>Neither Node has reported its Policy since the Relay last started</b>, so identical Policy rows mean nothing.</p>

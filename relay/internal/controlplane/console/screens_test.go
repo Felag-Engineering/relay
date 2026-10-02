@@ -3326,6 +3326,14 @@ func TestApprovalDiff_ScaleArgumentChangeIsTheHeadline(t *testing.T) {
 	if !strings.Contains(content, "version 1.24.0 → 1.25.0") {
 		t.Error("the diff callout does not name the scale argument that moved")
 	}
+	// Differing plan hashes do not mean the scale moved: an Approval grant's
+	// hash also covers its window, so two same-shape grants always differ.
+	if !strings.Contains(content, "The plan hashes differ, so this is not exactly what was approved then.") {
+		t.Error("the callout does not say what differing plan hashes mean")
+	}
+	if strings.Contains(content, "an amount this Relay cannot say") {
+		t.Error("the callout claims the scale moved by an amount this Relay cannot say; a differing hash proves no such thing")
+	}
 	if strings.Contains(content, "name nginx → nginx") {
 		t.Error("the callout listed an argument that did not change")
 	}
@@ -3570,8 +3578,8 @@ func TestApproval_SelectorIsNotShownWhenTheRecordCannotSayWhatItWas(t *testing.T
 	if strings.Contains(content, "<b>every Node</b> (no Selector terms)") {
 		t.Error("a record with no Action kind was rendered as a fleet-wide dispatch")
 	}
-	if !strings.Contains(content, "will not guess which") {
-		t.Error("the card does not say why the Selector is absent")
+	if !strings.Contains(content, "an empty Selector means unrecorded or every Node; this screen will not guess which") {
+		t.Error("the card does not say why the Selector is absent, or says an empty Selector might mean no Node")
 	}
 }
 

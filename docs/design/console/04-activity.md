@@ -220,8 +220,8 @@ it, one sentence says what the number counts, in plain lower-case words: events 
 not rows that will appear, from a stream this page's filter does not narrow, where one Job
 announces itself more than once. The control is a Refresh in the sense of `00-foundations.md`
 ("Refreshing a screen"): a deliberate click, never a timer. The "About this screen" disclosure
-says that every reload is an audited read, and that those reads are reads made from this Console,
-so the default above leaves them out.
+says that every reload is an audited read made from this Console; the kind chips' own visible note
+says the default above leaves such reads out.
 
 The live region states its condition in words alone ("Live.", "The live stream is not
 connected.", and the rest). It draws no pulsing dot or other animated indicator (owner decision,

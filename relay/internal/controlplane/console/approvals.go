@@ -1460,10 +1460,10 @@ const unspecifiedActionKind = "unspecified"
 
 // The diff callout's four absences: why nothing is being compared.
 const (
-	absenceGrantStoreUnreadable = "The Approval grant store could not be read, so nothing is being compared to it."
+	absenceGrantStoreUnreadable = "The Approval grant store could not be read, so nothing is being compared."
 	absenceShapeNeverComputed   = "This record's shape was never computed, so nothing can be compared to it."
 	absenceNoPrior              = "Nothing of this shape has been approved on this Relay before."
-	absencePriorUnreadable      = "The last approval of this shape could not be read, so nothing is being compared to it."
+	absencePriorUnreadable      = "The last approval of this shape could not be read, so nothing is being compared."
 )
 
 // buildApprovalDiff is spec 08's anti-fatigue callout, and the rule it follows
@@ -1807,7 +1807,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
     <p class="nodiff">Nothing this Relay is able to compare has changed since then.</p>
   {{end}}
   {{if .Diff.PlanHashKnown}}{{if .Diff.SamePlanHash}}<p class="note">Both records carry the same plan hash: the same action over the same resolved Nodes.</p>
-  {{else}}<p class="note">The plan hashes differ, so the scale moved by an amount this Relay cannot say.</p>{{end}}{{end}}
+  {{else}}<p class="note">The plan hashes differ, so this is not exactly what was approved then.</p>{{end}}{{end}}
   {{with .Diff.NotComparable}}<p class="note">Not compared: {{join "; " .}}.</p>{{end}}
 {{else}}
   <p class="nodiff">{{.Diff.Absence}}</p>
@@ -1823,7 +1823,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   </div>
 
   <p class="summary">{{.Summary}}</p>
-  <p class="note">The Relay wrote that sentence; the caller chose only the Operation.</p>
+  <p class="note">The Relay wrote that sentence; the caller chose what it describes, not its words.</p>
 
   <dl class="kv">
     <dt class="baseline">requested by</dt><dd class="baseline">{{template "trust-chip" (trust .Requester .Verified)}}</dd>
@@ -1883,7 +1883,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   {{else if .Action.Unreadable}}
   <p class="note">The park's audit record could not be read: a read failure, not an empty record.</p>
   {{else if .Action.Missing}}
-  <p class="note">The trail has no <code>approval_requested</code> record for this Request, which is not proof there was none.</p>
+  <p class="note">The trail has no <code>approval_requested</code> record, so the Selector and arguments are unknown, not empty.</p>
   {{else}}
   <dl class="kv">
     {{if .Action.Known}}
@@ -1893,7 +1893,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
     <dt>arguments</dt><dd>{{if .Action.Args}}<code>{{.Action.Args}}</code>{{else}}none recorded{{end}}</dd>
   </dl>
   <p class="note">Read from this Request's park record in the audit trail.</p>
-  {{if not .Action.Known}}<p class="note">Lacking an Action kind, an empty Selector means none or every Node; this screen will not guess which.</p>{{end}}
+  {{if not .Action.Known}}<p class="note">Lacking an Action kind, an empty Selector means unrecorded or every Node; this screen will not guess which.</p>{{end}}
   <p class="note">The <b>resolved fan-out is not stored on the approval record</b>.</p>
   {{end}}
 </section>

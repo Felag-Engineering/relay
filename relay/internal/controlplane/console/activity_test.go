@@ -593,7 +593,7 @@ func TestActivity_OutcomeOnTheJobLaneSaysWhatItCosts(t *testing.T) {
 	if strings.Contains(body, "job-clean") {
 		t.Error("a Job with no deny survived ?outcome=denied_by_policy")
 	}
-	if !strings.Contains(body, "Outcome keeps every Job with at least one <code>denied_by_policy</code> Task</b>, so a filtered page can come back short") {
+	if !strings.Contains(body, "Outcome keeps Jobs with at least one <code>denied_by_policy</code> Task</b>; a short page is not the end") {
 		t.Error("the page does not say that the dispatch outcome filter is applied after the fetch — " +
 			"an operator would read a short page as 'this is everything'")
 	}

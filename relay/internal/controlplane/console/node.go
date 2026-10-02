@@ -579,7 +579,7 @@ func nodeTaskFrom(rec audit.Record) (nodeTask, bool) {
 var nodeMissingTmpl = newScreen("nodemissing", `
 <div class="placeholder">
   <p>No Node with the id <code>{{.}}</code> is in this Relay's registry.</p>
-  <p>A revoked Node stays readable; an id that was never enrolled has none.</p>
+  <p>A revoked Node stays readable; an id that was never enrolled has no record.</p>
   <p><a href="/console/">Back to the fleet</a>.</p>
 </div>
 `)
@@ -623,7 +623,7 @@ var nodeTmpl = newScreen("node", `
       {{else}}
       <p class="gap"><b>Revoked at {{.RevokedAt}}</b> by <b>{{.RevokedBy}}</b>, with no reason: this Node was revoked before the endpoint accepted one.</p>
       {{end}}{{else}}
-      <p class="gap"><b>Revoked at {{.RevokedAt}}</b>; the audit trail holds no record of who revoked this Node.</p>
+      <p class="gap"><b>Revoked at {{.RevokedAt}}</b>; the audit trail holds no record of this revocation.</p>
       {{end}}
       <p class="note">Its record is kept for investigation; its certificate is revoked and it cannot reconnect.</p>
       {{end}}
@@ -652,11 +652,11 @@ var nodeTmpl = newScreen("node", `
           <span class="dim">{{.TemplateShared}} {{plural .TemplateShared "Node reports" "Nodes report"}} this</span>
         {{else}}<span class="dim">no templates installed</span>{{end}}</dd>
       </dl>
-      <p class="note">These counts are observation, never evidence of equal Policy or trust.</p>
+      <p class="note">These counts are observations, never evidence of equal Policy or trust.</p>
     </section>
 
     <section class="panel">
-      <h3>Facts <span class="phint">self-reported · never used for targeting</span></h3>
+      <h3>Facts <span class="phint">self-reported · this page only · never targeted</span></h3>
       {{if .Facts}}
       <dl>{{range .Facts}}<dt>{{.Key}}</dt><dd>{{.Value}}</dd>{{end}}</dl>
       {{else}}<p class="dim">This Node has not reported any Facts.</p>{{end}}

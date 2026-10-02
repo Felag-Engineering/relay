@@ -115,7 +115,7 @@ func TestActivity_SituationalMessagesStayVisible(t *testing.T) {
 		{"/console/activity?window=fortnight", "Part of this URL could not be read:"},
 		{"/console/activity?kind=nonesuch", "There is no row kind called"},
 		{"/console/activity?q=nginx", "matches text within the rows already on this page"},
-		{"/console/activity?outcome=failure", "Outcome keeps every Job with at least one"},
+		{"/console/activity?outcome=failure", "Outcome keeps Jobs with at least one"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			mustBeSituational(t, get(t, h, tc.path).Body.String(), tc.msg)
@@ -316,9 +316,9 @@ func TestNode_MandatedNotesStayVisible(t *testing.T) {
 	for _, msg := range []string{
 		"There is no path from this screen to this Node's Policy",
 		"receipt time, not a query time",
-		"self-reported · never used for targeting",
+		"self-reported · this page only · never targeted",
 		"reported by the daemon",
-		"These counts are observation",
+		"These counts are observations",
 		"never the Node",
 	} {
 		mustBeSituational(t, body, msg)

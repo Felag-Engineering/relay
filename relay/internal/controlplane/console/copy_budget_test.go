@@ -11,6 +11,27 @@ package console
 // edit go.mod. It is strict instead of forgiving. A tag-stack mismatch is an
 // error naming both tags and the byte offset, because a scanner that silently
 // misattributes text is a budget test that silently passes.
+//
+// What is enforced, stated so the guard claims no more than it does. Every
+// element of a rendered page falls in exactly one of these:
+//
+//   - measured: explanatory prose. Counts toward the screen's budget and is
+//     capped per element. A <p> is measured by default, whatever its class, so
+//     a new paragraph is a note until somebody argues otherwise below.
+//   - bounded: data, or the annotation of a value. Capped per element, not
+//     budgeted.
+//   - exempt: recorded data a Relay author did not write (an approval summary,
+//     a diff row) or a sentence the capability layer owns (the deny block's
+//     BoundaryExplanation).
+//   - a value: text inside td, dd, dt, th, code, pre, a, label or a heading is
+//     a datum or a name, not prose. <dd> is exempt on purpose: it is a value
+//     cell, and a note placed in one is the one place this guard cannot see it.
+//   - unclassified: ANY other run of eight or more words — in an <li>, a
+//     <summary>, a <div>, a bare container — fails the test. A new kind of
+//     element cannot carry prose past the budget by being new.
+//
+// Class names are matched on the element that carries them (tag.class), never
+// by the class alone, so a <span> cannot borrow what a <p> is allowed.
 
 import (
 	"fmt"
@@ -75,33 +96,48 @@ var measuredClasses = map[string]bool{
 }
 
 // boundedClasses are held to maxNoteWords but not budgeted: each is data, or
-// the annotation of a value, rather than a note about the screen. The reason
-// is the test's own documentation of why the class is not a note.
+// the annotation of a value, rather than a note about the screen. Keyed by
+// "tag.class"; the reason is the test's own documentation of why the element
+// is not a note.
 var boundedClasses = map[string]string{
-	"dim":        "an honest absence or a value's annotation",
-	"sub":        "a value's annotation",
-	"qrules":     "a queue row's data line",
-	"tcap":       "a table caption",
-	"wmsg":       "live-status words, one shown at a time",
-	"evlive":     "live-status words, one shown at a time",
-	"rnlive":     "live-status words, one shown at a time",
-	"clabel":     "a cluster's data label",
-	"repeatdeny": "a data row",
-	"truths":     "Day one's state facts (each li of ul.truths)",
+	"p.dim":         "an honest absence or a value's annotation",
+	"span.dim":      "an honest absence or a value's annotation",
+	"div.sub":       "a value's annotation",
+	"div.qrules":    "a queue row's data line",
+	"caption.tcap":  "a table caption",
+	"span.wmsg":     "live-status words, one shown at a time",
+	"span.evlive":   "live-status words, one shown at a time",
+	"span.rnlive":   "live-status words, one shown at a time",
+	"div.clabel":    "a cluster's data label",
+	"p.mode":        "Fleet distribution line: counts",
+	"p.rncount":     "a count",
+	"p.back":        "navigation",
+	"p.rolestate":   "Accounts role and state data",
+	"span.unattrib": "what stands in the requester slot when the trail recorded none: a value, a trail defect named",
+	"span.overcap":  "a Plan's over-cap verdict: a state, drawn where the cap arithmetic is",
+	"ul.truths":     "Day one's state facts (each li of ul.truths)",
 }
 
-// exemptClasses are not measured at all. denynote is exempt only when its
-// text IS one of the capability layer's BoundaryExplanation strings; any other
-// denynote (the Console's own clip note) is measured.
+// exemptClasses are not measured at all, keyed by "tag.class". denynote is
+// exempt only when its text IS one of the capability layer's
+// BoundaryExplanation strings; any other denynote (the Console's own clip
+// note) is measured.
 var exemptClasses = map[string]string{
-	"mode":       "Fleet distribution line: counts",
-	"rncount":    "a count",
-	"summary":    "Relay-authored approval summary, recorded data",
-	"diffchange": "diff data",
-	"back":       "navigation",
-	"rolestate":  "Accounts role and state data",
-	"denynote":   "the capability layer's shared refusal bytes (00 'The deny block')",
+	"p.summary":    "Relay-authored approval summary, recorded data",
+	"p.diffchange": "diff data",
+	"p.denynote":   "the capability layer's shared refusal bytes (00 'The deny block')",
 }
+
+// valueTags hold a value or a name, not prose: text inside one is never
+// reported as unclassified. dd is here deliberately (see the header).
+var valueTags = map[string]bool{
+	"td": true, "dd": true, "dt": true, "th": true, "code": true, "pre": true, "a": true,
+	"label": true, "h1": true, "h2": true, "h3": true, "h4": true, "h5": true, "h6": true,
+}
+
+// minUnclassifiedRun is the shortest run of words outside every classified
+// element that fails the test. Below it a run is a label or a fragment.
+const minUnclassifiedRun = 8
 
 // barePContainers are the classes whose bare <p> children are prose (the
 // nearest classed ancestor decides).
@@ -110,7 +146,10 @@ var barePContainers = map[string]bool{
 }
 
 // barePSkipped are the classes whose bare <p> children are data or a secret:
-// an approval decision line, and the reveal-once token page.
+// an approval decision line, and the reveal-once token page (its bare <p>s are
+// the reveal-once instruction, the secret itself and navigation — 15
+// "plaintext is shown once" — none of them a note). A note nested inside one
+// is still measured.
 var barePSkipped = map[string]bool{"jobapproval": true, "minted": true}
 
 // noteish is the class shape that must be classified: a span or div whose
@@ -164,7 +203,18 @@ var copyTag = regexp.MustCompile(`<(/?)([a-zA-Z][a-zA-Z0-9]*)((?:[^>"']|"[^"]*"|
 
 var htmlComment = regexp.MustCompile(`(?s)<!--.*?-->`)
 
-var classAttr = regexp.MustCompile(`\bclass="([^"]*)"`)
+// classAttr and titleAttr accept single- and double-quoted values: HTML does,
+// and a quote style the scan skips is a place prose can hide.
+var classAttr = regexp.MustCompile(`\bclass=(?:"([^"]*)"|'([^']*)')`)
+
+// classesOf returns the classes in a tag's attribute text.
+func classesOf(attrs string) []string {
+	cm := classAttr.FindStringSubmatch(attrs)
+	if cm == nil {
+		return nil
+	}
+	return strings.Fields(cm[1] + cm[2])
+}
 
 var voidTags = map[string]bool{
 	"br": true, "img": true, "input": true, "meta": true, "link": true, "hr": true, "wbr": true,
@@ -198,6 +248,7 @@ type openElem struct {
 	class   string // the class that classified it
 	about   bool   // this element is <details class="about">
 	collect *strings.Builder
+	own     strings.Builder // text directly inside, when nothing classifies it
 }
 
 // proseOf measures rendered content. It returns every measured and bounded
@@ -212,7 +263,7 @@ func proseOf(content string) (elems []proseElem, unclassified []string, err erro
 	// element nested in another counts once, as part of the outer one.
 	collector := func() *openElem {
 		for _, e := range stack {
-			if e.kind != kindNone {
+			if e.kind != kindNone && e.kind != kindSkipped {
 				return e
 			}
 		}
@@ -226,9 +277,40 @@ func proseOf(content string) (elems []proseElem, unclassified []string, err erro
 		}
 		return false
 	}
+	// accountedFor reports whether text here is already classified: collected
+	// by a measured, bounded or exempt element, or inside a value or a
+	// skipped data paragraph.
+	accountedFor := func() bool {
+		if collector() != nil {
+			return true
+		}
+		for _, e := range stack {
+			if valueTags[e.tag] || e.kind == kindSkipped {
+				return true
+			}
+		}
+		return false
+	}
+	var rootText strings.Builder
 	appendText := func(s string) {
 		if c := collector(); c != nil && c.collect != nil {
 			c.collect.WriteString(s)
+		}
+		if accountedFor() {
+			return
+		}
+		if len(stack) == 0 {
+			rootText.WriteString(s)
+			return
+		}
+		stack[len(stack)-1].own.WriteString(s)
+	}
+	reportRun := func(e *openElem) {
+		text := strings.Join(strings.Fields(e.own.String()), " ")
+		if n := countWords(text); n >= minUnclassifiedRun {
+			unclassified = append(unclassified, fmt.Sprintf(
+				"byte %d: <%s class=%q> carries a %d-word run that no measured class collects: %q",
+				e.offset, e.tag, strings.Join(e.classes, " "), n, text))
 		}
 	}
 
@@ -253,6 +335,7 @@ func proseOf(content string) (elems []proseElem, unclassified []string, err erro
 				return nil, nil, fmt.Errorf("byte %d: </%s> closes <%s> opened at byte %d", m[0], tag, top.tag, top.offset)
 			}
 			stack = stack[:len(stack)-1]
+			reportRun(top)
 			if top.collect == nil {
 				continue
 			}
@@ -275,19 +358,12 @@ func proseOf(content string) (elems []proseElem, unclassified []string, err erro
 			continue
 		}
 
-		var classes []string
-		if cm := classAttr.FindStringSubmatch(attrs); cm != nil {
-			classes = strings.Fields(cm[1])
-		}
+		classes := classesOf(attrs)
 		e := &openElem{tag: tag, classes: classes, offset: m[0]}
 		e.about = tag == "details" && len(classes) > 0 && classes[0] == "about"
 		if collector() == nil {
 			e.kind, e.class = classify(tag, classes, stack, inAbout())
-			if e.kind == kindSkipped {
-				// Data or a secret, not prose — but a note nested inside it
-				// (a span.gap in an approval line) is still measured.
-				e.kind = kindNone
-			} else if e.kind == kindNone && tag == "p" && len(classes) == 0 {
+			if e.kind == kindNone && tag == "p" && len(classes) == 0 {
 				unclassified = append(unclassified, fmt.Sprintf("byte %d: a bare <p> with no classified container", m[0]))
 			}
 			if e.kind == kindNone && (tag == "span" || tag == "div") {
@@ -297,21 +373,27 @@ func proseOf(content string) (elems []proseElem, unclassified []string, err erro
 					}
 				}
 			}
-			if e.kind != kindNone {
+			if e.kind != kindNone && e.kind != kindSkipped {
 				e.collect = &strings.Builder{}
 			}
 		}
 		stack = append(stack, e)
 	}
+	appendText(html.UnescapeString(content[pos:]))
 	if len(stack) > 0 {
 		top := stack[len(stack)-1]
 		return nil, nil, fmt.Errorf("<%s> opened at byte %d is never closed", top.tag, top.offset)
 	}
+	if n := countWords(rootText.String()); n >= minUnclassifiedRun {
+		unclassified = append(unclassified, fmt.Sprintf("a %d-word run outside every element: %q", n, strings.Join(strings.Fields(rootText.String()), " ")))
+	}
 	return elems, unclassified, nil
 }
 
-// classify decides what an element's text is, from its own classes and, for
-// a bare <p>, its nearest classed ancestor.
+// classify decides what an element's text is, from its own tag and classes
+// and, for a bare <p>, its nearest classed ancestor. Every lookup is keyed by
+// tag.class: a class means what it means on the element the Console gave it
+// to, and nowhere else.
 func classify(tag string, classes []string, stack []*openElem, inAbout bool) (proseKind, string) {
 	if tag == "li" && len(stack) > 0 {
 		parent := stack[len(stack)-1]
@@ -341,12 +423,13 @@ func classify(tag string, classes []string, stack []*openElem, inAbout bool) (pr
 			return kindNone, ""
 		}
 		first := classes[0]
+		key := "p." + first
 		switch {
 		case first == "denynote":
 			return kindDenynote, first
-		case exemptClasses[first] != "":
+		case exemptClasses[key] != "":
 			return kindExempt, first
-		case boundedClasses[first] != "":
+		case boundedClasses[key] != "":
 			return kindBounded, first
 		default:
 			// A known measured class, or an unknown one: both are prose.
@@ -359,10 +442,10 @@ func classify(tag string, classes []string, stack []*openElem, inAbout bool) (pr
 		}
 	}
 	for _, c := range classes {
-		if exemptClasses[c] != "" {
+		if exemptClasses[tag+"."+c] != "" {
 			return kindExempt, c
 		}
-		if boundedClasses[c] != "" && c != "truths" {
+		if boundedClasses[tag+"."+c] != "" && (tag != "ul" || c != "truths") {
 			return kindBounded, c
 		}
 	}
@@ -420,11 +503,55 @@ func TestCopyBudget_CounterMeasuresWhatItShould(t *testing.T) {
 	if about != 3 {
 		t.Errorf("About measured %d words, want 3 — the summary is not prose", about)
 	}
-	if bounded != 1 {
-		t.Errorf("bounded elements = %d, want 1 (span.dim)", bounded)
+	if bounded != 2 {
+		t.Errorf("bounded elements = %d, want 2 (span.dim and p.mode)", bounded)
 	}
 	if len(unclassified) != 1 || !strings.Contains(unclassified[0], "bare <p>") {
 		t.Errorf("unclassified = %v, want exactly the orphan bare <p> (the minted page's is skipped)", unclassified)
+	}
+
+	// Prose cannot hide in an element the scanner was not told about: a run of
+	// eight or more words outside every measured, bounded, exempt or value
+	// element is reported, whatever its tag, class or quote style.
+	long := "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six"
+	for name, snippet := range map[string]string{
+		"li":                 `<ul><li>` + long + `</li></ul>`,
+		"summary":            `<details><summary>` + long + `</summary></details>`,
+		"unknown div":        `<div class="caveat">` + long + `</div>`,
+		"single-quoted div":  `<div class='caveat'>` + long + `</div>`,
+		"bare container":     `<section class="panel">` + long + `</section>`,
+		"a class borrowed":   `<span class="back">` + long + `</span>`,
+		"a span in a li":     `<ul><li><span>` + long + `</span></li></ul>`,
+		"text at the root":   long,
+		"a nested bare span": `<div class="wrap"><div><span>` + long + `</span></div></div>`,
+	} {
+		if _, unclassified, err := proseOf(snippet); err != nil || len(unclassified) == 0 {
+			t.Errorf("%s: a 26-word run went unreported (unclassified=%v, err=%v)", name, unclassified, err)
+		}
+	}
+	// A measured element in single quotes counts, and a long p.mode is measured
+	// as a bounded element for the per-element cap rather than skipped.
+	if elems, _, _ := proseOf(`<p class='note'>` + long + `</p>`); len(elems) != 1 || elems[0].Words != 26 {
+		t.Errorf("a single-quoted class went unmeasured: %v", elems)
+	}
+	if elems, _, _ := proseOf(`<p class="mode">` + long + `</p>`); len(elems) != 1 || !elems[0].Bounded || elems[0].Words != 26 {
+		t.Errorf("a long p.mode was not seen: %v", elems)
+	}
+	// Values are not prose: a long run inside them is not reported.
+	for _, tag := range []string{"td", "dd", "dt", "th", "code", "pre", "a", "label", "h3"} {
+		if _, unclassified, err := proseOf(`<` + tag + `>` + long + `</` + tag + `>`); err != nil || len(unclassified) != 0 {
+			t.Errorf("a long run inside <%s> was reported as prose (unclassified=%v, err=%v)", tag, unclassified, err)
+		}
+	}
+	// A run just under the threshold is a label or a fragment, not a note.
+	if _, unclassified, _ := proseOf(`<ul><li>one two three four five six seven</li></ul>`); len(unclassified) != 0 {
+		t.Errorf("a seven-word run was reported: %v", unclassified)
+	}
+	// A rendered tooltip is a note nobody budgets, in either quote style.
+	for _, attr := range []string{`title="` + long + `"`, `title='` + long + `'`, `aria-label="` + long + `"`} {
+		if got := longAttributes(`<span ` + attr + `>x</span>`); len(got) != 1 {
+			t.Errorf("a 26-word %s was not reported: %v", attr[:5], got)
+		}
 	}
 
 	// A tag-stack mismatch names both tags and the offset; an unclosed
@@ -450,6 +577,19 @@ func TestCopyBudget_CounterMeasuresWhatItShould(t *testing.T) {
 	if n := countWords("12:00:00Z — 2026-08-25 · Node's"); n != 3 {
 		t.Errorf("countWords = %d, want 3", n)
 	}
+}
+
+// longAttributes reports every rendered title, aria-label, aria-description,
+// placeholder or alt over maxTitleWords: a tooltip is a note nobody budgets.
+func longAttributes(content string) []string {
+	var out []string
+	for _, m := range titleAttr.FindAllStringSubmatch(content, -1) {
+		value := html.UnescapeString(m[2] + m[3])
+		if n := countWords(value); n > maxTitleWords {
+			out = append(out, fmt.Sprintf("%s is %d words, over %d: %q", m[1], n, maxTitleWords, value))
+		}
+	}
+	return out
 }
 
 // --- T2: every screen is within its budget ----------------------------------
@@ -482,14 +622,14 @@ var copyBudgets = map[string]struct{ Visible, About int }{
 	"/console/nodes/{node_id}":         {75, 0},
 	"/console/activity":                {35, 40},
 	"/console/jobs/{job_id}":           {60, 0},
-	"/console/compare":                 {45, 0},
+	"/console/compare":                 {40, 0},
 	"/console/approvals":               {60, 20},
-	"/console/approvals/{approval_id}": {80, 0},
-	"/console/accounts":                {15, 20},
+	"/console/approvals/{approval_id}": {85, 0},
+	"/console/accounts":                {20, 20},
 	"/console/access":                  {0, 55},
 	"/console/run":                     {10, 0},
 	"day one":                          {65, 20},
-	"grant card":                       {100, 0},
+	"grant card":                       {105, 0},
 }
 
 // aboutScreenOf maps a budget key to its aboutDocScreens key, so the budget
@@ -575,9 +715,12 @@ func TestCopyBudget_EveryScreenIsWithinItsBudget(t *testing.T) {
 			continue
 		}
 		content := contentOf(rec.Body.String())
-		elems, _, err := proseOf(content)
+		elems, unclassified, err := proseOf(content)
 		if err != nil {
 			t.Fatalf("%s (%s): the scanner cannot attribute this page's text: %v", pg.key, pg.path, err)
+		}
+		for _, u := range unclassified {
+			t.Errorf("%s (%s): %s — classify it in copy_budget_test.go or cut it", pg.key, pg.path, u)
 		}
 		var visible, about, aboutParas int
 		var listing []string
@@ -754,7 +897,10 @@ func TestCopyBudget_EveryVisibleNoteIsOneShortSentence(t *testing.T) {
 			t.Fatalf("%s %s: the scanner cannot attribute this page's text: %v", pg.name, pg.path, err)
 		}
 		for _, u := range unclassified {
-			t.Errorf("%s %s: %s — classify it in copy_budget_test.go", pg.name, pg.path, u)
+			t.Errorf("%s %s: %s — classify it in copy_budget_test.go or cut it", pg.name, pg.path, u)
+		}
+		for _, a := range longAttributes(contentOf(rec.Body.String())) {
+			t.Errorf("%s %s: %s", pg.name, pg.path, a)
 		}
 		for _, e := range elems {
 			measured++
@@ -831,7 +977,7 @@ func consoleTemplateSources(t *testing.T) []templateSource {
 var (
 	tmplComment = regexp.MustCompile(`(?s)\{\{-?\s*/\*.*?\*/\s*-?\}\}`)
 	tmplAction  = regexp.MustCompile(`(?s)\{\{.*?\}\}`)
-	titleAttr   = regexp.MustCompile(`\b(title|aria-label)="([^"]*)"`)
+	titleAttr   = regexp.MustCompile(`\b(title|aria-label|aria-description|placeholder|alt)=(?:"([^"]*)"|'([^']*)')`)
 	anyTag      = regexp.MustCompile(`<[^>]*>`)
 )
 
@@ -964,10 +1110,7 @@ func templateElements(t *testing.T, src templateSource) []sourceElement {
 			}
 			continue
 		}
-		var classes []string
-		if cm := classAttr.FindStringSubmatch(attrs); cm != nil {
-			classes = strings.Fields(cm[1])
-		}
+		classes := classesOf(attrs)
 		ancestors := make([]*openElem, 0, len(stack))
 		for _, a := range stack {
 			ancestors = append(ancestors, &openElem{tag: a.tag, classes: a.classes})
@@ -1008,6 +1151,65 @@ func templateElements(t *testing.T, src templateSource) []sourceElement {
 	return out
 }
 
+// templateRuns is the source twin of proseOf's unclassified check: every run
+// of minUnclassifiedRun or more words between two tags of a template that no
+// measured, bounded, exempt, value or About element accounts for. It reaches
+// the branches no fixture renders. A run that spans an {{if}} adds its
+// branches together, so it can over-count; a false positive is classified or
+// split, never raised past.
+func templateRuns(src templateSource) []string {
+	text := blank(tmplComment, src.text)
+	masked := maskActions(text)
+	type frame struct {
+		tag       string
+		classes   []string
+		accounted bool
+	}
+	var stack []frame
+	var out []string
+	pos := 0
+	flush := func(end int) {
+		if len(stack) > 0 && stack[len(stack)-1].accounted {
+			return
+		}
+		seg := strings.Join(strings.Fields(html.UnescapeString(masked[pos:end])), " ")
+		if n := countWords(seg); n >= minUnclassifiedRun {
+			out = append(out, fmt.Sprintf("%s:%d: a %d-word run no measured class collects: %q",
+				src.file, src.line+strings.Count(text[:pos], "\n"), n, seg))
+		}
+	}
+	for _, m := range copyTag.FindAllStringSubmatchIndex(masked, -1) {
+		flush(m[0])
+		pos = m[1]
+		closing := masked[m[2]:m[3]] == "/"
+		tag := strings.ToLower(masked[m[4]:m[5]])
+		if voidTags[tag] {
+			continue
+		}
+		if closing {
+			for j := len(stack) - 1; j >= 0; j-- {
+				if stack[j].tag == tag {
+					stack = stack[:j]
+					break
+				}
+			}
+			continue
+		}
+		classes := classesOf(masked[m[6]:m[7]])
+		ancestors := make([]*openElem, 0, len(stack))
+		accounted := valueTags[tag] || tag == "script" || tag == "style"
+		for _, a := range stack {
+			ancestors = append(ancestors, &openElem{tag: a.tag, classes: a.classes})
+			accounted = accounted || a.accounted
+		}
+		about := tag == "details" && len(classes) > 0 && classes[0] == "about"
+		kind, _ := classify(tag, classes, ancestors, false)
+		stack = append(stack, frame{tag, classes, accounted || about || kind != kindNone})
+	}
+	flush(len(masked))
+	return out
+}
+
 func TestCopyBudget_EveryTemplateNoteIsShortOnEveryPath(t *testing.T) {
 	sources := consoleTemplateSources(t)
 	if len(sources) < 15 {
@@ -1016,7 +1218,6 @@ func TestCopyBudget_EveryTemplateNoteIsShortOnEveryPath(t *testing.T) {
 	elements := 0
 	var corpus strings.Builder
 	for _, src := range sources {
-		corpus.WriteString(src.text)
 		for _, e := range templateElements(t, src) {
 			elements++
 			if n, text := longestPath(t, e.where, e.inner); n > maxSourceWords {
@@ -1024,25 +1225,33 @@ func TestCopyBudget_EveryTemplateNoteIsShortOnEveryPath(t *testing.T) {
 					e.where, e.tag, e.class, n, maxSourceWords, text)
 			}
 		}
+		for _, r := range templateRuns(src) {
+			t.Errorf("%s — classify the element in copy_budget_test.go or cut it", r)
+		}
 		text := blank(tmplComment, src.text)
 		masked := maskActions(text)
+		corpus.WriteString(masked)
 		for _, m := range titleAttr.FindAllStringSubmatchIndex(masked, -1) {
 			where := fmt.Sprintf("%s:%d", src.file, src.line+strings.Count(text[:m[0]], "\n"))
-			if n, value := longestPath(t, where, text[m[4]:m[5]]); n > maxTitleWords {
+			start, end := m[4], m[5]
+			if start < 0 { // single-quoted
+				start, end = m[6], m[7]
+			}
+			if n, value := longestPath(t, where, text[start:end]); n > maxTitleWords {
 				t.Errorf("%s: %s is %d words, over %d: %q", where, text[m[2]:m[3]], n, maxTitleWords, value)
 			}
 		}
 		for _, m := range copyTag.FindAllStringSubmatch(masked, -1) {
 			tag := strings.ToLower(m[2])
-			cm := classAttr.FindStringSubmatch(m[3])
-			if cm == nil || (tag != "span" && tag != "div") {
+			if tag != "span" && tag != "div" {
 				continue
 			}
-			for _, c := range strings.Fields(cm[1]) {
+			for _, c := range classesOf(m[3]) {
 				if !noteish.MatchString(c) || strings.Trim(c, "X") != c {
 					continue
 				}
-				if !measuredClasses[tag+"."+c] && boundedClasses[c] == "" && exemptClasses[c] == "" {
+				key := tag + "." + c
+				if !measuredClasses[key] && boundedClasses[key] == "" && exemptClasses[key] == "" {
 					t.Errorf("%s:%d: <%s class=%q> reads like a note and is in no map — classify it", src.file, src.line, tag, c)
 				}
 			}
@@ -1055,14 +1264,18 @@ func TestCopyBudget_EveryTemplateNoteIsShortOnEveryPath(t *testing.T) {
 	// Every class a map names is used somewhere: a stale exemption is an
 	// exemption waiting for a new element to borrow it.
 	used := map[string]bool{}
-	for _, m := range classAttr.FindAllStringSubmatch(corpus.String(), -1) {
-		for _, c := range strings.Fields(m[1]) {
+	for _, m := range copyTag.FindAllStringSubmatch(corpus.String(), -1) {
+		if m[1] == "/" {
+			continue
+		}
+		for _, c := range classesOf(m[3]) {
 			used[c] = true
+			used[strings.ToLower(m[2])+"."+c] = true
 		}
 	}
 	var named []string
 	for k := range measuredClasses {
-		named = append(named, k[strings.Index(k, ".")+1:])
+		named = append(named, k)
 	}
 	for _, m := range []map[string]string{boundedClasses, exemptClasses} {
 		for k := range m {
@@ -1272,8 +1485,8 @@ func TestCopyBudget_RuledQualifiersStillRender(t *testing.T) {
 		why, path, want string
 		h               http.Handler
 	}{
-		{"QRY-9: a difference is not a verdict", "/console/compare?nodes=node-web-1,node-web-3",
-			"a difference is not a verdict on what will run", h},
+		{"QRY-9: a Policy view never predicts what will run", "/console/compare?nodes=node-web-1,node-web-3",
+			"this screen never predicts what will run", h},
 		{"QRY-5: a fingerprint count is not evidence of trust", "/console/nodes/node-web-1",
 			"never evidence of equal Policy or trust", h},
 		{"invariant 7: relay: is never the Node's", "/console/nodes/node-web-1",
@@ -1288,6 +1501,10 @@ func TestCopyBudget_RuledQualifiersStillRender(t *testing.T) {
 			"This Console&#39;s certificate, re-issued about daily", newTestHandler(dayOneDeps(), accounts.RoleAdmin)},
 		{"cert provenance: the expiry is unknown", "/console/nodes/node-web-1",
 			"so its expiry is unknown until its next renewal", newTestHandler(sweepFixture(), accounts.RoleAdmin)},
+		{"the summary is the Relay's wording, though the caller chose its content", "/console/approvals/ap-1",
+			"the caller chose what it describes, not its words", h},
+		{"a missing park record leaves the Selector and arguments unknown, not empty", "/console/approvals/ap-1",
+			"so the Selector and arguments are unknown, not empty", h},
 		{"approval residual risk: the audience is a union", "/console/approvals/ap-grant",
 			"the audience is their union", newTestHandler(gd, accounts.RoleAdmin)},
 		{"08: the Scope must be expanded", "/console/approvals/ap-grant",

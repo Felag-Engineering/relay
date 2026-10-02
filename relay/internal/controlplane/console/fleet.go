@@ -1609,7 +1609,7 @@ var fleetTmpl = newScreen("fleet", `
       {{range .Legend}}<span class="sskeyitem"><i class="cell" data-bucket="{{.Bucket}}" aria-hidden="true"></i><b>{{.Count}}</b> {{.Label}}</span>{{end}}
     </div>
   </div>
-  <div class="wall" data-size="{{.CellSize}}" role="img" aria-label="{{.WallTotal}} Nodes: {{range .Legend}}{{.Count}} {{.Label}}. {{end}}Individual Nodes are listed in the tables below.">
+  <div class="wall" data-size="{{.CellSize}}" role="img" aria-label="{{.WallTotal}} Nodes: {{range .Legend}}{{.Count}} {{.Label}}. {{end}}Nodes are listed below.">
     {{range .Wall}}<div class="wallgroup">
       {{if $.GroupBy}}<span class="walllabel" aria-hidden="true"><span class="ident">{{.Key}}</span></span>{{end}}
       <div class="wallcells">{{range .Nodes}}<a class="cell" data-bucket="{{.Bucket}}" href="{{.Href}}{{$.Pin.Query}}" tabindex="-1" aria-hidden="true" title="{{.ID}}{{with .Hostname}} — {{.}}{{end}} · {{.BucketLabel}}"></a>{{end}}</div>
@@ -1694,7 +1694,7 @@ var fleetTmpl = newScreen("fleet", `
 </section>
 {{end}}
 
-{{if .GroupsElided}}<p class="gap"><b>{{.GroupsElided}} more {{plural .GroupsElided "group is" "groups are"}} not shown</b>; narrow the filter or group by a key with fewer values.</p>{{end}}
+{{if .GroupsElided}}<p class="gap"><b>{{.GroupsElided}} more {{plural .GroupsElided "group is" "groups are"}} not shown</b>; this page draws only the {{len .Groups}} largest, so narrow the filter.</p>{{end}}
 
 {{if not .CertExpiryKnown}}
 <p class="gap"><b>{{.CertExpiryUnknown}} {{plural .CertExpiryUnknown "Node has" "Nodes have"}} no recorded validity at all</b>; for {{plural .CertExpiryUnknown "it" "them"}}, a clean State column means unknown, not all-clear.</p>

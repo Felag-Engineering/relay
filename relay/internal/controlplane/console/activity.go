@@ -1782,7 +1782,7 @@ var activityTmpl = newScreen("activity", `
 {{end}}
 
 {{if .Filter.Outcome}}
-<p class="gap"><b>Outcome keeps every Job with at least one <code>{{.Filter.Outcome}}</code> Task</b>, so a filtered page can come back short.</p>
+<p class="gap"><b>Outcome keeps Jobs with at least one <code>{{.Filter.Outcome}}</code> Task</b>; a short page is not the end.</p>
 {{end}}
 
 <details class="about">

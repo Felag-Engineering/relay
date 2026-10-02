@@ -1149,7 +1149,7 @@ var jobTmpl = newScreen("job", `
 {{end}}
 
 {{if .TrailError}}
-<p class="gap">The dispatch record could not be read; arguments, on-behalf-of and approval are missing above.</p>
+<p class="gap">The dispatch record could not be read, so arguments, on-behalf-of and approval are missing; outcomes below are unaffected.</p>
 {{end}}
 
 {{if .CancelRequest}}
@@ -1168,7 +1168,7 @@ var jobTmpl = newScreen("job", `
 </div>
 {{end}}
 {{if .CancelTrailError}}
-<p class="gap">The cancel request could not be read, so who asked and when is missing above.</p>
+<p class="gap">The cancel request could not be read, so who asked and when is missing; outcomes below are unaffected.</p>
 {{end}}
 
 {{if .Bar.Total}}{{template "outcome-bar" .Bar}}{{end}}

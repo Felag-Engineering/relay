@@ -368,7 +368,7 @@ func TestNode_RevokedNodeRendersItsRevocationRecord(t *testing.T) {
 	// And a revoked Node whose trail holds nothing says so.
 	d.Audit = fakeAudit{}
 	quiet := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-gone").Body.String()
-	if !strings.Contains(quiet, "the audit trail holds no record of who revoked this Node") {
+	if !strings.Contains(quiet, "the audit trail holds no record of this revocation") {
 		t.Error("a revoked Node with no audit record rendered nothing about the revocation")
 	}
 }

@@ -92,7 +92,7 @@ const policyCeilingNote = "A role bounds what this Relay will ask of a Node; eac
 // selfPanelNote is why the signed-in Account's own panel carries no control.
 // The refusal page's fuller sentence, selfTargetRefusal, is the capability
 // layer's refusal; this is the panel's one-line rendering of the same rule.
-const selfPanelNote = "An Account cannot change its own role or disable itself; another admin must."
+const selfPanelNote = "This is your own Account; another admin must change its role or state."
 
 // accountsView is the whole screen.
 type accountsView struct {
@@ -533,7 +533,7 @@ var accountsTmpl = newScreen("accounts", `
     </div>
     <button class="btn grant" type="submit">Create Account</button>
   </form>
-  <p class="note">A <b>human</b> Account cannot sign in until a password is set with <code>relay console-password</code>.</p>
+  <p class="note">A <b>human</b> Account cannot sign in until a password is set with <code>relay console-password</code> on the Relay host.</p>
 </section>
 {{end}}
 
