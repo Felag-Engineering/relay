@@ -3,7 +3,8 @@
 Relay's mark is a type-only wordmark, `relay_`: the product name in lowercase monospace
 followed by a teal terminal cursor. There is deliberately no mascot or emblem. Relay is
 infrastructure you drive from a terminal, and it is a separate product from Gleipnir, which
-has the wolf-and-chain badge. Relay and Gleipnir share a palette, not a crest.
+has the wolf-and-chain badge. Relay and Gleipnir share a palette, not a crest, though
+Relay's teal is also the Console's interactive accent (see Rules).
 
 | File | Use |
 |---|---|
@@ -19,8 +20,12 @@ committing it: a committed raster is a second copy that nothing keeps in step.
 
 - **One accent.** Teal appears only on the cursor (or as the icon's ground). The letters are
   near-black `#1a1a1a` on light and cream `#ece6da` on dark.
-- **Teal is a brand colour, not a UI colour.** It lives inside these images only. It is not
-  one of the Console's semantic colours (`console.css`), and the mark adds no CSS token.
+- **Teal is a brand colour, and the Console's interactive accent.** Amended by owner decision
+  on 2026-10-01: the Console's interactive colour (links, primary buttons, focus rings, the
+  live indicator) is this teal, `#0a8276` on light and `#4fb3a8` on dark, as the
+  `--color-accent` token in `console.css`. Where the teal has to carry small text on a light
+  ground, the Console uses a darker step of it to clear WCAG AA. The teal still means "you can
+  act here" and is never one of the Console's semantic colours. The mark itself is unchanged.
 - **Don't re-set it in a live font.** The SVGs are the letterforms as outlines, so they
   render identically everywhere and need no font. If the mark ever changes, regenerate the
   outlines rather than editing the paths by hand.
