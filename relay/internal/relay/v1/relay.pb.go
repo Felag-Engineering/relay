@@ -86,13 +86,13 @@ type Outcome int32
 const (
 	Outcome_OUTCOME_UNSPECIFIED      Outcome = 0
 	Outcome_OUTCOME_SUCCESS          Outcome = 1
-	Outcome_OUTCOME_FAILURE          Outcome = 2
+	Outcome_OUTCOME_FAILURE          Outcome = 2 // something ran and failed — or the daemon refused the Task for a protocol reason without executing it (missing action, overloaded, class mismatch); stderr says which
 	Outcome_OUTCOME_TIMEOUT          Outcome = 3
 	Outcome_OUTCOME_DENIED_BY_POLICY Outcome = 4
 	Outcome_OUTCOME_CANCELLED        Outcome = 5 // Task killed by TaskCancel before it finished; a Task that already completed reports its real outcome, never a retroactive cancel (ADR-0013)
 	Outcome_OUTCOME_UNREACHABLE      Outcome = 6 // Relay-synthesized: the Node was offline at dispatch, so the Task was never sent; a daemon never emits this (ADR-0004 fail-fast, no store-and-forward)
 	Outcome_OUTCOME_VERSION_REFUSED  Outcome = 7 // Relay-synthesized: the Node's daemon is below the Relay's configured minimum version (ADR-0014), so the Task was refused at dispatch and never sent; a daemon never emits this.
-	Outcome_OUTCOME_UNSUPPORTED      Outcome = 8 // daemon-reported: the Operation name is not in THIS Node's vocabulary (an unloaded Template Operation, or an unknown name) — the Task was never executed and Policy was never asked to decide. Distinct from OUTCOME_DENIED_BY_POLICY (Policy decided) and OUTCOME_FAILURE (something ran and failed). Vocabulary is per-Node once templates exist (ADR-0021); discover it with describe_node/list_operations.
+	Outcome_OUTCOME_UNSUPPORTED      Outcome = 8 // daemon-reported: the Operation name is not in THIS Node's vocabulary (an unloaded Template Operation, or an unknown name) — the Task was never executed and Policy was never asked to decide. Distinct from OUTCOME_DENIED_BY_POLICY (Policy decided) and OUTCOME_FAILURE (something ran and failed, or a protocol refusal). Vocabulary is per-Node once templates exist (ADR-0021); discover it with describe_node/list_operations.
 )
 
 // Enum value maps for Outcome.
@@ -855,13 +855,15 @@ type TaskRequest struct {
 	//	*TaskRequest_RawExec
 	Action         isTaskRequest_Action `protobuf_oneof:"action"`
 	TimeoutSeconds int32                `protobuf:"varint,4,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"` // Policy may cap the effective value
-	// risk_class is the class the Relay dispatched this Task under (ADR-0012,
-	// ADR-0042): a Native's from /proto, Raw Exec always MUTATE, a Template's
-	// the class this Node itself reported when the dispatch was resolved. The
-	// daemon refuses, without executing, a Task dispatched as READ whose action
-	// it classifies as MUTATE — which closes the window where the Node's Policy
-	// was reloaded between its vocabulary report and this Task's arrival.
-	// UNSPECIFIED (an older Relay) is not checked.
+	// risk_class is the class this Task was recorded under (ADR-0012,
+	// ADR-0042): a Native's from /proto, Raw Exec always MUTATE, and for a
+	// Template THIS NODE'S OWN reported class — deliberately not the Job's
+	// most-restrictive class. The daemon refuses, without executing and before
+	// Policy, a Task declared READ whose action it classifies as MUTATE: the
+	// Node's Template catalog changed (a daemon restart) after the report the
+	// Relay resolved against. UNSPECIFIED (an older Relay) is not checked, and
+	// an older daemon ignores the field, so the check holds only where both
+	// sides carry it.
 	RiskClass     RiskClass `protobuf:"varint,5,opt,name=risk_class,json=riskClass,proto3,enum=relay.v1.RiskClass" json:"risk_class,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

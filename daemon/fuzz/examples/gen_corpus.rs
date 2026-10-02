@@ -22,7 +22,7 @@ use std::path::Path;
 use prost::Message;
 use relay_daemon_fuzz::pb::{
     policy_query, relay_message, task_request, EnrollResponse, Label, Operation, Ping, PolicyQuery,
-    RawExec, RelayMessage, RenewResponse, TaskCancel, TaskRequest,
+    RawExec, RelayMessage, RenewResponse, RiskClass, TaskCancel, TaskRequest,
 };
 
 fn write_seed(dir: &Path, name: &str, bytes: &[u8]) {
@@ -52,6 +52,9 @@ fn main() {
                 args: HashMap::from([("name".to_string(), "nginx".to_string())]),
             })),
             timeout_seconds: 30,
+            // A non-zero class, so the decode fuzzer's seeds exercise field 5
+            // (ADR-0042).
+            risk_class: RiskClass::Mutate as i32,
         })),
     };
     write_seed(&dir, "task_operation", &task_operation.encode_to_vec());
@@ -63,6 +66,7 @@ fn main() {
                 argv: vec!["/usr/bin/uptime".into()],
             })),
             timeout_seconds: 60,
+            risk_class: RiskClass::Read as i32,
         })),
     };
     write_seed(&dir, "task_raw_exec", &task_raw_exec.encode_to_vec());
