@@ -67,7 +67,7 @@ version and Policy fingerprint facets each carry an explicit "not reported" row,
 facet sums to the group's Node count. That row is not a link: absence is not a label.
 
 **Deviation table**, sorted **anomaly-first by rarity, never alphabetically**. The weird Node is
-row one. Columns: liveness dot + name · **State** · Labels · Policy fingerprint · Last seen.
+row one. Columns: liveness dot + name · **State** · Labels · Policy fingerprint · Last seen · Pin.
 The State column is omitted from a group's table when no row in it draws a state (revoked,
 quarantined, not reported, or a `state:` label).
 Below it, the ladder: "*N* more deviate the same way — expand", then the mode as one calm line
@@ -75,6 +75,14 @@ Below it, the ladder: "*N* more deviate the same way — expand", then the mode 
 counts a "not reported" Node as reachable, current or permitted: it says how many Nodes have not
 reported and that they are not counted, and uses "other Nodes" for the rest. The card header shows
 the count in a neutral style ("1 not reported"), not amber.
+
+**Pin to compare.** Every listed row carries a Pin toggle that adds or removes that Node from the
+pin set (2-3 Nodes, spec 02). It is a button in a GET form, keyboard reachable and needing no script,
+and it keeps the current filter, grouping and pin set. It is pressed when the Node is pinned. Once
+three are pinned the buttons of unpinned rows are disabled, which takes them out of the tab order;
+the pin bar's "three is the maximum" sentence carries the reason. The pin bar always offers
+Compare, disabled with "Pin 1 more to compare" until two are pinned. Pinning writes nothing: the set
+lives in the query string. Below 600px the toggle is a labelled cell in the row's card.
 
 ## Filtering and targeting
 

@@ -90,6 +90,10 @@ type fleetNode struct {
 	Hostname string
 	Href     string
 
+	// PinToggle is the row's pin control. Set by the handler after the view is
+	// built, like fleetView.Pin, never by newFleetNode (which has no request).
+	PinToggle rowPin
+
 	Connected bool
 	LastSeen  string
 
@@ -279,6 +283,37 @@ type fleetGroup struct {
 	Open bool
 }
 
+// rowPin is one Fleet row's pin toggle.
+type rowPin struct {
+	// Value is the pin set after this row's toggle, comma-joined; "" means no
+	// pin parameter.
+	Value string
+	// Pinned reports that this Node is in the current pin set.
+	Pinned bool
+	// Disabled reports that the set is full and this Node is not in it.
+	Disabled bool
+}
+
+// pinRows sets every listed row's toggle. It is computed server-side because a
+// template cannot build a set; it reads no registry.
+func pinRows(groups []fleetGroup, pins []string) {
+	for g := range groups {
+		for i := range groups[g].Deviations {
+			id := groups[g].Deviations[i].ID
+			pinned := slices.Contains(pins, id)
+			toggled := without(pins, id)
+			if !pinned {
+				toggled = append(slices.Clone(pins), id)
+			}
+			groups[g].Deviations[i].PinToggle = rowPin{
+				Value:    strings.Join(toggled, ","),
+				Pinned:   pinned,
+				Disabled: !pinned && len(pins) >= maxPins,
+			}
+		}
+	}
+}
+
 // fleetView is the whole screen.
 type fleetView struct {
 	Total    int
@@ -353,6 +388,20 @@ type fleetView struct {
 	// after the view is built. It only ever travels through this screen —
 	// every row and facet link appends it so a click does not lose the pins.
 	Pin pinState
+}
+
+// GroupParam is the grouping a form on this screen carries onward: "-" for
+// none, the same rule linkContext.href applies, so a row toggle never
+// re-defaults the grouping.
+func (v fleetView) GroupParam() string { return groupParam(v.GroupBy) }
+
+// groupParam is the grouping query value: "-" when there is none, so a link
+// never falls back to the default grouping.
+func groupParam(groupBy string) string {
+	if groupBy == "" {
+		return "-"
+	}
+	return groupBy
 }
 
 // groupCards bounds how many rollup cards the page draws. Forty is well past
@@ -478,6 +527,7 @@ func handleFleet(d Deps) http.HandlerFunc {
 		// audited, not through a second door into the registry: one screen,
 		// one disclosure, one record.
 		v.Pin = buildPinState(knownIn(nodes), pins, fleetPath, "pin")
+		pinRows(v.Groups, pins)
 		renderScreen(w, p, fleetTmpl, v)
 	}
 }
@@ -1112,11 +1162,7 @@ type linkContext struct {
 func (c linkContext) href(term string) string {
 	q := url.Values{}
 	q.Set("filter", appendTerm(c.Filter, term))
-	if c.GroupBy == "" {
-		q.Set("group", "-")
-	} else {
-		q.Set("group", c.GroupBy)
-	}
+	q.Set("group", groupParam(c.GroupBy))
 	return "/console/?" + q.Encode()
 }
 
@@ -1555,6 +1601,7 @@ var fleetTmpl = newScreen("fleet", `
           <th scope="col"><span class="vh">Reachable</span></th>
           <th scope="col">Node <span class="selfreptag">hostname self-reported</span></th>{{if .ShowState}}<th scope="col">State</th>{{end}}<th scope="col">Labels</th>
           <th scope="col">Policy</th><th scope="col">Last seen</th>
+          <th scope="col"><span class="vh">Pin to compare</span></th>
         </tr></thead>
         <tbody>
         {{$showState := .ShowState}}
@@ -1569,6 +1616,12 @@ var fleetTmpl = newScreen("fleet", `
             <td data-label="Labels"><div class="lblcell">{{range .Labels}}{{template "label-chip" .}}{{end}}</div></td>
             <td data-label="Policy">{{if .PolicyFingerprint}}<code title="{{.PolicyFingerprint}}">{{short .PolicyFingerprint}}</code>{{else}}<span class="dim">not reported</span>{{end}}</td>
             <td class="num" data-label="Last seen">{{.LastSeen}}</td>
+            <td class="pincell" id="pin-{{.ID}}" data-label="Pin to compare"><form class="pinform" method="get" action="/console/#pin-{{.ID}}">
+              {{with $.Filter}}<input type="hidden" name="filter" value="{{.}}">{{end}}
+              <input type="hidden" name="group" value="{{$.GroupParam}}">
+              {{with .PinToggle.Value}}<input type="hidden" name="pin" value="{{.}}">{{end}}
+              <button type="submit" class="pinbtn" aria-pressed="{{if .PinToggle.Pinned}}true{{else}}false{{end}}" aria-label="Pin {{.ID}} to compare"{{if .PinToggle.Disabled}} disabled title="Three Nodes are pinned. Unpin one to pin another."{{end}}>Pin</button>
+            </form></td>
           </tr>
         {{end}}
         </tbody>

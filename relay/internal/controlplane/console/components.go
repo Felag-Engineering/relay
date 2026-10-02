@@ -538,6 +538,11 @@ type StepUp struct {
 // duplicated in three templates and had already diverged — the comparison
 // screen's "pick another from the fleet" link dropped the pin set, on the one
 // screen whose whole purpose is adding a third Node.
+//
+// Off the comparison screen the Compare action is always drawn, disabled below
+// two pins, so one pin is never a dead end. The bar only draws with at least
+// one pin and Compare enables at two, so the disabled text is a fixed "Pin 1
+// more"; an unresolvable id still counts toward two, as it does for the link.
 
 // --- Rendering --------------------------------------------------------------
 
@@ -698,10 +703,11 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 {{define "pin-bar"}}<div class="pinbar">
   <span class="pinlbl">Pinned</span>
   {{range .Pins}}<span class="pinchip">
-    {{if .Known}}<a href="{{.Href}}"><code>{{.ID}}</code></a>
+    {{if .Current}}<code>{{.ID}}</code><span class="dim">this Node</span>
+    {{else if .Known}}<a href="{{.Href}}"><code>{{.ID}}</code></a>
     {{else}}<code class="dim">{{.ID}}</code><span class="dim" title="A pinned id is whatever the link carried; the Relay resolves each one against the registry.">not in this registry</span>{{end}}
     <a class="unpin" href="{{.UnpinHref}}">unpin</a></span>{{end}}
-  {{with .CompareHref}}<a class="act" href="{{.}}">Compare these Nodes</a>{{end}}
+  {{if .ShowCompare}}{{with .CompareHref}}<a class="act" href="{{.}}">Compare these Nodes</a>{{else}}<span class="act dim">Compare these Nodes</span><span class="dim">Pin 1 more to compare</span>{{end}}{{end}}
   {{with .FleetHref}}<a href="{{.}}">Pick another from the fleet</a>{{end}}
   {{if .Full}}<span class="dim">Three is the maximum &mdash; unpin one to pin another.</span>{{end}}
 </div>{{end}}

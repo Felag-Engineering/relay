@@ -108,6 +108,10 @@ type nodePin struct {
 	// link — this surface has no mutating route and no cookie to write
 	// (v0.6.0: zero mutating routes).
 	UnpinHref string
+
+	// Current marks the Node whose page is being drawn. The bar names it as
+	// "this Node" rather than linking to the page the operator is already on.
+	Current bool
 }
 
 // pinState is the pinned set as one screen sees it.
@@ -119,9 +123,15 @@ type pinState struct {
 
 	// CompareHref and FleetHref are the bar's two onward links: to the
 	// comparison (two or more pinned) and to the fleet, where the next Node is
-	// picked. Each is empty on the screen it points at.
+	// picked. Each is empty on the screen it points at. CompareHref is also
+	// empty below two pins, but the bar still DRAWS the Compare action there
+	// (disabled) so one pin is never a dead end; see ShowCompare.
 	CompareHref string
 	FleetHref   string
+
+	// ShowCompare is true on every screen except the comparison itself, which
+	// is the screen the Compare action leads to.
+	ShowCompare bool
 
 	Full bool
 }
@@ -200,7 +210,7 @@ func parsePins(raw string) (ids []string, overflow bool) {
 // unaudited door into the registry. A nil known resolves nothing, which draws
 // every chip dead rather than drawing a claim the screen cannot support.
 func buildPinState(known func(string) bool, ids []string, selfPath, selfParam string) pinState {
-	p := pinState{Raw: strings.Join(ids, ","), Full: len(ids) >= maxPins}
+	p := pinState{Raw: strings.Join(ids, ","), Full: len(ids) >= maxPins, ShowCompare: selfPath != comparePath}
 	for _, id := range ids {
 		unpin := selfPath
 		if rest := without(ids, id); len(rest) > 0 {
@@ -586,8 +596,8 @@ one that was mistyped, and either is worth knowing.</p>
 {{if lt (len .Columns) 2}}
 <div class="placeholder">
   <p>Pin at least two Nodes to compare them.</p>
-  <p>Pin from a Node's own page — the header carries a <b>Pin to compare</b> link — or
-  <a href="/console/">start from the fleet</a>.</p>
+  <p>Pin from a row on the <a href="/console/{{.Pin.Query}}">fleet</a>, or from a Node's own page — its header
+  carries a <b>Pin to compare</b> link.</p>
 </div>
 {{else}}
 <div class="tablescroll">

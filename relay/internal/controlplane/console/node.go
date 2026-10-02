@@ -180,7 +180,8 @@ type nodeView struct {
 
 	// Pin is the pinned set and the bar that draws it (the shared "pin-bar"
 	// component). PinHref pins THIS Node and is empty once it is pinned or the
-	// set is full — the bar itself says which.
+	// set is full — the bar itself says which. Once pinned, this Node's own
+	// chip in the bar reads "this Node" rather than linking back here.
 	Pin     pinState
 	Pinned  bool
 	PinHref string
@@ -380,6 +381,12 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 	for _, id := range pins {
 		if id == n.NodeID {
 			v.Pinned = true
+		}
+	}
+	for i := range v.Pin.Pins {
+		if v.Pin.Pins[i].ID == n.NodeID {
+			v.Pin.Pins[i].Current = true
+			v.Pin.Pins[i].Href = ""
 		}
 	}
 	if !v.Pinned && !v.Pin.Full {

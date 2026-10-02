@@ -15,8 +15,11 @@ package console
 import (
 	"context"
 	"fmt"
+	"html"
 	"net/http"
+	"net/url"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -155,6 +158,7 @@ func TestNode_IsStructurallyReadOnly(t *testing.T) {
 
 	for _, path := range []string{
 		"/console/nodes/node-web-1?pin=node-web-1,node-web-2",
+		"/console/nodes/node-web-1?pin=node-web-1",
 		"/console/compare?nodes=node-web-1,node-web-2",
 	} {
 		content := contentOf(get(t, h, path).Body.String())
@@ -383,7 +387,10 @@ func TestNode_PinIsCarriedInTheUrlAndCapsAtThree(t *testing.T) {
 		t.Error("a pinned Node draws no pin bar")
 	}
 	if strings.Contains(one, "/console/compare") {
-		t.Error("one pinned Node offered a comparison — a diff of one column is not a diff")
+		t.Error("one pinned Node linked a comparison — a diff of one column is not a diff")
+	}
+	if !strings.Contains(one, "Pin 1 more to compare") {
+		t.Error("one pinned Node was left with no word on how to reach a comparison")
 	}
 
 	// Pinning the same Node twice is a double click, not two columns.
@@ -471,6 +478,193 @@ func TestPin_UnresolvableIdIsNotDrawnAsANode(t *testing.T) {
 		if !strings.Contains(body, "not in this registry") {
 			t.Errorf("%s renders an unresolvable pinned id without saying it is not a Node", path)
 		}
+	}
+}
+
+var hiddenInputPattern = regexp.MustCompile(`<input type="hidden" name="([^"]+)" value="([^"]*)">`)
+
+// rowPinForm returns the pin toggle's form for one Fleet row.
+func rowPinForm(t *testing.T, body, id string) string {
+	t.Helper()
+	at := strings.Index(body, `aria-label="Pin `+id+` to compare"`)
+	if at < 0 {
+		t.Fatalf("no pin toggle for %s", id)
+	}
+	start := strings.LastIndex(body[:at], "<form")
+	end := strings.Index(body[at:], "</form>")
+	if start < 0 || end < 0 {
+		t.Fatalf("the pin toggle for %s is not inside a form", id)
+	}
+	return body[start : at+end]
+}
+
+// formQuery reads the hidden inputs a form would submit. Values are
+// unescaped: html/template escapes some characters in attributes.
+func formQuery(form string) url.Values {
+	q := url.Values{}
+	for _, m := range hiddenInputPattern.FindAllStringSubmatch(form, -1) {
+		q.Set(m[1], html.UnescapeString(m[2]))
+	}
+	return q
+}
+
+func TestFleet_RowPinIsAGetFormThatTogglesTheNode(t *testing.T) {
+	h := newTestHandler(fleetFixture(), accounts.RoleAdmin)
+
+	body := get(t, h, "/console/?filter=node:env=prod&group=role").Body.String()
+	form := rowPinForm(t, body, "node-web-1")
+	for _, want := range []string{`method="get"`, `action="/console/#pin-node-web-1"`, `type="submit"`, `aria-pressed="false"`} {
+		if !strings.Contains(form, want) {
+			t.Errorf("row pin form lacks %s: %s", want, form)
+		}
+	}
+	for _, banned := range []string{`method="post"`, "csrf_token"} {
+		if strings.Contains(form, banned) {
+			t.Errorf("row pin form carries %s — a pin is a query string, not a write", banned)
+		}
+	}
+	if !strings.Contains(body, `id="pin-node-web-1"`) {
+		t.Error("the pin cell has no id for the form to return the keyboard to")
+	}
+	q := formQuery(form)
+	if q.Get("filter") != "node:env=prod" || q.Get("group") != "role" || q.Get("pin") != "node-web-1" {
+		t.Errorf("toggle query = %v, want filter, group kept and pin=node-web-1", q)
+	}
+
+	body = get(t, h, "/console/?pin=node-web-1").Body.String()
+	form = rowPinForm(t, body, "node-web-1")
+	if !strings.Contains(form, `aria-pressed="true"`) {
+		t.Error("a pinned row's toggle is not pressed")
+	}
+	if formQuery(form).Has("pin") {
+		t.Error("unpinning the only pin still carries a pin parameter")
+	}
+	q = formQuery(rowPinForm(t, body, "node-web-2"))
+	if q.Get("pin") != "node-web-1,node-web-2" {
+		t.Errorf("pin = %q, want node-web-1,node-web-2", q.Get("pin"))
+	}
+	if q.Get("group") != "env" {
+		t.Errorf("group = %q, want the default grouping env kept", q.Get("group"))
+	}
+
+	body = get(t, h, "/console/?group=-").Body.String()
+	if g := formQuery(rowPinForm(t, body, "node-web-1")).Get("group"); g != "-" {
+		t.Errorf("group = %q, want - (no grouping must not be re-defaulted)", g)
+	}
+
+	body = get(t, h, "/console/?pin=node-web-1,node-web-2,node-web-3").Body.String()
+	if !strings.Contains(rowPinForm(t, body, "node-db-1"), " disabled") {
+		t.Error("with three pinned, an unpinned row's toggle is not disabled")
+	}
+	if got := formQuery(rowPinForm(t, body, "node-web-2")).Get("pin"); got != "node-web-1,node-web-3" {
+		t.Errorf("unpin pin = %q, want node-web-1,node-web-3", got)
+	}
+}
+
+func TestFleet_HostilePinIsEscapedAndRoundTrips(t *testing.T) {
+	h := newTestHandler(fleetFixture(), accounts.RoleAdmin)
+	payload := `x"><img src=x onerror=alert(1)>`
+
+	body := get(t, h, "/console/?pin="+url.QueryEscape(payload)).Body.String()
+	if strings.Contains(body, payload) || strings.Contains(body, "<img src=x") {
+		t.Fatal("a hostile pin id reached the page unescaped")
+	}
+	form := rowPinForm(t, body, "node-web-1")
+	if got := formQuery(form).Get("pin"); !strings.Contains(got, payload) {
+		t.Errorf("row pin value = %q, want it to unescape back to the hostile id", got)
+	}
+}
+
+func TestPin_BothEntryPointsReachCompare(t *testing.T) {
+	h := newTestHandler(fleetFixture(), accounts.RoleAdmin)
+
+	// Fleet entry point.
+	body := get(t, h, "/console/").Body.String()
+	body = get(t, h, "/console/?"+formQuery(rowPinForm(t, body, "node-web-1")).Encode()).Body.String()
+	if !strings.Contains(body, "Pin 1 more to compare") || strings.Contains(body, `href="/console/compare`) {
+		t.Error("one pin from Fleet: want the disabled Compare and no comparison link")
+	}
+	body = get(t, h, "/console/?"+formQuery(rowPinForm(t, body, "node-web-2")).Encode()).Body.String()
+	link := `href="/console/compare?nodes=node-web-1%2Cnode-web-2"`
+	if !strings.Contains(body, link) {
+		t.Fatalf("two pins from Fleet offer no comparison link")
+	}
+	if cmp := get(t, h, "/console/compare?nodes=node-web-1%2Cnode-web-2").Body.String(); !strings.Contains(cmp, `<table class="cmp">`) {
+		t.Error("the comparison reached from Fleet renders no table")
+	}
+
+	// Node detail entry point.
+	body = get(t, h, "/console/nodes/node-web-1").Body.String()
+	if !strings.Contains(body, `href="/console/nodes/node-web-1?pin=node-web-1"`) {
+		t.Fatal("Node detail offers no pin link")
+	}
+	body = get(t, h, "/console/nodes/node-web-1?pin=node-web-1").Body.String()
+	if !strings.Contains(body, "Pin 1 more to compare") {
+		t.Error("one pin from Node detail: want the disabled Compare")
+	}
+	body = get(t, h, "/console/nodes/node-web-2?pin=node-web-1").Body.String()
+	if !strings.Contains(body, `href="/console/nodes/node-web-2?pin=node-web-1%2Cnode-web-2"`) {
+		t.Fatal("Node detail offers no link that adds this Node to the pin")
+	}
+	body = get(t, h, "/console/nodes/node-web-2?pin=node-web-1%2Cnode-web-2").Body.String()
+	if !strings.Contains(body, link) || strings.Contains(body, "Pin 1 more") {
+		t.Error("two pins from Node detail: want an enabled Compare")
+	}
+}
+
+func TestPin_BarAlwaysOffersCompareBelowTwo(t *testing.T) {
+	d := withFleet(renderableDeps(),
+		registry.Node{NodeID: "n1", Connected: true},
+		registry.Node{NodeID: "n2", Connected: true},
+		registry.Node{NodeID: "n3", Connected: true})
+	h := newTestHandler(d, accounts.RoleAdmin)
+
+	for _, path := range []string{"/console/?pin=n1", "/console/nodes/n2?pin=n1"} {
+		body := get(t, h, path).Body.String()
+		if !strings.Contains(body, `<span class="act dim">Compare these Nodes</span>`) {
+			t.Errorf("%s draws no disabled Compare action", path)
+		}
+		if !strings.Contains(body, "Pin 1 more to compare") {
+			t.Errorf("%s does not say how many more to pin", path)
+		}
+		if strings.Contains(body, `href="/console/compare`) {
+			t.Errorf("%s links a comparison of one Node", path)
+		}
+	}
+
+	body := get(t, h, "/console/compare?nodes=n1").Body.String()
+	if strings.Contains(body, "Compare these Nodes") || strings.Contains(body, "more to compare") {
+		t.Error("the comparison screen offers Compare to itself")
+	}
+
+	// An id the registry does not know still counts toward two, as it did.
+	d = withFleet(renderableDeps(), registry.Node{NodeID: "n1", Connected: true})
+	body = get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/n1?pin=n1,node-typo").Body.String()
+	if !strings.Contains(body, `href="/console/compare?nodes=n1%2Cnode-typo"`) || strings.Contains(body, "Pin 1 more") {
+		t.Error("an unresolvable second pin changed whether Compare is offered")
+	}
+}
+
+func TestNode_OwnPinReadsAsThisNode(t *testing.T) {
+	d := withFleet(renderableDeps(),
+		registry.Node{NodeID: "n1", Connected: true},
+		registry.Node{NodeID: "n2", Connected: true})
+	h := newTestHandler(d, accounts.RoleAdmin)
+
+	body := get(t, h, "/console/nodes/n1?pin=n1").Body.String()
+	if !strings.Contains(body, `<span class="dim">this Node</span>`) {
+		t.Error("a Node's own chip does not read as this Node")
+	}
+	if strings.Contains(body, `<a href="/console/nodes/n1?pin=n1"><code>n1</code></a>`) {
+		t.Error("a Node's own chip links to the page already open")
+	}
+	if !strings.Contains(body, `href="/console/nodes/n1"`) {
+		t.Error("the own chip lost its unpin link")
+	}
+
+	body = get(t, h, "/console/nodes/n2?pin=n1").Body.String()
+	if !strings.Contains(body, `<a href="/console/nodes/n1?pin=n1"><code>n1</code></a>`) || strings.Contains(body, `<span class="dim">this Node</span>`) {
+		t.Error("another Node's chip should be a link and never read as this Node")
 	}
 }
 
@@ -660,6 +854,9 @@ func TestCompare_OneNodeAsksForASecondRatherThanRenderingHalfATable(t *testing.T
 	one := get(t, h, "/console/compare?nodes=n1").Body.String()
 	if !strings.Contains(one, "Pin at least two Nodes") {
 		t.Error("a single-Node comparison did not ask for a second Node")
+	}
+	if !strings.Contains(one, `href="/console/?pin=n1"`) {
+		t.Error("the Compare placeholder's fleet link does not carry the pin set")
 	}
 	if strings.Contains(one, `<table class="cmp">`) {
 		t.Error("a single-Node comparison rendered a table with one column")

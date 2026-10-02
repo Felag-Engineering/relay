@@ -542,10 +542,17 @@ func TestComponents_ContainNoInlineScript(t *testing.T) {
 		"pin-bar": pinState{
 			Pins:        []nodePin{{ID: "n1", Known: true, Href: "/console/nodes/n1", UnpinHref: "/console/"}},
 			CompareHref: "/console/compare?nodes=n1", FleetHref: "/console/?pin=n1",
+			ShowCompare: true,
 		},
 	}
 	for name, data := range samples {
 		out := render(t, name, data)
 		assertCSPClean(t, name, out)
 	}
+	// The disabled Compare branch of the same component.
+	assertCSPClean(t, "pin-bar", render(t, "pin-bar", pinState{
+		Pins:        []nodePin{{ID: "n1", Known: true, Href: "/console/nodes/n1", UnpinHref: "/console/"}},
+		FleetHref:   "/console/?pin=n1",
+		ShowCompare: true,
+	}))
 }

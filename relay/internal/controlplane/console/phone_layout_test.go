@@ -85,10 +85,13 @@ func TestFleet_PhoneCardsLabelEveryCell(t *testing.T) {
 		}
 	}
 	got := labelsOf(table)
-	for _, want := range []string{"Node · hostname self-reported", "State", "Last seen"} {
+	for _, want := range []string{"Node · hostname self-reported", "State", "Last seen", "Pin to compare"} {
 		if !got[want] {
 			t.Errorf("no Fleet cell is labelled %q; labels: %v", want, got)
 		}
+	}
+	if !strings.Contains(table, `class="pinbtn"`) {
+		t.Error("the Fleet card table has no pin toggle for the guard to cover")
 	}
 }
 
@@ -198,6 +201,7 @@ func TestConsole_PhoneLayoutRulesLiveInTheirBreakpoints(t *testing.T) {
 		"table.cards td[data-label]::before", "content: attr(data-label)",
 		".vfield, .vfield.wide { flex-basis: 100%; }",
 		"table.cards caption, .cmp caption { display: block;",
+		"table.cards td.pincell .pinbtn",
 	} {
 		if !strings.Contains(phone, want) {
 			t.Errorf("the 600px block lacks %q", want)

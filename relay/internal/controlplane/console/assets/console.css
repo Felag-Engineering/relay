@@ -1165,10 +1165,19 @@ details.about > .gap { border: 0; background: transparent; padding: 0; margin: v
 .act.dim { color: var(--text-muted); }
 
 /* --- Pin to compare ------------------------------------------------------- */
-/* The pin set lives in the query string, so every control here is an anchor.
- * There is no button and no form: a pin that wrote a cookie would be a
- * mutating GET on a surface whose acceptance criterion is zero mutating
- * routes. */
+/* The pin set lives in the query string. The bar is anchors only; the Fleet
+ * row toggle is a GET form whose button only rebuilds the query string: it
+ * writes no cookie and reaches no mutating route. A pin that wrote a cookie
+ * would be a mutating GET on a surface whose acceptance criterion is zero
+ * mutating routes. */
+.pinform { display: inline; margin: 0; }
+.pinbtn {
+  font: inherit; font-size: var(--text-xs); min-height: 28px; padding: 0 var(--space-3);
+  border: 1px solid var(--border-mid); border-radius: var(--radius-md);
+  background: transparent; color: var(--accent-text); cursor: pointer;
+}
+.pinbtn[aria-pressed="true"] { background: var(--color-accent); border-color: var(--color-accent); color: var(--on-accent); }
+.pinbtn:disabled { opacity: 0.5; cursor: not-allowed; }
 .pinbar {
   display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
   padding: var(--space-2) var(--space-4); background: var(--bg-surface);
@@ -1911,4 +1920,5 @@ dl.kv dd { min-width: 0; }
     color: var(--text-muted); font-weight: var(--weight-medium);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  table.cards td.pincell .pinbtn { min-height: 34px; }
 }
