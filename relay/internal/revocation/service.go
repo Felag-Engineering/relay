@@ -20,8 +20,12 @@ import (
 // list Nodes (for the token cascade) and to persist a Node's revocation so it
 // survives a Relay restart. Both *registry.InMemory and the store-backed
 // registry satisfy it.
+//
+// The cascade lists through ListChecked, never List: List cannot report a
+// store read failure, so a cascade over it would revoke nothing on an
+// unreadable registry and still report success (see ErrCascadeIncomplete).
 type Registry interface {
-	List() []registry.Node
+	ListChecked() ([]registry.Node, error)
 	SetRevoked(nodeID string, at time.Time) error
 
 	// SetRevokedAll is the cascade's persistence path (revokeAll): one
@@ -130,6 +134,14 @@ func (e *CascadeShortfall) Unwrap() error { return ErrCascadeNotRecorded }
 // was revoked but one or more of their revocation records could not be
 // written. See RevokeToken's cascade loop for why the revoke proceeds anyway.
 var ErrCascadeNotRecorded = errors.New("revocation: one or more cascaded Node revocations were not recorded")
+
+// ErrCascadeIncomplete is returned (wrapped) by RevokeToken when the token was
+// revoked but the registry could not be read completely, so Nodes enrolled
+// under it may still be trusted. It deliberately does NOT wrap
+// ErrCascadeNotRecorded: that error means "every Node was revoked", which is
+// exactly what cannot be claimed here. A retry is safe and is the remedy —
+// token revocation is idempotent and the cascade skips Nodes already revoked.
+var ErrCascadeIncomplete = errors.New("revocation: the registry could not be read completely; Nodes enrolled under the token may not all be revoked")
 
 // Service coordinates the denylist and live-connection teardown for Node and
 // Enrollment Token revocation.
@@ -406,6 +418,12 @@ func (s *Service) RevokeNodeRecorded(ctx context.Context, nodeID string, record 
 // pass loop's IsRevoked skip drops all of them and nothing is recorded
 // twice; (c) the lock is keyed on tokenID, so a cascade for a different
 // token is never delayed by this one.
+//
+// FAILS LOUDLY ON AN UNREADABLE REGISTRY: if any pass cannot read the whole
+// registry, the Nodes it did read are still revoked, and RevokeToken then
+// returns an error wrapping ErrCascadeIncomplete instead of reporting
+// success. The token itself stays revoked (Step 1 already ran); a retry
+// re-runs the cascade.
 func (s *Service) RevokeToken(ctx context.Context, tokenID string, record RevocationRecorder) error {
 	// A nil recorder is refused before the token store or the token lock is
 	// touched, so a nil recorder revokes NOTHING — see ErrRecorderRequired.
@@ -470,7 +488,14 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string, record Revoca
 			pending = make(map[string]struct{}, cascadeRecordChunk)
 		}
 
-		for _, n := range s.reg.List() {
+		// A failed or partial read must never pass for a settled registry:
+		// that is how a store error used to revoke zero Nodes and report
+		// success, leaving every Node a leaked token enrolled still trusted.
+		// The Nodes that WERE read are still revoked below — over-denying
+		// beats under-denying — and the cascade then stops and fails loudly
+		// after this pass rather than claiming completion.
+		nodes, listErr := s.reg.ListChecked()
+		for _, n := range nodes {
 			if n.EnrollingTokenID != tokenID {
 				continue
 			}
@@ -499,6 +524,13 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string, record Revoca
 		flush()
 
 		total += newThisPass
+		if listErr != nil {
+			slog.Error("token revocation cascade incomplete: registry read failed",
+				"token_id", tokenID, "pass", pass, "nodes_revoked", total,
+				"nodes_unrecorded", unrecorded, "error", listErr)
+			return fmt.Errorf("%w (pass %d; %d Nodes revoked, %d unrecorded): %w",
+				ErrCascadeIncomplete, pass, total, unrecorded, listErr)
+		}
 		// After the initial scan (pass > 0), stop early if this pass found no new
 		// nodes: the registry has settled and no further late Upserts are expected.
 		if pass > 0 && newThisPass == 0 {

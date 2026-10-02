@@ -275,7 +275,19 @@ type Repository interface {
 	// List returns deep copies of all stored Node records. Ordering is
 	// unspecified; the InMemory implementation sorts by NodeID for determinism,
 	// but callers must not rely on it.
+	//
+	// List cannot report a read failure: a store-backed implementation logs
+	// one and returns the Nodes it could read (possibly none). A caller whose
+	// correctness depends on having seen EVERY Node must use ListChecked.
 	List() []Node
+
+	// ListChecked is List for a caller that must not mistake a failed read
+	// for an empty or smaller fleet — today only the Enrollment-Token
+	// revocation cascade, where a silently short list leaves Nodes enrolled
+	// under a leaked token trusted (invariant 6). It returns every Node it
+	// could read and a non-nil error whenever that is not every Node in the
+	// registry, so the caller can act on what was read and still fail loudly.
+	ListChecked() ([]Node, error)
 
 	// RecordEnrollment persists the certificate provenance for a Node's FIRST
 	// enrollment: the certificate the Relay just issued, and the moment it

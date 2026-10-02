@@ -115,15 +115,15 @@ func (s *singleConnRegistry) SetRevoked(nodeID string, at time.Time) error {
 	return s.InMemory.SetRevoked(nodeID, at)
 }
 
-func (s *singleConnRegistry) List() []registry.Node {
+func (s *singleConnRegistry) ListChecked() ([]registry.Node, error) {
 	s.acquire()
 	defer s.release()
-	return s.InMemory.List()
+	return s.InMemory.ListChecked()
 }
 
 // Get is the "other store call" this file's contention test drives through
 // the modelled connection. The cascade itself never calls Get — only
-// List — so an "other-get" log entry is unambiguous evidence of an
+// ListChecked — so an "other-get" log entry is unambiguous evidence of an
 // unrelated caller.
 func (s *singleConnRegistry) Get(nodeID string) (registry.Node, bool) {
 	s.acquire()
@@ -300,7 +300,7 @@ func indexOfLogEntry(log []string, entry string) int {
 
 // erroringSetRevokedAllRegistry is a test double for revocation.Registry
 // whose SetRevokedAll always fails, modelling a persistent batch failure
-// across an entire cascade. List delegates to the embedded InMemory
+// across an entire cascade. ListChecked delegates to the embedded InMemory
 // unchanged; SetRevoked either delegates too (so revokeAll's per-Node
 // fallback can be proven to persist) or also fails (so the denylist and the
 // live-Tunnel teardown can be proven unconditional even when nothing

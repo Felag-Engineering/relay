@@ -31,9 +31,11 @@ func silenceLogs(t *testing.T) {
 }
 
 // fakeLister is a test double for revocation.Registry. It returns a successive
-// slice of Nodes on each call to List(); once all slices are exhausted it
-// repeats the last one. SetRevoked is a no-op: these tests assert on the
-// denylist, not on persisted registry state.
+// slice of Nodes on each call to ListChecked(); once all slices are exhausted
+// it repeats the last one. errs, when set, is the error returned alongside
+// the slice for the call at that index (nil past its end), modelling a
+// registry read that failed or came back short. SetRevoked is a no-op: these
+// tests assert on the denylist, not on persisted registry state.
 //
 // mu guards calls, the double's OWN bookkeeping — it says nothing about the
 // product under test. Without it, two cascades List()-ing this double at
@@ -44,17 +46,23 @@ type fakeLister struct {
 	mu      sync.Mutex
 	calls   int
 	perCall [][]registry.Node
+	errs    []error
 }
 
-func (f *fakeLister) List() []registry.Node {
+func (f *fakeLister) ListChecked() ([]registry.Node, error) {
 	f.mu.Lock()
-	i := f.calls
+	call := f.calls
+	i := call
 	if i >= len(f.perCall) {
 		i = len(f.perCall) - 1
 	}
 	f.calls++
 	f.mu.Unlock()
-	return f.perCall[i]
+	var err error
+	if call < len(f.errs) {
+		err = f.errs[call]
+	}
+	return f.perCall[i], err
 }
 
 func (f *fakeLister) SetRevoked(string, time.Time) error { return nil }
@@ -335,24 +343,24 @@ func TestService_RevokeToken_ToleratesUnknownToken(t *testing.T) {
 }
 
 // TestService_RevokeToken_RecordsNodeFoundOnRescan asserts that a Node whose
-// registry Upsert lands AFTER the first List() snapshot is both denylisted
+// registry Upsert lands AFTER the first ListChecked() snapshot is both denylisted
 // AND recorded by the re-scan.
 //
 // This covers the TOCTOU window: a daemon passes Validate just before the
 // token-revoke barrier and writes its registry entry during or after the
 // first scan. The bounded re-scan in RevokeToken must denylist AND record it
 // — this reddens if recording is ever hoisted out of the pass loop to run
-// only against the first List() snapshot.
+// only against the first ListChecked() snapshot.
 func TestService_RevokeToken_RecordsNodeFoundOnRescan(t *testing.T) {
 	d := revocation.NewDenylist()
 	c := revocation.NewConnections()
 
-	// The first List() call returns nothing (node hasn't been upserted yet).
+	// The first ListChecked() call returns nothing (node hasn't been upserted yet).
 	// All subsequent calls return the late Node, simulating a registry Upsert
 	// that raced past the first snapshot.
 	lister := &fakeLister{
 		perCall: [][]registry.Node{
-			{}, // first List(): node not yet visible
+			{}, // first ListChecked(): node not yet visible
 			{{NodeID: "node-late", EnrollingTokenID: "tok-abc"}},
 		},
 	}
@@ -367,6 +375,50 @@ func TestService_RevokeToken_RecordsNodeFoundOnRescan(t *testing.T) {
 	}
 	if len(rec.got) != 1 || rec.got[0] != "node-late" {
 		t.Errorf("recorder calls = %v, want exactly [node-late]", rec.got)
+	}
+}
+
+// TestService_RevokeToken_RegistryReadFailureFailsLoudly is G-E0's revocation
+// half: a registry read that fails or comes back short must never let the
+// cascade report success, because the Nodes it could not see are still
+// trusted (invariant 6). The first pass reads cleanly; the re-scan reads one
+// more matching Node but reports an error. Both Nodes that WERE read must be
+// revoked (over-denying beats under-denying), and RevokeToken must return
+// ErrCascadeIncomplete — and must NOT return ErrCascadeNotRecorded, which the
+// Control API reads as "every Node was revoked".
+func TestService_RevokeToken_RegistryReadFailureFailsLoudly(t *testing.T) {
+	silenceLogs(t)
+	d := revocation.NewDenylist()
+	c := revocation.NewConnections()
+
+	lister := &fakeLister{
+		perCall: [][]registry.Node{
+			{{NodeID: "node-a", EnrollingTokenID: "tok-abc"}},
+			{
+				{NodeID: "node-a", EnrollingTokenID: "tok-abc"},
+				{NodeID: "node-b", EnrollingTokenID: "tok-abc"},
+			},
+		},
+		errs: []error{nil, errors.New("store unavailable")},
+	}
+	svc := revocation.NewService(d, c, lister, &fakeTokenRevoker{})
+
+	rec := &recorder{}
+	err := svc.RevokeToken(context.Background(), "tok-abc", rec.record)
+	if !errors.Is(err, revocation.ErrCascadeIncomplete) {
+		t.Fatalf("RevokeToken error = %v, want errors.Is(err, ErrCascadeIncomplete)", err)
+	}
+	if errors.Is(err, revocation.ErrCascadeNotRecorded) {
+		t.Errorf("RevokeToken error = %v must not claim ErrCascadeNotRecorded: that "+
+			"tells the Control API every Node was revoked", err)
+	}
+	for _, id := range []string{"node-a", "node-b"} {
+		if !d.IsRevoked(id) {
+			t.Errorf("%s was read but not denylisted: a short read must still revoke what it saw", id)
+		}
+	}
+	if lister.calls != 2 {
+		t.Errorf("ListChecked calls = %d, want 2: the cascade must stop at the failed read", lister.calls)
 	}
 }
 

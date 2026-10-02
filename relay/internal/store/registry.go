@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -380,8 +381,12 @@ func (r *sqliteRegistry) Get(nodeID string) (registry.Node, bool) {
 	ctx := context.Background()
 	n, ok, err := getNode(ctx, r.db, nodeID, &r.declined)
 	if err != nil {
-		// registry.Repository.Get has no error return; a query failure here
-		// is treated as "not found" rather than panicking the caller.
+		// registry.Repository.Get has no error return, so a query failure here
+		// still reads as "not found" to the caller. Log it so an unreadable
+		// store is never indistinguishable from an absent Node in the logs.
+		// node_id is the verified client-cert CN (ADR-0006), not a secret.
+		slog.Error("registry get failed: store read error reported as not found",
+			"node_id", nodeID, "error", err)
 		return registry.Node{}, false
 	}
 	if !ok {
@@ -390,22 +395,50 @@ func (r *sqliteRegistry) Get(nodeID string) (registry.Node, bool) {
 	return r.withOutdated(n), true
 }
 
-// List returns all stored Node records, sorted by NodeID.
+// List returns all stored Node records, sorted by NodeID. A read failure is
+// logged and the Nodes that could be read are returned (none, if the ID scan
+// itself failed); ListChecked is the variant that reports it.
 func (r *sqliteRegistry) List() []registry.Node {
+	out, err := r.ListChecked()
+	if err != nil {
+		slog.Error("registry list incomplete: store read error",
+			"nodes_returned", len(out), "error", err)
+	}
+	return out
+}
+
+// ListChecked returns every Node it could read, sorted by NodeID, and a
+// non-nil error when that is not every Node in the registry: either the ID
+// scan failed (no Nodes returned), or one or more Nodes failed to read (the
+// rest are returned). A Node deleted between the ID scan and its read is
+// absent, not an error.
+func (r *sqliteRegistry) ListChecked() ([]registry.Node, error) {
 	ctx := context.Background()
 	ids, err := allNodeIDs(ctx, r.db)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	out := make([]registry.Node, 0, len(ids))
+	var failed int
+	var firstErr error
 	for _, id := range ids {
 		n, ok, err := getNode(ctx, r.db, id, &r.declined)
-		if err != nil || !ok {
+		if err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if !ok {
 			continue
 		}
 		out = append(out, r.withOutdated(n))
 	}
-	return out
+	if failed > 0 {
+		return out, fmt.Errorf("read %d of %d nodes failed (first: %w)", failed, len(ids), firstErr)
+	}
+	return out, nil
 }
 
 // withOutdated computes n.Outdated (ADR-0014) against this registry's

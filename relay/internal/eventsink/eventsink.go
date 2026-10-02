@@ -222,6 +222,10 @@ func (o registryObserver) List() []registry.Node {
 	return o.r.List()
 }
 
+func (o registryObserver) ListChecked() ([]registry.Node, error) {
+	return o.r.ListChecked()
+}
+
 func (o registryObserver) RecordEnrollment(nodeID string, cert registry.Certificate, at time.Time) error {
 	return o.r.RecordEnrollment(nodeID, cert, at)
 }
