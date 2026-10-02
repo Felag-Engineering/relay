@@ -135,13 +135,75 @@ func (e *CascadeShortfall) Unwrap() error { return ErrCascadeNotRecorded }
 // written. See RevokeToken's cascade loop for why the revoke proceeds anyway.
 var ErrCascadeNotRecorded = errors.New("revocation: one or more cascaded Node revocations were not recorded")
 
-// ErrCascadeIncomplete is returned (wrapped) by RevokeToken when the token was
-// revoked but the registry could not be read completely, so Nodes enrolled
-// under it may still be trusted. It deliberately does NOT wrap
-// ErrCascadeNotRecorded: that error means "every Node was revoked", which is
-// exactly what cannot be claimed here. A retry is safe and is the remedy —
-// token revocation is idempotent and the cascade skips Nodes already revoked.
+// ErrCascadeIncomplete is wrapped by the *IncompleteCascade RevokeToken
+// returns when the token was revoked but the registry could not be read
+// completely, so Nodes enrolled under it may still be trusted. It
+// deliberately does NOT wrap ErrCascadeNotRecorded: that error means "every
+// Node was revoked", which is exactly what cannot be claimed here.
+//
+// A retry is safe — token revocation is idempotent and the cascade skips
+// Nodes already revoked — and fixes a TRANSIENT store fault. It does not fix
+// a Node whose row stays unreadable: every retry fails the same way, and that
+// Node must be revoked individually by the ID IncompleteCascade names (the
+// single-Node revoke never reads the row).
 var ErrCascadeIncomplete = errors.New("revocation: the registry could not be read completely; Nodes enrolled under the token may not all be revoked")
+
+// maxNamedUnreadable bounds how many unreadable Node IDs an IncompleteCascade
+// carries, so one bad store cannot turn an error string or a log line into
+// an unbounded list; UnreadableCount still gives the full number.
+const maxNamedUnreadable = 10
+
+// IncompleteCascade reports a cascade that stopped because the registry could
+// not be read completely. It wraps ErrCascadeIncomplete and the registry's
+// read error, and never ErrCascadeNotRecorded. The counts are typed fields for
+// the reason CascadeShortfall's are: they are what an operator acts on, and
+// they must stay assertable when an unreadable registry and a recording
+// shortfall coincide.
+type IncompleteCascade struct {
+	// Pass is the 0-based cascade pass whose registry read failed.
+	Pass int
+	// Revoked and Unrecorded count what the cascade did before it stopped:
+	// Nodes revoked, and how many of those went unrecorded.
+	Revoked    int
+	Unrecorded int
+	// UnreadableNodeIDs names at most maxNamedUnreadable of the Nodes the
+	// registry listed but could not read; UnreadableCount is how many there
+	// were in all. Both are zero when the ID scan itself failed — then no
+	// Node can be named, and every Node the token enrolled may still be
+	// trusted.
+	UnreadableNodeIDs []string
+	UnreadableCount   int
+	// Err is the registry's read error.
+	Err error
+}
+
+func (e *IncompleteCascade) Error() string {
+	unseen := "every Node enrolled under the token may still be trusted"
+	if e.UnreadableCount > 0 {
+		unseen = fmt.Sprintf("%d unreadable Node(s) may still be trusted %v", e.UnreadableCount, e.UnreadableNodeIDs)
+		if more := e.UnreadableCount - len(e.UnreadableNodeIDs); more > 0 {
+			unseen += fmt.Sprintf(" and %d more", more)
+		}
+	}
+	return fmt.Sprintf("revocation: the registry could not be read completely on pass %d "+
+		"(%d Nodes revoked, %d unrecorded); %s: %v", e.Pass, e.Revoked, e.Unrecorded, unseen, e.Err)
+}
+
+// Unwrap lets errors.Is(err, ErrCascadeIncomplete) hold, and keeps the
+// registry's own error reachable.
+func (e *IncompleteCascade) Unwrap() []error { return []error{ErrCascadeIncomplete, e.Err} }
+
+// newIncompleteCascade builds the IncompleteCascade for listErr, naming the
+// unreadable Nodes when the registry reported them.
+func newIncompleteCascade(pass, revoked, unrecorded int, listErr error) *IncompleteCascade {
+	ic := &IncompleteCascade{Pass: pass, Revoked: revoked, Unrecorded: unrecorded, Err: listErr}
+	var unreadable *registry.UnreadableNodesError
+	if errors.As(listErr, &unreadable) {
+		ic.UnreadableCount = len(unreadable.NodeIDs)
+		ic.UnreadableNodeIDs = append([]string(nil), unreadable.NodeIDs[:min(len(unreadable.NodeIDs), maxNamedUnreadable)]...)
+	}
+	return ic
+}
 
 // Service coordinates the denylist and live-connection teardown for Node and
 // Enrollment Token revocation.
@@ -421,9 +483,10 @@ func (s *Service) RevokeNodeRecorded(ctx context.Context, nodeID string, record 
 //
 // FAILS LOUDLY ON AN UNREADABLE REGISTRY: if any pass cannot read the whole
 // registry, the Nodes it did read are still revoked, and RevokeToken then
-// returns an error wrapping ErrCascadeIncomplete instead of reporting
-// success. The token itself stays revoked (Step 1 already ran); a retry
-// re-runs the cascade.
+// returns an *IncompleteCascade (wrapping ErrCascadeIncomplete) naming what
+// it could not see, instead of reporting success. The token itself stays
+// revoked (Step 1 already ran). See ErrCascadeIncomplete for what a retry
+// does and does not fix.
 func (s *Service) RevokeToken(ctx context.Context, tokenID string, record RevocationRecorder) error {
 	// A nil recorder is refused before the token store or the token lock is
 	// touched, so a nil recorder revokes NOTHING — see ErrRecorderRequired.
@@ -525,11 +588,12 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string, record Revoca
 
 		total += newThisPass
 		if listErr != nil {
+			ic := newIncompleteCascade(pass, total, unrecorded, listErr)
 			slog.Error("token revocation cascade incomplete: registry read failed",
 				"token_id", tokenID, "pass", pass, "nodes_revoked", total,
-				"nodes_unrecorded", unrecorded, "error", listErr)
-			return fmt.Errorf("%w (pass %d; %d Nodes revoked, %d unrecorded): %w",
-				ErrCascadeIncomplete, pass, total, unrecorded, listErr)
+				"nodes_unrecorded", unrecorded, "nodes_unreadable", ic.UnreadableCount,
+				"unreadable_node_ids", ic.UnreadableNodeIDs, "error", listErr)
+			return ic
 		}
 		// After the initial scan (pass > 0), stop early if this pass found no new
 		// nodes: the registry has settled and no further late Upserts are expected.

@@ -11,12 +11,33 @@ package registry
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"time"
 )
 
 // ErrNotFound is returned when an operation targets a Node that is not in the registry.
 var ErrNotFound = errors.New("registry: node not found")
+
+// UnreadableNodesError is what ListChecked returns when the registry's Node
+// IDs were read but one or more of those Nodes could not be: NodeIDs names
+// every one of them (sorted), Scanned is how many IDs the scan found, and Err
+// is the first read error. A caller can name the Nodes it could not see —
+// which, for the revocation cascade, are exactly the Nodes that may still be
+// trusted. A failure of the ID scan itself is returned as a plain error: no
+// Node can be named then.
+type UnreadableNodesError struct {
+	NodeIDs []string
+	Scanned int
+	Err     error
+}
+
+func (e *UnreadableNodesError) Error() string {
+	return fmt.Sprintf("registry: %d of %d nodes could not be read (first: %v)",
+		len(e.NodeIDs), e.Scanned, e.Err)
+}
+
+func (e *UnreadableNodesError) Unwrap() error { return e.Err }
 
 // ErrEmptyNodeID is returned when an operation is given an empty node ID.
 var ErrEmptyNodeID = errors.New("registry: empty node id")

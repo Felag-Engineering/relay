@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -382,14 +383,22 @@ func TestService_RevokeToken_RecordsNodeFoundOnRescan(t *testing.T) {
 // half: a registry read that fails or comes back short must never let the
 // cascade report success, because the Nodes it could not see are still
 // trusted (invariant 6). The first pass reads cleanly; the re-scan reads one
-// more matching Node but reports an error. Both Nodes that WERE read must be
-// revoked (over-denying beats under-denying), and RevokeToken must return
-// ErrCascadeIncomplete — and must NOT return ErrCascadeNotRecorded, which the
-// Control API reads as "every Node was revoked".
+// more matching Node but reports 12 unreadable ones, and that re-scan's record
+// call fails too. Both Nodes that WERE read must be revoked (over-denying
+// beats under-denying), and RevokeToken must return an *IncompleteCascade —
+// counts intact although an unreadable registry and a recording shortfall
+// coincide, at most 10 unreadable Nodes named — wrapping
+// ErrCascadeIncomplete and NOT ErrCascadeNotRecorded, which the Control API
+// reads as "every Node was revoked".
 func TestService_RevokeToken_RegistryReadFailureFailsLoudly(t *testing.T) {
 	silenceLogs(t)
 	d := revocation.NewDenylist()
 	c := revocation.NewConnections()
+
+	unreadable := make([]string, 12)
+	for i := range unreadable {
+		unreadable[i] = fmt.Sprintf("node-u%02d", i+1)
+	}
 
 	lister := &fakeLister{
 		perCall: [][]registry.Node{
@@ -399,14 +408,29 @@ func TestService_RevokeToken_RegistryReadFailureFailsLoudly(t *testing.T) {
 				{NodeID: "node-b", EnrollingTokenID: "tok-abc"},
 			},
 		},
-		errs: []error{nil, errors.New("store unavailable")},
+		errs: []error{nil, &registry.UnreadableNodesError{NodeIDs: unreadable, Scanned: 14, Err: errors.New("store unavailable")}},
 	}
 	svc := revocation.NewService(d, c, lister, &fakeTokenRevoker{})
 
-	rec := &recorder{}
+	rec := &recorder{failCalls: map[int]error{2: errors.New("audit store unavailable")}}
 	err := svc.RevokeToken(context.Background(), "tok-abc", rec.record)
 	if !errors.Is(err, revocation.ErrCascadeIncomplete) {
 		t.Fatalf("RevokeToken error = %v, want errors.Is(err, ErrCascadeIncomplete)", err)
+	}
+	var ic *revocation.IncompleteCascade
+	if !errors.As(err, &ic) {
+		t.Fatalf("RevokeToken error = %v, want it to carry an *IncompleteCascade", err)
+	}
+	if ic.Pass != 1 || ic.Revoked != 2 || ic.Unrecorded != 1 || ic.UnreadableCount != 12 {
+		t.Errorf("IncompleteCascade = {Pass:%d Revoked:%d Unrecorded:%d UnreadableCount:%d}, want {1 2 1 12}",
+			ic.Pass, ic.Revoked, ic.Unrecorded, ic.UnreadableCount)
+	}
+	if !slices.Equal(ic.UnreadableNodeIDs, unreadable[:10]) {
+		t.Errorf("UnreadableNodeIDs = %v, want the first 10 of %v", ic.UnreadableNodeIDs, unreadable)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "node-u01") || !strings.Contains(msg, "and 2 more") ||
+		strings.Contains(msg, "node-u11") {
+		t.Errorf("error text = %q, want it to name the first 10 unreadable Nodes and count the rest", msg)
 	}
 	if errors.Is(err, revocation.ErrCascadeNotRecorded) {
 		t.Errorf("RevokeToken error = %v must not claim ErrCascadeNotRecorded: that "+

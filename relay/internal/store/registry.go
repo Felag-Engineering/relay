@@ -384,7 +384,9 @@ func (r *sqliteRegistry) Get(nodeID string) (registry.Node, bool) {
 		// registry.Repository.Get has no error return, so a query failure here
 		// still reads as "not found" to the caller. Log it so an unreadable
 		// store is never indistinguishable from an absent Node in the logs.
-		// node_id is the verified client-cert CN (ADR-0006), not a secret.
+		// node_id is not a secret: it is a cert CN (ADR-0006) or an ID a
+		// caller already validated. Not rate-limited: a store that stays
+		// unreadable logs once per Get.
 		slog.Error("registry get failed: store read error reported as not found",
 			"node_id", nodeID, "error", err)
 		return registry.Node{}, false
@@ -409,9 +411,10 @@ func (r *sqliteRegistry) List() []registry.Node {
 
 // ListChecked returns every Node it could read, sorted by NodeID, and a
 // non-nil error when that is not every Node in the registry: either the ID
-// scan failed (no Nodes returned), or one or more Nodes failed to read (the
-// rest are returned). A Node deleted between the ID scan and its read is
-// absent, not an error.
+// scan failed (a plain error, no Nodes returned), or one or more Nodes failed
+// to read (a *registry.UnreadableNodesError naming them; the rest are
+// returned). A Node deleted between the ID scan and its read is absent, not
+// an error.
 func (r *sqliteRegistry) ListChecked() ([]registry.Node, error) {
 	ctx := context.Background()
 	ids, err := allNodeIDs(ctx, r.db)
@@ -419,12 +422,12 @@ func (r *sqliteRegistry) ListChecked() ([]registry.Node, error) {
 		return nil, err
 	}
 	out := make([]registry.Node, 0, len(ids))
-	var failed int
+	var unreadable []string
 	var firstErr error
 	for _, id := range ids {
 		n, ok, err := getNode(ctx, r.db, id, &r.declined)
 		if err != nil {
-			failed++
+			unreadable = append(unreadable, id)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -435,8 +438,8 @@ func (r *sqliteRegistry) ListChecked() ([]registry.Node, error) {
 		}
 		out = append(out, r.withOutdated(n))
 	}
-	if failed > 0 {
-		return out, fmt.Errorf("read %d of %d nodes failed (first: %w)", failed, len(ids), firstErr)
+	if len(unreadable) > 0 {
+		return out, &registry.UnreadableNodesError{NodeIDs: unreadable, Scanned: len(ids), Err: firstErr}
 	}
 	return out, nil
 }
@@ -540,17 +543,17 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 
 	ips, err := decodeIPAddresses(ipAddresses)
 	if err != nil {
-		return registry.Node{}, false, err
+		return registry.Node{}, false, fmt.Errorf("node %q: %w", nodeID, err)
 	}
 
 	nodeLabels, err := fetchLabels(ctx, q, nsNode.table(), nodeID)
 	if err != nil {
-		return registry.Node{}, false, err
+		return registry.Node{}, false, fmt.Errorf("node %q: %w", nodeID, err)
 	}
 	nodeLabels = wellFormedLabels(nsNode, nodeLabels, declined)
 	relayLabels, err := fetchLabels(ctx, q, nsRelay.table(), nodeID)
 	if err != nil {
-		return registry.Node{}, false, err
+		return registry.Node{}, false, fmt.Errorf("node %q: %w", nodeID, err)
 	}
 	relayLabels = wellFormedLabels(nsRelay, relayLabels, declined)
 

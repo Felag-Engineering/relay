@@ -81,6 +81,10 @@ func TestRevokeToken_UnreadableRegistryDoesNotReportSuccess(t *testing.T) {
 	if errors.Is(err, revocation.ErrCascadeNotRecorded) {
 		t.Errorf("RevokeToken error = %v must not claim ErrCascadeNotRecorded (every Node revoked)", err)
 	}
+	var ic *revocation.IncompleteCascade
+	if errors.As(err, &ic) && ic.UnreadableCount != 0 {
+		t.Errorf("UnreadableCount = %d, want 0: a failed ID scan cannot name any Node", ic.UnreadableCount)
+	}
 	if d.IsRevoked("node-a") {
 		t.Error("node-a denylisted although the registry could not be read — the test's fault did not take")
 	}
@@ -102,6 +106,14 @@ func TestRevokeToken_UnreadableNodeDoesNotReportSuccess(t *testing.T) {
 	if !errors.Is(err, revocation.ErrCascadeIncomplete) {
 		t.Fatalf("RevokeToken error = %v, want errors.Is(err, ErrCascadeIncomplete): node-bad "+
 			"could not be read, so the cascade cannot claim it revoked every Node", err)
+	}
+	var ic *revocation.IncompleteCascade
+	if !errors.As(err, &ic) {
+		t.Fatalf("RevokeToken error = %v, want an *IncompleteCascade", err)
+	}
+	if ic.UnreadableCount != 1 || len(ic.UnreadableNodeIDs) != 1 || ic.UnreadableNodeIDs[0] != "node-bad" {
+		t.Errorf("unreadable = %v (count %d), want exactly [node-bad]: the Nodes that may "+
+			"still be trusted must be named", ic.UnreadableNodeIDs, ic.UnreadableCount)
 	}
 	// Over-denying beats under-denying: the Nodes that were readable are revoked.
 	for _, id := range []string{"node-a", "node-c"} {
@@ -125,8 +137,12 @@ func TestSqliteRegistry_ListChecked_ReportsWhatListHides(t *testing.T) {
 		corruptLastSeen(t, st, "node-bad")
 
 		got, err := reg.ListChecked()
-		if err == nil {
-			t.Fatal("ListChecked: want an error for the unreadable node, got nil")
+		var une *registry.UnreadableNodesError
+		if !errors.As(err, &une) {
+			t.Fatalf("ListChecked error = %v, want a *registry.UnreadableNodesError", err)
+		}
+		if len(une.NodeIDs) != 1 || une.NodeIDs[0] != "node-bad" || une.Scanned != 3 {
+			t.Errorf("UnreadableNodesError = {NodeIDs:%v Scanned:%d}, want {[node-bad] 3}", une.NodeIDs, une.Scanned)
 		}
 		if ids := nodeIDs(got); len(ids) != 2 || ids[0] != "node-a" || ids[1] != "node-c" {
 			t.Errorf("ListChecked nodes = %v, want [node-a node-c] (the readable ones)", ids)
