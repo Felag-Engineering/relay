@@ -46,6 +46,7 @@ endif
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
         test-security-surface test-codex-review test-proto-tools-check \
+        test-check-docs test-smoke-test \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
         demo-build demo-reset demo-reset-oauth demo-fault demo-up demo-up-oauth demo-down demo-creds \
         test-demo-fleet \
@@ -58,7 +59,8 @@ endif
 # and proto-breaking gates, the operation-schema drift check, the devharness
 # absence check, the security-surface gate self-test, the demo-fleet reset
 # guard self-test, the codex-review gate self-test, the proto-tools pin check
-# self-test, the strict-umask test lane, and both cross-binary suites.
+# self-test, the docs-check and smoke-test self-tests, the strict-umask test
+# lane, and both cross-binary suites.
 # Work can pass the inner loop and fail CI on a class of problem the author
 # never looked at.
 #
@@ -76,7 +78,8 @@ endif
 verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
         apiclient-check verify-proto docs-check test-security-surface \
-        test-demo-fleet test-codex-review test-proto-tools-check test-integration test-crossbinary
+        test-demo-fleet test-codex-review test-proto-tools-check test-check-docs test-smoke-test \
+        test-integration test-crossbinary
 	@echo
 	@echo "verify: all local CI-equivalent gates passed."
 
@@ -265,6 +268,21 @@ test-codex-review:
 test-proto-tools-check:
 	bash scripts/proto-tools-check-test.sh
 
+# Proves scripts/check-docs.sh's cited-test check covers Go Test/Benchmark/Fuzz names and, in
+# proof rows, Rust test fns and cargo-fuzz targets — failing on a name that does not exist, a
+# Rust fn that is not a test, or a test only under target/. Hermetic: a throwaway fixture repo
+# holding the real script; no Go or Rust toolchain.
+test-check-docs:
+	bash scripts/check-docs-test.sh
+
+# Proves scripts/smoke-test.sh's mTLS verdict is not vacuous: it passes only when a certless
+# Enroll reaches its handler (positive control) AND certless Renew and Tunnel/Open are refused
+# by the transport interceptors, and fails when nothing listens or mTLS is off. Hermetic: the
+# real script against a stub Relay and a stub curl replaying a recorded real capture. The real
+# binary half is test-integration.
+test-smoke-test:
+	bash scripts/smoke-test-test.sh
+
 # Verify no committed generated code drifts from the proto source (ADR-0007).
 # Runs proto (which regenerates) then fails if relay/internal/relay/v1 differs.
 proto-check: proto
@@ -379,8 +397,9 @@ test-strict-umask-daemon:
 ## --- End-to-end integration tests ---
 # test-integration is NOT part of the make test gate (hermetic suites only).
 # Run explicitly: make test-integration
-# Runs the mTLS smoke test (certless rejection) then the real-wire Go integration
-# tests (//go:build integration) with the actual relay-daemon binary.
+# Runs the mTLS smoke test (certless refusal, with a positive control) then the
+# real-wire Go integration tests (//go:build integration) with the actual
+# relay-daemon binary.
 # Depends on build so both binaries exist before running.
 test-integration: build
 	bash scripts/smoke-test.sh

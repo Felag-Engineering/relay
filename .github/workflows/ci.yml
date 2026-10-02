@@ -94,6 +94,20 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-proto-tools-check
 
+      # scripts/check-docs.sh's cited-test check, proved against a fixture repo: Go
+      # Test/Benchmark/Fuzz names, and Rust test fns and cargo-fuzz targets in proof rows. Shell
+      # only, no toolchain.
+      - name: Docs-check self-test
+        if: ${{ !cancelled() }}
+        run: make test-check-docs
+
+      # scripts/smoke-test.sh's mTLS verdict, proved against a stub Relay and a stub curl: it
+      # cannot pass when nothing listens or when mTLS is off. Shell only; the real-binary run is
+      # the integration job's make test-integration.
+      - name: Smoke-test self-test
+        if: ${{ !cancelled() }}
+        run: make test-smoke-test
+
   # ---- relay: Go format, build, lint, race-detector tests, the OpenAPI contract,
   # and the Go half of the strict-umask lane ----
   relay:

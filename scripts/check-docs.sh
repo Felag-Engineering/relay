@@ -2,7 +2,10 @@
 # Documentation invariants that CI enforces on every PR. Fast, no toolchain: shell + grep + awk.
 #
 #   1. ADR numbers are unique.
-#   2. Every test a spec cites exists.
+#   2. Every test a spec cites exists: a Go `Test*`, `Benchmark*` or `Fuzz*` name anywhere in
+#      the spec; and, in a "What proves each claim" row, every snake_case name (one with an
+#      underscore, optionally `path::`-qualified), which is read as a Rust test — a fn under
+#      #[test] or #[tokio::test] in daemon/ — or a cargo-fuzz target in daemon/fuzz/Cargo.toml.
 #   3. A migrated spec (Status current/designed) has the claim shape docs/specs/TEMPLATE.md
 #      describes: a declared prefix, unique across specs; every claim ID uses it and is defined
 #      once; proof rows cite defined Behaviour/Refusals claims; Designed rows carry a milestone;
@@ -29,14 +32,46 @@ declare -A prefix_owner=()
 # Print the body of one "## Heading" section (up to the next "## ").
 section() { awk -v h="## $2" '$0==h{f=1;next} /^## /{f=0} f' "$1"; }
 
+# Print the table rows of a spec's "### What proves each claim" (up to the next ## or ###).
+proof_rows() { awk '/^### What proves each claim/{f=1;next} /^###? /{f=0} f && /^\|/' "$1"; }
+
+# The names a proof row may cite as Rust evidence, computed once: every fn declared under a
+# #[test] or #[tokio::test] attribute in daemon/ (other attributes, doc comments and blank lines
+# may sit between the two; build output under target/ is not source), plus every cargo-fuzz
+# target, whose name is its [[bin]] name rather than a fn.
+rust_evidence=$(
+  find daemon -name target -prune -o -name '*.rs' -type f -print 2>/dev/null | sort | while IFS= read -r f; do
+    awk '
+      FNR == 1 { t = 0 }
+      /^[[:space:]]*#\[(tokio::)?test(\]|\()/ { t = 1; next }
+      t && /^[[:space:]]*(#\[|\/\/|$)/ { next }
+      t && match($0, /^[[:space:]]*(pub(\([a-z]+\))?[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/) {
+        s = substr($0, RSTART, RLENGTH); sub(/.*fn[[:space:]]+/, "", s); print s
+      }
+      { t = 0 }' "$f"
+  done
+  [ -f daemon/fuzz/Cargo.toml ] && awk '
+    /^\[\[bin\]\]/ { b = 1; next }
+    /^\[/ { b = 0 }
+    b && /^[[:space:]]*name[[:space:]]*=/ { s = $0; sub(/^[^"]*"/, "", s); sub(/".*/, "", s); print s }' daemon/fuzz/Cargo.toml
+)
+
 for spec in "$SPEC_DIR"/*.md; do
   case "$spec" in */README.md|*/TEMPLATE.md) continue;; esac
   name=$(basename "$spec")
 
   # 2. Cited tests exist
-  for t in $(grep -oE '`(Test|Benchmark)[A-Za-z0-9_]+`' "$spec" | tr -d '`' | sort -u); do
+  for t in $(grep -oE '`(Test|Benchmark|Fuzz)[A-Za-z0-9_]+`' "$spec" | tr -d '`' | sort -u); do
     grep -rqF "func $t(" --include='*_test.go' . || grep -rqE "fn $t\(" --include='*.rs' . \
       || err "$name cites $t, which does not exist"
+  done
+  # 2b. Rust tests and fuzz targets a proof row cites exist. A `path::` qualifier is dropped:
+  # the fn name is what must resolve. Matched through a here-string, never `printf | grep -q`
+  # (see 3h).
+  for t in $(proof_rows "$spec" | grep -oE '`([a-z][a-z0-9_]*::)*[a-z][a-z0-9]*(_[a-z0-9]+)+`' \
+             | tr -d '`' | sed 's/.*:://' | sort -u); do
+    grep -qxF "$t" <<<"$rust_evidence" \
+      || err "$name: a proof row cites $t, which is neither a Rust test (#[test]/#[tokio::test] fn in daemon/) nor a cargo-fuzz target — a snake_case name in a proof row is read as one"
   done
 
   status=$(grep -m1 -E '^\*\*Status:\*\*' "$spec" | sed -E 's/^\*\*Status:\*\* *//')
