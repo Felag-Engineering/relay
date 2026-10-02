@@ -1128,8 +1128,8 @@ this runs `dev-fleet-service restart`. It is a fan-out-2 mutate, parks under
 `demo-fleet-wide-mutates-need-a-human`, and can be approved in-band by the client that asked (with an asserted responder
 name Relay records and does not verify)
 for it; approved, it returns 2 × `success, exit_code: 0` and the faulted Node serves again
-*(predicted)*. `svc.status` and `svc.restart` become the natural read/mutate pair for this
-once #626 makes the Template pack dispatchable.
+*(predicted)*. `svc.status` and `svc.restart` from the demo Template pack are the typed
+read/mutate pair for the same beat, dispatchable by name since ADR-0042 (#626).
 
 **Independent verification.** `file.read` of
 `/var/lib/dev-fleet-service/state` on the repaired Node shows a new `pid` and

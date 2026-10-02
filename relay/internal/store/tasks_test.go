@@ -331,6 +331,68 @@ func TestMarkVersionRefused_FromPending(t *testing.T) {
 	}
 }
 
+// TestMarkUnsupported_FromPending is the store contract for a Node the Relay
+// excluded from a Template dispatch (ADR-0042): a Pending Task moves straight
+// to Resolved/OutcomeUnsupported with the Relay-authored reason as Stderr, no
+// DispatchedAt, and is absent from InFlight (it was never sent). A
+// non-Pending or unknown Task is refused with the usual sentinels.
+func TestMarkUnsupported_FromPending(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	seedJobAndStage(t, st, "job-1", "stage-1")
+	taskRepo := st.Tasks()
+
+	for _, id := range []string{"task-1", "task-2"} {
+		task := jobs.Task{ID: id, JobID: "job-1", StageID: "stage-1", NodeID: "node-" + id, Action: testAction(), CreatedAt: time.Now().UTC()}
+		if err := taskRepo.CreateTask(ctx, task); err != nil {
+			t.Fatalf("CreateTask(%s): %v", id, err)
+		}
+	}
+
+	resolvedAt := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+	const reason = "not dispatched: this Node does not report this Template Operation"
+	if err := taskRepo.MarkUnsupported(ctx, "task-1", reason, resolvedAt); err != nil {
+		t.Fatalf("MarkUnsupported: %v", err)
+	}
+
+	got, err := taskRepo.Get(ctx, "task-1")
+	if err != nil {
+		t.Fatalf("Get after MarkUnsupported: %v", err)
+	}
+	if got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeUnsupported {
+		t.Errorf("after MarkUnsupported: state=%v outcome=%v, want Resolved/Unsupported", got.State, got.Outcome)
+	}
+	if string(got.Stderr) != reason {
+		t.Errorf("Stderr after MarkUnsupported: got %q, want %q", got.Stderr, reason)
+	}
+	if !got.DispatchedAt.IsZero() {
+		t.Errorf("DispatchedAt after MarkUnsupported: got %v, want zero (never dispatched)", got.DispatchedAt)
+	}
+	if !got.ResolvedAt.Equal(resolvedAt) {
+		t.Errorf("ResolvedAt after MarkUnsupported: got %v, want %v", got.ResolvedAt, resolvedAt)
+	}
+
+	if err := taskRepo.MarkDispatched(ctx, "task-2", time.Now().UTC()); err != nil {
+		t.Fatalf("MarkDispatched(task-2): %v", err)
+	}
+	if err := taskRepo.MarkUnsupported(ctx, "task-2", reason, time.Now().UTC()); !errors.Is(err, jobs.ErrInvalidTaskState) {
+		t.Errorf("MarkUnsupported on dispatched task: want ErrInvalidTaskState, got %v", err)
+	}
+	if err := taskRepo.MarkUnsupported(ctx, "does-not-exist", reason, time.Now().UTC()); !errors.Is(err, jobs.ErrTaskNotFound) {
+		t.Errorf("MarkUnsupported unknown task: want ErrTaskNotFound, got %v", err)
+	}
+
+	inFlight, err := taskRepo.InFlight(ctx)
+	if err != nil {
+		t.Fatalf("InFlight: %v", err)
+	}
+	for _, task := range inFlight {
+		if task.ID == "task-1" {
+			t.Errorf("InFlight contains task-1: an unsupported Task was never dispatched")
+		}
+	}
+}
+
 // TestMarkVersionRefused_InvalidState mirrors TestMarkUnreachable_InvalidState:
 // that transition only applies to a Task that was never sent.
 func TestMarkVersionRefused_InvalidState(t *testing.T) {

@@ -382,7 +382,19 @@ func buildOperationAction(name string, args map[string]string, timeoutSeconds in
 
 	d, ok := opvocab.Lookup(name)
 	if !ok {
-		return jobs.Action{}, fmt.Errorf("unknown operation %q", name)
+		// Not Native, so a Template Operation (ADR-0021). This adapter decides
+		// nothing about it (ADR-0042, invariant 10): no risk class, no
+		// argument check — the capability layer resolves both over the
+		// matched Nodes' own reports, and refuses a name none of them reports.
+		if name == "" {
+			return jobs.Action{}, fmt.Errorf("operation is required")
+		}
+		return jobs.Action{
+			Kind:           jobs.ActionOperation,
+			OperationName:  name,
+			OperationArgs:  args,
+			TimeoutSeconds: timeout,
+		}, nil
 	}
 	if err := opvocab.ValidateArgNames(d, args); err != nil {
 		return jobs.Action{}, err
@@ -437,6 +449,16 @@ func writeExecError(w http.ResponseWriter, err error) {
 		// audit-write failure must stay visible to the caller (errors.As
 		// still finds the type on the joined err).
 		writeProblem(w, http.StatusUnprocessableEntity, "no nodes matched", err.Error())
+		return
+	}
+	// A Template no matched Node reports, or a Template call whose argument
+	// names do not fit its slots (ADR-0042): malformed input, refused by the
+	// capability layer after authorization, never a Policy verdict — the same
+	// 400 an unknown Native argument gets at this adapter (#345).
+	var unknownErr *capability.UnknownOperationError
+	var malformedErr *capability.MalformedCallError
+	if errors.As(err, &unknownErr) || errors.As(err, &malformedErr) {
+		writeProblem(w, http.StatusBadRequest, "invalid operation request", err.Error())
 		return
 	}
 	if errors.Is(err, authz.ErrUnauthorized) {

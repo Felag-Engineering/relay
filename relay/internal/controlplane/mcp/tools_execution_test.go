@@ -397,3 +397,37 @@ func TestPendingApproval_CarriesNoWayToApprove(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildOperationAction_TemplateNameCarriesNoClass pins this adapter's
+// half of ADR-0042 (invariant 10): a name outside the Native vocabulary is a
+// Template Operation, forwarded with its arguments untouched and NO risk
+// class. The capability layer decides the class over the matched Nodes' own
+// reports and checks the argument names against their slots; this adapter
+// neither classifies nor rejects it, so an argument name no Native declares
+// is not refused here.
+func TestBuildOperationAction_TemplateNameCarriesNoClass(t *testing.T) {
+	act, err := buildOperationAction(stubOpsLister{}, "svc.status", map[string]string{"unit": "nginx"}, 0)
+	if err != nil {
+		t.Fatalf("buildOperationAction(svc.status) = %v, want a Template Action for the capability layer", err)
+	}
+	if act.Kind != jobs.ActionOperation || act.OperationName != "svc.status" || act.OperationArgs["unit"] != "nginx" {
+		t.Errorf("Action = %+v, want the Template name and its arguments forwarded unchanged", act)
+	}
+	if act.RiskClass != jobs.RiskClassUnspecified {
+		t.Errorf("Action.RiskClass = %s, want unspecified — only the capability layer decides a Template's class", jobs.RiskClassName(act.RiskClass))
+	}
+}
+
+// TestRenderRunError_TemplateRefusalsPassThroughVerbatim: the capability
+// layer's unknown-operation and malformed-call refusals already tell the
+// AI-agent what to do next, so they reach it unwrapped.
+func TestRenderRunError_TemplateRefusalsPassThroughVerbatim(t *testing.T) {
+	for _, err := range []error{
+		&capability.UnknownOperationError{Operation: "nope.notreal", Matched: 1},
+		&capability.MalformedCallError{Operation: "log.tail", Reason: "unknown argument(s) [unitt]"},
+	} {
+		if got := renderRunError(err); got.Error() != err.Error() {
+			t.Errorf("renderRunError(%q) = %q, want it verbatim", err.Error(), got.Error())
+		}
+	}
+}

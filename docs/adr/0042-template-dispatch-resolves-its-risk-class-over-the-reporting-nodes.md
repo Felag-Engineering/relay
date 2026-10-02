@@ -59,7 +59,15 @@ pass under every rule that keys on `mutate`.
   refusals → blast cap → approval gate → dispatch. Template resolution computes; it refuses
   nothing until after authorization, so a caller who may not ask learns nothing about which
   Nodes carry which Templates. Policy preflight follows the same order and reports where a run
-  refuses (ADR-0011, ADR-0038).
+  refuses (ADR-0011, ADR-0038), with one exception: an unknown or malformed Template call is a
+  request that cannot be asked at all, so a preflight refuses it as a run would.
+
+- **Policy preflight excludes exactly as a run does.** A matched Node excluded from a Template
+  dispatch is never queried; the preflight reports it `unsupported` with the same Relay-authored
+  reason the run's Task carries, so preflight and apply agree. This is the one place the Relay
+  reads its cached vocabulary during a preflight, and it decides only fan-out and class: every
+  `allow` and `deny` is still the daemon's live answer (invariant 12). `policy-preflight.md`'s
+  PF-7 and PF-11 are amended on the same date to say so.
 
 - **The vocabulary cache becomes a dispatch input.** It stops being display-only. It stays
   in-memory and is still refreshed only by the Node's own report on (re)connect; nothing on the

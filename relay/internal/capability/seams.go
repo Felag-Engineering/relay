@@ -527,6 +527,16 @@ const (
 	// resolved to zero Nodes (#571). This is a real refusal, not a park:
 	// nothing was dispatched and no Job was created.
 	RefusalNoNodesMatched
+
+	// RefusalUnknownOperation counts a dispatch refused because its Operation
+	// is neither Native nor reported as a Template Operation by any matched
+	// Node (ADR-0042). No Job was created.
+	RefusalUnknownOperation
+
+	// RefusalMalformed counts a Template dispatch refused because its argument
+	// names do not match the Template's slots, or its matched Nodes disagree
+	// about them (ADR-0042, #345). Malformed input, never a Policy verdict.
+	RefusalMalformed
 )
 
 // MetricsSink records best-effort observability counters for the capability
@@ -604,13 +614,16 @@ type PolicyViewSource interface {
 	Get(nodeID string) (policyview.Snapshot, bool)
 }
 
-// TemplateVocabularySource is the DISPLAY-ONLY read of a Node's
-// daemon-reported Template Operation vocabulary (nodevocab.Cache, #680).
+// TemplateVocabularySource is the read of a Node's daemon-reported Template
+// Operation vocabulary (nodevocab.Cache, #680): displayed by the read lane,
+// and read by template.go to decide a Template dispatch's fan-out and risk
+// class (ADR-0042) — never to decide an allow or a deny (invariant 12).
 // Get only, for the same reason PolicyViewSource's is: the concrete
 // *nodevocab.Cache pointer (which carries Set) stays with the Tunnel handler
 // and the composition root, never this package. A nil seam means "not
-// wired", and both DescribeNode and ListOperations report Reported=false for
-// it rather than an empty vocabulary.
+// wired": DescribeNode and ListOperations report Reported=false for it
+// rather than an empty vocabulary, and a Template dispatch excludes every
+// Node.
 type TemplateVocabularySource interface {
 	Get(nodeID string) (nodevocab.Snapshot, bool)
 }

@@ -190,6 +190,8 @@ func TestIncRefusal_EveryKind(t *testing.T) {
 		{capability.RefusalBlastCap, "blast_cap"},
 		{capability.RefusalInternal, "internal"},
 		{capability.RefusalNoNodesMatched, "no_nodes_matched"},
+		{capability.RefusalUnknownOperation, "unknown_operation"},
+		{capability.RefusalMalformed, "malformed"},
 	}
 	for _, k := range kinds {
 		m.IncRefusal(k.kind)

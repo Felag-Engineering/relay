@@ -424,6 +424,16 @@ type TaskRepository interface {
 	// ErrInvalidTaskState if the Task is not currently Pending.
 	MarkVersionRefused(ctx context.Context, taskID string, at time.Time) error
 
+	// MarkUnsupported transitions a Task from Pending directly to Resolved
+	// with OutcomeUnsupported and Stderr = reason, leaving DispatchedAt unset
+	// — the Relay excluded the Task's Node from a Template dispatch because
+	// that Node does not report the Template, or has not reported its
+	// vocabulary at all (ADR-0042), so the Task was never sent. reason is
+	// Relay-authored and fixed, never daemon bytes. Returns ErrTaskNotFound if
+	// the Task does not exist, or ErrInvalidTaskState if the Task is not
+	// currently Pending.
+	MarkUnsupported(ctx context.Context, taskID, reason string, at time.Time) error
+
 	// MarkCancelled transitions a Task from Pending directly to Resolved with
 	// OutcomeCancelled, leaving DispatchedAt unset — the Task was cancelled
 	// before it was ever sent (ADR-0013). Returns ErrTaskNotFound if the Task

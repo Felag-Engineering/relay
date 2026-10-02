@@ -76,8 +76,11 @@ func templatePurpose(t nodevocab.Template) string {
 	return "Template Operation loaded on this Node from a local root-owned template file (ADR-0021). " +
 		"The command structure is fixed by the operator who installed it; only the typed parameter " +
 		"slots below vary, and the daemon validates and quotes each one before it runs. Governed by " +
-		"the Node's Policy exactly like a Native Operation. Not present on Nodes without this " +
-		"template — dispatching it there reports `unsupported`."
+		"the Node's Policy exactly like a Native Operation. Call it with run_operation like any other " +
+		"Operation. Across a Selector, Nodes that do not report this template are left out and reported " +
+		"`unsupported` without being sent anything, and the dispatch is `read` only if every remaining " +
+		"Node reports it `read` (ADR-0042). This entry is this Node's report; other Nodes may declare a " +
+		"different risk class or slots for the same name."
 }
 
 // slotConstraintProse renders one slot's declared type as the same
@@ -130,8 +133,10 @@ func registerOperationTools(srv *sdkmcp.Server, ops OperationLister, lane ReadLa
 			"Node, while Template Operations (source=template) are loaded from local root-owned files on " +
 			"individual Nodes. Pass node_id to see one Node's full vocabulary; without it you get the native " +
 			"part only. An unknown node_id is refused, not answered with an empty template set. " +
-			"Dispatching an Operation to a Node that does not have it reports the `unsupported` " +
-			"outcome — nothing runs and Policy is never consulted, so it is neither a failure nor a denial. " +
+			"run_operation calls a Template Operation by name exactly like a native one: matched Nodes that " +
+			"do not report it are left out and come back `unsupported` (nothing runs, Policy is never " +
+			"consulted — neither a failure nor a denial), its risk class is `read` only if every remaining " +
+			"Node reports `read`, and a name no matched Node reports is refused as an unknown operation. " +
 			"Raw Exec is a separate tool (#118), not an Operation, and is always mutate.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in listOperationsInput) (*sdkmcp.CallToolResult, ListOperationsOutput, error) {
 		vocab, err := lane.ListOperations(ctx, in.NodeID)

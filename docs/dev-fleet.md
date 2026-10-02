@@ -406,8 +406,9 @@ enough to prove a restart happened, and neither one can lie about the present.
 
 ### The Raw Exec beat
 
-Use `raw_exec(selector=…, argv=[…])` for this — **never `run_operation` with the Template
-pack's `svc.*`**, since those are not dispatchable yet (see below). The one other working
+Use `raw_exec(selector=…, argv=[…])` for this beat — it is the Raw Exec demonstration. The
+typed route to the same repair is the Template pack's `svc.restart` (see
+[below](#the-template-pack--loaded-enforced-and-dispatchable)), and the one other structured
 mutate is `service.restart` on the web Nodes, through the shim described in
 [The fixture limit, stated plainly](#the-fixture-limit-stated-plainly).
 
@@ -451,18 +452,26 @@ of band (see [The fault, and resetting between takes](operations/demo-fleet.md#t
 in the demo runbook). The script has no `stop` subcommand and the
 Policy has no allow for one, so both layers say the same thing.
 
-### The template pack — loaded and enforced, not yet dispatchable
+### The template pack — loaded, enforced and dispatchable
 
 `svc.restart` (`mutate`) and `svc.status` (`read`) are visible through
 `list_operations(node_id="<a web node id>")` and `describe_node(...)`'s
 `template_vocabulary` (with a real `template_set_fingerprint`; the literal `unloadable`
-there means the pack failed to load). They are in each Node's Policy vocabulary — allowed on
-the web fixture, absent from the db fixture.
+there means the pack failed to load). Every fixture Node loads the pack; the web fixture's
+Policy allows both, and the db fixture's has no rule for either.
 
-**They cannot be called yet:** the Relay resolves only the four Native Operations at
-dispatch, so `run_operation(operation="svc.restart")` returns `unknown operation`. Making a
-Template callable is tracked in
-[issue #626](https://github.com/Felag-Engineering/gleipnir-relay/issues/626).
+Call them like any Operation (ADR-0042):
+
+```
+run_operation(selector="relay:env=dev", operation="svc.status")
+```
+
+returns `success` on the web Nodes and `denied_by_policy` on the db Node — it has the
+Template, and its own Policy refuses it. The dispatch is `read` because every Node that
+reports `svc.status` reports it `read`; `svc.restart` is `mutate`, so it takes the mutate cap
+and every approval rule that matches a `mutate`, exactly as `service.restart` does. A Node that
+does not report a Template at all is left out and comes back `unsupported` without being
+sent anything, and a preflight (`plan=true`) reports the same.
 
 After the rebuild, `list_nodes()` shows **two distinct `policy_fingerprint` values** across
 the fleet, because `daemon-3` now loads a different Policy file — the registry's

@@ -49,7 +49,7 @@ const nOutcomes = 9
 // capability.RefusalKind value, including the ones IncRefusal folds into
 // RefusalInternal's slot (see IncRefusal) rather than rendering their own
 // series.
-const nRefusalKinds = int(capability.RefusalNoNodesMatched) + 1
+const nRefusalKinds = int(capability.RefusalMalformed) + 1
 
 // nViolationRules is the number of relay_protocol_violations_total
 // series. Unlike dispatches and refusals, THE SLOT IS NOT THE
@@ -151,6 +151,10 @@ func refusalLabel(k capability.RefusalKind) string {
 		return "blast_cap"
 	case capability.RefusalNoNodesMatched:
 		return "no_nodes_matched"
+	case capability.RefusalUnknownOperation:
+		return "unknown_operation"
+	case capability.RefusalMalformed:
+		return "malformed"
 	default:
 		return "internal"
 	}
@@ -211,6 +215,8 @@ var refusalOrder = []capability.RefusalKind{
 	capability.RefusalBlastCap,
 	capability.RefusalInternal,
 	capability.RefusalNoNodesMatched,
+	capability.RefusalUnknownOperation,
+	capability.RefusalMalformed,
 }
 
 // violationSlotOrder is the rendering order of the
@@ -259,7 +265,8 @@ func (m *Metrics) IncRefusal(k capability.RefusalKind) {
 	idx := int(capability.RefusalInternal)
 	switch k {
 	case capability.RefusalFrozen, capability.RefusalUnauthorized, capability.RefusalBlastCap,
-		capability.RefusalInternal, capability.RefusalNoNodesMatched:
+		capability.RefusalInternal, capability.RefusalNoNodesMatched,
+		capability.RefusalUnknownOperation, capability.RefusalMalformed:
 		idx = int(k)
 	}
 	m.refusals[idx].Add(1)

@@ -136,7 +136,13 @@ func TestPreflightNeverConsultsCachedPolicyOrVocabulary(t *testing.T) {
 
 	svc := newPreflightServiceWithCaches(t, reg, conduit, pv, nv)
 
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "disk.usage", RiskClass: jobs.RiskClassRead}
+	// A Native Operation: amended PF-7 (ADR-0042) admits a cached-vocabulary
+	// read only to decide a TEMPLATE's fan-out and class, so for a Native the
+	// zero-Gets property below still holds in full. The Template case — where
+	// the cache is read for fan-out but every allow and deny is still the
+	// daemon's — is TestPreflightTemplateExclusionNeverDecidesAVerdict
+	// (template_test.go).
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "file.read", OperationArgs: map[string]string{"path": "/etc/hostname"}, RiskClass: jobs.RiskClassRead}
 	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), act)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
@@ -306,9 +312,18 @@ const (
 // bitten by): each of the four counts at least one hit before the test
 // trusts its own zero-violations result.
 func TestCachedPolicyAndVocabularyReachOnlyTheDisplayReadLane(t *testing.T) {
-	fieldAllow := map[string]bool{"service.go": true, "readlane_registry.go": true}
+	// template.go joined the field and import lists with #626 (ADR-0042,
+	// PF-7 as amended 2026-10-02): it reads the cached Template vocabulary to
+	// decide a Template dispatch's fan-out and risk class, which is the one
+	// non-display use PF-7 now admits. It produces no verdict — every allow
+	// and deny is still the daemon's, which
+	// TestPreflightTemplateExclusionNeverDecidesAVerdict proves behaviourally
+	// — and it is the only file admitted; plan.go and service.go reach it
+	// only through resolveAction. It is NOT on the type list: it never names
+	// a seam type, so a new cached field there would still trip this test.
+	fieldAllow := map[string]bool{"service.go": true, "readlane_registry.go": true, "template.go": true}
 	typeAllow := map[string]bool{"seams.go": true, "service.go": true}
-	importAllow := map[string]bool{"seams.go": true, "readlane_registry.go": true}
+	importAllow := map[string]bool{"seams.go": true, "readlane_registry.go": true, "template.go": true}
 	methodAllow := map[string]bool{"readlane_registry.go": true}
 
 	_, thisFile, _, ok := runtime.Caller(0)

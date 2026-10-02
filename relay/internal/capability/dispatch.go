@@ -22,6 +22,13 @@ type dispatch struct {
 	nodes     []registry.Node
 	action    jobs.Action
 
+	// excluded are matched Nodes left out of a Template dispatch (ADR-0042):
+	// each gets a Task resolved unsupported without ever being sent, so the
+	// Job records every matched Node truthfully. Empty for a Native Operation
+	// or Raw Exec. Set by Service.Run from resolveAction, never by
+	// newDispatch itself.
+	excluded []excludedNode
+
 	// jobID is a Job ID reserved — and already bound to the releasing
 	// approval — before dispatch (AP-77). When empty, the dispatcher mints
 	// its own, exactly as before. Set by Service.Run after the release claim

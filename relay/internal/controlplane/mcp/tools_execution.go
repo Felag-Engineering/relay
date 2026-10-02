@@ -185,6 +185,12 @@ func renderRunError(err error) error {
 	if errors.As(err, &nnmErr) {
 		return err
 	}
+	// Template refusals (ADR-0042) already say what to do next.
+	var unknownErr *capability.UnknownOperationError
+	var malformedErr *capability.MalformedCallError
+	if errors.As(err, &unknownErr) || errors.As(err, &malformedErr) {
+		return err
+	}
 	return fmt.Errorf("mcp: dispatch failed: %w", err)
 }
 
@@ -208,6 +214,13 @@ func renderRunError(err error) error {
 // The argument-name half lives in [opvocab.ValidateArgNames], beside the
 // ArgConstraints convention it reads, so this surface and the Control API's
 // execution routes share ONE definition and cannot reopen #345 independently.
+//
+// A name outside the Native vocabulary is a Template Operation (ADR-0021),
+// and this adapter decides NOTHING about it (ADR-0042, invariant 10): it
+// builds the Action with no risk class and no argument check, and the
+// capability layer resolves the class over the matched Nodes' own reports,
+// checks the argument names against their slots, and refuses a name no
+// matched Node reports as an unknown operation.
 func buildOperationAction(ops OperationLister, name string, args map[string]string, timeoutSeconds int32) (jobs.Action, error) {
 	timeoutSeconds, err := controlplane.ResolveTimeoutSeconds(timeoutSeconds)
 	if err != nil {
@@ -227,7 +240,15 @@ func buildOperationAction(ops OperationLister, name string, args map[string]stri
 			}, nil
 		}
 	}
-	return jobs.Action{}, fmt.Errorf("unknown operation %q (see list_operations)", name)
+	if name == "" {
+		return jobs.Action{}, fmt.Errorf("operation is required (see list_operations)")
+	}
+	return jobs.Action{
+		Kind:           jobs.ActionOperation,
+		OperationName:  name,
+		OperationArgs:  args,
+		TimeoutSeconds: timeoutSeconds,
+	}, nil
 }
 
 // runOperationInput is run_operation's argument. Plan is additive (#119):
