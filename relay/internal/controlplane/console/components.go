@@ -634,6 +634,9 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 	// number — TestPluralFamiliesKeepOppositeContracts), shared so a
 	// component cannot render "1 Nodes matched".
 	"plural": screenFuncs["plural"],
+	// aboutDoc is screen.go's About docs pointer, shared so the "about-docs"
+	// partial below resolves the same choice every screen does.
+	"aboutDoc": screenFuncs["aboutDoc"],
 }).Parse(`
 {{define "label-chip"}}<span class="chip lbl" data-ns="{{.Namespace}}"{{if .SecurityLane}} data-lane="security"{{end}}{{if .Attention}} data-sev="attention"{{end}} title="{{.}}"><span class="ns">{{.Namespace}}:</span>{{.Key}}{{if .Value}}<span class="eq">=</span>{{.Value}}{{end}}</span>{{end}}
 
@@ -700,12 +703,18 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 {{/* refresh: 00-foundations.md, "Refreshing a screen". An anchor, never a timer. */}}
 {{define "refresh"}}<div class="refreshbar"><a class="refreshbtn" href="{{.Href}}">Refresh</a></div>{{end}}
 
+{{/* about-docs ends an "About this screen" paragraph with what it names for
+     further reading (00-foundations.md, "Standing notes and situational
+     messages"). The choice is aboutDocsShipped's, in screen.go; while it is
+     aboutDocsNone this renders nothing. */}}
+{{define "about-docs"}}{{with aboutDoc .}} More in <code>{{.}}</code>.{{end}}{{end}}
+
 {{define "pin-bar"}}<div class="pinbar">
   <span class="pinlbl">Pinned</span>
   {{range .Pins}}<span class="pinchip">
     {{if .Current}}<code>{{.ID}}</code><span class="dim">this Node</span>
     {{else if .Known}}<a href="{{.Href}}"><code>{{.ID}}</code></a>
-    {{else}}<code class="dim">{{.ID}}</code><span class="dim" title="A pinned id is whatever the link carried; the Relay resolves each one against the registry.">not in this registry</span>{{end}}
+    {{else}}<code class="dim">{{.ID}}</code><span class="dim" title="A pinned id is whatever the link carried; the Relay checks it against the registry.">not in this registry</span>{{end}}
     <a class="unpin" href="{{.UnpinHref}}">unpin</a></span>{{end}}
   {{if .ShowCompare}}{{with .CompareHref}}<a class="act" href="{{.}}">Compare these Nodes</a>{{else}}<span class="act dim">Compare these Nodes</span><span class="dim">Pin 1 more to compare</span>{{end}}{{end}}
   {{with .FleetHref}}<a href="{{.}}">Pick another from the fleet</a>{{end}}
@@ -725,6 +734,6 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 {{define "job-cancel"}}<form class="jobcancel" method="post" action="{{.Action}}">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
   <button type="submit">Cancel</button>
-  <span class="jcnote">Cancel stops this Job&#39;s in-flight Tasks. It stops nothing that comes later; the incident ladder does that.</span>
+  <span class="jcnote">Cancel asks this Job&#39;s in-flight Tasks to end; nothing later is affected.</span>
 </form>{{end}}
 `))

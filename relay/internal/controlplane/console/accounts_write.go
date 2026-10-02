@@ -730,9 +730,8 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 				"account_id", id, "token_id", tok.ID, "error", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
-				Heading: "The Relay could not confirm this token was fully recorded. A token may " +
-					"have been created — check this Account's token list, and revoke anything you " +
-					"did not intend. Its id is " + tok.ID + ".",
+				Heading: "The Relay could not confirm this token was fully recorded. A token may have been " +
+					"created; check this Account's token list and revoke anything unintended. Its id is " + tok.ID + ".",
 				Href:  accountsScreenPath,
 				Label: "Back to Accounts.",
 			})
@@ -822,14 +821,12 @@ func handleRevokeAPIToken(d Deps) http.HandlerFunc {
 // html/template, rendered exactly once, beside the sentence that says this is
 // the only time it will ever appear.
 var accountsMintedTmpl = newScreen("accounts-minted", `
-<section class="panel">
+<section class="panel minted">
   <h3>API Token minted &mdash; <span class="ident">{{.TokenName}}</span>{{with .AccountName}} for <span class="ident">{{.}}</span>{{end}}</h3>
   <p><b>Copy this now.</b> This is the only time this Relay will show it. It is stored as a hash and
   cannot be recovered &mdash; if it is lost, revoke this token and mint another.</p>
   <p><code>{{.Token}}</code></p>
-  <p class="note">Token id <code>{{.TokenID}}</code>{{if .Expires.IsZero}} &mdash; this token does not
-  expire{{else}} &mdash; expires {{stamp .Expires}}{{end}}. The id is safe to record; the value above
-  is not.</p>
+  <p class="note">Token id <code>{{.TokenID}}</code>{{if .Expires.IsZero}}, which does not expire{{else}}, expiring {{stamp .Expires}}{{end}}; record the id, never the value above.</p>
   <p><a href="{{.BackHref}}">Back to Accounts</a></p>
 </section>
 `)

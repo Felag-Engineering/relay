@@ -7,6 +7,7 @@ package console
 // visible where it always was.
 
 import (
+	"html/template"
 	"strings"
 	"testing"
 	"time"
@@ -104,13 +105,7 @@ func TestActivity_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
 	inside, outside := splitAbout(t, body)
 	mustBeStanding(t, inside, outside,
 		"Each page holds up to",
-		"The default feed leaves out the trail&#39;s own read records.",
-		"This screen lists tool calls and nothing else.",
-		"The filter box carries no Selector and no Node.",
-		"The chips above list every family this screen shows, including empty ones.",
 		"Every Refresh is an audited read",
-		"Cancel is offered in Running now",
-		"This screen shows the request and never the reasoning.",
 	)
 }
 
@@ -120,7 +115,7 @@ func TestActivity_SituationalMessagesStayVisible(t *testing.T) {
 		{"/console/activity?window=fortnight", "Part of this URL could not be read:"},
 		{"/console/activity?kind=nonesuch", "There is no row kind called"},
 		{"/console/activity?q=nginx", "matches text within the rows already on this page"},
-		{"/console/activity?outcome=failure", "Outcome narrows dispatch rows after the page is fetched."},
+		{"/console/activity?outcome=failure", "Outcome keeps Jobs with at least one"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			mustBeSituational(t, get(t, h, tc.path).Body.String(), tc.msg)
@@ -143,7 +138,6 @@ func TestAccess_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
 	body := get(t, newTestHandler(accessDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/access").Body.String()
 	inside, outside := splitAbout(t, body)
 	mustBeStanding(t, inside, outside,
-		"Changes made on the Relay host name the host, not an Account.",
 		"OAuth sign-ins are not listed.",
 		"There is no filter by the changed Account.",
 		"Every Refresh is an audited read",
@@ -151,6 +145,12 @@ func TestAccess_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
 	)
 	if strings.Contains(body, "not on the trail") {
 		t.Error("the Access screen still says something is not on the trail")
+	}
+	// The Control API has no audit-read route (docs/api/openapi.yaml;
+	// 20-access.md), so a sentence saying these records are readable there
+	// was false and is gone.
+	if strings.Contains(body, "readable through the Control API") {
+		t.Error("the Access screen says its records are readable through the Control API, which has no audit-read route")
 	}
 }
 
@@ -177,7 +177,7 @@ func TestDayOne_StandingNoteIsInOneClosedDisclosure(t *testing.T) {
 func TestDayOne_UnwatchedEnrollmentNoteStaysVisible(t *testing.T) {
 	d := withFleet(renderableDeps()) // no event seam: nothing is watching
 	mustBeSituational(t, get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String(),
-		"Rejected attempts are not shown yet.")
+		"Rejected attempts are not shown yet</b>")
 }
 
 // --- Approval object: every message is about this caller or this record -----
@@ -200,12 +200,12 @@ func TestApproval_SituationalMessagesStayVisible(t *testing.T) {
 		req.RequestedBy, req.RequestedByID = testAccountName(accounts.RoleOperator), testAccountID(accounts.RoleOperator)
 		d := decideRenderDeps(req, &fakeDecider{}, &fakeAuth{})
 		mustBeSituational(t, get(t, newTestHandler(d, accounts.RoleOperator), "/console/approvals/ap-1").Body.String(),
-			"You cannot decide this one.")
+			"You cannot decide this one</b>")
 	})
 	t.Run("role below the floor", func(t *testing.T) {
 		d := decideRenderDeps(pendingApprovalRequest("ap-1"), &fakeDecider{}, &fakeAuth{})
 		mustBeSituational(t, get(t, newTestHandler(d, accounts.RoleViewer), "/console/approvals/ap-1").Body.String(),
-			"Your role cannot decide this.")
+			"Your role cannot decide this</b>")
 	})
 	t.Run("expired", func(t *testing.T) {
 		req := pendingApprovalRequest("ap-1")
@@ -235,16 +235,16 @@ func TestApprovals_DecidingCopySaysWhatIsTrue(t *testing.T) {
 	if !strings.Contains(queue, "Deciding happens on the request itself, behind step-up") {
 		t.Error("the queue does not say where and how deciding happens")
 	}
-	if !strings.Contains(queue, "This Console does not decide a Grant") {
-		t.Error("the queue dropped the true statement that a Grant is not decided here")
+	if !strings.Contains(queue, "this Console does not decide an Approval grant") {
+		t.Error("the queue dropped the true statement that an Approval grant is not decided here")
 	}
 
 	g := consoleGrant("grant-1", "ap-grant", 200, 20)
 	gd := renderableDeps()
 	gd.Approvals = &fakeApprovals{pending: []approval.Request{grantRequest(g, approval.StatePending)}, grants: []approval.Grant{g}}
 	card := contentOf(get(t, newTestHandler(gd, accounts.RoleAdmin), "/console/approvals/ap-grant").Body.String())
-	if !strings.Contains(card, "so it does not decide a Grant at all: it decides a single\n  Plan, behind step-up") {
-		t.Error("the Grant card does not say what this Console does decide")
+	if !strings.Contains(card, "so this Console does not decide an Approval grant") {
+		t.Error("the Approval grant card does not say this Console does not decide it")
 	}
 
 	for _, page := range []string{queue, card} {
@@ -291,17 +291,21 @@ func TestFleet_NoMatchEmptyStateIsSituational(t *testing.T) {
 	}
 }
 
-func TestNode_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
+// TestNode_HasNoAboutDisclosure: every note Node detail carries qualifies a
+// value beside it, so each one is visible and the screen has no standing note
+// left to collapse (00-foundations.md as amended for #849). An About
+// disclosure here would be a place for qualifiers to be hidden.
+func TestNode_HasNoAboutDisclosure(t *testing.T) {
 	d := withPolicy(fleetFixture(), map[string]policyview.Snapshot{"node-web-1": reportedSnapshot(policyview.Snapshot{
 		AllowedOperations: []string{"service.restart"},
 	}, testNow.Add(-90*time.Second))})
-	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
-	inside, outside := splitAbout(t, body)
-	mustBeStanding(t, inside, outside,
-		"Who writes each label namespace.",
-		"The fingerprints are compared, not trusted.",
-		"Facts appear here and nowhere else.",
-	)
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String())
+	if !strings.Contains(content, "<h3>Effective Policy") {
+		t.Fatal("the Node page did not render its Policy panel, so its absence of an About proves nothing")
+	}
+	if n := strings.Count(content, `<details class="about"`); n != 0 {
+		t.Errorf("Node detail carries %d About disclosures, want 0", n)
+	}
 }
 
 func TestNode_MandatedNotesStayVisible(t *testing.T) {
@@ -312,17 +316,21 @@ func TestNode_MandatedNotesStayVisible(t *testing.T) {
 	for _, msg := range []string{
 		"There is no path from this screen to this Node's Policy",
 		"receipt time, not a query time",
-		"cannot store tag: labels yet",
-		"self-reported · this page only",
+		"self-reported · this page only · never targeted",
 		"reported by the daemon",
+		"These counts are observations",
+		"never the Node",
 	} {
 		mustBeSituational(t, body, msg)
 	}
-	_, outside := splitAbout(t, body)
-	for _, ns := range []string{"<b>node:</b>", "<b>tag:</b>", "<b>relay:</b>", "<b>state:</b>"} {
-		if !strings.Contains(outside, ns) {
+	content := contentOf(body)
+	for _, ns := range []string{"<b>node:</b>", "<b>relay:</b>", "<b>state:</b>"} {
+		if !strings.Contains(content, ns) {
 			t.Errorf("the visible legend does not name %s", ns)
 		}
+	}
+	if strings.Contains(content, "<b>tag:</b>") {
+		t.Error("the visible legend names tag:, a namespace no chip on this screen can carry yet")
 	}
 	for _, claim := range []string{"security-lane", "security lane"} {
 		if strings.Contains(body, claim) {
@@ -334,11 +342,7 @@ func TestNode_MandatedNotesStayVisible(t *testing.T) {
 func TestAccounts_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
 	body := get(t, newTestHandler(accountsFixture(), accounts.RoleAdmin), accountsPath).Body.String()
 	inside, outside := splitAbout(t, body)
-	mustBeStanding(t, inside, outside,
-		"What a role means.",
-		"Granting costs your password; reducing does not.",
-		"What the two time columns mean.",
-	)
+	mustBeStanding(t, inside, outside, template.HTMLEscapeString(policyCeilingNote))
 	mustBeSituational(t, body, "cannot sign in until a password is set")
 	for i := 0; ; {
 		j := strings.Index(body[i:], "agent call trail")

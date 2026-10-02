@@ -408,11 +408,12 @@ func TestAccounts_NoConsoleFileNamesSecretHash(t *testing.T) {
 	}
 }
 
-// TestAccounts_RoleBlockNamesThePolicyCeiling: spec 15 asks for "what a role
-// means" in BOUNDARY terms, with the sentence that the ceiling is always the
-// fleet's own Policy. It must not become a permission matrix, and it must not
-// become Relay configuration (invariant 11, foundations rule 7).
-func TestAccounts_RoleBlockNamesThePolicyCeiling(t *testing.T) {
+// TestAccounts_AboutNamesThePolicyCeiling: spec 15 asks for the sentence that
+// the ceiling is always the fleet's own Policy. Since #849 the screen draws no
+// per-role lines — what each role may do is ADR-0010's and GLOSSARY.md's — so
+// the ceiling is what remains. It must not become a permission matrix, and it
+// must not become Relay configuration (invariant 11, foundations rule 7).
+func TestAccounts_AboutNamesThePolicyCeiling(t *testing.T) {
 	body := contentOf(get(t, newTestHandler(accountsFixture(), accounts.RoleAdmin), accountsPath).Body.String())
 
 	// Compared against the const rather than a copy of the prose, so the
@@ -420,13 +421,7 @@ func TestAccounts_RoleBlockNamesThePolicyCeiling(t *testing.T) {
 	// turns the apostrophe in "Node's" into &#39;, which is correct output and
 	// would make a raw comparison fail for the wrong reason.
 	if !strings.Contains(html.UnescapeString(body), policyCeilingNote) {
-		t.Errorf("the role block does not state that a Node's own Policy is the ceiling:\n%s", body)
-	}
-	for _, want := range []string{"Raw Exec", "relay:", "Operations"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("the role block does not name %q — the boundaries are where operator and admin "+
-				"actually differ", want)
-		}
+		t.Errorf("the screen does not state that a Node's own Policy is the ceiling:\n%s", body)
 	}
 	// Not configuration, and not a fleet inventory: this screen is about
 	// identity, and a Node id, Selector or Operation name here would be the

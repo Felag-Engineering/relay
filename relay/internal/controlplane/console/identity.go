@@ -8,7 +8,7 @@ const maxHostnameBytes = 253
 // selfReportedTitle is the tooltip on any self-reported name drawn as a visual
 // primary. It is one const so the layout (the Node detail heading) and the
 // screens (a Fleet row) say the same thing.
-const selfReportedTitle = "Self-reported by this Node's daemon. Nothing checked it — the Node ID is the identity its certificate proves."
+const selfReportedTitle = "Self-reported by the daemon, never checked; the Node ID is what its certificate proves."
 
 // primaryHostname returns the Node's hostname when it may stand as the visual
 // primary of a heading or a row, and "" when the caller must fall back to the

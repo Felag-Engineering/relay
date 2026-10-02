@@ -276,12 +276,10 @@ func TestJob_TenThousandNodesRenderWithoutAList(t *testing.T) {
 			t.Errorf("rendered only %d Task rows on a 10,000-Task Job — the disclosure ladder is not showing anything", rows)
 		}
 
-		// The template wraps this sentence across a source line
-		// (job.go:1201-1203), so the rendered body carries a newline and two
-		// spaces where the raw string would not — squashSpace normalises
-		// that rather than pinning where the template happens to wrap.
+		// squashSpace normalises whitespace rather than pinning where the
+		// template happens to wrap.
 		if got := squashSpace(body); !strings.Contains(got,
-			"None of these 9000 Nodes is listed: at this size the count is the answer and the list is not.") {
+			"These 9000 Nodes are not listed; at this size the count is the answer.") {
 			t.Error("the success group did not state that its count is the answer and the list is not")
 		}
 
@@ -328,12 +326,11 @@ func TestJob_TenThousandNodesRenderWithoutAList(t *testing.T) {
 		// (job.go:861-871), so ShowAllHref stays empty and the "List the
 		// first N" fragment does not render for success — it does for the
 		// seven non-success groups, still capped at 25, which is why that
-		// substring is not the witness here. This note wraps across
-		// job.go:1201-1202, so squashSpace is needed here too; "the 100
-		// listed" is unique to the success group (the other seven each say
-		// "the 25 listed").
+		// substring is not the witness here. squashSpace normalises
+		// whitespace here too; "the 100 listed" is unique to the success
+		// group (the other seven each say "the 25 listed").
 		if got := squashSpace(body); !strings.Contains(got,
-			"The count above is exact; everything below is computed over the 100 listed.") {
+			"The count above is exact; what follows covers the 100 listed.") {
 			t.Error("the expanded success group did not state the bound it honoured")
 		}
 

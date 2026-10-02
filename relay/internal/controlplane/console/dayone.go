@@ -193,8 +193,7 @@ type dayOneAttempt struct {
 var dayOneTmpl = newScreen("dayone", `
 <div class="dayone">
   <h2>No Nodes have enrolled yet.</h2>
-  <p class="lede">This Relay is running and listening. Nothing has joined it, which on a
-  first run is exactly what you would expect.</p>
+  <p class="lede">This Relay is running; nothing has joined it yet.</p>
 
   <ul class="truths">
     <li>The Relay is up and accepting connections.</li>
@@ -205,15 +204,11 @@ var dayOneTmpl = newScreen("dayone", `
 
   <div class="firststep">
     {{if .CanMint}}
-    <p><b>Add Nodes</b> is not built yet. When it is, it will show an Enrollment Token and
-    everything a machine needs to join, together and only once.</p>
+    <p><b>Add Nodes</b> is not built yet.</p>
     {{else}}
-    <p>An <code>admin</code> mints the Enrollment Token. Its scope becomes the joining Node&#39;s
-    <code>relay:</code> labels, which is the security lane, so it is not a viewer&#39;s to
-    create.</p>
+    <p>An <code>admin</code> mints the Enrollment Token; its scope becomes the joining Node&#39;s <code>relay:</code> labels.</p>
     {{end}}
-    <p class="note">The end-to-end walkthrough is <code>docs/quickstart.md</code>, which is not
-    published with this build.</p>
+    <p class="note">The walkthrough is <code>docs/quickstart.md</code>, not published with this build.</p>
   </div>
 
   <section class="watch" id="dayone-watch" data-live-region
@@ -260,10 +255,7 @@ var dayOneTmpl = newScreen("dayone", `
   </section>
 
   {{if not .Watching}}
-  <p class="gap"><b>Rejected attempts are not shown yet.</b> A daemon that dials in with a
-  revoked, expired or malformed token is refused by the Relay and does not appear here. So this
-  screen shows an empty fleet, not proof that nothing tried to join. Refused attempts appear here
-  only when this Relay's live updates are available.</p>
+  <p class="gap"><b>Rejected attempts are not shown yet</b>, so an empty fleet is not proof nothing tried to join.</p>
   {{end}}
 
   <section class="trustpins">
@@ -272,29 +264,20 @@ var dayOneTmpl = newScreen("dayone", `
     <dl class="kv">
       <dt>CA fingerprint</dt>
       <dd><code title="{{.CAFingerprint}}">{{short .CAFingerprint}}</code>
-      <span class="note">This identifies the certificate authority every Node&#39;s certificate
-      chains to. It stays the same when the server certificate below is re-issued. It is
-      the value to compare against the one this Relay logged at startup. Today a daemon trusts this authority
-      because it was installed with its certificate. Pinning this number directly is not built
-      yet.</span></dd>
+      <span class="note">This is the value to compare against the one this Relay logged at startup.</span>
+      <span class="note">A daemon trusts this authority because it was installed with the CA bundle.</span></dd>
       <dt>Server certificate</dt>
       <dd><code title="{{.ServerFingerprint}}">{{short .ServerFingerprint}}</code>
-      <span class="note">The certificate this Console is served over right now. It is re-issued
-      about daily; it is not what you pin.</span></dd>
+      <span class="note">This Console&#39;s certificate, re-issued about daily; not what the CA bundle pins.</span></dd>
     </dl>
     {{else}}
-    <p class="dim">The CA and server-certificate fingerprints are not wired into this Console, so
-    this screen cannot show you what to compare. This is not a certificate problem, and it
-    is not something you can configure: it comes from how this Relay was built.</p>
+    <p class="dim">The CA and server-certificate fingerprints are not wired into this Console.</p>
     {{end}}
   </section>
 
   <details class="about">
     <summary>About this screen</summary>
-    <p class="gap"><b>A daemon that refuses this Relay&#39;s certificate never appears here.</b> It
-    aborts the handshake before it sends a token, so the Relay sees a connection and no attempt at
-    all. What catches that is checking the CA fingerprint above against the one this Relay logged at
-    startup before you install a daemon against it &mdash; this screen cannot.</p>
+    <p class="gap"><b>A daemon that refuses this Relay&#39;s certificate never appears here.</b> Check the CA fingerprint above before installing one.{{template "about-docs" "dayone"}}</p>
   </details>
 </div>
 `)

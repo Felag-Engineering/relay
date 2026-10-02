@@ -1458,6 +1458,14 @@ func buildApprovalAction(ctx context.Context, d Deps, caller capability.Principa
 // unspecifiedActionKind is how the audit trail spells "no Action was recorded".
 const unspecifiedActionKind = "unspecified"
 
+// The diff callout's four absences: why nothing is being compared.
+const (
+	absenceGrantStoreUnreadable = "The Approval grant store could not be read, so nothing is being compared."
+	absenceShapeNeverComputed   = "This record's shape was never computed, so nothing can be compared to it."
+	absenceNoPrior              = "Nothing of this shape has been approved on this Relay before."
+	absencePriorUnreadable      = "The last approval of this shape could not be read, so nothing is being compared."
+)
+
 // buildApprovalDiff is spec 08's anti-fatigue callout, and the rule it follows
 // is that it renders ONLY WHAT IS GENUINELY STORED and NAMES WHAT IT CANNOT
 // COMPARE.
@@ -1491,7 +1499,7 @@ func buildApprovalDiff(ctx context.Context, d Deps, caller capability.Principal,
 	// answer is that this screen does not yet know which of the two it is
 	// looking at.
 	if lookup == grantUnreadable {
-		diff.Absence = "This Request may authorize a Scope, and the Grant store could not be read, so nothing is being compared to it."
+		diff.Absence = absenceGrantStoreUnreadable
 		return diff
 	}
 
@@ -1500,16 +1508,16 @@ func buildApprovalDiff(ctx context.Context, d Deps, caller capability.Principal,
 	// clearer statement of intent: a record whose shape was never computed has
 	// no comparable prior BY CONSTRUCTION.
 	if req.ShapeKey == "" || approval.IsLegacyShapeKey(req.ShapeKey) {
-		diff.Absence = "This record's shape was never computed, so nothing can be compared to it."
+		diff.Absence = absenceShapeNeverComputed
 		return diff
 	}
 
 	prior, err := d.Approvals.LastApprovedOfSameShape(ctx, req)
 	if err != nil {
 		if errors.Is(err, approval.ErrNotFound) {
-			diff.Absence = "Nothing of this shape has been approved on this Relay before."
+			diff.Absence = absenceNoPrior
 		} else {
-			diff.Absence = "The last approval of this shape could not be read, so this record is not being compared to anything."
+			diff.Absence = absencePriorUnreadable
 		}
 		return diff
 	}
@@ -1719,17 +1727,12 @@ var approvalsTmpl = newScreen("approvals", `
 {{if not .Count}}
 <div class="empty">
   <h2>Nothing is waiting.</h2>
-  <p>An empty approval queue is good news. When a gate rule parks a dispatch, it appears here with
-  the Plan it is asking you to authorise.</p>
+  <p>An empty approval queue is good news; a parked dispatch appears here.</p>
 </div>
 {{else}}
-<p class="lede"><b>{{.Count}}</b> {{plural .Count "dispatch is" "dispatches are"}} waiting for a
-human. Ordered by <b>nearest expiry</b>, never by arrival — a request that lapses because it sat
-below the fold is a failure of this screen. A request that has already lapsed sorts <b>last</b>:
-an undecidable row at the top pushes the decidable ones under it.</p>
+<p class="lede"><b>{{.Count}}</b> {{plural .Count "dispatch is" "dispatches are"}} waiting for a human, nearest expiry first; lapsed requests sort last.</p>
 
-{{if .GrantsUnreadable}}<p class="note">The Grant store could not be read, so a row that is a Grant
-does not carry its Scope line here. Nothing else on this screen is affected.</p>{{end}}
+{{if .GrantsUnreadable}}<p class="note">The Approval grant store could not be read, so Approval grant rows carry no Scope line.</p>{{end}}
 
 {{with .Filters}}
 <div class="kindbar">
@@ -1738,14 +1741,9 @@ does not carry its Scope line here. Nothing else on this screen is affected.</p>
 {{end}}
 
 {{if .ScopeNotApplied}}
-<p class="note"><b>"Waiting on me" was not applied.</b> Nothing in this queue names you, and a
-default filter that turns a full queue into "nothing is waiting" is worse than a long list. All
-{{.Count}} {{plural .Count "request is" "requests are"}} shown.</p>
+<p class="note"><b>"Waiting on me" was not applied</b>: nothing here names you, so all {{.Count}} {{plural .Count "request is" "requests are"}} shown.</p>
 {{else if .ScopeMine}}
-<p class="note">Showing the {{.Shown}} {{plural .Shown "request" "requests"}} that may be waiting on
-you{{if .HiddenByScope}}, and hiding {{.HiddenByScope}} addressed to somebody else{{end}}.
-<a href="{{.AllHref}}">Show everything</a>. A request with no named audience is shown rather than
-hidden: who may decide is the capability layer's answer, and this screen never second-guesses it.</p>
+<p class="note">Showing the {{.Shown}} {{plural .Shown "request" "requests"}} that may be waiting on you{{if .HiddenByScope}}, hiding {{.HiddenByScope}} addressed to somebody else{{end}}. <a href="{{.AllHref}}">Show everything</a>.</p>
 {{else if .Filtered}}
 <p class="note">Showing {{.Shown}} of {{.Count}}. <a href="{{.ClearHref}}">Clear the filters</a>.</p>
 {{end}}
@@ -1769,8 +1767,7 @@ hidden: who may decide is the capability layer's answer, and this screen never s
       <div class="qsummary">{{.Summary}}</div>
       {{with .ScopeLine}}<div class="qscope">{{.}}</div>{{end}}
       {{with .MatchedRules}}<div class="qrules">parked by <code>{{join ", " .}}</code></div>{{end}}
-      {{if .ExcludedRequester}}<div class="qrules">you asked for this one, and the rule that parked it
-      does not let a requester sign their own</div>{{end}}
+      {{if .ExcludedRequester}}<div class="qrules">you asked for this one, and its rule does not let a requester sign their own</div>{{end}}
     </div>
     <div class="qside">
       <div class="quorum"><b>{{.Signed}}</b> of {{.Required}} signed</div>
@@ -1782,19 +1779,12 @@ hidden: who may decide is the capability layer's answer, and this screen never s
 </div>
 {{end}}
 
-<p class="note">There is no Approve control on a row, and there will not be one. A decision is made
-on the approval itself, with its Plan in front of you — approving from a list is approving without
-seeing what you approved. Deciding happens on the request itself, behind step-up: your password
-is asked for on every decision. This Console does not decide a Grant; answer one through the
-Control API.</p>
+<p class="note">Deciding happens on the request itself, behind step-up; this Console does not decide an Approval grant.</p>
 {{end}}
 
 <details class="about">
 <summary>About this screen</summary>
-<p class="gap"><b>Why reloading this queue leaves no record.</b> The pending requests and the live
-Approval grants are read through methods that write no read record, so neither opening this queue
-nor a Refresh adds anything to the audit trail. Opening one request is recorded. This is a known
-gap.</p>
+<p class="gap"><b>Opening this queue or a Refresh writes no read record</b>, a known gap; opening one request is recorded.{{template "about-docs" "approvals"}}</p>
 </details>
 {{end}}
 `)
@@ -1816,14 +1806,9 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   {{else}}
     <p class="nodiff">Nothing this Relay is able to compare has changed since then.</p>
   {{end}}
-  {{if .Diff.PlanHashKnown}}<p class="note">{{if .Diff.SamePlanHash}}Both records carry the same plan
-  hash, which means the same action over the same resolved Nodes.{{else}}The two plan hashes differ,
-  so something about the scale moved — and this Relay cannot say by how much.{{end}}</p>{{end}}
+  {{if .Diff.PlanHashKnown}}{{if .Diff.SamePlanHash}}<p class="note">Both records carry the same plan hash: the same action over the same resolved Nodes.</p>
+  {{else}}<p class="note">The plan hashes differ, so this is not exactly what was approved then.</p>{{end}}{{end}}
   {{with .Diff.NotComparable}}<p class="note">Not compared: {{join "; " .}}.</p>{{end}}
-  {{if eq .Diff.Kind "plan"}}<p class="note">How many Nodes this request covers is not stored on
-  the approval record. A parked request creates <b>no Job at all</b>, so there is no Task and no
-  result to count Nodes from. The count in the sentence below is written by the Relay, and this
-  screen never reads a number back out of it.</p>{{end}}
 {{else}}
   <p class="nodiff">{{.Diff.Absence}}</p>
 {{end}}
@@ -1838,8 +1823,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   </div>
 
   <p class="summary">{{.Summary}}</p>
-  <p class="note">That sentence is written by the Relay, not by the caller. The caller chose the
-  Operation; it did not choose one word a human reads about it.</p>
+  <p class="note">The Relay wrote that sentence; its Operation names and quoted values are the caller&#39;s.</p>
 
   <dl class="kv">
     <dt class="baseline">requested by</dt><dd class="baseline">{{template "trust-chip" (trust .Requester .Verified)}}</dd>
@@ -1853,23 +1837,15 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
 {{if .GrantUnreadable}}
 <section class="panel">
   <h3>What was asked for</h3>
-  <p class="note">This Relay could not say whether this Request authorizes a <b>Scope</b> — a Grant
-  covering many future dispatches — or one Plan: the Grant store did not answer. Neither is shown,
-  because the two are not interchangeable and guessing the narrower one is the dangerous direction.
-  Reload, or read the Request through the Control API.</p>
+  <p class="note">The Approval grant store did not answer, so neither a Scope nor a Plan is shown.</p>
 </section>
 {{else if .Grant.Present}}
 <section class="panel">
   <h3>The Scope</h3>
   {{if .Grant.LegacyNamespacePin}}
-  <p class="note"><b>This Grant covers nothing.</b> It was stored before namespace pinning was
-  removed from a Scope on 2026-09-16, and carries a retired pin (<code>{{.Grant.LegacyNamespacePin}}</code>).
-  Ignoring the pin would widen what it covers, so approving it releases no dispatch; revoke it to
-  close it for the record.</p>
+  <p class="note"><b>This Approval grant covers nothing</b>: it carries a retired pin, <code>{{.Grant.LegacyNamespacePin}}</code>, so approving it releases no dispatch.</p>
   {{else}}
-  <p class="note">This Request's subject is a <b>Scope</b> rather than one Plan. Approving it
-  pre-approves every dispatch inside these walls until the window closes, so the walls are the whole
-  of what is being agreed to.</p>
+  <p class="note">Approving this <b>Scope</b> pre-approves every dispatch inside these walls until the window closes.</p>
   {{end}}
   <details class="scope">
     <summary>Expand the Scope</summary>
@@ -1884,44 +1860,30 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
       {{if .Grant.Revoked}}<dt>revoked</dt><dd>{{.Grant.RevokedAt}} by {{.Grant.RevokedBy}}{{with .Grant.RevokeReason}} — {{.}}{{end}}</dd>{{end}}
     </dl>
     {{if not .Grant.JobsWired}}
-    <p class="note">The audit query lane is not wired into this Console, so the Jobs this Grant has
-    released cannot be listed here.</p>
+    <p class="note">The audit query lane is not wired here, so released Jobs cannot be listed.</p>
     {{else if .Grant.JobsUnreadable}}
-    <p class="note">The Jobs this Grant has released could not be read from the audit trail.</p>
+    <p class="note">The Jobs this Approval grant has released could not be read from the audit trail.</p>
     {{else if not .Grant.Jobs}}
-    <p class="note">This Grant has released no Jobs yet.</p>
+    <p class="note">This Approval grant has released no Jobs yet.</p>
     {{else}}
-    <p class="note">Jobs released so far, newest first — at most {{.Grant.JobCap}} are
-    listed{{if not .Grant.JobsComplete}}, and this list stopped before the trail did, so it names the
-    most recent Jobs rather than every one: the trail records one row per Node, so a wide Grant
-    produces thousands of them{{end}}.</p>
+    <p class="note">Released Jobs, newest first; at most {{.Grant.JobCap}} are listed{{if not .Grant.JobsComplete}}, so older ones are missing here{{end}}.</p>
     <ul class="joblist">{{range .Grant.Jobs}}<li><a href="{{.Href}}">{{short .ID}}</a></li>{{end}}</ul>
     {{end}}
   </details>
-  <p class="note"><b>Approving a Grant requires expanding this Scope at least once.</b> This
-  Console does not enforce that yet, so it does not decide a Grant at all: it decides a single
-  Plan, behind step-up, and a Grant is answered through the Control API.</p>
+  <p class="note">Expand the Scope before approving; nothing enforces that yet, so this Console does not decide an Approval grant.</p>
   {{if not .Grant.LegacyNamespacePin}}
-  <p class="note">The quorum below was derived at this Scope's <b>widest admissible dispatch</b>:
-  count, channel, requester exclusion and decision deadline (TTL) are priced at the strictest any
-  covered dispatch would have faced, and the approver audience is the <b>union</b> of those
-  dispatches' audiences (a rule with no audience makes the merged audience unrestricted).</p>
+  <p class="note">Count, channel, requester exclusion and TTL are the strictest any covered dispatch faces; the audience is their union.</p>
   {{end}}
 </section>
 {{else}}
 <section class="panel">
   <h3>What was asked for</h3>
   {{if not .Action.Wired}}
-  <p class="note">The audit query lane is not wired into this Console, so the Selector and the
-  arguments cannot be shown. They are not missing from the Relay; this screen cannot reach them.</p>
+  <p class="note">The audit query lane is not wired here, so the Selector and arguments are not shown.</p>
   {{else if .Action.Unreadable}}
-  <p class="note">The park's audit record could not be read, so the Selector and the arguments are
-  not shown. This is a read failure, not an empty record.</p>
+  <p class="note">The park's audit record could not be read: a read failure, not an empty record.</p>
   {{else if .Action.Missing}}
-  <p class="note">This Relay's trail carries no <code>approval_requested</code> record for this
-  Request. The park's audit write can fail after the Request is already durable, so the Selector and
-  the arguments are absent from the trail — <b>which is not the same as there having been
-  none</b>.</p>
+  <p class="note">The trail has no <code>approval_requested</code> record, so the Selector and arguments are unknown, not empty.</p>
   {{else}}
   <dl class="kv">
     {{if .Action.Known}}
@@ -1930,12 +1892,9 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
     {{end}}
     <dt>arguments</dt><dd>{{if .Action.Args}}<code>{{.Action.Args}}</code>{{else}}none recorded{{end}}</dd>
   </dl>
-  <p class="note">Read from this Request's own park record in the audit trail — the only place
-  the Selector as written and the arguments are stored.{{if not .Action.Known}} That record carries
-  no Action kind, so the Selector is <b>not</b> shown: an empty stored Selector means either "none
-  was recorded" or "no terms, which matches every Node", and this screen will not guess which.{{end}}</p>
-  <p class="note">The <b>resolved fan-out is not stored on the approval record</b>. A park creates no
-  Job, so there is no Task and no result to count.</p>
+  <p class="note">Read from this Request's park record in the audit trail.</p>
+  {{if not .Action.Known}}<p class="note">Lacking an Action kind, an empty Selector means unrecorded or every Node; this screen will not guess which.</p>{{end}}
+  <p class="note">The <b>resolved fan-out is not stored on the approval record</b>.</p>
   {{end}}
 </section>
 {{end}}
@@ -1951,9 +1910,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   </dl>
   {{if not .RequesterAllowed}}<p class="note">The requester may not sign their own request; a second
   person must.</p>{{end}}
-  {{if .CallerIsExcludedRequester}}<p class="note"><b>You are that requester.</b> You can read this
-  card, and the rule that parked it means somebody else has to answer it. Nothing is hidden from you
-  here — the exclusion is stated rather than made to look like an absence.</p>{{end}}
+  {{if .CallerIsExcludedRequester}}<p class="note"><b>You are that requester</b>, so somebody else has to answer.</p>{{end}}
 </section>
 
 {{if .Decisions}}
@@ -1975,12 +1932,8 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
     </tbody>
   </table>
   </div>
-  <p class="note">The channel is recorded rather than assumed. A decision that arrived over a
-  credential the requesting session does not hold is evidence; one that arrived in-band is a
-  delivery convenience, and the difference is the whole security property. <b>Human</b> or
-  <b>machine</b> beside a verified decider is what the decision recorded about its own Account when
-  it was made, not what that Account is today; <b>machine</b> means &ldquo;not recorded as
-  human&rdquo;, which is how a decision made before the Relay recorded it reads.</p>
+  <p class="note">An out-of-band decision is evidence; an in-band one is only a delivery convenience.</p>
+  <p class="note"><b>Human</b> or <b>machine</b> is what each decision recorded then; <b>machine</b> means &ldquo;not recorded as human&rdquo;.</p>
 </section>
 {{end}}
 
@@ -2000,36 +1953,24 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
 {{else}}
   {{if .Pending}}
     {{if .CallerIsExcludedRequester}}
-    <p class="gap"><b>You cannot decide this one.</b> You are the requester this rule excludes — see
-    above for why. A second, distinct Account has to answer. Answer through the Control API's
-    decision endpoint if a different Account needs to.</p>
+    <p class="gap"><b>You cannot decide this one</b>: this rule excludes the requester, so another Account must answer.</p>
     {{else if .CallerAlreadySigned}}
-    <p class="gap"><b>You already signed this at {{.CallerSignedAt}}.</b> A second, distinct approver
-    is needed to complete this request's quorum — deciding again would not be that second signature.
-    A different Account can still answer, here or through the Control API.</p>
-    {{else if or .Grant.Present .GrantUnreadable}}
-    <p class="gap"><b>This Console does not decide a Grant.</b> {{if .GrantUnreadable}}The Grant store
-    could not be read, so this Console cannot tell whether this Request authorizes a Scope or a single
-    Plan, and will not decide either while that is unknown.{{else}}This Request authorizes a Scope, not
-    one Plan. An Approval grant's Scope must be expanded at least once before it is approved, and this
-    Console does not enforce that yet.{{end}} Answer it through the Control API.</p>
+    <p class="gap"><b>You already signed this at {{.CallerSignedAt}}</b>; a second, distinct Account must complete the quorum.</p>
+    {{else if .GrantUnreadable}}
+    <p class="gap"><b>The Approval grant store could not be read</b>, so this Console will not decide; use the Control API.</p>
+    {{else if .Grant.Present}}
+    <p class="gap"><b>Answer this Approval grant through the Control API.</b></p>
     {{else if .DecideSeamsUnwired}}
-    <p class="gap"><b>Deciding is not wired into this Relay's Console.</b> Answer through the Control
-    API's decision endpoint instead — the same code path, and the one that always decides.</p>
+    <p class="gap"><b>Deciding is not wired into this Relay's Console</b>; answer through the Control API.</p>
     {{else if .CallerRoleBelowFloor}}
-    <p class="gap"><b>Your role cannot decide this.</b> Deciding requires the operator role or above.
-    Answer through the Control API if your Account holds it.</p>
+    <p class="gap"><b>Your role cannot decide this</b>; deciding needs the operator role or above.</p>
     {{else}}
-    <p class="gap"><b>Deciding is not offered to you on this Request.</b> Answer through the Control
-    API's decision endpoint instead — the same code path, and the one that always decides.</p>
+    <p class="gap"><b>Deciding is not offered to you on this Request</b>; answer through the Control API.</p>
     {{end}}
   {{else if eq .State "expired"}}
-  <p class="gap"><b>The TTL lapsed at {{.Expires}}.</b> The dispatch was never released and this
-  request can no longer be answered. The requester has to ask again, which creates a new Request with
-  its own plan hash — an approval is a decision about a moment, not a standing permission.</p>
+  <p class="gap"><b>The TTL lapsed at {{.Expires}}</b>; the requester must ask again, as a new Request.</p>
   {{else}}
-  <p class="gap"><b>This request was {{.State}}.</b> The decisions above name who answered, over which
-  channel, and when. Approvals are not re-openable: a late answer cannot revive a resolved Request.</p>
+  <p class="gap"><b>This request was {{.State}}</b>; a late answer cannot revive it.</p>
   {{end}}
 {{end}}
 {{end}}

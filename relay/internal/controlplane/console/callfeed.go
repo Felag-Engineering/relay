@@ -109,5 +109,5 @@ func collapseNote(foldedCalls, foldedRows int) string {
 		return ""
 	}
 	return countOf(foldedCalls, "call", "calls") + " on this page are collapsed into " +
-		countOf(foldedRows, "row", "rows") + ", each saying how many calls it stands for."
+		countOf(foldedRows, "row", "rows") + "."
 }

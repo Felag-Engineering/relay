@@ -30,10 +30,9 @@ func banner(d Deps, r *http.Request) *Banner {
 		// state is never guessed, and the guess that costs least here is the
 		// one that makes somebody look.
 		return &Banner{
-			Kind: BannerFreeze,
-			Text: "Freeze state could not be read.",
-			Detail: "The Console cannot currently tell whether dispatch is halted. " +
-				"Check the Relay's logs before assuming the fleet is accepting work.",
+			Kind:   BannerFreeze,
+			Text:   "Freeze state could not be read.",
+			Detail: freezeUnreadableDetail,
 		}
 	}
 	if !frozen {
@@ -43,9 +42,15 @@ func banner(d Deps, r *http.Request) *Banner {
 	// gets released in a panic by the next person to look at it, which is
 	// exactly the moment nobody should be releasing it.
 	return &Banner{
-		Kind: BannerFreeze,
-		Text: "Freeze engaged — no new Tasks are dispatching.",
-		Detail: "In-flight Tasks keep running and Preflights still resolve, so you can " +
-			"still see what would happen. An admin releases it with a reason.",
+		Kind:   BannerFreeze,
+		Text:   "Freeze engaged — no new Tasks are dispatching.",
+		Detail: freezeEngagedDetail,
 	}
 }
+
+// The Freeze banner's two details, one sentence each. The engaged one states
+// what is still true (00-foundations.md, "Control-plane banner").
+const (
+	freezeUnreadableDetail = "The Console cannot tell whether dispatch is halted; check the Relay's logs before assuming it is not."
+	freezeEngagedDetail    = "In-flight Tasks keep running and Preflights still resolve; an admin releases it with a reason."
+)

@@ -1857,7 +1857,7 @@ func TestAccountsWrite_TheSignedInAccountsPanelSaysWhyItCannotChange(t *testing.
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, template.HTMLEscapeString(selfTargetRefusal)) {
+	if !strings.Contains(body, template.HTMLEscapeString(selfPanelNote)) {
 		t.Errorf("the panel does not say why it cannot change:\n%s", contentOf(body))
 	}
 	for _, action := range []string{setAccountRoleAction(self), setAccountEnabledAction(self)} {

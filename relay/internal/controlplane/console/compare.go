@@ -583,21 +583,16 @@ func orAbsent(s string) string {
 var compareTmpl = newScreen("compare", `
 {{if .Pin.Any}}{{template "pin-bar" .Pin}}{{end}}
 
-{{if .Truncated}}<p class="gap"><b>More Nodes were named than a comparison holds.</b> Three columns
-is the most at which a difference is still visible at a glance, so the extra ones are not
-shown. Unpin one to swap it for another.</p>{{end}}
+{{if .Truncated}}<p class="gap"><b>Only three Nodes can be compared</b>; unpin one to swap in another.</p>{{end}}
 
 {{with .Unknown}}
-<p class="gap"><b>Not in this Relay's registry:</b> {{range .}}<code>{{.}}</code> {{end}}
-They are listed rather than dropped. From here, an id that was never enrolled looks the same as
-one that was mistyped, and either is worth knowing.</p>
+<p class="gap"><b>Not in this Relay's registry:</b> {{range .}}<code>{{.}}</code> {{end}}</p>
 {{end}}
 
 {{if lt (len .Columns) 2}}
 <div class="placeholder">
   <p>Pin at least two Nodes to compare them.</p>
-  <p>Pin from a row on the <a href="/console/{{.Pin.Query}}">fleet</a>, or from a Node's own page — its header
-  carries a <b>Pin to compare</b> link.</p>
+  <p>Pin from a row on the <a href="/console/{{.Pin.Query}}">fleet</a> or from a Node's own page.</p>
 </div>
 {{else}}
 <div class="tablescroll">
@@ -628,25 +623,14 @@ one that was mistyped, and either is worth knowing.</p>
 </table>
 </div>
 
-<p class="note">Every cell is what that Node's daemon <b>reported</b>, compared for string
-equality. A marked row means the Nodes said different things; it is not a verdict about either
-of them. Policy is evaluated by the Node's own engine and by nothing else, so this screen can
-tell you where two Nodes diverge and cannot tell you what either will do with a given Task.</p>
+<p class="note">Each cell is what that Node's daemon <b>reported</b>; this screen never predicts what will run.</p>
 
 {{if .AllPolicyMissing}}
-<p class="gap"><b>Neither Node has reported its Policy since the Relay last started</b>, so the
-Policy rows above compare nothing. They read as identical only because every value is missing.
-That is not agreement between these Nodes: the Relay has not been told. A Node sends its Policy
-when it connects.</p>
+<p class="gap"><b>Neither Node has reported its Policy since the Relay last started</b>, so identical Policy rows mean nothing.</p>
 {{else if .AnyPolicyMissing}}
-<p class="note">A column reading <b>not reported</b> has not been heard from since the Relay last
-started, so there is nothing of its own to compare. Beside a column that has reported, it is
-marked as a difference, so a blank column never reads as agreement.</p>
+<p class="note">A <b>not reported</b> column is marked as a difference, never read as agreement.</p>
 {{end}}
 
-<p class="note">No Fact is compared here. OS, kernel, arch and IP appear only on Node detail. A
-Node reports its own Facts, so they describe one machine well but mislead when compared across the
-fleet. The hostname above each column names the machine, as it does on a fleet row, and it is
-self-reported too. Use it to recognise a Node, never to trust one.</p>
+<p class="note">Each column's hostname is self-reported; no other Fact is compared here.</p>
 {{end}}
 `)

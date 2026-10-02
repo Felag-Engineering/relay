@@ -93,7 +93,7 @@ func TestCancel_ViewerSeesNoControlOnARunningJob(t *testing.T) {
 	q := &fakeQueries{jobs: []capability.JobSummary{runningJobSummary(tasks)}, tasks: tasks}
 	content := contentOf(jobBodyAs(t, cancelDeps(q, &fakeCanceller{}), accounts.RoleViewer, jobPath("")))
 
-	for _, banned := range []string{"<form", "<button", cancelJobAction(testJobID), "Cancel stops"} {
+	for _, banned := range []string{"<form", "<button", cancelJobAction(testJobID), "Cancel asks this Job"} {
 		if strings.Contains(content, banned) {
 			t.Errorf("a viewer's Job page renders %q — a viewer must see no control", banned)
 		}
@@ -113,7 +113,7 @@ func TestCancel_OperatorSeesTheControlWhileTasksAreInFlight(t *testing.T) {
 			if !strings.Contains(body, `name="csrf_token"`) {
 				t.Error("the cancel form carries no CSRF token")
 			}
-			if !strings.Contains(body, "Cancel stops this Job") {
+			if !strings.Contains(body, "Cancel asks this Job") {
 				t.Error("the one-line explanation beside Cancel is missing")
 			}
 		})

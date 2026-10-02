@@ -79,6 +79,9 @@ answer to "may this Account do X" would be a second control path, and the first 
 Show what a role means in terms of the boundary, not in terms of screens: `operator` may run
 Operations, `admin` may additionally use Raw Exec and set `relay:` labels. Never claim a role can do
 something Policy might still deny — **the ceiling is always what the fleet's own Policy permits.**
+Since #849 the screen draws no per-role lines: it states only that Policy ceiling, in its "About
+this screen" disclosure, and what each role may do is defined in ADR-0010 and GLOSSARY.md
+(*Account*).
 
 ## API tokens
 

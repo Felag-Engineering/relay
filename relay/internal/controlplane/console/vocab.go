@@ -513,7 +513,7 @@ func denyText(stderr []byte, reason string, readClass bool) string {
 		return "The deciding rule is not recorded in the trail for a read-class Task.\n\n" +
 			"The daemon explains a refusal in the Task's output, and the audit trail never\n" +
 			"retains read output — reading is exfiltration, so what left the Node is audited\n" +
-			"and what it said is not (ADR-0025). Query this Node's effective Policy to see\n" +
+			"and what it said is not. Query this Node's effective Policy to see\n" +
 			"the rule."
 	}
 	return "The daemon refused this Operation and did not report the deciding rule."

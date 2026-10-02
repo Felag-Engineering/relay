@@ -242,7 +242,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 		planHash := r.PostFormValue("plan_hash")
 		if planHash == "" || len(planHash) > maxPlanHashBytes {
 			renderDecideResult(w, pg, http.StatusBadRequest, decideResultView{
-				Heading: "A decision binds to the Plan it was shown (ADR-0027), and this form carried no usable plan hash. Nothing was decided.",
+				Heading: "A decision binds to the Plan it was shown, and this form carried no usable plan hash. Nothing was decided.",
 			})
 			return
 		}
@@ -277,18 +277,17 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 			// Proceed — this Request authorizes a Plan, not a Scope.
 		case grantFound:
 			renderDecideResult(w, pg, http.StatusConflict, decideResultView{
-				Heading: "This Request authorizes a Scope, not one Plan. Spec 08 requires a Grant's " +
-					"Scope to have been expanded before it is approved, this Console does not enforce " +
-					"that yet, so it will not decide one. Answer it through the Control API.",
+				Heading: "This Request authorizes a Scope; its Scope must be expanded before approval, " +
+					"and this Console does not enforce that yet. Nothing was decided; answer it through " +
+					"the Control API.",
 				ApprovalHref:  decideApprovalPageHref(id),
 				ApprovalLabel: "Back to this Request.",
 			})
 			return
 		default: // grantUnreadable
 			renderDecideResult(w, pg, http.StatusConflict, decideResultView{
-				Heading: "The Grant store could not be read, so this Console cannot tell whether this " +
-					"Request authorizes a Scope or a single Plan, and will not decide either while that " +
-					"is unknown.",
+				Heading: "The Approval grant store could not be read, so this Console cannot tell whether " +
+					"this Request authorizes a Scope or one Plan. Nothing was decided.",
 				ApprovalHref:  decideApprovalPageHref(id),
 				ApprovalLabel: "Back to this Request.",
 			})

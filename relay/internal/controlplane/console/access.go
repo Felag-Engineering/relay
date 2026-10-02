@@ -628,10 +628,7 @@ var accessTmpl = newScreen("access", `
 </div>
 
 {{if .UnknownKind}}
-<p class="gap"><b>There is no row kind called &ldquo;{{.UnknownKind}}&rdquo;.</b> Nothing was queried:
-an unrecognised filter narrows to nothing here rather than falling back to everything, because a
-filter that quietly widens is how an auditor comes to read the whole trail believing it is one
-slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>.</p>
+<p class="gap"><b>There is no row kind called &ldquo;{{.UnknownKind}}&rdquo;</b>, so nothing was queried: <a href="{{.ResetHref}}">clear the filter</a>.</p>
 {{else}}
 
 {{template "refresh" .Refresh}}
@@ -665,36 +662,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
 
 <details class="about">
 <summary>About this screen</summary>
-
-<p class="gap"><b>Each page holds up to {{.PageSize}} records</b>, newest first.</p>
-
-<p class="gap"><b>Changes made on the Relay host name the host, not an Account.</b> A Console password is
-set or removed only by the host-side <code>relay console-password</code> command, and the first API
-Token is minted by <code>relay bootstrap-token</code>. Their rows name <code>local-host</code>: whoever
-ran them had root on the Relay host, which no Account's credential proves. They never carry the
-password or the token.</p>
-
-<p class="gap"><b>OAuth sign-ins are not listed.</b> An OAuth sign-in happens at the identity provider,
-not at the Relay, which sees only the authenticated calls that follow it. This screen lists Console
-sign-ins.</p>
-
-<p class="gap"><b>There is no filter by the changed Account.</b> The Account a change was made to is
-written into the record's free-text reason, which the audit query cannot filter on. The Actor filter
-matches the Account that acted.</p>
-
-<p class="gap"><b>A failed sign-in shows the name typed only when it is a real Account's name.</b> Any
-other text may be a password typed into the wrong box, so it is never recorded and the row says "a name
-that is not an Account". The person signing in is never told which half was wrong. A failed step-up
-always names the session's own Account. A throttled attempt was refused before any credential was
-compared, so it is shown as throttled and is not a failure. Records written before this rule was
-introduced keep whatever was typed, so on an older failed sign-in the name shown is only what the
-caller entered: it may not be an Account, and it may be text typed into the wrong box. An older record
-with no name also reads "a name that is not an Account".</p>
-
-<p class="gap"><b>Every Refresh is an audited read</b>, like every read made from this Console.</p>
-
-<p class="gap"><b>This screen is limited to admins in the Console only.</b> The same records remain
-readable through the Control API by any Account the audit read rules already allow.</p>
+<p class="gap"><b>Each page holds up to {{.PageSize}} records</b>, newest first. <b>Every Refresh is an audited read</b>. OAuth sign-ins are not listed. There is no filter by the changed Account. An older failed sign-in may show text typed into the wrong box, not an Account's name. This screen is limited to admins in the Console only.{{template "about-docs" "access"}}</p>
 </details>
 
 {{end}}

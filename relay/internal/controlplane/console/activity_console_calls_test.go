@@ -108,7 +108,8 @@ func TestActivity_AccountFilterComposesWithTheConsoleDefault(t *testing.T) {
 	if strings.Contains(own, "query_audit") {
 		t.Error("?account= alone listed that Account's Console-session reads")
 	}
-	if !strings.Contains(own, "Reads made from this Console are left out: 3 of the 3 calls by this Account on this page.") {
+	if !strings.Contains(own, "Reads made from this Console are left out: 3 of the 3 calls on this page.") ||
+		!strings.Contains(own, "Showing one Account only.") {
 		t.Errorf("the sentence does not give the filtered Account's count:\n%s", own)
 	}
 	if !strings.Contains(own, `href="/console/activity?account=acct-mike&amp;console=show&amp;kind=read">Show them</a>`) {
@@ -337,14 +338,6 @@ func TestActivity_TheExportIgnoresTheConsoleDefault(t *testing.T) {
 	}
 }
 
-func TestActivity_TheAboutDisclosureStatesTheExportRule(t *testing.T) {
-	body := contentOf(activityAs(t, &fakeQueries{}, "/console/activity"))
-	i := strings.Index(body, `<details class="about">`)
-	if i < 0 || !strings.Contains(body[i:], "The export is the fetched rows, not the screen.") {
-		t.Error("the export rule is not in the About disclosure")
-	}
-}
-
 // TestActivity_EveryLinkCarriesAccountAndConsole: every link the page draws
 // keeps ?account= and ?console= as it found them. Three exceptions, all
 // deliberate: Clear and Start again reset everything, Show every Account is the
@@ -395,6 +388,6 @@ func TestActivity_EveryLinkCarriesAccountAndConsole(t *testing.T) {
 
 	check(t, "/console/activity?kind=read&account=acct-1&console=show",
 		`>Older</a>`, `class="refreshbtn"`, `class="kchip`, `Export this filter as CSV`,
-		`kind=read</a>`, `Show every Account`, `Leave them out`)
+		`Show every Account`, `Leave them out`)
 	check(t, "/console/activity?kind=read&account=acct-1&console=show&ac=next", `>Newest</a>`)
 }
