@@ -1,57 +1,93 @@
 #!/usr/bin/env bash
-# End-to-end mTLS-rejection smoke test: boot the (mTLS-required) Relay + the still-plaintext
-# relay-daemon, and assert the Relay REJECTS the certless daemon — no Hello is processed and
-# no Ping is delivered.
+# End-to-end mTLS smoke test (invariant 6; ADR-0005, ADR-0006): boot the real Relay binary and
+# prove, from an independent client on the wire, that its daemon listener refuses a caller
+# that presents no client certificate.
 #
-# This captures the transition state after Relay mTLS (#26): the Relay now requires & verifies
-# client certs, but the daemon does not yet have an mTLS client. Once the daemon gains one (#28)
-# this assertion will be upgraded back to a positive Hello→Ping handshake.
+# What "refused" means here. The daemon listener deliberately ACCEPTS a certless TLS handshake
+# (tls.VerifyClientCertIfGiven): Enrollment is the one certless method, and a daemon has no
+# certificate until it has enrolled. The refusal is therefore per-RPC, by the transport
+# interceptors' default-deny allowlist. So this script dials the listener over TLS 1.3 + HTTP/2
+# with NO client certificate and makes three gRPC calls:
 #
-# Assumes 'make build' has already produced both binaries (or runs from make test-integration,
-# which depends on build). Exits non-zero on any failed assertion or timeout.
+#   positive control  Enrollment/Enroll (the certless method), empty request. Must come back
+#                     from the Enroll HANDLER itself: InvalidArgument. That proves the dial path
+#                     works end to end — the listener is up, the TLS handshake succeeds against
+#                     the CA this Relay just minted (so it is this Relay, not some other process
+#                     on the port), HTTP/2 and gRPC framing are understood — so the refusals
+#                     below cannot be "nothing listening" or "the client is broken".
+#   refusal (unary)   Enrollment/Renew. Must be Unauthenticated "client certificate required",
+#                     the unary interceptor's own refusal. The message is load-bearing: with the
+#                     interceptor bypassed, Renew's handler ALSO answers Unauthenticated (with a
+#                     different message), so a status-code-only check would pass with mTLS off.
+#   refusal (stream)  Tunnel/Open, the stream a daemon actually connects on. Must be refused by
+#                     the stream interceptor with the same status and message.
+#
+# This replaced an assertion that ran the relay-daemon and checked that no Hello reached the
+# Relay. A daemon with no enrolled identity refuses to dial at all ("no enrolled identity in
+# state dir; refusing to connect"), so that assertion held whether or not mTLS was enforced,
+# and whether or not anything was listening. The cert-presenting positive path — a real daemon
+# connecting with its enrolled certificate — is proved by the integration and cross-binary
+# suites, not here.
+#
+# Needs the Relay binary ('make build', or run from make test-integration, which depends on
+# build) and curl built with HTTP/2. A missing prerequisite is an error, never a skip.
+# Exits non-zero on any failed assertion or timeout.
+#
+# Environment:
+#   RELAY_SMOKE_PORT      port for the Relay's daemon listener (default 17654), so parallel
+#                         `make verify` runs in several worktrees do not reach one another.
+#   RELAY_SMOKE_RELAY_BIN the Relay binary to test (default relay/bin/relay). A seam for
+#                         scripts/smoke-test-test.sh; nothing in the Makefile or CI sets it.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RELAY_BIN="${REPO_ROOT}/relay/bin/relay"
-DAEMON_BIN="${REPO_ROOT}/daemon/target/debug/relay-daemon"
-# RELAY_SMOKE_PORT lets parallel runs (several worktrees running `make verify` at once, as
-# /dev-loop-parallel does) each bind their own port instead of reaching one another's Relay.
-RELAY_ADDR="127.0.0.1:${RELAY_SMOKE_PORT:-17654}"
-RELAY_URL="http://${RELAY_ADDR}"
+RELAY_BIN="${RELAY_SMOKE_RELAY_BIN:-${REPO_ROOT}/relay/bin/relay}"
+RELAY_PORT="${RELAY_SMOKE_PORT:-17654}"
+RELAY_ADDR="127.0.0.1:${RELAY_PORT}"
+# The Relay's server certificate is issued for --hostname; curl is pointed at that name and
+# --resolve pins it to the loopback address, so certificate verification is real, not skipped.
+RELAY_HOSTNAME="localhost"
 STARTUP_TIMEOUT=10
-DAEMON_WINDOW=5
+CALL_TIMEOUT=5
 
-relay_log=""
-daemon_log=""
 relay_pid=""
-ca_dir=""
+work_dir=""
 
 cleanup() {
     if [[ -n "${relay_pid}" ]]; then
         kill "${relay_pid}" 2>/dev/null || true
         wait "${relay_pid}" 2>/dev/null || true
     fi
-    [[ -n "${relay_log}" ]] && rm -f "${relay_log}"
-    [[ -n "${daemon_log}" ]] && rm -f "${daemon_log}"
-    [[ -n "${ca_dir}" ]] && rm -rf "${ca_dir}"
+    case "${work_dir}" in /*) rm -rf "${work_dir}" ;; esac
 }
 trap cleanup EXIT
 
-relay_log="$(mktemp)"
-daemon_log="$(mktemp)"
-ca_dir="$(mktemp -d)"
+work_dir="$(mktemp -d)"
+relay_log="${work_dir}/relay.log"
+ca_dir="${work_dir}/ca"
+frame="${work_dir}/empty-grpc-frame"
 
 if [[ ! -x "${RELAY_BIN}" ]]; then
     echo "ERROR: relay binary not found at ${RELAY_BIN}; run 'make build' first" >&2
     exit 1
 fi
-if [[ ! -x "${DAEMON_BIN}" ]]; then
-    echo "ERROR: relay-daemon binary not found at ${DAEMON_BIN}; run 'make build' first" >&2
+if ! command -v curl >/dev/null 2>&1; then
+    echo "ERROR: curl not found; the certless dial needs curl with HTTP/2" >&2
+    exit 1
+fi
+if ! curl --version | grep -qw HTTP2; then
+    echo "ERROR: this curl has no HTTP/2 support; the certless dial needs it (gRPC is HTTP/2)" >&2
     exit 1
 fi
 
+relay_dump_log() {
+    echo "--- relay log ---" >&2
+    cat "${relay_log}" >&2 || true
+}
+
 echo "Starting Relay (mTLS) on ${RELAY_ADDR}..."
-"${RELAY_BIN}" --addr "${RELAY_ADDR}" --ca-dir "${ca_dir}" >"${relay_log}" 2>&1 &
+"${RELAY_BIN}" --addr "${RELAY_ADDR}" --hostname "${RELAY_HOSTNAME}" --ca-dir "${ca_dir}" \
+    --store-path "${work_dir}/store/relay.db" >"${relay_log}" 2>&1 &
 relay_pid=$!
 
 echo "Waiting for Relay to report listening (up to ${STARTUP_TIMEOUT}s)..."
@@ -59,39 +95,108 @@ deadline=$(( $(date +%s) + STARTUP_TIMEOUT ))
 while ! grep -q "relay listening" "${relay_log}" 2>/dev/null; do
     if ! kill -0 "${relay_pid}" 2>/dev/null; then
         echo "ERROR: Relay process exited unexpectedly" >&2
-        echo "--- relay log ---" >&2
-        cat "${relay_log}" >&2
+        relay_dump_log
         exit 1
     fi
     if [[ "$(date +%s)" -ge "${deadline}" ]]; then
         echo "ERROR: Relay did not start within ${STARTUP_TIMEOUT}s" >&2
-        echo "--- relay log ---" >&2
-        cat "${relay_log}" >&2
+        relay_dump_log
         exit 1
     fi
     sleep 0.2
 done
 echo "Relay is listening."
 
-echo "Running the (plaintext) relay-daemon against the mTLS Relay for ${DAEMON_WINDOW}s..."
-timeout "${DAEMON_WINDOW}" "${DAEMON_BIN}" --relay "${RELAY_URL}" >"${daemon_log}" 2>&1 || true
-
-# The Relay now requires & verifies client certs (#26). The still-plaintext daemon cannot
-# complete the TLS handshake, so no Hello ever reaches the handler and no Ping is returned.
-echo "Asserting the Relay rejected the certless daemon (no node_id in relay log)..."
-if grep -q "node_id" "${relay_log}"; then
-    echo "FAIL: Relay processed a Hello from a certless daemon — mTLS is not being enforced" >&2
-    echo "--- relay log ---" >&2
-    cat "${relay_log}" >&2
+ca_cert="${ca_dir}/ca-cert.pem"
+if [[ ! -s "${ca_cert}" ]]; then
+    echo "ERROR: Relay reported listening but wrote no CA certificate at ${ca_cert}" >&2
+    relay_dump_log
     exit 1
 fi
 
-echo "Asserting the daemon did NOT receive a Ping (checking daemon log)..."
-if grep -q "received Ping from Relay" "${daemon_log}"; then
-    echo "FAIL: certless daemon received a Ping — the handshake was not rejected" >&2
-    echo "--- daemon log ---" >&2
-    cat "${daemon_log}" >&2
+# One gRPC message frame carrying an empty protobuf message: compressed-flag 0, length 0. An
+# empty message is valid for every request type, so each call reaches its interceptor, and —
+# where the interceptor lets it through — its handler.
+printf '\x00\x00\x00\x00\x00' >"${frame}"
+
+# grpc_call <method> — one certless gRPC call. Sets globals (never `local x=$(cmd)`, which
+# reports local's status, not the command's): CALL_RC (curl's exit status), CALL_HTTP (the
+# HTTP status code), CALL_STATUS and CALL_MSG (the grpc-status and grpc-message headers or
+# trailers), CALL_ERR (curl's stderr).
+#
+# -q is first so no ~/.curlrc can add a client certificate (or anything else) to a dial that
+# must be certless; no --cert/--key is ever passed. --noproxy '*' keeps the dial on loopback.
+grpc_call() {
+    local method=$1 headers
+    set +e
+    headers="$(curl -q -sS --http2 --noproxy '*' --max-time "${CALL_TIMEOUT}" \
+        --cacert "${ca_cert}" --resolve "${RELAY_HOSTNAME}:${RELAY_PORT}:127.0.0.1" \
+        -H 'content-type: application/grpc' -H 'te: trailers' \
+        --data-binary @"${frame}" -o /dev/null -D - \
+        "https://${RELAY_HOSTNAME}:${RELAY_PORT}/${method}" 2>"${work_dir}/curl.err")"
+    CALL_RC=$?
+    set -e
+    # Here-strings, never `printf | awk ... exit`: under pipefail an early-exiting reader can
+    # SIGPIPE the writer and fail the assignment (the race scripts/check-docs.sh records).
+    headers="${headers//$'\r'/}"
+    CALL_ERR="$(cat "${work_dir}/curl.err")"
+    CALL_HTTP="$(awk '/^HTTP\// {print $2; exit}' <<<"${headers}")"
+    CALL_STATUS="$(awk -F': ' 'tolower($1)=="grpc-status" {print $2; exit}' <<<"${headers}")"
+    CALL_MSG="$(awk 'tolower($0) ~ /^grpc-message: / {sub(/^[^:]*: /, ""); print; exit}' <<<"${headers}")"
+}
+
+call_summary() {
+    echo "curl exit=${CALL_RC} http=${CALL_HTTP:-none} grpc-status=${CALL_STATUS:-none} grpc-message=[${CALL_MSG}] curl-stderr=[${CALL_ERR}]"
+}
+
+GRPC_INVALID_ARGUMENT=3
+GRPC_UNAUTHENTICATED=16
+CERT_REQUIRED_MSG="client certificate required"
+
+echo "Positive control: a certless call to Enrollment/Enroll must reach its handler..."
+grpc_call "relay.v1.Enrollment/Enroll"
+if [[ "${CALL_RC}" -ne 0 || "${CALL_HTTP}" != "200" ]]; then
+    echo "FAIL: positive control: the certless dial itself did not work ($(call_summary))." >&2
+    echo "      Nothing is listening, the TLS handshake failed, or HTTP/2 was not negotiated —" >&2
+    echo "      so a refusal below would prove nothing about mTLS." >&2
+    relay_dump_log
+    exit 1
+fi
+if [[ "${CALL_STATUS}" != "${GRPC_INVALID_ARGUMENT}" ]]; then
+    echo "FAIL: positive control: certless Enroll did not reach the Enroll handler; want" >&2
+    echo "      grpc-status ${GRPC_INVALID_ARGUMENT} (InvalidArgument) ($(call_summary))." >&2
+    echo "      If the certless method is refused too, the refusals below cannot tell mTLS" >&2
+    echo "      enforcement from a listener that refuses everything." >&2
+    relay_dump_log
+    exit 1
+fi
+echo "  ok: $(call_summary)"
+
+fail=0
+# Tunnel/Open is the stream a daemon connects on (stream interceptor); Renew is a unary method
+# that is not on the certless allowlist (unary interceptor). Each interceptor is checked.
+for method in "relay.v1.Enrollment/Renew" "relay.v1.Tunnel/Open"; do
+    echo "Asserting a certless call to ${method} is refused..."
+    grpc_call "${method}"
+    if [[ "${CALL_RC}" -ne 0 || "${CALL_HTTP}" != "200" \
+          || "${CALL_STATUS}" != "${GRPC_UNAUTHENTICATED}" || "${CALL_MSG}" != "${CERT_REQUIRED_MSG}" ]]; then
+        echo "FAIL: certless ${method} was not refused with grpc-status ${GRPC_UNAUTHENTICATED}" >&2
+        echo "      (Unauthenticated) \"${CERT_REQUIRED_MSG}\" — mTLS is not being enforced" >&2
+        echo "      ($(call_summary))." >&2
+        fail=1
+        continue
+    fi
+    echo "  ok: $(call_summary)"
+done
+
+if ! kill -0 "${relay_pid}" 2>/dev/null; then
+    echo "FAIL: the Relay exited during the smoke test" >&2
+    fail=1
+fi
+
+if [[ "${fail}" -ne 0 ]]; then
+    relay_dump_log
     exit 1
 fi
 
-echo "PASS: mTLS Relay correctly rejected the certless daemon (no Hello, no Ping)."
+echo "PASS: the Relay's daemon listener refused certless Renew and Tunnel/Open with \"${CERT_REQUIRED_MSG}\", while the same certless dial reached the Enroll handler (positive control)."
