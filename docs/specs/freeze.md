@@ -153,6 +153,7 @@ executor is the same class of wiring bug as an unauthorized one.
 | A Freeze survives a Relay restart | `TestFreezeSurvivesRestart` | capability |
 | Engage and release persist and audit | `TestEngageFreezePersistsAndAudits`, `TestReleaseFreezePersistsAndAudits` | capability |
 | Engage consults the control authorizer | `TestEngageFreeze_ConsultsTheControlAuthorizer` | capability |
+| Engaging over the Control API requires a human Account, at any role | `TestAuthorizeControl_FreezeEngageIsHumanOnly`, `TestFreezeEngage_RequiresHumanOperator` | capability, API |
 | A refused engage or release changes nothing and is still audited | `TestEngageFreeze_RefusedIsNotEngagedAndIsAudited`, `TestReleaseFreeze_RefusedIsNotReleasedAndIsAudited` | capability |
 | A release requires a reason — including on the local lever | `TestReleaseFreeze_RequiresAReason`, `TestReleaseFreezeLocal_StillRequiresAReason` | capability |
 | The local lever bypasses the role gate deliberately | `TestFreezeLocalLever_BypassesTheRoleGate` | capability |
@@ -162,9 +163,6 @@ executor is the same class of wiring bug as an unauthorized one.
 
 Claims above with **no row**, and so nothing checking them:
 
-- That engaging over the Control API requires a **human** Account. The role gate is covered and
-  the human-Account clause is the 2026-08-24 amendment to ADR-0013; no test names it, and it is
-  the clause that stops a jailbroken AI-agent halting the fleet.
 - That in-flight Tasks keep running through a Freeze. Stated by ADR-0013 and true by construction
   — the gate is on new dispatch only — but not asserted.
 - That the host lever is unreachable from any surface. True by the interface the API holds, and
