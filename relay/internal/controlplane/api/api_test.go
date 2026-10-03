@@ -632,6 +632,53 @@ func TestHandleRevokeToken_UnrecordedCascadeStillRecordsTheTokenRevoke(t *testin
 	}
 }
 
+// TestHandleRevokeToken_IncompleteCascadeRecordsTheRevokeAndSaysNodesMayBeTrusted
+// covers G-E0's API half: RevokeToken returning an *IncompleteCascade means
+// the token WAS revoked but the registry could not be read completely. The
+// response must be an error that says Nodes may still be trusted — never the
+// "Nodes were revoked" answer of the NotRecorded case — and the token revoke
+// must still be on the trail, attributed and marked incomplete.
+func TestHandleRevokeToken_IncompleteCascadeRecordsTheRevokeAndSaysNodesMayBeTrusted(t *testing.T) {
+	tr := &fakeTokenRevoker{
+		cascade: []string{"node-a"},
+		cascadeErr: &revocation.IncompleteCascade{
+			Revoked: 1, UnreadableNodeIDs: []string{"node-bad"}, UnreadableCount: 1,
+			Err: errors.New("store unavailable"),
+		},
+	}
+	auditor := &fakeAuditor{}
+	d := Deps{TokenRevoker: tr, Audit: auditor, Now: fixedNow}
+	h := newTestHandler(d)
+
+	rec := do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
+	if rec.Code < 500 {
+		t.Fatalf("status = %d, want a 5xx; body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "revoke not fully recorded") || strings.Contains(body, "Nodes were revoked") {
+		t.Errorf("body = %s: an incomplete cascade must never claim the token's Nodes were revoked", body)
+	}
+	if !strings.Contains(body, "may still be trusted") {
+		t.Errorf("body = %s: want it to say Nodes enrolled under the token may still be trusted", body)
+	}
+
+	var tokenRevokes []audit.Record
+	for _, r := range auditor.all() {
+		if r.Kind == audit.KindTokenRevoke {
+			tokenRevokes = append(tokenRevokes, r)
+		}
+	}
+	if len(tokenRevokes) != 1 {
+		t.Fatalf("KindTokenRevoke records = %d, want 1: the token was revoked, so the trail must say who did it", len(tokenRevokes))
+	}
+	if got, want := tokenRevokes[0].Reason, "token_id=tok-123 cascade=incomplete"; got != want {
+		t.Errorf("KindTokenRevoke Reason = %q, want %q", got, want)
+	}
+	if got, want := tokenRevokes[0].Principal, controlplane.FoundingAdmin().Attribution(); got != want {
+		t.Errorf("KindTokenRevoke Principal = %q, want %q", got, want)
+	}
+}
+
 // TestHandleRevokeToken_CascadeRecorderReportsAuditFailure asserts the
 // recorder closure this handler builds propagates a real audit failure back
 // to the caller (revocation.Service) rather than swallowing it — mutation 4.

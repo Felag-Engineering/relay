@@ -136,6 +136,7 @@ func TestObserveRegistry_HeartbeatAndEverythingElsePublishNothing(t *testing.T) 
 		{"RecordRenewal", func() error { return reg.RecordRenewal("node-1", registry.Certificate{}, time.Now()) }},
 		{"Get", func() error { _, _ = reg.Get("node-1"); return nil }},
 		{"List", func() error { _ = reg.List(); return nil }},
+		{"ListChecked", func() error { _, err := reg.ListChecked(); return err }},
 		{"RevokedNodeIDs", func() error { _, err := reg.RevokedNodeIDs(); return err }},
 		{"Count", func() error { _, _, err := reg.Count(); return err }},
 	}

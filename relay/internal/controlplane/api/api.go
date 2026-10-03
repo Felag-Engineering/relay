@@ -49,7 +49,10 @@ type TokenMinter interface {
 // audit sink of its own, so tokens.go's handleRevokeToken builds the closure
 // that authors each record's Principal and reason and hands it in. A
 // returned ErrCascadeNotRecorded means the token and every Node it enrolled
-// were revoked, but the trail is incomplete for one or more of them.
+// were revoked, but the trail is incomplete for one or more of them. A
+// returned ErrCascadeIncomplete means the token was revoked but the registry
+// could not be read completely, so Nodes it enrolled may still be trusted —
+// never that every Node was revoked.
 type TokenRevoker interface {
 	RevokeToken(ctx context.Context, id string, record revocation.RevocationRecorder) error
 }

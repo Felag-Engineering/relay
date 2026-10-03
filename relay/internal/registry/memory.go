@@ -311,6 +311,11 @@ func (r *InMemory) List() []Node {
 	return out
 }
 
+// ListChecked returns List() and a nil error: an in-memory read cannot fail.
+func (r *InMemory) ListChecked() ([]Node, error) {
+	return r.List(), nil
+}
+
 // copyNode returns a deep copy of n so callers cannot mutate stored state
 // through a returned value, with Outdated computed against the registry's
 // configured minDaemonVersion (ADR-0014; derived on read, never stored).

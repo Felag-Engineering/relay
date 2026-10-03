@@ -128,7 +128,10 @@ const cascadeAuditBudget = 2 * time.Minute
 //
 // Can now also answer 400 (the token id cannot be rendered into a revocation
 // reason) and a completed-but-unrecorded 500 (the token and its Nodes were
-// revoked, but one or more per-Node records could not be written).
+// revoked, but one or more per-Node records could not be written), and a
+// token-revoked-cascade-incomplete 500 (the token was revoked, but the
+// registry could not be read completely, so some of its Nodes may still be
+// trusted).
 func handleRevokeToken(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
@@ -219,6 +222,19 @@ func handleRevokeToken(d Deps) http.HandlerFunc {
 		}
 
 		err = d.TokenRevoker.RevokeToken(r.Context(), id, record)
+		if errors.Is(err, revocation.ErrCascadeIncomplete) {
+			// The token WAS revoked — the cascade only reads the registry after
+			// the token barrier — so the act is recorded, marked incomplete. But
+			// the cascade could not see every Node, so this must neither claim
+			// failure (the token is dead) nor claim the Nodes were revoked:
+			// some enrolled under it may still be trusted.
+			recordLifecycle(r.Context(), d, p, audit.KindTokenRevoke, "", "token_id="+id+" cascade=incomplete")
+			writeProblem(w, http.StatusInternalServerError, "token revoked, cascade incomplete",
+				"the Enrollment Token was revoked, but the registry could not be read completely, "+
+					"so Nodes enrolled under it may still be trusted; retry the revoke, and if it "+
+					"fails again revoke the Nodes named in the Relay's log individually")
+			return
+		}
 		if err != nil && !errors.Is(err, revocation.ErrCascadeNotRecorded) {
 			writeProblem(w, http.StatusInternalServerError, "revoke enrollment token failed", "")
 			return
