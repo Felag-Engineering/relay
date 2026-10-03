@@ -150,6 +150,16 @@ func startRelaySubprocess(t *testing.T, relayBin, caDir, storePath, sockPath, ad
 		}
 
 		if ready {
+			// build-relay-devharness compiles this Relay with -race. The race detector
+			// reports to the log and lets the process run on, and every caller ends it
+			// with SIGKILL, so its race exit status is never seen: the report in the log
+			// is the only evidence. Registered before the caller's kill cleanup, so it
+			// runs after it, on the complete log.
+			t.Cleanup(func() {
+				if strings.Contains(logBuf.String(), "WARNING: DATA RACE") {
+					t.Errorf("relay subprocess reported a data race:\n%s", logBuf.String())
+				}
+			})
 			return c, logBuf, a, exitedAttempt
 		}
 	}
@@ -267,7 +277,7 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 	relayBin := os.Getenv("RELAY_BIN")
 	daemonBin := os.Getenv("RELAY_DAEMON_BIN")
 	if relayBin == "" || daemonBin == "" {
-		t.Skip("RELAY_BIN and/or RELAY_DAEMON_BIN not set; skipping cross-binary e2e (run via make test-crossbinary)")
+		relaytest.SkipMissingBin(t, "RELAY_BIN and/or RELAY_DAEMON_BIN not set; skipping cross-binary e2e (run via make test-crossbinary)")
 	}
 
 	caDir := t.TempDir()

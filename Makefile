@@ -51,7 +51,7 @@ endif
         demo-build demo-reset demo-reset-oauth demo-fault demo-up demo-up-oauth demo-down demo-creds \
         test-demo-fleet \
         fuzz-relay fuzz-daemon \
-        verify opschema-check openapi-check gen-apiclient apiclient-check
+        verify verify-proto proto-lint opschema-check openapi-check gen-apiclient apiclient-check
 
 ## --- verify: the local mirror of CI ---
 # `make build test lint` is the fast inner loop. It is NOT what CI runs, and
@@ -75,13 +75,39 @@ endif
 # The proto gates need `buf`, which is not part of a normal dev setup. When it
 # is absent they are SKIPPED WITH A NOTICE rather than silently passed over or
 # hard-failed: a check you did not run must not look like a check that passed.
+# Every such skip is collected, and verify's last line says how many there were
+# rather than claiming a full pass (the skip ledger, below).
 verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
         apiclient-check verify-proto docs-check test-security-surface \
         test-demo-fleet test-codex-review test-proto-tools-check test-check-docs test-smoke-test \
         test-integration test-crossbinary
 	@echo
-	@echo "verify: all local CI-equivalent gates passed."
+	@test -n "$(RELAY_VERIFY_SKIPS)" || { echo "verify: no skip ledger, so skipped gates cannot be ruled out" >&2; exit 1; }
+	@if [ -s "$(RELAY_VERIFY_SKIPS)" ]; then \
+		sed 's/^/verify: SKIPPED /' "$(RELAY_VERIFY_SKIPS)"; \
+		echo "verify: every gate that ran passed, but $$(wc -l < "$(RELAY_VERIFY_SKIPS)") check(s) were SKIPPED (listed above; CI runs them) — NOT a full CI-equivalent pass."; \
+	else \
+		echo "verify: all local CI-equivalent gates passed; none skipped."; \
+	fi; rm -f "$(RELAY_VERIFY_SKIPS)"
+
+# GOFLAGS=-count=1, exactly as ci.yml's workflow-level env sets it, so no Go lane under verify
+# (the race tests, both e2e suites, the contract checks) can replay a cached pass. The test
+# cache does not key on everything a test depends on (the umask; a rebuilt relay-daemon at
+# the same path), and CI never reuses results, so a local replay is a pass CI did not give.
+# Target-specific, so it reaches every prerequisite verify builds and nothing outside verify.
+verify: export GOFLAGS := -count=1
+
+# The skip ledger. A gate that cannot run here (no buf; no GitHub for the milestone check)
+# appends one line naming itself; verify's last line reports them instead of claiming a
+# full pass. Created only when verify is a goal, and exported so the recursive $(MAKE) in
+# verify-proto and the scripts see the same file. Skips do NOT fail verify: each is a gate
+# CI runs unconditionally (its jobs install buf and hold a GitHub token), so a skip is a
+# local tool gap, never a defect CI would reject — but it is reported as a skip, never as
+# a pass. RELAY_VERIFY_SKIPS unset (any target run on its own) records nothing.
+ifneq ($(filter verify,$(MAKECMDGOALS)),)
+export RELAY_VERIFY_SKIPS := $(shell mktemp "$${TMPDIR:-/tmp}/relay-verify-skips.XXXXXX")
+endif
 
 # Operation-schema drift (ci.yml: the daemon job's opschema-drift step). Regenerates the committed
 # schema from the daemon binary and fails if it moved.
@@ -129,14 +155,18 @@ apiclient-check: gen-apiclient
 openapi-check:
 	cd relay && go test ./internal/controlplane/api/ -run 'TestOpenAPISpec|TestServedRoutes' -count=1
 
-# The two proto gates (ci.yml: the proto job's proto-drift and proto-breaking steps), skipped with a
-# notice when buf is unavailable.
+# The proto gates (ci.yml: the proto job's proto-drift and proto-breaking steps; proto-check
+# includes buf lint), skipped with a notice when buf is unavailable — and recorded in verify's
+# skip ledger, so the skip reaches verify's last line.
 verify-proto:
 	@if command -v buf >/dev/null 2>&1; then \
 		$(MAKE) proto-check proto-breaking; \
 	else \
-		echo "verify: SKIPPING proto-check and proto-breaking — buf not installed."; \
+		echo "verify: SKIPPING proto-check (buf lint, proto drift) and proto-breaking — buf not installed."; \
 		echo "verify:   these run in CI regardless. Install with: make proto-tools"; \
+		if [ -n "$$RELAY_VERIFY_SKIPS" ]; then \
+			echo "verify-proto: buf lint, proto drift and proto-breaking (buf not installed)" >> "$$RELAY_VERIFY_SKIPS"; \
+		fi; \
 	fi
 
 ## --- build stamping (issue #249, ADR-0014) ---
@@ -215,10 +245,6 @@ lint-tools:
 
 tools: proto-tools lint-tools
 
-# Documentation gates: ADR numbers are unique, and every test a capability spec
-# names in its proof table still exists. Both catch drift that has happened here —
-# two files once claimed ADR-0015, and a spec citing tests by name breaks silently
-# when one is renamed. Cheap, hermetic, no network.
 .PHONY: console-snapshots
 # Render every Console screen against the test fixtures and write the HTML to
 # relay/console-snapshots/ (gitignored). The design canvas is seeded from these so
@@ -229,6 +255,11 @@ console-snapshots:
 	@ls relay/console-snapshots
 
 .PHONY: docs-check adr-index
+# Documentation gates: ADR numbers are unique, and every test a capability spec
+# names in its proof table still exists. Both catch drift that has happened here —
+# two files once claimed ADR-0015, and a spec citing tests by name breaks silently
+# when one is renamed. Cheap, hermetic, no network.
+#
 # Both run so a PR sees every finding at once; the target fails if either does. check-crosslinks
 # includes the docs/adr/README.md drift gate (same pattern as opschema-check: regenerate, compare).
 docs-check:
@@ -284,9 +315,15 @@ test-smoke-test:
 	bash scripts/smoke-test-test.sh
 
 # Verify no committed generated code drifts from the proto source (ADR-0007).
-# Runs proto (which regenerates) then fails if relay/internal/relay/v1 differs.
-proto-check: proto
+# Lints /proto first, then runs proto (which regenerates) and fails if relay/internal/relay/v1
+# differs.
+proto-check: proto-lint proto
 	git diff --exit-code -- relay/internal/relay/v1
+
+# buf lint over /proto, by the rules proto/buf.yaml configures (STANDARD, minus the three
+# exceptions it records and justifies). Read-only: it reports, it never rewrites /proto.
+proto-lint: proto-tools-check
+	cd proto && PATH="$$(go env GOPATH)/bin:$$PATH" buf lint
 
 # Additive-only /proto gate (ADR-0014): fail if the working-tree proto breaks wire
 # compatibility vs a base git ref. Run from repo root so the `.git` input resolves at
@@ -311,8 +348,10 @@ test-relay-race:
 
 # Formatting is fmt-relay's job, not this target's: CI runs it as a separate,
 # last step so a formatting slip never hides lint and test results.
+# --allow-serial-runners: a second golangci-lint on the same host (a parallel worktree) waits
+# for the first one's lock instead of failing on it. Runs are serialised, never skipped.
 lint-relay:
-	cd relay && go vet ./... && golangci-lint run
+	cd relay && go vet ./... && golangci-lint run --allow-serial-runners
 
 ## --- format-only targets (no compile; fmt-relay is the relay CI job's gofmt step) ---
 # fmt-relay fails loudly if any file is unformatted: gofmt -l alone exits 0 even on drift.
@@ -339,6 +378,17 @@ fmt-daemon:
 fmt: fmt-relay fmt-daemon
 
 ## --- relay-daemon (Rust) ---
+# Where build-daemon's `cargo build` leaves the debug relay-daemon, for every target that then
+# runs it (gen-opschema, test-integration, test-crossbinary). Cargo honours CARGO_TARGET_DIR
+# (and CARGO_BUILD_TARGET_DIR below it), resolving a relative value against the directory it
+# runs in — daemon/, since every recipe here does `cd daemon` first. A hardcoded daemon/target/
+# made a shared target dir build one binary and then run another, or none at all. Unset, the
+# path is the same as before. A target dir set only in a cargo config file is not seen here;
+# gen-opschema refuses loudly, and the e2e suites fail, rather than run a stale binary.
+DAEMON_TARGET_DIR_RAW := $(or $(CARGO_TARGET_DIR),$(CARGO_BUILD_TARGET_DIR))
+DAEMON_TARGET_DIR     := $(if $(DAEMON_TARGET_DIR_RAW),$(if $(filter /%,$(DAEMON_TARGET_DIR_RAW)),$(DAEMON_TARGET_DIR_RAW),$(abspath $(CURDIR)/daemon/$(DAEMON_TARGET_DIR_RAW))),$(CURDIR)/daemon/target)
+DAEMON_DEBUG_BIN      := $(DAEMON_TARGET_DIR)/debug/relay-daemon
+
 build-daemon:
 	cd daemon && $(DAEMON_STAMP) cargo build
 
@@ -401,9 +451,20 @@ test-strict-umask-daemon:
 # real-wire Go integration tests (//go:build integration) with the actual
 # relay-daemon binary.
 # Depends on build so both binaries exist before running.
+#
+# Two settings make this suite prove what it claims:
+#  - RELAY_E2E_REQUIRED=1 turns an e2e test's "binary not set" skip into a failure
+#    (relaytest.SkipMissingBin), so a path mistake fails the gate instead of passing it with
+#    every real-binary test skipped. A bare `go test` leaves it unset and still skips.
+#  - -race: the Relay under test here runs in-process, inside the test binary, so the race
+#    detector instruments it directly.
+# The cross-binary tests need RELAY_BIN too and run in test-crossbinary, so they are skipped
+# here by the same pattern that target selects; without that, the requirement switch would fail them.
+CROSSBINARY_TESTS := TestCrossBinary|TestFleetE2E
 test-integration: build
 	bash scripts/smoke-test.sh
-	cd relay && RELAY_DAEMON_BIN=$(CURDIR)/daemon/target/debug/relay-daemon go test -tags integration ./cmd/relay/...
+	cd relay && RELAY_E2E_REQUIRED=1 RELAY_DAEMON_BIN=$(DAEMON_DEBUG_BIN) \
+		go test -race -tags integration -skip '$(CROSSBINARY_TESTS)' ./cmd/relay/...
 
 # Depends on fmt-daemon rather than repeating it, so `verify` (which also pulls in
 # fmt) checks Rust formatting once. CI's daemon job relies on this target for it.
@@ -417,8 +478,20 @@ lint-daemon: fmt-daemon
 # and writing its canonical JSON straight to the committed golden. The golden
 # MUST live inside relay/internal/opvocab/ (not repo root): opvocab_test.go
 # //go:embed's it, and go:embed cannot reach above its own package tree.
+#
+# The golden is replaced only by a complete, non-empty dump: the schema is written to a temp
+# file beside it and renamed into place on success. A plain `>` redirect truncated the
+# committed file before the binary ran, so a missing binary left it empty — and the drift
+# check then reported that emptying as the change under review.
+OPSCHEMA_GOLDEN := $(CURDIR)/relay/internal/opvocab/testdata/operations.schema.json
 gen-opschema: build-daemon
-	$(CURDIR)/daemon/target/debug/relay-daemon dump-operation-schema > $(CURDIR)/relay/internal/opvocab/testdata/operations.schema.json
+	@test -x "$(DAEMON_DEBUG_BIN)" || { echo "gen-opschema: FAIL no relay-daemon at $(DAEMON_DEBUG_BIN) (CARGO_TARGET_DIR?); golden left untouched" >&2; exit 1; }
+	@tmp="$$(mktemp "$(OPSCHEMA_GOLDEN).XXXXXX")" || exit 1; trap 'rm -f "$$tmp"' EXIT; \
+	"$(DAEMON_DEBUG_BIN)" dump-operation-schema > "$$tmp" \
+		|| { echo "gen-opschema: FAIL dump-operation-schema exited non-zero; golden left untouched" >&2; exit 1; }; \
+	test -s "$$tmp" || { echo "gen-opschema: FAIL dump-operation-schema printed nothing; golden left untouched" >&2; exit 1; }; \
+	chmod 644 "$$tmp" && mv -f "$$tmp" "$(OPSCHEMA_GOLDEN)" \
+		&& echo "gen-opschema: wrote $(OPSCHEMA_GOLDEN) from $(DAEMON_DEBUG_BIN)"
 
 ## --- #112 dev-harness cross-binary CI machinery ---
 # Kept OUT of build/test/lint: build-relay-devharness produces a non-shippable
@@ -427,9 +500,12 @@ gen-opschema: build-daemon
 # binaries and is non-hermetic, matching the existing test-integration
 # exclusion above.
 
-# The devharness-tagged relay binary: never the shippable relay/bin/relay.
+# The devharness-tagged relay binary: never the shippable relay/bin/relay. Built with -race:
+# its one consumer is test-crossbinary, where the Relay under test is this subprocess, not
+# the test binary, so the race detector reaches the Relay only if it is compiled in here.
+# The test harness fails a test whose Relay log carries a race report.
 build-relay-devharness:
-	cd relay && go build -tags devharness -o bin/relay-devharness ./cmd/relay
+	cd relay && go build -race -tags devharness -o bin/relay-devharness ./cmd/relay
 
 # Vet the gated files that the default (untagged) lint-relay never compiles,
 # let alone lints: devharness.go and the integration-tagged Go tests.
@@ -446,10 +522,12 @@ devharness-absent-check:
 # through the devharness control socket — the fleet suite additionally drives
 # the real capability pipeline/Job engine, including a real Relay crash
 # mid-Job, ADR-0004).
+# RELAY_E2E_REQUIRED and -race as in test-integration: a missing binary fails rather than
+# skips, and the test binary's own half (the harness client) runs under the race detector too.
 test-crossbinary: build-daemon build-relay-devharness
-	cd relay && RELAY_BIN=$(CURDIR)/relay/bin/relay-devharness \
-		RELAY_DAEMON_BIN=$(CURDIR)/daemon/target/debug/relay-daemon \
-		go test -tags integration -run 'TestCrossBinary|TestFleetE2E' ./cmd/relay/...
+	cd relay && RELAY_E2E_REQUIRED=1 RELAY_BIN=$(CURDIR)/relay/bin/relay-devharness \
+		RELAY_DAEMON_BIN=$(DAEMON_DEBUG_BIN) \
+		go test -race -tags integration -run '$(CROSSBINARY_TESTS)' ./cmd/relay/...
 
 ## --- vulnerability scanning (nightly; non-blocking in CI) ---
 # Install: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
@@ -523,11 +601,16 @@ FUZZ_FLAGS      := -max_total_time=$(FUZZ_TOTAL_TIME) -rss_limit_mb=$(FUZZ_RSS_M
 FUZZ_GROWN_CORPUS ?=
 FUZZ_DAEMON_TARGETS := fuzz_relay_message_decode fuzz_enroll_response_decode fuzz_renew_response_decode
 fuzz_corpus = $(if $(FUZZ_GROWN_CORPUS),$(FUZZ_GROWN_CORPUS)/$(1) $(CURDIR)/daemon/fuzz/corpus/$(1))
+#
+# One recipe line per FUZZ_DAEMON_TARGETS entry (the foreach ends each with a newline), so the
+# list above is the only place a target is named and make still stops at the first crasher.
+define fuzz_daemon_newline
+
+
+endef
 fuzz-daemon:
 	$(if $(FUZZ_GROWN_CORPUS),mkdir -p $(addprefix $(FUZZ_GROWN_CORPUS)/,$(FUZZ_DAEMON_TARGETS)))
-	cd daemon && cargo +nightly fuzz run fuzz_relay_message_decode   $(call fuzz_corpus,fuzz_relay_message_decode) -- $(FUZZ_FLAGS)
-	cd daemon && cargo +nightly fuzz run fuzz_enroll_response_decode $(call fuzz_corpus,fuzz_enroll_response_decode) -- $(FUZZ_FLAGS)
-	cd daemon && cargo +nightly fuzz run fuzz_renew_response_decode  $(call fuzz_corpus,fuzz_renew_response_decode) -- $(FUZZ_FLAGS)
+	$(foreach t,$(FUZZ_DAEMON_TARGETS),cd daemon && cargo +nightly fuzz run $(t) $(call fuzz_corpus,$(t)) -- $(FUZZ_FLAGS)$(fuzz_daemon_newline))
 
 ## --- local dev fleet (DEV-ONLY; requires Docker + compose v2) ---
 # Thin convenience wrappers over `docker compose` for the laptop dev fleet
@@ -616,6 +699,9 @@ demo-up-oauth:
 demo-creds:
 	bash scripts/demo-fleet.sh creds
 
+# relay/bin/ holds build-relay's and build-relay-devharness's output, which `go clean` does not
+# know about; it is gitignored, so nothing tracked lives there.
 clean:
 	cd relay && go clean ./... || true
+	rm -rf relay/bin
 	cd daemon && cargo clean || true

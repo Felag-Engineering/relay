@@ -41,7 +41,7 @@ var deniedOperationArgs = map[string]any{
 func TestRefusalLegibilityE2E_NodePolicyDenyExplainsItself(t *testing.T) {
 	daemonBin := os.Getenv("RELAY_DAEMON_BIN")
 	if daemonBin == "" {
-		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
+		relaytest.SkipMissingBin(t, "RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
 	}
 	f := startAccountFleet(t, daemonBin)
 
@@ -108,7 +108,7 @@ func TestRefusalLegibilityE2E_NodePolicyDenyExplainsItself(t *testing.T) {
 func TestRefusalLegibilityE2E_AdminBypassIsRefusedIdentically(t *testing.T) {
 	daemonBin := os.Getenv("RELAY_DAEMON_BIN")
 	if daemonBin == "" {
-		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
+		relaytest.SkipMissingBin(t, "RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
 	}
 	f := startAccountFleet(t, daemonBin)
 	_, operatorToken := f.mintAccount(t, "gleipnir-bypass", accounts.RoleOperator)
@@ -156,7 +156,7 @@ func TestRefusalLegibilityE2E_AdminBypassIsRefusedIdentically(t *testing.T) {
 func TestRefusalLegibilityE2E_PlanAndApplyFrameTheSameBoundary(t *testing.T) {
 	daemonBin := os.Getenv("RELAY_DAEMON_BIN")
 	if daemonBin == "" {
-		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
+		relaytest.SkipMissingBin(t, "RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
 	}
 	f := startAccountFleet(t, daemonBin)
 	session := relaytest.Connect(t, f.relay.ControlBase, f.clientFor(f.relay.Credential))
