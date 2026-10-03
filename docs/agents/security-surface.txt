@@ -99,3 +99,15 @@ daemon/Cargo.lock
 # change to either must escalate exactly as it did before the move.
 relay/internal/relaytest/astguard/**
 relay/internal/relaytest/protowalk/**
+
+# Added 2026-10-03 (owner decision, tech-debt audit E8): deployment hardening that bounds
+# the privileged processes, the approval-notification path invariant 11 names as security
+# floor, the host Freeze lever, and the daemon module directories ahead of splitting
+# daemon/src/policy.rs and daemon/src/dispatch.rs into submodules.
+daemon/packaging/**
+docker/relay.Dockerfile
+deploy/compose/**
+relay/internal/approvalnotify/**
+relay/cmd/relay/freeze_signal.go
+daemon/src/policy/**
+daemon/src/dispatch/**
