@@ -53,9 +53,10 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Any request for more is silently clamped to this value. ADR-0004's
 /// Policy-configurable cap is not built, so this constant is the only cap on
 /// the budget. The budget runs from receipt and covers the whole Task — queue
-/// wait, execution, and the drain of the command's output — so a Task cannot
-/// outlive it by more than the executor's fixed kill and drain graces
-/// (`executor::execute`).
+/// wait, execution, and the drain of the command's output. The executor
+/// overruns it only by its fixed kill and drain graces (`executor::execute`),
+/// unless the kernel holds a process in uninterruptible sleep, which no signal
+/// can end; a process that left the Task's process group is not killed at all.
 const MAX_TIMEOUT: Duration = Duration::from_secs(300);
 
 // MAX_OUTPUT_BYTES (per-Task output byte cap for stdout/stderr independently,
@@ -2166,7 +2167,8 @@ allow = ['^/bin/sh /\S+$']
     // deadline is rooted at received_at using an ALREADY-EXPIRED deadline,
     // which fires on the very first select! poll — a good but limited proxy.
     // The two tests below use tokio's paused/virtual clock (already enabled
-    // by the dev-only `test-util` feature and used in executor.rs:597) to
+    // by the dev-only `test-util` feature and used by the executor's
+    // `timeout_beats_buffered_cancel_biased`) to
     // prove the stronger, previously-untested properties: (a) a deadline that
     // is genuinely in the FUTURE at dispatch still fires while the Task
     // remains queued behind a live blocker, and (b) time spent queued is

@@ -22,7 +22,7 @@ use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 
-use super::registry::run_blocking;
+use super::registry::BlockingGate;
 use crate::gen::{Outcome, TaskResult};
 use crate::not_executed::{denied_by_policy_result, not_executed};
 
@@ -76,13 +76,15 @@ pub fn read_capped_from(f: std::fs::File, cap: usize) -> std::io::Result<(Vec<u8
 /// # Off the async worker threads
 ///
 /// Opening, resolving and reading are blocking syscalls that a hung mount can
-/// stall indefinitely, so each runs on the blocking pool ([`run_blocking`]),
-/// never on a tokio worker thread that the tunnel and heartbeat share. Only
+/// stall indefinitely, so each runs on the blocking pool behind `gate`
+/// ([`BlockingGate`]), never on a tokio worker thread that the tunnel and
+/// heartbeat share. Only
 /// `recheck` — a pure, in-memory Policy evaluation — runs in between on the
 /// async side, which is what lets it borrow the live Policy. The descriptor
 /// is moved from the open to the read, so the check-to-read guarantee above
 /// is unchanged. The caller bounds the whole by the Task's timeout.
 pub async fn file_read(
+    gate: BlockingGate,
     task_id: String,
     path: String,
     cap: usize,
@@ -90,7 +92,7 @@ pub async fn file_read(
 ) -> TaskResult {
     let opened = {
         let (task_id, path) = (task_id.clone(), path.clone());
-        run_blocking(move || open_and_resolve(&task_id, &path)).await
+        gate.run(move || open_and_resolve(&task_id, &path)).await
     };
     let (f, resolved) = match opened {
         Ok(opened) => opened,
@@ -99,7 +101,7 @@ pub async fn file_read(
     if let PathCheck::Denied(reason) = recheck(&resolved) {
         return denied_by_policy(&task_id, &reason);
     }
-    run_blocking(move || read_opened(&task_id, &path, f, cap)).await
+    gate.run(move || read_opened(&task_id, &path, f, cap)).await
 }
 
 /// Opens `path` and resolves the target the descriptor actually points at
@@ -262,7 +264,14 @@ mod tests {
     #[tokio::test]
     async fn file_read_missing_path_is_failure() {
         let path = "/nonexistent/relay-test-file-read";
-        let result = file_read("t1".into(), path.into(), 1024, |_| PathCheck::Allowed).await;
+        let result = file_read(
+            BlockingGate::data_only(),
+            "t1".into(),
+            path.into(),
+            1024,
+            |_| PathCheck::Allowed,
+        )
+        .await;
         assert_eq!(
             result.outcome,
             Outcome::Failure as i32,
@@ -327,7 +336,13 @@ mod tests {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .build()
                 .expect("build a test runtime");
-            let result = rt.block_on(file_read("t-fifo".into(), p, 1024, |_| PathCheck::Allowed));
+            let result = rt.block_on(file_read(
+                BlockingGate::data_only(),
+                "t-fifo".into(),
+                p,
+                1024,
+                |_| PathCheck::Allowed,
+            ));
             let _ = tx.send(result);
         });
 
@@ -356,7 +371,14 @@ mod tests {
     async fn resolved_target_recheck_allows_normal_read() {
         let content = b"ok";
         let tmp = TempFile::new("recheck-allow", content);
-        let result = file_read("t".into(), tmp.path_str(), 1024, |_| PathCheck::Allowed).await;
+        let result = file_read(
+            BlockingGate::data_only(),
+            "t".into(),
+            tmp.path_str(),
+            1024,
+            |_| PathCheck::Allowed,
+        )
+        .await;
         assert_eq!(
             result.outcome,
             Outcome::Success as i32,
@@ -389,13 +411,19 @@ mod tests {
         let _guard = LinkGuard(link.clone());
 
         let link_path = link.to_str().unwrap().to_string();
-        let result = file_read("t".into(), link_path, 1024, |resolved| {
-            if resolved == real {
-                PathCheck::Denied("resolved to a denied target".to_string())
-            } else {
-                PathCheck::Allowed
-            }
-        })
+        let result = file_read(
+            BlockingGate::data_only(),
+            "t".into(),
+            link_path,
+            1024,
+            |resolved| {
+                if resolved == real {
+                    PathCheck::Denied("resolved to a denied target".to_string())
+                } else {
+                    PathCheck::Allowed
+                }
+            },
+        )
         .await;
 
         assert_eq!(

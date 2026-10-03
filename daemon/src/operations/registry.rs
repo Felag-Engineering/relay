@@ -31,7 +31,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Semaphore};
 
 use super::schema::{self, ArgSpec};
 use crate::executor::ExecRequest;
@@ -42,6 +42,7 @@ use crate::operations::service_restart::service_restart;
 use crate::operations::system_facts::{format_facts_as_kv, gather_facts};
 use crate::policy::{Decision, Policy};
 use crate::raw_exec::run_raw_exec;
+use crate::scheduler::READ_CONCURRENCY;
 
 // ---------------------------------------------------------------------------
 // Handler plumbing
@@ -289,19 +290,30 @@ pub fn lookup_in<'r>(entries: &'r [OpRegistration], name: &str) -> Option<&'r Op
 
 // The data-only Natives (`system.facts`, `file.read`) spawn no process, but
 // their work is blocking syscalls — file reads, getifaddrs(3) — that a hung
-// mount can stall indefinitely. They run that work on the blocking pool
-// (`run_blocking`), never on a tokio worker thread the tunnel and heartbeat
-// share, and bound it by the Task's remaining wall-clock budget
+// mount can stall indefinitely. They run that work on the blocking pool behind
+// a small gate (`BlockingGate`), never on a tokio worker thread the tunnel and
+// heartbeat share, and bound it by the Task's remaining wall-clock budget
 // (`within_task_timeout`, ADR-0004). Cancel is irrelevant to them: there is no
 // process group to kill, and the receiver drops with the context.
+//
+// Each handler is a thin binding of a `*_via` function to the production gate,
+// so a test can drive the real handler body through a gate it controls.
 
 fn system_facts_handler(ctx: OpCtx<'_>) -> OpFuture<'_> {
+    system_facts_via(BlockingGate::data_only(), ctx)
+}
+
+fn file_read_handler(ctx: OpCtx<'_>) -> OpFuture<'_> {
+    file_read_via(BlockingGate::data_only(), ctx)
+}
+
+fn system_facts_via(gate: BlockingGate, ctx: OpCtx<'_>) -> OpFuture<'_> {
     Box::pin(async move {
         let OpCtx {
             task_id, timeout, ..
         } = ctx;
         let work = async {
-            let stdout = run_blocking(|| format_facts_as_kv(&gather_facts())).await;
+            let stdout = gate.run(|| format_facts_as_kv(&gather_facts())).await;
             TaskResult {
                 task_id: task_id.clone(),
                 outcome: Outcome::Success as i32,
@@ -316,7 +328,7 @@ fn system_facts_handler(ctx: OpCtx<'_>) -> OpFuture<'_> {
     })
 }
 
-fn file_read_handler(ctx: OpCtx<'_>) -> OpFuture<'_> {
+fn file_read_via(gate: BlockingGate, ctx: OpCtx<'_>) -> OpFuture<'_> {
     Box::pin(async move {
         let OpCtx {
             task_id,
@@ -332,6 +344,7 @@ fn file_read_handler(ctx: OpCtx<'_>) -> OpFuture<'_> {
         // `/proc`-magic and symlink evasions that are canonical in form and
         // so pass layer 1.
         let work = file_read(
+            gate,
             task_id.clone(),
             path,
             max_output_bytes,
@@ -344,23 +357,67 @@ fn file_read_handler(ctx: OpCtx<'_>) -> OpFuture<'_> {
     })
 }
 
-/// Runs blocking work on tokio's blocking pool and returns its value, keeping
-/// it off the async worker threads (see the data-only Natives above).
+/// How many data-only blocking calls may be in flight at once, stuck or not.
 ///
-/// A panic in `work` is resumed on the caller, exactly as if `work` had run
-/// inline. The blocking pool only fails to run `work` when the runtime is
-/// shutting down, which takes the Task with it.
-pub(crate) async fn run_blocking<T, F>(work: F) -> T
-where
-    F: FnOnce() -> T + Send + 'static,
-    T: Send + 'static,
-{
-    match tokio::task::spawn_blocking(work).await {
-        Ok(value) => value,
-        Err(err) => match err.try_into_panic() {
-            Ok(panic) => std::panic::resume_unwind(panic),
-            Err(err) => panic!("blocking work did not run: {err}"),
-        },
+/// A Task's timeout ends the Task but cannot interrupt a blocking syscall: a
+/// read on a hung NFS or FUSE mount keeps its blocking-pool thread until the
+/// kernel returns. Without a bound, repeating such a read would pin a new
+/// thread per Task until tokio's pool limit (512) is full, after which every
+/// `spawn_blocking` in the process queues — DNS resolution on reconnect among
+/// them — and the Node falls off the fleet.
+///
+/// Sized to [`READ_CONCURRENCY`]: both data-only Natives are `read`-class, so
+/// the read lane never runs more than that many at once, and a healthy Node
+/// never waits here — a call's permit is released before its Task finishes.
+/// It also restores the bound that held before this work moved off the async
+/// workers, when a stuck read kept its read-lane slot: at most four stuck
+/// calls, while the rest of the blocking pool stays free.
+pub(crate) const DATA_ONLY_BLOCKING_CAP: usize = READ_CONCURRENCY;
+
+static DATA_ONLY_BLOCKING: Semaphore = Semaphore::const_new(DATA_ONLY_BLOCKING_CAP);
+
+/// A bound on blocking work in flight: runs work on tokio's blocking pool,
+/// keeping it off the async worker threads, only once a permit is free.
+///
+/// The permit moves into the blocking closure and is released when the work
+/// returns — not when the Task gives up on it — so stuck work keeps counting
+/// against the bound. Waiting for a permit is part of the Task's work, inside
+/// its timeout: a Task that cannot get one in time reports `OUTCOME_TIMEOUT`.
+#[derive(Clone, Copy)]
+pub(crate) struct BlockingGate(&'static Semaphore);
+
+impl BlockingGate {
+    /// The process-wide gate the data-only Natives share.
+    pub(crate) fn data_only() -> Self {
+        Self(&DATA_ONLY_BLOCKING)
+    }
+
+    /// Runs `work` on the blocking pool once a permit is free, and returns its
+    /// value. A panic in `work` is resumed on the caller, exactly as if `work`
+    /// had run inline. The blocking pool only fails to run `work` when the
+    /// runtime is shutting down, which takes the Task with it.
+    pub(crate) async fn run<T, F>(self, work: F) -> T
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let permit = self
+            .0
+            .acquire()
+            .await
+            .expect("the blocking gate is never closed");
+        let joined = tokio::task::spawn_blocking(move || {
+            let _permit = permit; // held until the work returns
+            work()
+        })
+        .await;
+        match joined {
+            Ok(value) => value,
+            Err(err) => match err.try_into_panic() {
+                Ok(panic) => std::panic::resume_unwind(panic),
+                Err(err) => panic!("blocking work did not run: {err}"),
+            },
+        }
     }
 }
 
@@ -480,17 +537,11 @@ mod tests {
         let other = tokio::spawn(tokio::task::yield_now());
 
         let started = std::time::Instant::now();
-        let result = within_task_timeout("t-hung", Duration::from_millis(200), async {
-            run_blocking(move || {
-                let _ = hung.recv_timeout(Duration::from_secs(5));
-                TaskResult {
-                    task_id: "t-hung".to_string(),
-                    outcome: Outcome::Success as i32,
-                    ..Default::default()
-                }
-            })
-            .await
-        })
+        let result = within_task_timeout(
+            "t-hung",
+            Duration::from_millis(200),
+            test_gate(1).run(hung_work(hung)),
+        )
         .await;
         let elapsed = started.elapsed();
         let other_ran = other.is_finished();
@@ -507,6 +558,149 @@ mod tests {
             other_ran,
             "another Task must run while the blocking work is stuck"
         );
+    }
+
+    /// A gate of `permits` that only this test uses, so filling it never stalls
+    /// another test's data-only work on the process-wide gate.
+    fn test_gate(permits: usize) -> BlockingGate {
+        BlockingGate(Box::leak(Box::new(Semaphore::new(permits))))
+    }
+
+    /// Blocking work standing in for a syscall on a hung mount: it blocks its
+    /// thread until released, or its sender is dropped (5 s at most).
+    fn hung_work(hung: std::sync::mpsc::Receiver<()>) -> impl FnOnce() -> TaskResult + Send {
+        move || {
+            let _ = hung.recv_timeout(Duration::from_secs(5));
+            TaskResult {
+                outcome: Outcome::Success as i32,
+                ..Default::default()
+            }
+        }
+    }
+
+    // Stuck blocking work is capped. A timed-out Task's syscall keeps its
+    // blocking-pool thread, so without a cap every repeat of a read on a hung
+    // mount pins another thread until tokio's pool (512) is full and every
+    // `spawn_blocking` in the process — DNS on reconnect among them — queues
+    // forever. Once the cap's worth of work is stuck, the next data-only Task
+    // must time out promptly *without starting its work*, an unrelated
+    // `spawn_blocking` must still run, and the permits must come back when the
+    // stuck calls return.
+    #[tokio::test]
+    async fn stuck_blocking_work_is_capped_and_the_pool_stays_free() {
+        let gate = test_gate(DATA_ONLY_BLOCKING_CAP);
+        let mut releases = Vec::new();
+        for _ in 0..DATA_ONLY_BLOCKING_CAP {
+            let (release, hung) = std::sync::mpsc::channel::<()>();
+            releases.push(release);
+            let stuck = within_task_timeout(
+                "t-stuck",
+                Duration::from_millis(50),
+                gate.run(hung_work(hung)),
+            )
+            .await;
+            assert_eq!(stuck.outcome, Outcome::Timeout as i32);
+        }
+        assert_eq!(
+            gate.0.available_permits(),
+            0,
+            "a timed-out call that is still stuck must keep its permit"
+        );
+
+        let started = std::time::Instant::now();
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran_in_work = std::sync::Arc::clone(&ran);
+        let next = within_task_timeout(
+            "t-next",
+            Duration::from_millis(200),
+            gate.run(move || {
+                ran_in_work.store(true, std::sync::atomic::Ordering::SeqCst);
+                TaskResult::default()
+            }),
+        )
+        .await;
+        assert_eq!(next.outcome, Outcome::Timeout as i32);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(
+            !ran.load(std::sync::atomic::Ordering::SeqCst),
+            "work past the cap must never reach the blocking pool"
+        );
+
+        let unrelated =
+            tokio::time::timeout(Duration::from_secs(5), tokio::task::spawn_blocking(|| 42))
+                .await
+                .expect("an unrelated spawn_blocking must still run")
+                .expect("it must not panic");
+        assert_eq!(unrelated, 42);
+
+        // Releasing the stuck calls returns their permits.
+        drop(releases);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while gate.0.available_permits() < DATA_ONLY_BLOCKING_CAP {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the permits of returned calls must be released"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Refuses to spawn: the data-only Natives never run a process.
+    struct NoProcess;
+    impl Runner for NoProcess {
+        fn run(&self, _req: ExecRequest) -> OpFuture<'static> {
+            panic!("a data-only Native must not spawn a process")
+        }
+    }
+
+    type Via = for<'a> fn(BlockingGate, OpCtx<'a>) -> OpFuture<'a>;
+
+    // The real handler bodies route their work through the bounded path: with
+    // a gate that has no free permit they can only time out, and with a free
+    // permit the same body completes. (The registered handlers are one-line
+    // bindings of these bodies to the process-wide gate.) A body that ran its
+    // blocking work any other way would succeed against the closed gate.
+    #[tokio::test]
+    async fn data_only_handlers_route_through_the_blocking_gate() {
+        let policy = crate::policy::from_toml_str(
+            r#"
+[[operation]]
+name = "file.read"
+allowed_args = [["*"]]
+"#,
+        )
+        .expect("parse policy");
+        let tmp = crate::test_support::TempFile::new("gate-route", b"routed");
+        let cases: [(&str, Via, Vec<String>); 2] = [
+            (super::super::SYSTEM_FACTS, system_facts_via, vec![]),
+            (super::super::FILE_READ, file_read_via, vec![tmp.path_str()]),
+        ];
+        for (name, via, positional) in cases {
+            let ctx = |timeout| OpCtx {
+                task_id: format!("t-{name}"),
+                positional: positional.clone(),
+                timeout,
+                max_output_bytes: 1024,
+                policy: &policy,
+                cancel: None,
+                runner: &NoProcess,
+            };
+
+            let closed = via(test_gate(0), ctx(Duration::from_millis(100))).await;
+            assert_eq!(
+                closed.outcome,
+                Outcome::Timeout as i32,
+                "{name} must wait on the blocking gate"
+            );
+
+            let open = via(test_gate(1), ctx(Duration::from_secs(5))).await;
+            assert_eq!(
+                open.outcome,
+                Outcome::Success as i32,
+                "{name}: stderr={:?}",
+                String::from_utf8_lossy(&open.stderr)
+            );
+        }
     }
 
     fn op(name: &str, args: &[(&str, &str)]) -> Operation {
