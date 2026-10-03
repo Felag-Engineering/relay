@@ -36,7 +36,11 @@ source scripts/adr-links.sh
 fail=0; warned=0; skipped=0
 err()  { echo "check-crosslinks: FAIL $*" >&2; fail=1; }
 warn() { echo "check-crosslinks: warn $*" >&2; warned=$((warned + 1)); }
-skip() { echo "check-crosslinks: SKIP $*" >&2; skipped=$((skipped + 1)); }
+# Under `make verify`, a skip is also appended to its skip ledger, so verify's last line reports it.
+skip() {
+  echo "check-crosslinks: SKIP $*" >&2; skipped=$((skipped + 1))
+  if [ -n "${RELAY_VERIFY_SKIPS:-}" ]; then echo "check-crosslinks: $*" >> "$RELAY_VERIFY_SKIPS"; fi
+}
 
 # Where ADR citations are looked for. docs/adr/ itself is included for the phantom check and
 # excluded (--exclude-dir=adr) for the orphan check.

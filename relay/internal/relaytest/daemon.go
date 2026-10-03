@@ -44,12 +44,13 @@ type DaemonHandle struct {
 // until the process has started (not until it has enrolled/connected — that
 // sync point is the caller's own, e.g. polling a dispatcher or a devharness
 // socket). Skips the test if cfg.Bin is empty (RELAY_DAEMON_BIN unset — the
-// convention every e2e caller uses). The subprocess is killed and reaped via
+// convention every e2e caller uses), or fails it under RELAY_E2E_REQUIRED=1
+// (SkipMissingBin). The subprocess is killed and reaped via
 // t.Cleanup.
 func StartDaemon(t *testing.T, cfg DaemonConfig) *DaemonHandle {
 	t.Helper()
 	if cfg.Bin == "" {
-		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
+		SkipMissingBin(t, "RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
 	}
 
 	env := append(os.Environ(),

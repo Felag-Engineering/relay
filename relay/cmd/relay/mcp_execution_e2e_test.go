@@ -40,7 +40,7 @@ import (
 func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 	daemonBin := os.Getenv("RELAY_DAEMON_BIN")
 	if daemonBin == "" {
-		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
+		relaytest.SkipMissingBin(t, "RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
 	}
 
 	ctx := context.Background()

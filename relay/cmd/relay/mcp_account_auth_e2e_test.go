@@ -108,7 +108,7 @@ func (f *accountFleet) clientFor(credential string) *http.Client {
 func TestMCPAccountAuth_RoleLadder_E2E(t *testing.T) {
 	daemonBin := os.Getenv("RELAY_DAEMON_BIN")
 	if daemonBin == "" {
-		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
+		relaytest.SkipMissingBin(t, "RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
 	}
 	f := startAccountFleet(t, daemonBin)
 
@@ -194,7 +194,7 @@ func TestMCPAccountAuth_RoleLadder_E2E(t *testing.T) {
 func TestMCPAccountAuth_RevocationAndDisablement_E2E(t *testing.T) {
 	daemonBin := os.Getenv("RELAY_DAEMON_BIN")
 	if daemonBin == "" {
-		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
+		relaytest.SkipMissingBin(t, "RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
 	}
 	f := startAccountFleet(t, daemonBin)
 	ctx := context.Background()
@@ -315,7 +315,7 @@ func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 func TestMCPAccountAuth_AttributionLanes_E2E(t *testing.T) {
 	daemonBin := os.Getenv("RELAY_DAEMON_BIN")
 	if daemonBin == "" {
-		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
+		relaytest.SkipMissingBin(t, "RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
 	}
 	f := startAccountFleet(t, daemonBin)
 	ctx := context.Background()

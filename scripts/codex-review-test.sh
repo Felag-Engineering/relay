@@ -701,6 +701,9 @@ assert_cause_line_count_is "case-no-companion" 1
 c10_tmp="$WORKDIR/tmp-signal"
 if ! command -v setsid >/dev/null 2>&1 || ! setsid --wait true >/dev/null 2>&1; then
   echo "SKIP: case-signal-cleanup: setsid not available on this host; the signal trap is unproven here"
+  if [ -n "${RELAY_VERIFY_SKIPS:-}" ]; then
+    echo "codex-review-test: case-signal-cleanup (setsid not available)" >> "$RELAY_VERIFY_SKIPS"
+  fi
 else
   rm -rf "$c10_tmp"; mkdir -p "$c10_tmp"
   rm -f "$STUB_READY" "$STUB_PGID"

@@ -305,7 +305,7 @@ func skipUnlessFleetBins(t *testing.T) (relayBin, daemonBin string) {
 	relayBin = os.Getenv("RELAY_BIN")
 	daemonBin = os.Getenv("RELAY_DAEMON_BIN")
 	if relayBin == "" || daemonBin == "" {
-		t.Skip("RELAY_BIN and/or RELAY_DAEMON_BIN not set; skipping fleet e2e (run via make test-crossbinary)")
+		relaytest.SkipMissingBin(t, "RELAY_BIN and/or RELAY_DAEMON_BIN not set; skipping fleet e2e (run via make test-crossbinary)")
 	}
 	return relayBin, daemonBin
 }

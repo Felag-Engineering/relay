@@ -103,7 +103,7 @@ func stringSlicesEqual(a, b []string) bool {
 func startSurfaceHarness(t *testing.T) (deps *appDeps, nodeAddr, controlBase string, authed, plain *http.Client, credential string) {
 	t.Helper()
 	if os.Getenv("RELAY_DAEMON_BIN") == "" {
-		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
+		relaytest.SkipMissingBin(t, "RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
 	}
 
 	// baseTestConfig's enrollment limits (IPBurst: 3) suit the 1-2-Enroll
