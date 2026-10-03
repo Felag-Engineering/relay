@@ -106,10 +106,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"math"
 	"net/http"
 	"net/url"
-	"strconv"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
@@ -300,7 +298,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 			switch {
 			case isThrottled(err):
 				wait, _ := consoleauth.Throttled(err)
-				w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
+				setRetryAfter(w, wait)
 				renderDecideResult(w, pg, http.StatusTooManyRequests, decideResultView{Heading: throttleMessage(wait)})
 			case errors.Is(err, consoleauth.ErrBadCredentials):
 				renderDecideResult(w, pg, http.StatusUnauthorized, decideResultView{
