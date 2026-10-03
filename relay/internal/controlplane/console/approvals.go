@@ -276,7 +276,7 @@ func handleApprovals(d Deps) http.HandlerFunc {
 		ctx := r.Context()
 		reqs, err := d.Approvals.PendingApprovals(ctx)
 		if err != nil {
-			unavailable(w, "the approval queue (it returned an error)")
+			unreadable(w, "the approval queue")
 			return
 		}
 
@@ -1136,9 +1136,15 @@ func handleApproval(d Deps) http.HandlerFunc {
 			return
 		}
 		req, err := d.Approvals.Approval(r.Context(), id)
-		if err != nil {
+		switch {
+		case errors.Is(err, approval.ErrNotFound):
 			w.WriteHeader(http.StatusNotFound)
 			renderScreen(w, p, approvalTmpl, approvalView{ID: id})
+			return
+		case err != nil:
+			// A store failure is never reported as absence (the capability
+			// layer keeps approval.ErrNotFound distinct for exactly this).
+			unreadable(w, "this approval request")
 			return
 		}
 		// This card's trail reads — the park record, the anti-fatigue diff,
