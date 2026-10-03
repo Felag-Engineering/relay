@@ -20,7 +20,7 @@ shipped unit (`daemon/packaging/relay-daemon.service`) now **carries** the deriv
 by #224 (see [What the unit restricts](#what-the-unit-restricts) below). What this
 document does **not** yet cover is the LIVE apply-and-verify on a real systemd host —
 tracing the applied unit under load and confirming no legitimate syscall is denied — which
-remains **#224's** outstanding manual step.
+#224 (closed by PR #241) split out as its own outstanding manual step, tracked by **#246**.
 
 ## Why the daemon is privileged
 
@@ -112,7 +112,7 @@ Directive-by-directive, from `daemon/packaging/relay-daemon.service`:
   [Documented exceptions](#documented-exceptions)) overrides it to `=no` for its
   maintainer-script interpreters. **Live trace still pending:** applying these lines is
   done, but validating them against `pkg.install` and a Policy-permitted Raw Exec command
-  on a real systemd host is **#224's** outstanding manual step — see
+  on a real systemd host is the outstanding manual step tracked by **#246** — see
   [What the derivation did and did NOT cover](#what-the-derivation-did-and-did-not-cover-residual-risk)
   for the residual risk this leaves open.
 
@@ -142,7 +142,7 @@ CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER 
 # Conservative default: the base's inherited MemoryDenyWriteExecute=yes could
 # silently break a maintainer-script interpreter that needs W^X memory on the
 # very Nodes that opt into running pkg.install. This is a documented choice
-# PENDING the live trace (#224), not a verified fact — the live trace can
+# PENDING the live trace (#246), not a verified fact — the live trace can
 # promote this back to inheriting the base's =yes if it proves safe.
 MemoryDenyWriteExecute=no
 ```
@@ -443,7 +443,7 @@ A maintainer script or Raw Exec command that invokes a syscall **outside** `@sys
 (e.g. `@mount`, `quotactl`, a `@privileged`-only call, `bpf`) would be `SIGSYS`/`EPERM`'d
 under the candidate allowlist — unlike the `ProtectSystem` case, this is a **hard syscall
 block**, not a soft one. Only a **LIVE** `strace`/seccomp trace on a real systemd host (the
-**#224** follow-up) closes this gap. If a live trace shows a real, legitimate need outside
+#224 follow-up, **#246**) closes this gap. If a live trace shows a real, legitimate need outside
 `@system-service`, the fix is a targeted, trace-validated **additive**
 `SystemCallFilter=@mount` (or whichever specific group) line in the `pkg-install.conf`
 drop-in — never a speculative widening of the shipped base.
@@ -497,7 +497,7 @@ Docker containers, not under `systemd`, so neither path can be exercised there. 
 daemon under `relay-daemon.service` on an actual systemd host (with policy.toml and an
 Enrollment Token in place), confirming it enrolls, connects, and successfully executes
 `system.facts`, and running the tracing procedure below against every Operation — promoting
-the applied profile to a live-validated one — is the **outstanding manual step of #224**;
+the applied profile to a live-validated one — is the outstanding manual step tracked by **#246**;
 it is not something this repository's automated checks can currently run.
 
 ### #224 apply status
@@ -511,7 +511,8 @@ it is not something this repository's automated checks can currently run.
   `MemoryDenyWriteExecute=no` as the conservative default (see
   [Documented exceptions](#documented-exceptions)) — a documented choice pending the live
   trace, not a verified fact.
-- **[ ] Live-systemd verification run — REQUIRED, NOT YET DONE.** Human must, on a real
+- **[ ] Live-systemd verification run — REQUIRED, NOT YET DONE (#246).** #224 itself closed
+  with PR #241 and split this item out to #246. Human must, on a real
   systemd host: install the unit, enroll a Node, run all five Operations (`system.facts`,
   `file.read`, `service.restart`, `pkg.install`) + a permitted Raw Exec under the filter,
   confirm none break (esp. `pkg.install` maintainer scripts + Raw Exec, the two surfaces
@@ -519,7 +520,7 @@ it is not something this repository's automated checks can currently run.
 
 ### Live tracing procedure (real systemd host)
 
-The reproducible procedure a human runs on a real systemd host to close out #224 and
+The reproducible procedure a human runs on a real systemd host to close out #246 and
 validate the applied profile. The same content lives, verbatim, as a commented
 (never-executed) block in `scripts/daemon-privilege-audit.sh`, so the procedure travels
 with the repo rather than only this doc.
@@ -589,7 +590,7 @@ systemd 257 (see [#224 apply status](#224-apply-status)). **The drop-in `MemoryD
 stance: DECIDED** — `=no`, pending live confirmation (see
 [Documented exceptions](#documented-exceptions)).
 
-What **remains** for **#224**: run the
+What **remains** — split out of #224 into **#246**: run the
 [live tracing procedure](#live-tracing-procedure-real-systemd-host) on a real systemd host to
 confirm no legitimate syscall is denied — especially package-manager maintainer scripts and a
 representative Policy-permitted Raw Exec command, the two surfaces this audit explicitly could
