@@ -164,7 +164,7 @@ proto gates.
 | QRY-1 | `TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead` (the negative half only, over the Control API's own route table rather than the composed mux, by a route-name heuristic; the positive half rests on QRY-3's, QRY-7's and QRY-11's rows) | API |
 | QRY-2 | `TestMCP_ListNodes_All`, `TestMCP_ListNodes_StateLabels`, `TestHandleGetNode_StateLabels` | MCP, API |
 | QRY-3 | Ordering half, empty Selector only: `TestListNodes_ReturnsMatchesInNodeIdOrder` (lane) and `TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder` (MCP, seeded out of ID order). Rest of the claim: `TestMCP_ListNodes_SelectorFilter`, `TestMCP_ListNodes_All` | capability, MCP |
-| QRY-4 | `TestConnected_IsNotInferredFromLastSeen` | registry |
+| QRY-4 | `Connected_IsNotInferredFromLastSeen` in the shared registry conformance suite, run as `TestRepositoryConformance` (in-memory) and `TestSQLiteRegistryConformance` (SQLite store) | registry, store |
 | QRY-5 | `TestDescribeNode_CountsFingerprintPeersAndSkipsEmptyFingerprints` (the lane's arithmetic and empty-fingerprint skip); `TestNode_FingerprintPanelReportsThePeerCounts` (a real lane's counts reach the Node-detail screen); `TestMCP_DescribeNode_ReportsNoFingerprintPeerCounts` (pins today's MCP gap, which is *Future work*, not a prohibition) | capability, Console, MCP |
 | QRY-6 | `TestMCP_ListOperations_PerNode`, `TestMCP_DescribeNode` | MCP |
 | QRY-7 | `TestMCP_DescribeNode` | MCP |

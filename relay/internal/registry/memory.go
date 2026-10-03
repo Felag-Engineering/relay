@@ -314,15 +314,14 @@ func (r *InMemory) List() []Node {
 // copyNode returns a deep copy of n so callers cannot mutate stored state
 // through a returned value, with Outdated computed against the registry's
 // configured minDaemonVersion (ADR-0014; derived on read, never stored).
+//
+// It is the single read-back path behind Upsert, Get and List, as getNode is
+// for the SQLite store, and like getNode it serves both label namespaces
+// through wellFormedLabels: a stored pair WellFormedLabel refuses is declined
+// on read (#504/#555).
 func (r *InMemory) copyNode(n *Node) Node {
-	nl := maps.Clone(n.NodeLabels)
-	if nl == nil {
-		nl = map[string]string{}
-	}
-	rl := maps.Clone(n.RelayLabels)
-	if rl == nil {
-		rl = map[string]string{}
-	}
+	nl := wellFormedLabels(n.NodeLabels)
+	rl := wellFormedLabels(n.RelayLabels)
 	return Node{
 		NodeID:                 n.NodeID,
 		CertFingerprint:        n.CertFingerprint,
@@ -345,6 +344,24 @@ func (r *InMemory) copyNode(n *Node) Node {
 		// because there is no stored record — see Node.Connected.
 		Connected: r.isConnected(n.NodeID),
 	}
+}
+
+// wellFormedLabels returns a new, non-nil map holding only the pairs of
+// labels that WellFormedLabel accepts. It mirrors the SQLite store's
+// read-back filter of the same name pair for pair, so the fake declines
+// exactly what production declines: "decline to serve, never write"
+// (#504/#555). The stored map is never modified. Each namespace's own writer
+// owns its storage (invariant 7, ADR-0006): the Relay declining to serve a
+// value is not the same act as rewriting it. The store's filter also counts
+// what it declines for /metrics. The fake has no metrics, so it only filters.
+func wellFormedLabels(labels map[string]string) map[string]string {
+	out := make(map[string]string, len(labels))
+	for k, v := range labels {
+		if WellFormedLabel(k, v) {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // isConnected reports whether nodeID currently holds a Tunnel. Callers hold at
