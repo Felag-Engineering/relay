@@ -19,7 +19,7 @@ Gleipnir authenticates with, the human approver, the scripted bypass beat, the f
 
 This is containers on a laptop, not a production deployment. Every warning in
 [dev-fleet.md](../dev-fleet.md)'s **DEV-ONLY** banner applies here, with more force: nine Nodes
-sit behind the very same committed dev credential, the control plane is loopback-only, and every
+sit behind the very same committed default Console password, the control plane is loopback-only, and every
 container shares one kernel. This section makes no hardening claims. It is worth saying anyway,
 because the Node's refusal in the bypass beat below is produced by the same relay-daemon Policy
 engine whether it runs in a container on a laptop or on a server in a datacenter — the posture

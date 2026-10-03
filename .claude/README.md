@@ -9,6 +9,7 @@ commands/dev-loop-queue.md   routine: one loop:ready issue per tick, no merge wa
 commands/pr-respond.md       routine: address human review comments on an open loop PR
 commands/dev-loop.md         the pipeline the queue invokes, in --non-interactive mode
 commands/dev-loop-parallel.md interactive: up to 3 issues at once, one dev-loop-runner per worktree
+commands/dev-loop-drive.md   interactive, under /loop: a milestone in strict waves of PRs
 commands/spec-author.md      interactive: co-author a spec, ADR, glossary entry or invariant
 commands/spec-check.md       interactive: docs-only conflict check for a changed spec
 commands/spec-drift.md       interactive: classify a spec's claims as built or unbuilt
@@ -28,11 +29,12 @@ The chain these form, and who may touch what, is `docs/agents/workflow.md`.
 ## What is vendored, and why
 
 Everything on the chain in `docs/agents/workflow.md` lives here, because a cloud routine sees
-only the tree. The two unattended commands (`dev-loop-queue`, `pr-respond`) grant no `Skill`
-tool and no `AskUserQuestion`; the interactive ones (`spec-author`, `design`, `decompose`,
-`milestone-close`) do, and are never scheduled. Subagents get the narrowest tool set their job
-needs — reviewers cannot edit, the developer cannot commit, the proof updater can edit only a
-spec's evidence rows.
+only the tree. The two unattended commands (`dev-loop-queue`, `pr-respond`) grant no
+`AskUserQuestion`; `dev-loop-queue` grants `Skill` only to invoke `/dev-loop`, and `pr-respond`
+grants no `Skill` at all. The interactive ones (`spec-author`, `design`, `decompose`,
+`milestone-close`) grant `AskUserQuestion`, and are never scheduled. Subagents get the
+narrowest tool set their job needs — reviewers cannot edit, the developer cannot commit, the
+proof updater can edit only a spec's evidence rows.
 
 Codex is the second reviewer on the design gate and once per issue on the final diff, reached
 through `scripts/codex-review.sh`, read-only. When it returns no structured verdict the gate

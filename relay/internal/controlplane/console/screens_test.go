@@ -447,6 +447,60 @@ func TestApprovals_EmptyQueueSaysSoPlainly(t *testing.T) {
 	}
 }
 
+// TestApproval_UnknownIDIsNotFound — approval.ErrNotFound, and only that, is
+// the 404 that says no such Request exists.
+func TestApproval_UnknownIDIsNotFound(t *testing.T) {
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{}
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-nope")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for an id the store does not hold", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "No approval request with the id") {
+		t.Error("an unknown approval id did not say no such request exists")
+	}
+}
+
+// TestApproval_StoreFailureIsNotReportedAsAbsent — a Request the store could
+// not read may exist and may be pending; calling it absent tells an approver
+// there is nothing to decide.
+func TestApproval_StoreFailureIsNotReportedAsAbsent(t *testing.T) {
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{
+		pending:     []approval.Request{pendingApprovalRequest("ap-1")},
+		approvalErr: errQueryFailed,
+	}
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-1")
+	body := rec.Body.String()
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 — a store failure is not a 404", rec.Code)
+	}
+	if strings.Contains(body, "No approval request with the id") {
+		t.Error("a failed approval read was reported as the Request not existing")
+	}
+	if !strings.Contains(body, "could not be read") {
+		t.Error("a failed approval read does not say it could not be read")
+	}
+}
+
+// TestApprovals_QueueStoreFailureIsNotCalledUnwired — a wired queue that
+// failed is a runtime fault, never the "not wired" configuration page.
+func TestApprovals_QueueStoreFailureIsNotCalledUnwired(t *testing.T) {
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pendingErr: errQueryFailed}
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals")
+	body := rec.Body.String()
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+	if strings.Contains(body, "was not wired") {
+		t.Error("a failed queue read was reported as an unwired seam")
+	}
+	if !strings.Contains(body, "could not be read") {
+		t.Errorf("a failed queue read does not say it could not be read: %q", body)
+	}
+}
+
 // TestBanner_FreezeStatesWhatIsStillTrue — an emergency stop that reads as a
 // total outage gets released in a panic by the next person to look at it.
 func TestBanner_FreezeStatesWhatIsStillTrue(t *testing.T) {

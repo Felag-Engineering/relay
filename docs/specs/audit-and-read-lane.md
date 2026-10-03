@@ -194,7 +194,7 @@ Claims above with **no row**, and so nothing checking them:
 | Paged audit, Job, and Task reads | A caller receives at most the effective bounded page limit and a cursor for a later page | *(none)* |
 | Audit aggregates | A caller must supply a bounded time window; the lane floors the bucket to its minimum | *(none)* |
 | Read audit writes | One access record is written per non-dispatching read or capability query; one event-subscription record covers its whole subscription | *(none)* |
-| Large audit-write actions | Audit persistence currently appends individual records; token-revocation cascade batching is tracked by #563 | *(none)* |
+| Large audit-write actions | The token-revocation cascade appends its per-Node audit records all-or-nothing, one transaction per bounded chunk of Nodes rather than one per Node (#563) | *(none)* |
 
 ## Out of scope
 

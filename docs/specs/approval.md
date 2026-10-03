@@ -568,6 +568,7 @@ covers every row below; the end-to-end rows additionally need `make test-integra
 | AP-33 | `TestCreateGrant_RefusesTheRetiredSelectorNamespace` | API |
 | AP-34 | `TestApprovalGrant_RequesterCannotApproveTheirOwnWindow` | e2e |
 | AP-35 | `TestRequestGrantDerivesTheStrictestRequirement` | capability |
+| AP-36 | `TestClaimGrantNeverExceedsItsBoundUnderConcurrency` | store |
 | AP-37 | `TestGrantIsConsultedOnlyAfterTheGate`, `TestGrantNeverBypassesTheBlastCap`, `TestExhaustedGrantParksAgain`, `TestRevokedGrantCoversNothing`, `TestUncoveredDispatchStillParks`, `TestApprovalGrant_RevokeClosesTheWindowImmediately` | capability, approval, e2e |
 | AP-38 | `TestARefusingEndpointIsSurvivable`, `TestNotifyParkedDoesNotBlock` | approval |
 | AP-40 | `TestAttribution_LanesAreStructurallySeparate` | capability |
@@ -575,6 +576,7 @@ covers every row below; the end-to-end rows additionally need `make test-integra
 | AP-42 | `TestExpiredRequestIsNotDecidableOrSatisfiable` | approval |
 | AP-43 | `TestRequesterCannotApproveOwnRequest`, `TestApprovalGrant_RequesterCannotApproveTheirOwnWindow` | approval, e2e |
 | AP-44 | `TestAudienceIsEnforced` | approval |
+| AP-45 | `TestQuorumNeedsDistinctDeciders`, `TestRecordDecisionRejectsDuplicateDecider`, `TestDecideApproval_DuplicateDeciderReturnsTheCurrentRequest` | approval, store, capability |
 | AP-46 | `TestDecisionMustCiteTheRequestsPlanHash` | capability |
 | AP-47 | `TestWeakChannelIsRefused`, `TestWeakChannelIsRefusedForDenialsToo` | approval |
 | AP-48 | `TestApprovalCallout_MachineCannotSatisfyItsOwnGate`, `TestMachineCannotConfirmItself` | e2e, approval |
@@ -582,6 +584,7 @@ covers every row below; the end-to-end rows additionally need `make test-integra
 | AP-50 | `TestRequestGrantRefusesWhenNothingIsGated` | capability |
 | AP-51 | `TestRequestGrantRefusesUnboundedScopes`, `TestEveryScopeBoundIsRequired` | capability, approval |
 | AP-52 | `TestCreateGrant_RefusesTheRetiredSelectorNamespace` | API |
+| AP-53 | `TestGrantWindowCannotExceedTheHardMaximum`, `TestRequestGrantRefusesUnboundedScopes` | approval, capability |
 | AP-54 | `TestLoadFailsClosed` | approval |
 | AP-60 | `TestCompositionRoot_EnablesElicitation`, `TestMCPElicitation_ApproveRunsTheJobAndReturnsResults`, `TestElicit_AskableParkFromMRTRClientGetsAQuestion` | e2e |
 | AP-61 | `TestMCPElicitation_RequesterExcludedAndAudienceRestrictedNeverAsk`, `TestMCPElicitation_OutOfBandRuleNeverAsks` | e2e |
@@ -614,16 +617,14 @@ Claims with **no row**, and so nothing checking them:
   not the carve-out. That a grant-shaped request renders no decision control at all, and is
   answered only on the Control API, is an unchecked box on the Console screen's own specification
   and nothing asserts it here.
-- **AP-31**, **AP-53** — the 24-hour cap and its refusal exist in code; no test names the cap.
+- **AP-31** — a window past the hard cap is refused (AP-53's row), but no test names the cap's
+  value: nothing asserts that it is 24 hours rather than any other duration.
 - **AP-32** — that a one-approval in-band grant is representable is the *absence* of a floor.
   Nothing asserts an absence.
-- **AP-36** — the claim is enforced by a conditional update inside one transaction; no test races
-  two claims against one grant.
 - **AP-39** — the two lanes are proven structurally separate (AP-40), but **no end-to-end test
   drives `approve_request` and then checks the two columns**: that the verified lane holds the
   calling Account and never the asserted string, and that the asserted approver reached
   `on_behalf_of` and nowhere else. The claim that matters most here is the one nothing walks.
-- **AP-45** — the duplicate-decider sentinel exists; no test names it.
 - **AP-12**, surface half — the Control API is proven not to take a channel from the body; MCP and
   the Console are not asserted the same way.
 - **AP-38**, guarantee half — the webhook's best-effort behaviour is proven; that a park

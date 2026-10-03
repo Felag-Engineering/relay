@@ -80,21 +80,34 @@ type fakeApprovals struct {
 
 	grantsErr error
 
+	// pendingErr and approvalErr fail the queue read and the one-record read
+	// as a wired store would: a runtime failure, not an absence.
+	pendingErr  error
+	approvalErr error
+
 	// shapeCalls counts LastApprovedOfSameShape calls.
 	shapeCalls int
 }
 
 func (f *fakeApprovals) PendingApprovals(context.Context) ([]approval.Request, error) {
+	if f.pendingErr != nil {
+		return nil, f.pendingErr
+	}
 	return f.pending, nil
 }
 
+// Approval returns the real sentinel for an unknown id, as the capability
+// layer does, so a test can tell "no such Request" from a store failure.
 func (f *fakeApprovals) Approval(_ context.Context, id string) (approval.Request, error) {
+	if f.approvalErr != nil {
+		return approval.Request{}, f.approvalErr
+	}
 	for _, r := range append(append([]approval.Request(nil), f.pending...), f.resolved...) {
 		if r.ID == id {
 			return r, nil
 		}
 	}
-	return approval.Request{}, errNotFound
+	return approval.Request{}, approval.ErrNotFound
 }
 
 // LastApprovedOfSameShape mirrors the store's own predicate rather than

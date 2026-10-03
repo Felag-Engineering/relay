@@ -150,35 +150,50 @@ The unit reads `/etc/relay/relay.env` (`0640 root:relay`), which holds no secret
 *values* — every credential is a file path — but does hold the security floor
 (invariant 11): whoever can edit it can lower that floor at the next restart.
 
-The abbreviated unit below shows the shape; the packaged file is the one to install.
+The packaged unit's directives are reproduced below with its comments stripped. The
+comments carry the reasoning for each setting, so install the packaged file, not a copy
+of this block.
 
 ```ini
 [Unit]
-Description=Relay (fleet-administration control plane server)
+Description=Relay (fleet-administration control plane)
+Documentation=file:///usr/share/doc/relay/relay-install.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=exec
-# Dedicated unprivileged user; StateDirectory gives it /var/lib/relay.
 User=relay
 Group=relay
-StateDirectory=relay
-StateDirectoryMode=0700
-# Configuration lives in /etc/relay/relay.env — see relay/packaging/relay.env.example.
-EnvironmentFile=-/etc/relay/relay.env
 ExecStart=/usr/local/bin/relay
+EnvironmentFile=-/etc/relay/relay.env
 Restart=on-failure
 RestartSec=5s
-
-# Hardening (the Relay spawns no child processes and needs no capabilities).
+StateDirectory=relay
+StateDirectoryMode=0700
 NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-CapabilityBoundingSet=
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+PrivateDevices=yes
+RestrictSUIDSGID=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
 SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6
+TasksMax=512
 
 [Install]
 WantedBy=multi-user.target
@@ -193,7 +208,8 @@ $ systemctl status relay
 ```
 
 The control plane comes up with no usable credential until you mint one. Run
-`relay bootstrap-token` on this host and switch your callers to the printed token —
+`relay bootstrap-token -store-path /var/lib/relay/relay.db` on this host (the same path as
+`RELAY_STORE_PATH` in `relay.env`) and switch your callers to the printed token —
 see [control-plane-credential.md](control-plane-credential.md). If the Admin Console is
 enabled, set the first human password with `relay console-password` the same way.
 

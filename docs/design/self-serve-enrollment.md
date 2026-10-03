@@ -28,13 +28,13 @@ unreviewed regardless of sequencing.
 
 | Existing | Becomes | Note |
 |---|---|---|
-| #398 — ADR: what belongs in the `relay` binary | **satisfied by ADR-0030** | Close against the ADR |
+| #398 — ADR: what belongs in the `relay` binary | **satisfied by ADR-0030** | Close against the ADR — *done: closed 2026-09-17; ADR-0030 landed in PR #411* |
 | #400 — `relay init` | **E4** | Scope unchanged; now depends on E2 + E3 |
 | #401 — the join command | **E5 + E6** | Split: daemon-side verification, then steady-state address |
 | #399 — container image | **E9** | Unchanged |
 | #402 — quickstart | **E12** | Unchanged |
 | #361 — thin Ansible role (`v0.4.0` [6/7]) | **closed as superseded** | E3 renders the same playbook from the capability layer (owner decision, 2026-08-18) |
-| #397 — enrollment mint has no role gate | **prerequisite of E3** | Rendering on top of an ungated mint would wrap a privilege escalation in a convenience |
+| #397 — enrollment mint has no role gate | **prerequisite of E3** — *resolved: closed by PR #447, 2026-08-25* | Rendering on top of an ungated mint would wrap a privilege escalation in a convenience |
 
 ---
 
@@ -75,13 +75,14 @@ This predates every other decision here and blocks nothing. It should not wait.
 - Startup logs the CA fingerprint and the leaf fingerprint, labelled distinctly.
 
 ### E3 · Enrollment bundle rendering
-**ADR-0032 · escalate: Control API + auth · depends on #397**
+**ADR-0032 · escalate: Control API + auth · depends on #397 (resolved: PR #447)**
 
 - `render: []` on `POST /api/v1/enrollment-tokens`; `renderings` in the response.
 - Formats `join`, `ansible`, `shell`. Renderer is a pure function of join string, scope,
   and expiry.
 - `admin`-gated — **which requires #397 first.** The gate does not exist today; a `viewer`
-  can mint a token that stamps `relay:` labels.
+  can mint a token that stamps `relay:` labels. *(Resolved: PR #447 role-gated the mint and
+  closed #397 on 2026-08-25.)*
 - The `ansible` rendering pins a daemon version + SHA-256 baked into the Relay build
   (ADR-0032 §6), rendered into `get_url` + `checksum` so verify-then-install survives.
 - The `ansible` rendering inlines the token (ADR-0030, interim) and carries its expiry in
