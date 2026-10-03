@@ -287,50 +287,109 @@ pub fn lookup_in<'r>(entries: &'r [OpRegistration], name: &str) -> Option<&'r Op
 // verbatim (issue #289 pure refactor; no behavior change).
 // ---------------------------------------------------------------------------
 
+// The data-only Natives (`system.facts`, `file.read`) spawn no process, but
+// their work is blocking syscalls — file reads, getifaddrs(3) — that a hung
+// mount can stall indefinitely. They run that work on the blocking pool
+// (`run_blocking`), never on a tokio worker thread the tunnel and heartbeat
+// share, and bound it by the Task's remaining wall-clock budget
+// (`within_task_timeout`, ADR-0004). Cancel is irrelevant to them: there is no
+// process group to kill, and the receiver drops with the context.
+
 fn system_facts_handler(ctx: OpCtx<'_>) -> OpFuture<'_> {
     Box::pin(async move {
-        // Data-only: no process spawned; cancel is irrelevant.
-        let _ = ctx.cancel;
-        // KNOWN LIMITATION: gather_facts calls fs::read_to_string (blocking)
-        // and libc::getifaddrs (blocking syscall) inside this async context.
-        // Safe for v0.0.3 single-flight; move to spawn_blocking in v0.0.4
-        // (mirrors executor.rs:117-120).
-        let facts = gather_facts();
-        TaskResult {
-            task_id: ctx.task_id,
-            outcome: Outcome::Success as i32,
-            exit_code: 0,
-            stdout: format_facts_as_kv(&facts),
-            stderr: vec![],
-            truncated: false,
-            duration_millis: 0,
-        }
+        let OpCtx {
+            task_id, timeout, ..
+        } = ctx;
+        let work = async {
+            let stdout = run_blocking(|| format_facts_as_kv(&gather_facts())).await;
+            TaskResult {
+                task_id: task_id.clone(),
+                outcome: Outcome::Success as i32,
+                exit_code: 0,
+                stdout,
+                stderr: vec![],
+                truncated: false,
+                duration_millis: 0,
+            }
+        };
+        within_task_timeout(&task_id, timeout, work).await
     })
 }
 
 fn file_read_handler(ctx: OpCtx<'_>) -> OpFuture<'_> {
     Box::pin(async move {
-        // Data-only: no process spawned; cancel is irrelevant.
-        let _ = ctx.cancel;
-        // KNOWN LIMITATION: file_read calls std::fs::File::open (blocking)
-        // inside this async context. Safe for v0.0.3 single-flight; move to
-        // spawn_blocking in v0.0.4 (mirrors executor.rs:117-120).
-        let path = ctx.positional.first().map(String::as_str).unwrap_or("");
-        let policy = ctx.policy;
+        let OpCtx {
+            task_id,
+            positional,
+            timeout,
+            max_output_bytes,
+            policy,
+            ..
+        } = ctx;
+        let path = positional.into_iter().next().unwrap_or_default();
         // ADR-0018 layer 2: file_read resolves the target it opens and calls
         // back here to re-evaluate Policy on the RESOLVED path, closing
         // `/proc`-magic and symlink evasions that are canonical in form and
         // so pass layer 1.
-        file_read(
-            &ctx.task_id,
+        let work = file_read(
+            task_id.clone(),
             path,
-            ctx.max_output_bytes,
+            max_output_bytes,
             |resolved| match policy.evaluate(super::FILE_READ, &[resolved.to_string()]) {
                 Decision::Deny { reason, .. } => PathCheck::Denied(reason),
                 Decision::Allow(_) => PathCheck::Allowed,
             },
-        )
+        );
+        within_task_timeout(&task_id, timeout, work).await
     })
+}
+
+/// Runs blocking work on tokio's blocking pool and returns its value, keeping
+/// it off the async worker threads (see the data-only Natives above).
+///
+/// A panic in `work` is resumed on the caller, exactly as if `work` had run
+/// inline. The blocking pool only fails to run `work` when the runtime is
+/// shutting down, which takes the Task with it.
+pub(crate) async fn run_blocking<T, F>(work: F) -> T
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::task::spawn_blocking(work).await {
+        Ok(value) => value,
+        Err(err) => match err.try_into_panic() {
+            Ok(panic) => std::panic::resume_unwind(panic),
+            Err(err) => panic!("blocking work did not run: {err}"),
+        },
+    }
+}
+
+/// Bounds a data-only Native's `work` by the Task's remaining wall-clock
+/// budget (ADR-0004).
+///
+/// On expiry the Task reports `OUTCOME_TIMEOUT` with exit code `-1` and no
+/// output — the outcome a timed-out command reports. The blocking syscall
+/// itself cannot be interrupted, so its blocking-pool thread stays occupied
+/// until the kernel returns; but the Task, its concurrency permit and the
+/// async worker threads are all released on time.
+async fn within_task_timeout(
+    task_id: &str,
+    timeout: Duration,
+    work: impl Future<Output = TaskResult>,
+) -> TaskResult {
+    let started = tokio::time::Instant::now();
+    match tokio::time::timeout(timeout, work).await {
+        Ok(result) => result,
+        Err(_elapsed) => TaskResult {
+            task_id: task_id.to_string(),
+            outcome: Outcome::Timeout as i32,
+            exit_code: -1,
+            stdout: vec![],
+            stderr: vec![],
+            truncated: false,
+            duration_millis: started.elapsed().as_millis() as i64,
+        },
+    }
 }
 
 fn service_restart_handler(ctx: OpCtx<'_>) -> OpFuture<'_> {
@@ -407,6 +466,48 @@ mod tests {
 
     use super::*;
     use crate::operations::schema::{OP_ARG_NAME, OP_ARG_PATH, OP_ARG_UNIT, OP_ARG_VERSION};
+
+    // A data-only Native whose blocking work hangs — standing in for a read on a
+    // hung mount — reports OUTCOME_TIMEOUT at the Task's timeout, and the
+    // runtime keeps serving other Tasks meanwhile. `#[tokio::test]` is a
+    // single-threaded runtime: before the fix the work ran inline on that one
+    // thread, so the timer could not fire, nothing else could run, and the
+    // Task returned SUCCESS only once the work gave up after 5 s.
+    #[tokio::test]
+    async fn hung_blocking_work_times_out_without_stalling_the_runtime() {
+        let (release, hung) = std::sync::mpsc::channel::<()>();
+        // Another Task's work, on the same single-threaded runtime.
+        let other = tokio::spawn(tokio::task::yield_now());
+
+        let started = std::time::Instant::now();
+        let result = within_task_timeout("t-hung", Duration::from_millis(200), async {
+            run_blocking(move || {
+                let _ = hung.recv_timeout(Duration::from_secs(5));
+                TaskResult {
+                    task_id: "t-hung".to_string(),
+                    outcome: Outcome::Success as i32,
+                    ..Default::default()
+                }
+            })
+            .await
+        })
+        .await;
+        let elapsed = started.elapsed();
+        let other_ran = other.is_finished();
+        let _ = release.send(()); // let the blocked thread go
+
+        assert_eq!(result.outcome, Outcome::Timeout as i32);
+        assert_eq!(result.exit_code, -1);
+        assert!(result.stdout.is_empty());
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "the Task must end at its timeout, not when the blocking work does: {elapsed:?}"
+        );
+        assert!(
+            other_ran,
+            "another Task must run while the blocking work is stuck"
+        );
+    }
 
     fn op(name: &str, args: &[(&str, &str)]) -> Operation {
         Operation {

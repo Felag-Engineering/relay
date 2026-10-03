@@ -22,6 +22,7 @@ use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 
+use super::registry::run_blocking;
 use crate::gen::{Outcome, TaskResult};
 use crate::not_executed::{denied_by_policy_result, not_executed};
 
@@ -71,20 +72,49 @@ pub fn read_capped_from(f: std::fs::File, cap: usize) -> std::io::Result<(Vec<u8
 /// On success the file's bytes (up to `cap`) appear in `stdout` with
 /// `truncated` set appropriately. On any I/O error the result is
 /// `OUTCOME_FAILURE` with the error message in `stderr`.
-pub fn file_read(
-    task_id: &str,
-    path: &str,
+///
+/// # Off the async worker threads
+///
+/// Opening, resolving and reading are blocking syscalls that a hung mount can
+/// stall indefinitely, so each runs on the blocking pool ([`run_blocking`]),
+/// never on a tokio worker thread that the tunnel and heartbeat share. Only
+/// `recheck` — a pure, in-memory Policy evaluation — runs in between on the
+/// async side, which is what lets it borrow the live Policy. The descriptor
+/// is moved from the open to the read, so the check-to-read guarantee above
+/// is unchanged. The caller bounds the whole by the Task's timeout.
+pub async fn file_read(
+    task_id: String,
+    path: String,
     cap: usize,
     recheck: impl FnOnce(&str) -> PathCheck,
 ) -> TaskResult {
+    let opened = {
+        let (task_id, path) = (task_id.clone(), path.clone());
+        run_blocking(move || open_and_resolve(&task_id, &path)).await
+    };
+    let (f, resolved) = match opened {
+        Ok(opened) => opened,
+        Err(result) => return result,
+    };
+    if let PathCheck::Denied(reason) = recheck(&resolved) {
+        return denied_by_policy(&task_id, &reason);
+    }
+    run_blocking(move || read_opened(&task_id, &path, f, cap)).await
+}
+
+/// Opens `path` and resolves the target the descriptor actually points at
+/// (ADR-0018 layer 2). Blocking. `Err` is the Task's final result: a failed
+/// open, a non-regular file, or an unresolvable target (denied, fail-closed).
+fn open_and_resolve(task_id: &str, path: &str) -> Result<(std::fs::File, String), TaskResult> {
     // Open non-blocking so a FIFO with no writer (or any other file whose
     // `open(2)` would block) returns a descriptor immediately instead of
-    // hanging this thread forever — `file.read` has no timeout, so a blocking
-    // open is an unbounded stall reachable through any Policy-allowed path
-    // directory that an attacker can drop a FIFO into. `O_NONBLOCK` has no
-    // effect on reads from a regular file, so the capped-read path below is
-    // unchanged for the only case we ultimately serve. `O_NOCTTY` prevents a
-    // TTY path from becoming this process's controlling terminal.
+    // hanging a blocking-pool thread forever — the Task's timeout ends the
+    // Task but cannot interrupt the syscall, so a blocking open would still pin
+    // that thread, through any Policy-allowed path directory an attacker can
+    // drop a FIFO into. `O_NONBLOCK` has no effect on reads from a regular
+    // file, so the capped-read path below is unchanged for the only case we
+    // ultimately serve. `O_NOCTTY` prevents a TTY path from becoming this
+    // process's controlling terminal.
     //
     // Deliberately NOT `O_NOFOLLOW`: the ADR-0018 design opens the path
     // (following symlinks), reads the resolved target back off the descriptor,
@@ -96,7 +126,7 @@ pub fn file_read(
         .open(path)
     {
         Ok(f) => f,
-        Err(e) => return read_failure(task_id, path, &e),
+        Err(e) => return Err(read_failure(task_id, path, &e)),
     };
 
     // Refuse anything that is not a regular file. A FIFO/socket would make the
@@ -107,28 +137,27 @@ pub fn file_read(
     // is no second path lookup and no TOCTOU with the open above.
     match f.metadata() {
         Ok(meta) if meta.is_file() => {}
-        Ok(_) => return not_regular_file_failure(task_id, path),
-        Err(e) => return read_failure(task_id, path, &e),
+        Ok(_) => return Err(not_regular_file_failure(task_id, path)),
+        Err(e) => return Err(read_failure(task_id, path, &e)),
     }
 
-    // Resolve the path the descriptor actually points at, then re-check it.
-    let resolved = match std::fs::read_link(format!("/proc/self/fd/{}", f.as_raw_fd())) {
-        Ok(p) => p.to_string_lossy().into_owned(),
+    // Resolve the path the descriptor actually points at, for the re-check.
+    match std::fs::read_link(format!("/proc/self/fd/{}", f.as_raw_fd())) {
+        Ok(p) => Ok((f, p.to_string_lossy().into_owned())),
         // Fail closed: if the resolved target cannot be determined, refuse.
-        Err(e) => {
-            return denied_by_policy(
-                task_id,
-                &format!(
-                    "cannot resolve opened path {path:?} for policy re-check (ADR-0018): {}",
-                    crate::config::clean_io_error(&e)
-                ),
-            )
-        }
-    };
-    if let PathCheck::Denied(reason) = recheck(&resolved) {
-        return denied_by_policy(task_id, &reason);
+        Err(e) => Err(denied_by_policy(
+            task_id,
+            &format!(
+                "cannot resolve opened path {path:?} for policy re-check (ADR-0018): {}",
+                crate::config::clean_io_error(&e)
+            ),
+        )),
     }
+}
 
+/// Reads up to `cap` bytes from `f`, the descriptor [`open_and_resolve`] opened
+/// and the re-check cleared. Blocking.
+fn read_opened(task_id: &str, path: &str, f: std::fs::File, cap: usize) -> TaskResult {
     match read_capped_from(f, cap) {
         Ok((bytes, truncated)) => TaskResult {
             task_id: task_id.to_string(),
@@ -230,10 +259,10 @@ mod tests {
     // file_read wrapper: missing path → OUTCOME_FAILURE, exit -1, stderr set
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn file_read_missing_path_is_failure() {
+    #[tokio::test]
+    async fn file_read_missing_path_is_failure() {
         let path = "/nonexistent/relay-test-file-read";
-        let result = file_read("t1", path, 1024, |_| PathCheck::Allowed);
+        let result = file_read("t1".into(), path.into(), 1024, |_| PathCheck::Allowed).await;
         assert_eq!(
             result.outcome,
             Outcome::Failure as i32,
@@ -288,12 +317,17 @@ mod tests {
         }
         let _guard = FifoGuard(path.clone());
 
-        // Run on a worker thread so a regression (a blocking open) surfaces as a
-        // test timeout rather than a silent hang of the whole suite.
+        // Run on a separate thread with its own runtime so a regression (a
+        // blocking open) surfaces as a test timeout rather than a silent hang of
+        // the whole suite — a runtime waits for its blocking-pool threads when it
+        // is dropped, so this test's own runtime could not be the one stuck.
         let p = path.to_str().unwrap().to_string();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let result = file_read("t-fifo", &p, 1024, |_| PathCheck::Allowed);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("build a test runtime");
+            let result = rt.block_on(file_read("t-fifo".into(), p, 1024, |_| PathCheck::Allowed));
             let _ = tx.send(result);
         });
 
@@ -318,13 +352,11 @@ mod tests {
     // target is denied is refused before any bytes are read.
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn resolved_target_recheck_allows_normal_read() {
+    #[tokio::test]
+    async fn resolved_target_recheck_allows_normal_read() {
         let content = b"ok";
         let tmp = TempFile::new("recheck-allow", content);
-        let result = file_read("t", tmp.path().to_str().unwrap(), 1024, |_| {
-            PathCheck::Allowed
-        });
+        let result = file_read("t".into(), tmp.path_str(), 1024, |_| PathCheck::Allowed).await;
         assert_eq!(
             result.outcome,
             Outcome::Success as i32,
@@ -334,8 +366,8 @@ mod tests {
         assert_eq!(result.stdout, content);
     }
 
-    #[test]
-    fn resolved_target_recheck_denies_symlinked_deny_target() {
+    #[tokio::test]
+    async fn resolved_target_recheck_denies_symlinked_deny_target() {
         use std::os::unix::fs::symlink;
 
         // A real target, plus a symlink whose NAME would slip an exact-string
@@ -356,13 +388,15 @@ mod tests {
         }
         let _guard = LinkGuard(link.clone());
 
-        let result = file_read("t", link.to_str().unwrap(), 1024, |resolved| {
+        let link_path = link.to_str().unwrap().to_string();
+        let result = file_read("t".into(), link_path, 1024, |resolved| {
             if resolved == real {
                 PathCheck::Denied("resolved to a denied target".to_string())
             } else {
                 PathCheck::Allowed
             }
-        });
+        })
+        .await;
 
         assert_eq!(
             result.outcome,

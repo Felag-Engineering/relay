@@ -1156,4 +1156,47 @@ pub(crate) mod test_support {
             let _ = std::fs::remove_file(&self.0);
         }
     }
+
+    /// Waits (up to 5 s) for a test command to have written a newline-terminated
+    /// pid to `path`, and returns it. Polls the file — observable state — rather
+    /// than sleeping a fixed time.
+    pub(crate) async fn read_pid_file(path: &Path) -> i32 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if let Some(pid) = text.strip_suffix('\n').and_then(|s| s.parse().ok()) {
+                    return pid;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no pid written to {} within 5 s",
+                path.display()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Waits (up to `within`) until `pid` no longer exists at all — not even as
+    /// a zombie — and panics otherwise. `kill(pid, 0)` answers for an
+    /// unreaped zombie and returns ESRCH only once the process has been reaped,
+    /// so this proves the process was both killed and collected.
+    pub(crate) async fn wait_until_reaped(pid: i32, within: std::time::Duration) {
+        use rustix::io::Errno;
+        use rustix::process::{test_kill_process, Pid};
+        let probe = Pid::from_raw(pid).expect("a test pid is non-zero");
+        let deadline = std::time::Instant::now() + within;
+        loop {
+            match test_kill_process(probe) {
+                Err(Errno::SRCH) => return,
+                Err(e) => panic!("pid {pid} must be gone (ESRCH), not another error: {e}"),
+                Ok(()) => {}
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "pid {pid} still exists after {within:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
 }

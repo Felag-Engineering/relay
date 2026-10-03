@@ -50,9 +50,12 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Hard upper bound on per-Task wall-clock time (ADR-0004).
 ///
-/// Policy-configurable per-Task timeout caps are a v0.0.4 item; until then,
-/// this constant is the sole enforced upper bound. Any request for more is
-/// silently clamped to this value.
+/// Any request for more is silently clamped to this value. ADR-0004's
+/// Policy-configurable cap is not built, so this constant is the only cap on
+/// the budget. The budget runs from receipt and covers the whole Task — queue
+/// wait, execution, and the drain of the command's output — so a Task cannot
+/// outlive it by more than the executor's fixed kill and drain graces
+/// (`executor::execute`).
 const MAX_TIMEOUT: Duration = Duration::from_secs(300);
 
 // MAX_OUTPUT_BYTES (per-Task output byte cap for stdout/stderr independently,
@@ -591,8 +594,8 @@ where
 ///
 /// `≤0` → `DEFAULT_TIMEOUT` (absent or unset by the AI-agent).
 /// `>0` → `min(requested, MAX_TIMEOUT)` — the daemon hard cap (ADR-0004).
-/// Policy-configurable per-Task timeout caps are a v0.0.4 item; until then
-/// this function is the sole timeout enforcer.
+/// This only computes the budget; the scheduler (queue wait) and the handlers
+/// (execution, including the executor's output drain) enforce it.
 fn effective_timeout(timeout_seconds: i32) -> Duration {
     if timeout_seconds <= 0 {
         DEFAULT_TIMEOUT
@@ -1905,6 +1908,84 @@ allow = ["^/bin/sleep [0-9]+$"]
             1,
             "mutate Tasks must NEVER overlap: peak concurrent runners must be 1"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // A cancel that lands while the executor is draining a finished command's
+    // output — the command exited, but a process it backgrounded still holds
+    // its stdout — ends the Task and releases the mutate permit (ADR-0004,
+    // ADR-0013). Before the drain was bounded, the cancel was ignored there and
+    // the permit stayed held for as long as the background process lived,
+    // blocking every later mutate Task on this Node.
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn cancel_during_output_drain_releases_the_mutate_permit() {
+        let state_dir = TempDir::created("drain-cancel-permit");
+        let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
+        // Raw Exec argv elements may not contain whitespace, so the command is a
+        // script file run by /bin/sh rather than an `sh -c` string.
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ['^/bin/sh /\S+$']
+"#,
+        )
+        .expect("parse policy");
+        let services = test_services(policy, dedup);
+
+        let work = TempDir::created("drain-cancel-permit-work");
+        let leader_pid_file = work.path().join("leader.pid");
+        let script = work.write(
+            "holder.sh",
+            &format!(
+                "echo $$ > {}\nsleep 30 &\necho $!\n",
+                leader_pid_file.display()
+            ),
+        );
+        let task = make_task_raw_exec(
+            "t-drain-cancel-permit",
+            vec!["/bin/sh".to_string(), script.to_string_lossy().into_owned()],
+        );
+
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        let run = dispatch(&task, &services, Instant::now(), Some(cancel_rx));
+        // The leader being reaped means the executor's own wait collected it, so
+        // the run phase is over and the cancel lands in the drain.
+        let cancel_in_drain = async {
+            let leader = crate::test_support::read_pid_file(&leader_pid_file).await;
+            crate::test_support::wait_until_reaped(leader, Duration::from_secs(3)).await;
+            cancel_tx
+                .send(())
+                .expect("the Task still holds its cancel receiver");
+        };
+        // Shorter than the Task's own 5 s timeout, so a cancel that is ignored
+        // fails here instead of passing as a timeout.
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(4), async {
+            tokio::join!(run, cancel_in_drain)
+        })
+        .await
+        .expect("a cancel during the output drain must end the Task promptly");
+
+        assert_eq!(result.outcome, Outcome::Cancelled as i32);
+        assert_eq!(result.exit_code, -1);
+        assert!(result.truncated);
+        let holder: i32 = String::from_utf8_lossy(&result.stdout)
+            .trim()
+            .parse()
+            .expect("stdout keeps the background holder's pid");
+        crate::test_support::wait_until_reaped(holder, Duration::from_secs(2)).await;
+
+        // The mutate lane is free again.
+        let mut no_cancel = None;
+        let _permit = services
+            .scheduler
+            .acquire(
+                crate::scheduler::Class::Mutate,
+                Instant::now() + Duration::from_secs(1),
+                &mut no_cancel,
+            )
+            .await
+            .expect("the cancelled Task must have released the mutate permit");
     }
 
     // -----------------------------------------------------------------------
