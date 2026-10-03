@@ -21,10 +21,5 @@ func TestRepositoryConformance(t *testing.T) {
 			registry.WithMaxNodes(cfg.MaxNodes),
 			registry.WithMinDaemonVersion(cfg.MinDaemonVersion),
 		)
-	}, registrytest.Divergences{
-		// Known divergence, escalated rather than resolved: InMemory stores
-		// and serves any label it is handed, where the SQLite store declines
-		// to serve one registry.WellFormedLabel rejects. See the field's doc.
-		ServesMalformedStoredLabels: true,
 	})
 }

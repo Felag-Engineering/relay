@@ -18,8 +18,6 @@ func TestSQLiteRegistryConformance(t *testing.T) {
 	registrytest.RunRepositoryConformance(t, func(t *testing.T, cfg registrytest.Config) registry.Repository {
 		st, _ := openTestStore(t, WithMaxNodes(cfg.MaxNodes), WithMinDaemonVersion(cfg.MinDaemonVersion))
 		return st.Registry()
-	}, registrytest.Divergences{
-		ServesMalformedStoredLabels: false,
 	})
 }
 
@@ -35,15 +33,12 @@ func TestRegistryNodeLabelConformance(t *testing.T) {
 	impls := []struct {
 		name string
 		new  func(t *testing.T) registry.Repository
-		// servesMalformed mirrors registrytest.Divergences.ServesMalformedStoredLabels
-		// for each implementation: the same known, escalated divergence.
-		servesMalformed bool
 	}{
-		{"InMemory", func(t *testing.T) registry.Repository { return registry.NewInMemory() }, true},
+		{"InMemory", func(t *testing.T) registry.Repository { return registry.NewInMemory() }},
 		{"SQLite", func(t *testing.T) registry.Repository {
 			st, _ := openTestStore(t)
 			return st.Registry()
-		}, false},
+		}},
 	}
 
 	labelled := func(nodeID string, labels map[string]string) registry.Report {
@@ -147,15 +142,15 @@ func TestRegistryNodeLabelConformance(t *testing.T) {
 				}
 			})
 
-			t.Run("Divergence_MalformedStoredNodeLabelReadBack", func(t *testing.T) {
-				// Same known divergence as registrytest's relay-space case.
-				// WithNodeLabels documents that its input must already be
-				// well-formed, so this is input no production caller sends —
-				// but a row written before #504's ingress gate can still hold
-				// one, and only the SQLite store declines to serve it.
+			t.Run("MalformedStoredLabelIsDeclinedOnEveryRead", func(t *testing.T) {
+				// The node-space half of registrytest's relay-space case:
+				// "decline to serve, never write" (#504). WithNodeLabels
+				// documents that its input must already be well-formed, so
+				// this is input no production caller sends — it stands for a
+				// row written before #504's ingress gate existed.
 				r := impl.new(t)
 				const bad = "web, relay:quarantine=on" // fails registry.WellFormedLabel
-				upsert(t, r, labelled("node-a", map[string]string{"role": bad, "ok": "fine"}))
+				upserted := upsert(t, r, labelled("node-a", map[string]string{"role": bad, "ok": "fine"}))
 				var listed registry.Node
 				if l := r.List(); len(l) == 1 {
 					listed = l[0]
@@ -165,10 +160,11 @@ func TestRegistryNodeLabelConformance(t *testing.T) {
 				for _, n := range []struct {
 					via string
 					n   registry.Node
-				}{{"Get", get(t, r, "node-a")}, {"List", listed}} {
-					if _, served := n.n.NodeLabels["role"]; served != impl.servesMalformed {
-						t.Errorf("%s: malformed node:role served=%v, want %v for %s", n.via, served, impl.servesMalformed, impl.name)
+				}{{"Get", get(t, r, "node-a")}, {"List", listed}, {"Upsert", upserted}} {
+					if v, served := n.n.NodeLabels["role"]; served {
+						t.Errorf("%s: malformed node:role=%q was served; a label WellFormedLabel refuses is declined on read", n.via, v)
 					}
+					// Declining is per pair, never per Node.
 					if n.n.NodeLabels["ok"] != "fine" {
 						t.Errorf("%s: a well-formed label beside a malformed one was not served: %v", n.via, n.n.NodeLabels)
 					}

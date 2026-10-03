@@ -52,30 +52,11 @@ type Config struct {
 // per subtest; any cleanup belongs on t.
 type Factory func(t *testing.T, cfg Config) registry.Repository
 
-// Divergences declares, per implementation, the behaviours on which the two
-// implementations are KNOWN to disagree. The suite does not paper over a
-// disagreement: each field selects which side of a named subtest's assertion
-// this implementation is held to, so both behaviours stay pinned and a change
-// on either side fails here until somebody decides which one is right.
-//
-// A field here is a record of an open question, not a licence. Removing one
-// is the goal; adding one needs the same escalation its doc names.
-type Divergences struct {
-	// ServesMalformedStoredLabels is true when a label that fails
-	// registry.WellFormedLabel, once stored, is served back on read.
-	//
-	// sqliteRegistry declines to serve it (store.wellFormedLabels, #504/#555:
-	// "decline to serve, never write"); InMemory stores and serves whatever it
-	// was given. selectors-and-labels.md ("Labels the store declines to serve")
-	// states the declining behaviour as intended, but that spec is still
-	// aspirational, so it does not yet bind either implementation.
-	ServesMalformedStoredLabels bool
-}
-
 // RunRepositoryConformance exercises the registry.Repository contract against
-// a fresh Repository per subtest, built by newRepo. div declares the known
-// divergences of the implementation under test (see Divergences).
-func RunRepositoryConformance(t *testing.T, newRepo Factory, div Divergences) {
+// a fresh Repository per subtest, built by newRepo. Every case holds both
+// implementations to the same assertion: there is no per-implementation
+// switch, because the fake exists to behave as production does.
+func RunRepositoryConformance(t *testing.T, newRepo Factory) {
 	t.Helper()
 
 	fresh := func(t *testing.T) registry.Repository {
@@ -347,26 +328,28 @@ func RunRepositoryConformance(t *testing.T, newRepo Factory, div Divergences) {
 		}
 	})
 
-	t.Run("Divergence_MalformedStoredRelayLabelReadBack", func(t *testing.T) {
-		// The two implementations disagree here; see
-		// Divergences.ServesMalformedStoredLabels. Both sides are pinned so
-		// neither can move silently. The node-space half of this case is in
-		// the store package's test file.
+	t.Run("RelayLabels_MalformedStoredLabelIsDeclinedOnEveryRead", func(t *testing.T) {
+		// "Decline to serve, never write" (#504/#555): a stored relay: label
+		// that fails registry.WellFormedLabel is withheld from every read —
+		// Get, List, and Upsert's own read-back — one pair at a time. The
+		// production gate keeps such a label out at ingress, so the stored
+		// one stands for a row written before that gate existed. The
+		// node-space half of this case is in the store package's test file.
 		r := fresh(t)
 		mustUpsert(t, r, registry.Report{NodeID: "node-a"})
 		// "pci/1" fails registry.WellFormedLabel; "eu" passes.
 		mustNil(t, "SetRelayLabels", r.SetRelayLabels("node-a", map[string]string{"tier": "pci/1", "zone": "eu"}))
 
+		upserted := mustUpsert(t, r, registry.Report{NodeID: "node-a"})
 		for _, n := range []struct {
 			via string
 			n   registry.Node
-		}{{"Get", mustGet(t, r, "node-a")}, {"List", onlyNode(t, r.List())}} {
-			if _, served := n.n.RelayLabels["tier"]; served != div.ServesMalformedStoredLabels {
-				t.Errorf("%s: malformed relay:tier served=%v; this implementation declares ServesMalformedStoredLabels=%v",
-					n.via, served, div.ServesMalformedStoredLabels)
+		}{{"Get", mustGet(t, r, "node-a")}, {"List", onlyNode(t, r.List())}, {"Upsert", upserted}} {
+			if v, served := n.n.RelayLabels["tier"]; served {
+				t.Errorf("%s: malformed relay:tier=%q was served; a label WellFormedLabel refuses is declined on read", n.via, v)
 			}
-			// Either way, the well-formed neighbour is served: declining is
-			// per pair, never per Node.
+			// The well-formed neighbour is still served: declining is per
+			// pair, never per Node.
 			if n.n.RelayLabels["zone"] != "eu" {
 				t.Errorf("%s: a well-formed label beside a malformed one was not served: %v", n.via, n.n.RelayLabels)
 			}
