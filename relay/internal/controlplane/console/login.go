@@ -416,7 +416,7 @@ func handleLoginSubmit(d Deps) http.HandlerFunc {
 
 		case isThrottled(err):
 			wait, _ := consoleauth.Throttled(err)
-			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
+			setRetryAfter(w, wait)
 			renderLogin(w, http.StatusTooManyRequests, loginView{
 				CSRFToken: token,
 				Next:      next,
@@ -529,11 +529,23 @@ func renderLogin(w http.ResponseWriter, status int, v loginView) {
 // when the next attempt will be accepted. It never suggests the credential was
 // wrong.
 func throttleMessage(wait time.Duration) string {
-	seconds := int(math.Ceil(wait.Seconds()))
+	seconds := throttleSeconds(wait)
 	if seconds <= 1 {
 		return "Too many recent attempts. The next one will be accepted in a second."
 	}
 	return fmt.Sprintf("Too many recent attempts. The next one will be accepted in %d seconds. Your password was not checked.", seconds)
+}
+
+// throttleSeconds is the throttle's wait rounded UP to whole seconds: rounding
+// down would tell a caller to retry while the throttle still refuses.
+func throttleSeconds(wait time.Duration) int {
+	return int(math.Ceil(wait.Seconds()))
+}
+
+// setRetryAfter sets Retry-After from a throttle's wait, so the header and the
+// message beside it (throttleMessage) always agree.
+func setRetryAfter(w http.ResponseWriter, wait time.Duration) {
+	w.Header().Set("Retry-After", strconv.Itoa(throttleSeconds(wait)))
 }
 
 // isThrottled reports whether err is a throttle rather than a failure.

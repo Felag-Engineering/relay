@@ -91,10 +91,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"math"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
@@ -252,7 +250,7 @@ func stepUpProved(d Deps, w http.ResponseWriter, r *http.Request, pg Page, undon
 	switch {
 	case isThrottled(err):
 		wait, _ := consoleauth.Throttled(err)
-		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
+		setRetryAfter(w, wait)
 		w.WriteHeader(http.StatusTooManyRequests)
 		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
 			Heading: throttleMessage(wait) + " " + undone,
