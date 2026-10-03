@@ -71,6 +71,10 @@ type nodeTask struct {
 	// (ADR-0025). Said on the row, because an operator looking for output that
 	// is not there needs to know it was never kept rather than lost.
 	ReadClass bool
+
+	// RawExecTier is set only by trailRowName, from the record's ActionKind or
+	// RawExecArgv — never from the Operation's name (D18).
+	RawExecTier bool
 }
 
 type nodeView struct {
@@ -544,7 +548,6 @@ func nodeTaskFrom(rec audit.Record) (nodeTask, bool) {
 	f := factsOfRecord(rec)
 	t := nodeTask{
 		When:      rec.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
-		Operation: operationText(f),
 		Args:      argsText(f),
 		Outcome:   jobs.OutcomeName(rec.Outcome),
 		JobID:     rec.JobID,
@@ -557,6 +560,7 @@ func nodeTaskFrom(rec audit.Record) (nodeTask, bool) {
 		// deserves the "output not retained" note (ADR-0025).
 		ReadClass: riskOf(f) == jobs.RiskClassRead,
 	}
+	t.Operation, t.RawExecTier = trailRowName(f)
 	if rec.JobID != "" {
 		t.JobHref = "/console/jobs/" + rec.JobID
 	}
@@ -708,7 +712,7 @@ var nodeTmpl = newScreen("node", `
         {{range .Tasks}}
           <tr>
             <td class="num">{{.When}}</td>
-            <td><code>{{.Operation}}</code>{{with .Args}}<div class="sub mono">{{.}}</div>{{end}}
+            <td>{{if .RawExecTier}}<span class="chip" data-tier="raw_exec">Raw Exec</span>{{end}}<code>{{.Operation}}</code>{{with .Args}}<div class="sub mono">{{.}}</div>{{end}}
               {{if .ReadClass}}<div class="sub">read — output not retained</div>{{end}}</td>
             <td>{{template "trust-chip" (trust .Principal .Verified)}}</td>
             <td><span class="chip outcome" data-outcome="{{.Outcome}}">{{.Outcome}}</span></td>
