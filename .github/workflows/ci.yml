@@ -108,6 +108,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-smoke-test
 
+      # scripts/ci-changed-paths.sh, the classifier above that decides which jobs below run,
+      # proved against throwaway fixture repos. Shell and git only. It runs here, in the one
+      # job that always runs, because a classifier bug is exactly what would skip the others.
+      - name: Changed-paths classifier self-test
+        if: ${{ !cancelled() }}
+        run: make test-ci-changed-paths
+
   # ---- relay: Go format, build, lint, race-detector tests, the OpenAPI contract,
   # and the Go half of the strict-umask lane ----
   relay:

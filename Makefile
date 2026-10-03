@@ -45,7 +45,7 @@ endif
         clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
-        test-security-surface test-codex-review test-proto-tools-check \
+        test-security-surface test-codex-review test-proto-tools-check test-ci-changed-paths \
         test-check-docs test-smoke-test \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
         demo-build demo-reset demo-reset-oauth demo-fault demo-up demo-up-oauth demo-down demo-creds \
@@ -59,8 +59,8 @@ endif
 # and proto-breaking gates, the operation-schema drift check, the devharness
 # absence check, the security-surface gate self-test, the demo-fleet reset
 # guard self-test, the codex-review gate self-test, the proto-tools pin check
-# self-test, the docs-check and smoke-test self-tests, the strict-umask test
-# lane, and both cross-binary suites.
+# self-test, the changed-paths classifier self-test, the docs-check and
+# smoke-test self-tests, the strict-umask test lane, and both cross-binary suites.
 # Work can pass the inner loop and fail CI on a class of problem the author
 # never looked at.
 #
@@ -78,7 +78,8 @@ endif
 verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
         apiclient-check verify-proto docs-check test-security-surface \
-        test-demo-fleet test-codex-review test-proto-tools-check test-check-docs test-smoke-test \
+        test-demo-fleet test-codex-review test-proto-tools-check test-ci-changed-paths \
+        test-check-docs test-smoke-test \
         test-integration test-crossbinary
 	@echo
 	@echo "verify: all local CI-equivalent gates passed."
@@ -267,6 +268,13 @@ test-codex-review:
 # needs no test edit.
 test-proto-tools-check:
 	bash scripts/proto-tools-check-test.sh
+
+# Proves scripts/ci-changed-paths.sh runs the code jobs for every docs/ path a Go or Rust test
+# reads, skips them only for documentation nothing reads, trips the proto gates on every input
+# they depend on, and fails open off a pull request or without a parent commit. Hermetic: bash
+# and git against throwaway fixture repos under a mktemp WORKDIR.
+test-ci-changed-paths:
+	bash scripts/ci-changed-paths-test.sh
 
 # Proves scripts/check-docs.sh's cited-test check covers Go Test/Benchmark/Fuzz names and, in
 # proof rows, Rust test fns and cargo-fuzz targets — failing on a name that does not exist, a
