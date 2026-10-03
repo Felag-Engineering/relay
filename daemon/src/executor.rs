@@ -26,6 +26,18 @@ use crate::not_executed::not_executed_after;
 /// Fixed for v1 (privileged side, deterministic); a Policy-configurable value is future work.
 const TERM_GRACE: Duration = Duration::from_secs(5);
 
+/// How long the output drain may still run after a timeout or cancel has killed
+/// the process group, to collect what the group wrote before it died. A killed
+/// group's pipes normally reach EOF at once; this only bounds the case where a
+/// process outside the group (one that left it with `setsid(2)`) still holds
+/// them. Fixed, like [`TERM_GRACE`], so the Task's overrun past its timeout is
+/// bounded by constants (ADR-0004).
+const POST_KILL_DRAIN_GRACE: Duration = Duration::from_secs(1);
+
+/// Poll interval while waiting for a process group whose leader has already
+/// been reaped to empty after SIGTERM (see [`sweep_reaped_group`]).
+const GROUP_EMPTY_POLL: Duration = Duration::from_millis(25);
+
 /// Fixed `PATH` handed to every spawned child. The daemon's own `PATH` is
 /// deliberately *not* inherited (see `env_clear()` in [`execute`]): a bare-name
 /// `argv[0]` must resolve against this trusted, standard search path — never one
@@ -48,7 +60,9 @@ pub struct ExecRequest {
     ///
     /// **Never** pass a shell command string here — this is exec'd directly (ADR-0001).
     pub argv: Vec<String>,
-    /// Per-Task wall-clock budget. On expiry the entire process group is killed.
+    /// Per-Task wall-clock budget, covering both the run and the drain of the
+    /// command's output (see [`execute`]). On expiry the entire process group is
+    /// killed and the Task reports `OUTCOME_TIMEOUT`.
     pub timeout: Duration,
     /// Per-stream byte cap for stdout and stderr independently. Bytes past the cap
     /// are drained (to avoid blocking the child on a full pipe) but discarded;
@@ -71,8 +85,46 @@ pub struct ExecRequest {
 /// Never returns an error: spawn failures and empty-argv guards are mapped to
 /// `OUTCOME_FAILURE` with the OS error in `stderr`. No `OUTCOME_ERROR` exists in
 /// proto; FAILURE + exit_code -1 is the honest available mapping.
+///
+/// # One wall-clock bound for the whole Task (ADR-0004)
+///
+/// `req.timeout` bounds the whole Task, from a single deadline taken on entry:
+/// the wait for the child **and** the drain of its output.
+///
+/// 1. **Run.** Wait for the direct child, racing the deadline and the cancel
+///    signal. If either wins while the child is still running, the process
+///    group is killed (`kill_group_graceful`) and the drain gets a short, fixed
+///    [`POST_KILL_DRAIN_GRACE`] to collect what the group wrote before it died.
+/// 2. **Drain.** A child that exited normally can still leave its pipes open: a
+///    backgrounded process inherits stdout/stderr and holds them past the
+///    child's exit. So the drain races the *same* deadline and the *same* cancel
+///    signal.
+///
+/// **A timeout or cancel is honoured only while something of the Task is still
+/// running** (ADR-0013: a Task that completed inside the race window reports
+/// its real outcome, never a retroactive one). Concretely:
+///
+/// - If a member of the Task's process group is alive when the deadline or
+///   cancel wins, what is left of the group is swept ([`sweep_reaped_group`]),
+///   the drain is stopped with the output collected so far, `truncated` is set,
+///   and the Task reports `OUTCOME_TIMEOUT` or `OUTCOME_CANCELLED` with exit
+///   code `-1`.
+/// - If the child has exited and its process group is empty, the command has
+///   completed: it reports its real outcome and exit code, after the drain
+///   collects what it wrote (within [`POST_KILL_DRAIN_GRACE`]; `truncated` is
+///   set if a process outside the group still holds the pipes then).
+///
+/// The overrun past `req.timeout` is therefore bounded by fixed constants —
+/// [`TERM_GRACE`] for the kill plus [`POST_KILL_DRAIN_GRACE`] for the drain —
+/// unless the kernel holds the child in uninterruptible sleep, where even
+/// SIGKILL waits for the kernel and so does reaping it. Nothing else the
+/// command does can extend it. A process that left the group with `setsid(2)`
+/// is outside the group's reach: it is not killed, and only loses the pipes.
 pub async fn execute(req: ExecRequest) -> TaskResult {
     let started = Instant::now();
+    // The one deadline both phases race. A `tokio::time::Instant`, so the paused
+    // test clock drives it.
+    let deadline = tokio::time::Instant::now() + req.timeout;
 
     // Guard: empty argv must never reach Command::new. Return immediately without
     // touching a shell (ADR-0001 invariant #1).
@@ -132,90 +184,187 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     let pgid = Pid::from_raw(child.id().expect("spawned child has a pid") as i32)
         .expect("a spawned child's pid is never zero");
 
-    // Spawn two concurrent drain tasks to read stdout/stderr to EOF. Running them
-    // concurrently with child.wait() prevents the classic two-pipe deadlock where a
-    // full pipe blocks the child forever while we wait on it (ADR-0004).
+    // Drain stdout/stderr to EOF in one spawned task, concurrently with
+    // child.wait(): that prevents the classic two-pipe deadlock where a full pipe
+    // blocks the child forever while we wait on it (ADR-0004). `stop_drain` ends
+    // the drain early, keeping what it has collected (see `drain_output`).
     let out_pipe = child.stdout.take().expect("stdout piped");
     let err_pipe = child.stderr.take().expect("stderr piped");
-    let cap = req.max_output_bytes;
-    let out_task = tokio::spawn(drain_capped(out_pipe, cap));
-    let err_task = tokio::spawn(drain_capped(err_pipe, cap));
+    let (stop_drain, stop_rx) = oneshot::channel::<()>();
+    let mut drain = tokio::spawn(drain_output(
+        out_pipe,
+        err_pipe,
+        req.max_output_bytes,
+        stop_rx,
+    ));
 
-    let cancel = req.cancel;
-    let mut timed_out = false;
-    let mut cancelled = false;
+    // Pinned once and shared by both phases, so a cancel is honoured whichever
+    // phase it lands in. It is never polled again once it has resolved: every
+    // poll below is guarded by `requested.is_none()`, and it sets `requested`.
+    let mut cancel = std::pin::pin!(recv_cancel(req.cancel));
     let mut exit_code: i32 = -1;
-    // kill_needed: set inside the select! to avoid holding &mut child borrow
-    // across select arms; kill_group_graceful is called once AFTER the select.
-    let mut kill_needed = false;
+    let mut leader_exited = false;
+    // A timeout or cancel that has arrived. Whether it is *honoured* — the
+    // Task reported stopped — depends on whether anything of it is still running.
+    let mut requested: Option<Outcome> = None;
 
-    // biased; makes the wait arm win over the cancel arm when both are ready
-    // simultaneously — an already-exited child reports its real outcome, never a
-    // retroactive OUTCOME_CANCELLED (ADR-0013 honest-race semantics).
+    // Phase 1 — run. biased; makes the wait arm win over the cancel arm when both
+    // are ready simultaneously — an already-exited child reports its real
+    // outcome, never a retroactive OUTCOME_CANCELLED (ADR-0013 honest-race
+    // semantics).
     tokio::select! {
         biased;
-        res = tokio::time::timeout(req.timeout, child.wait()) => {
+        res = tokio::time::timeout_at(deadline, child.wait()) => {
             match res {
                 Ok(Ok(status)) => {
+                    leader_exited = true;
                     exit_code = status.code().unwrap_or(-1);
                 }
                 Ok(Err(_io_err)) => {
                     // wait() failed: leave exit_code = -1, treat as failure below.
+                    leader_exited = true;
                 }
-                Err(_elapsed) => {
-                    timed_out = true;
-                    kill_needed = true;
-                }
+                Err(_elapsed) => requested = Some(Outcome::Timeout),
             }
         }
-        _ = recv_cancel(cancel) => {
-            // KNOWN LIMITATION: a daemonized grandchild inheriting pipe fds could
-            // block the drain tasks below (executor.rs ~L116-119 applies here too);
-            // this is not solved by the cancel path.
-            cancelled = true;
-            kill_needed = true;
+        () = &mut cancel => requested = Some(Outcome::Cancelled),
+    }
+
+    // `wait()` sees an exit only once the runtime's reaper has been woken, which
+    // can lag the exit itself — so a deadline or cancel can win the race above
+    // against a leader that has in fact already exited. Ask the kernel directly
+    // before treating the leader as running: an exited leader reports its real
+    // outcome (ADR-0013).
+    if !leader_exited {
+        if let Ok(Some(status)) = child.try_wait() {
+            leader_exited = true;
+            exit_code = status.code().unwrap_or(-1);
         }
     }
 
-    if kill_needed {
-        // Kill the whole process group: SIGTERM first, then SIGKILL after the
-        // grace period. Both the direct child and all grandchildren receive the
-        // signal because pgid == child pid and kill(-pgid) targets the group.
+    // Whether anything of the process group outlived the leader, sampled as soon
+    // as the leader is known to have exited. A group that is empty then stays
+    // empty — setpgid(2) only joins an existing group — so it is never the
+    // Task's again and is never signalled later, when its pgid may have been
+    // recycled.
+    let group_outlived_leader = leader_exited && group_is_nonempty(pgid);
+
+    // Set when the Task is reported stopped short of completing.
+    let mut stopped: Option<Outcome> = None;
+    let output = if !leader_exited {
+        // The leader was still running when the deadline or cancel arrived. Kill
+        // the whole process group: SIGTERM first, then SIGKILL after the grace
+        // period. Both the direct child and all grandchildren receive the signal
+        // because pgid == child pid and kill(-pgid) targets the group. Then give
+        // the drain a short grace to collect what the group wrote.
+        stopped = requested;
         kill_group_graceful(pgid, &mut child).await;
-    }
-
-    // KNOWN LIMITATION: if the child backgrounded a process that inherited the pipe
-    // fds (e.g. daemonized without closing fd 1/2), these awaits can block until that
-    // process exits. v1 structured Operations do not daemonize; the tunnel-loop wiring
-    // issue should add a timeout/select around this point.
-    let (stdout, out_trunc) = out_task.await.unwrap_or_default();
-    let (stderr, err_trunc) = err_task.await.unwrap_or_default();
-
-    // Intentionally discard the process's signal exit code when cancelled; use -1.
-    // The process was externally killed (not a normal exit), so its signal-derived
-    // exit code is meaningless — -1 is the honest "externally killed" mapping.
-    let outcome = if cancelled {
-        Outcome::Cancelled
-    } else if timed_out {
-        Outcome::Timeout
-    } else if exit_code == 0 {
-        Outcome::Success
+        collect_output(drain, stop_drain, POST_KILL_DRAIN_GRACE).await
     } else {
-        Outcome::Failure
+        // Phase 2 — drain, racing the same deadline and cancel. biased; a drain
+        // that has reached EOF wins: complete output is the Task's real result.
+        // Then the deadline beats a simultaneous cancel, as in phase 1. A
+        // timeout or cancel that already arrived in phase 1 is still pending.
+        let mut drained = None;
+        tokio::select! {
+            biased;
+            res = &mut drain => drained = Some(res.unwrap_or_default()),
+            () = tokio::time::sleep_until(deadline), if requested.is_none() => {
+                requested = Some(Outcome::Timeout);
+            }
+            () = &mut cancel, if requested.is_none() => requested = Some(Outcome::Cancelled),
+            () = std::future::ready(()), if requested.is_some() => {}
+        }
+        match drained {
+            Some(output) => output,
+            // Something of the Task's process group is still running and holding
+            // its pipes: the Task has not completed, so the timeout or cancel is
+            // honoured. Sweep the group, then stop the drain.
+            None if group_outlived_leader && group_is_nonempty(pgid) => {
+                stopped = requested;
+                sweep_reaped_group(pgid).await;
+                // The stop cut the command's output short, even if killing the
+                // group let the pipes reach EOF during the sweep.
+                let mut output = collect_output(drain, stop_drain, Duration::ZERO).await;
+                output.stdout.truncated = true;
+                output.stderr.truncated = true;
+                output
+            }
+            // Nothing of the Task's process group is running: the command has
+            // completed, and reports its real outcome and exit code — never a
+            // retroactive timeout or cancel (ADR-0013). Collect what it wrote,
+            // still bounded: a process that left the group with setsid(2) can
+            // hold the pipes open indefinitely.
+            None => collect_output(drain, stop_drain, POST_KILL_DRAIN_GRACE).await,
+        }
+    };
+
+    // Intentionally discard the process's exit code when stopped; use -1.
+    // The Task was externally stopped (not a normal completion), so its exit code
+    // is meaningless — -1 is the honest "externally killed" mapping.
+    let outcome = match stopped {
+        Some(outcome) => outcome,
+        None if exit_code == 0 => Outcome::Success,
+        None => Outcome::Failure,
     };
 
     TaskResult {
         task_id: req.task_id,
         outcome: outcome as i32,
-        exit_code: if timed_out || cancelled {
-            -1
-        } else {
-            exit_code
-        },
-        stdout,
-        stderr,
-        truncated: out_trunc || err_trunc,
+        exit_code: if stopped.is_some() { -1 } else { exit_code },
+        stdout: output.stdout.bytes,
+        stderr: output.stderr.bytes,
+        truncated: output.stdout.truncated || output.stderr.truncated,
         duration_millis: started.elapsed().as_millis() as i64,
+    }
+}
+
+/// Waits up to `grace` for the drain to reach EOF on both streams and returns
+/// its output. If it has not by then, the drain is stopped, what it collected
+/// is returned, and both streams are marked `truncated`. `Duration::ZERO`
+/// stops it at once unless it has already finished.
+async fn collect_output(
+    mut drain: tokio::task::JoinHandle<Output>,
+    stop_drain: oneshot::Sender<()>,
+    grace: Duration,
+) -> Output {
+    if let Ok(res) = tokio::time::timeout(grace, &mut drain).await {
+        return res.unwrap_or_default();
+    }
+    let _ = stop_drain.send(());
+    let mut output = drain.await.unwrap_or_default();
+    output.stdout.truncated = true;
+    output.stderr.truncated = true;
+    output
+}
+
+/// Kills what is left of a Task's process group once its leader has already
+/// been reaped — the background process holding the Task's pipes past the
+/// leader's exit (see [`execute`], phase 2).
+///
+/// SIGTERM, then SIGKILL to any member still present after [`TERM_GRACE`],
+/// mirroring [`kill_group_graceful`]. The leader is gone, so there is no child to
+/// wait on: the group's emptiness is polled instead.
+///
+/// pgid-reuse safety follows [`kill_group_graceful`]'s rule for a reaped leader:
+/// signal only while the group is non-empty, because a surviving member holds
+/// `pgid` and keeps the kernel from recycling it, and an empty group is the one
+/// case where `pgid` may already name an unrelated process. The same residual
+/// microsecond race between the check and the signal applies.
+async fn sweep_reaped_group(pgid: Pid) {
+    if !group_is_nonempty(pgid) {
+        // Empty — e.g. the pipe holder left the group with setsid(2). Nothing of
+        // the Task's group remains to signal, and pgid may have been recycled.
+        return;
+    }
+    signal_group(pgid, Signal::TERM);
+    let grace_end = tokio::time::Instant::now() + TERM_GRACE;
+    while group_is_nonempty(pgid) {
+        if tokio::time::Instant::now() >= grace_end {
+            signal_group(pgid, Signal::KILL);
+            return;
+        }
+        tokio::time::sleep(GROUP_EMPTY_POLL).await;
     }
 }
 
@@ -297,35 +446,77 @@ async fn recv_cancel(rx: Option<oneshot::Receiver<()>>) {
     }
 }
 
-/// Drains `reader` to EOF, keeping at most `cap` bytes.
+/// One stream's captured output: at most the cap's worth of bytes, and whether
+/// anything was cut.
+#[derive(Default)]
+struct Captured {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+/// Both streams' captured output.
+#[derive(Default)]
+struct Output {
+    stdout: Captured,
+    stderr: Captured,
+}
+
+/// Drains stdout and stderr concurrently to EOF, each capped at `cap` bytes,
+/// until both reach EOF or `stop` resolves.
+///
+/// The bytes live here, outside the per-stream drain futures, so stopping keeps
+/// everything collected so far: on `stop` the reads are dropped (closing the
+/// pipes' read ends) and the partial output is returned. A dropped sender counts
+/// as `stop` too — if [`execute`] itself is dropped, the drain does not outlive
+/// it. `stop` is polled first, so a stream that is always readable cannot starve
+/// it.
+async fn drain_output<O, E>(out: O, err: E, cap: usize, stop: oneshot::Receiver<()>) -> Output
+where
+    O: tokio::io::AsyncRead + Unpin,
+    E: tokio::io::AsyncRead + Unpin,
+{
+    let mut output = Output::default();
+    let both = async {
+        tokio::join!(
+            drain_capped(out, cap, &mut output.stdout),
+            drain_capped(err, cap, &mut output.stderr),
+        )
+    };
+    tokio::select! {
+        biased;
+        _ = stop => {}
+        _ = both => {}
+    }
+    output
+}
+
+/// Drains `reader` to EOF into `into`, keeping at most `cap` bytes.
 ///
 /// Bytes past the cap are read (to avoid blocking the child on a full pipe)
-/// but discarded. Returns `(bytes, truncated)`.
-async fn drain_capped<R>(mut reader: R, cap: usize) -> (Vec<u8>, bool)
+/// but discarded, and `into.truncated` is set.
+async fn drain_capped<R>(mut reader: R, cap: usize, into: &mut Captured)
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    let mut buf = Vec::new();
-    let mut truncated = false;
     let mut chunk = [0u8; 8192];
     loop {
         match reader.read(&mut chunk).await {
             Ok(0) => break, // EOF
             Ok(n) => {
+                let buf = &mut into.bytes;
                 if buf.len() < cap {
                     let take = n.min(cap - buf.len());
                     buf.extend_from_slice(&chunk[..take]);
                     if take < n {
-                        truncated = true;
+                        into.truncated = true;
                     }
                 } else {
-                    truncated = true; // still draining, just discarding
+                    into.truncated = true; // still draining, just discarding
                 }
             }
-            Err(_) => break, // pipe error: return what we have
+            Err(_) => break, // pipe error: keep what we have
         }
     }
-    (buf, truncated)
 }
 
 /// Sends `signal` to the entire process group led by `pgid`.
@@ -820,7 +1011,7 @@ mod tests {
         assert_eq!(result.exit_code, 7, "real exit code must be preserved");
     }
 
-    // 11. ACCEPTANCE-CRITICAL: pins `biased;` at executor.rs:110 with BOTH select arms
+    // 11. ACCEPTANCE-CRITICAL: pins phase 1's `biased;` (in `execute`) with BOTH select arms
     //     genuinely ready heading into the resolving poll — no process-timing race.
     //
     //     Test 10 above (`finished_before_cancel_reports_real_outcome`) fires cancel at
@@ -1147,5 +1338,271 @@ mod tests {
                 .any(|l| l == format!("PATH={SAFE_CHILD_PATH}")),
             "child PATH must be exactly the fixed safe path; got:\n{env_dump}"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // The drain of a finished child's output is bounded (ADR-0004)
+    // -------------------------------------------------------------------------
+
+    /// A command whose leader exits at once but leaves a backgrounded `sleep`
+    /// holding its stdout/stderr — so the output never reaches EOF on its own.
+    /// It writes the leader's own pid to `leader_pid_file` first, and prints the
+    /// background holder's pid to stdout.
+    fn leader_exits_holder_keeps_pipe(leader_pid_file: &std::path::Path) -> Vec<String> {
+        vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "echo $$ > {}; sleep 30 & echo $!",
+                leader_pid_file.display()
+            ),
+        ]
+    }
+
+    // 16. The Task's timeout bounds the drain, not just the wait. The leader exits
+    //     straight away, so the whole budget is spent in the drain. Before the fix
+    //     the drain awaited EOF with no bound and `execute` hung for the holder's
+    //     full 30 s; the outer 10 s guard turns that hang into a failure.
+    #[tokio::test]
+    async fn drain_is_bounded_by_the_task_timeout() {
+        let pid_file = crate::test_support::unique_temp_path("drain-timeout-leader");
+        // Long enough that even a loaded runner sees the leader exit well before
+        // the deadline, so the budget is spent in the drain, not the run phase.
+        let timeout = Duration::from_secs(2);
+        let started = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            execute(ExecRequest {
+                task_id: "t-drain-timeout".to_string(),
+                argv: leader_exits_holder_keeps_pipe(&pid_file),
+                timeout,
+                max_output_bytes: 4096,
+                cancel: None,
+                limits: no_limits(),
+            }),
+        )
+        .await
+        .expect("execute must return at its timeout, not wait for the pipe holder to exit");
+        let elapsed = started.elapsed();
+        let _ = std::fs::remove_file(&pid_file);
+
+        assert_eq!(result.outcome, Outcome::Timeout as i32);
+        assert_eq!(result.exit_code, -1);
+        assert!(
+            result.truncated,
+            "a drain stopped short of EOF must be marked truncated"
+        );
+        assert!(
+            elapsed >= timeout,
+            "returned after {elapsed:?}, before its {timeout:?} timeout"
+        );
+        assert!(
+            elapsed < timeout + super::TERM_GRACE,
+            "overran its timeout by more than the kill grace: {elapsed:?}"
+        );
+
+        // Output collected before the deadline is kept, and the holder — still in
+        // the Task's process group — was swept, not left running.
+        let holder: i32 = String::from_utf8_lossy(&result.stdout)
+            .trim()
+            .parse()
+            .expect("stdout keeps the output written before the deadline");
+        crate::test_support::wait_until_reaped(holder, Duration::from_secs(2)).await;
+    }
+
+    // 17. A cancel that lands while the drain is still waiting on a pipe holder
+    //     (the leader already exited and was reaped) stops the Task. Before the fix
+    //     the cancel arm had already been dropped with the run-phase select!, so
+    //     the cancel was ignored and `execute` hung for the holder's full 30 s.
+    #[tokio::test]
+    async fn cancel_during_the_drain_stops_the_task() {
+        let pid_file = crate::test_support::unique_temp_path("drain-cancel-leader");
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(execute(ExecRequest {
+            task_id: "t-drain-cancel".to_string(),
+            argv: leader_exits_holder_keeps_pipe(&pid_file),
+            timeout: Duration::from_secs(30), // long: only the cancel can end it
+            max_output_bytes: 4096,
+            cancel: Some(cancel_rx),
+            limits: no_limits(),
+        }));
+
+        // The leader being *reaped* (ESRCH, not merely exited) means `execute`'s
+        // own `child.wait()` collected it, so the run phase is over and `execute`
+        // is in the drain: the cancel below lands there, deterministically.
+        let leader = crate::test_support::read_pid_file(&pid_file).await;
+        let _ = std::fs::remove_file(&pid_file);
+        crate::test_support::wait_until_reaped(leader, Duration::from_secs(5)).await;
+        cancel_tx
+            .send(())
+            .expect("execute still holds the cancel receiver");
+
+        let result = tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .expect("a cancel during the drain must end the Task promptly")
+            .expect("execute must not panic");
+
+        assert_eq!(result.outcome, Outcome::Cancelled as i32);
+        assert_eq!(result.exit_code, -1);
+        assert!(result.truncated);
+        let holder: i32 = String::from_utf8_lossy(&result.stdout)
+            .trim()
+            .parse()
+            .expect("stdout keeps the output written before the cancel");
+        crate::test_support::wait_until_reaped(holder, Duration::from_secs(2)).await;
+    }
+
+    // 18. Regression guard for the common case: a child whose pipes close when it
+    //     exits still reports its real outcome, exit code and complete output —
+    //     the drain bound changes nothing unless something holds the pipes.
+    #[tokio::test]
+    async fn drain_reaching_eof_reports_the_real_outcome() {
+        let result = execute(ExecRequest {
+            task_id: "t-drain-eof".to_string(),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "echo out; echo err 1>&2; exit 3".to_string(),
+            ],
+            timeout: Duration::from_secs(5),
+            max_output_bytes: 4096,
+            cancel: None,
+            limits: no_limits(),
+        })
+        .await;
+        assert_eq!(result.outcome, Outcome::Failure as i32);
+        assert_eq!(result.exit_code, 3);
+        assert_eq!(result.stdout, b"out\n");
+        assert_eq!(result.stderr, b"err\n");
+        assert!(!result.truncated);
+    }
+
+    /// Blocking: spins (up to 5 s) until the leader whose pid the command writes
+    /// to `pid_file` has exited — a zombie, or already reaped and gone from
+    /// `/proc` — then sends `cancel` at once. Spinning on observable state,
+    /// rather than sleeping, sends the cancel as close to the exit as possible:
+    /// inside the window where the runtime has not yet reaped the leader.
+    fn cancel_once_exited(pid_file: std::path::PathBuf, cancel: tokio::sync::oneshot::Sender<()>) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let pid: i32 = loop {
+            let text = std::fs::read_to_string(&pid_file).unwrap_or_default();
+            if let Some(pid) = text.strip_suffix('\n').and_then(|s| s.parse().ok()) {
+                break pid;
+            }
+            assert!(Instant::now() < deadline, "no pid written within 5 s");
+            std::thread::yield_now();
+        };
+        let _ = std::fs::remove_file(&pid_file);
+        // Gone from /proc means reaped already.
+        while let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            // The state is the first field after the parenthesised command.
+            let state = stat
+                .rsplit_once(')')
+                .and_then(|(_, rest)| rest.split_whitespace().next());
+            if state == Some("Z") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "pid {pid} did not exit within 5 s"
+            );
+            std::thread::yield_now();
+        }
+        // Execute may already have finished and dropped the receiver.
+        let _ = cancel.send(());
+    }
+
+    // 19. ADR-0013: a cancel that arrives only after the command has exited — its
+    //     leader already a zombie, its output fully written — must report the
+    //     real outcome and exit code, never a retroactive OUTCOME_CANCELLED. The
+    //     runtime's reaper can lag the exit, so the cancel often wins the run
+    //     phase's race against `wait()`; and the drain may not have seen EOF
+    //     yet, so it can win the drain phase's race too. Looped on a
+    //     multi-threaded runtime because the race is timing-dependent: before
+    //     the fix a large share of iterations reported CANCELLED.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancel_after_the_command_exited_reports_its_real_outcome() {
+        for i in 0..20 {
+            let pid_file = crate::test_support::unique_temp_path("cancel-after-exit");
+            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+            let task = tokio::spawn(execute(ExecRequest {
+                task_id: format!("t-cancel-after-exit-{i}"),
+                argv: vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    format!("echo $$ > {}; printf done; exit 7", pid_file.display()),
+                ],
+                timeout: Duration::from_secs(30),
+                max_output_bytes: 4096,
+                cancel: Some(cancel_rx),
+                limits: no_limits(),
+            }));
+
+            tokio::task::spawn_blocking(move || cancel_once_exited(pid_file, cancel_tx))
+                .await
+                .expect("the cancel sender must not panic");
+
+            let result = tokio::time::timeout(Duration::from_secs(10), task)
+                .await
+                .expect("execute must return")
+                .expect("execute must not panic");
+            assert_eq!(
+                (result.outcome, result.exit_code),
+                (Outcome::Failure as i32, 7),
+                "iteration {i}: an exited command must report its real outcome, not CANCELLED"
+            );
+            assert_eq!(result.stdout, b"done", "iteration {i}");
+            assert!(!result.truncated, "iteration {i}");
+        }
+    }
+
+    // 20. The same rule at the deadline. The command exits at once, but a process
+    //     that left its process group with setsid(2) keeps the stdout pipe open.
+    //     Nothing of the Task's group is running at the deadline, so the command
+    //     has completed: it reports its real outcome and exit code — with the
+    //     output marked truncated, since the drain was stopped short of EOF —
+    //     not OUTCOME_TIMEOUT.
+    #[tokio::test]
+    async fn deadline_with_only_an_escaped_pipe_holder_reports_the_real_outcome() {
+        let timeout = Duration::from_secs(2);
+        let started = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(15),
+            execute(ExecRequest {
+                task_id: "t-escaped-holder".to_string(),
+                argv: vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "setsid sleep 30 & echo $!; exit 4".to_string(),
+                ],
+                timeout,
+                max_output_bytes: 4096,
+                cancel: None,
+                limits: no_limits(),
+            }),
+        )
+        .await
+        .expect("execute must return despite the escaped pipe holder");
+        let elapsed = started.elapsed();
+
+        // The holder left the Task's group, so nothing in execute kills it: this
+        // test cleans up the one process it created, by its own pid.
+        let holder: i32 = String::from_utf8_lossy(&result.stdout)
+            .trim()
+            .parse()
+            .expect("stdout keeps the holder's pid");
+        let _ = rustix::process::kill_process(
+            Pid::from_raw(holder).expect("a shell-reported pid is non-zero"),
+            rustix::process::Signal::KILL,
+        );
+
+        assert_eq!(result.outcome, Outcome::Failure as i32);
+        assert_eq!(result.exit_code, 4);
+        assert!(result.truncated);
+        assert!(
+            elapsed < timeout + super::POST_KILL_DRAIN_GRACE + Duration::from_secs(2),
+            "the drain must still be bounded: {elapsed:?}"
+        );
+        crate::test_support::wait_until_reaped(holder, Duration::from_secs(2)).await;
     }
 }
