@@ -91,8 +91,8 @@ func TestJob_TheRawExecTierIsNeverImpersonated(t *testing.T) {
 	}
 }
 
-// The chip is written twice, here and in Activity. Until it is shared, this
-// keeps the two from drifting apart.
+// The chip is written once per screen. Until it is shared, this keeps Job
+// detail's from drifting from Activity's (node_tier_test.go does Node detail's).
 func TestJob_TheRawExecChipMatchesActivitys(t *testing.T) {
 	chipOf := func(body string) string {
 		i := strings.Index(body, `<span class="chip" data-tier="raw_exec">`)

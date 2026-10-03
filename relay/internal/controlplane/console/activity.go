@@ -1352,7 +1352,8 @@ func jobRowName(sum capability.JobSummary) (operation string, rawExecTier bool) 
 
 // trailRowName is jobRowName's trail-lane twin: the tier is read from
 // ActionKind or RawExecArgv first, and an Operation whose name collides with
-// the tier's spelling is prefixed so it cannot impersonate Raw Exec.
+// the tier's spelling is prefixed so it cannot impersonate Raw Exec. Node
+// detail's Recent Tasks names its rows through it too.
 func trailRowName(f trailFacts) (operation string, rawExecTier bool) {
 	switch {
 	case f.ActionKind == rawExecActionKind || len(f.RawExecArgv) > 0:

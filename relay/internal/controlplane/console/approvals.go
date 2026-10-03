@@ -110,6 +110,8 @@ type approvalRow struct {
 	Summary   string
 	Operation string
 	Risk      string
+	// RawExecTier is read from the request's ActionKind (D18).
+	RawExecTier bool
 
 	Requester string
 	Verified  bool
@@ -339,6 +341,7 @@ func buildApprovalRows(reqs []approval.Request, grants map[string]approval.Grant
 			Href:              "/console/approvals/" + req.ID,
 			Summary:           req.Summary,
 			Operation:         approvalOperation(req),
+			RawExecTier:       req.ActionKind == jobs.ActionRawExec,
 			Risk:              jobs.RiskClassName(req.RiskClass),
 			Requester:         req.RequestedBy,
 			Verified:          req.RequestedByID != "",
@@ -1011,6 +1014,8 @@ type approvalView struct {
 	Operation string
 	Risk      string
 	PlanHash  string
+	// RawExecTier is read from the request's ActionKind (D18).
+	RawExecTier bool
 
 	Requester string
 	Verified  bool
@@ -1179,6 +1184,7 @@ func buildApprovalView(ctx context.Context, d Deps, caller capability.Principal,
 		ID:                req.ID,
 		Summary:           req.Summary,
 		Operation:         approvalOperation(req),
+		RawExecTier:       req.ActionKind == jobs.ActionRawExec,
 		Risk:              jobs.RiskClassName(req.RiskClass),
 		PlanHash:          req.PlanHash,
 		Requester:         req.RequestedBy,
@@ -1767,6 +1773,7 @@ var approvalsTmpl = newScreen("approvals", `
     <div class="qmain">
       <div class="qhead">
         <span class="chip risk" data-risk="{{.Risk}}">{{.Risk}}</span>
+        {{if .RawExecTier}}<span class="chip" data-tier="raw_exec">Raw Exec</span>{{end}}
         <code>{{.Operation}}</code>
         {{template "trust-chip" (trust .Requester .Verified)}}
       </div>
@@ -1823,6 +1830,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
 <section class="panel">
   <div class="jhrow">
     <span class="chip risk" data-risk="{{.Risk}}">{{.Risk}}</span>
+    {{if .RawExecTier}}<span class="chip" data-tier="raw_exec">Raw Exec</span>{{end}}
     <code class="jobop">{{.Operation}}</code>
     <span class="chip state" data-state="{{.State}}">{{.State}}</span>
     {{if .Urgent}}<span class="overcap">{{.TTL}}</span>{{else}}<span class="dim">{{.TTL}}</span>{{end}}
