@@ -22,8 +22,10 @@ single-Relay deployment stack, with no relay-daemons and no fixtures, is
 > [docs/operations/relay-install.md](operations/relay-install.md) and
 > [docs/operations/relay-daemon-install.md](operations/relay-daemon-install.md).
 > Never reuse the credentials or Policy below anywhere real. The published
-> ports (`7654`, `9443`) are bound to `127.0.0.1` by default: the control plane
-> accepts a committed dev credential, so exposing it on the LAN would be remote
+> ports (`7654`, `9443`) are bound to `127.0.0.1` by default. The control-plane
+> API Tokens are minted at startup, not committed (see below), but the Console's
+> default sign-in password is committed to this repository, and a signed-in admin
+> can mint API Tokens — so exposing the control plane on the LAN would be remote
 > code execution for anyone on your network. `RELAY_PUBLISH_ADDR=0.0.0.0` opts the
 > control plane (`9443`) in to being exposed anyway, and the `console-password`
 > service then refuses the committed default password: set a real
@@ -551,7 +553,7 @@ The nine-Node `demo` compose profile — its roster, the four beats, the injecte
 names its project after the checkout directory rather than `relay-demo`. It is purely
 additive to the fleet above (`demo_profile_is_additive`, `daemon/tests/dev_fleet_fixtures.rs`,
 enforces this), and everything in this document's DEV-ONLY banner applies to it with more
-force, not less: three times the Nodes sit behind the same committed dev credential. That
+force, not less: three times the Nodes sit behind the same committed default Console password. That
 runbook's [Presenter runbook](operations/demo-fleet.md#presenter-runbook) section is what a
 presenter who has never run this fleet follows from cold to on stage, including
 [minting Gleipnir's credentials](operations/demo-fleet.md#credentials-for-gleipnir-copy-paste)

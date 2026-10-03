@@ -30,7 +30,7 @@ store file, which is root-owned.
 
 ```console
 # On the Relay host, as root:
-$ relay bootstrap-token -store-path /var/lib/relay/store/relay.db -ttl 24h
+$ relay bootstrap-token -store-path /var/lib/relay/relay.db -ttl 24h
 Minted API Token 7f3c… for account founding-admin (acct-…).
 This token expires at 2026-08-12T09:00:00Z. Revoke it once your real Accounts have tokens:
   DELETE /api/v1/api-tokens/7f3c…
@@ -42,7 +42,7 @@ Diagnostics go to stderr and **the credential alone goes to stdout**, so you can
 straight into a secret store without parsing:
 
 ```console
-$ relay bootstrap-token -store-path /var/lib/relay/store/relay.db -ttl 24h \
+$ relay bootstrap-token -store-path /var/lib/relay/relay.db -ttl 24h \
     | vault kv put secret/relay/bootstrap token=-
 ```
 
@@ -240,7 +240,8 @@ sign in to the Console.
 2. Remove `-control-credential-hash-file` / `RELAY_CONTROL_CREDENTIAL_HASH_FILE` from your
    unit file, IaC, and any wrapper scripts. The Relay will not start with the flag present.
 3. Start the Relay. It seeds the founding admin Account automatically, as it already did.
-4. Run `relay bootstrap-token` and switch your callers to the printed credential.
+4. Run `relay bootstrap-token -store-path <path>` — the same store path the Relay runs with —
+   and switch your callers to the printed credential.
 5. Create per-caller Accounts, mint their tokens, and revoke the bootstrap one.
 6. Delete the old credential-hash file and the plaintext from your vault. Nothing reads
    them any more.
