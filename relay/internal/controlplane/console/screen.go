@@ -28,6 +28,16 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
+// Absolute times in the Console are always UTC and carry the trailing "Z".
+const (
+	utcStampLayout  = "2006-01-02 15:04:05Z"
+	utcMinuteLayout = "2006-01-02 15:04Z"
+)
+
+// utcStamp renders t as an absolute UTC timestamp. It does not special-case
+// the zero time; callers that need a placeholder check IsZero first.
+func utcStamp(t time.Time) string { return t.UTC().Format(utcStampLayout) }
+
 // screenFuncs are the template helpers every screen may use.
 //
 // They are deliberately few. A template that needs a function this list does
@@ -62,7 +72,7 @@ var screenFuncs = template.FuncMap{
 		if t.IsZero() {
 			return "—"
 		}
-		return t.UTC().Format("2006-01-02 15:04:05Z")
+		return utcStamp(t)
 	},
 
 	// join renders a string slice for display.

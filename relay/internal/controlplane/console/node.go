@@ -317,7 +317,7 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 		Hostname:            primaryHostname(n.Facts.Hostname),
 		Connected:           n.Connected,
 		LastSeen:            nodestate.Since(n.LastSeen, d.now()),
-		LastSeenAbs:         n.LastSeen.UTC().Format("2006-01-02 15:04:05Z"),
+		LastSeenAbs:         utcStamp(n.LastSeen),
 		Revoked:             !n.RevokedAt.IsZero(),
 		States:              stateChips(nodestate.Markers(in)),
 		Labels:              declaredChips(n),
@@ -332,17 +332,17 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 		AuditWired:          d.Audit != nil,
 	}
 	if v.Revoked {
-		v.RevokedAt = n.RevokedAt.UTC().Format("2006-01-02 15:04:05Z")
+		v.RevokedAt = utcStamp(n.RevokedAt)
 	}
 	if v.CertProvenanceKnown {
-		v.CertNotAfter = n.CertNotAfter.UTC().Format("2006-01-02 15:04:05Z")
+		v.CertNotAfter = utcStamp(n.CertNotAfter)
 		v.CertExpiresIn = nodestate.Until(n.CertNotAfter, d.now())
 		v.RenewalCount = n.RenewalCount
 		if !n.EnrolledAt.IsZero() {
-			v.EnrolledAt = n.EnrolledAt.UTC().Format("2006-01-02 15:04:05Z")
+			v.EnrolledAt = utcStamp(n.EnrolledAt)
 		}
 		if !n.LastRenewedAt.IsZero() {
-			v.LastRenewedAt = n.LastRenewedAt.UTC().Format("2006-01-02 15:04:05Z")
+			v.LastRenewedAt = utcStamp(n.LastRenewedAt)
 		}
 	}
 
@@ -420,7 +420,7 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 			v.FingerprintUnrecorded = n.PolicyFingerprint == ""
 		}
 		if !snap.ReportedAt.IsZero() {
-			v.PolicyReportedAt = snap.ReportedAt.UTC().Format("2006-01-02 15:04:05Z")
+			v.PolicyReportedAt = utcStamp(snap.ReportedAt)
 			v.PolicyReportedAgo = nodestate.Since(snap.ReportedAt, d.now())
 		}
 		// A snapshot refreshes on (re)connect and at no other moment, so an
@@ -547,7 +547,7 @@ func nodeTaskFrom(rec audit.Record) (nodeTask, bool) {
 	}
 	f := factsOfRecord(rec)
 	t := nodeTask{
-		When:      rec.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
+		When:      utcStamp(rec.Timestamp),
 		Args:      argsText(f),
 		Outcome:   jobs.OutcomeName(rec.Outcome),
 		JobID:     rec.JobID,

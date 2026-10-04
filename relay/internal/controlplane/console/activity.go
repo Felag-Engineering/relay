@@ -1275,7 +1275,7 @@ func dispatchRowFromJob(sum capability.JobSummary) activityRow {
 		Kind:      rowDispatch,
 		EventKind: audit.KindDispatch,
 		at:        sum.CreatedAt,
-		When:      sum.CreatedAt.UTC().Format("2006-01-02 15:04:05Z"),
+		When:      utcStamp(sum.CreatedAt),
 		Operation: operation,
 		Args:      argsSummary(sum.Args, sum.RawExecArgv),
 		// The DECLARED class, from tasks.risk_class — never this package's
@@ -1372,7 +1372,7 @@ func eventRowFromTrail(f trailFacts) activityRow {
 		Kind:            kindOf(f.Kind),
 		EventKind:       f.Kind,
 		at:              f.Timestamp,
-		When:            f.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
+		When:            utcStamp(f.Timestamp),
 		Principal:       principalText(f),
 		Verified:        f.VerifiedAccountID != "",
 		AccountID:       f.VerifiedAccountID,

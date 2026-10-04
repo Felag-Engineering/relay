@@ -139,7 +139,7 @@ func dayOneWatch(r EventReader) ([]dayOneAttempt, string) {
 			Accepted: ev.Enrollment.Outcome == events.EnrollmentAccepted,
 			TokenID:  ev.Enrollment.TokenID,
 			Source:   ev.Enrollment.Source,
-			At:       ev.At.UTC().Format("2006-01-02 15:04:05Z"),
+			At:       utcStamp(ev.At),
 		}
 		// Only a rejection carries a reason. See sseEnrollment.Reason: the
 		// seam delivers every ACCEPTED attempt with events.ReasonInternal,
