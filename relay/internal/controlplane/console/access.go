@@ -281,7 +281,7 @@ func accessRowFrom(f trailFacts) accessRow {
 		Kind:      family,
 		EventKind: f.Kind,
 		at:        f.Timestamp,
-		When:      f.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
+		When:      utcStamp(f.Timestamp),
 		Summary:   accessSummary(f),
 		Attempt:   accessAttempt(f.Kind),
 		Record:    f.Reason,

@@ -466,7 +466,7 @@ func grantRowLine(g approval.Grant) string {
 		"any namespace",
 		"up to " + strconv.Itoa(g.Scope.MaxFanOut) + " Nodes per dispatch",
 		strconv.Itoa(g.MaxUses) + " dispatches",
-		"until " + g.ExpiresAt.UTC().Format("2006-01-02 15:04Z"),
+		"until " + g.ExpiresAt.UTC().Format(utcMinuteLayout),
 	}, " · ")
 }
 
@@ -1196,8 +1196,8 @@ func buildApprovalView(ctx context.Context, d Deps, caller capability.Principal,
 		Audience:          req.Require.Audience,
 		AudienceMalformed: req.Require.AudienceMalformed(),
 		RequesterAllowed:  req.Require.RequesterAllowed,
-		Created:           req.CreatedAt.UTC().Format("2006-01-02 15:04:05Z"),
-		Expires:           req.ExpiresAt.UTC().Format("2006-01-02 15:04:05Z"),
+		Created:           utcStamp(req.CreatedAt),
+		Expires:           utcStamp(req.ExpiresAt),
 		TTL:               renderTTL(ttl),
 		Urgent:            ttl > 0 && ttl <= expiryPressure,
 		MatchedRules:      req.MatchedRules,
@@ -1334,8 +1334,8 @@ func buildGrantCard(ctx context.Context, d Deps, caller capability.Principal, g 
 		Namespace:          namespace,
 		LegacyNamespacePin: g.LegacyNamespacePin,
 		MaxFanOut:          g.Scope.MaxFanOut,
-		Starts:             g.StartsAt.UTC().Format("2006-01-02 15:04:05Z"),
-		Expires:            g.ExpiresAt.UTC().Format("2006-01-02 15:04:05Z"),
+		Starts:             utcStamp(g.StartsAt),
+		Expires:            utcStamp(g.ExpiresAt),
 		MaxUses:            g.MaxUses,
 		Progress:           g.Progress(),
 		Revoked:            g.Revoked(),
@@ -1654,7 +1654,7 @@ func stampOrAbsent(t time.Time) string {
 	if t.IsZero() {
 		return "not recorded"
 	}
-	return t.UTC().Format("2006-01-02 15:04:05Z")
+	return utcStamp(t)
 }
 
 func decisionAgo(t time.Time, now time.Time) string {

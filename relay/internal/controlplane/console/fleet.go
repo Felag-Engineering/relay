@@ -738,7 +738,7 @@ func newFleetNode(d Deps, n registry.Node) fleetNode {
 	}
 
 	if fn.Revoked {
-		fn.RevokedAt = n.RevokedAt.UTC().Format("2006-01-02 15:04:05Z")
+		fn.RevokedAt = utcStamp(n.RevokedAt)
 	}
 
 	// Selector terms for the three self-reported facts, derived through

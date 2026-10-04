@@ -119,7 +119,7 @@ func buildRunningNow(pg capability.JobPage, f activityFilter, now time.Time, off
 			Principal:     sum.Requester,
 			Verified:      sum.RequesterAccountID != "",
 			RequesterKind: verifiedKind(sum.RequesterAccountID != "", sum.RequesterKind),
-			Started:       sum.CreatedAt.UTC().Format("2006-01-02 15:04:05Z"),
+			Started:       utcStamp(sum.CreatedAt),
 			RunningFor:    runningFor(sum.CreatedAt, now),
 			Resolved:      sum.Total - sum.Unresolved,
 			Total:         sum.Total,

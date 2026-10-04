@@ -718,7 +718,7 @@ func projectEnrollment(e events.EnrollmentEvent, at time.Time) sseEnrollment {
 		Outcome: string(e.Outcome),
 		TokenID: e.TokenID,
 		Source:  e.Source,
-		At:      at.UTC().Format("2006-01-02 15:04:05Z"),
+		At:      utcStamp(at),
 	}
 	// See sseEnrollment.Reason: an accepted attempt's reason is meaningless
 	// and, as the seam actually delivers it, actively misleading.
@@ -738,7 +738,7 @@ func projectJob(e events.JobEvent, at time.Time) sseJob {
 	return sseJob{
 		JobID:      e.JobID,
 		Transition: string(e.Transition),
-		At:         at.UTC().Format("2006-01-02 15:04:05Z"),
+		At:         utcStamp(at),
 	}
 }
 

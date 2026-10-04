@@ -396,7 +396,7 @@ func buildCompareView(ctx context.Context, d Deps, caller capability.Principal, 
 			snap = &s
 			col.PolicyReported = true
 			if !s.ReportedAt.IsZero() {
-				col.PolicyReportedAt = s.ReportedAt.UTC().Format("2006-01-02 15:04:05Z")
+				col.PolicyReportedAt = utcStamp(s.ReportedAt)
 			}
 		}
 		if snap == nil {
