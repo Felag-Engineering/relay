@@ -64,5 +64,5 @@ func assertionsFromRequest(r *http.Request) (capability.Assertions, error) {
 func badAssertedAttribution(w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusBadRequest)
-	_, _ = w.Write([]byte(err.Error() + "\n"))
+	_, _ = w.Write([]byte(err.Error() + "\n")) //nolint:gosec // G705: served as text/plain (set above), so nothing is interpreted as HTML
 }

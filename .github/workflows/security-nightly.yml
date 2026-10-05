@@ -5,9 +5,10 @@ on:
     - cron: '0 7 * * *'
   workflow_dispatch:
 
+# Read-only at the workflow level; the one job that files the tracking issue asks for
+# issues:write itself, so no other job ever holds it.
 permissions:
   contents: read
-  issues: write
 
 jobs:
 
@@ -18,12 +19,19 @@ jobs:
   scan:
     name: Vulnerability scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write # the report step creates or updates the security-scan tracking issue
     env:
       GOVULNCHECK_VERSION: v1.1.4  # pinned; full module path in the install step
       CARGO_AUDIT_VERSION: 0.22.2  # pinned for supply-chain reproducibility
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the secrets scan reads the whole history
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -85,6 +93,17 @@ jobs:
           make vuln-daemon > vuln-daemon.txt 2>&1
           echo $? > vuln-daemon.rc
 
+      # Every commit in the history, not just the tree: a secret committed and deleted
+      # later is still in every clone. Blocking — a leaked credential is rotated now,
+      # not triaged with the advisories — so a finding turns this job red. gitleaks is a
+      # pinned `go install` in the Makefile, restored from the shared Go tool cache.
+      - name: Go tools (pinned in the Makefile)
+        uses: ./.github/actions/go-tools
+
+      - name: Secrets scan, full history (gitleaks)
+        id: secrets
+        run: make secrets-scan-history
+
       # Always runs; creates or updates the single security-scan tracking issue.
       - name: Report findings
         if: always()
@@ -101,6 +120,7 @@ jobs:
   fuzz-plan:
     name: Fuzz plan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: read # gh run list: find the last successful scheduled run
@@ -109,6 +129,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          persist-credentials: false
           fetch-depth: 0 # diff against the last successful run's commit
 
       - name: Decide
@@ -127,14 +148,15 @@ jobs:
     needs: fuzz-plan
     if: ${{ !cancelled() && needs.fuzz-plan.outputs.run != 'false' }}
     runs-on: ubuntu-latest
-    # Least-privilege: this job only reads the repo and runs the bounded fuzzers;
-    # it never files issues, so it drops the workflow-level `issues: write` that
-    # the `scan` job needs for its report step.
+    timeout-minutes: 30 # six targets at FUZZTIME=120s, plus the build
+    # Least-privilege: this job only reads the repo and runs the bounded fuzzers.
     permissions:
       contents: read
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -204,13 +226,16 @@ jobs:
     needs: fuzz-plan
     if: ${{ !cancelled() && needs.fuzz-plan.outputs.run != 'false' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 45 # three targets at FUZZ_TOTAL_TIME=300s, plus a nightly-toolchain build
     # Least-privilege: like the Go fuzz job above, this only reads the repo and
-    # runs the bounded fuzzers; it never files issues.
+    # runs the bounded fuzzers.
     permissions:
       contents: read
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       # Same pinned action as the stable setup in `scan`; the `toolchain` input
       # selects nightly, which cargo-fuzz needs for its -Z sanitizer flags.

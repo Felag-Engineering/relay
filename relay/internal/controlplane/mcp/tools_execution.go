@@ -475,7 +475,7 @@ func answerThenDispatch(
 ) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
 	digest, err := callArgsDigest(in)
 	if err != nil {
-		return nil, RunOrPlanOutput{Results: []PerNodeResult{}, AnswerRefused: answerStateRefusedOutput()}, nil
+		return nil, RunOrPlanOutput{Results: []PerNodeResult{}, AnswerRefused: answerStateRefusedOutput()}, nil //nolint:nilerr // the refusal is the tool result; a protocol error would hide it from the AI-agent
 	}
 
 	r := acceptElicitedAnswer(ctx, decider, ask.opener(), now(), p, elicitedAnswer{

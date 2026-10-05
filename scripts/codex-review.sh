@@ -51,7 +51,7 @@
 #       single-reviewer, and NEVER as a pass.
 #== end usage ==
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 usage() { sed -n '/^#== usage ==$/,/^#== end usage ==$/{ /^#== /d; p; }' "$0"; }
 

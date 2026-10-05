@@ -187,12 +187,12 @@ func Open(path string, opts ...Option) (*Store, error) {
 	// sql.Open is lazy and never dials, so a bad DSN or a failing
 	// DSN-supplied pragma would otherwise surface for the first time on the
 	// journal_mode Exec below, misleadingly reported as a pragma failure.
-	if err := db.Ping(); err != nil {
+	if err := db.Ping(); err != nil { //nolint:noctx // opening the store at startup, before any request context exists
 		db.Close() //nolint:errcheck
 		return nil, fmt.Errorf("open sqlite database %q: %w", path, err)
 	}
 
-	if _, err := db.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+	if _, err := db.Exec(`PRAGMA journal_mode = WAL`); err != nil { //nolint:noctx // opening the store at startup, before any request context exists
 		db.Close() //nolint:errcheck
 		return nil, fmt.Errorf("apply pragma %q: %w", `PRAGMA journal_mode = WAL`, err)
 	}

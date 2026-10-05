@@ -360,7 +360,7 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 	// the Grant check and the switch below; any other error fails the
 	// dispatch closed, and a covering Grant's own uses are left untouched
 	// (ClaimGrant below is never reached).
-	if lookupErr != nil && lookupErr != approval.ErrNotFound {
+	if lookupErr != nil && lookupErr != approval.ErrNotFound { //nolint:errorlint // a wrapped ErrNotFound would take the fail-closed branch, never the permissive one
 		return approvalDecision{}, fmt.Errorf("capability: read approval for plan: %w", lookupErr)
 	}
 

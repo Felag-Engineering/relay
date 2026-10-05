@@ -282,7 +282,7 @@ func scanTask(row rowScanner) (jobs.Task, error) {
 		},
 		State:          dispatchStateFromString(state),
 		Outcome:        outcomeFromNullInt64(outcome),
-		ExitCode:       int32(exitCode.Int64),
+		ExitCode:       int32(exitCode.Int64), //nolint:gosec // G115: stored from an int32 exit code, so it round-trips
 		Stdout:         stdout,
 		Stderr:         stderr,
 		TimeoutSeconds: timeoutSeconds,

@@ -112,7 +112,7 @@ func (a *sqliteAudit) Query(ctx context.Context, q audit.Query, limit int, curso
 
 	stmt := `SELECT ` + auditQueryColumns + ` FROM audit`
 	if len(conds) > 0 {
-		stmt += ` WHERE ` + strings.Join(conds, " AND ")
+		stmt += ` WHERE ` + strings.Join(conds, " AND ") //nolint:gosec // G202: conds are buildAuditWhere's fixed fragments; every value is a ? placeholder
 	}
 	stmt += " " + auditOrderDesc + " LIMIT ?"
 	args = append(args, limit+1)
@@ -283,6 +283,7 @@ func (a *sqliteAudit) ReachCounts(ctx context.Context, q audit.Query) (audit.Rea
 		return audit.Reach{}, err
 	}
 
+	//nolint:gosec // G201: targetExpr is built from audit.TargetArgKeys, each checked against ^[a-z][a-z0-9_]*$
 	stmt := fmt.Sprintf(`SELECT COUNT(*),
 		COUNT(DISTINCT operation_name || ' ' || %s),
 		COUNT(DISTINCT CASE WHEN node_id IS NOT NULL AND node_id != '' THEN node_id END)

@@ -185,7 +185,7 @@ func renderScreen(w http.ResponseWriter, p Page, tmpl *template.Template, data a
 		http.Error(w, "the Console could not render this page", http.StatusInternalServerError)
 		return
 	}
-	p.Content = template.HTML(buf.String())
+	p.Content = template.HTML(buf.String()) //nolint:gosec // G203: buf is html/template output, already contextually escaped
 	Render(w, p)
 }
 

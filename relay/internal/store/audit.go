@@ -191,6 +191,7 @@ func (a *sqliteAudit) ByOnBehalfOf(ctx context.Context, onBehalfOf string) ([]au
 // TestAuditSQL_EveryOrderByTsCarriesTheTieBreak only if its clause is a
 // string literal in a non-test file of this package.
 func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any) ([]audit.Record, error) {
+	//nolint:gosec // G202: every caller passes a constant WHERE clause with ? placeholders
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason, stdout, stderr, truncated,
 		       account_id, account_name, account_role, token_id, auth_method, verified_source,

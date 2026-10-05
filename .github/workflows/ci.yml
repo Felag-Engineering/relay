@@ -2,6 +2,9 @@ name: CI
 
 on:
   pull_request:
+    # The default three plus ready_for_review: a draft PR runs only the Docs job
+    # (below), and marking it ready is what runs the toolchain jobs.
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
 
@@ -30,6 +33,19 @@ permissions:
 # each build cache is a restore action early in the job and a save action at its end,
 # and the save's `if:` — the save policy — stays here in the job.
 #
+# Drafts: on a draft pull request only the Docs job runs. Every toolchain job is gated
+# on `github.event.pull_request.draft != true` (null on a push, so main is unaffected),
+# and marking the PR ready for review fires the run that gates the merge. Push to a
+# draft as often as you like; it costs the Docs job.
+#
+# Timeouts: every job sets timeout-minutes at roughly three times its normal runtime.
+# Without one, a hung test bills the platform default of six hours.
+#
+# Adding a gate: make it a step of the job that already has its toolchain and cache
+# (the hardening gates — golangci's security linters, shellcheck, actionlint, zizmor,
+# gitleaks, cargo-deny, the PR-time advisory scans — are all steps, not jobs). A new
+# job is justified only by a toolchain no existing job has.
+#
 # GOFLAGS=-count=1: the restored Go build cache also holds test RESULTS, which do
 # not key on everything a test depends on (the umask, for one — see the Makefile's
 # strict-umask notes). CI never replays a cached pass; it only reuses compilation.
@@ -39,21 +55,27 @@ env:
 
 jobs:
 
-  # ---- docs: ADR-number uniqueness, every test a capability spec cites, and which
-  # of the jobs below this change needs. Needs no toolchain: shell + grep over the
-  # tree. It is the one job that always runs. scripts/ci-changed-paths.sh fails
-  # open — pushes to main always run everything — and the jobs below skip only on an
-  # explicit `false`, so a docs job that dies before classifying runs every gate.
-  # They run on `!cancelled()`, so a docs-check failure never hides a code-job result. ----
+  # ---- docs: ADR-number uniqueness, every test a capability spec cites, which of the
+  # jobs below this change needs, and the repo-wide hygiene gates (shell and workflow
+  # lint, the secrets scan). The checks are shell + grep over the tree; Go is set up
+  # only to run the pinned scanner binaries out of the shared tool cache. It is the one
+  # job that always runs, drafts included — which is why the secrets scan lives here.
+  # scripts/ci-changed-paths.sh fails open — pushes to main always run everything — and
+  # the jobs below skip only on an explicit `false`, so a docs job that dies before
+  # classifying runs every gate. They run on `!cancelled()`, so a docs-check failure
+  # never hides a code-job result. ----
   docs:
     name: Docs & paths
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       code: ${{ steps.paths.outputs.code }}
       proto: ${{ steps.paths.outputs.proto }}
+      deps: ${{ steps.paths.outputs.deps }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          persist-credentials: false
           fetch-depth: 2 # the PR merge commit and its base parent
 
       - name: Classify changed paths
@@ -115,15 +137,51 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-ci-changed-paths
 
+      # ---- Repo-wide hygiene gates. The scanners are pinned `go install`s in the
+      # Makefile's lint-tools, so they ride the shared Go tool cache; zizmor is a Python
+      # package, installed by pipx. ----
+      - name: Set up Go
+        if: ${{ !cancelled() }}
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: relay/go.mod
+          cache: false
+
+      - name: Go tools (pinned in the Makefile)
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/go-tools
+
+      # Tracked files only, every run, drafts included: a credential pushed to a draft is
+      # as leaked as one pushed anywhere else. security-nightly.yml scans the history.
+      - name: Secrets scan (gitleaks)
+        if: ${{ !cancelled() }}
+        run: make secrets-scan
+
+      - name: Install zizmor (pinned in the Makefile)
+        if: ${{ !cancelled() }}
+        run: make zizmor-tool
+
+      # shellcheck (preinstalled on the runner image) over every tracked script,
+      # actionlint over the workflows, and zizmor's workflow security audits. GH_TOKEN
+      # turns on zizmor's online audits: impostor commits and known-vulnerable actions.
+      - name: Shell and workflow lint
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make lint-ci
+
   # ---- relay: Go format, build, lint, race-detector tests, the OpenAPI contract,
   # and the Go half of the strict-umask lane ----
   relay:
     name: Relay (Go)
     needs: docs
-    if: ${{ !cancelled() && needs.docs.outputs.code != 'false' }}
+    if: ${{ !cancelled() && needs.docs.outputs.code != 'false' && github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -159,6 +217,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: make apiclient-check
 
+      # Known vulnerabilities in the Relay's dependencies and its Go toolchain, on a PR
+      # that changes go.mod/go.sum (or the scanners' pins) — and on every push to main,
+      # where the classifier fails open. Everything else is the nightly scan's.
+      - name: Vulnerability scan (govulncheck)
+        if: ${{ !cancelled() && needs.docs.outputs.deps != 'false' }}
+        run: make vuln-relay
+
       # strict-umask (#528): the hermetic Go tests again at umask 077. Every other
       # gate runs at the runner's default 0022, which made a whole defect class
       # invisible: fixtures that quietly stop being valid inputs, and assertions
@@ -186,10 +251,13 @@ jobs:
   daemon:
     name: Daemon (Rust)
     needs: docs
-    if: ${{ !cancelled() && needs.docs.outputs.code != 'false' }}
+    if: ${{ !cancelled() && needs.docs.outputs.code != 'false' && github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Set up Rust stable
         id: toolchain
@@ -207,6 +275,44 @@ jobs:
       - run: make build-daemon
       - run: make lint-daemon # includes cargo fmt --check
       - run: make test-daemon
+
+      # cargo-deny, compiled once per pinned version and cached as a binary: the
+      # install is minutes, a cache hit is seconds. The pin is CARGO_DENY_VERSION in
+      # the Makefile, read here so there is one copy of it.
+      - name: cargo-deny version
+        if: ${{ !cancelled() }}
+        id: deny
+        run: echo "version=$(sed -n 's/^CARGO_DENY_VERSION := //p' Makefile)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cargo-deny
+        if: ${{ !cancelled() }}
+        id: deny-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ steps.deny.outputs.version }}
+
+      - name: Install cargo-deny
+        if: ${{ !cancelled() && steps.deny-cache.outputs.cache-hit != 'true' }}
+        run: make deny-tool
+
+      - name: Save cargo-deny
+        if: ${{ !cancelled() && steps.deny-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: ${{ steps.deny-cache.outputs.cache-primary-key }}
+
+      # daemon/deny.toml: licences, banned crates (a second crypto stack), sources.
+      # Offline, so on every daemon change.
+      - name: Dependency policy (cargo-deny)
+        if: ${{ !cancelled() }}
+        run: make deny-daemon
+
+      # Known advisories, on the same deps= condition as the relay job's govulncheck.
+      - name: Dependency advisories (cargo-deny)
+        if: ${{ !cancelled() && needs.docs.outputs.deps != 'false' }}
+        run: make deny-daemon-advisories
 
       # strict-umask (#528), Rust half: see the relay job's step of the same name.
       # Reuses the test binaries test-daemon just compiled.
@@ -234,11 +340,13 @@ jobs:
   proto:
     name: Proto (drift & breaking)
     needs: docs
-    if: ${{ !cancelled() && needs.docs.outputs.proto != 'false' }}
+    if: ${{ !cancelled() && needs.docs.outputs.proto != 'false' && github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          persist-credentials: false
           fetch-depth: 0 # proto-breaking reads the base revision out of .git
 
       - name: Set up Go
@@ -267,10 +375,13 @@ jobs:
   integration:
     name: Integration
     needs: docs
-    if: ${{ !cancelled() && needs.docs.outputs.code != 'false' }}
+    if: ${{ !cancelled() && needs.docs.outputs.code != 'false' && github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -323,9 +434,12 @@ jobs:
   release-build:
     name: Release build (musl)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Set up Rust stable (musl target)
         id: toolchain

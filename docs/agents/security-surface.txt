@@ -111,3 +111,11 @@ relay/internal/approvalnotify/**
 relay/cmd/relay/freeze_signal.go
 daemon/src/policy/**
 daemon/src/dispatch/**
+
+# Added 2026-10-05 (CI hardening; the owner confirms at review): the configuration of the
+# static gates. Each decides what a gate refuses, so loosening one is loosening the gate —
+# the same reason the Makefile and .github/** are listed above.
+.golangci.yml
+.gitleaks.toml
+daemon/deny.toml
+daemon/clippy.toml

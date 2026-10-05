@@ -36,6 +36,10 @@
 //! new package, and co-locating them keeps the compose <-> fixture <->
 //! Dockerfile triangle in one place.
 
+// Integration tests can only drive the bin-only daemon through its compiled binary,
+// so spawning it is the point; clippy.toml's spawn ban is for the daemon's own code.
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use common::TempDir;

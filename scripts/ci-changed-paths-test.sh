@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Proves scripts/ci-changed-paths.sh classifies what its header claims: a docs/ path that a
 # code job reads is code, every other docs/ path, .claude/ and top-level *.md are not, an
-# unknown path is code, and every input of the proto gates trips proto — and that it fails
-# OPEN, running every job, when it is not a pull request or cannot diff the merge commit.
+# unknown path is code, every input of the proto gates trips proto, and every dependency
+# manifest, lockfile and scanner input trips deps — and that it fails OPEN, running every
+# job and gate, when it is not a pull request or cannot diff the merge commit.
 #
 # A wrong `false` here is the dangerous direction: it skips a gate on a change that reaches
 # it, and the PR goes green on a check that never ran. Before this test, a docs-only PR that
@@ -50,6 +51,7 @@ new_fixture() {
 # command (security-surface-test.sh:106-108).
 CODE=""
 PROTO=""
+DEPS=""
 RC=0
 
 # classify <fixture> <GITHUB_EVENT_NAME, or "" for unset> [path...]
@@ -64,12 +66,13 @@ classify() {
   RC=$?
   CODE="$(sed -n 's/^code=//p' <<<"$out")"
   PROTO="$(sed -n 's/^proto=//p' <<<"$out")"
+  DEPS="$(sed -n 's/^deps=//p' <<<"$out")"
 }
 
-# expect <case name> <want code> <want proto>
+# expect <case name> <want code> <want proto> <want deps>
 expect() {
-  if [ "$RC" -ne 0 ] || [ "$CODE" != "$2" ] || [ "$PROTO" != "$3" ]; then
-    echo "FAIL: $1: got rc=$RC code=$CODE proto=$PROTO, want rc=0 code=$2 proto=$3" >&2
+  if [ "$RC" -ne 0 ] || [ "$CODE" != "$2" ] || [ "$PROTO" != "$3" ] || [ "$DEPS" != "$4" ]; then
+    echo "FAIL: $1: got rc=$RC code=$CODE proto=$PROTO deps=$DEPS, want rc=0 code=$2 proto=$3 deps=$4" >&2
     fail=$((fail + 1))
   fi
 }
@@ -98,7 +101,7 @@ for p in \
     fail=$((fail + 1))
   fi
   classify "$ARGS" "" "$p"
-  expect "test-read docs path $p" true false
+  expect "test-read docs path $p" true false false
 done
 
 # --- 2. Documentation nothing builds or tests reads stays skippable — including neighbours
@@ -114,18 +117,18 @@ for p in \
   README.md \
   GLOSSARY.md; do
   classify "$ARGS" "" "$p"
-  expect "documentation path $p" false false
+  expect "documentation path $p" false false false
 done
 
 # One read path among docs-only paths still makes the change code.
 classify "$ARGS" "" docs/adr/0001-example.md README.md docs/brand/relay-icon.svg
-expect "mixed docs change with one test-read path" true false
+expect "mixed docs change with one test-read path" true false false
 
 # --- 3. Code, and paths the script has never heard of, are code.
-for p in relay/cmd/relay/main.go daemon/src/main.rs scripts/check-docs.sh relay/go.sum \
-  docker-compose.demo.yml unknown-top-level-file; do
+for p in relay/cmd/relay/main.go daemon/src/main.rs scripts/check-docs.sh \
+  docker-compose.demo.yml unknown-top-level-file daemon/fuzz/Cargo.lock; do
   classify "$ARGS" "" "$p"
-  expect "code path $p" true false
+  expect "code path $p" true false false
 done
 
 # --- 4. Every input of the proto gates trips proto: the contract and its generated Go, the
@@ -133,17 +136,31 @@ done
 # GOTOOLCHAIN), proto-tools-check.sh (prerequisite of `make proto` and `make proto-breaking`),
 # and the CI machinery including this classifier.
 for p in proto/relay/v1/relay.proto proto/buf.yaml relay/internal/relay/v1/relay.pb.go \
-  Makefile relay/go.mod scripts/proto-tools-check.sh scripts/ci-changed-paths.sh \
-  .github/workflows/ci.yml .github/actions/go-tools/action.yml; do
+  scripts/proto-tools-check.sh; do
   classify "$ARGS" "" "$p"
-  expect "proto input $p" true true
+  expect "proto input $p" true true false
+done
+# The CI machinery, the Makefile and relay/go.mod are inputs of both the proto gates and
+# the dependency scans.
+for p in Makefile relay/go.mod scripts/ci-changed-paths.sh .github/workflows/ci.yml \
+  .github/actions/go-tools/action.yml; do
+  classify "$ARGS" "" "$p"
+  expect "proto and deps input $p" true true true
+done
+
+# --- 4b. Every input of the PR-time advisory scans trips deps: the manifests and lockfiles
+# they read and the cargo-deny policy. (The daemon's fuzz workspace is not one: cargo-deny
+# checks the daemon crate only, and the nightly scan covers the rest.)
+for p in relay/go.sum daemon/Cargo.toml daemon/Cargo.lock daemon/deny.toml; do
+  classify "$ARGS" "" "$p"
+  expect "deps input $p" true false true
 done
 
 # --- 5. Fail open: not a pull request runs every job, whatever the arguments would say.
 classify "$ARGS" ""
-expect "no event, no paths" true true
+expect "no event, no paths" true true true
 classify "$ARGS" push
-expect "push event" true true
+expect "push event" true true true
 
 # --- 6. The pull_request path: diff the checked-out commit against its first parent, as on
 # the merge commit CI checks out. A fixture repo, two commits.
@@ -171,16 +188,20 @@ pr_fixture() {
 
 pr_fixture pr-docs sh -c 'echo changed >>docs/adr/0001-example.md'
 classify "$PR_FIX" pull_request
-expect "pull_request touching only an unread doc" false false
+expect "pull_request touching only an unread doc" false false false
 
 pr_fixture pr-brand sh -c 'echo changed >>docs/brand/relay-icon.svg'
 classify "$PR_FIX" pull_request
-expect "pull_request touching only docs/brand" true false
+expect "pull_request touching only docs/brand" true false false
+
+pr_fixture pr-lockfile sh -c 'echo changed >relay/go.sum'
+classify "$PR_FIX" pull_request
+expect "pull_request touching a lockfile" true false true
 
 # A rename classifies BOTH paths: moving a file the build reads into docs/ is a code change.
 pr_fixture pr-rename git mv relay/main.go docs/adr/main.go
 classify "$PR_FIX" pull_request
-expect "pull_request renaming code into docs/" true false
+expect "pull_request renaming code into docs/" true false false
 
 # No parent to diff against (a fetch-depth of 1): fail open.
 ROOT_ONLY="$(new_fixture pr-root-only)"
@@ -189,11 +210,11 @@ if ! { git init -q -b main "$ROOT_ONLY" && git -C "$ROOT_ONLY" add -A && git -C 
   fail=$((fail + 1))
 fi
 classify "$ROOT_ONLY" pull_request
-expect "pull_request with no parent commit" true true
+expect "pull_request with no parent commit" true true true
 
 if [ "$fail" -ne 0 ]; then
   echo "FAIL: $fail case(s) failed" >&2
   exit 1
 fi
 
-echo "PASS: ci-changed-paths.sh runs the code jobs for every docs/ path a test reads and skips them only for documentation nothing reads, trips proto on every proto-gate input, and fails open off a pull request or without a parent commit."
+echo "PASS: ci-changed-paths.sh runs the code jobs for every docs/ path a test reads and skips them only for documentation nothing reads, trips proto on every proto-gate input and deps on every dependency-scan input, and fails open off a pull request or without a parent commit."

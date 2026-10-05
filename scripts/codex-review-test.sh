@@ -755,7 +755,7 @@ fi
 # guard refuses rather than capture into the working tree.
 C11_REL=reltmp
 
-rm -rf "$FIX/$C11_REL"
+rm -rf "${FIX:?}/${C11_REL:?}"
 run TMPDIR="$C11_REL" STUB_CASE=emit STUB_EXIT=1 STUB_OUT_FILE="$PDIR/result-null.json" -- diff main
 check "case-relative-tmpdir-absent" 2 exact "" "contains:mktemp -d failed"
 assert_no_cause_line "case-relative-tmpdir-absent"
@@ -775,7 +775,7 @@ if [ "$c11_untracked" -ne 0 ]; then
   echo "FAIL: case-relative-tmpdir-present: git reports '?? $C11_REL/' — the capture leaked into the working tree" >&2
   fail=$((fail + 1))
 fi
-rm -rf "$FIX/$C11_REL"
+rm -rf "${FIX:?}/${C11_REL:?}"
 
 # case-capture-cleanup: the capture dir is removed after a NORMAL exit-0 run and a NORMAL
 # exit-3 run — previously only proven after a signal (case-signal-cleanup) and the two

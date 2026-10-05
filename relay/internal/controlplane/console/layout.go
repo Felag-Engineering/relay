@@ -216,7 +216,7 @@ func placeholder(title, spec string) func(Deps) http.HandlerFunc {
 			if !ok {
 				return
 			}
-			p.Content = template.HTML(`<div class="placeholder">` +
+			p.Content = template.HTML(`<div class="placeholder">` + //nolint:gosec // G203: a constant fragment; the one variable part is HTMLEscapeString'd
 				`<p>This screen is not built yet.</p>` +
 				`<p>Its specification is <code>docs/design/console/` +
 				template.HTMLEscapeString(spec) + `</code>.</p></div>`)
