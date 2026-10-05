@@ -9,7 +9,13 @@ useDefault = true
 [[allowlists]]
 description = "Go test sentinels: fake tokens, token IDs and passwords that redaction and audit tests assert never leak"
 targetRules = ["generic-api-key"]
-paths = ['''_test\.go$''']
+# Named files, not every _test.go: a real key pasted into any other test still fails.
+paths = [
+  '''^relay/cmd/relay/mcp_elicitation_refusals_e2e_test\.go$''',
+  '''^relay/internal/auditsink/auditsink_test\.go$''',
+  '''^relay/internal/capability/revoke_reason_test\.go$''',
+  '''^relay/internal/controlplane/console/node_test\.go$''',
+]
 
 [[allowlists]]
 description = "A truncated PEM block the audit sink test holds as a must-never-persist sentinel"

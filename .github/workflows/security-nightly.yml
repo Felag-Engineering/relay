@@ -100,9 +100,17 @@ jobs:
       - name: Go tools (pinned in the Makefile)
         uses: ./.github/actions/go-tools
 
+      # Output is captured for the report step (redacted: rule, file, commit — never the
+      # secret), and the step still fails on a finding.
       - name: Secrets scan, full history (gitleaks)
         id: secrets
-        run: make secrets-scan-history
+        run: |
+          set +e
+          make secrets-scan-history > secrets-history.txt 2>&1
+          rc=$?
+          echo "$rc" > secrets-history.rc
+          cat secrets-history.txt
+          exit "$rc"
 
       # Always runs; creates or updates the single security-scan tracking issue.
       - name: Report findings

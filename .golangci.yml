@@ -34,6 +34,7 @@ linters:
     - nilerr
     # Mechanical guards for the invariants; patterns below.
     - forbidigo
+    - depguard
 
   settings:
     errcheck:
@@ -62,8 +63,26 @@ linters:
           msg: "the Relay never spawns processes; execution happens only in relay-daemon (AGENTS.md invariants 1 and 10)"
         - pattern: ^os\.StartProcess$
           msg: "the Relay never spawns processes; execution happens only in relay-daemon (AGENTS.md invariants 1 and 10)"
-        - pattern: ^syscall\.(Exec|ForkExec)$
+        - pattern: ^syscall\.(Exec|ForkExec|StartProcess)$
           msg: "the Relay never spawns processes; execution happens only in relay-daemon (AGENTS.md invariants 1 and 10)"
+        - pattern: ^unix\.(Exec|ForkExec)$
+          msg: "the Relay never spawns processes; execution happens only in relay-daemon (AGENTS.md invariants 1 and 10)"
+        # Building an exec.Cmd literal and calling Run() spawns without exec.Command.
+        - pattern: ^exec\.Cmd$
+          msg: "the Relay never spawns processes; execution happens only in relay-daemon (AGENTS.md invariants 1 and 10)"
+
+    depguard:
+      rules:
+        # relaytest launches a real relay-daemon binary for tests, so it is exempt from
+        # the spawn ban above. That exemption is only safe while no production code can
+        # reach it.
+        relaytest-is-test-only:
+          files:
+            - "!$test"
+            - "!**/internal/relaytest/**"
+          deny:
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest
+              desc: "test-only harness (it spawns processes); never import it from production code"
 
     gosec:
       excludes:
@@ -72,9 +91,9 @@ linters:
         - G101
         # G104 duplicates errcheck, which is configured above.
         - G104
-        # G304: every file the Relay opens comes from an operator-set path on the host
-        # (invariant 11: secrets are supplied as file paths). Reading them is the job.
-        - G304
+        # G304 (file path from a variable) stays ON: the Relay's legitimate reads are all
+        # operator-set host paths (invariant 11) and each carries an inline reason, so a
+        # new read built from anything request-derived surfaces in review.
 
   exclusions:
     rules:

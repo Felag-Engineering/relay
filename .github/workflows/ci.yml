@@ -36,7 +36,8 @@ permissions:
 # Drafts: on a draft pull request only the Docs job runs. Every toolchain job is gated
 # on `github.event.pull_request.draft != true` (null on a push, so main is unaffected),
 # and marking the PR ready for review fires the run that gates the merge. Push to a
-# draft as often as you like; it costs the Docs job.
+# draft as often as you like; it costs the Docs job. Branch protection must require
+# the `CI OK` job (ci-ok, below), not the toolchain jobs: see why there.
 #
 # Timeouts: every job sets timeout-minutes at roughly three times its normal runtime.
 # Without one, a hung test bills the platform default of six hours.
@@ -429,6 +430,56 @@ jobs:
         uses: ./.github/actions/cargo-cache-save
         with:
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
+  # ---- ci-ok: the one check branch protection should require. ----
+  # A job skipped by its `if:` reports as passing to a required status check. Draft gating
+  # makes that matter: a draft run leaves the toolchain jobs *skipped* on the head commit,
+  # and when the PR is marked ready, the new run's toolchain jobs only appear once Docs
+  # finishes — so for those minutes, requiring them individually would see stale skips
+  # as passes. This job fails closed instead: it is red on a draft run, and green only
+  # when Docs passed and every other job either passed or was skipped for the one
+  # legitimate reason (the classifier said the change cannot reach it). Require this
+  # check alone; the jobs it names stay visible for diagnosis.
+  ci-ok:
+    name: CI OK
+    needs: [docs, relay, daemon, proto, integration]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every gate this change needs ran and passed
+        env:
+          DRAFT: ${{ github.event.pull_request.draft }}
+          CODE: ${{ needs.docs.outputs.code }}
+          PROTO: ${{ needs.docs.outputs.proto }}
+          DOCS: ${{ needs.docs.result }}
+          RELAY: ${{ needs.relay.result }}
+          DAEMON: ${{ needs.daemon.result }}
+          PROTO_JOB: ${{ needs.proto.result }}
+          INTEGRATION: ${{ needs.integration.result }}
+        run: |
+          if [ "$DRAFT" = "true" ]; then
+            echo "::error::draft pull request: the toolchain gates did not run. Mark it ready for review."
+            exit 1
+          fi
+          fail=0
+          # check <job> <result> <the classifier output that may excuse a skip>
+          check() {
+            case "$2" in
+              success) ;;
+              skipped)
+                if [ "$3" != "false" ]; then
+                  echo "::error::$1 was skipped, but the change can reach it"; fail=1
+                fi ;;
+              *) echo "::error::$1: $2"; fail=1 ;;
+            esac
+          }
+          [ "$DOCS" = "success" ] || { echo "::error::docs: $DOCS"; fail=1; }
+          check relay "$RELAY" "$CODE"
+          check daemon "$DAEMON" "$CODE"
+          check integration "$INTEGRATION" "$CODE"
+          check proto "$PROTO_JOB" "$PROTO"
+          exit "$fail"
 
   # ---- release-build: compile-check the musl static binary (main only) ----
   release-build:

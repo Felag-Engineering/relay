@@ -331,12 +331,12 @@ func load(dir string) (*CA, error) {
 	keyPath := filepath.Join(dir, keyFileName)
 	certPath := filepath.Join(dir, certFileName)
 
-	keyRaw, err := os.ReadFile(keyPath)
+	keyRaw, err := os.ReadFile(keyPath) //nolint:gosec // G304: the CA directory is operator-set on the host (invariant 11)
 	if err != nil {
 		return nil, fmt.Errorf("ca: read key file: %w", err)
 	}
 
-	certRaw, err := os.ReadFile(certPath)
+	certRaw, err := os.ReadFile(certPath) //nolint:gosec // G304: the CA directory is operator-set on the host (invariant 11)
 	if err != nil {
 		return nil, fmt.Errorf("ca: read cert file: %w", err)
 	}
@@ -399,7 +399,7 @@ func newSerial() (*big.Int, error) {
 // using O_CREATE|O_EXCL so a concurrent creator is detected and the file mode
 // is applied atomically at creation time.
 func writeFileExcl(path, blockType string, der []byte, perm os.FileMode) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm) //nolint:gosec // G304: a path under the operator-set CA directory (invariant 11)
 	if err != nil {
 		return fmt.Errorf("ca: create %s: %w", filepath.Base(path), err)
 	}

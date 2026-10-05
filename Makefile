@@ -114,6 +114,12 @@ verify: export GOFLAGS := -count=1
 # a pass. RELAY_VERIFY_SKIPS unset (any target run on its own) records nothing.
 ifneq ($(filter verify,$(MAKECMDGOALS)),)
 export RELAY_VERIFY_SKIPS := $(shell mktemp "$${TMPDIR:-/tmp}/relay-verify-skips.XXXXXX")
+else ifeq ($(MAKELEVEL),0)
+# Not under verify, and not a recursive make verify started (verify-proto's $(MAKE)
+# inherits the ledger on purpose): a RELAY_VERIFY_SKIPS left in the caller's environment
+# must not turn a gate run on its own into a recordable skip (need_tool, below).
+unexport RELAY_VERIFY_SKIPS
+override RELAY_VERIFY_SKIPS :=
 endif
 
 # Operation-schema drift (ci.yml: the daemon job's opschema-drift step). Regenerates the committed

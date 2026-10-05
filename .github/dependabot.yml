@@ -6,6 +6,10 @@
 # security updates are enabled for the repository, a fix for a known advisory still
 # arrives as soon as it exists, outside this schedule.
 #
+# cooldown: a release must be a week old before it is proposed, so a compromised or
+# yanked-within-days version (the usual shape of a registry supply-chain attack) is
+# not what the monthly PR picks up.
+#
 # Every PR this opens edits a dependency manifest, which is on the security surface
 # (docs/agents/security-surface.txt): a human reviews and merges it like any other.
 # Tool pins in the Makefile (golangci-lint, buf, the scanners) are not covered here.
@@ -15,6 +19,8 @@ updates:
     directory: /relay
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 1
     groups:
       relay-go:
@@ -28,6 +34,8 @@ updates:
       - /daemon/fuzz
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 1
     groups:
       daemon-rust:
@@ -44,6 +52,8 @@ updates:
       - /.github/actions/*
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 1
     groups:
       actions:
