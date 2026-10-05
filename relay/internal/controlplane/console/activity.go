@@ -484,6 +484,15 @@ type lanePos struct {
 	Done   bool
 }
 
+// queryLaneName names the audit and Job query lane in the unavailable and
+// read-failed pages every screen that reads it renders.
+const queryLaneName = "the audit and Job query lane"
+
+// lanePosAfter is where a lane stands once it has returned next as its next
+// page: an empty next means the lane ran out, which travels as FINISHED rather
+// than as an empty cursor that the next request would read as page one.
+func lanePosAfter(next string) lanePos { return lanePos{Cursor: next, Done: next == ""} }
+
 // activityWindows is the closed vocabulary of relative ranges.
 var activityWindows = []struct {
 	Value string
@@ -838,7 +847,7 @@ func handleActivity(d Deps) http.HandlerFunc {
 		p.Banner = banner(d, r)
 
 		if d.Queries == nil {
-			unavailable(w, "the audit and Job query lane")
+			unavailable(w, queryLaneName)
 			return
 		}
 		// Every read this page and its CSV export make goes through the
@@ -902,18 +911,18 @@ func handleActivity(d Deps) http.HandlerFunc {
 			capability.PageRequest{Limit: jobPageSize, Cursor: f.Job.Cursor},
 			capability.PageRequest{Limit: auditPageSize, Cursor: f.Audit.Cursor})
 		if err != nil {
-			readFailed(w, err, "the audit and Job query lane")
+			readFailed(w, err, queryLaneName)
 			return
 		}
-		if refusedUnaudited(w, lane, "the audit and Job query lane") {
+		if refusedUnaudited(w, lane, queryLaneName) {
 			return
 		}
 		rn, err := fetchRunningNow(r.Context(), d, caller, f)
 		if err != nil {
-			readFailed(w, err, "the audit and Job query lane")
+			readFailed(w, err, queryLaneName)
 			return
 		}
-		if refusedUnaudited(w, lane, "the audit and Job query lane") {
+		if refusedUnaudited(w, lane, queryLaneName) {
 			return
 		}
 		jobNext, auditNext := fetch.JobNext, fetch.AuditNext
@@ -953,20 +962,7 @@ func handleActivity(d Deps) http.HandlerFunc {
 		// construction, whichever pages the two are on. A stream row links up
 		// to its entry when the entry is on this page, else to the section.
 		v.RunningNow = buildRunningNow(rn, f, d.now(), cancelOffered(d, accounts.Role(caller.Role)))
-		inRunningNow := map[string]bool{}
-		for _, e := range v.RunningNow.Entries {
-			inRunningNow[e.JobID] = true
-		}
-		for i := range v.Rows {
-			r := &v.Rows[i]
-			if r.Kind != rowDispatch || !r.Running || r.JobID == "" {
-				continue
-			}
-			r.RunningHref = "#running-now"
-			if inRunningNow[r.JobID] {
-				r.RunningHref = "#rn-" + r.JobID
-			}
-		}
+		linkRunningRows(v.Rows, v.RunningNow)
 
 		// BOTH lane positions travel, always, and a lane that came back with
 		// no Next travels as FINISHED rather than as an empty cursor. "Older"
@@ -974,10 +970,10 @@ func handleActivity(d Deps) http.HandlerFunc {
 		// terminates instead of looping over a restarted lane forever.
 		nextJob, nextAudit := f.Job, f.Audit
 		if ranJob {
-			nextJob = lanePos{Cursor: jobNext, Done: jobNext == ""}
+			nextJob = lanePosAfter(jobNext)
 		}
 		if ranTrail {
-			nextAudit = lanePos{Cursor: auditNext, Done: auditNext == ""}
+			nextAudit = lanePosAfter(auditNext)
 		}
 		if jobNext != "" || auditNext != "" {
 			v.OlderHref = f.href(nextJob, nextAudit)
@@ -989,24 +985,50 @@ func handleActivity(d Deps) http.HandlerFunc {
 			v.ExportHref = f.base() + exportSuffix(f)
 		}
 
-		// The live region, only where the current view renders something the
-		// client can flip: dispatch rows, or Running now's entries (a Job
-		// finishing is marked in place there, whatever the kind filter). A
-		// screen with no live seam — or a view with neither — must not load a
-		// script that sits there queueing events nothing would show.
-		if d.Events != nil && (ranJob || len(v.RunningNow.Entries) > 0) {
-			v.Live = Live{
-				Wired:       true,
-				Endpoint:    "/console/events?kinds=job",
-				LastEventID: newestJobEventID(d.Events),
-				ShowHref:    f.base(),
-				CountNote:   liveCountNote,
-			}
-			p.Scripts = []string{"/console/assets/stream.js", "/console/assets/activity.js"}
+		if live, scripts := activityLive(d, f, ranJob, v.RunningNow); live.Wired {
+			v.Live, p.Scripts = live, scripts
 		}
 
 		renderScreen(w, p, activityTmpl, v)
 	}
+}
+
+// linkRunningRows points each running dispatch row at its Running now entry
+// when the entry is on this page, else at the section.
+func linkRunningRows(rows []activityRow, rn runningNowView) {
+	inRunningNow := map[string]bool{}
+	for _, e := range rn.Entries {
+		inRunningNow[e.JobID] = true
+	}
+	for i := range rows {
+		r := &rows[i]
+		if r.Kind != rowDispatch || !r.Running || r.JobID == "" {
+			continue
+		}
+		r.RunningHref = "#running-now"
+		if inRunningNow[r.JobID] {
+			r.RunningHref = "#rn-" + r.JobID
+		}
+	}
+}
+
+// activityLive is the live region and the scripts that drive it, only where
+// the current view renders something the client can flip: dispatch rows, or
+// Running now's entries (a Job finishing is marked in place there, whatever
+// the kind filter). A screen with no live seam — or a view with neither — must
+// not load a script that sits there queueing events nothing would show; it
+// gets the zero Live.
+func activityLive(d Deps, f activityFilter, ranJob bool, rn runningNowView) (Live, []string) {
+	if d.Events == nil || (!ranJob && len(rn.Entries) == 0) {
+		return Live{}, nil
+	}
+	return Live{
+		Wired:       true,
+		Endpoint:    "/console/events?kinds=job",
+		LastEventID: newestJobEventID(d.Events),
+		ShowHref:    f.base(),
+		CountNote:   liveCountNote,
+	}, []string{"/console/assets/stream.js", "/console/assets/activity.js"}
 }
 
 // liveCountNote qualifies the live region's counter (04-activity.md, "Live but
@@ -1538,21 +1560,21 @@ func writeActivityCSV(ctx context.Context, w http.ResponseWriter, lane *auditLat
 			capability.PageRequest{Limit: jobPageSize, Cursor: job.Cursor},
 			capability.PageRequest{Limit: auditPageSize, Cursor: aud.Cursor})
 		if err != nil {
-			readFailed(w, err, "the audit and Job query lane")
+			readFailed(w, err, queryLaneName)
 			return
 		}
 		rows = append(rows, page.Rows...)
 		if runJob {
-			job = lanePos{Cursor: page.JobNext, Done: page.JobNext == ""}
+			job = lanePosAfter(page.JobNext)
 		}
 		if runTrail {
-			aud = lanePos{Cursor: page.AuditNext, Done: page.AuditNext == ""}
+			aud = lanePosAfter(page.AuditNext)
 		}
 	}
 
 	// The export is checked before a single byte of it is written: a file an
 	// auditor keeps must never be half a download plus an error.
-	if refusedUnaudited(w, lane, "the audit and Job query lane") {
+	if refusedUnaudited(w, lane, queryLaneName) {
 		return
 	}
 

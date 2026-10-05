@@ -252,7 +252,7 @@ func handleAccounts(d Deps) http.HandlerFunc {
 		p.Banner = banner(d, r)
 
 		if d.Queries == nil {
-			unavailable(w, "the audit and Job query lane")
+			unavailable(w, queryLaneName)
 			return
 		}
 		if d.Accounts == nil {

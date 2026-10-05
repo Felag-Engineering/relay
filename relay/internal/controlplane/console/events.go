@@ -438,7 +438,7 @@ func newEventsHandler(d Deps, limiter *streamLimiter) http.HandlerFunc {
 		}
 
 		if d.Queries == nil {
-			unavailable(w, "the audit and Job query lane")
+			unavailable(w, queryLaneName)
 			return
 		}
 		// POSITION (3 of 4, #539): the read record MUST be written before
