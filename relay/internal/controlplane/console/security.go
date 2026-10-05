@@ -3,8 +3,11 @@ package console
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
+	"log/slog"
 	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
@@ -224,6 +227,7 @@ func Secure(h http.Handler) http.Handler {
 		// what makes that literally true of the control flow.
 		var valid bool
 		if Unauthenticated(r) {
+			boundUnauthenticatedBody(w, r)
 			valid = signInCSRFValid(r)
 		} else {
 			valid = sessionCSRFValid(r)
@@ -240,6 +244,39 @@ func Secure(h http.Handler) http.Handler {
 
 		h.ServeHTTP(w, r)
 	})
+}
+
+// Bounds on a request body read before anyone has authenticated: the sign-in POST,
+// whose CSRF check (signInCSRFValid) parses the form right here. The control-plane
+// listener deliberately sets no server-wide ReadTimeout (controlplane.New explains
+// why), so without these a client could trickle a body for as long as it liked,
+// holding a connection and a goroutine each. Every other route refuses an
+// unauthenticated request before reading its body.
+const (
+	// DefaultUnauthenticatedBodyTimeout is how long such a body may take to arrive.
+	DefaultUnauthenticatedBodyTimeout = 10 * time.Second
+	// unauthenticatedBodyMaxBytes caps it: a username, a password, a CSRF token and
+	// a return path are a few hundred bytes, against ParseForm's own 10 MB default.
+	unauthenticatedBodyMaxBytes = 64 << 10
+)
+
+// unauthenticatedBodyTimeout is DefaultUnauthenticatedBodyTimeout, as a variable only so
+// this package's tests can shorten it; nothing else may change it (a pre-authentication
+// bound is security floor, invariant 11).
+var unauthenticatedBodyTimeout = DefaultUnauthenticatedBodyTimeout
+
+// boundUnauthenticatedBody applies both bounds to r before its body is first read.
+// Per-request rather than a server-wide ReadTimeout: the sign-in handler reads the whole
+// form up front and answers well inside the bound, so the deadline never outlives the
+// read it guards. ErrNotSupported (a ResponseRecorder in tests) means there is no
+// connection to hold; TestConsole_TrickledSignInBodyIsCut proves the deadline reaches a
+// real connection through the middleware chain.
+func boundUnauthenticatedBody(w http.ResponseWriter, r *http.Request) {
+	err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(unauthenticatedBodyTimeout))
+	if err != nil && !errors.Is(err, http.ErrNotSupported) {
+		slog.Warn("console: could not bound an unauthenticated request body", "error", err)
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, unauthenticatedBodyMaxBytes)
 }
 
 // isSafeMethod reports whether m is read-only by definition.
