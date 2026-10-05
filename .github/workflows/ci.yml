@@ -138,6 +138,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-ci-changed-paths
 
+      # scripts/vuln-gate.sh, the relay job's PR govulncheck gate, proved against fixture
+      # govulncheck streams (bash + jq). Here because the gate itself runs only on deps=.
+      - name: Vulnerability-gate self-test
+        if: ${{ !cancelled() }}
+        run: make test-vuln-gate
+
       # ---- Repo-wide hygiene gates. The scanners are pinned `go install`s in the
       # Makefile's lint-tools, so they ride the shared Go tool cache; zizmor is a Python
       # package, installed by pipx. ----
@@ -218,12 +224,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: make apiclient-check
 
-      # Known vulnerabilities in the Relay's dependencies and its Go toolchain, on a PR
-      # that changes go.mod/go.sum (or the scanners' pins) — and on every push to main,
-      # where the classifier fails open. Everything else is the nightly scan's.
+      # Known vulnerabilities reachable from the Relay's code, on a pull request that
+      # changes go.mod/go.sum, the exceptions list or the scanners' pins. Fails on a finding
+      # relay/govulncheck-exceptions.txt does not list (scripts/vuln-gate.sh). Not on a
+      # push to main: an advisory published against an unchanged tree is the nightly
+      # scan's to report, not a reason to turn main red.
       - name: Vulnerability scan (govulncheck)
-        if: ${{ !cancelled() && needs.docs.outputs.deps != 'false' }}
-        run: make vuln-relay
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.docs.outputs.deps != 'false' }}
+        run: make vuln-relay-gate
 
       # strict-umask (#528): the hermetic Go tests again at umask 077. Every other
       # gate runs at the runner's default 0022, which made a whole defect class
@@ -262,8 +270,9 @@ jobs:
 
       - name: Set up Rust stable
         id: toolchain
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
+          toolchain: stable
           components: rustfmt,clippy
 
       - name: Restore Cargo registry and build cache
@@ -310,9 +319,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: make deny-daemon
 
-      # Known advisories, on the same deps= condition as the relay job's govulncheck.
+      # Known advisories, on the same pull-request deps= condition as the relay job's
+      # govulncheck; daemon/deny.toml's [advisories].ignore is this gate's exceptions list.
       - name: Dependency advisories (cargo-deny)
-        if: ${{ !cancelled() && needs.docs.outputs.deps != 'false' }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.docs.outputs.deps != 'false' }}
         run: make deny-daemon-advisories
 
       # strict-umask (#528), Rust half: see the relay job's step of the same name.
@@ -392,7 +402,9 @@ jobs:
 
       - name: Set up Rust stable
         id: toolchain
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
 
       - name: Restore Go build and module cache
         id: go-cache
@@ -494,8 +506,9 @@ jobs:
 
       - name: Set up Rust stable (musl target)
         id: toolchain
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
+          toolchain: stable
           targets: x86_64-unknown-linux-musl
 
       - name: Install musl linker

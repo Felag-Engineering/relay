@@ -119,3 +119,4 @@ daemon/src/dispatch/**
 .gitleaks.toml
 daemon/deny.toml
 daemon/clippy.toml
+relay/govulncheck-exceptions.txt

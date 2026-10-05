@@ -48,8 +48,9 @@ jobs:
           cache: false
 
       - name: Set up Rust stable (musl target)
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
+          toolchain: stable
           targets: x86_64-unknown-linux-musl
 
       - name: Install musl linker

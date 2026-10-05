@@ -53,7 +53,7 @@ endif
         fuzz-relay fuzz-daemon \
         verify verify-proto proto-lint opschema-check openapi-check gen-apiclient apiclient-check \
         lint-ci lint-shell lint-actions lint-zizmor zizmor-tool secrets-scan secrets-scan-history \
-        deny-daemon deny-daemon-advisories deny-tool
+        deny-daemon deny-daemon-advisories deny-tool vuln-relay-gate test-vuln-gate
 
 ## --- verify: the local mirror of CI ---
 # `make build test lint` is the fast inner loop. It is NOT what CI runs, and
@@ -88,7 +88,7 @@ verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
         test-demo-fleet test-codex-review test-proto-tools-check test-ci-changed-paths \
         test-check-docs test-smoke-test \
         test-integration test-crossbinary \
-        lint-ci secrets-scan deny-daemon
+        lint-ci secrets-scan deny-daemon test-vuln-gate
 	@echo
 	@test -n "$(RELAY_VERIFY_SKIPS)" || { echo "verify: no skip ledger, so skipped gates cannot be ruled out" >&2; exit 1; }
 	@if [ -s "$(RELAY_VERIFY_SKIPS)" ]; then \
@@ -559,6 +559,17 @@ test-crossbinary: build-daemon build-relay-devharness
 # scripts/ci-changed-paths.sh's deps=). Install: make lint-tools (govulncheck is pinned there).
 vuln-relay:
 	cd relay && govulncheck ./...
+
+# The pull-request form: fails only on a reachable vulnerability that
+# relay/govulncheck-exceptions.txt does not list, or on a listed one the scan no longer
+# reports. vuln-relay above (nightly) still reports everything. See scripts/vuln-gate.sh.
+vuln-relay-gate:
+	$(call need_tool,govulncheck,vuln-relay-gate,make lint-tools)
+	bash scripts/vuln-gate.sh
+
+# vuln-gate.sh's verdicts, proved against fixture govulncheck streams. Hermetic: bash + jq.
+test-vuln-gate:
+	bash scripts/vuln-gate-test.sh
 
 # Install: cargo install cargo-audit --version 0.22.2 --locked # pinned for supply-chain reproducibility
 vuln-daemon:
