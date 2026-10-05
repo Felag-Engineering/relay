@@ -107,7 +107,7 @@ func New(cfg Config, authn *Authenticator) *Server {
 
 	return &Server{
 		mux: mux,
-		http: &http.Server{ //nolint:gosec // G112: pre-existing, no ReadHeaderTimeout; flagged for a follow-up fix, not changed in the CI-hardening PR
+		http: &http.Server{
 			Addr:      cfg.Addr,
 			Handler:   public,
 			TLSConfig: tlsCfg,
