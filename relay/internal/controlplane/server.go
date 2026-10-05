@@ -6,6 +6,21 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"time"
+)
+
+// Connection bounds for the control-plane listener. It faces operators and AI-agent
+// harnesses over the network, and every connection is accepted before anyone has
+// authenticated, so without a bound a client that opens connections and sends nothing
+// holds a goroutine and a file descriptor each, forever — and the descriptors it
+// exhausts are the whole Relay's, node-plane gRPC included.
+const (
+	// DefaultReadHeaderTimeout bounds the TLS handshake and the request headers
+	// together: net/http derives its handshake deadline from it.
+	DefaultReadHeaderTimeout = 10 * time.Second
+	// DefaultIdleTimeout closes a keep-alive connection that has gone quiet between
+	// requests.
+	DefaultIdleTimeout = 2 * time.Minute
 )
 
 // Config holds the parameters needed to construct a control-plane Server.
@@ -24,6 +39,13 @@ type Config struct {
 	// over once expires while the process still runs, which is how a Relay up
 	// longer than its leaf's lifetime came to serve a dead certificate (#403).
 	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+
+	// readHeaderTimeout and idleTimeout override the Default* bounds above; zero means
+	// the default. Unexported on purpose: they exist so this package's tests can
+	// shorten them, not as configuration — a listener bound is part of the security
+	// floor (invariant 11), and nothing outside the host's code may change it.
+	readHeaderTimeout time.Duration
+	idleTimeout       time.Duration
 }
 
 // Server is the Relay's control-plane HTTP surface. Every route registered on
@@ -74,12 +96,31 @@ func New(cfg Config, authn *Authenticator) *Server {
 		ClientAuth: tls.NoClientCert,
 	}
 
+	readHeaderTimeout := cfg.readHeaderTimeout
+	if readHeaderTimeout <= 0 {
+		readHeaderTimeout = DefaultReadHeaderTimeout
+	}
+	idleTimeout := cfg.idleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = DefaultIdleTimeout
+	}
+
 	return &Server{
 		mux: mux,
 		http: &http.Server{
 			Addr:      cfg.Addr,
 			Handler:   public,
 			TLSConfig: tlsCfg,
+			// No server-wide ReadTimeout or WriteTimeout. On HTTP/1.1 a read deadline
+			// that expires while a handler is still running cancels the request's
+			// context, cutting a long tool call short; a write deadline cuts a long
+			// response. What a client can hold open before it has authenticated is
+			// bounded here (the handshake and headers, and the gap between requests)
+			// and, for the one route that reads a body unauthenticated — the Console's
+			// sign-in POST — by that handler itself. Every other route refuses an
+			// unauthenticated request before reading its body.
+			ReadHeaderTimeout: readHeaderTimeout,
+			IdleTimeout:       idleTimeout,
 		},
 	}
 }
