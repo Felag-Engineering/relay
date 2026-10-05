@@ -224,7 +224,7 @@ func runConsolePasswordCommand(args []string, stdin, stdout, stderr *os.File) in
 // includes a newline is a credential nobody can reproduce.
 func readPassword(path string, stdin *os.File) (accounts.Password, error) {
 	if path != "" {
-		raw, err := os.ReadFile(path)
+		raw, err := os.ReadFile(path) //nolint:gosec // G304: the operator's own --password-file argument on the host
 		if err != nil {
 			return accounts.Password{}, fmt.Errorf("read password file: %w", err)
 		}

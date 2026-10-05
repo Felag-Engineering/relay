@@ -266,11 +266,14 @@ Two toolchains. The `Makefile` wraps both — prefer it.
 **`make build test lint` is the fast inner loop. It is not what CI runs, and the gap has
 bitten.** CI additionally runs the race detector, the proto-drift and proto-breaking gates,
 the operation-schema and OpenAPI drift checks, the docs and security-surface self-checks, the
-strict-umask runs, the devharness absence check, and both cross-binary suites. Work can pass the inner loop and fail CI on a class of problem the author
+strict-umask runs, the devharness absence check, both cross-binary suites, the shell and workflow
+linters, the secrets scan, and the daemon's cargo-deny policy. Work can pass the inner loop and fail CI on a class of problem the author
 never looked at. `make verify` mirrors CI gate for gate; it is deliberately slow and deliberately
 not what you run on every save. On a pull request CI skips the gates a change cannot reach — the
 toolchain jobs for documentation-only changes, the proto gates when neither `/proto` nor its
-generated code moved (`scripts/ci-changed-paths.sh`); pushes to `main` run everything.
+generated code moved, the advisory scans when no lockfile moved (`scripts/ci-changed-paths.sh`);
+a **draft** PR runs only the docs job until it is marked ready for review; pushes to `main` run
+everything.
 
 - **Go (relay):** `gofmt`/`go vet`/`golangci-lint`, under the toolchain the `Makefile` exports.
   The version is named once, in `relay/go.mod`'s `go` directive, and the `Makefile` derives

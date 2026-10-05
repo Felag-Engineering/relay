@@ -211,7 +211,7 @@ func isLoopback(host string) bool {
 // world-READABLE. The permission bar is stricter than the gate file's because
 // this is secret material, not configuration.
 func readSecret(path string) ([]byte, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NOCTTY, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NOCTTY, 0) //nolint:gosec // G304: an operator-set host path (invariant 11), opened O_NOFOLLOW
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("approvalnotify: secret file %s does not exist", path)

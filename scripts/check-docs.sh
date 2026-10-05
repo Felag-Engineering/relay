@@ -16,7 +16,7 @@
 # see "The establishing phase" in docs/specs/README.md. SPEC_DIR overrides the directory for
 # self-tests.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 SPEC_DIR=${SPEC_DIR:-docs/specs}
 fail=0
 err() { echo "check-docs: $*" >&2; fail=1; }

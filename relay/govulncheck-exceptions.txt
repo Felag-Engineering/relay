@@ -1,0 +1,21 @@
+# Known vulnerabilities the Relay's code reaches, accepted for now by a human reviewer.
+# Read by scripts/vuln-gate.sh (the pull-request govulncheck gate). One per line:
+#   <GO-ID>  <tracking reference>  <why it is accepted, and what removes it>
+# A line whose vulnerability the scan no longer reports FAILS the gate — delete it in the
+# change that fixed it. On the security surface: adding a line is accepting a risk.
+#
+# Added 2026-10-05 with the gate itself (#872): all were already on main when it first ran.
+
+# Standard library, fixed in go1.25.13. Raising the Go version is an owner decision
+# (AGENTS.md; #572), so these wait on that bump and are deleted by it.
+GO-2026-6218  #572  net/url: quadratic resolvePath
+GO-2026-6091  #572  html/template: JS regexp context tracking
+GO-2026-6090  #572  crypto/tls: unbounded post-handshake messages
+GO-2026-6089  #572  net/http: ReadHeaderTimeout not applied to the h2c check
+GO-2026-5972  #572  encoding/asn1: no recursion depth limit (reached via ca.SignCSR, pre-auth)
+GO-2026-5026  #572  net/http (x/net/idna): ASCII-only Punycode labels
+
+# google.golang.org/grpc v1.84.0: server panic on missing :authority/Host. The fix exists
+# only in an unreleased v1.85.0-dev pseudo-version; adopting a pre-release gRPC is an owner
+# decision (#872). Delete when a released grpc carries the fix.
+GO-2026-6443  #872  grpc: server panic via missing authority or Host headers

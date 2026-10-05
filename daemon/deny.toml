@@ -1,0 +1,64 @@
+# cargo-deny policy for relay-daemon: `make deny-daemon` (ci.yml: the daemon job).
+#
+# The daemon runs as root on every Node, so what it links is part of the security
+# surface. This file is the mechanical half of that review: which licences may ship,
+# which registries code may come from, which crates must never enter the tree, and
+# (when the lockfile changes) whether a dependency has a known advisory. The nightly
+# security workflow still runs `cargo audit` over the whole tree every night.
+
+[graph]
+# Only the platforms the daemon ships for. Without this, Windows- and macOS-only
+# crates in the lockfile would be judged as if they shipped.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-gnu",
+  "aarch64-unknown-linux-musl",
+]
+
+[advisories]
+# Vulnerabilities and unsound crates are errors by default. Unmaintained crates
+# are errors only when a direct dependency of ours: a transitive one is the
+# upstream's call, and the nightly scan reports it.
+unmaintained = "workspace"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Permissive licences only. Adding one is a decision, not a fix-up: say why in the PR.
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Unlicense",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# relay-daemon itself is `publish = false` and `Proprietary`.
+ignore = true
+
+[bans]
+# Duplicate versions are reported, not refused: they cost binary size, not safety.
+multiple-versions = "warn"
+wildcards = "deny"
+# ring is the daemon's sole crypto backend (Cargo.toml, the rustls entry). These
+# would each bring a second TLS/crypto stack, and a C library, into a root daemon.
+deny = [
+  { name = "aws-lc-rs", reason = "ring is the sole crypto backend (daemon/Cargo.toml)" },
+  { name = "aws-lc-sys", reason = "ring is the sole crypto backend (daemon/Cargo.toml)" },
+  { name = "openssl", reason = "rustls + ring only; no OpenSSL in the root daemon" },
+  { name = "openssl-sys", reason = "rustls + ring only; no OpenSSL in the root daemon" },
+  { name = "native-tls", reason = "rustls + ring only; no platform TLS in the root daemon" },
+]
+
+[sources]
+# crates.io only. A git or alternative-registry dependency is reviewed and added here.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

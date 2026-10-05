@@ -19,11 +19,14 @@ edition = "2021"
 # daemon at exactly this version and the claim can go stale without anything
 # noticing. Its two effects are real, though: cargo refuses an older rustc by
 # naming this version instead of failing somewhere in the middle of a compile,
-# and with no clippy.toml here clippy reads it as its MSRV and stops suggesting
+# and with no `msrv` in clippy.toml clippy reads it as its MSRV and stops suggesting
 # constructs newer than it — a safe direction, but a real effect.
 rust-version = "1.96"
 description = "The Relay relay-daemon: the non-AI daemon that runs on each managed Node."
 license = "Proprietary"
+# Never published to a registry. Also what lets cargo-deny skip the licence check for this
+# crate itself, whose `Proprietary` is not an SPDX expression (deny.toml).
+publish = false
 
 [[bin]]
 name = "relay-daemon"
@@ -121,6 +124,14 @@ x509-parser = { version = "0.18", features = ["verify"] }
 [build-dependencies]
 tonic-build = "0.12"
 protoc-bin-vendored = "3"
+
+# Lints that guard the root daemon itself, in every target and every editor, not only
+# under `make lint-daemon`. clippy.toml holds the configuration they read.
+[lints.clippy]
+# Every `unsafe` block states why it is sound, in a `// SAFETY:` comment.
+undocumented_unsafe_blocks = "deny"
+# clippy.toml's disallowed-methods: Command::new outside executor.rs.
+disallowed_methods = "deny"
 
 [profile.release]
 # Small static binary for the fleet (ADR-0007). Build target: musl.

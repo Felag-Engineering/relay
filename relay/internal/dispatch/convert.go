@@ -27,7 +27,7 @@ func taskRequest(t jobs.Task) *relayv1.TaskRequest {
 	tr := &relayv1.TaskRequest{
 		TaskId:         t.ID,
 		TimeoutSeconds: t.TimeoutSeconds,
-		RiskClass:      relayv1.RiskClass(t.Action.RiskClass),
+		RiskClass:      relayv1.RiskClass(t.Action.RiskClass), //nolint:gosec // G115: a closed enum that mirrors relayv1.RiskClass value for value
 	}
 	switch t.Action.Kind {
 	case jobs.ActionOperation:

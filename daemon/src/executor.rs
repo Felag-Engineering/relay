@@ -133,6 +133,9 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     }
 
     // Build the command — argv ONLY, never /bin/sh (ADR-0001).
+    // The daemon's one sanctioned spawn site: clippy.toml disallows Command::new
+    // everywhere else, so a second process-spawning path cannot appear unreviewed.
+    #[allow(clippy::disallowed_methods)]
     let mut cmd = Command::new(&req.argv[0]);
     cmd.args(&req.argv[1..]);
     cmd.stdin(Stdio::null());

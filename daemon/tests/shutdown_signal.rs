@@ -8,6 +8,10 @@
 //! can only drive it through its compiled binary — `env!("CARGO_BIN_EXE_relay-daemon")`
 //! — never by importing its internals directly.
 
+// Integration tests can only drive the bin-only daemon through its compiled binary,
+// so spawning it is the point; clippy.toml's spawn ban is for the daemon's own code.
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use common::TempDir;

@@ -212,7 +212,7 @@ func (h PasswordHash) Verify(p Password) bool {
 	if len(p.secret) > MaxPasswordBytes {
 		return false
 	}
-	got := argon2.IDKey([]byte(p.secret), salt, params.time, params.memoryKiB, params.threads, uint32(len(want)))
+	got := argon2.IDKey([]byte(p.secret), salt, params.time, params.memoryKiB, params.threads, uint32(len(want))) //nolint:gosec // G115: the length of a decoded argon2id hash, a few dozen bytes
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 

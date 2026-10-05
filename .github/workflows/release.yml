@@ -27,6 +27,7 @@ jobs:
   release:
     name: Build, verify, publish
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       # fetch-depth: 0 is load-bearing, not a convenience: the version stamp
       # (scripts/build-version.sh) reports the release version ONLY when the
@@ -38,38 +39,27 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: relay/go.mod
+          cache: false
 
       - name: Set up Rust stable (musl target)
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
+          toolchain: stable
           targets: x86_64-unknown-linux-musl
 
       - name: Install musl linker
         run: sudo apt-get install -y musl-tools
 
-      - name: Cache Go modules
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('relay/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
-      - name: Cache Cargo registry and build
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            daemon/target
-          key: ${{ runner.os }}-cargo-musl-${{ hashFiles('daemon/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-musl-
+      # No build caches here, deliberately (zizmor: cache-poisoning). A cache restored
+      # into this job would feed objects built by some earlier run into the binaries
+      # the fleet installs; a release is rare enough that a cold build costs nothing
+      # worth that. The toolchain setups below are told not to cache for the same reason.
 
       # Pin the build date to the tagged commit's committer date so a rebuild of
       # the same tag reproduces the same bytes — and therefore the same SHA256.

@@ -561,7 +561,7 @@ func redirectAfterLogin(w http.ResponseWriter, r *http.Request, next string) {
 		target = HomePath
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, target, http.StatusSeeOther)
+	http.Redirect(w, r, target, http.StatusSeeOther) //nolint:gosec // G710: every caller passes safeReturnPath's output or HomePath
 }
 
 // setSessionCookie writes the session cookie.

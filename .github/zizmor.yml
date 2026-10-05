@@ -1,0 +1,7 @@
+# zizmor configuration (`make lint-zizmor`; ci.yml: the docs job).
+rules:
+  # A style suggestion: write local composite actions with GitHub's self-repository syntax
+  # instead of `./.github/actions/<name>`. No security property differs between the two,
+  # and ci.yml's cache-action layout is documented in its own header comment.
+  self-repository:
+    disable: true

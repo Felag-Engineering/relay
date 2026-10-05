@@ -51,7 +51,9 @@ endif
         demo-build demo-reset demo-reset-oauth demo-fault demo-up demo-up-oauth demo-down demo-creds \
         test-demo-fleet \
         fuzz-relay fuzz-daemon \
-        verify verify-proto proto-lint opschema-check openapi-check gen-apiclient apiclient-check
+        verify verify-proto proto-lint opschema-check openapi-check gen-apiclient apiclient-check \
+        lint-ci lint-shell lint-actions lint-zizmor zizmor-tool secrets-scan secrets-scan-history \
+        deny-daemon deny-daemon-advisories deny-tool vuln-relay-gate test-vuln-gate
 
 ## --- verify: the local mirror of CI ---
 # `make build test lint` is the fast inner loop. It is NOT what CI runs, and
@@ -60,7 +62,8 @@ endif
 # absence check, the security-surface gate self-test, the demo-fleet reset
 # guard self-test, the codex-review gate self-test, the proto-tools pin check
 # self-test, the changed-paths classifier self-test, the docs-check and
-# smoke-test self-tests, the strict-umask test lane, and both cross-binary suites.
+# smoke-test self-tests, the strict-umask test lane, both cross-binary suites, the
+# shell/workflow linters (lint-ci), the secrets scan and the daemon's cargo-deny policy.
 # Work can pass the inner loop and fail CI on a class of problem the author
 # never looked at.
 #
@@ -76,13 +79,16 @@ endif
 # is absent they are SKIPPED WITH A NOTICE rather than silently passed over or
 # hard-failed: a check you did not run must not look like a check that passed.
 # Every such skip is collected, and verify's last line says how many there were
-# rather than claiming a full pass (the skip ledger, below).
+# rather than claiming a full pass (the skip ledger, below). The same holds for the
+# CI-hardening gates' tools (shellcheck, actionlint, zizmor, gitleaks, cargo-deny):
+# under verify a missing one is a recorded skip; run on its own, it is a failure.
 verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
         apiclient-check verify-proto docs-check test-security-surface \
         test-demo-fleet test-codex-review test-proto-tools-check test-ci-changed-paths \
         test-check-docs test-smoke-test \
-        test-integration test-crossbinary
+        test-integration test-crossbinary \
+        lint-ci secrets-scan deny-daemon test-vuln-gate
 	@echo
 	@test -n "$(RELAY_VERIFY_SKIPS)" || { echo "verify: no skip ledger, so skipped gates cannot be ruled out" >&2; exit 1; }
 	@if [ -s "$(RELAY_VERIFY_SKIPS)" ]; then \
@@ -108,6 +114,12 @@ verify: export GOFLAGS := -count=1
 # a pass. RELAY_VERIFY_SKIPS unset (any target run on its own) records nothing.
 ifneq ($(filter verify,$(MAKECMDGOALS)),)
 export RELAY_VERIFY_SKIPS := $(shell mktemp "$${TMPDIR:-/tmp}/relay-verify-skips.XXXXXX")
+else ifeq ($(MAKELEVEL),0)
+# Not under verify, and not a recursive make verify started (verify-proto's $(MAKE)
+# inherits the ledger on purpose): a RELAY_VERIFY_SKIPS left in the caller's environment
+# must not turn a gate run on its own into a recordable skip (need_tool, below).
+unexport RELAY_VERIFY_SKIPS
+override RELAY_VERIFY_SKIPS :=
 endif
 
 # Operation-schema drift (ci.yml: the daemon job's opschema-drift step). Regenerates the committed
@@ -238,11 +250,15 @@ proto-tools:
 proto-tools-check:
 	@bash scripts/proto-tools-check.sh
 
-# golangci-lint at a pinned version (full module path required: v2 module). Pinned
-# here rather than in ci.yml so every `go install` pin lives in one place: CI keys
-# its cached tool binaries on these lines, so bumping a version rebuilds the cache.
+# golangci-lint and the CI-hardening scanners at pinned versions (full module paths
+# required). Pinned here rather than in ci.yml so every `go install` pin lives in one
+# place: CI keys its cached tool binaries on these lines, so bumping a version rebuilds
+# the cache. govulncheck's pin matches security-nightly.yml's GOVULNCHECK_VERSION.
 lint-tools:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+	go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+	go install github.com/zricethezav/gitleaks/v8@v8.30.1
+	go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
 tools: proto-tools lint-tools
 
@@ -537,14 +553,119 @@ test-crossbinary: build-daemon build-relay-devharness
 		RELAY_DAEMON_BIN=$(DAEMON_DEBUG_BIN) \
 		go test -race -tags integration -run '$(CROSSBINARY_TESTS)' ./cmd/relay/...
 
-## --- vulnerability scanning (nightly; non-blocking in CI) ---
-# Install: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+## --- vulnerability scanning ---
+# Nightly over the whole tree (non-blocking, files a tracking issue), and on a pull request
+# only when it changes a dependency manifest or lockfile (ci.yml: the relay job, gated on
+# scripts/ci-changed-paths.sh's deps=). Install: make lint-tools (govulncheck is pinned there).
 vuln-relay:
 	cd relay && govulncheck ./...
+
+# The pull-request form: fails only on a reachable vulnerability that
+# relay/govulncheck-exceptions.txt does not list, or on a listed one the scan no longer
+# reports. vuln-relay above (nightly) still reports everything. See scripts/vuln-gate.sh.
+vuln-relay-gate:
+	$(call need_tool,govulncheck,vuln-relay-gate,make lint-tools)
+	bash scripts/vuln-gate.sh
+
+# vuln-gate.sh's verdicts, proved against fixture govulncheck streams. Hermetic: bash + jq.
+test-vuln-gate:
+	bash scripts/vuln-gate-test.sh
 
 # Install: cargo install cargo-audit --version 0.22.2 --locked # pinned for supply-chain reproducibility
 vuln-daemon:
 	cd daemon && cargo audit
+
+## --- CI hardening: shell, workflow, secrets and dependency-policy gates ---
+# Each runs as a step of a job CI already has (ci.yml), so it costs seconds, not a job.
+#
+# need_tool: run a gate's command only if its tool is installed. Under `make verify` a missing
+# tool is a recorded skip (the skip ledger above), so a contributor without zizmor still gets
+# an honest verdict; anywhere else — CI included — a missing tool FAILS, so an install step
+# that broke can never turn into a gate that quietly passed.
+#   $(call need_tool,<binary>,<gate name>,<how to install>)
+define need_tool
+	@command -v $(1) >/dev/null 2>&1 || { \
+		if [ -n "$$RELAY_VERIFY_SKIPS" ]; then \
+			echo "verify: SKIPPING $(2) — $(1) not installed (CI runs it; install: $(3))"; \
+			echo "$(2) ($(1) not installed)" >> "$$RELAY_VERIFY_SKIPS"; \
+			exit 0; \
+		fi; \
+		echo "$(2): $(1) is not installed (install: $(3))" >&2; exit 1; \
+	}
+endef
+
+ZIZMOR_VERSION := 1.30.1
+CARGO_DENY_VERSION := 0.20.2
+
+lint-ci: lint-shell lint-actions lint-zizmor
+
+# shellcheck over every tracked shell script, at warning severity and above. Several of
+# these scripts ARE CI gates (the changed-paths classifier decides which jobs run at all),
+# so a quoting bug in one is a gate that silently stops gating. shellcheck ships on the
+# GitHub-hosted runner image; locally: apt install shellcheck, or pip install shellcheck-py.
+lint-shell:
+	$(call need_tool,shellcheck,lint-shell,apt install shellcheck)
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		git ls-files -z '*.sh' | xargs -0 shellcheck -S warning; \
+	fi
+
+# actionlint: workflow syntax, expression types, and (with shellcheck on PATH) the shell in
+# every `run:` block.
+lint-actions:
+	$(call need_tool,actionlint,lint-actions,make lint-tools)
+	@if command -v actionlint >/dev/null 2>&1; then actionlint; fi
+
+# zizmor: workflow security — template injection, over-broad permissions, credential
+# persistence, cache poisoning of release builds. With GH_TOKEN set (CI) it also runs its
+# online audits (impostor commits, known-vulnerable pinned actions). Every finding at low
+# severity and above fails; the help-level self-repository hint is style.
+lint-zizmor:
+	$(call need_tool,zizmor,lint-zizmor,make zizmor-tool)
+	@if command -v zizmor >/dev/null 2>&1; then \
+		if [ -n "$$GH_TOKEN" ]; then zizmor --min-severity low .github/; \
+		else env -u GH_TOKEN zizmor --offline --min-severity low .github/; fi; \
+	fi
+
+# zizmor is a Python package; pipx keeps it out of the system interpreter (PEP 668).
+zizmor-tool:
+	pipx install --force zizmor==$(ZIZMOR_VERSION)
+
+# gitleaks over every tracked file in the working tree (default rules plus .gitleaks.toml's
+# reviewed allowlists). Tracked files only, via a staging copy: a build tree's binaries are
+# not what a commit would leak. Scanned from inside the copy so reported paths are
+# repo-relative, which is what the allowlists' anchored path patterns match. Findings are
+# redacted in the output.
+secrets-scan:
+	$(call need_tool,gitleaks,secrets-scan,make lint-tools)
+	@if command -v gitleaks >/dev/null 2>&1; then \
+		tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+		git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$$tmp" && \
+		cd "$$tmp" && gitleaks dir . --config "$(CURDIR)/.gitleaks.toml" --redact --no-banner; \
+	fi
+
+# The whole git history (security-nightly.yml): a secret committed and then deleted in a
+# later commit is still in the history every clone carries. Needs a full-depth checkout.
+secrets-scan-history:
+	$(call need_tool,gitleaks,secrets-scan-history,make lint-tools)
+	gitleaks git . --config .gitleaks.toml --redact --no-banner
+
+# cargo-deny's offline policy for the root daemon (daemon/deny.toml): licences, banned crates
+# (a second crypto stack), and allowed sources. Runs on every daemon change.
+deny-daemon:
+	$(call need_tool,cargo-deny,deny-daemon,make deny-tool)
+	@if command -v cargo-deny >/dev/null 2>&1; then \
+		cd daemon && cargo deny --locked check bans licenses sources; \
+	fi
+
+# Known advisories against the daemon's dependency tree. Network (the RustSec database), so
+# CI runs it on a pull request only when the dependencies changed (deps=), like vuln-relay;
+# the nightly `cargo audit` covers the rest.
+deny-daemon-advisories:
+	$(call need_tool,cargo-deny,deny-daemon-advisories,make deny-tool)
+	cd daemon && cargo deny --locked check advisories
+
+deny-tool:
+	cargo install cargo-deny --version $(CARGO_DENY_VERSION) --locked
 
 ## --- wire fuzzing (nightly; bounded) — issue #217 ---
 # Native Go fuzzing. `go test -fuzz` fuzzes ONE target per invocation, so each

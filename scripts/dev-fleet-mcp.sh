@@ -187,6 +187,8 @@ except Exception:
     print(raw)'
 }
 
+# `args` here is this function's own string local, not api_call()'s array of the same name.
+# shellcheck disable=SC2178,SC2128
 tool_params() {
     local tool="$1" args="${2-}"
     [[ -n "${args}" ]] || args='{}'

@@ -388,7 +388,7 @@ func (s *Service) Logout(ctx context.Context, id SessionID, source string) error
 	sess, err := s.sessions.Lookup(id)
 	if err != nil {
 		// Already gone. Nothing to end and nothing to attribute.
-		return nil
+		return nil //nolint:nilerr // logging out a session that is already gone is a success, by design
 	}
 	s.sessions.End(id)
 	return s.recordLogin(ctx, LoginEvent{

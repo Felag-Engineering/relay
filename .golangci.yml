@@ -1,6 +1,15 @@
-# Minimal golangci-lint config (repo-root; golangci-lint searches upward from relay/).
-# disable-all + curated enabled set keeps lint predictable and avoids noise on
-# existing code (e.g. errcheck false-positives on conn.Close() in test cleanups).
+# golangci-lint config (repo-root; golangci-lint searches upward from relay/).
+#
+# `default: none` + a curated set keeps lint predictable: a linter is here because it
+# catches a defect class this codebase can actually have, not because it exists.
+#
+# The first four are the original baseline. The rest were added as the cheap half of the
+# CI hardening pass: they run inside the existing lint-relay step, so they cost seconds,
+# not a job. Every pre-existing finding was reviewed when they were enabled; the ones that
+# are false positives for a reason specific to one site carry an inline `//nolint:<linter>
+# // <reason>`, and the ones that are noise for a reason true of the whole codebase are
+# excluded below, each with that reason. A new finding is either fixed or earns its own
+# inline reason in review — never a new blanket exclusion without one.
 version: "2"
 
 linters:
@@ -10,3 +19,94 @@ linters:
     - staticcheck
     - ineffassign
     - unused
+    # Security: injection, TLS settings, weak crypto, file modes, unbounded servers.
+    - gosec
+    # Unchecked errors. A dropped error on a Policy, store or transport path is a
+    # fail-open in waiting.
+    - errcheck
+    # Unclosed HTTP response bodies (connection/FD exhaustion).
+    - bodyclose
+    # Network and database calls with no context: nothing can cancel or bound them.
+    - noctx
+    # `err == sentinel` that silently stops matching once someone wraps the error.
+    - errorlint
+    # `if err != nil { return nil }` — an error swallowed into a success.
+    - nilerr
+    # Mechanical guards for the invariants; patterns below.
+    - forbidigo
+    - depguard
+
+  settings:
+    errcheck:
+      exclude-functions:
+        # Formatted writes to a terminal or an in-memory buffer; nothing to recover.
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        # `defer rows.Close()` is the database/sql idiom; the error that matters is
+        # rows.Err(), which the store checks after every scan loop.
+        - (*database/sql.Rows).Close
+
+    errorlint:
+      # The comparison and type-assertion checks catch real bugs. The %v-vs-%w check is
+      # a style choice: several sites deliberately do not wrap, so a caller cannot
+      # errors.Is its way past a boundary.
+      errorf: false
+
+    forbidigo:
+      analyze-types: true
+      forbid:
+        # Invariant 1 and 10: the Relay never runs a process — only relay-daemon
+        # executes, on a Node, under its Policy. A process spawned on the Relay is a
+        # parallel control path.
+        - pattern: ^exec\.Command(Context)?$
+          msg: "the Relay never spawns processes; execution happens only in relay-daemon (AGENTS.md invariants 1 and 10)"
+        - pattern: ^os\.StartProcess$
+          msg: "the Relay never spawns processes; execution happens only in relay-daemon (AGENTS.md invariants 1 and 10)"
+        - pattern: ^syscall\.(Exec|ForkExec|StartProcess)$
+          msg: "the Relay never spawns processes; execution happens only in relay-daemon (AGENTS.md invariants 1 and 10)"
+        - pattern: ^unix\.(Exec|ForkExec)$
+          msg: "the Relay never spawns processes; execution happens only in relay-daemon (AGENTS.md invariants 1 and 10)"
+        # Building an exec.Cmd literal and calling Run() spawns without exec.Command.
+        - pattern: ^exec\.Cmd$
+          msg: "the Relay never spawns processes; execution happens only in relay-daemon (AGENTS.md invariants 1 and 10)"
+
+    depguard:
+      rules:
+        # relaytest launches a real relay-daemon binary for tests, so it is exempt from
+        # the spawn ban above. That exemption is only safe while no production code can
+        # reach it.
+        relaytest-is-test-only:
+          files:
+            - "!$test"
+            - "!**/internal/relaytest/**"
+          deny:
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest
+              desc: "test-only harness (it spawns processes); never import it from production code"
+
+    gosec:
+      excludes:
+        # G101 matches identifier names like `passwordFile`; every hit here was a name,
+        # never a value. gitleaks (make secrets-scan) looks for actual secrets.
+        - G101
+        # G104 duplicates errcheck, which is configured above.
+        - G104
+        # G304 (file path from a variable) stays ON: the Relay's legitimate reads are all
+        # operator-set host paths (invariant 11) and each carries an inline reason, so a
+        # new read built from anything request-derived surfaces in review.
+
+  exclusions:
+    rules:
+      # Test code and the test-only relaytest harness (which launches a real relay-daemon
+      # binary on purpose) are held to the baseline linters, not the hardening set: their
+      # fixtures write files, open listeners without contexts and drop errors on cleanup
+      # by design, and gating that would be noise with no defect behind it.
+      - path: (_test\.go$|internal/relaytest/)
+        linters:
+          - gosec
+          - errcheck
+          - bodyclose
+          - noctx
+          - errorlint
+          - nilerr
+          - forbidigo

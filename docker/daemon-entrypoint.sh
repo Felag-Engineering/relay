@@ -60,6 +60,7 @@ case ",$labels," in
         ;;
 esac
 
-export RELAY_ENROLLMENT_TOKEN="$(cat "${RELAY_ENROLLMENT_TOKEN_FILE:-/bootstrap/enrollment-token}")"
+RELAY_ENROLLMENT_TOKEN="$(cat "${RELAY_ENROLLMENT_TOKEN_FILE:-/bootstrap/enrollment-token}")"
+export RELAY_ENROLLMENT_TOKEN
 
 exec /usr/local/bin/relay-daemon

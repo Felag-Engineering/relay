@@ -1072,7 +1072,7 @@ func main() {
 	// activation rationale. It must start before Serve so a signal sent
 	// immediately after startup is never missed.
 	go watchFreezeSignals(context.Background(), deps.capability)
-	lis, err := net.Listen("tcp", cfg.Addr)
+	lis, err := net.Listen("tcp", cfg.Addr) //nolint:noctx // process-lifetime listener opened at startup; there is no context to bound it
 	if err != nil {
 		slog.Error("listen failed", "addr", cfg.Addr, "err", err)
 		os.Exit(1)
@@ -1102,7 +1102,7 @@ func main() {
 	// goroutine, its own lifecycle. deps.control is nil unless
 	// cfg.ControlEnabled, so this is a no-op on the default (disabled) path.
 	if deps.control != nil {
-		controlLis, err := net.Listen("tcp", cfg.ControlAddr)
+		controlLis, err := net.Listen("tcp", cfg.ControlAddr) //nolint:noctx // process-lifetime listener opened at startup; there is no context to bound it
 		if err != nil {
 			slog.Error("control-plane listen failed", "addr", cfg.ControlAddr, "err", err)
 			os.Exit(1)

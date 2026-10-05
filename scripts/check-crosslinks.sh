@@ -29,7 +29,7 @@
 #
 # The amendment vocabulary the checks read is in scripts/adr-links.sh, shared with the generator.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 # shellcheck source=scripts/adr-links.sh
 source scripts/adr-links.sh
 

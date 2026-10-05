@@ -111,7 +111,7 @@ func Load(path string) (*Gate, error) {
 // DESCRIPTOR rather than on the path, so the thing validated is the thing read
 // (no TOCTOU window between stat and open).
 func openConfigFile(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NOCTTY, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NOCTTY, 0) //nolint:gosec // G304: an operator-set host path (invariant 11), opened O_NOFOLLOW
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			// Pointedly NOT "no gates configured": the operator named a file,

@@ -55,7 +55,7 @@
 # "CLEAN": a caller that reads silence as "continue" must treat it as a skipped gate. The glob
 # list is the single source of truth — see docs/agents/workflow.md.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 # GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE in the environment would silently redirect every git
 # call below to a different repository's history and index (SEC5).
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE

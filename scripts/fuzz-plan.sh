@@ -14,7 +14,7 @@
 # fuzzing: it skipped only because nothing changed since the run before it, and a run
 # whose fuzzing found a crash is not successful, so the next night fuzzes again.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 fuzzed_paths=(relay daemon proto Makefile .github/workflows/security-nightly.yml scripts/fuzz-plan.sh)
 

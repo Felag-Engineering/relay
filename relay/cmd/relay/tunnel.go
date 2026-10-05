@@ -65,7 +65,7 @@ type tunnelServer struct {
 
 func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessage, relayv1.RelayMessage]) error {
 	first, err := stream.Recv()
-	if err == io.EOF {
+	if err == io.EOF { //nolint:errorlint // grpc-go returns io.EOF unwrapped from Recv at a clean end of stream
 		return nil
 	}
 	if err != nil {
@@ -229,7 +229,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		case <-cctx.Done():
 			return status.Error(codes.Unauthenticated, "node revoked")
 		case err := <-recvErr:
-			if err == io.EOF {
+			if err == io.EOF { //nolint:errorlint // grpc-go returns io.EOF unwrapped from Recv at a clean end of stream
 				return nil
 			}
 			return err

@@ -7,7 +7,7 @@
 #   scripts/spec-coverage.sh            full report
 #   scripts/spec-coverage.sh --summary  the three numbers only
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 SPECS=(docs/specs/*.md)
 mentioned() { grep -qF -- "$1" "${SPECS[@]}"; }
 
@@ -36,7 +36,8 @@ if [ "${1:-}" != "--summary" ]; then
     [ -n "$r" ] || continue
     n=$((n+1)); k=$(echo "$r" | sed -E 's#\{[^}]+\}##g; s#/+#/#g; s#/$##')
     grep -qF -- "$k" "${SPECS[@]}" docs/design/console/*.md || { m=$((m+1)); echo "  - $method $r"; }
-  done < <(grep -hoE '\{"(GET|POST)", "/console[^"]*"' $(ls relay/internal/controlplane/console/*.go | grep -v _test) \
+  done < <(find relay/internal/controlplane/console -maxdepth 1 -name '*.go' ! -name '*_test.go' \
+             -exec grep -hoE '\{"(GET|POST)", "/console[^"]*"' {} + \
            | sed -E 's/^\{"([A-Z]+)", "([^"]*)"$/\1 \2/' | sort -u)
   echo "  ($m of $n unmentioned)"; echo
 
@@ -61,7 +62,7 @@ if [ "${1:-}" != "--summary" ]; then
 fi
 
 legacy=$(grep -lE '^\*\*Status:\*\* *(aspirational|stub)' "${SPECS[@]}" | wc -l)
-total=$(ls docs/specs/*.md | grep -vE 'README|TEMPLATE' | wc -l)
+total=$(find docs/specs -maxdepth 1 -name '*.md' ! -name 'README.md' ! -name 'TEMPLATE.md' | wc -l)
 rows=$(grep -hcE '^\| .*\| *`(Test|Benchmark)[A-Za-z0-9_]+`' "${SPECS[@]}" | awk "{s+=\$1} END {print s+0}")
 pkgs=$(find relay/internal -mindepth 1 -maxdepth 1 -type d | wc -l)
 mods=$(ls daemon/src/*.rs | wc -l)
