@@ -149,6 +149,7 @@ what has shipped; read them with `gh` rather than inferring either from any file
 were deliberately built out of order — the Template engine and shipped catalog, Accounts and
 access, the Control API, approval callout, and the MCP Tasks extension shipped ahead of a
 real-hardware proof.
+For what the code on `main` does today, capability by capability, see [docs/STATUS.md](docs/STATUS.md).
 
 ## Documentation
 

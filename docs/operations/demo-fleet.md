@@ -6,7 +6,8 @@ roster, beats, fault injection and resetting between takes, and resource usage. 
 connection all apply here, with more force: three times the Nodes sit behind the same committed
 dev credential. This file is also the presenter's runbook for the Relay half of a stage demo
 ([Presenter runbook](#presenter-runbook), below) — the overall script, including Gleipnir's own
-half of it, lives in [the Gleipnir-side runbook](https://github.com/Felag-Engineering/gleipnir/issues/933).
+half of it, lives in Gleipnir's own presenter runbook, which is maintained with Gleipnir and not
+published here.
 Gleipnir is the AI-agent that drives the demo: a consumer of Relay, never a part of it.
 
 ## Presenter runbook
@@ -117,8 +118,7 @@ verified `auto-incident-response` with method `api_token`.
 **Re-run this after every reset.** `make demo-reset` runs `down -v`, which destroys the store:
 the AI-agent's machine Account, its API Token, and the CA all die with it. After running the
 block below, make Gleipnir pick up the new token and the new CA. How Gleipnir reloads them
-(restart, or otherwise) is Gleipnir's own runbook to document
-([gleipnir#933](https://github.com/Felag-Engineering/gleipnir/issues/933)) — most clients read a
+(restart, or otherwise) is Gleipnir's own runbook to document — most clients read a
 CA only at process start, so restarting it is the safe assumption *(predicted)*. A `make
 demo-up` keeps the store, so the Gleipnir token survives it; only `demo-reset` requires a re-run.
 
@@ -228,9 +228,8 @@ The role choice, stated plainly:
   one the AI-agent could request and release alone (see `kind: "machine"` above and
   [The human approver](#the-human-approver)). If you choose `admin`, change `"operator"` to
   `"admin"` in the create body above. **A human should confirm this choice** before a presenter
-  relies on it, and the Gleipnir-side runbook
-  ([gleipnir#933](https://github.com/Felag-Engineering/gleipnir/issues/933)) must agree with
-  whichever role is actually used.
+  relies on it, and Gleipnir's own presenter runbook must agree with whichever role is actually
+  used.
 - A pre-existing Account of the `AGENT` name is reused as it is, whatever its role. To see its role, read
   `"role"` in `scripts/dev-fleet-mcp.sh api GET /api/v1/accounts`. After a reset there is none.
 
@@ -240,7 +239,6 @@ the MCP URL `https://relay:9443/mcp`; the CA file (the absolute path of
 `.dev-fleet/ca-cert.pem`); and the API Token in `.dev-fleet/auto-incident-response-credential`,
 sent in an `Authorization: Bearer` header — plus the two things the block cannot set: declare
 the client name `gleipnir`, and name the responder (`mrapp`) on an answered approval. Gleipnir's own config keys are Gleipnir's to document
-([gleipnir#933](https://github.com/Felag-Engineering/gleipnir/issues/933)/[#928](https://github.com/Felag-Engineering/gleipnir/issues/928))
 — they are not invented here.
 
 Optional, needs `openssl`:

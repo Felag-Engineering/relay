@@ -7,6 +7,12 @@ A capability specification is **durable**. It is not a pre-implementation artifa
 stale once a feature ships — it is maintained as the capability evolves, and it is the answer
 to "what does Relay actually do here?" for anyone, human or agent, who has to work on it.
 
+**Reading these from outside.** A spec's Status banner (`aspirational`, `stub`,
+`designed, not built`, `current`) records how far that spec has migrated to the claim format
+described below — a migration artefact, not a measure of how much of the capability is built.
+For the product view — what each capability does today on MCP, the Control API and the Admin
+Console — read [`STATUS.md`](../STATUS.md).
+
 ## The establishing phase — per spec, not per repo
 
 **A spec binds the loop only once it has been migrated to the claim format**, which
