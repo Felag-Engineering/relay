@@ -1648,6 +1648,10 @@ values = ["ActiveState", "LoadState"]
 // Property tests — structural-invariance under arbitrary inputs (issue #218
 // posture: attack the substitution boundary for structure drift and panics).
 // ---------------------------------------------------------------------------
+//
+// Regression seeds are tracked, not ignored (#259): commit
+// `daemon/proptest-regressions/` files with the fix; the full rule is in
+// `policy.rs`'s `mod proptests` header.
 
 #[cfg(test)]
 mod proptests {

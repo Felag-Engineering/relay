@@ -17,6 +17,13 @@
 # apiclient-check` does by generating, compiling, and asserting against it.
 /relay/internal/apiclient/client.gen.go
 
+# proptest regression seeds are deliberately TRACKED (#259). A seed file is a
+# counterexample: commit it with the fix so it replays for everyone, and never
+# delete one as noise. A seed that encodes a test-oracle bug rather than an engine
+# bug may be removed only in the change that fixes the oracle, after the case is
+# promoted into a named test.
+!/daemon/proptest-regressions/
+
 # Build artifacts
 /dist/
 /build/
