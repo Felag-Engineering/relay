@@ -704,12 +704,15 @@ pub fn path_is_canonical(path: &str) -> bool {
 
 /// The `Decision` a non-canonical path argument produces, with the reason text
 /// shared by every caller of [`path_is_canonical`] so the plan verdict, the
-/// apply-path stderr, and the audit record all read identically.
+/// apply-path stderr, and the audit record all read identically. The quoted
+/// path is caller-controlled and not yet validated here, so it is bounded by
+/// [`reason_fragment`].
 pub fn non_canonical_path_denial(path: &str) -> Decision {
     Decision::Deny {
         reason: format!(
-            "path argument {path:?} is not in canonical form (ADR-0018): must be absolute \
-             with no '.', '..', '//', or trailing-slash segment"
+            "path argument {:?} is not in canonical form (ADR-0018): must be absolute \
+             with no '.', '..', '//', or trailing-slash segment",
+            reason_fragment(path)
         ),
         rule: None,
     }
@@ -1005,7 +1008,9 @@ const REASON_FRAGMENT_BUDGET: usize = 120;
 /// Bound a caller-controlled fragment before it is quoted into a Deny reason.
 ///
 /// Used for every caller-controlled string this module quotes: the text a deny
-/// pattern matched, and `argv[0]` in the ADR-0019 guard reason. The reason
+/// pattern matched, `argv[0]` in the ADR-0019 guard reason, the structured-
+/// Operation args rendering in the deny-by-default reason, and the path in
+/// `non_canonical_path_denial`. The reason
 /// travels as `PolicyVerdict.deciding_rule` and into the audit trail, while the
 /// fragment can be arbitrarily long (a `.*` deny against a megabyte of argv
 /// matches the whole joined command; the guard reason needs no pattern at all,
@@ -1216,10 +1221,20 @@ impl Policy {
         // at all. This must never enumerate the allowed values (the
         // PolicySnapshot owns discovery) and must never change the outcome
         // — only the string differs.
+        //
+        // The args are caller-controlled and not yet validated here (Template
+        // slot validators run after the Policy gate), so the rendering is
+        // bounded by `reason_fragment`. The whole Debug rendering is
+        // truncated, deliberately, rather than each element: that gives one
+        // total budget whatever the arity, whereas per-element bounding would
+        // grow with the Operation's slot count. The cost is that the cut may
+        // land mid-escape or drop the closing `"]`; the `…` marks it, and
+        // nothing parses this text (ADR-0019).
         let reason = if self.operations.iter().any(|op| op.name == operation_name) {
             format!(
-                "no allow rule matched args {args:?} for operation '{operation_name}' \
-                 (allow rules exist for other arguments)"
+                "no allow rule matched args {} for operation '{operation_name}' \
+                 (allow rules exist for other arguments)",
+                reason_fragment(&format!("{args:?}"))
             )
         } else {
             format!("deny-by-default: no allow rule for operation '{operation_name}'")
@@ -3617,6 +3632,109 @@ mod raw_exec_redteam {
             "later-element guard reason: must never quote the caller's argument text, which \
              may hold a secret; got {reason:?}"
         );
+    }
+
+    // The structured-Operation deny reasons quote caller text too (the args
+    // rendering and a non-canonical path), and must be bounded the same way
+    // as the Raw Exec ones above (#258). Same property as the bound checks in
+    // `deny_reason_names_the_matched_form_and_text`: a 4x longer input yields
+    // the byte-identical reason, never an absolute byte length.
+    #[test]
+    fn structured_operation_deny_reasons_are_bounded() {
+        // Non-uniform width, so byte index REASON_FRAGMENT_BUDGET falls inside
+        // a character and a byte-slice "simplification" panics here.
+        let long_texts = [
+            ("ascii", "x".repeat(4096)),
+            (
+                "mixed-width 4-byte codepoints",
+                format!("x{}", "🔥".repeat(1024)),
+            ),
+            ("combining marks", format!("x{}", "e\u{0301}".repeat(1024))),
+        ];
+
+        // service.restart is allowed only for nginx/php-fpm there, so any
+        // other arg is a deny-by-default with `rule: None`.
+        let example = from_toml_str(include_str!("../policy.example.toml"))
+            .expect("the example policy must parse");
+        // An EMPTY Policy still emits the non-canonical-path reason: the
+        // cheapest one to provoke.
+        let empty_policy = from_toml_str("").expect("an empty policy must parse");
+
+        // `{:?}` escaping expands a combining mark to `\u{301}`, so a
+        // character cap rather than a byte cap, generous enough for that.
+        const REASON_CHAR_CAP: usize = 1_500;
+
+        let deny_of = |decision: Decision, which: &str, label: &str| -> (String, Option<Rule>) {
+            match decision {
+                Decision::Deny { reason, rule } => (reason, rule),
+                other => panic!("{which} ({label}): must be denied; got {other:?}"),
+            }
+        };
+
+        for (label, text) in &long_texts {
+            let longer = text.repeat(4);
+            let path = format!("/./{text}");
+            let longer_path = format!("/./{longer}");
+            for (which, suffix, short, long) in [
+                (
+                    "args-mismatch reason",
+                    "for operation 'service.restart'",
+                    deny_of(
+                        example.evaluate("service.restart", &argv(&[text])),
+                        "args-mismatch reason",
+                        label,
+                    ),
+                    deny_of(
+                        example.evaluate("service.restart", &argv(&[&longer])),
+                        "args-mismatch reason",
+                        label,
+                    ),
+                ),
+                (
+                    "non-canonical path reason",
+                    "is not in canonical form (ADR-0018)",
+                    deny_of(
+                        empty_policy.evaluate("file.read", &argv(&[&path])),
+                        "non-canonical path reason",
+                        label,
+                    ),
+                    deny_of(
+                        empty_policy.evaluate("file.read", &argv(&[&longer_path])),
+                        "non-canonical path reason",
+                        label,
+                    ),
+                ),
+            ] {
+                let (short, short_rule) = short;
+                let (long, _) = long;
+                assert!(
+                    short.contains('…'),
+                    "{which} ({label}): an over-long fragment must be truncated and marked; \
+                     got {short:?}"
+                );
+                assert_eq!(
+                    short, long,
+                    "{which} ({label}): a 4x longer input must produce the identical reason — \
+                     the caller must not be able to size an audit record"
+                );
+                assert!(
+                    short.chars().count() < REASON_CHAR_CAP,
+                    "{which} ({label}): the reason must stay small; got {} chars ({} bytes)",
+                    short.chars().count(),
+                    short.len()
+                );
+                assert!(
+                    short.contains(suffix),
+                    "{which} ({label}): truncation must hit only the quoted fragment, not the \
+                     fixed text after it; got {short:?}"
+                );
+                assert!(
+                    short_rule.is_none(),
+                    "{which} ({label}): outcome and attribution are unchanged — a plain \
+                     deny-by-default carries no rule; got {short_rule:?}"
+                );
+            }
+        }
     }
 
     // ---------------------------------------------------------------------------
