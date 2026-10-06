@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Proves scripts/proto-tools-check.sh sees what its header claims: a plugin at the wrong
-# version, an absent plugin, and resolution that follows `make proto` (GOPATH/bin first, then
+# Proves scripts/proto-tools-check.sh sees what its header claims: buf at the wrong
+# version, an absent buf, and resolution that follows `make proto` (GOPATH/bin first, then
 # the ambient PATH) rather than whatever happens to be first on the caller's own PATH — and
 # that it refuses, loudly, rather than passing vacuously when the proto-tools recipe it parses
 # has been reshaped out from under it (#710).
@@ -68,9 +68,7 @@ chmod +x "$WORKDIR/stub/go"
 write_stub() {
   local path=$1 bin=$2 ver=$3 line
   case "$bin" in
-    protoc-gen-go)      line="protoc-gen-go v$ver" ;;
-    protoc-gen-go-grpc) line="protoc-gen-go-grpc $ver" ;;
-    buf)                line="$ver" ;;
+    buf) line="$ver" ;;
     *) echo "FAIL: write_stub: unknown bin '$bin'" >&2; exit 1 ;;
   esac
   cat > "$path" <<STUB
@@ -84,38 +82,23 @@ STUB
   chmod +x "$path"
 }
 
-# --- Pins, derived from the FIXTURE Makefile by an expression INDEPENDENT of the check's own
-# awk parser (a test that reuses the parser mirrors its bugs into the oracle). The `@` anchored
-# immediately after the module path is what keeps the protoc-gen-go pattern from matching the
-# protoc-gen-go-grpc line; escaping the dots keeps `.` from matching anything else.
+# --- The pin, derived from the FIXTURE Makefile by an expression INDEPENDENT of the check's own
+# awk parser (a test that reuses the parser mirrors its bugs into the oracle). protoc-gen-go
+# and protoc-gen-go-grpc are `tool` directives in relay/go.mod now, so buf is the only pin.
 derive_pin() {
   local esc
   esc=${1//./\\.}
   sed -n "s|^[[:space:]]*go install ${esc}@\([^[:space:]]*\)[[:space:]]*\$|\1|p" \
     "$FIX/Makefile" | head -n 1
 }
-PIN_GO=$(derive_pin 'google.golang.org/protobuf/cmd/protoc-gen-go')
-PIN_GRPC=$(derive_pin 'google.golang.org/grpc/cmd/protoc-gen-go-grpc')
 PIN_BUF=$(derive_pin 'github.com/bufbuild/buf/cmd/buf')
 
 # --- Oracle guard, before case 1 runs. A silently-empty derived pin would make the stubs
 # below echo an empty version and every case that follows would prove nothing.
-n_derived=0
-for v in "$PIN_GO" "$PIN_GRPC" "$PIN_BUF"; do
-  [ -n "$v" ] && n_derived=$((n_derived + 1))
-done
-if [ "$n_derived" -ne 3 ]; then
-  echo "FAIL: derived $n_derived of 3 pins from the fixture Makefile — the oracle would be vacuous" >&2
+if [ -z "$PIN_BUF" ]; then
+  echo "FAIL: derived no buf pin from the fixture Makefile — the oracle would be vacuous" >&2
   exit 1
 fi
-# Case 2's deliberately-wrong version is a literal, not a pin — guard it so a future pin bump
-# that happened to land on the same string can't turn case 2 vacuous without anyone noticing.
-if [ "$PIN_GO" = "v1.36.10" ]; then
-  echo "FAIL: case 2's wrong version equals the pin" >&2
-  exit 1
-fi
-N_GO=${PIN_GO#v}
-N_GRPC=${PIN_GRPC#v}
 N_BUF=${PIN_BUF#v}
 
 # --- Capture harness. Globals only: `local out=$(cmd)` sets $? from `local`, not the
@@ -180,65 +163,47 @@ BASE_PATH="$WORKDIR/stub:/usr/bin:/bin"
 
 # --- Cases ---
 
-# 1: all three stubs at the derived pins -> exit 0, no output. Also proves the check's own
-# parse finds all three real `go install` lines in the shipped recipe (the fixture Makefile
-# has not been touched yet).
+# 1: buf stub at the derived pin -> exit 0, no output. Also proves the check's own parse finds
+# the real `go install` line in the shipped recipe (the fixture Makefile has not been touched yet).
 GOPATH1="$WORKDIR/case1/gopath"
 mkdir -p "$GOPATH1/bin"
-write_stub "$GOPATH1/bin/protoc-gen-go" protoc-gen-go "$N_GO"
-write_stub "$GOPATH1/bin/protoc-gen-go-grpc" protoc-gen-go-grpc "$N_GRPC"
 write_stub "$GOPATH1/bin/buf" buf "$N_BUF"
 run_check "$GOPATH1" "$BASE_PATH"
-assert_rc "case1-all-pinned" 0
-assert_stdout_empty "case1-all-pinned"
-assert_stderr_empty "case1-all-pinned"
+assert_rc "case1-pinned" 0
+assert_stdout_empty "case1-pinned"
+assert_stderr_empty "case1-pinned"
 
-# 2: protoc-gen-go reports the issue's exact wrong version -> exit 1; message names the
-# installed version, the DERIVED pin, the resolved path, and the fix.
+# 2: buf reports a wrong version -> exit 1; message names the installed version, the DERIVED
+# pin, the resolved path, and the fix.
+WRONG="0.0.1"
+if [ "$N_BUF" = "$WRONG" ]; then
+  echo "FAIL: case 2's wrong version equals the pin" >&2
+  exit 1
+fi
 GOPATH2="$WORKDIR/case2/gopath"
 mkdir -p "$GOPATH2/bin"
-write_stub "$GOPATH2/bin/protoc-gen-go" protoc-gen-go "1.36.10"
-write_stub "$GOPATH2/bin/protoc-gen-go-grpc" protoc-gen-go-grpc "$N_GRPC"
-write_stub "$GOPATH2/bin/buf" buf "$N_BUF"
+write_stub "$GOPATH2/bin/buf" buf "$WRONG"
 run_check "$GOPATH2" "$BASE_PATH"
 assert_rc "case2-wrong-version" 1
-assert_contains "case2-wrong-version" "1.36.10"
-assert_contains "case2-wrong-version" "$PIN_GO"
-assert_contains "case2-wrong-version" "$GOPATH2/bin/protoc-gen-go"
+assert_contains "case2-wrong-version" "buf is v$WRONG"
+assert_contains "case2-wrong-version" "$PIN_BUF"
+assert_contains "case2-wrong-version" "$GOPATH2/bin/buf"
 assert_contains "case2-wrong-version" "make proto-tools"
 
-# 3: protoc-gen-go absent, the other two at the pins -> exit 1, "not installed". Proves
-# constraint 3: absent is never "the right version".
+# 3: buf absent -> exit 1, "not installed". Proves constraint 3: absent is never "the right
+# version".
 GOPATH3="$WORKDIR/case3/gopath"
 mkdir -p "$GOPATH3/bin"
-write_stub "$GOPATH3/bin/protoc-gen-go-grpc" protoc-gen-go-grpc "$N_GRPC"
-write_stub "$GOPATH3/bin/buf" buf "$N_BUF"
 run_check "$GOPATH3" "$BASE_PATH"
-assert_rc "case3-plugin-absent" 1
-assert_contains "case3-plugin-absent" "not installed"
-
-# 4: all three at wrong versions -> exit 1 and all three named in one run (no early exit).
-# Also the case that proves the buf assertion fires at all.
-WRONG4="0.0.1"
-GOPATH4="$WORKDIR/case4/gopath"
-mkdir -p "$GOPATH4/bin"
-write_stub "$GOPATH4/bin/protoc-gen-go" protoc-gen-go "$WRONG4"
-write_stub "$GOPATH4/bin/protoc-gen-go-grpc" protoc-gen-go-grpc "$WRONG4"
-write_stub "$GOPATH4/bin/buf" buf "$WRONG4"
-run_check "$GOPATH4" "$BASE_PATH"
-assert_rc "case4-all-wrong" 1
-assert_contains "case4-all-wrong" "protoc-gen-go is v$WRONG4"
-assert_contains "case4-all-wrong" "protoc-gen-go-grpc is v$WRONG4"
-assert_contains "case4-all-wrong" "buf is v$WRONG4"
+assert_rc "case3-buf-absent" 1
+assert_contains "case3-buf-absent" "not installed"
 
 # 5a: correct stub in $GOPATH/bin, a WRONG stub earlier on the ambient PATH -> must PASS.
 GOPATH5A="$WORKDIR/case5a/gopath"
 AMBIENT5A="$WORKDIR/case5a/ambient"
 mkdir -p "$GOPATH5A/bin" "$AMBIENT5A"
-write_stub "$GOPATH5A/bin/protoc-gen-go" protoc-gen-go "$N_GO"
-write_stub "$GOPATH5A/bin/protoc-gen-go-grpc" protoc-gen-go-grpc "$N_GRPC"
 write_stub "$GOPATH5A/bin/buf" buf "$N_BUF"
-write_stub "$AMBIENT5A/protoc-gen-go" protoc-gen-go "$WRONG4"
+write_stub "$AMBIENT5A/buf" buf "$WRONG"
 run_check "$GOPATH5A" "$WORKDIR/stub:$AMBIENT5A:/usr/bin:/bin"
 assert_rc "case5a-gopath-wins" 0
 assert_stderr_empty "case5a-gopath-wins"
@@ -249,14 +214,12 @@ assert_stderr_empty "case5a-gopath-wins"
 GOPATH5B="$WORKDIR/case5b/gopath"
 AMBIENT5B="$WORKDIR/case5b/ambient"
 mkdir -p "$GOPATH5B/bin" "$AMBIENT5B"
-write_stub "$GOPATH5B/bin/protoc-gen-go" protoc-gen-go "$WRONG4"
-write_stub "$GOPATH5B/bin/protoc-gen-go-grpc" protoc-gen-go-grpc "$N_GRPC"
-write_stub "$GOPATH5B/bin/buf" buf "$N_BUF"
-write_stub "$AMBIENT5B/protoc-gen-go" protoc-gen-go "$N_GO"
+write_stub "$GOPATH5B/bin/buf" buf "$WRONG"
+write_stub "$AMBIENT5B/buf" buf "$N_BUF"
 run_check "$GOPATH5B" "$WORKDIR/stub:$AMBIENT5B:/usr/bin:/bin"
 assert_rc "case5b-gopath-first" 1
-assert_contains "case5b-gopath-first" "protoc-gen-go is v$WRONG4"
-assert_contains "case5b-gopath-first" "$GOPATH5B/bin/protoc-gen-go"
+assert_contains "case5b-gopath-first" "buf is v$WRONG"
+assert_contains "case5b-gopath-first" "$GOPATH5B/bin/buf"
 
 # 6: a reshaped `proto-tools` recipe with NO `go install` lines -> exit 1 with the "parsed
 # no ..." message, and no version verdict printed. Total vacuity. The recipe's only content is
@@ -269,27 +232,25 @@ assert_rc "case6-no-pins" 1
 assert_contains "case6-no-pins" "parsed no"
 assert_not_contains "case6-no-pins" "the pin is"
 
-# 7: a reshaped recipe with ONE valid `go install` line and one tab-indented line the check
+# 7: a reshaped recipe with the valid `go install` line and one tab-indented line the check
 # cannot parse -> exit 1, the offending line quoted, and no version verdict printed. Partial
 # vacuity — the reshape that would otherwise silently narrow what the check vouches for.
-printf 'proto-tools:\n\tgo install google.golang.org/protobuf/cmd/protoc-gen-go@%s\n\t@echo installing proto tools\n' \
-  "$PIN_GO" > "$FIX/Makefile"
+printf 'proto-tools:\n\tgo install github.com/bufbuild/buf/cmd/buf@%s\n\t@echo installing proto tools\n' \
+  "$PIN_BUF" > "$FIX/Makefile"
 GOPATH7="$WORKDIR/case7/gopath"
 run_check "$GOPATH7" "$BASE_PATH"
 assert_rc "case7-partial-vacuity" 1
 assert_contains "case7-partial-vacuity" "@echo installing proto tools"
 assert_not_contains "case7-partial-vacuity" "the pin is"
 
-# 8: the three real pin lines, each carrying trailing whitespace -> exit 0, silent. Proves the
+# 8: the real pin line carrying trailing whitespace -> exit 0, silent. Proves the
 # `sub(/[ \t]+$/, "", stripped)` strip in the recipe-parsing awk: without it, a good pin line
 # with trailing whitespace is misreported as unparseable even though CI's own tool-cache-key
 # grep still matches it.
-printf 'proto-tools:\n\tgo install google.golang.org/protobuf/cmd/protoc-gen-go@%s   \n\tgo install google.golang.org/grpc/cmd/protoc-gen-go-grpc@%s   \n\tgo install github.com/bufbuild/buf/cmd/buf@%s   \n' \
-  "$PIN_GO" "$PIN_GRPC" "$PIN_BUF" > "$FIX/Makefile"
+printf 'proto-tools:\n\tgo install github.com/bufbuild/buf/cmd/buf@%s   \n' \
+  "$PIN_BUF" > "$FIX/Makefile"
 GOPATH8="$WORKDIR/case8/gopath"
 mkdir -p "$GOPATH8/bin"
-write_stub "$GOPATH8/bin/protoc-gen-go" protoc-gen-go "$N_GO"
-write_stub "$GOPATH8/bin/protoc-gen-go-grpc" protoc-gen-go-grpc "$N_GRPC"
 write_stub "$GOPATH8/bin/buf" buf "$N_BUF"
 run_check "$GOPATH8" "$BASE_PATH"
 assert_rc "case8-trailing-whitespace" 0
@@ -301,4 +262,4 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "PASS: proto-tools-check.sh fires on a wrong version and on an absent plugin, resolves the same binary 'make proto' would invoke (GOPATH/bin first), refuses rather than passing when the proto-tools recipe parses to zero pins or to a line it cannot read, and still passes a good pin line that merely carries trailing whitespace (#710)."
+echo "PASS: proto-tools-check.sh fires on a wrong buf version and on an absent buf, resolves the same binary 'make proto' would invoke (GOPATH/bin first), refuses rather than passing when the proto-tools recipe parses to zero pins or to a line it cannot read, and still passes a good pin line that merely carries trailing whitespace (#710)."

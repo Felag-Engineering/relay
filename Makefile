@@ -223,19 +223,21 @@ lint: fmt-relay lint-relay lint-daemon
 # Go types are generated (via buf) into relay/internal/relay/v1/ and committed.
 # CI runs make proto-tools then make proto for the proto-drift check; Rust types are
 # generated at cargo-build time by daemon/build.rs (tonic-build), so there is no
-# Rust step here.  Run `make proto-tools` once before regenerating locally.
+# Rust step here.  The Go generators are `tool` directives in relay/go.mod; only buf needs
+# `make proto-tools` before regenerating locally.
 proto: proto-tools-check
 	cd proto && PATH="$$(go env GOPATH)/bin:$$PATH" buf generate
 
-# Install the proto codegen toolchain at pinned versions (into $(go env GOPATH)/bin).
-# Versions must match the committed generated code; @latest is intentionally avoided
-# (protoc-gen-go-grpc@latest = v1.6.2 produces a spurious diff, false-positiving proto-drift).
+# Install buf at its pinned version (into $(go env GOPATH)/bin). protoc-gen-go and
+# protoc-gen-go-grpc are no longer installed: they are `tool` directives in relay/go.mod,
+# run by proto/buf.gen.yaml through `go tool`, so their versions follow the committed
+# generated code and cannot be changed from a sibling worktree.
 proto-tools:
-	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
-	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
 	go install github.com/bufbuild/buf/cmd/buf@v1.54.0
 
-# The three `go install` lines above are the ONLY copy of these pins. Three consumers read
+# The `go install` lines are the ONLY copy of the Makefile's tool pins. The Go proto generators
+# are not among them: they are `tool` directives in relay/go.mod (#891), pinned by go.sum and
+# built per checkout by `go tool`, so never reintroduce a `go install` line for them. Three consumers read
 # that exact line shape and none may be given a second copy: this recipe; ci.yml's cache-key
 # step in both the relay and proto jobs (`grep -hE '^\s+go install ' Makefile | sha256sum`); and
 # scripts/proto-tools-check.sh below, which parses them and refuses — before any codegen
@@ -244,7 +246,7 @@ proto-tools:
 # whose entire content was the generator stamp). Reshape this recipe and update all three in
 # the same change.
 #
-# proto-tools-check asserts buf too, even though buf's own version is not recorded anywhere in
+# proto-tools-check asserts buf, whose version is not recorded anywhere in
 # the generated stamp — nothing else here can catch a wrong buf, and buf's version is what
 # decides what `buf lint` and `buf breaking` accept. Silent on success, like proto-check.
 proto-tools-check:
