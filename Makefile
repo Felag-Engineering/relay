@@ -46,7 +46,7 @@ endif
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
         test-security-surface test-codex-review test-proto-tools-check test-ci-changed-paths \
-        test-check-docs test-smoke-test \
+        test-check-docs test-smoke-test test-maintainer-check \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
         demo-build demo-reset demo-reset-oauth demo-fault demo-up demo-up-oauth demo-down demo-creds \
         test-demo-fleet \
@@ -61,8 +61,8 @@ endif
 # and proto-breaking gates, the operation-schema drift check, the devharness
 # absence check, the security-surface gate self-test, the demo-fleet reset
 # guard self-test, the codex-review gate self-test, the proto-tools pin check
-# self-test, the changed-paths classifier self-test, the docs-check and
-# smoke-test self-tests, the strict-umask test lane, both cross-binary suites, the
+# self-test, the changed-paths classifier self-test, the docs-check,
+# smoke-test and maintainer-check self-tests, the strict-umask test lane, both cross-binary suites, the
 # shell/workflow linters (lint-ci), the secrets scan and the daemon's cargo-deny policy.
 # Work can pass the inner loop and fail CI on a class of problem the author
 # never looked at.
@@ -86,7 +86,7 @@ verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
         apiclient-check verify-proto docs-check test-security-surface \
         test-demo-fleet test-codex-review test-proto-tools-check test-ci-changed-paths \
-        test-check-docs test-smoke-test \
+        test-check-docs test-smoke-test test-maintainer-check \
         test-integration test-crossbinary \
         lint-ci secrets-scan deny-daemon test-vuln-gate
 	@echo
@@ -337,6 +337,15 @@ test-check-docs:
 # binary half is test-integration.
 test-smoke-test:
 	bash scripts/smoke-test-test.sh
+
+# Proves scripts/maintainer-check.sh, the one check every routine runs before a GitHub author's
+# text may instruct it (docs/agents/routines.md): it admits exactly role_name
+# admin/maintain/write, refuses a non-collaborator, tells a refusal (1) from a check that could
+# not run (2), validates the login before any call, and accepts the REST login form the
+# commands read (#910). Hermetic: a stub gh under a throwaway WORKDIR; bash and jq, no token,
+# no network.
+test-maintainer-check:
+	bash scripts/maintainer-check-test.sh
 
 # Verify no committed generated code drifts from the proto source (ADR-0007).
 # Lints /proto first, then runs proto (which regenerates) and fails if relay/internal/relay/v1
