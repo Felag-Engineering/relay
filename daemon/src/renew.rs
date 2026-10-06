@@ -436,11 +436,9 @@ mod tests {
         // This is required for the pubkey correspondence check (FIX A, FIND-1+FIND-3).
         let renewed = perform_renewal_with(dir.path(), &current, move |csr_pem| async move {
             let ca_kp = rcgen::KeyPair::generate().expect("ca keygen");
-            let ca_cert = rcgen::CertificateParams::new(vec![])
-                .expect("ca params")
-                .self_signed(&ca_kp)
-                .expect("ca cert");
-            let issued = crate::identity::test_ca::sign_csr(&csr_pem, &ca_cert, &ca_kp);
+            let ca_params = rcgen::CertificateParams::new(vec![]).expect("ca params");
+            let ca_cert = ca_params.self_signed(&ca_kp).expect("ca cert");
+            let issued = crate::identity::test_ca::sign_csr(&csr_pem, &ca_params, &ca_kp);
             Ok::<_, EnrollError>((nid, issued.pem(), ca_cert.pem()))
         })
         .await

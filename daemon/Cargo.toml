@@ -50,7 +50,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 ring = "0.17"
 # CSR / keypair generation for enrollment bootstrap (ADR-0006).
 # `ring` backend keeps crypto internally consistent with the rustls ring path above.
-rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+rcgen = { version = "0.14", default-features = false, features = ["pem", "ring"] }
 # PEM parsing for the identity idempotency check and mTLS identity loading
 # (#28). rustls-pemfile was retired here (#344): RUSTSEC flagged it unmaintained,
 # and its PEM decoders now live in rustls-pki-types — the same crate whose
@@ -70,7 +70,7 @@ serde = { version = "1", features = ["derive"] }
 # Deserialize-only TOML for the Policy file; default-features=false drops the
 # serializer half, keeping the musl binary small (ADR-0007). The Relay may never
 # modify the Policy file over the wire (ADR-0002 remotely-immutable invariant).
-toml = { version = "0.8", default-features = false, features = ["parse"] }
+toml = { version = "1.1", default-features = false, features = ["parse", "serde"] }
 # Regex gating for Raw Exec (ADR-0001): RE2-style linear-time engine, no ReDoS.
 # Already transitive (regex 1.12.4 via the dependency tree); promoting to a
 # direct dep makes the Raw Exec gate explicit without adding a new crate.
