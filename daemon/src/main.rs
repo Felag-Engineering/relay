@@ -4,7 +4,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, warn, Subscriber};
+use tracing_subscriber::fmt::format::{DefaultFields, Format, Full};
+use tracing_subscriber::fmt::time::SystemTime as LogSystemTime;
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::EnvFilter;
 
 mod cancel;
 mod catalog;
@@ -45,6 +51,26 @@ use gen::{
     daemon_message, relay_message, tunnel_client::TunnelClient, ArgMatcher, DaemonMessage,
     DenyRule, Facts, Heartbeat, Hello, OperationRule, PolicySnapshot,
 };
+
+/// The daemon's one log formatting layer, shared by production and the tests
+/// that prove what a journal line looks like.
+///
+/// ANSI is off unconditionally because the log sink is journald (#888): escape
+/// codes split the target from its colon and break the documented `journalctl`
+/// pattern. `log_internal_errors(true)` keeps what `fmt()`'s builder set, so a
+/// failed write to stdout is still reported on stderr, not dropped silently.
+pub(crate) fn log_fmt_layer<S, W>(
+    make_writer: W,
+) -> tracing_subscriber::fmt::Layer<S, DefaultFields, Format<Full, LogSystemTime>, W>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+    W: for<'w> MakeWriter<'w> + 'static,
+{
+    tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .log_internal_errors(true)
+        .with_writer(make_writer)
+}
 
 fn now_millis() -> i64 {
     SystemTime::now()
@@ -399,7 +425,7 @@ async fn run_tunnel(
                         // so TaskCancel/PolicyQuery keep flowing while at capacity.
                         if ctx.inflight.count() >= MAX_INFLIGHT_TASKS {
                             warn!(
-                                task_id = %task_req.task_id,
+                                task_id = ?task_req.task_id,
                                 cap = MAX_INFLIGHT_TASKS,
                                 "refusing Task: daemon at in-flight backstop",
                             );
@@ -736,11 +762,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(code);
     }
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with(log_fmt_layer(std::io::stdout))
         .init();
 
     // rustls 0.23 requires an explicit process-level CryptoProvider. ring is the
@@ -839,6 +863,83 @@ mod tests {
     };
     use crate::policy;
     use std::time::Duration;
+
+    /// The documented `journalctl -g` pattern must match what the production
+    /// layer really writes: plain text (no ANSI splitting the target from its
+    /// colon), and the install guide must show exactly this pattern.
+    #[test]
+    fn journalctl_pattern_matches_production_formatted_decision_lines() {
+        use crate::policy::decision_log::{
+            emit_allow, DecisionFields, Tier, ALLOW_TARGET, DENY_TARGET, JOURNALCTL_PATTERN,
+        };
+        use crate::test_support::trace_capture::SharedBuf;
+        use tracing_subscriber::prelude::*;
+
+        let buf = SharedBuf::default();
+        let writer = buf.clone();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::EnvFilter::new("info"))
+            .with(super::log_fmt_layer(move || writer.clone()));
+        let guard = tracing::subscriber::set_default(subscriber);
+
+        let fingerprint = "f".repeat(64);
+        let fields = DecisionFields {
+            task_id: "task-fmt-1",
+            operation: "service.restart",
+            tier: Tier::Native,
+            risk_class: crate::gen::RiskClass::Mutate,
+            argv_digest: "0".repeat(64),
+            argc: 2,
+            policy_fingerprint: &fingerprint,
+        };
+        emit_allow(
+            &fields,
+            &policy::Rule::OperationAllow {
+                operation: "service.restart".to_string(),
+            },
+        );
+        tracing::warn!(
+            target: DENY_TARGET,
+            task_id = %fields.task_id,
+            operation = %fields.operation,
+            "operation denied by policy"
+        );
+        drop(guard);
+
+        let bytes = buf.0.lock().unwrap().clone();
+        assert!(
+            !bytes.contains(&0x1b),
+            "log lines must carry no ANSI escape"
+        );
+        let text = String::from_utf8(bytes).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "one line per event: {text:?}");
+
+        let pattern = regex::Regex::new(JOURNALCTL_PATTERN).unwrap();
+        let prefix = regex::Regex::new(
+            r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z  (INFO|WARN) relay_daemon::(allow|deny): ",
+        )
+        .unwrap();
+        for line in &lines {
+            assert!(pattern.is_match(line), "pattern must match {line:?}");
+            assert!(prefix.is_match(line), "unexpected line prefix: {line:?}");
+        }
+        assert!(lines[0].contains(&format!(" INFO {ALLOW_TARGET}: policy allowed ")));
+        assert!(lines[0].contains("task_id=\"task-fmt-1\""));
+        assert!(lines[1].contains(&format!(" WARN {DENY_TARGET}: ")));
+
+        let guide = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../docs/operations/relay-daemon-install.md"
+        ))
+        .expect("read the daemon install guide");
+        assert!(
+            guide.contains(&format!(
+                "journalctl -u relay-daemon -g '{JOURNALCTL_PATTERN}'"
+            )),
+            "the install guide must show the tested journalctl pattern verbatim"
+        );
+    }
 
     #[test]
     fn facts_struct_construction() {
@@ -1197,6 +1298,101 @@ pub(crate) mod test_support {
                 "pid {pid} still exists after {within:?}"
             );
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Captures `tracing` events into memory so a test can assert on what the
+    /// daemon logs, and on what it must not.
+    pub(crate) mod trace_capture {
+        use std::collections::BTreeMap;
+        use std::sync::{Arc, Mutex};
+
+        use tracing::field::{Field, Visit};
+        use tracing::subscriber::DefaultGuard;
+        use tracing_subscriber::layer::Context;
+        use tracing_subscriber::prelude::*;
+        use tracing_subscriber::Layer;
+
+        #[derive(Debug, Clone)]
+        pub(crate) struct CapturedEvent {
+            pub(crate) target: String,
+            pub(crate) fields: BTreeMap<String, String>,
+        }
+
+        impl CapturedEvent {
+            pub(crate) fn field_names(&self) -> Vec<&str> {
+                self.fields.keys().map(String::as_str).collect()
+            }
+        }
+
+        #[derive(Clone, Default)]
+        pub(crate) struct Captured(Arc<Mutex<Vec<CapturedEvent>>>);
+
+        impl Captured {
+            pub(crate) fn events_with_target(&self, target: &str) -> Vec<CapturedEvent> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|e| e.target == target)
+                    .cloned()
+                    .collect()
+            }
+        }
+
+        struct FieldVisitor<'a>(&'a mut BTreeMap<String, String>);
+
+        impl Visit for FieldVisitor<'_> {
+            fn record_str(&mut self, field: &Field, value: &str) {
+                self.0.insert(field.name().to_string(), value.to_string());
+            }
+            fn record_u64(&mut self, field: &Field, value: u64) {
+                self.0.insert(field.name().to_string(), value.to_string());
+            }
+            fn record_i64(&mut self, field: &Field, value: i64) {
+                self.0.insert(field.name().to_string(), value.to_string());
+            }
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                self.0
+                    .insert(field.name().to_string(), format!("{value:?}"));
+            }
+        }
+
+        struct CaptureLayer(Captured);
+
+        impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                let mut fields = BTreeMap::new();
+                event.record(&mut FieldVisitor(&mut fields));
+                (self.0).0.lock().unwrap().push(CapturedEvent {
+                    target: event.metadata().target().to_string(),
+                    fields,
+                });
+            }
+        }
+
+        /// Installs a capturing subscriber for the current thread (the tests
+        /// using it are current-thread `#[tokio::test]`s) until the guard drops.
+        pub(crate) fn capture() -> (Captured, DefaultGuard) {
+            let captured = Captured::default();
+            let guard = tracing::subscriber::set_default(
+                tracing_subscriber::registry().with(CaptureLayer(captured.clone())),
+            );
+            (captured, guard)
+        }
+
+        /// A shared in-memory writer, for formatting tests.
+        #[derive(Clone, Default)]
+        pub(crate) struct SharedBuf(pub(crate) Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
         }
     }
 }

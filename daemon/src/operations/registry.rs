@@ -167,6 +167,8 @@ pub trait ResolvedOp: Send + Sync {
     /// (`scheduler::Scheduler::classify`) and by discovery; native dispatch
     /// reads the concrete `OpRegistration::risk` field directly.
     fn risk(&self) -> RiskClass;
+    /// The execution tier, named in the Node's Policy decision log (#888).
+    fn tier(&self) -> crate::policy::decision_log::Tier;
     /// Named-args → positional vector, in the entry's declared order. MUST be
     /// the exact vector Policy evaluates (ADR-0011: no drift between "would
     /// allow" and "actually allows").
@@ -195,6 +197,12 @@ impl ResolvedOp for OpRegistration {
 
     fn risk(&self) -> RiskClass {
         self.risk
+    }
+
+    // RAW_EXEC is never resolved through `ResolvedOp`/`gate_and_invoke` (it is
+    // not in the by-name table); `run_raw_exec` names its own tier.
+    fn tier(&self) -> crate::policy::decision_log::Tier {
+        crate::policy::decision_log::Tier::Native
     }
 
     fn positional_args(&self, op: &Operation) -> Vec<String> {

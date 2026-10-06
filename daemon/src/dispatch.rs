@@ -36,6 +36,7 @@ use crate::operations;
 use crate::operations::registry::{self, FnRunner, OpCtx, OpRegistration, ResolvedOp};
 #[cfg(test)]
 use crate::operations::schema::{OP_ARG_NAME, OP_ARG_PATH, OP_ARG_UNIT, OP_ARG_VERSION};
+use crate::policy::decision_log::{self, argv_digest, DecisionFields, DenyDetail};
 use crate::policy::{Decision, Policy};
 use crate::scheduler::{QueuedOutcome, Scheduler};
 use crate::services::Services;
@@ -525,14 +526,29 @@ where
         // cancel drops naturally here — nothing was spawned, nothing queued.
         let _ = cancel;
         tracing::info!(
-            task_id = %task_id,
-            operation = %op.name,
+            task_id = ?task_id,
+            operation = ?op.name,
             "operation is not in this Node's vocabulary; reporting unsupported"
         );
         return unsupported_result(task_id);
     };
 
     let positional = entry.positional_args(op);
+
+    // The digest covers the vector Policy evaluates (name + positional), not a
+    // Template's rendered `/bin/sh -c` line, and never reaches a log as argv.
+    let mut digest_parts = Vec::with_capacity(1 + positional.len());
+    digest_parts.push(op.name.as_str());
+    digest_parts.extend(positional.iter().map(String::as_str));
+    let fields = DecisionFields {
+        task_id: &task_id,
+        operation: &op.name,
+        tier: entry.tier(),
+        risk_class: entry.risk(),
+        argv_digest: argv_digest(&digest_parts),
+        argc: digest_parts.len(),
+        policy_fingerprint: policy.fingerprint(),
+    };
 
     // ADR-0018 canonical-form precondition for path arguments (issue #293),
     // via the one predicate the plan path also runs (issue #339) so a Plan and
@@ -547,11 +563,12 @@ where
         let Decision::Deny { reason, .. } = decision else {
             unreachable!("non_canonical_path_precondition only ever returns Deny")
         };
-        tracing::warn!(
-            task_id = %task_id,
-            operation = %op.name,
-            reason = %reason,
-            "template path argument is not in canonical form; denied before Policy"
+        decision_log::emit_deny(
+            &fields,
+            None,
+            &reason,
+            DenyDetail::None,
+            "template path argument is not in canonical form; denied before Policy",
         );
         let _ = cancel;
         return denied_by_policy_result(task_id, &reason);
@@ -561,17 +578,17 @@ where
     match policy.evaluate(&op.name, &positional) {
         Decision::Deny { reason, rule } => {
             // cancel drops naturally here — denied before any process spawned.
-            tracing::warn!(
-                task_id = %task_id,
-                operation = %op.name,
-                args = ?positional,
-                rule = ?rule,
-                reason = %reason,
-                "operation denied by policy"
+            decision_log::emit_deny(
+                &fields,
+                rule.as_ref(),
+                &reason,
+                DenyDetail::Args(&positional),
+                "operation denied by policy",
             );
             denied_by_policy_result(task_id, &reason)
         }
-        Decision::Allow(_rule) => {
+        Decision::Allow(rule) => {
+            decision_log::emit_allow(&fields, &rule);
             let runner = FnRunner(run);
             let ctx = OpCtx {
                 task_id,
@@ -686,7 +703,7 @@ fn class_mismatch(task: &TaskRequest, templates: &TemplateSet) -> bool {
 /// ones, which the proto's FAILURE comment covers.
 fn class_mismatch_result(task_id: String) -> TaskResult {
     tracing::warn!(
-        task_id = %task_id,
+        task_id = ?task_id,
         "Task dispatched as read, but this Node classifies its action as mutate; refusing"
     );
     failure_result(task_id, CLASS_MISMATCH_REASON.as_bytes())
@@ -3736,5 +3753,443 @@ mod proptests {
                 prop_assert!(s.chars().next_back().unwrap().is_ascii_alphanumeric());
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The Node's own record of Policy decisions (#888): one `relay_daemon::allow`
+// event per Allow, a `relay_daemon::deny` event per Deny, never argv.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod decision_log_tests {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::operations::template::{RiskClassDef, SlotDef, SlotType, TemplateDef};
+    use crate::policy::decision_log::{argv_digest, ALLOW_TARGET, DENY_TARGET};
+    use crate::policy::from_toml_str;
+    use crate::test_support::trace_capture::{capture, CapturedEvent};
+    use crate::test_support::{TempDir, TempFile};
+
+    const SHARED_FIELDS: [&str; 8] = [
+        "argc",
+        "argv_digest",
+        "message",
+        "operation",
+        "policy_fingerprint",
+        "risk_class",
+        "task_id",
+        "tier",
+    ];
+
+    fn ok_result(req: &ExecRequest) -> TaskResult {
+        TaskResult {
+            task_id: req.task_id.clone(),
+            outcome: Outcome::Success as i32,
+            exit_code: 0,
+            stdout: vec![],
+            stderr: vec![],
+            truncated: false,
+            duration_millis: 0,
+        }
+    }
+
+    fn operation_task(task_id: &str, name: &str, args: &[(&str, &str)]) -> TaskRequest {
+        let args: HashMap<String, String> = args
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        TaskRequest {
+            risk_class: 0,
+            task_id: task_id.to_string(),
+            timeout_seconds: 5,
+            action: Some(task_request::Action::Operation(Operation {
+                name: name.to_string(),
+                args,
+            })),
+        }
+    }
+
+    fn dedup_in(label: &str) -> (TempDir, DedupStore) {
+        let dir = TempDir::created(label);
+        let dedup = DedupStore::open(dir.path()).expect("open dedup");
+        (dir, dedup)
+    }
+
+    fn all_values(e: &CapturedEvent) -> String {
+        e.fields.values().cloned().collect::<Vec<_>>().join("\n")
+    }
+
+    fn sorted(mut names: Vec<&str>) -> Vec<&str> {
+        names.sort_unstable();
+        names
+    }
+
+    fn counting_runner(
+        calls: Arc<AtomicUsize>,
+    ) -> impl Fn(ExecRequest) -> std::future::Ready<TaskResult> + Sync + Clone {
+        move |req: ExecRequest| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(ok_result(&req))
+        }
+    }
+
+    fn disk_usage_templates() -> TemplateSet {
+        TemplateSet::for_test(&[TemplateDef {
+            name: "disk.usage".to_string(),
+            risk_class: RiskClassDef::Read,
+            body: "df -PT {{path}}".to_string(),
+            slots: vec![SlotDef {
+                name: "path".to_string(),
+                ty: SlotType::Path,
+            }],
+        }])
+    }
+
+    #[tokio::test]
+    async fn native_allow_emits_one_allow_event_with_named_fields_and_no_argv() {
+        let (captured, _guard) = capture();
+        let (_dir, dedup) = dedup_in("dl-native");
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["*"]]
+"#,
+        )
+        .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let task = operation_task(
+            "t-dl-native",
+            "service.restart",
+            &[(OP_ARG_UNIT, "sentinel-unit-7f3a")],
+        );
+
+        dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            counting_runner(calls.clone()),
+            None,
+        )
+        .await;
+
+        let events = captured.events_with_target(ALLOW_TARGET);
+        assert_eq!(events.len(), 1, "exactly one Allow event");
+        let e = &events[0];
+        assert_eq!(
+            sorted(e.field_names()),
+            sorted([&SHARED_FIELDS[..], &["rule"]].concat())
+        );
+        assert_eq!(e.fields["task_id"], "\"t-dl-native\"");
+        assert_eq!(e.fields["operation"], "\"service.restart\"");
+        assert_eq!(e.fields["tier"], "native");
+        assert_eq!(e.fields["risk_class"], "mutate");
+        assert_eq!(e.fields["argc"], "2");
+        assert_eq!(
+            e.fields["argv_digest"],
+            argv_digest(&["service.restart", "sentinel-unit-7f3a"])
+        );
+        assert_eq!(
+            e.fields["argv_digest"],
+            "89b11f9eeb9515e5a439097caf3e50e90b2d44fecdd781e73bef981599516a1d"
+        );
+        assert_eq!(e.fields["policy_fingerprint"], policy.fingerprint());
+        assert!(!all_values(e).contains("sentinel-unit-7f3a"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn template_allow_event_reports_template_tier() {
+        let (captured, _guard) = capture();
+        let (_dir, dedup) = dedup_in("dl-template");
+        let templates = disk_usage_templates();
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "disk.usage"
+allowed_args = [["*"]]
+"#,
+        )
+        .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let task = operation_task(
+            "t-dl-template",
+            "disk.usage",
+            &[("path", "/var/sentinel-dir")],
+        );
+
+        dispatch_with_runner(
+            &task,
+            &policy,
+            &templates,
+            &dedup,
+            counting_runner(calls.clone()),
+            None,
+        )
+        .await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let events = captured.events_with_target(ALLOW_TARGET);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].fields["tier"], "template");
+        assert_eq!(events[0].fields["risk_class"], "read");
+        assert!(!all_values(&events[0]).contains("sentinel-dir"));
+    }
+
+    #[tokio::test]
+    async fn file_read_allow_emits_exactly_one_allow_event() {
+        let (captured, _guard) = capture();
+        let (_dir, dedup) = dedup_in("dl-file-read");
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "file.read"
+allowed_args = [["*"]]
+"#,
+        )
+        .unwrap();
+        let tmp = TempFile::with_requested_mode("dl-content", b"x", 0o600);
+        let path = tmp.path_str();
+        let task = operation_task("t-dl-file-read", "file.read", &[(OP_ARG_PATH, &path)]);
+
+        let result = dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            execute,
+            None,
+        )
+        .await;
+
+        assert_eq!(result.outcome, Outcome::Success as i32);
+        // The layer-2 re-check calls policy.evaluate again, outside the gate.
+        let events = captured.events_with_target(ALLOW_TARGET);
+        assert_eq!(events.len(), 1);
+        assert!(!all_values(&events[0]).contains(&path));
+    }
+
+    #[tokio::test]
+    async fn deny_emits_no_allow_event_and_a_deny_event_with_the_shared_fields() {
+        let (captured, _guard) = capture();
+        let (_dir, dedup) = dedup_in("dl-deny");
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx"]]
+"#,
+        )
+        .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let task = operation_task("t-dl-deny", "service.restart", &[(OP_ARG_UNIT, "sshd")]);
+
+        let result = dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            counting_runner(calls.clone()),
+            None,
+        )
+        .await;
+
+        assert_eq!(result.outcome, Outcome::DeniedByPolicy as i32);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(captured.events_with_target(ALLOW_TARGET).is_empty());
+        let denies = captured.events_with_target(DENY_TARGET);
+        assert_eq!(denies.len(), 1);
+        let names = denies[0].field_names();
+        for shared in SHARED_FIELDS {
+            assert!(names.contains(&shared), "deny event lacks {shared}");
+        }
+        assert_eq!(denies[0].fields["tier"], "native");
+        assert_eq!(denies[0].fields["policy_fingerprint"], policy.fingerprint());
+    }
+
+    #[tokio::test]
+    async fn non_canonical_template_path_deny_is_logged_at_the_deny_target() {
+        let (captured, _guard) = capture();
+        let (_dir, dedup) = dedup_in("dl-noncanon");
+        let templates = disk_usage_templates();
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "disk.usage"
+allowed_args = [["*"]]
+"#,
+        )
+        .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let task = operation_task(
+            "t-dl-noncanon",
+            "disk.usage",
+            &[("path", "/etc/../etc/hosts")],
+        );
+
+        let result = dispatch_with_runner(
+            &task,
+            &policy,
+            &templates,
+            &dedup,
+            counting_runner(calls.clone()),
+            None,
+        )
+        .await;
+
+        assert_eq!(result.outcome, Outcome::DeniedByPolicy as i32);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(captured.events_with_target(ALLOW_TARGET).is_empty());
+        let denies = captured.events_with_target(DENY_TARGET);
+        assert_eq!(denies.len(), 1);
+        assert_eq!(denies[0].fields["tier"], "template");
+        assert!(!denies[0].fields.contains_key("rule"), "no rule fired");
+    }
+
+    /// `task_id` and the Operation name come off the wire unchecked, and the
+    /// journal splits on newlines: a hostile value must not start a forged
+    /// decision line, through the production formatting layer.
+    #[tokio::test]
+    async fn newline_in_task_id_or_operation_cannot_forge_a_decision_line() {
+        use crate::test_support::trace_capture::SharedBuf;
+        use tracing_subscriber::prelude::*;
+
+        let buf = SharedBuf::default();
+        let writer = buf.clone();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::EnvFilter::new("info"))
+            .with(crate::log_fmt_layer(move || writer.clone()));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let (_dir, dedup) = dedup_in("dl-inject");
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx"]]
+"#,
+        )
+        .unwrap();
+        let forged = "\nFORGED relay_daemon::allow: policy allowed";
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        // Allow, Policy Deny, and an unknown (wire-supplied) Operation name.
+        let tasks = [
+            operation_task(
+                &format!("t-inject-allow{forged}\r{forged}"),
+                "service.restart",
+                &[(OP_ARG_UNIT, "nginx")],
+            ),
+            operation_task(
+                &format!("t-inject-deny{forged}\r{forged}"),
+                "service.restart",
+                &[(OP_ARG_UNIT, "sshd")],
+            ),
+            operation_task("t-inject-op", &format!("no.such.op{forged}\r{forged}"), &[]),
+        ];
+        for task in &tasks {
+            dispatch_with_runner(
+                task,
+                &policy,
+                TemplateSet::empty_static(),
+                &dedup,
+                counting_runner(calls.clone()),
+                None,
+            )
+            .await;
+        }
+
+        let text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        assert!(!text.contains('\r'), "raw CR reached the log: {text:?}");
+        for line in text.lines() {
+            assert!(
+                !line.starts_with("FORGED"),
+                "forged text started a line: {line:?}"
+            );
+        }
+        let decision_lines = text
+            .lines()
+            .filter(|l| l.contains(ALLOW_TARGET) || l.contains(DENY_TARGET))
+            .count();
+        assert_eq!(
+            decision_lines,
+            text.lines().count(),
+            "every line is a real event: {text:?}"
+        );
+        assert!(
+            decision_lines >= 3,
+            "allow and deny events present: {text:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dedup_replay_emits_no_second_allow_event() {
+        let (captured, _guard) = capture();
+        let (_dir, dedup) = dedup_in("dl-dedup");
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["*"]]
+"#,
+        )
+        .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let task = operation_task("t-dl-dedup", "service.restart", &[(OP_ARG_UNIT, "nginx")]);
+
+        for _ in 0..2 {
+            dispatch_with_runner(
+                &task,
+                &policy,
+                TemplateSet::empty_static(),
+                &dedup,
+                counting_runner(calls.clone()),
+                None,
+            )
+            .await;
+        }
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(captured.events_with_target(ALLOW_TARGET).len(), 1);
+    }
+
+    #[test]
+    fn policy_query_emits_no_allow_event() {
+        let (captured, _guard) = capture();
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["*"]]
+
+[raw_exec]
+allow = ["^/bin/echo .+$"]
+"#,
+        )
+        .unwrap();
+        let op_query = PolicyQuery {
+            query_id: "q-op".to_string(),
+            action: Some(policy_query::Action::Operation(Operation {
+                name: "service.restart".to_string(),
+                args: [(OP_ARG_UNIT.to_string(), "nginx".to_string())].into(),
+            })),
+        };
+        let raw_query = PolicyQuery {
+            query_id: "q-raw".to_string(),
+            action: Some(policy_query::Action::RawExec(crate::gen::RawExec {
+                argv: vec!["/bin/echo".to_string(), "hi".to_string()],
+            })),
+        };
+
+        let ops = evaluate_policy_query(&op_query, &policy, TemplateSet::empty_static());
+        let raw = evaluate_policy_query(&raw_query, &policy, TemplateSet::empty_static());
+
+        assert!(ops.allowed && raw.allowed, "both hypotheticals are allowed");
+        assert!(captured.events_with_target(ALLOW_TARGET).is_empty());
     }
 }

@@ -16,6 +16,7 @@ use crate::config::ResourceLimits;
 use crate::executor::{execute, ExecRequest};
 use crate::gen::{RawExec, TaskResult};
 use crate::not_executed::denied_by_policy_result;
+use crate::policy::decision_log::{self, argv_digest, DecisionFields, DenyDetail, Tier};
 use crate::policy::{Decision, Policy};
 
 /// Raw Exec is always classified as `mutate` (ADR-0012).
@@ -23,10 +24,8 @@ use crate::policy::{Decision, Policy};
 /// Arbitrary commands are unclassifiable, so Raw Exec always takes the strict
 /// mutate lane by definition — never conditional on the command content.
 ///
-/// Only referenced in tests (blast-radius classification); dispatch routes via
-/// Policy, not this constant. Compiled only under test; a future production
-/// use lifts the `cfg`.
-#[cfg(test)]
+/// The Policy decision log (`policy::decision_log`) reports it on every Raw
+/// Exec decision event; dispatch routes via Policy, not this constant.
 pub const RAW_EXEC_RISK_CLASS: crate::gen::RiskClass = crate::gen::RiskClass::Mutate;
 
 /// Evaluate and execute a Raw Exec task.
@@ -48,34 +47,36 @@ pub async fn run_raw_exec(
 
     // Never log the full argv: Raw Exec arguments are caller-supplied and may
     // embed credentials (e.g. `curl -H "Authorization: ..."`, a `--password`
-    // flag). Log only the program name (`argv[0]`) and the argument count. The
-    // Policy `reason` is already bounded to a short, char-boundary-safe fragment
-    // (policy.rs `reason_fragment`), so attribution survives without dumping the
-    // whole command line into the log.
+    // flag). A Deny logs the program name (`argv[0]`) plus the argument count; an
+    // Allow logs the argv digest plus the count only. The Policy `reason` is
+    // already bounded to a short, char-boundary-safe fragment (policy.rs
+    // `reason_fragment`), so attribution survives without dumping the whole
+    // command line into the log.
     let program = raw.argv.first().map_or("", String::as_str);
-    let argc = raw.argv.len();
+    let fields = DecisionFields {
+        task_id: &task_id,
+        operation: "raw_exec",
+        tier: Tier::RawExec,
+        risk_class: RAW_EXEC_RISK_CLASS,
+        argv_digest: argv_digest(&raw.argv),
+        argc: raw.argv.len(),
+        policy_fingerprint: policy.fingerprint(),
+    };
 
     match decision {
         Decision::Deny { reason, rule } => {
             // cancel drops naturally here — denied before any process spawned.
-            tracing::warn!(
-                task_id = %task_id,
-                program = %program,
-                argc,
-                rule = ?rule,
-                reason = %reason,
-                "raw exec denied by policy"
+            decision_log::emit_deny(
+                &fields,
+                rule.as_ref(),
+                &reason,
+                DenyDetail::Program(program),
+                "raw exec denied by policy",
             );
             denied_by_policy_result(task_id, &reason)
         }
         Decision::Allow(rule) => {
-            tracing::info!(
-                task_id = %task_id,
-                program = %program,
-                argc,
-                rule = ?rule,
-                "raw exec allowed by policy"
-            );
+            decision_log::emit_allow(&fields, &rule);
             execute(ExecRequest {
                 task_id,
                 argv: raw.argv.clone(),
@@ -418,5 +419,124 @@ allow = ["^/bin/echo .+$"]
     #[test]
     fn raw_exec_is_mutate() {
         assert_eq!(RAW_EXEC_RISK_CLASS, RiskClass::Mutate);
+    }
+
+    // -----------------------------------------------------------------------
+    // 6. The Node's decision log (#888): Allow carries digest + argc only
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn raw_exec_allow_event_carries_digest_and_argc_only() {
+        use crate::policy::decision_log::{argv_digest, ALLOW_TARGET};
+        use crate::test_support::trace_capture::capture;
+
+        let (captured, _guard) = capture();
+        // Neither the sentinel nor "/bin/echo" appears in the pattern, because
+        // the event logs the matched rule.
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^/bin/ech[o] [a-z0-9-]+$"]
+"#,
+        )
+        .unwrap();
+        let raw = make_raw_exec(argv(&["/bin/echo", "s3cret-token-91"]));
+
+        let result = run_raw_exec(
+            "t-raw-log".to_string(),
+            &raw,
+            Duration::from_secs(5),
+            big_cap(),
+            &policy,
+            None,
+        )
+        .await;
+        assert_eq!(result.outcome, Outcome::Success as i32);
+
+        let events = captured.events_with_target(ALLOW_TARGET);
+        assert_eq!(events.len(), 1, "exactly one Allow event");
+        let e = &events[0];
+        let mut names = e.field_names();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            [
+                "argc",
+                "argv_digest",
+                "message",
+                "operation",
+                "policy_fingerprint",
+                "risk_class",
+                "rule",
+                "task_id",
+                "tier"
+            ]
+        );
+        assert_eq!(e.fields["argc"], "2");
+        assert_eq!(e.fields["operation"], "\"raw_exec\"");
+        assert_eq!(e.fields["tier"], "raw_exec");
+        assert_eq!(e.fields["risk_class"], "mutate");
+        assert_eq!(
+            e.fields["argv_digest"],
+            argv_digest(&["/bin/echo", "s3cret-token-91"])
+        );
+        assert_eq!(
+            e.fields["argv_digest"],
+            "2b36a31b7a7bbef040fac5ff92a17a71d3377ae79814e72c1e1fcc504951872c"
+        );
+        for value in e.fields.values() {
+            assert!(!value.contains("s3cret-token-91"), "argv leaked: {value}");
+            assert!(!value.contains("/bin/echo"), "argv[0] leaked: {value}");
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_exec_deny_logs_at_deny_target_with_shared_fields() {
+        use crate::policy::decision_log::{ALLOW_TARGET, DENY_TARGET};
+        use crate::test_support::trace_capture::capture;
+
+        let (captured, _guard) = capture();
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^/bin/echo hello$"]
+"#,
+        )
+        .unwrap();
+        let raw = make_raw_exec(argv(&["/bin/echo", "nope"]));
+
+        let result = run_raw_exec(
+            "t-raw-deny-log".to_string(),
+            &raw,
+            Duration::from_secs(5),
+            big_cap(),
+            &policy,
+            None,
+        )
+        .await;
+        assert_eq!(result.outcome, Outcome::DeniedByPolicy as i32);
+
+        assert!(captured.events_with_target(ALLOW_TARGET).is_empty());
+        let denies = captured.events_with_target(DENY_TARGET);
+        assert_eq!(denies.len(), 1);
+        let e = &denies[0];
+        for shared in [
+            "task_id",
+            "operation",
+            "tier",
+            "risk_class",
+            "argv_digest",
+            "argc",
+            "policy_fingerprint",
+        ] {
+            assert!(e.fields.contains_key(shared), "deny event lacks {shared}");
+        }
+        assert_eq!(e.fields["operation"], "\"raw_exec\"");
+        assert_eq!(e.fields["tier"], "raw_exec");
+        assert_eq!(e.fields["policy_fingerprint"], policy.fingerprint());
+        assert!(
+            !e.fields.values().any(|v| v.contains("nope")),
+            "no argument value may reach the log"
+        );
     }
 }
