@@ -1,14 +1,17 @@
-// Template dispatch (ADR-0042, #626): how a Template Operation's risk class,
-// fan-out and argument names are decided before anything is dispatched.
+// Action resolution (ADR-0012, ADR-0042, #626, #878): how every Action's risk
+// class and a Template Operation's fan-out and argument names are decided
+// before anything is dispatched.
 //
 // A Native Operation's risk class is a constant the Relay compiled in
-// (opvocab, ADR-0012). A Template Operation's class is a value each Node
-// reports about itself (nodevocab, ADR-0021), so it cannot be known until the
-// Selector is resolved, and a Node is exactly the party whose compromise the
-// rest of the system is built to survive. This file is the one place that
-// turns those reports into a class, and it is reached only from Service.Run
-// and Service.Plan — never from an adapter, which builds a Template Action
-// with no class at all (invariant 10).
+// (opvocab, ADR-0012) and Raw Exec is always mutate; both come from
+// fixedRiskClass (riskclass.go). A Template Operation's class is a value each
+// Node reports about itself (nodevocab, ADR-0021), so it cannot be known until
+// the Selector is resolved, and a Node is exactly the party whose compromise
+// the rest of the system is built to survive. resolveAction is the one place
+// that decides a class for any Action, and it is reached only from
+// Service.Run and Service.Plan — never from an adapter, which builds an Action
+// with no class at all (invariants 10 and 13). An Action that arrives with a
+// class is refused.
 //
 // The rules, each from ADR-0042:
 //
@@ -78,8 +81,8 @@ type excludedNode struct {
 // resolvedAction is resolveAction's result: the Action with its class
 // decided, the Nodes that will actually be dispatched, the Nodes excluded
 // from it, and — if the dispatch must be refused — why. For a Native
-// Operation or Raw Exec it is the input unchanged with every matched Node
-// dispatched.
+// Operation or Raw Exec it is the input with its fixed class and every matched
+// Node dispatched.
 //
 // nodeClass is each dispatched Node's OWN reported class for a Template
 // (nil for a Native Operation or Raw Exec, whose class is the Action's): the
@@ -106,16 +109,27 @@ func isTemplateAction(act jobs.Action) bool {
 	return !native
 }
 
-// resolveAction decides a Template Action's dispatch over matched; see this
-// file's header for the rules. It never refuses on its own: a refusal is
+// resolveAction decides an Action's class and, for a Template, its dispatch
+// over matched; see this file's header for the rules. It never refuses on its own: a refusal is
 // returned as data for the caller to act on after authorization.
 func (s *Service) resolveAction(act jobs.Action, matched []registry.Node) resolvedAction {
 	if !isTemplateAction(act) {
-		return resolvedAction{act: act, nodes: matched}
+		out := resolvedAction{act: act, nodes: matched}
+		// Written even on the refusal path, so a refused Action never carries
+		// an adapter-supplied class onward.
+		out.act.RiskClass = fixedRiskClass(act)
+		if act.RiskClass != jobs.RiskClassUnspecified {
+			out.refusalKind = RefusalInternal
+			out.refusal = &ClassPresetError{Kind: act.Kind, Operation: act.OperationName, Class: act.RiskClass}
+		}
+		return out
 	}
 
-	// An adapter never decides a Template's class (invariant 10). A class
-	// already present means a surface tried to; refuse rather than trust it.
+	// An adapter never decides a Template's class (invariants 10 and 13). A
+	// class already present means a surface tried to; refuse rather than trust
+	// it. Unlike the branch above, the preset stays on the returned Action: a
+	// Template's class is unknowable without the Nodes' reports, and a refusal
+	// never reaches a cap check or a Task.
 	if act.RiskClass != jobs.RiskClassUnspecified {
 		return resolvedAction{act: act, nodes: matched, refusalKind: RefusalInternal,
 			refusal: &TemplateClassPresetError{Operation: act.OperationName, Class: act.RiskClass}}

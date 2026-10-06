@@ -68,10 +68,9 @@ func TestFleetE2E_RelayRestartDaemonReconnects_DedupHolds(t *testing.T) {
 	h2 := dialHarness(t, fr.sockPath)
 	go func() {
 		_, _ = h2.send(map[string]any{
-			"op":         "run_job",
-			"selector":   "relay:env=test",
-			"raw_exec":   []string{script, marker, "30"},
-			"risk_class": "mutate",
+			"op":       "run_job",
+			"selector": "relay:env=test",
+			"raw_exec": []string{script, marker, "30"},
 		})
 	}()
 

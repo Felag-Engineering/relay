@@ -78,7 +78,7 @@ func TestRoleFloorCannotRefuseAnAskablePark(t *testing.T) {
 		act  jobs.Action
 	}, 0, maxSweptActionKind+1)
 	for k := jobs.ActionKind(0); k <= maxSweptActionKind; k++ {
-		act := jobs.Action{Kind: k, RiskClass: jobs.RiskClassMutate}
+		act := jobs.Action{Kind: k}
 		name := fmt.Sprintf("kind-%d", k)
 		switch k {
 		case jobs.ActionOperation:

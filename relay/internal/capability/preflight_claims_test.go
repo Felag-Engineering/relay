@@ -303,7 +303,6 @@ func TestPreflightCarriesAnIllFormedArgumentValueToTheDaemon(t *testing.T) {
 		Kind:          jobs.ActionOperation,
 		OperationName: "file.read",
 		OperationArgs: map[string]string{"path": illFormedPath},
-		RiskClass:     jobs.RiskClassRead,
 	}
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 

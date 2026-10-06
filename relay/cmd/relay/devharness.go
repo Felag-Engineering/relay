@@ -53,7 +53,6 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 )
 
 // harnessState is threaded through every socket handler: deps for
@@ -202,14 +201,12 @@ type harnessRequest struct {
 	TaskID         string            `json:"task_id,omitempty"`
 	Operation      string            `json:"operation,omitempty"`
 	Args           map[string]string `json:"args,omitempty"`
-	// Selector/RawExec/RiskClass drive run_job: Selector is parsed via
+	// Selector/RawExec drive run_job: Selector is parsed via
 	// capability.ParseSelector; RawExec (if non-empty) builds an ActionRawExec
-	// Action and always takes RiskClassMutate (ADR-0012), regardless of
-	// RiskClass; otherwise Operation+Args build an ActionOperation Action
-	// with RiskClass from RiskClass ("read" -> RiskClassRead, else Mutate).
-	Selector  string   `json:"selector,omitempty"`
-	RawExec   []string `json:"raw_exec,omitempty"`
-	RiskClass string   `json:"risk_class,omitempty"`
+	// Action; otherwise Operation+Args build an ActionOperation Action. The
+	// risk class is decided by the capability layer, never by the request.
+	Selector string   `json:"selector,omitempty"`
+	RawExec  []string `json:"raw_exec,omitempty"`
 	// JobID drives cancel_job and query_job (and, optionally, query_audit).
 	JobID string `json:"job_id,omitempty"`
 }
@@ -477,28 +474,19 @@ func harnessRunJob(ctx context.Context, st *harnessState, req harnessRequest) ha
 	return resp
 }
 
-// harnessRunJobAction builds run_job's Action: Raw Exec (if raw_exec is
-// non-empty) ALWAYS takes RiskClassMutate (ADR-0012, invariant 13) regardless
-// of risk_class, enforced here rather than assumed; a Native Operation takes
-// its RiskClass from risk_class ("read" -> RiskClassRead, else Mutate). A
-// Template Operation (any name opvocab does not know) carries NO class, like
-// every real surface's: the capability layer resolves it from the Nodes'
-// reports and refuses a Template Action that arrives classified (ADR-0042).
+// harnessRunJobAction builds run_job's Action: Raw Exec if raw_exec is
+// non-empty, otherwise the named Operation. Like every real surface it sets
+// NO risk class: the capability layer derives it (Native from opvocab, Raw
+// Exec as mutate, a Template from the Nodes' reports) and refuses an Action
+// that arrives classified (ADR-0012, ADR-0042, invariant 13).
 func harnessRunJobAction(req harnessRequest) (jobs.Action, error) {
 	if len(req.RawExec) > 0 {
-		return jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: req.RawExec, RiskClass: jobs.RiskClassMutate}, nil
+		return jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: req.RawExec}, nil
 	}
 	if req.Operation == "" {
 		return jobs.Action{}, fmt.Errorf("operation or raw_exec is required")
 	}
-	if _, native := opvocab.Lookup(req.Operation); !native {
-		return jobs.Action{Kind: jobs.ActionOperation, OperationName: req.Operation, OperationArgs: req.Args}, nil
-	}
-	class := jobs.RiskClassMutate
-	if req.RiskClass == "read" {
-		class = jobs.RiskClassRead
-	}
-	return jobs.Action{Kind: jobs.ActionOperation, OperationName: req.Operation, OperationArgs: req.Args, RiskClass: class}, nil
+	return jobs.Action{Kind: jobs.ActionOperation, OperationName: req.Operation, OperationArgs: req.Args}, nil
 }
 
 // harnessCancelJob stops job_id's Tasks (#101, ADR-0013) via the capability

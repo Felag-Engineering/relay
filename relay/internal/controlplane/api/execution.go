@@ -279,10 +279,11 @@ func handleRawExec(d Deps) http.HandlerFunc {
 			return
 		}
 
+		// No risk class: the capability layer fixes Raw Exec to mutate
+		// (ADR-0012, invariant 13), and this adapter must not set it.
 		act := jobs.Action{
 			Kind:           jobs.ActionRawExec,
 			RawExecArgv:    req.Argv,
-			RiskClass:      jobs.RiskClassMutate, // always (ADR-0012, invariant 13)
 			TimeoutSeconds: timeout,
 		}
 
@@ -364,10 +365,11 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 // Action construction
 // ---------------------------------------------------------------------------
 
-// buildOperationAction resolves a Native name in the Operation vocabulary for
-// its declared risk class (ADR-0012), validates the argument NAMES, and builds
-// the jobs.Action. Any other name is a Template Operation and is forwarded
-// with no class and no argument check: the capability layer decides both
+// buildOperationAction resolves a Native name in the Operation vocabulary,
+// validates the argument NAMES, and builds the jobs.Action. This adapter
+// decides no risk class for any Operation (ADR-0012, invariant 13): the
+// capability layer derives it. Any other name is a Template Operation and is
+// forwarded with no argument check: the capability layer decides that too
 // (ADR-0042, invariant 10).
 //
 // Both checks are fail-fast legibility pre-checks, never a second Policy
@@ -406,7 +408,6 @@ func buildOperationAction(name string, args map[string]string, timeoutSeconds in
 		Kind:           jobs.ActionOperation,
 		OperationName:  name,
 		OperationArgs:  args,
-		RiskClass:      d.Risk,
 		TimeoutSeconds: timeout,
 	}, nil
 }

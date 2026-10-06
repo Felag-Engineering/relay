@@ -197,7 +197,7 @@ func TestRun_RequesterIsReadableAndEnforcedWhileEveryTaskIsPending(t *testing.T)
 	}
 
 	sel := capability.Selector{Predicates: []capability.Predicate{{Namespace: capability.NamespaceNode, Key: "role", Value: "web"}}}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 
 	results, err := svc.Run(ctx, requester, sel, act)
 	// Cancelled-before-dispatch is not a dispatch failure: dispatchOne's

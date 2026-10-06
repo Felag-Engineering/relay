@@ -101,7 +101,7 @@ func TestPlanReturnsPerNodeVerdictsNoJobOrTask(t *testing.T) {
 	svc, audit, _ := newPlanTestService(t, reg, conduit)
 
 	sel := webSelector()
-	act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/rm", "-rf", "/"}, RiskClass: jobs.RiskClassMutate}
+	act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/rm", "-rf", "/"}}
 	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, sel, act)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
@@ -172,7 +172,7 @@ func TestPlanOfflineNodeIsUnknownNeverQueried(t *testing.T) {
 
 	svc, _, _ := newPlanTestService(t, reg, conduit)
 
-	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead})
+	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestPlanOverCapReportsNotErrors(t *testing.T) {
 		WithExecution(jobsRepo, tasksRepo, conduit),
 	)
 
-	act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}, RiskClass: jobs.RiskClassMutate}
+	act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}}
 	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), act)
 	if err != nil {
 		t.Fatalf("Plan() with an over-cap Selector should report, not error: %v", err)
@@ -270,7 +270,7 @@ func TestPlanFrozenReportsAdvisoryWhileRunRefuses(t *testing.T) {
 	)
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 
 	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, sel, act)
 	if err != nil {
@@ -311,7 +311,7 @@ func TestPlanZeroMatchReportsNoNodesMatchedWhileRunRefuses(t *testing.T) {
 	)
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "db"}}}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 
 	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, sel, act)
 	if err != nil {
@@ -375,7 +375,7 @@ func TestPlanOutdatedNodeGetsRealVerdictAdvisoryOnly(t *testing.T) {
 
 	svc, _, _ := newPlanTestService(t, reg, conduit)
 
-	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead})
+	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -434,7 +434,7 @@ func TestPlanAuthzDeniedRecordsRefusalNoVerdicts(t *testing.T) {
 	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}, metrics: noopMetricsSink{}}
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{RiskClass: jobs.RiskClassRead})
+	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{})
 	if err == nil {
 		t.Fatal("Plan() with a denying Authorizer should return an error")
 	}

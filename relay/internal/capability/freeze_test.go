@@ -99,7 +99,7 @@ func TestRunNotFrozenProceedsNormally(t *testing.T) {
 	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: freezeStore, metrics: noopMetricsSink{}}
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{RiskClass: jobs.RiskClassRead})
+	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{})
 	if err != nil {
 		t.Fatalf("Run() with the Freeze not engaged returned unexpected error: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestRunFreezeReadErrorFailsClosed(t *testing.T) {
 	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: freezeStore, metrics: noopMetricsSink{}}
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{RiskClass: jobs.RiskClassRead})
+	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{})
 	if err == nil {
 		t.Fatal("Run() with a Frozen read error should return an error (fail closed)")
 	}
@@ -229,7 +229,7 @@ func TestFreezeSurvivesRestart(t *testing.T) {
 
 	svcB := New(reg, WithFreeze(st2.Freeze()))
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	_, err = svcB.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{RiskClass: jobs.RiskClassRead})
+	_, err = svcB.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{})
 
 	var frozenErr *FrozenError
 	if !errors.As(err, &frozenErr) {

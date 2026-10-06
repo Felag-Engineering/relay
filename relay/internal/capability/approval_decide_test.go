@@ -918,11 +918,11 @@ func TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel(t *testing.T) {
 	// a second one).
 	approveAct := jobs.Action{
 		Kind: jobs.ActionOperation, OperationName: "service.restart",
-		OperationArgs: map[string]string{"service": "nginx"}, RiskClass: jobs.RiskClassMutate,
+		OperationArgs: map[string]string{"service": "nginx"},
 	}
 	denyAct := jobs.Action{
 		Kind: jobs.ActionOperation, OperationName: "service.restart",
-		OperationArgs: map[string]string{"service": "redis"}, RiskClass: jobs.RiskClassMutate,
+		OperationArgs: map[string]string{"service": "redis"},
 	}
 
 	parkOne := func(act jobs.Action) *ParkedError {

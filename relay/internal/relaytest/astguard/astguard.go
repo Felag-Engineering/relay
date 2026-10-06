@@ -1,7 +1,9 @@
 // Package astguard holds the AST helpers shared by the repository's
 // structural guards: the no_dispatch guards of the Control API, the MCP
 // surface and the Console (invariant 10's `no_dispatch` structural guard,
-// ADR-0009/0010/0025/0026), and accounts' secret-logging guard (#674).
+// ADR-0009/0010/0025/0026), accounts' secret-logging guard (#674), and the
+// risk-class guard that keeps any adapter from setting an Action's class
+// (RiskClassViolations, invariant 13, ADR-0012, #878).
 //
 // Only the pieces that were byte-identical across those guards live here.
 // Each guard's rule set (its dispatchViolations, allowlists and file

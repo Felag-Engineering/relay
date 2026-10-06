@@ -336,25 +336,21 @@ func TestBuildOperationAction_IllFormedArgValueIsNotRefused(t *testing.T) {
 		name      string
 		operation string
 		args      map[string]string
-		wantRisk  jobs.RiskClass
 	}{
 		{
 			name:      "file.read: a non-canonical path — the daemon denies it (ADR-0018)",
 			operation: "file.read",
 			args:      map[string]string{"path": "/etc/../etc/shadow"},
-			wantRisk:  jobs.RiskClassRead,
 		},
 		{
 			name:      "service.restart: a unit name carrying a semicolon and a shell fragment — fails the daemon's validate_unit_name",
 			operation: "service.restart",
 			args:      map[string]string{"unit": "nginx; rm -rf /"},
-			wantRisk:  jobs.RiskClassMutate,
 		},
 		{
 			name:      "pkg.install: a traversal-shaped package name — fails the daemon's validate_pkg_name",
 			operation: "pkg.install",
 			args:      map[string]string{"name": "../../etc/passwd"},
-			wantRisk:  jobs.RiskClassMutate,
 		},
 	}
 
@@ -369,8 +365,8 @@ func TestBuildOperationAction_IllFormedArgValueIsNotRefused(t *testing.T) {
 					t.Errorf("OperationArgs[%q] = %q, want %q byte-for-byte (no trimming, no normalisation)", k, got, want)
 				}
 			}
-			if act.RiskClass != tc.wantRisk {
-				t.Errorf("RiskClass = %v, want %v", act.RiskClass, tc.wantRisk)
+			if act.RiskClass != jobs.RiskClassUnspecified {
+				t.Errorf("RiskClass = %v, want unspecified: the adapter sets no class; the capability layer derives it (invariant 13)", act.RiskClass)
 			}
 		})
 	}

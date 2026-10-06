@@ -42,7 +42,7 @@ func TestAssertionsAreNotAnAuthorizationInput(t *testing.T) {
 		ChangeRef:   "CHG-1",
 	})
 
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	_, _ = svc.Run(ctx, Principal{AccountID: "acct-1", Account: "gleipnir", Role: "admin"}, Selector{}, act)
 
 	if !spy.called {
