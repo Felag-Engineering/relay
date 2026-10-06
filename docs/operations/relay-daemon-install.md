@@ -160,8 +160,14 @@ Deny adds `reason`, plus `args` for a typed Operation Policy Deny or `program`
 `rule`, only `reason`.
 
 `task_id`, `operation`, `reason`, `args` and `program` come from the caller and
-are written quoted, with control characters such as a newline escaped, so one
-event is always one journal line.
+are written quoted, with control characters such as a newline escaped, so a
+caller-supplied value cannot start a second journal line. Each is capped at 256
+characters (an `args` list at 16 elements); a value that was cut ends with `…`
+after its closing quote. The full text stays in the Task's result. The same
+escaping applies to every Relay-supplied value the daemon logs, such as the
+`node_id` in renewal and enrollment messages and Relay error text. It does not
+cover the daemon's own load errors for its root-owned Policy and Template
+files, which are logged as written and can span several lines.
 
 An Allow never carries argv. A Raw Exec Allow carries only the digest and
 `argc`. There is no Job id on the wire to a Node: correlate by `task_id` against

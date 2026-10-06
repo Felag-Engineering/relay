@@ -30,6 +30,7 @@ use crate::gen::{
     policy_query, task_request, Operation, Outcome, PolicyQuery, PolicyVerdict, RiskClass,
     TaskRequest, TaskResult,
 };
+use crate::log_field;
 use crate::not_executed::{denied_by_policy_result, not_executed, not_executed_after};
 #[cfg(test)]
 use crate::operations;
@@ -526,8 +527,8 @@ where
         // cancel drops naturally here — nothing was spawned, nothing queued.
         let _ = cancel;
         tracing::info!(
-            task_id = ?task_id,
-            operation = ?op.name,
+            task_id = log_field::untrusted(&task_id),
+            operation = log_field::untrusted(&op.name),
             "operation is not in this Node's vocabulary; reporting unsupported"
         );
         return unsupported_result(task_id);
@@ -703,7 +704,7 @@ fn class_mismatch(task: &TaskRequest, templates: &TemplateSet) -> bool {
 /// ones, which the proto's FAILURE comment covers.
 fn class_mismatch_result(task_id: String) -> TaskResult {
     tracing::warn!(
-        task_id = ?task_id,
+        task_id = log_field::untrusted(&task_id),
         "Task dispatched as read, but this Node classifies its action as mutate; refusing"
     );
     failure_result(task_id, CLASS_MISMATCH_REASON.as_bytes())
@@ -4056,15 +4057,7 @@ allowed_args = [["*"]]
     /// decision line, through the production formatting layer.
     #[tokio::test]
     async fn newline_in_task_id_or_operation_cannot_forge_a_decision_line() {
-        use crate::test_support::trace_capture::SharedBuf;
-        use tracing_subscriber::prelude::*;
-
-        let buf = SharedBuf::default();
-        let writer = buf.clone();
-        let subscriber = tracing_subscriber::registry()
-            .with(tracing_subscriber::EnvFilter::new("info"))
-            .with(crate::log_fmt_layer(move || writer.clone()));
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let (buf, _guard) = crate::test_support::trace_capture::capture_fmt();
 
         let (_dir, dedup) = dedup_in("dl-inject");
         let policy = from_toml_str(

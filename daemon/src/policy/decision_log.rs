@@ -7,6 +7,7 @@
 //! writes no file of its own.
 
 use crate::gen::RiskClass;
+use crate::log_field;
 use crate::policy::Rule;
 
 /// `tracing` target of the one event emitted per Policy Allow.
@@ -93,15 +94,15 @@ pub(crate) enum DenyDetail<'a> {
 
 /// Records a Policy Deny with the same shared field names as [`emit_allow`].
 /// `rule` is present only when a specific rule fired. Caller-derived text
-/// (`task_id`, `operation`, `reason`, `args`, `program`) is Debug-formatted:
-/// Debug escapes a newline, so a hostile value cannot start a forged journal
-/// line.
+/// (`task_id`, `operation`, `reason`, `args`, `program`) goes through
+/// `log_field::untrusted` (Debug-escaped, capped at `LOG_FIELD_MAX_CHARS`): a
+/// hostile value cannot start a forged journal line or grow one without bound.
 pub(crate) fn emit_deny(
     f: &DecisionFields,
     rule: Option<&Rule>,
     reason: &str,
     detail: DenyDetail,
-    message: &str,
+    message: &'static str,
 ) {
     let (args, program) = match detail {
         DenyDetail::Args(args) => (Some(args), None),
@@ -111,30 +112,30 @@ pub(crate) fn emit_deny(
     // An `Option` field is recorded only when `Some`.
     tracing::warn!(
         target: DENY_TARGET,
-        task_id = ?f.task_id,
-        operation = ?f.operation,
+        task_id = log_field::untrusted(f.task_id),
+        operation = log_field::untrusted(f.operation),
         tier = f.tier.as_str(),
         risk_class = risk_class_str(f.risk_class),
         argv_digest = %f.argv_digest,
         argc = f.argc,
         policy_fingerprint = %f.policy_fingerprint,
-        args = args.map(tracing::field::debug),
-        program = program.map(tracing::field::debug),
+        args = args.map(log_field::untrusted_list),
+        program = program.map(log_field::untrusted),
         rule = rule.map(tracing::field::debug),
-        reason = ?reason,
+        reason = log_field::untrusted(reason),
         "{message}"
     );
 }
 
 /// Records a Policy Allow before invoke or spawn, not a successful spawn:
 /// Template slot validation and the `file.read` layer-2 re-check can still
-/// refuse afterwards. Caller-derived text is Debug-formatted, as in
+/// refuse afterwards. Caller-derived text goes through `log_field::untrusted`, as in
 /// [`emit_deny`].
 pub(crate) fn emit_allow(f: &DecisionFields, rule: &Rule) {
     tracing::info!(
         target: ALLOW_TARGET,
-        task_id = ?f.task_id,
-        operation = ?f.operation,
+        task_id = log_field::untrusted(f.task_id),
+        operation = log_field::untrusted(f.operation),
         tier = f.tier.as_str(),
         risk_class = risk_class_str(f.risk_class),
         argv_digest = %f.argv_digest,
