@@ -1,0 +1,17 @@
+-- #816: index the unresolved-Task lookup the running-Job filter reads.
+--
+-- jobquery.go's running filter takes the job_ids of unresolved Tasks
+-- (state IN ('pending', 'dispatched')) and restricts both the jobs scan and
+-- the per-Job Task aggregate to them. This index serves that as a covering
+-- SEARCH: state is the key and job_id rides along, so no tasks row is read.
+-- Without it the running filter falls back to idx_tasks_state; without the
+-- filter, Running now aggregates the whole tasks table, up to twice (its page
+-- and its count). The Job lane is not bounded by this change (#919).
+--
+-- idx_tasks_state (0001) is left in place on purpose: migrations are
+-- additive-only, even though it is now a prefix of this index.
+--
+-- IF NOT EXISTS follows 0021 and 0026's convention for presence-based repair
+-- (#492). Building it is a one-off cost on the first start after upgrade,
+-- proportional to the size of tasks.
+CREATE INDEX IF NOT EXISTS idx_tasks_state_job ON tasks (state, job_id);

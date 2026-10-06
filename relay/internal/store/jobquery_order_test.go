@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -308,5 +309,95 @@ func TestJobQuery_CountTouchesTheAuditTrailOnlyWhenTheFilterDoes(t *testing.T) {
 	stmt, args = jobQueryCount(jobs.JobQuery{OnBehalfOf: "agent-7"})
 	if plan := planOf(t, st, stmt, args); !strings.Contains(plan, "audit") {
 		t.Errorf("a count filtered on on-behalf-of does not join the audit table, so it cannot be right:\n%s", plan)
+	}
+}
+
+// TestJobQuery_RunningDoesNotScanEveryTask is the boundedness property of the
+// running-Job check (#816), for the three shapes Running now runs: the count,
+// the oldest-first page and the newest-first page. SQLite will not push the
+// outer running predicate into the Task aggregate's LEFT JOIN, so without
+// jobQueryFrom's pushdown (and migration 0027's index) every one aggregates
+// the whole of tasks. Nothing about the RESULTS changes when it does, which is
+// why the plan itself is the assertion.
+func TestJobQuery_RunningDoesNotScanEveryTask(t *testing.T) {
+	st, _ := openTestStore(t)
+	running := jobs.JobStateRunning
+
+	for _, requester := range []string{"", "acct-x"} {
+		filter := jobs.JobQuery{State: &running, RequesterAccountID: requester}
+
+		page := func(orderBy string) (string, []any) {
+			stmt, args := jobQuerySelect(filter)
+			conds, whereArgs := buildJobWhere(filter)
+			stmt += ` WHERE ` + strings.Join(conds, " AND ") + orderBy
+			return stmt, append(append(args, whereArgs...), 2)
+		}
+		countStmt, countArgs := jobQueryCount(filter)
+		oldestStmt, oldestArgs := page(` ORDER BY ` + jobCreatedAtFixedWidth + ` ASC, j.job_id ASC LIMIT ?`)
+		newestStmt, newestArgs := page(` ORDER BY j.created_at DESC, j.job_id DESC LIMIT ?`)
+
+		for name, q := range map[string]struct {
+			stmt string
+			args []any
+		}{
+			"count":       {countStmt, countArgs},
+			"page oldest": {oldestStmt, oldestArgs},
+			"page newest": {newestStmt, newestArgs},
+		} {
+			plan := planOf(t, st, q.stmt, q.args)
+			if strings.Contains(plan, "SCAN tasks") {
+				t.Errorf("%s (requester %q) plans a SCAN of tasks — every Activity view would aggregate the whole table:\n%s", name, requester, plan)
+			}
+			if !strings.Contains(plan, "idx_tasks_state_job") {
+				t.Errorf("%s (requester %q) does not read the unresolved Tasks through idx_tasks_state_job:\n%s", name, requester, plan)
+			}
+		}
+	}
+}
+
+// TestJobQuery_RunningFilterKeepsEveryTaskOfARunningJob pins that the running
+// pushdown narrows the Task aggregate by job_id membership, never by state: a
+// running Job must still report every one of its Tasks.
+func TestJobQuery_RunningFilterKeepsEveryTaskOfARunningJob(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	op := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+
+	createJobFixture(t, ctx, st, "job-mixed", base, []jobs.Task{
+		{ID: "job-mixed-t1", NodeID: "node-1", Action: op, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
+		{ID: "job-mixed-t2", NodeID: "node-2", Action: op, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
+		{ID: "job-mixed-t3", NodeID: "node-3", Action: op, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeFailure},
+		{ID: "job-mixed-t4", NodeID: "node-4", Action: op, State: jobs.DispatchStateDispatched},
+	})
+	createJobFixture(t, ctx, st, "job-done", base.Add(time.Second), []jobs.Task{
+		{ID: "job-done-t1", NodeID: "node-1", Action: op, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
+	})
+	createJobFixture(t, ctx, st, "job-pending", base.Add(2*time.Second), []jobs.Task{
+		{ID: "job-pending-t1", NodeID: "node-1", Action: op, State: jobs.DispatchStatePending},
+	})
+
+	running := jobs.JobStateRunning
+	page, err := st.JobQueries().QueryJobs(ctx, jobs.JobQuery{State: &running}, 0, "")
+	if err != nil {
+		t.Fatalf("QueryJobs: %v", err)
+	}
+	got := map[string]jobs.JobSummary{}
+	for _, j := range page.Jobs {
+		got[j.JobID] = j
+	}
+	if len(got) != 2 || got["job-mixed"].JobID == "" || got["job-pending"].JobID == "" {
+		t.Fatalf("running Jobs = %v, want exactly job-mixed and job-pending", got)
+	}
+	mixed := got["job-mixed"]
+	if mixed.Total != 4 || mixed.Unresolved != 1 {
+		t.Errorf("job-mixed Total/Unresolved = %d/%d, want 4/1", mixed.Total, mixed.Unresolved)
+	}
+	want := map[jobs.Outcome]int{jobs.OutcomeSuccess: 2, jobs.OutcomeFailure: 1}
+	if !reflect.DeepEqual(mixed.Counts, want) {
+		t.Errorf("job-mixed Counts = %v, want %v", mixed.Counts, want)
+	}
+	if mixed.OperationName != "system.facts" || mixed.RiskClass != jobs.RiskClassRead {
+		t.Errorf("job-mixed operation/risk = %q/%v, want system.facts/read", mixed.OperationName, mixed.RiskClass)
 	}
 }

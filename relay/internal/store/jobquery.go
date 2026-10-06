@@ -39,6 +39,17 @@ var jobOutcomeOrder = []jobs.Outcome{
 	jobs.OutcomeUnsupported,
 }
 
+// runningJobIDs selects the job_id of every unresolved Task. Given tasks.state
+// is NOT NULL with CHECK (state IN ('pending','dispatched','resolved')) in
+// 0001_init, this is exactly the set where the Task aggregate's
+// `state != 'resolved'` holds, so it must change together with that
+// expression if a Task state is ever added. It is spelled as IN rather than
+// != so SQLite plans a covering SEARCH on idx_tasks_state_job (migration
+// 0027) instead of an index scan. It binds no arguments, so embedding it
+// changes no argument order. The literals are internal constants, never
+// caller input, the same reasoning as jobOutcomeSumColumns.
+const runningJobIDs = `SELECT job_id FROM tasks WHERE state IN ('pending', 'dispatched')`
+
 // jobOutcomeSumColumns renders one "SUM(CASE WHEN outcome = n THEN 1 ELSE 0
 // END) AS on" per jobOutcomeOrder entry. The outcome literal is an internal
 // constant (jobs.Outcome), never caller input, so interpolating it directly
@@ -78,6 +89,17 @@ func jobOutcomeSumColumns() []string {
 // repeatable by anyone holding down refresh. With the predicate pushed down,
 // both become an index SEARCH. TestJobQuery_SingleJobDoesNotScanEveryTask
 // asserts the query plan, because nothing else would notice the regression.
+//
+// # Why the running filter is pushed into the Task aggregate
+//
+// The same holds for State = running (#816): SQLite does not push the outer
+// running predicate into the LEFT JOIN's right operand, so without a
+// pushdown every running query is a GROUP BY over the whole of tasks, on the
+// store's single connection. jobQueryFrom therefore narrows the aggregate to
+// Jobs in runningJobIDs. It narrows by job_id and never by state, so a
+// running Job keeps ALL of its Tasks, resolved ones included, and Total,
+// Unresolved, Counts, operation and risk class are unchanged.
+// TestJobQuery_RunningDoesNotScanEveryTask pins the plan.
 //
 // # What the audit aggregate projects, and why MIN is exact
 //
@@ -132,14 +154,22 @@ func jobQueryFrom(filter jobs.JobQuery, withAudit bool) (from string, args []any
 	// Selector, on-behalf-of and approval columns below must come from the
 	// dispatch record, not from a refusal or cancel row. See
 	// TestJobQuery_RequesterIsNeverTakenFromTheAuditTrail.
-	taskWhere, auditWhere := "", "\n\tWHERE kind = 'dispatch'"
+	auditWhere := "\n\tWHERE kind = 'dispatch'"
+	var taskConds []string
 	if filter.JobID != "" {
-		taskWhere = "\n\tWHERE job_id = ?"
+		taskConds = append(taskConds, "job_id = ?")
 		auditWhere += "\n\t\tAND job_id = ?"
 		args = []any{filter.JobID}
 		if withAudit {
 			args = append(args, filter.JobID)
 		}
+	}
+	if filter.State != nil && *filter.State == jobs.JobStateRunning {
+		taskConds = append(taskConds, "job_id IN ("+runningJobIDs+")")
+	}
+	taskWhere := ""
+	if len(taskConds) > 0 {
+		taskWhere = "\n\tWHERE " + strings.Join(taskConds, "\n\t\tAND ")
 	}
 	from = `FROM jobs j
 LEFT JOIN (
@@ -348,7 +378,11 @@ func buildJobWhere(filter jobs.JobQuery) (conds []string, args []any) {
 	if filter.State != nil {
 		switch *filter.State {
 		case jobs.JobStateRunning:
-			conds = append(conds, `(COALESCE(t.total, 0) > 0 AND COALESCE(t.unresolved, 0) > 0)`)
+			// jobQueryFrom pushes the same IN into the Task aggregate (#816);
+			// here it lets SQLite SEARCH jobs by key. The COALESCE
+			// predicate is redundant with it but keeps the derivation
+			// identical to scanJobSummary's.
+			conds = append(conds, `j.job_id IN (`+runningJobIDs+`) AND (COALESCE(t.total, 0) > 0 AND COALESCE(t.unresolved, 0) > 0)`)
 		default: // JobStateComplete: zero Tasks, or every Task resolved.
 			conds = append(conds, `(COALESCE(t.total, 0) = 0 OR COALESCE(t.unresolved, 0) = 0)`)
 		}
