@@ -146,7 +146,7 @@ func TestEngineOneTaskPerNodePersistedBeforeDispatch(t *testing.T) {
 	}
 
 	nodes := []registry.Node{testNode("node-1"), testNode("node-2"), testNode("node-3")}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
 
 	dr, err := e.run(context.Background(), d)
@@ -214,7 +214,7 @@ func TestJobEngine_RunUsesTheReservedJobID(t *testing.T) {
 	}
 
 	nodes := []registry.Node{testNode("node-1"), testNode("node-2")}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
 	d.jobID = "job-reserved"
 
@@ -307,7 +307,7 @@ func TestJobEngine_ReservedRunSurvivesRequestCancellationAfterCreateJob(t *testi
 	}
 
 	nodes := []registry.Node{testNode("node-1")}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
 	d.jobID = "job-reserved" // approval-claimed (AP-77): the claim already committed.
 
@@ -361,7 +361,7 @@ func TestEngineRecordsRequesterOnJob(t *testing.T) {
 	}
 
 	p := Principal{AccountID: "acct-1", Account: "gleipnir", Kind: "machine"}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	d := newDispatch(p, Selector{}, []registry.Node{testNode("node-1")}, act)
 
 	dr, err := e.run(context.Background(), d)
@@ -397,7 +397,7 @@ func TestEngineRecordsNoRequesterWithoutAnAccountID(t *testing.T) {
 	}
 
 	p := Principal{Account: "devharness"}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	d := newDispatch(p, Selector{}, []registry.Node{testNode("node-1")}, act)
 
 	dr, err := e.run(context.Background(), d)
@@ -438,7 +438,7 @@ func TestEngineOfflineNodeUnreachable(t *testing.T) {
 	}
 
 	nodes := []registry.Node{testNode("node-online"), testNode("node-offline")}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
 
 	dr, err := e.run(context.Background(), d)
@@ -515,7 +515,7 @@ func TestEngineMixedOutcomesTruthful(t *testing.T) {
 	}
 
 	nodes := []registry.Node{testNode("node-ok"), testNode("node-denied"), testNode("node-offline")}
-	act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}, RiskClass: jobs.RiskClassMutate}
+	act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}}
 	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
 
 	dr, err := e.run(context.Background(), d)
@@ -564,7 +564,7 @@ func TestEngineConduitErrorLeavesTaskInFlight(t *testing.T) {
 	}
 
 	nodes := []registry.Node{testNode("node-flaky")}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
 
 	dr, err := e.run(context.Background(), d)
@@ -716,7 +716,7 @@ func TestEngineMixedFleetVersionGate(t *testing.T) {
 	)
 
 	sel := Selector{} // Selector{} matches every Node (see selector.go)
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassMutate}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, act)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -838,7 +838,7 @@ func TestWithExecutionAcceptsRealSeams(t *testing.T) {
 	)
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, act)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -936,7 +936,7 @@ func TestRun_RequesterIsOnTheJobWhileEveryTaskIsPending(t *testing.T) {
 	)
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	p := Principal{AccountID: "acct-1", Account: "gleipnir", Kind: "machine", Role: "operator"}
 	if _, err := svc.Run(context.Background(), p, sel, act); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -1142,7 +1142,7 @@ func TestEngine_JobEvents_CreatedThenCompleted(t *testing.T) {
 
 	principal := Principal{Account: "alice"}
 	sel := Selector{}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	d := newDispatch(principal, sel, nodes, act)
 
 	if _, err := e.run(context.Background(), d); err != nil {
@@ -1193,7 +1193,7 @@ func TestEngine_JobEvents_NeverCarryOutput(t *testing.T) {
 	}
 
 	nodes := []registry.Node{testNode("node-1")}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
 
 	dr, err := e.run(context.Background(), d)
@@ -1273,7 +1273,7 @@ func TestJobEventsAreObservationalOnly(t *testing.T) {
 			events:    sink,
 		}
 		nodes := []registry.Node{testNode("node-1")}
-		act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+		act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 		d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
 		dr, err := e.run(context.Background(), d)
 		return dr.results, err

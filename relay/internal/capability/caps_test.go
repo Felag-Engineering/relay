@@ -139,12 +139,12 @@ func seedNodes(t *testing.T, n int) registry.Repository {
 func TestRunBlastCapRejectsOversizedSelector(t *testing.T) {
 	tests := []struct {
 		name      string
-		class     jobs.RiskClass
+		operation string // a Native Operation whose opvocab class is the one under test
 		readCap   int
 		mutateCap int
 	}{
-		{"read class over the read-cap", jobs.RiskClassRead, 2, 100},
-		{"mutate class over the mutate-cap", jobs.RiskClassMutate, 100, 2},
+		{"read class over the read-cap", "system.facts", 2, 100},
+		{"mutate class over the mutate-cap", "service.restart", 100, 2},
 	}
 
 	for _, tt := range tests {
@@ -155,7 +155,7 @@ func TestRunBlastCapRejectsOversizedSelector(t *testing.T) {
 			svc.disp = disp
 
 			sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-			act := jobs.Action{RiskClass: tt.class}
+			act := jobs.Action{Kind: jobs.ActionOperation, OperationName: tt.operation}
 			_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, act)
 
 			if err == nil {

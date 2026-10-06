@@ -524,11 +524,13 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 
 	matched := sel.Resolve(s.reg, s.stateEval())
 
-	// A Template Operation's class and fan-out are decided here, over the
-	// matched Nodes' own reports (ADR-0042, template.go). resolveAction only
-	// COMPUTES: its refusal is acted on below, after authorization, so a
+	// Every Action's class is fixed here (invariant 13): a Native Operation's
+	// from opvocab, Raw Exec's as mutate, and a Template Operation's — with its
+	// fan-out — over the matched Nodes' own reports (ADR-0042, template.go).
+	// resolveAction only COMPUTES: its refusal, including an Action that
+	// arrived with a class preset, is acted on below, after authorization, so a
 	// caller who may not ask learns nothing about which Nodes carry which
-	// Templates. For a Native Operation or Raw Exec it changes nothing.
+	// Templates.
 	ra := s.resolveAction(act, matched)
 	act = ra.act
 	nodes := ra.nodes
@@ -558,8 +560,8 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 		return nil, s.recordRefusal(ctx, p, sel, act, RefusalNoNodesMatched, &NoNodesMatchedError{Selector: sel.String()})
 	}
 
-	// A Template no matched Node reports, a malformed Template call, or a
-	// Template Action an adapter tried to classify (ADR-0042). Like
+	// A Template no matched Node reports, a malformed Template call, or an
+	// Action of any kind an adapter tried to classify (ADR-0042, invariant 13). Like
 	// no_nodes_matched: after authorization, before the cap, and with no Job.
 	if ra.refusal != nil {
 		return nil, s.recordRefusal(ctx, p, sel, act, ra.refusalKind, ra.refusal)

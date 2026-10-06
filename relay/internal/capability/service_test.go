@@ -244,7 +244,7 @@ func TestRunAuthorizeDeniedShortCircuits(t *testing.T) {
 	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}, metrics: noopMetricsSink{}}
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{RiskClass: jobs.RiskClassRead})
+	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{})
 	if err == nil {
 		t.Fatal("Run() with a denying Authorizer should return an error")
 	}
@@ -277,7 +277,7 @@ func TestRunCapCheckDeniedShortCircuits(t *testing.T) {
 	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}, metrics: noopMetricsSink{}}
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	act := jobs.Action{RiskClass: jobs.RiskClassMutate}
+	act := jobs.Action{}
 	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, act)
 	if err == nil {
 		t.Fatal("Run() with a rejecting CapChecker should return an error")
@@ -319,7 +319,7 @@ func TestRunZeroMatchRefusedBeforeAnyJob(t *testing.T) {
 
 	principal := Principal{Account: "alice"}
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "db"}}}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 
 	results, err := svc.Run(context.Background(), principal, sel, act)
 	if results != nil {
@@ -395,7 +395,7 @@ func TestRunZeroMatchCreatesNoJob(t *testing.T) {
 	)
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "db"}}}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 
 	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, act)
 	var nnmErr *NoNodesMatchedError
@@ -423,7 +423,7 @@ func TestRunZeroMatchUnauthorizedIsRefusedAsUnauthorized(t *testing.T) {
 	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}, metrics: noopMetricsSink{}}
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "db"}}}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 
 	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, act)
 	var nnmErr *NoNodesMatchedError
@@ -477,7 +477,7 @@ func TestRunThreadsPrincipalToAudit(t *testing.T) {
 
 	principal := Principal{Account: "alice", Role: "operator"}
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart"}
 
 	results, err := svc.Run(context.Background(), principal, sel, act)
 	if err != nil {
@@ -502,8 +502,10 @@ func TestRunThreadsPrincipalToAudit(t *testing.T) {
 	if audit.entry.Selector.Predicates[0] != sel.Predicates[0] {
 		t.Errorf("AuditEntry.Selector = %+v, want %+v", audit.entry.Selector, sel)
 	}
-	if !reflect.DeepEqual(audit.entry.Action, act) {
-		t.Errorf("AuditEntry.Action = %+v, want %+v", audit.entry.Action, act)
+	wantAct := act
+	wantAct.RiskClass = jobs.RiskClassMutate // derived by the capability layer (invariant 13)
+	if !reflect.DeepEqual(audit.entry.Action, wantAct) {
+		t.Errorf("AuditEntry.Action = %+v, want %+v", audit.entry.Action, wantAct)
 	}
 	if len(audit.entry.Results) != 1 || !reflect.DeepEqual(audit.entry.Results[0], wantResults[0]) {
 		t.Errorf("AuditEntry.Results = %+v, want %+v", audit.entry.Results, wantResults)
@@ -515,7 +517,7 @@ func TestRunHappyPathDefaultsToNoopDispatcher(t *testing.T) {
 	svc := New(reg)
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{RiskClass: jobs.RiskClassRead})
+	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{})
 	if err != nil {
 		t.Fatalf("Run() with default seams returned unexpected error: %v", err)
 	}
@@ -542,7 +544,7 @@ func TestRunAuditsPartialResultsOnDispatchError(t *testing.T) {
 
 	principal := Principal{Account: "alice"}
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart"}
 
 	results, err := svc.Run(context.Background(), principal, sel, act)
 	if err == nil {
@@ -605,7 +607,7 @@ func TestRunJoinsDispatchAndAuditErrors(t *testing.T) {
 	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}, metrics: noopMetricsSink{}}
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
-	act := jobs.Action{RiskClass: jobs.RiskClassMutate}
+	act := jobs.Action{}
 	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, act)
 
 	if !audit.called {

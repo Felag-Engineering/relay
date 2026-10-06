@@ -822,3 +822,53 @@ func toolCallEventFields(file *ast.File) (fields []*ast.Field, found bool) {
 	}
 	return nil, false
 }
+
+// TestNoAdapterSetsARiskClass is the structural half of invariant 13 for this
+// surface (ADR-0012, ADR-0042, #878): no adapter sets an Action's risk class.
+// The capability layer derives it and refuses an Action that arrives with one;
+// this guard (astguard.RiskClassViolations) makes the attempt fail go test.
+// What this surface may do beyond comparing a class is the allowlist below, by
+// file and function, each with its reason; an entry that no longer names a
+// class constant fails the test so the list cannot quietly widen.
+func TestNoAdapterSetsARiskClass(t *testing.T) {
+	allowed := map[string]map[string]string{}
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("os.ReadDir: %v", err)
+	}
+	fset := token.NewFileSet()
+	checked := 0
+	usesConstant := map[string]map[string]bool{} // file -> function -> names a class constant
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, filepath.Join(".", name), nil, 0)
+		if err != nil {
+			t.Fatalf("parser.ParseFile(%s): %v", name, err)
+		}
+		checked++
+		for _, msg := range astguard.RiskClassViolations(name, file, allowed[name]) {
+			t.Error(msg)
+		}
+		usesConstant[name] = map[string]bool{}
+		for _, fn := range astguard.RiskClassConstantFuncs(file) {
+			usesConstant[name][fn] = true
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no non-test .go files checked: the guard is vacuous")
+	}
+	for file, funcs := range allowed {
+		for fn, reason := range funcs {
+			if reason == "" {
+				t.Errorf("allowlist entry %s %s has no reason", file, fn)
+			}
+			if !usesConstant[file][fn] {
+				t.Errorf("allowlist entry %s %s no longer names a risk class constant outside a comparison; remove it", file, fn)
+			}
+		}
+	}
+}

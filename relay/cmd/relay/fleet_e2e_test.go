@@ -327,11 +327,10 @@ func TestFleetE2E_OverCapRejectedBothClasses(t *testing.T) {
 	waitForConnected(t, fr.harness, 2)
 
 	readResp := fr.harness.callRaw(t, map[string]any{
-		"op":         "run_job",
-		"selector":   "relay:env=test",
-		"operation":  "file.read",
-		"args":       map[string]string{"path": "/etc/hostname"},
-		"risk_class": "read",
+		"op":        "run_job",
+		"selector":  "relay:env=test",
+		"operation": "file.read",
+		"args":      map[string]string{"path": "/etc/hostname"},
 	})
 	assertCapRefusal(t, readResp, "read")
 
@@ -343,11 +342,10 @@ func TestFleetE2E_OverCapRejectedBothClasses(t *testing.T) {
 	assertCapRefusal(t, rawResp, "mutate")
 
 	mutateResp := fr.harness.callRaw(t, map[string]any{
-		"op":         "run_job",
-		"selector":   "relay:env=test",
-		"operation":  "service.restart",
-		"args":       map[string]string{"unit": "nginx"},
-		"risk_class": "mutate",
+		"op":        "run_job",
+		"selector":  "relay:env=test",
+		"operation": "service.restart",
+		"args":      map[string]string{"unit": "nginx"},
 	})
 	assertCapRefusal(t, mutateResp, "mutate")
 
@@ -381,11 +379,10 @@ func TestFleetE2E_JobSpanningOfflineNode(t *testing.T) {
 	wantContent := "hello from fleet offline-node e2e\n"
 	contentPath := relaytest.WriteTempFile(t, "content-*.txt", wantContent)
 	resp := fr.harness.call(t, map[string]any{
-		"op":         "run_job",
-		"selector":   "relay:env=test",
-		"operation":  "file.read",
-		"args":       map[string]string{"path": contentPath},
-		"risk_class": "read",
+		"op":        "run_job",
+		"selector":  "relay:env=test",
+		"operation": "file.read",
+		"args":      map[string]string{"path": contentPath},
 	})
 	jobID, _ := resp["job_id"].(string)
 	if jobID == "" {
@@ -452,11 +449,10 @@ func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *
 	waitForFrozen(t, fr.harness, true)
 
 	frozenResp := fr.harness.callRaw(t, map[string]any{
-		"op":         "run_job",
-		"selector":   "relay:env=test",
-		"operation":  "file.read",
-		"args":       map[string]string{"path": "/etc/hostname"},
-		"risk_class": "read",
+		"op":        "run_job",
+		"selector":  "relay:env=test",
+		"operation": "file.read",
+		"args":      map[string]string{"path": "/etc/hostname"},
 	})
 	errMsg, _ := frozenResp["error"].(string)
 	if errMsg == "" || !strings.Contains(errMsg, "Freeze") {
@@ -480,11 +476,10 @@ func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *
 	waitForFrozen(t, fr.harness, false)
 
 	unfrozenResp := fr.harness.call(t, map[string]any{
-		"op":         "run_job",
-		"selector":   "relay:env=test",
-		"operation":  "file.read",
-		"args":       map[string]string{"path": "/etc/hostname"},
-		"risk_class": "read",
+		"op":        "run_job",
+		"selector":  "relay:env=test",
+		"operation": "file.read",
+		"args":      map[string]string{"path": "/etc/hostname"},
 	})
 	if results := toMapSlice(unfrozenResp["results"]); len(results) != 2 {
 		t.Fatalf("run_job after Freeze release: results = %v, want 2 entries", results)
@@ -506,10 +501,9 @@ func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *
 		// send (not call/callRaw): this goroutine must never touch *testing.T
 		// — the main goroutine reads the result off runDone instead.
 		resp, err := harness2.send(map[string]any{
-			"op":         "run_job",
-			"selector":   "relay:env=test",
-			"raw_exec":   []string{"/bin/sleep", "30"},
-			"risk_class": "mutate",
+			"op":       "run_job",
+			"selector": "relay:env=test",
+			"raw_exec": []string{"/bin/sleep", "30"},
 		})
 		runDone <- runOutcome{resp: resp, err: err}
 	}()
@@ -567,11 +561,10 @@ func TestFleetE2E_AuditAndRestartSurvival(t *testing.T) {
 	wantContent := "hello from fleet restart-survival e2e\n"
 	contentPath := relaytest.WriteTempFile(t, "content-*.txt", wantContent)
 	resp := fr.harness.call(t, map[string]any{
-		"op":         "run_job",
-		"selector":   "relay:env=test",
-		"operation":  "file.read",
-		"args":       map[string]string{"path": contentPath},
-		"risk_class": "read",
+		"op":        "run_job",
+		"selector":  "relay:env=test",
+		"operation": "file.read",
+		"args":      map[string]string{"path": contentPath},
 	})
 	jobID, _ := resp["job_id"].(string)
 	if jobID == "" {
@@ -634,10 +627,9 @@ func TestFleetE2E_CrashMidJobNeverDoubleRuns(t *testing.T) {
 		// never reads this response. send (not call/callRaw) never touches
 		// *testing.T, so it is safe to ignore from a background goroutine.
 		_, _ = harness2.send(map[string]any{
-			"op":         "run_job",
-			"selector":   "relay:env=test",
-			"raw_exec":   []string{"/bin/sleep", "30"},
-			"risk_class": "mutate",
+			"op":       "run_job",
+			"selector": "relay:env=test",
+			"raw_exec": []string{"/bin/sleep", "30"},
 		})
 	}()
 

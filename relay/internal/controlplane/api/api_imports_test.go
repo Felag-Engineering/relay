@@ -82,12 +82,12 @@ func TestAPIImportsAreAllowlisted(t *testing.T) {
 		// would be the second control path package authz's doc warns about.
 		// Importing it to *recognize* a refusal is the opposite of re-deciding one.
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz": true,
-		// jobs is the proto-free execution domain: Action/RiskClass to build the
-		// request, Task/Outcome to render the response. No SQL, no HTTP, no Relay
+		// jobs is the proto-free execution domain: Action to build the request, RiskClass to render
+		// it, Task/Outcome to render the response. No SQL, no HTTP, no Relay
 		// configuration — the same domain-mirror role accounts plays for identity.
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs": true,
 		// opvocab is the read-only Operation vocabulary mirror. It supplies the
-		// risk class and the SHARED argument-name validation both control surfaces
+		// Operation names and the SHARED argument-name validation both control surfaces
 		// call (opvocab.ValidateArgNames), so a malformed call cannot be a clean
 		// 400 on one surface and a denied_by_policy on the other (#345).
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab": true,

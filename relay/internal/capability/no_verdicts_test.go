@@ -142,7 +142,7 @@ func TestPreflightNeverConsultsCachedPolicyOrVocabulary(t *testing.T) {
 	// the cache is read for fan-out but every allow and deny is still the
 	// daemon's — is TestPreflightTemplateExclusionNeverDecidesAVerdict
 	// (template_test.go).
-	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "file.read", OperationArgs: map[string]string{"path": "/etc/hostname"}, RiskClass: jobs.RiskClassRead}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "file.read", OperationArgs: map[string]string{"path": "/etc/hostname"}}
 	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), act)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)

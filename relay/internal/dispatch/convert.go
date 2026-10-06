@@ -21,8 +21,10 @@ import (
 // the Node's Tunnel. RiskClass travels with it (ADR-0042): the class this
 // Task was dispatched under — for a Template, the class this Node itself
 // reported — so the daemon can refuse a Task dispatched as read whose action
-// it now classifies as mutate. jobs.RiskClass mirrors relayv1.RiskClass
-// value for value.
+// it now classifies as mutate. The class is the one the capability layer's
+// resolveAction fixed (ADR-0012, ADR-0042, invariant 13); an adapter's value
+// cannot reach here, because the capability layer refuses any Action that
+// arrives with one. jobs.RiskClass mirrors relayv1.RiskClass value for value.
 func taskRequest(t jobs.Task) *relayv1.TaskRequest {
 	tr := &relayv1.TaskRequest{
 		TaskId:         t.ID,

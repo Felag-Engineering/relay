@@ -252,19 +252,18 @@ func TestBuildOperationAction_MissingRequiredArgIsRejected(t *testing.T) {
 
 // TestBuildOperationAction_ValidArgsSucceed proves the pre-check is a narrow
 // name gate, not a blanket refusal: correct names (including an omitted
-// OPTIONAL arg) still build the Action, with args and risk class preserved.
+// OPTIONAL arg) still build the Action, with args preserved and no risk class.
 func TestBuildOperationAction_ValidArgsSucceed(t *testing.T) {
 	cases := []struct {
 		name string
 		args map[string]string
-		risk jobs.RiskClass
 	}{
-		{"system.facts", map[string]string{}, jobs.RiskClassRead},
-		{"file.read", map[string]string{"path": "/etc/os-release"}, jobs.RiskClassRead},
-		{"service.restart", map[string]string{"unit": "nginx"}, jobs.RiskClassMutate},
+		{"system.facts", map[string]string{}},
+		{"file.read", map[string]string{"path": "/etc/os-release"}},
+		{"service.restart", map[string]string{"unit": "nginx"}},
 		// version is optional — omitting it must NOT trip the required check.
-		{"pkg.install", map[string]string{"name": "nginx"}, jobs.RiskClassMutate},
-		{"pkg.install", map[string]string{"name": "nginx", "version": "1.24.0"}, jobs.RiskClassMutate},
+		{"pkg.install", map[string]string{"name": "nginx"}},
+		{"pkg.install", map[string]string{"name": "nginx", "version": "1.24.0"}},
 	}
 	for _, c := range cases {
 		act, err := buildOperationAction(stubOpsLister{}, c.name, c.args, 0)
@@ -272,8 +271,8 @@ func TestBuildOperationAction_ValidArgsSucceed(t *testing.T) {
 			t.Errorf("buildOperationAction(%s, %v) = error %v, want success", c.name, c.args, err)
 			continue
 		}
-		if act.OperationName != c.name || act.RiskClass != c.risk {
-			t.Errorf("buildOperationAction(%s) = {name:%q risk:%v}, want {name:%q risk:%v}", c.name, act.OperationName, act.RiskClass, c.name, c.risk)
+		if act.OperationName != c.name || act.RiskClass != jobs.RiskClassUnspecified {
+			t.Errorf("buildOperationAction(%s) = {name:%q risk:%v}, want {name:%q risk:unspecified}: the adapter sets no class; the capability layer derives it (invariant 13)", c.name, act.OperationName, act.RiskClass, c.name)
 		}
 		if len(act.OperationArgs) != len(c.args) {
 			t.Errorf("buildOperationAction(%s) args = %v, want %v (passed through unchanged)", c.name, act.OperationArgs, c.args)

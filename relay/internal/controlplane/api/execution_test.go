@@ -619,8 +619,8 @@ func TestRunOperation_BuildsTheActionTheCapabilityLayerExpects(t *testing.T) {
 	if act.OperationName != "service.restart" {
 		t.Errorf("OperationName = %q, want service.restart", act.OperationName)
 	}
-	if act.RiskClass != jobs.RiskClassMutate {
-		t.Errorf("RiskClass = %v, want mutate (it selects the blast cap, ADR-0012)", act.RiskClass)
+	if act.RiskClass != jobs.RiskClassUnspecified {
+		t.Errorf("RiskClass = %v, want unspecified: the adapter sets no class; the capability layer derives it (invariant 13)", act.RiskClass)
 	}
 	if act.TimeoutSeconds != 30 {
 		t.Errorf("TimeoutSeconds = %d, want 30", act.TimeoutSeconds)
@@ -633,10 +633,10 @@ func TestRunOperation_BuildsTheActionTheCapabilityLayerExpects(t *testing.T) {
 	}
 }
 
-// Raw Exec is ALWAYS mutate class regardless of what argv does (ADR-0012,
-// invariant 13) — a read-only-looking command still takes the strict
-// mutate-cap, and no client field can change that.
-func TestRawExec_IsAlwaysMutateClass(t *testing.T) {
+// The Raw Exec route sets no class: the capability layer fixes Raw Exec to
+// mutate (ADR-0012, invariant 13; proven in capability's riskclass_test.go),
+// and no adapter may set it.
+func TestRawExec_AdapterSetsNoClass(t *testing.T) {
 	exec := &fakeExecutor{}
 	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
 
@@ -646,8 +646,8 @@ func TestRawExec_IsAlwaysMutateClass(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("Run called %d times, want 1", len(calls))
 	}
-	if calls[0].Action.RiskClass != jobs.RiskClassMutate {
-		t.Errorf("RiskClass = %v, want mutate for every Raw Exec (ADR-0012)", calls[0].Action.RiskClass)
+	if calls[0].Action.RiskClass != jobs.RiskClassUnspecified {
+		t.Errorf("RiskClass = %v, want unspecified: the adapter sets no class (invariant 13)", calls[0].Action.RiskClass)
 	}
 	if got := calls[0].Action.RawExecArgv; len(got) != 2 || got[0] != "/bin/cat" {
 		t.Errorf("RawExecArgv = %v, want the argv verbatim", got)

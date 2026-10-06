@@ -268,11 +268,21 @@ func approvalFixtureWithAudit(t *testing.T, nodes []string, gate ApprovalGate, s
 
 var apNow = time.Date(2026, 8, 14, 9, 0, 0, 0, time.UTC)
 
+// mutateAct is a Native mutate Operation as an adapter builds it: with no
+// class, which the capability layer derives (invariant 13).
 func mutateAct() jobs.Action {
 	return jobs.Action{
 		Kind: jobs.ActionOperation, OperationName: "service.restart",
-		OperationArgs: map[string]string{"service": "nginx"}, RiskClass: jobs.RiskClassMutate,
+		OperationArgs: map[string]string{"service": "nginx"},
 	}
+}
+
+// resolvedMutateAct is mutateAct as the capability layer resolves it, for a
+// test that compares against what Run hashed or recorded.
+func resolvedMutateAct() jobs.Action {
+	act := mutateAct()
+	act.RiskClass = jobs.RiskClassMutate
+	return act
 }
 
 // TestGatedDispatchParksAndSendsNothing is the core of #269: a gated dispatch
@@ -578,7 +588,7 @@ func TestPark_RecordsShapeKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Shape: %v", err)
 	}
-	want := approval.HashPlanShape(act, shape)
+	want := approval.HashPlanShape(resolvedMutateAct(), shape)
 	if got.ShapeKey != want {
 		t.Errorf("stored ShapeKey = %q, want %q", got.ShapeKey, want)
 	}
@@ -649,11 +659,11 @@ func TestLastApprovedOfSameShape(t *testing.T) {
 	s, _, _ := shapeFixture(t, map[string]map[string]string{"node-a": {"role": "web"}}, gateEverything(t, 1), store)
 	ctx := context.Background()
 
-	shape := approval.HashPlanShape(mutateAct(), approval.SelectorShape{
+	shape := approval.HashPlanShape(resolvedMutateAct(), approval.SelectorShape{
 		Known: true,
 		Terms: []approval.SelectorTerm{{Namespace: "node", Key: "role", Value: "web"}},
 	})
-	other := approval.HashPlanShape(mutateAct(), approval.SelectorShape{Known: true})
+	other := approval.HashPlanShape(resolvedMutateAct(), approval.SelectorShape{Known: true})
 
 	seed := func(id, shapeKey string, state approval.State, resolved time.Time) approval.Request {
 		r := approval.Request{

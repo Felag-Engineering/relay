@@ -194,11 +194,11 @@ func renderRunError(err error) error {
 	return fmt.Errorf("mcp: dispatch failed: %w", err)
 }
 
-// buildOperationAction looks up a Native name in ops' vocabulary for its
-// declared RiskClass (ADR-0012), validates the argument NAMES against that
-// Operation's published arg_constraints, and builds the resulting
-// jobs.Action. Any other name is a Template Operation, forwarded unclassified
-// (see the last paragraph).
+// buildOperationAction looks up a Native name in ops' vocabulary, validates
+// the argument NAMES against that Operation's published arg_constraints, and
+// builds the resulting jobs.Action. It sets no risk class: the capability
+// layer derives it (ADR-0012, invariant 13). Any other name is a Template
+// Operation (see the last paragraph).
 //
 // The name checks are a thin **legibility pre-check** before ever reaching Run,
 // never a second Policy decision (ADR-0002/0011, invariant 12): the daemon's
@@ -236,7 +236,6 @@ func buildOperationAction(ops OperationLister, name string, args map[string]stri
 				Kind:           jobs.ActionOperation,
 				OperationName:  name,
 				OperationArgs:  args,
-				RiskClass:      d.Risk,
 				TimeoutSeconds: timeoutSeconds,
 			}, nil
 		}
@@ -677,10 +676,10 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		if err != nil {
 			return nil, RunOrPlanOutput{}, err
 		}
-		// Raw Exec always takes RiskClassMutate by construction, regardless
-		// of what argv does (ADR-0012, invariant 13) — no client field can
-		// change this, plan mode included.
-		act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: in.Argv, RiskClass: jobs.RiskClassMutate, TimeoutSeconds: timeoutSeconds}
+		// Raw Exec always takes mutate (ADR-0012, invariant 13). The
+		// capability layer fixes it, and no client field and no adapter can
+		// change that, plan mode included.
+		act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: in.Argv, TimeoutSeconds: timeoutSeconds}
 
 		if in.Plan {
 			plan, err := planAndRender(ctx, exec, p, sel, act)

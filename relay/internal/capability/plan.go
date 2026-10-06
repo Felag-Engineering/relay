@@ -163,8 +163,9 @@ func (e *jobEngine) query(ctx context.Context, d dispatch) (planResult, error) {
 func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.Action) (PlanResult, error) {
 	matched := sel.Resolve(s.reg, s.stateEval())
 
-	// The same Template resolution Run makes (ADR-0042), so a preflight and a
-	// real run agree on the class, the cap and which Nodes are excluded.
+	// The same resolution Run makes, which fixes the class of every Action
+	// kind (ADR-0042, invariant 13), so a preflight and a real run agree on
+	// the class, the cap and which Nodes are excluded.
 	ra := s.resolveAction(act, matched)
 	act = ra.act
 	nodes := ra.nodes

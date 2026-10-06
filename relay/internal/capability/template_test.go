@@ -130,16 +130,24 @@ func templateAction(name string, args map[string]string) jobs.Action {
 
 // --- resolveAction: the rules, one at a time ------------------------------
 
-func TestResolveAction_NativeAndRawExecPassThroughUnchanged(t *testing.T) {
+func TestResolveAction_NativeAndRawExecTakeTheirFixedClass(t *testing.T) {
 	s := &Service{nodeVocab: staticVocab{}}
 	nodes := []registry.Node{{NodeID: "node-0"}, {NodeID: "node-1"}}
-	for _, act := range []jobs.Action{
-		{Kind: jobs.ActionOperation, OperationName: "service.restart", OperationArgs: map[string]string{"unit": "nginx"}, RiskClass: jobs.RiskClassMutate},
-		{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}, RiskClass: jobs.RiskClassMutate},
-	} {
-		ra := s.resolveAction(act, nodes)
-		if ra.refusal != nil || !reflect.DeepEqual(ra.act, act) || len(ra.nodes) != 2 || len(ra.excluded) != 0 {
-			t.Errorf("resolveAction(%+v) = %+v, want the Action and every Node unchanged", act, ra)
+	tests := []struct {
+		act  jobs.Action
+		want jobs.RiskClass
+	}{
+		{jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", OperationArgs: map[string]string{"unit": "nginx"}}, jobs.RiskClassMutate},
+		{jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}, jobs.RiskClassRead},
+		{jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}}, jobs.RiskClassMutate},
+	}
+	for _, tt := range tests {
+		ra := s.resolveAction(tt.act, nodes)
+		want := tt.act
+		want.RiskClass = tt.want
+		if ra.refusal != nil || !reflect.DeepEqual(ra.act, want) || len(ra.nodes) != 2 || len(ra.excluded) != 0 {
+			t.Errorf("resolveAction(%+v) = %+v, want the Action with class %q and every Node unchanged",
+				tt.act, ra, jobs.RiskClassName(tt.want))
 		}
 	}
 }
