@@ -490,7 +490,7 @@ mod tests {
     // Queued-timeout: acquire with an expired deadline → Err(Timeout)
     // -----------------------------------------------------------------------
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn queued_timeout_returns_timeout() {
         let sched = Scheduler::new();
         // Occupy the mutate gate so the next acquire must queue (not acquire immediately).
@@ -500,8 +500,12 @@ mod tests {
             .await
             .expect("blocker must acquire");
 
-        // An already-expired deadline fires on the first select! poll, before the
-        // semaphore acquire is checked (biased: cancel > timeout > permit).
+        // The blocker means the permit arm is never Ready, so on a real clock this
+        // test was not racy. It still runs on virtual time: delete the blocker and
+        // it becomes the #637 bug, and virtual time makes "already expired" exact
+        // rather than dependent on timer phase. An expired deadline yields Timeout
+        // because the select is biased (cancel > timeout > permit) and the sleep
+        // arm is Ready first. tests/virtual_clock_guard.rs enforces the rule.
         let past = tokio::time::Instant::now() - Duration::from_millis(1);
         let mut cancel = None;
         let result = sched.acquire(Class::Mutate, past, &mut cancel).await;
@@ -598,8 +602,8 @@ mod tests {
     // Virtual time makes "already expired" exact instead of phase-dependent:
     // Instant::now() is frozen, so now() - 1ms is unambiguously a past tick and
     // the sleep is elapsed on the first poll. The sibling test at
-    // queued_timeout_returns_timeout does NOT need this — it occupies the gate,
-    // so the permit arm is never Ready and the timeout wins whenever it fires.
+    // queued_timeout_returns_timeout also runs paused, and
+    // tests/virtual_clock_guard.rs enforces the rule.
     #[tokio::test(start_paused = true)]
     async fn free_gate_timeout_beats_permit_biased() {
         let sched = Scheduler::new();

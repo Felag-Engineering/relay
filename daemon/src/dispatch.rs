@@ -3343,6 +3343,10 @@ allowed_args = [["*"]]
 // scheduler, or the validators. A drift between an assertion and the real
 // behavior is a TEST bug — fix the test, never the production code.
 //
+// Regression seeds are tracked, not ignored (#259): commit
+// `daemon/proptest-regressions/` files with the fix; the full rule is in
+// `policy.rs`'s `mod proptests` header.
+//
 // This module is a sibling of `mod tests` above; it never edits it and
 // builds its own fixtures and its own self-cleaning temp-dir helper rather
 // than sharing the `crate::test_support::TempDir` that sibling uses.

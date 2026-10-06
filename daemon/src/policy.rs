@@ -4077,6 +4077,13 @@ mod loader_hardening_tests {
 // A drift between an oracle and the engine is a TEST bug — fix the test,
 // never the engine (see the module CONSTRAINTS note).
 //
+// Regression seeds (#259): proptest persists a failing case to
+// `daemon/proptest-regressions/<module path>.txt`, and that directory is
+// deliberately TRACKED. A seed file is a counterexample: commit it with the fix
+// so it replays for everyone, and never delete one as noise. A seed that
+// encodes an oracle bug rather than an engine bug may be removed only in the
+// change that fixes the oracle, after the case is promoted into a named test.
+//
 // This module is a sibling of `mod tests`, `mod raw_exec_redteam`, and
 // `mod loader_hardening_tests` above; it never edits them and builds its own
 // fixtures from literal TOML rather than reaching into a private sibling
