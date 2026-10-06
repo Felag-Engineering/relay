@@ -101,7 +101,7 @@ pub(crate) fn build_keypair_and_csr() -> Result<(String, String)> {
 pub(crate) fn cert_pubkey_matches_key(cert_pem: &str, key_pem: &str) -> Result<()> {
     // rcgen loads the private key and returns its SubjectPublicKeyInfo as DER bytes.
     let kp = rcgen::KeyPair::from_pem(key_pem)?;
-    let key_spki_der = kp.public_key_der();
+    let key_spki_der = rcgen::PublicKeyData::subject_public_key_info(&kp);
 
     // x509-parser parses the cert and exposes the raw SPKI DER via .raw (RFC 5280 §4.1).
     let ders: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(cert_pem.as_bytes())
@@ -384,17 +384,17 @@ pub(crate) mod test_ca {
         fn der_bytes(&self) -> &[u8] {
             &self.0
         }
-        fn algorithm(&self) -> &rcgen::SignatureAlgorithm {
+        fn algorithm(&self) -> &'static rcgen::SignatureAlgorithm {
             &rcgen::PKCS_ECDSA_P256_SHA256
         }
     }
 
-    /// Parses and signs `csr_pem` with `ca_cert`/`ca_kp`, after checking its
-    /// self-signature and that it carries the P-256/ecdsa-with-SHA256, empty-
-    /// subject shape `build_keypair_and_csr` produces.
+    /// Parses and signs `csr_pem` as the CA self-signed from `ca_params`/`ca_kp`,
+    /// after checking its self-signature and that it carries the P-256/ecdsa-
+    /// with-SHA256, empty-subject shape `build_keypair_and_csr` produces.
     pub(crate) fn sign_csr(
         csr_pem: &str,
-        ca_cert: &rcgen::Certificate,
+        ca_params: &rcgen::CertificateParams,
         ca_kp: &rcgen::KeyPair,
     ) -> rcgen::Certificate {
         let der =
@@ -451,8 +451,7 @@ pub(crate) mod test_ca {
         params
             .signed_by(
                 &CsrPublicKey(subject_pki.subject_public_key.data.to_vec()),
-                ca_cert,
-                ca_kp,
+                &rcgen::Issuer::from_params(ca_params, ca_kp),
             )
             .expect("sign CSR")
     }
