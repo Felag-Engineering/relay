@@ -19,6 +19,18 @@ prints the escalation to you instead of commenting, so you can fix the issue and
 loop never asks questions in either mode — an issue that needs shaping goes back through
 `/decompose` or a hand edit, not through a conversation mid-pipeline.
 
+Every comment this pipeline posts uses a Posting form (`/pr-respond` § Posting;
+`docs/agents/routines.md` § The loop marker): REST, with the loop marker as its first line, and
+never the CLI comment subcommands (GraphQL).
+The delimiter is the fixed quoted line `RELAY_LOOP_BODY_EOF`; never emit that line inside a body:
+
+```bash
+gh api --method POST repos/{owner}/{repo}/issues/<n>/comments -F body=@- <<'RELAY_LOOP_BODY_EOF'
+<!-- relay-loop -->
+<text>
+RELAY_LOOP_BODY_EOF
+```
+
 ## Repo context
 
 !git remote get-url origin 2>/dev/null || echo "no remote"

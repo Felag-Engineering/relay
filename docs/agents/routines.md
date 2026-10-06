@@ -68,8 +68,51 @@ never invokes the check. The type gate comes first and fails closed; the check's
 is the second line of defence, not the first.
 
 **Reading order.** Authors are listed through the REST API with a `--jq` projection of id,
-author and timestamp only, so no body enters the session. A body is fetched by id only after
-its author passes the check.
+author, timestamp and, where a listing needs it, a boolean computed by `--jq` from the body (the
+loop-reply marker, an empty review). So no body text enters the session. A body is fetched by id
+only after its author passes the check, and never for a loop reply.
+
+**The loop marker.** Every comment the loop posts on GitHub has the line `<!-- relay-loop -->`
+as its entire first line, followed by the text. That covers issue comments, PR conversation
+comments and review-thread replies. Posting is over REST with the body on stdin from a quoted
+heredoc, so agent-composed text is never shell-expanded, and the marker is the literal line
+after the command line, which makes it checkable by line. Keep the fence unindented so the
+marker and the closing delimiter sit at column 0. The delimiter is always the one fixed, quoted,
+unusual line `RELAY_LOOP_BODY_EOF`, for every loop comment and every issue or PR body write; a
+poster never emits that line inside a body, since it would end the heredoc and run the rest as
+shell (the self-test requires the quoted delimiter on every such line):
+
+```bash
+gh api --method POST repos/{owner}/{repo}/issues/<n>/comments -F body=@- <<'RELAY_LOOP_BODY_EOF'
+<!-- relay-loop -->
+<text>
+RELAY_LOOP_BODY_EOF
+
+gh api --method POST repos/{owner}/{repo}/pulls/<n>/comments/<id>/replies -F body=@- <<'RELAY_LOOP_BODY_EOF'
+<!-- relay-loop -->
+<text>
+RELAY_LOOP_BODY_EOF
+```
+
+A PR conversation comment is `issues/<pr>/comments`. `gh issue comment` and `gh pr comment` are
+GraphQL mutations, which return 403 in Claude Code sessions, so the loop does not use them.
+
+A comment or review is a **loop reply** only if both hold, in this order: its author passed the
+type gate and `scripts/maintainer-check.sh` exits 0, and then the first line of its body, with
+leading whitespace and one trailing `\r` stripped, equals the marker exactly. The listing decides
+the second part as a boolean, so no body text enters the session:
+
+```bash
+((.body // "") | (split("\n")[0] // "") | rtrimstr("\r") | sub("^\\s+"; "") == "<!-- relay-loop -->")
+```
+
+The check runs before the marker is read, so a marked comment from a non-maintainer is
+`not actioned: author is not a maintainer`, never a loop reply: forging the marker gains an
+outsider nothing, and nobody outside can edit a maintainer's comment. The marker is not tied to
+one login because the loop runs under more than one maintainer credential (an interactive session
+and a routine token), and each run must recognise every other run's replies. A maintainer who
+quotes a loop reply still counts: GitHub's quote-reply prefixes `> `, and a hand-written quote
+starts with prose. Every dropped loop reply is listed by id and login as `skipped: loop reply`.
 
 **Per routine.**
 
@@ -82,14 +125,31 @@ its author passes the check.
   non-maintainer review or comment is listed in its report as
   `not actioned: author is not a maintainer` (id and login, never the body) and left for a
   human. The linked issue contributes its body only, never its comments, and only when its
-  author is a maintainer.
-- `/dev-loop`, `/dev-loop-queue` and `/dev-loop-parallel` pick only issues whose author is a
+  author is a maintainer. A loop reply never makes a PR actionable and is never classified: it is
+  listed as `skipped: loop reply` with id and login. A review with an empty body is not an
+  instruction (a thread reply creates an empty-body `COMMENTED` review); its thread comments are
+  judged on their own. The listings project the marker boolean (last, except the reviews listing,
+  where the empty-body boolean follows it); the issue-comment one is:
+
+  ```bash
+  .[] | [.id, (.user.login // ""), (.user.type // ""), .created_at, ((.body // "") | (split("\n")[0] // "") | rtrimstr("\r") | sub("^\\s+"; "") == "<!-- relay-loop -->")] | @tsv
+  ```
+- `/dev-loop`, `/dev-loop-queue`, `/dev-loop-parallel` and `/dev-loop-drive` pick only issues whose author is a
   maintainer. Any other issue is reported `not actioned: author is not a maintainer`, and a
   maintainer re-files it in their own name if it should run. This also closes body edits after
   `loop:ready`, since only the author and other maintainers can edit the body.
 - Only maintainer comments enter `.dev-loop/issue.md`. The rest are listed (id, login, date) as
   not actioned.
-- Capacity counts, "already started" guards and `/pr-respond`'s automatic selection read the
+- `/dev-loop-drive` lists authors before reading any issue title or body, and leaves out issues
+  labelled `loop:needs-human`. Its wave barrier, CI verification, flake rerun and auto-fix see
+  only same-repository `loop/` and `agent/` PRs, from one paginated call that projects a
+  same-repository boolean. A fork PR is reported `not actioned: PR #<n> head is a fork` and is
+  never rerun, checked out, commented on or fixed. A PR whose fork status cannot be determined is
+  reported `not actioned: PR #<n> could not determine head repository`, never as a fork. The
+  tracking issue is used only if its author is a maintainer. Its `ci-fix` and `ci-rerun`
+  attempt counters count marked comments by any maintainer, so the cap of 2 is one cap across
+  every credential.
+- Capacity counts (including the drive's wave barrier), "already started" guards and `/pr-respond`'s automatic selection read the
   paginated REST pulls listing and keep only PRs whose head repository is the base repository
   (a head with no repository counts as a fork), so a fork PR named `loop/...` can neither fill
   the cap, block an issue, nor push a real PR off the first page.
@@ -106,7 +166,34 @@ its author passes the check.
 - The type gate lives in each caller's prose, not in `maintainer-check.sh`, which takes a login
   only; `make test-maintainer-check` models the gate and pins that every caller projects the
   type, but cannot execute an agent's reading of it.
-- `/dev-loop-drive` is not yet covered by this rule.
+- The marker is a convention, not a signature: a maintainer comment that begins with the exact
+  marker line is treated as a loop reply (fail-safe: ignored, and reported). Prose instructions
+  such as "post a comment" are pinned only by each file carrying the marker; the self-test
+  checks the posting forms line by line, not an agent's reading of the prose.
+- Some steps still use GitHub's GraphQL API, which returns 403 in Claude Code sessions: the
+  `loop:halt` check (`gh issue list`), `gh issue view`, `gh issue edit` and `gh pr edit` (label
+  changes, and the drive's `gh issue edit "$TRACK" --body`, which rewrites the dashboard and state
+  record every tick), `gh issue create`, `gh pr checks`, `gh pr checkout`, `gh pr view`
+  (including `/pr-respond`'s `isCrossRepository` read) and `gh pr create`. The drive's TRACK
+  creation and its dashboard and state-record rewrite are REST (`gh api` POST and PATCH with a
+  quoted heredoc), not GraphQL. Whether each remaining call fails closed where it gates an action
+  is not proven here; moving them to REST is follow-up work. The halt check is the one that
+  matters: it reads `-q 'length'` and its commands say "non-zero → stop" about the count without
+  saying what an error does, and a session may print an empty result that reads as zero. An
+  erroring or empty result must be read as a stop, not as zero. Tracked as a follow-up (a REST
+  read where anything but `0` stops).
+- An outsider's issue or PR comment that begins with the marker and a `ci-fix` or `ci-rerun` line
+  is ignored by the counters (its author fails the gate). Where the author's check exits 2 (a
+  deleted `ghost` account) the PR is parked in the drive's Needs-you bucket: fail-safe noise, not
+  an action.
+- CI runs are selected by the same-repository PR's head SHA and `head_repository` equal to the
+  base repository, never by branch name: a fork's `pull_request` run carries the fork's branch
+  name, which an attacker can make equal to a loop branch.
+- `/pr-respond` can re-answer a question-only thread. An answer creates no commit, so the
+  maintainer's question is still "after the last commit" on the next tick. Tracked as a
+  follow-up.
+- The self-test runs the commands' jq with `jq`; `gh --jq` uses gojq. The expressions here use
+  only builtins both implement identically (`split`, `rtrimstr`, `sub`, `startswith`, `test`).
 
 ## Environment
 
