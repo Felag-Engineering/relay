@@ -34,6 +34,8 @@ use serde::Deserialize;
 use crate::hardened_open::{open_hardened, HardenedRejection};
 use crate::operations;
 
+pub(crate) mod decision_log;
+
 // ---------------------------------------------------------------------------
 // On-disk serde model
 // ---------------------------------------------------------------------------

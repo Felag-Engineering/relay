@@ -57,7 +57,7 @@ The daemon is configured entirely by environment variables (read once at startup
 | `RELAY_ENROLL_ENDPOINT` | *(falls back to `RELAY_ADDR`)* | Optional distinct endpoint for the enrollment RPC. Must be `https://` — anything else is refused (fail closed). |
 | `RELAY_HEARTBEAT_INTERVAL_SECS` | `30` | Heartbeat base interval; each send is jittered ±20% so a bulk-restarted fleet spreads out. |
 | `RELAY_SHUTDOWN_GRACE_SECS` | `30` | Graceful-shutdown grace period: on SIGTERM/SIGINT the daemon stops accepting Tasks, drains in-flight ones up to this budget, then exits. |
-| `RUST_LOG` | `info` | Log filter (`tracing_subscriber` EnvFilter syntax). |
+| `RUST_LOG` | `info` | Log filter (`tracing_subscriber` EnvFilter syntax). Keep Policy decision events on: see [section 6](#6-local-record-of-policy-decisions). |
 
 Fail-closed behaviors to know about (all deliberate):
 
@@ -134,7 +134,71 @@ From the Relay's control plane, the new Node appears in `list_nodes` (MCP) with
 its Facts, Labels, and Policy fingerprint — see [enrollment.md](enrollment.md)
 for the full verification loop.
 
-## 6. Lifecycle
+## 6. Local record of Policy decisions
+
+The daemon keeps its own record of its Policy decisions, so a Node holds
+evidence of what it was asked to run even if the Relay is compromised. Each
+Policy gate decision (a Task's one pass through the Policy engine, or the
+canonical-path refusal that runs just before it) is one structured log line,
+shipped by journald and your log pipeline. The `file.read` path re-check made
+after an Allow is a second Policy evaluation that is not logged at the deny
+target: a refusal there shows only as the Task's result, after the Allow line.
+The daemon writes no file of its own, and retention is journald's
+(`SystemMaxUse=` / `MaxRetentionSec=` in `journald.conf`).
+
+- **Allow:** target `relay_daemon::allow`, one event per Policy Allow, emitted
+  after the decision and before anything is invoked or spawned. It records the
+  Allow, not a successful run: a Template slot refused afterwards, or a
+  `file.read` that fails its path re-check, still logged an Allow.
+- **Deny:** target `relay_daemon::deny`, the same field names.
+
+Shared fields: `task_id`, `operation` (the Operation name, or `raw_exec`),
+`tier` (`native`, `template` or `raw_exec`), `risk_class`, `argv_digest`, `argc`
+and `policy_fingerprint`. An Allow, and a Deny by a rule, also carry `rule`. A
+Deny adds `reason`, plus `args` for a typed Operation Policy Deny or `program`
+(`argv[0]`) for Raw Exec. The canonical-path Deny carries neither `args` nor
+`rule`, only `reason`.
+
+`task_id`, `operation`, `reason`, `args` and `program` come from the caller and
+are written quoted, with control characters such as a newline escaped, so one
+event is always one journal line.
+
+An Allow never carries argv. A Raw Exec Allow carries only the digest and
+`argc`. There is no Job id on the wire to a Node: correlate by `task_id` against
+the Relay's audit trail.
+
+`argv_digest` is the SHA-256 of the elements joined by a NUL byte. For a typed
+Operation the first element is the Operation name, followed by its positional
+arguments in Policy order; for Raw Exec the elements are the argv. `argc` counts
+the elements. To reproduce one:
+
+```console
+$ printf "%s\0%s" /bin/echo hello | sha256sum
+```
+
+The digest is unsalted and meant for correlation, not secrecy: anyone who can
+read the journal can confirm a guess at a low-entropy argument.
+
+Log lines are plain text with no ANSI colour, so `journalctl` filters them
+directly. To list every decision:
+
+```console
+$ journalctl -u relay-daemon -g 'relay_daemon::(allow|deny):'
+```
+
+If your `journalctl` was built without PCRE2, filter with grep instead:
+
+```console
+$ journalctl -u relay-daemon | grep -E 'relay_daemon::(allow|deny):'
+```
+
+A `RUST_LOG` filter above `info` drops Allows. To quiet the daemon and keep the
+record, use `RUST_LOG=warn,relay_daemon::allow=info`. Directives keyed on module
+paths (`relay_daemon::dispatch=...`, `relay_daemon::raw_exec=...`) no longer
+govern decision events, which sit at `relay_daemon::allow` and
+`relay_daemon::deny`.
+
+## 7. Lifecycle
 
 - **Upgrades:** the daemon never self-upgrades and the Relay never pushes
   binaries (ADR-0014). Upgrading is a config-management artifact swap + restart —

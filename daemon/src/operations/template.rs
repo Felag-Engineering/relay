@@ -387,6 +387,10 @@ impl ResolvedOp for TemplateOp {
         self.risk
     }
 
+    fn tier(&self) -> crate::policy::decision_log::Tier {
+        crate::policy::decision_log::Tier::Template
+    }
+
     fn positional_args(&self, op: &Operation) -> Vec<String> {
         TemplateOp::positional_args(self, op)
     }
