@@ -28,13 +28,13 @@ jobs:
       CARGO_AUDIT_VERSION: 0.22.2  # pinned for supply-chain reproducibility
 
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0 # the secrets scan reads the whole history
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: relay/go.mod
           cache: false # its built-in cache looks for go.sum at the repo root
@@ -52,7 +52,7 @@ jobs:
 
       - name: Restore scanner binaries
         id: scanners
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/go/bin/govulncheck
@@ -69,7 +69,7 @@ jobs:
 
       - name: Save scanner binaries
         if: steps.scanners.outputs.cache-hit != 'true'
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/go/bin/govulncheck
@@ -137,7 +137,7 @@ jobs:
     outputs:
       run: ${{ steps.plan.outputs.run }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0 # diff against the last successful run's commit
@@ -164,18 +164,18 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: relay/go.mod
           cache: false # its built-in cache looks for go.sum at the repo root
 
       - name: Cache Go modules
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('relay/go.sum') }}
@@ -193,7 +193,7 @@ jobs:
         run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
 
       - name: Restore fuzz corpus
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/go-build/fuzz
           key: fuzz-corpus-go-${{ steps.corpus.outputs.month }}-${{ github.run_id }}
@@ -210,7 +210,7 @@ jobs:
       # Saved even when a target crashed: what the others found is still coverage.
       - name: Save fuzz corpus
         if: ${{ !cancelled() }}
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/go-build/fuzz
           key: fuzz-corpus-go-${{ steps.corpus.outputs.month }}-${{ github.run_id }}
@@ -243,7 +243,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -255,7 +255,7 @@ jobs:
           toolchain: nightly
 
       - name: Cache Cargo registry
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -266,7 +266,7 @@ jobs:
 
       - name: Restore cargo-fuzz
         id: cargo-fuzz
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/bin/cargo-fuzz
           key: cargo-fuzz-0.13.2
@@ -277,7 +277,7 @@ jobs:
 
       - name: Save cargo-fuzz
         if: steps.cargo-fuzz.outputs.cache-hit != 'true'
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/bin/cargo-fuzz
           key: cargo-fuzz-0.13.2
@@ -291,7 +291,7 @@ jobs:
         run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
 
       - name: Restore fuzz corpus
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/fuzz-corpus-daemon
           key: fuzz-corpus-daemon-${{ steps.corpus.outputs.month }}-${{ github.run_id }}
@@ -311,7 +311,7 @@ jobs:
 
       - name: Save fuzz corpus
         if: ${{ !cancelled() }}
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/fuzz-corpus-daemon
           key: fuzz-corpus-daemon-${{ steps.corpus.outputs.month }}-${{ github.run_id }}
