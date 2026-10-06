@@ -1,0 +1,64 @@
+name: Bug report
+description: Something in Relay or the relay-daemon behaves wrongly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security vulnerability? Do not file it here. Report it privately:
+        https://github.com/Felag-Engineering/gleipnir-relay/security/advisories/new
+        (see SECURITY.md).
+
+        Do not paste secrets: API Tokens, Enrollment Tokens, private keys, certificates.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Relay
+        - relay-daemon
+        - Admin Console
+        - MCP
+        - Control API
+        - packaging (systemd units, EnvironmentFile, Template catalog)
+        - dev/demo fleet
+        - documentation
+        - not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `relay --version` and/or `relay-daemon --version`, or the commit.
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS or distribution, and deployment shape.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Redact secrets (tokens, private keys, certificates) before pasting.
+      render: text

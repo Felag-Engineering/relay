@@ -157,6 +157,7 @@ real-hardware proof.
 - **[docs/specs/](docs/specs/)** — capability specifications: what each capability does today, across MCP, the Control API, and the Admin Console.
 - **[docs/adr/](docs/adr/)** — why the architecture is the way it is.
 - **[docs/security/threat-model.md](docs/security/threat-model.md)** — the trust boundaries, and which invariant defends each.
+- **[SECURITY.md](SECURITY.md)** — supported versions and how to report a vulnerability privately.
 - **[docs/api/](docs/api/)** — Control API reference and OpenAPI surface.
 - **[docs/operations/beta-hardware-validation.md](docs/operations/beta-hardware-validation.md)** — the one validation that cannot be automated: proving the vertical slice on real machines.
 - **[docs/dev-fleet.md](docs/dev-fleet.md)** — local dev fleet: `make dev-fleet-up` for one Relay + N relay-daemons, drivable over MCP (dev-only).
