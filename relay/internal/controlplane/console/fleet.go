@@ -1314,40 +1314,23 @@ func stateFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 // re-keying is needed here — only routing the term through nodestate.Facts
 // instead of concatenating it.
 func daemonVersionFacet(nodes []fleetNode, link linkContext) (facet, bool) {
-	versions := map[string]int{}
-	versionTerms := map[string]string{}
-	versionRefused := false
+	tally := newFactTally()
 	for _, n := range nodes {
 		if n.DaemonVersion == "" {
 			// Counted, not skipped, so the facet sums to the group's Node count.
-			versions[factSentinelUnreported]++
+			tally.addSentinel(factSentinelUnreported)
 			continue
 		}
-		key := facetValueKey(n.DaemonVersion)
-		versions[key]++
-		// Harmless last-writer-wins: every Node reporting the same version
-		// produces the same term, because nodestate.Facts is a pure function
-		// of the value.
-		versionTerms[key] = n.versionTerm
-		if n.versionTerm == "" {
-			versionRefused = true
-		}
+		tally.addValue(n.DaemonVersion, n.versionTerm)
 	}
-	f := facetFrom("Daemon version", versions, link, func(k string) (string, string, bool) {
+	return tally.facet("Daemon version", link, func(k string) (string, string, bool) {
 		if k == factSentinelUnreported {
 			// Absence is not a label — there is nothing to target.
 			return "not reported", "", false
 		}
-		term := versionTerms[k]
+		term := tally.terms[k]
 		return strings.TrimPrefix(k, facetValuePrefix), term, term != ""
 	})
-	if len(f.Values) == 0 {
-		return facet{}, false
-	}
-	if versionRefused {
-		f.Hint = facetRefusalHint
-	}
-	return f, true
 }
 
 // policyFingerprintFacet builds the Policy fingerprint facet; false when no Node contributes a value.
@@ -1363,35 +1346,21 @@ func daemonVersionFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 // with no recorded fingerprint; real values are keyed through facetValueKey so
 // a Node self-reporting the literal "not reported" never joins the sentinel row.
 func policyFingerprintFacet(nodes []fleetNode, link linkContext) (facet, bool) {
-	policies := map[string]int{}
-	policyTerms := map[string]string{}
-	policyRefused := false
+	tally := newFactTally()
 	for _, n := range nodes {
 		if n.PolicyFingerprint == "" {
-			policies[factSentinelUnreported]++
+			tally.addSentinel(factSentinelUnreported)
 			continue
 		}
-		key := facetValueKey(n.PolicyFingerprint)
-		policies[key]++
-		policyTerms[key] = n.policyTerm
-		if n.policyTerm == "" {
-			policyRefused = true
-		}
+		tally.addValue(n.PolicyFingerprint, n.policyTerm)
 	}
-	f := facetFrom("Policy fingerprint", policies, link, func(k string) (string, string, bool) {
+	return tally.facet("Policy fingerprint", link, func(k string) (string, string, bool) {
 		if k == factSentinelUnreported {
 			return "not reported", "", false
 		}
-		term := policyTerms[k]
+		term := tally.terms[k]
 		return shortHash(strings.TrimPrefix(k, facetValuePrefix)), term, term != ""
 	})
-	if len(f.Values) == 0 {
-		return facet{}, false
-	}
-	if policyRefused {
-		f.Hint = facetRefusalHint
-	}
-	return f, true
 }
 
 // templateSetFacet builds the Template set facet; false when no Node contributes a value.
@@ -1411,25 +1380,18 @@ func policyFingerprintFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 // below give the two kinds of key disjoint PREFIXES, so that collision is
 // structurally unreachable rather than merely unlikely.
 func templateSetFacet(nodes []fleetNode, link linkContext) (facet, bool) {
-	templates := map[string]int{}
-	templateTerms := map[string]string{}
-	templateRefused := false
+	tally := newFactTally()
 	for _, n := range nodes {
 		switch {
 		case n.TemplateFingerprint == nodestate.TemplateUnloadable:
-			templates[templateSentinelUnloadable]++
+			tally.addSentinel(templateSentinelUnloadable)
 		case n.TemplateFingerprint != "":
-			key := facetValueKey(n.TemplateFingerprint)
-			templates[key]++
-			templateTerms[key] = n.templateTerm
-			if n.templateTerm == "" {
-				templateRefused = true
-			}
+			tally.addValue(n.TemplateFingerprint, n.templateTerm)
 		default:
-			templates[templateSentinelNoneInstalled]++
+			tally.addSentinel(templateSentinelNoneInstalled)
 		}
 	}
-	f := facetFrom("Template set", templates, link, func(k string) (string, string, bool) {
+	return tally.facet("Template set", link, func(k string) (string, string, bool) {
 		switch k {
 		case templateSentinelUnloadable:
 			// "unloadable" maps to the marker term, not a fact: the fingerprint
@@ -1440,16 +1402,9 @@ func templateSetFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 			return "no templates installed", "", false
 		default:
 			full := strings.TrimPrefix(k, facetValuePrefix)
-			return shortHash(full), templateTerms[k], templateTerms[k] != ""
+			return shortHash(full), tally.terms[k], tally.terms[k] != ""
 		}
 	})
-	if len(f.Values) == 0 {
-		return facet{}, false
-	}
-	if templateRefused {
-		f.Hint = facetRefusalHint
-	}
-	return f, true
 }
 
 // nodeRoleFacet builds the node:role facet; false when no Node contributes a value.
@@ -1511,6 +1466,51 @@ const (
 	// Policy fingerprint, in the facet for that field.
 	factSentinelUnreported = sentinelPrefix + "unreported"
 )
+
+// factTally is the counting half of a self-reported value facet (Daemon
+// version, Policy fingerprint, Template set): per-bucket counts, the recorded
+// Selector term of each real value, and whether any real value was refused.
+type factTally struct {
+	counts  map[string]int
+	terms   map[string]string
+	refused bool
+}
+
+func newFactTally() *factTally {
+	return &factTally{counts: map[string]int{}, terms: map[string]string{}}
+}
+
+// addSentinel counts a Node into one of the facet's closed-vocabulary
+// sentinel buckets.
+func (t *factTally) addSentinel(key string) { t.counts[key]++ }
+
+// addValue counts a self-reported value, keyed through facetValueKey, with the
+// term nodestate.Facts recorded for it; an empty term means it was refused.
+func (t *factTally) addValue(value, term string) {
+	key := facetValueKey(value)
+	t.counts[key]++
+	// Harmless last-writer-wins: every Node reporting the same value
+	// produces the same term, because nodestate.Facts is a pure function
+	// of the value.
+	t.terms[key] = term
+	if term == "" {
+		t.refused = true
+	}
+}
+
+// facet renders the tally; false when no Node contributes a value. The
+// refusal hint is set only when a real value was refused, never for a
+// sentinel.
+func (t *factTally) facet(title string, link linkContext, render func(key string) (label, term string, targetable bool)) (facet, bool) {
+	f := facetFrom(title, t.counts, link, render)
+	if len(f.Values) == 0 {
+		return facet{}, false
+	}
+	if t.refused {
+		f.Hint = facetRefusalHint
+	}
+	return f, true
+}
 
 // facetValueKey is the ONLY way a self-reported value becomes a key in a
 // value facet's counts map — see the key-space comment above.
