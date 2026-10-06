@@ -35,6 +35,9 @@ because you are one of several running at once:
    `loop:needs-human` on the issue is the launching coordinator's job, so two runners never race on
    the same label. Where dev-loop.md says to label and stop, comment on the issue saying exactly why,
    stop, and put `ESCALATED: <one line>` in your final report — the coordinator applies the label.
+   A `/dev-loop` Stage 1 refusal because the issue's author is not a maintainer is reported as
+   `ESCALATED: not actioned: author is not a maintainer`. A maintainer check that could not run is
+   reported as `ESCALATED: maintainer check could not run: <reason>`.
 6. **Your final message is a report, nothing else**, in this shape:
 
 ```

@@ -144,6 +144,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-vuln-gate
 
+      # scripts/maintainer-check.sh, the routines' "who may instruct" check, proved against a
+      # stub gh (#910). Bash and jq only, no token, no network, so it runs here with the other
+      # gate self-tests.
+      - name: Maintainer-check self-test
+        if: ${{ !cancelled() }}
+        run: make test-maintainer-check
+
       # ---- Repo-wide hygiene gates. The scanners are pinned `go install`s in the
       # Makefile's lint-tools, so they ride the shared Go tool cache; zizmor is a Python
       # package, installed by pipx. ----
