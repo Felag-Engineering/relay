@@ -215,7 +215,9 @@ func sleepFor(ctx context.Context, d time.Duration) error {
 }
 
 // WithStepUpWindow overrides how recently a human must have proved presence
-// for a step-up-gated action. Non-positive keeps the default.
+// for a step-up-gated action. Non-positive keeps the default; a value above
+// MaxStepUpWindow is clamped to it, as defence in depth for any caller that
+// skips the composition root's own clamp.
 //
 // This is file-only Relay configuration (spec 11, invariant 11): the
 // composition root reads it at startup and there is no code path from any
@@ -224,7 +226,7 @@ func sleepFor(ctx context.Context, d time.Duration) error {
 func WithStepUpWindow(d time.Duration) ServiceOption {
 	return func(s *Service) {
 		if d > 0 {
-			s.stepUpWindow = d
+			s.stepUpWindow, _ = ClampStepUpWindow(d)
 		}
 	}
 }
@@ -446,7 +448,9 @@ func (s *Service) CSRFToken(id SessionID) CSRFToken {
 }
 
 // StepUp re-verifies a password against the session's own Account and, on
-// success, refreshes the proof of human presence.
+// success, stamps the proof of human presence and returns the session's
+// ROTATED identifier. The old identifier is dead on return: the caller MUST
+// reissue the cookie and re-derive the CSRF token from the returned id.
 //
 // It takes the same Attempt shape and runs the same throttle as Login, because
 // it IS a login — the strongest one in the system. What it must never be is a
@@ -460,21 +464,31 @@ func (s *Service) CSRFToken(id SessionID) CSRFToken {
 // second one (see audit.go's doc). audit.AuthFailureKinds is how a consumer
 // asks both refusal questions at once when it needs to.
 //
-// TWO EXITS WRITE NO RECORD, and the distinction is "was a credential
+// ONE EXIT WRITES NO RECORD, and the distinction is "was a credential
 // compared", not "did this attempt matter": the Resolve failure below (an
-// expired, unknown or disabled session) and a sessions.StepUp write failure
-// both return before or after the comparison, never because of it. The first
-// is the gap worth knowing about — a caller probing this endpoint with a
-// stale or invented session identifier leaves nothing in the trail, and
-// audit.AuthFailureKinds cannot recover what was never written. That is
+// expired, unknown or disabled session) returns before the comparison, never
+// because of it. It is the gap worth knowing about — a caller probing this
+// endpoint with a stale or invented session identifier leaves nothing in the
+// trail, and audit.AuthFailureKinds cannot recover what was never written. That is
 // pre-existing behaviour, shared with every other route that resolves a
 // session, and closing it belongs with the session lane rather than with this
 // function; it is recorded here rather than left for a reader to discover
 // that "audited" quietly meant "mostly".
-func (s *Service) StepUp(ctx context.Context, id SessionID, password accounts.Password, source string) error {
+//
+// The record is written BEFORE the stamp, and an unrecorded step-up stamps and
+// rotates nothing: once the window is consulted, a stamp left behind by a
+// failed audit would be an unaudited window (recordLogin's fail-closed rule).
+// A session that ends between the credential check and the stamp therefore
+// leaves a recorded step_up with no stamp, which fails toward a re-prompt,
+// never toward an unaudited window.
+//
+// No ThrottledFloor padding here: padding is Login-only, because its reason (a
+// typed name looked up before the throttle) does not exist on StepUp, whose
+// name comes from the session.
+func (s *Service) StepUp(ctx context.Context, id SessionID, password accounts.Password, source string) (SessionID, error) {
 	sess, acct, err := s.Resolve(ctx, id)
 	if err != nil {
-		return err
+		return SessionID{}, err
 	}
 	name := accounts.NormalizeName(sess.Account)
 
@@ -487,9 +501,9 @@ func (s *Service) StepUp(ctx context.Context, id SessionID, password accounts.Pa
 			Reason: fmt.Sprintf("step-up re-authentication refused before any credential "+
 				"was checked; next attempt accepted in %s", ceilSecond(wait)),
 		}); err != nil {
-			return err
+			return SessionID{}, err
 		}
-		return &ThrottledError{RetryAfter: wait}
+		return SessionID{}, &ThrottledError{RetryAfter: wait}
 	}
 
 	_, hash, ok := s.resolve(ctx, name)
@@ -505,15 +519,12 @@ func (s *Service) StepUp(ctx context.Context, id SessionID, password accounts.Pa
 			Source:        source,
 			Reason:        "step-up re-authentication refused",
 		}); err != nil {
-			return err
+			return SessionID{}, err
 		}
-		return ErrBadCredentials
+		return SessionID{}, ErrBadCredentials
 	}
 	s.throttle.Succeed(source, name)
-	if err := s.sessions.StepUp(id); err != nil {
-		return err
-	}
-	return s.recordLogin(ctx, LoginEvent{
+	if err := s.recordLogin(ctx, LoginEvent{
 		Kind:      auditKindStepUp,
 		Account:   acct.Name,
 		AccountID: acct.ID,
@@ -521,11 +532,16 @@ func (s *Service) StepUp(ctx context.Context, id SessionID, password accounts.Pa
 		Method:    MethodPassword,
 		Source:    source,
 		Reason:    "step-up re-authentication",
-	})
+	}); err != nil {
+		return SessionID{}, err
+	}
+	return s.sessions.StepUp(id)
 }
 
 // RequireStepUp reports whether the session's proof of human presence is still
 // fresh, returning ErrStepUpRequired when it is not.
+//
+// This is the ONE window check: the Console never compares timestamps itself.
 func (s *Service) RequireStepUp(id SessionID) error {
 	sess, err := s.sessions.Lookup(id)
 	if err != nil {

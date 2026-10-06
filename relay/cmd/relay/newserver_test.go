@@ -371,3 +371,19 @@ func TestListeners_Independent(t *testing.T) {
 	}
 	conn.Close() //nolint:errcheck
 }
+
+func TestClampedStepUpWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   time.Duration
+		want time.Duration
+	}{
+		{"above the maximum is clamped", 2 * time.Hour, 15 * time.Minute},
+		{"the maximum passes", 15 * time.Minute, 15 * time.Minute},
+		{"below the maximum passes", 5 * time.Minute, 5 * time.Minute},
+	} {
+		if got := clampedStepUpWindow(tc.in); got != tc.want {
+			t.Errorf("%s: clampedStepUpWindow(%v) = %v, want %v", tc.name, tc.in, got, tc.want)
+		}
+	}
+}

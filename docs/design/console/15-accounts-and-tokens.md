@@ -44,9 +44,10 @@ principle governs — an act that can only *reduce* what a principal may do (dis
 a password is one people route around. This is not a UI convention — it is the mitigation ADR-0009
 named for a consequence class it could not otherwise close.
 
-Step-up here is a password on the granting form itself, verified in the same request as the act it
-authorises — never a recent-auth window. Every granting act costs its own password, which is
-stricter than the window model and is what invariant 10 permits an adapter to be.
+Step-up here is a password on the granting form itself. Granting acts consult the recent-auth window
+(owner decision `2026-10-05`, #879): one password covers granting acts until the window lapses. A
+submitted password is always verified in the request, and a successful step-up rotates the
+session. The step-up matrix above — which acts take step-up — is unchanged.
 
 ## Rows
 

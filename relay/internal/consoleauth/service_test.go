@@ -23,12 +23,14 @@ type recorder struct {
 	mu       sync.Mutex
 	events   []consoleauth.LoginEvent
 	failWith error
+	// failKind, when set, narrows failWith to events of that Kind.
+	failKind string
 }
 
 func (r *recorder) RecordLogin(_ context.Context, e consoleauth.LoginEvent) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.failWith != nil {
+	if r.failWith != nil && (r.failKind == "" || r.failKind == e.Kind) {
 		return r.failWith
 	}
 	r.events = append(r.events, e)
@@ -701,22 +703,130 @@ func TestStepUp_RefreshesPresenceOnlyWithACredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	// Sign-in itself proves presence.
-	if err := f.svc.RequireStepUp(id); err != nil {
-		t.Errorf("a fresh sign-in does not satisfy step-up: %v", err)
-	}
-
-	f.clk.advance(6 * time.Minute)
+	// Sign-in alone does NOT prove presence for an act: step-up does.
 	if err := f.svc.RequireStepUp(id); !errors.Is(err, consoleauth.ErrStepUpRequired) {
-		t.Fatalf("RequireStepUp past the window = %v, want ErrStepUpRequired", err)
+		t.Fatalf("RequireStepUp after a bare sign-in = %v, want ErrStepUpRequired", err)
 	}
 
-	// A wrong password must not refresh it.
-	if err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
+	// A wrong password must not stamp it.
+	if _, err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
 		t.Fatalf("StepUp with a wrong password = %v, want ErrBadCredentials", err)
 	}
 	if err := f.svc.RequireStepUp(id); !errors.Is(err, consoleauth.ErrStepUpRequired) {
-		t.Error("a refused step-up refreshed the proof of presence")
+		t.Error("a refused step-up stamped the proof of presence")
+	}
+
+	// Past the throttle's delay, a correct password stamps the ROTATED id.
+	f.clk.advance(10 * time.Second)
+	newID, err := f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
+	if err != nil {
+		t.Fatalf("StepUp: %v", err)
+	}
+	if err := f.svc.RequireStepUp(newID); err != nil {
+		t.Errorf("RequireStepUp after a step-up = %v, want nil", err)
+	}
+	if err := f.svc.RequireStepUp(id); !errors.Is(err, consoleauth.ErrNoSession) {
+		t.Errorf("RequireStepUp on the pre-step-up id = %v, want ErrNoSession", err)
+	}
+
+	f.clk.advance(6 * time.Minute)
+	if err := f.svc.RequireStepUp(newID); !errors.Is(err, consoleauth.ErrStepUpRequired) {
+		t.Fatalf("RequireStepUp past the window = %v, want ErrStepUpRequired", err)
+	}
+}
+
+func TestStepUp_RotatesTheSessionIdentifier(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+
+	id, _, err := f.svc.Login(ctx, attempt("mike", testPassword))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	newID, err := f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
+	if err != nil {
+		t.Fatalf("StepUp: %v", err)
+	}
+	if newID.IsZero() || newID.Reveal() == id.Reveal() {
+		t.Fatal("StepUp did not return a fresh identifier")
+	}
+	if f.svc.CSRFToken(newID).Reveal() == f.svc.CSRFToken(id).Reveal() {
+		t.Error("the CSRF token did not change with the identifier")
+	}
+	if _, _, err := f.svc.Resolve(ctx, newID); err != nil {
+		t.Errorf("the rotated session does not resolve: %v", err)
+	}
+}
+
+// TestStepUp_AnUnauditableStepUpStampsNothing: a stamp left behind by a
+// step-up the trail never heard of would be an unaudited window.
+func TestStepUp_AnUnauditableStepUpStampsNothing(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+
+	id, _, err := f.svc.Login(ctx, attempt("mike", testPassword))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	f.audit.failWith = errors.New("the audit store is unreachable")
+	f.audit.failKind = audit.KindStepUp
+
+	newID, err := f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
+	if err == nil {
+		t.Fatal("an unauditable step-up returned no error")
+	}
+	if !newID.IsZero() {
+		t.Error("a failed step-up returned an identifier")
+	}
+	if err := f.svc.RequireStepUp(id); !errors.Is(err, consoleauth.ErrStepUpRequired) {
+		t.Errorf("RequireStepUp(old) = %v, want ErrStepUpRequired: the stamp must not exist", err)
+	}
+	if _, _, err := f.svc.Resolve(ctx, id); err != nil {
+		t.Errorf("the old id stopped resolving though nothing rotated: %v", err)
+	}
+}
+
+func TestStepUp_AStampIsPerSession(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+
+	a, _, err := f.svc.Login(ctx, attempt("mike", testPassword))
+	if err != nil {
+		t.Fatalf("Login A: %v", err)
+	}
+	f.clk.advance(10 * time.Second)
+	b, _, err := f.svc.Login(ctx, attempt("mike", testPassword))
+	if err != nil {
+		t.Fatalf("Login B: %v", err)
+	}
+	f.clk.advance(10 * time.Second)
+	if _, err := f.svc.StepUp(ctx, a, accounts.NewPassword(testPassword), "198.51.100.7"); err != nil {
+		t.Fatalf("StepUp A: %v", err)
+	}
+	if err := f.svc.RequireStepUp(b); !errors.Is(err, consoleauth.ErrStepUpRequired) {
+		t.Errorf("RequireStepUp(B) = %v, want ErrStepUpRequired: A's step-up leaked", err)
+	}
+}
+
+func TestWithStepUpWindow_ClampsToTheMaximum(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		in   time.Duration
+		want time.Duration
+	}{
+		{"above the maximum", 2 * time.Hour, consoleauth.MaxStepUpWindow},
+		{"within it", 3 * time.Minute, 3 * time.Minute},
+		{"zero is the default", 0, consoleauth.DefaultStepUpWindow},
+		{"negative is the default", -time.Minute, consoleauth.DefaultStepUpWindow},
+	} {
+		f := newFixture(t, consoleauth.WithStepUpWindow(tc.in))
+		if got := f.svc.StepUpWindow(); got != tc.want {
+			t.Errorf("%s: window = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -732,10 +842,10 @@ func TestStepUp_IsNotACheaperCheckThanTheSignIn(t *testing.T) {
 	// Step-up runs the same throttle as a sign-in. It is the strongest
 	// per-action credential in the system; it must never be the easiest one
 	// to grind against.
-	if err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
+	if _, err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
 		t.Fatalf("StepUp: %v", err)
 	}
-	err = f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
+	_, err = f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
 	if _, throttled := consoleauth.Throttled(err); !throttled {
 		t.Fatalf("an immediate step-up retry = %v, want a ThrottledError", err)
 	}
@@ -754,7 +864,7 @@ func TestStepUp_AThrottledStepUpIsAudited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	if err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
+	if _, err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
 		t.Fatalf("StepUp with a wrong password = %v, want ErrBadCredentials", err)
 	}
 	afterFailure := len(f.audit.all())
@@ -763,7 +873,7 @@ func TestStepUp_AThrottledStepUpIsAudited(t *testing.T) {
 	// a sub-second 400ms — the exact case that used to round to "0s"
 	// (time.Duration.Round) instead of up to "1s" (#640, item 4).
 	f.clk.advance(600 * time.Millisecond)
-	err = f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
+	_, err = f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
 	wait, throttled := consoleauth.Throttled(err)
 	if !throttled {
 		t.Fatalf("StepUp inside the delay window = %v, want a ThrottledError", err)
@@ -806,12 +916,12 @@ func TestStepUp_AnUnauditableThrottleIsNotSilentlyAThrottle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	if err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
+	if _, err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
 		t.Fatalf("StepUp with a wrong password = %v, want ErrBadCredentials", err)
 	}
 
 	f.audit.failWith = errors.New("the audit store is unreachable")
-	err = f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
+	_, err = f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
 	if err == nil {
 		t.Fatal("an unauditable throttled step-up returned no error")
 	}
@@ -835,7 +945,7 @@ func TestStepUp_SucceedsUnderItsOwnAuditKind(t *testing.T) {
 	// Past both the step-up window and the throttle's progressive delay.
 	f.clk.advance(6 * time.Minute)
 
-	if err := f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7"); err != nil {
+	if _, err := f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7"); err != nil {
 		t.Fatalf("StepUp: %v", err)
 	}
 
@@ -867,7 +977,7 @@ func TestStepUp_ARefusedStepUpIsNotASignInFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	if err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
+	if _, err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
 		t.Fatalf("StepUp: %v", err)
 	}
 
@@ -897,7 +1007,7 @@ func TestStepUp_RefusedAndThrottledStepUpsNameNoAccount(t *testing.T) {
 		t.Fatalf("Login: %v", err)
 	}
 
-	if err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
+	if _, err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
 		t.Fatalf("StepUp: %v", err)
 	}
 	refused := f.audit.last()
@@ -906,7 +1016,7 @@ func TestStepUp_RefusedAndThrottledStepUpsNameNoAccount(t *testing.T) {
 	}
 
 	// The immediate retry lands inside the delay the refusal above earned.
-	err = f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
+	_, err = f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
 	if _, throttled := consoleauth.Throttled(err); !throttled {
 		t.Fatalf("StepUp inside the delay window = %v, want a ThrottledError", err)
 	}

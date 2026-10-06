@@ -79,11 +79,19 @@ const (
 //
 // An interface rather than a *consoleauth.Service so this package stays
 // renderable in a test without a store, and so the set of things a Console
-// handler can do to a session is enumerable by reading four method names.
+// handler can do to a session is enumerable by reading six method names.
+//
+// StepUp returns the session's ROTATED identifier: a step-up is a privilege
+// change, and the old identifier is dead on return. CSRFToken is here for the
+// same reason: a page rendered in the same response must carry the NEW id's
+// token. RequireStepUp is how the window is read — from consoleauth, never
+// decided in this package.
 type Authenticator interface {
 	Login(ctx context.Context, a consoleauth.Attempt) (consoleauth.SessionID, consoleauth.Session, error)
 	Logout(ctx context.Context, id consoleauth.SessionID, source string) error
-	StepUp(ctx context.Context, id consoleauth.SessionID, password accounts.Password, source string) error
+	StepUp(ctx context.Context, id consoleauth.SessionID, password accounts.Password, source string) (consoleauth.SessionID, error)
+	RequireStepUp(id consoleauth.SessionID) error
+	CSRFToken(id consoleauth.SessionID) consoleauth.CSRFToken
 	StepUpWindow() time.Duration
 }
 

@@ -79,7 +79,7 @@ as an `EnvironmentFile`, with the reasoning behind each setting:
 | `-console-enabled` | `RELAY_CONSOLE_ENABLED` | `false` | Serve the Admin Console on the control-plane listener (ADR-0009, ADR-0026); requires `-control-enabled`. Humans sign in with a password held as an argon2id hash in the store — set the first one with `relay console-password` (below). |
 | `-console-session-max-age` | `RELAY_CONSOLE_SESSION_MAX_AGE` | `12h` | Absolute lifetime of a Console session; never extended by activity. |
 | `-console-session-idle` | `RELAY_CONSOLE_SESSION_IDLE` | `30m` | Idle timeout of a Console session. |
-| `-console-step-up-window` | `RELAY_CONSOLE_STEP_UP_WINDOW` | `5m` | How recently a human must have re-authenticated for a step-up-gated action to proceed. Startup-only, like everything here: no Account of any role can extend it through any API. |
+| `-console-step-up-window` | `RELAY_CONSOLE_STEP_UP_WINDOW` | `5m` | How recently a human must have re-entered their password for a privilege-granting Account act to proceed without being asked again. Approval decisions always ask. Maximum `15m`: a larger value is clamped, with a startup warning. Sign-in alone does not satisfy it. A successful step-up rotates the session identifier. Startup-only, like everything here: no Account of any role can extend it through any API. |
 
 Subcommands (checked before flag parsing):
 

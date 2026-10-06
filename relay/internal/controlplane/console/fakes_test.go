@@ -726,7 +726,7 @@ func (f *fakeAccountAdmin) record(verb string) {
 	}
 }
 
-// fakeAuth implements the Console's four-method Authenticator (login.go)
+// fakeAuth implements the Console's six-method Authenticator (login.go)
 // over nothing but recorded calls and configurable errors — no real store,
 // no real session. Login and Logout are here only to satisfy the interface;
 // decide_test.go exercises real sessions through loginFixture (a REAL
@@ -735,9 +735,20 @@ func (f *fakeAccountAdmin) record(verb string) {
 // (throttled, bad credential, no session), where a real store would only
 // obscure what handleDecideApproval does with the error it gets back.
 type fakeAuth struct {
-	loginErr    error
-	logoutErr   error
-	stepUpErr   error
+	loginErr  error
+	logoutErr error
+	stepUpErr error
+	// stepUpID is the rotated identifier StepUp returns; unset, StepUp
+	// returns the id it was given (no rotation).
+	stepUpID consoleauth.SessionID
+	// requireErr is what RequireStepUp returns when set; otherwise fresh
+	// decides between nil and ErrStepUpRequired.
+	requireErr   error
+	fresh        bool
+	requireCalls int
+	// csrf is the token CSRFToken reports when no rotation happened; unset,
+	// one is derived from the id.
+	csrf        string
 	stepUpCalls []struct {
 		ID       consoleauth.SessionID
 		Password accounts.Password
@@ -755,7 +766,7 @@ func (f *fakeAuth) Logout(context.Context, consoleauth.SessionID, string) error 
 	return f.logoutErr
 }
 
-func (f *fakeAuth) StepUp(_ context.Context, id consoleauth.SessionID, password accounts.Password, source string) error {
+func (f *fakeAuth) StepUp(_ context.Context, id consoleauth.SessionID, password accounts.Password, source string) (consoleauth.SessionID, error) {
 	f.stepUpCalls = append(f.stepUpCalls, struct {
 		ID       consoleauth.SessionID
 		Password accounts.Password
@@ -764,7 +775,37 @@ func (f *fakeAuth) StepUp(_ context.Context, id consoleauth.SessionID, password 
 	if f.order != nil {
 		*f.order = append(*f.order, "StepUp")
 	}
-	return f.stepUpErr
+	if f.stepUpErr != nil {
+		return consoleauth.SessionID{}, f.stepUpErr
+	}
+	if !f.stepUpID.IsZero() {
+		return f.stepUpID, nil
+	}
+	return id, nil
+}
+
+func (f *fakeAuth) RequireStepUp(consoleauth.SessionID) error {
+	f.requireCalls++
+	if f.order != nil {
+		*f.order = append(*f.order, "RequireStepUp")
+	}
+	switch {
+	case f.requireErr != nil:
+		return f.requireErr
+	case f.fresh:
+		return nil
+	}
+	return consoleauth.ErrStepUpRequired
+}
+
+// CSRFToken reports f.csrf when no rotation happened, so a test that never
+// rotates sees no phantom token change; after a rotation it derives a token
+// from the new id.
+func (f *fakeAuth) CSRFToken(id consoleauth.SessionID) consoleauth.CSRFToken {
+	if f.stepUpID.IsZero() && f.csrf != "" {
+		return consoleauth.ParseCSRFToken(f.csrf)
+	}
+	return consoleauth.ParseCSRFToken("fake-csrf-" + id.Reveal())
 }
 
 func (f *fakeAuth) StepUpWindow() time.Duration { return f.window }

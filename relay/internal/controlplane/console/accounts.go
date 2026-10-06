@@ -135,7 +135,10 @@ type accountsView struct {
 // accounts.KindHuman/KindMachine rather than hand-typed strings, so a screen
 // and the domain cannot come to disagree about what the closed sets are.
 type accountsWriteControls struct {
-	CSRFToken    string
+	CSRFToken string
+	// StepUpFresh renders the four granting forms' password field as
+	// optional. Presentation only: requireStepUp re-decides on submit.
+	StepUpFresh  bool
 	CreateAction string
 	Roles        []string
 	Kinds        []string
@@ -337,6 +340,7 @@ func handleAccounts(d Deps) http.HandlerFunc {
 		if accountsOffered(d) {
 			v.Write = &accountsWriteControls{
 				CSRFToken:    p.CSRFToken,
+				StepUpFresh:  stepUpFresh(d, r),
 				CreateAction: createAccountAction(),
 				Roles:        allRoleNames(),
 				Kinds:        []string{string(accounts.KindHuman), string(accounts.KindMachine)},
@@ -528,8 +532,8 @@ var accountsTmpl = newScreen("accounts", `
       </select>
     </div>
     <div class="fld">
-      <label class="fldlabel" for="create-password">Your password &mdash; required to create an Account</label>
-      <input id="create-password" name="password" type="password" autocomplete="current-password" required>
+      <label class="fldlabel" for="create-password">{{if .StepUpFresh}}Your password to create an Account &mdash; optional, you confirmed it recently{{else}}Your password &mdash; required to create an Account{{end}}</label>
+      <input id="create-password" name="password" type="password" autocomplete="current-password"{{if not .StepUpFresh}} required{{end}}>
     </div>
     <button class="btn grant" type="submit">Create Account</button>
   </form>
@@ -555,8 +559,8 @@ var accountsTmpl = newScreen("accounts", `
           {{range .}}<option value="{{.}}">{{.}}</option>{{end}}
         </select>
       </label>
-      <label class="fld"><span class="fldlabel">Your password &mdash; required to raise a role</span>
-        <input name="password" type="password" autocomplete="current-password" required>
+      <label class="fld"><span class="fldlabel">{{if $.Write.StepUpFresh}}Your password to raise a role &mdash; optional, you confirmed it recently{{else}}Your password &mdash; required to raise a role{{end}}</span>
+        <input name="password" type="password" autocomplete="current-password"{{if not $.Write.StepUpFresh}} required{{end}}>
       </label>
       <button class="btn grant" type="submit">Raise role</button>
     </form>
@@ -583,8 +587,8 @@ var accountsTmpl = newScreen("accounts", `
     <form class="ctlform ctlrow" method="post" action="{{$c.EnabledAction}}">
       <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
       <input type="hidden" name="enabled" value="true">
-      <label class="fld"><span class="fldlabel">Password &mdash; required to re-enable</span>
-        <input name="password" type="password" autocomplete="current-password" required>
+      <label class="fld"><span class="fldlabel">{{if $.Write.StepUpFresh}}Password to re-enable &mdash; optional, you confirmed it recently{{else}}Password &mdash; required to re-enable{{end}}</span>
+        <input name="password" type="password" autocomplete="current-password"{{if not $.Write.StepUpFresh}} required{{end}}>
       </label>
       <button class="btn grant" type="submit">Enable</button>
     </form>
@@ -642,8 +646,8 @@ var accountsTmpl = newScreen("accounts", `
       </select>
     </div>
     <div class="fld">
-      <label class="fldlabel" for="mint-password">Your password &mdash; required to mint a token</label>
-      <input id="mint-password" name="password" type="password" autocomplete="current-password" required>
+      <label class="fldlabel" for="mint-password">{{if .Write.StepUpFresh}}Your password to mint a token &mdash; optional, you confirmed it recently{{else}}Your password &mdash; required to mint a token{{end}}</label>
+      <input id="mint-password" name="password" type="password" autocomplete="current-password"{{if not .Write.StepUpFresh}} required{{end}}>
     </div>
     <button class="btn grant" type="submit">Mint API Token</button>
   </form>

@@ -15,19 +15,20 @@ package console
 // route's MinRole is mount-time absence at exactly that layer's own admin
 // floor: it subtracts reach and can never widen it.
 //
-// # Step-up: a credential in THIS request, never a window check
+// # Step-up: one password per window (#879)
 //
-// Every granting act carries an inline `password` field on its own form,
-// verified immediately before the capability call in the same request and the
-// same goroutine. RequireStepUp, StepUpFresh and ErrStepUpRequired stay
-// uncalled — this is STRICTER than the recent-auth window, which invariant 10
-// permits (an adapter may offer less, never more). decide.go's header carries
-// the full argument for the idiom and it is not restated here; what is worth
-// restating is why the [StepUp] component cannot express it (components.go):
-// StepUp models a STANDALONE confirmation with its own FormAction, and every
-// granting act here is a form already carrying its own fields (name/kind/role;
-// role; ttl/name), which a nested <form> cannot hold — invalid HTML, the same
-// structural reason decide.go gave.
+// Every granting act goes through the shared requireStepUp (stepup.go) in
+// stepUpWindowed mode. Owner decision 2026-10-05 (#879): a successful step-up
+// stamps the session, and a later granting act inside the configured window
+// proceeds without a password; outside it, or with no stamp, the prompt
+// returns. The window is consoleauth's to decide, never this file's. A
+// password, when submitted, is always verified in the request, and a
+// successful step-up rotates the session id. Each granting act's form carries
+// an inline `password` field, which is why the [StepUp] component cannot
+// express it (components.go): StepUp models a STANDALONE confirmation with its
+// own FormAction, and every granting act here is a form already carrying its
+// own fields (name/kind/role; role; ttl/name), which a nested <form> cannot
+// hold — invalid HTML.
 //
 // WHICH ACTS TAKE A PASSWORD is the owner's decision of 2026-09-19, not this
 // file's derivation: an act that could INCREASE what some principal may do
@@ -35,11 +36,6 @@ package console
 // re-enable a disabled Account, mint an API Token); an act that can only
 // REDUCE does not (disable, LOWER a role, revoke a Token), because an
 // emergency brake that costs a password is one people route around.
-//
-// Carry-over, flagged: a successful step-up here DOES refresh the session's
-// AuthenticatedAt stamp, as consoleauth.Service.StepUp's normal side effect.
-// Nothing in this package consults it — decide.go already flags this for #438
-// — but the surface area grew from one route to five, so it is said again.
 //
 // # The role route's TOCTOU residual, named rather than discovered later
 //
@@ -98,8 +94,6 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 )
 
 // AccountAdministrator is the write seam this file holds. Every method
@@ -209,74 +203,22 @@ func accountsOffered(d Deps) bool {
 	return d.AccountAdmin != nil && d.Auth != nil && d.Accounts != nil
 }
 
-// stepUpProved verifies the submitted password against the session's own
-// Account and reports whether the CALLER MAY PROCEED. It returns false on
-// EVERY path that did not prove the credential, having already written the
-// response — so `if !stepUpProved(...) { return }` is the only correct use,
-// and no capability call may appear before it in a granting handler.
-//
-// undone names, in the operator's terms, what did NOT happen ("Nothing was
-// created.", "The role was not changed.") so each refusal says so plainly.
-//
-// The four error arms are copied in CLASSIFICATION from decide.go:307-334.
-// decide.go is deliberately NOT refactored onto this helper: it is a
-// security-reviewed file and keeps its own copy.
-func stepUpProved(d Deps, w http.ResponseWriter, r *http.Request, pg Page, undone string) bool {
-	cs, ok := controlplane.ConsoleSessionFromContext(r.Context())
-	if !ok {
-		// FAIL CLOSED, the shape login.go's and decide.go's identical
-		// branches take: an authenticated request reached a gated /console/
-		// route with no resolved browser session, which the cookie lane
-		// cannot produce. There is no session to step up.
-		slog.Error("console account administration reached without a resolved browser session",
-			"path", r.URL.Path)
-		http.Error(w, "the Relay could not identify the session to step up", http.StatusInternalServerError)
-		return false
+// accountsStepUp is the step-up ask for the four privilege-granting Account
+// acts. undone names, in the operator's terms, what did NOT happen ("Nothing
+// was created.", "The role was not changed.") so each refusal says so plainly.
+func accountsStepUp(undone string) stepUpAsk {
+	return stepUpAsk{
+		mode:     stepUpWindowed,
+		required: "Step-up re-authentication is required for this act.",
+		undone:   undone,
+		act:      "an account administration act",
+		render: func(w http.ResponseWriter, pg Page, status int, heading, href, label string) {
+			w.WriteHeader(status)
+			renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
+				Heading: heading, Href: href, Label: label,
+			})
+		},
 	}
-
-	password := r.PostFormValue("password")
-	if password == "" {
-		w.WriteHeader(http.StatusUnauthorized)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
-			Heading: "Step-up re-authentication is required for this act. " + undone,
-		})
-		return false
-	}
-
-	err := d.Auth.StepUp(r.Context(), cs.ID, accounts.NewPassword(password), controlplane.SourceAddress(r))
-	if err == nil {
-		return true
-	}
-	switch {
-	case isThrottled(err):
-		wait, _ := consoleauth.Throttled(err)
-		setRetryAfter(w, wait)
-		w.WriteHeader(http.StatusTooManyRequests)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
-			Heading: throttleMessage(wait) + " " + undone,
-		})
-	case errors.Is(err, consoleauth.ErrBadCredentials):
-		w.WriteHeader(http.StatusUnauthorized)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
-			Heading: "That password did not match. " + undone,
-		})
-	case errors.Is(err, consoleauth.ErrNoSession):
-		w.WriteHeader(http.StatusUnauthorized)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
-			Heading: "Your session has ended. " + undone,
-			Href:    LoginPath,
-			Label:   "Sign in again.",
-		})
-	default:
-		// Never the password, and never the error text to the page.
-		slog.Error("console step-up for an account administration act returned an error",
-			"path", r.URL.Path, "error", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
-			Heading: "The Relay could not verify your password. " + undone,
-		})
-	}
-	return false
 }
 
 // roleChangeCouldGrant reports whether changing a role FROM from TO to could
@@ -503,7 +445,7 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 			return
 		}
 
-		if !stepUpProved(d, w, r, pg, "Nothing was created.") {
+		if !requireStepUp(d, w, r, &pg, accountsStepUp("Nothing was created.")) {
 			return
 		}
 
@@ -562,7 +504,7 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 			}
 			couldGrant = roleChangeCouldGrant(target.Role, role)
 		}
-		if couldGrant && !stepUpProved(d, w, r, pg, "The role was not changed.") {
+		if couldGrant && !requireStepUp(d, w, r, &pg, accountsStepUp("The role was not changed.")) {
 			return
 		}
 
@@ -600,7 +542,7 @@ func handleSetAccountEnabled(d Deps) http.HandlerFunc {
 		enabled := submitted == "true"
 
 		undone := "The Account was not changed."
-		if enabled && !stepUpProved(d, w, r, pg, undone) {
+		if enabled && !requireStepUp(d, w, r, &pg, accountsStepUp(undone)) {
 			return
 		}
 
@@ -702,10 +644,12 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 			return
 		}
 
-		if !stepUpProved(d, w, r, pg, "Nothing was minted.") {
+		if !requireStepUp(d, w, r, &pg, accountsStepUp("Nothing was minted.")) {
 			return
 		}
 
+		// pg was passed to requireStepUp by pointer, so this render carries the
+		// ROTATED session's CSRF token, with no redirect in between.
 		tok, plaintext, err := d.AccountAdmin.MintAPIToken(r.Context(), caller, id, name, ttl)
 		if err != nil {
 			// MINT CAN FAIL WITH A LIVE CREDENTIAL ALREADY IN THE STORE.

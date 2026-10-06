@@ -690,7 +690,7 @@ func TestAccess_AFailedSignInShowsTheNameOnlyWhenItIsARealAccounts(t *testing.T)
 	if err != nil {
 		t.Fatalf("Login(mike, correct password): %v", err)
 	}
-	if err := svc.StepUp(ctx, id, accounts.NewPassword("wrong password"), accessFixtureSource); !errors.Is(err, consoleauth.ErrBadCredentials) {
+	if _, err := svc.StepUp(ctx, id, accounts.NewPassword("wrong password"), accessFixtureSource); !errors.Is(err, consoleauth.ErrBadCredentials) {
 		t.Fatalf("StepUp(wrong password) = %v, want ErrBadCredentials", err)
 	}
 

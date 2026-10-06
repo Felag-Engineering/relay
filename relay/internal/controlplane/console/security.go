@@ -317,9 +317,10 @@ func sessionCSRFValid(r *http.Request) bool {
 	if !ok {
 		return false
 	}
-	// Reveal() only here and in sessionCSRFToken: the token is a redacting
-	// type precisely so the two places that must handle the raw value are the
-	// two that name it out loud.
+	// Reveal() only here, in sessionCSRFToken and in requireStepUp (which
+	// re-derives the token after a rotation): the token is a redacting type
+	// precisely so the few places that must handle the raw value are the ones
+	// that name it out loud.
 	return consoleauth.CSRFTokensEqual(cs.CSRFToken.Reveal(), submittedCSRFToken(r))
 }
 

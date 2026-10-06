@@ -856,10 +856,14 @@ func newWriteFix(t *testing.T, mutate func(*Deps)) *writeFix {
 	if err != nil {
 		t.Fatalf("mint session: %v", err)
 	}
+	csrf := f.sessions.CSRFToken(id).Reveal()
+	// Without a rotation the fake reports the page's own token, so a seam test
+	// sees no phantom token change.
+	auth.csrf = csrf
 	return &writeFix{
 		f:       f,
 		session: &http.Cookie{Name: consoleauth.SessionCookieName, Value: id.Reveal()},
-		csrf:    f.sessions.CSRFToken(id).Reveal(),
+		csrf:    csrf,
 		admin:   admin,
 		auth:    auth,
 	}
@@ -1287,6 +1291,9 @@ func TestAccountsWrite_AReducingActNeedsNoPassword(t *testing.T) {
 			if got := len(x.auth.stepUpCalls); got != 0 {
 				t.Errorf("StepUp was called %d times on an act that can only reduce — an "+
 					"emergency brake that costs a password is one people route around", got)
+			}
+			if x.auth.requireCalls != 0 {
+				t.Errorf("the step-up window was consulted %d times on an act that needs no step-up", x.auth.requireCalls)
 			}
 		})
 	}
@@ -2090,6 +2097,8 @@ type realWriteFix struct {
 	actor    accounts.Account
 	target   accounts.Account
 	sessions *consoleauth.Store
+	svc      *consoleauth.Service
+	clk      *testClock
 	session  *http.Cookie
 	csrf     string
 }
@@ -2141,9 +2150,10 @@ func newRealWriteFix(t *testing.T) *realWriteFix {
 		capability.WithAuditSink(sink),
 		capability.WithAccountAdmin(st.Accounts(), tokenSvc))
 
-	sessions := consoleauth.NewStore()
+	clk := &testClock{t: time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)}
+	sessions := consoleauth.NewStore(consoleauth.WithClock(clk.now))
 	svc := consoleauth.NewService(st.Accounts(), st.Passwords(), sessions,
-		consoleauth.NewThrottle(), sink)
+		consoleauth.NewThrottle(consoleauth.WithThrottleClock(clk.now)), sink)
 
 	authn := controlplane.NewAuthenticator(
 		tokenSvc,
@@ -2174,6 +2184,8 @@ func newRealWriteFix(t *testing.T) *realWriteFix {
 		actor:    actor,
 		target:   target,
 		sessions: sessions,
+		svc:      svc,
+		clk:      clk,
 		session:  &http.Cookie{Name: consoleauth.SessionCookieName, Value: id.Reveal()},
 		csrf:     sessions.CSRFToken(id).Reveal(),
 	}
@@ -2190,7 +2202,35 @@ func (x *realWriteFix) post(t *testing.T, path string, form url.Values) *httptes
 	req.AddCookie(x.session)
 	rec := httptest.NewRecorder()
 	x.handler.ServeHTTP(rec, req)
+	x.followSessionCookie(rec)
 	return rec
+}
+
+// get renders path with the fixture's current session, following any rotated
+// cookie exactly as post does.
+func (x *realWriteFix) get(t *testing.T, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.AddCookie(x.session)
+	rec := httptest.NewRecorder()
+	x.handler.ServeHTTP(rec, req)
+	x.followSessionCookie(rec)
+	return rec
+}
+
+// followSessionCookie does what a browser does when a response sets the
+// session cookie: it keeps the new value, and the CSRF token that derives from
+// it. A step-up rotates the session id, so every later request must carry the
+// new pair. A CLEARING Set-Cookie (empty value or MaxAge < 0) is not followed:
+// it would replace a live session with nothing.
+func (x *realWriteFix) followSessionCookie(rec *httptest.ResponseRecorder) {
+	for _, c := range rec.Result().Cookies() {
+		if c.Name != consoleauth.SessionCookieName || c.Value == "" || c.MaxAge < 0 {
+			continue
+		}
+		x.session = &http.Cookie{Name: consoleauth.SessionCookieName, Value: c.Value}
+		x.csrf = x.sessions.CSRFToken(consoleauth.ParseSessionID(c.Value)).Reveal()
+	}
 }
 
 // records returns the whole trail, oldest first.
