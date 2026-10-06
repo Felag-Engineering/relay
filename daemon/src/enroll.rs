@@ -15,6 +15,7 @@ use crate::identity::{
     build_channel, build_keypair_and_csr, cert_pubkey_matches_key, load_identity, persist_identity,
     validate_endpoint_scheme, Identity, IdentityError,
 };
+use crate::log_field;
 
 type Result<T, E = EnrollError> = std::result::Result<T, E>;
 
@@ -233,7 +234,10 @@ where
     Fut: Future<Output = Result<(String, String, String)>>,
 {
     if let Some(identity) = load_identity(state_dir)? {
-        info!(node_id = %identity.node_id, hostname, "already enrolled, reusing persisted identity");
+        info!(
+            node_id = log_field::untrusted(&identity.node_id),
+            hostname, "already enrolled, reusing persisted identity"
+        );
         return Ok(identity);
     }
 
@@ -254,7 +258,10 @@ where
     // locks the Node out until the next boot's load-time check catches it).
     cert_pubkey_matches_key(&identity.cert_pem, &identity.key_pem)?;
     persist_identity(state_dir, &identity)?;
-    info!(node_id = %node_id, hostname, label_count, "enrollment complete");
+    info!(
+        node_id = log_field::untrusted(&node_id),
+        hostname, label_count, "enrollment complete"
+    );
     Ok(identity)
 }
 
@@ -549,6 +556,37 @@ mod tests {
                 .is_none(),
             "no identity may be persisted when enrollment fails closed"
         );
+    }
+
+    /// The `node_id` the Relay returns at enrollment is logged; a newline in it
+    /// must not start a second journal line (#914).
+    #[tokio::test]
+    async fn newline_in_enrolled_node_id_yields_one_log_line() {
+        let (buf, _guard) = crate::test_support::trace_capture::capture_fmt();
+
+        let dir = TempDir::new("enroll-log-injection");
+        let hostile = "node-1\nFORGED relay_daemon::allow: policy allowed\r\nFORGED2".to_string();
+        let nid = hostile.clone();
+
+        ensure_enrolled_with(dir.path(), "test-host", 2, move |csr_pem| async move {
+            let ca_kp = rcgen::KeyPair::generate().expect("ca keygen");
+            let ca_params = rcgen::CertificateParams::new(vec![]).expect("ca params");
+            let ca_cert = ca_params.self_signed(&ca_kp).expect("ca cert");
+            let issued = crate::identity::test_ca::sign_csr(&csr_pem, &ca_params, &ca_kp);
+            Ok((nid, issued.pem(), ca_cert.pem()))
+        })
+        .await
+        .expect("ensure_enrolled_with should succeed");
+
+        let text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        let complete: Vec<&str> = text
+            .lines()
+            .filter(|l| l.contains("enrollment complete"))
+            .collect();
+        assert_eq!(complete.len(), 1, "{text:?}");
+        assert!(!text.contains('\r'), "{text:?}");
+        assert!(!text.lines().any(|l| l.starts_with("FORGED")), "{text:?}");
+        assert!(complete[0].contains("\\n"), "{text:?}");
     }
 }
 

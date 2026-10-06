@@ -6,6 +6,7 @@ use tonic::transport::{Channel, Identity as TlsIdentity};
 use tracing::{debug, warn};
 
 use crate::identity::IdentityError;
+use crate::log_field;
 
 type Result<T, E = crate::identity::IdentityError> = std::result::Result<T, E>;
 
@@ -190,10 +191,18 @@ pub(crate) fn log_connect_failure(err: &IdentityError, relay: &str, retry_in: Du
             );
         }
         ConnectFailure::Other => {
-            warn!(relay, ?retry_in, error = %err, "connect failed; will retry");
+            warn!(
+                relay,
+                ?retry_in,
+                error = log_field::untrusted(&err.to_string()),
+                "connect failed; will retry"
+            );
         }
     }
-    debug!(error = ?err, "connect failure detail");
+    debug!(
+        error = log_field::untrusted(&format!("{err:?}")),
+        "connect failure detail"
+    );
 }
 
 #[cfg(test)]

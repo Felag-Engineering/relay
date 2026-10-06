@@ -21,6 +21,7 @@ use crate::gen::{enrollment_client::EnrollmentClient, RenewRequest};
 use crate::identity::{
     build_keypair_and_csr, cert_pubkey_matches_key, persist_identity, Identity, IdentityError,
 };
+use crate::log_field;
 
 // Renewal is triggered at a random fraction of [50%, 75%] through the cert lifetime.
 // For a 336h (14-day) cert this means renewal at [168h, 252h], leaving [84h, 168h]
@@ -140,8 +141,8 @@ where
     // to overwrite the persisted identity with a mismatched cert.
     if node_id != current.node_id {
         error!(
-            expected = %current.node_id,
-            received = %node_id,
+            expected = log_field::untrusted(&current.node_id),
+            received = log_field::untrusted(&node_id),
             "renewal response node_id does not match persisted node_id; refusing to persist"
         );
         return Err(EnrollError::NodeIdMismatch {
@@ -156,7 +157,7 @@ where
     // Fail closed: keep the current working identity rather than persisting a broken one.
     if let Err(e) = cert_pubkey_matches_key(&cert_pem, &key_pem) {
         error!(
-            error = %e,
+            error = log_field::untrusted(&e.to_string()),
             "renewal cert public key does not correspond to new keypair; refusing to persist"
         );
         return Err(EnrollError::Identity(e));
@@ -200,7 +201,10 @@ pub async fn run(channel: Channel, state_dir: PathBuf, mut identity: Identity) {
         let (not_before, not_after) = match validity {
             Ok(v) => v,
             Err(e) => {
-                error!(error = %e, "failed to parse cert validity; retrying in 1 hour");
+                error!(
+                    error = log_field::untrusted(&e.to_string()),
+                    "failed to parse cert validity; retrying in 1 hour"
+                );
                 // Drop e before the await so the future remains Send.
                 drop(e);
                 tokio::time::sleep(MAX_RETRY_BACKOFF).await;
@@ -222,7 +226,10 @@ pub async fn run(channel: Channel, state_dir: PathBuf, mut identity: Identity) {
             tokio::time::sleep(delay).await;
         }
 
-        info!(node_id = %identity.node_id, "initiating cert renewal");
+        info!(
+            node_id = log_field::untrusted(&identity.node_id),
+            "initiating cert renewal"
+        );
 
         let ch = channel.clone();
         let node_id_for_closure = identity.node_id.clone();
@@ -253,13 +260,16 @@ pub async fn run(channel: Channel, state_dir: PathBuf, mut identity: Identity) {
 
         match result {
             Ok(new_identity) => {
-                info!(node_id = %new_identity.node_id, "cert renewal successful");
+                info!(
+                    node_id = log_field::untrusted(&new_identity.node_id),
+                    "cert renewal successful"
+                );
                 identity = new_identity;
                 // Loop immediately to recompute the next delay from the fresh cert.
             }
             Err(e) => {
                 // Log and back off; never give up (cert still has days of margin).
-                error!(error = %e, "cert renewal failed; will retry");
+                log_renewal_failure(&e);
                 let backoff = compute_retry_backoff(crate::rand_unit());
                 // Drop e before the await so the future remains Send.
                 drop(e);
@@ -267,6 +277,15 @@ pub async fn run(channel: Channel, state_dir: PathBuf, mut identity: Identity) {
             }
         }
     }
+}
+
+/// Logs a failed renewal. The error can carry Relay-supplied text (the
+/// mismatched `node_id`, an RPC status message), so it is escaped and capped.
+fn log_renewal_failure(e: &EnrollError) {
+    error!(
+        error = log_field::untrusted(&e.to_string()),
+        "cert renewal failed; will retry"
+    );
 }
 
 /// Computes a jittered retry backoff. Base of 30 minutes with ±20% jitter;
@@ -617,5 +636,68 @@ mod tests {
             matches!(e, EnrollError::NodeIdMismatch { .. }),
             "expected NodeIdMismatch variant"
         );
+    }
+
+    /// Runs `f` under the production formatting layer and returns what it wrote.
+    fn captured_log(f: impl FnOnce()) -> String {
+        let (buf, guard) = crate::test_support::trace_capture::capture_fmt();
+        f();
+        drop(guard);
+        let bytes = buf.0.lock().unwrap().clone();
+        String::from_utf8(bytes).expect("log output is UTF-8")
+    }
+
+    fn assert_one_unforged_line(text: &str) {
+        assert_eq!(text.lines().count(), 1, "one event, one line: {text:?}");
+        assert!(!text.contains('\r'), "no raw CR: {text:?}");
+        assert!(
+            !text.lines().any(|l| l.starts_with("FORGED")),
+            "no forged line: {text:?}"
+        );
+        assert!(
+            text.contains("\\n"),
+            "newline is visible as an escape: {text:?}"
+        );
+    }
+
+    /// A Relay-returned `node_id` is logged on mismatch; a newline in it must
+    /// not start a second journal line (#914).
+    #[tokio::test]
+    async fn newline_in_renewal_node_id_yields_one_log_line() {
+        let (buf, _guard) = crate::test_support::trace_capture::capture_fmt();
+
+        let dir = TempDir::new("renew-log-injection");
+        let current = self_signed_identity("node-abc-001");
+        persist_identity(dir.path(), &current).expect("persist current identity");
+
+        let result = perform_renewal_with(dir.path(), &current, |_csr_pem| async {
+            let kp = rcgen::KeyPair::generate().expect("keygen");
+            let cert = rcgen::CertificateParams::new(vec![])
+                .expect("params")
+                .self_signed(&kp)
+                .expect("self_signed")
+                .pem();
+            let hostile = "node-abc-001\nFORGED relay_daemon::allow: policy allowed\r\nFORGED2";
+            Ok::<_, EnrollError>((hostile.to_string(), cert.clone(), cert))
+        })
+        .await;
+
+        assert!(matches!(result, Err(EnrollError::NodeIdMismatch { .. })));
+        let bytes = buf.0.lock().unwrap().clone();
+        assert_one_unforged_line(&String::from_utf8(bytes).unwrap());
+    }
+
+    #[test]
+    fn renewal_failure_log_escapes_relay_text() {
+        let mismatch = EnrollError::NodeIdMismatch {
+            expected: "node-abc-001".to_string(),
+            received: "x\nFORGED relay_daemon::allow: policy allowed\r\nFORGED2".to_string(),
+        };
+        assert_one_unforged_line(&captured_log(|| log_renewal_failure(&mismatch)));
+
+        let rpc = EnrollError::from(tonic::Status::internal(
+            "boom\nFORGED relay_daemon::allow: x",
+        ));
+        assert_one_unforged_line(&captured_log(|| log_renewal_failure(&rpc)));
     }
 }

@@ -21,6 +21,7 @@ mod enroll;
 mod executor;
 mod hardened_open;
 mod identity;
+mod log_field;
 mod not_executed;
 mod operations;
 mod policy;
@@ -425,7 +426,7 @@ async fn run_tunnel(
                         // so TaskCancel/PolicyQuery keep flowing while at capacity.
                         if ctx.inflight.count() >= MAX_INFLIGHT_TASKS {
                             warn!(
-                                task_id = ?task_req.task_id,
+                                task_id = log_field::untrusted(&task_req.task_id),
                                 cap = MAX_INFLIGHT_TASKS,
                                 "refusing Task: daemon at in-flight backstop",
                             );
@@ -680,12 +681,18 @@ async fn reconnect_loop(
                     }
                     TunnelExit::DroppedMidSession(e) => {
                         warn!(relay = %config.relay_addr, "stream dropped mid-session; reconnecting");
-                        debug!(error = ?e, "mid-session drop detail");
+                        debug!(
+                            error = log_field::untrusted(&format!("{e:?}")),
+                            "mid-session drop detail"
+                        );
                         backoff.reset();
                     }
                     TunnelExit::NotEstablished(e) => {
                         warn!(relay = %config.relay_addr, "Relay rejected stream open; will retry");
-                        debug!(error = ?e, "stream-open failure detail");
+                        debug!(
+                            error = log_field::untrusted(&format!("{e:?}")),
+                            "stream-open failure detail"
+                        );
                     }
                     TunnelExit::ShutdownComplete => {
                         if let Some(h) = renew_handle.take() {
@@ -781,7 +788,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // rather than fall back to a plaintext dial (ADR-0005, invariant #6).
     let identity = acquire_identity(&config).await?;
 
-    info!(relay = %config.relay_addr, node_id = %identity.node_id, "relay-daemon starting");
+    info!(relay = %config.relay_addr, node_id = log_field::untrusted(&identity.node_id), "relay-daemon starting");
 
     // Open the dedup store before connecting (fail closed: must be writable).
     let dedup = dedup::DedupStore::open(&config.state_dir)?;
@@ -872,15 +879,7 @@ mod tests {
         use crate::policy::decision_log::{
             emit_allow, DecisionFields, Tier, ALLOW_TARGET, DENY_TARGET, JOURNALCTL_PATTERN,
         };
-        use crate::test_support::trace_capture::SharedBuf;
-        use tracing_subscriber::prelude::*;
-
-        let buf = SharedBuf::default();
-        let writer = buf.clone();
-        let subscriber = tracing_subscriber::registry()
-            .with(tracing_subscriber::EnvFilter::new("info"))
-            .with(super::log_fmt_layer(move || writer.clone()));
-        let guard = tracing::subscriber::set_default(subscriber);
+        let (buf, guard) = crate::test_support::trace_capture::capture_fmt();
 
         let fingerprint = "f".repeat(64);
         let fields = DecisionFields {
@@ -1374,11 +1373,41 @@ pub(crate) mod test_support {
         /// Installs a capturing subscriber for the current thread (the tests
         /// using it are current-thread `#[tokio::test]`s) until the guard drops.
         pub(crate) fn capture() -> (Captured, DefaultGuard) {
+            ensure_callsites_enabled();
             let captured = Captured::default();
             let guard = tracing::subscriber::set_default(
                 tracing_subscriber::registry().with(CaptureLayer(captured.clone())),
             );
             (captured, guard)
+        }
+
+        /// Installs, once per process, a global subscriber that enables every
+        /// callsite and discards the events. tracing caches each callsite's
+        /// interest; a test thread with no subscriber can register a callsite as
+        /// "never" while another thread's scoped capture is installed, and that
+        /// cached "never" would then drop the event the capture is waiting for.
+        /// Once the global subscriber is installed the interest can never be
+        /// "never", so each event is decided by the thread's own scoped
+        /// subscriber. The first install leaves a window of microseconds, once
+        /// per process, in which a callsite registering on another thread can
+        /// still cache "never"; repeated full parallel runs have not hit it.
+        fn ensure_callsites_enabled() {
+            static INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+            INSTALLED.get_or_init(|| {
+                let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry());
+            });
+        }
+
+        /// Installs the production formatting layer, filtered at `info`, over a
+        /// shared buffer for the current thread until the guard drops.
+        pub(crate) fn capture_fmt() -> (SharedBuf, DefaultGuard) {
+            ensure_callsites_enabled();
+            let buf = SharedBuf::default();
+            let writer = buf.clone();
+            let subscriber = tracing_subscriber::registry()
+                .with(tracing_subscriber::EnvFilter::new("info"))
+                .with(crate::log_fmt_layer(move || writer.clone()));
+            (buf, tracing::subscriber::set_default(subscriber))
         }
 
         /// A shared in-memory writer, for formatting tests.
