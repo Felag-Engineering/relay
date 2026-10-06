@@ -80,7 +80,23 @@ const (
 	// widen their own step-up window has removed the control, so this is
 	// file-only configuration and there is no code path from a request to it.
 	DefaultStepUpWindow = 5 * time.Minute
+
+	// MaxStepUpWindow is the ceiling an operator's step-up window is clamped
+	// to. A window long enough to be convenient is long enough for someone
+	// else at the keyboard, so a typo (or a deliberate "24h") must not turn
+	// the control into a formality.
+	MaxStepUpWindow = 15 * time.Minute
 )
+
+// ClampStepUpWindow caps d at MaxStepUpWindow and reports whether it did.
+// Non-positive values pass through unchanged: WithStepUpWindow already maps
+// them to DefaultStepUpWindow.
+func ClampStepUpWindow(d time.Duration) (time.Duration, bool) {
+	if d > MaxStepUpWindow {
+		return MaxStepUpWindow, true
+	}
+	return d, false
+}
 
 // sessionIDBytes is the entropy in a session identifier. 32 bytes is the same
 // budget the CSRF pepper and the API Token secret carry: guessing is not a
@@ -193,9 +209,11 @@ type Session struct {
 	LastSeenAt time.Time
 
 	// AuthenticatedAt is the step-up stamp: the last moment a human proved
-	// presence by re-entering a credential. Set at sign-in and refreshed by
-	// StepUp; never refreshed by activity, which is the difference between it
-	// and LastSeenAt.
+	// presence by re-entering a credential. It is ZERO until the session's
+	// first successful step-up: sign-in does NOT set it. Proving who you are
+	// at sign-in authorises the session; step-up binds intent to an act. Never
+	// refreshed by activity, which is the difference between it and
+	// LastSeenAt.
 	AuthenticatedAt time.Time
 }
 
@@ -310,9 +328,10 @@ func (s *Store) Now() time.Time { return s.now() }
 
 // Issue creates a session for sess and returns its new identifier.
 //
-// CreatedAt, LastSeenAt and AuthenticatedAt are stamped here from the Store's
-// clock rather than taken from the caller: a session's own lifetime must not be
-// settable by whoever is asking for one.
+// CreatedAt and LastSeenAt are stamped here from the Store's clock rather than
+// taken from the caller: a session's own lifetime must not be settable by
+// whoever is asking for one. AuthenticatedAt is explicitly zeroed, so a
+// caller-supplied Session can never arrive pre-stamped; only StepUp sets it.
 func (s *Store) Issue(sess Session) (SessionID, error) {
 	id, err := newSessionID()
 	if err != nil {
@@ -322,7 +341,7 @@ func (s *Store) Issue(sess Session) (SessionID, error) {
 	now := s.now()
 	sess.CreatedAt = now
 	sess.LastSeenAt = now
-	sess.AuthenticatedAt = now
+	sess.AuthenticatedAt = time.Time{}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -372,23 +391,42 @@ func (s *Store) Lookup(id SessionID) (Session, error) {
 // boundary can have been planted before it — by a link, by a shared machine,
 // by an attacker who set the cookie themselves — and would then be a valid
 // credential for the session the victim went on to authenticate.
+//
+// A plain rotation with no stamp. Store.StepUp is the privilege-change
+// rotation.
 func (s *Store) Rotate(old SessionID) (SessionID, error) {
 	newID, err := newSessionID()
 	if err != nil {
 		return SessionID{}, err
 	}
-	oldKey := hashID(old)
+	now := s.now()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if _, err := s.rotateLocked(hashID(old), newID, now); err != nil {
+		return SessionID{}, err
+	}
+	return newID, nil
+}
+
+// rotateLocked moves the session under oldKey to newID's key, keeping the same
+// *Session (so CreatedAt, the absolute clock, carries over). An absent or
+// expired session is ErrNoSession, and an expired one is evicted. The caller
+// holds s.mu and mints newID beforehand so nothing under the lock can fail on
+// randomness.
+func (s *Store) rotateLocked(oldKey string, newID SessionID, now time.Time) (*Session, error) {
 	sess, ok := s.sessions[oldKey]
 	if !ok {
-		return SessionID{}, ErrNoSession
+		return nil, ErrNoSession
+	}
+	if s.expiredLocked(sess, now) {
+		delete(s.sessions, oldKey)
+		return nil, ErrNoSession
 	}
 	delete(s.sessions, oldKey)
 	s.sessions[hashID(newID)] = sess
-	return newID, nil
+	return sess, nil
 }
 
 // CSRFToken derives THIS session's Console CSRF token: HMAC-SHA256 of id's
@@ -502,22 +540,31 @@ func CSRFTokensEqual(held, submitted string) bool {
 	return subtle.ConstantTimeCompare([]byte(held), []byte(submitted)) == 1
 }
 
-// StepUp refreshes the session's proof of human presence. Call it only after a
-// credential has been re-verified — never on activity.
-func (s *Store) StepUp(id SessionID) error {
-	key := hashID(id)
+// StepUp stamps the session's proof of human presence and rotates its
+// identifier, returning the new one. Call it only after a credential has been
+// re-verified — never on activity.
+//
+// A step-up is a privilege change, so this Store can never stamp a session
+// without rotating its id in the same critical section: no interleaving can
+// observe a stamped old id or an unstamped new one. The old id is dead on
+// return; its CSRF token changes with it, because the token is derived from
+// the id.
+func (s *Store) StepUp(old SessionID) (SessionID, error) {
+	newID, err := newSessionID()
+	if err != nil {
+		return SessionID{}, err
+	}
 	now := s.now()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	sess, ok := s.sessions[key]
-	if !ok || s.expiredLocked(sess, now) {
-		delete(s.sessions, key)
-		return ErrNoSession
+	sess, err := s.rotateLocked(hashID(old), newID, now)
+	if err != nil {
+		return SessionID{}, err
 	}
 	sess.AuthenticatedAt = now
-	return nil
+	return newID, nil
 }
 
 // End retires a session. Ending one that is already gone is not an error: the

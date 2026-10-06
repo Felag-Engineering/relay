@@ -207,9 +207,10 @@ type ConsoleSession struct {
 	ID consoleauth.SessionID
 
 	// AuthenticatedAt is the step-up stamp: the last moment a human proved
-	// presence by re-entering a credential. Safe to carry because it is
-	// REFRESHED — Service.StepUp writes it — so the value here is current as
-	// of this request, unlike the identity snapshot below.
+	// presence by re-entering a credential. ZERO until the session's first
+	// step-up, set only by a successful one (which also rotates the session
+	// id). Safe to carry because Service.StepUp writes it, so the value here
+	// is current as of this request, unlike the identity snapshot below.
 	AuthenticatedAt time.Time
 
 	// CSRFToken is this request's derived Console CSRF token (#460) — NOT a

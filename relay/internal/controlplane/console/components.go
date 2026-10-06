@@ -528,6 +528,10 @@ type StepUp struct {
 // shape even though they are two different forms. [StepUp]'s expected
 // consumer remains the composer's standalone mutate apply (#438); it is not
 // dead by accident.
+// The decision form's HANDLER does run the shared requireStepUp ladder
+// (stepup.go) in its per-act mode, so the package still has ONE step-up idiom
+// server-side, while the form keeps its own inline field for the HTML reasons
+// above.
 
 // --- Pin to compare ---------------------------------------------------------
 

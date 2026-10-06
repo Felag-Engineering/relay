@@ -66,9 +66,8 @@ package console
 //     — there is no lane on which they can differ.
 //  5. Nothing is stored server-side that a later request could redeem AS
 //     THIS DECISION. (The session's AuthenticatedAt stamp IS refreshed as a
-//     normal side effect of StepUp and IS stored — see the carry-over note
-//     below, which says so; this claim is about a bearer credential for
-//     the decision itself, not about that stamp.)
+//     normal side effect of StepUp and IS stored; this claim is about a
+//     bearer credential for the decision itself, not about that stamp.)
 //
 // Rejected: stash the pending decision (a server-side map, or a signed
 // cookie keyed by a nonce) and replay it after a separate re-auth POST. That
@@ -78,21 +77,18 @@ package console
 // which is a confused deputy: anything that can plant or swap the stash
 // forges an approval while the password is genuine.
 //
-// The window is never a bypass here, either. consoleauth remains the one
-// owner of the step-up window (DefaultStepUpWindow, file-only, invariant
-// 11); Service.StepUp stamps AuthenticatedAt as its normal side effect, but
-// this handler never consults it — StepUpFresh, RequireStepUp and
-// ErrStepUpRequired stay uncalled. Every decision costs its own password.
-// That is STRICTER than the window model spec 11 describes elsewhere, which
-// invariant 10 permits (an adapter may offer less, never more), and it is
-// what spec 08 actually asks for: a one-click second approval is the
-// rubber-stamp failure this whole screen exists to prevent.
+// The ladder is the shared requireStepUp (stepup.go) in stepUpPerAct mode, as
+// approval.md AP-16 requires ("re-authenticates at the moment of deciding"):
+// the window is never a bypass here. consoleauth remains the one owner of the
+// step-up window; this handler never consults it, and every decision costs its
+// own password. That is STRICTER than the window the Account acts use (#879),
+// which invariant 10 permits (an adapter may offer less, never more), and it
+// is what spec 08 asks for: a one-click second approval is the rubber-stamp
+// failure this whole screen exists to prevent. A successful step-up rotates
+// the session identifier (#879), and the page carries the new CSRF token.
 //
-// Carry-over, flagged for #438: a successful decision DOES refresh the
-// session's step-up stamp (Service.StepUp's normal side effect), so a
-// decision made in the previous five minutes would satisfy a future
-// window-based caller. No other step-up caller exists today, so this is
-// inert now — it must not be rediscovered later as a surprise.
+// A decision's successful step-up still stamps the session, so it opens the
+// window for the Account acts. That is stated in stepup.go, not a surprise.
 //
 // # Import-scope
 //
@@ -113,7 +109,6 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 )
 
@@ -131,6 +126,19 @@ type ApprovalDecider interface {
 // decideOffered can compare against routesFor's output rather than
 // restating the path (mirrors cancelJobPattern, cancel.go).
 const decideApprovalPattern = "POST /console/approvals/{approval_id}/decision"
+
+// decideStepUp is the decide route's step-up ask. stepUpPerAct: a decision
+// always costs its own password and never consults the window (approval.md
+// AP-16).
+var decideStepUp = stepUpAsk{
+	mode:     stepUpPerAct,
+	required: "Step-up re-authentication is required to decide an approval.",
+	undone:   "Nothing was decided.",
+	act:      "an approval decision",
+	render: func(w http.ResponseWriter, pg Page, status int, heading, href, label string) {
+		renderDecideResult(w, pg, status, decideResultView{Heading: heading, ApprovalHref: href, ApprovalLabel: label})
+	},
+}
 
 // decideApprovalAction builds the form action for approvalID.
 func decideApprovalAction(approvalID string) string {
@@ -192,7 +200,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 			return
 		}
 
-		cs, ok := controlplane.ConsoleSessionFromContext(r.Context())
+		_, ok = controlplane.ConsoleSessionFromContext(r.Context())
 		if !ok {
 			// FAIL CLOSED, the same shape handleLogout's identical branch
 			// takes (login.go): an authenticated request reached a gated
@@ -253,11 +261,8 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 			return
 		}
 
-		password := r.PostFormValue("password")
-		if password == "" {
-			renderDecideResult(w, pg, http.StatusUnauthorized, decideResultView{
-				Heading: "Step-up re-authentication is required to decide an approval. Nothing was decided.",
-			})
+		if r.PostFormValue("password") == "" {
+			decideStepUp.refuseMissing(w, pg)
 			return
 		}
 
@@ -292,31 +297,12 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 			return
 		}
 
-		// Step-up, last before the decision. On any non-nil error, return in
-		// every branch with NO call to d.Decide.
-		if err := d.Auth.StepUp(r.Context(), cs.ID, accounts.NewPassword(password), controlplane.SourceAddress(r)); err != nil {
-			switch {
-			case isThrottled(err):
-				wait, _ := consoleauth.Throttled(err)
-				setRetryAfter(w, wait)
-				renderDecideResult(w, pg, http.StatusTooManyRequests, decideResultView{Heading: throttleMessage(wait)})
-			case errors.Is(err, consoleauth.ErrBadCredentials):
-				renderDecideResult(w, pg, http.StatusUnauthorized, decideResultView{
-					Heading: "That password did not match. Nothing was decided.",
-				})
-			case errors.Is(err, consoleauth.ErrNoSession):
-				renderDecideResult(w, pg, http.StatusUnauthorized, decideResultView{
-					Heading:       "Your session has ended. Nothing was decided.",
-					ApprovalHref:  LoginPath,
-					ApprovalLabel: "Sign in again.",
-				})
-			default:
-				slog.Error("console step-up for an approval decision returned an error",
-					"approval_id", id, "error", err)
-				renderDecideResult(w, pg, http.StatusInternalServerError, decideResultView{
-					Heading: "The Relay could not verify your password. Nothing was decided.",
-				})
-			}
+		// Step-up, last before the decision: no call to d.Decide on any false
+		// return. The early empty-password check above makes requireStepUp's
+		// own per-act empty branch unreachable from here; it is kept anyway
+		// as defence in depth, so moving that check can never open a
+		// password-less decision.
+		if !requireStepUp(d, w, r, &pg, decideStepUp) {
 			return
 		}
 

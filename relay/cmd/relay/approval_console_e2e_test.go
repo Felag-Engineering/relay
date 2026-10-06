@@ -26,6 +26,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/console"
 )
 
@@ -190,6 +191,8 @@ func TestApprovalCallout_ConsoleDecideRun(t *testing.T) {
 		t.Fatalf("card's plan_hash = %q, want the park's own %q", planHash, parked.PlanHash)
 	}
 
+	sessionBefore := consoleSessionCookie(t, client, f.ControlBase)
+
 	decideResp, err := client.PostForm(f.ControlBase+"/console/approvals/"+parked.RequestID+"/decision", url.Values{
 		"csrf_token": {csrfToken},
 		"plan_hash":  {planHash},
@@ -203,6 +206,12 @@ func TestApprovalCallout_ConsoleDecideRun(t *testing.T) {
 	decideBody := readAll(t, decideResp)
 	if decideResp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("decide status = %d, want 303; body %s", decideResp.StatusCode, decideBody)
+	}
+
+	// The decision's step-up rotated the session identifier (#879): the
+	// browser now holds a different cookie than the one it signed in with.
+	if after := consoleSessionCookie(t, client, f.ControlBase); after == sessionBefore {
+		t.Error("the decision's step-up did not rotate the Console session cookie")
 	}
 
 	// The decision reads back on the API exactly as a Control-API decision
@@ -491,4 +500,21 @@ func TestApprovalCallout_ConsoleSelfApprovalIsRefused(t *testing.T) {
 	if retry.StatusCode != http.StatusAccepted {
 		t.Fatalf("re-drive status = %d, want it still parked", retry.StatusCode)
 	}
+}
+
+// consoleSessionCookie returns the Console session cookie value currently in
+// the client jar, failing if there is none.
+func consoleSessionCookie(t *testing.T, client *http.Client, base string) string {
+	t.Helper()
+	u, err := url.Parse(base + "/console/")
+	if err != nil {
+		t.Fatalf("parse %q: %v", base, err)
+	}
+	for _, c := range client.Jar.Cookies(u) {
+		if c.Name == consoleauth.SessionCookieName {
+			return c.Value
+		}
+	}
+	t.Fatal("the client jar holds no Console session cookie")
+	return ""
 }

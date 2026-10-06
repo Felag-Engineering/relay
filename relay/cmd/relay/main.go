@@ -148,6 +148,9 @@ type Config struct {
 	// from any request to either of them. That matters most for
 	// ConsoleStepUpWindow — an Account that could widen its own step-up window
 	// has removed the strongest per-action control in the system (spec 11).
+	// It is clamped to consoleauth.MaxStepUpWindow at parse. It governs the
+	// privilege-granting Account acts, and never approval decisions, which
+	// always ask for the password.
 	ConsoleEnabled       bool
 	ConsoleSessionMaxAge time.Duration
 	ConsoleSessionIdle   time.Duration
@@ -353,7 +356,7 @@ func parseConfig() Config {
 	cfg.ConsoleEnabled = boolEnvOr("RELAY_CONSOLE_ENABLED", *consoleEnabled)
 	cfg.ConsoleSessionMaxAge = durationEnvOr("RELAY_CONSOLE_SESSION_MAX_AGE", *consoleSessionMaxAge)
 	cfg.ConsoleSessionIdle = durationEnvOr("RELAY_CONSOLE_SESSION_IDLE", *consoleSessionIdle)
-	cfg.ConsoleStepUpWindow = durationEnvOr("RELAY_CONSOLE_STEP_UP_WINDOW", *consoleStepUpWindow)
+	cfg.ConsoleStepUpWindow = clampedStepUpWindow(durationEnvOr("RELAY_CONSOLE_STEP_UP_WINDOW", *consoleStepUpWindow))
 	cfg.OAuthIssuer = envOr("RELAY_OAUTH_ISSUER", *oauthIssuer)
 	cfg.OAuthAudience = envOr("RELAY_OAUTH_AUDIENCE", *oauthAudience)
 	cfg.OAuthAccountClaim = envOr("RELAY_OAUTH_ACCOUNT_CLAIM", *oauthAccountClaim)
@@ -1214,6 +1217,18 @@ func durationEnvOr(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// clampedStepUpWindow caps the operator's step-up window at
+// consoleauth.MaxStepUpWindow, warning when it does: a window long enough to
+// be convenient is long enough for someone else at the keyboard.
+func clampedStepUpWindow(d time.Duration) time.Duration {
+	clamped, did := consoleauth.ClampStepUpWindow(d)
+	if did {
+		slog.Warn("console step-up window exceeds the maximum; clamped",
+			"requested", d, "effective", clamped)
+	}
+	return clamped
 }
 
 // certExpiringFractionFromEnv reads RELAY_CERT_EXPIRING_FRACTION, given the

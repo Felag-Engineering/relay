@@ -547,7 +547,7 @@ covers every row below; the end-to-end rows additionally need `make test-integra
 | AP-12 | `TestDecideApproval_BodyCannotNameAChannel` | API |
 | AP-13 | `TestStrongChannelSatisfiesAWeakerRule`, `TestAssertedApproverDoesNotWeakenAnOutOfBandRule` | approval |
 | AP-14 | `TestUnstatedChannelDefaultsToOutOfBand` | approval |
-| AP-16 | `TestDecide_StepUpHappensBeforeTheDecision`, `TestApprovalCallout_ConsoleDecideRun` | Console, e2e |
+| AP-16 | `TestDecide_StepUpHappensBeforeTheDecision`, `TestApprovalCallout_ConsoleDecideRun`, `TestStepUp_ADecisionInsideTheWindowStillNeedsAPassword`, `TestStepUp_APerActAskRefusesAnEmptyPasswordInsideTheWindow` | Console, e2e |
 | AP-17 | `TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel`, `TestApprovalCallout_ConsoleDecideRun`, `TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestE2EOAuth_ApproveRequestOnAHumanSessionStillRecordsAnAssertion` | capability, MCP, e2e |
 | AP-19 | `TestApprovalCallout_ConsoleDecideRun` | e2e |
 | AP-20 | `TestApprovedPlanDispatchesAndBindsTheJob`, `TestDecisionMustCiteTheRequestsPlanHash` | capability |

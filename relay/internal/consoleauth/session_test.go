@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,8 +48,31 @@ func TestStore_IssueAndLookup(t *testing.T) {
 	if got.Account != "mike" || got.Role != accounts.RoleAdmin {
 		t.Errorf("Lookup returned %+v, want the issued session", got)
 	}
-	if !got.CreatedAt.Equal(c.now()) || !got.AuthenticatedAt.Equal(c.now()) {
-		t.Error("Issue did not stamp CreatedAt and AuthenticatedAt from the Store's clock")
+	if !got.CreatedAt.Equal(c.now()) || !got.LastSeenAt.Equal(c.now()) {
+		t.Error("Issue did not stamp CreatedAt and LastSeenAt from the Store's clock")
+	}
+	if !got.AuthenticatedAt.IsZero() || got.StepUpFresh(c.now(), consoleauth.DefaultStepUpWindow) {
+		t.Error("a fresh session carries a step-up stamp: sign-in must not satisfy step-up")
+	}
+}
+
+func TestStore_IssueZeroesACallerSuppliedStepUpStamp(t *testing.T) {
+	t.Parallel()
+	c := newClock()
+	st := consoleauth.NewStore(consoleauth.WithClock(c.now))
+
+	sess := aSession()
+	sess.AuthenticatedAt = c.now()
+	id, err := st.Issue(sess)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	got, err := st.Lookup(id)
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if !got.AuthenticatedAt.IsZero() {
+		t.Error("Issue let a caller hand in a pre-stamped session")
 	}
 }
 
@@ -137,7 +161,11 @@ func TestStore_BrowsingDoesNotRefreshTheStepUpStamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	issuedAt := c.now()
+	id, err = st.StepUp(id)
+	if err != nil {
+		t.Fatalf("StepUp: %v", err)
+	}
+	stampedAt := c.now()
 
 	// Use the session repeatedly. Activity must not extend the proof of human
 	// PRESENCE, or the window would measure browsing rather than a person.
@@ -151,15 +179,16 @@ func TestStore_BrowsingDoesNotRefreshTheStepUpStamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lookup: %v", err)
 	}
-	if !got.AuthenticatedAt.Equal(issuedAt) {
-		t.Errorf("AuthenticatedAt moved from %v to %v through activity alone", issuedAt, got.AuthenticatedAt)
+	if !got.AuthenticatedAt.Equal(stampedAt) {
+		t.Errorf("AuthenticatedAt moved from %v to %v through activity alone", stampedAt, got.AuthenticatedAt)
 	}
 	if got.StepUpFresh(c.now(), 5*time.Minute) {
-		t.Error("a 15-minute-old sign-in still counts as fresh for a 5-minute step-up window")
+		t.Error("a 15-minute-old step-up still counts as fresh for a 5-minute step-up window")
 	}
 
 	// Re-authenticating is the only thing that moves it.
-	if err := st.StepUp(id); err != nil {
+	id, err = st.StepUp(id)
+	if err != nil {
 		t.Fatalf("StepUp: %v", err)
 	}
 	got, err = st.Lookup(id)
@@ -541,4 +570,139 @@ func TestCSRFToken_AZeroStorePanicsRatherThanForging(t *testing.T) {
 	}()
 	var st consoleauth.Store
 	_ = st.CSRFToken(consoleauth.ParseSessionID("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+}
+
+func TestStore_StepUpRotatesAndStampsAtomically(t *testing.T) {
+	t.Parallel()
+	c := newClock()
+	st := consoleauth.NewStore(consoleauth.WithClock(c.now))
+
+	oldID, err := st.Issue(aSession())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	created := c.now()
+	c.advance(time.Minute)
+
+	newID, err := st.StepUp(oldID)
+	if err != nil {
+		t.Fatalf("StepUp: %v", err)
+	}
+	if newID.Reveal() == oldID.Reveal() {
+		t.Fatal("StepUp returned the same identifier: a privilege change did not rotate the session")
+	}
+	if _, err := st.Lookup(oldID); err != consoleauth.ErrNoSession {
+		t.Errorf("the pre-step-up identifier still resolves: %v", err)
+	}
+	got, err := st.Lookup(newID)
+	if err != nil {
+		t.Fatalf("Lookup(newID): %v", err)
+	}
+	if got.Account != "mike" || !got.CreatedAt.Equal(created) {
+		t.Errorf("StepUp lost the session's identity or absolute clock: %+v", got)
+	}
+	if !got.AuthenticatedAt.Equal(c.now()) {
+		t.Errorf("AuthenticatedAt = %v, want %v", got.AuthenticatedAt, c.now())
+	}
+}
+
+func TestStore_ConcurrentStepUpsOfOneIdentifierYieldExactlyOneWinner(t *testing.T) {
+	t.Parallel()
+	st := consoleauth.NewStore()
+	oldID, err := st.Issue(aSession())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	const n = 16
+	results := make(chan consoleauth.SessionID, n)
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			id, err := st.StepUp(oldID)
+			results <- id
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+
+	winners := 0
+	for id := range results {
+		if !id.IsZero() {
+			winners++
+		}
+	}
+	for err := range errs {
+		if err != nil && err != consoleauth.ErrNoSession {
+			t.Errorf("a losing StepUp returned %v, want ErrNoSession", err)
+		}
+	}
+	if winners != 1 {
+		t.Errorf("%d StepUps won, want exactly one", winners)
+	}
+	if st.Len() != 1 {
+		t.Errorf("Len = %d, want 1", st.Len())
+	}
+}
+
+func TestStore_StepUpRefusesAnExpiredSession(t *testing.T) {
+	t.Parallel()
+	c := newClock()
+	st := consoleauth.NewStore(consoleauth.WithClock(c.now))
+	id, err := st.Issue(aSession())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	c.advance(consoleauth.DefaultIdleTimeout + time.Minute)
+
+	if _, err := st.StepUp(id); err != consoleauth.ErrNoSession {
+		t.Errorf("StepUp past the idle timeout = %v, want ErrNoSession", err)
+	}
+	if st.Len() != 0 {
+		t.Errorf("Len = %d, want the expired session evicted", st.Len())
+	}
+}
+
+func TestStore_RotateRefusesAnExpiredSession(t *testing.T) {
+	t.Parallel()
+	c := newClock()
+	st := consoleauth.NewStore(consoleauth.WithClock(c.now))
+	id, err := st.Issue(aSession())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	c.advance(consoleauth.DefaultIdleTimeout + time.Minute)
+
+	if _, err := st.Rotate(id); err != consoleauth.ErrNoSession {
+		t.Errorf("Rotate past the idle timeout = %v, want ErrNoSession", err)
+	}
+	if st.Len() != 0 {
+		t.Errorf("Len = %d, want the expired session evicted", st.Len())
+	}
+}
+
+func TestClampStepUpWindow(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		in      time.Duration
+		want    time.Duration
+		clamped bool
+	}{
+		{2 * time.Hour, consoleauth.MaxStepUpWindow, true},
+		{consoleauth.MaxStepUpWindow + time.Nanosecond, consoleauth.MaxStepUpWindow, true},
+		{consoleauth.MaxStepUpWindow, consoleauth.MaxStepUpWindow, false},
+		{3 * time.Minute, 3 * time.Minute, false},
+		{0, 0, false},
+		{-time.Minute, -time.Minute, false},
+	} {
+		got, clamped := consoleauth.ClampStepUpWindow(tc.in)
+		if got != tc.want || clamped != tc.clamped {
+			t.Errorf("ClampStepUpWindow(%v) = (%v, %v), want (%v, %v)", tc.in, got, clamped, tc.want, tc.clamped)
+		}
+	}
 }
