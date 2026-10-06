@@ -1,12 +1,12 @@
 # Admin Console — screen specifications
 
 **Status:** wireframe-backed specifications, 2026-08-24. Written from a design session with the
-owner, against low-fidelity wireframes that exist as a design canvas (link below). These expand
+owner, against low-fidelity wireframes drawn in a private design canvas (see below). These expand
 [`../console-wireframe-brief.md`](../console-wireframe-brief.md) — deliverable #2 of
 [`../ui-advisory.md`](../ui-advisory.md) — into per-screen, implementable units.
 
-**Wireframes:** <https://claude.ai/code/artifact/0048ba58-2686-4f1a-992c-ca2d47aa44a4> — eleven
-artboards plus a shared-grammar sheet. Each screen spec names its artboard.
+**Wireframes:** eleven artboards plus a shared-grammar sheet, in a private design canvas that
+is not published with this repository. Each screen spec names its artboard.
 
 ## How to use these
 
