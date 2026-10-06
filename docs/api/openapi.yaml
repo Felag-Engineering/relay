@@ -824,6 +824,10 @@ paths:
         for every caller, which is a real security boundary rather than a
         convenience: the control plane must always keep at least one enabled
         admin Account.
+
+        On this route only, a third 409 is possible: if the Account's role
+        changed in the instant between the Relay reading it and writing it,
+        nothing is written. Read the Account and retry.
       requestBody:
         required: true
         content:
@@ -1079,6 +1083,11 @@ components:
           admin is refused for **every** caller, including another admin —
           this one IS a security boundary: it guarantees the control plane
           always keeps at least one enabled admin Account.
+
+        The role route alone (`setAccountRole`) has a third: **a concurrent
+        change** of the Account's role between the Relay reading and writing
+        it, with nothing written; read the Account and retry. The enabled
+        route never returns it.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }

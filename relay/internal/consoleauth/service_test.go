@@ -652,7 +652,7 @@ func TestResolve_ReadsTheAccountFreshOnEveryCall(t *testing.T) {
 	// A demotion must take effect on the very next click, not at the next
 	// sign-in. The session's own snapshot still says admin; the resolved
 	// Account is what authorization uses.
-	if err := f.accounts.SetRole(ctx, f.mike.ID, accounts.RoleViewer); err != nil {
+	if err := f.accounts.SetRole(ctx, f.mike.ID, accounts.RoleAdmin, accounts.RoleViewer); err != nil {
 		t.Fatalf("SetRole: %v", err)
 	}
 	_, acct, err := f.svc.Resolve(ctx, id)

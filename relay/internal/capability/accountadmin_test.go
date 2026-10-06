@@ -50,8 +50,8 @@ type fakeAccountStore struct {
 
 	createCalls  []accounts.Account
 	setRoleCalls []struct {
-		id   string
-		role accounts.Role
+		id       string
+		from, to accounts.Role
 	}
 	setEnabledCalls []struct {
 		id      string
@@ -81,11 +81,11 @@ func (f *fakeAccountStore) List(context.Context) ([]accounts.Account, error) {
 	return f.listOut, f.listErr
 }
 
-func (f *fakeAccountStore) SetRole(_ context.Context, id string, role accounts.Role) error {
+func (f *fakeAccountStore) SetRole(_ context.Context, id string, from, to accounts.Role) error {
 	f.setRoleCalls = append(f.setRoleCalls, struct {
-		id   string
-		role accounts.Role
-	}{id, role})
+		id       string
+		from, to accounts.Role
+	}{id, from, to})
 	return f.setRoleErr
 }
 
@@ -239,7 +239,7 @@ func TestAccountAdmin_EveryActRecordsItsPrincipal(t *testing.T) {
 		createOut: accounts.Account{ID: "acct-new", Name: "new-guy", Role: accounts.RoleViewer},
 		listOut:   []accounts.Account{{ID: "acct-1"}},
 		accountsByID: map[string]accounts.Account{
-			"acct-1": {ID: "acct-1", Name: "one"},
+			"acct-1": {ID: "acct-1", Name: "one", Role: accounts.RoleViewer},
 		},
 	}
 	tokenStore := &fakeAPITokenStore{
@@ -381,11 +381,10 @@ func TestAccountAdmin_BelowAdminIsRefusedAndAudited(t *testing.T) {
 }
 
 // TestAccountAdmin_LastAdminRefusalSurvivesTheRealStore drives a REAL
-// store.Open database (suggestion 6, mitigation (a)): store/** and
-// accounts/** are not on security-surface.txt, so a later store-only PR
-// could weaken the SQL guard unreviewed. This test lives in capability —
-// which IS on the surface — so it fails CI if that guard is ever removed,
-// from inside a package a reviewer is already required to look at.
+// store.Open database (suggestion 6, mitigation (a)): the guard is SQL in
+// store/**, and this test pins it from the capability layer, so it fails CI
+// if that guard is ever removed, from inside a package a reviewer is already
+// required to look at.
 func TestAccountAdmin_LastAdminRefusalSurvivesTheRealStore(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
 	if err != nil {
@@ -422,6 +421,134 @@ func TestAccountAdmin_LastAdminRefusalSurvivesTheRealStore(t *testing.T) {
 	}
 	if got.Role != accounts.RoleAdmin || !got.Enabled {
 		t.Errorf("admin = %+v after refused calls, want an untouched enabled admin", got)
+	}
+}
+
+func TestAccountAdmin_SetAccountRoleFromRecordsTheNewRole(t *testing.T) {
+	accountStore := &fakeAccountStore{}
+	svc, audit := newAccountAdminFixture(t, &permissiveControlAuthorizer{}, accountStore, &fakeAPITokenStore{})
+	p := Principal{AccountID: "acct-admin", Account: "admin", Role: "admin", Kind: PrincipalKindHuman}
+
+	if err := svc.SetAccountRoleFrom(context.Background(), p, "acct-1", accounts.RoleAdmin, accounts.RoleOperator); err != nil {
+		t.Fatalf("SetAccountRoleFrom: %v", err)
+	}
+	if len(accountStore.setRoleCalls) != 1 {
+		t.Fatalf("store SetRole calls = %d, want 1", len(accountStore.setRoleCalls))
+	}
+	if c := accountStore.setRoleCalls[0]; c.id != "acct-1" || c.from != accounts.RoleAdmin || c.to != accounts.RoleOperator {
+		t.Errorf("store got %+v, want (acct-1, admin, operator)", c)
+	}
+	if len(audit.accountAdminCalls) != 1 {
+		t.Fatalf("recorded %d events, want 1", len(audit.accountAdminCalls))
+	}
+	if ev := audit.accountAdminCalls[0].Event; ev.Kind != AccountAdminRole || ev.AccountID != "acct-1" || ev.Role != string(accounts.RoleOperator) {
+		t.Errorf("event = %+v, want AccountAdminRole acct-1 with the new role", ev)
+	}
+}
+
+func TestAccountAdmin_SetAccountRoleFromRefusesSelfBeforeTheStore(t *testing.T) {
+	accountStore := &fakeAccountStore{}
+	svc, audit := newAccountAdminFixture(t, &permissiveControlAuthorizer{}, accountStore, &fakeAPITokenStore{})
+	p := Principal{AccountID: "acct-1", Account: "me", Role: "admin", Kind: PrincipalKindHuman}
+
+	err := svc.SetAccountRoleFrom(context.Background(), p, "acct-1", accounts.RoleAdmin, accounts.RoleViewer)
+	if !errors.Is(err, ErrSelfTargeted) {
+		t.Fatalf("SetAccountRoleFrom(self) = %v, want ErrSelfTargeted", err)
+	}
+	if len(accountStore.setRoleCalls) != 0 {
+		t.Errorf("SetRole was called %d times, want 0", len(accountStore.setRoleCalls))
+	}
+	if len(audit.entries) != 1 || audit.entries[0].Kind != AuditKindRefusal {
+		t.Errorf("audit entries = %+v, want exactly one AuditKindRefusal", audit.entries)
+	}
+}
+
+func TestAccountAdmin_SetAccountRoleFromRequiresAdmin(t *testing.T) {
+	denyErr := errors.New("authz: unauthorized: needs admin")
+	accountStore := &fakeAccountStore{}
+	svc, audit := newAccountAdminFixture(t, &permissiveControlAuthorizer{err: denyErr}, accountStore, &fakeAPITokenStore{})
+	p := Principal{AccountID: "acct-viewer", Account: "viewer", Role: "viewer"}
+
+	err := svc.SetAccountRoleFrom(context.Background(), p, "acct-1", accounts.RoleViewer, accounts.RoleAdmin)
+	if !errors.Is(err, denyErr) {
+		t.Fatalf("SetAccountRoleFrom below the floor = %v, want the denial", err)
+	}
+	if len(accountStore.setRoleCalls) != 0 {
+		t.Errorf("SetRole was called %d times, want 0", len(accountStore.setRoleCalls))
+	}
+	if len(audit.entries) != 1 || audit.entries[0].Kind != AuditKindRefusal {
+		t.Errorf("audit entries = %+v, want exactly one AuditKindRefusal", audit.entries)
+	}
+}
+
+// The unconditional path reads the stored role and passes exactly it as
+// `from`, so its write is a compare-and-set on what it just saw.
+func TestAccountAdmin_SetAccountRolePassesTheStoredRoleAsFrom(t *testing.T) {
+	accountStore := &fakeAccountStore{accountsByID: map[string]accounts.Account{
+		"acct-1": {ID: "acct-1", Role: accounts.RoleOperator},
+	}}
+	svc, _ := newAccountAdminFixture(t, &permissiveControlAuthorizer{}, accountStore, &fakeAPITokenStore{})
+	p := Principal{AccountID: "acct-admin", Account: "admin", Role: "admin"}
+
+	if err := svc.SetAccountRole(context.Background(), p, "acct-1", accounts.RoleAdmin); err != nil {
+		t.Fatalf("SetAccountRole: %v", err)
+	}
+	if len(accountStore.setRoleCalls) != 1 {
+		t.Fatalf("store SetRole calls = %d, want 1", len(accountStore.setRoleCalls))
+	}
+	if c := accountStore.setRoleCalls[0]; c.from != accounts.RoleOperator || c.to != accounts.RoleAdmin {
+		t.Errorf("store got from=%q to=%q, want from=operator to=admin", c.from, c.to)
+	}
+}
+
+// TestAccountAdmin_SetAccountRoleFromRefusesAStaleRole is the capability-seam
+// half of #912, on a real store: a caller that read X as admin, after a
+// second admin demoted X, is refused and writes nothing.
+func TestAccountAdmin_SetAccountRoleFromRefusesAStaleRole(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	ctx := context.Background()
+
+	var x accounts.Account
+	for _, name := range []string{"admin-1", "admin-2", "target"} {
+		a, err := st.Accounts().Create(ctx, accounts.Account{
+			Name: name, Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+		})
+		if err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+		x = a
+	}
+	tokenSvc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
+	svc, audit := newAccountAdminFixture(t, &permissiveControlAuthorizer{}, st.Accounts(), tokenSvc)
+
+	first := Principal{AccountID: "caller-1", Account: "c1", Role: "admin"}
+	second := Principal{AccountID: "caller-2", Account: "c2", Role: "admin"}
+
+	read, err := svc.Account(ctx, first, x.ID)
+	if err != nil {
+		t.Fatalf("Account: %v", err)
+	}
+	if err := svc.SetAccountRole(ctx, second, x.ID, accounts.RoleViewer); err != nil {
+		t.Fatalf("concurrent demotion: %v", err)
+	}
+
+	err = svc.SetAccountRoleFrom(ctx, first, x.ID, read.Role, accounts.RoleOperator)
+	if !errors.Is(err, accounts.ErrRoleChanged) {
+		t.Fatalf("SetAccountRoleFrom(stale admin) = %v, want accounts.ErrRoleChanged", err)
+	}
+	got, err := st.Accounts().Get(ctx, x.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Role != accounts.RoleViewer {
+		t.Errorf("role = %q, want viewer: the refused write must not land", got.Role)
+	}
+	if len(audit.accountAdminCalls) != 1 {
+		t.Errorf("recorded %d account-admin events, want 1 (the demotion only): %+v", len(audit.accountAdminCalls), audit.accountAdminCalls)
 	}
 }
 

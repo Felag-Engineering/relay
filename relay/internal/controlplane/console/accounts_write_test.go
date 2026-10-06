@@ -1387,6 +1387,121 @@ func TestAccountsWrite_ARoleReadFailureStillDemandsAPassword(t *testing.T) {
 	if len(y.admin.roles) != 1 {
 		t.Errorf("SetAccountRole calls = %d, want 1", len(y.admin.roles))
 	}
+	// The read failed, so there is no observed role to compare against: this
+	// is the one unconditional write, and it is stepped.
+	if got := y.admin.roles[0]; got.Conditional {
+		t.Errorf("the read-failure write was a compare-and-set %+v, want the unconditional SetAccountRole", got)
+	}
+}
+
+// The role write is a compare-and-set against the role the handler classified
+// from (#912), not an unconditional write.
+func TestAccountsWrite_TheRoleWriteComparesAgainstTheRoleItClassifiedFrom(t *testing.T) {
+	x := newWriteFix(t, nil)
+
+	rec := x.post(t, setAccountRoleAction(targetAdminID), url.Values{"role": {"operator"}})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303; body %s", rec.Code, contentOf(rec.Body.String()))
+	}
+	if len(x.admin.roles) != 1 {
+		t.Fatalf("role writes = %d, want exactly 1", len(x.admin.roles))
+	}
+	got := x.admin.roles[0]
+	if !got.Conditional || got.From != accounts.RoleAdmin || got.Role != accounts.RoleOperator {
+		t.Errorf("role write = %+v, want a compare-and-set from admin to operator", got)
+	}
+}
+
+func TestAccountsWrite_ARoleChangedRefusalSaysReviewAndRetry(t *testing.T) {
+	x := newWriteFix(t, nil)
+	x.admin.roleErr = accounts.ErrRoleChanged
+
+	rec := x.post(t, setAccountRoleAction(targetAdminID), url.Values{"role": {"operator"}})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body %s", rec.Code, contentOf(rec.Body.String()))
+	}
+	body := contentOf(rec.Body.String())
+	if !strings.Contains(body, roleChangedRefusal) {
+		t.Errorf("body does not carry the role-changed refusal: %s", body)
+	}
+	if !strings.Contains(body, "The role was not changed.") {
+		t.Errorf("body does not say the role was not changed: %s", body)
+	}
+	if strings.Contains(body, "could not confirm") {
+		t.Errorf("a role-changed refusal fell into the audit-confirmation default: %s", body)
+	}
+}
+
+// interleavingReader runs afterRead synchronously once the real read has
+// returned and before its result reaches the handler: the deterministic
+// stand-in for a second admin's committed write landing between the handler's
+// classification read and its write.
+type interleavingReader struct {
+	AccountReader
+	afterRead func()
+}
+
+func (i *interleavingReader) Account(ctx context.Context, p capability.Principal, id string) (accounts.Account, error) {
+	a, err := i.AccountReader.Account(ctx, p, id)
+	if f := i.afterRead; f != nil {
+		i.afterRead = nil
+		f()
+	}
+	return a, err
+}
+
+// TestAccountsWrite_AConcurrentDemotionBetweenClassifyAndWriteIsRefused is the
+// acceptance test of #912, on the real chain. The handler reads the target as
+// admin, so operator is a LOWER and no password is taken; a second admin then
+// demotes the target to viewer; the write that follows would be a raise from
+// viewer with no step-up. It must be refused instead.
+//
+// It also proves the handler calls the compare-and-set: the unconditional path
+// would read viewer and write operator, and land.
+func TestAccountsWrite_AConcurrentDemotionBetweenClassifyAndWriteIsRefused(t *testing.T) {
+	ctx := context.Background()
+	var reader *interleavingReader
+	x := newRealWriteFix(t, func(d *Deps) {
+		reader = &interleavingReader{AccountReader: d.Accounts}
+		d.Accounts = reader
+	})
+	// Three enabled admins, so the last-admin rule cannot interfere.
+	if err := x.trail.Accounts().SetRole(ctx, x.target.ID, accounts.RoleOperator, accounts.RoleAdmin); err != nil {
+		t.Fatalf("raise the target to admin: %v", err)
+	}
+	ran := false
+	reader.afterRead = func() {
+		ran = true
+		if err := x.trail.Accounts().SetRole(ctx, x.target.ID, accounts.RoleAdmin, accounts.RoleViewer); err != nil {
+			t.Errorf("the concurrent demotion: %v", err)
+		}
+	}
+
+	// A lower from admin: no password field.
+	rec := x.post(t, setAccountRoleAction(x.target.ID), url.Values{"role": {"operator"}})
+
+	if !ran {
+		t.Fatal("the interleaved demotion never ran, so this test proved nothing")
+	}
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body %s", rec.Code, contentOf(rec.Body.String()))
+	}
+	if !strings.Contains(contentOf(rec.Body.String()), "changed while you were editing") {
+		t.Errorf("body does not say the Account changed: %s", contentOf(rec.Body.String()))
+	}
+	got, err := x.trail.Accounts().Get(ctx, x.target.ID)
+	if err != nil {
+		t.Fatalf("get target: %v", err)
+	}
+	if got.Role != accounts.RoleViewer {
+		t.Errorf("stored role = %q, want viewer: an unstepped raise landed", got.Role)
+	}
+	kinds := x.kinds(t)
+	for _, k := range []string{audit.KindAccountRole, audit.KindStepUp} {
+		if containsKind(kinds, k) {
+			t.Errorf("the trail has a %q row after a refused, unstepped write: %v", k, kinds)
+		}
+	}
 }
 
 // TestAccountsWrite_AnUnwiredAccountReaderOffersNothingAndPanicsNowhere is the
@@ -2105,7 +2220,7 @@ type realWriteFix struct {
 
 const realWritePassword = "a real console password"
 
-func newRealWriteFix(t *testing.T) *realWriteFix {
+func newRealWriteFix(t *testing.T, opts ...func(*Deps)) *realWriteFix {
 	t.Helper()
 	ctx := context.Background()
 
@@ -2168,6 +2283,9 @@ func newRealWriteFix(t *testing.T) *realWriteFix {
 	d.Auth = svc
 	d.Accounts = capSvc
 	d.AccountAdmin = capSvc
+	for _, opt := range opts {
+		opt(&d)
+	}
 	Register(mux, d)
 
 	id, _, err := svc.Login(ctx, consoleauth.Attempt{

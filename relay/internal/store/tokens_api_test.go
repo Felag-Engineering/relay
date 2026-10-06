@@ -170,7 +170,7 @@ func TestAPIToken_InheritsAccountRoleAndDisablement(t *testing.T) {
 		t.Fatalf("initial role = %q, want operator", got.Role)
 	}
 
-	if err := acctRepo.SetRole(ctx, acct.ID, accounts.RoleAdmin); err != nil {
+	if err := acctRepo.SetRole(ctx, acct.ID, accounts.RoleOperator, accounts.RoleAdmin); err != nil {
 		t.Fatalf("promote: %v", err)
 	}
 	got, _, err = svc.Verify(ctx, cred)

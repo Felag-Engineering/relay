@@ -176,9 +176,15 @@ func (r *sqliteAccounts) List(ctx context.Context) ([]accounts.Account, error) {
 	return out, nil
 }
 
-// setRoleGuardSQL is SetRole's single UPDATE (#653): it changes role IFF
-// doing so does not leave zero enabled admin rows. The WHERE clause is a
-// disjunction of "this change cannot possibly be the one that empties the
+// setRoleGuardSQL is SetRole's single UPDATE (#653, #912): it changes role IFF
+// the stored role is still :from AND doing so does not leave zero enabled
+// admin rows. The WHERE clause is a conjunction of
+//
+//   - role = :from                        — the compare of the compare-and-set (#912): a
+//     caller that decided something from the role it read (the Console's step-up
+//     classification) writes only if that role is still the stored one.
+//
+// and a disjunction of "this change cannot possibly be the one that empties the
 // enabled-admin set":
 //
 //   - :role = 'admin'                     — this is a promotion, never a problem.
@@ -208,6 +214,7 @@ func (r *sqliteAccounts) List(ctx context.Context) ([]accounts.Account, error) {
 // silently transposed one pair would fail OPEN in at least one direction.
 const setRoleGuardSQL = `UPDATE accounts SET role = :role
 	WHERE id = :id
+	  AND role = :from
 	  AND (:role = 'admin' OR role <> 'admin' OR enabled = 0
 	       OR EXISTS (SELECT 1 FROM accounts o
 	                   WHERE o.role = 'admin' AND o.enabled = 1 AND o.id <> :id))`
@@ -222,14 +229,16 @@ const setDisabledGuardSQL = `UPDATE accounts SET enabled = 0
 	       OR EXISTS (SELECT 1 FROM accounts o
 	                   WHERE o.role = 'admin' AND o.enabled = 1 AND o.id <> :id))`
 
-// SetRole changes an Account's role, effective immediately. Returns
-// accounts.ErrLastAdmin if the change would demote the last enabled admin —
-// see setRoleGuardSQL and updateGuarded.
-func (r *sqliteAccounts) SetRole(ctx context.Context, id string, role accounts.Role) error {
-	if !role.Valid() {
+// SetRole changes an Account's role from `from` to `to`, effective
+// immediately. Returns accounts.ErrRoleChanged if the stored role is not
+// `from`, and accounts.ErrLastAdmin if the change would demote the last
+// enabled admin — see setRoleGuardSQL and updateGuarded.
+func (r *sqliteAccounts) SetRole(ctx context.Context, id string, from, to accounts.Role) error {
+	if !from.Valid() || !to.Valid() {
 		return accounts.ErrInvalidRole
 	}
-	return r.updateGuarded(ctx, setRoleGuardSQL, id, sql.Named("role", string(role)))
+	return r.updateGuarded(ctx, setRoleGuardSQL, id, roleRefusal(from),
+		sql.Named("role", string(to)), sql.Named("from", string(from)))
 }
 
 // SetEnabled enables or disables an Account, effective immediately. Enabling
@@ -240,7 +249,7 @@ func (r *sqliteAccounts) SetEnabled(ctx context.Context, id string, enabled bool
 	if enabled {
 		return r.update(ctx, `UPDATE accounts SET enabled = ? WHERE id = ?`, boolToInt(true), id)
 	}
-	return r.updateGuarded(ctx, setDisabledGuardSQL, id)
+	return r.updateGuarded(ctx, setDisabledGuardSQL, id, lastAdminRefusal)
 }
 
 func (r *sqliteAccounts) update(ctx context.Context, query string, value any, id string) error {
@@ -254,7 +263,8 @@ func (r *sqliteAccounts) update(ctx context.Context, query string, value any, id
 // updateGuarded runs a single guarded UPDATE (query, built from extraArgs
 // plus a `:id` binding this function builds ITSELF from id) and, when it
 // affects zero rows, disambiguates WHY: accounts.ErrNotFound if id does not
-// exist, accounts.ErrLastAdmin if it does.
+// exist, otherwise whatever refused(current) names (ErrLastAdmin, or for
+// SetRole ErrRoleChanged when the stored role is no longer the one expected).
 //
 // The `:id` binding is built here, once, rather than passed in by each
 // caller alongside the OTHER copy of id used for the Get disambiguation
@@ -264,13 +274,25 @@ func (r *sqliteAccounts) update(ctx context.Context, query string, value any, id
 // from the same id parameter both uses makes that divergence impossible
 // rather than merely unlikely.
 //
-// The disambiguation itself is EXACT, not a heuristic, for two reasons
-// specific to this schema: accounts.Repository has no Delete, so a row can
-// never vanish between the UPDATE and the Get below — an id that existed a
-// moment ago still exists now, or it never did. And SQLite counts a no-op
-// UPDATE (new value equals the old one) as one changed row, not zero, so a
-// redundant write can never be mistaken for a refused one.
-func (r *sqliteAccounts) updateGuarded(ctx context.Context, query string, id string, extraArgs ...any) error {
+// The not-found disambiguation is EXACT, for two reasons specific to this
+// schema: accounts.Repository has no Delete, so a row can never vanish
+// between the UPDATE and the Get below — an id that existed a moment ago
+// still exists now, or it never did. And SQLite counts a no-op UPDATE (new
+// value equals the old one) as one changed row, not zero, so a redundant
+// write can never be mistaken for a refused one.
+//
+// Between a role mismatch and the last-admin guard the explanation is
+// best-effort: a second writer landing between the UPDATE and the Get can
+// change which reason is reported, in either direction (a mismatch that was
+// restored in the gap reads as ErrLastAdmin; a last-admin refusal followed by
+// a role change reads as ErrRoleChanged). Every outcome is still a refusal
+// with nothing written, and n > 0 is the only nil return, so this can never
+// fail open. Mismatch is checked first so a stale caller is told to re-read.
+// There is deliberately no transaction around UPDATE+Get: r.Get uses r.db,
+// and under SetMaxOpenConns(1) a transaction holding the only connection
+// would deadlock against it; an exact message would need a tx-scoped scan, which
+// is churn for a wording-only gain.
+func (r *sqliteAccounts) updateGuarded(ctx context.Context, query string, id string, refused func(current accounts.Account) error, extraArgs ...any) error {
 	args := append(append([]any{}, extraArgs...), sql.Named("id", id))
 	res, err := r.db.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -283,10 +305,26 @@ func (r *sqliteAccounts) updateGuarded(ctx context.Context, query string, id str
 	if n > 0 {
 		return nil
 	}
-	if _, err := r.Get(ctx, id); err != nil {
+	cur, err := r.Get(ctx, id)
+	if err != nil {
 		return err
 	}
-	return accounts.ErrLastAdmin
+	return refused(cur)
+}
+
+// lastAdminRefusal names why a zero-row SetEnabled was refused: the last-admin
+// guard is the only condition its UPDATE adds.
+func lastAdminRefusal(accounts.Account) error { return accounts.ErrLastAdmin }
+
+// roleRefusal names why a zero-row SetRole was refused: a stored role that is
+// no longer `from` is ErrRoleChanged (#912), otherwise the last-admin guard.
+func roleRefusal(from accounts.Role) func(accounts.Account) error {
+	return func(cur accounts.Account) error {
+		if cur.Role != from {
+			return accounts.ErrRoleChanged
+		}
+		return accounts.ErrLastAdmin
+	}
 }
 
 // TouchLastSeen records a successful authentication.

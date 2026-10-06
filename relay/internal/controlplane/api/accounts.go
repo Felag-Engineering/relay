@@ -174,6 +174,9 @@ func writeAccountError(w http.ResponseWriter, err error, title, selfTargetVerb s
 	case errors.Is(err, accounts.ErrLastAdmin):
 		writeProblem(w, http.StatusConflict, "the last enabled admin cannot be demoted or disabled",
 			"another admin must exist before this account can be changed; a control plane with zero enabled admins has no way back in")
+	case errors.Is(err, accounts.ErrRoleChanged):
+		writeProblem(w, http.StatusConflict, "account changed concurrently",
+			"the account's role changed while this request was applied; read it and retry")
 	case errors.Is(err, accounts.ErrNotFound):
 		writeProblem(w, http.StatusNotFound, "account not found", "")
 	case errors.Is(err, accounts.ErrNameTaken):

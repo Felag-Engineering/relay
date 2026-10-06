@@ -112,8 +112,8 @@ func (m *memoryStore) anotherEnabledAdminExistsLocked(excludeID string) bool {
 	return false
 }
 
-func (m *memoryStore) SetRole(_ context.Context, id string, role Role) error {
-	if !role.Valid() {
+func (m *memoryStore) SetRole(_ context.Context, id string, from, to Role) error {
+	if !from.Valid() || !to.Valid() {
 		return ErrInvalidRole
 	}
 	m.mu.Lock()
@@ -122,13 +122,17 @@ func (m *memoryStore) SetRole(_ context.Context, id string, role Role) error {
 	if !ok {
 		return ErrNotFound
 	}
+	// The compare (#912) comes first, so a stale caller is told to re-read.
+	if a.Role != from {
+		return ErrRoleChanged
+	}
 	// The last-admin guard (#653): demoting an enabled admin away from
 	// "admin" is refused unless another enabled admin exists. Promoting TO
 	// admin, and any change to a disabled or non-admin row, is unaffected.
-	if a.Role == RoleAdmin && a.Enabled && role != RoleAdmin && !m.anotherEnabledAdminExistsLocked(id) {
+	if a.Role == RoleAdmin && a.Enabled && to != RoleAdmin && !m.anotherEnabledAdminExistsLocked(id) {
 		return ErrLastAdmin
 	}
-	a.Role = role
+	a.Role = to
 	m.accounts[id] = a
 	return nil
 }

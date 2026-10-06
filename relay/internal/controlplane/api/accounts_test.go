@@ -59,6 +59,14 @@ type identityFixture struct {
 // leaves one and the call still succeeds.
 func newIdentityFixture(t *testing.T) *identityFixture {
 	t.Helper()
+	return newIdentityFixtureWith(t, func(s capability.AccountStore) capability.AccountStore { return s })
+}
+
+// newIdentityFixtureWith is newIdentityFixture with the Account store the
+// capability layer sees passed through wrap, so a test can inject a store
+// fault without a second copy of the wiring.
+func newIdentityFixtureWith(t *testing.T, wrap func(capability.AccountStore) capability.AccountStore) *identityFixture {
+	t.Helper()
 
 	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
 	if err != nil {
@@ -94,7 +102,7 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 	capSvc := capability.New(registry.NewInMemory(),
 		capability.WithAuthorizer(authz.NewRoleGate()),
 		capability.WithAuditSink(auditsink.New(st.Audit())),
-		capability.WithAccountAdmin(st.Accounts(), tokenSvc))
+		capability.WithAccountAdmin(wrap(st.Accounts()), tokenSvc))
 
 	mux := http.NewServeMux()
 	Register(mux, Deps{
@@ -491,6 +499,31 @@ func TestIdentityAPI_SelfDisableAndSelfRoleAreRefused(t *testing.T) {
 	// admins are undemotable.
 	if rec := f.call(t, f.bootstrap, http.MethodPost, "/api/v1/accounts/"+self+"/disable", nil); rec.Code != http.StatusOK {
 		t.Errorf("another admin disabling it: status %d, want 200", rec.Code)
+	}
+}
+
+// roleChangedStore reports every SetRole as having lost a race (#912).
+type roleChangedStore struct{ capability.AccountStore }
+
+func (roleChangedStore) SetRole(context.Context, string, accounts.Role, accounts.Role) error {
+	return accounts.ErrRoleChanged
+}
+
+// The role route is unconditional, but its store write is a compare-and-set;
+// losing that race in the instant after its own read must be a 409, never a
+// bare 500.
+func TestIdentityAPI_RoleChangedIsAConflict(t *testing.T) {
+	f := newIdentityFixtureWith(t, func(s capability.AccountStore) capability.AccountStore {
+		return roleChangedStore{s}
+	})
+	target, _ := f.mintFor(t, "target", accounts.RoleViewer)
+
+	rec := f.call(t, f.bootstrap, http.MethodPost, "/api/v1/accounts/"+target.ID+"/role", setRoleRequest{Role: "operator"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409; body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "account changed concurrently") {
+		t.Errorf("body %s, want title %q", rec.Body.String(), "account changed concurrently")
 	}
 }
 
