@@ -43,12 +43,22 @@ var jobOutcomeOrder = []jobs.Outcome{
 // is NOT NULL with CHECK (state IN ('pending','dispatched','resolved')) in
 // 0001_init, this is exactly the set where the Task aggregate's
 // `state != 'resolved'` holds, so it must change together with that
-// expression if a Task state is ever added. It is spelled as IN rather than
-// != so SQLite plans a covering SEARCH on idx_tasks_state_job (migration
-// 0027) instead of an index scan. It binds no arguments, so embedding it
-// changes no argument order. The literals are internal constants, never
-// caller input, the same reasoning as jobOutcomeSumColumns.
+// expression (and jobHasNoUnresolvedTask) if a Task state is ever added. It is
+// spelled as IN rather than != so SQLite plans a covering SEARCH on
+// idx_tasks_state_job (migration 0027) instead of an index scan. It binds no
+// arguments, so embedding it changes no argument order. The literals are
+// internal constants, never caller input, the same reasoning as
+// jobOutcomeSumColumns.
 const runningJobIDs = `SELECT job_id FROM tasks WHERE state IN ('pending', 'dispatched')`
+
+// jobHasNoUnresolvedTask holds for a Job with no Task, or with every Task
+// resolved: the complete state. It is runningJobIDs' complement as a
+// per-Job predicate, and exact for the same reason (tasks.state is NOT NULL
+// with a CHECK in 0001_init), so the two change together with
+// scanJobSummary's derivation if a Task state is ever added. NOT EXISTS
+// rather than NOT IN so a NULL can never make it unknown; it plans a covering
+// SEARCH on idx_tasks_state_job. The literals are internal constants.
+const jobHasNoUnresolvedTask = `NOT EXISTS (SELECT 1 FROM tasks WHERE job_id = j.job_id AND state IN ('pending', 'dispatched'))`
 
 // jobOutcomeSumColumns renders one "SUM(CASE WHEN outcome = n THEN 1 ELSE 0
 // END) AS on" per jobOutcomeOrder entry. The outcome literal is an internal
@@ -62,116 +72,120 @@ func jobOutcomeSumColumns() []string {
 	return cols
 }
 
-// jobQuerySelect renders the QueryJobs SELECT for filter: one row per Job,
-// LEFT JOINed to a per-Job Task aggregate and a per-Job audit aggregate. It
-// returns the statement and the arguments bound INSIDE it, which precede
-// every WHERE/cursor/limit argument in the text.
+// jobOrderBy renders the ORDER BY clause (no LIMIT) for order. It is used
+// twice by jobPageQuery, inside the page and on the outer SELECT, which works
+// verbatim because the outer query names the page `j`.
+func jobOrderBy(order jobs.JobOrder) (string, error) {
+	switch order {
+	case jobs.JobOrderNewestFirst:
+		return ` ORDER BY j.created_at DESC, j.job_id DESC`, nil
+	case jobs.JobOrderOldestFirst:
+		return ` ORDER BY ` + jobCreatedAtFixedWidth + ` ASC, j.job_id ASC`, nil
+	default:
+		return "", fmt.Errorf("query jobs: unknown order %d", order)
+	}
+}
+
+// jobPageQuery renders the QueryJobs page statement for filter: one row per
+// Job, LEFT JOINed to a per-Job Task aggregate and a per-Job audit aggregate,
+// both computed only for the page's Jobs. limit is the already-clamped page
+// size; the statement fetches limit+1 rows so the caller can tell whether
+// another page exists. It returns the arguments in text order, all bound
+// inside the page. A bad order or cursor is refused here, the order first.
 //
 // Both joins are LEFT, deliberately: a zero-Task Job (a historical row from
 // before #571, when a zero-match dispatch still created one) has no row in
-// the tasks aggregate, and an IN-FLIGHT Job has no
-// audit row yet at all — capability/service.go's dispatcher writes the audit
-// record only after disp.run returns (capability/service.go's AuditSink.Record
-// call happens after dispatch, not before). An INNER JOIN would make either
-// kind of Job disappear from a query the instant it was created, which is
-// exactly the race a Job list must not have: Job state and risk class come
-// from the tasks table, never from the trail, so they are correct from the
-// moment CreateTask commits.
+// the tasks aggregate, and an IN-FLIGHT Job has no audit row yet at all —
+// capability/service.go's dispatcher writes the audit record only after
+// disp.run returns. An INNER JOIN would make either kind of Job disappear
+// from a query the instant it was created, which is exactly the race a Job
+// list must not have: Job state and risk class come from the tasks table,
+// never from the trail, so they are correct from the moment CreateTask
+// commits.
 //
-// # Why job_id is pushed into both derived tables
+// # Page first
 //
-// It is a statement, not an optimisation. SQLite cannot flatten an aggregate
-// subquery, and it does not push an outer WHERE into the RIGHT OPERAND of a
-// LEFT JOIN — which both derived tables are. So `WHERE j.job_id = ?` alone
-// leaves each of them a full aggregate over EVERY row of tasks and every
-// dispatch row of audit, on every single-Job query: at 10,000 Tasks with
-// retained history that is millions of rows per Job-detail page view,
-// repeatable by anyone holding down refresh. With the predicate pushed down,
-// both become an index SEARCH. TestJobQuery_SingleJobDoesNotScanEveryTask
-// asserts the query plan, because nothing else would notice the regression.
+// SQLite cannot flatten an aggregate subquery, and it does not push an outer
+// WHERE into the right operand of a LEFT JOIN, so an aggregate joined to jobs
+// is a GROUP BY over every row of tasks and every dispatch row of audit no
+// matter how few Jobs the page keeps (#816, #919). So the page's job_ids are
+// chosen first, from jobs alone (filters, cursor, ORDER BY, LIMIT; see
+// buildJobWhere for how each filter reads only j or a correlated lookup), and
+// both aggregates are restricted to them with `job_id IN (SELECT job_id FROM
+// page)`, which plans as an index SEARCH per Job. MATERIALIZED makes the page
+// computed once for its three readers. The outer ORDER BY is required: a join
+// does not preserve the page's order. `+kind` is not a typo: it disqualifies
+// idx_audit_kind_ts, which SQLite would otherwise pick for `kind = 'dispatch'`
+// and so read every dispatch row, instead of idx_audit_job_ts.
+// TestJobQuery_PageFirstReadsOnlyThePage pins the plan and
+// TestJobQuery_PageFirstMatchesTheAggregateFirstShape pins the results.
 //
-// # Why the running filter is pushed into the Task aggregate
-//
-// The same holds for State = running (#816): SQLite does not push the outer
-// running predicate into the LEFT JOIN's right operand, so without a
-// pushdown every running query is a GROUP BY over the whole of tasks, on the
-// store's single connection. jobQueryFrom therefore narrows the aggregate to
-// Jobs in runningJobIDs. It narrows by job_id and never by state, so a
-// running Job keeps ALL of its Tasks, resolved ones included, and Total,
-// Unresolved, Counts, operation and risk class are unchanged.
-// TestJobQuery_RunningDoesNotScanEveryTask pins the plan.
+// kind = 'dispatch' is load-bearing: capability's CancelJob writes
+// job_id-carrying KindRefusal and KindJobCancel audit rows too, and the
+// Selector, on-behalf-of and approval columns must come from the dispatch
+// record, not from a refusal or cancel row. See
+// TestJobQuery_RequesterIsNeverTakenFromTheAuditTrail.
 //
 // # What the audit aggregate projects, and why MIN is exact
 //
-// The `a` derived table adds columns to a subquery that ALREADY EXISTS and
-// already groups by job_id — no new join, no new index, and no change to the
-// plan that test pins. Every dispatch record within one Job is written from
-// one base record (internal/auditsink's fan-out loop mutates only the Node,
-// the outcome and the captured output), so MIN over a Job's dispatch rows
-// returns the single value they all carry rather than an arbitrary sample.
-// See jobs.JobSummary's doc comment for the caller invariant that rests on.
+// Every dispatch record within one Job is written from one base record
+// (internal/auditsink's fan-out loop mutates only the Node, the outcome and
+// the captured output), so MIN over a Job's dispatch rows returns the single
+// value they all carry rather than an arbitrary sample. See jobs.JobSummary's
+// doc comment for the caller invariant that rests on.
 //
 // It does NOT project stdout, stderr or truncated, ever (ADR-0025): no BLOB
 // column is named here, so paginating a Job list can never become a path to
 // captured output.
-func jobQuerySelect(filter jobs.JobQuery) (stmt string, args []any) {
-	from, args := jobQueryFrom(filter, true)
-	stmt = `SELECT j.job_id, j.created_at,
+func jobPageQuery(filter jobs.JobQuery, limit int, cursor string) (stmt string, args []any, err error) {
+	orderBy, err := jobOrderBy(filter.Order)
+	if err != nil {
+		return "", nil, err
+	}
+	conds, args := buildJobWhere(filter)
+
+	if cursor != "" {
+		switch filter.Order {
+		case jobs.JobOrderNewestFirst:
+			lastCreatedAt, lastJobID, err := decodeCursor2(cursor, jobs.ErrInvalidCursor)
+			if err != nil {
+				return "", nil, err
+			}
+			conds = append(conds, `(j.created_at < ? OR (j.created_at = ? AND j.job_id < ?))`)
+			args = append(args, lastCreatedAt, lastCreatedAt, lastJobID)
+		case jobs.JobOrderOldestFirst:
+			tag, lastCreatedAt, lastJobID, err := decodeCursor3(cursor, jobs.ErrInvalidCursor)
+			if err != nil {
+				return "", nil, err
+			}
+			if tag != jobCursorOldestTag {
+				return "", nil, jobs.ErrInvalidCursor
+			}
+			lastKey, err := normalizeAuditTimeText(lastCreatedAt)
+			if err != nil {
+				return "", nil, fmt.Errorf("%w: %v", jobs.ErrInvalidCursor, err)
+			}
+			conds = append(conds, `(`+jobCreatedAtFixedWidth+` > ? OR (`+jobCreatedAtFixedWidth+` = ? AND j.job_id > ?))`)
+			args = append(args, lastKey, lastKey, lastJobID)
+		}
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = ` WHERE ` + strings.Join(conds, " AND ")
+	}
+	args = append(args, limit+1)
+
+	stmt = `WITH page AS MATERIALIZED (
+	SELECT j.job_id, j.created_at, j.requester_account_id, j.requester_account_name, j.requester_kind
+	FROM jobs j` + where + orderBy + ` LIMIT ?
+)
+SELECT j.job_id, j.created_at,
 	COALESCE(t.total, 0), COALESCE(t.unresolved, 0),
 	t.action_kind, t.operation_name, t.risk_class,
 	` + strings.Join(jobOutcomeColumnRefs(), ", ") + `,
 	a.selector, j.requester_account_id, j.requester_account_name, j.requester_kind,
 	a.on_behalf_of, a.approval_id, a.grant_id, a.args, a.raw_exec_argv
-` + from
-	return stmt, args
-}
-
-// jobQueryCount renders the COUNT(*) over exactly the Jobs jobQuerySelect
-// would return for filter, before paging. It shares jobQueryFrom and
-// buildJobWhere with the page query, so the two cannot describe different
-// filters. The audit aggregate is joined only when a condition reads it
-// (jobWhereUsesAudit): it is the costly operand — every dispatch row in the
-// trail — and the count selects no column from it. The args are the full
-// bound list, WHERE arguments included.
-func jobQueryCount(filter jobs.JobQuery) (stmt string, args []any) {
-	from, args := jobQueryFrom(filter, jobWhereUsesAudit(filter))
-	conds, whereArgs := buildJobWhere(filter)
-	stmt = `SELECT COUNT(*) ` + from
-	if len(conds) > 0 {
-		stmt += ` WHERE ` + strings.Join(conds, " AND ")
-	}
-	return stmt, append(args, whereArgs...)
-}
-
-// jobQueryFrom renders the FROM clause shared by the page and the count:
-// jobs LEFT JOINed to the Task aggregate and, when withAudit, the audit
-// aggregate. It returns the arguments bound inside it. See jobQuerySelect for
-// why both joins are LEFT and why job_id is pushed into each.
-func jobQueryFrom(filter jobs.JobQuery, withAudit bool) (from string, args []any) {
-	// kind = 'dispatch' is still load-bearing, even though the requester no
-	// longer comes from this join (#616): capability's CancelJob writes
-	// job_id-carrying KindRefusal and KindJobCancel audit rows too, and the
-	// Selector, on-behalf-of and approval columns below must come from the
-	// dispatch record, not from a refusal or cancel row. See
-	// TestJobQuery_RequesterIsNeverTakenFromTheAuditTrail.
-	auditWhere := "\n\tWHERE kind = 'dispatch'"
-	var taskConds []string
-	if filter.JobID != "" {
-		taskConds = append(taskConds, "job_id = ?")
-		auditWhere += "\n\t\tAND job_id = ?"
-		args = []any{filter.JobID}
-		if withAudit {
-			args = append(args, filter.JobID)
-		}
-	}
-	if filter.State != nil && *filter.State == jobs.JobStateRunning {
-		taskConds = append(taskConds, "job_id IN ("+runningJobIDs+")")
-	}
-	taskWhere := ""
-	if len(taskConds) > 0 {
-		taskWhere = "\n\tWHERE " + strings.Join(taskConds, "\n\t\tAND ")
-	}
-	from = `FROM jobs j
+FROM page j
 LEFT JOIN (
 	SELECT job_id,
 		COUNT(*) AS total,
@@ -180,20 +194,31 @@ LEFT JOIN (
 		MIN(operation_name) AS operation_name,
 		MIN(risk_class) AS risk_class,
 		` + strings.Join(jobOutcomeSumColumns(), ",\n\t\t") + `
-	FROM tasks` + taskWhere + `
+	FROM tasks WHERE job_id IN (SELECT job_id FROM page)
 	GROUP BY job_id
-) t ON t.job_id = j.job_id`
-	if withAudit {
-		from += `
+) t ON t.job_id = j.job_id
 LEFT JOIN (
 	SELECT job_id, MIN(selector) AS selector,
 		MIN(asserted_on_behalf_of) AS on_behalf_of, MIN(approval_id) AS approval_id, MIN(grant_id) AS grant_id,
 		MIN(args) AS args, MIN(raw_exec_argv) AS raw_exec_argv
-	FROM audit` + auditWhere + `
+	FROM audit WHERE +kind = 'dispatch' AND job_id IN (SELECT job_id FROM page)
 	GROUP BY job_id
-) a ON a.job_id = j.job_id`
+) a ON a.job_id = j.job_id` + orderBy
+	return stmt, args, nil
+}
+
+// jobQueryCount renders the COUNT(*) over exactly the Jobs jobPageQuery would
+// return for filter, before paging. It shares buildJobWhere with the page, so
+// the two cannot describe different filters, and it joins no aggregate: every
+// condition is a column of jobs or a per-Job lookup. It cannot be bounded by
+// the page, a count of matching Jobs being O(matching Jobs) by definition.
+func jobQueryCount(filter jobs.JobQuery) (stmt string, args []any) {
+	conds, args := buildJobWhere(filter)
+	stmt = `SELECT COUNT(*) FROM jobs j`
+	if len(conds) > 0 {
+		stmt += ` WHERE ` + strings.Join(conds, " AND ")
 	}
-	return from, args
+	return stmt, args
 }
 
 // jobOutcomeColumnRefs renders "COALESCE(t.o0, 0), COALESCE(t.o1, 0), ..."
@@ -246,51 +271,14 @@ const jobCreatedAtFixedWidth = `(substr(j.created_at, 1, 19) || '.' || ` +
 func (q *sqliteJobQueries) QueryJobs(ctx context.Context, filter jobs.JobQuery, limit int, cursor string) (jobs.JobPage, error) {
 	limit = clampPageSize(limit)
 
-	stmt, args := jobQuerySelect(filter)
-	conds, whereArgs := buildJobWhere(filter)
-	args = append(args, whereArgs...)
-
+	// Both statements are built, and a bad order or cursor refused, before a
+	// transaction is opened.
+	stmt, args, err := jobPageQuery(filter, limit, cursor)
+	if err != nil {
+		return jobs.JobPage{}, err
+	}
 	// The total ignores paging, so it never sees the cursor condition.
 	countStmt, countArgs := jobQueryCount(filter)
-
-	var orderBy string
-	switch filter.Order {
-	case jobs.JobOrderNewestFirst:
-		orderBy = ` ORDER BY j.created_at DESC, j.job_id DESC LIMIT ?`
-		if cursor != "" {
-			lastCreatedAt, lastJobID, err := decodeCursor2(cursor, jobs.ErrInvalidCursor)
-			if err != nil {
-				return jobs.JobPage{}, err
-			}
-			conds = append(conds, `(j.created_at < ? OR (j.created_at = ? AND j.job_id < ?))`)
-			args = append(args, lastCreatedAt, lastCreatedAt, lastJobID)
-		}
-	case jobs.JobOrderOldestFirst:
-		orderBy = ` ORDER BY ` + jobCreatedAtFixedWidth + ` ASC, j.job_id ASC LIMIT ?`
-		if cursor != "" {
-			tag, lastCreatedAt, lastJobID, err := decodeCursor3(cursor, jobs.ErrInvalidCursor)
-			if err != nil {
-				return jobs.JobPage{}, err
-			}
-			if tag != jobCursorOldestTag {
-				return jobs.JobPage{}, jobs.ErrInvalidCursor
-			}
-			lastKey, err := normalizeAuditTimeText(lastCreatedAt)
-			if err != nil {
-				return jobs.JobPage{}, fmt.Errorf("%w: %v", jobs.ErrInvalidCursor, err)
-			}
-			conds = append(conds, `(`+jobCreatedAtFixedWidth+` > ? OR (`+jobCreatedAtFixedWidth+` = ? AND j.job_id > ?))`)
-			args = append(args, lastKey, lastKey, lastJobID)
-		}
-	default:
-		return jobs.JobPage{}, fmt.Errorf("query jobs: unknown order %d", filter.Order)
-	}
-
-	if len(conds) > 0 {
-		stmt += ` WHERE ` + strings.Join(conds, " AND ")
-	}
-	stmt += orderBy
-	args = append(args, limit+1)
 
 	var (
 		db       queryer = q.db
@@ -356,35 +344,28 @@ func (q *sqliteJobQueries) QueryJobs(ctx context.Context, filter jobs.JobQuery, 
 	return page, nil
 }
 
-// jobWhereUsesAudit reports whether buildJobWhere emits a condition on the
-// audit aggregate (alias a). Keep it beside buildJobWhere: a condition added
-// there that reads `a.` must be reflected here, or the count fails loudly with
-// "no such column" (TestJobQuery_CountMatchesPagingEveryFilter).
-func jobWhereUsesAudit(filter jobs.JobQuery) bool {
-	return filter.OnBehalfOf != ""
-}
-
 // buildJobWhere translates a jobs.JobQuery into parameterised SQL conditions
-// (ANDed by the caller, referencing the jobQuerySelect aliases j/t/a) and
-// their bound arguments.
+// (ANDed by the caller) and their bound arguments. Every condition names only
+// columns of `j` (a jobs row, or the page's projection of one) or a
+// correlated lookup keyed on j.job_id, because it runs where no aggregate
+// exists: inside the page and in the count (#919). Each lookup is the SAME
+// MIN, over the same rows, that the page's aggregate projects, so a filter
+// selects exactly the Jobs whose summary shows the value; a Job with no such
+// rows yields NULL, which fails `= ?` as the old LEFT JOIN's NULL did.
 func buildJobWhere(filter jobs.JobQuery) (conds []string, args []any) {
 	if filter.JobID != "" {
-		// Also pushed into both derived tables by jobQuerySelect — see there
-		// for why one predicate in three places is the point rather than a
-		// duplication.
 		conds = append(conds, `j.job_id = ?`)
 		args = append(args, filter.JobID)
 	}
 	if filter.State != nil {
 		switch *filter.State {
 		case jobs.JobStateRunning:
-			// jobQueryFrom pushes the same IN into the Task aggregate (#816);
-			// here it lets SQLite SEARCH jobs by key. The COALESCE
-			// predicate is redundant with it but keeps the derivation
-			// identical to scanJobSummary's.
-			conds = append(conds, `j.job_id IN (`+runningJobIDs+`) AND (COALESCE(t.total, 0) > 0 AND COALESCE(t.unresolved, 0) > 0)`)
+			// Exact: tasks.state is NOT NULL with a CHECK (0001_init), so "has
+			// an unresolved Task" is total > 0 AND unresolved > 0, which is
+			// scanJobSummary's running derivation. Changes together with it.
+			conds = append(conds, `j.job_id IN (`+runningJobIDs+`)`)
 		default: // JobStateComplete: zero Tasks, or every Task resolved.
-			conds = append(conds, `(COALESCE(t.total, 0) = 0 OR COALESCE(t.unresolved, 0) = 0)`)
+			conds = append(conds, jobHasNoUnresolvedTask)
 		}
 	}
 	if filter.RequesterAccountID != "" {
@@ -395,25 +376,19 @@ func buildJobWhere(filter jobs.JobQuery) (conds []string, args []any) {
 		args = append(args, filter.RequesterAccountID)
 	}
 	if filter.OnBehalfOf != "" {
-		// The derived table's ALIAS, not the raw column: asserted_on_behalf_of
-		// is inside the aggregate, and the outer WHERE can only see what the
-		// aggregate projected.
-		//
-		// This predicate lands in the OUTER WHERE and SQLite will not push it
-		// into the right operand of a LEFT JOIN (see jobQuerySelect's doc
-		// comment), so the aggregate still reads every dispatch row in the
-		// trail. Unlike RequesterAccountID above, OnBehalfOf stays
-		// audit-joined: it is the caller-asserted lane, which has no home on
-		// the jobs row.
-		conds = append(conds, `a.on_behalf_of = ?`)
+		// The caller-asserted lane has no home on the jobs row, so it reads
+		// the Job's dispatch rows. `+kind` keeps the planner on
+		// idx_audit_job_ts (see jobPageQuery); and only dispatch rows count,
+		// as a refusal or cancel row may assert something else.
+		conds = append(conds, `(SELECT MIN(asserted_on_behalf_of) FROM audit WHERE +kind = 'dispatch' AND job_id = j.job_id) = ?`)
 		args = append(args, filter.OnBehalfOf)
 	}
 	if filter.Operation != "" {
-		conds = append(conds, `t.operation_name = ?`)
+		conds = append(conds, `(SELECT MIN(operation_name) FROM tasks WHERE job_id = j.job_id) = ?`)
 		args = append(args, filter.Operation)
 	}
 	if filter.RiskClass != nil {
-		conds = append(conds, `t.risk_class = ?`)
+		conds = append(conds, `(SELECT MIN(risk_class) FROM tasks WHERE job_id = j.job_id) = ?`)
 		args = append(args, jobs.RiskClassName(*filter.RiskClass))
 	}
 	if !filter.Since.IsZero() {
@@ -427,7 +402,7 @@ func buildJobWhere(filter jobs.JobQuery) (conds []string, args []any) {
 	return conds, args
 }
 
-// scanJobSummary scans one jobQuerySelect row, also returning the raw stored
+// scanJobSummary scans one jobPageQuery row, also returning the raw stored
 // created_at text (needed for the cursor, on auditquery.go's precedent).
 func scanJobSummary(row rowScanner) (jobs.JobSummary, string, error) {
 	var (
