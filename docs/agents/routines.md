@@ -88,7 +88,7 @@ gh api --method POST repos/{owner}/{repo}/issues/<n>/comments -F body=@- <<'RELA
 <text>
 RELAY_LOOP_BODY_EOF
 
-gh api --method POST repos/{owner}/{repo}/pulls/<n>/comments/<id>/replies -F body=@- <<'RELAY_LOOP_BODY_EOF'
+gh api --method POST repos/{owner}/{repo}/pulls/<n>/comments/<thread-root-id>/replies -F body=@- <<'RELAY_LOOP_BODY_EOF'
 <!-- relay-loop -->
 <text>
 RELAY_LOOP_BODY_EOF
@@ -119,17 +119,22 @@ starts with prose. Every dropped loop reply is listed by id and login as `skippe
 - `/pr-respond` acts only on PRs with `isCrossRepository == false`, for automatic selection and
   an explicit PR number alike. A fork PR is reported `not actioned: PR #<n> head is a fork`, and nothing
   from it is checked out or run. (Only write access can push a branch here, so a same-repository
-  PR body is maintainer-or-loop text.) What makes a PR actionable is unchanged: a
-  `CHANGES_REQUESTED` review or a review-thread comment after the last push, now by a
-  maintainer. A conversation comment never makes a PR actionable on its own. Every
+  PR body is maintainer-or-loop text.) What makes a PR actionable is a
+  `CHANGES_REQUESTED` review by a maintainer after the last push, or an actionable review thread:
+  a thread is actionable only if its newest maintainer comment that is not a loop reply is newer than both the branch's last commit and the newest loop reply in that same thread.
+  A maintainer comment not newer than its thread's newest loop reply is recorded
+  `answered in thread` (id and login, never the body). Only a loop reply that passed the type
+  gate and the check counts, so an outsider's or an app's marked reply never closes a thread. A conversation comment never makes a PR actionable on its own. Every
   non-maintainer review or comment is listed in its report as
   `not actioned: author is not a maintainer` (id and login, never the body) and left for a
   human. The linked issue contributes its body only, never its comments, and only when its
   author is a maintainer. A loop reply never makes a PR actionable and is never classified: it is
   listed as `skipped: loop reply` with id and login. A review with an empty body is not an
   instruction (a thread reply creates an empty-body `COMMENTED` review); its thread comments are
-  judged on their own. The listings project the marker boolean (last, except the reviews listing,
-  where the empty-body boolean follows it); the issue-comment one is:
+  judged on their own. The review-thread listing also projects the thread's root id
+  (`.in_reply_to_id // .id`) before the marker boolean, so grouping a thread needs no body. The
+  listings project the marker boolean (last, except the reviews listing, where the empty-body
+  boolean follows it); the issue-comment one is:
 
   ```bash
   .[] | [.id, (.user.login // ""), (.user.type // ""), .created_at, ((.body // "") | (split("\n")[0] // "") | rtrimstr("\r") | sub("^\\s+"; "") == "<!-- relay-loop -->")] | @tsv
@@ -170,18 +175,13 @@ starts with prose. Every dropped loop reply is listed by id and login as `skippe
   marker line is treated as a loop reply (fail-safe: ignored, and reported). Prose instructions
   such as "post a comment" are pinned only by each file carrying the marker; the self-test
   checks the posting forms line by line, not an agent's reading of the prose.
-- Some steps still use GitHub's GraphQL API, which returns 403 in Claude Code sessions: the
-  `loop:halt` check (`gh issue list`), `gh issue view`, `gh issue edit` and `gh pr edit` (label
-  changes, and the drive's `gh issue edit "$TRACK" --body`, which rewrites the dashboard and state
+- Some steps still use GitHub's GraphQL API, which returns 403 in Claude Code sessions:
+  `gh issue view`, `gh issue edit` and `gh pr edit` (label changes, and the drive's `gh issue edit "$TRACK" --body`, which rewrites the dashboard and state
   record every tick), `gh issue create`, `gh pr checks`, `gh pr checkout`, `gh pr view`
   (including `/pr-respond`'s `isCrossRepository` read) and `gh pr create`. The drive's TRACK
   creation and its dashboard and state-record rewrite are REST (`gh api` POST and PATCH with a
   quoted heredoc), not GraphQL. Whether each remaining call fails closed where it gates an action
-  is not proven here; moving them to REST is follow-up work. The halt check is the one that
-  matters: it reads `-q 'length'` and its commands say "non-zero → stop" about the count without
-  saying what an error does, and a session may print an empty result that reads as zero. An
-  erroring or empty result must be read as a stop, not as zero. Tracked as a follow-up (a REST
-  read where anything but `0` stops).
+  is not proven here; moving them to REST is follow-up work. The `loop:halt` check is REST and fails closed (§ The kill switch): a 200 whose body is not an array reads as a stop, as does an error or an empty result.
 - An outsider's issue or PR comment that begins with the marker and a `ci-fix` or `ci-rerun` line
   is ignored by the counters (its author fails the gate). Where the author's check exits 2 (a
   deleted `ghost` account) the PR is parked in the drive's Needs-you bucket: fail-safe noise, not
@@ -189,11 +189,19 @@ starts with prose. Every dropped loop reply is listed by id and login as `skippe
 - CI runs are selected by the same-repository PR's head SHA and `head_repository` equal to the
   base repository, never by branch name: a fork's `pull_request` run carries the fork's branch
   name, which an attacker can make equal to a loop branch.
-- `/pr-respond` can re-answer a question-only thread. An answer creates no commit, so the
-  maintainer's question is still "after the last commit" on the next tick. Tracked as a
-  follow-up.
+- Only review threads are cut at their newest loop reply. A `CHANGES_REQUESTED` review answered
+  without a push still makes the PR actionable on the next tick. A conversation comment has no
+  thread, so it is classified again whenever the PR is actionable for another reason. A reply
+  whose `in_reply_to_id` names a non-root comment forms its own thread and is judged alone. All
+  three are noisy, never quiet. Comparison is by `created_at`; a maintainer comment in the same
+  second as the loop reply is not newer.
+- One shape is quiet: a maintainer comment posted in a thread between Stage 0's listing and
+  Stage 4's reply is closed by that reply, and the next tick records it `answered in thread`
+  without it ever having been read. The window is one tick's work and is not closed here;
+  re-listing the thread before replying would close it.
 - The self-test runs the commands' jq with `jq`; `gh --jq` uses gojq. The expressions here use
-  only builtins both implement identically (`split`, `rtrimstr`, `sub`, `startswith`, `test`).
+  only builtins both implement identically (`split`, `rtrimstr`, `sub`, `startswith`, `test`,
+  `type`, `length`, `if`/`then`/`else`).
 
 ## Environment
 
@@ -225,8 +233,19 @@ Network access: **Trusted** is sufficient. It covers crates.io, the Go module pr
 
 ## The kill switch
 
-Label any open issue **`loop:halt`**. Every tick checks this first and stops before doing
-anything else.
+Label an open issue that a maintainer authored **`loop:halt`**, ideally one pinned, dedicated halt issue; never an outsider's issue or PR. Every tick checks this first and stops before doing
+anything else. The check is one REST call, run as:
+
+```bash
+halt="$(gh api 'repos/{owner}/{repo}/issues?labels=loop:halt&state=open&per_page=1' --jq 'if type == "array" then length else "not-an-array" end')"; halt_rc=$?
+if [ "$halt_rc" -eq 0 ] && [ "$halt" = 0 ]; then echo "halt: clear"
+elif [ "$halt_rc" -eq 0 ] && [ "$halt" = 1 ]; then echo "halted: loop:halt is set on an open issue or PR"
+else echo "halted: the loop:halt check gave no usable answer (exit $halt_rc), so the tick stops (fail closed)"; fi
+```
+
+**Fail closed:** only exit 0 with output exactly `0` continues; anything else, an error or empty output included, stops the tick. Anything but the line `halt: clear`, including no line at all (the shell aborted), is a stop.
+The REST issues listing returns PRs as well as issues, so a PR labelled `loop:halt` halts too:
+fail closed. The author of a labelled issue or PR can close it, and closing it (or merging a labelled PR) clears the halt, which is why the label goes on a maintainer's issue and never on an outsider's. Labelling needs triage access.
 
 It is deliberately a label rather than a file: it takes five seconds from a phone, needs no
 commit, no PR, and no laptop. Removing it is a human act — the routine will never clear it.
