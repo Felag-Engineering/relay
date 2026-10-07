@@ -873,34 +873,7 @@ func handleActivity(d Deps) http.HandlerFunc {
 			return
 		}
 
-		v := activityView{
-			Filter:        f,
-			Note:          note,
-			JobPageSize:   jobPageSize,
-			AuditPageSize: auditPageSize,
-			// Both lanes finished. Only reachable by hand-editing the URL —
-			// the "Older" link is not drawn in this state — but "nothing
-			// matches" would be a lie about the filter rather than about the
-			// position, so it gets its own sentence.
-			Exhausted: known && !ranJob && !ranTrail,
-			// Clear resets every filter, account and console included, so it is
-			// deliberately not among the links that keep them (spec 04).
-			ResetHref:     "/console/activity",
-			Narrowing:     f.narrowing(),
-			Windows:       windowChoices(f.Window),
-			Outcomes:      outcomeChoices(f.Outcome),
-			Kinds:         kindChips(f),
-			ReadsExcluded: !slices.Contains(activityLaneKinds(f), audit.KindRead),
-		}
-		v.CSRFToken = p.CSRFToken
-		v.Refresh = newRefresh("/console/activity", f.query(f.Job, f.Audit))
-		if f.Kind == "" {
-			for _, c := range v.Kinds {
-				if c.Kind == rowRead {
-					v.ReadsLeftOutHref = c.Href
-				}
-			}
-		}
+		v := newActivityView(f, note, p.CSRFToken, known, ranJob, ranTrail)
 		if !known {
 			v.UnknownKind = f.Kind
 			renderScreen(w, p, activityTmpl, v)
@@ -925,71 +898,113 @@ func handleActivity(d Deps) http.HandlerFunc {
 		if refusedUnaudited(w, lane, queryLaneName) {
 			return
 		}
-		jobNext, auditNext := fetch.JobNext, fetch.AuditNext
-		v.Rows = fetch.Rows
-
-		// What the filter SELECTS decides whether the Console-read rule is
-		// stated, not which lane this page position happened to run, so an Older
-		// page whose trail lane is finished still states it.
-		v.ShowConsole = f.ShowConsole
-		v.ConsoleInForce = !v.ReadsExcluded
-		v.ConsoleLeftOut, v.PageCalls = fetch.ConsoleLeftOut, fetch.PageCalls
-		v.AllConsoleReads = v.ConsoleLeftOut > 0 && v.ConsoleLeftOut == v.PageCalls
-		toggle := f
-		toggle.ShowConsole = !f.ShowConsole
-		v.ConsoleToggleHref = toggle.href(f.Job, f.Audit)
-		everyone := f
-		everyone.Account = ""
-		// Running now follows ?account=, so its set changes with it and its
-		// old position means nothing under the new one.
-		everyone.Running = runningPos{}
-		v.AllAccountsHref = everyone.base()
-		v.Scrolled = f.Job != (lanePos{}) || f.Audit != (lanePos{})
-		if v.Scrolled {
-			v.NewestHref = f.base()
-		}
-
-		v.Rows = collapseActivityRows(v.Rows)
-		fc, fr := foldedSummary(v.Rows, func(r activityRow) int { return r.Calls })
-		v.CollapseNote = collapseNote(fc, fr)
-		for _, r := range v.Rows {
-			v.EventCount += r.Calls
-		}
-
-		// Cancel follows Job detail literally: a Job with Unresolved Tasks
-		// and a role the route is mounted for. It is drawn in Running now and
-		// nowhere on the stream, so a Job draws at most one per page by
-		// construction, whichever pages the two are on. A stream row links up
-		// to its entry when the entry is on this page, else to the section.
-		v.RunningNow = buildRunningNow(rn, f, d.now(), cancelOffered(d, accounts.Role(caller.Role)))
-		linkRunningRows(v.Rows, v.RunningNow)
-
-		// BOTH lane positions travel, always, and a lane that came back with
-		// no Next travels as FINISHED rather than as an empty cursor. "Older"
-		// is drawn only while some lane has a real next page, so the chain
-		// terminates instead of looping over a restarted lane forever.
-		nextJob, nextAudit := f.Job, f.Audit
-		if ranJob {
-			nextJob = lanePosAfter(jobNext)
-		}
-		if ranTrail {
-			nextAudit = lanePosAfter(auditNext)
-		}
-		if jobNext != "" || auditNext != "" {
-			v.OlderHref = f.href(nextJob, nextAudit)
-		}
-		// writeActivityCSV walks the same fetchActivity from page one with
-		// ShowConsole forced on, so with no rows, no left-out Console reads
-		// and no further page the file would be empty: offer no link to it.
-		if v.Scrolled || len(v.Rows) > 0 || v.ConsoleLeftOut > 0 || v.OlderHref != "" {
-			v.ExportHref = f.base() + exportSuffix(f)
-		}
+		v.fill(d, caller, f, fetch, rn, ranJob, ranTrail)
 
 		if live, scripts := activityLive(d, f, ranJob, v.RunningNow); live.Wired {
 			v.Live, p.Scripts = live, scripts
 		}
 
 		renderScreen(w, p, activityTmpl, v)
+	}
+}
+
+// newActivityView is the page chrome that depends on the filter alone: its
+// choices, links and lane-position flags, before any row is fetched.
+func newActivityView(f activityFilter, note, csrfToken string, known, ranJob, ranTrail bool) activityView {
+	v := activityView{
+		Filter:        f,
+		Note:          note,
+		JobPageSize:   jobPageSize,
+		AuditPageSize: auditPageSize,
+		// Both lanes finished. Only reachable by hand-editing the URL —
+		// the "Older" link is not drawn in this state — but "nothing
+		// matches" would be a lie about the filter rather than about the
+		// position, so it gets its own sentence.
+		Exhausted: known && !ranJob && !ranTrail,
+		// Clear resets every filter, account and console included, so it is
+		// deliberately not among the links that keep them (spec 04).
+		ResetHref:     "/console/activity",
+		Narrowing:     f.narrowing(),
+		Windows:       windowChoices(f.Window),
+		Outcomes:      outcomeChoices(f.Outcome),
+		Kinds:         kindChips(f),
+		ReadsExcluded: !slices.Contains(activityLaneKinds(f), audit.KindRead),
+	}
+	v.CSRFToken = csrfToken
+	v.Refresh = newRefresh("/console/activity", f.query(f.Job, f.Audit))
+	if f.Kind == "" {
+		for _, c := range v.Kinds {
+			if c.Kind == rowRead {
+				v.ReadsLeftOutHref = c.Href
+			}
+		}
+	}
+	return v
+}
+
+// fill sets everything that depends on the fetched rows: the Console-read
+// statement, the links that move the filter, the collapsed stream, Running now
+// and the Older and Export links.
+func (v *activityView) fill(d Deps, caller capability.Principal, f activityFilter, fetch activityFetch,
+	rn capability.JobPage, ranJob, ranTrail bool) {
+	jobNext, auditNext := fetch.JobNext, fetch.AuditNext
+	v.Rows = fetch.Rows
+
+	// What the filter SELECTS decides whether the Console-read rule is
+	// stated, not which lane this page position happened to run, so an Older
+	// page whose trail lane is finished still states it.
+	v.ShowConsole = f.ShowConsole
+	v.ConsoleInForce = !v.ReadsExcluded
+	v.ConsoleLeftOut, v.PageCalls = fetch.ConsoleLeftOut, fetch.PageCalls
+	v.AllConsoleReads = v.ConsoleLeftOut > 0 && v.ConsoleLeftOut == v.PageCalls
+	toggle := f
+	toggle.ShowConsole = !f.ShowConsole
+	v.ConsoleToggleHref = toggle.href(f.Job, f.Audit)
+	everyone := f
+	everyone.Account = ""
+	// Running now follows ?account=, so its set changes with it and its
+	// old position means nothing under the new one.
+	everyone.Running = runningPos{}
+	v.AllAccountsHref = everyone.base()
+	v.Scrolled = f.Job != (lanePos{}) || f.Audit != (lanePos{})
+	if v.Scrolled {
+		v.NewestHref = f.base()
+	}
+
+	v.Rows = collapseActivityRows(v.Rows)
+	fc, fr := foldedSummary(v.Rows, func(r activityRow) int { return r.Calls })
+	v.CollapseNote = collapseNote(fc, fr)
+	for _, r := range v.Rows {
+		v.EventCount += r.Calls
+	}
+
+	// Cancel follows Job detail literally: a Job with Unresolved Tasks
+	// and a role the route is mounted for. It is drawn in Running now and
+	// nowhere on the stream, so a Job draws at most one per page by
+	// construction, whichever pages the two are on. A stream row links up
+	// to its entry when the entry is on this page, else to the section.
+	v.RunningNow = buildRunningNow(rn, f, d.now(), cancelOffered(d, accounts.Role(caller.Role)))
+	linkRunningRows(v.Rows, v.RunningNow)
+
+	// BOTH lane positions travel, always, and a lane that came back with
+	// no Next travels as FINISHED rather than as an empty cursor. "Older"
+	// is drawn only while some lane has a real next page, so the chain
+	// terminates instead of looping over a restarted lane forever.
+	nextJob, nextAudit := f.Job, f.Audit
+	if ranJob {
+		nextJob = lanePosAfter(jobNext)
+	}
+	if ranTrail {
+		nextAudit = lanePosAfter(auditNext)
+	}
+	if jobNext != "" || auditNext != "" {
+		v.OlderHref = f.href(nextJob, nextAudit)
+	}
+	// writeActivityCSV walks the same fetchActivity from page one with
+	// ShowConsole forced on, so with no rows, no left-out Console reads
+	// and no further page the file would be empty: offer no link to it.
+	if v.Scrolled || len(v.Rows) > 0 || v.ConsoleLeftOut > 0 || v.OlderHref != "" {
+		v.ExportHref = f.base() + exportSuffix(f)
 	}
 }
 
