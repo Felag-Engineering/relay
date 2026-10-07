@@ -351,8 +351,10 @@ jobs:
           probe="$(basename dist/relay-*-x86_64-unknown-linux-gnu)"
           version="${probe#relay-}"
           version="${version%-x86_64-unknown-linux-gnu}"
-          [ -n "${version}" ] && [ "${version}" != "${probe}" ] \
-            || { echo "::error::cannot derive the version from the artifact names"; exit 1; }
+          if [ -z "${version}" ] || [ "${version}" = "${probe}" ]; then
+            echo "::error::cannot derive the version from the artifact names"
+            exit 1
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Install syft
