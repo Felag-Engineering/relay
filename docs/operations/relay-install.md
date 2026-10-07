@@ -15,10 +15,14 @@ of that posture and what it does not.
 
 ## 1. Obtain and verify the artifact
 
-Releases publish `relay-<version>-x86_64-unknown-linux-gnu` (glibc-linked) plus a
-`SHA256SUMS` file. Follow the **verify-then-install** sequence from
+Releases publish `relay-<version>-x86_64-unknown-linux-gnu` and
+`relay-<version>-aarch64-unknown-linux-gnu` (statically linked; the `gnu` triple is kept
+for naming stability), plus a signed `SHA256SUMS` file. Follow the **verify-then-install** sequence from
 [release-artifacts.md](release-artifacts.md) — the digest check happens **before**
-the binary is installed or executed, and a mismatch aborts:
+the binary is installed or executed, and a mismatch aborts. The full sequence,
+including `cosign verify-blob` on `SHA256SUMS` and the optional
+`gh attestation verify`, is in release-artifacts.md; the commands below are its
+checksum core:
 
 ```sh
 # Pinned by the operator — never resolved at install time. Substitute the
@@ -26,7 +30,7 @@ the binary is installed or executed, and a mismatch aborts:
 # (see release-artifacts.md).
 VERSION="X.Y.Z"
 ARTIFACT="relay-${VERSION}-x86_64-unknown-linux-gnu"
-BASE="https://github.com/Felag-Engineering/gleipnir-relay/releases/download/v${VERSION}"
+BASE="https://github.com/Felag-Engineering/relay/releases/download/v${VERSION}"
 
 curl -fsSLO "${BASE}/${ARTIFACT}"
 curl -fsSLO "${BASE}/SHA256SUMS"
@@ -37,6 +41,11 @@ install -m 0755 "${ARTIFACT}" /usr/local/bin/relay
 
 `relay --version` (also `-version` and `-V`, identical to relay-daemon's spellings)
 prints the build stamp — see [version-stamping.md](version-stamping.md).
+
+The release binary is built with `CGO_ENABLED=0`, so it uses Go's pure resolver: it reads
+`/etc/hosts` and `/etc/resolv.conf` directly and ignores NSS modules configured in
+`/etc/nsswitch.conf` (LDAP, mDNS and the like). A hostname the Relay itself resolves — an
+OAuth issuer, a webhook host — must be resolvable through DNS or `/etc/hosts`.
 
 ## 2. Configuration surface
 
@@ -284,7 +293,7 @@ deliberately no `docker-compose.yml` at the repository root.
 | Root-owned unit file | **Not kept.** The compose file lives in the checkout; see the row above. |
 | Root-owned `EnvironmentFile` read only by the service | **Partly.** The file is read by `docker compose` on the host, as whoever runs it, and its values then sit in the container's environment, where anyone in the `docker` group can read them with `docker inspect`. That is why it must hold no secret — and note that `RELAY_APPROVAL_WEBHOOK_URL` may itself be a capability URL (a webhook endpoint whose path is its secret); if yours is, it is exposed the same way. Membership of the `docker` group is root-equivalent anyway. |
 | The unit's finer sandboxing (`SystemCallFilter=@system-service`, `ProtectKernel*`, `MemoryDenyWriteExecute`, `RestrictAddressFamilies`, `ProtectProc`) | **Not claimed.** Docker's default seccomp profile and namespaces cover some of the same ground; they are not equivalent and nothing here asserts they are. |
-| A digest-verified release binary (section 1) | **Not kept.** No Relay image is published yet (#399), so the stack builds the image from the checkout's own source. What runs is whatever that checkout contains. Switching to a pinned published image, once one exists, is a one-line change in the compose file. |
+| A digest-verified release binary (section 1) | **Not kept yet.** A signed Relay image is published per release (`ghcr.io/felag-engineering/relay`, #892), but the stack still builds the image from the checkout's own source, so what runs is whatever that checkout contains. The compose file switches to the published image, pinned by digest, once the first signed release exists; that is a one-line change. |
 | `Restart=on-failure`, enabled at boot | **`restart: unless-stopped`.** Docker's `on-failure` would not bring the Relay back after a host or Docker restart; `unless-stopped` does, and additionally restarts after a clean exit nobody asked for, which the Relay does not make on its own. Neither restarts an *unhealthy* container: watch the health status. |
 
 **Open point for a human: who owns a secret file.** Invariant 11 says a file holding a secret

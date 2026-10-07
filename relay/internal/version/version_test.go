@@ -151,7 +151,7 @@ func TestMakefileLdflagsTargetThisPackage(t *testing.T) {
 	}
 
 	// The flags must also actually be handed to the relay build.
-	if !strings.Contains(makefile, `go build -ldflags "$(GO_LDFLAGS)" -o bin/relay`) {
+	if !strings.Contains(makefile, `-ldflags "$(GO_LDFLAGS)" -o bin/relay`) {
 		t.Error("build-relay does not pass $(GO_LDFLAGS) to go build")
 	}
 }

@@ -18,11 +18,18 @@ stops before creating a branch.
 ## Stage 0 — Halt check (always first)
 
 ```bash
-gh issue list --label loop:halt --state open --limit 1 --json number -q 'length'
+halt="$(gh api 'repos/{owner}/{repo}/issues?labels=loop:halt&state=open&per_page=1' --jq 'if type == "array" then length else "not-an-array" end')"; halt_rc=$?
+if [ "$halt_rc" -eq 0 ] && [ "$halt" = 0 ]; then echo "halt: clear"
+elif [ "$halt_rc" -eq 0 ] && [ "$halt" = 1 ]; then echo "halted: loop:halt is set on an open issue or PR"
+else echo "halted: the loop:halt check gave no usable answer (exit $halt_rc), so the tick stops (fail closed)"; fi
 ```
 
-**Non-zero → stop immediately.** Print `halted: loop:halt is set on #N` and end the tick. Do
-not pick an issue, do not create a branch, do not comment.
+**Fail closed:** only exit 0 with output exactly `0` continues; anything else, an error or empty output included, stops the tick. Anything but the line `halt: clear`, including no line at all (the shell aborted), is a stop.
+A stop: print the block's line (if any) and end the tick. Do not pick an issue, do not create a
+branch, do not comment. The REST issues listing also returns PRs, so a PR labelled `loop:halt`
+halts too. Put the label on an issue a maintainer authored, ideally one pinned, dedicated halt
+issue, never on an outsider's issue or PR: its author can close it, and closing it (or merging a
+labelled PR) clears the halt.
 
 This is the remote kill switch: one label, settable from a phone, stopping every future tick
 without touching the routine's configuration. Never remove the `loop:halt` label yourself —

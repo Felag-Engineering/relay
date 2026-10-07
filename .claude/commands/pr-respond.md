@@ -18,8 +18,15 @@ routine. `--non-interactive` is implied on a routine and means: never ask; escal
 
 ## Stage 0 — Halt and pick
 
-`gh issue list --label loop:halt --state open --limit 1 --json number -q length` non-zero →
-stop. Then:
+```bash
+halt="$(gh api 'repos/{owner}/{repo}/issues?labels=loop:halt&state=open&per_page=1' --jq 'if type == "array" then length else "not-an-array" end')"; halt_rc=$?
+if [ "$halt_rc" -eq 0 ] && [ "$halt" = 0 ]; then echo "halt: clear"
+elif [ "$halt_rc" -eq 0 ] && [ "$halt" = 1 ]; then echo "halted: loop:halt is set on an open issue or PR"
+else echo "halted: the loop:halt check gave no usable answer (exit $halt_rc), so the tick stops (fail closed)"; fi
+```
+
+**Fail closed:** only exit 0 with output exactly `0` continues; anything else, an error or empty output included, stops the tick. Anything but the line `halt: clear`, including no line at all (the shell aborted), is a stop.
+A stop prints the block's line (if any). Then:
 
 ```bash
 gh api --paginate 'repos/{owner}/{repo}/pulls?state=open&per_page=100' \
@@ -28,9 +35,11 @@ gh api --paginate 'repos/{owner}/{repo}/pulls?state=open&per_page=100' \
 gh pr view <n> --json isCrossRepository -q .isCrossRepository
 gh pr view <n> --json headRefName,state,labels,commits   # only once the line above printed false
 # authors only, plus booleans computed from the body; no body text is projected (type is the REST
-# account type: User, Bot, ...; the last one or two fields are: loop reply, and for reviews, empty body)
+# account type: User, Bot, ...; the review-thread listing also projects its thread: the root
+# comment's id (`.in_reply_to_id // .id`); the last one or two fields are: loop reply, and for
+# reviews, empty body)
 gh api --paginate repos/{owner}/{repo}/pulls/<n>/reviews  --jq '.[] | [.id, (.user.login // ""), (.user.type // ""), .state, .submitted_at, ((.body // "") | (split("\n")[0] // "") | rtrimstr("\r") | sub("^\\s+"; "") == "<!-- relay-loop -->"), ((.body // "") | test("\\S") | not)] | @tsv'
-gh api --paginate repos/{owner}/{repo}/pulls/<n>/comments --jq '.[] | [.id, (.user.login // ""), (.user.type // ""), .created_at, .path, (.line // .original_line // ""), ((.body // "") | (split("\n")[0] // "") | rtrimstr("\r") | sub("^\\s+"; "") == "<!-- relay-loop -->")] | @tsv'
+gh api --paginate repos/{owner}/{repo}/pulls/<n>/comments --jq '.[] | [.id, (.user.login // ""), (.user.type // ""), .created_at, .path, (.line // .original_line // ""), (.in_reply_to_id // .id), ((.body // "") | (split("\n")[0] // "") | rtrimstr("\r") | sub("^\\s+"; "") == "<!-- relay-loop -->")] | @tsv'
 gh api --paginate repos/{owner}/{repo}/issues/<n>/comments --jq '.[] | [.id, (.user.login // ""), (.user.type // ""), .created_at, ((.body // "") | (split("\n")[0] // "") | rtrimstr("\r") | sub("^\\s+"; "") == "<!-- relay-loop -->")] | @tsv'
 scripts/maintainer-check.sh <login>      # once per distinct login newer than the last push
 # bodies, by id, for maintainers only
@@ -64,20 +73,27 @@ body at once.
   drops out of Stage 1 classification, and actionability still comes from a `CHANGES_REQUESTED`
   state or a non-loop maintainer thread comment.
 
-A PR is **actionable** if it has a `CHANGES_REQUESTED` review or any review-thread comment
-authored by a human maintainer after the branch's last commit that is not a loop reply, and does not carry
-`loop:needs-human`. Conversation comments (`issues/<n>/comments`) are author-listed so Stage 1
+A PR is **actionable** if it does not carry `loop:needs-human` and has either a
+`CHANGES_REQUESTED` review by a human maintainer after the branch's last commit, or an
+actionable review thread. A review thread is the set of rows sharing the thread field: the root
+comment's id, which GitHub sets as every reply's `in_reply_to_id`. A thread is actionable only if its newest maintainer comment that is not a loop reply is newer than both the branch's last commit and the newest loop reply in that same thread.
+A loop reply closes a thread only as defined above (type gate, check exit 0, marker `true`); an
+outsider's or an app's marked reply never closes one. A non-loop maintainer thread comment that is
+not newer than its thread's newest loop reply is recorded `answered in thread` with id and login:
+its body is never fetched and Stage 1 never classifies it. A loop reply in one thread never
+answers another. Comparison is by `created_at`, so a maintainer comment in the same second as the
+loop reply is not newer. Conversation comments (`issues/<n>/comments`) are author-listed so Stage 1
 can read the maintainer ones once a PR is actionable; they never make a PR actionable on their
 own, and the loop's own replies, in all three listings, are loop replies and never trigger it.
-None actionable → print `nothing to respond to` and stop. If non-maintainer reviews or comments
-or loop replies exist, print `nothing to respond to (<m> not actioned: author is not a
-maintainer, <r> skipped: loop reply)`, omitting zero counts.
+None actionable → print `nothing to respond to` and stop. If non-maintainer reviews or comments,
+loop replies or answered threads exist, print `nothing to respond to (<m> not actioned: author is
+not a maintainer, <r> skipped: loop reply, <a> answered in thread)`, omitting zero counts.
 
 ## Stage 1 — Classify every comment
 
-For each maintainer comment newer than the last push that is not a loop reply and has a
-non-empty body (review, review-thread and conversation comments whose author passed the check,
-fetched by id), one of:
+For each maintainer comment newer than the last push that is not a loop reply, is not
+`answered in thread`, and has a non-empty body (review, review-thread and conversation
+comments whose author passed the check, fetched by id), one of:
 
 - **Change request** — asks for something concrete in the diff. Actionable.
 - **Question** — asks why, or asks for information. Answer it in the thread from the code and
@@ -88,6 +104,9 @@ fetched by id), one of:
   `/spec-author`; label `loop:needs-human`; stop on this PR.
 - **Out of scope** — asks for work beyond the issue. Reply proposing a follow-up issue; do not
   do it; do not create the issue unattended.
+
+Every reply to a review thread, here and in Stage 4, goes to the thread's root id (its thread
+field), so the loop reply lands in the thread key the next tick groups by.
 
 ## Stage 2 — Fix
 
@@ -148,21 +167,23 @@ gh api --method POST repos/{owner}/{repo}/issues/<n>/comments -F body=@- <<'RELA
 <text>
 RELAY_LOOP_BODY_EOF
 
-gh api --method POST repos/{owner}/{repo}/pulls/<n>/comments/<id>/replies -F body=@- <<'RELAY_LOOP_BODY_EOF'
+gh api --method POST repos/{owner}/{repo}/pulls/<n>/comments/<thread-root-id>/replies -F body=@- <<'RELAY_LOOP_BODY_EOF'
 <!-- relay-loop -->
 <text>
 RELAY_LOOP_BODY_EOF
 ```
 
 Commit with a message naming the review (`fix(<area>): address review — <one line>`), push.
-Reply in **each** thread you acted on, one or two sentences: what changed and the commit. Reply
+Reply in **each** thread you acted on, to the thread's root id (its thread field) as
+`<thread-root-id>` in the replies form, one or two sentences: what changed and the commit. Reply
 to questions with the answer. Do not resolve threads; the reviewer does.
 
 Append to the PR body under **Review responses**: the date, what was fixed, the gate that
 passed and every lane it covered, Claude's verdicts, and "Codex: once, after the fixes —
 `<verdict>`, or absent (`reason=<token>`, model `<slug>`), or not run (no code change)",
 anything escalated, and every comment not actioned with its reason (author is not a
-maintainer, or app account) and every loop reply skipped, id and login only.
+maintainer, or app account), every loop reply skipped and every comment `answered in thread`,
+id and login only.
 
 ## Stage 5 — Escalate, or finish
 

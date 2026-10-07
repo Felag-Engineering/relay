@@ -476,8 +476,11 @@ fn nothing_in_the_build_overrides_the_clippy_config() {
         scripts.len()
     );
     for path in scripts {
-        let text = read(&path);
+        let mut text = read(&path);
         let name = path.strip_prefix(repo()).unwrap().display().to_string();
+        if name == "Makefile" {
+            text = without_the_release_rustflags(&text);
+        }
         for (pattern, why) in loosening_patterns() {
             let re = Regex::new(pattern).expect("pattern compiles");
             if let Some(m) = re.find(&text) {
@@ -489,6 +492,40 @@ fn nothing_in_the_build_overrides_the_clippy_config() {
             }
         }
     }
+}
+
+/// The one sanctioned `RUSTFLAGS` in the Makefile: `build-daemon-release` hands rustc the
+/// path-remapping flags that make the release artifact reproducible (#892). It is a
+/// `cargo build`, never a clippy run, and its value is pinned here to exactly the two
+/// `--remap-path-prefix` flags, so it can never carry a lint level. Both lines must appear
+/// exactly once and verbatim; the scan then runs over the rest of the Makefile as usual.
+/// Comment lines are dropped too: make passes neither a `#` line nor a recipe line that
+/// make or the shell sees as a comment to any tool.
+fn without_the_release_rustflags(makefile: &str) -> String {
+    const DEFINITION: &str =
+        "DAEMON_RELEASE_RUSTFLAGS := --remap-path-prefix=$(CURDIR)=/relay-src \
+                              --remap-path-prefix=$(CARGO_HOME_DIR)=/cargo";
+    const RECIPE: &str =
+        "\tcd daemon && $(DAEMON_STAMP) CC_$(subst -,_,$(RELEASE_DAEMON_TARGET))=musl-gcc \
+                          RUSTFLAGS=\"$(DAEMON_RELEASE_RUSTFLAGS)\" cargo build --release --locked \
+                          -p relay-daemon --target $(RELEASE_DAEMON_TARGET)";
+    let lines: Vec<&str> = makefile.lines().collect();
+    for (pinned, what) in [
+        (DEFINITION, "definition"),
+        (RECIPE, "build-daemon-release recipe"),
+    ] {
+        let n = lines.iter().filter(|l| **l == pinned).count();
+        assert_eq!(
+            n, 1,
+            "the release RUSTFLAGS {what} must appear exactly once, verbatim:\n{pinned}"
+        );
+    }
+    lines
+        .iter()
+        .filter(|l| **l != RECIPE && !l.trim_start().starts_with('#'))
+        .map(|l| l.replace("DAEMON_RELEASE_RUSTFLAGS", "DAEMON_RELEASE_FLAGS"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Flags that switch a clippy lint off, cap it, or hand rustc flags to the build.

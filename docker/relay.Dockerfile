@@ -1,18 +1,21 @@
 # Relay image. Build context is the repo root so the builder can see /relay.
 #
-# Two targets, one binary:
+# Three targets:
 #
 #   dev-fleet  DEV-ONLY, and only when named (`target: dev-fleet`, as every
 #              Relay build in docker-compose.demo.yml does): it adds the dev
 #              and demo fleets' approval-gate fixtures and runs as root,
 #              exactly as this image did before the split (docs/dev-fleet.md).
+#   release    the PUBLISHED image (ghcr.io/felag-engineering/relay, built by
+#              .github/workflows/release.yml, #892). Its binary is not compiled
+#              here: it is the released, rebuild-verified one, supplied as the
+#              named build context `release-binary`. Unprivileged, like runtime.
 #   runtime    the LAST stage, so the default for a build that names no
-#              target: the Relay and nothing else, as an unprivileged user.
-#              deploy/compose/docker-compose.yml builds it — the single-host
-#              deployment in docs/operations/relay-install.md, section 7. No
-#              fixture, gate file or credential is baked into it.
-#
-# Neither is a published, reviewed release image yet (#399).
+#              target: the Relay and nothing else, as an unprivileged user,
+#              compiled from this checkout. deploy/compose/docker-compose.yml
+#              builds it until it pins the published image by digest — the
+#              single-host deployment in docs/operations/relay-install.md,
+#              section 7. No fixture, gate file or credential is baked into it.
 
 # ---- build stage: compile the Relay (Go) as a static binary --------------------
 # golang:1.25-bookworm is a CEILING, and only that: the in-image `go build` below
@@ -30,16 +33,18 @@ COPY relay/ ./relay/
 # reproducible and free of local path leakage.
 RUN cd relay && CGO_ENABLED=0 go build -trimpath -o /out/relay ./cmd/relay
 
-# ---- base stage: what both targets below share ------------------------------
+# ---- os stage: what every target below shares, minus the binary ---------------
 # alpine rather than busybox: the compose healthcheck completes a real TLS
 # handshake with each listener, and both listeners are TLS 1.3 only — busybox's
 # ssl_client stops at 1.2. openssl s_client does 1.3 and verifies the chain
 # against the Relay's own CA. The static Go binary needs no libc.
-FROM alpine:3.22 AS base
+#
+# Pinned by digest: this is the only base that reaches the published image (the
+# golang builder above never ships). Dependabot's docker ecosystem refreshes the
+# tag and digest together (.github/dependabot.yml).
+FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 AS os
 
 RUN apk add --no-cache openssl
-
-COPY --from=build /out/relay /usr/local/bin/relay
 
 # 7654 = node-plane gRPC (relay-daemon dial-home); 9443 = control-plane HTTPS
 # (MCP + /api/v1). Distinct listeners, published to distinct host ports by
@@ -49,6 +54,11 @@ EXPOSE 7654 9443
 # All configuration is supplied as RELAY_* environment by the compose file
 # that runs the image.
 ENTRYPOINT ["/usr/local/bin/relay"]
+
+# ---- base stage: os plus the binary compiled above --------------------------
+FROM os AS base
+
+COPY --from=build /out/relay /usr/local/bin/relay
 
 # ---- dev-fleet: DEV-ONLY, selected by name ---------------------------------
 # FROM base, not FROM runtime: the dev and demo fleets run the Relay as root,
@@ -89,9 +99,7 @@ COPY --chmod=0644 docker/fixtures/approval-gates.demo.json /etc/relay/approval-g
 # one is minted at runtime by the `credential` service (docker/mint-credential.sh)
 # using this image's own `relay bootstrap-token` subcommand.
 
-# ---- runtime: the deployment target, and the LAST stage -----------------------
-# Last on purpose: a build that names no target gets this fixture-free,
-# non-root image, never the dev fleet's.
+# ---- unprivileged: os plus the non-root user, still without a binary ----------
 # The container expression of relay/packaging/relay.service's `User=relay`: the
 # Relay needs no privilege, so it does not run as root. The UID/GID are fixed so
 # that a file the operator mounts in (a webhook secret must be 0600 and owned
@@ -100,10 +108,41 @@ COPY --chmod=0644 docker/fixtures/approval-gates.demo.json /etc/relay/approval-g
 # /var/lib/relay is created 0700 and owned by that user, so a fresh named
 # volume mounted there inherits both — the CA key under it is the most
 # sensitive file in the deployment (docs/operations/ca-disaster-recovery.md).
-FROM base AS runtime
+# release and runtime both build on this stage, so they cannot drift apart in
+# posture; they differ only in where the binary comes from.
+FROM os AS unprivileged
 
 RUN addgroup -S -g 10001 relay \
  && adduser -S -D -H -u 10001 -G relay -s /sbin/nologin relay \
  && install -d -o relay -g relay -m 0700 /var/lib/relay
 
 USER 10001:10001
+
+# ---- release-binary: empty on purpose ----------------------------------------
+# release.yml overrides this with `--build-context release-binary=<dir>`. A
+# `--target release` build without it fails at the COPY below, rather than
+# quietly compiling and shipping a binary nobody rebuild-verified.
+FROM scratch AS release-binary
+
+# ---- release: the published image ---------------------------------------------
+# The binary is the one the release job built twice and compared byte for byte
+# and listed in the signed SHA256SUMS. COPY lands it root:root regardless of USER.
+FROM unprivileged AS release
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=unknown
+ARG REVISION=unknown
+
+LABEL org.opencontainers.image.source="https://github.com/Felag-Engineering/relay" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}"
+
+COPY --from=release-binary --chmod=0755 relay-${TARGETOS}-${TARGETARCH} /usr/local/bin/relay
+
+# ---- runtime: the build-from-checkout target, and the LAST stage ---------------
+# Last on purpose: a build that names no target gets this fixture-free,
+# non-root image, never the dev fleet's.
+FROM unprivileged AS runtime
+
+COPY --from=build /out/relay /usr/local/bin/relay

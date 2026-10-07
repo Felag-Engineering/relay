@@ -34,7 +34,9 @@ edition = "2021"
 # MSRV (#667): the oldest rustc this daemon is *claimed* to build on. A floor,
 # not a pin — the daemon tracks stable (AGENTS.md), so there is deliberately no
 # rust-toolchain.toml. Read the number as advisory: every first-party build, CI
-# and the fleet images alike, uses current stable, so nothing ever compiles the
+# and the fleet images alike, uses current stable (the release pins one exact
+# stable, RELEASE_RUST_TOOLCHAIN in release.yml, still without a
+# rust-toolchain.toml), so nothing ever compiles the
 # daemon at exactly this version and the claim can go stale without anything
 # noticing. Its two effects are real, though: cargo refuses an older rustc by
 # naming this version instead of failing somewhere in the middle of a compile,

@@ -1,5 +1,7 @@
-# Release CD (issue #250, closes #44): on a v* tag, build both stamped binaries,
-# verify the stamp equals the tag, and publish a checksummed GitHub Release.
+# Release CD (issue #250, closes #44; hardened by #892): on a v* tag, build both stamped
+# binaries for linux/amd64 and linux/arm64 TWICE, fail unless the two builds are
+# byte-identical, then publish a checksummed GitHub Release, a GHCR Relay image, SBOMs,
+# keyless signatures and provenance attestations.
 #
 # The daemon is distributed to the fleet by the customer's config management
 # (ADR-0014: the Relay never pushes binaries), so the artifact set here is the
@@ -7,8 +9,39 @@
 # verify-then-install path are documented in docs/operations/release-artifacts.md.
 # Change the convention there and here together.
 #
-# Deliberately out of scope (docs/operations/release-artifacts.md, "Out of
-# scope"): container images, SBOM, cosign/sigstore signing.
+# Job graph (a "dry run" is every run that is not a v* tag push: pull_request and
+# workflow_dispatch; it does all the building and guarding and publishes nothing):
+#
+#   build (arch x pass)  -> reproducible -> image -> sign-push -> github-release
+#   4 jobs, no privilege    diff + SBOMs    OCI      packages,     contents:write
+#                                           archive  id-token,     (only job that can
+#                                           + guards attestations  write a Release)
+#                                                       \-> latest (packages:write only)
+#
+# The three privileged jobs never start on a dry run (job-level `if:`), so a pull request
+# or a dispatch never holds id-token, packages, attestations or contents:write. This file
+# is never run under pull_request_target.
+#
+# Trust argument. Everything that is signed was built by unprivileged jobs and checked
+# before any privileged job runs: the binaries are the primary pass of a build that a second
+# runner, from a different checkout path, reproduced byte for byte; the image is built once
+# as an OCI archive and guarded by reading that archive's own bytes
+# (scripts/release-image-guard.sh). `sign-push` compiles nothing: it signs and moves bytes
+# that were already guarded. Nothing carries a version tag until it is signed, attested and
+# verified: the image is pushed by digest, and `:<version>` and `:latest` are the last
+# registry writes, made by copying the verified digest.
+# No build cache is used anywhere, including the setup-qemu and setup-buildx actions' own.
+#
+# Re-running. Use "Re-run failed jobs", never "Re-run all jobs". A re-run of a failed
+# `sign-push` reuses the successful `image` job's archive, so it carries the same digest;
+# "Re-run all jobs" rebuilds the image, whose bytes are not reproducible, and `sign-push`
+# then refuses to move an already-published version tag to a new digest. That refusal is by
+# design: a published version never moves. See docs/operations/release-artifacts.md.
+#
+# Two things only a human can do, because neither is configurable from this file: restrict
+# who may create, move or delete `v*` tags (a tag push is the only thing that triggers
+# signing), and, optionally, put `sign-push`, `github-release` and `latest` behind a
+# protected `release` environment with required reviewers.
 
 name: Release
 
@@ -17,18 +50,77 @@ on:
     # Tags only — never branch pushes. `v*` matches every release tag this
     # project cuts (vX.Y.Z and prerelease forms like vX.Y.Z-beta).
     tags: ['v*']
+  # A maintainer's dry run, from a BRANCH. A dispatch on a tag is refused (see `build`).
+  workflow_dispatch: {}
+  # A dry run on every change to what a release builds, so a break shows on the PR
+  # rather than on the tag. Drafts are skipped.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - .github/workflows/release.yml
+      - docker/relay.Dockerfile
+      - .dockerignore
+      - Makefile
+      - scripts/build-version.sh
+      - scripts/release-image-guard.sh
+      - daemon/Cargo.toml
+      - daemon/Cargo.lock
+      - relay/go.mod
+      - relay/go.sum
 
-# The default GITHUB_TOKEN needs contents:write to create the Release. Nothing
-# here needs more; keep the surface minimal (principle as in ci.yml).
-permissions:
-  contents: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Nothing inherits: every job declares exactly what it holds.
+permissions: {}
+
+env:
+  # The one place the release's Rust toolchain is named: an exact stable, never a channel,
+  # bumped deliberately (the daemon otherwise tracks stable, and there is no
+  # rust-toolchain.toml — AGENTS.md). CI keeps `stable`, so CI sees a new stable first.
+  RELEASE_RUST_TOOLCHAIN: 1.99.0
 
 jobs:
-  release:
-    name: Build, verify, publish
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  build:
+    name: Build ${{ matrix.arch }} (${{ matrix.pass }})
+    if: github.event.pull_request.draft != true
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+        pass: [primary, rebuild]
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            daemon_triple: x86_64-unknown-linux-musl
+            relay_triple: x86_64-unknown-linux-gnu
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            daemon_triple: aarch64-unknown-linux-musl
+            relay_triple: aarch64-unknown-linux-gnu
+    env:
+      # The second pass builds from a different absolute path, which is what the diff
+      # downstream proves the binaries do not depend on.
+      SRC: ${{ matrix.pass == 'primary' && 'src' || 'rebuild/nested/src' }}
+      ARCH: ${{ matrix.arch }}
+      PASS: ${{ matrix.pass }}
+      DAEMON_TRIPLE: ${{ matrix.daemon_triple }}
+      RELAY_TRIPLE: ${{ matrix.relay_triple }}
+      IS_RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     steps:
+      # A dispatch on a tag would take the dry-run path below, whose guard demands a -0.dev
+      # stamp, and fail confusingly on a correctly stamped release build.
+      - name: Refuse a dispatch from a tag
+        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/')
+        run: |
+          echo "::error::dispatch from a branch; a release runs only from the tag push"
+          exit 1
+
       # fetch-depth: 0 is load-bearing, not a convenience: the version stamp
       # (scripts/build-version.sh) reports the release version ONLY when the
       # tag v<Cargo.toml version> is visible on a clean HEAD. A shallow,
@@ -40,26 +132,38 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          path: ${{ env.SRC }}
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: relay/go.mod
+          go-version-file: ${{ env.SRC }}/relay/go.mod
           cache: false
 
-      - name: Set up Rust stable (musl target)
+      - name: Set up Rust (pinned, musl target)
         uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
-          toolchain: stable
-          targets: x86_64-unknown-linux-musl
+          toolchain: ${{ env.RELEASE_RUST_TOOLCHAIN }}
+          targets: ${{ matrix.daemon_triple }}
 
+      - name: Assert the pinned toolchain is the one in use
+        run: |
+          set -euo pipefail
+          rustc --version
+          case "$(rustc --version)" in
+            "rustc ${RELEASE_RUST_TOOLCHAIN} "*) ;;
+            *) echo "::error::rustc is not ${RELEASE_RUST_TOOLCHAIN}"; exit 1 ;;
+          esac
+
+      # apt-get update is required on the arm image. Native on both arches: no cross
+      # toolchain, because Ubuntu packages no aarch64 musl C compiler for ring.
       - name: Install musl linker
-        run: sudo apt-get install -y musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       # No build caches here, deliberately (zizmor: cache-poisoning). A cache restored
       # into this job would feed objects built by some earlier run into the binaries
       # the fleet installs; a release is rare enough that a cold build costs nothing
-      # worth that. The toolchain setups below are told not to cache for the same reason.
+      # worth that. The toolchain setups above are told not to cache for the same reason.
 
       # Pin the build date to the tagged commit's committer date so a rebuild of
       # the same tag reproduces the same bytes — and therefore the same SHA256.
@@ -68,17 +172,44 @@ jobs:
       # verification (docs/operations/version-stamping.md, "Reproducibility
       # limit"). scripts/build-version.sh honours SOURCE_DATE_EPOCH.
       - name: Pin SOURCE_DATE_EPOCH to the tagged commit
-        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)" >> "$GITHUB_ENV"
+        run: |
+          cd "$SRC"
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)" >> "$GITHUB_ENV"
+
+      # What the build ran on, written next to the artifacts and echoed. Not a release
+      # asset: it is what `reproducible` prints beside a mismatch, so a runner-image or
+      # compiler difference is visible rather than a mystery. Outside the checkout, so it
+      # can never make the tree dirty.
+      - name: Record the build environment
+        run: |
+          set -uo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          {
+            echo "image: ${ImageOS:-?} ${ImageVersion:-?}"
+            echo "machine: $(uname -m)"
+            echo "gcc: $(gcc --version | head -1)"
+            echo "musl-gcc: $(musl-gcc -v 2>&1 | tail -1)"
+            dpkg-query -W musl-tools
+            rustc -vV
+            cargo -V
+            go version
+            echo "SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH}"
+            echo "commit: $(git -C "$SRC" rev-parse HEAD)"
+          } | tee "$GITHUB_WORKSPACE/dist/BUILDENV.${ARCH}.${PASS}"
 
       # Both binaries via the Makefile's stamped targets — the same recipes as
       # local builds and CI, no parallel build path. (docker/daemon.Dockerfile is
       # deliberately NOT the release recipe: it builds unstamped, for the dev
       # fleet.)
-      - name: Build relay (stamped)
-        run: make build-relay
+      - name: Build relay (stamped, static)
+        run: |
+          cd "$SRC"
+          make build-relay
 
       - name: Build relay-daemon (stamped, static musl)
-        run: make build-daemon-release
+        run: |
+          cd "$SRC"
+          make build-daemon-release RELEASE_DAEMON_TARGET="$DAEMON_TRIPLE"
 
       # ---- stamped-version-equals-tag guard ----
       # The single assertion that keeps "the published artifact reports its true
@@ -90,12 +221,24 @@ jobs:
       #   - Cargo.toml not bumped to the tag's version -> stamp is X.Y.Z-dev+g<sha>
       #   - Cargo.toml bumped past the tag             -> stamp is a -dev of an unshipped version
       #   - tag invisible to the checkout              -> stamp takes the -dev path
+      # On a dry run there is no tag: the expected stamp is the one the checkout
+      # computes for itself, and it must be a -0.dev stamp, so a dry run can never be
+      # mistaken for a release build.
       - name: Guard - stamped version equals tag
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
+          cd "$SRC"
+          if [ "${IS_RELEASE}" = "true" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="v$(bash scripts/build-version.sh | awk '{print $1}')"
+            case "${tag}" in
+              *-0.dev*) ;;
+              *) echo "::error::a dry run must stamp a -0.dev version, got '${tag}'"; exit 1 ;;
+            esac
+          fi
           relay_v="$(relay/bin/relay --version | awk '{print $2}')"
-          daemon_v="$(daemon/target/x86_64-unknown-linux-musl/release/relay-daemon --version | awk '{print $2}')"
+          daemon_v="$("$(make -s print-release-daemon-bin RELEASE_DAEMON_TARGET="$DAEMON_TRIPLE")" --version | awk '{print $2}')"
           echo "tag=${tag} relay=${relay_v} relay-daemon=${daemon_v}"
           fail=0
           if [ "v${relay_v}" != "${tag}" ]; then
@@ -106,18 +249,24 @@ jobs:
             echo "::error::relay-daemon stamped version '${daemon_v}' does not equal tag '${tag}'"
             fail=1
           fi
-          exit "${fail}"
+          [ "${fail}" -eq 0 ] || exit 1
+          echo "EXPECTED_TAG=${tag}" >> "$GITHUB_ENV"
 
-      # The daemon artifact must be static (ADR-0007): it drops onto arbitrary
-      # fleet Nodes with no libc expectations. ldd prints "statically linked"
-      # (static-pie) or "not a dynamic executable" depending on version; accept
-      # either, fail on anything else.
-      - name: Guard - relay-daemon is static
+      # Both artifacts must be static (ADR-0007): the daemon drops onto arbitrary fleet
+      # Nodes with no libc expectations, and the Relay now runs in an alpine image and must
+      # not depend on the runner's glibc. ldd prints "statically linked" (static-pie) or
+      # "not a dynamic executable" depending on version; accept either, fail on anything else.
+      - name: Guard - binaries are static
         run: |
           set -uo pipefail
-          out="$(ldd daemon/target/x86_64-unknown-linux-musl/release/relay-daemon 2>&1 || true)"
-          echo "${out}"
-          echo "${out}" | grep -Eq 'statically linked|not a dynamic executable'
+          cd "$SRC"
+          fail=0
+          for bin in "$(make -s print-release-daemon-bin RELEASE_DAEMON_TARGET="$DAEMON_TRIPLE")" relay/bin/relay; do
+            out="$(ldd "${bin}" 2>&1 || true)"
+            echo "${bin}: ${out}"
+            echo "${out}" | grep -Eq 'statically linked|not a dynamic executable' || { echo "::error::${bin} is not static"; fail=1; }
+          done
+          exit "${fail}"
 
       # ---- stage artifacts under the documented naming convention ----
       # <binary>-<version>-<target-triple>; <version> is the tag without the
@@ -126,18 +275,488 @@ jobs:
       - name: Stage artifacts and generate SHA256SUMS
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          mkdir -p dist
-          cp daemon/target/x86_64-unknown-linux-musl/release/relay-daemon \
-             "dist/relay-daemon-${version}-x86_64-unknown-linux-musl"
-          cp relay/bin/relay \
-             "dist/relay-${version}-x86_64-unknown-linux-gnu"
+          version="${EXPECTED_TAG#v}"
+          daemon_bin="$(cd "$SRC" && make -s print-release-daemon-bin RELEASE_DAEMON_TARGET="$DAEMON_TRIPLE")"
+          cp "${daemon_bin}" "dist/relay-daemon-${version}-${DAEMON_TRIPLE}"
+          cp "$SRC/relay/bin/relay" "dist/relay-${version}-${RELAY_TRIPLE}"
           cd dist
           # Bare filenames in SHA256SUMS so `sha256sum --check` works from any
           # download directory.
-          sha256sum relay-daemon-"${version}"-x86_64-unknown-linux-musl \
-                    relay-"${version}"-x86_64-unknown-linux-gnu > SHA256SUMS
+          sha256sum "relay-daemon-${version}-${DAEMON_TRIPLE}" \
+                    "relay-${version}-${RELAY_TRIPLE}" > "SHA256SUMS.${ARCH}"
+          cat "SHA256SUMS.${ARCH}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bin-${{ matrix.arch }}-${{ matrix.pass }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Rebuild-and-diff. What this proves, and no more: the build is deterministic for this
+  # commit, toolchain and runner-image family, and independent of the checkout path (the two
+  # passes ran on separate VMs from different directories). It does NOT prove independence
+  # from GitHub's infrastructure or from the toolchain downloads, which both passes share, nor
+  # that the source is benign. It is the precondition for a third party's independent
+  # rebuild, not a substitute for one.
+  reproducible:
+    name: Rebuild matches, SBOMs
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.assemble.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bin-*
+          path: bins
+
+      - name: Diff the two passes
+        run: |
+          set -uo pipefail
+          fail=0
+          for arch in x86_64 aarch64; do
+            a="bins/bin-${arch}-primary"
+            b="bins/bin-${arch}-rebuild"
+            echo "== ${arch}: build environments (empty diff is the expected case)"
+            diff -y "${a}/BUILDENV.${arch}.primary" "${b}/BUILDENV.${arch}.rebuild" || true
+            if ! diff "${a}/SHA256SUMS.${arch}" "${b}/SHA256SUMS.${arch}"; then
+              echo "::error::${arch}: the rebuild's SHA256SUMS differs from the primary build's"
+              fail=1
+              continue
+            fi
+            for f in "${a}"/relay-*; do
+              cmp "${f}" "${b}/$(basename "${f}")" || { echo "::error::${arch}: $(basename "${f}") differs"; fail=1; }
+            done
+          done
+          exit "${fail}"
+
+      # The release set is the primary pass's. The rebuild existed only to be compared.
+      - name: Assemble the release directory
+        id: assemble
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for arch in x86_64 aarch64; do
+            cp bins/bin-"${arch}"-primary/relay-* dist/
+          done
+          ls -l dist
+          probe="$(basename dist/relay-*-x86_64-unknown-linux-gnu)"
+          version="${probe#relay-}"
+          version="${version%-x86_64-unknown-linux-gnu}"
+          if [ -z "${version}" ] || [ "${version}" = "${probe}" ]; then
+            echo "::error::cannot derive the version from the artifact names"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Install syft
+        id: syft
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.54.1
+
+      # SPDX JSON, one per binary. The Relay's come from the Go build info in the binary (the
+      # exact module set). A stripped Rust binary carries no dependency metadata syft can
+      # read, so the daemon's come from Cargo.lock: a superset (every target, dev and build
+      # dependencies). SBOMs are not reproducible (timestamps, UUIDs) and are not part of
+      # the diff above.
+      - name: SBOMs for the binaries
+        env:
+          SYFT: ${{ steps.syft.outputs.cmd }}
+        run: |
+          set -euo pipefail
+          for f in dist/relay-*; do
+            case "$(basename "${f}")" in
+              relay-daemon-*) "${SYFT}" scan "file:daemon/Cargo.lock" -o "spdx-json=${f}.spdx.json" ;;
+              *)              "${SYFT}" scan "file:${f}" -o "spdx-json=${f}.spdx.json" ;;
+            esac
+          done
+          cd dist
+          sha256sum relay-* > SHA256SUMS
           cat SHA256SUMS
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  image:
+    name: Build and guard the Relay image
+    needs: reproducible
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.reproducible.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: dist
+
+      # The image carries the released binary byte for byte, supplied as a named build
+      # context; the Dockerfile's `release` stage compiles nothing.
+      - name: Prepare the binary build context
+        run: |
+          set -euo pipefail
+          mkdir -p dist/image
+          cp "dist/relay-${VERSION}-x86_64-unknown-linux-gnu"  dist/image/relay-linux-amd64
+          cp "dist/relay-${VERSION}-aarch64-unknown-linux-gnu" dist/image/relay-linux-arm64
+
+      # Both actions default to restoring tool images and binaries from the Actions cache,
+      # which would put a cache into the chain that produces the signed image. Off. Their
+      # tool images are pinned by digest instead.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          cache-image: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+          cache-binary: false
+
+      - name: Build the image as an OCI archive
+        env:
+          REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --file docker/relay.Dockerfile \
+            --target release \
+            --build-context "release-binary=${PWD}/dist/image" \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg "VERSION=${VERSION}" \
+            --build-arg "REVISION=${REVISION}" \
+            --provenance=false --sbom=false \
+            --output type=oci,dest=relay-image.oci.tar \
+            .
+
+      # skopeo extracts a platform from the archive for the guard's --version step (through a
+      # docker-archive file, not the Docker daemon API) and pushes the archive later.
+      - name: Ensure skopeo
+        run: command -v skopeo >/dev/null || { sudo apt-get update && sudo apt-get install -y skopeo; }
+
+      # The guards read THE ARCHIVE'S bytes — the same file `sign-push` will push — never a
+      # separately built image: the binary's sha256 against SHA256SUMS, the config's User and
+      # Entrypoint, and (on the image loaded from the archive itself) --version against the
+      # stamp. arm64 runs under QEMU.
+      - name: Guard - image binary, user, entrypoint and version
+        run: |
+          set -euo pipefail
+          for p in amd64:x86_64 arm64:aarch64; do
+            goarch="${p%%:*}"; arch="${p##*:}"
+            sha="$(awk -v n="relay-${VERSION}-${arch}-unknown-linux-gnu" '$2 == n {print $1}' dist/SHA256SUMS)"
+            [ -n "${sha}" ] || { echo "::error::no SHA256SUMS line for the ${arch} relay"; exit 1; }
+            bash scripts/release-image-guard.sh relay-image.oci.tar "linux/${goarch}" "${sha}" "${VERSION}"
+          done
+
+      - name: Install syft
+        id: syft
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.54.1
+
+      - name: Image SBOMs and digest
+        env:
+          SYFT: ${{ steps.syft.outputs.cmd }}
+        run: |
+          set -euo pipefail
+          for p in amd64 arm64; do
+            "${SYFT}" scan oci-archive:relay-image.oci.tar --platform "linux/${p}" \
+              -o "spdx-json=relay-image-${VERSION}-linux-${p}.spdx.json"
+          done
+          sha256sum relay-image.oci.tar > relay-image.oci.tar.sha256
+          # The image index's digest, which is what the registry will report after a push.
+          tar -xOf relay-image.oci.tar index.json \
+            | jq -er 'if (.manifests | length) == 1 then .manifests[0].digest else error("index.json must name exactly one manifest") end' \
+            > relay-image.digest
+          cat relay-image.digest
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-image
+          path: |
+            relay-image.oci.tar
+            relay-image.oci.tar.sha256
+            relay-image.digest
+            relay-image-*.spdx.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # Signs and publishes; builds nothing. Never gets an `always()` or `!cancelled()` job
+  # condition: it runs only after every job above succeeded, on a tag push.
+  sign-push:
+    name: Sign and push
+    needs: [reproducible, image]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      packages: write       # push to ghcr.io
+      id-token: write       # Fulcio keyless certificate (cosign) and attestation signing
+      attestations: write   # actions/attest-build-provenance
+    env:
+      IMAGE: ghcr.io/felag-engineering/relay
+    steps:
+      # Fail closed. Signing writes to the public Rekor log from a private repository
+      # (cosign sign-blob does so before attestation can fail), and attestations on a private
+      # repository need a plan that supports them. Until the owner records both decisions as
+      # repository variables this job errors; an unset variable is an error, never a skip,
+      # because a release without signatures must not look like one. `vars` also resolves
+      # organization- and environment-level variables.
+      - name: Decision gate
+        env:
+          REKOR: ${{ vars.RELEASE_PUBLIC_REKOR_ACCEPTED }}
+          ATTEST: ${{ vars.RELEASE_ATTESTATIONS_AVAILABLE }}
+        run: |
+          [ "${REKOR}" = "true" ] || { echo "::error::D1 unrecorded: set repository variable RELEASE_PUBLIC_REKOR_ACCEPTED=true once the owner accepts public Rekor entries for this private repository"; exit 1; }
+          [ "${ATTEST}" = "true" ] || { echo "::error::D2 unrecorded: set RELEASE_ATTESTATIONS_AVAILABLE=true once the organization's plan supports artifact attestations on a private repository"; exit 1; }
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: dist
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-image
+          path: image
+
+      - name: Check the artifacts are the ones that were guarded
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          [ -e "dist/relay-${version}-x86_64-unknown-linux-gnu" ] \
+            || { echo "::error::the built artifacts are not version ${version}"; exit 1; }
+          (cd image && sha256sum --check relay-image.oci.tar.sha256)
+          cp image/relay-image-*.spdx.json dist/
+          (cd dist && sha256sum relay-image-*.spdx.json >> SHA256SUMS && sha256sum --check SHA256SUMS)
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      # Steps that do not touch the registry come first, so a failure there leaves nothing
+      # published; the registry steps then sign before anything is tagged.
+      - name: Sign SHA256SUMS (keyless)
+        run: cosign sign-blob --yes --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
+
+      - name: Attest the release artifacts
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      # The identity is pinned to this workflow at this ref, so a signature from any other
+      # workflow, repository or ref fails. --signer-workflow and --source-ref are always set
+      # on gh attestation verify; without them any workflow in the repository satisfies it.
+      - name: Verify what was just signed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          id="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"
+          cosign verify-blob --bundle dist/SHA256SUMS.sigstore.json \
+            --certificate-identity "${id}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            dist/SHA256SUMS
+          for f in dist/relay-*-unknown-linux-*; do
+            case "${f}" in *.spdx.json) continue ;; esac
+            gh attestation verify "${f}" --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml" \
+              --source-ref "${GITHUB_REF}"
+          done
+
+      # One login serves skopeo (which falls back to ~/.docker/config.json), cosign, and
+      # attest-build-provenance's push-to-registry, which reads the docker config.
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "${GH_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Ensure skopeo
+        run: command -v skopeo >/dev/null || { sudo apt-get update && sudo apt-get install -y skopeo; }
+
+      # A published version is never moved. Proceed only when the registry says specifically
+      # that the version does not exist yet, or that it already holds exactly this digest (an
+      # idempotent re-push). Any other inspect error — an outage, a denial — fails the job
+      # rather than being read as "absent".
+      - name: Refuse to retag
+        id: digest
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          digest="$(cat image/relay-image.digest)"
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::malformed image digest '${digest}'"; exit 1; }
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          set +e
+          err="$(skopeo inspect --raw "docker://${IMAGE}:${version}" 2>&1 >existing.json)"
+          rc=$?
+          set -e
+          if [ "${rc}" -eq 0 ]; then
+            existing="sha256:$(sha256sum existing.json | awk '{print $1}')"
+            if [ "${existing}" != "${digest}" ]; then
+              echo "::error::${IMAGE}:${version} already points at ${existing}; a published version is never moved. Re-run with 'Re-run failed jobs' (it reuses this run's image artifact) or cut a new tag."
+              exit 1
+            fi
+            echo "::notice::${IMAGE}:${version} already holds ${digest}; continuing"
+          elif grep -Eqi 'manifest unknown|MANIFEST_UNKNOWN|name unknown|NAME_UNKNOWN' <<<"${err}"; then
+            echo "${IMAGE}:${version} does not exist yet"
+          else
+            echo "::error::cannot tell whether ${IMAGE}:${version} exists: ${err}"
+            exit 1
+          fi
+
+      # The archive that was guarded, pushed unchanged (same bytes, same digests) BY DIGEST:
+      # no version tag exists yet, so nothing can pull an unsigned `:<version>`.
+      - name: Push the image by digest
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          skopeo copy --all --preserve-digests \
+            oci-archive:image/relay-image.oci.tar "docker://${IMAGE}@${DIGEST}"
+          skopeo inspect --raw "docker://${IMAGE}@${DIGEST}" > pushed.json
+          pushed="sha256:$(sha256sum pushed.json | awk '{print $1}')"
+          [ "${pushed}" = "${DIGEST}" ] || { echo "::error::registry holds ${pushed}, pushed ${DIGEST}"; exit 1; }
+
+      - name: Sign the image (keyless)
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: cosign sign --yes --recursive "${IMAGE}@${DIGEST}"
+
+      # create-storage-record: false — v4 would otherwise write a storage record, which
+      # needs the artifact-metadata: write permission this job does not hold.
+      - name: Attest the image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Verify the image signature
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign verify "${IMAGE}@${DIGEST}" \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+      # The version tag is the last registry write for this release: it is made only now that
+      # the digest is signed, attested and verified, by copying that digest. The retag check
+      # above already proved the tag is absent or already this digest.
+      - name: Tag the verified digest
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          skopeo copy --all --preserve-digests "docker://${IMAGE}@${DIGEST}" "docker://${IMAGE}:${version}"
+          skopeo inspect --raw "docker://${IMAGE}:${version}" > tagged.json
+          tagged="sha256:$(sha256sum tagged.json | awk '{print $1}')"
+          [ "${tagged}" = "${DIGEST}" ] || { echo "::error::${IMAGE}:${version} holds ${tagged}, want ${DIGEST}"; exit 1; }
+
+      # The credential must not outlive the steps that used it, whether or not they passed.
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io || true
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # :latest follows the highest NON-prerelease tag, and only that. `sort -V` orders
+  # prereleases above their release, so tags with a hyphen are filtered out first. A job of
+  # its own, in its own concurrency group, so two tags cut close together cannot race on it;
+  # a run superseded while pending loses only its :latest move, and the next run recomputes
+  # the highest tag. It holds packages:write and nothing else, and only runs once the digest
+  # has been signed and tagged.
+  latest:
+    name: Move :latest
+    needs: [sign-push, image]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: release-latest
+      cancel-in-progress: false
+    permissions:
+      contents: read  # private repo: actions/checkout needs it for `git tag -l`
+      packages: write
+    env:
+      IMAGE: ghcr.io/felag-engineering/relay
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-image
+          path: image
+
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "${GH_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Ensure skopeo
+        run: command -v skopeo >/dev/null || { sudo apt-get update && sudo apt-get install -y skopeo; }
+
+      - name: Move :latest (highest release tag only)
+        run: |
+          set -euo pipefail
+          digest="$(cat image/relay-image.digest)"
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::malformed image digest '${digest}'"; exit 1; }
+          highest="$(git tag -l 'v*' | grep -v -- - | sort -V | tail -1)"
+          if [ "${highest}" != "${GITHUB_REF_NAME}" ]; then
+            echo "${GITHUB_REF_NAME} is not the highest release tag (${highest}): :latest not moved"
+            exit 0
+          fi
+          skopeo copy --all --preserve-digests "docker://${IMAGE}@${digest}" "docker://${IMAGE}:latest"
+
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io || true
+
+  # The only job that can write a Release.
+  github-release:
+    name: Publish the GitHub Release
+    needs: sign-push
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signed-dist
+          path: dist
+
+      - name: Check the signed artifacts
+        run: cd dist && sha256sum --check SHA256SUMS
 
       # gh is preinstalled on the runner and uses the job's GITHUB_TOKEN — no
       # third-party release action to pin or audit. --verify-tag refuses to
@@ -150,12 +769,12 @@ jobs:
       # because an earlier attempt published and then failed. Uploading into the
       # existing Release is the safe resolution — the artifacts still come from
       # THIS verified build, and --clobber replaces any same-named asset rather
-      # than silently keeping a stale one. Re-running the job must converge, not
-      # fail; the guards above are what protect the artifacts' integrity, not the
-      # accident of who created the Release row.
+      # than silently keeping a stale one. The guards above are what protect the
+      # artifacts' integrity, not the accident of who created the Release row.
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"

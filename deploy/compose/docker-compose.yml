@@ -33,13 +33,15 @@ name: relay
 
 services:
   relay:
-    # Built from this checkout because no Relay image is published yet (#399).
-    # The context is the repo root, two levels up. Once an image is published,
-    # replace this ONE line with the pinned image, for example
-    #   image: <registry>/relay:<version>@sha256:<digest>
-    # (built from the same Dockerfile's `runtime` stage, so it runs as UID
-    # 10001 and owns /var/lib/relay). `runtime` carries no dev fixture — see
-    # docker/relay.Dockerfile.
+    # Built from this checkout. A signed Relay image is now published per release
+    # (ghcr.io/felag-engineering/relay, #892); this file pins it by digest once the
+    # first signed release exists, replacing the `build:` block (never both).
+    # The context is the repo root, two levels up. Meanwhile, to use a published
+    # image, replace this ONE line with the pinned image, for example
+    #   image: ghcr.io/felag-engineering/relay:<version>@sha256:<digest>
+    # (its `release` stage and the `runtime` stage below share one unprivileged
+    # base, so either runs as UID 10001 and owns /var/lib/relay). Neither carries
+    # a dev fixture — see docker/relay.Dockerfile.
     build: { context: ../.., dockerfile: docker/relay.Dockerfile, target: runtime }
 
     # Relay configuration, written by the operator on the HOST and never
