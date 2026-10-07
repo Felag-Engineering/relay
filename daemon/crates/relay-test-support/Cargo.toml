@@ -1,0 +1,18 @@
+[package]
+name = "relay-test-support"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Test fixtures shared by the daemon workspace. Dev-dependency ONLY (tests/clippy_write_ban.rs)."
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+relay-log = { workspace = true }
+rustix = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

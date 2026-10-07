@@ -150,9 +150,9 @@ done
 
 # --- 4b. Every input of the PR-time advisory scans trips deps: the manifests and lockfiles
 # they read and the cargo-deny policy. (The daemon's fuzz workspace is not one: cargo-deny
-# checks the daemon crate only, and the nightly scan covers the rest.)
-for p in relay/go.sum daemon/Cargo.toml daemon/Cargo.lock daemon/deny.toml \
-  relay/govulncheck-exceptions.txt scripts/vuln-gate.sh; do
+# checks the daemon workspace (--workspace), which the fuzz crate is not a member of.)
+for p in relay/go.sum daemon/Cargo.toml daemon/crates/relay-policy/Cargo.toml daemon/Cargo.lock \
+  daemon/deny.toml relay/govulncheck-exceptions.txt scripts/vuln-gate.sh; do
   classify "$ARGS" "" "$p"
   expect "deps input $p" true false true
 done

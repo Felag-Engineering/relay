@@ -10,6 +10,17 @@
 
 use std::fmt;
 
+use tracing::Subscriber;
+use tracing_subscriber::fmt::format::{DefaultFields, Format, Full};
+use tracing_subscriber::fmt::time::SystemTime as LogSystemTime;
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::registry::LookupSpan;
+
+#[cfg(feature = "ban-probe")]
+#[allow(dead_code)]
+#[path = "../ban_probe.rs"]
+mod ban_probe;
+
 /// Longest value, counted in chars of the raw value before escaping. Debug
 /// expands one char to at most 10, so a line stays bounded.
 pub(crate) const LOG_FIELD_MAX_CHARS: usize = 256;
@@ -18,7 +29,7 @@ pub(crate) const LOG_LIST_MAX_ITEMS: usize = 16;
 
 /// A string that came off the wire, rendered quoted and escaped, and cut at
 /// [`LOG_FIELD_MAX_CHARS`].
-pub(crate) struct Untrusted<'a>(&'a str);
+pub struct Untrusted<'a>(&'a str);
 
 impl fmt::Display for Untrusted<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -33,7 +44,7 @@ impl fmt::Display for Untrusted<'_> {
 
 /// A list of wire strings: each element as [`Untrusted`], at most
 /// [`LOG_LIST_MAX_ITEMS`] of them.
-pub(crate) struct UntrustedList<'a>(&'a [String]);
+pub struct UntrustedList<'a>(&'a [String]);
 
 impl fmt::Display for UntrustedList<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -53,13 +64,33 @@ impl fmt::Display for UntrustedList<'_> {
 
 /// Wraps a wire string as a `tracing` field value. Call sites use no `%`/`?`
 /// sigil on the result.
-pub(crate) fn untrusted(s: &str) -> tracing::field::DisplayValue<Untrusted<'_>> {
+pub fn untrusted(s: &str) -> tracing::field::DisplayValue<Untrusted<'_>> {
     tracing::field::display(Untrusted(s))
 }
 
 /// [`untrusted`] for a list of wire strings.
-pub(crate) fn untrusted_list(v: &[String]) -> tracing::field::DisplayValue<UntrustedList<'_>> {
+pub fn untrusted_list(v: &[String]) -> tracing::field::DisplayValue<UntrustedList<'_>> {
     tracing::field::display(UntrustedList(v))
+}
+
+/// The daemon's one log formatting layer, shared by production and the tests
+/// that prove what a journal line looks like.
+///
+/// ANSI is off unconditionally because the log sink is journald (#888): escape
+/// codes split the target from its colon and break the documented `journalctl`
+/// pattern. `log_internal_errors(true)` keeps what `fmt()`'s builder set, so a
+/// failed write to stdout is still reported on stderr, not dropped silently.
+pub fn log_fmt_layer<S, W>(
+    make_writer: W,
+) -> tracing_subscriber::fmt::Layer<S, DefaultFields, Format<Full, LogSystemTime>, W>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+    W: for<'w> MakeWriter<'w> + 'static,
+{
+    tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .log_internal_errors(true)
+        .with_writer(make_writer)
 }
 
 #[cfg(test)]

@@ -1,0 +1,25 @@
+[package]
+name = "relay-proto"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "The prost/tonic types generated from /proto, once, for the whole daemon workspace and its fuzz crate (ADR-0007)."
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Compiles ban_probe.rs (scripts/clippy-ban-probe.sh). Never enabled by a dependency.
+ban-probe = []
+
+[dependencies]
+# Only what generated code needs: no `tls`, so the fuzz build, which imports this
+# crate, links no TLS stack.
+tonic = { workspace = true, features = ["codegen", "prost", "transport"] }
+prost = { workspace = true }
+
+[build-dependencies]
+tonic-build = "0.12"
+protoc-bin-vendored = "3"
+
+[lints]
+workspace = true

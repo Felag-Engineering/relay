@@ -739,6 +739,20 @@ allowed_args = [["*"]]
         assert_eq!(REGISTRY[3].risk, RiskClass::Mutate);
     }
 
+    /// The Policy linter asks `relay_policy::natives::is_native` where it used
+    /// to ask the registry (#889); this keeps the two vocabularies one set.
+    #[test]
+    fn registry_names_are_exactly_the_native_names() {
+        let mut registry: Vec<&str> = REGISTRY.iter().map(|e| e.name).collect();
+        let mut natives: Vec<&str> = relay_policy::natives::NATIVE_NAMES.to_vec();
+        registry.sort_unstable();
+        natives.sort_unstable();
+        assert_eq!(registry, natives);
+        assert!(REGISTRY
+            .iter()
+            .all(|e| relay_policy::natives::is_native(e.name)));
+    }
+
     #[test]
     fn raw_exec_entry_is_mutate_and_never_a_named_operation() {
         // ADR-0012: Raw Exec is ALWAYS mutate — pinned, not derived.

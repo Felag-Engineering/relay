@@ -11,6 +11,25 @@ name = "relay-daemon"
 # release immediately after a release tag is cut — see
 # docs/operations/version-stamping.md.
 version = "0.0.9"
+edition.workspace = true
+rust-version.workspace = true
+description = "The Relay relay-daemon: the non-AI daemon that runs on each managed Node."
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "relay-daemon"
+path = "src/main.rs"
+
+[workspace]
+members = ["crates/*"]
+default-members = [".", "crates/*"]
+# The fuzz crate is its own workspace root (cargo-fuzz needs nightly); it imports
+# relay-proto by path.
+exclude = ["fuzz"]
+resolver = "2"
+
+[workspace.package]
 edition = "2021"
 # MSRV (#667): the oldest rustc this daemon is *claimed* to build on. A floor,
 # not a pin — the daemon tracks stable (AGENTS.md), so there is deliberately no
@@ -22,19 +41,25 @@ edition = "2021"
 # and with no `msrv` in clippy.toml clippy reads it as its MSRV and stops suggesting
 # constructs newer than it — a safe direction, but a real effect.
 rust-version = "1.96"
-description = "The Relay relay-daemon: the non-AI daemon that runs on each managed Node."
 license = "Proprietary"
 # Never published to a registry. Also what lets cargo-deny skip the licence check for this
 # crate itself, whose `Proprietary` is not an SPDX expression (deny.toml).
 publish = false
 
-[[bin]]
-name = "relay-daemon"
-path = "src/main.rs"
+[workspace.dependencies]
+# First-party members. Versioned path deps: deny.toml's `wildcards = "deny"` rejects a
+# versionless one, and every member is `publish = false` so the version is never used.
+relay-proto = { path = "crates/relay-proto", version = "0.0.0" }
+relay-log = { path = "crates/relay-log", version = "0.0.0" }
+relay-policy = { path = "crates/relay-policy", version = "0.0.0" }
+relay-test-support = { path = "crates/relay-test-support", version = "0.0.0" }
 
-[dependencies]
-tokio = { version = "1", features = ["full"] }
-tonic = { version = "0.12", features = ["tls"] }
+# External dependencies, declared once; members opt in with `workspace = true`.
+tokio = "1"
+# Each member picks its features: relay-proto needs only codegen/prost/transport (no
+# TLS stack in the fuzz build); the daemon adds `tls`, which with these three is
+# exactly the default+tls set it had before the workspace split (#889).
+tonic = { version = "0.12", default-features = false }
 prost = "0.13"
 tokio-stream = "0.1"
 # mTLS / crypto
@@ -83,7 +108,9 @@ regex = "1"
 # dependency — Cargo unifies features crate-graph-wide, and rustix's build.rs flips
 # to the libc backend whenever `use-libc` is on, which would turn that `setrlimit`
 # back into a libc wrapper (on musl, `__synccall` — not async-signal-safe after
-# fork). This crate must keep EXACTLY `features = ["process"]`: besides
+# fork). Features unify across every workspace member, so no member may enable
+# either one: the workspace must keep EXACTLY `features = ["process"]`, and members
+# write `rustix = { workspace = true }` with no `features` key. Besides
 # `use-libc`, the `fs` feature must never be enabled either — it is the only
 # thing that keeps `daemon/tests/policy_never_opened_for_write.rs`'s rustix
 # blind spot honest (see its header, ~:43-47: rustix exposes no filesystem-write
@@ -99,39 +126,68 @@ rustix = { version = "1", features = ["process"] }
 # fixture strings. Already present transitively via tokio ->
 # signal-hook-registry, so this adds zero new crates to the musl build.
 libc = "0.2"
+# Test-only deps (see the dev-dependencies of the members that use them).
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+time = "0.3"
+proptest = "1"
+
+[workspace.lints.clippy]
+# Every `unsafe` block states why it is sound, in a `// SAFETY:` comment.
+undocumented_unsafe_blocks = "deny"
+# clippy.toml's disallowed-methods: Command::new outside executor.rs, and in the
+# read-only crates the filesystem-write ban (AGENTS.md invariants 1 and 2).
+disallowed_methods = "deny"
+
+[dependencies]
+relay-proto = { workspace = true }
+relay-log = { workspace = true }
+relay-policy = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tonic = { workspace = true, features = ["codegen", "prost", "transport", "tls"] }
+prost = { workspace = true }
+tokio-stream = { workspace = true }
+rustls = { workspace = true }
+ring = { workspace = true }
+rcgen = { workspace = true }
+rustls-pki-types = { workspace = true }
+x509-parser = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+regex = { workspace = true }
+rustix = { workspace = true }
+libc = { workspace = true }
 
 [dev-dependencies]
+relay-test-support = { workspace = true }
+# The bin's tests read the decision-log journalctl pattern.
+relay-policy = { workspace = true, features = ["test-util"] }
 # Enables the paused/virtual clock (tokio::time::pause / advance) used only by
 # executor.rs's timeout_beats_buffered_cancel_biased test to deterministically
 # tie the wait-arm and cancel-arm select branches without a process-timing
 # race. test-util is dev-only: it does not ship in the production binary.
-tokio = { version = "1", features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util"] }
 # Used only by tunnel.rs wrong-CA refusal test (wrong_ca_relay_is_refused).
 # ABI-matched to the rustls = "0.23" runtime dependency. default-features = false
 # prevents the dev build from re-enabling rustls/aws_lc_rs via tokio-rustls defaults.
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+tokio-rustls = { workspace = true }
 # Used by renew.rs tests to construct rcgen certs with specific validity windows.
 # (rcgen's not_before/not_after fields are time::OffsetDateTime.)
-time = "0.3"
-proptest = "1"
+time = { workspace = true }
+proptest = { workspace = true }
 # Test-only CSR parsing and self-signature check for the enroll/renew tests'
 # test CA (identity::test_ca). It is the same 0.18 as the runtime dependency,
 # so there is no second ASN.1 stack. The verify feature uses ring, which is
 # already in the tree. It is dev-only (resolver 2) and does not reach the
 # production binary.
-x509-parser = { version = "0.18", features = ["verify"] }
-
-[build-dependencies]
-tonic-build = "0.12"
-protoc-bin-vendored = "3"
+x509-parser = { workspace = true, features = ["verify"] }
 
 # Lints that guard the root daemon itself, in every target and every editor, not only
 # under `make lint-daemon`. clippy.toml holds the configuration they read.
-[lints.clippy]
-# Every `unsafe` block states why it is sound, in a `// SAFETY:` comment.
-undocumented_unsafe_blocks = "deny"
-# clippy.toml's disallowed-methods: Command::new outside executor.rs.
-disallowed_methods = "deny"
+[lints]
+workspace = true
 
 [profile.release]
 # Small static binary for the fleet (ADR-0007). Build target: musl.

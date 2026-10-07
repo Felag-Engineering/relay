@@ -8,7 +8,7 @@
 //! and the Relay-side oneof test (`policy_immutability_test.go`). Nothing in
 //! `daemon/` asserted the daemon's OWN half: that no code path opens the
 //! Policy path with a write flag. This test closes that gap by scanning
-//! `daemon/src` rather than using `strace` — ptrace is unavailable in the
+//! every workspace `src/` (`daemon/src` and `daemon/crates/*/src`) rather than using `strace` — ptrace is unavailable in the
 //! hermetic `cargo test` runner and the strict-umask CI runs, and `strace`
 //! only observes the paths one test run happens to exercise, not every path
 //! the source admits.
@@ -16,13 +16,15 @@
 //! # It proves
 //!
 //! * no daemon code path opens or mutates a file, except the two reviewed
-//!   writers (`identity.rs`, `dedup.rs`), and neither of those is a module
-//!   that names the Policy path — subject to the limits below;
-//! * the Policy path is named only by three non-writing modules (`config.rs`,
-//!   `main.rs`, `selfref.rs`);
+//!   writers (`src/identity.rs`, `src/dedup.rs`) and the dev-only
+//!   `relay-test-support` fixtures, and none of those is a module that names
+//!   the Policy path — subject to the limits below;
+//! * the Policy path is named only by three non-writing modules
+//!   (`src/config.rs`, `src/main.rs`, `src/selfref.rs`);
 //! * the loader's open call names no write flag: the Policy loader
-//!   (`policy.rs`) and the Template Operation loader (`templates.rs`) open
-//!   their files only through the shared hardened open (`hardened_open.rs`),
+//!   (relay-policy's `lib.rs`) and the Template Operation loader
+//!   (`src/templates.rs`) open their files only through the shared hardened
+//!   open (relay-policy's `hardened_open.rs`),
 //!   whose single `OpenOptions` chain is `.read(true)` plus
 //!   `O_NOFOLLOW | O_NONBLOCK` and nothing else, and none of the three modules
 //!   has a write site at all.
@@ -48,13 +50,18 @@
 //! (e) Macro-generated code, and writes performed through a crate that wraps
 //!     a filesystem syscall. `rustix` IS a production dependency
 //!     (`Cargo.toml`), but only with `features = ["process"]` — no `fs`
-//!     feature, so it exposes no filesystem-write API for this guard to miss;
+//!     feature, so it exposes no filesystem-write API for this guard to miss.
+//!     Cargo unifies features across the whole workspace, so that holds only
+//!     while NO member enables `fs` or `use-libc`; `clippy_write_ban.rs`
+//!     asserts no member's rustix entry carries a `features` key;
 //!     `tempfile` and `nix` are not production dependencies at all today.
-//! (f) A `#[path = ".."] mod x;` pointing OUTSIDE `daemon/src`, or an
-//!     `include!` of a file outside `daemon/src` — including
-//!     `include!(concat!(env!("OUT_DIR"), "/relay.v1.rs"))` in `main.rs`,
-//!     which pulls prost's generated code in at build time and is never
-//!     walked by [`source_files`]; a renamed `fs` import (`use std::fs as
+//! (f) A `#[path = ".."] mod x;` pointing OUTSIDE the walked `src/`
+//!     roots, or an `include!` of a file outside them — including
+//!     `include!(concat!(env!("OUT_DIR"), "/relay.v1.rs"))` in relay-proto's
+//!     `lib.rs`, which pulls prost's generated code in at build time and is
+//!     never walked by [`source_files`], and the sanctioned
+//!     `#[path = "../ban_probe.rs"]` probe modules, which sit outside `src/`
+//!     and are compiled only with the `ban-probe` feature; a renamed `fs` import (`use std::fs as
 //!     f; f::write(..)`); or a nested-path `use` (`use std::{fs::write}`).
 //!     (A `#[cfg(test)] mod foo;` pointing at a file still inside
 //!     `daemon/src` is walked as ordinary production by [`source_files`]'s
@@ -67,6 +74,11 @@
 //!     libc write syscall, and a numeric-literal open flag (for example
 //!     `.custom_flags(0o2)` for `O_WRONLY`) is unseen — only the named
 //!     `O_*` constants are matched.
+//!
+//! The read-only crates' `clippy.toml` write ban is the compiler-checked
+//! counterpart of this lexer, and `clippy_write_ban.rs` guards that ban. This
+//! file is kept whole on purpose (it still covers the bin's modules that name
+//! the Policy path, and the pinned open chain); shrinking it is a follow-up.
 //!
 //! Its counterpart on the Relay side proving the secrets-in-logs half of the
 //! same audit gap is `relay/internal/accounts/secret_logging_guard_test.go`.
@@ -827,19 +839,42 @@ fn source_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 struct FileView {
-    /// Path relative to `daemon/src`, forward-slash (e.g. `"policy.rs"`,
-    /// `"operations/template.rs"`).
+    /// Path relative to `daemon/`, forward-slash (e.g. `"src/main.rs"`,
+    /// `"crates/relay-policy/src/lib.rs"`).
     rel: String,
     prod_scrubbed: String,
     prod_original: String,
 }
 
-/// Walks `daemon/src`, scrubbing and stripping every file, and skipping a
-/// file that is test-only (`#![cfg(test)]`, today only `catalog.rs`).
+/// The `src/` roots this guard walks: the bin's, and every workspace member's
+/// `crates/<member>/src`, found by listing `crates/` so a new member is walked
+/// without editing this test (#889).
+fn src_roots(manifest: &Path) -> Vec<PathBuf> {
+    let mut members: Vec<PathBuf> = std::fs::read_dir(manifest.join("crates"))
+        .expect("read daemon/crates")
+        .map(|e| e.expect("dir entry").path())
+        .filter(|p| p.is_dir())
+        .collect();
+    members.sort();
+    let mut roots = vec![manifest.join("src")];
+    roots.extend(members.into_iter().map(|m| m.join("src")));
+    roots
+}
+
+/// Walks every workspace `src/` root, scrubbing and stripping every file, and
+/// skipping a file that is test-only (`#![cfg(test)]`, today only `catalog.rs`).
 fn daemon_src_files() -> Vec<FileView> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut paths = Vec::new();
-    source_files(&root, &mut paths);
+    for dir in src_roots(&root) {
+        let before = paths.len();
+        source_files(&dir, &mut paths);
+        assert!(
+            paths.len() > before,
+            "{} holds no .rs file — the walk is broken",
+            dir.display()
+        );
+    }
     paths.sort();
 
     let mut views = Vec::new();
@@ -871,8 +906,8 @@ fn daemon_src_files() -> Vec<FileView> {
 // ---------------------------------------------------------------------------
 
 /// The modules that open or name the Policy file must never write to the
-/// filesystem: `policy.rs` (`load_policy`, the Policy file's loader),
-/// `hardened_open.rs` (`open_hardened`, the one open `load_policy` goes
+/// filesystem: relay-policy's `lib.rs` (`load_policy`, the Policy file's loader),
+/// its `hardened_open.rs` (`open_hardened`, the one open `load_policy` goes
 /// through — `.read(true)` plus `custom_flags(O_NOFOLLOW|O_NONBLOCK)`, pinned
 /// by [`trust_files_open_only_through_the_read_only_hardened_open`]),
 /// `templates.rs` (Template Operation files, the same locally-rooted trust
@@ -883,13 +918,15 @@ fn daemon_src_files() -> Vec<FileView> {
 #[test]
 fn policy_modules_never_write() {
     let targets = [
-        "policy.rs",
-        "hardened_open.rs",
-        "templates.rs",
-        "policy_check.rs",
-        "config.rs",
-        "selfref.rs",
-        "main.rs",
+        "crates/relay-policy/src/lib.rs",
+        "crates/relay-policy/src/hardened_open.rs",
+        "crates/relay-policy/src/decision_log.rs",
+        "crates/relay-policy/src/natives.rs",
+        "src/templates.rs",
+        "src/policy_check.rs",
+        "src/config.rs",
+        "src/selfref.rs",
+        "src/main.rs",
     ];
     let views = daemon_src_files();
 
@@ -907,7 +944,7 @@ fn policy_modules_never_write() {
     assert_eq!(
         checked,
         targets.len(),
-        "expected to find all of {targets:?} under daemon/src, found {checked} — the guard must \
+        "expected to find all of {targets:?} under daemon/, found {checked} — the guard must \
          actually inspect the modules it claims to"
     );
 
@@ -930,13 +967,17 @@ fn policy_modules_never_write() {
 fn production_write_sites_are_exactly_the_allowlist() {
     let allowlist: BTreeMap<&str, &str> = BTreeMap::from([
         (
-            "identity.rs",
+            "src/identity.rs",
             "the mTLS key/cert write, rename and DirBuilder — persist_identity/write_atomic \
              (ADR-0006)",
         ),
         (
-            "dedup.rs",
+            "src/dedup.rs",
             "the at-most-once marker store — DedupStore::open/record (ADR-0004)",
+        ),
+        (
+            "crates/relay-test-support/src/lib.rs",
+            "dev-only fixtures; never a normal dependency (tests/clippy_write_ban.rs)",
         ),
     ]);
 
@@ -973,7 +1014,7 @@ fn production_write_sites_are_exactly_the_allowlist() {
 }
 
 /// (i) The files whose production text names the Policy path must be exactly
-/// `{config.rs, main.rs, selfref.rs}`: the identifier `policy_path` in the
+/// `{src/config.rs, src/main.rs, src/selfref.rs}`: the identifier `policy_path` in the
 /// scrubbed text, or the literal `"RELAY_POLICY_PATH"` in the original text
 /// (scrub blanks string contents, so the scrubbed text can never show it).
 /// `selfref.rs` uses the path only as a probe STRING for
@@ -995,8 +1036,12 @@ fn policy_path_reaches_only_the_read_only_loader() {
     static POLICY_PATH_IDENT: OnceLock<Regex> = OnceLock::new();
     let ident_re = POLICY_PATH_IDENT.get_or_init(|| Regex::new(r"\bpolicy_path\b").unwrap());
 
-    let write_allowlist = ["identity.rs", "dedup.rs"];
-    let expected = ["config.rs", "main.rs", "selfref.rs"];
+    let write_allowlist = [
+        "src/identity.rs",
+        "src/dedup.rs",
+        "crates/relay-test-support/src/lib.rs",
+    ];
+    let expected = ["src/config.rs", "src/main.rs", "src/selfref.rs"];
 
     let views = daemon_src_files();
 
@@ -1015,7 +1060,7 @@ fn policy_path_reaches_only_the_read_only_loader() {
     assert_eq!(
         naming, expected_sorted,
         "the files whose production text names the Policy path must be exactly \
-         {{config.rs, main.rs, selfref.rs}} — either a new module now reaches the Policy path \
+         {{src/config.rs, src/main.rs, src/selfref.rs}} — either a new module now reaches the Policy path \
          (review against invariant 2), or one of the three stopped naming it (stale check)"
     );
 
@@ -1033,8 +1078,8 @@ fn policy_path_reaches_only_the_read_only_loader() {
         .get_or_init(|| Regex::new(r"load_policy\(\s*&config\.policy_path\s*\)").unwrap());
     let main_view = views
         .iter()
-        .find(|v| v.rel == "main.rs")
-        .expect("main.rs not found under daemon/src");
+        .find(|v| v.rel == "src/main.rs")
+        .expect("src/main.rs not found under daemon/");
     assert!(
         call_re.is_match(&main_view.prod_scrubbed),
         "main.rs must still hand the Policy path to the read-only loader via \
@@ -1043,9 +1088,9 @@ fn policy_path_reaches_only_the_read_only_loader() {
 }
 
 /// The Policy file and every Template Operation file are opened only through
-/// `hardened_open.rs`'s `open_hardened`, and that open names no write flag.
+/// relay-policy's `hardened_open.rs` `open_hardened`, and that open names no write flag.
 ///
-/// (i) `hardened_open.rs`'s production text has exactly one `OpenOptions`
+/// (i) `crates/relay-policy/src/hardened_open.rs`'s production text has exactly one `OpenOptions`
 /// and exactly one `.open(` call, and they form exactly the chain
 /// `OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW |
 /// libc::O_NONBLOCK).open(path)` — so a write, append, create or truncate
@@ -1053,9 +1098,9 @@ fn policy_path_reaches_only_the_read_only_loader() {
 /// on top of [`policy_modules_never_write`] scanning the module for every
 /// write pattern.
 ///
-/// (ii) `policy.rs` and `templates.rs` have no opener of their own in
-/// production (`OpenOptions`, `File::open`, `File::options`), `policy.rs` has
-/// no path-based `fs::read`/`fs::read_to_string` and `templates.rs` exactly
+/// (ii) relay-policy's `lib.rs` and `src/templates.rs` have no opener of their
+/// own in production (`OpenOptions`, `File::open`, `File::options`), `lib.rs`
+/// has no path-based `fs::read`/`fs::read_to_string` and `templates.rs` exactly
 /// one (its linter's), and each still hands its path to `open_hardened` — so
 /// the loaders cannot drift back to a private open that (i) does not see.
 #[test]
@@ -1065,10 +1110,10 @@ fn trust_files_open_only_through_the_read_only_hardened_open() {
         views
             .iter()
             .find(|v| v.rel == rel)
-            .unwrap_or_else(|| panic!("{rel} not found under daemon/src"))
+            .unwrap_or_else(|| panic!("{rel} not found under daemon/"))
     };
 
-    let helper = &view("hardened_open.rs").prod_scrubbed;
+    let helper = &view("crates/relay-policy/src/hardened_open.rs").prod_scrubbed;
     let open_options = Regex::new(r"\bOpenOptions\b").unwrap();
     let open_call = Regex::new(r"\.open\(").unwrap();
     let chain = Regex::new(
@@ -1078,17 +1123,17 @@ fn trust_files_open_only_through_the_read_only_hardened_open() {
     assert_eq!(
         open_options.find_iter(helper).count(),
         1,
-        "hardened_open.rs must name OpenOptions exactly once in production — the one \
+        "relay-policy's hardened_open.rs must name OpenOptions exactly once in production — the one \
          read-only hardened open (invariant 2)"
     );
     assert_eq!(
         open_call.find_iter(helper).count(),
         1,
-        "hardened_open.rs must have exactly one .open( call in production"
+        "relay-policy's hardened_open.rs must have exactly one .open( call in production"
     );
     assert!(
         chain.is_match(helper),
-        "hardened_open.rs's open must be exactly OpenOptions::new().read(true)\
+        "relay-policy's hardened_open.rs open must be exactly OpenOptions::new().read(true)\
          .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path) — no write, append, \
          create or truncate flag, and no other flag, on the Policy/template open (invariant 2)"
     );
@@ -1097,10 +1142,13 @@ fn trust_files_open_only_through_the_read_only_hardened_open() {
     let path_read = Regex::new(r"\bfs::read(_to_string)?\(").unwrap();
     let delegates = Regex::new(r"\bopen_hardened\(\s*path\s*\)").unwrap();
     // (file, how many `fs::read`/`fs::read_to_string` calls it may have):
-    // `templates.rs` has exactly one, `lint_dir`'s deliberately ungated read
+    // `src/templates.rs` has exactly one, `lint_dir`'s deliberately ungated read
     // for the pre-deployment linter (`relay-daemon policy check`), which never
     // feeds the runtime template set; a second one fails here for review.
-    for (rel, allowed_path_reads) in [("policy.rs", 0usize), ("templates.rs", 1usize)] {
+    for (rel, allowed_path_reads) in [
+        ("crates/relay-policy/src/lib.rs", 0usize),
+        ("src/templates.rs", 1usize),
+    ] {
         let text = &view(rel).prod_scrubbed;
         let hits: Vec<usize> = private_open
             .find_iter(text)
@@ -1518,25 +1566,25 @@ mod tests {
     let views = daemon_src_files();
     assert!(
         views.len() >= 20,
-        "walked only {} daemon/src files, want >= 20 — the guard must actually inspect a \
+        "walked only {} daemon source files, want >= 20 — the guard must actually inspect a \
          realistic tree",
         views.len()
     );
     let policy_view = views
         .iter()
-        .find(|v| v.rel == "policy.rs")
-        .expect("policy.rs not found under daemon/src");
+        .find(|v| v.rel == "crates/relay-policy/src/lib.rs")
+        .expect("relay-policy's lib.rs not found under daemon/crates");
     assert!(
         policy_view.prod_scrubbed.contains("load_policy"),
-        "policy.rs's production text must still contain load_policy"
+        "relay-policy's lib.rs production text must still contain load_policy"
     );
     let templates_view = views
         .iter()
-        .find(|v| v.rel == "templates.rs")
-        .expect("templates.rs not found under daemon/src");
+        .find(|v| v.rel == "src/templates.rs")
+        .expect("src/templates.rs not found under daemon/");
     assert!(
         templates_view.prod_scrubbed.contains("r#type"),
-        "templates.rs's production text must still contain the raw identifier r#type — this \
+        "src/templates.rs's production text must still contain the raw identifier r#type — this \
          is what ties the raw-identifier fixture above to a real production file rather than \
          only a synthetic one"
     );

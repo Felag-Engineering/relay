@@ -281,6 +281,10 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt,clippy
+          targets: x86_64-unknown-linux-musl # lint-daemon lints the shipped musl config
+
+      - name: Install musl linker
+        run: sudo apt-get install -y musl-tools # ring's build script compiles C for the musl clippy pass
 
       - name: Restore Cargo registry and build cache
         id: cargo-cache
@@ -291,6 +295,7 @@ jobs:
 
       - run: make build-daemon
       - run: make lint-daemon # includes cargo fmt --check
+      - run: make check-daemon-bans
       - run: make test-daemon
 
       # cargo-deny, compiled once per pinned version and cached as a binary: the
