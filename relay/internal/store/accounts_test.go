@@ -127,7 +127,7 @@ func TestAccounts_SetRoleAndEnabled(t *testing.T) {
 		t.Fatalf("create other admin: %v", err)
 	}
 
-	if err := repo.SetRole(ctx, a.ID, accounts.RoleAdmin); err != nil {
+	if err := repo.SetRole(ctx, a.ID, accounts.RoleViewer, accounts.RoleAdmin); err != nil {
 		t.Fatalf("set role: %v", err)
 	}
 	got, _ := repo.Get(ctx, a.ID)
@@ -135,10 +135,10 @@ func TestAccounts_SetRoleAndEnabled(t *testing.T) {
 		t.Errorf("role after SetRole = %q, want admin", got.Role)
 	}
 
-	if err := repo.SetRole(ctx, a.ID, accounts.Role("root")); !errors.Is(err, accounts.ErrInvalidRole) {
+	if err := repo.SetRole(ctx, a.ID, accounts.RoleAdmin, accounts.Role("root")); !errors.Is(err, accounts.ErrInvalidRole) {
 		t.Errorf("set invalid role: %v, want ErrInvalidRole", err)
 	}
-	if err := repo.SetRole(ctx, "acct-nope", accounts.RoleViewer); !errors.Is(err, accounts.ErrNotFound) {
+	if err := repo.SetRole(ctx, "acct-nope", accounts.RoleAdmin, accounts.RoleViewer); !errors.Is(err, accounts.ErrNotFound) {
 		t.Errorf("set role on unknown: %v, want ErrNotFound", err)
 	}
 
@@ -216,7 +216,7 @@ func TestAccounts_EnsureFoundingAdminIsIdempotent(t *testing.T) {
 	if err := repo.SetEnabled(ctx, first.ID, false); err != nil {
 		t.Fatalf("disable founding admin: %v", err)
 	}
-	if err := repo.SetRole(ctx, first.ID, accounts.RoleViewer); err != nil {
+	if err := repo.SetRole(ctx, first.ID, accounts.RoleAdmin, accounts.RoleViewer); err != nil {
 		t.Fatalf("demote founding admin: %v", err)
 	}
 	after, err := repo.EnsureFoundingAdmin(ctx)
@@ -392,6 +392,11 @@ func TestSQLiteAccounts_LastAdminGuardIsASingleStatement(t *testing.T) {
 	if len(gotSetRole) != len(wantSetRole) || gotSetRole[0] != wantSetRole[0] {
 		t.Errorf("SetRole issues %+v, want exactly %+v — the guard must be a single statement", gotSetRole, wantSetRole)
 	}
+	// The role compare is part of that same statement (#912). Without this a
+	// later edit could drop it and every other check here would still pass.
+	if !strings.Contains(consts["setRoleGuardSQL"], "role = :from") {
+		t.Error("setRoleGuardSQL has no `role = :from` compare — SetRole must be a compare-and-set in the one statement (#912)")
+	}
 	checked++
 
 	// SetEnabled must reach the UNGUARDED update for enable=true (enabling is
@@ -534,7 +539,7 @@ func TestSQLiteAccounts_ConcurrentDemotionsLeaveOneEnabledAdmin(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			results[i] = repo.SetRole(ctx, ids[i], accounts.RoleViewer)
+			results[i] = repo.SetRole(ctx, ids[i], accounts.RoleAdmin, accounts.RoleViewer)
 		}(i)
 	}
 	wg.Wait()
@@ -590,7 +595,7 @@ func TestSQLiteAccounts_ChainedDisableDemoteDisableIsRefused(t *testing.T) {
 	if err := repo.SetEnabled(ctx, a.ID, false); err != nil {
 		t.Fatalf("disable a (b still enabled): %v", err)
 	}
-	if err := repo.SetRole(ctx, a.ID, accounts.RoleViewer); err != nil {
+	if err := repo.SetRole(ctx, a.ID, accounts.RoleAdmin, accounts.RoleViewer); err != nil {
 		t.Fatalf("demote the now-disabled a: %v, want nil — a disabled admin does not count", err)
 	}
 	if err := repo.SetEnabled(ctx, b.ID, false); !errors.Is(err, accounts.ErrLastAdmin) {

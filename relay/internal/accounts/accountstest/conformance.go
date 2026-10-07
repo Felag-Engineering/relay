@@ -42,7 +42,7 @@ func RunRepositoryConformance(t *testing.T, newRepo func(t *testing.T) accounts.
 		repo := newRepo(t)
 		admin := create(t, repo, "sole-admin", accounts.RoleAdmin, true)
 
-		if err := repo.SetRole(ctx, admin.ID, accounts.RoleViewer); !errors.Is(err, accounts.ErrLastAdmin) {
+		if err := repo.SetRole(ctx, admin.ID, accounts.RoleAdmin, accounts.RoleViewer); !errors.Is(err, accounts.ErrLastAdmin) {
 			t.Fatalf("SetRole(only enabled admin, viewer) = %v, want ErrLastAdmin", err)
 		}
 		got, err := repo.Get(ctx, admin.ID)
@@ -77,7 +77,7 @@ func RunRepositoryConformance(t *testing.T, newRepo func(t *testing.T) accounts.
 
 		// The disabled admin does not count, so enabledAdmin is still the
 		// only ENABLED admin — demoting or disabling it must be refused.
-		if err := repo.SetRole(ctx, enabledAdmin.ID, accounts.RoleViewer); !errors.Is(err, accounts.ErrLastAdmin) {
+		if err := repo.SetRole(ctx, enabledAdmin.ID, accounts.RoleAdmin, accounts.RoleViewer); !errors.Is(err, accounts.ErrLastAdmin) {
 			t.Fatalf("SetRole(last enabled admin, viewer), with a disabled admin also present, = %v, want ErrLastAdmin", err)
 		}
 		if err := repo.SetEnabled(ctx, enabledAdmin.ID, false); !errors.Is(err, accounts.ErrLastAdmin) {
@@ -90,7 +90,7 @@ func RunRepositoryConformance(t *testing.T, newRepo func(t *testing.T) accounts.
 		a := create(t, repo, "admin-a", accounts.RoleAdmin, true)
 		create(t, repo, "admin-b", accounts.RoleAdmin, true)
 
-		if err := repo.SetRole(ctx, a.ID, accounts.RoleViewer); err != nil {
+		if err := repo.SetRole(ctx, a.ID, accounts.RoleAdmin, accounts.RoleViewer); err != nil {
 			t.Fatalf("SetRole(admin-a, viewer) with admin-b still enabled = %v, want nil", err)
 		}
 	})
@@ -101,7 +101,7 @@ func RunRepositoryConformance(t *testing.T, newRepo func(t *testing.T) accounts.
 		viewer := create(t, repo, "a-viewer", accounts.RoleViewer, true)
 		_ = admin
 
-		if err := repo.SetRole(ctx, viewer.ID, accounts.RoleAdmin); err != nil {
+		if err := repo.SetRole(ctx, viewer.ID, accounts.RoleViewer, accounts.RoleAdmin); err != nil {
 			t.Fatalf("SetRole(viewer, admin) = %v, want nil", err)
 		}
 	})
@@ -120,7 +120,7 @@ func RunRepositoryConformance(t *testing.T, newRepo func(t *testing.T) accounts.
 		create(t, repo, "sole-admin", accounts.RoleAdmin, true)
 		op := create(t, repo, "an-operator", accounts.RoleOperator, true)
 
-		if err := repo.SetRole(ctx, op.ID, accounts.RoleViewer); err != nil {
+		if err := repo.SetRole(ctx, op.ID, accounts.RoleOperator, accounts.RoleViewer); err != nil {
 			t.Fatalf("SetRole(operator, viewer) = %v, want nil", err)
 		}
 	})
@@ -129,11 +129,75 @@ func RunRepositoryConformance(t *testing.T, newRepo func(t *testing.T) accounts.
 		repo := newRepo(t)
 		create(t, repo, "sole-admin", accounts.RoleAdmin, true)
 
-		if err := repo.SetRole(ctx, "does-not-exist", accounts.RoleViewer); !errors.Is(err, accounts.ErrNotFound) {
+		if err := repo.SetRole(ctx, "does-not-exist", accounts.RoleAdmin, accounts.RoleViewer); !errors.Is(err, accounts.ErrNotFound) {
 			t.Errorf("SetRole(unknown id, viewer) = %v, want ErrNotFound", err)
 		}
 		if err := repo.SetEnabled(ctx, "does-not-exist", false); !errors.Is(err, accounts.ErrNotFound) {
 			t.Errorf("SetEnabled(unknown id, false) = %v, want ErrNotFound", err)
+		}
+	})
+
+	roleOf := func(t *testing.T, repo accounts.Repository, id string) accounts.Role {
+		t.Helper()
+		got, err := repo.Get(ctx, id)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		return got.Role
+	}
+
+	t.Run("a stale from is refused with ErrRoleChanged and writes nothing", func(t *testing.T) {
+		repo := newRepo(t)
+		a := create(t, repo, "admin-a", accounts.RoleAdmin, true)
+		create(t, repo, "admin-b", accounts.RoleAdmin, true)
+
+		// The concurrent demotion lands first.
+		if err := repo.SetRole(ctx, a.ID, accounts.RoleAdmin, accounts.RoleViewer); err != nil {
+			t.Fatalf("demote: %v", err)
+		}
+		// The stale writer still believes a is an admin.
+		if err := repo.SetRole(ctx, a.ID, accounts.RoleAdmin, accounts.RoleOperator); !errors.Is(err, accounts.ErrRoleChanged) {
+			t.Fatalf("SetRole(stale from=admin) = %v, want ErrRoleChanged", err)
+		}
+		if got := roleOf(t, repo, a.ID); got != accounts.RoleViewer {
+			t.Errorf("role after refused stale write = %q, want viewer unchanged", got)
+		}
+	})
+
+	t.Run("role mismatch wins over last-admin", func(t *testing.T) {
+		repo := newRepo(t)
+		a := create(t, repo, "sole-admin", accounts.RoleAdmin, true)
+
+		if err := repo.SetRole(ctx, a.ID, accounts.RoleOperator, accounts.RoleViewer); !errors.Is(err, accounts.ErrRoleChanged) {
+			t.Fatalf("SetRole(sole admin, from=operator) = %v, want ErrRoleChanged", err)
+		}
+		if got := roleOf(t, repo, a.ID); got != accounts.RoleAdmin {
+			t.Errorf("role after refused write = %q, want admin unchanged", got)
+		}
+	})
+
+	t.Run("an invalid from is ErrInvalidRole", func(t *testing.T) {
+		repo := newRepo(t)
+		a := create(t, repo, "sole-admin", accounts.RoleAdmin, true)
+
+		if err := repo.SetRole(ctx, a.ID, accounts.Role("root"), accounts.RoleViewer); !errors.Is(err, accounts.ErrInvalidRole) {
+			t.Fatalf("SetRole(from=root) = %v, want ErrInvalidRole", err)
+		}
+		if got := roleOf(t, repo, a.ID); got != accounts.RoleAdmin {
+			t.Errorf("role after refused write = %q, want admin unchanged", got)
+		}
+	})
+
+	t.Run("a matching from writes", func(t *testing.T) {
+		repo := newRepo(t)
+		create(t, repo, "sole-admin", accounts.RoleAdmin, true)
+		v := create(t, repo, "a-viewer", accounts.RoleViewer, true)
+
+		if err := repo.SetRole(ctx, v.ID, accounts.RoleViewer, accounts.RoleOperator); err != nil {
+			t.Fatalf("SetRole(viewer->operator) = %v, want nil", err)
+		}
+		if got := roleOf(t, repo, v.ID); got != accounts.RoleOperator {
+			t.Errorf("role = %q, want operator", got)
 		}
 	})
 }

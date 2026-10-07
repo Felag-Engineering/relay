@@ -67,6 +67,13 @@ var (
 	// admin" — see SetRole/SetEnabled below for why an implementation MUST
 	// refuse this in one statement rather than a check-then-write.
 	ErrLastAdmin = errors.New("accounts: the last enabled admin cannot be demoted or disabled")
+
+	// ErrRoleChanged is returned by SetRole when the Account's stored role is
+	// not the `from` role the caller named: another writer changed it after
+	// the caller read it. Nothing was written. A caller whose decision
+	// depended on the role it read (the Console's step-up classification,
+	// #912) must re-read and re-decide, never retry blindly.
+	ErrRoleChanged = errors.New("accounts: the account's role changed since it was read")
 )
 
 // Kind distinguishes a human operator from a machine driver. It is not an
@@ -245,9 +252,22 @@ type Repository interface {
 	// List returns every Account, ordered by name.
 	List(ctx context.Context) ([]Account, error)
 
-	// SetRole changes an Account's role. Returns ErrNotFound if it does not
-	// exist, ErrInvalidRole for a role outside the closed set, and
-	// ErrLastAdmin if the change would demote the last enabled admin (#653).
+	// SetRole is a compare-and-set (#912): it changes an Account's role to
+	// `to` only if the stored role is `from`. Returns:
+	//
+	//   - ErrNotFound if the Account does not exist;
+	//   - ErrInvalidRole if `from` or `to` is outside the closed set. A
+	//     stored role is always valid (the schema constrains it), so an
+	//     invalid `from` can never match; it is refused up front;
+	//   - ErrRoleChanged if the stored role is not `from`;
+	//   - ErrLastAdmin if the change would demote the last enabled admin
+	//     (#653).
+	//
+	// The role compare MUST be in the SAME single statement as the
+	// last-admin guard below, for the same reason: a check-then-write above
+	// the store races another writer in the gap. It is what lets a caller
+	// that decided something from the role it read (the Console's step-up
+	// classification) have that decision and the write be one atomic step.
 	//
 	// Takes effect immediately: authorization reads the stored role at each
 	// request rather than caching it at authentication time, so a demotion
@@ -274,7 +294,7 @@ type Repository interface {
 	//     this rule as "lockout is now impossible".
 	//   - There is no Delete on this interface, so spec 15's "removed" is
 	//     SetEnabled(false), not a deletion.
-	SetRole(ctx context.Context, id string, role Role) error
+	SetRole(ctx context.Context, id string, from, to Role) error
 
 	// SetEnabled enables or disables an Account. A disabled Account
 	// authenticates nowhere, immediately.

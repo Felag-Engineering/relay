@@ -33,7 +33,9 @@ import (
 // ErrNameTaken (see its insert, and SetRole/SetEnabled's doc comments in
 // internal/accounts/accounts.go). It is enforced in one guarded UPDATE, in
 // the store, and surfaces here only as accounts.ErrLastAdmin bubbling up
-// from SetAccountRole/SetAccountEnabled.
+// from SetAccountRole/SetAccountEnabled. The role compare-and-set (#912) is
+// the same kind of thing: a clause of the store's one UPDATE, not a check in
+// this layer.
 //
 // READS RECORD NOTHING. Accounts, Account, and APITokens are authorized and
 // answered, but write no audit row on success — matching the Control API's
@@ -128,6 +130,13 @@ func (s *Service) CreateAccount(ctx context.Context, p Principal, a accounts.Acc
 // accounts.ErrLastAdmin if it would demote the last enabled admin (enforced
 // in the store, not here — see this file's header). The change is audited
 // (AccountAdminRole) with the new role.
+//
+// "Unconditional" for a caller that decided nothing from the current role
+// (the Control API). The store write is still a compare-and-set, against the
+// role this method reads just after authorizing, so ErrRoleChanged is
+// possible only if another writer lands between that read and the UPDATE; the
+// caller may simply retry. A surface whose own decision depended on the role
+// it read uses SetAccountRoleFrom.
 func (s *Service) SetAccountRole(ctx context.Context, p Principal, id string, role accounts.Role) error {
 	if s.accountsStore == nil {
 		return ErrAccountsUnavailable
@@ -139,14 +148,50 @@ func (s *Service) SetAccountRole(ctx context.Context, p Principal, id string, ro
 		return s.refuseControl(ctx, p, ErrSelfTargeted)
 	}
 
-	if err := s.accountsStore.SetRole(ctx, id, role); err != nil {
+	// Validate before the read so an invalid role is a 400 whether or not
+	// the Account exists, as it was before the read was added.
+	if !role.Valid() {
+		return accounts.ErrInvalidRole
+	}
+	cur, err := s.accountsStore.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	return s.setAccountRole(ctx, p, id, cur.Role, role)
+}
+
+// SetAccountRoleFrom changes id's role from `from` to `to`, refusing with
+// accounts.ErrRoleChanged if the stored role is no longer `from` (#912). For
+// a surface whose own decision depended on the role it read (the Console's
+// step-up classification): the decision and the write become one
+// compare-and-set in the store. Authorized at ControlAccountRole and
+// self-target-refused exactly as SetAccountRole is, in the same order.
+func (s *Service) SetAccountRoleFrom(ctx context.Context, p Principal, id string, from, to accounts.Role) error {
+	if s.accountsStore == nil {
+		return ErrAccountsUnavailable
+	}
+	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAccountRole); err != nil {
+		return s.refuseControl(ctx, p, err)
+	}
+	if SelfTargeted(p, id) {
+		return s.refuseControl(ctx, p, ErrSelfTargeted)
+	}
+	return s.setAccountRole(ctx, p, id, from, to)
+}
+
+// setAccountRole is the post-authorization body shared by SetAccountRole and
+// SetAccountRoleFrom. Store refusals (ErrRoleChanged, ErrLastAdmin,
+// ErrNotFound, ErrInvalidRole) return unwrapped and unaudited: nothing
+// changed, and they are store conflicts, not authorization refusals.
+func (s *Service) setAccountRole(ctx context.Context, p Principal, id string, from, to accounts.Role) error {
+	if err := s.accountsStore.SetRole(ctx, id, from, to); err != nil {
 		return err
 	}
 
 	if auditErr := s.audit.RecordAccountAdmin(ctx, p, AccountAdminEvent{
 		Kind:      AccountAdminRole,
 		AccountID: id,
-		Role:      string(role),
+		Role:      string(to),
 		Asserted:  AssertionsFromContext(ctx),
 	}); auditErr != nil {
 		return fmt.Errorf("capability: record audit entry: %w", auditErr)

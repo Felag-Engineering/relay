@@ -166,17 +166,10 @@ type ApprovalReader interface {
 // target's CURRENT role so it can tell a raise from a lower, because a raise
 // costs a password and a lower does not (owner decision, 2026-09-19).
 //
-// That read carries a NAMED, BOUNDED RESIDUAL, stated here so a reader of the
-// seam meets it rather than discovering it: accounts.Repository.SetRole takes
-// no expected-current-role argument, so no surface can make read-then-write
-// atomic, and a concurrent demote by a second admin between the two could let
-// a raise through without step-up. The window is inherent to the contract, not
-// introduced by this adapter, and it is bounded three ways — the outcome is
-// capped at the role the handler OBSERVED, capability.ErrSelfTargeted refuses
-// a self-target unconditionally so it can never be used for self-elevation
-// (ADR-0009's named risk), and the last-admin guard does NOT contain it (it is
-// a count over enabled admins, orthogonal to whether a change was a raise).
-// See accounts_write.go's header and the PR body for the full write-up.
+// The read feeds the step-up classification, and the write that follows is a
+// compare-and-set against the role it read (capability.SetAccountRoleFrom,
+// #912), so a concurrent change between the two is refused rather than
+// letting a raise through without step-up. See accounts_write.go's header.
 type AccountReader interface {
 	Accounts(ctx context.Context, p capability.Principal) ([]accounts.Account, error)
 	Account(ctx context.Context, p capability.Principal, id string) (accounts.Account, error)

@@ -37,35 +37,37 @@ package console
 // REDUCE does not (disable, LOWER a role, revoke a Token), because an
 // emergency brake that costs a password is one people route around.
 //
-// # The role route's TOCTOU residual, named rather than discovered later
+// # The role route's read-then-write, closed by a compare-and-set (#912)
 //
 // handleSetAccountRole reads the target's current role, decides raise vs
-// lower, then writes. accounts.Repository.SetRole takes no
-// expected-current-role argument, so NO surface can make this atomic: the
-// window is inherent to the contract, not introduced by this adapter. A
-// concurrent demote by a SECOND admin between the read and the write could let
-// a raise through without step-up. Three bounds, because they change how bad
-// that is:
+// lower, then writes. The write is a compare-and-set on exactly the role that
+// decision was made from (capability.SetAccountRoleFrom, one guarded UPDATE in
+// the store), so a concurrent change between the read and the write is refused
+// with accounts.ErrRoleChanged instead of turning an unstepped lower into a
+// raise. The atomicity lives in the store and the capability layer; this
+// adapter only passes back the role it read and decides nothing new.
 //
-//   - The outcome is CAPPED AT THE ROLE THIS HANDLER OBSERVED. It can never
-//     produce a role above what the read returned. It is NOT capped at a role
-//     the target has ever held: read admin, submit operator (so no password is
-//     taken), a second admin demotes the target to viewer, and the write lands
-//     a viewer to operator RAISE with no step-up. The cap is on the ceiling,
-//     not on the direction.
 //   - It can NEVER be used for self-elevation. capability.ErrSelfTargeted
 //     (decided by capability.SelfTargeted) refuses a role change on the
 //     caller's own Account unconditionally, before the store is touched —
 //     and self-elevation by a hijacked admin session is precisely ADR-0009's
-//     named risk. This race does not reach it.
-//   - The last-admin guard does NOT help here. It is a count over enabled
-//     admins and is orthogonal to whether a change was a raise. Said out loud
-//     because a reader will otherwise assume it contains this.
+//     named risk.
+//   - The last-admin guard is orthogonal to whether a change was a raise; it
+//     is a count over enabled admins and says nothing about step-up.
+//   - The compare applies to a stepped raise too: a refused stepped write is a
+//     "review and retry", and inside the step-up window the retry costs no
+//     password. One rule is simpler to audit than a conditional.
 //
-// What IS in place: roleChangeCouldGrant fails closed on an invalid role on
-// either side, and a FAILED read demands step-up rather than skipping it. The
-// unchanged-role refusal rides the same read and, like the raise/lower
-// decision, does not apply when the read fails.
+// The one unconditional write is the read-failure branch: with no observed
+// role there is nothing to compare, and step-up was taken (a failed read
+// counts as a possible raise), so every transition on that branch is a stepped
+// one. That write still goes through capability.SetAccountRole, which itself
+// reads the stored role before its own compare-and-set.
+//
+// roleChangeCouldGrant fails closed on an invalid role on either side, and a
+// FAILED read demands step-up rather than skipping it. The unchanged-role
+// refusal rides the same read and, like the raise/lower decision, does not
+// apply when the read fails.
 //
 // # The mint response, and the one field a secret may occupy
 //
@@ -103,6 +105,7 @@ import (
 type AccountAdministrator interface {
 	CreateAccount(ctx context.Context, p capability.Principal, a accounts.Account) (accounts.Account, error)
 	SetAccountRole(ctx context.Context, p capability.Principal, id string, role accounts.Role) error
+	SetAccountRoleFrom(ctx context.Context, p capability.Principal, id string, from, to accounts.Role) error
 	SetAccountEnabled(ctx context.Context, p capability.Principal, id string, enabled bool) error
 	MintAPIToken(ctx context.Context, p capability.Principal, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error)
 	RevokeAPIToken(ctx context.Context, p capability.Principal, id string) error
@@ -179,6 +182,8 @@ const (
 
 	lastAdminRefusal = "This is the last enabled admin, so it cannot be demoted or disabled. " +
 		"Another admin must exist first: a control plane with zero enabled admins has no way back in."
+
+	roleChangedRefusal = "The Account changed while you were editing. Review its current role and retry."
 )
 
 // accountsOffered reports whether the write half is wired at all. Three seams,
@@ -308,6 +313,13 @@ func writeFailed(w http.ResponseWriter, pg Page, err error, route, ident, undone
 		w.WriteHeader(http.StatusConflict)
 		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
 			Heading: lastAdminRefusal + " " + undone,
+			Href:    accountsScreenPath,
+			Label:   "Back to Accounts.",
+		})
+	case errors.Is(err, accounts.ErrRoleChanged):
+		w.WriteHeader(http.StatusConflict)
+		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
+			Heading: roleChangedRefusal + " " + undone,
 			Href:    accountsScreenPath,
 			Label:   "Back to Accounts.",
 		})
@@ -463,9 +475,9 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 // handleSetAccountRole implements POST /console/accounts/{account_id}/role.
 //
 // Step-up ONLY when the change could raise the role. The target's current role
-// comes from d.Accounts.Account — see this file's header for the bounded
-// TOCTOU residual that read carries, and roleChangeCouldGrant for why an
-// unknown role on either side is treated as a raise.
+// comes from d.Accounts.Account, and the write is a compare-and-set against
+// that same role (see this file's header, #912); roleChangeCouldGrant says why
+// an unknown role on either side is treated as a raise.
 //
 // A submission of the role the target already holds is refused here, writing
 // nothing and auditing nothing. That is Console-only narrowing: the Control API
@@ -492,9 +504,11 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 		}
 
 		// A read failure demands step-up rather than skipping it — fail
-		// closed in the FRICTION direction. It does not refuse the act: a
-		// demote during an incident must not be blocked by an unrelated read
-		// failure.
+		// closed in the FRICTION direction. It does not refuse the act at
+		// this layer. That is not a promise that a demote is never blocked by
+		// a failing read: the unconditional capability.SetAccountRole this
+		// branch falls back to reads the stored role before its own
+		// compare-and-set, so a persistent read failure fails there too.
 		target, readErr := d.Accounts.Account(r.Context(), caller, id)
 		couldGrant := true
 		if readErr == nil {
@@ -508,7 +522,21 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 			return
 		}
 
-		if err := d.AccountAdmin.SetAccountRole(r.Context(), caller, id, role); err != nil {
+		var err error
+		if readErr == nil {
+			// The step-up decision above was made from target.Role. The write
+			// is a compare-and-set on exactly that role, so a concurrent change
+			// between the read and here is refused rather than turning an
+			// unstepped lower into a raise (#912).
+			err = d.AccountAdmin.SetAccountRoleFrom(r.Context(), caller, id, target.Role, role)
+		} else {
+			// The read failed, so couldGrant was true and step-up was taken
+			// above: every transition from here is a stepped one, and there is
+			// no observed role to compare against. Unconditional is safe on
+			// this branch and on no other.
+			err = d.AccountAdmin.SetAccountRole(r.Context(), caller, id, role)
+		}
+		if err != nil {
 			writeFailed(w, pg, err, setAccountRolePattern, id, "The role was not changed.", "Account")
 			return
 		}

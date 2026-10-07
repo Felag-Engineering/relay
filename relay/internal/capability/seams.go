@@ -105,7 +105,7 @@ type AccountStore interface {
 	Create(ctx context.Context, a accounts.Account) (accounts.Account, error)
 	Get(ctx context.Context, id string) (accounts.Account, error)
 	List(ctx context.Context) ([]accounts.Account, error)
-	SetRole(ctx context.Context, id string, role accounts.Role) error
+	SetRole(ctx context.Context, id string, from, to accounts.Role) error
 	SetEnabled(ctx context.Context, id string, enabled bool) error
 }
 

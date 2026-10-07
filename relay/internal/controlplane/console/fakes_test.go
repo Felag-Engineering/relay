@@ -619,6 +619,11 @@ type setRoleCall struct {
 	Principal capability.Principal
 	ID        string
 	Role      accounts.Role
+
+	// From and Conditional are set only by SetAccountRoleFrom: the role the
+	// write was a compare-and-set against (#912).
+	From        accounts.Role
+	Conditional bool
 }
 
 type setEnabledCall struct {
@@ -693,6 +698,12 @@ func (f *fakeAccountAdmin) CreateAccount(_ context.Context, p capability.Princip
 
 func (f *fakeAccountAdmin) SetAccountRole(_ context.Context, p capability.Principal, id string, role accounts.Role) error {
 	f.roles = append(f.roles, setRoleCall{Principal: p, ID: id, Role: role})
+	f.record("SetAccountRole")
+	return f.roleErr
+}
+
+func (f *fakeAccountAdmin) SetAccountRoleFrom(_ context.Context, p capability.Principal, id string, from, to accounts.Role) error {
+	f.roles = append(f.roles, setRoleCall{Principal: p, ID: id, Role: to, From: from, Conditional: true})
 	f.record("SetAccountRole")
 	return f.roleErr
 }

@@ -165,7 +165,7 @@ func TestTokenService_RoleIsReadFresh(t *testing.T) {
 	if got, _, _ := svc.Verify(ctx, cred); got.Role != RoleOperator {
 		t.Fatalf("initial role = %q, want operator", got.Role)
 	}
-	if err := m.SetRole(ctx, acct.ID, RoleAdmin); err != nil {
+	if err := m.SetRole(ctx, acct.ID, RoleOperator, RoleAdmin); err != nil {
 		t.Fatalf("promote: %v", err)
 	}
 	if got, _, _ := svc.Verify(ctx, cred); got.Role != RoleAdmin {
