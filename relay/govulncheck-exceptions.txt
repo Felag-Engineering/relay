@@ -14,8 +14,3 @@ GO-2026-6090  #572  crypto/tls: unbounded post-handshake messages
 GO-2026-6089  #572  net/http: ReadHeaderTimeout not applied to the h2c check
 GO-2026-5972  #572  encoding/asn1: no recursion depth limit (reached via ca.SignCSR, pre-auth)
 GO-2026-5026  #572  net/http (x/net/idna): ASCII-only Punycode labels
-
-# google.golang.org/grpc v1.84.0: server panic on missing :authority/Host. The fix exists
-# only in an unreleased v1.85.0-dev pseudo-version; adopting a pre-release gRPC is an owner
-# decision (#872). Delete when a released grpc carries the fix.
-GO-2026-6443  #872  grpc: server panic via missing authority or Host headers
