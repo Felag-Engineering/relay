@@ -18,7 +18,18 @@ Arguments: **$ARGUMENTS**. Explicit issue numbers skip Stage 2's picking but not
 
 ## Stage 0 — Halt and preflight
 
-- `gh issue list --label loop:halt --state open --limit 1 --json number -q length` non-zero → stop.
+Halt check first:
+
+```bash
+halt="$(gh api 'repos/{owner}/{repo}/issues?labels=loop:halt&state=open&per_page=1' --jq 'if type == "array" then length else "not-an-array" end')"; halt_rc=$?
+if [ "$halt_rc" -eq 0 ] && [ "$halt" = 0 ]; then echo "halt: clear"
+elif [ "$halt_rc" -eq 0 ] && [ "$halt" = 1 ]; then echo "halted: loop:halt is set on an open issue or PR"
+else echo "halted: the loop:halt check gave no usable answer (exit $halt_rc), so the tick stops (fail closed)"; fi
+```
+
+**Fail closed:** only exit 0 with output exactly `0` continues; anything else, an error or empty output included, stops the tick. Anything but the line `halt: clear`, including no line at all (the shell aborted), is a stop.
+A stop prints the block's line (if any). Then:
+
 - `gh auth status`; `go`, `cargo`, `buf` (the Go proto generators are `go tool` directives in `relay/go.mod`; the runners inherit this environment,
   and each will refuse to run half a gate). Missing → stop and say which.
 - Warn once about cost: each runner builds the Go and Rust trees and runs `make verify` in its own

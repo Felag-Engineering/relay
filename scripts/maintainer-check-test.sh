@@ -7,6 +7,9 @@
 # from drifting away from the projections proved here (#910). It also proves the #918 rules: the
 # drive's listings, fork PRs never actioned (REST same-repo check, "could not determine" never
 # read as fork), loop replies (the marker) never instruct pr-respond, and shared attempt counters.
+# It proves the #924 halt check (REST, fail closed: an error, an empty output or a body that is
+# not an array stops the tick) and the #927 thread rule (a review thread a loop reply answered
+# with no push is not actionable).
 # The commands' real jq strings run on fixtures; the models of the agents' reading order are
 # written here and can pin the prose only through the drift guards.
 #
@@ -372,8 +375,18 @@ DRIVE_PULLS_JQ='.[] | select(.head.ref | test("^(loop|agent)/")) | [.number, (.h
 SAME_REPO_ONE_JQ="if ($SAME_REPO_EXPR) then \"true \\(.head.sha)\" else \"false\" end"
 RUNS_JQ='.workflow_runs[] | select(.head_repository != null and .head_repository.full_name == .repository.full_name) | [.id, .name, .conclusion] | @tsv'
 PR_ISSUE_COMMENTS_JQ=".[] | [.id, (.user.login // \"\"), (.user.type // \"\"), .created_at, $LOOP_JQ] | @tsv"
-PR_THREAD_COMMENTS_JQ=".[] | [.id, (.user.login // \"\"), (.user.type // \"\"), .created_at, .path, (.line // .original_line // \"\"), $LOOP_JQ] | @tsv"
+PR_THREAD_COMMENTS_JQ=".[] | [.id, (.user.login // \"\"), (.user.type // \"\"), .created_at, .path, (.line // .original_line // \"\"), (.in_reply_to_id // .id), $LOOP_JQ] | @tsv"
 PR_REVIEWS_JQ='.[] | [.id, (.user.login // ""), (.user.type // ""), .state, .submitted_at, '"$LOOP_JQ"', ((.body // "") | test("\\S") | not)] | @tsv'
+# The #924 halt check, verbatim from the commands (the guard below pins the text; the cases
+# below execute it). IFS= keeps the lines intact.
+IFS= read -r -d '' HALT_BLOCK <<'HALT_EOF'
+halt="$(gh api 'repos/{owner}/{repo}/issues?labels=loop:halt&state=open&per_page=1' --jq 'if type == "array" then length else "not-an-array" end')"; halt_rc=$?
+if [ "$halt_rc" -eq 0 ] && [ "$halt" = 0 ]; then echo "halt: clear"
+elif [ "$halt_rc" -eq 0 ] && [ "$halt" = 1 ]; then echo "halted: loop:halt is set on an open issue or PR"
+else echo "halted: the loop:halt check gave no usable answer (exit $halt_rc), so the tick stops (fail closed)"; fi
+HALT_EOF
+HALT_RULE='only exit 0 with output exactly `0` continues; anything else, an error or empty output included, stops the tick'
+THREAD_RULE="newer than both the branch's last commit and the newest loop reply in that same thread"
 FIX_ATTEMPT_JQ='.[] | [(.user.login // ""), (.user.type // ""), ((.body // "") | sub("^\\s+"; "") | startswith("<!-- relay-loop -->\n🤖 ci-fix attempt"))] | @tsv'
 RERUN_JQ='.[] | [(.user.login // ""), (.user.type // ""), ((.body // "") | sub("^\\s+"; "") | startswith("<!-- relay-loop -->\n🤖 ci-rerun"))] | @tsv'
 TRACK_REUSE_JQ='.[] | select(.pull_request == null) | select(.title == "🤖 drive: <milestone>") | [.number, (.user.login // ""), (.user.type // "")] | @tsv'
@@ -507,12 +520,13 @@ JSON
 # pr_model <last_push_iso> <ids...>: pr-respond's Stage 0 reading order, over the stub. Results
 # land in model.out as "<id>: <result>"; `actionable` is the count that makes the PR actionable.
 pr_model() {
-  local last="$1" keep=" $2 " kind id login type ts state loopf empty rc
-  declare -A seen
-  actionable=0 skipped=0 notact=0
+  local last="$1" keep=" $2 " kind id login type ts state loopf empty thread rc cut _path _line row
+  local -a trows
+  declare -A seen newest_loop
+  actionable=0 skipped=0 notact=0 answered=0
   : >"$WORKDIR/model.out"
-  classify() { # kind id login type ts state loopf empty
-    kind="$1" id="$2" login="$3" type="$4" ts="$5" state="$6" loopf="$7" empty="$8"
+  classify() { # kind id login type ts state loopf empty thread
+    kind="$1" id="$2" login="$3" type="$4" ts="$5" state="$6" loopf="$7" empty="$8" thread="${9:-}"
     case "$keep" in *" all "*) ;; *" $id "*) ;; *) return 0 ;; esac
     if [[ ! "$ts" > "$last" ]]; then echo "$id: before the last push" >>"$WORKDIR/model.out"; return 0; fi
     if [ "$type" != User ]; then echo "$id: not actioned: app account" >>"$WORKDIR/model.out"; return 0; fi
@@ -526,19 +540,49 @@ pr_model() {
         if [ "$state" = CHANGES_REQUESTED ]; then actionable=$((actionable + 1)); echo "$id: actionable" >>"$WORKDIR/model.out"
         elif [ "$empty" = true ]; then echo "$id: no instruction" >>"$WORKDIR/model.out"
         else echo "$id: classify only" >>"$WORKDIR/model.out"; fi ;;
-      thread) actionable=$((actionable + 1)); echo "$id: actionable" >>"$WORKDIR/model.out" ;;
+      thread)
+        cut=""
+        [ -z "$thread" ] || cut="${newest_loop[$thread]:-}"
+        if [ -n "$cut" ] && [[ ! "$ts" > "$cut" ]]; then
+          answered=$((answered + 1)); echo "$id: answered in thread" >>"$WORKDIR/model.out"
+        else
+          actionable=$((actionable + 1)); echo "$id: actionable" >>"$WORKDIR/model.out"
+        fi ;;
       issue) echo "$id: classify only" >>"$WORKDIR/model.out" ;;
     esac
   }
   while IFS=$'\t' read -r id login type state ts loopf empty; do
     classify review "$id" "$login" "$type" "$ts" "$state" "$loopf" "$empty"
   done < <(gh_m api --paginate 'repos/{owner}/{repo}/pulls/7/reviews' --jq "$PR_REVIEWS_JQ")
-  while IFS=$'\t' read -r id login type ts _path _line loopf; do
-    classify thread "$id" "$login" "$type" "$ts" "" "$loopf" ""
-  done < <(gh_m api --paginate 'repos/{owner}/{repo}/pulls/7/comments' --jq "$PR_THREAD_COMMENTS_JQ")
+  # Pass 1: the newest loop reply per thread. Only a kept row newer than the last push, by a
+  # User, whose check exited 0, with the marker, counts (max(push, loop) needs no older reply).
+  mapfile -t trows < <(gh_m api --paginate 'repos/{owner}/{repo}/pulls/7/comments' --jq "$PR_THREAD_COMMENTS_JQ")
+  for row in "${trows[@]}"; do
+    IFS=$'\t' read -r id login type ts _path _line thread loopf <<<"$row"
+    case "$keep" in *" all "*) ;; *" $id "*) ;; *) continue ;; esac
+    [[ "$ts" > "$last" ]] && [ "$type" = User ] && [ -n "$thread" ] && [ "$loopf" = true ] || continue
+    if [ -z "${seen[$login]:-}" ]; then mcheck "$login"; seen[$login]=$?; fi
+    [ "${seen[$login]}" -eq 0 ] || continue
+    if [ -z "${newest_loop[$thread]:-}" ] || [[ "$ts" > "${newest_loop[$thread]}" ]]; then newest_loop[$thread]="$ts"; fi
+  done
+  for row in "${trows[@]}"; do
+    IFS=$'\t' read -r id login type ts _path _line thread loopf <<<"$row"
+    classify thread "$id" "$login" "$type" "$ts" "" "$loopf" "" "$thread"
+  done
   while IFS=$'\t' read -r id login type ts loopf; do
     classify issue "$id" "$login" "$type" "$ts" "" "$loopf" ""
   done < <(gh_m api --paginate 'repos/{owner}/{repo}/issues/7/comments' --jq "$PR_ISSUE_COMMENTS_JQ")
+}
+pr_report() { # Stage 0's report rule over the counters
+  local parts=()
+  [ "$actionable" -eq 0 ] || { echo "actionable"; return; }
+  [ "$notact" -eq 0 ] || parts+=("$notact not actioned: author is not a maintainer")
+  [ "$skipped" -eq 0 ] || parts+=("$skipped skipped: loop reply")
+  [ "$answered" -eq 0 ] || parts+=("$answered answered in thread")
+  if [ "${#parts[@]}" -eq 0 ]; then echo "nothing to respond to"; return; fi
+  local joined="${parts[0]}" p
+  for p in "${parts[@]:1}"; do joined="$joined, $p"; done
+  echo "nothing to respond to ($joined)"
 }
 res_of() { grep "^$1: " "$WORKDIR/model.out" | cut -d' ' -f2-; }
 LAST_PUSH="2026-01-15T00:00:00Z"
@@ -585,6 +629,102 @@ for list in "$PR_ISSUE_COMMENTS_JQ:issues/7/comments" "$PR_THREAD_COMMENTS_JQ:pu
     echo "PASS: loop reply: the ${list##*:} listing projects no body text"
   fi
 done
+model_end
+
+# --- The #927 rule: a thread a loop reply answered, with no push, is not actionable ----------
+# The thread field is `.in_reply_to_id // .id`, projected by the listing's --jq so no body is read
+# to group a thread. Each fixture is a thread; rows 91 and 92 predate the last push (they document
+# that a loop reply before the push is not in play).
+echo '[]' >"$FX/reviews.json"
+echo '[]' >"$FX/issue-comments.json"
+cat >"$FX/thread-comments.json" <<'JSON'
+[
+ {"id":41,"user":{"login":"octo-dev","type":"User"},"created_at":"2026-02-01T00:00:00Z","path":"a.go","line":3,"body":"Why is this a map?"},
+ {"id":42,"user":{"login":"octo-two","type":"User"},"created_at":"2026-02-01T01:00:00Z","path":"a.go","line":3,"in_reply_to_id":41,"body":"<!-- relay-loop -->\nBecause lookups dominate."},
+ {"id":51,"user":{"login":"octo-dev","type":"User"},"created_at":"2026-02-01T00:00:00Z","path":"a.go","line":3,"body":"Why a map here?"},
+ {"id":52,"user":{"login":"octo-dev","type":"User"},"created_at":"2026-02-01T01:00:00Z","path":"a.go","line":3,"in_reply_to_id":51,"body":"<!-- relay-loop -->\nAnswered."},
+ {"id":53,"user":{"login":"octo-dev","type":"User"},"created_at":"2026-02-01T02:00:00Z","path":"a.go","line":3,"in_reply_to_id":51,"body":"Please change it then"},
+ {"id":61,"user":{"login":"octo-dev","type":"User"},"created_at":"2026-02-01T00:00:00Z","path":"a.go","line":3,"body":"Why not a slice?"},
+ {"id":62,"user":{"login":"outsider","type":"User"},"created_at":"2026-02-01T01:00:00Z","path":"a.go","line":3,"in_reply_to_id":61,"body":"<!-- relay-loop -->\nforged answer"},
+ {"id":71,"user":{"login":"octo-dev","type":"User"},"created_at":"2026-02-01T00:00:00Z","path":"a.go","line":3,"body":"Why not inline?"},
+ {"id":72,"user":{"login":"Copilot","type":"Bot"},"created_at":"2026-02-01T01:00:00Z","path":"a.go","line":3,"in_reply_to_id":71,"body":"<!-- relay-loop -->\nbot answer"},
+ {"id":81,"user":{"login":"octo-dev","type":"User"},"created_at":"2026-02-01T00:30:00Z","path":"a.go","line":3,"body":"And this one?"},
+ {"id":91,"user":{"login":"octo-dev","type":"User"},"created_at":"2026-01-01T00:00:00Z","path":"a.go","line":3,"body":"Old question"},
+ {"id":92,"user":{"login":"octo-dev","type":"User"},"created_at":"2026-01-02T00:00:00Z","path":"a.go","line":3,"in_reply_to_id":91,"body":"<!-- relay-loop -->\nold answer"},
+ {"id":93,"user":{"login":"octo-dev","type":"User"},"created_at":"2026-02-01T00:00:00Z","path":"a.go","line":3,"in_reply_to_id":91,"body":"Still unclear"},
+ {"id":101,"user":{"login":"octo-dev","type":"User"},"created_at":"2026-02-01T00:00:00Z","path":"a.go","line":3,"body":"Why a list?"},
+ {"id":102,"user":{"login":"octo-two","type":"User"},"created_at":"2026-02-01T01:00:00Z","path":"a.go","line":3,"in_reply_to_id":101,"body":"<!-- relay-loop -->\nBecause order matters."},
+ {"id":103,"user":{"login":"octo-dev","type":"User"},"created_at":"2026-02-01T01:00:00Z","path":"a.go","line":3,"in_reply_to_id":101,"body":"Followup in the same second"},
+ {"id":111,"user":{"login":"octo-dev","type":"User"},"created_at":"2026-02-01T00:00:00Z","path":"a.go","line":3,"body":"Why a channel?"},
+ {"id":112,"user":{"login":"ghost","type":"User"},"created_at":"2026-02-01T01:00:00Z","path":"a.go","line":3,"in_reply_to_id":111,"body":"<!-- relay-loop -->\nghost answer"}
+]
+JSON
+
+model_begin
+tsv="$(gh_m api --paginate 'repos/{owner}/{repo}/pulls/7/comments' --jq "$PR_THREAD_COMMENTS_JQ")"
+check "927: the thread field of a root comment is its own id" \
+  test "$(awk -F'\t' '$1 == 41 { print $7 }' <<<"$tsv")" = 41
+check "927: the thread field of a reply is the root comment's id" \
+  test "$(awk -F'\t' '$1 == 42 { print $7 }' <<<"$tsv")" = 41
+check "927: the thread listing still projects no body text" \
+  test -z "$(grep -iE 'Why|Because|Please|forged|Answered|Still|answer|Followup' <<<"$tsv")"
+model_end
+
+model_begin
+pr_model "$LAST_PUSH" "41 42"
+check "927 acceptance: a question and a marked loop reply with no push are not actionable" test "$actionable" -eq 0
+check "927 acceptance: the question is answered in thread" test "$(res_of 41)" = "answered in thread"
+check "927 acceptance: the marked reply is a skipped loop reply" test "$(res_of 42)" = "skipped: loop reply"
+check "927 acceptance: the Stage 0 report is nothing to respond to" \
+  test "$(pr_report)" = "nothing to respond to (1 skipped: loop reply, 1 answered in thread)"
+check "927 acceptance: no body was fetched and nothing was posted" log_has_no_action
+model_end
+
+model_begin
+pr_model "$LAST_PUSH" "51 52 53"
+check "927 acceptance: a new maintainer comment after the loop reply is actionable" test "$actionable" -eq 1
+check "927: that comment is the actionable one" test "$(res_of 53)" = actionable
+check "927: the question before the loop reply stays answered in thread" test "$(res_of 51)" = "answered in thread"
+check "927: no body was fetched and nothing was posted (new comment)" log_has_no_action
+model_end
+
+model_begin
+pr_model "$LAST_PUSH" "61 62"
+check "927: an outsider's marked reply never closes a thread" test "$(res_of 61)" = actionable
+check "927: the outsider's reply is not actioned" test "$(res_of 62)" = "not actioned: author is not a maintainer"
+model_end
+
+model_begin
+# The app is mapped as a writer here, so only the type gate (not a failing check) can keep it
+# from closing the thread.
+STUB_ROLES="$STUB_ROLES Copilot=write" pr_model "$LAST_PUSH" "71 72"
+check "927: an app's marked reply never closes a thread" test "$(res_of 71)" = actionable
+check "927: the app's reply is an app account" test "$(res_of 72)" = "not actioned: app account"
+model_end
+
+model_begin
+pr_model "$LAST_PUSH" "41 42 81"
+check "927: a loop reply in another thread answers nothing here" test "$(res_of 81)" = actionable
+check "927: and the thread it did answer stays answered" test "$(res_of 41)" = "answered in thread"
+check "927: exactly one actionable thread" test "$actionable" -eq 1
+model_end
+
+model_begin
+pr_model "$LAST_PUSH" "91 92 93"
+check "927: a loop reply before the push is ignored" test "$(res_of 92)" = "before the last push"
+check "927: a maintainer comment after the push is actionable whatever the old loop reply says" test "$(res_of 93)" = actionable
+model_end
+
+model_begin
+pr_model "$LAST_PUSH" "101 102 103"
+check "927: a maintainer comment in the same second as the loop reply is not newer" test "$(res_of 103)" = "answered in thread"
+check "927: the same-second thread is not actionable" test "$actionable" -eq 0
+model_end
+
+model_begin
+pr_model "$LAST_PUSH" "111 112"
+check "927: a loop reply whose author check could not run escalates" test "$(res_of 112)" = ESCALATE
+check "927: and does not close the thread" test "$(res_of 111)" = actionable
 model_end
 
 # --- Drive caller shapes ---
@@ -685,6 +825,66 @@ out="$(STUB_ROLES="octo-dev=write outsider=read" STUB_USER_STATUS=500 count_rows
 check "counters: a check that could not run sends the PR to Needs you" test "$out" = NEEDS-YOU
 check "counters: and nothing was rerun or checked out" log_has_no_action
 model_end
+# --- The #924 halt check: REST, fail closed -------------------------------------------------
+# The cases execute the same text the guard below pins in each command.
+halt_run() { PATH="$BIN:$PATH_BEFORE_MODEL" GH_LOG="$GH_LOG" bash -c "$HALT_BLOCK" 2>/dev/null; }
+halt_tick() { # the tick shape: halt first; only `halt: clear` reaches the next call
+  local out
+  out="$(halt_run)"
+  echo "$out"
+  [ "$out" = "halt: clear" ] || return 0
+  gh_m api --paginate 'repos/{owner}/{repo}/pulls?state=open&per_page=100' --jq '.[] | .number' >/dev/null
+  echo "ran"
+}
+HALT_SET="halted: loop:halt is set on an open issue or PR"
+halt_nousable() { echo "halted: the loop:halt check gave no usable answer (exit $1), so the tick stops (fail closed)"; }
+halt_case() { # <fixture json, or - for none> [<STUB_LIST_STATUS>]: sets HOUT
+  if [ "$1" = - ]; then rm -f "$FX/issues.json"; else printf '%s' "$1" >"$FX/issues.json"; fi
+  model_begin
+  HOUT="$(STUB_LIST_STATUS="${2:-}" halt_tick)"
+  model_end
+}
+halt_stops() { # <name> <want first line>: a stop, never a run, after exactly one gh call
+  check "halt: $1 stops the tick" test "$HOUT" = "$2"
+  check "halt: $1 makes no further call" gh_calls 1
+  check "halt: $1 makes no unexpected call" file_lacks '^UNEXPECTED' "$GH_LOG"
+}
+
+halt_case '[]'
+check "halt: no label is clear and the tick runs" test "$HOUT" = "$(printf 'halt: clear\nran')"
+check "halt: the halt call is first and the pulls call second" gh_calls 2
+check "halt: the second call is the pulls listing" grep -q 'pulls?state=open' < <(sed -n '2p' "$GH_LOG")
+check "halt: the call is the REST issues listing, one row" grep -qF -- "issues?labels=loop:halt&state=open&per_page=1 " "$GH_LOG"
+check "halt: the call is not paginated" file_lacks "--paginate" <(sed -n '1p' "$GH_LOG")
+check "halt: the call is not GraphQL" file_lacks "graphql" "$GH_LOG"
+check "halt: the clear case makes no unexpected call" file_lacks '^UNEXPECTED' "$GH_LOG"
+
+halt_case '[{"number":5,"labels":[{"name":"loop:halt"}]}]'
+halt_stops "a labelled issue" "$HALT_SET"
+halt_case '[{"number":6,"pull_request":{"url":"x"},"labels":[{"name":"loop:halt"}]}]'
+halt_stops "a labelled PR" "$HALT_SET"
+
+# The #924 acceptance: the halt call errors -> a stop, not a run.
+halt_case '[]' 403
+halt_stops "an HTTP 403 (GraphQL-style failure)" "$(halt_nousable 1)"
+halt_case '[]' 500
+halt_stops "an HTTP 500" "$(halt_nousable 1)"
+halt_case '[]' neterr
+halt_stops "a network error" "$(halt_nousable 1)"
+halt_case -
+halt_stops "empty output is never read as zero; it" "$(halt_nousable 0)"
+halt_case '{}'
+halt_stops "a 200 whose body is {}" "$(halt_nousable 0)"
+halt_case 'null'
+halt_stops "a 200 whose body is null" "$(halt_nousable 0)"
+halt_case '[{"number":1},{"number":2}]'
+halt_stops "more rows than the one requested" "$(halt_nousable 0)"
+
+model_begin
+HOUT="$(PATH="$EMPTY_BIN" "$BASH" -c "$HALT_BLOCK" 2>/dev/null)"
+model_end
+check "halt: gh absent (exit 127) stops the tick" test "$HOUT" = "$(halt_nousable 127)"
+
 PATH="$PATH_BEFORE_MODEL"
 
 # --- Drift guard ------------------------------------------------------------------------
@@ -841,6 +1041,48 @@ if grep -nE -- '--body|gh issue create|gh issue edit "\$TRACK"' "$REPO_ROOT/.cla
 else
   echo "PASS: drift guard: dev-loop-drive.md writes bodies over REST only"
 fi
+
+# --- Drift guard: #924 and #927 ---
+# The halt block is the REST, fail-closed form in every command that checks the halt label, and
+# the cases above execute that very text. guard_block strips leading whitespace, so the drive's
+# list-indented block matches.
+guard_block() { # <block> <file...>
+  local block="$1" f content
+  shift
+  for f in "$@"; do
+    content="$(sed 's/^[[:space:]]*//' "$REPO_ROOT/$f")"
+    if [[ $content == *"$block"* ]]; then
+      echo "PASS: drift guard: $f carries the halt block"
+    else
+      echo "FAIL: drift guard: $f does not carry the halt block" >&2
+      fail=$((fail + 1))
+    fi
+  done
+}
+HALT_FILES=(.claude/commands/dev-loop-queue.md .claude/commands/dev-loop-parallel.md
+  .claude/commands/dev-loop-drive.md .claude/commands/pr-respond.md docs/agents/routines.md)
+guard_block "$HALT_BLOCK" "${HALT_FILES[@]}"
+guard_has "$HALT_RULE" "${HALT_FILES[@]}"
+guard_has "$THREAD_RULE" .claude/commands/pr-respond.md docs/agents/routines.md
+guard_has "answered in thread" .claude/commands/pr-respond.md docs/agents/routines.md
+guard_has "<thread-root-id>/replies" .claude/commands/pr-respond.md docs/agents/routines.md
+guard_has "to the thread's root id" .claude/commands/pr-respond.md
+guard_has "never on an outsider's" docs/agents/routines.md
+guard_has "never on an outsider's issue or PR" .claude/commands/dev-loop-queue.md
+# No GraphQL halt check, in any command, agent or routines.md fence. Scoped to the halt form so
+# other `gh issue list` calls (milestone-close) stay legal.
+for f in "$REPO_ROOT"/.claude/commands/*.md "$REPO_ROOT"/.claude/agents/*.md "$WORKDIR/routines-fenced.md"; do
+  rel="${f#"$REPO_ROOT"/}"
+  rel="${rel#"$WORKDIR"/}"
+  # Only lines naming the halt label are scanned, so other gh calls stay legal.
+  if grep -n 'loop:halt' "$f" | grep -E "gh (issue|pr) list|gh api graphql|gh search|--json number -q|--jq '?(\. *\| *)?length'?( |$)|-q '?length'?( |$)" >"$WORKDIR/drift"; then
+    echo "FAIL: halt guard: $rel has a GraphQL or untyped halt check:" >&2
+    sed 's/^/    /' "$WORKDIR/drift" >&2
+    fail=$((fail + 1))
+  else
+    echo "PASS: halt guard: $rel has no GraphQL halt check"
+  fi
+done
 
 if [ "$fail" -ne 0 ]; then
   echo "FAIL: $fail case(s) failed" >&2
