@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Assert the proto codegen toolchain (protoc-gen-go, protoc-gen-go-grpc, buf) is at the
-# versions the Makefile's `proto-tools` recipe pins, BEFORE any codegen runs.
+# Assert the proto toolchain installed into GOPATH/bin (buf) is at the version the Makefile's
+# `proto-tools` recipe pins, BEFORE any codegen runs. protoc-gen-go and protoc-gen-go-grpc are
+# no longer installed there: they are `tool` directives in relay/go.mod, run via `go tool`.
 #
-# Why this exists (#710): `make proto-tools` installs into the shared $(go env GOPATH)/bin.
+# Why this exists (#710; the generator half is history since #891, which moved them to go.mod):
+# `make proto-tools` installs into the shared $(go env GOPATH)/bin.
 # Parallel dev-loop runners in separate worktrees share that directory, so one runner's
 # `make proto-tools` at a different pin makes a SIBLING runner's proto-drift gate report
 # drift in relay/internal/relay/v1/*.pb.go whose entire content is the generator stamp
@@ -16,8 +18,7 @@
 # comment above `proto-tools` names the other two consumers of that same line shape (ci.yml's
 # tool-cache key, and this script), so a reshape of the recipe is a three-way coordinated edit.
 #
-# buf is asserted too, not just the two codegen plugins — a deliberate behaviour change (see
-# the PR that introduced this script for the full argument). buf's own version is not recorded
+# buf is the one tool left in GOPATH/bin, and the one that needs this check: buf's own version is not recorded
 # anywhere in the generated code (protoc-gen-go and protoc-gen-go-grpc stamp their versions;
 # buf does not), so a wrong buf produces byte-identical output and no drift diff at all —
 # nothing else in this repo can catch it. A buf installed from apt/brew/nix at a version other
@@ -130,9 +131,9 @@ for spec in "${pins[@]}"; do
     continue
   fi
 
-  # The three shipped --version shapes differ ("protoc-gen-go v<N>", "protoc-gen-go-grpc <N>",
-  # "<N>"). All three reduce the same way: first line, last whitespace-separated field, strip
-  # one leading 'v'. The pin gets the identical normalisation.
+  # buf prints "<N>"; the generators it once also checked printed "protoc-gen-go v<N>" shapes.
+  # All reduce the same way: first line, last whitespace-separated field, strip one leading
+  # 'v'. The pin gets the identical normalisation.
   installed=$(printf '%s\n' "$out" | head -n1 | awk '{print $NF}')
   installed=${installed#v}
   pin=${version#v}

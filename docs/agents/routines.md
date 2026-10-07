@@ -130,7 +130,9 @@ make proto-tools
 `buf` is not pre-installed. Without it, `verify-proto` **skips** the proto-drift and
 proto-breaking gates with a notice — so a routine touching `/proto` would report a green
 `make verify` that never checked the contract. Setup scripts run once and the filesystem is
-snapshotted, so this costs nothing per run.
+snapshotted, so this costs nothing per run. `make proto-tools` installs only `buf`; the Go
+generators (`protoc-gen-go`, `protoc-gen-go-grpc`) are `tool` directives in `relay/go.mod` that
+`go tool` builds on demand, so the image needs nothing else for codegen.
 
 Network access: **Trusted** is sufficient. It covers crates.io, the Go module proxy, and GitHub.
 

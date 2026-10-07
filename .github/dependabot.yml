@@ -13,6 +13,9 @@
 # Every PR this opens edits a dependency manifest, which is on the security surface
 # (docs/agents/security-surface.txt): a human reviews and merges it like any other.
 # Tool pins in the Makefile (golangci-lint, buf, the scanners) are not covered here.
+# The Go proto generators ARE covered: they are `tool` directives in relay/go.mod
+# (#891), and protoc-gen-go is the protobuf runtime module itself. A PR that moves
+# either goes red on proto-drift until someone runs `make proto` on its branch.
 version: 2
 updates:
   - package-ecosystem: gomod
