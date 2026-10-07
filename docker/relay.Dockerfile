@@ -42,7 +42,7 @@ RUN cd relay && CGO_ENABLED=0 go build -trimpath -o /out/relay ./cmd/relay
 # Pinned by digest: this is the only base that reaches the published image (the
 # golang builder above never ships). Dependabot's docker ecosystem refreshes the
 # tag and digest together (.github/dependabot.yml).
-FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 AS os
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS os
 
 RUN apk add --no-cache openssl
 
