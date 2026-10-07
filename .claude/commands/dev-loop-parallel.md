@@ -91,10 +91,10 @@ From each `RUNNER REPORT`, exactly one of:
   and the PR lacks `loop:needs-human`, add it to the PR.
 - **ESCALATED** → remove `loop:in-progress` and `loop:ready`, add `loop:needs-human`. The runner has
   already commented why.
-- **NO_CHANGES** → remove `loop:in-progress`; comment the runner's reason; leave `loop:ready` off and
+- **NO_CHANGES** → remove `loop:in-progress`; post a comment (a Posting form, first line `<!-- relay-loop -->`) with the runner's reason; leave `loop:ready` off and
   add `loop:needs-human` so a human closes or rescopes it.
 - **FAILED, or no report** (a crash, a context limit) → remove `loop:in-progress`, add
-  `loop:needs-human`, comment what is known.
+  `loop:needs-human`, post a comment (a Posting form, marker first) with what is known.
 
 **Never leave `loop:in-progress` set.**
 

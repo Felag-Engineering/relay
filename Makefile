@@ -344,7 +344,8 @@ test-smoke-test:
 # text may instruct it (docs/agents/routines.md): it admits exactly role_name
 # admin/maintain/write, refuses a non-collaborator, tells a refusal (1) from a check that could
 # not run (2), validates the login before any call, and accepts the REST login form the
-# commands read (#910). Hermetic: a stub gh under a throwaway WORKDIR; bash and jq, no token,
+# commands read (#910); fork PRs and loop replies (the loop marker) produce no action (#918).
+# Hermetic: a stub gh under a throwaway WORKDIR; bash and jq, no token,
 # no network.
 test-maintainer-check:
 	bash scripts/maintainer-check-test.sh

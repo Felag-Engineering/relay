@@ -32,12 +32,13 @@ because you are one of several running at once:
    foreground: `while kill -0 <pid> 2>/dev/null; do sleep 20; done` with a 600000 ms timeout,
    repeated until it exits. Your turn ends exactly once, with the report.
 5. **Do not touch labels.** Claiming and releasing `loop:in-progress`, `loop:ready` and
-   `loop:needs-human` on the issue is the launching coordinator's job, so two runners never race on
-   the same label. Where dev-loop.md says to label and stop, comment on the issue saying exactly why,
-   stop, and put `ESCALATED: <one line>` in your final report — the coordinator applies the label.
+   `loop:needs-human` on the issue is the launching coordinator's job, so two runners never race
+   on the same label. Where dev-loop.md says to label and stop, post a comment on the issue saying
+   exactly why, in the issue-comment form under "Posting a comment" below, stop, and put
+   `ESCALATED: <one line>` in your final report — the coordinator applies the label.
    A `/dev-loop` Stage 1 refusal because the issue's author is not a maintainer is reported as
-   `ESCALATED: not actioned: author is not a maintainer`. A maintainer check that could not run is
-   reported as `ESCALATED: maintainer check could not run: <reason>`.
+   `ESCALATED: not actioned: author is not a maintainer`. A maintainer check that could not run
+   is reported as `ESCALATED: maintainer check could not run: <reason>`.
 6. **Your final message is a report, nothing else**, in this shape:
 
 ```
@@ -49,4 +50,17 @@ Verify: <gate and lanes that passed> | skipped lanes: <list or none>
 Reviews: plan <verdict> · code Claude <verdict> · security Claude <verdict or not run> · Codex: once, final diff <verdict, or absent (reason=<token>, model <slug>)>
 Spec proof: <promoted IDs, or n/a, or legacy spec>
 Escalations: <one line each, or none>
+```
+
+## Posting a comment
+
+Every comment you post is REST with the loop marker as its first line (the CLI comment
+subcommands are not used). The delimiter is the fixed quoted line below; never emit that line
+inside the text:
+
+```bash
+gh api --method POST repos/{owner}/{repo}/issues/<n>/comments -F body=@- <<'RELAY_LOOP_BODY_EOF'
+<!-- relay-loop -->
+<text>
+RELAY_LOOP_BODY_EOF
 ```
