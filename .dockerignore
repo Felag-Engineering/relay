@@ -3,7 +3,9 @@
 # and /docker are needed by the dev-fleet builds; everything else is excluded.
 #
 # This file affects `docker build` / `docker compose build` only. It has no
-# effect on the Go/Rust/proto toolchains or on CI (CI never invokes Docker).
+# effect on the Go/Rust/proto toolchains. release.yml now invokes Docker, but the release
+# image takes its binary from a named build context (dist/image), never from the main context,
+# so the exclusions below are unchanged by it.
 
 # VCS + tooling metadata
 .git/
