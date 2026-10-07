@@ -66,7 +66,11 @@ how an operator sees upgrade progress across the fleet.
 carry the same stamp, and the stamp's build date is the *wall-clock* UTC date. A rebuild of
 the same tag on a different day therefore produces a different binary hash. Pin
 `SOURCE_DATE_EPOCH` (honoured by `scripts/build-version.sh`) in any pipeline that needs
-rebuild-and-compare verification or artifact signing.
+rebuild-and-compare verification or artifact signing. Release builds do exactly that, and
+also pin the Rust toolchain, build with `-trimpath` / `--locked`, and remap the checkout
+and `CARGO_HOME` paths out of the daemon; `release.yml` builds every release twice from
+different paths and fails unless both are byte-identical
+([release-artifacts.md](release-artifacts.md#reproducing-a-release)).
 
 **Version history:** the daemon's reported version jumps from `0.0.1` to the `0.0.9` line
 in v0.0.9 — `Cargo.toml` had never been bumped, so every daemon reported `0.0.1` regardless

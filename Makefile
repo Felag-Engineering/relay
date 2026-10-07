@@ -43,13 +43,13 @@ endif
         test-relay test-relay-race test-daemon test-strict-umask test-strict-umask-relay \
         test-strict-umask-daemon lint-relay lint-daemon lint-tools tools \
         clean test-integration \
-        fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
+        fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release print-release-daemon-bin \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
         test-security-surface test-codex-review test-proto-tools-check test-ci-changed-paths \
         test-check-docs test-smoke-test test-maintainer-check \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
         demo-build demo-reset demo-reset-oauth demo-fault demo-up demo-up-oauth demo-down demo-creds \
-        test-demo-fleet \
+        test-demo-fleet test-release-image-guard \
         fuzz-relay fuzz-daemon \
         verify verify-proto proto-lint opschema-check openapi-check gen-apiclient apiclient-check \
         lint-ci lint-shell lint-actions lint-zizmor zizmor-tool secrets-scan secrets-scan-history \
@@ -86,7 +86,7 @@ verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
         apiclient-check verify-proto docs-check test-security-surface \
         test-demo-fleet test-codex-review test-proto-tools-check test-ci-changed-paths \
-        test-check-docs test-smoke-test test-maintainer-check \
+        test-check-docs test-smoke-test test-maintainer-check test-release-image-guard \
         test-integration test-crossbinary \
         lint-ci secrets-scan deny-daemon test-vuln-gate
 	@echo
@@ -300,6 +300,13 @@ test-security-surface:
 test-demo-fleet:
 	bash scripts/demo-fleet-test.sh
 
+# Proves scripts/release-image-guard.sh, the check release.yml runs on the OCI archive before
+# it is pushed and signed (#892), refuses a wrong binary digest, a root User, a tampered blob,
+# a symlink/hardlink binary, a malformed digest and a binary hidden under a whiteout.
+# Hermetic: tiny archives built from tar, jq and sha256sum; no Docker.
+test-release-image-guard:
+	bash scripts/release-image-guard-test.sh
+
 # Proves scripts/codex-review.sh exits 0 only on a parsed result.verdict, 3 on anything else
 # — including the recorded real quota capture (#673) — a refusal with 2, and a killed run
 # with 1; that no count it prints can be forged by a hostile payload; and that it stays
@@ -373,8 +380,13 @@ proto-breaking: proto-tools-check
 ## --- Relay (Go) ---
 # Emit the actual `relay` binary (into the gitignored relay/bin/), not just a
 # compile check. `go build ./...` validates but produces no artifact.
+#
+# CGO_ENABLED=0 and -trimpath are for the release (release.yml runs this recipe, unchanged):
+# the Relay is pure Go (modernc.org/sqlite), so the bytes then depend on neither the runner's
+# gcc/glibc nor the checkout path, and the same binary runs in the alpine image. One recipe
+# for dev, CI and release; there is no parallel release build path.
 build-relay:
-	cd relay && go build -ldflags "$(GO_LDFLAGS)" -o bin/relay ./cmd/relay
+	cd relay && CGO_ENABLED=0 go build -trimpath -ldflags "$(GO_LDFLAGS)" -o bin/relay ./cmd/relay
 
 test-relay:
 	cd relay && go test ./...
@@ -425,12 +437,32 @@ DAEMON_TARGET_DIR_RAW := $(or $(CARGO_TARGET_DIR),$(CARGO_BUILD_TARGET_DIR))
 DAEMON_TARGET_DIR     := $(if $(DAEMON_TARGET_DIR_RAW),$(if $(filter /%,$(DAEMON_TARGET_DIR_RAW)),$(DAEMON_TARGET_DIR_RAW),$(abspath $(CURDIR)/daemon/$(DAEMON_TARGET_DIR_RAW))),$(CURDIR)/daemon/target)
 DAEMON_DEBUG_BIN      := $(DAEMON_TARGET_DIR)/debug/relay-daemon
 
+# The release daemon. RELEASE_DAEMON_TARGET is the only knob: release.yml sets it per
+# architecture (x86_64 and aarch64 musl) and asks `print-release-daemon-bin` where the
+# result landed, so no workflow hardcodes daemon/target/<triple>/.
+RELEASE_DAEMON_TARGET ?= x86_64-unknown-linux-musl
+CARGO_HOME_DIR        := $(or $(CARGO_HOME),$(HOME)/.cargo)
+# Remap the checkout and CARGO_HOME out of the binary so a rebuild from another path, or by
+# another person with another CARGO_HOME, produces the same bytes.
+DAEMON_RELEASE_RUSTFLAGS := --remap-path-prefix=$(CURDIR)=/relay-src --remap-path-prefix=$(CARGO_HOME_DIR)=/cargo
+DAEMON_RELEASE_BIN    = $(DAEMON_TARGET_DIR)/$(RELEASE_DAEMON_TARGET)/release/relay-daemon
+
 build-daemon:
 	cd daemon && $(DAEMON_STAMP) cargo build
 
 # Release artifact for the fleet: small static musl binary (ADR-0007).
+# --locked: the build may not move Cargo.lock. CC_<triple>=musl-gcc names the C compiler that
+# cc-rs uses for ring, rather than leaving it to cc-rs's per-target fallback, which differs
+# between x86_64 and aarch64. RUSTFLAGS here replaces any ambient value; with --target set it
+# reaches only the shipped artifact, not build scripts or proc-macros. `-p relay-daemon`
+# selects the package by name so the recipe is the same in a single-package manifest and in a
+# workspace rooted at daemon/.
 build-daemon-release:
-	cd daemon && $(DAEMON_STAMP) cargo build --release --target x86_64-unknown-linux-musl
+	cd daemon && $(DAEMON_STAMP) CC_$(subst -,_,$(RELEASE_DAEMON_TARGET))=musl-gcc RUSTFLAGS="$(DAEMON_RELEASE_RUSTFLAGS)" cargo build --release --locked -p relay-daemon --target $(RELEASE_DAEMON_TARGET)
+
+# Where build-daemon-release leaves its binary (CARGO_TARGET_DIR-safe).
+print-release-daemon-bin:
+	@echo $(DAEMON_RELEASE_BIN)
 
 test-daemon:
 	cd daemon && cargo test

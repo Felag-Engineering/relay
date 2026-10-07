@@ -102,6 +102,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-demo-fleet
 
+      # The release image guard (#892), proved against tiny OCI archives. tar, jq and
+      # sha256sum only — no Docker, no toolchain.
+      - name: Release image guard self-test
+        if: ${{ !cancelled() }}
+        run: make test-release-image-guard
+
       # scripts/codex-review.sh's structural verdict classifier, proved against a stubbed
       # companion (#694). Shell, git and node — the stub companion is a Node program and the
       # gate's classifier parses JSON with node. No Codex CLI, no network.

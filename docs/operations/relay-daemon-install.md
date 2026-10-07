@@ -15,8 +15,11 @@ the standalone walkthrough for someone standing up a Node from scratch.
 
 ## 1. Obtain and verify the artifact
 
-Releases publish `relay-daemon-<version>-x86_64-unknown-linux-musl` — statically
-linked (musl, ADR-0007), no libc or distro expectations — plus `SHA256SUMS`.
+Releases publish `relay-daemon-<version>-x86_64-unknown-linux-musl` and
+`relay-daemon-<version>-aarch64-unknown-linux-musl` — statically linked (musl,
+ADR-0007), no libc or distro expectations — plus a signed `SHA256SUMS`
+(`SHA256SUMS.sigstore.json`; check it with `cosign verify-blob` first, as
+release-artifacts.md shows).
 Follow the **verify-then-install** sequence
 ([release-artifacts.md](release-artifacts.md)); the digest check happens
 **before** the binary is installed or executed, and a mismatch aborts:
@@ -24,7 +27,7 @@ Follow the **verify-then-install** sequence
 ```sh
 VERSION="X.Y.Z"         # the release pinned by the operator, in config management
 ARTIFACT="relay-daemon-${VERSION}-x86_64-unknown-linux-musl"
-BASE="https://github.com/Felag-Engineering/gleipnir-relay/releases/download/v${VERSION}"
+BASE="https://github.com/Felag-Engineering/relay/releases/download/v${VERSION}"
 
 curl -fsSLO "${BASE}/${ARTIFACT}"
 curl -fsSLO "${BASE}/SHA256SUMS"

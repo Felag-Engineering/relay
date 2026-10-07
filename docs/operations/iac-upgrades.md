@@ -16,13 +16,15 @@ exactly like the Policy file: through the reviewed IaC pipeline.
 ## The upgrade loop
 
 1. **A release is cut.** Pushing `v<version>` publishes
-   `relay-daemon-<version>-x86_64-unknown-linux-musl`,
-   `relay-<version>-x86_64-unknown-linux-gnu`, and `SHA256SUMS`
+   `relay-daemon-<version>-<arch>-unknown-linux-musl`,
+   `relay-<version>-<arch>-unknown-linux-gnu` (`<arch>` is `x86_64` or `aarch64`),
+   `SHA256SUMS` and its cosign bundle `SHA256SUMS.sigstore.json`
    ([release-artifacts.md](release-artifacts.md)).
 2. **The operator updates the pin** in config management: the version string
    *and* the expected sha256 line copied from `SHA256SUMS` (the operator's copy
    of the digest is the trust anchor — pinning only the version proves download
-   integrity, not provenance).
+   integrity, not provenance; `cosign verify-blob` on `SHA256SUMS` adds the
+   provenance, as release-artifacts.md shows).
 3. **The Relay upgrades first** (ADR-0014 ordering rule: daemons lag behind
    within the min-version window, never the other way around). Same
    verify-then-install sequence, on the far fewer Relay hosts
@@ -59,7 +61,7 @@ relay_daemon_sha256: "<sha256 line for the new artifact, from SHA256SUMS>"
 # The fetch task from enrollment.md already notifies the handler on change:
 - name: Fetch relay-daemon artifact (digest verified BEFORE install)
   ansible.builtin.get_url:
-    url: "https://github.com/Felag-Engineering/gleipnir-relay/releases/download/\
+    url: "https://github.com/Felag-Engineering/relay/releases/download/\
           v{{ relay_daemon_version }}/relay-daemon-{{ relay_daemon_version }}-x86_64-unknown-linux-musl"
     dest: /usr/local/bin/relay-daemon
     mode: "0755"

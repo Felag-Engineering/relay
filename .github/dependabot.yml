@@ -63,3 +63,18 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: "deps(ci)"
+
+  # The Relay image's one shipped base (docker/relay.Dockerfile, `os` stage) is pinned by
+  # digest; this refreshes the tag and the digest together. golang is a deliberate ceiling
+  # (#667) that never ships, and the rust/busybox bases are dev-fleet only.
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    allow:
+      - dependency-name: alpine
+    commit-message:
+      prefix: "deps(image)"
