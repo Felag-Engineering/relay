@@ -25,12 +25,12 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 # Match the daemon's wire stack (daemon/Cargo.toml pins prost 0.13 via tonic 0.12).
-prost = "0.13"
+prost = "0.14"
 
 [build-dependencies]
 # prost-build alone (no tonic-build): the fuzz surface is message decoding,
 # not gRPC services, so service codegen is deliberately skipped.
-prost-build = "0.13"
+prost-build = "0.14"
 protoc-bin-vendored = "3"
 
 # Standalone workspace root. Keeps this nightly-only crate out of the parent

@@ -37,7 +37,7 @@ path = "src/main.rs"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 tonic = { version = "0.12", features = ["tls"] }
-prost = "0.13"
+prost = "0.14"
 tokio-stream = "0.1"
 # mTLS / crypto
 # default-features = false drops aws_lc_rs + prefer-post-quantum, which together
@@ -124,7 +124,7 @@ proptest = "1"
 x509-parser = { version = "0.18", features = ["verify"] }
 
 [build-dependencies]
-tonic-build = "0.12"
+tonic-build = "0.14"
 protoc-bin-vendored = "3"
 
 # Lints that guard the root daemon itself, in every target and every editor, not only
