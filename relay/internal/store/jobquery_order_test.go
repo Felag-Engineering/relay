@@ -201,9 +201,9 @@ func TestJobQuery_AnUnknownOrderIsAnError(t *testing.T) {
 	}
 }
 
-// The count shares jobQueryFrom and buildJobWhere with the page, but leaves the
-// audit aggregate out unless a condition reads it. That is only safe if the two
-// still agree on every filter, so the property is asserted over each one:
+// The count shares buildJobWhere with the page and joins no aggregate. That is
+// only safe if the two still agree on every filter, so the property is asserted
+// over each one:
 // Matching equals the number of Jobs met by paging the same filter to the end.
 func TestJobQuery_CountMatchesPagingEveryFilter(t *testing.T) {
 	st, _ := openTestStore(t)
@@ -295,8 +295,8 @@ func planOf(t *testing.T, st *Store, stmt string, args []any) string {
 }
 
 // The count runs on every Activity view, which a viewer can reach. The audit
-// aggregate reads every dispatch row in the trail, so a count that does not
-// filter on it must not plan it at all; one that does (on-behalf-of) must.
+// trail is the costly operand, so a count that does not filter on it must not
+// plan it at all; one that does (on-behalf-of) must.
 func TestJobQuery_CountTouchesTheAuditTrailOnlyWhenTheFilterDoes(t *testing.T) {
 	st, _ := openTestStore(t)
 	running := jobs.JobStateRunning
@@ -312,37 +312,44 @@ func TestJobQuery_CountTouchesTheAuditTrailOnlyWhenTheFilterDoes(t *testing.T) {
 	}
 }
 
-// TestJobQuery_RunningDoesNotScanEveryTask is the boundedness property of the
-// running-Job check (#816), for the three shapes Running now runs: the count,
-// the oldest-first page and the newest-first page. SQLite will not push the
-// outer running predicate into the Task aggregate's LEFT JOIN, so without
-// jobQueryFrom's pushdown (and migration 0027's index) every one aggregates
-// the whole of tasks. Nothing about the RESULTS changes when it does, which is
-// why the plan itself is the assertion.
+// TestJobQuery_RunningDoesNotScanEveryTask is the boundedness property of
+// the running-Job check (#816), for the shapes Running now runs: the count,
+// the oldest-first page (with and without the ?rc= cursor it pages on) and the
+// newest-first page. The page is chosen from the unresolved Tasks through
+// migration 0027's index, and the aggregates follow the page (#919); nothing
+// about the RESULTS changes when either regresses, which is why the plan
+// itself is the assertion. The page's sort is bounded by the number of running
+// Jobs, not by the page size.
 func TestJobQuery_RunningDoesNotScanEveryTask(t *testing.T) {
 	st, _ := openTestStore(t)
 	running := jobs.JobStateRunning
+	cursor := encodeCursor3(jobCursorOldestTag, "2026-08-20T00:00:00.000000000Z", "job-x")
 
 	for _, requester := range []string{"", "acct-x"} {
 		filter := jobs.JobQuery{State: &running, RequesterAccountID: requester}
 
-		page := func(orderBy string) (string, []any) {
-			stmt, args := jobQuerySelect(filter)
-			conds, whereArgs := buildJobWhere(filter)
-			stmt += ` WHERE ` + strings.Join(conds, " AND ") + orderBy
-			return stmt, append(append(args, whereArgs...), 2)
+		page := func(order jobs.JobOrder, cursor string) (string, []any) {
+			f := filter
+			f.Order = order
+			stmt, args, err := jobPageQuery(f, 2, cursor)
+			if err != nil {
+				t.Fatalf("jobPageQuery: %v", err)
+			}
+			return stmt, args
 		}
 		countStmt, countArgs := jobQueryCount(filter)
-		oldestStmt, oldestArgs := page(` ORDER BY ` + jobCreatedAtFixedWidth + ` ASC, j.job_id ASC LIMIT ?`)
-		newestStmt, newestArgs := page(` ORDER BY j.created_at DESC, j.job_id DESC LIMIT ?`)
+		oldestStmt, oldestArgs := page(jobs.JobOrderOldestFirst, "")
+		oldestCurStmt, oldestCurArgs := page(jobs.JobOrderOldestFirst, cursor)
+		newestStmt, newestArgs := page(jobs.JobOrderNewestFirst, "")
 
 		for name, q := range map[string]struct {
 			stmt string
 			args []any
 		}{
-			"count":       {countStmt, countArgs},
-			"page oldest": {oldestStmt, oldestArgs},
-			"page newest": {newestStmt, newestArgs},
+			"count":               {countStmt, countArgs},
+			"page oldest":         {oldestStmt, oldestArgs},
+			"page oldest, cursor": {oldestCurStmt, oldestCurArgs},
+			"page newest":         {newestStmt, newestArgs},
 		} {
 			plan := planOf(t, st, q.stmt, q.args)
 			if strings.Contains(plan, "SCAN tasks") {
@@ -355,8 +362,105 @@ func TestJobQuery_RunningDoesNotScanEveryTask(t *testing.T) {
 	}
 }
 
-// TestJobQuery_RunningFilterKeepsEveryTaskOfARunningJob pins that the running
-// pushdown narrows the Task aggregate by job_id membership, never by state: a
+// TestJobQuery_PageFirstReadsOnlyThePage pins #919's done-when at the plan: no
+// SCAN of tasks or audit, no read of every dispatch row through
+// idx_audit_kind_ts, and the audit aggregate only ever a job_id SEARCH, for
+// every subset of the Activity Job lane's filters (with and without a cursor)
+// and for Running now's pages. The page is materialized once.
+//
+// It proves the AGGREGATES are bounded to the page. Choosing the page still
+// walks jobs in order until limit+1 Jobs match, and an Operation or
+// OnBehalfOf filter runs its per-Job index lookup for each Job examined, so a
+// selective filter reads the dispatch rows of every candidate Job examined.
+// That the walk stops at the page's end follows from LIMIT; this test asserts
+// only that every such read is index-keyed, never an unkeyed scan.
+func TestJobQuery_PageFirstReadsOnlyThePage(t *testing.T) {
+	st, _ := openTestStore(t)
+	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	running := jobs.JobStateRunning
+
+	check := func(name string, filter jobs.JobQuery, cursor string, wantStateIdx bool) {
+		t.Helper()
+		stmt, args, err := jobPageQuery(filter, 5, cursor)
+		if err != nil {
+			t.Fatalf("%s: jobPageQuery: %v", name, err)
+		}
+		plan := planOf(t, st, stmt, args)
+		for _, banned := range []string{"SCAN tasks", "SCAN audit", "(kind=?)", "idx_audit_kind_ts"} {
+			if strings.Contains(plan, banned) {
+				t.Errorf("%s plans %q:\n%s", name, banned, plan)
+			}
+		}
+		if !strings.Contains(plan, "MATERIALIZE page") {
+			t.Errorf("%s does not materialize the page first:\n%s", name, plan)
+		}
+		if wantStateIdx && !strings.Contains(plan, "idx_tasks_state_job") {
+			t.Errorf("%s does not read the unresolved Tasks through idx_tasks_state_job:\n%s", name, plan)
+		}
+		for _, line := range strings.Split(plan, "\n") {
+			if strings.Contains(line, " audit ") && !strings.Contains(line, "SEARCH audit USING INDEX idx_audit_job_ts (job_id=?)") {
+				t.Errorf("%s reads audit other than by job_id: %q\n%s", name, line, plan)
+			}
+		}
+	}
+
+	newestCursor := encodeCursor2("2026-08-20T00:00:00Z", "job-x")
+	for mask := 0; mask < 32; mask++ {
+		var filter jobs.JobQuery
+		var name []string
+		if mask&1 != 0 {
+			filter.RequesterAccountID = "acct-x"
+			name = append(name, "requester")
+		}
+		if mask&2 != 0 {
+			filter.OnBehalfOf = "agent-7"
+			name = append(name, "on-behalf-of")
+		}
+		if mask&4 != 0 {
+			filter.Operation = "system.facts"
+			name = append(name, "operation")
+		}
+		if mask&8 != 0 {
+			filter.Since = since
+			name = append(name, "since")
+		}
+		if mask&16 != 0 {
+			filter.Until = since.Add(time.Hour)
+			name = append(name, "until")
+		}
+		label := "job lane [" + strings.Join(name, "+") + "]"
+		check(label, filter, "", false)
+		check(label+" with cursor", filter, newestCursor, false)
+	}
+
+	// RiskClass and State=complete are not sent by the Activity screen but are
+	// reachable through the capability layer's JobFilter (Control API, MCP read
+	// lane); pin their correlated lookups too.
+	mutate := jobs.RiskClassMutate
+	complete := jobs.JobStateComplete
+	for _, tc := range []struct {
+		name   string
+		filter jobs.JobQuery
+	}{
+		{"risk class", jobs.JobQuery{RiskClass: &mutate}},
+		{"complete", jobs.JobQuery{State: &complete}},
+		{"risk class+complete", jobs.JobQuery{RiskClass: &mutate, State: &complete}},
+		{"requester+on-behalf-of+risk class+complete", jobs.JobQuery{RequesterAccountID: "acct-x", OnBehalfOf: "agent-7", RiskClass: &mutate, State: &complete}},
+	} {
+		check("job lane ["+tc.name+"]", tc.filter, "", false)
+		check("job lane ["+tc.name+"] with cursor", tc.filter, newestCursor, false)
+	}
+
+	oldestCursor := encodeCursor3(jobCursorOldestTag, "2026-08-20T00:00:00.000000000Z", "job-x")
+	for _, requester := range []string{"", "acct-x"} {
+		filter := jobs.JobQuery{State: &running, RequesterAccountID: requester, Order: jobs.JobOrderOldestFirst}
+		check("running now "+requester, filter, "", true)
+		check("running now "+requester+" with cursor", filter, oldestCursor, true)
+	}
+}
+
+// TestJobQuery_RunningFilterKeepsEveryTaskOfARunningJob pins that the Task
+// aggregate is narrowed by job_id membership (the page), never by state: a
 // running Job must still report every one of its Tasks.
 func TestJobQuery_RunningFilterKeepsEveryTaskOfARunningJob(t *testing.T) {
 	st, _ := openTestStore(t)

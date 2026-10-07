@@ -490,20 +490,19 @@ func TestJobQuery_SingleJob(t *testing.T) {
 // the Job-detail screen, asserted where it can actually be lost.
 //
 // SQLite cannot flatten an aggregate subquery and will not push an outer
-// WHERE into the right operand of a LEFT JOIN, so `WHERE j.job_id = ?` alone
-// leaves both derived tables aggregating the WHOLE of tasks and audit on
-// every page view. The predicate has to be pushed into each of them, and
-// nothing about the RESULTS changes when it is not — which is why the plan
-// itself is the assertion.
+// WHERE into the right operand of a LEFT JOIN, so an aggregate joined to jobs
+// reads the WHOLE of tasks and audit on every page view. jobPageQuery picks
+// the page's job_ids first and restricts both aggregates to them, and nothing
+// about the RESULTS changes when it does not — which is why the plan itself
+// is the assertion.
 func TestJobQuery_SingleJobDoesNotScanEveryTask(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()
 
-	stmt, args := jobQuerySelect(jobs.JobQuery{JobID: "job-wanted"})
-	conds, whereArgs := buildJobWhere(jobs.JobQuery{JobID: "job-wanted"})
-	args = append(args, whereArgs...)
-	stmt += ` WHERE ` + strings.Join(conds, " AND ") + ` ORDER BY j.created_at DESC, j.job_id DESC LIMIT ?`
-	args = append(args, 2)
+	stmt, args, err := jobPageQuery(jobs.JobQuery{JobID: "job-wanted"}, 2, "")
+	if err != nil {
+		t.Fatalf("jobPageQuery: %v", err)
+	}
 
 	rows, err := st.db.QueryContext(ctx, `EXPLAIN QUERY PLAN `+stmt, args...)
 	if err != nil {
@@ -527,7 +526,7 @@ func TestJobQuery_SingleJobDoesNotScanEveryTask(t *testing.T) {
 	if strings.Contains(plan.String(), "SCAN tasks") {
 		t.Errorf("a single-Job query plans a full SCAN of tasks — every Job-detail page view would aggregate the whole table:\n%s", plan.String())
 	}
-	// Both derived tables, not just the Task one: without the pushdown the
+	// Both aggregates, not just the Task one: without the page restriction the
 	// audit aggregate plans "SEARCH audit ... (kind=?)", which is every
 	// dispatch row ever written rather than this Job's.
 	for _, want := range []string{"SEARCH tasks", "SEARCH audit"} {
