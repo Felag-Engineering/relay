@@ -2,13 +2,11 @@
 # "Signing in as a human over OAuth").
 #
 # Opt-in. Nothing reads this file unless it is named with a second `-f`.
-# scripts/demo-fleet.sh names it for `reset --oauth` / `up --oauth` (make
-# demo-reset-oauth / demo-up-oauth), and also for `down` and for every
-# `reset`'s wipe, so the IdP stops with the fleet whichever way it came up —
-# which means a plain `make demo-down` / `make demo-reset` now also needs this
-# file to parse (and Compose >= 2.18.0, for `!reset` below). What a plain reset
-# or up BRINGS UP is exactly what docker-compose.demo.yml describes. It layers onto
-# either fleet:
+# Named by `make demo-reset-oauth` / `demo-up-oauth`, and also by `make
+# demo-down`, `dev-fleet-down`, `dev-fleet-logs` and every reset's wipe, so the
+# IdP stops with the fleet. That is why those plain targets need Compose >=
+# 2.18.0 (`!reset` below) too. What a plain reset or up BRINGS UP is exactly what
+# docker-compose.demo.yml describes. It layers onto either fleet:
 #
 #   docker compose -f docker-compose.demo.yml -f docker-compose.oauth.yml [--profile demo] ...
 #
@@ -171,25 +169,13 @@ services:
       # resource_metadata=...` is how a client discovers the sign-in, while a
       # browser on /console/ is still sent to the Console's own sign-in (#775).
 
-  # One-shot: creates the human Account the IdP's user signs in as. The Relay
-  # never creates an Account from a token (ADR-0024).
-  oauth-account:
-    image: curlimages/curl:8.11.1
-    user: "0:0"
-    restart: "no"
-    depends_on:
-      relay:
-        condition: service_healthy
-      credential:
-        condition: service_completed_successfully
+  # The fleet's `init` one-shot also creates the human Account the IdP's user
+  # signs in as (docker/dev-fleet-init.sh); the Relay never creates an Account
+  # from a token (ADR-0024).
+  init:
     environment:
       # Must equal the realm user's username (the token's preferred_username).
       OAUTH_ACCOUNT_NAME: "demo-user"
-    entrypoint: ["sh", "/oauth-account.sh"]
-    volumes:
-      - ./docker/oauth-account.sh:/oauth-account.sh:ro
-      - relay-data:/relay-data:ro
-      - control-credential:/credential:ro
 
 volumes:
   idp-data:

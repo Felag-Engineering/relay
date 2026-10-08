@@ -31,8 +31,8 @@ count below is for nine.
 
 ### From cold to ready
 
-1. **Prerequisites.** Docker Engine with the Compose v2 plugin, `python3` (both
-   `scripts/dev-fleet-mcp.sh` and `scripts/demo-fleet.sh` shell out to it), and `curl`. Add the
+1. **Prerequisites.** Docker Engine with the Compose v2 plugin, `python3` (`scripts/dev-fleet-mcp.sh`
+   shells out to it), and `curl`. Add the
    `/etc/hosts` mapping for any client other than `scripts/dev-fleet-mcp.sh` (that script pins
    with `curl --resolve`, so it does not need it) — the control plane's server certificate has a
    single SAN, `relay`, and Gleipnir and Claude Code both need to dial that name to get verified
@@ -43,33 +43,29 @@ count below is for nine.
    $ grep -q 'relay$' /etc/hosts || echo '127.0.0.1 relay' | sudo tee -a /etc/hosts
    ```
 
-   Host ports `7654` and `9443` must be free: `make demo-reset` refuses if another compose
-   project already publishes them.
+   Host ports `7654` and `9443` must be free: `make demo-reset` fails at bind if anything else
+   holds them. The make targets refuse a `relay-demo` fleet started from another checkout.
 
 2. **`make demo-build`.** Do it the day before, not on stage — it is the only demo-fleet target
-   that builds anything, and again after any code change. It also fetches the images of the
-   services that are never built (today `curlimages/curl`, for the `approver`,
-   `console-admin` and `bootstrap` one-shots), only where they are missing, so a fresh Docker
-   engine is left ready for `make demo-reset`, which never pulls.
+   that builds anything, and again after any code change. It builds the relay, `init` and
+   daemon images, and pre-pulls only the OAuth overlay's images, only where they are missing, so
+   a fresh Docker engine is left ready for `make demo-reset`, which never pulls.
 
-3. **`make demo-reset`.** Expected closing output *(predicted — the literal `echo` lines in
-   `scripts/dev-fleet-mcp.sh`'s `cmd_init` and `scripts/demo-fleet.sh`'s `cmd_reset`)*, in this
+3. **`make demo-reset`.** Expected closing output *(predicted — re-observe; the literal `echo` lines in
+   `scripts/dev-fleet-mcp.sh`'s `cmd_init` and the `demo-reset` recipe)*, in this
    order, after compose's own progress output:
 
    ```
    dev-fleet-mcp: CA cert and both credentials are in .dev-fleet/
    dev-fleet-mcp: copy-paste launch commands: .dev-fleet/start-claude.txt
-   demo-fleet: reset complete — 9 Nodes healthy, 6 web Nodes serving, .dev-fleet/ refreshed with the fresh credentials this reset just minted.
-   demo-fleet: the CA was regenerated, so a registered MCP client still holds the OLD bearer token AND the OLD CA (NODE_EXTRA_CA_CERTS is read only at process start). Restart it — .dev-fleet/ is already current, so there is no need to run 'make demo-creds' again first:
-   demo-fleet:   claude mcp remove relay
-   demo-fleet:   claude mcp add --transport http relay https://relay:9443/mcp --header "Authorization: Bearer $(cat .dev-fleet/control-credential)"
+   demo-reset: reset complete — init exited 0, every service is healthy, .dev-fleet/ holds the fresh credentials.
+   demo-reset: the CA was regenerated, so a registered MCP client still holds the OLD bearer token AND the OLD CA (NODE_EXTRA_CA_CERTS is read only at process start). Restart it — .dev-fleet/ is already current, so there is no need to run 'make demo-creds' again first:
+   demo-reset:   claude mcp remove relay
+   demo-reset:   claude mcp add --transport http relay https://relay:9443/mcp --header "Authorization: Bearer $(cat .dev-fleet/control-credential)"
    ```
 
-   **Failure.** The script exits non-zero with a message prefixed `demo-fleet: ` on stderr. Some
-   messages name a service (a web Node not serving; the health wait lists what it is still
-   waiting on); others name only the step that failed (`compose down`/`up`, the approvals check,
-   `list_nodes`). Read the message: it names the step, and the service where it knows one — do
-   not expect every failure to name a service.
+   **Failure.** The failing command exits non-zero and make stops on that line; if `init`
+   failed, no daemon started — `docker compose -p relay-demo logs init`.
 
 4. **Enrollment timing from cold. Unmeasured.** No one has timed a cold `make demo-reset` at
    nine Nodes, and no number is invented here. The only bound in code is `DEMO_WAIT_SECONDS`,
@@ -82,8 +78,8 @@ count below is for nine.
    | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ |
 
    **Credential lifetime.** Every credential a reset mints expires 24h later — the founding
-   admin's (`-ttl 24h`, `docker/mint-credential.sh`) and `dev-approver`'s (`ttl_seconds` 86400,
-   `docker/mint-approver.sh`) — and the Gleipnir token minted below matches that same 86400s. So
+   admin's (`-ttl 24h`) and `dev-approver`'s (`ttl_seconds` 86400), both in
+   `docker/dev-fleet-init.sh` — and the Gleipnir token minted below matches that same 86400s. So
    reset on demo day, not the night before.
 
 5. Mint Gleipnir's credentials — [Credentials for Gleipnir (copy-paste)](#credentials-for-gleipnir-copy-paste),
@@ -162,7 +158,7 @@ Why each guard, stated once on the page:
 - `scripts/dev-fleet-mcp.sh api` exits 0 even on an HTTP error (plain `curl -sS`, no `--fail`,
   then a pretty-printer), so the guards above test the extracted values, not the exit code. A
   409 on the create call (name already taken) is harmless: the second `find_id` resolves the id
-  regardless. This mirrors `docker/mint-approver.sh`'s own create-then-resolve pattern.
+  regardless. This mirrors `docker/dev-fleet-init.sh`'s own create-then-resolve pattern.
 - Without `pipefail` and the tmp-then-`mv` step, a failed mint would leave an empty file that
   looks like a credential. With them, the real file only ever holds a token. A run that fails
   before the `mv` can leave `.dev-fleet/<agent>-credential.tmp` behind — harmless (it is
@@ -281,7 +277,7 @@ Gleipnir's own secret input, and never copy it off the laptop.
 **The demo fleet runs its own gate, and it is in-band.** `make demo-reset` and `make demo-up`
 start the Relay on `docker/fixtures/approval-gates.demo.json`, not on the default fleet's
 `approval-gates.json` ([The approval gate](../dev-fleet.md#the-approval-gate)):
-`scripts/demo-fleet.sh` sets `DEV_FLEET_APPROVAL_GATE_CONFIG`, which `docker-compose.demo.yml` hands
+the `make demo-*` targets set `DEV_FLEET_APPROVAL_GATE_CONFIG`, which `docker-compose.demo.yml` hands
 the Relay as `RELAY_APPROVAL_GATE_CONFIG`. A bare `docker compose -f docker-compose.demo.yml --profile demo up` sets
 nothing and gets the default fleet's out-of-band gate — one more reason to use the `make demo-*`
 targets. Both files are baked into the relay image root-owned `0644`. No API writes either of
@@ -365,7 +361,7 @@ accepted client-integrity assumption of in-band approval
 ([approval.md, Channel strength](../specs/approval.md#channel-strength); ADR-0029). Say so on stage rather than claim the gate is a two-person control; the
 default fleet's gate is the one that demonstrates that.
 
-`dev-approver` still exists on this fleet — the `approver` one-shot (`docker/mint-approver.sh`)
+`dev-approver` still exists on this fleet — the `init` one-shot (`docker/dev-fleet-init.sh`)
 creates it, a human admin Account, on every reset, and `make demo-reset` copies its API Token
 to `.dev-fleet/approver-credential`. Confirm it with
 `scripts/dev-fleet-mcp.sh api GET /api/v1/accounts`, then look for `"name": "dev-approver"`
@@ -410,8 +406,8 @@ Evidence on the page:
   `TestRefusalLegibilityE2E_AdminBypassIsRefusedIdentically`
   (`relay/cmd/relay/refusal_legibility_e2e_test.go`). That test uses `service.restart`, not this
   `file.read` — same property, different Operation.
-- `result.structuredContent` is the path `scripts/demo-fleet.sh`'s own `check_nodes_healthy`
-  already parses. The per-Node fields `outcome`, `stderr` and `refusal_explanation` are the MCP
+- `result.structuredContent` is the path the `list_nodes` check below
+  reads. The per-Node fields `outcome`, `stderr` and `refusal_explanation` are the MCP
   `PerNodeResult` (`relay/internal/controlplane/mcp/wire.go`).
 - The end-to-end run above — the literal command producing the literal output on a live
   nine-Node fleet — is *(predicted)*, not observed.
@@ -526,8 +522,7 @@ Independent checks for the presenter, as literal commands:
       | python3 -c 'import json,sys; n=json.load(sys.stdin)["result"]["structuredContent"]["nodes"]; print(len(n), "Nodes,", sum(1 for x in n if x.get("connected")), "connected")'
   ```
 
-  Expected *(predicted)*: `9 Nodes, 9 connected`. It reads `result.structuredContent.nodes`, the
-  same path `check_nodes_healthy` reads.
+  Expected *(predicted)*: `9 Nodes, 9 connected`. It reads `result.structuredContent.nodes`.
 - `scripts/dev-fleet-mcp.sh api GET /api/v1/approvals`: an empty `approvals` array.
 - Re-run the [AI-agent credential block](#credentials-for-gleipnir-copy-paste), then the
   approvals curl above with the NEW token: `200` with an empty `approvals` array. Negative
@@ -606,16 +601,16 @@ Two things differ from the plain fleet, each on purpose:
    missing image.
 3. **`make demo-reset-oauth`.** The Relay starts only once Keycloak is healthy — it fetches the
    issuer's discovery document once, at boot, and would not start without it — and the
-   `oauth-account` one-shot then creates `demo-user` through `/api/v1/accounts`, the way
-   `dev-approver` is created. Observed on 2026-09-29 (4 CPUs, 8 GB, images already present):
-   76s wall, the Relay booting first time with no restart. The closing output (observed):
+   `init` also creates `demo-user` (the overlay sets `OAUTH_ACCOUNT_NAME`) through
+   `/api/v1/accounts`, the way `dev-approver` is created. Observed on 2026-09-29 (4 CPUs, 8 GB, images already present):
+   76s wall (pre-#893 timing), the Relay booting first time with no restart. The closing output *(predicted — re-observe)*:
 
    ```
-   demo-fleet: reset complete — 9 Nodes healthy, 6 web Nodes serving, .dev-fleet/ refreshed with the fresh credentials this reset just minted.
-   demo-fleet: the CA was regenerated, so a registered MCP client still holds the OLD bearer token AND the OLD CA (NODE_EXTRA_CA_CERTS is read only at process start). Restart it — .dev-fleet/ is already current, so there is no need to run 'make demo-creds' again first:
-   demo-fleet:   claude mcp remove relay
-   demo-fleet:   claude mcp add --transport http --client-id relay-demo-claude-code --callback-port 33418 relay https://relay:9443/mcp
-   demo-fleet: then start Claude Code with NODE_EXTRA_CA_CERTS="$PWD/.dev-fleet/ca-cert.pem", run /mcp, pick relay, Authenticate, and sign in as demo-user / dev-only-demo-user (DEV-ONLY).
+   demo-reset: reset complete — init exited 0, every service is healthy, .dev-fleet/ holds the fresh credentials.
+   demo-reset: the CA was regenerated, so a registered MCP client still holds the OLD bearer token AND the OLD CA (NODE_EXTRA_CA_CERTS is read only at process start). Restart it — .dev-fleet/ is already current, so there is no need to run 'make demo-creds' again first:
+   demo-reset:   claude mcp remove relay
+   demo-reset:   claude mcp add --transport http --client-id relay-demo-claude-code --callback-port 33418 relay https://relay:9443/mcp
+   demo-reset: then start Claude Code with NODE_EXTRA_CA_CERTS="$PWD/.dev-fleet/ca-cert.pem", run /mcp, pick relay, Authenticate, and sign in as demo-user / dev-only-demo-user (DEV-ONLY).
    ```
 
 4. [Credentials for Gleipnir](#credentials-for-gleipnir-copy-paste) as usual — API Tokens are
@@ -739,7 +734,7 @@ open, and this is why the overlay is DEV-ONLY.
 
 - **It proves whose session made the call.** The Relay verified, offline against the IdP's keys,
   a token issued by this issuer for this audience, naming an existing, enabled Account — here
-  `demo-user`, created human by the `oauth-account` one-shot (which also refuses to go on if
+  `demo-user`, created human by the `init` one-shot (which also refuses to go on if
   that Account is not human, not enabled, or not `operator`). The Relay does **not** restrict
   OAuth sign-in by Account kind, so an identity-provider username equal to a machine or admin
   Account's name signs in as that Account; kind matters only later, when an answer is weighed
@@ -764,8 +759,8 @@ open, and this is why the overlay is DEV-ONLY.
   answer on it meets the same refusals as any in-band decision by `demo-user`, so it never
   satisfies a rule that excludes the requester, and never an `out-of-band` rule (AP-79, AP-13).
 - **The OAuth fleet runs the demo gate, exactly as the plain demo fleet does.**
-  `scripts/demo-fleet.sh` hands every compose call the in-band demo gate
-  ([The human approver](#the-human-approver)), with or without `--oauth`. Under it
+  `make demo-reset-oauth` / `demo-up-oauth` set the in-band demo gate
+  ([The human approver](#the-human-approver)), as the plain demo targets do. Under it
   `demo-user` — human, `operator`, and the gate has `requester_allowed: true` and no
   audience — may answer its own request for an Operation. It cannot release a Raw Exec: the
   decision floor for a Raw Exec is `admin`, and `demo-user` cannot even request one
@@ -812,18 +807,13 @@ $ make demo-build   # first time, and again after any code change
 $ make demo-reset
 ```
 
-The demo fleet is its own fixed compose project, `relay-demo` — separate
-images and separate volumes from the default fleet, driven entirely
-through the guarded `scripts/demo-fleet.sh` (see
-[The fault, and resetting between takes](#the-fault-and-resetting-between-takes)
-below). It cannot run alongside the default fleet: both publish the same host
-ports, `127.0.0.1:7654` / `9443`.
+One project, `relay-demo`, shared with the default fleet; the two cannot run at once. The
+targets refuse a fleet another checkout owns.
 
-`make demo-reset` is `docker compose -f docker-compose.demo.yml --profile demo down -v` followed by
-`up -d --no-build` under the `relay-demo` project name, plus the health and
-credential verification described below. It never builds — run `make
-demo-build` once first (and again after any code change); a missing image is
-refused up front, before anything is torn down.
+`make demo-reset` = owner check → image check → `down -v` → `up -d` (`init` runs to
+completion) → health wait → `make demo-creds`. It never builds — run `make demo-build` once
+first (and again after any code change); a missing image is refused up front, before anything
+is torn down.
 
 Why `down -v` and not a plain `down`: `relay-data` is a **named** volume, so the
 Relay's registry — and every Node in it — survives a plain `compose down`. A Node
@@ -833,36 +823,27 @@ the beat that is supposed to run straight through. `down -v` is the only thing t
 clears it. The cost is real and worth stating plainly: `-v` destroys the CA and every
 Node identity, so the next `up` re-enrolls the whole fleet from scratch.
 
-`COMPOSE_PROFILES=demo make dev-fleet-up` looks like the Makefile-shaped
-equivalent, but it is not: `dev-fleet-up` runs `docker compose -f docker-compose.demo.yml` with no `-p`, which
-names its project after the checkout directory rather than `relay-demo` — a
-project `make demo-reset` refuses on sight (see
-[The fault, and resetting between takes](#the-fault-and-resetting-between-takes)).
-Use `make demo-build` / `make demo-reset` instead.
+`COMPOSE_PROFILES=demo make dev-fleet-up` reaches the same project but builds, and starts the
+Relay on the default (out-of-band) gate; use `make demo-*`.
 
 Stop the demo fleet with `make demo-down` (no `-v` — Node identities and the
 store survive, same as `dev-fleet-down` for the default fleet), and bring it
 back with `make demo-up` (also no `-v`, no build — the matching plain
-restart). `demo-up` is **not** "no credential mint": the mint one-shots have
+restart). `demo-up` is **not** "no credential mint": `init` has
 `restart: no`, but a stopped one-shot container is started again by `up` just
 like any other service, which re-runs its entrypoint and mints fresh values
 into the (persisted) volume — it just does not copy them out to
 `.dev-fleet/`; run `make demo-creds` after `demo-up` for that (see
 [The fault, and resetting between takes](#the-fault-and-resetting-between-takes)
 for what `demo-creds` does and does not do). There is no `down` you need to
-remember to run before `make demo-reset`: it wipes first. Never substitute a bare
-`docker compose -f docker-compose.demo.yml --profile demo down` / `up` for these targets: it names its project after
-the checkout directory rather than `relay-demo`. `make demo-up` brings back all nine
+remember to run before `make demo-reset`: it wipes first. `make demo-up` brings back all nine
 daemons every time precisely because the fixed project and profile are baked into the
-script rather than typed at the command line.
+Makefile rather than typed at the command line.
 
 **Cleanup — stop it and leave it down.** `make demo-reset` also wipes `relay-demo`, but
 brings the fleet straight back up; it is the between-takes reset, not a cleanup. To stop
 the demo fleet and wipe its volumes, run `docker compose -p relay-demo` with both of its files
-and `--profile demo down -v` directly, from the checkout root — never a bare
-`docker compose -f docker-compose.demo.yml --profile demo down -v`, which names its
-project after the checkout directory, not `relay-demo`, and leaves the demo fleet's
-volumes behind uncleaned. Name both files: the repository root has no
+and `--profile demo down -v` directly, from the checkout root. Name both files: the repository root has no
 `docker-compose.yml`, so without `-f` Compose finds none (or a parent directory's); the OAuth overlay is named so that an IdP left from an `--oauth` run goes too,
 as `make demo-down` does:
 
@@ -1052,16 +1033,14 @@ The default targets are `daemon-4` (`dev-node-4`, `env=prod`) and `daemon-6`
 ["drop first" list](#resource-usage) if the roster is ever trimmed. Override with
 `DEMO_FAULT_NODES`, e.g. `make demo-fault DEMO_FAULT_NODES="daemon-2 daemon-9"`
 — the Makefile passes it through as a real environment variable rather than
-splicing it into the recipe text, and the script splits it on whitespace and
-validates every token against the derived web roster (below) before any
+splicing it into the recipe text, and the recipe splits it on whitespace, with
+globbing off, and validates every token against the Makefile's fixed list of
+`role=web` services before any
 `exec` into a container, so a value carrying a shell metacharacter is
 refused, not executed.
 Every target must be a `role=web` Node — anything else is refused before any
 `exec` into a container, since faulting a Node that runs no demo service
-would report a condition that was never there. (This refusal runs after the
-project guard, and after one read-only `docker compose config` call that
-derives the web/daemon rosters from the compose file — it is not before the
-script touches Docker at all.) The kill is idempotent: running it again on an
+would report a condition that was never there. The kill is idempotent: running it again on an
 already-down Node reaches the same DOWN report immediately, so it is safe to
 run more than once with no reset in between.
 
@@ -1142,79 +1121,41 @@ every Node healthy — and, unlike a bare `docker compose -f docker-compose.demo
 / `up`, it never builds (a missing image is refused up front — run
 `make demo-build` once, first) and it verifies rather than assumes:
 
-1. Every image `docker compose config --images` names must already exist,
+1. The ownership check: no `relay-demo` container may belong to another checkout.
+2. Every image `docker compose config --images` names must already exist,
    checked before anything is torn down.
-2. `down -v --remove-orphans` then `up -d --no-build --pull never`.
-3. Waits for `relay` and every daemon to report `healthy`, and every one-shot
-   (`credential`, `approver`, `console-admin`, `console-password`, `bootstrap`)
-   to have exited `0`.
-4. Probes `dev-fleet-service status` on every `role=web` Node — the fault, if
-   any, is cleared by the fresh `up`, but this step confirms it with the same
-   live probe the fault check uses, rather than assuming a fresh container
-   means a serving one.
-5. **Mints** fresh credentials: step 2's `down -v` / `up` recreates the
-   `credential`/`approver`/`console-admin`/`console-password` one-shots from
-   nothing, which is what actually mints (`docker/mint-credential.sh` runs
-   again on every container that starts fresh). This step then **copies**
-   them out to `.dev-fleet/` (`scripts/dev-fleet-mcp.sh init` — a
-   `docker compose cp` / `run --no-deps` read, nothing more) and checks, live,
-   that `GET /api/v1/approvals` comes back empty and that `list_nodes()` over
-   MCP reports every Node connected — there is no `GET /api/v1/nodes` list
-   route on the Control API, only `GET /api/v1/nodes/{node_id}`, so `list_nodes`
-   is the only surface that sees the whole registry.
+3. `down -v --remove-orphans`.
+4. `up -d --no-build --pull never`: `init` runs to completion (it mints the credentials and
+   the Enrollment Token), and the daemons start only once it has exited `0`.
+5. Waits (`--wait`) until `relay` and every daemon are healthy.
+6. `scripts/dev-fleet-mcp.sh init` **copies** the freshly minted credentials out to
+   `.dev-fleet/` (a `docker compose cp` read out of the exited `init` container, nothing more).
 
 **The CA is regenerated on every reset, so a registered MCP client is left
 holding a stale bearer token and a stale CA it can no longer verify against**
 (`NODE_EXTRA_CA_CERTS` is read only at process start). `.dev-fleet/` is
-already current — step 5 above just refreshed it — so the fix is only to
+already current — step 6 above just refreshed it — so the fix is only to
 restart the client: `claude mcp remove relay` / `claude mcp add ...` as in
 [Connecting Claude Code](../dev-fleet.md#connecting-claude-code). `make demo-reset`'s
-closing summary says this every time. **Do not follow
-`.dev-fleet/start-claude.txt`'s own `make dev-fleet-creds` line** — `.dev-fleet/`
-is shared between the default fleet and the demo fleet, and `dev-fleet-creds`
-targets the directory-named default project, not `relay-demo`. `make demo-creds`
-is the demo fleet's equivalent, and it is only needed after `demo-up`: unlike
+closing summary says this every time. `make demo-creds` is only needed after `demo-up`: unlike
 `demo-reset`, `demo-up` does not copy anything out on its own, even though its
 `up` (see [Survive `down` / `up`](../dev-fleet.md#survive-down--up)) causes the same
-one-shots to re-mint into the volume. `demo-creds` itself mints nothing — it
+`init` to re-mint into the volume. `demo-creds` itself mints nothing — it
 is a pure copy, safe to run any number of times.
 
-**The refusal.** `scripts/demo-fleet.sh` (every one of `demo-build`,
-`demo-reset`, `demo-fault`, `demo-up`, `demo-down`, `demo-creds`) refuses
-unless the target is exactly the `relay-demo` compose project on a local
-Docker engine, and it does so before any Docker call **except two read-only
-checks**: the current docker context's endpoint (always made, to confirm it
-is a local engine), and — only once that passes — a `docker ps` that confirms
-no *other* checkout already owns the `relay-demo` project (this repo lives in
-many git worktrees, and `relay-demo` is one project name per Docker engine).
-A `COMPOSE_PROJECT_NAME` set to anything else — including set-but-empty — or
-a non-local `DOCKER_HOST` are refused with **no** Docker call at all, because
-they are decided from the environment alone. Once past that guard, `demo-reset`
-and `demo-up` separately refuse — before either touches a volume or a
-container, via one more read-only `docker ps` — if host port `7654` or `9443`
-is already published by some other compose project. `demo-reset` refuses once
-more, via a read-only `docker compose config --format json`, if any volume it
-is about to `down -v` does not resolve to a `relay-demo_`-prefixed name — the
-defense against a future `name:`/`external:` override on a volume in
-`docker-compose.demo.yml` quietly pointing `-p relay-demo` at a volume this
-checkout does not own. `make test-demo-fleet` (`scripts/demo-fleet-test.sh`,
-in `make verify` and CI) proves every refusal against a stubbed `docker`,
-never a real engine.
-
-A checkout directory literally named `relay-demo` would give the *default*
-(non-demo) fleet's `docker compose -f docker-compose.demo.yml up` (`make dev-fleet-up`) that same project name — an
-unlikely collision, but one more reason to prefer `make demo-build` /
-`make demo-reset` over typing `docker compose` by hand under this profile.
+**The refusal.** The targets refuse a `relay-demo` fleet started from another checkout
+(compared by physical path), and refuse an `up` in the other OAuth mode. They also refuse a
+non-local engine (`DOCKER_HOST` or the docker context), before any `docker compose` call.
 
 **Verification honesty.** The `/proc/net/tcp` discovery signal is *(predicted)*
 from `web_policy_allows_reading_the_socket_table`
 (`daemon/tests/dev_fleet_fixtures.rs`) — the daemon's own Policy engine agrees
 the read is allowed, but no automated test here starts a real `busybox httpd`
 or reads its real socket table. "Reset survives back to back, repeatedly" has
-**not been observed live at all** — `scripts/demo-fleet-test.sh`'s hermetic
-guard proof only proves the refusal logic against a stubbed `docker`; it says
-nothing about whether a real `down -v` / `up` / wait / probe cycle actually
-succeeds once, let alone repeatedly. Run the fault → discover → repair →
+**not been observed live at all** — the Makefile recipes have been checked statically
+(`docker compose config`, `make -n`, and `make test-dev-fleet-make`, which runs the
+guards and `demo-fault` against a stub docker); a real `down -v` / `up` / fault cycle
+has not been run since #893. Run the fault → discover → repair →
 verify sequence, and `make demo-reset` two or three times back to back,
 before presenting, and correct this paragraph with what you actually saw.
 

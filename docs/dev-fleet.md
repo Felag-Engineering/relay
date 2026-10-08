@@ -8,38 +8,24 @@ compose profile built on top of it has its own runbook — see
 [The demo profile](#the-demo-profile).
 
 Both fleets are `docker-compose.demo.yml` at the repository root, and every command below
-names it with `-f` (the `make dev-fleet-*` targets do it for you). There is deliberately no
+names it with `-f` (the `make dev-fleet-*` targets do it for you). Both are one compose
+project, `relay-demo`, fixed by the file's `name:`. One project per Docker engine: the make
+targets refuse a fleet another checkout started. There is deliberately no
 `docker-compose.yml` at the root, so a bare `docker compose up` there does nothing. The
 single-Relay deployment stack, with no relay-daemons and no fixtures, is
 `deploy/compose/docker-compose.yml`, documented in
 [Running it with Docker Compose](operations/relay-install.md#7-running-it-with-docker-compose)
 — and it must never run on a machine that holds a development checkout like this one.
 
-> **DEV-ONLY — no production posture.** This environment ships committed
-> credentials and a fixture Policy for convenience, runs everything on one host,
-> and makes no availability, isolation, or hardening claims. It is **not** a
-> deployment guide. The real deployment story is
-> [docs/operations/relay-install.md](operations/relay-install.md) and
-> [docs/operations/relay-daemon-install.md](operations/relay-daemon-install.md).
-> Never reuse the credentials or Policy below anywhere real. The published
-> ports (`7654`, `9443`) are bound to `127.0.0.1` by default. The control-plane
-> API Tokens are minted at startup, not committed (see below), but the Console's
-> default sign-in password is committed to this repository, and a signed-in admin
-> can mint API Tokens — so exposing the control plane on the LAN would be remote
-> code execution for anyone on your network. `RELAY_PUBLISH_ADDR=0.0.0.0` opts the
-> control plane (`9443`) in to being exposed anyway, and the `console-password`
-> service then refuses the committed default password: set a real
-> `CONSOLE_ADMIN_PASSWORD` first, or the Console cannot be signed in to. The node
-> plane (`7654`) has its own `RELAY_NODE_PUBLISH_ADDR`, needed only by a
-> relay-daemon outside this compose project. For
-> the hardened production posture, see
-> `daemon/packaging/relay-daemon.service` and
-> [docs/operations/daemon-privilege-posture.md](operations/daemon-privilege-posture.md).
+> **DEV-ONLY — no production posture.** Committed credentials, a fixture Policy, one
+> host. Ports are bound to `127.0.0.1`; exposing `9443` (`RELAY_PUBLISH_ADDR`) is
+> remote code execution for your network. The deployment story is [relay-install.md](operations/relay-install.md).
 
 ## Prerequisites
 
 - Docker Engine with the Compose v2 plugin (`docker compose`, not the legacy
-  `docker-compose`).
+  `docker-compose`), version 2.18 or later for every `make dev-fleet-*` target: `down` and
+  `logs` name the OAuth overlay, which uses `!reset`.
 - Network access to Docker Hub the first time (the Relay/daemon binaries are
   compiled inside multi-stage images; nothing depends on a host Go or Rust
   toolchain).
@@ -52,10 +38,7 @@ never invokes it.
 | Piece | What it is |
 | --- | --- |
 | `relay` | The Go Relay. Node-plane gRPC on `:7654`, control-plane HTTPS (MCP + `/api/v1`) on `:9443` — distinct listeners, distinct published ports. CA + SQLite store live on the `relay-data` volume. |
-| `bootstrap` | A one-shot helper that, once the Relay is healthy, mints a `relay:`-scoped Enrollment Token through `POST /api/v1/enrollment-tokens` and exports the Relay's **public** CA certificate for the daemons to pin. Then it exits. |
-| `approver` | A one-shot helper that creates the `dev-approver` **human** Account and mints its credential. It exists because the approval gate forbids self-approval — see [The approval gate](#the-approval-gate) below. Then it exits. |
-| `console-admin` | A one-shot helper that creates the `admin` **human** Account the Admin Console signs in. Then it exits. |
-| `console-password` | A one-shot helper that sets that Account's Console password with `relay console-password`. Separate from `console-admin` because the two acts carry different authorities — see [The Admin Console](#the-admin-console) below. Then it exits. |
+| `init` | A one-shot, on the Relay image: mints the founding admin's token, creates `dev-approver` (with its token — the approval gate forbids self-approval, see [The approval gate](#the-approval-gate)) and the Console `admin` (with its password, see [The Admin Console](#the-admin-console)), mints a `relay:`-scoped Enrollment Token through `POST /api/v1/enrollment-tokens` and exports the Relay's **public** CA certificate for the daemons to pin, then exits. If it fails, no daemon starts. |
 | `daemon-1..3` | Three relay-daemons (Rust, musl static binary). Each has a baked, root-owned Policy fixture and a private state volume, enrolls on first start, and reports health once it has a persisted identity. The two `role=web` Nodes (`daemon-1`, `daemon-2`) also run the dev-fleet demo service; `daemon-3` (`role=db`) loads a different Policy fixture and runs no demo service. |
 | `daemon-4..9` (`demo` profile) | Six more relay-daemons, started only with `--profile demo`. See [The demo profile](#the-demo-profile). |
 
@@ -73,8 +56,8 @@ Security-relevant choices, made explicit:
   fail-closed **whole-set**: a bad mode on one template file empties the
   Node's entire template vocabulary and reports the `unloadable` fingerprint.
 - **The CA private key never reaches a daemon.** `ca-key.pem` lives only on the
-  `relay-data` volume. The short-lived `bootstrap` helper mounts that volume
-  read-only to copy out `ca-cert.pem`; the long-lived daemon containers never
+  `relay-data` volume. The short-lived `init` helper mounts that volume
+  **read-write** (it writes the store) to copy out `ca-cert.pem`; the long-lived daemon containers never
   mount it and only ever receive the **public** cert.
 - **The Enrollment Token is `relay:`-scoped.** It can only join Nodes; it can
   never call the API or run Operations. Enrollment stamps `relay:env=dev` and
@@ -82,13 +65,12 @@ Security-relevant choices, made explicit:
   target.
 - **The control-plane credential is minted at runtime, not committed.** Since
   ADR-0023 the control plane accepts only per-Account API Tokens, so the
-  one-shot `credential` service runs `relay bootstrap-token` against the Relay's
+  `init` one-shot runs `relay bootstrap-token` against the Relay's
   own store and writes the result to the shared volume
-  (`docker/mint-credential.sh`). Read it with:
+  (`docker/dev-fleet-init.sh`). Read it with:
 
   ```console
-  $ docker compose -f docker-compose.demo.yml run --rm --no-deps --entrypoint sh credential \
-      -c 'cat /credential/control-credential'
+  $ docker compose -p relay-demo -f docker-compose.demo.yml cp init:/credential/control-credential - | tar -xO
   ```
 
   It lives on its own volume, which the daemons deliberately do not mount — an
@@ -125,7 +107,9 @@ Sign in with:
 | password | `admin1234567` |
 
 Override either with `CONSOLE_ADMIN_NAME` / `CONSOLE_ADMIN_PASSWORD` in the
-environment before `docker compose -f docker-compose.demo.yml up`.
+environment before `docker compose -f docker-compose.demo.yml up`. With
+`RELAY_PUBLISH_ADDR` beyond loopback, `init` refuses the committed default password, and the
+fleet does not start.
 
 **Why the password is not shorter.** The Relay refuses any Console password below
 12 bytes (`accounts.MinPasswordBytes`). The sign-in throttle deliberately has no
@@ -134,15 +118,15 @@ operators — so an attacker gets slow, unlimited attempts, and length is the on
 thing that makes that safe. What sits behind the credential is the front half of a
 fleet-execution surface (ADR-0026).
 
-**Why setting it takes two containers.** Creating the Account is a control-plane
+**Why the password is set locally.** Creating the Account is a control-plane
 request: it goes through `POST /api/v1/accounts` carrying a bearer token, like any
 other administrative act. Setting its first Console password is not, and cannot
 be — reaching the Console requires a password, so the first one has nowhere to
 come from except local root on the Relay's own store. That is the same
 chicken-and-egg as `relay bootstrap-token` (ADR-0023) and the same answer ADR-0002
-gives for Policy: root it in the filesystem. Two authorities, two containers, and
-neither holds the other's power — `console-admin` has a credential and no store
-access, `console-password` has store access and no credential.
+gives for Policy: root it in the filesystem. The dev fleet's single `init` holds both
+authorities, a bearer token and the store, on purpose: this is a laptop fleet, and the
+credential it holds was always minted by a container with store access.
 
 **What you can do there today.** Everything and nothing: the v0.6.0 Console is
 **read-only by construction**. The read seams it is wired with have no write
@@ -155,11 +139,12 @@ decide an approval — those arrive in v0.7.0 behind step-up re-authentication.
 ## Bring the fleet up
 
 ```console
-$ docker compose -f docker-compose.demo.yml up --build -d
+$ make dev-fleet-up
 ```
 
-The Relay starts and creates its CA; `bootstrap` waits for the control API, mints
-the token, and exports the CA cert; then the daemons enroll and go healthy.
+The Relay starts and creates its CA; `init` mints the founding admin's token,
+creates the dev Accounts, then mints the Enrollment Token and exports the CA cert; then
+the daemons enroll and go healthy. `make dev-fleet-up` returns once every daemon is healthy.
 
 ```console
 $ docker compose -f docker-compose.demo.yml ps
@@ -171,9 +156,14 @@ enrollment).
 
 > **Troubleshooting.** The Relay healthcheck completes a TLS 1.3 handshake with
 > both listeners using `openssl s_client`, verified against the Relay's CA. If it
-> never passes, `bootstrap` never starts and no daemon enrolls — check
+> never passes, `init` never starts and no daemon enrolls — check
 > `docker inspect --format '{{json .State.Health}}' <relay container>` and
-> `docker compose -f docker-compose.demo.yml logs relay`.
+> `docker compose -f docker-compose.demo.yml logs relay`. If `init` exits non-zero, read
+> `docker compose -p relay-demo logs init`: no daemon starts until it exits 0.
+>
+> `refusing: relay-demo is running from another checkout` means stop the fleet from that
+> checkout. If that checkout is gone, run `docker compose -p relay-demo -f docker-compose.demo.yml
+> -f docker-compose.oauth.yml --profile demo down` here first.
 
 ## Verify N enrolled Nodes
 
@@ -291,13 +281,11 @@ the parked-dispatch and MCP-task-handle surfaces are exercisable rather than the
 This section covers the dev fixture only; the operator-facing account of gates — rule
 schema, webhook, decision endpoint — is
 [docs/operations/approval-gates.md](operations/approval-gates.md). The nine-Node demo fleet
-runs a different, in-band gate (`docker/fixtures/approval-gates.demo.json`), selected by
-`scripts/demo-fleet.sh`; see
-[The human approver](operations/demo-fleet.md#the-human-approver) in its runbook. That nothing
-else selects it is a convention, not an enforced property: `docker-compose.demo.yml` reads the selector,
-`DEV_FLEET_APPROVAL_GATE_CONFIG`, from the caller's shell or a repo-root `.env`, so if either
-sets it, `make dev-fleet-up` starts this fleet on the demo fleet's in-band gate. Check that
-neither does.
+runs a different, in-band gate (`docker/fixtures/approval-gates.demo.json`), selected by the
+`make demo-*` targets; see
+[The human approver](operations/demo-fleet.md#the-human-approver) in its runbook.
+`make dev-fleet-up` and `make demo-*` each set the selector, `DEV_FLEET_APPROVAL_GATE_CONFIG`,
+explicitly; only a bare `docker compose` reads it from the caller's shell or a repo-root `.env`.
 Two rules:
 
 | Rule | Matches | Requires |
@@ -547,10 +535,10 @@ exist yet — it is future work. For now the logs and the store are the trail.
 
 The nine-Node `demo` compose profile — its roster, the four beats, the injected fault and
 `make demo-reset`, and resource usage — has a runbook of its own:
-[docs/operations/demo-fleet.md](operations/demo-fleet.md). It runs as its own fixed
-`relay-demo` compose project, so start, stop, reset and clean it up with that runbook's
-`make demo-*` targets and commands — never a bare `docker compose -f docker-compose.demo.yml --profile demo …`, which
-names its project after the checkout directory rather than `relay-demo`. It is purely
+[docs/operations/demo-fleet.md](operations/demo-fleet.md). Same project, `--profile demo`;
+use the runbook's `make demo-*` targets, which also pick the demo gate. After a demo reset,
+`make dev-fleet-up` recreates the Relay on the dev gate and leaves `daemon-4..9` running
+until `make dev-fleet-down` / `demo-down`. It is purely
 additive to the fleet above (`demo_profile_is_additive`, `daemon/tests/dev_fleet_fixtures.rs`,
 enforces this), and everything in this document's DEV-ONLY banner applies to it with more
 force, not less: three times the Nodes sit behind the same committed default Console password. That
@@ -581,9 +569,10 @@ build if a new service forgets it.
 ## Cleanup
 
 ```console
-$ docker compose -f docker-compose.demo.yml down -v
+$ docker compose -p relay-demo -f docker-compose.demo.yml -f docker-compose.oauth.yml --profile demo down -v
 $ rm -rf ./.dev-fleet
 ```
 
-This cleans up the three-Node fleet only; the demo fleet's cleanup is in its runbook's
-[Start from a clean registry](operations/demo-fleet.md#start-from-a-clean-registry).
+This cleans up either fleet, since they are one project. A checkout that ran the fleet before
+#893 has volumes under its old directory-named project; remove them once with
+`docker compose -p <old-dir-name> -f docker-compose.demo.yml down -v`.

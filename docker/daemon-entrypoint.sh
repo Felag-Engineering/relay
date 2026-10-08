@@ -3,8 +3,8 @@
 #
 # The daemon reads its Enrollment Token from the RELAY_ENROLLMENT_TOKEN env var,
 # but in the dev fleet the token does not exist until runtime: the one-shot
-# `bootstrap` service mints it through the Relay's Control API and drops it on a
-# shared volume (see docker/bootstrap.sh). This wrapper lifts that file into the
+# `init` service mints it through the Relay's Control API and drops it on a
+# shared volume (see docker/dev-fleet-init.sh). This wrapper lifts that file into the
 # env var, then execs the daemon so it becomes PID 1 (clean signal handling).
 #
 # It also starts the dev-fleet demo service (#389) on the Nodes whose labels

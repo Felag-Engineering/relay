@@ -662,12 +662,11 @@ fn read_compose_lines() -> Vec<String> {
 ///
 /// Two clauses in the span-end rule are easy to get wrong, and both are
 /// load-bearing against the real file (#452 review findings N1/N2):
-///   - a BLANK line (empty, or all whitespace) is NOT a terminator. Nine
-///     blank lines sit inside `services:`'s span (the first inside
-///     `approver`'s block), and the natural reading of "a line beginning
+///   - a BLANK line (empty, or all whitespace) is NOT a terminator. Blank
+///     lines sit inside `services:`'s span, and the natural reading of "a line beginning
 ///     with a character that is neither whitespace nor `#`" is vacuously
 ///     TRUE for `""` — which would end the span after the very first
-///     service and yield 3, not 9.
+///     service.
 ///   - a 0-indent COMMENT line (starts with `#`) is NOT a terminator either.
 ///     `services:`'s span ends with exactly one of these, immediately
 ///     before `volumes:` — harmless today because it trails the last
@@ -939,19 +938,9 @@ fn demo_profile_is_additive() {
         }
     }
 
-    let expected: BTreeSet<&str> = [
-        "relay",
-        "credential",
-        "approver",
-        "console-admin",
-        "console-password",
-        "bootstrap",
-        "daemon-1",
-        "daemon-2",
-        "daemon-3",
-    ]
-    .into_iter()
-    .collect();
+    let expected: BTreeSet<&str> = ["relay", "init", "daemon-1", "daemon-2", "daemon-3"]
+        .into_iter()
+        .collect();
 
     assert_eq!(
         no_profile, expected,
@@ -1190,6 +1179,30 @@ fn a_single_node_selector_survives_at_nine_nodes() {
         count(&|s| s.get("role") == Some(&"db") && s.get("env") == Some(&"prod")),
         1,
         "role=db, env=prod count"
+    );
+}
+
+/// The Makefile's `DEMO_WEB_NODES` (what `make demo-fault` validates its targets
+/// against) is a hand-kept copy of `ROSTER`'s `role=web` entries; this turns
+/// the "must match" comment beside it into a test.
+#[test]
+fn makefile_demo_web_nodes_match_the_roster() {
+    let path = repo_root().join("Makefile");
+    let makefile =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let line = makefile
+        .lines()
+        .find_map(|l| l.strip_prefix("DEMO_WEB_NODES :="))
+        .expect("Makefile has no `DEMO_WEB_NODES :=` line");
+    let in_makefile: BTreeSet<&str> = line.split_whitespace().collect();
+    let in_roster: BTreeSet<&str> = ROSTER
+        .iter()
+        .filter(|e| e.labels.split(',').any(|l| l == "role=web"))
+        .map(|e| e.service)
+        .collect();
+    assert_eq!(
+        in_makefile, in_roster,
+        "Makefile DEMO_WEB_NODES drifted from ROSTER's role=web Nodes"
     );
 }
 

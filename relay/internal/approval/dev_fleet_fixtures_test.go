@@ -10,7 +10,7 @@ import (
 
 // The two DEV-ONLY approval-gate fixtures the dev fleet bakes into the relay
 // image (docker/relay.Dockerfile): the default three-Node fleet's, and the
-// nine-Node demo fleet's, which scripts/demo-fleet.sh selects. The Relay's gate
+// nine-Node demo fleet's, which the Makefile's demo-* targets select. The Relay's gate
 // loader is fail-closed, so a fixture this parser refuses crash-loops that
 // fleet's Relay; these tests catch it here instead, and pin the posture each
 // fleet's documentation describes (docs/dev-fleet.md, "The approval gate";
