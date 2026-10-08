@@ -622,6 +622,205 @@ func TestEngineConduitErrorLeavesTaskInFlight(t *testing.T) {
 	}
 }
 
+// panicConduit panics in Dispatch for dispatchPanic and in Connected for
+// connectedPanic (#942), and behaves as the embedded fakeConduit otherwise.
+type panicConduit struct {
+	*fakeConduit
+	dispatchPanic  string
+	connectedPanic string
+}
+
+func (p *panicConduit) Connected(nodeID string) bool {
+	if nodeID == p.connectedPanic {
+		panic("secret-bearing connected panic")
+	}
+	return p.fakeConduit.Connected(nodeID)
+}
+
+func (p *panicConduit) Dispatch(ctx context.Context, nodeID string, task jobs.Task) (jobs.Result, error) {
+	if nodeID == p.dispatchPanic {
+		panic("secret-bearing dispatch panic")
+	}
+	return p.fakeConduit.Dispatch(ctx, nodeID, task)
+}
+
+func panicTestEngine(jobsRepo jobs.JobRepository, tasksRepo jobs.TaskRepository, c Conduit) *jobEngine {
+	return &jobEngine{
+		jobsRepo:    jobsRepo,
+		tasksRepo:   tasksRepo,
+		conduit:     c,
+		newID:       sequentialIDs("id-"),
+		now:         func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
+		concurrency: 2,
+	}
+}
+
+// TestJobEngine_DispatchPanicFailsOnlyThatTask: a panic in one dispatch worker
+// (#942) is that Task's failure — the process survives, the siblings finish,
+// and the panic value stays out of the returned error. The panicking Task is
+// left Dispatched, like a Conduit error, so reconciliation finds it and it is
+// never retried (invariant 4).
+func TestJobEngine_DispatchPanicFailsOnlyThatTask(t *testing.T) {
+	for _, panicNode := range []string{"node-a", "node-b", "node-c"} {
+		t.Run(panicNode, func(t *testing.T) {
+			jobsRepo, tasksRepo := testEngineStore(t)
+			fc := newFakeConduit(nil)
+			for _, n := range []string{"node-a", "node-b", "node-c"} {
+				fc.connected[n] = true
+				fc.results[n] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+			}
+			e := panicTestEngine(jobsRepo, tasksRepo, &panicConduit{fakeConduit: fc, dispatchPanic: panicNode})
+
+			nodes := []registry.Node{testNode("node-a"), testNode("node-b"), testNode("node-c")}
+			act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
+			dr, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act))
+			if !errors.Is(err, errDispatchPanicked) {
+				t.Fatalf("run() error = %v, want it to wrap errDispatchPanicked", err)
+			}
+			if strings.Contains(err.Error(), "secret-bearing") {
+				t.Errorf("run() error %q leaks the panic value", err)
+			}
+			if len(dr.results) != 3 {
+				t.Fatalf("results = %+v, want 3", dr.results)
+			}
+			for _, r := range dr.results {
+				want := jobs.OutcomeSuccess
+				if r.NodeID == panicNode {
+					want = jobs.OutcomeFailure
+				}
+				if r.Outcome != want {
+					t.Errorf("result[%s].Outcome = %v, want %v", r.NodeID, r.Outcome, want)
+				}
+				if r.JobID != dr.jobID {
+					t.Errorf("result[%s].JobID = %q, want %q", r.NodeID, r.JobID, dr.jobID)
+				}
+			}
+
+			ctx := context.Background()
+			tasks, err := tasksRepo.ByJob(ctx, dr.jobID)
+			if err != nil {
+				t.Fatalf("ByJob: %v", err)
+			}
+			for _, task := range tasks {
+				want := jobs.DispatchStateResolved
+				if task.NodeID == panicNode {
+					want = jobs.DispatchStateDispatched
+				}
+				if task.State != want {
+					t.Errorf("Task[%s] state = %v, want %v", task.NodeID, task.State, want)
+				}
+			}
+			inFlight, err := tasksRepo.InFlight(ctx)
+			if err != nil {
+				t.Fatalf("InFlight: %v", err)
+			}
+			if len(inFlight) != 1 || inFlight[0].NodeID != panicNode {
+				t.Errorf("InFlight = %v, want only the panicking node's Task", inFlight)
+			}
+		})
+	}
+}
+
+// TestJobEngine_DispatchPanicBeforeMarkDispatchedIsNeverSent: a panic before
+// the Task got past MarkDispatched leaves it Pending and unsent. Nothing
+// revisits a Pending Task, so it is not a recorded outcome — only proof that
+// the Task is never sent after a panic it never got past.
+func TestJobEngine_DispatchPanicBeforeMarkDispatchedIsNeverSent(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	var log []string
+	fc := newFakeConduit(&log)
+	for _, n := range []string{"node-a", "node-b"} {
+		fc.connected[n] = true
+		fc.results[n] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+	}
+	e := panicTestEngine(jobsRepo, tasksRepo, &panicConduit{fakeConduit: fc, connectedPanic: "node-a"})
+
+	nodes := []registry.Node{testNode("node-a"), testNode("node-b")}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
+	dr, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act))
+	if !errors.Is(err, errDispatchPanicked) {
+		t.Fatalf("run() error = %v, want it to wrap errDispatchPanicked", err)
+	}
+	for _, r := range dr.results {
+		want := jobs.OutcomeSuccess
+		if r.NodeID == "node-a" {
+			want = jobs.OutcomeFailure
+		}
+		if r.Outcome != want {
+			t.Errorf("result[%s].Outcome = %v, want %v", r.NodeID, r.Outcome, want)
+		}
+	}
+	if len(log) != 1 || log[0] != "dispatch:node-b" {
+		t.Errorf("dispatch log = %v, want only [dispatch:node-b]", log)
+	}
+	tasks, err := tasksRepo.ByJob(context.Background(), dr.jobID)
+	if err != nil {
+		t.Fatalf("ByJob: %v", err)
+	}
+	for _, task := range tasks {
+		if task.NodeID == "node-a" && task.State != jobs.DispatchStatePending {
+			t.Errorf("Task[node-a] state = %v, want DispatchStatePending", task.State)
+		}
+		if task.NodeID == "node-b" && task.State != jobs.DispatchStateResolved {
+			t.Errorf("Task[node-b] state = %v, want DispatchStateResolved", task.State)
+		}
+	}
+	inFlight, err := tasksRepo.InFlight(context.Background())
+	if err != nil {
+		t.Fatalf("InFlight: %v", err)
+	}
+	if len(inFlight) != 0 {
+		t.Errorf("InFlight = %v, want none", inFlight)
+	}
+}
+
+// TestServiceRunDispatchPanicReachesAuditAndResults: through Service.Run, the
+// panicking Node's OutcomeFailure is in the returned results and in the
+// KindDispatch audit record — the durable record of the failure (#942).
+func TestServiceRunDispatchPanicReachesAuditAndResults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "relay.db")
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	reg := st.Registry()
+	fc := newFakeConduit(nil)
+	for _, n := range []string{"node-a", "node-b"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: n}); err != nil {
+			t.Fatalf("Upsert %s: %v", n, err)
+		}
+		fc.connected[n] = true
+		fc.results[n] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+	}
+	audit := &spyAuditSink{}
+	svc := New(reg,
+		WithAuthorizer(&spyAuthorizer{}),
+		WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(audit),
+		WithFreeze(&fakeFreezeStore{}),
+		WithExecution(st.Jobs(), st.Tasks(), &panicConduit{fakeConduit: fc, dispatchPanic: "node-a"}),
+	)
+
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
+	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, Selector{}, act)
+	if !errors.Is(err, errDispatchPanicked) {
+		t.Fatalf("Run() error = %v, want it to wrap errDispatchPanicked", err)
+	}
+	if audit.entry.Kind != AuditKindDispatch {
+		t.Fatalf("audit entry Kind = %v, want AuditKindDispatch", audit.entry.Kind)
+	}
+	for name, rs := range map[string][]NodeResult{"returned": results, "audit": audit.entry.Results} {
+		got := map[string]jobs.Outcome{}
+		for _, r := range rs {
+			got[r.NodeID] = r.Outcome
+		}
+		if got["node-a"] != jobs.OutcomeFailure || got["node-b"] != jobs.OutcomeSuccess {
+			t.Errorf("%s results = %v, want node-a failure and node-b success", name, got)
+		}
+	}
+}
+
 // TestEngineDispatchOneTreatsConcurrentCancelAsTerminal covers the
 // dispatchOne gap-closure (ADR-0004/0013): a Task MarkCancelled while still
 // Pending (a concurrent CancelJob reaching it before dispatchOne's own
@@ -1054,6 +1253,9 @@ func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 		// own logging already keeps. Stdlib, no proto, no database/sql — the
 		// same admission bar every other entry here clears.
 		"log/slog": true,
+		// runtime/debug joined with #942: a recovered dispatch-worker panic logs
+		// its stack. Stdlib, no proto, no database/sql.
+		"runtime/debug": true,
 		// sort joined with #539: RecordEventSubscription canonicalises its
 		// caller-supplied kind list (sort + dedup) before it is bounded and
 		// recorded, so a subscription's read record is grouped by shape

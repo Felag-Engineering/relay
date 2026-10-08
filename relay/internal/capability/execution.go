@@ -45,6 +45,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -120,6 +122,10 @@ func requesterOf(p Principal) jobs.Requester {
 // startup-only. It is not the blast cap: the cap bounds how many Nodes a Job
 // may touch (invariant 5); this bounds how many it touches at the same time.
 const DefaultDispatchConcurrency = 16
+
+// errDispatchPanicked marks a Task whose dispatch worker panicked (#942). It
+// carries no panic value: the run error reaches callers.
+var errDispatchPanicked = errors.New("capability: dispatch worker panicked")
 
 // jobGate is the per-Job cancel gate. Holding mu across "is it cancelled? then
 // MarkDispatched" makes "no Task is dispatched after the cancel is recorded"
@@ -368,7 +374,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	results := make([]NodeResult, len(pending))
 	errs := make([]error, len(pending))
 	resolve := func(i int, pt pendingTask) {
-		res, err := e.dispatchOne(runCtx, gate, pt)
+		res, err := e.dispatchOneRecovered(runCtx, gate, pt)
 		errs[i] = err
 		results[i] = NodeResult{
 			NodeID:    pt.task.NodeID,
@@ -447,6 +453,45 @@ type pendingTask struct {
 	task        jobs.Task
 	outdated    bool
 	unsupported string
+}
+
+// dispatchOneRecovered runs dispatchOne and turns a panic into this Task's
+// failure (#942). A worker goroutine has no request-level recovery, so an
+// unrecovered panic would end the Relay process, not just the Job.
+//
+// It writes nothing to the store, exactly like the Conduit-error branch, so
+// at-most-once (invariant 4) is unchanged: a Task that panicked after
+// MarkDispatched stays Dispatched and is found by InFlight() reconciliation,
+// never retried. A Task that panicked before MarkDispatched stays Pending and
+// is never sent; nothing revisits a Pending Task, so its Job stays Running
+// with an unresolved Task until cancelled — a known effect, not a recorded
+// outcome.
+//
+// The panic's type and stack go only to the server-side log; the message too
+// only for a runtime.Error, whose text carries no Task data. Neither is put in
+// the returned error, which reaches callers through errors.Join.
+func (e *jobEngine) dispatchOneRecovered(ctx context.Context, gate *jobGate, pt pendingTask) (res jobs.Result, err error) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		attrs := []any{
+			"job_id", pt.task.JobID, "task_id", pt.task.ID, "node_id", pt.task.NodeID,
+			"panic_type", fmt.Sprintf("%T", r), "stack", string(debug.Stack()),
+		}
+		// runtime.Error's marker method, without importing runtime.
+		if re, ok := r.(interface {
+			error
+			RuntimeError()
+		}); ok {
+			attrs = append(attrs, "panic", re.Error())
+		}
+		slog.ErrorContext(ctx, "capability: dispatch worker panicked; Task reported as failed, store state left as-is", attrs...)
+		res = jobs.Result{Outcome: jobs.OutcomeFailure}
+		err = fmt.Errorf("capability: task %q on node %q: %w", pt.task.ID, pt.task.NodeID, errDispatchPanicked)
+	}()
+	return e.dispatchOne(ctx, gate, pt)
 }
 
 // dispatchOne carries one persisted (Pending) Task through the rest of its
