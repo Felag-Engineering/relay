@@ -936,7 +936,13 @@ fn pinned_dependency_keys(krate: &str) -> BTreeSet<&'static str> {
             "tracing",
         ],
         "relay-log" => &["tracing", "tracing-subscriber"],
-        "relay-proto" => &["tonic", "prost", "tonic-build", "protoc-bin-vendored"],
+        "relay-proto" => &[
+            "tonic",
+            "tonic-prost",
+            "prost",
+            "tonic-prost-build",
+            "protoc-bin-vendored",
+        ],
         other => panic!("no pinned dependency set for read-only crate {other}"),
     };
     keys.iter().copied().collect()
@@ -1536,7 +1542,7 @@ fn compiled_sources_carry_no_unpinned_suppression_or_mount() {
 }
 
 #[test]
-fn relay_proto_build_script_is_only_the_tonic_build_call() {
+fn relay_proto_build_script_is_only_the_tonic_prost_build_call() {
     let src = read(&daemon().join("crates/relay-proto/build.rs"));
     assert_eq!(
         squeeze(&scrub(&src, false)),
@@ -1545,7 +1551,7 @@ fn relay_proto_build_script_is_only_the_tonic_build_call() {
                 let protoc = protoc_bin_vendored::protoc_bin_path()?;
                 std::env::set_var("PROTOC", protoc);
                 println!("cargo:rerun-if-changed=../../../proto/relay/v1/relay.proto");
-                tonic_build::configure()
+                tonic_prost_build::configure()
                     .build_server(false)
                     .compile_protos(
                         &["../../../proto/relay/v1/relay.proto"],
@@ -1554,7 +1560,7 @@ fn relay_proto_build_script_is_only_the_tonic_build_call() {
                 Ok(())
             }"#
         ),
-        "relay-proto/build.rs must stay exactly the tonic_build configure/compile_protos call"
+        "relay-proto/build.rs must stay exactly the tonic_prost_build configure/compile_protos call"
     );
 }
 

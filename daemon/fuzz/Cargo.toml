@@ -24,9 +24,9 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-# Match the daemon's wire stack (daemon/Cargo.toml pins prost 0.13 via tonic 0.12).
-prost = "0.13"
-# The generated wire types. relay-proto declares tonic without `tls`, so no TLS
+# Match the daemon's wire stack (daemon/Cargo.toml pins prost 0.14 via tonic 0.14).
+prost = "0.14"
+# The generated wire types. relay-proto declares tonic without `tls-*`, so no TLS
 # stack enters the fuzz build.
 relay-proto = { path = "../crates/relay-proto" }
 

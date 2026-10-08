@@ -40,7 +40,9 @@ use prost::Message;
 /// produces a message it cannot faithfully re-serialize.
 pub fn decode_roundtrip<M>(data: &[u8])
 where
-    M: Message + Default + PartialEq,
+    // prost 0.14 dropped `Debug` as a supertrait of `Message`; the generated types
+    // still implement it, and `assert_eq!` needs it to print a failing pair.
+    M: Message + Default + PartialEq + std::fmt::Debug,
 {
     let Ok(msg) = M::decode(data) else {
         // Malformed bytes correctly rejected: the expected case, not a finding.

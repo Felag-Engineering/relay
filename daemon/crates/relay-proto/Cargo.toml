@@ -12,13 +12,16 @@ publish.workspace = true
 ban-probe = []
 
 [dependencies]
-# Only what generated code needs: no `tls`, so the fuzz build, which imports this
-# crate, links no TLS stack.
-tonic = { workspace = true, features = ["codegen", "prost", "transport"] }
+# Only what generated code needs: no `tls-*` feature, so the fuzz build, which
+# imports this crate, links no TLS stack.
+tonic = { workspace = true, features = ["codegen", "transport"] }
 prost = { workspace = true }
+tonic-prost = { workspace = true }
 
 [build-dependencies]
-tonic-build = "0.12"
+# default-features = false keeps tonic-build 0.12's codegen: no cleanup-markdown, so
+# no pulldown-cmark build dependency and the generated doc comments are unchanged.
+tonic-prost-build = { version = "0.14", default-features = false, features = ["transport"] }
 protoc-bin-vendored = "3"
 
 [lints]

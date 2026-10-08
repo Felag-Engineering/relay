@@ -38,6 +38,14 @@ allow = [
 ]
 confidence-threshold = 0.9
 
+# Zlib for one crate, not for the tree. foldhash is the default hasher of
+# hashbrown 0.15, reached only through prost-build 0.14 -> petgraph, which is a
+# build-dependency of relay-proto (codegen at build time, #938): it never links
+# into relay-daemon. Zlib is OSI-approved and permissive.
+[[licenses.exceptions]]
+crate = "foldhash"
+allow = ["Zlib"]
+
 [licenses.private]
 # relay-daemon itself is `publish = false` and `Proprietary`.
 ignore = true

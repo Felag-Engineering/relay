@@ -58,11 +58,16 @@ relay-test-support = { path = "crates/relay-test-support", version = "0.0.0" }
 
 # External dependencies, declared once; members opt in with `workspace = true`.
 tokio = "1"
-# Each member picks its features: relay-proto needs only codegen/prost/transport (no
-# TLS stack in the fuzz build); the daemon adds `tls`, which with these three is
-# exactly the default+tls set it had before the workspace split (#889).
-tonic = { version = "0.12", default-features = false }
-prost = "0.13"
+# Each member picks its features: relay-proto needs only codegen/transport, plus
+# tonic-prost for the codec (no TLS stack in the fuzz build); the daemon adds
+# `tls-ring`, tonic 0.14's name for 0.12's ring-backed `tls`. Deliberately not
+# `tls-aws-lc` (one crypto backend) nor `tls-native-roots`/`tls-webpki-roots`: the
+# pinned Relay CA stays the only trust root (ADR-0005, invariant 6).
+tonic = { version = "0.14", default-features = false }
+prost = "0.14"
+# The prost codec the generated client stubs name (`tonic_prost::ProstCodec`), split
+# out of tonic in 0.14 (#938).
+tonic-prost = "0.14"
 tokio-stream = "0.1"
 # mTLS / crypto
 # default-features = false drops aws_lc_rs + prefer-post-quantum, which together
@@ -145,7 +150,7 @@ relay-proto = { workspace = true }
 relay-log = { workspace = true }
 relay-policy = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-tonic = { workspace = true, features = ["codegen", "prost", "transport", "tls"] }
+tonic = { workspace = true, features = ["codegen", "transport", "tls-ring"] }
 prost = { workspace = true }
 tokio-stream = { workspace = true }
 rustls = { workspace = true }
