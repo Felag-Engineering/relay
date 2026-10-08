@@ -19,12 +19,12 @@
 #              section 7. No fixture, gate file or credential is baked into it.
 
 # ---- build stage: compile the Relay (Go) as a static binary --------------------
-# golang:1.25-bookworm is a CEILING, and only that: the in-image `go build` below
+# golang:1.26-bookworm is a CEILING, and only that: the in-image `go build` below
 # never sees the Makefile, so nothing here exports GOTOOLCHAIN (#667). The
-# floating 1.25 tag simply can never be 1.26, and if the image ships a 1.25.x
+# floating 1.26 tag simply can never be 1.27, and if the image ships a 1.26.x
 # older than relay/go.mod's `go` directive the go command downloads the named
 # toolchain at image-build time.
-FROM golang:1.25-bookworm AS build
+FROM golang:1.26-bookworm AS build
 
 WORKDIR /src
 COPY relay/ ./relay/
