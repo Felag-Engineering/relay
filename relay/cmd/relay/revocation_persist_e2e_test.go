@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
@@ -43,6 +44,7 @@ func persistTestConfig(t *testing.T) Config {
 		EnrollGlobalBurst:    10,
 		EnrollMaxTrackedIPs:  100000,
 		MaxNodes:             110000,
+		DispatchConcurrency:  capability.DefaultDispatchConcurrency,
 		CertExpiringFraction: nodestate.DefaultCertExpiringFraction,
 	}
 }

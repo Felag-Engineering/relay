@@ -1,39 +1,18 @@
-# Relay dev fleet — DEV-ONLY (docs/dev-fleet.md).
+# Relay dev fleet — DEV-ONLY (docs/dev-fleet.md). NOT the deployment stack:
+# deploy/compose/docker-compose.yml is that.
 #
-# NOT the deployment stack. deploy/compose/docker-compose.yml is that: one
-# Relay service and nothing else (docs/operations/relay-install.md, section
-# 7). There is deliberately no docker-compose.yml at the repo root, so this
-# file is never read unless it is named: every command for this fleet carries
-# `-f docker-compose.demo.yml` — `make dev-fleet-*` and scripts/demo-fleet.sh
-# (`make demo-*`) name it for you.
+# The project is fixed by `name:` below, so any `docker compose -f
+# docker-compose.demo.yml` reaches `relay-demo`; the make targets also pass
+# `-p relay-demo`. One project per Docker engine: the Makefile refuses a
+# `relay-demo` fleet that another checkout owns. Every Relay build names
+# `target: dev-fleet`: the default (last) stage of docker/relay.Dockerfile is the
+# fixture-free `runtime` image. Three daemons by default, nine with `--profile
+# demo` (#452; docs/dev-fleet.md, "The demo profile"); daemon-4..9 carry
+# `profiles: ["demo"]`, so nothing above daemon-3 changes without it.
 #
-# Every Relay build below names `target: dev-fleet` explicitly: the default
-# (last) stage of docker/relay.Dockerfile is the fixture-free, non-root
-# `runtime` image, and this fleet needs the dev image with its baked gates.
-# That is the one non-comment change made when this file was split off.
-#
-# One `relay` container plus three `relay-daemon` containers by default (nine
-# under `--profile demo`, see below) that auto-enroll over CA-pinned mTLS and
-# are drivable through the control plane (MCP + /api/v1). This is a laptop
-# demo / dogfooding environment; it makes NO production posture claims.
-# Docker is never a CI dependency — this file only affects `docker compose`,
-# not `make build/test/lint`.
-#
-# The `demo` compose profile (#452) adds six more daemons, `daemon-4..9`, for
-# a fleet-scale stage demo — varied `node:` labels, a third Policy fixture,
-# and a fan-out that returns `success` beside `denied_by_policy`. It is
-# strictly additive: every one of the six carries `profiles: ["demo"]`, so a
-# plain `docker compose -f docker-compose.demo.yml up` still means exactly
-# what it means today, and
-# nothing above `daemon-3` is touched. See "The demo profile" in
-# docs/dev-fleet.md.
-#
-# Startup order:
-#   relay (healthy) -> credential (mints the control-plane credential with
-#   `relay bootstrap-token`) -> approver (creates the dev-approver Account that
-#   the approval gate names as its audience) + bootstrap (mints a relay:
-#   Enrollment Token + exports the public CA cert) -> daemon-1..3 (enroll, then
-#   go healthy); daemon-4..9 join them the same way under `--profile demo`.
+# Startup order: relay (healthy) -> init (exit 0) -> daemons. If init fails, no
+# daemon starts.
+name: relay-demo
 
 # All nine daemon services are byte-identical except for their per-Node
 # environment, their private state volume, and — for `daemon-4..9`, the
@@ -48,8 +27,9 @@ x-daemon-base: &daemon-base
     dockerfile: docker/daemon.Dockerfile
   restart: unless-stopped
   depends_on:
-    bootstrap:
-      # Daemons start only after the token + CA cert exist on the shared volume.
+    init:
+      # Daemons start only after the token + CA cert exist on the shared volume,
+      # and init exiting non-zero keeps them all down.
       condition: service_completed_successfully
   healthcheck:
     # The daemon writes the `node_id` file only after a successful enrollment
@@ -81,7 +61,7 @@ services:
       # plane: listener separation.
       RELAY_CONTROL_ENABLED: "true"
       RELAY_CONTROL_ADDR: ":9443"
-      # Server cert SAN = the in-fleet DNS name daemons and bootstrap dial, so
+      # Server cert SAN = the in-fleet DNS name daemons and init dial, so
       # mTLS verification succeeds without any insecure flag inside the fleet.
       RELAY_HOSTNAME: "relay"
       RELAY_CA_DIR: "/var/lib/relay/ca"
@@ -96,14 +76,12 @@ services:
       #
       # DEV_FLEET_APPROVAL_GATE_CONFIG picks WHICH baked-in gate file, and
       # nothing else: both candidates are in the image, root-owned 0644. Unset,
-      # it is the dev gate above (out-of-band, `dev-approver` only).
-      # scripts/demo-fleet.sh sets it, to the demo fleet's in-band gate
-      # (docker/fixtures/approval-gates.demo.json). That nothing else sets it
-      # is a CONVENTION, not an enforced property: any `docker compose` of
-      # this file — `make dev-fleet-up` included — interpolates it from the caller's
-      # shell or a repo-root .env, so a leftover export or .env line would
-      # start the default fleet on the in-band gate. A path that is not in
-      # the image fails startup, like any other unloadable gate file.
+      # it is the dev gate above (out-of-band, `dev-approver` only). The Makefile
+      # sets it: the dev gate for `make dev-fleet-up`, the demo fleet's in-band
+      # gate (docker/fixtures/approval-gates.demo.json) for `make demo-*`. A bare
+      # `docker compose` of this file reads it from the caller's shell or a
+      # repo-root .env. A path that is not in the image fails startup, like any
+      # other unloadable gate file.
       RELAY_APPROVAL_GATE_CONFIG: "${DEV_FLEET_APPROVAL_GATE_CONFIG:-/etc/relay/approval-gates.json}"
       # The Admin Console (ADR-0009), served on the SAME control-plane listener
       # as MCP and /api/v1 — no new listener and no new auth path (invariant
@@ -120,16 +98,16 @@ services:
     ports:
       # Distinct published host ports: node plane vs control plane, each bound
       # to 127.0.0.1 (loopback) by default and each opted out of it separately.
-      # Nothing inside the fleet uses these host ports; daemons and bootstrap
+      # Nothing inside the fleet uses these host ports; daemons and init
       # dial the compose DNS name `relay` over the private network.
       #
       # RELAY_PUBLISH_ADDR publishes the CONTROL plane (MCP, /api/v1, the
       # Console) — what a client on another host needs. It is an execution
       # surface, so anything but loopback makes it network-reachable RCE for
       # whoever holds a credential or the Console password. The
-      # console-password service refuses to set the committed default password
-      # when this is not loopback, so an exposed fleet needs a real
-      # CONSOLE_ADMIN_PASSWORD or its Console cannot be signed in to.
+      # init service refuses the committed default password when this is not
+      # loopback, and then the fleet does not start: an exposed fleet needs a
+      # real CONSOLE_ADMIN_PASSWORD.
       #
       # RELAY_NODE_PUBLISH_ADDR publishes the NODE plane, needed only by a
       # relay-daemon running outside this compose project. Leave it on loopback
@@ -160,16 +138,15 @@ services:
       retries: 20
       start_period: 3s
 
-  # One-shot: mints the founding admin's control-plane credential with
-  # `relay bootstrap-token` (ADR-0023) and writes it to the shared volume.
-  #
-  # There is no committed credential fixture any more: since #298 the control
-  # plane accepts only per-Account API Tokens, and the first one is minted
-  # locally against the Relay's own store. This service uses the relay image
-  # because it needs that binary, and mounts relay-data READ-WRITE because
-  # minting is a store write — the only service other than the Relay itself
-  # that does.
-  credential:
+  # The dev fleet's one bootstrap one-shot (docker/dev-fleet-init.sh): mints the
+  # founding admin's credential, creates the dev-approver and Console admin
+  # Accounts (and the IdP user under the OAuth overlay), sets the Console
+  # password, mints the relay:-scoped Enrollment Token and exports the public CA
+  # cert, then exits. Besides the Relay it is the only service that mounts
+  # relay-data, and it mounts it READ-WRITE (minting and the password are store
+  # writes). No daemon mounts control-credential or relay-data. A failure here
+  # keeps every daemon down.
+  init:
     build:
       context: .
       dockerfile: docker/relay.Dockerfile
@@ -179,120 +156,17 @@ services:
     depends_on:
       relay:
         condition: service_healthy
-    entrypoint: ["sh", "/mint-credential.sh"]
-    volumes:
-      - ./docker/mint-credential.sh:/mint-credential.sh:ro
-      - relay-data:/var/lib/relay
-      # Its OWN volume, deliberately NOT bootstrap-shared: that one is mounted
-      # by every daemon, and a control-plane admin credential readable by every
-      # Node is exactly the shape a compromised Node would exploit. Only the
-      # minting service and the bootstrap service see this one.
-      - control-credential:/credential
-
-  # One-shot: creates the `dev-approver` human Account and mints its credential
-  # (docker/mint-approver.sh).
-  #
-  # The dev gate leaves `requester_allowed` unset — the strict default — so the
-  # Account that requests a parked dispatch may NOT approve it. Without a second
-  # Account the fleet could park a dispatch and never release it. This is the
-  # human half of that pair, and its credential deliberately lands on the
-  # control-credential volume that daemons never mount. (The demo fleet's gate,
-  # selected by scripts/demo-fleet.sh, names no audience, so dev-approver is
-  # one Account among several that may decide there — still created, still
-  # usable.)
-  approver:
-    image: curlimages/curl:8.11.1
-    user: "0:0"
-    restart: "no"
-    depends_on:
-      relay:
-        condition: service_healthy
-      credential:
-        condition: service_completed_successfully
-    entrypoint: ["sh", "/mint-approver.sh"]
-    volumes:
-      - ./docker/mint-approver.sh:/mint-approver.sh:ro
-      # Read-only, and only for the PUBLIC ca-cert.pem it pins its API calls to.
-      - relay-data:/relay-data:ro
-      - control-credential:/credential
-
-  # One-shot: creates the human Account that signs in to the Admin Console.
-  #
-  # A DISTINCT Account from `dev-approver` and from the founding admin, because
-  # the Console is a per-human identity (ADR-0009) and a shared "the admin
-  # account" is exactly the attribution hole the audit trail exists to close —
-  # every act in the Console is attributed to the person who did it.
-  console-admin:
-    image: curlimages/curl:8.11.1
-    user: "0:0"
-    restart: "no"
-    depends_on:
-      relay:
-        condition: service_healthy
-      credential:
-        condition: service_completed_successfully
-    environment:
-      CONSOLE_ADMIN_NAME: "${CONSOLE_ADMIN_NAME:-admin}"
-    entrypoint: ["sh", "/console-admin.sh"]
-    volumes:
-      - ./docker/console-admin.sh:/console-admin.sh:ro
-      # Read-only, and only for the PUBLIC ca-cert.pem it pins its API calls to.
-      - relay-data:/relay-data:ro
-      - control-credential:/credential:ro
-
-  # One-shot: sets that Account's Console sign-in password.
-  #
-  # Separate from console-admin because the two acts have different authorities:
-  # creating an Account is a control-plane request carrying a bearer token, and
-  # setting the first Console password is local root on the Relay's own store
-  # (there is no API for it — reaching the Console requires a password, so the
-  # first one cannot be set through the Console). This service therefore mounts
-  # relay-data READ-WRITE and holds no credential at all, and its sibling holds
-  # the credential and no store access.
-  #
-  # The Relay refuses a password shorter than 12 bytes. The Console's throttle
-  # has no hard lockout by design (spec 12), so an attacker gets slow unlimited
-  # attempts in front of a fleet-execution surface, and length is the only thing
-  # that makes that safe.
-  console-password:
-    build:
-      context: .
-      dockerfile: docker/relay.Dockerfile
-      target: dev-fleet
-    user: "0:0"
-    restart: "no"
-    depends_on:
-      console-admin:
-        condition: service_completed_successfully
     environment:
       CONSOLE_ADMIN_NAME: "${CONSOLE_ADMIN_NAME:-admin}"
       CONSOLE_ADMIN_PASSWORD: "${CONSOLE_ADMIN_PASSWORD:-admin1234567}"
       # So the script can refuse the committed default password once the
-      # control plane is published beyond loopback (docker/console-password.sh).
+      # control plane is published beyond loopback.
       RELAY_PUBLISH_ADDR: "${RELAY_PUBLISH_ADDR:-127.0.0.1}"
-    entrypoint: ["sh", "/console-password.sh"]
+    entrypoint: ["sh", "/dev-fleet-init.sh"]
     volumes:
-      - ./docker/console-password.sh:/console-password.sh:ro
+      - ./docker/dev-fleet-init.sh:/dev-fleet-init.sh:ro
       - relay-data:/var/lib/relay
-
-  # One-shot: mints the Enrollment Token and exports the public CA cert, then
-  # exits. Runs as root (0:0) so it can read the root-owned CA volume and write
-  # the shared bootstrap volume. See docker/bootstrap.sh for the security notes
-  # (relay:-scoped token; daemons receive ONLY ca-cert.pem, never ca-key.pem).
-  bootstrap:
-    image: curlimages/curl:8.11.1
-    user: "0:0"
-    restart: "no"
-    depends_on:
-      relay:
-        condition: service_healthy
-      credential:
-        condition: service_completed_successfully
-    entrypoint: ["sh", "/bootstrap.sh"]
-    volumes:
-      - ./docker/bootstrap.sh:/bootstrap.sh:ro
-      - relay-data:/relay-data:ro
-      - control-credential:/credential:ro
+      - control-credential:/credential
       - bootstrap-shared:/bootstrap
 
   # daemon-1 and daemon-2 are the `role=web` Nodes: docker/daemon-entrypoint.sh
@@ -480,7 +354,7 @@ volumes:
   relay-data:
   bootstrap-shared:
   # Holds ONLY the control-plane admin credential. Separate from
-  # bootstrap-shared so daemons never mount it (see the credential service).
+  # bootstrap-shared so daemons never mount it (see the init service).
   control-credential:
   daemon1-state:
   daemon2-state:

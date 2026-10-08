@@ -40,7 +40,7 @@
 //!
 //! # It proves
 //!
-//! No `#[tokio::test]` under `daemon/src` or `daemon/tests` that lacks
+//! No `#[tokio::test]` under `daemon/src`, `daemon/crates/*/src` or `daemon/tests` that lacks
 //! `start_paused = true` builds a deadline as a tokio-clock `Instant::now()`
 //! plus or minus a sub-second literal `Duration` (subject to the limits below).
 //!
@@ -365,8 +365,24 @@ fn unpaused_hits(file: &str, src: &str) -> Vec<String> {
 fn tree_files() -> Vec<(String, String)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    for sub in ["src", "tests"] {
-        source_files(&root.join(sub), &mut files);
+    // The bin's src and tests, then every workspace member's src, found by listing
+    // `crates/` so a new member is scanned without editing this test (#889).
+    let mut roots = vec![root.join("src"), root.join("tests")];
+    let mut members: Vec<_> = std::fs::read_dir(root.join("crates"))
+        .expect("read crates dir")
+        .map(|e| e.expect("dir entry").path())
+        .filter(|p| p.is_dir())
+        .collect();
+    members.sort();
+    roots.extend(members.into_iter().map(|m| m.join("src")));
+    for dir in &roots {
+        let before = files.len();
+        source_files(dir, &mut files);
+        assert!(
+            files.len() > before,
+            "{} holds no .rs file; the scan is broken",
+            dir.display()
+        );
     }
     files.sort();
     files

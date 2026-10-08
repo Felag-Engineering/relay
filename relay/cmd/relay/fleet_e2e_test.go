@@ -225,6 +225,29 @@ func waitForInFlightJobID(t *testing.T, harness *harnessClient) string {
 	}
 }
 
+// waitForInFlightTasks polls list_inflight until jobID has n Tasks in flight
+// (Dispatched, no Result yet), or fails at a 10s deadline.
+func waitForInFlightTasks(t *testing.T, harness *harnessClient, jobID string, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		resp := harness.call(t, map[string]any{"op": "list_inflight"})
+		count := 0
+		for _, tk := range toMapSlice(resp["tasks"]) {
+			if id, _ := tk["job_id"].(string); id == jobID {
+				count++
+			}
+		}
+		if count >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("list_inflight: job %s has %d in-flight tasks, want %d before deadline", jobID, count, n)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // nodeByRelayLabel returns the node_id among nodeIDs whose relay_labels[key]
 // == value (bare key, no "relay:" prefix — registry.Node.RelayLabels strips
 // it, ADR-0006).
@@ -486,10 +509,14 @@ func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *
 	}
 
 	// -------------------------------------------------------------------
-	// (b) Cancel kills an in-flight Task and stops an undispatched one.
-	// jobEngine dispatches Nodes sequentially (execution.go), so whichever
-	// Node is dispatched first sits in-flight (running /bin/sleep 30) while
-	// the other's Task is still Pending when cancel_job races in.
+	// (b) Cancel kills concurrently in-flight Tasks.
+	// jobEngine dispatches a Job's Tasks concurrently under
+	// -dispatch-concurrency (default 16), so both Nodes run /bin/sleep 30 at
+	// once; this test waits until both are in flight before cancel_job. The
+	// never-dispatched branch, where a Task is still Pending when the cancel
+	// is recorded, is proven at the capability seam
+	// (TestJobEngine_NoTaskDispatchedAfterCancelRecorded) and over MCP
+	// (TestMCP_CancelJob_InFlightAndPendingSibling, pinned to bound 1).
 	// -------------------------------------------------------------------
 	harness2 := dialHarness(t, fr.sockPath)
 	type runOutcome struct {
@@ -509,6 +536,16 @@ func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *
 	}()
 
 	jobID := waitForInFlightJobID(t, fr.harness)
+	waitForInFlightTasks(t, fr.harness, jobID, 2)
+	// list_inflight shows a Task once MarkDispatched commits, which is
+	// microseconds BEFORE the TaskRequest is sent (the pre-send window,
+	// ADR-0013). A cancel that overtakes the send is a no-op on the daemon and
+	// /bin/sleep 30 would then run to completion. The settle makes sure both
+	// TaskRequests are on the wire, so the test checks what it claims
+	// (cancelling concurrent in-flight Tasks) and not the pre-send residual.
+	// No observable signal for "sent" exists; the crash-mid-Job test settles
+	// for the same reason.
+	time.Sleep(500 * time.Millisecond)
 
 	fr.harness.call(t, map[string]any{"op": "cancel_job", "job_id": jobID})
 

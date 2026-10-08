@@ -4,7 +4,8 @@
 #
 #   dev-fleet  DEV-ONLY, and only when named (`target: dev-fleet`, as every
 #              Relay build in docker-compose.demo.yml does): it adds the dev
-#              and demo fleets' approval-gate fixtures and runs as root,
+#              and demo fleets' approval-gate fixtures and curl (for the
+#              `init` one-shot) and runs as root,
 #              exactly as this image did before the split (docs/dev-fleet.md).
 #   release    the PUBLISHED image (ghcr.io/felag-engineering/relay, built by
 #              .github/workflows/release.yml, #892). Its binary is not compiled
@@ -67,6 +68,12 @@ COPY --from=build /out/relay /usr/local/bin/relay
 # docker-compose.demo.yml does) gets this stage and its fixtures.
 FROM base AS dev-fleet
 
+# The dev fleet's `init` one-shot calls the Control API over TLS 1.3, which
+# busybox wget cannot do. The long-running dev-fleet `relay` container shares
+# this stage, so it carries curl too (dev-only, root, already has openssl). No
+# other stage gets it.
+RUN apk add --no-cache curl
+
 # The approval gate (ADR-0027) arrives WITH THE IMAGE, never over the wire —
 # the same posture as the daemon's Policy file (ADR-0002). COPY lands it
 # root:root 0644, which is what the Relay's fail-closed loader demands: it
@@ -86,17 +93,16 @@ COPY --chmod=0644 docker/fixtures/approval-gates.json /etc/relay/approval-gates.
 # `requester_allowed: true`, so an MCP client can be asked the approval
 # question (MRTR) or answer with `approve_request`. The Relay reads only the
 # file RELAY_APPROVAL_GATE_CONFIG names: docker-compose.demo.yml defaults that to
-# the file above, and by convention only scripts/demo-fleet.sh points it here.
-# That convention is all that keeps the default three-Node fleet off this
-# gate: a bare `docker compose -f docker-compose.demo.yml up` (`make
-# dev-fleet-up` included) reads
+# the file above, and only the Makefile's demo-* targets point it here.
+# `make dev-fleet-up` and `make demo-*` each set it explicitly; only a bare
+# `docker compose -f docker-compose.demo.yml up` reads
 # DEV_FLEET_APPROVAL_GATE_CONFIG from the caller's shell or a repo-root .env,
 # so a stray value there would select this file.
 COPY --chmod=0644 docker/fixtures/approval-gates.demo.json /etc/relay/approval-gates.demo.json
 
 # No credential fixture is baked into the image: since #298 (ADR-0023) the
 # control plane accepts only per-Account API Tokens, and the dev fleet's first
-# one is minted at runtime by the `credential` service (docker/mint-credential.sh)
+# one is minted at runtime by the `init` service (docker/dev-fleet-init.sh)
 # using this image's own `relay bootstrap-token` subcommand.
 
 # ---- unprivileged: os plus the non-root user, still without a binary ----------
