@@ -108,7 +108,8 @@ func migrate(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 	// Timed because 0024 is the first migration whose cost is proportional to
 	// the size of a table rather than to the schema — it rewrites every audit
 	// row, at roughly 16 seconds per GB — so a boot that used to be instant can
-	// now take minutes, and the operator is owed the reason.
+	// now take minutes, and the operator is owed the reason. 0028 (#896) is the
+	// second: it chains every existing audit row.
 	//
 	// Info only past migrationSlowThreshold, Debug otherwise. A fresh database
 	// applies two dozen migrations in microseconds each; logging all of them at
@@ -231,8 +232,17 @@ func pendingMigrations(migrations []migration, applied map[int]struct{}) (pendin
 	return pending, unknown
 }
 
-// applyMigration runs one migration's SQL and records its version, in a
-// single transaction. 0001_init.sql itself creates schema_migrations.
+// migrationGoSteps holds the migrations that need Go after their SQL: work SQL
+// cannot do (SHA-256) or splitStatements cannot split (a trigger body). A step
+// runs inside the migration's transaction, after the SQL statements and before
+// the version is recorded, so it commits or rolls back with them.
+var migrationGoSteps = map[int]func(context.Context, *sql.Tx) error{
+	28: chainAuditTrail,
+}
+
+// applyMigration runs one migration's SQL and its Go step, if any, and records
+// its version, in a single transaction. 0001_init.sql itself creates
+// schema_migrations.
 func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -243,6 +253,12 @@ func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
 	for _, stmt := range splitStatements(m.sql) {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("exec statement: %w", err)
+		}
+	}
+
+	if step, ok := migrationGoSteps[m.version]; ok {
+		if err := step(ctx, tx); err != nil {
+			return fmt.Errorf("go step: %w", err)
 		}
 	}
 

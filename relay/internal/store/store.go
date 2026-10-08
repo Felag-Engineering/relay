@@ -209,6 +209,9 @@ func Open(path string, opts ...Option) (*Store, error) {
 		db.Close() //nolint:errcheck
 		return nil, fmt.Errorf("migrate %q: %w", path, err)
 	}
+	// Migration 28 chained every pre-existing audit row, exactly once. There is
+	// deliberately no re-chaining here on every Open: it would vouch for any row
+	// inserted outside the chain since the last boot.
 
 	// The approval shape-key backfill (#415) is Go rather than migration SQL
 	// because it must call the same approval.HashGrantShape the write path
@@ -296,6 +299,12 @@ func (s *Store) Tasks() jobs.TaskRepository {
 
 // Audit returns the SQLite-backed audit.Repository.
 func (s *Store) Audit() audit.Repository {
+	return &sqliteAudit{db: s.db}
+}
+
+// AuditChain returns the reader of the audit chain's head (#896), for the
+// checkpoint that gives an operator an anchor to verify against.
+func (s *Store) AuditChain() audit.ChainHeadReader {
 	return &sqliteAudit{db: s.db}
 }
 

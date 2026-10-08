@@ -26,22 +26,6 @@ const auditTSCanonicalGlob = `[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0
 // alone rather than mangled by substr arithmetic on a negative length.
 const auditTSShapeGlob = `[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]*Z`
 
-// auditTSRepairSQL is migration 0024's conversion UPDATE, verbatim — the
-// statement an operator runs to repair rows a rolled-back binary wrote in the
-// old format.
-//
-// It is a second copy on purpose: an operator reading a log line has a binary
-// and a database, not this repository, so "see migrations/0024" is not a
-// remedy. TestAuditTSRepair_MatchesMigration0024 pins the two copies against
-// each other so they cannot drift.
-const auditTSRepairSQL = `UPDATE audit
-SET ts = substr(ts, 1, 19) || '.' ||
-         substr(CASE WHEN substr(ts, 20, 1) = '.'
-                     THEN substr(ts, 21, length(ts) - 21)
-                     ELSE '' END || '000000000', 1, 9) || 'Z'
-WHERE ts NOT GLOB '` + auditTSCanonicalGlob + `'
-  AND ts GLOB '` + auditTSShapeGlob + `'`
-
 // auditShapeCheckRows is how many of the most recently inserted rows the
 // window reads.
 const auditShapeCheckRows = 100
@@ -49,7 +33,7 @@ const auditShapeCheckRows = 100
 // legacyTSWarnMsg is the one message both warning paths use, so an operator
 // grepping for it finds the first boot that saw the problem and every boot
 // since.
-const legacyTSWarnMsg = "audit trail holds pre-0024 timestamps — rows written by a Relay older than #656 sort out of order against migrated rows, and a pagination cursor landing on one can skip or repeat rows. If running the repair does not clear this warning, the offending rows are outside the statement's shape (no Relay binary can write such a value, so they were introduced by hand) and need manual inspection"
+const legacyTSWarnMsg = "audit trail holds pre-0024 timestamps — rows written by a Relay older than #656 sort out of order against migrated rows, and a pagination cursor landing on one can skip or repeat rows. Since #896 the audit trail is append-only and migration 28 canonicalised every row that existed when it ran, so a row reported now was written afterwards by a pre-#896 binary. It cannot be rewritten in place, it also has no chain position, and relay-audit-verify reports it. The remedy is inspection, or restoring from backup"
 
 // auditShapeCheckFailedMsg is logged when the detector itself cannot run. It
 // is never an error the caller sees: see warnOnLegacyAuditTimestamps.
@@ -86,7 +70,8 @@ type auditShapeAlert struct {
 // schema_migrations and migrate selects by PRESENCE, so upgrading again
 // re-runs nothing. Without this the symptom is entirely silent: no error, no
 // failed query, just an audit trail that is quietly in two formats. This
-// function is what turns it into a log line carrying the repair statement.
+// function is what turns it into a log line. Since #896 the line carries no
+// repair statement: the table refuses UPDATE.
 //
 // THREE STEPS, AND THE MIDDLE ONE IS WHY THERE IS A TABLE FOR IT (0025):
 //
@@ -121,11 +106,12 @@ type auditShapeAlert struct {
 // scan, the alert write, the alert clear — is logged at Warn and Open carries
 // on. Refusing to start over a DIAGNOSTIC would invert #492's
 // tolerate-a-newer-database posture, and is the same reasoning that rejected
-// a CHECK constraint or an aborting trigger here: a Relay that cannot write
-// an audit record cannot dispatch, so bricking the control plane on rollback
-// would be worse than the ordering defect. Unlike backfillShapeKeys, this
-// repairs no audit row and asserts nothing; the only thing it writes is its
-// own alert.
+// a CHECK constraint or an aborting trigger on INSERT here: a Relay that cannot
+// write an audit record cannot dispatch, so bricking the control plane on
+// rollback would be worse than the ordering defect. (The #896 triggers block
+// only UPDATE and DELETE, never INSERT, for the same reason.) Unlike
+// backfillShapeKeys, this repairs no audit row and asserts nothing; the only
+// thing it writes is its own alert.
 func warnOnLegacyAuditTimestamps(ctx context.Context, db *sql.DB, logger *slog.Logger) {
 	alert, err := readAuditShapeAlert(ctx, db)
 	if err != nil {
@@ -153,7 +139,6 @@ func warnOnLegacyAuditTimestamps(ctx context.Context, db *sql.DB, logger *slog.L
 			"nonconforming_rows", observed.bad,
 			"sample_audit_id", observed.sampleID,
 			"sample_ts", observed.sampleTS,
-			"repair", auditTSRepairSQL,
 		)
 		return
 	}
@@ -168,7 +153,6 @@ func warnOnLegacyAuditTimestamps(ctx context.Context, db *sql.DB, logger *slog.L
 			"first_observed_at", alert.observedAt,
 			"sample_audit_id", alert.sampleID,
 			"sample_ts", alert.sampleTS,
-			"repair", auditTSRepairSQL,
 		)
 		return
 	}
@@ -206,14 +190,16 @@ func windowHoldsLegacyTimestamps(ctx context.Context, db *sql.DB) (legacyTSObser
 	// each, never the retained output blobs.
 	//
 	// THE PREMISE, stated because it is not a property of rowid in general:
-	// this holds because `audit` is append-only. Nothing in this repo deletes
-	// from it, VACUUMs it, or names a rowid on insert, so rowids are assigned
-	// in ascending order and never reused. SQLite reuses the highest rowid
-	// after the highest row is deleted, which would put a NEWER row below
-	// older ones and hide it from this window. Retention (#677) is the
-	// obvious future violator: deleting oldest-first stays safe, deleting
-	// newest or emptying the table does not. Anything that starts removing
-	// audit rows must re-check this window.
+	// this holds because `audit` is append-only, and since #896 that is
+	// enforced by trigger (UPDATE and DELETE are refused) rather than by
+	// convention. Nothing in this repo VACUUMs it or names a rowid on insert,
+	// so rowids are assigned in ascending order and never reused. SQLite reuses
+	// the highest rowid after the highest row is deleted, which would put a
+	// NEWER row below older ones and hide it from this window. Retention (#677)
+	// is the obvious future violator, and must seal and archive whole prefixes
+	// of the chain: deleting oldest-first stays safe, deleting newest or
+	// emptying the table does not. Anything that starts removing audit rows
+	// must replace the triggers and re-check this window.
 	rows, err := db.QueryContext(ctx,
 		`SELECT audit_id, CAST(ts AS TEXT), ts GLOB ? FROM audit ORDER BY rowid DESC LIMIT ?`,
 		auditTSCanonicalGlob, auditShapeCheckRows)

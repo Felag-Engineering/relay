@@ -458,7 +458,9 @@ type Record struct {
 }
 
 // Repository is the interface for the audit trail. Append-only: there is no
-// update or delete.
+// update or delete. The store enforces that with triggers that refuse UPDATE
+// and DELETE, and makes it tamper-evident with a hash chain over the rows
+// (chain.go, #896).
 //
 // Every reader below returns Records ordered by Timestamp, ties broken by ID.
 // That pair is a TOTAL order (#656): ID is minted monotonically by NewID, so

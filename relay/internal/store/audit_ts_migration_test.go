@@ -65,7 +65,7 @@ func auditIndexDefinitions(t *testing.T, m migration) map[string]string {
 // these indexes, and IF NOT EXISTS then SKIPS each one. If the two files ever
 // disagree, the repair silently keeps 0024's definition and never applies
 // 0021's, with no error anywhere. Two copies of a definition, so: pinned,
-// exactly as auditTSRepairSQL is pinned against the migration it quotes.
+// exactly as auditTSCanonicaliseSQL is pinned against the migration it quotes.
 func TestAuditIndexDefinitions_0021MatchesMigration0024(t *testing.T) {
 	in21 := auditIndexDefinitions(t, migrationByVersion(t, 21))
 	in24 := auditIndexDefinitions(t, migration0024(t))
@@ -91,13 +91,19 @@ func TestAuditIndexDefinitions_0021MatchesMigration0024(t *testing.T) {
 // DROP INDEX, or a CREATE INDEX without IF EXISTS in front of it, would make
 // every test below fail for a reason that has nothing to do with what it
 // asserts.
+//
+// Since #896 the audit table refuses UPDATE, so the statements run with the
+// append-only triggers lifted (withoutAppendOnlyTriggers) — the test-only
+// equivalent of an operator restoring a database from before migration 28.
 func runMigration0024(t *testing.T, db *sql.DB) {
 	t.Helper()
-	for _, stmt := range splitStatements(migration0024(t).sql) {
-		if _, err := db.ExecContext(context.Background(), stmt); err != nil {
-			t.Fatalf("exec 0024 statement %q: %v", stmt, err)
+	withoutAppendOnlyTriggers(t, db, func() {
+		for _, stmt := range splitStatements(migration0024(t).sql) {
+			if _, err := db.ExecContext(context.Background(), stmt); err != nil {
+				t.Fatalf("exec 0024 statement %q: %v", stmt, err)
+			}
 		}
-	}
+	})
 }
 
 // insertLegacyAuditRow writes a row with a hand-supplied ts TEXT, bypassing

@@ -38,12 +38,12 @@ func (s *Store) recordWith(ctx context.Context, change func(context.Context, exe
 	if rec.ID == "" {
 		return errors.New("store: refusing to record a credential change with no audit record id")
 	}
-	args, err := auditInsertArgs(rec)
+	p, err := prepareAudit(rec)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, insertAuditSQL, args...); err != nil {
-		return fmt.Errorf("insert audit record: %w", err)
+	if err := insertChained(ctx, tx, []preparedAudit{p}); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit credential change and audit record: %w", err)

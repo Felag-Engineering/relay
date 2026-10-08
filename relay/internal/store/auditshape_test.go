@@ -94,6 +94,7 @@ func TestWarnOnLegacyAuditTimestamps_WarnsOnARolledBackRow(t *testing.T) {
 
 	var entry struct {
 		Level             string `json:"level"`
+		Msg               string `json:"msg"`
 		CheckedRows       int    `json:"checked_rows"`
 		NonconformingRows int    `json:"nonconforming_rows"`
 		SampleAuditID     string `json:"sample_audit_id"`
@@ -115,8 +116,11 @@ func TestWarnOnLegacyAuditTimestamps_WarnsOnARolledBackRow(t *testing.T) {
 	if entry.SampleTS != "2026-09-21T12:01:00Z" {
 		t.Errorf("sample_ts = %q, want the STORED bytes \"2026-09-21T12:01:00Z\" — the driver re-renders a scanned TIMESTAMP column, so a sample read that way would not be what is in the file", entry.SampleTS)
 	}
-	if entry.Repair != auditTSRepairSQL {
-		t.Errorf("repair = %q, want the 0024 conversion UPDATE — an operator reading this line has a binary and a database, not the repository, so a file reference is not a remedy", entry.Repair)
+	if entry.Repair != "" {
+		t.Errorf("repair = %q, want no repair attribute — since #896 the table refuses UPDATE, so the line must not advise a statement that cannot run", entry.Repair)
+	}
+	if !strings.Contains(entry.Msg, "append-only") || !strings.Contains(entry.Msg, "relay-audit-verify") {
+		t.Errorf("warning %q must say the trail is append-only and name relay-audit-verify", entry.Msg)
 	}
 }
 
@@ -177,6 +181,7 @@ func TestWarnOnLegacyAuditTimestamps_KeepsWarningAfterTheWindowScrolls(t *testin
 
 	var entry struct {
 		Level           string `json:"level"`
+		Msg             string `json:"msg"`
 		FirstObservedAt string `json:"first_observed_at"`
 		SampleAuditID   string `json:"sample_audit_id"`
 		Repair          string `json:"repair"`
@@ -193,8 +198,11 @@ func TestWarnOnLegacyAuditTimestamps_KeepsWarningAfterTheWindowScrolls(t *testin
 	if entry.FirstObservedAt == "" {
 		t.Errorf("first_observed_at is empty — a warning on a later boot must say when the problem was first seen")
 	}
-	if entry.Repair != auditTSRepairSQL {
-		t.Errorf("repair = %q, want the 0024 conversion UPDATE — every boot's warning must carry the remedy, not just the first", entry.Repair)
+	if entry.Repair != "" {
+		t.Errorf("repair = %q, want no repair attribute — since #896 the table refuses UPDATE", entry.Repair)
+	}
+	if !strings.Contains(entry.Msg, "append-only") {
+		t.Errorf("warning %q must say the trail is append-only", entry.Msg)
 	}
 	if n := auditShapeAlertRows(t, reopenedAgain); n != 1 {
 		t.Errorf("audit_shape_alert holds %d rows, want 1 — the alert is what makes the warning durable", n)
@@ -213,10 +221,13 @@ func TestWarnOnLegacyAuditTimestamps_ClearsTheAlertAfterTheRepair(t *testing.T) 
 		t.Fatalf("the first Open after the rollback logged %d warnings, want 1; log:\n%s", len(lines), logBuf.String())
 	}
 
-	// Exactly what the operator is told to run — the log line's own string.
-	if _, err := reopened.db.ExecContext(context.Background(), auditTSRepairSQL); err != nil {
-		t.Fatalf("run the repair the warning carries: %v", err)
-	}
+	// An operator restoring or repairing the file out of band: the table
+	// refuses UPDATE, so the triggers are lifted for the statement.
+	withoutAppendOnlyTriggers(t, reopened.db, func() {
+		if _, err := reopened.db.ExecContext(context.Background(), auditTSCanonicaliseSQL); err != nil {
+			t.Fatalf("run the canonicalising UPDATE: %v", err)
+		}
+	})
 
 	repaired, logBuf := reopenWithLogger(t, reopened, path)
 	if lines := linesContaining(logBuf, legacyTSWarning); len(lines) != 0 {
@@ -287,16 +298,16 @@ func TestWarnOnLegacyAuditTimestamps_SurvivesAQueryError(t *testing.T) {
 	}
 }
 
-// TestAuditTSRepair_MatchesMigration0024 pins the two copies of the
-// conversion UPDATE against each other. They are two copies on purpose — the
-// log line has to carry a runnable statement — and two copies drift.
-func TestAuditTSRepair_MatchesMigration0024(t *testing.T) {
+// TestAuditTSCanonicalise_MatchesMigration0024 pins the two copies of the
+// conversion UPDATE against each other. Migration 28 re-runs the statement
+// from Go, and two copies drift.
+func TestAuditTSCanonicalise_MatchesMigration0024(t *testing.T) {
 	collapse := func(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 	migrationSQL := collapse(stripLineComments(migration0024(t).sql))
-	repair := collapse(auditTSRepairSQL)
+	repair := collapse(auditTSCanonicaliseSQL)
 
 	if !strings.Contains(migrationSQL, repair) {
-		t.Errorf("auditTSRepairSQL is not present in 0024_audit_ts_sortable.sql — the statement an operator is told to run must be the statement the migration runs, byte for byte modulo whitespace (#656).\nrepair:    %s\nmigration: %s", repair, migrationSQL)
+		t.Errorf("auditTSCanonicaliseSQL is not present in 0024_audit_ts_sortable.sql — migration 28 must run the statement 0024 runs, byte for byte modulo whitespace (#656).\ncanonicalise: %s\nmigration:    %s", repair, migrationSQL)
 	}
 }
