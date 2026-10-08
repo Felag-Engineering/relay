@@ -159,6 +159,7 @@ func TestEngineOneTaskPerNodePersistedBeforeDispatch(t *testing.T) {
 	e := &jobEngine{
 		jobsRepo:  jobsRepo,
 		tasksRepo: &recordingTasks{TaskRepository: tasksRepo, log: &log},
+		intents:   &nonAtomicIntents{tr: &recordingTasks{TaskRepository: tasksRepo, log: &log}},
 		conduit:   conduit,
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
@@ -230,6 +231,7 @@ func TestJobEngine_RunUsesTheReservedJobID(t *testing.T) {
 	e := &jobEngine{
 		jobsRepo:  jobsRepo,
 		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
 		conduit:   conduit,
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
@@ -323,6 +325,7 @@ func TestJobEngine_ReservedRunSurvivesRequestCancellationAfterCreateJob(t *testi
 	e := &jobEngine{
 		jobsRepo:  &cancelAfterCreateJobRepo{JobRepository: jobsRepo, cancel: cancel},
 		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
 		conduit:   conduit,
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
@@ -377,6 +380,7 @@ func TestEngineRecordsRequesterOnJob(t *testing.T) {
 	e := &jobEngine{
 		jobsRepo:  jobsRepo,
 		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
 		conduit:   conduit,
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
@@ -413,6 +417,7 @@ func TestEngineRecordsNoRequesterWithoutAnAccountID(t *testing.T) {
 	e := &jobEngine{
 		jobsRepo:  jobsRepo,
 		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
 		conduit:   conduit,
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
@@ -454,6 +459,7 @@ func TestEngineOfflineNodeUnreachable(t *testing.T) {
 	e := &jobEngine{
 		jobsRepo:  jobsRepo,
 		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
 		conduit:   conduit,
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
@@ -531,6 +537,7 @@ func TestEngineMixedOutcomesTruthful(t *testing.T) {
 	e := &jobEngine{
 		jobsRepo:  jobsRepo,
 		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
 		conduit:   conduit,
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
@@ -580,6 +587,7 @@ func TestEngineConduitErrorLeavesTaskInFlight(t *testing.T) {
 	e := &jobEngine{
 		jobsRepo:  jobsRepo,
 		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
 		conduit:   conduit,
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
@@ -648,6 +656,7 @@ func panicTestEngine(jobsRepo jobs.JobRepository, tasksRepo jobs.TaskRepository,
 	return &jobEngine{
 		jobsRepo:    jobsRepo,
 		tasksRepo:   tasksRepo,
+		intents:     &nonAtomicIntents{tr: tasksRepo},
 		conduit:     c,
 		newID:       sequentialIDs("id-"),
 		now:         func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
@@ -799,7 +808,7 @@ func TestServiceRunDispatchPanicReachesAuditAndResults(t *testing.T) {
 		WithCapChecker(&spyCapChecker{}),
 		WithAuditSink(audit),
 		WithFreeze(&fakeFreezeStore{}),
-		WithExecution(st.Jobs(), st.Tasks(), &panicConduit{fakeConduit: fc, dispatchPanic: "node-a"}),
+		testExecution(st.Jobs(), st.Tasks(), &panicConduit{fakeConduit: fc, dispatchPanic: "node-a"}),
 	)
 
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
@@ -969,7 +978,7 @@ func TestEngineMixedFleetVersionGate(t *testing.T) {
 		WithCapChecker(capChecker),
 		WithAuditSink(audit),
 		WithFreeze(freezeStore),
-		WithExecution(st.Jobs(), st.Tasks(), conduit),
+		testExecution(st.Jobs(), st.Tasks(), conduit),
 	)
 
 	sel := Selector{} // Selector{} matches every Node (see selector.go)
@@ -1091,7 +1100,7 @@ func TestWithExecutionAcceptsRealSeams(t *testing.T) {
 		WithCapChecker(capChecker),
 		WithAuditSink(audit),
 		WithFreeze(freezeStore),
-		WithExecution(jobsRepo, tasksRepo, conduit, WithExecNewID(sequentialIDs("id-"))),
+		testExecution(jobsRepo, tasksRepo, conduit, WithExecNewID(sequentialIDs("id-"))),
 	)
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
@@ -1190,7 +1199,7 @@ func TestRun_RequesterIsOnTheJobWhileEveryTaskIsPending(t *testing.T) {
 		WithCapChecker(capChecker),
 		WithAuditSink(auditSink),
 		WithFreeze(freezeStore),
-		WithExecution(st.Jobs(), st.Tasks(), conduit, WithExecNewID(sequentialIDs("id-"))),
+		testExecution(st.Jobs(), st.Tasks(), conduit, WithExecNewID(sequentialIDs("id-"))),
 	)
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
@@ -1400,6 +1409,7 @@ func TestEngine_JobEvents_CreatedThenCompleted(t *testing.T) {
 	e := &jobEngine{
 		jobsRepo:  jobsRepo,
 		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
 		conduit:   conduit,
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
@@ -1452,6 +1462,7 @@ func TestEngine_JobEvents_NeverCarryOutput(t *testing.T) {
 	e := &jobEngine{
 		jobsRepo:  jobsRepo,
 		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
 		conduit:   conduit,
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
@@ -1533,6 +1544,7 @@ func TestJobEventsAreObservationalOnly(t *testing.T) {
 		e := &jobEngine{
 			jobsRepo:  jobsRepo,
 			tasksRepo: tasksRepo,
+			intents:   &nonAtomicIntents{tr: tasksRepo},
 			conduit:   conduit,
 			newID:     sequentialIDs("id-"),
 			now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
@@ -1669,6 +1681,7 @@ func newConcurrentEngine(t *testing.T, c Conduit, concurrency int) (*jobEngine, 
 	return &jobEngine{
 		jobsRepo:    jobsRepo,
 		tasksRepo:   tasksRepo,
+		intents:     &nonAtomicIntents{tr: tasksRepo},
 		conduit:     c,
 		newID:       sequentialIDs("id-"),
 		now:         func() time.Time { return time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC) },
@@ -2104,6 +2117,7 @@ func TestJobEngine_CancelRaceStress(t *testing.T) {
 		e := &jobEngine{
 			jobsRepo:    jobsRepo,
 			tasksRepo:   tasksRepo,
+			intents:     &nonAtomicIntents{tr: tasksRepo},
 			conduit:     c,
 			newID:       sequentialIDs(fmt.Sprintf("i%d-", iter)),
 			now:         func() time.Time { return time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC) },

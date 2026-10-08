@@ -34,6 +34,20 @@ const (
 	KindNodeRevoke    = "node_revoke"
 	KindPlan          = "plan"
 
+	// KindDispatchIntent is the Job-level record of what was about to be
+	// dispatched. It is written in the same transaction as the Job's Tasks
+	// (#887), so it exists before any Task can be sent; there is exactly one
+	// per Job. The per-Node KindDispatch outcome rows reference it by the
+	// shared job_id, and its seq is lower than every one of them.
+	//
+	// It never carries Stdout, Stderr or Truncated, on any risk class
+	// (ADR-0025). Surface is recorded as for every other kind: in the verified
+	// lane's Method/Source — there is no separate surface field. Reason is
+	// Relay-authored key=value text built only from closed vocabularies,
+	// counts and Relay-minted Node IDs; the keys are documented in
+	// auditsink's intentReason.
+	KindDispatchIntent = "dispatch_intent"
+
 	// KindProtocolViolation is a relay-daemon reporting something the wire
 	// contract (/proto) does not permit — the refusal #632 added at the wire
 	// boundary, made queryable (#638). Distinct from KindDispatch because it
@@ -242,6 +256,7 @@ const (
 // it.
 var allKinds = []string{
 	KindDispatch,
+	KindDispatchIntent,
 	KindRefusal,
 	KindFreezeEngage,
 	KindFreezeRelease,
@@ -323,6 +338,7 @@ var authFailureKinds = []string{
 // is, which is the property the group needs and the suffix could not give.
 var notAnAuthFailureKinds = []string{
 	KindDispatch,
+	KindDispatchIntent,
 	KindRefusal,
 	KindFreezeEngage,
 	KindFreezeRelease,
@@ -484,6 +500,13 @@ type Repository interface {
 	// connection, and the whole call holds it.
 	AppendAll(ctx context.Context, rs []Record) error
 
+	// AppendWithTasks persists every task as Pending, exactly as
+	// jobs.TaskRepository.CreateTask would, and appends r to the hash chain,
+	// in ONE transaction: nil means all of it landed, an error means none of
+	// it did (#887). It is how a Job's dispatch_intent row commits with its
+	// Tasks, so a crash cannot leave a Task that was never recorded.
+	AppendWithTasks(ctx context.Context, r Record, tasks []jobs.Task) error
+
 	// List returns all Records, ordered by Timestamp, ties broken by ID.
 	List(ctx context.Context) ([]Record, error)
 
@@ -508,12 +531,14 @@ type Repository interface {
 	// ordered by Timestamp, ties broken by ID — including the park and the
 	// decision themselves, so
 	// one query answers "who asked, who approved, and what then ran". For a
-	// batch/window Grant's Request this is every dispatch the window released.
+	// batch/window Grant's Request this is every dispatch the window released,
+	// and each released Job's dispatch_intent row (#887).
 	ByApproval(ctx context.Context, approvalID string) ([]Record, error)
 
 	// ByGrant returns all Records released by a batch/window Grant, ordered by
-	// Timestamp, ties broken by ID. Narrower than ByApproval on the same Request: this is the
-	// dispatches only, which is what "what did that window actually do" means.
+	// Timestamp, ties broken by ID. Narrower than ByApproval on the same Request: this is
+	// the dispatch outcome rows and each released Job's dispatch_intent row (#887).
+	// Filter by kind for one or the other.
 	ByGrant(ctx context.Context, grantID string) ([]Record, error)
 
 	// ByOnBehalfOf returns all Records carrying an exact asserted OnBehalfOf

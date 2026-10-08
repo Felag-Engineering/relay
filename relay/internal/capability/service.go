@@ -408,6 +408,14 @@ func New(reg registry.Repository, opts ...Option) *Service {
 	// same sink.
 	if e, ok := s.disp.(*jobEngine); ok {
 		e.events = s.jobEvents
+		// Likewise the dispatch-intent recorder (#887): the AuditSink that
+		// records the Job's outcome is the one that can record its intent in
+		// the Tasks' transaction. Order-independent, like events.
+		if e.intents == nil {
+			if r, ok := s.audit.(IntentRecorder); ok {
+				e.intents = r
+			}
+		}
 	}
 	if s.realDispatcher {
 		if _, ok := s.authz.(allowAllAuthorizer); ok {
@@ -421,6 +429,9 @@ func New(reg registry.Repository, opts ...Option) *Service {
 		}
 		if _, ok := s.freeze.(noopFreezeStore); ok {
 			panic("capability: New: a real dispatcher (WithExecution) requires a real FreezeStore (WithFreeze); noopFreezeStore is never frozen, making the emergency stop unreachable")
+		}
+		if e, ok := s.disp.(*jobEngine); ok && e.intents == nil {
+			panic("capability: New: a real dispatcher (WithExecution) requires an AuditSink that records dispatch intent (IntentRecorder); without it Tasks cannot be persisted")
 		}
 	}
 	// WithQueries requires a real AuditSink (F5, #441 cycle-2 security
@@ -640,6 +651,7 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	d := newDispatch(p, sel, nodes, act)
 	d.excluded = ra.excluded
 	d.nodeClass = ra.nodeClass
+	d.approvalID, d.grantID = ap.requestID, ap.grantID
 
 	// A single-Plan approval's release is now CLAIMED before dispatch, not
 	// bound after it (AP-77). The join between the approval and the Job it

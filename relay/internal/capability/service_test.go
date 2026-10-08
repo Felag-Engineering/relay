@@ -391,7 +391,7 @@ func TestRunZeroMatchCreatesNoJob(t *testing.T) {
 		WithCapChecker(&spyCapChecker{}),
 		WithAuditSink(audit),
 		WithFreeze(&fakeFreezeStore{}),
-		WithExecution(jobsRepo, tasksRepo, conduit, WithExecNewID(sequentialIDs("id-"))),
+		testExecution(jobsRepo, tasksRepo, conduit, WithExecNewID(sequentialIDs("id-"))),
 	)
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "db"}}}

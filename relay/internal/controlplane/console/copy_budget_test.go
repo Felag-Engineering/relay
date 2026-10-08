@@ -136,6 +136,9 @@ var boundedClasses = map[string]string{
 	"span.gcount": "a Fleet group's Node count",
 	"span.gdev":   "a Fleet group header chip: a count and a state name",
 	"span.seen":   "Node detail header: liveness and last seen",
+	// A plain chip (no CSS of its own): which part of a finished Job's dispatch
+	// record the trail lacks (#887). Two branches, one ever shown.
+	"span.outcomeunk": "a Job's recording state chip: a state name, not a note",
 }
 
 // exemptClasses are not measured at all, keyed by "tag.class". denynote is

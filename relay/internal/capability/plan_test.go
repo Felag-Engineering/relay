@@ -25,7 +25,7 @@ func newPlanTestService(t *testing.T, reg registry.Repository, conduit *fakeCond
 		WithCapChecker(&spyCapChecker{}),
 		WithAuditSink(audit),
 		WithFreeze(freezeStore),
-		WithExecution(jobsRepo, tasksRepo, conduit, opts...),
+		testExecution(jobsRepo, tasksRepo, conduit, opts...),
 	)
 	return svc, audit, freezeStore
 }
@@ -217,7 +217,7 @@ func TestPlanOverCapReportsNotErrors(t *testing.T) {
 		WithCapChecker(NewBlastCap(100, 2)), // mutate-cap = 2, 5 Nodes matched
 		WithAuditSink(audit),
 		WithFreeze(&fakeFreezeStore{}),
-		WithExecution(jobsRepo, tasksRepo, conduit),
+		testExecution(jobsRepo, tasksRepo, conduit),
 	)
 
 	act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}}
@@ -266,7 +266,7 @@ func TestPlanFrozenReportsAdvisoryWhileRunRefuses(t *testing.T) {
 		WithCapChecker(&spyCapChecker{}),
 		WithAuditSink(audit),
 		WithFreeze(freezeStore),
-		WithExecution(jobsRepo, tasksRepo, conduit),
+		testExecution(jobsRepo, tasksRepo, conduit),
 	)
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
@@ -307,7 +307,7 @@ func TestPlanZeroMatchReportsNoNodesMatchedWhileRunRefuses(t *testing.T) {
 		WithCapChecker(&spyCapChecker{}),
 		WithAuditSink(audit),
 		WithFreeze(&fakeFreezeStore{}),
-		WithExecution(jobsRepo, tasksRepo, conduit, WithExecNewID(sequentialIDs("id-"))),
+		testExecution(jobsRepo, tasksRepo, conduit, WithExecNewID(sequentialIDs("id-"))),
 	)
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "db"}}}

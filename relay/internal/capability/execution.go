@@ -8,10 +8,13 @@
 //     over crypto/rand). A Task ID is therefore never generated twice: it
 //     exists exactly once, the moment it is minted, and is immediately
 //     written to the store.
-//   - The order is persist-then-dispatch: every Task for a Job is CreateTask'd
-//     (State = Pending) BEFORE any of them is dispatched. A crash between
-//     "generate Job/Tasks" and "start dispatching" leaves only Pending rows —
-//     never a Task that was sent but never recorded.
+//   - The order is persist-then-dispatch: every Task for a Job and the Job's
+//     dispatch_intent audit record commit in ONE transaction (#887,
+//     IntentRecorder) BEFORE any Task is dispatched. A failed commit leaves no
+//     Task, so there is nothing to dispatch or reconcile, and no retry path
+//     exists. A crash between "generate Job/Tasks" and "start dispatching"
+//     leaves only Pending rows — never a Task that was sent but never
+//     recorded.
 //   - Dispatch itself is persist-then-send: a Task is MarkDispatched in the
 //     store BEFORE jobEngine calls Conduit.Dispatch. A crash after
 //     MarkDispatched but before (or during) the send/result leaves the Task
@@ -230,6 +233,11 @@ type jobEngine struct {
 	// was used (service.go). Purely observational — see JobEventSink's doc
 	// comment.
 	events JobEventSink
+
+	// intents persists a Job's Tasks together with its dispatch-intent audit
+	// record (#887). Service.New propagates it from the AuditSink; run refuses
+	// to persist Tasks without one.
+	intents IntentRecorder
 }
 
 var _ dispatcher = (*jobEngine)(nil)
@@ -263,7 +271,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	// Stage/Tasks: the approval stays bound and every re-drive re-attaches
 	// to that empty Job until it expires, and the approved work never runs.
 	// So for a reserved id the WHOLE persist-then-dispatch pipeline —
-	// CreateJob, AddStage, every CreateTask, and every dispatchOne — runs on
+	// CreateJob, AddStage, the Tasks-and-intent commit, and every dispatchOne — runs on
 	// a context detached from the caller's own cancellation
 	// (context.WithoutCancel): once the claim commits, a client
 	// timeout/drop/cancel can neither strand the approval nor abandon the
@@ -282,7 +290,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	// in flight, a Job over a blast-cap-bounded node set (invariant 5) takes
 	// at most ceil(n/concurrency) times that cap, even on a ctx with no
 	// deadline of its own. The store calls above and below
-	// (CreateJob/AddStage/CreateTask/MarkDispatched/Resolve) are local
+	// (CreateJob/AddStage/the Tasks-and-intent commit/MarkDispatched/Resolve) are local
 	// SQLite calls already bounded by the driver's own busy_timeout
 	// (store.go's busyTimeoutMillis).
 	runCtx := ctx
@@ -318,13 +326,14 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 		return dispatchResult{}, fmt.Errorf("capability: add stage %q to job %q: %w", stageID, jobID, err)
 	}
 
-	// Persist ALL Pending Tasks before dispatching any of them: this is
-	// "one Task per matched Node, unique IDs, persisted before dispatch"
-	// (acceptance criterion 2), and leaves a clean Pending/Dispatched split
-	// on any mid-Job crash.
+	// Build ALL Pending Tasks here; they are committed together with the
+	// dispatch intent below, before any is dispatched: this is "one Task per
+	// matched Node, unique IDs, persisted before dispatch" (acceptance
+	// criterion 2), and leaves a clean Pending/Dispatched split on any
+	// mid-Job crash.
 	//
 	// A Node excluded from a Template dispatch (ADR-0042) gets a Task too,
-	// persisted the same way and then resolved unsupported without ever being
+	// built the same way and then resolved unsupported without ever being
 	// sent — so the Job records every matched Node, and get_job re-reads the
 	// exclusion exactly as it reads any other outcome. Excluded Tasks come
 	// FIRST, and are resolved before the concurrent dispatch phase starts: they
@@ -334,7 +343,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	// A dispatched Template Task is recorded under its own Node's reported
 	// class (d.nodeClass), which decides whether its output is retained.
 	pending := make([]pendingTask, 0, len(d.nodes)+len(d.excluded))
-	persist := func(n registry.Node, unsupported string) error {
+	stageTask := func(n registry.Node, unsupported string) error {
 		taskID, err := e.prefixedID("task-")
 		if err != nil {
 			return fmt.Errorf("capability: generate task id for node %q: %w", n.NodeID, err)
@@ -352,21 +361,43 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 			TimeoutSeconds: d.action.TimeoutSeconds,
 			CreatedAt:      e.now(),
 		}
-		if err := e.tasksRepo.CreateTask(runCtx, task); err != nil {
-			return fmt.Errorf("capability: create task %q for node %q: %w", taskID, n.NodeID, err)
-		}
 		pending = append(pending, pendingTask{task: task, outdated: n.Outdated, unsupported: unsupported})
 		return nil
 	}
 	for _, x := range d.excluded {
-		if err := persist(x.node, x.reason); err != nil {
+		if err := stageTask(x.node, x.reason); err != nil {
 			return dispatchResult{}, err
 		}
 	}
 	for _, n := range d.nodes {
-		if err := persist(n, ""); err != nil {
+		if err := stageTask(n, ""); err != nil {
 			return dispatchResult{}, err
 		}
+	}
+
+	// Every Task and the Job's dispatch-intent record commit in ONE
+	// transaction (#887), before any resolve: a failed commit leaves no Task,
+	// so there is nothing to dispatch or reconcile, and no retry path exists.
+	if e.intents == nil {
+		return dispatchResult{}, errors.New("capability: job engine has no IntentRecorder; refusing to persist Tasks without a dispatch intent record")
+	}
+	tasks := make([]jobs.Task, len(pending))
+	for i := range pending {
+		tasks[i] = pending[i].task
+	}
+	intent := AuditEntry{
+		Kind:       AuditKindDispatchIntent,
+		Principal:  d.principal,
+		Selector:   d.selector,
+		Action:     d.action,
+		JobID:      jobID,
+		ApprovalID: d.approvalID,
+		GrantID:    d.grantID,
+		Asserted:   AssertionsFromContext(runCtx),
+		CapCleared: len(d.nodes),
+	}
+	if err := e.intents.RecordIntent(runCtx, intent, tasks); err != nil {
+		return dispatchResult{}, fmt.Errorf("capability: record dispatch intent and tasks for job %q: %w", jobID, err)
 	}
 
 	// Each worker writes only its own index, so results come out in pending
@@ -746,7 +777,9 @@ func WithExecClock(f func() time.Time) ExecOption {
 // Per the contract on New (service.go), a Service configured with
 // WithExecution MUST also be configured with a real Authorizer, CapChecker,
 // and AuditSink (WithAuthorizer/WithCapChecker/WithAuditSink); New enforces
-// this at construction and panics otherwise, regardless of Option order.
+// this at construction and panics otherwise, regardless of Option order. That
+// AuditSink must also implement IntentRecorder (#887): the Job's Tasks are
+// persisted through it, in one transaction with its dispatch-intent record.
 func WithExecution(jr jobs.JobRepository, tr jobs.TaskRepository, c Conduit, opts ...ExecOption) Option {
 	if jr == nil || tr == nil || c == nil {
 		panic("capability: WithExecution: jobsRepo, tasksRepo, and conduit must not be nil")

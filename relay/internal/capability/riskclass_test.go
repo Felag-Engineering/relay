@@ -152,7 +152,7 @@ func TestPlan_NativeClassIsDerived(t *testing.T) {
 		WithCapChecker(capChecker),
 		WithAuditSink(&spyAuditSink{}),
 		WithFreeze(&fakeFreezeStore{}),
-		WithExecution(jobsRepo, tasksRepo, conduit),
+		testExecution(jobsRepo, tasksRepo, conduit),
 	)
 
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}

@@ -754,6 +754,11 @@ func (t *recordingTrail) Append(_ context.Context, r audit.Record) error {
 	return nil
 }
 
+// AppendWithTasks is unused by the Console read tests; it only satisfies audit.Repository.
+func (t *recordingTrail) AppendWithTasks(context.Context, audit.Record, []jobs.Task) error {
+	return errors.New("not supported by this fake")
+}
+
 // AppendAll mirrors sqliteAudit.AppendAll's all-or-nothing contract: on
 // appendErr, nothing in rs is kept, unlike Append above.
 func (t *recordingTrail) AppendAll(_ context.Context, rs []audit.Record) error {

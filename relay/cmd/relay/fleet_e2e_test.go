@@ -617,11 +617,7 @@ func TestFleetE2E_AuditAndRestartSurvival(t *testing.T) {
 	if len(auditBefore) == 0 {
 		t.Fatal("query_audit(job_id): no records found for a just-dispatched Job")
 	}
-	for _, rec := range auditBefore {
-		if rec["kind"] != "dispatch" {
-			t.Errorf("audit record kind = %v, want dispatch", rec["kind"])
-		}
-	}
+	assertIntentPlusOutcomes(t, "before restart", auditBefore, 1)
 
 	// Restart the Relay against the SAME store/addr/CA dir.
 	fr.restart(t, nil)
@@ -636,6 +632,28 @@ func TestFleetE2E_AuditAndRestartSurvival(t *testing.T) {
 	auditAfter := toMapSlice(auditAfterResp["audit"])
 	if len(auditAfter) != len(auditBefore) {
 		t.Errorf("query_audit after restart = %d record(s), want %d (same as before restart)", len(auditAfter), len(auditBefore))
+	}
+	assertIntentPlusOutcomes(t, "after restart", auditAfter, 1)
+}
+
+// assertIntentPlusOutcomes asserts recs are exactly one dispatch_intent record
+// (#887: the Job-level record that commits with its Tasks) plus outcomes
+// dispatch records (one per Node), and nothing else.
+func assertIntentPlusOutcomes(t *testing.T, when string, recs []map[string]any, outcomes int) {
+	t.Helper()
+	intents, dispatches := 0, 0
+	for _, rec := range recs {
+		switch rec["kind"] {
+		case "dispatch_intent":
+			intents++
+		case "dispatch":
+			dispatches++
+		default:
+			t.Errorf("%s: audit record kind = %v, want dispatch_intent or dispatch", when, rec["kind"])
+		}
+	}
+	if intents != 1 || dispatches != outcomes {
+		t.Errorf("%s: %d dispatch_intent and %d dispatch record(s), want 1 and %d", when, intents, dispatches, outcomes)
 	}
 }
 
@@ -725,5 +743,17 @@ func TestFleetE2E_CrashMidJobNeverDoubleRuns(t *testing.T) {
 	if !strings.Contains(stderr, dedupSignal) {
 		t.Errorf("reconciled Task stderr = %q, want it to contain %q (daemon dedup signal — proof the Task was NOT re-run)",
 			stderr, dedupSignal)
+	}
+
+	// The Relay was killed with -9 between dispatch and the outcome append:
+	// the intent row (committed with the Task) survived, and no outcome row
+	// was ever written for the Job (#887).
+	auditResp := fr.harness.call(t, map[string]any{"op": "query_audit", "job_id": jobID})
+	auditRecs := toMapSlice(auditResp["audit"])
+	assertIntentPlusOutcomes(t, "after the crash", auditRecs, 0)
+	for _, rec := range auditRecs {
+		if rec["kind"] == "dispatch_intent" && rec["selector"] != "relay:env=test" {
+			t.Errorf("dispatch_intent selector = %v, want relay:env=test", rec["selector"])
+		}
 	}
 }

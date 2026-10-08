@@ -92,7 +92,7 @@ func TestPreflightNeverConsultsTheApprovalGate(t *testing.T) {
 		WithFreeze(&fakeFreezeStore{}),
 		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
 		WithClock(func() time.Time { return apNow }),
-		WithExecution(jobsRepo, tasksRepo, conduit),
+		testExecution(jobsRepo, tasksRepo, conduit),
 	)
 
 	sel := webSelector()
@@ -166,7 +166,7 @@ func TestPlanPreflightNeverEmitsAQuestion(t *testing.T) {
 		WithFreeze(&fakeFreezeStore{}),
 		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
 		WithClock(func() time.Time { return apNow }),
-		WithExecution(jobsRepo, tasksRepo, conduit),
+		testExecution(jobsRepo, tasksRepo, conduit),
 	)
 
 	sel := webSelector()
@@ -295,7 +295,7 @@ func TestPreflightCarriesAnIllFormedArgumentValueToTheDaemon(t *testing.T) {
 		WithCapChecker(&spyCapChecker{}),
 		WithAuditSink(&spyAuditSink{}),
 		WithFreeze(&fakeFreezeStore{}),
-		WithExecution(jobsRepo, tasksRepo, conduit),
+		testExecution(jobsRepo, tasksRepo, conduit),
 	)
 
 	const illFormedPath = "/etc/../etc/shadow"

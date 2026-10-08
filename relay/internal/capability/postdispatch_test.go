@@ -178,7 +178,7 @@ func TestRun_ReservedDispatchIsAuditedAndBoundWhenTheClientDropsMidDispatch(t *t
 		WithAuditSink(auditSink), WithFreeze(&fakeFreezeStore{}),
 		WithApprovals(gateEverything(t, 1), approvalsRepo, &spyApprovalAuthorizer{}),
 		WithMCPTasks(tasks),
-		WithExecution(st.Jobs(), st.Tasks(), conduit),
+		testExecution(st.Jobs(), st.Tasks(), conduit),
 		WithClock(func() time.Time { return apNow }),
 	)
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}

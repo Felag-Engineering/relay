@@ -5,7 +5,36 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
+
+// TestOutcomeUnrecorded_CoversIntentOnlyAndPartialOnlyWhenComplete: the single
+// definition of "intent recorded, outcome unknown" (#887). Running + IntentOnly
+// is false by design: it documents the Running-forever case after a crash.
+func TestOutcomeUnrecorded_CoversIntentOnlyAndPartialOnlyWhenComplete(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		state     jobs.JobState
+		recording jobs.JobRecording
+		want      bool
+	}{
+		{"complete, none", jobs.JobStateComplete, jobs.JobRecordingNone, false},
+		{"complete, intent only", jobs.JobStateComplete, jobs.JobRecordingIntentOnly, true},
+		{"complete, partial", jobs.JobStateComplete, jobs.JobRecordingOutcomePartial, true},
+		{"complete, outcome", jobs.JobStateComplete, jobs.JobRecordingOutcome, false},
+		{"running, intent only", jobs.JobStateRunning, jobs.JobRecordingIntentOnly, false},
+		{"running, partial", jobs.JobStateRunning, jobs.JobRecordingOutcomePartial, false},
+		{"running, outcome", jobs.JobStateRunning, jobs.JobRecordingOutcome, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := JobSummary{State: tc.state, Recording: tc.recording}.OutcomeUnrecorded()
+			if got != tc.want {
+				t.Errorf("OutcomeUnrecorded() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
 
 // TestAuditFilter_Validate_OperationsCap is F2 (#441 cycle-2 security
 // review): Operations is capped exactly as Kinds is (32 entries x 64 bytes),

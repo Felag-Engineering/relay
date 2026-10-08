@@ -20,6 +20,12 @@ var _ jobs.TaskRepository = (*sqliteTasks)(nil)
 
 // CreateTask persists a new Task with State = jobs.DispatchStatePending.
 func (t *sqliteTasks) CreateTask(ctx context.Context, task jobs.Task) error {
+	return createTaskExec(ctx, t.db, task)
+}
+
+// createTaskExec is CreateTask's body over an execer, so AppendWithTasks can
+// insert a Job's Tasks inside its own transaction (#887).
+func createTaskExec(ctx context.Context, ex execer, task jobs.Task) error {
 	kindStr, err := actionKindToString(task.Action.Kind)
 	if err != nil {
 		return err
@@ -33,7 +39,7 @@ func (t *sqliteTasks) CreateTask(ctx context.Context, task jobs.Task) error {
 		return err
 	}
 
-	_, err = t.db.ExecContext(ctx, `
+	_, err = ex.ExecContext(ctx, `
 		INSERT INTO tasks (task_id, job_id, stage_id, node_id, action_kind, operation_name,
 			operation_args, raw_exec_argv, risk_class, timeout_seconds, state,
 			outcome, exit_code, stdout, stderr, created_at, dispatched_at, resolved_at)

@@ -693,7 +693,9 @@ var accountsTmpl = newScreen("accounts", `
 func isAgentCallKind(kind string) bool {
 	switch kindOf(kind) {
 	case rowDispatch, rowRead, rowRefusal, rowApproval, rowPlan, rowCancel:
-		return kind != audit.KindApprovalExpired
+		// The intent record is not a call: the last-tool-call read keeps
+		// reading the outcome row (#887).
+		return kind != audit.KindApprovalExpired && kind != audit.KindDispatchIntent
 	default:
 		return false
 	}

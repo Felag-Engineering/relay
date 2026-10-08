@@ -164,7 +164,7 @@ func kindOf(k string) rowKind {
 		return rowAccess
 	}
 	switch k {
-	case audit.KindDispatch:
+	case audit.KindDispatch, audit.KindDispatchIntent:
 		return rowDispatch
 	case audit.KindPlan:
 		return rowPlan
@@ -228,6 +228,8 @@ func kindsOfFamily(f rowKind) []string {
 //
 //   - dispatch — served Job-grained by QueryJobs. A dispatch record is
 //     per-Node, and four thousand of them are one row.
+//   - dispatch_intent — the Job-level intent record (#887), also served by
+//     QueryJobs: it is the Job row's Recording state, not a row of its own.
 //   - read — the trail's OWN read records, including the two this screen
 //     writes on every page view (capability's read lane records every query).
 //     Left out of the default feed so the screen does not fill with itself
@@ -235,7 +237,7 @@ func kindsOfFamily(f rowKind) []string {
 //
 // Both are ONE CLICK AWAY, reachable as their own family. activityAccessKinds
 // below is excluded too, but is not: see its own comment.
-var activityLaneExcluded = []string{audit.KindDispatch, audit.KindRead}
+var activityLaneExcluded = []string{audit.KindDispatch, audit.KindDispatchIntent, audit.KindRead}
 
 // activityAccessKinds is every kind Access (spec 20) owns — accessAllKinds
 // itself, named again here rather than re-derived so the two screens'
@@ -365,6 +367,12 @@ type activityRow struct {
 	// summary reads as running. Job detail gates its Cancel on Unresolved
 	// (job.go), which is what "offered exactly as Job detail's is" means.
 	Running bool
+	// OutcomeUnrecorded is a finished Job-lane row whose dispatch intent is on
+	// the trail with none, or only some, of its outcome rows (#887). The
+	// predicate is capability.JobSummary.OutcomeUnrecorded; this only renders
+	// it. OutcomePartial picks the wording: some outcome rows exist.
+	OutcomeUnrecorded bool
+	OutcomePartial    bool
 	// Resolved is Total minus Unresolved, drawn as "resolved of total" on a
 	// Running row.
 	Resolved int
@@ -1318,24 +1326,26 @@ func dispatchRowFromJob(sum capability.JobSummary) activityRow {
 		// The DECLARED class, from tasks.risk_class — never this package's
 		// name inference. A Template Operation the Console has never heard of
 		// is still classified by the catalog that dispatched it.
-		ReadClass:     sum.RiskClass == jobs.RiskClassRead,
-		Selector:      sum.Selector,
-		FanOut:        sum.Total,
-		InFlight:      sum.Unresolved,
-		Running:       sum.Unresolved > 0,
-		Resolved:      sum.Total - sum.Unresolved,
-		RawExecTier:   rawExecTier,
-		Outcomes:      barFrom(sum.Counts),
-		JobID:         sum.JobID,
-		JobHref:       "/console/jobs/" + sum.JobID,
-		Principal:     sum.Requester,
-		Verified:      sum.RequesterAccountID != "",
-		AccountID:     sum.RequesterAccountID,
-		Calls:         1,
-		RequesterKind: verifiedKind(sum.RequesterAccountID != "", sum.RequesterKind),
-		OnBehalfOf:    sum.OnBehalfOf,
-		ApprovalID:    sum.ApprovalID,
-		GrantID:       sum.GrantID,
+		ReadClass:         sum.RiskClass == jobs.RiskClassRead,
+		Selector:          sum.Selector,
+		FanOut:            sum.Total,
+		InFlight:          sum.Unresolved,
+		Running:           sum.Unresolved > 0,
+		OutcomeUnrecorded: sum.OutcomeUnrecorded(),
+		OutcomePartial:    sum.Recording == jobs.JobRecordingOutcomePartial,
+		Resolved:          sum.Total - sum.Unresolved,
+		RawExecTier:       rawExecTier,
+		Outcomes:          barFrom(sum.Counts),
+		JobID:             sum.JobID,
+		JobHref:           "/console/jobs/" + sum.JobID,
+		Principal:         sum.Requester,
+		Verified:          sum.RequesterAccountID != "",
+		AccountID:         sum.RequesterAccountID,
+		Calls:             1,
+		RequesterKind:     verifiedKind(sum.RequesterAccountID != "", sum.RequesterKind),
+		OnBehalfOf:        sum.OnBehalfOf,
+		ApprovalID:        sum.ApprovalID,
+		GrantID:           sum.GrantID,
 	}
 	if sum.RiskClass != jobs.RiskClassUnspecified {
 		row.Risk = jobs.RiskClassName(sum.RiskClass)
@@ -1772,6 +1782,7 @@ var activityTmpl = newScreen("activity", `
         {{with .Risk}}<span class="chip risk" data-risk="{{.}}">{{.}}</span>{{end}}
         {{if .State}}<span class="chip state" data-state="{{.State}}">{{.State}}</span>{{else}}{{with .Outcome}}<span class="chip outcome" data-outcome="{{.}}">{{.}}</span>{{end}}{{end}}
         {{if .Running}}<span class="chip" data-state="running" title="This Job has Tasks not yet resolved.">running</span>{{end}}
+        {{if .OutcomeUnrecorded}}{{if .OutcomePartial}}<span class="chip outcomeunk" data-state="outcome-unknown">outcome partly unknown</span>{{else}}<span class="chip outcomeunk" data-state="outcome-unknown">intent recorded · outcome unknown</span>{{end}}{{end}}
         {{if gt .Calls 1}}<span class="chip calls" title="Consecutive identical calls, collapsed for display. Each one is on the audit trail.">x{{.Calls}}</span>{{end}}
       </div>
       {{with .Args}}<div class="evargs mono">{{.}}</div>{{end}}

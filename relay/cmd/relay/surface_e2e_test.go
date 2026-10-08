@@ -778,13 +778,27 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		if len(jobRecords) == 0 {
 			t.Errorf("deps.audit.ByJob(%q): got 0 records, want at least 1 (every dispatch is audited, #102)", factsJobID)
 		}
+		dispatches, intents := 0, 0
 		for _, r := range jobRecords {
-			if r.Kind != audit.KindDispatch {
-				t.Errorf("audit record for JobID=%q has Kind=%q, want %q", factsJobID, r.Kind, audit.KindDispatch)
+			// One dispatch_intent per Job (#887) plus the per-Node outcome rows.
+			if r.Kind != audit.KindDispatch && r.Kind != audit.KindDispatchIntent {
+				t.Errorf("audit record for JobID=%q has Kind=%q, want %q or %q", factsJobID, r.Kind, audit.KindDispatch, audit.KindDispatchIntent)
+			}
+			if r.Kind == audit.KindDispatch {
+				dispatches++
+			}
+			if r.Kind == audit.KindDispatchIntent {
+				intents++
 			}
 			if r.Principal != wantPrincipal {
 				t.Errorf("audit record for JobID=%q has Principal=%q, want %q", factsJobID, r.Principal, wantPrincipal)
 			}
+		}
+		if dispatches == 0 {
+			t.Errorf("deps.audit.ByJob(%q): no %q outcome record among %d record(s)", factsJobID, audit.KindDispatch, len(jobRecords))
+		}
+		if intents != 1 {
+			t.Errorf("deps.audit.ByJob(%q): %d %q records, want exactly 1", factsJobID, intents, audit.KindDispatchIntent)
 		}
 	})
 }

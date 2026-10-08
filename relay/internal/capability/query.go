@@ -208,6 +208,26 @@ type JobSummary struct {
 	Total      int
 	Counts     map[jobs.Outcome]int
 	Unresolved int
+
+	// Recording is how much of the Job's dispatch audit record the trail holds
+	// (#887); see jobs.JobSummary.Recording. Read it through OutcomeUnrecorded.
+	Recording jobs.JobRecording
+}
+
+// OutcomeUnrecorded reports "intent recorded, outcome unknown": the Job is
+// finished, yet the trail holds its dispatch intent with none, or only some,
+// of its per-Node outcome rows. This is the single definition (invariant 10):
+// adapters render it and never decide it.
+//
+// A Job still Running is never reported, because Running already says the
+// outcome is pending. That leaves one case it cannot see: a crash before
+// dispatch reached every Task leaves Pending survivors, which ADR-0004 says
+// are never run, so the Job stays Running with Recording == IntentOnly and
+// this is false. The read lane still reports Recording; the store has no
+// restart epoch, so a surface cannot tell that Job from a live run.
+func (s JobSummary) OutcomeUnrecorded() bool {
+	return s.State == jobs.JobStateComplete &&
+		(s.Recording == jobs.JobRecordingIntentOnly || s.Recording == jobs.JobRecordingOutcomePartial)
 }
 
 // JobPage is one page of JobSummary, cursor-paginated in JobFilter.Order's

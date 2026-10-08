@@ -295,6 +295,12 @@ type jobView struct {
 	Created time.Time
 	State   string
 
+	// OutcomeUnrecorded and OutcomePartial render
+	// capability.JobSummary.OutcomeUnrecorded (#887): the Job's dispatch
+	// intent is on the trail with none, or only some, of its outcome rows.
+	OutcomeUnrecorded bool
+	OutcomePartial    bool
+
 	Operation string
 	// RawExecTier is set only from the recorded ActionKind through
 	// jobRowName, never from a name — the same rule as activityRow.
@@ -581,6 +587,9 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 		ID:      sum.JobID,
 		Created: sum.CreatedAt,
 		State:   jobStateText(sum.State),
+
+		OutcomeUnrecorded: sum.OutcomeUnrecorded(),
+		OutcomePartial:    sum.Recording == jobs.JobRecordingOutcomePartial,
 		// The DECLARED class, from tasks.risk_class — not this package's
 		// name-list inference. A Template Operation the Console has never
 		// heard of is still classified by the catalog that dispatched it.
@@ -656,13 +665,19 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 		v.ApprovalHref = "/console/approvals/" + v.ApprovalID
 	}
 
+	selectorNote := "the Selector is recorded in the audit trail when the dispatch completes"
+	if v.OutcomeUnrecorded {
+		// A finished Job whose outcome rows never landed: the note above
+		// would promise a record that is not coming.
+		selectorNote = "no dispatch outcome was recorded"
+	}
 	v.Plan = Plan{
 		Selector: sum.Selector,
 		// The Selector is not readable while the Job runs — it lives in the
 		// dispatch audit record, which is written after the dispatch returns.
 		// The slot holds this until then, so the block resolves rather than
 		// growing a line (foundations rule 6).
-		SelectorNote: "the Selector is recorded in the audit trail when the dispatch completes",
+		SelectorNote: selectorNote,
 		// Fixed at dispatch: every Task is created before the first one runs,
 		// so the fan-out does not move while the Job does.
 		Matched:   sum.Total,
@@ -1102,6 +1117,7 @@ var jobTmpl = newScreen("job", `
   <div class="jhrow">
     <span class="dim">job</span> <code>{{short .ID}}</code>
     <span class="chip" data-state="{{.State}}">{{.State}}</span>
+    {{if .OutcomeUnrecorded}}{{if .OutcomePartial}}<span class="chip outcomeunk" data-state="outcome-unknown">outcome partly unknown</span>{{else}}<span class="chip outcomeunk" data-state="outcome-unknown">intent recorded · outcome unknown</span>{{end}}{{end}}
     {{if .InFlight}}<span class="overcap">{{.InFlight}} still in flight</span>{{end}}
     <span class="dim">dispatched {{stamp .Created}}</span>
     {{with .Cancel}}{{template "job-cancel" .}}{{end}}

@@ -54,7 +54,7 @@ func newPreflightServiceWithCaches(t *testing.T, reg registry.Repository, condui
 		WithCapChecker(&spyCapChecker{}),
 		WithAuditSink(&spyAuditSink{}),
 		WithFreeze(&fakeFreezeStore{}),
-		WithExecution(jobsRepo, tasksRepo, conduit),
+		testExecution(jobsRepo, tasksRepo, conduit),
 		WithPolicyView(pv),
 		WithTemplateVocabulary(nv),
 	)

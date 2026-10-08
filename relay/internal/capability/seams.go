@@ -353,6 +353,14 @@ const (
 	// RevokeGrant writes — a revocation is not a Decision, so nobody answered
 	// a parked Job.
 	AuditKindApprovalDecided
+
+	// AuditKindDispatchIntent is a Job's dispatch intent (#887): Principal,
+	// Selector, Action, JobID, ApprovalID, GrantID and Asserted are set, plus
+	// CapCleared. It is recorded with the Job's Tasks in one transaction, by
+	// IntentRecorder.RecordIntent and never by AuditSink.Record, so it exists
+	// before any Task can be dispatched. Results and Reason are empty.
+	// Appended at the end so no existing AuditKind value moves.
+	AuditKindDispatchIntent
 )
 
 // ApprovalAnswer is the structured answer a Decision carries (#545). package
@@ -428,6 +436,18 @@ type AuditEntry struct {
 	// be forged into a channel the surface did not stamp.
 	ApprovalAnswer  ApprovalAnswer
 	DecisionChannel approval.Channel
+
+	// CapCleared is the number of Nodes the blast cap cleared for dispatch; set
+	// only on AuditKindDispatchIntent.
+	CapCleared int
+}
+
+// IntentRecorder persists a Job's Pending Tasks and its dispatch-intent audit
+// record in one transaction (#887): nil = both landed, error = neither.
+// Kept off AuditSink deliberately: a sink that cannot persist Tasks must not
+// be able to claim it can.
+type IntentRecorder interface {
+	RecordIntent(ctx context.Context, e AuditEntry, tasks []jobs.Task) error
 }
 
 // FreezeEvent is a Freeze engage/release, passed to AuditSink.RecordFreeze
