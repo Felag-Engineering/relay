@@ -24,6 +24,8 @@
 //! **Not yet wired**: this module provides a pure evaluation API. Task-dispatch
 //! wiring lands in a later v0.0.3 issue.
 
+#![cfg_attr(not(test), forbid(unsafe_code))]
+
 use std::fmt::Write as _;
 use std::io::Read;
 use std::path::Path;
@@ -32,9 +34,24 @@ use regex::Regex;
 use serde::Deserialize;
 
 use crate::hardened_open::{open_hardened, HardenedRejection};
-use crate::operations;
+use crate::natives as operations;
 
-pub(crate) mod decision_log;
+// Crate-private aliases so the `crate::x::...` paths in the moved files resolve
+// unchanged (#889).
+use crate as policy;
+pub(crate) use relay_log as log_field;
+pub(crate) use relay_proto as gen;
+#[cfg(test)]
+pub(crate) use relay_test_support as test_support;
+
+pub mod decision_log;
+pub mod hardened_open;
+pub mod natives;
+
+#[cfg(feature = "ban-probe")]
+#[allow(dead_code)]
+#[path = "../ban_probe.rs"]
+mod ban_probe;
 
 // ---------------------------------------------------------------------------
 // On-disk serde model
@@ -637,9 +654,8 @@ pub fn lint_with_vocabulary(
     );
     lint_raw_exec_allow_anchoring(&file.raw_exec.allow, &mut findings);
 
-    let known = |name: &str| {
-        operations::risk_class(name).is_some() || template_names.iter().any(|t| t == name)
-    };
+    let known =
+        |name: &str| operations::is_native(name) || template_names.iter().any(|t| t == name);
     let (severity, hint) = if vocabulary_complete {
         (
             LintSeverity::Error,
@@ -1411,7 +1427,7 @@ mod tests {
 
     // The fixture is the example policy file checked into the repo. Tests
     // use it directly so the documented examples stay honest.
-    const FIXTURE: &str = include_str!("../policy.example.toml");
+    const FIXTURE: &str = include_str!("../../../policy.example.toml");
 
     fn fixture_policy() -> Policy {
         from_toml_str(FIXTURE).expect("policy.example.toml must parse cleanly")
@@ -3654,7 +3670,7 @@ mod raw_exec_redteam {
 
         // service.restart is allowed only for nginx/php-fpm there, so any
         // other arg is a deny-by-default with `rule: None`.
-        let example = from_toml_str(include_str!("../policy.example.toml"))
+        let example = from_toml_str(include_str!("../../../policy.example.toml"))
             .expect("the example policy must parse");
         // An EMPTY Policy still emits the non-canonical-path reason: the
         // cheapest one to provoke.
@@ -3930,13 +3946,17 @@ mod raw_exec_redteam {
 // tests` or `mod raw_exec_redteam` above.
 // ---------------------------------------------------------------------------
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "test fixtures; the non-test lib target is linted separately"
+)]
 #[cfg(test)]
 mod loader_hardening_tests {
     use super::*;
 
     // The fixture is the example policy file checked into the repo (mirrors
     // `mod tests::FIXTURE`).
-    const FIXTURE: &str = include_str!("../policy.example.toml");
+    const FIXTURE: &str = include_str!("../../../policy.example.toml");
 
     // Unique temp path + forced-mode writer, shared with `mod tests::TempFile`
     // (mode set via both OpenOptions::mode and a post-hoc chmod to defeat the
@@ -4399,7 +4419,7 @@ mod default_policy_tests {
 
     /// The shipped default Policy file, included verbatim so the checked-in
     /// artifact is exactly what these tests validate.
-    const DEFAULT: &str = include_str!("../policy.default.toml");
+    const DEFAULT: &str = include_str!("../../../policy.default.toml");
 
     /// The full confidentiality deny-list ADR-0022 records, in canonical form
     /// (ADR-0018). `deny_list_mirrors_adr_0022_exactly` asserts the file

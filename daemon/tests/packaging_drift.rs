@@ -81,6 +81,31 @@ fn relay_names(text: &str) -> BTreeSet<String> {
     out
 }
 
+/// Every Rust source in the workspace: the bin's `src/` and each member's
+/// `crates/<member>/src/`, found by listing `crates/` so a new member is read
+/// without editing this test (#889).
+fn workspace_sources(root: &Path) -> Vec<PathBuf> {
+    let mut members: Vec<_> = std::fs::read_dir(root.join("crates"))
+        .expect("read crates dir")
+        .map(|e| e.expect("dir entry").path())
+        .filter(|p| p.is_dir())
+        .collect();
+    members.sort();
+    let mut roots = vec![root.join("src")];
+    roots.extend(members.into_iter().map(|m| m.join("src")));
+    let mut files = Vec::new();
+    for dir in &roots {
+        let before = files.len();
+        source_files(dir, &mut files);
+        assert!(
+            files.len() > before,
+            "{} holds no .rs file; the scan is broken",
+            dir.display()
+        );
+    }
+    files
+}
+
 fn source_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -109,8 +134,7 @@ fn env_example_covers_the_config_surface() {
     });
     let documented = relay_names(&sample);
 
-    let mut files = Vec::new();
-    source_files(&root.join("src"), &mut files);
+    let files = workspace_sources(&root);
     assert!(
         !files.is_empty(),
         "no Rust sources found — this test is scanning nothing"
@@ -135,7 +159,7 @@ fn env_example_covers_the_config_surface() {
 
     assert!(
         found_any,
-        "no RELAY_* names found in daemon/src — this test is scanning nothing"
+        "no RELAY_* names found in daemon/src and daemon/crates/*/src — this test is scanning nothing"
     );
 
     missing.sort();
@@ -157,8 +181,7 @@ fn env_example_covers_the_config_surface() {
 #[test]
 fn exemptions_are_real() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut files = Vec::new();
-    source_files(&root.join("src"), &mut files);
+    let files = workspace_sources(&root);
 
     let mut referenced = BTreeSet::new();
     for file in &files {
@@ -170,7 +193,7 @@ fn exemptions_are_real() {
     for (prefix, why) in exemptions() {
         assert!(
             referenced.iter().any(|name| name.starts_with(prefix)),
-            "exemptions() lists the prefix {prefix:?} ({why:?}) but nothing in daemon/src \
+            "exemptions() lists the prefix {prefix:?} ({why:?}) but nothing in daemon/src and daemon/crates/*/src \
              starts with it — a stale exemption is where the next real drift hides"
         );
     }

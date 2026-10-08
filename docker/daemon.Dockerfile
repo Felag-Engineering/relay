@@ -1,7 +1,8 @@
 # relay-daemon image for the local dev fleet (docs/dev-fleet.md). DEV-ONLY
 # packaging — not a production deployment artifact. Build context is the repo
-# root so the builder can see BOTH /daemon and /proto (build.rs compiles the
-# proto contract from ../proto relative to /daemon).
+# root so the builder can see BOTH /daemon and /proto (relay-proto's build.rs
+# compiles the proto contract from ../../../proto relative to
+# /src/daemon/crates/relay-proto).
 #
 # There is no host Rust toolchain assumption: the daemon is compiled inside this
 # image as a musl static binary, using the same target as the CI release-build
@@ -22,7 +23,7 @@
 # is the fix. CI always pulls fresh.
 FROM rust:1-bookworm AS build
 
-# musl-tools provides the musl linker; add the musl target. build.rs uses
+# musl-tools provides the musl linker; add the musl target. relay-proto's build.rs uses
 # protoc_bin_vendored, so NO system protoc is required.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends musl-tools \
@@ -30,14 +31,15 @@ RUN apt-get update \
     && rustup target add x86_64-unknown-linux-musl
 
 WORKDIR /src
-# /proto must be present for build.rs (it resolves ../proto from /src/daemon).
+# /proto must be present for relay-proto's build.rs (it resolves ../../../proto
+# from /src/daemon/crates/relay-proto).
 COPY proto/ ./proto/
 COPY daemon/ ./daemon/
 
 # Same profile and target as `make build-daemon-release`, but intentionally
 # UNSTAMPED (see the header): no RELAY_BUILD_* here, so this is a dev-fleet
 # binary, not a release artifact.
-RUN cd daemon && cargo build --release --target x86_64-unknown-linux-musl
+RUN cd daemon && cargo build --release --target x86_64-unknown-linux-musl -p relay-daemon
 
 # ---- final stage: minimal runtime image ---------------------------------------
 # busybox:stable-musl ships sh (for the entrypoint) + test (for the enrollment

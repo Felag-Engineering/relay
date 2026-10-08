@@ -26,20 +26,11 @@ pub mod template;
 use crate::gen::RiskClass;
 
 // ---------------------------------------------------------------------------
-// Name constants — single source of the vocabulary strings.
+// Name constants — re-exported from `relay_policy::natives`, the single source of
+// the vocabulary strings (Policy needs them too, and cannot depend on this crate).
 // ---------------------------------------------------------------------------
 
-/// Wire name for the `system.facts` Operation.
-pub const SYSTEM_FACTS: &str = "system.facts";
-
-/// Wire name for the `file.read` Operation.
-pub const FILE_READ: &str = "file.read";
-
-/// Wire name for the `service.restart` Operation.
-pub const SERVICE_RESTART: &str = "service.restart";
-
-/// Wire name for the `pkg.install` Operation.
-pub const PKG_INSTALL: &str = "pkg.install";
+pub use relay_policy::natives::{FILE_READ, PKG_INSTALL, SERVICE_RESTART, SYSTEM_FACTS};
 
 // ---------------------------------------------------------------------------
 // Vocabulary views over the registry ([`registry::REGISTRY`] — the single

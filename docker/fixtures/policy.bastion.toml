@@ -48,7 +48,7 @@ allowed_args = [["/etc/os-release"]]
 # The VERDICT here is unchanged whether or not this rule exists: `/etc/shadow`
 # sits outside the one `file.read` allow above, so deny-by-default would
 # refuse it anyway. But the deny pass runs FIRST on every call
-# (`daemon/src/policy.rs:1162`, `// --- 1. Deny pass (deny-beats-allow,
+# (`daemon/crates/relay-policy/src/lib.rs:1162`, `// --- 1. Deny pass (deny-beats-allow,
 # evaluated first) ---`, before the allow pass at `:1200`), so this rule IS
 # reached and evaluated on every `file.read` — and today it is what decides
 # `/etc/shadow`, changing the attributed deciding rule and the audited reason
@@ -61,7 +61,7 @@ name = "file.read"
 args = [["/etc/shadow"]]
 
 # No `service.restart` allow, no `svc.*` blocks, and no `[raw_exec]` section
-# at all. `daemon/src/policy.rs`'s `PolicyFile`/`RawExecRaw` default every
+# at all. `daemon/crates/relay-policy/src/lib.rs`'s `PolicyFile`/`RawExecRaw` default every
 # section to empty (`#[serde(default)]`), so an ABSENT `[raw_exec]` section is
 # deny-by-default for every raw command — the stronger and simpler statement
 # than an empty `allow = []`. This Node runs no demo service, has no repair
