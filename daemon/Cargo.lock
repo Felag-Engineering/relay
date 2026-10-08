@@ -1089,9 +1089,12 @@ dependencies = [
  "libc",
  "proptest",
  "prost",
- "protoc-bin-vendored",
  "rcgen",
  "regex",
+ "relay-log",
+ "relay-policy",
+ "relay-proto",
+ "relay-test-support",
  "ring",
  "rustix",
  "rustls",
@@ -1104,10 +1107,56 @@ dependencies = [
  "tokio-stream",
  "toml",
  "tonic",
- "tonic-build",
  "tracing",
  "tracing-subscriber",
  "x509-parser",
+]
+
+[[package]]
+name = "relay-log"
+version = "0.0.0"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "relay-policy"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "proptest",
+ "regex",
+ "relay-log",
+ "relay-proto",
+ "relay-test-support",
+ "ring",
+ "rustix",
+ "serde",
+ "thiserror",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "relay-proto"
+version = "0.0.0"
+dependencies = [
+ "prost",
+ "protoc-bin-vendored",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
+name = "relay-test-support"
+version = "0.0.0"
+dependencies = [
+ "relay-log",
+ "rustix",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

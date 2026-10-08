@@ -8,9 +8,9 @@
 # only consumer is the nightly `make fuzz-daemon` target wired into
 # .github/workflows/security-nightly.yml.
 #
-# Message types are generated at build time from /proto (the single source of
-# truth, ADR-0007) by this crate's own build.rs — never hand-copied and never
-# hand-edited.
+# Message types come from the daemon workspace's relay-proto crate, which
+# generates them once from /proto (the single source of truth, ADR-0007) — never
+# hand-copied and never hand-edited.
 [package]
 name = "relay-daemon-fuzz"
 version = "0.0.0"
@@ -26,12 +26,9 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 # Match the daemon's wire stack (daemon/Cargo.toml pins prost 0.13 via tonic 0.12).
 prost = "0.13"
-
-[build-dependencies]
-# prost-build alone (no tonic-build): the fuzz surface is message decoding,
-# not gRPC services, so service codegen is deliberately skipped.
-prost-build = "0.13"
-protoc-bin-vendored = "3"
+# The generated wire types. relay-proto declares tonic without `tls`, so no TLS
+# stack enters the fuzz build.
+relay-proto = { path = "../crates/relay-proto" }
 
 # Standalone workspace root. Keeps this nightly-only crate out of the parent
 # package's build graph so `make build`/`make test`/`make lint` stay stable-only.

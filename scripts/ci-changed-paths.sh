@@ -16,7 +16,7 @@
 #               and the Makefile's GOTOOLCHAIN), scripts/proto-tools-check.sh (both proto
 #               gates' prerequisite), or the CI machinery that runs the proto gates.
 #   deps=false  no dependency manifest or lockfile changed (relay/go.mod, relay/go.sum,
-#               daemon/Cargo.toml, daemon/Cargo.lock), nor either gate's exceptions
+#               daemon/Cargo.toml, daemon/crates/*/Cargo.toml, daemon/Cargo.lock), nor either gate's exceptions
 #               (daemon/deny.toml, relay/govulncheck-exceptions.txt, scripts/vuln-gate.sh),
 #               nor the Makefile that pins the scanners, nor the CI machinery. Gates
 #               the PR-time advisory scans (govulncheck, cargo-deny advisories): an advisory
@@ -74,7 +74,8 @@ while IFS= read -r f; do
       proto=true ;;
   esac
   case "$f" in
-    relay/go.mod | relay/go.sum | daemon/Cargo.toml | daemon/Cargo.lock | daemon/deny.toml \
+    relay/go.mod | relay/go.sum | daemon/Cargo.toml | daemon/crates/*/Cargo.toml \
+      | daemon/Cargo.lock | daemon/deny.toml \
       | relay/govulncheck-exceptions.txt | scripts/vuln-gate.sh \
       | Makefile | .github/workflows/ci.yml | .github/actions/* | scripts/ci-changed-paths.sh)
       deps=true ;;

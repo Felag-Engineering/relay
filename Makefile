@@ -41,7 +41,7 @@ endif
 .PHONY: build test lint proto proto-tools proto-tools-check proto-check proto-breaking \
         build-relay build-daemon \
         test-relay test-relay-race test-daemon test-strict-umask test-strict-umask-relay \
-        test-strict-umask-daemon lint-relay lint-daemon lint-tools tools \
+        test-strict-umask-daemon lint-relay lint-daemon check-daemon-bans lint-tools tools \
         clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release print-release-daemon-bin \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
@@ -82,7 +82,7 @@ endif
 # rather than claiming a full pass (the skip ledger, below). The same holds for the
 # CI-hardening gates' tools (shellcheck, actionlint, zizmor, gitleaks, cargo-deny):
 # under verify a missing one is a recorded skip; run on its own, it is a failure.
-verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
+verify: fmt lint-relay lint-daemon check-daemon-bans lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
         apiclient-check verify-proto docs-check test-security-surface \
         test-codex-review test-proto-tools-check test-ci-changed-paths \
@@ -222,7 +222,7 @@ lint: fmt-relay lint-relay lint-daemon
 ## --- proto codegen ---
 # Go types are generated (via buf) into relay/internal/relay/v1/ and committed.
 # CI runs make proto-tools then make proto for the proto-drift check; Rust types are
-# generated at cargo-build time by daemon/build.rs (tonic-build), so there is no
+# generated at cargo-build time by daemon/crates/relay-proto/build.rs (tonic-build), so there is no
 # Rust step here.  The Go generators are `tool` directives in relay/go.mod; only buf needs
 # `make proto-tools` before regenerating locally.
 proto: proto-tools-check
@@ -423,7 +423,7 @@ fmt-relay:
 	test -z "$$unformatted" || { printf '%s\n' "$$unformatted" >&2; exit 1; }
 
 fmt-daemon:
-	cd daemon && cargo fmt --check
+	cd daemon && cargo fmt --all --check
 
 fmt: fmt-relay fmt-daemon
 
@@ -538,8 +538,26 @@ test-integration: build
 
 # Depends on fmt-daemon rather than repeating it, so `verify` (which also pulls in
 # fmt) checks Rust formatting once. CI's daemon job relies on this target for it.
+#
+# Linted twice: clippy sees one configuration at a time, and the shipped one (release, no
+# cfg(test)) is not the debug test build, so code gated on `debug_assertions` would escape the
+# write ban (#889). tests/clippy_write_ban.rs also refuses non-allowlisted cfg predicates in the
+# read-only crates. The third run lints the musl release configuration, the one that ships
+# (it needs the target's std, not musl-tools; `rustup target add x86_64-unknown-linux-musl`).
 lint-daemon: fmt-daemon
-	cd daemon && cargo clippy --all-targets -- -D warnings
+	cd daemon && cargo clippy --workspace --all-targets -- -D warnings
+	cd daemon && cargo clippy --workspace --lib --release -- -D warnings
+	cd daemon && cargo clippy --workspace --lib --release --target x86_64-unknown-linux-musl -- -D warnings
+
+# Proves every disallowed-methods entry in a read-only crate's clippy.toml fires, by linting
+# each crate's ban_probe.rs (compiled only under its `ban-probe` feature) and requiring a hit
+# on exactly the probe lines. lint-daemon is the negative control: it builds without the
+# feature and must pass. See scripts/clippy-ban-probe.sh (#889).
+check-daemon-bans:
+	$(call need_tool,jq,check-daemon-bans,apt install jq)
+	@if command -v jq >/dev/null 2>&1; then \
+		bash scripts/clippy-ban-probe.sh; \
+	fi
 
 ## --- opschema golden (ADR-0015: daemon is the single source of truth for what
 ## it enforces) ---
@@ -695,12 +713,12 @@ secrets-scan-history:
 	$(call need_tool,gitleaks,secrets-scan-history,make lint-tools)
 	gitleaks git . --config .gitleaks.toml --redact --no-banner
 
-# cargo-deny's offline policy for the root daemon (daemon/deny.toml): licences, banned crates
+# cargo-deny's offline policy for the daemon workspace (daemon/deny.toml): licences, banned crates
 # (a second crypto stack), and allowed sources. Runs on every daemon change.
 deny-daemon:
 	$(call need_tool,cargo-deny,deny-daemon,make deny-tool)
 	@if command -v cargo-deny >/dev/null 2>&1; then \
-		cd daemon && cargo deny --locked check bans licenses sources; \
+		cd daemon && cargo deny --workspace --locked check bans licenses sources; \
 	fi
 
 # Known advisories against the daemon's dependency tree. Network (the RustSec database), so
@@ -708,7 +726,7 @@ deny-daemon:
 # the nightly `cargo audit` covers the rest.
 deny-daemon-advisories:
 	$(call need_tool,cargo-deny,deny-daemon-advisories,make deny-tool)
-	cd daemon && cargo deny --locked check advisories
+	cd daemon && cargo deny --workspace --locked check advisories
 
 deny-tool:
 	cargo install cargo-deny --version $(CARGO_DENY_VERSION) --locked
@@ -751,8 +769,8 @@ fuzz-relay:
 #  `cargo install cargo-fuzz --version 0.13.2 --locked`).
 # That is exactly why this target is wired ONLY into security-nightly.yml and
 # must never be pulled into per-PR CI (ci.yml stays stable-only); the fuzz
-# crate itself (daemon/fuzz) is a standalone workspace root, so the stable
-# build/test/lint targets above never compile it.
+# crate itself (daemon/fuzz) is a standalone workspace root, excluded from daemon/'s
+# workspace, so the stable build/test/lint targets above never compile it.
 #
 # Bounds (documented per #238's DoD): -max_total_time caps wall-clock per
 # target, -rss_limit_mb turns runaway allocation into a reported OOM crash,

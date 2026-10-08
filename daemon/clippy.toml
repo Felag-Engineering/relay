@@ -1,5 +1,5 @@
 # Clippy configuration for relay-daemon; the lints that read it are enabled in
-# Cargo.toml's [lints.clippy]. No `msrv` here on purpose: clippy then reads
+# Cargo.toml's [workspace.lints.clippy]. No `msrv` here on purpose: clippy then reads
 # Cargo.toml's rust-version, which stays the single place the floor is named.
 
 # Invariant 1: arguments can never change which command runs. The mechanism is that
