@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
@@ -30,24 +31,27 @@ func counterID(prefix string) func() (string, error) {
 
 // probeConduit is a capability.Conduit whose Connected method runs probe
 // exactly once — on the FIRST call — then always reports the Node
-// connected. dispatchOne calls Connected as its first step for each Task,
-// after every Task in the Job has been persisted Pending and before any is
-// MarkDispatched, so the first call is the earliest point at which the
-// probe can observe (and, here, cancel) a Job with every Task still
-// Pending.
+// connected. Every Task is persisted Pending before any dispatch worker
+// starts, and a worker calls Connected before MarkDispatched; mu, held across
+// the whole probe, keeps every other worker out of Connected until the probe
+// (including its CancelJob) has finished, so no Task can leave Pending while
+// the probe observes it — whatever the dispatch concurrency.
 //
-// The probe runs from inside svc.Run, on the same goroutine driving the
-// test, so it must never call t.Fatal (or anything else that calls
-// FailNow): that would abandon svc.Run mid-call rather than simply failing
-// the test. Failures are collected into probeErrs and asserted after Run
-// returns.
+// The probe runs on a dispatch worker goroutine inside svc.Run, so it must
+// never call t.Fatal (or anything else that calls FailNow): FailNow must
+// never be called off the test goroutine. Failures are collected into
+// probeErrs and asserted after Run returns.
 type probeConduit struct {
-	probe         func()
+	probe func()
+
+	mu            sync.Mutex
 	probed        bool
 	dispatchCalls int
 }
 
 func (c *probeConduit) Connected(string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.probed {
 		c.probed = true
 		c.probe()
@@ -56,8 +60,22 @@ func (c *probeConduit) Connected(string) bool {
 }
 
 func (c *probeConduit) Dispatch(context.Context, string, jobs.Task) (jobs.Result, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.dispatchCalls++
 	return jobs.Result{Outcome: jobs.OutcomeSuccess}, nil
+}
+
+func (c *probeConduit) wasProbed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.probed
+}
+
+func (c *probeConduit) dispatches() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.dispatchCalls
 }
 
 func (c *probeConduit) Cancel(context.Context, string, string) error { return nil }
@@ -201,13 +219,13 @@ func TestRun_RequesterIsReadableAndEnforcedWhileEveryTaskIsPending(t *testing.T)
 
 	results, err := svc.Run(ctx, requester, sel, act)
 	// Cancelled-before-dispatch is not a dispatch failure: dispatchOne's
-	// ErrInvalidTaskState branch honours the cancel rather than reporting it
+	// cancelled-Job path honours the cancel rather than reporting it
 	// as an error.
 	if err != nil {
 		t.Errorf("Run: %v, want nil", err)
 	}
 
-	if !conduit.probed {
+	if !conduit.wasProbed() {
 		t.Fatal("probe never ran — Connected was never called")
 	}
 	for _, msg := range probeErrs {
@@ -222,7 +240,7 @@ func TestRun_RequesterIsReadableAndEnforcedWhileEveryTaskIsPending(t *testing.T)
 			t.Errorf("result for %s: Outcome = %v, want OutcomeCancelled", r.NodeID, r.Outcome)
 		}
 	}
-	if conduit.dispatchCalls != 0 {
-		t.Errorf("Dispatch was called %d times, want 0 — both Tasks were cancelled before dispatchOne could send them", conduit.dispatchCalls)
+	if n := conduit.dispatches(); n != 0 {
+		t.Errorf("Dispatch was called %d times, want 0 — both Tasks were cancelled before dispatchOne could send them", n)
 	}
 }

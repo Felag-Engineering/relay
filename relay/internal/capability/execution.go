@@ -17,6 +17,10 @@
 //     MarkDispatched but before (or during) the send/result leaves the Task
 //     Dispatched with no Result — exactly TaskRepository.InFlight()'s
 //     definition.
+//   - Dispatch is concurrent (bounded per Job, WithExecDispatchConcurrency),
+//     but persist-then-dispatch and persist-then-send still hold per Task:
+//     every Task is Pending before any dispatch goroutine starts, and each
+//     goroutine does MarkDispatched before Conduit.Dispatch.
 //   - On restart, the Relay reconciles via TaskRepository.InFlight(): those
 //     Tasks may be safely re-sent-for-result because the relay-daemon dedups
 //     Task execution by Task ID (ADR-0004) — resend is safe ONLY because of
@@ -41,7 +45,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -108,6 +115,90 @@ func requesterOf(p Principal) jobs.Requester {
 	return req
 }
 
+// DefaultDispatchConcurrency is the default bound on how many Tasks of ONE Job
+// are in flight at once (#886). It bounds reach (invariant 11) and is
+// startup-only. It is not the blast cap: the cap bounds how many Nodes a Job
+// may touch (invariant 5); this bounds how many it touches at the same time.
+const DefaultDispatchConcurrency = 16
+
+// jobGate is the per-Job cancel gate. Holding mu across "is it cancelled? then
+// MarkDispatched" makes "no Task is dispatched after the cancel is recorded"
+// structural rather than a matter of timing.
+type jobGate struct {
+	mu        sync.Mutex
+	cancelled bool
+}
+
+// isCancelled reports whether the Job's cancel has been recorded. A nil gate
+// is ungated and never cancelled.
+func (g *jobGate) isCancelled() bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.cancelled
+}
+
+func (g *jobGate) markCancelled() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.cancelled = true
+}
+
+// admit runs mark (a MarkDispatched closure) under the gate lock, and only if
+// the Job is not cancelled; otherwise it returns (false, nil) without calling
+// mark. A nil gate calls mark unconditionally.
+func (g *jobGate) admit(mark func() error) (admitted bool, err error) {
+	if g == nil {
+		return true, mark()
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.cancelled {
+		return false, nil
+	}
+	return true, mark()
+}
+
+// openGate registers the cancel gate for a Job running in this process and
+// returns it with a release func. It panics on a duplicate Job ID: a second
+// run for one ID would silently overwrite the first gate and reopen the cancel
+// gap, which is a composition bug, not a runtime condition.
+func (e *jobEngine) openGate(jobID string) (*jobGate, func()) {
+	e.gatesMu.Lock()
+	defer e.gatesMu.Unlock()
+	if e.gates == nil {
+		e.gates = make(map[string]*jobGate)
+	}
+	if _, dup := e.gates[jobID]; dup {
+		panic(fmt.Sprintf("capability: jobEngine.run: Job %q is already running in this process", jobID))
+	}
+	g := &jobGate{}
+	e.gates[jobID] = g
+	return g, func() {
+		e.gatesMu.Lock()
+		defer e.gatesMu.Unlock()
+		delete(e.gates, jobID)
+	}
+}
+
+// gateFor returns the gate of a Job running in this process, or nil.
+func (e *jobEngine) gateFor(jobID string) *jobGate {
+	e.gatesMu.Lock()
+	defer e.gatesMu.Unlock()
+	return e.gates[jobID]
+}
+
+// dispatchLimit is the per-Job in-flight bound. The fallback to 1 exists only
+// for &jobEngine{} literals in white-box tests; WithExecution refuses < 1.
+func (e *jobEngine) dispatchLimit() int {
+	if e.concurrency < 1 {
+		return 1
+	}
+	return e.concurrency
+}
+
 // jobEngine is the real Job engine: it implements the unexported dispatcher
 // interface (dispatch.go) and is reachable only through Service.Run, never
 // directly by a foreign package. It fans a resolved dispatch out to one
@@ -119,6 +210,13 @@ type jobEngine struct {
 	conduit   Conduit
 	newID     idGen
 	now       func() time.Time
+
+	// concurrency is the per-Job in-flight bound; WithExecution guarantees >= 1.
+	concurrency int
+
+	// gates holds the cancel gate of every Job running in THIS process.
+	gatesMu sync.Mutex
+	gates   map[string]*jobGate
 
 	// events is the event seam's Job-grained publisher (#416). Defaulted to
 	// noopJobEventSink by WithExecution so a directly-constructed engine is
@@ -174,9 +272,10 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	// per-Task wall-clock cap (daemon/src/dispatch.rs's MAX_TIMEOUT, 300s,
 	// ADR-0004) — the daemon always answers within it, and a Node that
 	// disconnects mid-wait unblocks Dispatch immediately (the waiter
-	// channel close in dispatch/router.go) — so looping over a
-	// blast-cap-bounded node set (invariant 5) finishes in bounded time even
-	// on a ctx with no deadline of its own. The store calls above and below
+	// channel close in dispatch/router.go). With at most `concurrency` Tasks
+	// in flight, a Job over a blast-cap-bounded node set (invariant 5) takes
+	// at most ceil(n/concurrency) times that cap, even on a ctx with no
+	// deadline of its own. The store calls above and below
 	// (CreateJob/AddStage/CreateTask/MarkDispatched/Resolve) are local
 	// SQLite calls already bounded by the driver's own busy_timeout
 	// (store.go's busyTimeoutMillis).
@@ -184,6 +283,12 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	if reserved {
 		runCtx = context.WithoutCancel(ctx)
 	}
+
+	// The gate exists before any Task does, so a cancel can never find a
+	// persisted Task whose Job has no gate.
+	gate, release := e.openGate(jobID)
+	defer release()
+
 	if err := e.jobsRepo.CreateJob(runCtx, jobs.Job{ID: jobID, CreatedAt: e.now(), Requester: requesterOf(d.principal)}); err != nil {
 		return dispatchResult{}, fmt.Errorf("capability: create job %q: %w", jobID, err)
 	}
@@ -216,7 +321,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	// persisted the same way and then resolved unsupported without ever being
 	// sent — so the Job records every matched Node, and get_job re-reads the
 	// exclusion exactly as it reads any other outcome. Excluded Tasks come
-	// FIRST, so they are resolved before any real Task is dispatched: they
+	// FIRST, and are resolved before the concurrent dispatch phase starts: they
 	// never sit Pending behind a slow fan-out where a concurrent cancel or a
 	// crash could leave them stranded.
 	//
@@ -258,14 +363,14 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 		}
 	}
 
-	results := make([]NodeResult, 0, len(pending))
-	var errs []error
-	for _, pt := range pending {
-		res, err := e.dispatchOne(runCtx, pt)
-		if err != nil {
-			errs = append(errs, err)
-		}
-		results = append(results, NodeResult{
+	// Each worker writes only its own index, so results come out in pending
+	// order (excluded first, then d.nodes) and need no lock.
+	results := make([]NodeResult, len(pending))
+	errs := make([]error, len(pending))
+	resolve := func(i int, pt pendingTask) {
+		res, err := e.dispatchOne(runCtx, gate, pt)
+		errs[i] = err
+		results[i] = NodeResult{
 			NodeID:    pt.task.NodeID,
 			Outcome:   res.Outcome,
 			JobID:     jobID,
@@ -273,8 +378,28 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 			Stderr:    res.Stderr,
 			Truncated: res.Truncated,
 			RiskClass: pt.task.Action.RiskClass,
+		}
+	}
+	// Excluded Tasks are resolved synchronously, before any real Task is
+	// dispatched.
+	for i, pt := range pending {
+		if pt.unsupported != "" {
+			resolve(i, pt)
+		}
+	}
+	// Not errgroup.WithContext: one Task's error must never cancel its siblings.
+	var g errgroup.Group
+	g.SetLimit(e.dispatchLimit())
+	for i, pt := range pending {
+		if pt.unsupported != "" {
+			continue
+		}
+		g.Go(func() error {
+			resolve(i, pt)
+			return nil
 		})
 	}
+	_ = g.Wait() // workers always return nil; errors are collected per index
 
 	// Tally ONLY r.Outcome — never r.Stdout/r.Stderr. This is the second
 	// place (alongside internal/events itself) the no-read-output property
@@ -340,27 +465,46 @@ type pendingTask struct {
 // check (Service.Run) — outdated Nodes still matched the Selector and still
 // count against the cap (invariant #5); only the send is refused.
 //
+// gate is the Job's cancel gate (nil means ungated). Once the Job's cancel is
+// recorded, no Task is MarkDispatched: MarkDispatched runs under the gate lock
+// and only if the Job is not cancelled. Because of the early cancelled check, a
+// cancelled Job's outdated or offline Node reports Cancelled rather than
+// VersionRefused or Unreachable — deliberate, and what a pre-dispatch
+// MarkCancelled already produced under sequential dispatch.
+//
 // run persists every Task Pending before dispatching any of them, so a
 // concurrent CancelJob (ADR-0013) can legitimately MarkCancelled a Task
-// that is still Pending in this loop by the time dispatchOne reaches it;
-// MarkDispatched then returns ErrInvalidTaskState. That is not a failure —
-// the Task already reached a terminal, truthful outcome (Resolved,
+// that is still Pending while its Job's other Tasks are being dispatched;
+// the state transition then returns ErrInvalidTaskState. That is not a
+// failure — the Task already reached a terminal, truthful outcome (Resolved,
 // OutcomeCancelled) — so dispatchOne honors it rather than dispatching an
 // already-cancelled Task or fabricating OutcomeFailure over a real cancel.
-func (e *jobEngine) dispatchOne(ctx context.Context, pt pendingTask) (jobs.Result, error) {
+func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTask) (jobs.Result, error) {
 	task := pt.task
 
 	// Excluded from a Template dispatch before the cap was ever counted
 	// (ADR-0042): never sent, whatever its version or connectivity.
 	if pt.unsupported != "" {
 		if err := e.tasksRepo.MarkUnsupported(ctx, task.ID, pt.unsupported, e.now()); err != nil {
+			if res, ok := e.resolvedByCancel(ctx, task.ID, err); ok {
+				return res, nil
+			}
 			return jobs.Result{Outcome: jobs.OutcomeUnsupported}, fmt.Errorf("capability: mark task %q unsupported: %w", task.ID, err)
 		}
 		return jobs.Result{Outcome: jobs.OutcomeUnsupported, Stderr: []byte(pt.unsupported)}, nil
 	}
 
+	// Stops queued Tasks from running the version and connectivity checks
+	// after a cancel.
+	if gate.isCancelled() {
+		return e.resolveCancelled(ctx, task)
+	}
+
 	if pt.outdated {
 		if err := e.tasksRepo.MarkVersionRefused(ctx, task.ID, e.now()); err != nil {
+			if res, ok := e.resolvedByCancel(ctx, task.ID, err); ok {
+				return res, nil
+			}
 			return jobs.Result{Outcome: jobs.OutcomeVersionRefused}, fmt.Errorf("capability: mark task %q version-refused: %w", task.ID, err)
 		}
 		return jobs.Result{Outcome: jobs.OutcomeVersionRefused, Stderr: []byte(jobs.VersionRefusedMessage)}, nil
@@ -368,21 +512,28 @@ func (e *jobEngine) dispatchOne(ctx context.Context, pt pendingTask) (jobs.Resul
 
 	if !e.conduit.Connected(task.NodeID) {
 		if err := e.tasksRepo.MarkUnreachable(ctx, task.ID, e.now()); err != nil {
+			if res, ok := e.resolvedByCancel(ctx, task.ID, err); ok {
+				return res, nil
+			}
 			return jobs.Result{Outcome: jobs.OutcomeUnreachable}, fmt.Errorf("capability: mark task %q unreachable: %w", task.ID, err)
 		}
 		return jobs.Result{Outcome: jobs.OutcomeUnreachable}, nil
 	}
 
-	if err := e.tasksRepo.MarkDispatched(ctx, task.ID, e.now()); err != nil {
-		if errors.Is(err, jobs.ErrInvalidTaskState) {
-			// A concurrent CancelJob may have MarkCancelled this Task while it
-			// was still Pending, between run's persist loop and this call. If
-			// so, the Task already carries a terminal, truthful outcome —
-			// honor it rather than fabricating OutcomeFailure or dispatching a
-			// Task the caller already asked to stop.
-			if cur, getErr := e.tasksRepo.Get(ctx, task.ID); getErr == nil && cur.State == jobs.DispatchStateResolved {
-				return jobs.Result{Outcome: cur.Outcome, Stdout: cur.Stdout, Stderr: cur.Stderr}, nil
-			}
+	admitted, err := gate.admit(func() error {
+		return e.tasksRepo.MarkDispatched(ctx, task.ID, e.now())
+	})
+	if !admitted {
+		// The Job was cancelled first; this Task was never sent.
+		return e.resolveCancelled(ctx, task)
+	}
+	if err != nil {
+		// A concurrent CancelJob may have MarkCancelled this Task while it
+		// was still Pending. If so, the Task already carries a terminal,
+		// truthful outcome — honor it rather than fabricating OutcomeFailure
+		// or dispatching a Task the caller already asked to stop.
+		if res, ok := e.resolvedByCancel(ctx, task.ID, err); ok {
+			return res, nil
 		}
 		return jobs.Result{Outcome: jobs.OutcomeFailure}, fmt.Errorf("capability: mark task %q dispatched: %w", task.ID, err)
 	}
@@ -401,6 +552,33 @@ func (e *jobEngine) dispatchOne(ctx context.Context, pt pendingTask) (jobs.Resul
 	return result, nil
 }
 
+// resolvedByCancel reports the truthful outcome of a Task that another party
+// already resolved, when err is the ErrInvalidTaskState a lost transition
+// race produces.
+func (e *jobEngine) resolvedByCancel(ctx context.Context, taskID string, err error) (jobs.Result, bool) {
+	if !errors.Is(err, jobs.ErrInvalidTaskState) {
+		return jobs.Result{}, false
+	}
+	cur, getErr := e.tasksRepo.Get(ctx, taskID)
+	if getErr != nil || cur.State != jobs.DispatchStateResolved {
+		return jobs.Result{}, false
+	}
+	return jobs.Result{Outcome: cur.Outcome, Stdout: cur.Stdout, Stderr: cur.Stderr}, true
+}
+
+// resolveCancelled resolves a never-sent Task of a cancelled Job as Cancelled.
+// If cancel() already resolved it, that truthful outcome is returned instead.
+func (e *jobEngine) resolveCancelled(ctx context.Context, task jobs.Task) (jobs.Result, error) {
+	err := e.tasksRepo.MarkCancelled(ctx, task.ID, e.now())
+	if err == nil {
+		return jobs.Result{Outcome: jobs.OutcomeCancelled}, nil
+	}
+	if res, ok := e.resolvedByCancel(ctx, task.ID, err); ok {
+		return res, nil
+	}
+	return jobs.Result{Outcome: jobs.OutcomeCancelled}, fmt.Errorf("capability: mark task %q cancelled: %w", task.ID, err)
+}
+
 // cancel implements dispatcher (#101, ADR-0013): it stops jobID's Tasks by
 // their current dispatch state — Pending Tasks are MarkCancelled without
 // ever being sent, Dispatched Tasks are asked to cancel over their Tunnels
@@ -411,19 +589,25 @@ func (e *jobEngine) dispatchOne(ctx context.Context, pt pendingTask) (jobs.Resul
 // short-circuited, so one failing Task does not stop the rest from being
 // cancelled.
 //
-// Best-effort race gap (deliberate, per ADR-0013's cancel contract — do not
-// try to close it): a Task that transitions Pending -> Dispatched in the
-// window between the ByJob read below and the MarkCancelled attempt is
-// neither cancelled here (the MarkCancelled call fails with
-// ErrInvalidTaskState, joined into the returned error) nor sent
-// Conduit.Cancel (the loop only cancels what it read as Dispatched) — it
-// runs to completion uncancelled. This is unreachable today (no real
-// concurrent dispatcher is wired in this milestone), but whoever wires one
-// in a later issue must know: cancel only ever *asks*, it never fabricates a
-// cancelled outcome for a Task that won the race.
+// Recording the cancel on the Job's in-process gate happens BEFORE the ByJob
+// read. After that point no MarkDispatched for this Job can commit in this
+// process, so the snapshot's Dispatched set is complete and Conduit.Cancel
+// reaches every Task that was or ever will be dispatched; a worker that loses
+// the race resolves its own Task Cancelled. That closes the
+// Pending -> Dispatched window in-process.
+//
+// What stays best-effort under ADR-0013: (i) a Dispatched Task that wins the
+// race keeps its real outcome; (ii) the pre-send window — a TaskCancel can
+// reach the daemon before the TaskRequest of a Task already MarkDispatched,
+// and the daemon treats a cancel for an unknown id as a no-op, so that Task
+// runs. Cancel only ever *asks*; it never fabricates an outcome for a Task
+// that won the race.
 func (e *jobEngine) cancel(ctx context.Context, jobID string) error {
 	if _, err := e.jobsRepo.GetJob(ctx, jobID); err != nil {
 		return err
+	}
+	if g := e.gateFor(jobID); g != nil {
+		g.markCancelled()
 	}
 
 	tasks, err := e.tasksRepo.ByJob(ctx, jobID)
@@ -435,7 +619,25 @@ func (e *jobEngine) cancel(ctx context.Context, jobID string) error {
 	for _, task := range tasks {
 		switch task.State {
 		case jobs.DispatchStatePending:
-			if err := e.tasksRepo.MarkCancelled(ctx, task.ID, e.now()); err != nil {
+			err := e.tasksRepo.MarkCancelled(ctx, task.ID, e.now())
+			if err == nil {
+				break
+			}
+			if !errors.Is(err, jobs.ErrInvalidTaskState) {
+				errs = append(errs, fmt.Errorf("capability: mark task %q cancelled: %w", task.ID, err))
+				break
+			}
+			// Lost the race to a worker. Resolved is truthful and not an error;
+			// Dispatched is reachable only for a Job not gated in this process
+			// (left over from a restart, never re-run), so ask it to cancel.
+			cur, getErr := e.tasksRepo.Get(ctx, task.ID)
+			switch {
+			case getErr == nil && cur.State == jobs.DispatchStateResolved:
+			case getErr == nil && cur.State == jobs.DispatchStateDispatched:
+				if err := e.conduit.Cancel(ctx, cur.NodeID, cur.ID); err != nil {
+					errs = append(errs, fmt.Errorf("capability: cancel task %q on node %q: %w", cur.ID, cur.NodeID, err))
+				}
+			default:
 				errs = append(errs, fmt.Errorf("capability: mark task %q cancelled: %w", task.ID, err))
 			}
 		case jobs.DispatchStateDispatched:
@@ -476,6 +678,12 @@ func WithExecNewID(f idGen) ExecOption {
 	return func(e *jobEngine) { e.newID = f }
 }
 
+// WithExecDispatchConcurrency sets the per-Job dispatch bound (default
+// DefaultDispatchConcurrency). It bounds reach and is startup-only (invariant 11).
+func WithExecDispatchConcurrency(n int) ExecOption {
+	return func(e *jobEngine) { e.concurrency = n }
+}
+
 // WithExecClock overrides the jobEngine's clock seam (production default:
 // time.Now, UTC).
 func WithExecClock(f func() time.Time) ExecOption {
@@ -484,7 +692,8 @@ func WithExecClock(f func() time.Time) ExecOption {
 
 // WithExecution wires the real Job engine into a Service: it fans a resolved
 // Selector to one persisted Task per matched Node, fails offline Nodes fast
-// (ADR-0004), and dispatches the rest through c. jr, tr, and c must not be
+// (ADR-0004), and dispatches the rest through c concurrently, at most
+// WithExecDispatchConcurrency at a time. jr, tr, and c must not be
 // nil — a nil collaborator here is a composition-root wiring bug, not a
 // recoverable runtime condition, so WithExecution panics rather than
 // constructing a half-wired engine.
@@ -498,11 +707,12 @@ func WithExecution(jr jobs.JobRepository, tr jobs.TaskRepository, c Conduit, opt
 		panic("capability: WithExecution: jobsRepo, tasksRepo, and conduit must not be nil")
 	}
 	e := &jobEngine{
-		jobsRepo:  jr,
-		tasksRepo: tr,
-		conduit:   c,
-		newID:     defaultID,
-		now:       func() time.Time { return time.Now().UTC() },
+		jobsRepo:    jr,
+		tasksRepo:   tr,
+		conduit:     c,
+		newID:       defaultID,
+		concurrency: DefaultDispatchConcurrency,
+		now:         func() time.Time { return time.Now().UTC() },
 		// A directly-constructed engine (e.g. in a test that never calls
 		// Service.New) must never hold a nil sink. Service.New overwrites
 		// this with the real one when WithJobEvents was used (service.go).
@@ -510,6 +720,9 @@ func WithExecution(jr jobs.JobRepository, tr jobs.TaskRepository, c Conduit, opt
 	}
 	for _, o := range opts {
 		o(e)
+	}
+	if e.concurrency < 1 {
+		panic("capability: WithExecution: dispatch concurrency must be at least 1")
 	}
 	return func(s *Service) {
 		s.disp = e

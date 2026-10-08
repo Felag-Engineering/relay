@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"go/parser"
 	"go/token"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +36,9 @@ type fakeConduit struct {
 	verdicts  map[string]jobs.Verdict
 	queryErrs map[string]error
 	log       *[]string
+
+	// mu guards log and the maps' reads: dispatchOne runs on worker goroutines.
+	mu sync.Mutex
 }
 
 func newFakeConduit(log *[]string) *fakeConduit {
@@ -46,9 +53,15 @@ func newFakeConduit(log *[]string) *fakeConduit {
 	}
 }
 
-func (f *fakeConduit) Connected(nodeID string) bool { return f.connected[nodeID] }
+func (f *fakeConduit) Connected(nodeID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.connected[nodeID]
+}
 
 func (f *fakeConduit) Dispatch(_ context.Context, nodeID string, _ jobs.Task) (jobs.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.log != nil {
 		*f.log = append(*f.log, "dispatch:"+nodeID)
 	}
@@ -61,6 +74,8 @@ func (f *fakeConduit) Dispatch(_ context.Context, nodeID string, _ jobs.Task) (j
 // Cancel records "cancel:<nodeID>:<taskID>" to the shared log and returns
 // the canned error for nodeID, if any.
 func (f *fakeConduit) Cancel(_ context.Context, nodeID, taskID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.log != nil {
 		*f.log = append(*f.log, "cancel:"+nodeID+":"+taskID)
 	}
@@ -70,6 +85,8 @@ func (f *fakeConduit) Cancel(_ context.Context, nodeID, taskID string) error {
 // Query records "query:<nodeID>" to the shared log and returns the canned
 // jobs.Verdict/error for nodeID (#119), mirroring Dispatch's shape.
 func (f *fakeConduit) Query(_ context.Context, nodeID string, _ jobs.Action) (jobs.Verdict, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.log != nil {
 		*f.log = append(*f.log, "query:"+nodeID)
 	}
@@ -87,6 +104,8 @@ type recordingTasks struct {
 	log *[]string
 }
 
+// CreateTask runs only in run's sequential persist phase, before any dispatch
+// goroutine starts, so the unsynchronised log append is ordered by g.Go.
 func (r *recordingTasks) CreateTask(ctx context.Context, task jobs.Task) error {
 	err := r.TaskRepository.CreateTask(ctx, task)
 	if err == nil {
@@ -143,6 +162,9 @@ func TestEngineOneTaskPerNodePersistedBeforeDispatch(t *testing.T) {
 		conduit:   conduit,
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
+		// Concurrent dispatch, so "all creates precede the first dispatch" is
+		// proven under the fan-out and not under the sequential fallback.
+		concurrency: 16,
 	}
 
 	nodes := []registry.Node{testNode("node-1"), testNode("node-2"), testNode("node-3")}
@@ -643,7 +665,7 @@ func TestEngineDispatchOneTreatsConcurrentCancelAsTerminal(t *testing.T) {
 		t.Fatalf("MarkCancelled: %v", err)
 	}
 
-	res, err := e.dispatchOne(ctx, pendingTask{task: task})
+	res, err := e.dispatchOne(ctx, nil, pendingTask{task: task})
 	if err != nil {
 		t.Fatalf("dispatchOne: %v", err)
 	}
@@ -670,6 +692,42 @@ func TestEngineDispatchOneTreatsConcurrentCancelAsTerminal(t *testing.T) {
 	}
 	if got.Stdout != nil || got.Stderr != nil {
 		t.Errorf("Task Stdout/Stderr = %q/%q, want nil (MarkCancelled persists no output)", got.Stdout, got.Stderr)
+	}
+}
+
+// TestEngineDispatchOneUnsupportedTaskCancelledFirstReportsCancelled: an
+// excluded Task that a concurrent cancel resolved before MarkUnsupported ran
+// reports the truthful Cancelled, not the wrapped ErrInvalidTaskState.
+func TestEngineDispatchOneUnsupportedTaskCancelledFirstReportsCancelled(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	now := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	e := &jobEngine{tasksRepo: tasksRepo, now: func() time.Time { return now }}
+
+	ctx := context.Background()
+	if err := jobsRepo.CreateJob(ctx, jobs.Job{ID: "job-1", CreatedAt: now}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := jobsRepo.AddStage(ctx, jobs.Stage{ID: "stage-1", JobID: "job-1", Index: 0}); err != nil {
+		t.Fatalf("AddStage: %v", err)
+	}
+	task := jobs.Task{
+		ID: "task-1", JobID: "job-1", StageID: "stage-1", NodeID: "node-1",
+		Action:    jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead},
+		CreatedAt: now,
+	}
+	if err := tasksRepo.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := tasksRepo.MarkCancelled(ctx, task.ID, now); err != nil {
+		t.Fatalf("MarkCancelled: %v", err)
+	}
+
+	res, err := e.dispatchOne(ctx, nil, pendingTask{task: task, unsupported: "no such template"})
+	if err != nil {
+		t.Fatalf("dispatchOne: %v", err)
+	}
+	if res.Outcome != jobs.OutcomeCancelled {
+		t.Errorf("Outcome = %v, want OutcomeCancelled", res.Outcome)
 	}
 }
 
@@ -852,10 +910,11 @@ func TestWithExecutionAcceptsRealSeams(t *testing.T) {
 }
 
 // probeAtFirstConnected wraps a Conduit, running probe exactly once — on the
-// FIRST call to Connected — then delegating for real. dispatchOne calls
-// Connected as its first step, after every Task's CreateTask and before any
-// MarkDispatched, so this is the earliest point at which every Task is
-// persisted Pending and none has been dispatched.
+// FIRST call to Connected — then delegating for real. Every Task is persisted
+// Pending before any dispatch worker starts and a worker calls Connected before
+// MarkDispatched, so the first Connected is the earliest point at which every
+// Task is Pending and none has been dispatched — "before any MarkDispatched"
+// holds here only because the Job has ONE Node, hence one worker.
 type probeAtFirstConnected struct {
 	Conduit
 	probe  func()
@@ -1003,7 +1062,12 @@ func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 		// every other entry here clears.
 		"sort":    true,
 		"strings": true,
-		"time":    true,
+		// sync and golang.org/x/sync/errgroup joined with #886: bounded
+		// concurrent Job fan-out and the per-Job cancel gate. x/sync is the Go
+		// team's own extension module — no proto, no database/sql, no network.
+		"sync":                       true,
+		"golang.org/x/sync/errgroup": true,
+		"time":                       true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs":     true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry": true,
 		// internal/approval joined the allowlist with #269 (ADR-0027). It is
@@ -1294,5 +1358,668 @@ func TestJobEventsAreObservationalOnly(t *testing.T) {
 			string(a.Stderr) != string(b.Stderr) || a.Truncated != b.Truncated {
 			t.Errorf("result[%d] differs: without=%+v with=%+v", i, a, b)
 		}
+	}
+}
+
+// scriptConduit is a Conduit whose Connected/Dispatch/Cancel behaviour is
+// scripted per test, and which records every Dispatch and Cancel (node IDs, in
+// arrival order) under a mutex — dispatchOne runs on worker goroutines. Query
+// comes from the embedded fakeConduit and is not exercised.
+type scriptConduit struct {
+	Conduit
+
+	connectedFn func(nodeID string) bool
+	dispatchFn  func(ctx context.Context, nodeID string, task jobs.Task) (jobs.Result, error)
+	cancelFn    func(nodeID, taskID string)
+
+	mu         sync.Mutex
+	dispatched []string
+	cancelled  []string
+}
+
+func newScriptConduit() *scriptConduit {
+	return &scriptConduit{Conduit: newFakeConduit(nil)}
+}
+
+func (c *scriptConduit) Connected(nodeID string) bool {
+	if c.connectedFn == nil {
+		return true
+	}
+	return c.connectedFn(nodeID)
+}
+
+func (c *scriptConduit) Dispatch(ctx context.Context, nodeID string, task jobs.Task) (jobs.Result, error) {
+	c.mu.Lock()
+	c.dispatched = append(c.dispatched, nodeID)
+	c.mu.Unlock()
+	if c.dispatchFn == nil {
+		return jobs.Result{Outcome: jobs.OutcomeSuccess}, nil
+	}
+	return c.dispatchFn(ctx, nodeID, task)
+}
+
+func (c *scriptConduit) Cancel(_ context.Context, nodeID, taskID string) error {
+	c.mu.Lock()
+	c.cancelled = append(c.cancelled, nodeID)
+	c.mu.Unlock()
+	if c.cancelFn != nil {
+		c.cancelFn(nodeID, taskID)
+	}
+	return nil
+}
+
+func (c *scriptConduit) dispatchedNodes() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.dispatched...)
+}
+
+func (c *scriptConduit) cancelledNodes() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.cancelled...)
+}
+
+// peakTracker records the highest number of concurrent enter..leave spans.
+type peakTracker struct {
+	cur, peak atomic.Int32
+}
+
+func (p *peakTracker) enter() {
+	n := p.cur.Add(1)
+	for {
+		old := p.peak.Load()
+		if n <= old || p.peak.CompareAndSwap(old, n) {
+			return
+		}
+	}
+}
+
+func (p *peakTracker) leave() { p.cur.Add(-1) }
+
+const testWaitTimeout = 5 * time.Second
+
+// waitFor receives from ch or fails the test after testWaitTimeout, so a
+// regression to sequential dispatch fails instead of hanging the package.
+// It must be called from the test goroutine.
+func waitFor[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(testWaitTimeout):
+		t.Fatalf("timed out waiting for %s", what)
+		panic("unreachable")
+	}
+}
+
+func nodeSet(n int) []registry.Node {
+	nodes := make([]registry.Node, n)
+	for i := range nodes {
+		nodes[i] = testNode(fmt.Sprintf("node-%d", i+1))
+	}
+	return nodes
+}
+
+func newConcurrentEngine(t *testing.T, c Conduit, concurrency int) (*jobEngine, jobs.TaskRepository) {
+	t.Helper()
+	jobsRepo, tasksRepo := testEngineStore(t)
+	return &jobEngine{
+		jobsRepo:    jobsRepo,
+		tasksRepo:   tasksRepo,
+		conduit:     c,
+		newID:       sequentialIDs("id-"),
+		now:         func() time.Time { return time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC) },
+		concurrency: concurrency,
+	}, tasksRepo
+}
+
+var fanOutAction = jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
+
+// TestJobEngine_FanOutRunsConcurrentlyUnderTheBound is #886's acceptance: N
+// pending Tasks across N fake Nodes complete in roughly one Task's time, not N.
+// The primary assertion is the measured peak concurrency; elapsed time is a
+// generous one-sided secondary check.
+func TestJobEngine_FanOutRunsConcurrentlyUnderTheBound(t *testing.T) {
+	const n, d = 8, 200 * time.Millisecond
+	var peak peakTracker
+	c := newScriptConduit()
+	c.dispatchFn = func(_ context.Context, _ string, _ jobs.Task) (jobs.Result, error) {
+		peak.enter()
+		defer peak.leave()
+		time.Sleep(d)
+		return jobs.Result{Outcome: jobs.OutcomeSuccess}, nil
+	}
+	e, _ := newConcurrentEngine(t, c, 16)
+
+	start := time.Now()
+	dr, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodeSet(n), fanOutAction))
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := int(peak.peak.Load()); got != n {
+		t.Errorf("peak in-flight = %d, want %d", got, n)
+	}
+	if elapsed >= 3*d {
+		t.Errorf("elapsed = %v, want well under %v (sequential would take %v)", elapsed, 3*d, n*int(d/time.Millisecond)*int(time.Millisecond))
+	}
+	if len(dr.results) != n {
+		t.Fatalf("results = %d, want %d", len(dr.results), n)
+	}
+	for i, r := range dr.results {
+		if want := fmt.Sprintf("node-%d", i+1); r.NodeID != want || r.Outcome != jobs.OutcomeSuccess {
+			t.Errorf("results[%d] = %s/%v, want %s/success", i, r.NodeID, r.Outcome, want)
+		}
+	}
+}
+
+func TestJobEngine_FanOutNeverExceedsTheBound(t *testing.T) {
+	const n, bound = 8, 3
+	var peak peakTracker
+	c := newScriptConduit()
+	c.dispatchFn = func(_ context.Context, _ string, _ jobs.Task) (jobs.Result, error) {
+		peak.enter()
+		defer peak.leave()
+		time.Sleep(50 * time.Millisecond)
+		return jobs.Result{Outcome: jobs.OutcomeSuccess}, nil
+	}
+	e, _ := newConcurrentEngine(t, c, bound)
+
+	dr, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodeSet(n), fanOutAction))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := int(peak.peak.Load()); got != bound {
+		t.Errorf("peak in-flight = %d, want exactly the bound %d", got, bound)
+	}
+	if len(dr.results) != n {
+		t.Fatalf("results = %d, want %d", len(dr.results), n)
+	}
+	for i, r := range dr.results {
+		if want := fmt.Sprintf("node-%d", i+1); r.NodeID != want {
+			t.Errorf("results[%d].NodeID = %s, want %s", i, r.NodeID, want)
+		}
+	}
+}
+
+// TestJobEngine_ResultsKeepNodeOrderUnderConcurrency: later Nodes answer first,
+// yet results stay in pending order (excluded Task first, then the Nodes), the
+// JobCompleted tally is unchanged, and one Node's send error neither cancels
+// nor skips its siblings and is named by the joined error.
+func TestJobEngine_ResultsKeepNodeOrderUnderConcurrency(t *testing.T) {
+	const n = 5
+	sendErr := errors.New("tunnel write failed")
+	c := newScriptConduit()
+	c.dispatchFn = func(_ context.Context, nodeID string, _ jobs.Task) (jobs.Result, error) {
+		i, _ := strconv.Atoi(strings.TrimPrefix(nodeID, "node-"))
+		time.Sleep(time.Duration(n-i) * 10 * time.Millisecond)
+		if nodeID == "node-3" {
+			return jobs.Result{}, sendErr
+		}
+		return jobs.Result{Outcome: jobs.OutcomeSuccess}, nil
+	}
+	e, _ := newConcurrentEngine(t, c, 16)
+	sink := &spyJobEventSink{}
+	e.events = sink
+
+	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodeSet(n), fanOutAction)
+	d.excluded = []excludedNode{{node: testNode("node-x"), reason: "no such Template"}}
+
+	dr, err := e.run(context.Background(), d)
+	if err == nil || !errors.Is(err, sendErr) || !strings.Contains(err.Error(), "node-3") {
+		t.Fatalf("run error = %v, want it to wrap the send error and name node-3", err)
+	}
+	wantIDs := []string{"node-x", "node-1", "node-2", "node-3", "node-4", "node-5"}
+	wantOutcomes := []jobs.Outcome{jobs.OutcomeUnsupported, jobs.OutcomeSuccess, jobs.OutcomeSuccess, jobs.OutcomeFailure, jobs.OutcomeSuccess, jobs.OutcomeSuccess}
+	if len(dr.results) != len(wantIDs) {
+		t.Fatalf("results = %d, want %d", len(dr.results), len(wantIDs))
+	}
+	for i, r := range dr.results {
+		if r.NodeID != wantIDs[i] || r.Outcome != wantOutcomes[i] {
+			t.Errorf("results[%d] = %s/%v, want %s/%v", i, r.NodeID, r.Outcome, wantIDs[i], wantOutcomes[i])
+		}
+	}
+	if got := len(c.dispatchedNodes()); got != n {
+		t.Errorf("Dispatch called %d times, want %d (every sibling attempted)", got, n)
+	}
+	if len(sink.events) != 2 {
+		t.Fatalf("events = %d, want 2", len(sink.events))
+	}
+	oc := sink.events[1].Outcomes
+	if oc[jobs.OutcomeSuccess] != 4 || oc[jobs.OutcomeFailure] != 1 || oc[jobs.OutcomeUnsupported] != 1 {
+		t.Errorf("JobCompleted outcomes = %v, want 4 success, 1 failure, 1 unsupported", oc)
+	}
+}
+
+// TestJobEngine_NoTaskDispatchedAfterCancelRecorded is #886's acceptance with
+// the bound (16) larger than the Job (4): node-1 is in flight while nodes 2-4
+// are held in their connectivity check; a cancel is recorded; nothing but
+// node-1 is ever sent.
+//
+// This test proves concurrency plus the acceptance behaviour but NOT the
+// cancel gate itself: held Tasks are Pending in cancel's snapshot, so cancel's
+// own MarkCancelled would resolve them even without the gate. The gate is
+// proven by TestJobEngine_CancelGateClosesTheSnapshotToMarkCancelledWindow.
+func TestJobEngine_NoTaskDispatchedAfterCancelRecorded(t *testing.T) {
+	inflight := make(chan struct{}, 1)
+	arrived := make(chan string, 3)
+	release := make(chan struct{})
+	cancelSeen := make(chan struct{})
+	var once sync.Once
+
+	c := newScriptConduit()
+	c.connectedFn = func(nodeID string) bool {
+		if nodeID == "node-1" {
+			return true
+		}
+		arrived <- nodeID
+		select {
+		case <-release:
+		case <-time.After(testWaitTimeout):
+		}
+		return true
+	}
+	c.dispatchFn = func(ctx context.Context, _ string, _ jobs.Task) (jobs.Result, error) {
+		inflight <- struct{}{}
+		select {
+		case <-cancelSeen:
+		case <-ctx.Done():
+		case <-time.After(testWaitTimeout):
+		}
+		return jobs.Result{Outcome: jobs.OutcomeCancelled}, nil
+	}
+	c.cancelFn = func(_, _ string) { once.Do(func() { close(cancelSeen) }) }
+	e, tasksRepo := newConcurrentEngine(t, c, 16)
+
+	type runOut struct {
+		dr  dispatchResult
+		err error
+	}
+	done := make(chan runOut, 1)
+	go func() {
+		dr, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodeSet(4), fanOutAction))
+		done <- runOut{dr, err}
+	}()
+
+	waitFor(t, inflight, "node-1 in flight")
+	for range 3 {
+		waitFor(t, arrived, "nodes 2-4 to reach their connectivity check")
+	}
+	if err := e.cancel(context.Background(), "job-id-1"); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	close(release)
+	out := waitFor(t, done, "run to finish")
+	if out.err != nil {
+		t.Fatalf("run: %v", out.err)
+	}
+
+	if got := c.dispatchedNodes(); len(got) != 1 || got[0] != "node-1" {
+		t.Errorf("Dispatch called for %v, want exactly [node-1]", got)
+	}
+	if got := c.cancelledNodes(); len(got) != 1 || got[0] != "node-1" {
+		t.Errorf("Conduit.Cancel called for %v, want exactly [node-1]", got)
+	}
+	if len(out.dr.results) != 4 {
+		t.Fatalf("results = %d, want 4", len(out.dr.results))
+	}
+	for i, r := range out.dr.results {
+		if want := fmt.Sprintf("node-%d", i+1); r.NodeID != want || r.Outcome != jobs.OutcomeCancelled {
+			t.Errorf("results[%d] = %s/%v, want %s/cancelled", i, r.NodeID, r.Outcome, want)
+		}
+	}
+	tasks, err := tasksRepo.ByJob(context.Background(), "job-id-1")
+	if err != nil {
+		t.Fatalf("ByJob: %v", err)
+	}
+	for _, task := range tasks {
+		if task.State != jobs.DispatchStateResolved || task.Outcome != jobs.OutcomeCancelled {
+			t.Errorf("task %s = %v/%v, want Resolved/Cancelled", task.NodeID, task.State, task.Outcome)
+		}
+		if task.NodeID != "node-1" && !task.DispatchedAt.IsZero() {
+			t.Errorf("task %s has DispatchedAt set, but was never sent", task.NodeID)
+		}
+	}
+}
+
+// windowTasks wraps a TaskRepository to drive the one window the cancel gate
+// exists to close: a worker's MarkDispatched committing after cancel's ByJob
+// snapshot and before cancel's MarkCancelled.
+type windowTasks struct {
+	jobs.TaskRepository
+	t           *testing.T
+	jobID       string
+	watchedTask string        // node-2's Task
+	release2    chan struct{} // closed from the first ByJob
+	settled     chan string   // "dispatched" or "cancelled" for watchedTask
+	once        sync.Once
+}
+
+func (w *windowTasks) MarkDispatched(ctx context.Context, id string, at time.Time) error {
+	err := w.TaskRepository.MarkDispatched(ctx, id, at)
+	if id == w.watchedTask && err == nil {
+		w.settled <- "dispatched"
+	}
+	return err
+}
+
+func (w *windowTasks) MarkCancelled(ctx context.Context, id string, at time.Time) error {
+	err := w.TaskRepository.MarkCancelled(ctx, id, at)
+	if id == w.watchedTask && err == nil {
+		w.settled <- "cancelled"
+	}
+	return err
+}
+
+func (w *windowTasks) ByJob(ctx context.Context, jobID string) ([]jobs.Task, error) {
+	snap, err := w.TaskRepository.ByJob(ctx, jobID)
+	if err != nil || jobID != w.jobID {
+		return snap, err
+	}
+	w.once.Do(func() {
+		for _, task := range snap {
+			if task.ID == w.watchedTask && task.State != jobs.DispatchStatePending {
+				w.t.Errorf("node-2's Task = %v in cancel's snapshot, want Pending", task.State)
+			}
+		}
+		// Release node-2's worker now: its step commits strictly after the
+		// snapshot and before cancel's own per-Task loop.
+		close(w.release2)
+		select {
+		case <-w.settledPeek():
+		case <-time.After(testWaitTimeout):
+			w.t.Errorf("node-2's worker did not settle after release")
+		}
+	})
+	return snap, nil
+}
+
+// settledPeek waits for the worker's signal and re-posts it for the test body.
+func (w *windowTasks) settledPeek() <-chan struct{} {
+	out := make(chan struct{})
+	go func() {
+		v := <-w.settled
+		w.settled <- v
+		close(out)
+	}()
+	return out
+}
+
+// TestJobEngine_CancelGateClosesTheSnapshotToMarkCancelledWindow drives the
+// window the cancel gate exists to close. node-2's worker is parked in
+// Connected, already past the early cancelled check; cancel records itself,
+// snapshots (node-2 Pending), and — before cancel's own MarkCancelled runs —
+// node-2's worker is released and reaches MarkDispatched. With the gate the
+// admit is refused and the worker cancels its own Task; without it node-2 would
+// be sent, never receive Conduit.Cancel, and cancel would return a joined
+// ErrInvalidTaskState.
+func TestJobEngine_CancelGateClosesTheSnapshotToMarkCancelledWindow(t *testing.T) {
+	const jobID = "job-id-1"
+	// sequentialIDs("id-"): job id-1, stage id-2, then one Task per Node.
+	const node1Task, node2Task = "task-id-3", "task-id-4"
+
+	inflight1 := make(chan struct{}, 1)
+	arrived2 := make(chan struct{}, 1)
+	release2 := make(chan struct{})
+	cancelSeen := make(chan struct{})
+	var cancelOnce sync.Once
+	var node2Once sync.Once
+
+	c := newScriptConduit()
+	c.connectedFn = func(nodeID string) bool {
+		if nodeID == "node-2" {
+			node2Once.Do(func() {
+				arrived2 <- struct{}{}
+				select {
+				case <-release2:
+				case <-time.After(testWaitTimeout):
+				}
+			})
+		}
+		return true
+	}
+	c.dispatchFn = func(ctx context.Context, nodeID string, _ jobs.Task) (jobs.Result, error) {
+		if nodeID != "node-1" {
+			return jobs.Result{Outcome: jobs.OutcomeSuccess}, nil
+		}
+		inflight1 <- struct{}{}
+		select {
+		case <-cancelSeen:
+		case <-ctx.Done():
+		case <-time.After(testWaitTimeout):
+		}
+		return jobs.Result{Outcome: jobs.OutcomeCancelled}, nil
+	}
+	c.cancelFn = func(nodeID, taskID string) {
+		if nodeID == "node-1" && taskID == node1Task {
+			cancelOnce.Do(func() { close(cancelSeen) })
+		}
+	}
+
+	e, tasksRepo := newConcurrentEngine(t, c, 16)
+	wt := &windowTasks{
+		TaskRepository: tasksRepo, t: t, jobID: jobID, watchedTask: node2Task,
+		release2: release2, settled: make(chan string, 2),
+	}
+	e.tasksRepo = wt
+
+	type runOut struct {
+		dr  dispatchResult
+		err error
+	}
+	done := make(chan runOut, 1)
+	go func() {
+		dr, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodeSet(2), fanOutAction))
+		done <- runOut{dr, err}
+	}()
+
+	waitFor(t, inflight1, "node-1 in flight")
+	waitFor(t, arrived2, "node-2 to reach its connectivity check")
+	if err := e.cancel(context.Background(), jobID); err != nil {
+		t.Errorf("cancel returned %v, want nil", err)
+	}
+	out := waitFor(t, done, "run to finish")
+	if out.err != nil {
+		t.Errorf("run: %v", out.err)
+	}
+
+	if got := waitFor(t, wt.settled, "node-2's settle signal"); got != "cancelled" {
+		t.Errorf("node-2 settled as %q inside the window, want \"cancelled\" (no MarkDispatched after the cancel is recorded)", got)
+	}
+	if got := c.dispatchedNodes(); len(got) != 1 || got[0] != "node-1" {
+		t.Errorf("Dispatch called for %v, want exactly [node-1]", got)
+	}
+	if got := c.cancelledNodes(); len(got) != 1 || got[0] != "node-1" {
+		t.Errorf("Conduit.Cancel called for %v, want exactly [node-1]", got)
+	}
+	task, err := tasksRepo.Get(context.Background(), node2Task)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if task.State != jobs.DispatchStateResolved || task.Outcome != jobs.OutcomeCancelled || !task.DispatchedAt.IsZero() {
+		t.Errorf("node-2's Task = %v/%v dispatchedAt=%v, want Resolved/Cancelled and never dispatched", task.State, task.Outcome, task.DispatchedAt)
+	}
+	if len(out.dr.results) != 2 {
+		t.Fatalf("results = %d, want 2", len(out.dr.results))
+	}
+	for i, r := range out.dr.results {
+		if want := fmt.Sprintf("node-%d", i+1); r.NodeID != want || r.Outcome != jobs.OutcomeCancelled {
+			t.Errorf("results[%d] = %s/%v, want %s/cancelled", i, r.NodeID, r.Outcome, want)
+		}
+	}
+}
+
+// TestJobEngine_CancelRaceStress fires cancel at a random moment across many
+// Jobs under -race. Every Task must end Resolved/Cancelled, every Task that
+// reached Conduit.Dispatch must have received a Conduit.Cancel, and cancel
+// must return nil.
+//
+// The fake Dispatch remembers cancels that arrive before it is entered. That
+// models only the engine's guarantee (a Cancel is issued for every dispatched
+// Task); the real daemon treats a cancel for a not-yet-known id as a no-op
+// (the pre-send residual, ADR-0013).
+func TestJobEngine_CancelRaceStress(t *testing.T) {
+	const iterations, nodes = 100, 6
+	// One store for all iterations (opening one costs ~0.5s); each iteration
+	// mints IDs under its own prefix so its Job is distinct.
+	jobsRepo, tasksRepo := testEngineStore(t)
+	for iter := range iterations {
+		var mu sync.Mutex
+		cancelCh := map[string]chan struct{}{}
+		chFor := func(taskID string) chan struct{} {
+			mu.Lock()
+			defer mu.Unlock()
+			ch, ok := cancelCh[taskID]
+			if !ok {
+				ch = make(chan struct{})
+				cancelCh[taskID] = ch
+			}
+			return ch
+		}
+		cancelled := map[string]bool{}
+
+		c := newScriptConduit()
+		c.dispatchFn = func(_ context.Context, _ string, task jobs.Task) (jobs.Result, error) {
+			select {
+			case <-chFor(task.ID):
+			case <-time.After(2 * time.Second):
+				t.Errorf("iter %d: Dispatch for %s never saw a Cancel", iter, task.ID)
+				return jobs.Result{Outcome: jobs.OutcomeSuccess}, nil
+			}
+			return jobs.Result{Outcome: jobs.OutcomeCancelled}, nil
+		}
+		c.cancelFn = func(_, taskID string) {
+			ch := chFor(taskID)
+			mu.Lock()
+			defer mu.Unlock()
+			if !cancelled[taskID] {
+				cancelled[taskID] = true
+				close(ch)
+			}
+		}
+		jobID := fmt.Sprintf("job-i%d-1", iter)
+		e := &jobEngine{
+			jobsRepo:    jobsRepo,
+			tasksRepo:   tasksRepo,
+			conduit:     c,
+			newID:       sequentialIDs(fmt.Sprintf("i%d-", iter)),
+			now:         func() time.Time { return time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC) },
+			concurrency: 16,
+		}
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodeSet(nodes), fanOutAction))
+			done <- err
+		}()
+
+		for {
+			if _, err := e.jobsRepo.GetJob(context.Background(), jobID); err == nil {
+				break
+			}
+			time.Sleep(100 * time.Microsecond)
+		}
+		time.Sleep(time.Duration(rand.Int64N(int64(5 * time.Millisecond))))
+		if err := e.cancel(context.Background(), jobID); err != nil {
+			t.Fatalf("iter %d: cancel returned %v, want nil", iter, err)
+		}
+		if err := waitFor(t, done, "run to finish"); err != nil {
+			t.Fatalf("iter %d: run: %v", iter, err)
+		}
+
+		tasks, err := tasksRepo.ByJob(context.Background(), jobID)
+		if err != nil {
+			t.Fatalf("iter %d: ByJob: %v", iter, err)
+		}
+		if len(tasks) != nodes {
+			t.Fatalf("iter %d: %d Tasks, want %d", iter, len(tasks), nodes)
+		}
+		for _, task := range tasks {
+			if task.State != jobs.DispatchStateResolved || task.Outcome != jobs.OutcomeCancelled {
+				t.Errorf("iter %d: task %s = %v/%v, want Resolved/Cancelled", iter, task.NodeID, task.State, task.Outcome)
+			}
+		}
+		dispatched, cancelledNodes := c.dispatchedNodes(), c.cancelledNodes()
+		for _, n := range dispatched {
+			if !slices.Contains(cancelledNodes, n) {
+				t.Errorf("iter %d: %s was dispatched but never received Conduit.Cancel", iter, n)
+			}
+		}
+	}
+}
+
+// staleByJob returns every Task as Pending, as a snapshot read just before a
+// worker resolved them would.
+type staleByJob struct {
+	jobs.TaskRepository
+}
+
+func (s staleByJob) ByJob(ctx context.Context, jobID string) ([]jobs.Task, error) {
+	snap, err := s.TaskRepository.ByJob(ctx, jobID)
+	for i := range snap {
+		snap[i].State = jobs.DispatchStatePending
+	}
+	return snap, err
+}
+
+// TestJobEngine_CancelToleratesAWorkerThatResolvedThePendingTaskFirst: a Task
+// Pending in cancel's snapshot but already Resolved in the store is a truthful
+// outcome, not an error, and cancel must not rewrite it.
+func TestJobEngine_CancelToleratesAWorkerThatResolvedThePendingTaskFirst(t *testing.T) {
+	c := newScriptConduit()
+	e, tasksRepo := newConcurrentEngine(t, c, 16)
+	if _, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodeSet(1), fanOutAction)); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	e.tasksRepo = staleByJob{tasksRepo}
+
+	if err := e.cancel(context.Background(), "job-id-1"); err != nil {
+		t.Fatalf("cancel = %v, want nil", err)
+	}
+	if got := c.cancelledNodes(); len(got) != 0 {
+		t.Errorf("Conduit.Cancel called for %v, want none", got)
+	}
+	tasks, err := tasksRepo.ByJob(context.Background(), "job-id-1")
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("ByJob = %v, %v", tasks, err)
+	}
+	if tasks[0].Outcome != jobs.OutcomeSuccess {
+		t.Errorf("Outcome = %v, want the truthful Success left untouched", tasks[0].Outcome)
+	}
+}
+
+func TestJobEngine_OpenGatePanicsOnADuplicateJob(t *testing.T) {
+	e := &jobEngine{}
+	_, release := e.openGate("job-1")
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("openGate on an already-open Job ID did not panic")
+			}
+		}()
+		e.openGate("job-1")
+	}()
+
+	release()
+	if e.gateFor("job-1") != nil {
+		t.Error("gate still registered after release")
+	}
+	_, release2 := e.openGate("job-1")
+	release2()
+}
+
+func TestWithExecutionPanicsOnNonPositiveDispatchConcurrency(t *testing.T) {
+	jr, tr := testEngineStore(t)
+	for _, n := range []int{0, -1} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("WithExecDispatchConcurrency(%d) did not panic", n)
+				}
+			}()
+			WithExecution(jr, tr, newFakeConduit(nil), WithExecDispatchConcurrency(n))
+		}()
 	}
 }

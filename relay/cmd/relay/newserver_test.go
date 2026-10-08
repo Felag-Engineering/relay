@@ -12,6 +12,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -36,6 +37,7 @@ func baseTestConfig(t *testing.T) Config {
 		MaxNodes:             110000,
 		ReadBlastCap:         10000,
 		MutateBlastCap:       100,
+		DispatchConcurrency:  capability.DefaultDispatchConcurrency,
 		CertExpiringFraction: nodestate.DefaultCertExpiringFraction,
 	}
 }
@@ -57,6 +59,7 @@ func TestNewServer_Smoke(t *testing.T) {
 		MaxNodes:             110000,
 		ReadBlastCap:         10000,
 		MutateBlastCap:       100,
+		DispatchConcurrency:  capability.DefaultDispatchConcurrency,
 		CertExpiringFraction: nodestate.DefaultCertExpiringFraction,
 	}
 
@@ -220,6 +223,24 @@ func TestCertExpiringFraction_RefusesAnInvalidValue(t *testing.T) {
 		}
 		if srv != nil || deps != nil {
 			t.Errorf("cert-expiring-fraction %v: newServer returned non-nil srv/deps on error", frac)
+		}
+	}
+}
+
+// TestDispatchConcurrency_RefusesZeroAndNegative: the per-Job dispatch bound
+// has no "off" value (#886); zero or negative must refuse startup.
+func TestDispatchConcurrency_RefusesZeroAndNegative(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		cfg := baseTestConfig(t)
+		cfg.DispatchConcurrency = n
+
+		srv, deps, err := newServer(cfg)
+		if err == nil {
+			t.Errorf("dispatch-concurrency %d: newServer succeeded, want a refusal", n)
+			continue
+		}
+		if srv != nil || deps != nil {
+			t.Errorf("dispatch-concurrency %d: newServer returned non-nil srv/deps on error", n)
 		}
 	}
 }

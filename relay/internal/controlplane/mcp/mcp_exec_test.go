@@ -49,7 +49,8 @@ func (testAuthorizer) AuthorizeControl(context.Context, capability.Principal, ca
 // that yields "id-1", "id-2", ... in call order, mutex-guarded (the cancel
 // test drives two concurrent tool calls, and the whole suite runs under
 // -race). The Job engine mints IDs job-id-N first, then stage-id-N, then one
-// task-id-N per matched Node, in that order (execution.go's run) — so a
+// task-id-N per matched Node, in that order (execution.go's run, in its
+// sequential persist phase before any dispatch) — so a
 // fresh testServer's FIRST run_operation/raw_exec call always mints Job ID
 // "job-id-1", predictable without reading it back first.
 func deterministicIDs() func() (string, error) {
@@ -492,12 +493,15 @@ func TestMCP_ZeroMatch_RefusesBothExecutionTools(t *testing.T) {
 // signals ready right before blocking node A's Dispatch, and this test waits
 // on that channel before calling cancel_job.
 func TestMCP_CancelJob_InFlightAndPendingSibling(t *testing.T) {
-	ts := newTestServer(t)
+	// registry.List() is sorted by NodeID, and this test pins the Job engine to
+	// one Task in flight at a time (capability.WithExecDispatchConcurrency(1)),
+	// so blocking node A's Dispatch leaves node B Pending in the store. That
+	// pin is what produces the "in-flight + pending sibling" scenario; under
+	// the default bound both would be in flight. Concurrent in-flight cancel is
+	// proven at the capability seam (TestJobEngine_NoTaskDispatchedAfterCancelRecorded,
+	// TestJobEngine_CancelRaceStress) and end-to-end in the fleet e2e cancel test.
+	ts := newTestServerWithConfig(t, 0, 0, "", capability.WithExecDispatchConcurrency(1))
 	ts.conduit.connect(ts.nodeA, ts.nodeB)
-	// registry.List() is sorted by NodeID ("node-a" < "node-b"), and the Job
-	// engine dispatches sequentially in that order (execution.go's run), so
-	// blocking node A's Dispatch leaves node B still Pending in the store —
-	// exactly the "in-flight + pending sibling" scenario this test needs.
 	ts.conduit.blockNode = ts.nodeA
 	ts.conduit.ready = make(chan struct{})
 	ts.conduit.unblock = make(chan struct{})
