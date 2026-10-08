@@ -133,7 +133,8 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	deps.tunnel.sink = sink
 
 	capSvc := capability.New(deps.registry,
-		capability.WithExecution(deps.jobs, deps.tasks, router),
+		capability.WithExecution(deps.jobs, deps.tasks, router,
+			capability.WithExecDispatchConcurrency(cfg.DispatchConcurrency)),
 		capability.WithAuthorizer(devHarnessAuthorizer{}),
 		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
 		capability.WithAuditSink(harnessAudit),

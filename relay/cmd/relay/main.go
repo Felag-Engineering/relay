@@ -77,6 +77,15 @@ type Config struct {
 	ReadBlastCap   int
 	MutateBlastCap int
 
+	// DispatchConcurrency is the per-Job bound on Tasks in flight at once
+	// (#886). It bounds reach, so invariant 11 allows it as runtime-shaped
+	// configuration; it is not the blast cap (how many Nodes a Job may touch)
+	// and not a security-floor value. It is startup-only today and reachable
+	// from no API; it is planned to move to the store-backed settings object
+	// under #596, where invariant 11's "human with step-up, audited" rule
+	// applies. Zero or negative refuses startup.
+	DispatchConcurrency int
+
 	// MinDaemonVersion is the minimum relay-daemon version (ADR-0014); empty
 	// means the gate is off and no Node is ever Outdated. Same startup-only,
 	// never-API-settable mechanism as ReadBlastCap/MutateBlastCap above
@@ -285,6 +294,8 @@ func parseConfig() Config {
 		"blast-radius cap for read Operations (max Nodes per Job)")
 	mutateBlastCap := flag.Int("mutate-blast-cap", capability.DefaultMutateCap,
 		"blast-radius cap for mutate Operations and Raw Exec (max Nodes per Job)")
+	dispatchConcurrency := flag.Int("dispatch-concurrency", capability.DefaultDispatchConcurrency,
+		"max Tasks of one Job dispatched at once (per-Job fan-out bound); must be at least 1")
 	approvalGatePath := flag.String("approval-gate-config", "",
 		"path to the root-owned approval-gate config (ADR-0027); empty disables approval gating. "+
 			"A configured path that cannot be loaded refuses startup.")
@@ -341,6 +352,7 @@ func parseConfig() Config {
 	cfg.MaxNodes = intEnvOr("RELAY_MAX_NODES", *maxNodes)
 	cfg.ReadBlastCap = intEnvOr("RELAY_READ_BLAST_CAP", *readBlastCap)
 	cfg.MutateBlastCap = intEnvOr("RELAY_MUTATE_BLAST_CAP", *mutateBlastCap)
+	cfg.DispatchConcurrency = intEnvOr("RELAY_DISPATCH_CONCURRENCY", *dispatchConcurrency)
 
 	cfg.MinDaemonVersion = envOr("RELAY_MIN_DAEMON_VERSION", *minDaemonVersion)
 	cfg.CertExpiringFraction = certExpiringFractionFromEnv(
@@ -448,6 +460,11 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// startup rather than degrading to "never fires".
 	if cfg.CertExpiringFraction <= 0 || cfg.CertExpiringFraction > 1 {
 		return nil, nil, fmt.Errorf("invalid cert-expiring-fraction %v: must be in (0, 1]", cfg.CertExpiringFraction)
+	}
+	// The per-Job dispatch bound has no "off" value (#886): zero would
+	// dispatch nothing, so it refuses startup.
+	if cfg.DispatchConcurrency < 1 {
+		return nil, nil, fmt.Errorf("invalid dispatch-concurrency %d: must be at least 1", cfg.DispatchConcurrency)
 	}
 	// Computed once, from the CA's own LeafValidity constant, and handed to
 	// every surface below (invariant 11) — a Duration, never the fraction
@@ -774,7 +791,8 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		// independently safe regardless).
 		enabledOpts := append([]capability.Option{}, base...)
 		enabledOpts = append(enabledOpts,
-			capability.WithExecution(st.Jobs(), st.Tasks(), router),
+			capability.WithExecution(st.Jobs(), st.Tasks(), router,
+				capability.WithExecDispatchConcurrency(cfg.DispatchConcurrency)),
 			// Passing WithAuthorizer(roleGate) again here is idempotent —
 			// base (#653) already carries it, and Option application is
 			// last-write-wins over the same object — kept explicit so this
@@ -1096,6 +1114,7 @@ func main() {
 		"max_nodes", cfg.MaxNodes,
 		"read_blast_cap", cfg.ReadBlastCap,
 		"mutate_blast_cap", cfg.MutateBlastCap,
+		"dispatch_concurrency", cfg.DispatchConcurrency,
 		"min_daemon_version", cfg.MinDaemonVersion,
 		"cert_expiring_fraction", cfg.CertExpiringFraction,
 	)

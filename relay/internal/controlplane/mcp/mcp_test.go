@@ -163,8 +163,9 @@ func newTestServerWithBlastCap(t *testing.T, readCap, mutateCap int) testServer 
 
 // newTestServerWithConfig is newTestServerWithBlastCap, additionally
 // parameterized on the registry's min_daemon_version gate (ADR-0014); ""
-// leaves the gate off, exactly like newTestServerWithBlastCap.
-func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVersion string) testServer {
+// leaves the gate off, exactly like newTestServerWithBlastCap. execOpts are
+// applied to the Job engine after the deterministic ID seam.
+func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVersion string, execOpts ...capability.ExecOption) testServer {
 	t.Helper()
 
 	const nodeA = "node-a"
@@ -246,7 +247,8 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 
 	conduit := newFakeConduit()
 	capSvc := capability.New(reg,
-		capability.WithExecution(st.Jobs(), st.Tasks(), conduit, capability.WithExecNewID(deterministicIDs())),
+		capability.WithExecution(st.Jobs(), st.Tasks(), conduit,
+			append([]capability.ExecOption{capability.WithExecNewID(deterministicIDs())}, execOpts...)...),
 		capability.WithAuthorizer(testAuthorizer{}),
 		capability.WithCapChecker(capability.NewBlastCap(readCap, mutateCap)),
 		capability.WithAuditSink(auditsink.New(st.Audit())),
