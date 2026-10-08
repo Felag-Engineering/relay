@@ -66,7 +66,9 @@ func TestSessionScope_ExcludesEveryOtherSurface(t *testing.T) {
 }
 
 // The bare "/console" is in scope even though nothing is registered there.
-// net/http answers it with a redirect to "/console/", and refusing it would
+// net/http answers it with a redirect to "/console/" (a 307 since Go 1.26; a
+// 301 before it — the status changed, the redirect and its target did not),
+// and refusing it would
 // send a signed-in operator to the sign-in page, back to "/console", and round
 // again — a sign-in loop, not a security control.
 func TestSessionScope_AdmitsTheBarePrefixSoSignInCannotLoop(t *testing.T) {
@@ -80,9 +82,17 @@ func TestSessionScope_AdmitsTheBarePrefixSoSignInCannotLoop(t *testing.T) {
 	mux.HandleFunc("/console/", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/console", nil))
-	if rec.Code != http.StatusMovedPermanently {
+	if rec.Code != http.StatusTemporaryRedirect {
 		t.Errorf(`GET /console = %d, want %d — the sign-in-loop reasoning above assumes the subtree redirect`,
-			rec.Code, http.StatusMovedPermanently)
+			rec.Code, http.StatusTemporaryRedirect)
+	}
+	// The loop is avoided only because the redirect lands INSIDE the scope.
+	loc := rec.Header().Get("Location")
+	if loc != "/console/" {
+		t.Fatalf(`GET /console redirects to %q, want "/console/"`, loc)
+	}
+	if !SessionScope(httptest.NewRequest(http.MethodGet, loc, nil)) {
+		t.Errorf("the redirect target %q is outside SessionScope", loc)
 	}
 }
 
