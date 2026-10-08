@@ -26,12 +26,8 @@ ADMIN_CRED="${STATE_DIR}/control-credential"
 APPROVER_CRED="${STATE_DIR}/approver-credential"
 BASE="${BASE:-https://localhost:9443}"
 
-# `init` reads the fleet with bare `docker compose`. The fleets live in
-# docker-compose.demo.yml, and the repo root has no docker-compose.yml (a
-# bare `docker compose` there finds nothing, or a parent directory's). So default to
-# the fleet file — the same project `make dev-fleet-up` starts. A caller that
-# has already chosen (scripts/demo-fleet.sh exports its own) keeps its choice.
-export COMPOSE_FILE="${COMPOSE_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/docker-compose.demo.yml}"
+# The fleet is the fixed `relay-demo` project (docker-compose.demo.yml names it).
+DC=(docker compose -p relay-demo -f "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/docker-compose.demo.yml")
 
 # The Relay's server cert SAN is `relay` (the in-fleet DNS name), not localhost.
 # --resolve maps the name to loopback so TLS is VERIFIED against the real CA
@@ -72,18 +68,22 @@ need_state() {
 }
 
 cmd_init() {
+    umask 077
     mkdir -p "${STATE_DIR}"
-    docker compose cp relay:/var/lib/relay/ca/ca-cert.pem "${CA}" >/dev/null
+    "${DC[@]}" cp relay:/var/lib/relay/ca/ca-cert.pem "${CA}" >/dev/null
     # The credentials live on the control-credential volume, which only the
-    # minting services mount. `run --no-deps` attaches a throwaway container to
-    # read them out without disturbing the fleet.
-    docker compose run --rm --no-deps --entrypoint sh approver \
-        -c 'cat /credential/control-credential' 2>/dev/null | tr -d '\r' > "${ADMIN_CRED}"
-    docker compose run --rm --no-deps --entrypoint sh approver \
-        -c 'cat /credential/approver-credential' 2>/dev/null | tr -d '\r' > "${APPROVER_CRED}"
+    # `init` service mounts. Read them out of its exited container: a new
+    # container would inherit init's read-write store and password. `cp -`
+    # emits a tar stream, hence `tar -xO`.
+    local f cred
+    for cred in "${ADMIN_CRED}" "${APPROVER_CRED}"; do
+        f="$(basename "${cred}")"
+        "${DC[@]}" cp "init:/credential/${f}" - 2>/dev/null | tar -xO 2>/dev/null \
+            | tr -d '\r' > "${cred}"
+    done
     chmod 0600 "${ADMIN_CRED}" "${APPROVER_CRED}"
     [[ -s "${ADMIN_CRED}" ]]    || die "admin credential came back empty — is the fleet up?"
-    [[ -s "${APPROVER_CRED}" ]] || die "approver credential came back empty — did the approver service run?"
+    [[ -s "${APPROVER_CRED}" ]] || die "approver credential came back empty — did the init service run?"
     write_start_note
     echo "dev-fleet-mcp: CA cert and both credentials are in ${STATE_DIR}/"
     echo "dev-fleet-mcp: copy-paste launch commands: ${STATE_DIR}/start-claude.txt"

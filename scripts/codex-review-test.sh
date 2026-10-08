@@ -13,7 +13,7 @@
 # Hermetic: the companion at
 # $FAKE_HOME/.claude/plugins/cache/openai-codex/codex/<ver>/scripts/codex-companion.mjs is a
 # small STUB — a real Node program, not the real plugin — driven by env vars per case
-# (the scripts/demo-fleet-test.sh idiom: one stub, not one per case). `codex` is a no-op shell
+# (one stub, not one per case). `codex` is a no-op shell
 # stub purely for `command -v codex`. PATH's `node` is the REAL system node: the script now
 # calls node a second time to classify the payload, and that call must reach real node to mean
 # anything — hermetic still holds (no network, no real Codex CLI, no real plugin), but the

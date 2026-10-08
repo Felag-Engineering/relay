@@ -112,7 +112,7 @@ import "unicode/utf8"
 // relay-daemon.env.example, docker-compose.demo.yml, the enrollment and install
 // docs, and the validation suites — uses only [A-Za-z0-9._-]. Relay-space:
 // every shipped scope example — docs/api/openapi.yaml, docs/operations/
-// enrollment.md, docs/dev-fleet.md, docker/bootstrap.sh, the validation
+// enrollment.md, docs/dev-fleet.md, docker/dev-fleet-init.sh, the validation
 // suites, every e2e test, and cmd/relay/devharness.go — uses the same
 // alphabet. `/`, `+`, `@`, `:` and non-ASCII are deliberately excluded: none
 // of them appears in a shipped example of either namespace, and admitting

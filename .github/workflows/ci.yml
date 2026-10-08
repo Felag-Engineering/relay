@@ -95,12 +95,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-security-surface
 
-      # scripts/demo-fleet.sh's reset/fault guard, proved against a stubbed docker
-      # (#622). Shell only — no python3, no Docker — so it runs here alongside the
-      # other guard self-test rather than in a toolchain job.
-      - name: Demo-fleet reset guard self-test
+      # The Makefile's dev-fleet guards (#893, #622), proved against a stubbed docker. Shell
+      # only — no python3, no Docker — so it runs here alongside the other guard self-tests.
+      - name: Dev-fleet Makefile guard self-test
         if: ${{ !cancelled() }}
-        run: make test-demo-fleet
+        run: make test-dev-fleet-make
 
       # The release image guard (#892), proved against tiny OCI archives. tar, jq and
       # sha256sum only — no Docker, no toolchain.
