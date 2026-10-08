@@ -13,13 +13,13 @@
 #               A new test that reads under docs/ adds its path below.
 #   proto=false nothing under proto/ or the generated relay/internal/relay/v1/ changed,
 #               and neither did the Makefile, relay/go.mod (the proto job's Go version
-#               and the Makefile's GOTOOLCHAIN), scripts/proto-tools-check.sh (both proto
-#               gates' prerequisite), or the CI machinery that runs the proto gates.
+#               and the Makefile's GOTOOLCHAIN), tools/buf/ (the pinned buf both proto
+#               gates run), or the CI machinery that runs the proto gates.
 #   deps=false  no dependency manifest or lockfile changed (relay/go.mod, relay/go.sum,
-#               daemon/Cargo.toml, daemon/crates/*/Cargo.toml, daemon/Cargo.lock), nor either gate's exceptions
-#               (daemon/deny.toml, relay/govulncheck-exceptions.txt, scripts/vuln-gate.sh),
-#               nor the Makefile that pins the scanners, nor the CI machinery. Gates
-#               the PR-time advisory scans (govulncheck, cargo-deny advisories): an advisory
+#               daemon/Cargo.toml, daemon/crates/*/Cargo.toml, daemon/Cargo.lock), nor either gate's
+#               exceptions (daemon/deny.toml, relay/govulncheck-exceptions.txt,
+#               scripts/vuln-gate.sh), nor tools/govulncheck/ or the Makefile that run the
+#               scanners, nor the CI machinery. Gates the PR-time advisory scans (govulncheck, cargo-deny advisories): an advisory
 #               published against an untouched dependency is the nightly scan's to report,
 #               not a reason to turn every open PR red at once.
 #
@@ -70,13 +70,13 @@ while IFS= read -r f; do
   esac
   case "$f" in
     proto/* | relay/internal/relay/v1/* | Makefile | relay/go.mod | .github/workflows/ci.yml \
-      | .github/actions/* | scripts/ci-changed-paths.sh | scripts/proto-tools-check.sh)
+      | .github/actions/* | scripts/ci-changed-paths.sh | tools/buf/*)
       proto=true ;;
   esac
   case "$f" in
     relay/go.mod | relay/go.sum | daemon/Cargo.toml | daemon/crates/*/Cargo.toml \
       | daemon/Cargo.lock | daemon/deny.toml \
-      | relay/govulncheck-exceptions.txt | scripts/vuln-gate.sh \
+      | relay/govulncheck-exceptions.txt | scripts/vuln-gate.sh | tools/govulncheck/* \
       | Makefile | .github/workflows/ci.yml | .github/actions/* | scripts/ci-changed-paths.sh)
       deps=true ;;
   esac

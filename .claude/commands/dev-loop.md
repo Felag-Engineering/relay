@@ -69,8 +69,7 @@ The queue relies on this. A fork PR with that branch name never blocks an issue 
 repository is gone counts as a fork), and a long fork-PR list cannot push a real PR off the
 page; the remote-heads listing sees only this repo's branches.
 
-**Toolchain preflight.** `go`, `cargo`, `buf` on `PATH` or in `$(go env GOPATH)/bin` (`make proto-tools`
-installs `buf`; the Go proto generators are `tool` directives in `relay/go.mod`, built by `go tool`). Missing → in interactive mode stop and say which lane cannot be verified; unattended,
+**Toolchain preflight.** `go` and `cargo` on `PATH` (buf, golangci-lint and the scanners are pinned under `tools/`, and the proto generators in `relay/go.mod`; `go tool` builds all of them). Missing → in interactive mode stop and say which lane cannot be verified; unattended,
 comment and stop. **Never silently run half the gate.**
 
 ## Stage 1 — Fetch

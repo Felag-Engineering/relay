@@ -17,7 +17,7 @@
 # (security-surface-test.sh:12).
 set -uo pipefail
 
-# --- Safety preamble, the same idiom as proto-tools-check-test.sh: the only destructive
+# --- Safety preamble, the same idiom as security-surface-test.sh: the only destructive
 # operation is the trap's `rm -rf "$WORKDIR"`, which refuses anything but an absolute path.
 # Every fixture path is derived from $WORKDIR, never from an argument or the environment.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
@@ -133,17 +133,17 @@ done
 
 # --- 4. Every input of the proto gates trips proto: the contract and its generated Go, the
 # Makefile that runs the gates, relay/go.mod (the proto job's Go version and the Makefile's
-# GOTOOLCHAIN), proto-tools-check.sh (prerequisite of `make proto` and `make proto-breaking`),
-# and the CI machinery including this classifier.
+# GOTOOLCHAIN), tools/buf (the pinned buf both proto gates run), and the CI machinery
+# including this classifier.
 for p in proto/relay/v1/relay.proto proto/buf.yaml relay/internal/relay/v1/relay.pb.go \
-  scripts/proto-tools-check.sh; do
+  tools/buf/go.mod; do
   classify "$ARGS" "" "$p"
   expect "proto input $p" true true false
 done
 # The CI machinery, the Makefile and relay/go.mod are inputs of both the proto gates and
 # the dependency scans.
 for p in Makefile relay/go.mod scripts/ci-changed-paths.sh .github/workflows/ci.yml \
-  .github/actions/go-tools/action.yml; do
+  .github/actions/go-cache-restore/action.yml; do
   classify "$ARGS" "" "$p"
   expect "proto and deps input $p" true true true
 done
@@ -152,10 +152,14 @@ done
 # they read and the cargo-deny policy. (The daemon's fuzz workspace is not one: cargo-deny
 # checks the daemon workspace (--workspace), which the fuzz crate is not a member of.)
 for p in relay/go.sum daemon/Cargo.toml daemon/crates/relay-policy/Cargo.toml daemon/Cargo.lock \
-  daemon/deny.toml relay/govulncheck-exceptions.txt scripts/vuln-gate.sh; do
+  daemon/deny.toml relay/govulncheck-exceptions.txt scripts/vuln-gate.sh \
+  tools/govulncheck/go.sum; do
   classify "$ARGS" "" "$p"
   expect "deps input $p" true false true
 done
+# The other pinned tools run a lint or scan gate, not a proto or advisory one: code only.
+classify "$ARGS" "" tools/golangci-lint/go.mod
+expect "tool pin tools/golangci-lint/go.mod" true false false
 
 # --- 5. Fail open: not a pull request runs every job, whatever the arguments would say.
 classify "$ARGS" ""

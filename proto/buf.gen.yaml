@@ -1,5 +1,7 @@
 # The generators are pinned by `tool` directives in relay/go.mod and run through `go tool`,
 # so no copy of them lives in the shared GOPATH/bin.
+# The `protoc (unknown)` line in the generated code cannot be set from here: buf passes no
+# compiler version to local plugins, and editing generated output is forbidden (invariant 8).
 version: v2
 plugins:
   - local: ["go", "tool", "-C", "../relay", "protoc-gen-go"]

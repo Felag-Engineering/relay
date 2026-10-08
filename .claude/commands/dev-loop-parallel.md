@@ -30,7 +30,7 @@ else echo "halted: the loop:halt check gave no usable answer (exit $halt_rc), so
 **Fail closed:** only exit 0 with output exactly `0` continues; anything else, an error or empty output included, stops the tick. Anything but the line `halt: clear`, including no line at all (the shell aborted), is a stop.
 A stop prints the block's line (if any). Then:
 
-- `gh auth status`; `go`, `cargo`, `buf` (the Go proto generators are `go tool` directives in `relay/go.mod`; the runners inherit this environment,
+- `gh auth status`; `go`, `cargo` (buf, golangci-lint and the scanners are pinned under `tools/`, and the proto generators in `relay/go.mod`; `go tool` builds all of them; the runners inherit this environment,
   and each will refuse to run half a gate). Missing → stop and say which.
 - Warn once about cost: each runner builds the Go and Rust trees and runs `make verify` in its own
   worktree, so N runners use roughly N times the CPU, memory and disk of one.

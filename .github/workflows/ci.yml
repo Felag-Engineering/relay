@@ -27,8 +27,9 @@ permissions:
 # Caches: the build caches (Go build + modules, Cargo registry + target) are keyed
 # per job and per ISO week, restored everywhere, and SAVED ONLY FROM main — so PRs
 # never spend upload time or cache quota, and a week's staleness bounds how much
-# recompiling a PR does. Pinned tool binaries are cached on the `go install` lines
-# in the Makefile, so bumping a pin rebuilds them. The cache steps live once, as local
+# recompiling a PR does. The pinned dev tools are not cached separately: `go tool`
+# builds them into the Go build cache that go-cache-restore and go-cache-save already
+# carry, keyed on tools/*/go.{mod,sum}. The cache steps live once, as local
 # composite actions under .github/actions/; a composite action has no post step, so
 # each build cache is a restore action early in the job and a save action at its end,
 # and the save's `if:` — the save policy — stays here in the job.
@@ -59,7 +60,7 @@ jobs:
   # ---- docs: ADR-number uniqueness, every test a capability spec cites, which of the
   # jobs below this change needs, and the repo-wide hygiene gates (shell and workflow
   # lint, the secrets scan). The checks are shell + grep over the tree; Go is set up
-  # only to run the pinned scanner binaries out of the shared tool cache. It is the one
+  # only to build the scanners pinned under tools/ (go tool, into the job's Go cache). It is the one
   # job that always runs, drafts included — which is why the secrets scan lives here.
   # scripts/ci-changed-paths.sh fails open — pushes to main always run everything — and
   # the jobs below skip only on an explicit `false`, so a docs job that dies before
@@ -114,14 +115,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-codex-review
 
-      # scripts/proto-tools-check.sh, proved against stub tools and a stub `go` (#710). Shell
-      # only, no Go toolchain, no network — it belongs with the other gate self-tests rather
-      # than in a toolchain job. The docs job has no `Set up Go` step, which is exactly why
-      # the stub `go` is load-bearing here rather than a convenience.
-      - name: Proto-tools pin check self-test
-        if: ${{ !cancelled() }}
-        run: make test-proto-tools-check
-
       # scripts/check-docs.sh's cited-test check, proved against a fixture repo: Go
       # Test/Benchmark/Fuzz names, and Rust test fns and cargo-fuzz targets in proof rows. Shell
       # only, no toolchain.
@@ -156,9 +149,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-maintainer-check
 
-      # ---- Repo-wide hygiene gates. The scanners are pinned `go install`s in the
-      # Makefile's lint-tools, so they ride the shared Go tool cache; zizmor is a Python
-      # package, installed by pipx. ----
+      # ---- Repo-wide hygiene gates. The scanners are pinned under tools/, built by go
+      # tool into the job's Go cache; zizmor is a Python package, installed by pipx. ----
       - name: Set up Go
         if: ${{ !cancelled() }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -166,9 +158,12 @@ jobs:
           go-version-file: relay/go.mod
           cache: false
 
-      - name: Go tools (pinned in the Makefile)
+      - name: Restore Go build and module cache
         if: ${{ !cancelled() }}
-        uses: ./.github/actions/go-tools
+        id: go-cache
+        uses: ./.github/actions/go-cache-restore
+        with:
+          prefix: go-${{ github.job }}
 
       # Tracked files only, every run, drafts included: a credential pushed to a draft is
       # as leaked as one pushed anywhere else. security-nightly.yml scans the history.
@@ -188,6 +183,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: make lint-ci
+
+      - name: Save Go build and module cache
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true' }}
+        uses: ./.github/actions/go-cache-save
+        with:
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   # ---- relay: Go format, build, lint, race-detector tests, the OpenAPI contract,
   # and the Go half of the strict-umask lane ----
@@ -213,9 +214,6 @@ jobs:
         uses: ./.github/actions/go-cache-restore
         with:
           prefix: go-${{ github.job }}
-
-      - name: Go tools (pinned in the Makefile)
-        uses: ./.github/actions/go-tools
 
       - run: make build-relay
       - run: make lint-relay
@@ -383,8 +381,11 @@ jobs:
           go-version-file: relay/go.mod
           cache: false
 
-      - name: Go tools (pinned in the Makefile)
-        uses: ./.github/actions/go-tools
+      - name: Restore Go build and module cache
+        id: go-cache
+        uses: ./.github/actions/go-cache-restore
+        with:
+          prefix: go-${{ github.job }}
 
       - name: Proto drift
         run: make proto-check
@@ -398,6 +399,12 @@ jobs:
       - name: Proto breaking (against PR base)
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: make proto-breaking PROTO_BREAKING_REF=${{ github.event.pull_request.base.sha }}
+
+      - name: Save Go build and module cache
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true' }}
+        uses: ./.github/actions/go-cache-save
+        with:
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   # ---- integration: smoke test against both built binaries ----
   integration:

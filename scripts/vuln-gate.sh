@@ -27,7 +27,11 @@ if [ $# -gt 0 ]; then
   json="$(cat "$1")" || { echo "vuln-gate: cannot read $1" >&2; exit 1; }
 else
   # -format json exits 0 whatever it finds; a non-zero exit is the scan itself failing.
-  json="$(cd relay && govulncheck -format json ./...)"
+  gv="$(GOWORK=off go -C tools/govulncheck tool -n govulncheck)" || {
+    echo "vuln-gate: cannot build the pinned govulncheck (tools/govulncheck); refusing to report a clean scan" >&2
+    exit 1
+  }
+  json="$(cd relay && "$gv" -format json ./...)"
   rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "vuln-gate: govulncheck failed (exit $rc); refusing to report a clean scan" >&2

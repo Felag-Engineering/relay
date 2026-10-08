@@ -12,10 +12,13 @@
 #
 # Every PR this opens edits a dependency manifest, which is on the security surface
 # (docs/agents/security-surface.txt): a human reviews and merges it like any other.
-# Tool pins in the Makefile (golangci-lint, buf, the scanners) are not covered here.
-# The Go proto generators ARE covered: they are `tool` directives in relay/go.mod
-# (#891), and protoc-gen-go is the protobuf runtime module itself. A PR that moves
-# either goes red on proto-drift until someone runs `make proto` on its branch.
+# The Go proto generators are `tool` directives in relay/go.mod, and protoc-gen-go is the
+# protobuf runtime module itself. A PR that moves either goes red on proto-drift until
+# someone runs `make proto` on its branch. The other dev tools (buf, golangci-lint, the
+# scanners) are one module each under tools/ (#891). `go mod tidy` records a tool's own
+# require as `// indirect`, and Dependabot's gomod default updates direct dependencies
+# only — hence the explicit `allow` lists on the two entries that carry tool pins.
+# Security updates ignore `allow`; tools/README.md says how to treat those PRs.
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -25,11 +28,43 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 1
+    allow:
+      - dependency-type: direct
+      - dependency-name: google.golang.org/grpc/cmd/protoc-gen-go-grpc
+        dependency-type: all
     groups:
       relay-go:
         patterns: ["*"]
     commit-message:
       prefix: "deps(relay)"
+
+  # Version updates bump only the tool itself: bumping a tool's transitive dependencies on
+  # their own would drift its build list away from what upstream tested (the gitleaks /
+  # charmbracelet-ansi class of break).
+  - package-ecosystem: gomod
+    directories:
+      - /tools/*
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    allow:
+      - dependency-name: github.com/bufbuild/buf
+        dependency-type: all
+      - dependency-name: github.com/golangci/golangci-lint/v2
+        dependency-type: all
+      - dependency-name: golang.org/x/vuln
+        dependency-type: all
+      - dependency-name: github.com/rhysd/actionlint
+        dependency-type: all
+      - dependency-name: github.com/zricethezav/gitleaks/v8
+        dependency-type: all
+    groups:
+      go-tools:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps(tools)"
 
   - package-ecosystem: cargo
     directories:

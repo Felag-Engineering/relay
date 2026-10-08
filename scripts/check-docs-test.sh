@@ -16,7 +16,7 @@
 # (security-surface-test.sh:13).
 set -uo pipefail
 
-# --- Safety preamble, the same idiom as proto-tools-check-test.sh: the trap's `rm -rf` only
+# --- Safety preamble, the same idiom as security-surface-test.sh: the trap's `rm -rf` only
 # ever targets an absolute $WORKDIR from mktemp, and $FIX is only ever derived from it.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 WORKDIR="$(mktemp -d)" || { echo "FAIL: mktemp -d failed" >&2; exit 1; }

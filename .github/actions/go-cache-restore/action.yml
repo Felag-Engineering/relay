@@ -1,6 +1,8 @@
 name: Restore Go build and module cache
 description: >-
-  Restore ~/.cache/go-build and ~/go/pkg/mod, keyed per job and per ISO week. Pair it
+  Restore ~/.cache/go-build and ~/go/pkg/mod, keyed per job, per ISO week, and on the
+  relay module and every pinned tool module under tools/ (`go tool` builds the tools into
+  the build cache, so a bump of a pin must miss the exact key). Pair it
   with go-cache-save at the end of the job: a composite action has no post step, so the
   save is a separate step that the caller places and gates (main only, on a miss).
 inputs:
@@ -32,7 +34,7 @@ runs:
         path: |
           ~/.cache/go-build
           ~/go/pkg/mod
-        key: ${{ inputs.prefix }}-${{ hashFiles('relay/go.mod', 'relay/go.sum') }}-${{ steps.keys.outputs.week }}
+        key: ${{ inputs.prefix }}-${{ hashFiles('relay/go.mod', 'relay/go.sum', 'tools/*/go.mod', 'tools/*/go.sum') }}-${{ steps.keys.outputs.week }}
         restore-keys: |
-          ${{ inputs.prefix }}-${{ hashFiles('relay/go.mod', 'relay/go.sum') }}-
+          ${{ inputs.prefix }}-${{ hashFiles('relay/go.mod', 'relay/go.sum', 'tools/*/go.mod', 'tools/*/go.sum') }}-
           ${{ inputs.prefix }}-
