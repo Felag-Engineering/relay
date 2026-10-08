@@ -1195,35 +1195,39 @@ func auditExpiry(ctx context.Context, deps *appDeps, r approval.Request) error {
 	})
 }
 
-// intEnvOr reads an integer from the environment, falling back to fallback
-// and warning on anything unparseable. It applies no bounds of its own:
-// range checks on these values live where the value is consumed.
-func intEnvOr(key string, fallback int) int {
+// parsedEnvOr reads key from the environment and parses it with parse,
+// falling back to fallback when the variable is unset, unparseable, or
+// rejected by parse (ok == false), and warning on the last two.
+func parsedEnvOr[T any](key string, fallback T, parse func(string) (v T, ok bool)) T {
 	env := os.Getenv(key)
 	if env == "" {
 		return fallback
 	}
-	v, err := strconv.Atoi(env)
-	if err != nil {
+	v, ok := parse(env)
+	if !ok {
 		slog.Warn("ignoring invalid "+key, "value", env)
 		return fallback
 	}
 	return v
 }
 
+// intEnvOr reads an integer from the environment, falling back to fallback
+// and warning on anything unparseable. It applies no bounds of its own:
+// range checks on these values live where the value is consumed.
+func intEnvOr(key string, fallback int) int {
+	return parsedEnvOr(key, fallback, func(s string) (int, bool) {
+		v, err := strconv.Atoi(s)
+		return v, err == nil
+	})
+}
+
 // boolEnvOr reads a boolean (as strconv.ParseBool accepts it) from the
 // environment, falling back to fallback and warning on anything unparseable.
 func boolEnvOr(key string, fallback bool) bool {
-	env := os.Getenv(key)
-	if env == "" {
-		return fallback
-	}
-	v, err := strconv.ParseBool(env)
-	if err != nil {
-		slog.Warn("ignoring invalid "+key, "value", env)
-		return fallback
-	}
-	return v
+	return parsedEnvOr(key, fallback, func(s string) (bool, bool) {
+		v, err := strconv.ParseBool(s)
+		return v, err == nil
+	})
 }
 
 // durationEnvOr reads a positive duration from the environment, falling back
@@ -1233,16 +1237,10 @@ func boolEnvOr(key string, fallback bool) bool {
 // this way bounds something (a session's life, a step-up window), and "0"
 // silently meaning "unbounded" is how a control gets turned off by a typo.
 func durationEnvOr(key string, fallback time.Duration) time.Duration {
-	env := os.Getenv(key)
-	if env == "" {
-		return fallback
-	}
-	d, err := time.ParseDuration(env)
-	if err != nil || d <= 0 {
-		slog.Warn("ignoring invalid "+key, "value", env)
-		return fallback
-	}
-	return d
+	return parsedEnvOr(key, fallback, func(s string) (time.Duration, bool) {
+		d, err := time.ParseDuration(s)
+		return d, err == nil && d > 0
+	})
 }
 
 // clampedStepUpWindow caps the operator's step-up window at
