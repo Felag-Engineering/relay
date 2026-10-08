@@ -65,5 +65,5 @@ legacy=$(grep -lE '^\*\*Status:\*\* *(aspirational|stub)' "${SPECS[@]}" | wc -l)
 total=$(find docs/specs -maxdepth 1 -name '*.md' ! -name 'README.md' ! -name 'TEMPLATE.md' | wc -l)
 rows=$(grep -hcE '^\| .*\| *`(Test|Benchmark)[A-Za-z0-9_]+`' "${SPECS[@]}" | awk "{s+=\$1} END {print s+0}")
 pkgs=$(find relay/internal -mindepth 1 -maxdepth 1 -type d | wc -l)
-mods=$(ls daemon/src/*.rs | wc -l)
+mods=$(ls daemon/src/*.rs daemon/crates/*/src/*.rs | wc -l)
 echo "SUMMARY  legacy specs: $legacy of $total   proof rows: $rows   relay packages: $pkgs   daemon modules: $mods"

@@ -11,25 +11,25 @@ use crate::log_field;
 use crate::policy::Rule;
 
 /// `tracing` target of the one event emitted per Policy Allow.
-pub(crate) const ALLOW_TARGET: &str = "relay_daemon::allow";
+pub const ALLOW_TARGET: &str = "relay_daemon::allow";
 /// `tracing` target of every Policy Deny event; same field names as Allow.
-pub(crate) const DENY_TARGET: &str = "relay_daemon::deny";
+pub const DENY_TARGET: &str = "relay_daemon::deny";
 
 /// The pattern the install guide documents for `journalctl -g`. Tests prove it
 /// matches real formatted lines and appears verbatim in the guide.
-#[cfg(test)]
-pub(crate) const JOURNALCTL_PATTERN: &str = "relay_daemon::(allow|deny):";
+#[cfg(any(test, feature = "test-util"))]
+pub const JOURNALCTL_PATTERN: &str = "relay_daemon::(allow|deny):";
 
 /// Which execution tier a decision was made for (ADR-0001, ADR-0021).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Tier {
+pub enum Tier {
     Native,
     Template,
     RawExec,
 }
 
 impl Tier {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Tier::Native => "native",
             Tier::Template => "template",
@@ -53,7 +53,7 @@ pub(crate) fn risk_class_str(risk: RiskClass) -> &'static str {
 /// a low-entropy argument can be recovered by guessing. The NUL join is a
 /// framing convention, not an injectivity guarantee, because proto strings may
 /// contain NUL.
-pub(crate) fn argv_digest<S: AsRef<str>>(parts: &[S]) -> String {
+pub fn argv_digest<S: AsRef<str>>(parts: &[S]) -> String {
     let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
     for (i, part) in parts.iter().enumerate() {
         if i > 0 {
@@ -72,18 +72,18 @@ pub(crate) fn argv_digest<S: AsRef<str>>(parts: &[S]) -> String {
 /// The fields every decision event shares. No field can hold argv.
 ///
 /// `argc` is the number of elements `argv_digest` covers, on every tier.
-pub(crate) struct DecisionFields<'a> {
-    pub(crate) task_id: &'a str,
-    pub(crate) operation: &'a str,
-    pub(crate) tier: Tier,
-    pub(crate) risk_class: RiskClass,
-    pub(crate) argv_digest: String,
-    pub(crate) argc: usize,
-    pub(crate) policy_fingerprint: &'a str,
+pub struct DecisionFields<'a> {
+    pub task_id: &'a str,
+    pub operation: &'a str,
+    pub tier: Tier,
+    pub risk_class: RiskClass,
+    pub argv_digest: String,
+    pub argc: usize,
+    pub policy_fingerprint: &'a str,
 }
 
 /// What a Deny adds beyond the shared fields, by tier.
-pub(crate) enum DenyDetail<'a> {
+pub enum DenyDetail<'a> {
     /// A typed Operation's positional arguments, as Policy saw them.
     Args(&'a [String]),
     /// A Raw Exec's `argv[0]`.
@@ -97,7 +97,7 @@ pub(crate) enum DenyDetail<'a> {
 /// (`task_id`, `operation`, `reason`, `args`, `program`) goes through
 /// `log_field::untrusted` (Debug-escaped, capped at `LOG_FIELD_MAX_CHARS`): a
 /// hostile value cannot start a forged journal line or grow one without bound.
-pub(crate) fn emit_deny(
+pub fn emit_deny(
     f: &DecisionFields,
     rule: Option<&Rule>,
     reason: &str,
@@ -131,7 +131,7 @@ pub(crate) fn emit_deny(
 /// Template slot validation and the `file.read` layer-2 re-check can still
 /// refuse afterwards. Caller-derived text goes through `log_field::untrusted`, as in
 /// [`emit_deny`].
-pub(crate) fn emit_allow(f: &DecisionFields, rule: &Rule) {
+pub fn emit_allow(f: &DecisionFields, rule: &Rule) {
     tracing::info!(
         target: ALLOW_TARGET,
         task_id = log_field::untrusted(f.task_id),

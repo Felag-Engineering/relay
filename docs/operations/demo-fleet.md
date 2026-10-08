@@ -890,7 +890,7 @@ Totals: 6 `role=web`, 2 `role=db`, 1 `role=bastion`; 4 `env=prod`, 2 `env=stagin
 no `env` label at all (the three base Nodes, deliberately unlabelled because their
 blocks stay untouched). `list_nodes()` shows three distinct `policy_fingerprint`
 values, one per Policy fixture — the SHA-256 of that file's raw bytes
-(`daemon/src/policy.rs`'s `policy_fingerprint`), computable locally with
+(`daemon/crates/relay-policy/src/lib.rs`'s `policy_fingerprint`), computable locally with
 `sha256sum docker/fixtures/policy.{web,db,bastion}.toml` and not reproduced here
 because it changes on any edit to the file, including a comment.
 

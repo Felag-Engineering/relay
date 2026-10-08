@@ -46,9 +46,7 @@ relay/cmd/relay/main.go
 relay/packaging/**
 
 # Daemon: everything is privileged, but these are the lines
-daemon/src/policy.rs
 daemon/src/policy_check.rs
-daemon/src/hardened_open.rs
 daemon/tests/policy_never_opened_for_write.rs
 daemon/src/selfref.rs
 daemon/src/executor.rs
@@ -110,7 +108,6 @@ docker/relay.Dockerfile
 deploy/compose/**
 relay/internal/approvalnotify/**
 relay/cmd/relay/freeze_signal.go
-daemon/src/policy/**
 daemon/src/dispatch/**
 
 # Added 2026-10-05 (CI hardening; the owner confirms at review): the configuration of the
@@ -121,3 +118,11 @@ daemon/src/dispatch/**
 daemon/deny.toml
 daemon/clippy.toml
 relay/govulncheck-exceptions.txt
+
+# Added 2026-10-07 (#889, owner decision): the daemon is a Cargo workspace. Every member
+# crate under daemon/crates/ (src/, Cargo.toml, clippy.toml, ban_probe.rs, relay-proto's
+# build.rs) is the code and the clippy write ban the lines above used to name; the smoke
+# test that guards that ban sits beside the other daemon structural guards. The lines for
+# daemon/src/policy.rs, hardened_open.rs and policy/** are retired: those files moved here.
+daemon/crates/**
+daemon/tests/clippy_write_ban.rs

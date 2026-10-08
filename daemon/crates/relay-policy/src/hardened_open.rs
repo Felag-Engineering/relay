@@ -70,6 +70,10 @@ pub enum HardenedRejection {
 /// against. The caller must read from the returned [`File`], never reopen
 /// `path`.
 pub fn open_hardened(path: &Path) -> Result<(File, Metadata), HardenedRejection> {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the one read-only hardened open; chain pinned by tests/policy_never_opened_for_write.rs"
+    )]
     let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -107,6 +111,10 @@ fn owner_is_trusted(file_uid: u32, daemon_euid: u32) -> bool {
     file_uid == 0 || file_uid == daemon_euid
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "test fixtures; the non-test lib target is linted separately"
+)]
 #[cfg(test)]
 mod tests {
     use super::*;

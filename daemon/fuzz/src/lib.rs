@@ -24,12 +24,9 @@
 //! inconsistency); a plain `Err` from `decode` is the correct outcome for
 //! malformed bytes and is never a finding.
 
-/// Prost-generated wire types, compiled from /proto by build.rs (ADR-0007:
-/// generated, never hand-edited).
-#[allow(clippy::all)]
-pub mod pb {
-    include!(concat!(env!("OUT_DIR"), "/relay.v1.rs"));
-}
+/// Prost-generated wire types, from the workspace's relay-proto crate (ADR-0007:
+/// generated once from /proto, never hand-edited).
+pub use relay_proto as pb;
 
 use prost::Message;
 

@@ -5,14 +5,14 @@
 //! `untrusted_list` (Debug escaping plus a length cap).
 //!
 //! `clippy.toml`'s `disallowed-methods` cannot express "this field of this
-//! macro must be wrapped", so this test scans `daemon/src` for `tracing`
+//! macro must be wrapped", so this test scans every workspace `src/` for `tracing`
 //! macros instead, as `policy_never_opened_for_write.rs` scans for file opens.
 //!
 //! # It proves
 //!
 //! * every field of every production `tracing` macro call that names one of
 //!   the macros in `macro_re` (bare, `tracing::`- or `::tracing::`-qualified,
-//!   with `()`, `[]` or `{}`) in `daemon/src` is either
+//!   with `()`, `[]` or `{}`) in `daemon/src` and `daemon/crates/*/src` is either
 //!   wrapped in `log_field::untrusted` / `untrusted_list` (called with no `%`
 //!   or `?` sigil: a sigil on a wrapped value fails deliberately), or is an
 //!   exact entry in [`LOCAL_FIELDS`] keyed by (file, field, normalised
@@ -56,7 +56,7 @@ use std::path::Path;
 
 use regex::Regex;
 
-/// A reviewed local-only field: (file under `src/`, field, normalised
+/// A reviewed local-only field: (file, relative to `daemon/`, field, normalised
 /// expression, message literal, count, why). NO wire-derived field belongs
 /// here; wrap it instead.
 type LocalField = (
@@ -70,7 +70,7 @@ type LocalField = (
 
 const LOCAL_FIELDS: &[LocalField] = &[
     (
-        "enroll.rs",
+        "src/enroll.rs",
         "hostname",
         "hostname",
         "already enrolled, reusing persisted identity",
@@ -78,7 +78,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "local hostname (operator host)",
     ),
     (
-        "enroll.rs",
+        "src/enroll.rs",
         "hostname",
         "hostname",
         "enrollment complete",
@@ -86,7 +86,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "local hostname (operator host)",
     ),
     (
-        "enroll.rs",
+        "src/enroll.rs",
         "hostname",
         "hostname",
         "starting enrollment",
@@ -94,7 +94,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "local hostname (operator host)",
     ),
     (
-        "enroll.rs",
+        "src/enroll.rs",
         "label_count",
         "label_count",
         "enrollment complete",
@@ -102,7 +102,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "count",
     ),
     (
-        "enroll.rs",
+        "src/enroll.rs",
         "label_count",
         "label_count",
         "starting enrollment",
@@ -110,7 +110,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "count",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "cap",
         "MAX_INFLIGHT_TASKS",
         "refusing Task: daemon at in-flight backstop",
@@ -118,7 +118,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "compile-time const",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "drained",
         "summary.drained",
         "graceful shutdown: in-flight Tasks drained",
@@ -126,7 +126,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "count",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "error",
         "%e",
         "policy load failed; using deny-all policy (fail closed)",
@@ -134,7 +134,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "PolicyError from the local root-owned Policy file",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "fingerprint",
         "%p.fingerprint()",
         "policy loaded",
@@ -142,7 +142,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "local SHA-256 hex of the Policy file",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "in_flight",
         "summary.in_flight",
         "graceful shutdown: in-flight Tasks drained",
@@ -150,7 +150,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "count",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "killed",
         "summary.killed",
         "graceful shutdown: in-flight Tasks drained",
@@ -158,7 +158,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "count",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "path",
         "%config.policy_path.display()",
         "policy load failed; using deny-all policy (fail closed)",
@@ -166,7 +166,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set Policy path",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "path",
         "%config.policy_path.display()",
         "policy loaded",
@@ -174,7 +174,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set Policy path",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "reason",
         "ctx.shutdown.reason()",
         "graceful shutdown: in-flight Tasks drained",
@@ -182,7 +182,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "static signal name from the shutdown module",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "relay",
         "%config.relay_addr",
         "Relay closed stream; reconnecting",
@@ -190,7 +190,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set relay address from the EnvironmentFile",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "relay",
         "%config.relay_addr",
         "Relay rejected stream open; will retry",
@@ -198,7 +198,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set relay address from the EnvironmentFile",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "relay",
         "%config.relay_addr",
         "relay-daemon starting",
@@ -206,7 +206,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set relay address from the EnvironmentFile",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "relay",
         "%config.relay_addr",
         "stream dropped mid-session; reconnecting",
@@ -214,7 +214,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set relay address from the EnvironmentFile",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "scheme",
         "%scheme",
         "endpoint scheme invalid (must be https); refusing to connect",
@@ -222,7 +222,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set relay address scheme",
     ),
     (
-        "main.rs",
+        "src/main.rs",
         "unix_millis",
         "ping.unix_millis",
         "received Ping from Relay",
@@ -230,7 +230,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "i64 from Ping; an integer cannot carry text",
     ),
     (
-        "policy.rs",
+        "crates/relay-policy/src/lib.rs",
         "mode",
         "format!(\"{mode:#o}\")",
         "policy file is group/world-writable; refusing to load (fail closed)",
@@ -238,7 +238,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "file mode integer",
     ),
     (
-        "policy.rs",
+        "crates/relay-policy/src/lib.rs",
         "path",
         "%path.display()",
         "policy file is group/world-writable; refusing to load (fail closed)",
@@ -246,7 +246,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set Policy path",
     ),
     (
-        "policy.rs",
+        "crates/relay-policy/src/lib.rs",
         "path",
         "%path.display()",
         "policy file is not a regular file; refusing to load (fail closed)",
@@ -254,7 +254,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set Policy path",
     ),
     (
-        "policy.rs",
+        "crates/relay-policy/src/lib.rs",
         "path",
         "%path.display()",
         "policy file is not owned by root or the daemon euid; refusing to load (fail closed)",
@@ -262,7 +262,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set Policy path",
     ),
     (
-        "policy.rs",
+        "crates/relay-policy/src/lib.rs",
         "path",
         "%path.display()",
         "policy file path is a symlink; refusing to follow (fail closed)",
@@ -270,7 +270,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set Policy path",
     ),
     (
-        "policy.rs",
+        "crates/relay-policy/src/lib.rs",
         "uid",
         "uid",
         "policy file is not owned by root or the daemon euid; refusing to load (fail closed)",
@@ -278,7 +278,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "file owner integer",
     ),
     (
-        "policy/decision_log.rs",
+        "crates/relay-policy/src/decision_log.rs",
         "argc",
         "f.argc",
         "policy allowed",
@@ -286,7 +286,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "count",
     ),
     (
-        "policy/decision_log.rs",
+        "crates/relay-policy/src/decision_log.rs",
         "argc",
         "f.argc",
         "{message}",
@@ -294,7 +294,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "count",
     ),
     (
-        "policy/decision_log.rs",
+        "crates/relay-policy/src/decision_log.rs",
         "argv_digest",
         "%f.argv_digest",
         "policy allowed",
@@ -302,7 +302,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "local SHA-256 hex",
     ),
     (
-        "policy/decision_log.rs",
+        "crates/relay-policy/src/decision_log.rs",
         "argv_digest",
         "%f.argv_digest",
         "{message}",
@@ -310,7 +310,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "local SHA-256 hex",
     ),
     (
-        "policy/decision_log.rs",
+        "crates/relay-policy/src/decision_log.rs",
         "message",
         "{message}",
         "{message}",
@@ -318,7 +318,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "&'static str by the emit_deny signature",
     ),
     (
-        "policy/decision_log.rs",
+        "crates/relay-policy/src/decision_log.rs",
         "policy_fingerprint",
         "%f.policy_fingerprint",
         "policy allowed",
@@ -326,7 +326,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "local SHA-256 hex of the Policy file",
     ),
     (
-        "policy/decision_log.rs",
+        "crates/relay-policy/src/decision_log.rs",
         "policy_fingerprint",
         "%f.policy_fingerprint",
         "{message}",
@@ -334,7 +334,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "local SHA-256 hex of the Policy file",
     ),
     (
-        "policy/decision_log.rs",
+        "crates/relay-policy/src/decision_log.rs",
         "risk_class",
         "risk_class_str(f.risk_class)",
         "policy allowed",
@@ -342,7 +342,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "&'static str from RiskClass",
     ),
     (
-        "policy/decision_log.rs",
+        "crates/relay-policy/src/decision_log.rs",
         "risk_class",
         "risk_class_str(f.risk_class)",
         "{message}",
@@ -350,7 +350,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "&'static str from RiskClass",
     ),
     (
-        "policy/decision_log.rs",
+        "crates/relay-policy/src/decision_log.rs",
         "rule",
         "?rule",
         "policy allowed",
@@ -358,7 +358,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "Rule built only after the wire name equals a Policy-file name: Policy-authored content",
     ),
     (
-        "policy/decision_log.rs",
+        "crates/relay-policy/src/decision_log.rs",
         "rule",
         "rule.map(tracing::field::debug)",
         "{message}",
@@ -366,7 +366,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "Rule built only after the wire name equals a Policy-file name: Policy-authored content",
     ),
     (
-        "policy/decision_log.rs",
+        "crates/relay-policy/src/decision_log.rs",
         "tier",
         "f.tier.as_str()",
         "policy allowed",
@@ -374,7 +374,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "&'static str from Tier",
     ),
     (
-        "policy/decision_log.rs",
+        "crates/relay-policy/src/decision_log.rs",
         "tier",
         "f.tier.as_str()",
         "{message}",
@@ -382,7 +382,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "&'static str from Tier",
     ),
     (
-        "shutdown.rs",
+        "src/shutdown.rs",
         "HANDLERS_INSTALLED_MSG",
         "{HANDLERS_INSTALLED_MSG}",
         "{HANDLERS_INSTALLED_MSG}",
@@ -390,7 +390,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "const message text",
     ),
     (
-        "shutdown.rs",
+        "src/shutdown.rs",
         "reason",
         "reason",
         "shutdown signal received; beginning graceful drain",
@@ -398,7 +398,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "&'static str, \"SIGTERM\" or \"SIGINT\"",
     ),
     (
-        "templates.rs",
+        "src/templates.rs",
         "error",
         "%e",
         "failed to load template set; continuing with NO Template Operations (fail closed)",
@@ -406,7 +406,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "error from local root-owned Template files",
     ),
     (
-        "templates.rs",
+        "src/templates.rs",
         "path",
         "%entry.path().display()",
         "template path is not valid UTF-8; skipped",
@@ -414,7 +414,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "directory entry of the local Template root",
     ),
     (
-        "templates.rs",
+        "src/templates.rs",
         "path",
         "%pack_path.display()",
         "template pack contains a nested directory; not traversed (packs are one level deep)",
@@ -422,7 +422,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "directory entry of the local Template root",
     ),
     (
-        "templates.rs",
+        "src/templates.rs",
         "root",
         "%root.display()",
         "failed to load template set; continuing with NO Template Operations (fail closed)",
@@ -430,7 +430,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set Template root",
     ),
     (
-        "templates.rs",
+        "src/templates.rs",
         "root",
         "%root.display()",
         "loaded template set",
@@ -438,7 +438,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set Template root",
     ),
     (
-        "templates.rs",
+        "src/templates.rs",
         "template_set_fingerprint",
         "%set.fingerprint()",
         "loaded template set",
@@ -446,7 +446,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "local SHA-256 hex of the Template set",
     ),
     (
-        "templates.rs",
+        "src/templates.rs",
         "templates",
         "set.len()",
         "loaded template set",
@@ -454,7 +454,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "count",
     ),
     (
-        "tunnel.rs",
+        "src/tunnel.rs",
         "relay",
         "relay",
         "Relay unreachable; will retry",
@@ -462,7 +462,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set relay address from the EnvironmentFile",
     ),
     (
-        "tunnel.rs",
+        "src/tunnel.rs",
         "relay",
         "relay",
         "TLS handshake rejected by Relay — client cert untrusted, expired, or revoked; will retry",
@@ -470,7 +470,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set relay address from the EnvironmentFile",
     ),
     (
-        "tunnel.rs",
+        "src/tunnel.rs",
         "relay",
         "relay",
         "connect failed; will retry",
@@ -478,7 +478,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set relay address from the EnvironmentFile",
     ),
     (
-        "tunnel.rs",
+        "src/tunnel.rs",
         "retry_in",
         "?retry_in",
         "Relay unreachable; will retry",
@@ -486,7 +486,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "Duration",
     ),
     (
-        "tunnel.rs",
+        "src/tunnel.rs",
         "retry_in",
         "?retry_in",
         "TLS handshake rejected by Relay — client cert untrusted, expired, or revoked; will retry",
@@ -494,7 +494,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "Duration",
     ),
     (
-        "tunnel.rs",
+        "src/tunnel.rs",
         "retry_in",
         "?retry_in",
         "connect failed; will retry",
@@ -847,15 +847,30 @@ fn scan_source(rel: &str, src: &str) -> Scan {
     scan
 }
 
+/// Every workspace `src/` root: the bin's, plus each `crates/<member>/src`, found by
+/// listing the directory so a new member is walked without editing this test.
+fn src_roots() -> Vec<std::path::PathBuf> {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut roots = vec![manifest.join("src")];
+    let mut members: Vec<_> = fs::read_dir(manifest.join("crates"))
+        .expect("read crates dir")
+        .map(|e| e.expect("dir entry").path())
+        .filter(|p| p.is_dir())
+        .collect();
+    members.sort();
+    roots.extend(members.into_iter().map(|m| m.join("src")));
+    roots
+}
+
 fn source_files() -> Vec<(String, String)> {
-    fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) {
+    fn walk(dir: &Path, manifest: &Path, out: &mut Vec<(String, String)>) {
         for entry in fs::read_dir(dir).expect("read src dir") {
             let path = entry.expect("dir entry").path();
             if path.is_dir() {
-                walk(&path, root, out);
+                walk(&path, manifest, out);
             } else if path.extension().is_some_and(|e| e == "rs") {
                 let rel = path
-                    .strip_prefix(root)
+                    .strip_prefix(manifest)
                     .unwrap()
                     .components()
                     .map(|c| c.as_os_str().to_string_lossy().into_owned())
@@ -865,9 +880,17 @@ fn source_files() -> Vec<(String, String)> {
             }
         }
     }
-    let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut out = Vec::new();
-    walk(root, root, &mut out);
+    for root in src_roots() {
+        let before = out.len();
+        walk(&root, manifest, &mut out);
+        assert!(
+            out.len() > before,
+            "{} holds no .rs file; the walk is broken",
+            root.display()
+        );
+    }
     out.sort();
     out
 }

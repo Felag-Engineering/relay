@@ -1,0 +1,158 @@
+# Clippy configuration for relay-daemon; the lints that read it are enabled in
+# Cargo.toml's [workspace.lints.clippy]. No `msrv` here on purpose: clippy then reads
+# Cargo.toml's rust-version, which stays the single place the floor is named.
+
+# Invariant 1: arguments can never change which command runs. The mechanism is that
+# exactly one function builds a process (executor.rs, argv only, never /bin/sh), and
+# every tier reaches it with an argv already fixed by Policy or a Template. A second
+# Command::new anywhere in the daemon would be a spawn path outside that review, so it
+# fails the build; the one sanctioned site carries an explicit allow.
+disallowed-methods = [
+  { path = "std::process::Command::new", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "tokio::process::Command::new", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  # libc is a direct dependency, so its exec/fork/spawn family is a route around the
+  # Command ban above.
+  { path = "libc::execv", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "libc::execve", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "libc::execvp", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "libc::execvpe", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "libc::execl", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "libc::execle", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "libc::execlp", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "libc::fexecve", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "libc::fork", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "libc::vfork", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "libc::posix_spawn", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "libc::posix_spawnp", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "libc::system", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  # The filesystem-write ban. The nearest clippy.toml REPLACES a parent's rather than
+  # merging, so this file repeats the exec ban above in full; the read-only crates'
+  # copies are byte-identical (tests/clippy_write_ban.rs). A path whose first segment
+  # is not a dependency of the linted crate is skipped by clippy, so one file serves
+  # relay-policy, relay-exec and relay-ops. Invariant 2: the Policy path opens files
+  # read-only, and nothing in a read-only crate writes the filesystem. The one
+  # sanctioned read-only open carries an item-level allow (hardened_open.rs).
+  # std::fs free functions
+  { path = "std::fs::write", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::rename", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::copy", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::remove_file", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::remove_dir", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::remove_dir_all", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::create_dir", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::create_dir_all", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::set_permissions", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::hard_link", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::soft_link", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  # std::fs::File
+  { path = "std::fs::File::create", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::File::create_new", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::File::set_len", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::File::set_permissions", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  # std::fs::OpenOptions
+  { path = "std::fs::OpenOptions::write", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::OpenOptions::append", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::OpenOptions::create", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::OpenOptions::create_new", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::OpenOptions::truncate", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  # std::fs::DirBuilder
+  { path = "std::fs::DirBuilder::new", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  # std::os::unix::fs
+  { path = "std::os::unix::fs::symlink", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::os::unix::fs::chown", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::os::unix::fs::lchown", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::os::unix::fs::fchown", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  # std::os::unix::fs::OpenOptionsExt
+  { path = "std::os::unix::fs::OpenOptionsExt::custom_flags", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  # tokio::fs free functions
+  { path = "tokio::fs::write", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::rename", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::copy", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::remove_file", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::remove_dir", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::remove_dir_all", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::create_dir", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::create_dir_all", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::set_permissions", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::hard_link", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::symlink", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  # tokio::fs::File
+  { path = "tokio::fs::File::create", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::File::create_new", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::File::set_len", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::File::set_permissions", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  # tokio::fs::OpenOptions
+  { path = "tokio::fs::OpenOptions::write", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::OpenOptions::append", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::OpenOptions::create", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::OpenOptions::create_new", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::OpenOptions::truncate", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "tokio::fs::OpenOptions::custom_flags", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  # tokio::fs::DirBuilder
+  { path = "tokio::fs::DirBuilder::new", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  # libc
+  { path = "libc::open", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::open64", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::openat", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::openat64", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::creat", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::creat64", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::write", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::pwrite", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::pwrite64", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::writev", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::unlink", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::unlinkat", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::rename", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::renameat", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::renameat2", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::mkdir", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::mkdirat", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::mkfifo", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::mkfifoat", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::mknod", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::mknodat", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::chmod", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::fchmod", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::fchmodat", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::chown", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::fchown", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::lchown", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::fchownat", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::truncate", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::truncate64", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::ftruncate", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::ftruncate64", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::link", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::linkat", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::symlink", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::symlinkat", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::remove", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::rmdir", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::fallocate", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::fallocate64", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::posix_fallocate", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::fopen", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::fopen64", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::freopen", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::mkstemp", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::syscall", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::File::set_times", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::fs::File::set_modified", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::os::unix::net::UnixListener::bind", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "std::os::unix::net::UnixDatagram::bind", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::pwritev", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::pwritev2", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::copy_file_range", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::splice", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::sendfile", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::utimensat", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::futimens", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::setxattr", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::fsetxattr", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::lsetxattr", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::removexattr", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::fremovexattr", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::lremovexattr", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+  { path = "libc::open_by_handle_at", reason = "read-only crate (AGENTS.md invariant 2, #889)" },
+]

@@ -1,0 +1,19 @@
+[package]
+name = "relay-log"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "The daemon's log-field escaping and its one log formatting layer."
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Compiles ban_probe.rs (scripts/clippy-ban-probe.sh). Never enabled by a dependency.
+ban-probe = []
+
+[dependencies]
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true
