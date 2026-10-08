@@ -1163,6 +1163,13 @@ func main() {
 		go sweeper.Run(context.Background(), func(err error) {
 			slog.Error("approval sweep failed", "err", err)
 		})
+
+		// The audit chain checkpoint (#896): a metadata-only log line an
+		// operator keeps as an anchor for relay-audit-verify -expect.
+		go auditsink.NewCheckpointer(deps.store.AuditChain(), auditsink.DefaultCheckpointInterval, slog.Default()).
+			Run(context.Background(), func(err error) {
+				slog.Error("audit chain checkpoint failed", "err", err)
+			})
 	}
 
 	if err := srv.Serve(lis); err != nil {
