@@ -222,7 +222,7 @@ lint: fmt-relay lint-relay lint-daemon
 ## --- proto codegen ---
 # Go types are generated (via buf) into relay/internal/relay/v1/ and committed.
 # CI runs make proto-tools then make proto for the proto-drift check; Rust types are
-# generated at cargo-build time by daemon/crates/relay-proto/build.rs (tonic-build), so there is no
+# generated at cargo-build time by daemon/crates/relay-proto/build.rs (tonic-prost-build), so there is no
 # Rust step here.  The Go generators are `tool` directives in relay/go.mod; only buf needs
 # `make proto-tools` before regenerating locally.
 proto: proto-tools-check

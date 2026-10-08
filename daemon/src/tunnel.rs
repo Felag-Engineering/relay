@@ -13,8 +13,8 @@ type Result<T, E = crate::identity::IdentityError> = std::result::Result<T, E>;
 /// Establishes a mutual-TLS channel to the Relay's Tunnel service.
 ///
 /// The Relay's server certificate is verified against `id.ca_bundle_pem` — the
-/// sole trust root. No system roots are consulted (tonic's `tls` feature only,
-/// not `tls-roots`/`tls-webpki-roots`), so a wrong-CA Relay is refused at the
+/// sole trust root. No system roots are consulted (tonic's `tls-ring` feature only,
+/// not `tls-native-roots`/`tls-webpki-roots`), so a wrong-CA Relay is refused at the
 /// TLS handshake. `connect()` is eager (not lazy): a mismatched server cert
 /// fails immediately, not on the first RPC.
 ///
