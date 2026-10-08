@@ -219,15 +219,15 @@ One thing is missing, and it matters here:
 
 ```bash
 # Setup script — configured in the environment dialog at claude.ai/code
-make proto-tools
+make tools
 ```
 
-`buf` is not pre-installed. Without it, `verify-proto` **skips** the proto-drift and
-proto-breaking gates with a notice — so a routine touching `/proto` would report a green
-`make verify` that never checked the contract. Setup scripts run once and the filesystem is
-snapshotted, so this costs nothing per run. `make proto-tools` installs only `buf`; the Go
-generators (`protoc-gen-go`, `protoc-gen-go-grpc`) are `tool` directives in `relay/go.mod` that
-`go tool` builds on demand, so the image needs nothing else for codegen.
+Every Go-built tool (`buf`, `golangci-lint`, `govulncheck`, `actionlint`, `gitleaks`) is pinned
+in a `tools/` module, and `go tool` builds it on first use; the Go generators (`protoc-gen-go`,
+`protoc-gen-go-grpc`) are `tool` directives in `relay/go.mod`. The setup script only pre-builds
+them into the snapshotted Go build cache, so no run pays for it. Leaving it out skips nothing —
+the first run is just slower. The tools that are not Go-built (`shellcheck`, `zizmor`,
+`cargo-deny`) are the ones `make verify` can still record as skipped.
 
 Network access: **Trusted** is sufficient. It covers crates.io, the Go module proxy, and GitHub.
 
@@ -271,7 +271,7 @@ To stop permanently rather than temporarily, disable the routine at claude.ai/co
    the queue skips anything whose `Blocked by:` is still open.
 3. **Prefer independent issues** when triaging. Work that depends on an unmerged PR cannot be
    done by a loop that never merges.
-4. **Check the environment's setup script** actually installs `buf`.
+4. **Check the environment's setup script** runs `make tools` (optional: it only pre-builds the pinned Go tools).
 5. **Confirm `loop:halt` is clear.**
 6. **Re-file under your own name** any `loop:ready` issue a non-maintainer opened; the queue
    reports and skips it.

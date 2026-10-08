@@ -126,3 +126,7 @@ relay/govulncheck-exceptions.txt
 # daemon/src/policy.rs, hardened_open.rs and policy/** are retired: those files moved here.
 daemon/crates/**
 daemon/tests/clippy_write_ban.rs
+
+# Added 2026-10-08 (#891; the owner confirms at review): the pinned tool modules. Each
+# decides which buf, linter or scanner binary a gate runs, so a bump is a gate change.
+tools/**

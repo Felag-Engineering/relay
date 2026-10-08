@@ -13,9 +13,10 @@ permissions:
 jobs:
 
   # The scan runs every night regardless of code changes: advisory databases move
-  # even when the code does not. Only the scanners' own install is cached — compiling
-  # cargo-audit from source was most of this job's runtime. The advisory data itself
-  # is fetched fresh on every run.
+  # even when the code does not. Two things are cached: cargo-audit's install (compiling
+  # it from source was most of this job's runtime) and the Go build cache, which carries
+  # the govulncheck and gitleaks that `go tool` builds from tools/. The advisory data
+  # itself is fetched fresh on every run.
   scan:
     name: Vulnerability scan
     runs-on: ubuntu-latest
@@ -24,7 +25,6 @@ jobs:
       contents: read
       issues: write # the report step creates or updates the security-scan tracking issue
     env:
-      GOVULNCHECK_VERSION: v1.1.4  # pinned; full module path in the install step
       CARGO_AUDIT_VERSION: 0.22.2  # pinned for supply-chain reproducibility
 
     steps:
@@ -44,37 +44,33 @@ jobs:
         with:
           toolchain: stable
 
-      # Keyed on the Go version too: govulncheck reports standard-library
-      # vulnerabilities for the toolchain it runs under.
-      - name: Scanner cache key
-        id: keys
-        run: echo "go=$(grep -E '^(go|toolchain) ' relay/go.mod | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore scanner binaries
+      - name: Restore cargo-audit
         id: scanners
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            ~/go/bin/govulncheck
-            ~/.cargo/bin/cargo-audit
-          key: scanners-go-${{ steps.keys.outputs.go }}-govulncheck-${{ env.GOVULNCHECK_VERSION }}-cargo-audit-${{ env.CARGO_AUDIT_VERSION }}
-
-      - name: Install govulncheck
-        if: steps.scanners.outputs.cache-hit != 'true'
-        run: go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          path: ~/.cargo/bin/cargo-audit
+          key: scanners-cargo-audit-${{ env.CARGO_AUDIT_VERSION }}
 
       - name: Install cargo-audit
         if: steps.scanners.outputs.cache-hit != 'true'
         run: cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked
 
-      - name: Save scanner binaries
+      - name: Save cargo-audit
         if: steps.scanners.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            ~/go/bin/govulncheck
-            ~/.cargo/bin/cargo-audit
+          path: ~/.cargo/bin/cargo-audit
           key: ${{ steps.scanners.outputs.cache-primary-key }}
+
+      # govulncheck is pinned in tools/govulncheck and built by `go tool` into this cache.
+      # It reports standard-library vulnerabilities for the toolchain it runs under, and
+      # that stays relay/go.mod's: make exports GOTOOLCHAIN from it, and the cache key
+      # hashes it.
+      - name: Restore Go build and module cache
+        id: go-cache
+        uses: ./.github/actions/go-cache-restore
+        with:
+          prefix: go-${{ github.job }}
 
       # Non-blocking: capture output and exit code; report step decides what to file.
       # NOTE: GH Actions `run:` runs under `bash -e`, so when a scan exits non-zero
@@ -97,11 +93,8 @@ jobs:
 
       # Every commit in the history, not just the tree: a secret committed and deleted
       # later is still in every clone. Blocking — a leaked credential is rotated now,
-      # not triaged with the advisories — so a finding turns this job red. gitleaks is a
-      # pinned `go install` in the Makefile, restored from the shared Go tool cache.
-      - name: Go tools (pinned in the Makefile)
-        uses: ./.github/actions/go-tools
-
+      # not triaged with the advisories — so a finding turns this job red. gitleaks is
+      # pinned in tools/gitleaks and built by `go tool` into the Go cache restored above.
       # Output is captured for the report step (redacted: rule, file, commit — never the
       # secret), and the step still fails on a finding.
       - name: Secrets scan, full history (gitleaks)
@@ -121,6 +114,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/security-nightly-report.sh
+
+      # After the blocking gitleaks step, and on !cancelled(), so a night with a finding
+      # still saves the cache. No ref check: Actions caches are scoped to the branch that
+      # saved them, so a workflow_dispatch run on another branch cannot seed main's.
+      - name: Save Go build and module cache
+        if: ${{ !cancelled() && steps.go-cache.outputs.cache-hit != 'true' }}
+        uses: ./.github/actions/go-cache-save
+        with:
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   # Whether tonight's fuzz jobs run: always on workflow_dispatch and on the
   # Wednesday/Sunday floor, otherwise only when something they exercise changed

@@ -8,10 +8,10 @@ Read [AGENTS.md](AGENTS.md) first (the architecture invariants and conventions) 
 
 - Toolchains: Go at the version `relay/go.mod` names (the `Makefile` pins it), and stable Rust
   at or above `rust-version` in `daemon/Cargo.toml`.
-- `make tools` once, for the proto plugins and linters.
+- `make tools` (optional) pre-builds the pinned Go tools; any target builds them on first use.
 - `make build test lint` is the inner loop.
 - **`make verify` before opening a PR.** It mirrors CI gate for gate. A skipped gate (for
-  example `buf` absent) is not a passed gate; say so in the PR body.
+  example `zizmor` or `cargo-deny` absent) is not a passed gate; say so in the PR body.
 - Wire and Operation changes start in `/proto` and are regenerated with `make proto`, never
   hand-edited (invariant 8).
 - Optional: `make dev-fleet-up` runs a Relay and real relay-daemons in Docker; see

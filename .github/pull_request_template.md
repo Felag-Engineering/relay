@@ -12,11 +12,11 @@ Behaviour, from the user's perspective. Not a file-by-file list.
 
 - [ ] `make verify` green
 
-**Gates skipped:** none / `proto-drift` + `proto-breaking` (`buf` absent) / …
+**Gates skipped:** none / `lint-zizmor` (`zizmor` absent) / …
 
-> A skipped gate is not a passed gate. If `buf` was unavailable and this diff touches
-> `/proto`, say so here — CI runs those gates regardless, and the reviewer needs to know
-> the local run did not.
+> A skipped gate is not a passed gate. If `make verify` recorded a skip (`shellcheck`,
+> `zizmor` or `cargo-deny` absent), say so here — CI runs those gates regardless, and the
+> reviewer needs to know the local run did not.
 
 ## Reviews
 

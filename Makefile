@@ -3,7 +3,7 @@
 # proto codegen feeds both from /proto (the contract spine, ADR-0007).
 
 # Prepend toolchain dirs so `make` works in non-login shells.
-# Schedulers (cron, Claude routines) don't source ~/.profile, so cargo/go/buf may be absent.
+# Schedulers (cron, Claude routines) don't source ~/.profile, so cargo/go may be absent.
 export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/go/bin:$(PATH)
 
 # The Go toolchain every `make` target builds and tests with (#667).
@@ -17,11 +17,10 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 # the go command deletes it as redundant.
 #
 # `+auto` rather than a bare name: this repo's modules get the pinned toolchain,
-# but a `go install <tool>@<version>` below whose own go.mod needs a NEWER one
-# still upgrades instead of hard-failing. That is also the one residual path by
-# which a newer toolchain runs anything here — every tool pinned below asks for
-# 1.26.x or older today, so none of them takes it, and the relay module never
-# does either way.
+# but a tools/<name> module whose go line needs a NEWER one still upgrades instead
+# of hard-failing. That is also the one residual path by which a newer toolchain
+# runs anything here — every tool module under tools/ asks for 1.26.x or older
+# today, so none of them takes it, and the relay module never does either way.
 #
 # Reach, stated so it is not over-read: GOTOOLCHAIN only re-execs the `go`
 # command. Sibling binaries are not covered — which is why gofmt below is
@@ -38,14 +37,24 @@ ifneq ($(GO_TOOLCHAIN),)
 export GOTOOLCHAIN ?= $(GO_TOOLCHAIN)
 endif
 
-.PHONY: build test lint proto proto-tools proto-tools-check proto-check proto-breaking \
+# The pinned dev tools: one Go module per tool under tools/<name>/ (see tools/README.md).
+GO_TOOLS := buf golangci-lint govulncheck actionlint gitleaks
+
+# tool_bin prints the path of tools/<name>'s pinned binary, building it into GOCACHE if
+# needed. GOCACHE is content-addressed, so the binary a checkout runs is the one its own
+# tools/<name>/go.sum names: per-checkout and worktree-safe by construction, and nothing
+# reads the shared $GOPATH/bin. Every caller assigns the path to a variable before running
+# it, so a failed build stops the recipe instead of running an empty command.
+tool_bin = GOWORK=off go -C "$(CURDIR)/tools/$(1)" tool -n $(1)
+
+.PHONY: build test lint proto proto-tools proto-check proto-breaking \
         build-relay build-daemon \
         test-relay test-relay-race test-daemon test-strict-umask test-strict-umask-relay \
-        test-strict-umask-daemon lint-relay lint-daemon check-daemon-bans lint-tools tools \
+        test-strict-umask-daemon lint-relay lint-daemon check-daemon-bans tools \
         clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release print-release-daemon-bin \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
-        test-security-surface test-codex-review test-proto-tools-check test-ci-changed-paths \
+        test-security-surface test-codex-review test-ci-changed-paths \
         test-check-docs test-smoke-test test-maintainer-check \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
         demo-build demo-reset demo-reset-oauth demo-fault demo-up demo-up-oauth demo-down demo-creds \
@@ -60,7 +69,7 @@ endif
 # the gap has bitten: CI additionally runs the race detector, the proto-drift
 # and proto-breaking gates, the operation-schema drift check, the devharness
 # absence check, the security-surface gate self-test, the codex-review gate
-# self-test, the proto-tools pin check self-test, the changed-paths classifier
+# self-test, the changed-paths classifier
 # self-test, the docs-check, smoke-test, maintainer-check and dev-fleet Makefile
 # guard self-tests, the strict-umask test lane, both cross-binary suites, the
 # shell/workflow linters (lint-ci), the secrets scan and the daemon's cargo-deny
@@ -75,17 +84,17 @@ endif
 # It is deliberately slower than `make test` — race builds and two e2e suites —
 # and deliberately not what you run on every save. Run it before opening a PR.
 #
-# The proto gates need `buf`, which is not part of a normal dev setup. When it
-# is absent they are SKIPPED WITH A NOTICE rather than silently passed over or
-# hard-failed: a check you did not run must not look like a check that passed.
-# Every such skip is collected, and verify's last line says how many there were
-# rather than claiming a full pass (the skip ledger, below). The same holds for the
-# CI-hardening gates' tools (shellcheck, actionlint, zizmor, gitleaks, cargo-deny):
-# under verify a missing one is a recorded skip; run on its own, it is a failure.
+# buf, golangci-lint, govulncheck, actionlint and gitleaks are built from tools/ by
+# `go tool` and so never absent where Go is: their gates always run. The tools that are
+# not Go-built (shellcheck, zizmor, cargo-deny) are SKIPPED WITH A NOTICE when absent
+# rather than silently passed over or hard-failed: a check you did not run must not
+# look like a check that passed. Every such skip is collected, and verify's last line
+# says how many there were rather than claiming a full pass (the skip ledger, below).
+# Under verify a missing one is a recorded skip; run on its own, it is a failure.
 verify: fmt lint-relay lint-daemon check-daemon-bans lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
         apiclient-check verify-proto docs-check test-security-surface \
-        test-codex-review test-proto-tools-check test-ci-changed-paths \
+        test-codex-review test-ci-changed-paths \
         test-check-docs test-smoke-test test-maintainer-check test-release-image-guard \
         test-dev-fleet-make test-integration test-crossbinary \
         lint-ci secrets-scan deny-daemon test-vuln-gate
@@ -105,11 +114,11 @@ verify: fmt lint-relay lint-daemon check-daemon-bans lint-devharness devharness-
 # Target-specific, so it reaches every prerequisite verify builds and nothing outside verify.
 verify: export GOFLAGS := -count=1
 
-# The skip ledger. A gate that cannot run here (no buf; no GitHub for the milestone check)
+# The skip ledger. A gate that cannot run here (no shellcheck; no GitHub for the milestone check)
 # appends one line naming itself; verify's last line reports them instead of claiming a
 # full pass. Created only when verify is a goal, and exported so the recursive $(MAKE) in
 # verify-proto and the scripts see the same file. Skips do NOT fail verify: each is a gate
-# CI runs unconditionally (its jobs install buf and hold a GitHub token), so a skip is a
+# CI runs unconditionally (its jobs install those tools and hold a GitHub token), so a skip is a
 # local tool gap, never a defect CI would reject — but it is reported as a skip, never as
 # a pass. RELAY_VERIFY_SKIPS unset (any target run on its own) records nothing.
 ifneq ($(filter verify,$(MAKECMDGOALS)),)
@@ -169,18 +178,10 @@ openapi-check:
 	cd relay && go test ./internal/controlplane/api/ -run 'TestOpenAPISpec|TestServedRoutes' -count=1
 
 # The proto gates (ci.yml: the proto job's proto-drift and proto-breaking steps; proto-check
-# includes buf lint), skipped with a notice when buf is unavailable — and recorded in verify's
-# skip ledger, so the skip reaches verify's last line.
-verify-proto:
-	@if command -v buf >/dev/null 2>&1; then \
-		$(MAKE) proto-check proto-breaking; \
-	else \
-		echo "verify: SKIPPING proto-check (buf lint, proto drift) and proto-breaking — buf not installed."; \
-		echo "verify:   these run in CI regardless. Install with: make proto-tools"; \
-		if [ -n "$$RELAY_VERIFY_SKIPS" ]; then \
-			echo "verify-proto: buf lint, proto drift and proto-breaking (buf not installed)" >> "$$RELAY_VERIFY_SKIPS"; \
-		fi; \
-	fi
+# includes buf lint). buf is pinned in tools/buf and built on first use, so these never skip.
+# proto-breaking diffs against PROTO_BREAKING_REF (origin/main by default): a checkout
+# without that ref fails here rather than skipping.
+verify-proto: proto-check proto-breaking
 
 ## --- build stamping (issue #249, ADR-0014) ---
 # scripts/build-version.sh derives "<version> <commit> <build-date>" once per
@@ -220,49 +221,27 @@ test: test-relay test-daemon
 lint: fmt-relay lint-relay lint-daemon
 
 ## --- proto codegen ---
-# Go types are generated (via buf) into relay/internal/relay/v1/ and committed.
-# CI runs make proto-tools then make proto for the proto-drift check; Rust types are
-# generated at cargo-build time by daemon/crates/relay-proto/build.rs (tonic-prost-build), so there is no
-# Rust step here.  The Go generators are `tool` directives in relay/go.mod; only buf needs
-# `make proto-tools` before regenerating locally.
-proto: proto-tools-check
-	cd proto && PATH="$$(go env GOPATH)/bin:$$PATH" buf generate
+# Go types are generated (via buf) into relay/internal/relay/v1/ and committed. CI runs
+# make proto, then checks for drift; Rust types are generated at cargo-build time by
+# daemon/crates/relay-proto/build.rs (tonic-prost-build), so there is no Rust step here.
+# buf is pinned in tools/buf; the Go generators are `tool` directives in relay/go.mod, run
+# by proto/buf.gen.yaml through `go tool`. Nothing needs installing first.
+proto:
+	bin=$$($(call tool_bin,buf)) && cd proto && "$$bin" generate
 
-# Install buf at its pinned version (into $(go env GOPATH)/bin). protoc-gen-go and
-# protoc-gen-go-grpc are no longer installed: they are `tool` directives in relay/go.mod,
-# run by proto/buf.gen.yaml through `go tool`, so their versions follow the committed
-# generated code and cannot be changed from a sibling worktree.
+# Compatibility alias, kept only because AGENTS.md (Toolchains, Proto codegen and
+# Schedulers) still tells agents to run `make proto-tools`. It installs nothing; it
+# pre-builds the pinned buf and generators into the Go build cache, which every proto
+# target also does on first use. Delete it once a human has updated AGENTS.md (#891,
+# Escalations).
 proto-tools:
-	go install github.com/bufbuild/buf/cmd/buf@v1.54.0
+	@$(call tool_bin,buf) >/dev/null && cd relay && go tool -n protoc-gen-go >/dev/null && go tool -n protoc-gen-go-grpc >/dev/null
 
-# The `go install` lines are the ONLY copy of the Makefile's tool pins. The Go proto generators
-# are not among them: they are `tool` directives in relay/go.mod (#891), pinned by go.sum and
-# built per checkout by `go tool`, so never reintroduce a `go install` line for them. Three consumers read
-# that exact line shape and none may be given a second copy: this recipe; ci.yml's cache-key
-# step in both the relay and proto jobs (`grep -hE '^\s+go install ' Makefile | sha256sum`); and
-# scripts/proto-tools-check.sh below, which parses them and refuses — before any codegen
-# runs — if the installed tools disagree (#710: parallel dev-loop worktrees share
-# $GOPATH/bin, so one runner's install used to surface on a sibling as a proto-drift diff
-# whose entire content was the generator stamp). Reshape this recipe and update all three in
-# the same change.
-#
-# proto-tools-check asserts buf, whose version is not recorded anywhere in
-# the generated stamp — nothing else here can catch a wrong buf, and buf's version is what
-# decides what `buf lint` and `buf breaking` accept. Silent on success, like proto-check.
-proto-tools-check:
-	@bash scripts/proto-tools-check.sh
-
-# golangci-lint and the CI-hardening scanners at pinned versions (full module paths
-# required). Pinned here rather than in ci.yml so every `go install` pin lives in one
-# place: CI keys its cached tool binaries on these lines, so bumping a version rebuilds
-# the cache. govulncheck's pin matches security-nightly.yml's GOVULNCHECK_VERSION.
-lint-tools:
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
-	go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-	go install github.com/zricethezav/gitleaks/v8@v8.30.1
-	go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
-
-tools: proto-tools lint-tools
+# Optional: pre-builds every pinned Go tool into the Go build cache (and installs nothing —
+# do not "simplify" this to `go install`, which would put the tools back into the shared
+# $GOPATH/bin). Every target also builds the tool it needs on first use.
+tools: proto-tools
+	@for t in $(filter-out buf,$(GO_TOOLS)); do $(call tool_bin,$$t) >/dev/null || exit 1; done
 
 .PHONY: console-snapshots
 # Render every Console screen against the test fixtures and write the HTML to
@@ -308,16 +287,6 @@ test-release-image-guard:
 # Codex CLI, no network (#694).
 test-codex-review:
 	bash scripts/codex-review-test.sh
-
-# Proves scripts/proto-tools-check.sh fires on a wrong version and on an absent plugin, reads
-# the binary `make proto` would actually invoke (GOPATH/bin first, then the ambient PATH,
-# never merely whatever happens to be first on the caller's own PATH), and refuses rather
-# than passing when it parses no pins from the proto-tools recipe OR meets a recipe line it
-# cannot parse (#710). Hermetic: a stub `go` and stub tools under a throwaway WORKDIR, touching
-# no real toolchain, installing nothing, deriving the pins from the Makefile so a pin bump
-# needs no test edit.
-test-proto-tools-check:
-	bash scripts/proto-tools-check-test.sh
 
 # Proves scripts/ci-changed-paths.sh runs the code jobs for every docs/ path a Go or Rust test
 # reads, skips them only for documentation nothing reads, trips the proto gates on every input
@@ -367,16 +336,16 @@ proto-check: proto-lint proto
 
 # buf lint over /proto, by the rules proto/buf.yaml configures (STANDARD, minus the three
 # exceptions it records and justifies). Read-only: it reports, it never rewrites /proto.
-proto-lint: proto-tools-check
-	cd proto && PATH="$$(go env GOPATH)/bin:$$PATH" buf lint
+proto-lint:
+	bin=$$($(call tool_bin,buf)) && cd proto && "$$bin" lint
 
 # Additive-only /proto gate (ADR-0014): fail if the working-tree proto breaks wire
 # compatibility vs a base git ref. Run from repo root so the `.git` input resolves at
 # the repo root; `subdir=proto` points buf at the proto module inside that revision.
 # PROTO_BREAKING_REF defaults to origin/main for local use; CI passes the PR base SHA.
 PROTO_BREAKING_REF ?= origin/main
-proto-breaking: proto-tools-check
-	PATH="$$(go env GOPATH)/bin:$$PATH" buf breaking proto \
+proto-breaking:
+	bin=$$($(call tool_bin,buf)) && "$$bin" breaking proto \
 		--against ".git#ref=$(PROTO_BREAKING_REF),subdir=proto"
 
 ## --- Relay (Go) ---
@@ -401,7 +370,7 @@ test-relay-race:
 # --allow-serial-runners: a second golangci-lint on the same host (a parallel worktree) waits
 # for the first one's lock instead of failing on it. Runs are serialised, never skipped.
 lint-relay:
-	cd relay && go vet ./... && golangci-lint run --allow-serial-runners
+	bin=$$($(call tool_bin,golangci-lint)) && cd relay && go vet ./... && "$$bin" run --allow-serial-runners
 
 ## --- format-only targets (no compile; fmt-relay is the relay CI job's gofmt step) ---
 # fmt-relay fails loudly if any file is unformatted: gofmt -l alone exits 0 even on drift.
@@ -620,15 +589,14 @@ test-crossbinary: build-daemon build-relay-devharness
 ## --- vulnerability scanning ---
 # Nightly over the whole tree (non-blocking, files a tracking issue), and on a pull request
 # only when it changes a dependency manifest or lockfile (ci.yml: the relay job, gated on
-# scripts/ci-changed-paths.sh's deps=). Install: make lint-tools (govulncheck is pinned there).
+# scripts/ci-changed-paths.sh's deps=). govulncheck is pinned in tools/govulncheck.
 vuln-relay:
-	cd relay && govulncheck ./...
+	bin=$$($(call tool_bin,govulncheck)) && cd relay && "$$bin" ./...
 
 # The pull-request form: fails only on a reachable vulnerability that
 # relay/govulncheck-exceptions.txt does not list, or on a listed one the scan no longer
 # reports. vuln-relay above (nightly) still reports everything. See scripts/vuln-gate.sh.
 vuln-relay-gate:
-	$(call need_tool,govulncheck,vuln-relay-gate,make lint-tools)
 	bash scripts/vuln-gate.sh
 
 # vuln-gate.sh's verdicts, proved against fixture govulncheck streams. Hermetic: bash + jq.
@@ -676,8 +644,7 @@ lint-shell:
 # actionlint: workflow syntax, expression types, and (with shellcheck on PATH) the shell in
 # every `run:` block.
 lint-actions:
-	$(call need_tool,actionlint,lint-actions,make lint-tools)
-	@if command -v actionlint >/dev/null 2>&1; then actionlint; fi
+	@bin=$$($(call tool_bin,actionlint)) && "$$bin"
 
 # zizmor: workflow security — template injection, over-broad permissions, credential
 # persistence, cache poisoning of release builds. With GH_TOKEN set (CI) it also runs its
@@ -700,18 +667,15 @@ zizmor-tool:
 # repo-relative, which is what the allowlists' anchored path patterns match. Findings are
 # redacted in the output.
 secrets-scan:
-	$(call need_tool,gitleaks,secrets-scan,make lint-tools)
-	@if command -v gitleaks >/dev/null 2>&1; then \
+	@bin=$$($(call tool_bin,gitleaks)) && \
 		tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
 		git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$$tmp" && \
-		cd "$$tmp" && gitleaks dir . --config "$(CURDIR)/.gitleaks.toml" --redact --no-banner; \
-	fi
+		cd "$$tmp" && "$$bin" dir . --config "$(CURDIR)/.gitleaks.toml" --redact --no-banner
 
 # The whole git history (security-nightly.yml): a secret committed and then deleted in a
 # later commit is still in the history every clone carries. Needs a full-depth checkout.
 secrets-scan-history:
-	$(call need_tool,gitleaks,secrets-scan-history,make lint-tools)
-	gitleaks git . --config .gitleaks.toml --redact --no-banner
+	@bin=$$($(call tool_bin,gitleaks)) && "$$bin" git . --config .gitleaks.toml --redact --no-banner
 
 # cargo-deny's offline policy for the daemon workspace (daemon/deny.toml): licences, banned crates
 # (a second crypto stack), and allowed sources. Runs on every daemon change.
