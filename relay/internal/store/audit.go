@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
@@ -138,6 +139,52 @@ func (a *sqliteAudit) AppendAll(ctx context.Context, rs []audit.Record) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit audit records: %w", err)
+	}
+	return nil
+}
+
+// AppendWithTasks inserts every task as Pending and chains r onto the trail,
+// in one transaction: on a nil error all of it landed, on a non-nil error none
+// of it did (see audit.Repository.AppendWithTasks). The Tasks and the audit
+// row share this one *sql.DB, so a crash cannot leave either without the
+// other.
+//
+// Every refusal happens before BeginTx, so a malformed call writes nothing.
+func (a *sqliteAudit) AppendWithTasks(ctx context.Context, r audit.Record, tasks []jobs.Task) error {
+	if r.ID == "" {
+		return errors.New("store: refusing to record a dispatch intent with no audit record id")
+	}
+	if r.JobID == "" {
+		return errors.New("store: refusing to record a dispatch intent with no job id")
+	}
+	if len(tasks) == 0 {
+		return errors.New("store: refusing to record a dispatch intent with no tasks")
+	}
+	for _, t := range tasks {
+		if t.JobID != r.JobID {
+			return fmt.Errorf("store: task %q belongs to job %q, not the intent's job %q", t.ID, t.JobID, r.JobID)
+		}
+	}
+	p, err := prepareAudit(r)
+	if err != nil {
+		return err
+	}
+
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin dispatch intent: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	for _, t := range tasks {
+		if err := createTaskExec(ctx, tx, t); err != nil {
+			return err
+		}
+	}
+	if err := insertChained(ctx, tx, []preparedAudit{p}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit dispatch intent and tasks: %w", err)
 	}
 	return nil
 }

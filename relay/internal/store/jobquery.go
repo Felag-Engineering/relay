@@ -87,17 +87,17 @@ func jobOrderBy(order jobs.JobOrder) (string, error) {
 }
 
 // jobPageQuery renders the QueryJobs page statement for filter: one row per
-// Job, LEFT JOINed to a per-Job Task aggregate and a per-Job audit aggregate,
-// both computed only for the page's Jobs. limit is the already-clamped page
+// Job, LEFT JOINed to a per-Job Task aggregate and two per-Job audit
+// aggregates, all computed only for the page's Jobs. limit is the already-clamped page
 // size; the statement fetches limit+1 rows so the caller can tell whether
 // another page exists. It returns the arguments in text order, all bound
 // inside the page. A bad order or cursor is refused here, the order first.
 //
-// Both joins are LEFT, deliberately: a zero-Task Job (a historical row from
+// All three joins are LEFT, deliberately: a zero-Task Job (a historical row from
 // before #571, when a zero-match dispatch still created one) has no row in
-// the tasks aggregate, and an IN-FLIGHT Job has no audit row yet at all —
-// capability/service.go's dispatcher writes the audit record only after
-// disp.run returns. An INNER JOIN would make either kind of Job disappear
+// the tasks aggregate, and an IN-FLIGHT Job has only its dispatch_intent row
+// (#887), which the dispatch-only aggregate `a` deliberately ignores; its
+// outcome rows are written after disp.run returns. An INNER JOIN would make either kind of Job disappear
 // from a query the instant it was created, which is exactly the race a Job
 // list must not have: Job state and risk class come from the tasks table,
 // never from the trail, so they are correct from the moment CreateTask
@@ -113,7 +113,7 @@ func jobOrderBy(order jobs.JobOrder) (string, error) {
 // buildJobWhere for how each filter reads only j or a correlated lookup), and
 // both aggregates are restricted to them with `job_id IN (SELECT job_id FROM
 // page)`, which plans as an index SEARCH per Job. MATERIALIZED makes the page
-// computed once for its three readers. The outer ORDER BY is required: a join
+// computed once for its four readers. The outer ORDER BY is required: a join
 // does not preserve the page's order. `+kind` is not a typo: it disqualifies
 // idx_audit_kind_ts, which SQLite would otherwise pick for `kind = 'dispatch'`
 // and so read every dispatch row, instead of idx_audit_job_ts.
@@ -125,6 +125,15 @@ func jobOrderBy(order jobs.JobOrder) (string, error) {
 // Selector, on-behalf-of and approval columns must come from the dispatch
 // record, not from a refusal or cancel row. See
 // TestJobQuery_RequesterIsNeverTakenFromTheAuditTrail.
+//
+// # Recording
+//
+// The third join counts the Job's dispatch_intent and dispatch rows, which
+// scanJobSummary compares with the Task total to say how much of the Job's
+// dispatch record exists (jobs.JobRecording). The count is exact because run
+// returns one result per persisted Task and Service.Run appends one dispatch
+// row per result. `+kind IN (...)` keeps the planner off idx_audit_kind_ts in
+// the same way `a` does.
 //
 // # What the audit aggregate projects, and why MIN is exact
 //
@@ -184,7 +193,8 @@ SELECT j.job_id, j.created_at,
 	t.action_kind, t.operation_name, t.risk_class,
 	` + strings.Join(jobOutcomeColumnRefs(), ", ") + `,
 	a.selector, j.requester_account_id, j.requester_account_name, j.requester_kind,
-	a.on_behalf_of, a.approval_id, a.grant_id, a.args, a.raw_exec_argv
+	a.on_behalf_of, a.approval_id, a.grant_id, a.args, a.raw_exec_argv,
+	COALESCE(r.intents, 0), COALESCE(r.outcomes, 0)
 FROM page j
 LEFT JOIN (
 	SELECT job_id,
@@ -203,7 +213,14 @@ LEFT JOIN (
 		MIN(args) AS args, MIN(raw_exec_argv) AS raw_exec_argv
 	FROM audit WHERE +kind = 'dispatch' AND job_id IN (SELECT job_id FROM page)
 	GROUP BY job_id
-) a ON a.job_id = j.job_id` + orderBy
+) a ON a.job_id = j.job_id
+LEFT JOIN (
+	SELECT job_id,
+		SUM(CASE WHEN kind = 'dispatch_intent' THEN 1 ELSE 0 END) AS intents,
+		SUM(CASE WHEN kind = 'dispatch' THEN 1 ELSE 0 END) AS outcomes
+	FROM audit WHERE +kind IN ('dispatch', 'dispatch_intent') AND job_id IN (SELECT job_id FROM page)
+	GROUP BY job_id
+) r ON r.job_id = j.job_id` + orderBy
 	return stmt, args, nil
 }
 
@@ -402,6 +419,21 @@ func buildJobWhere(filter jobs.JobQuery) (conds []string, args []any) {
 	return conds, args
 }
 
+// jobRecording says how much of a Job's dispatch record the trail holds, from
+// the Job's Task total and its dispatch_intent and dispatch row counts.
+func jobRecording(total, intents, outcomes int) jobs.JobRecording {
+	switch {
+	case outcomes > 0 && outcomes >= total:
+		return jobs.JobRecordingOutcome
+	case outcomes > 0:
+		return jobs.JobRecordingOutcomePartial
+	case intents > 0:
+		return jobs.JobRecordingIntentOnly
+	default:
+		return jobs.JobRecordingNone
+	}
+}
+
 // scanJobSummary scans one jobPageQuery row, also returning the raw stored
 // created_at text (needed for the cursor, on auditquery.go's precedent).
 func scanJobSummary(row rowScanner) (jobs.JobSummary, string, error) {
@@ -414,6 +446,7 @@ func scanJobSummary(row rowScanner) (jobs.JobSummary, string, error) {
 		requesterKind                        sql.NullString
 		onBehalfOf, approvalID, grantID      sql.NullString
 		argsJSON, argvJSON                   sql.NullString
+		intents, outcomes                    int
 	)
 
 	dest := []any{&jobID, &createdAt, &total, &unresolved, &actionKind, &operationName, &riskClass}
@@ -421,7 +454,8 @@ func scanJobSummary(row rowScanner) (jobs.JobSummary, string, error) {
 		dest = append(dest, &outcomeCounts[i])
 	}
 	dest = append(dest, &selector, &requesterID, &requesterName, &requesterKind,
-		&onBehalfOf, &approvalID, &grantID, &argsJSON, &argvJSON)
+		&onBehalfOf, &approvalID, &grantID, &argsJSON, &argvJSON,
+		&intents, &outcomes)
 
 	if err := row.Scan(dest...); err != nil {
 		return jobs.JobSummary{}, "", fmt.Errorf("scan job summary row: %w", err)
@@ -482,6 +516,7 @@ func scanJobSummary(row rowScanner) (jobs.JobSummary, string, error) {
 		Total:              total,
 		Counts:             counts,
 		Unresolved:         unresolved,
+		Recording:          jobRecording(total, intents, outcomes),
 	}, createdAt, nil
 }
 

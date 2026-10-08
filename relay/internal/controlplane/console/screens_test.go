@@ -11,6 +11,7 @@ package console
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -2439,6 +2440,12 @@ func (r *captureRepo) Append(_ context.Context, rec audit.Record) error {
 	r.recs = append(r.recs, rec)
 	return nil
 }
+
+// AppendWithTasks is unused by these tests; it only satisfies audit.Repository.
+func (r *captureRepo) AppendWithTasks(context.Context, audit.Record, []jobs.Task) error {
+	return errors.New("not supported by this fake")
+}
+
 func (r *captureRepo) AppendAll(_ context.Context, recs []audit.Record) error {
 	r.recs = append(r.recs, recs...)
 	return nil

@@ -144,7 +144,34 @@ type JobSummary struct {
 	Total      int
 	Counts     map[Outcome]int
 	Unresolved int
+
+	// Recording is how much of the Job's dispatch audit record exists (#887),
+	// worked out from counts: the Job's dispatch_intent and dispatch rows
+	// against Total. The comparison is exact because run returns one result
+	// per persisted Task and Service.Run appends one dispatch row per result.
+	Recording JobRecording
 }
+
+// JobRecording is how much of a Job's dispatch audit record the trail holds.
+type JobRecording int
+
+const (
+	// JobRecordingNone: neither an intent nor an outcome row. A pre-#887
+	// zero-Task Job, or one whose rows are gone.
+	JobRecordingNone JobRecording = iota
+
+	// JobRecordingIntentOnly: the dispatch_intent row and no dispatch rows.
+	JobRecordingIntentOnly
+
+	// JobRecordingOutcomePartial: some dispatch rows, fewer than the Job has
+	// Tasks.
+	JobRecordingOutcomePartial
+
+	// JobRecordingOutcome: at least one dispatch row and no fewer than the
+	// Job has Tasks. Includes legacy pre-#887 Jobs (outcome rows, no intent)
+	// and Jobs whose Task rows were pruned (Total 0).
+	JobRecordingOutcome
+)
 
 // JobPage is one page of JobSummary rows, cursor-paginated in
 // JobQuery.Order's direction.

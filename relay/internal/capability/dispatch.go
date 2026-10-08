@@ -40,6 +40,11 @@ type dispatch struct {
 	// its own, exactly as before. Set by Service.Run after the release claim
 	// wins, never by newDispatch itself.
 	jobID string
+
+	// approvalID and grantID are the approval Request and batch/window Grant
+	// that released this dispatch, copied onto its dispatch-intent record
+	// (#887). Set by Service.Run, never by newDispatch itself.
+	approvalID, grantID string
 }
 
 // newDispatch builds a dispatch from an already-authorized, already-resolved

@@ -231,6 +231,7 @@ func fromJobSummary(s jobs.JobSummary) capability.JobSummary {
 		Total:              s.Total,
 		Counts:             copyOutcomeCounts(s.Counts),
 		Unresolved:         s.Unresolved,
+		Recording:          s.Recording,
 	}
 }
 

@@ -57,6 +57,7 @@ func TestCancelJobStopsPendingSendsCancelToDispatchedLeavesResolved(t *testing.T
 	e := &jobEngine{
 		jobsRepo:  jobsRepo,
 		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
 		conduit:   conduit,
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return at },
@@ -129,6 +130,7 @@ func TestCancelJobUnknownJobReturnsErrJobNotFound(t *testing.T) {
 	e := &jobEngine{
 		jobsRepo:  jobsRepo,
 		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
 		conduit:   newFakeConduit(nil),
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Now().UTC() },
@@ -199,6 +201,7 @@ func TestCancelJobRefusalDoesNotRevealWhetherTheJobExists(t *testing.T) {
 	e := &jobEngine{
 		jobsRepo:  jobsRepo,
 		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
 		conduit:   newFakeConduit(nil),
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Now().UTC() },
@@ -228,6 +231,7 @@ func TestCancelJobAuthorizesWithoutAssertions(t *testing.T) {
 	e := &jobEngine{
 		jobsRepo:  jobsRepo,
 		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
 		conduit:   newFakeConduit(nil),
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return at },
@@ -270,6 +274,7 @@ func machineCancelFixture(t *testing.T, jobID string, jobQ JobQuery) (*Service, 
 	e := &jobEngine{
 		jobsRepo:  jobsRepo,
 		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
 		conduit:   newFakeConduit(nil),
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return at },

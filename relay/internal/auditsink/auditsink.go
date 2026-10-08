@@ -20,7 +20,9 @@
 // ApprovalAnswer and DecisionChannel — the structured answer a decision
 // carries alongside its prose Reason. Nothing else is added: no enrichment
 // from tokens, keys, or other in-memory secrets the sink never even sees.
-// RecordProtocolViolation copies only Relay-authored fields and never any
+// RecordIntent's dispatch_intent record copies the same domain fields, plus a
+// Relay-authored Reason built from closed vocabularies, counts and Relay-minted
+// Node IDs (intentReason); it never carries output. RecordProtocolViolation copies only Relay-authored fields and never any
 // Node-produced bytes, on any risk class.
 //
 // Logging (#181): Record additionally emits exactly one structured slog Info
@@ -34,7 +36,9 @@
 // never its content. It never logs an Action's OperationArgs or
 // RawExecArgv, any NodeResult's Stdout/Stderr/Truncated, or any token/key
 // material; the log is supplementary and never influences a decision.
-// RecordFreeze and RecordCancel are unchanged and remain unlogged. Errors
+// RecordIntent (#887) logs the same way for dispatch_intent: the job_id and
+// the Node count, never the Node IDs or args. RecordFreeze and RecordCancel
+// are unchanged and remain unlogged. Errors
 // from Record/RecordFreeze/RecordCancel propagate up to Service.Run, which
 // wraps but does not dump the entry's contents.
 package auditsink
@@ -67,7 +71,10 @@ type Sink struct {
 	log   *slog.Logger
 }
 
-var _ capability.AuditSink = (*Sink)(nil)
+var (
+	_ capability.AuditSink      = (*Sink)(nil)
+	_ capability.IntentRecorder = (*Sink)(nil)
+)
 
 // Option configures a Sink built by New.
 type Option func(*Sink)
@@ -143,6 +150,11 @@ func New(repo audit.Repository, opts ...Option) *Sink {
 // store Append below succeeds — the decision remains visible in logs even
 // if the SQLite write fails.
 func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
+	// Without this the entry would fall through below and be recorded as a
+	// dispatch: an intent that never ran, rendered as an outcome.
+	if e.Kind == capability.AuditKindDispatchIntent {
+		return errors.New("auditsink: a dispatch intent is recorded only with its Tasks, via RecordIntent")
+	}
 	base := s.baseRecord(e.Principal, e.Asserted, e.Selector, e.Action)
 
 	// The approval link (#378, ADR-0027), copied onto every Kind that can carry
@@ -270,6 +282,63 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 	}
 	s.logDecision(audit.KindDispatch, e, len(e.Results), outcomeCounts(e.Results))
 	return errors.Join(errs...)
+}
+
+// RecordIntent implements capability.IntentRecorder: it persists tasks as
+// Pending and appends the Job's one dispatch_intent record in a single
+// transaction (#887), so the intent exists before any Task can be dispatched.
+// The per-Node outcome rows that Record appends later reference it through the
+// shared job_id.
+//
+// Surface rides in the verified lane's Method/Source, as for every other kind.
+// The record never carries Stdout, Stderr or Truncated (ADR-0025).
+func (s *Sink) RecordIntent(ctx context.Context, e capability.AuditEntry, tasks []jobs.Task) error {
+	if e.Kind != capability.AuditKindDispatchIntent {
+		return errors.New("auditsink: RecordIntent takes only a dispatch intent entry")
+	}
+	if len(tasks) == 0 {
+		return errors.New("auditsink: a dispatch intent needs at least one Task")
+	}
+	rec := s.baseRecord(e.Principal, e.Asserted, e.Selector, e.Action)
+	rec.Kind = audit.KindDispatchIntent
+	rec.JobID = e.JobID
+	rec.ApprovalID = e.ApprovalID
+	rec.GrantID = e.GrantID
+	rec.Reason = intentReason(e, tasks)
+
+	id, err := s.newID()
+	if err != nil {
+		s.logDecision(audit.KindDispatchIntent, e, len(tasks), "")
+		return fmt.Errorf("auditsink: record dispatch intent: generate audit record id: %w", err)
+	}
+	rec.ID = id
+	err = s.repo.AppendWithTasks(ctx, rec, tasks)
+	s.logDecision(audit.KindDispatchIntent, e, len(tasks), "")
+	if err != nil {
+		return fmt.Errorf("auditsink: record dispatch intent: %w", err)
+	}
+	return nil
+}
+
+// intentReason renders a dispatch_intent record's Reason as space-separated
+// key=value text, in this order: risk_class (read or mutate), blast_cap=passed,
+// cap_cleared, excluded, node_count, node_ids.
+//
+// cap_cleared is the Nodes the blast cap cleared; some may later resolve
+// Unreachable or VersionRefused and never be sent. excluded is the Nodes
+// persisted pre-resolved because the Template is unsupported there — the only
+// excluded Nodes that get a Task. node_ids are Relay-minted enrollment IDs, in
+// Task order, so no Node-writable bytes enter the trail.
+//
+// The Reason deliberately has NO cap limit value (invariant 11; job.go's Plan
+// comment) and NO output (ADR-0025).
+func intentReason(e capability.AuditEntry, tasks []jobs.Task) string {
+	ids := make([]string, len(tasks))
+	for i, t := range tasks {
+		ids[i] = t.NodeID
+	}
+	return fmt.Sprintf("risk_class=%s blast_cap=passed cap_cleared=%d excluded=%d node_count=%d node_ids=%s",
+		jobs.RiskClassName(e.Action.RiskClass), e.CapCleared, len(tasks)-e.CapCleared, len(tasks), strings.Join(ids, ","))
 }
 
 // RecordRead appends one metadata-only read-access record (#288, ADR-0025):
@@ -526,6 +595,9 @@ func (s *Sink) logDecision(kind string, e capability.AuditEntry, matched int, co
 			attrs = append(attrs, "job_id", e.JobID)
 		}
 		attrs = append(attrs, "matched", matched, "outcome_counts", counts)
+	case audit.KindDispatchIntent:
+		// The Node count only: never the Node IDs or any args.
+		attrs = append(attrs, "job_id", e.JobID, "node_count", matched)
 	case audit.KindRefusal:
 		attrs = append(attrs, "reason", e.Reason)
 	}

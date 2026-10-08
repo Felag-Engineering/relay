@@ -105,7 +105,7 @@ func newTemplateTestService(t *testing.T, reg registry.Repository, conduit *fake
 		WithAuditSink(f.audit),
 		WithFreeze(&fakeFreezeStore{}),
 		WithMetrics(f.metrics),
-		WithExecution(jobsRepo, tasksRepo, conduit),
+		testExecution(jobsRepo, tasksRepo, conduit),
 	}
 	if vocab != nil {
 		opts = append(opts, WithTemplateVocabulary(vocab))
@@ -508,7 +508,7 @@ func TestPreflightTemplateExclusionNeverDecidesAVerdict(t *testing.T) {
 		WithCapChecker(&spyCapChecker{}),
 		WithAuditSink(&spyAuditSink{}),
 		WithFreeze(&fakeFreezeStore{}),
-		WithExecution(jobsRepo, tasksRepo, conduit),
+		testExecution(jobsRepo, tasksRepo, conduit),
 		WithPolicyView(pv),
 		WithTemplateVocabulary(vocab),
 	)
@@ -656,7 +656,7 @@ func TestRun_ExcludedTasksAreResolvedBeforeAnyDispatch(t *testing.T) {
 		WithCapChecker(&spyCapChecker{}),
 		WithAuditSink(&spyAuditSink{}),
 		WithFreeze(&fakeFreezeStore{}),
-		WithExecution(jobsRepo, tasksRepo, conduit),
+		testExecution(jobsRepo, tasksRepo, conduit),
 		WithTemplateVocabulary(staticVocab{"node-0": {Templates: []nodevocab.Template{readTemplate("svc.status")}}}),
 	)
 	if _, err := svc.Run(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("svc.status", nil)); err != nil {
@@ -889,7 +889,7 @@ func TestRun_TemplateJobEventsCountExcludedNodes(t *testing.T) {
 		WithCapChecker(&spyCapChecker{}),
 		WithAuditSink(&spyAuditSink{}),
 		WithFreeze(&fakeFreezeStore{}),
-		WithExecution(jobsRepo, tasksRepo, connectedConduit(&log, "node-0", "node-1", "node-2")),
+		testExecution(jobsRepo, tasksRepo, connectedConduit(&log, "node-0", "node-1", "node-2")),
 		WithJobEvents(events),
 		WithTemplateVocabulary(staticVocab{"node-0": {Templates: []nodevocab.Template{readTemplate("svc.status")}}}),
 	)

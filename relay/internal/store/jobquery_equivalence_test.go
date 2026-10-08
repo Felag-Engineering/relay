@@ -27,7 +27,8 @@ func legacyJobQuerySelect(filter jobs.JobQuery) (stmt string, args []any) {
 	t.action_kind, t.operation_name, t.risk_class,
 	` + strings.Join(jobOutcomeColumnRefs(), ", ") + `,
 	a.selector, j.requester_account_id, j.requester_account_name, j.requester_kind,
-	a.on_behalf_of, a.approval_id, a.grant_id, a.args, a.raw_exec_argv
+	a.on_behalf_of, a.approval_id, a.grant_id, a.args, a.raw_exec_argv,
+		COALESCE(r.intents, 0), COALESCE(r.outcomes, 0)
 ` + from
 	return stmt, args
 }
@@ -50,13 +51,15 @@ func legacyJobQueryFrom(filter jobs.JobQuery, withAudit bool) (from string, args
 	// dispatch record, not from a refusal or cancel row. See
 	// TestJobQuery_RequesterIsNeverTakenFromTheAuditTrail.
 	auditWhere := "\n\tWHERE kind = 'dispatch'"
+	recordingWhere := "\n\tWHERE kind IN ('dispatch', 'dispatch_intent')"
 	var taskConds []string
 	if filter.JobID != "" {
 		taskConds = append(taskConds, "job_id = ?")
 		auditWhere += "\n\t\tAND job_id = ?"
+		recordingWhere += "\n\t\tAND job_id = ?"
 		args = []any{filter.JobID}
 		if withAudit {
-			args = append(args, filter.JobID)
+			args = append(args, filter.JobID, filter.JobID)
 		}
 	}
 	if filter.State != nil && *filter.State == jobs.JobStateRunning {
@@ -86,7 +89,14 @@ LEFT JOIN (
 		MIN(args) AS args, MIN(raw_exec_argv) AS raw_exec_argv
 	FROM audit` + auditWhere + `
 	GROUP BY job_id
-) a ON a.job_id = j.job_id`
+) a ON a.job_id = j.job_id
+LEFT JOIN (
+	SELECT job_id,
+		SUM(CASE WHEN kind = 'dispatch_intent' THEN 1 ELSE 0 END) AS intents,
+		SUM(CASE WHEN kind = 'dispatch' THEN 1 ELSE 0 END) AS outcomes
+	FROM audit` + recordingWhere + `
+	GROUP BY job_id
+) r ON r.job_id = j.job_id`
 	}
 	return from, args
 }
