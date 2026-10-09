@@ -151,7 +151,16 @@ func (r *Reconciler) reconcileTask(ctx context.Context, nodeID string, task jobs
 		return fmt.Errorf("dispatch: reconcile task %q on node %q: %w", task.ID, nodeID, err)
 	}
 
-	if err := r.tasks.Resolve(ctx, task.ID, res); err != nil {
+	// The in-memory check feeds the same tolerated branch as a stale-state
+	// Resolve: InFlight returns only Dispatched Tasks, so on a correct
+	// snapshot it never fires, and it is here so that every Task write goes
+	// through the same transition table. The store stamps its own resolved_at.
+	if err := func() error {
+		if _, err := task.Transition(jobs.TaskEvent{Kind: jobs.TaskEventResolve, Result: res}, r.now()); err != nil {
+			return err
+		}
+		return r.tasks.Resolve(ctx, task.ID, res)
+	}(); err != nil {
 		if errors.Is(err, jobs.ErrInvalidTaskState) || errors.Is(err, jobs.ErrTaskNotFound) {
 			// Already reconciled by someone else — done, not an error.
 			return nil

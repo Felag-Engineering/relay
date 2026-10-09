@@ -69,7 +69,7 @@ func serveShim(t *testing.T, requestBody, responseBody string, opts ...func(http
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(requestBody))
-	withTaskShim(inner, shimClock).ServeHTTP(rec, req)
+	withTaskShim(inner, shimClock, nil).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -269,7 +269,7 @@ func TestShimDoesNotBufferAnOversizedRequest(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(huge))
-	withTaskShim(inner, shimClock).ServeHTTP(rec, req)
+	withTaskShim(inner, shimClock, nil).ServeHTTP(rec, req)
 
 	if seen != len(huge) {
 		t.Errorf("handler saw %d bytes, want all %d — the shim must give up on inspecting, never on serving", seen, len(huge))

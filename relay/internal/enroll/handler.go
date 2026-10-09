@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/protoconv"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
@@ -196,7 +197,17 @@ type Server struct {
 	observer          EnrollmentObserver
 	attempts          AttemptObserver
 	now               func() time.Time
+	log               *slog.Logger // nil means slog.Default() (logger)
 }
+
+// WithServerLogger sets the logger the Server reports enrollment and renewal
+// events to. Observational only. Without it the Server logs through
+// slog.Default().
+func WithServerLogger(l *slog.Logger) ServerOption {
+	return func(s *Server) { s.log = l }
+}
+
+func (s *Server) logger() *slog.Logger { return logctx.Or(s.log) }
 
 // WithServerClock overrides the clock used to stamp certificate provenance
 // (#440). Tests use it so an assertion about enrolled_at is not a race with the
@@ -428,7 +439,7 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 				// cannot become an oracle that distinguishes this rejection
 				// from any other. (Scope is already loggable: Token.LogValue
 				// emits it.)
-				slog.Warn("enrollment denied: stored token scope is not well-formed",
+				s.logger().WarnContext(ctx, "enrollment denied: stored token scope is not well-formed",
 					"token_id", tokenID, "err", err)
 			}
 			return nil, status.Error(codes.PermissionDenied, "enrollment token rejected")
@@ -499,7 +510,7 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 	//     enrollment — exactly the false alarm #427's day-one watch must not
 	//     see.
 	if err := s.registry.RecordEnrollment(nodeID, issued, s.now()); err != nil {
-		slog.Warn("recording enrollment certificate provenance failed",
+		s.logger().WarnContext(ctx, "recording enrollment certificate provenance failed",
 			"node_id", nodeID, "err", err)
 	}
 
@@ -542,7 +553,7 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 			// Log the raw check error (nil on the confirmed-revocation path) so the
 			// denial reason is unambiguous once a persistent store makes err != nil
 			// reachable. err is a repository error, never credential material.
-			slog.Warn("enrollment denied: token revoked mid-enrollment",
+			s.logger().WarnContext(ctx, "enrollment denied: token revoked mid-enrollment",
 				"node_id", nodeID, "token_id", tokenID, "check_err", err)
 			s.attempt(ctx, AttemptEvent{Reason: AttemptRevokedMidEnrollment, TokenID: tokenID, NodeID: nodeID, Source: source})
 			return nil, status.Error(codes.PermissionDenied, "enrollment token rejected")
@@ -560,7 +571,7 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 
 	// m. Log one audit line. tokenID is the public half of the credential — safe to log.
 	//    Never log the secret half or the full plaintext credential.
-	slog.Info("node enrolled",
+	s.logger().InfoContext(ctx, "node enrolled",
 		"node_id", nodeID,
 		"token_id", tokenID,
 		"hostname", facts.Hostname,
@@ -622,12 +633,12 @@ func (s *Server) Renew(ctx context.Context, req *relayv1.RenewRequest) (*relayv1
 	//    valid certificate, and failing the RPC over a bookkeeping write would
 	//    push it toward the expiry this record exists to warn about.
 	if err := s.registry.RecordRenewal(nodeID, issuedCertificate(certPEM), s.now()); err != nil {
-		slog.Warn("recording renewal certificate provenance failed",
+		s.logger().WarnContext(ctx, "recording renewal certificate provenance failed",
 			"node_id", nodeID, "err", err)
 	}
 
 	// e. Audit log: node_id only — no key material, no CSR contents.
-	slog.Info("node cert renewed", "node_id", nodeID)
+	s.logger().InfoContext(ctx, "node cert renewed", "node_id", nodeID)
 
 	return &relayv1.RenewResponse{
 		NodeId:      nodeID,

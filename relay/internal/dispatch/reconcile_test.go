@@ -680,3 +680,45 @@ func TestReconciler_NoInFlightTasksIsANoOp(t *testing.T) {
 		t.Errorf("send was called %d times, want 0 (no in-flight tasks)", got)
 	}
 }
+
+// TestReconcileTask_RefusedTransitionIsTolerated pins that the in-memory
+// Transition check sits in front of the Resolve write and feeds the existing
+// tolerated branch. The store row is still Dispatched (so the send guard lets
+// the resend through and a store Resolve WOULD succeed) while the snapshot
+// the Reconciler holds says Resolved: without the check the Task would be
+// resolved from a stale snapshot, with it nothing is written.
+func TestReconcileTask_RefusedTransitionIsTolerated(t *testing.T) {
+	stored := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	tasks := newFakeTaskRepository(stored)
+	router := NewRouter(nil, nil)
+	reconciler := NewReconciler(tasks, router)
+
+	send := &recordingSend{}
+	unregister := router.Register("node-1", send.send)
+	defer unregister()
+
+	snapshot := stored
+	snapshot.State = jobs.DispatchStateResolved
+
+	done := make(chan error, 1)
+	go func() { done <- reconciler.reconcileTask(context.Background(), "node-1", snapshot) }()
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+	router.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("reconcileTask: %v, want nil (a refused transition is tolerated)", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconcileTask did not return")
+	}
+
+	if send.len() != 1 {
+		t.Errorf("sends = %d, want 1: the path must run past the resend", send.len())
+	}
+	if tasks.resolveCalls != 0 {
+		t.Errorf("Resolve reached the store %d time(s); a refused transition must not", tasks.resolveCalls)
+	}
+}

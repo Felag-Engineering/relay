@@ -2296,7 +2296,7 @@ func newRealWriteFix(t *testing.T, opts ...func(*Deps)) *realWriteFix {
 	}
 
 	return &realWriteFix{
-		handler:  authn.Middleware(Secure(mux)),
+		handler:  authn.Middleware(Secure(mux, nil)),
 		trail:    st,
 		tokens:   tokenSvc,
 		actor:    actor,

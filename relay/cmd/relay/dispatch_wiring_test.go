@@ -45,7 +45,7 @@ func testTaskRepositoryWithStore(t *testing.T) (jobs.TaskRepository, *store.Stor
 // unexported taskSink interface (tunnel.go), which a type declared outside
 // package main cannot implement directly.
 func TestRouterSink_ForwardsToRouter(t *testing.T) {
-	router, _, sink := newDispatchStack(testTaskRepository(t), nil)
+	router, _, sink := newDispatchStack(testTaskRepository(t), nil, nil)
 
 	sentCh := make(chan *relayv1.RelayMessage, 4)
 	send := func(msg *relayv1.RelayMessage) error {
@@ -112,7 +112,7 @@ func TestRouterSink_ForwardsToRouter(t *testing.T) {
 // injecting a forged TaskResult exactly as sink.deliver would receive one
 // off a compromised Node's Tunnel.
 func TestRouterSink_ForgedRelayOnlyOutcomeRefused(t *testing.T) {
-	router, _, sink := newDispatchStack(testTaskRepository(t), nil)
+	router, _, sink := newDispatchStack(testTaskRepository(t), nil, nil)
 
 	sentCh := make(chan *relayv1.RelayMessage, 4)
 	send := func(msg *relayv1.RelayMessage) error {
@@ -165,7 +165,7 @@ func TestRouterSink_ForgedRelayOnlyOutcomeRefused(t *testing.T) {
 // other Router), by relying on Router.WaitForNode/Connected staying
 // consistent across the pair after a register/unregister cycle.
 func TestNewDispatchStack_ReconcilerUsesRouter(t *testing.T) {
-	router, reconciler, sink := newDispatchStack(testTaskRepository(t), nil)
+	router, reconciler, sink := newDispatchStack(testTaskRepository(t), nil, nil)
 	if reconciler == nil {
 		t.Fatal("newDispatchStack returned a nil Reconciler")
 	}
@@ -201,7 +201,7 @@ func TestNewDispatchStack_ReconcilerUsesRouter(t *testing.T) {
 func TestNewDispatchStack_AProtocolViolationOnAReadClassTaskIsRecordedWithNoOutput(t *testing.T) {
 	tasks, st := testTaskRepositoryWithStore(t)
 	violations := auditsink.New(st.Audit())
-	router, _, sink := newDispatchStack(tasks, violations)
+	router, _, sink := newDispatchStack(tasks, violations, nil)
 
 	sentCh := make(chan *relayv1.RelayMessage, 4)
 	send := func(msg *relayv1.RelayMessage) error {
@@ -306,7 +306,7 @@ func (h *holdingConduit) Dispatch(ctx context.Context, nodeID string, task jobs.
 // behind the dispatch bound is never dispatched.
 func TestDispatchWiring_ACancelDuringFanOutWithholdsUnsentTasksThroughTheRealRouter(t *testing.T) {
 	tasks, st := testTaskRepositoryWithStore(t)
-	router, _, _ := newDispatchStack(tasks, nil)
+	router, _, _ := newDispatchStack(tasks, nil, nil)
 
 	var mu sync.Mutex
 	requested := map[string]string{} // task ID -> node ID, TaskRequests that reached a Tunnel

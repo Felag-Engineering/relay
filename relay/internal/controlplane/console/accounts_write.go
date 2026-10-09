@@ -363,7 +363,7 @@ func writeFailed(w http.ResponseWriter, pg Page, err error, route, ident, undone
 		// SetAccountEnabled and MintAPIToken all do). The honest sentence
 		// that does not require distinguishing the wrapped audit error is
 		// "could not confirm", never "nothing happened".
-		slog.Error("console account administration returned an error",
+		pg.logger().Error("console account administration returned an error",
 			"route", route, "subject", subject, "target", ident, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
@@ -696,7 +696,7 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 				writeFailed(w, pg, err, mintAPITokenPattern, id, "Nothing was minted.", "Account")
 				return
 			}
-			slog.Error("console api token mint returned an error",
+			d.logger().ErrorContext(r.Context(), "console api token mint returned an error",
 				"account_id", id, "token_id", tok.ID, "error", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{

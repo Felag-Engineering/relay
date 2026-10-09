@@ -31,6 +31,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/eventsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
@@ -187,6 +188,9 @@ type Config struct {
 // appDeps holds the constructed collaborators that tests and lifecycle hooks need
 // to reach without starting a listener.
 type appDeps struct {
+	// logger is the process logger every internal package is handed; it adds
+	// the request, principal and Job ids from the context (logctx).
+	logger     *slog.Logger
 	ca         *ca.CA
 	store      *store.Store
 	registry   registry.Repository
@@ -472,7 +476,13 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// sense of it (nodestate's own package doc explains why).
 	certExpiringWithin := nodestate.CertExpiringWindow(ca.LeafValidity, cfg.CertExpiringFraction)
 
-	st, err := store.Open(cfg.StorePath, store.WithMaxNodes(cfg.MaxNodes), store.WithMinDaemonVersion(cfg.MinDaemonVersion))
+	// An injected logger, not slog.SetDefault: installing a wrapper around the
+	// default handler as the default would recurse through the log package
+	// (logctx.Handler). It reads the default now, so a test that captures
+	// internal log lines must set the default before newServer.
+	logger := slog.New(logctx.NewHandler(slog.Default().Handler()))
+
+	st, err := store.Open(cfg.StorePath, store.WithMaxNodes(cfg.MaxNodes), store.WithMinDaemonVersion(cfg.MinDaemonVersion), store.WithLogger(logger))
 	if err != nil {
 		return nil, nil, fmt.Errorf("open store: %w", err)
 	}
@@ -595,12 +605,13 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	}
 
 	tokenSvc := enroll.NewService(st.Tokens())
-	revocationSvc := revocation.NewService(denylist, conns, reg, tokenSvc)
+	revocationSvc := revocation.NewService(denylist, conns, reg, tokenSvc, revocation.WithLogger(logger))
 	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg,
 		enroll.WithPostEnrollRevocationCheck(tokenSvc, revocationSvc),
 		enroll.WithRateLimiter(limiter),
 		enroll.WithEnrollmentObserver(appMetrics),
-		enroll.WithAttemptObserver(eventsink.Enrollment(eventBus)))
+		enroll.WithAttemptObserver(eventsink.Enrollment(eventBus)),
+		enroll.WithServerLogger(logger))
 
 	// policyCache is the display-only effective-Policy cache (#117, invariant
 	// 12 / ADR-0002): the tunnel handler records what a daemon reports in
@@ -635,7 +646,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// One audit sink, shared by the capability layer and the MCP read surface
 	// (#288): read-access records land in the same trail as dispatches, via
 	// the same writer.
-	auditSink := auditsink.New(st.Audit())
+	auditSink := auditsink.New(st.Audit(), auditsink.WithLogger(logger))
 
 	// The read lane (#441): filtered, paginated queries over the audit trail
 	// and over Jobs/Tasks, adapted onto capability.AuditQuery/JobQuery by
@@ -673,6 +684,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 
 	base := []capability.Option{
 		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
+		capability.WithLogger(logger),
 		capability.WithAuditSink(auditSink),
 		// The real RoleGate (#653): both branches below now carry a real
 		// Authorizer, not just the ControlEnabled one, which is what makes
@@ -739,7 +751,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 			URL:        cfg.ApprovalWebhookURL,
 			SecretPath: cfg.ApprovalWebhookSecretPath,
 			Timeout:    cfg.ApprovalWebhookTimeout,
-		})
+		}, approvalnotify.WithLogger(logger))
 		if err != nil {
 			return nil, nil, fmt.Errorf("configure approval webhook: %w", err)
 		}
@@ -780,7 +792,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		// dispatch and refusal is audited (#102). This flip adds no new
 		// bypass — it only turns on the same pipeline every other surface
 		// already dispatches through.
-		router, reconciler, sink := newDispatchStack(st.Tasks(), violationRecorder{audit: auditSink, metrics: appMetrics})
+		router, reconciler, sink := newDispatchStack(st.Tasks(), violationRecorder{audit: auditSink, metrics: appMetrics}, logger)
 		// reconciler is captured by router's onConnect closure
 		// (dispatch_wiring.go) and fires on every Node (re)connect — this is
 		// what makes crash-mid-Job restart reconciliation happen; it is not
@@ -923,6 +935,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		// for the ControlSurface seam (#162) this replaces the two inline
 		// mount stanzas with.
 		sd := surfaceDeps{
+			logger:     logger,
 			ops:        opvocabLister{},
 			capability: capSvc,
 			jobs:       st.Jobs(),
@@ -1044,6 +1057,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		metrics:    appMetrics,
 		events:     eventBus,
 		hooks:      hooks,
+		logger:     logger,
 	}
 	return srv, deps, nil
 }
@@ -1170,7 +1184,7 @@ func main() {
 
 		// The audit chain checkpoint (#896): a metadata-only log line an
 		// operator keeps as an anchor for relay-audit-verify -expect.
-		go auditsink.NewCheckpointer(deps.store.AuditChain(), auditsink.DefaultCheckpointInterval, slog.Default()).
+		go auditsink.NewCheckpointer(deps.store.AuditChain(), auditsink.DefaultCheckpointInterval, deps.logger).
 			Run(context.Background(), func(err error) {
 				slog.Error("audit chain checkpoint failed", "err", err)
 			})

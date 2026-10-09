@@ -11,6 +11,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 )
 
 // Browser security for the Console is not hygiene.
@@ -203,7 +204,7 @@ const contentSecurityPolicy = "default-src 'self'; " +
 // OTHER minting call in this process treats that as a panic; this one still
 // returns an error, unchanged from the ensureCSRFCookie it replaces, because
 // login.go's callers need it request-scoped — they have a page to re-render.
-func Secure(h http.Handler) http.Handler {
+func Secure(h http.Handler, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -227,7 +228,7 @@ func Secure(h http.Handler) http.Handler {
 		// what makes that literally true of the control flow.
 		var valid bool
 		if Unauthenticated(r) {
-			boundUnauthenticatedBody(w, r)
+			boundUnauthenticatedBody(w, r, log)
 			valid = signInCSRFValid(r)
 		} else {
 			valid = sessionCSRFValid(r)
@@ -271,10 +272,10 @@ var unauthenticatedBodyTimeout = DefaultUnauthenticatedBodyTimeout
 // read it guards. ErrNotSupported (a ResponseRecorder in tests) means there is no
 // connection to hold; TestConsole_TrickledSignInBodyIsCut proves the deadline reaches a
 // real connection through the middleware chain.
-func boundUnauthenticatedBody(w http.ResponseWriter, r *http.Request) {
+func boundUnauthenticatedBody(w http.ResponseWriter, r *http.Request, log *slog.Logger) {
 	err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(unauthenticatedBodyTimeout))
 	if err != nil && !errors.Is(err, http.ErrNotSupported) {
-		slog.Warn("console: could not bound an unauthenticated request body", "error", err)
+		logctx.Or(log).WarnContext(r.Context(), "console: could not bound an unauthenticated request body", "error", err)
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, unauthenticatedBodyMaxBytes)
 }

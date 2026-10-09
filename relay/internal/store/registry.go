@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
@@ -47,8 +48,9 @@ func (ns labelNamespace) table() string {
 // never confused, and Upsert's insert-vs-update distinction is preserved).
 type sqliteRegistry struct {
 	db               *sql.DB
-	maxNodes         int    // 0 = unlimited
-	minDaemonVersion string // ADR-0014 gate; empty = off
+	maxNodes         int          // 0 = unlimited
+	logger           *slog.Logger // nil means slog.Default() (log)
+	minDaemonVersion string       // ADR-0014 gate; empty = off
 
 	// connected is the live Tunnel set. In memory and never written to SQLite:
 	// a Relay restart means nothing is connected, and a persisted flag that
@@ -387,7 +389,7 @@ func (r *sqliteRegistry) Get(nodeID string) (registry.Node, bool) {
 		// node_id is not a secret: it is a cert CN (ADR-0006) or an ID a
 		// caller already validated. Not rate-limited: a store that stays
 		// unreadable logs once per Get.
-		slog.Error("registry get failed: store read error reported as not found",
+		r.log().Error("registry get failed: store read error reported as not found",
 			"node_id", nodeID, "error", err)
 		return registry.Node{}, false
 	}
@@ -397,13 +399,17 @@ func (r *sqliteRegistry) Get(nodeID string) (registry.Node, bool) {
 	return r.withOutdated(n), true
 }
 
+// log resolves the registry's logger, falling back to slog.Default() for a
+// registry built without one.
+func (r *sqliteRegistry) log() *slog.Logger { return logctx.Or(r.logger) }
+
 // List returns all stored Node records, sorted by NodeID. A read failure is
 // logged and the Nodes that could be read are returned (none, if the ID scan
 // itself failed); ListChecked is the variant that reports it.
 func (r *sqliteRegistry) List() []registry.Node {
 	out, err := r.ListChecked()
 	if err != nil {
-		slog.Error("registry list incomplete: store read error",
+		r.log().Error("registry list incomplete: store read error",
 			"nodes_returned", len(out), "error", err)
 	}
 	return out

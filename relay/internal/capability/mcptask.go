@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
@@ -153,7 +152,7 @@ func (s *Service) bindTaskHandleJob(ctx context.Context, requestID, jobID string
 		// polling a handle that never reports its Job is a symptom an
 		// operator should be able to find, so it goes to the log rather
 		// than vanishing the way it did before.
-		slog.WarnContext(ctx, "capability: binding the MCP task handle to its Job failed",
+		s.logger().WarnContext(ctx, "capability: binding the MCP task handle to its Job failed",
 			"job_id", jobID, "approval_id", requestID, "error", err)
 	}
 }

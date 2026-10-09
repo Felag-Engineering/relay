@@ -124,6 +124,14 @@ type AccountAdmin interface {
 	RevokeAPIToken(ctx context.Context, p capability.Principal, id string) error
 }
 
+// logger returns Deps.Logger, or slog.Default() when none was supplied.
+func (d Deps) logger() *slog.Logger {
+	if d.Logger != nil {
+		return d.Logger
+	}
+	return slog.Default()
+}
+
 // Deps are the collaborators Register wires into the /api/v1 route table.
 // Deliberately narrow (invariant 11): no Relay Config, CA, blast cap, or
 // listener field — every dependency here is a purpose-built interface over
@@ -134,6 +142,10 @@ type Deps struct {
 	Nodes        NodeRevoker
 	Freeze       Freezer
 	Audit        Auditor
+	// Logger is where this surface's operational errors go; nil means
+	// slog.Default(). Wiring, not configuration (invariant 11); context
+	// correlation comes from the handler the composition root builds.
+	Logger *slog.Logger
 	// Authz is the control plane's role ladder for the ADMINISTRATIVE acts
 	// that never construct a jobs.Action and so never reach the capability
 	// layer's dispatch pipeline: enrollment-token mint and revoke, and Node
@@ -422,11 +434,11 @@ var newAuditID = audit.NewID
 func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) {
 	rec, err := newLifecycleRecord(ctx, d, p, kind, nodeID, reason)
 	if err != nil {
-		slog.Error("control api: build lifecycle audit record", "kind", kind, "error", err)
+		d.logger().ErrorContext(ctx, "control api: build lifecycle audit record", "kind", kind, "error", err)
 		return
 	}
 	if err := d.Audit.Append(ctx, rec); err != nil {
-		slog.Error("control api: append lifecycle audit record", "kind", kind, "error", err)
+		d.logger().ErrorContext(ctx, "control api: append lifecycle audit record", "kind", kind, "error", err)
 	}
 }
 

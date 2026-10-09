@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask"
 )
 
@@ -102,7 +103,7 @@ const (
 //
 // now is a seam so the shim's ttlMs arithmetic is testable, mirroring the
 // capability layer's WithClock. Production passes time.Now().UTC().
-func withTaskShim(next http.Handler, now func() time.Time) http.Handler {
+func withTaskShim(next http.Handler, now func() time.Time, log *slog.Logger) http.Handler {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
@@ -133,7 +134,7 @@ func withTaskShim(next http.Handler, now func() time.Time) http.Handler {
 		// become chatty. It carries the task id and nothing about the Plan: the
 		// approval trail already records what was parked, and this is routing
 		// metadata, not content.
-		slog.Info("mcp task result issued",
+		logctx.Or(log).InfoContext(r.Context(), "mcp task result issued",
 			"task_id", taskID, "shim", "sep-2663", "removal_condition", "go-sdk#626")
 
 		writeShimResponse(w, capture, rewritten)

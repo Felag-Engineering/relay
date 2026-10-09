@@ -1084,7 +1084,7 @@ func TestConsoleEvents_WriteDeadlinesSurviveTheMiddleware(t *testing.T) {
 	// The Console's own middleware, in the order the composition root mounts
 	// it — this is what a future wrapper would be added to.
 	authn := controlplane.NewAuthenticator(roleVerifier{role: accounts.RoleAdmin})
-	handler := authn.Middleware(Secure(mux))
+	handler := authn.Middleware(Secure(mux, nil))
 
 	for _, tc := range []struct {
 		name  string

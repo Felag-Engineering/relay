@@ -58,7 +58,7 @@ func createTaskExec(ctx context.Context, ex execer, task jobs.Task) error {
 // jobs.ErrTaskNotFound if the Task does not exist, or jobs.ErrInvalidTaskState
 // if it is not currently Pending.
 func (t *sqliteTasks) MarkDispatched(ctx context.Context, taskID string, at time.Time) error {
-	return t.transition(ctx, taskID, "pending", func(tx *sql.Tx) error {
+	return t.transition(ctx, taskID, jobs.TaskEventDispatch, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `UPDATE tasks SET state = 'dispatched', dispatched_at = ? WHERE task_id = ?`,
 			formatTime(roundTripTime(at)), taskID)
 		return err
@@ -76,7 +76,7 @@ func (t *sqliteTasks) MarkDispatched(ctx context.Context, taskID string, at time
 // retention posture, not a desired-state spec, documented in
 // docs/operations/audit-output-retention.md.
 func (t *sqliteTasks) Resolve(ctx context.Context, taskID string, r jobs.Result) error {
-	return t.transition(ctx, taskID, "dispatched", func(tx *sql.Tx) error {
+	return t.transition(ctx, taskID, jobs.TaskEventResolve, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE tasks SET state = 'resolved', outcome = ?, exit_code = ?, stdout = ?, stderr = ?, resolved_at = ?
 			WHERE task_id = ?`,
@@ -90,7 +90,7 @@ func (t *sqliteTasks) Resolve(ctx context.Context, taskID string, r jobs.Result)
 // sent. Returns jobs.ErrTaskNotFound if the Task does not exist, or
 // jobs.ErrInvalidTaskState if it is not currently Pending.
 func (t *sqliteTasks) MarkUnreachable(ctx context.Context, taskID string, at time.Time) error {
-	return t.transition(ctx, taskID, "pending", func(tx *sql.Tx) error {
+	return t.transition(ctx, taskID, jobs.TaskEventUnreachable, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE tasks SET state = 'resolved', outcome = ?, resolved_at = ? WHERE task_id = ?`,
 			int(jobs.OutcomeUnreachable), formatTime(roundTripTime(at)), taskID)
@@ -105,7 +105,7 @@ func (t *sqliteTasks) MarkUnreachable(ctx context.Context, taskID string, at tim
 // Returns jobs.ErrTaskNotFound if the Task does not exist, or
 // jobs.ErrInvalidTaskState if it is not currently Pending.
 func (t *sqliteTasks) MarkVersionRefused(ctx context.Context, taskID string, at time.Time) error {
-	return t.transition(ctx, taskID, "pending", func(tx *sql.Tx) error {
+	return t.transition(ctx, taskID, jobs.TaskEventVersionRefused, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE tasks SET state = 'resolved', outcome = ?, stderr = ?, resolved_at = ? WHERE task_id = ?`,
 			int(jobs.OutcomeVersionRefused), []byte(jobs.VersionRefusedMessage), formatTime(roundTripTime(at)), taskID)
@@ -119,7 +119,7 @@ func (t *sqliteTasks) MarkVersionRefused(ctx context.Context, taskID string, at 
 // Task was never sent. Returns jobs.ErrTaskNotFound if the Task does not
 // exist, or jobs.ErrInvalidTaskState if it is not currently Pending.
 func (t *sqliteTasks) MarkUnsupported(ctx context.Context, taskID, reason string, at time.Time) error {
-	return t.transition(ctx, taskID, "pending", func(tx *sql.Tx) error {
+	return t.transition(ctx, taskID, jobs.TaskEventUnsupported, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE tasks SET state = 'resolved', outcome = ?, stderr = ?, resolved_at = ? WHERE task_id = ?`,
 			int(jobs.OutcomeUnsupported), []byte(reason), formatTime(roundTripTime(at)), taskID)
@@ -133,7 +133,7 @@ func (t *sqliteTasks) MarkUnsupported(ctx context.Context, taskID, reason string
 // Task does not exist, or jobs.ErrInvalidTaskState if it is not currently
 // Pending.
 func (t *sqliteTasks) MarkCancelled(ctx context.Context, taskID string, at time.Time) error {
-	return t.transition(ctx, taskID, "pending", func(tx *sql.Tx) error {
+	return t.transition(ctx, taskID, jobs.TaskEventCancel, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE tasks SET state = 'resolved', outcome = ?, resolved_at = ? WHERE task_id = ?`,
 			int(jobs.OutcomeCancelled), formatTime(roundTripTime(at)), taskID)
@@ -149,7 +149,7 @@ func (t *sqliteTasks) MarkCancelled(ctx context.Context, taskID string, at time.
 // jobs.ErrTaskNotFound if the Task does not exist, or jobs.ErrInvalidTaskState
 // if it is not currently Dispatched.
 func (t *sqliteTasks) MarkCancelledBeforeSend(ctx context.Context, taskID string, at time.Time) error {
-	return t.transition(ctx, taskID, "dispatched", func(tx *sql.Tx) error {
+	return t.transition(ctx, taskID, jobs.TaskEventCancelBeforeSend, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE tasks SET state = 'resolved', outcome = ?, dispatched_at = NULL, resolved_at = ? WHERE task_id = ?`,
 			int(jobs.OutcomeCancelled), formatTime(roundTripTime(at)), taskID)
@@ -157,10 +157,23 @@ func (t *sqliteTasks) MarkCancelledBeforeSend(ctx context.Context, taskID string
 	})
 }
 
-// transition runs fn inside a tx after verifying taskID currently has
-// requiredState, translating "not found" / "wrong state" into the sentinel
-// errors jobs.ErrTaskNotFound / jobs.ErrInvalidTaskState.
-func (t *sqliteTasks) transition(ctx context.Context, taskID, requiredState string, fn func(tx *sql.Tx) error) error {
+// transition runs fn inside a tx after verifying taskID is in the state ev
+// requires, translating "not found" / "wrong state" into the sentinel errors
+// jobs.ErrTaskNotFound / jobs.ErrInvalidTaskState.
+//
+// This is the optimistic-concurrency guard against another writer (CancelJob,
+// a Reconciler, another process) moving the row first; whether the transition
+// is legal is decided by jobs.Task.Transition, and the required state is read
+// from the same table (jobs.TaskEventKind.From).
+func (t *sqliteTasks) transition(ctx context.Context, taskID string, ev jobs.TaskEventKind, fn func(tx *sql.Tx) error) error {
+	from, ok := ev.From()
+	if !ok {
+		return jobs.ErrUnknownTaskEvent
+	}
+	requiredState, ok := dispatchStateToString(from)
+	if !ok {
+		return jobs.ErrUnknownTaskEvent
+	}
 	tx, err := t.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -355,6 +368,21 @@ func dispatchStateFromString(s string) jobs.DispatchState {
 		return jobs.DispatchStateResolved
 	default:
 		return jobs.DispatchStatePending
+	}
+}
+
+// dispatchStateToString is the inverse of dispatchStateFromString for the
+// states a transition can start from. Resolved is terminal and never a source
+// state, and an unknown state is refused rather than defaulted, so a future
+// event cannot quietly guard on the wrong state.
+func dispatchStateToString(s jobs.DispatchState) (string, bool) {
+	switch s {
+	case jobs.DispatchStatePending:
+		return "pending", true
+	case jobs.DispatchStateDispatched:
+		return "dispatched", true
+	default:
+		return "", false
 	}
 }
 

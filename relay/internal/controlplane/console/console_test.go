@@ -57,7 +57,7 @@ func newTestHandler(d Deps, role accounts.Role) http.Handler {
 	authn := controlplane.NewAuthenticator(roleVerifier{role: role})
 	mux := http.NewServeMux()
 	Register(mux, d)
-	return authn.Middleware(Secure(mux))
+	return authn.Middleware(Secure(mux, nil))
 }
 
 // newTestHandlerWithEventsLimiter is newTestHandler with GET /console/events'
@@ -83,7 +83,7 @@ func newTestHandlerWithEventsLimiter(d Deps, role accounts.Role, limiter *stream
 		}
 	}
 	mux.HandleFunc("/console/", nf)
-	return authn.Middleware(Secure(mux))
+	return authn.Middleware(Secure(mux, nil))
 }
 
 func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
@@ -311,7 +311,7 @@ func TestConsole_SecurityHeaders(t *testing.T) {
 // absent one.
 func TestConsole_CSRFRefusesUnsafeMethodWithoutToken(t *testing.T) {
 	reached := false
-	h := Secure(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+	h := Secure(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }), nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/console/anything", nil)
 	rec := httptest.NewRecorder()

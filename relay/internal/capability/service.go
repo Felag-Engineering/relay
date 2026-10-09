@@ -26,6 +26,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
@@ -43,6 +44,11 @@ type Service struct {
 	// metrics is best-effort observability only (MetricsSink, seams.go); it
 	// never affects a dispatch, authz, cap, or Freeze decision.
 	metrics MetricsSink
+
+	// log is where this layer's operational errors go; nil means
+	// slog.Default() (logger). Propagated onto the Job engine at the end of
+	// New, like jobEvents.
+	log *slog.Logger
 
 	// jobEvents is the event seam's Job-grained publisher (#416,
 	// JobEventSink, seams.go) — the same "purely observational" contract as
@@ -148,6 +154,14 @@ type Service struct {
 
 // Option configures a Service built by New.
 type Option func(*Service)
+
+// WithLogger sets the logger the capability layer reports operational errors
+// to. Observational only. Without it the layer logs through slog.Default().
+func WithLogger(l *slog.Logger) Option {
+	return func(s *Service) { s.log = l }
+}
+
+func (s *Service) logger() *slog.Logger { return logctx.Or(s.log) }
 
 // WithAuthorizer overrides the default allow-all Authorizer.
 func WithAuthorizer(a Authorizer) Option {
@@ -432,6 +446,7 @@ func New(reg registry.Repository, opts ...Option) *Service {
 	// same sink.
 	if e, ok := s.disp.(*jobEngine); ok {
 		e.events = s.jobEvents
+		e.log = s.log
 		// Likewise the dispatch-intent recorder (#887): the AuditSink that
 		// records the Job's outcome is the one that can record its intent in
 		// the Tasks' transaction. Order-independent, like events.
@@ -929,7 +944,7 @@ func (s *Service) account(ctx context.Context, p Principal, sel Selector, pr pre
 			// cancellation. result_count, not the results themselves: the
 			// results carry argv (#102's residual risk above), which never
 			// belongs in a log line.
-			slog.ErrorContext(acctCtx, "capability: reserved-path dispatch audit write failed; an approved dispatch has an incomplete or missing audit record",
+			s.logger().ErrorContext(acctCtx, "capability: reserved-path dispatch audit write failed; an approved dispatch has an incomplete or missing audit record",
 				"job_id", res.jobID, "approval_id", ap.requestID, "result_count", len(res.results), "error", auditErr)
 		}
 	}
@@ -1222,7 +1237,7 @@ func (s *Service) authorizeMachineCancel(ctx context.Context, jobID, accountID s
 		// failure is operational detail (a store blip, a malformed filter)
 		// that must not change what a refused caller is told, and must not
 		// require a caller to be trusted with it to diagnose the Relay.
-		slog.ErrorContext(ctx, "capability: cancel: job-requester lookup failed",
+		s.logger().ErrorContext(ctx, "capability: cancel: job-requester lookup failed",
 			"job_id", jobID, "account_id", accountID, "error", queryErr)
 		return "", ErrJobNotRequestedByCaller
 	}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 )
 
 // bearerPrefix is the required Authorization header scheme.
@@ -217,6 +218,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 // drift.
 func (a *Authenticator) contextWith(ctx context.Context, res authResult) context.Context {
 	ctx = context.WithValue(ctx, principalContextKey{}, res.principal)
+	ctx = logctx.WithPrincipal(ctx, res.principal.Attribution())
 	if res.console != nil {
 		ctx = context.WithValue(ctx, consoleSessionContextKey{}, *res.console)
 	}

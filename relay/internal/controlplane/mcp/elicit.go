@@ -10,6 +10,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp/requeststate"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 )
 
 // elicit.go is S2b of #646 (ADR-0029 decision 6; ADR-0028 as amended
@@ -95,7 +96,10 @@ func WithApprovalElicitation() Option {
 // as a byte-shaped value.
 type questioner struct {
 	sealer *requeststate.Sealer
+	log    *slog.Logger // nil means slog.Default() (logger)
 }
+
+func (q *questioner) logger() *slog.Logger { return logctx.Or(q.log) }
 
 // newQuestioner mints a process-lifetime Sealer via requeststate.Mint —
 // crypto/rand, never configuration. A Mint failure disables asking (fail
@@ -103,13 +107,13 @@ type questioner struct {
 // panicking or refusing to start over an operationally recoverable
 // condition; only the fact that minting failed is logged, never key
 // material.
-func newQuestioner() *questioner {
+func newQuestioner(log *slog.Logger) *questioner {
 	sealer, err := requeststate.Mint()
 	if err != nil {
-		slog.Error("mcp: approval elicitation disabled: request-state key could not be minted", "error", err)
+		logctx.Or(log).Error("mcp: approval elicitation disabled: request-state key could not be minted", "error", err)
 		return nil
 	}
-	return &questioner{sealer: sealer}
+	return &questioner{sealer: sealer, log: log}
 }
 
 // stateOpener is the ONLY way a sealed request state is opened outside this
@@ -314,7 +318,7 @@ func (q *questioner) question(req *sdkmcp.CallToolRequest, p capability.Principa
 
 	digest, err := callArgsDigest(in)
 	if err != nil {
-		slog.Warn("mcp: approval elicitation: could not digest call arguments; rendering pending_approval instead",
+		q.logger().Warn("mcp: approval elicitation: could not digest call arguments; rendering pending_approval instead",
 			"request_id", parked.RequestID, "error", err)
 		return nil, false
 	}
@@ -332,7 +336,7 @@ func (q *questioner) question(req *sdkmcp.CallToolRequest, p capability.Principa
 		// RequestID over requeststate.MaxFieldBytes) and refuses an empty
 		// AccountID — both render pending_approval here, fail closed, rather
 		// than a question this package could not actually seal.
-		slog.Warn("mcp: approval elicitation: could not seal request state; rendering pending_approval instead",
+		q.logger().Warn("mcp: approval elicitation: could not seal request state; rendering pending_approval instead",
 			"request_id", parked.RequestID, "error", err)
 		return nil, false
 	}

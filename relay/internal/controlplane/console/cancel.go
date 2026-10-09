@@ -38,7 +38,6 @@ package console
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -150,7 +149,7 @@ func handleCancelJob(d Deps) http.HandlerFunc {
 			// to the screen, matching readFailed's convention (screen.go)
 			// of naming the failure in the operator's terms rather than
 			// printing the underlying error text.
-			slog.Error("console cancel request returned an error", "job_id", jobID, "error", err)
+			d.logger().ErrorContext(r.Context(), "console cancel request returned an error", "job_id", jobID, "error", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			renderScreen(w, pg, cancelResultTmpl, cancelResultView{
 				Heading:  "The cancel returned an error. Some Tasks may already have been cancelled.",

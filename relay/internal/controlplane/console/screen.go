@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -26,6 +25,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 )
 
 // Absolute times in the Console are always UTC and carry the trailing "Z".
@@ -181,7 +181,7 @@ func renderScreen(w http.ResponseWriter, p Page, tmpl *template.Template, data a
 		// failing action (e.g. <.BoundaryExplanation>), never rendered values — so
 		// a template-reachable method must keep its error messages value-free, or
 		// whatever it interpolates is logged here. See Deny.BoundaryExplanation.
-		slog.Error("console screen render failed", "screen", tmpl.Name(), "error", err)
+		p.logger().Error("console screen render failed", "screen", tmpl.Name(), "error", err)
 		http.Error(w, "the Console could not render this page", http.StatusInternalServerError)
 		return
 	}
@@ -245,6 +245,7 @@ func renderNotFound(d Deps, w http.ResponseWriter, r *http.Request) {
 		// that nav item while an unmounted path renders the identical page.
 		Nav:       Nav(d, role, ""),
 		CSRFToken: token,
+		log:       d.logger().With(logctx.Attrs(r.Context())...),
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusNotFound)

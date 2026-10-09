@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
@@ -119,13 +118,13 @@ func handleRevokeNode(d Deps) http.HandlerFunc {
 			// way: none of these differences are the caller's to act on.
 			switch {
 			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-				slog.Error("control api: node revoke abandoned: request context ended before the revoke was recorded",
+				d.logger().ErrorContext(r.Context(), "control api: node revoke abandoned: request context ended before the revoke was recorded",
 					"node_id", nodeID, "error", err)
 			case errors.Is(err, revocation.ErrRecorderRequired):
-				slog.Error("control api: node revoke refused: no recorder supplied",
+				d.logger().ErrorContext(r.Context(), "control api: node revoke refused: no recorder supplied",
 					"node_id", nodeID, "error", err)
 			default:
-				slog.Error("control api: append node revoke audit record", "node_id", nodeID, "error", err)
+				d.logger().ErrorContext(r.Context(), "control api: append node revoke audit record", "node_id", nodeID, "error", err)
 			}
 			writeProblem(w, http.StatusInternalServerError, "revoke not recorded",
 				"the revocation was not performed because it could not be audited")

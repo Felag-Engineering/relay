@@ -124,7 +124,7 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	// and its normal capability-layer audit entries, as main.go does.
 	harnessAudit := auditsink.New(deps.audit)
 
-	router, reconciler, sink := newDispatchStack(deps.tasks, harnessAudit)
+	router, reconciler, sink := newDispatchStack(deps.tasks, harnessAudit, deps.logger)
 	// reconciler is captured by router's onConnect closure (dispatch_wiring.go)
 	// and fires on every Node registration, including reconnects — this is
 	// what makes the crash-mid-Job test's restart reconciliation happen; it
@@ -136,6 +136,7 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 		capability.WithExecution(deps.jobs, deps.tasks, router,
 			capability.WithExecDispatchConcurrency(cfg.DispatchConcurrency)),
 		capability.WithAuthorizer(devHarnessAuthorizer{}),
+		capability.WithLogger(deps.logger),
 		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
 		capability.WithAuditSink(harnessAudit),
 		capability.WithFreeze(deps.store.Freeze()))

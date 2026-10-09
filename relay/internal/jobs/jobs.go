@@ -31,7 +31,9 @@ var ErrTaskNotFound = errors.New("jobs: task not found")
 
 // ErrInvalidTaskState is returned when a Task state transition is attempted
 // out of order: MarkDispatched on a Task that is not Pending, or Resolve or
-// MarkCancelledBeforeSend on a Task that is not Dispatched. This is the at-most-once reconciliation guard —
+// MarkCancelledBeforeSend on a Task that is not Dispatched. Task.Transition
+// holds the table of legal transitions; the store re-checks it against the
+// persisted row. This is the at-most-once reconciliation guard —
 // a Relay restart must never re-dispatch a Task it already resolved, and must
 // never resolve a Task it never dispatched.
 var ErrInvalidTaskState = errors.New("jobs: invalid task state transition")
@@ -245,7 +247,8 @@ func RiskClassName(r RiskClass) string {
 // Pending (created, not yet sent) -> Dispatched (sent to the daemon, no
 // result yet) -> Resolved (result recorded). In-flight dispatch state —
 // Dispatched with no result — is what a Relay restart must recover to decide
-// whether re-dispatch is safe (ADR-0004).
+// whether re-dispatch is safe (ADR-0004). The legal moves between states are
+// the table in Task.Transition.
 type DispatchState int
 
 const (
@@ -392,7 +395,9 @@ type JobRepository interface {
 	Stages(ctx context.Context, jobID string) ([]Stage, error)
 }
 
-// TaskRepository persists Tasks and their dispatch state.
+// TaskRepository persists Tasks and their dispatch state. Each Mark* method
+// and Resolve persists the TaskEvent of the matching kind (see
+// Task.Transition) and re-checks its source state against the stored row.
 type TaskRepository interface {
 	// CreateTask persists a new Task with State = DispatchStatePending.
 	CreateTask(ctx context.Context, task Task) error

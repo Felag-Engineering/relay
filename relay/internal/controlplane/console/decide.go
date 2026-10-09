@@ -101,7 +101,6 @@ package console
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -208,7 +207,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 			// cookie lane cannot produce. The only way here is a bearer-lane
 			// caller reaching this POST — not browser-reachable, so this is a
 			// wiring alarm, and there is no session to step up.
-			slog.Error("console decide-approval reached without a resolved browser session",
+			d.logger().ErrorContext(r.Context(), "console decide-approval reached without a resolved browser session",
 				"path", r.URL.Path)
 			http.Error(w, "the Relay could not identify the session to step up", http.StatusInternalServerError)
 			return
@@ -375,7 +374,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 			// the wrapped audit error properly is a capability-layer change
 			// and is out of scope here; the honest sentence that does not
 			// require it is "could not CONFIRM", not "did not happen".
-			slog.Error("console decide-approval request returned an error",
+			d.logger().ErrorContext(r.Context(), "console decide-approval request returned an error",
 				"approval_id", id, "error", err)
 			renderDecideResult(w, pg, http.StatusInternalServerError, decideResultView{
 				Heading:       "The Relay could not confirm this decision was fully recorded. Reload this Request before answering again.",

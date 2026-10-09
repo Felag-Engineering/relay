@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
+
 	// registry is imported for the Registry return type (registry.Node) and its
 	// ErrNotFound sentinel.
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -213,6 +215,9 @@ type Service struct {
 	reg      Registry
 	tokens   TokenRevoker
 
+	// log is where revocations are reported; nil means slog.Default().
+	log *slog.Logger
+
 	// tokenLocks and nodeLocks serialise RevokeToken per token id and the
 	// decide-record-revoke critical section per Node id (#605): a cascade
 	// holds tokenLocks for the whole of one token's cascade and nodeLocks for
@@ -233,8 +238,8 @@ type Service struct {
 }
 
 // NewService creates a Service.
-func NewService(d *Denylist, c *Connections, reg Registry, tokens TokenRevoker) *Service {
-	return &Service{
+func NewService(d *Denylist, c *Connections, reg Registry, tokens TokenRevoker, opts ...Option) *Service {
+	s := &Service{
 		denylist:   d,
 		conns:      c,
 		reg:        reg,
@@ -243,7 +248,22 @@ func NewService(d *Denylist, c *Connections, reg Registry, tokens TokenRevoker) 
 		nodeLocks:  newKeyedMutex(),
 		recorded:   newRecordedSet(),
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
+
+// Option configures a Service at construction.
+type Option func(*Service)
+
+// WithLogger sets the logger the Service reports revocations to. Without it
+// the Service logs through slog.Default().
+func WithLogger(l *slog.Logger) Option {
+	return func(s *Service) { s.log = l }
+}
+
+func (s *Service) logger() *slog.Logger { return logctx.Or(s.log) }
 
 // RevokeNode adds nodeID to the denylist, persists the revocation to the
 // registry (the authority), and tears down any live Tunnel stream. The registry
@@ -277,16 +297,16 @@ func (s *Service) RevokeNode(nodeID string) {
 	// holds for this process, so log and continue rather than fail.
 	if err := s.reg.SetRevoked(nodeID, time.Now().UTC()); err != nil {
 		if errors.Is(err, registry.ErrNotFound) {
-			slog.Info("node revocation not persisted: no registry row",
+			s.logger().Info("node revocation not persisted: no registry row",
 				"node_id", nodeID)
 		} else {
-			slog.Warn("persist node revocation failed",
+			s.logger().Warn("persist node revocation failed",
 				"node_id", nodeID, "error", err)
 		}
 	}
 
 	s.conns.Disconnect(nodeID)
-	slog.Info("node revoked", "node_id", nodeID)
+	s.logger().Info("node revoked", "node_id", nodeID)
 }
 
 // revokeAll is RevokeNode's chunked twin, called only by revokeChunk for the
@@ -359,21 +379,21 @@ func (s *Service) revokeAll(ids []string) {
 	now := time.Now().UTC()
 	missing, err := s.reg.SetRevokedAll(ids, now)
 	for _, id := range missing {
-		slog.Info("node revocation not persisted: no registry row",
+		s.logger().Info("node revocation not persisted: no registry row",
 			"node_id", id)
 	}
 	if err != nil {
 		// The batch is all-or-nothing, so this chunk's ids are the
 		// recoverable set — see the fallback below and the doc above.
-		slog.Warn("persist node revocations failed; falling back to per-Node writes",
+		s.logger().Warn("persist node revocations failed; falling back to per-Node writes",
 			"chunk_size", len(ids), "error", err)
 		for _, id := range ids {
 			if ferr := s.reg.SetRevoked(id, now); ferr != nil {
 				if errors.Is(ferr, registry.ErrNotFound) {
-					slog.Info("node revocation not persisted: no registry row",
+					s.logger().Info("node revocation not persisted: no registry row",
 						"node_id", id)
 				} else {
-					slog.Warn("persist node revocation failed",
+					s.logger().Warn("persist node revocation failed",
 						"node_id", id, "error", ferr)
 				}
 			}
@@ -382,7 +402,7 @@ func (s *Service) revokeAll(ids []string) {
 
 	for _, id := range ids {
 		s.conns.Disconnect(id)
-		slog.Info("node revoked", "node_id", id)
+		s.logger().Info("node revoked", "node_id", id)
 	}
 }
 
@@ -435,7 +455,7 @@ func (s *Service) RevokeNodeRecorded(ctx context.Context, nodeID string, record 
 	defer unlock()
 
 	if s.recorded.has(nodeID) {
-		slog.Info("node revocation already recorded by this relay; no second record written",
+		s.logger().InfoContext(ctx, "node revocation already recorded by this relay; no second record written",
 			"node_id", nodeID)
 		// RevokeNode is idempotent and is called anyway: over-denying beats
 		// under-denying is this surface's own stated posture, and a repeat
@@ -509,7 +529,7 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string, record Revoca
 		if errors.Is(err, enroll.ErrNotFound) {
 			// Unknown token: log and continue. The cascade is still valid — Nodes
 			// that recorded this tokenID in their provenance must still be revoked.
-			slog.Info("token not found during revocation, continuing cascade",
+			s.logger().InfoContext(ctx, "token not found during revocation, continuing cascade",
 				"token_id", tokenID)
 		} else {
 			return err
@@ -589,7 +609,7 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string, record Revoca
 		total += newThisPass
 		if listErr != nil {
 			ic := newIncompleteCascade(pass, total, unrecorded, listErr)
-			slog.Error("token revocation cascade incomplete: registry read failed",
+			s.logger().ErrorContext(ctx, "token revocation cascade incomplete: registry read failed",
 				"token_id", tokenID, "pass", pass, "nodes_revoked", total,
 				"nodes_unrecorded", unrecorded, "nodes_unreadable", ic.UnreadableCount,
 				"unreadable_node_ids", ic.UnreadableNodeIDs, "error", listErr)
@@ -601,7 +621,7 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string, record Revoca
 			break
 		}
 	}
-	slog.Info("token revoked", "token_id", tokenID, "nodes_revoked", total, "nodes_unrecorded", unrecorded)
+	s.logger().InfoContext(ctx, "token revoked", "token_id", tokenID, "nodes_revoked", total, "nodes_unrecorded", unrecorded)
 	if unrecorded > 0 {
 		return &CascadeShortfall{Unrecorded: unrecorded, Total: total}
 	}
@@ -701,7 +721,7 @@ func (s *Service) revokeChunk(ids []string, record RevocationRecorder, tokenID s
 	recordIDs := append([]string(nil), ids...)
 	if err := record(recordIDs); err != nil {
 		for _, id := range ids {
-			slog.Error("cascaded node revocation not recorded",
+			s.logger().Error("cascaded node revocation not recorded",
 				"node_id", id, "token_id", tokenID, "error", err)
 		}
 		unrecorded = len(ids)

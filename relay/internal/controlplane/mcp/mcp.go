@@ -53,6 +53,7 @@ package mcp
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -224,6 +225,15 @@ type serverOptions struct {
 	// effect only when approvals is also wired: Relay never asks a question
 	// it cannot accept an answer to.
 	elicitApprovals bool
+	// log is where this surface's operational notes go; nil means
+	// slog.Default().
+	log *slog.Logger
+}
+
+// WithLogger sets the logger the MCP surface reports operational notes to.
+// Observational only; without it the surface logs through slog.Default().
+func WithLogger(l *slog.Logger) Option {
+	return func(cfg *serverOptions) { cfg.log = l }
 }
 
 // WithClock overrides the clock the Tasks surface renders timestamps from
@@ -285,7 +295,7 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 	// threat-model R27 and docs/specs/approval-assurance.md.
 	var ask *questioner
 	if cfg.elicitApprovals && cfg.approvals != nil {
-		ask = newQuestioner()
+		ask = newQuestioner(cfg.log)
 	}
 
 	registerNodeTools(srv, lane)
@@ -319,7 +329,7 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 	// on its request path at all — not a disabled branch, an absent one. See
 	// taskshim.go's header for the preconditions this depends on.
 	if tasks != nil {
-		handler = withTaskShim(handler, cfg.now)
+		handler = withTaskShim(handler, cfg.now, cfg.log)
 	}
 	return handler
 }

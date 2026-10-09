@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 )
 
@@ -158,6 +159,10 @@ type Router struct {
 	// violations records a relay-daemon's protocol violation (#638). See
 	// ViolationRecorder and NewRouter's doc comment.
 	violations ViolationRecorder
+
+	// log is where the Router's operational problems go; nil means
+	// slog.Default() (logger).
+	log *slog.Logger
 }
 
 // NewRouter returns a Router. onConnect may be nil (no reconciliation
@@ -177,12 +182,8 @@ type Router struct {
 // production wiring is asserted end to end by
 // TestNewDispatchStack_AProtocolViolationOnAReadClassTaskIsRecordedWithNoOutput
 // (cmd/relay).
-func NewRouter(onConnect func(nodeID string), violations ViolationRecorder) *Router {
-	if violations == nil {
-		slog.Warn("dispatch: NewRouter called with no ViolationRecorder; this Router will not " +
-			"record protocol violations durably — wire-boundary refusals will be log-only")
-	}
-	return &Router{
+func NewRouter(onConnect func(nodeID string), violations ViolationRecorder, opts ...RouterOption) *Router {
+	r := &Router{
 		conns:          make(map[string]*conn),
 		waiters:        make(map[string]*waiter),
 		verdictWaiters: make(map[string]*verdictWaiter),
@@ -190,7 +191,26 @@ func NewRouter(onConnect func(nodeID string), violations ViolationRecorder) *Rou
 		onConnect:      onConnect,
 		violations:     violations,
 	}
+	for _, o := range opts {
+		o(r)
+	}
+	if violations == nil {
+		r.logger().Warn("dispatch: NewRouter called with no ViolationRecorder; this Router will not " +
+			"record protocol violations durably — wire-boundary refusals will be log-only")
+	}
+	return r
 }
+
+// RouterOption configures a Router at construction.
+type RouterOption func(*Router)
+
+// WithLogger sets the logger the Router reports operational problems to.
+// Observational only. Without it the Router logs through slog.Default().
+func WithLogger(l *slog.Logger) RouterOption {
+	return func(r *Router) { r.log = l }
+}
+
+func (r *Router) logger() *slog.Logger { return logctx.Or(r.log) }
 
 // Register records nodeID's live outbound send function and returns an
 // unregister cleanup. It is called by the Tunnel handler once per connection,
@@ -332,7 +352,7 @@ func (r *Router) Dispatch(ctx context.Context, nodeID string, t jobs.Task) (jobs
 		}
 		res, v := result(tr)
 		if v.Violated() {
-			slog.Warn("dispatch: node reported an outcome the wire contract forbids; the Relay "+
+			r.logger().WarnContext(ctx, "dispatch: node reported an outcome the wire contract forbids; the Relay "+
 				"refused the report and resolved the Task as a Relay-authored failure",
 				"node_id", nodeID, "task_id", t.ID, "reported_outcome", v.ReportedOutcome, "rule", v.Rule)
 			r.recordViolation(ctx, nodeID, t, v)
@@ -420,7 +440,7 @@ func (r *Router) recordViolation(ctx context.Context, nodeID string, t jobs.Task
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), violationAuditBudget)
 	defer cancel()
 	if err := r.violations.RecordProtocolViolation(auditCtx, ev); err != nil {
-		slog.Error("dispatch: failed to record protocol violation; this violation has no durable row",
+		r.logger().ErrorContext(ctx, "dispatch: failed to record protocol violation; this violation has no durable row",
 			"node_id", nodeID, "task_id", t.ID, "job_id", t.JobID, "rule", v.Rule, "err", err)
 	}
 }
