@@ -101,8 +101,8 @@ func (goldenJobs) TasksByJob(_ context.Context, jobID string) ([]jobs.Task, erro
 // SHIM, and of nothing that varies.
 type goldenParker struct{}
 
-func (goldenParker) Run(context.Context, capability.Principal, capability.Selector, jobs.Action) ([]capability.NodeResult, error) {
-	return nil, &capability.ParkedError{
+func (goldenParker) Start(context.Context, capability.Principal, capability.Selector, jobs.Action, capability.StartOptions) (capability.StartedJob, error) {
+	return capability.StartedJob{}, &capability.ParkedError{
 		RequestID:     goldenRequestID,
 		PlanHash:      "hash-golden-1",
 		Summary:       `service.restart(unit="nginx") [mutate] on 1 node(s): node-a`,
@@ -292,6 +292,7 @@ func TestGolden_PollTerminalWithResults(t *testing.T) {
 	    "statusMessage":"service.restart(unit=\"nginx\") [mutate] on 1 node(s): node-a",
 	    "result":{
 	      "job_id":"job-golden-1",
+	      "job_status":"complete",
 	      "results":[{
 	        "node_id":"node-a",
 	        "outcome":"success",

@@ -286,8 +286,9 @@ type PerNodeResult struct {
 // per-Node results. run_operation/raw_exec render the superset
 // RunOrPlanOutput instead — see its JobID presence rules.
 type ExecutionOutput struct {
-	JobID   string          `json:"job_id"`
-	Results []PerNodeResult `json:"results"`
+	JobID     string          `json:"job_id"`
+	JobStatus string          `json:"job_status" jsonschema:"running while any Task is unresolved (its outcome reads unspecified); complete once every Task has a terminal outcome. Poll get_job with job_id until complete."`
+	Results   []PerNodeResult `json:"results"`
 }
 
 // PerNodeVerdict is one matched Node's Plan-mode result (#119, ADR-0011):
@@ -351,6 +352,11 @@ type RunOrPlanOutput struct {
 	JobID   string          `json:"job_id,omitempty" jsonschema:"Present only when a Job was created (every dispatch that ran; a Selector matching no Nodes is refused as no_nodes_matched and creates no Job); use it with get_job/cancel_job. Absent on plan=true and pending_approval responses — an absent job_id always means nothing was dispatched, never a failed id."`
 	Results []PerNodeResult `json:"results" jsonschema:"Always an array, never null: one entry per matched Node on a real dispatch, empty when nothing was dispatched (plan=true or a parked dispatch)."`
 	Plan    *PlanOutput     `json:"plan,omitempty"`
+
+	// JobStatus and Reattached describe a Job returned at persist (#895).
+	JobStatus  string `json:"job_status,omitempty" jsonschema:"running while any Task is unresolved (its outcome reads unspecified); complete once every Task has a terminal outcome; absent when no Job was created. Poll get_job with job_id until complete."`
+	Reattached bool   `json:"reattached,omitempty" jsonschema:"true when this call dispatched nothing and returned the Job an earlier call created (same idempotency_key, or an approval already released)."`
+
 	// PendingApproval is set when the dispatch PARKED for human approval
 	// (ADR-0027) instead of running. When it is present, job_id is absent and
 	// results is empty — nothing was dispatched and no Job exists.

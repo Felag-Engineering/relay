@@ -701,6 +701,10 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		// the gate parked, so with no rules configured nothing parks and the
 		// table stays empty.
 		capability.WithMCPTasks(st.MCPTasks()),
+		// Dispatch idempotency keys (#895): the MCP execution tools forward an
+		// optional key so a call re-issued after a lost response re-attaches to
+		// its Job. Without this a keyed call is refused, never run unkeyed.
+		capability.WithIdempotency(st.IdempotencyKeys()),
 		// The read lane (#441): filtered, paginated queries over the audit
 		// trail and over Jobs/Tasks — one seam, shared by every surface
 		// (invariant 10).
