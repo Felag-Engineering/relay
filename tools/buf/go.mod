@@ -1,6 +1,6 @@
 module github.com/Felag-Engineering/gleipnir-relay/tools/buf
 
-go 1.26.8
+go 1.26.9
 
 tool github.com/bufbuild/buf/cmd/buf
 
