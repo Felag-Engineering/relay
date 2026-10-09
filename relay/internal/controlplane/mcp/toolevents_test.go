@@ -80,6 +80,7 @@ func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolC
 		capability.WithAuditSink(auditsink.New(st.Audit())),
 		capability.WithFreeze(st.Freeze()),
 	)
+	drainOnCleanup(t, capSvc)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 
 	var opts []mcp.Option
@@ -269,8 +270,9 @@ func TestToolCallMiddleware_LeakTest_GetJobStdout(t *testing.T) {
 
 	session := ts.connect(t)
 	runRes := callTool(t, session, "raw_exec", map[string]any{
-		"selector": "node:role=web",
-		"argv":     []any{"/usr/bin/true"},
+		"selector":     "node:role=web",
+		"argv":         []any{"/usr/bin/true"},
+		"wait_seconds": 300,
 	})
 	var run struct {
 		JobID string `json:"job_id"`

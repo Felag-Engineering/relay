@@ -247,6 +247,12 @@ Point it at `https://relay:9443/mcp` with:
 keyed by the Operation's argument names (the Relay maps those names to the
 daemon's positional Policy under the hood).
 
+`run_operation` and `raw_exec` return as soon as the Job's Tasks are persisted, with
+`job_id` and `job_status: "running"`. To see per-Node results, either pass `wait_seconds`
+(up to 300) to wait for them in the same call, or poll `get_job` until `job_status` is
+`complete`. Every example below that shows per-Node results assumes one of the two. An
+answered retry must re-send the call unchanged, `wait_seconds` included.
+
 Happy path — fan `system.facts` (a no-argument, `read`-class Operation) across
 every dev Node and get a per-Node result:
 
@@ -421,7 +427,8 @@ returns a `pending_approval` result (every Raw Exec parks under
 `dev-approver` with the decision call in
 [Approving a parked dispatch](#approving-a-parked-dispatch) (a `reason` such as
 `"repair the dev-fleet demo service"`), then **re-issue the same `raw_exec` call
-unchanged**. Expect **two Nodes** `outcome=success, exit_code: 0` and **daemon-3**
+unchanged** (pass `wait_seconds` on both calls, or poll `get_job` until `job_status` is
+`complete`). Expect **two Nodes** `outcome=success, exit_code: 0` and **daemon-3**
 `outcome=denied_by_policy`. The verdict is the daemon's, never the Relay's (ADR-0002 /
 ADR-0011).
 

@@ -136,10 +136,12 @@ the client, in order:
 2. `describe_node` on one Node — the effective Policy mirror;
 3. `list_operations` — the vocabulary with risk classes;
 4. `run_operation(selector="node:role=web", operation="system.facts")` — hits **only**
-   the matching subset;
+   the matching subset (the call returns `job_id` at persist; pass `wait_seconds`, or poll
+   `get_job` until `job_status` is `complete`, to see the per-Node results);
 5. `run_operation(selector="relay:env=beta", operation="system.facts")` — fans out to
-   all ≥3 with per-Node results;
-6. the same as (5) with `plan=true` first, verdicts matching the subsequent real run;
+   all ≥3 with per-Node results (again with `wait_seconds`, or by polling `get_job`);
+6. the same as (5) with `plan=true` first, verdicts matching the completed outcomes of the
+   subsequent real run;
 7. one deliberate Policy denial (e.g. `service.restart` of a non-allowed unit) —
    `denied_by_policy` with the rule, per Node.
 

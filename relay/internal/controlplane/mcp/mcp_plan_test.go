@@ -286,7 +286,7 @@ func TestMCP_RunOperation_Plan_AuditedAsPlanNoJobOrTask(t *testing.T) {
 
 	// A subsequent real run still mints "job-id-1" — proof the Plan call
 	// above never advanced the deterministic ID sequence either.
-	runRes := callTool(t, session, "run_operation", map[string]any{"selector": "node:role=web", "operation": "system.facts"})
+	runRes := callTool(t, session, "run_operation", map[string]any{"selector": "node:role=web", "operation": "system.facts", "wait_seconds": 300})
 	var runOut mcp.RunOrPlanOutput
 	decodeResult(t, runRes, &runOut)
 	if runOut.JobID != "job-id-1" {
@@ -336,7 +336,7 @@ func TestMCP_Plan_PlanVsRealRunParity(t *testing.T) {
 	var planOut mcp.RunOrPlanOutput
 	decodeResult(t, planRes, &planOut)
 
-	runRes := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts"})
+	runRes := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 300})
 	var runOut mcp.RunOrPlanOutput
 	decodeResult(t, runRes, &runOut)
 

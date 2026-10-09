@@ -553,9 +553,10 @@ const (
 	// Node (ADR-0042). No Job was created.
 	RefusalUnknownOperation
 
-	// RefusalMalformed counts a Template dispatch refused because its argument
-	// names do not match the Template's slots, or its matched Nodes disagree
-	// about them (ADR-0042, #345). Malformed input, never a Policy verdict.
+	// RefusalMalformed counts a dispatch refused for malformed input: a
+	// Template's argument names not matching its slots or its matched Nodes
+	// disagreeing about them (ADR-0042, #345), or an invalid idempotency key, or
+	// a key reused with different arguments (#895). Never a Policy verdict.
 	RefusalMalformed
 )
 

@@ -119,8 +119,9 @@ func TestMCPTasks_PollAParkedDispatchThroughToCompletion(t *testing.T) {
 	}
 
 	ranRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
-		"operation": "service.restart",
-		"args":      map[string]string{"unit": "nginx"},
+		"operation":    "service.restart",
+		"args":         map[string]string{"unit": "nginx"},
+		"wait_seconds": 300,
 	})
 	var ran mcp.RunOrPlanOutput
 	relaytest.DecodeToolJSON(t, ranRes, &ran)
@@ -208,8 +209,9 @@ func TestMCPTasks_CancelAParkedTaskLeavesTheApprovalDecidable(t *testing.T) {
 	}
 
 	ranRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
-		"operation": "service.restart",
-		"args":      map[string]string{"unit": "nginx"},
+		"operation":    "service.restart",
+		"args":         map[string]string{"unit": "nginx"},
+		"wait_seconds": 300,
 	})
 	var ran mcp.RunOrPlanOutput
 	relaytest.DecodeToolJSON(t, ranRes, &ran)

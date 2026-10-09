@@ -244,8 +244,62 @@ var _ dispatcher = (*jobEngine)(nil)
 
 // run implements dispatcher. See the at-most-once design note above for why
 // IDs are minted before persistence and every Task is persisted (Pending)
-// before any Task is dispatched.
+// before any Task is dispatched. It is persist followed by fanOut on the
+// caller's own context; start (below) is the same two halves split across a
+// return.
 func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error) {
+	pj, err := e.persist(ctx, d, false)
+	if err != nil {
+		return dispatchResult{}, err
+	}
+	return e.fanOut(pj)
+}
+
+// persistedJob is a Job whose Tasks and dispatch intent are committed and whose
+// cancel gate is open: everything fanOut needs, and nothing it must re-derive.
+type persistedJob struct {
+	jobID   string
+	runCtx  context.Context
+	gate    *jobGate
+	release func()
+	pending []pendingTask
+	d       dispatch
+}
+
+// start persists d's Job and returns its ID as soon as the Tasks and the
+// dispatch intent are committed, with finish to run the fan-out. The Job's
+// whole pipeline runs on a context detached from ctx, for the reason the
+// reserved path always has (see persist): once start returns, a caller who
+// stops waiting can no more abandon the Job than a reserved one can. Its
+// lifetime is bounded the same way, by each Task's 300s hard wall clock.
+//
+// finish must be called exactly once; it releases the Job's cancel gate.
+func (e *jobEngine) start(ctx context.Context, d dispatch) (string, func() (dispatchResult, error), error) {
+	pj, err := e.persist(ctx, d, true)
+	if err != nil {
+		return "", nil, err
+	}
+	return pj.jobID, func() (dispatchResult, error) { return e.fanOut(pj) }, nil
+}
+
+// jobPersisted reports whether jobID's Tasks are committed. The engine commits a
+// Job's Tasks and its dispatch intent in one transaction (RecordIntent, #887),
+// and a zero-match Selector is refused before any Job exists, so "has at least
+// one Task" is exactly "was persisted".
+func (e *jobEngine) jobPersisted(ctx context.Context, jobID string) (bool, error) {
+	tasks, err := e.tasksRepo.ByJob(ctx, jobID)
+	if err != nil {
+		return false, fmt.Errorf("capability: read tasks of job %q: %w", jobID, err)
+	}
+	return len(tasks) > 0, nil
+}
+
+// persist is run's first half: it mints (or takes the reserved) Job ID, opens
+// the cancel gate, and commits the Job, its Stage, every Pending Task and the
+// dispatch intent. On success the gate stays open for fanOut to release; on any
+// error persist has released it. detach runs the pipeline on a context cut off
+// from ctx's cancellation, as a reserved Job ID always does.
+func (e *jobEngine) persist(ctx context.Context, d dispatch, detach bool) (pj *persistedJob, err error) {
 	// d.jobID carries a Job ID already reserved and bound to a releasing
 	// approval (AP-77, checkApproval/Service.Run). Using it here, rather than
 	// minting a fresh one, is what makes the release claim and the Job it
@@ -256,7 +310,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 		var err error
 		jobID, err = e.prefixedID("job-")
 		if err != nil {
-			return dispatchResult{}, fmt.Errorf("capability: generate job id: %w", err)
+			return nil, fmt.Errorf("capability: generate job id: %w", err)
 		}
 	}
 
@@ -294,17 +348,21 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	// SQLite calls already bounded by the driver's own busy_timeout
 	// (store.go's busyTimeoutMillis).
 	runCtx := ctx
-	if reserved {
+	if reserved || detach {
 		runCtx = context.WithoutCancel(ctx)
 	}
 
 	// The gate exists before any Task does, so a cancel can never find a
 	// persisted Task whose Job has no gate.
 	gate, release := e.openGate(jobID)
-	defer release()
+	defer func() {
+		if err != nil {
+			release()
+		}
+	}()
 
 	if err := e.jobsRepo.CreateJob(runCtx, jobs.Job{ID: jobID, CreatedAt: e.now(), Requester: requesterOf(d.principal)}); err != nil {
-		return dispatchResult{}, fmt.Errorf("capability: create job %q: %w", jobID, err)
+		return nil, fmt.Errorf("capability: create job %q: %w", jobID, err)
 	}
 	// Published error-free by construction (#416): the sink is
 	// observational and can never change dispatch control flow — the same
@@ -320,10 +378,10 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 
 	stageID, err := e.prefixedID("stage-")
 	if err != nil {
-		return dispatchResult{}, fmt.Errorf("capability: generate stage id: %w", err)
+		return nil, fmt.Errorf("capability: generate stage id: %w", err)
 	}
 	if err := e.jobsRepo.AddStage(runCtx, jobs.Stage{ID: stageID, JobID: jobID, Index: 0}); err != nil {
-		return dispatchResult{}, fmt.Errorf("capability: add stage %q to job %q: %w", stageID, jobID, err)
+		return nil, fmt.Errorf("capability: add stage %q to job %q: %w", stageID, jobID, err)
 	}
 
 	// Build ALL Pending Tasks here; they are committed together with the
@@ -366,12 +424,12 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	}
 	for _, x := range d.excluded {
 		if err := stageTask(x.node, x.reason); err != nil {
-			return dispatchResult{}, err
+			return nil, err
 		}
 	}
 	for _, n := range d.nodes {
 		if err := stageTask(n, ""); err != nil {
-			return dispatchResult{}, err
+			return nil, err
 		}
 	}
 
@@ -379,7 +437,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	// transaction (#887), before any resolve: a failed commit leaves no Task,
 	// so there is nothing to dispatch or reconcile, and no retry path exists.
 	if e.intents == nil {
-		return dispatchResult{}, errors.New("capability: job engine has no IntentRecorder; refusing to persist Tasks without a dispatch intent record")
+		return nil, errors.New("capability: job engine has no IntentRecorder; refusing to persist Tasks without a dispatch intent record")
 	}
 	tasks := make([]jobs.Task, len(pending))
 	for i := range pending {
@@ -397,8 +455,17 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 		CapCleared: len(d.nodes),
 	}
 	if err := e.intents.RecordIntent(runCtx, intent, tasks); err != nil {
-		return dispatchResult{}, fmt.Errorf("capability: record dispatch intent and tasks for job %q: %w", jobID, err)
+		return nil, fmt.Errorf("capability: record dispatch intent and tasks for job %q: %w", jobID, err)
 	}
+	return &persistedJob{jobID: jobID, runCtx: runCtx, gate: gate, release: release, pending: pending, d: d}, nil
+}
+
+// fanOut is run's second half: it resolves every persisted Task, concurrently
+// and bounded, then publishes the Job's completion. It releases the cancel gate
+// when it returns.
+func (e *jobEngine) fanOut(pj *persistedJob) (dispatchResult, error) {
+	defer pj.release()
+	jobID, runCtx, gate, pending, d := pj.jobID, pj.runCtx, pj.gate, pj.pending, pj.d
 
 	// Each worker writes only its own index, so results come out in pending
 	// order (excluded first, then d.nodes) and need no lock.

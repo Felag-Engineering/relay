@@ -36,6 +36,26 @@ func ResolveTimeoutSeconds(timeoutSeconds int32) (int32, error) {
 	return timeoutSeconds, nil
 }
 
+// MaxWaitSeconds bounds wait_seconds on the MCP execution tools: ADR-0004's
+// "short wait budget" for a call that blocks until its Job finishes. It equals
+// the daemon's per-Task hard wall clock, so a single-wave Job always fits;
+// beyond it, a caller polls get_job. A long hold is the lost-response window
+// idempotency keys exist to make safe.
+const MaxWaitSeconds = 300
+
+// ResolveWaitSeconds validates wait_seconds against [0, MaxWaitSeconds] (0 or
+// omitted means "return as soon as the Job is persisted"). It never silently
+// clamps.
+func ResolveWaitSeconds(s int32) (time.Duration, error) {
+	if s < 0 {
+		return 0, fmt.Errorf("wait_seconds must be >= 0, got %d", s)
+	}
+	if s > MaxWaitSeconds {
+		return 0, fmt.Errorf("wait_seconds must be <= %d, got %d; poll get_job for longer waits", MaxWaitSeconds, s)
+	}
+	return time.Duration(s) * time.Second, nil
+}
+
 // VerdictName renders a capability.VerdictStatus as its lowercase wire name.
 func VerdictName(v capability.VerdictStatus) string {
 	switch v {
