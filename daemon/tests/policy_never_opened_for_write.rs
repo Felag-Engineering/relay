@@ -921,6 +921,7 @@ fn policy_modules_never_write() {
         "crates/relay-policy/src/lib.rs",
         "crates/relay-policy/src/hardened_open.rs",
         "crates/relay-policy/src/decision_log.rs",
+        "crates/relay-policy/src/model.rs",
         "crates/relay-policy/src/natives.rs",
         "crates/relay-ops/src/templates.rs",
         "src/policy_check.rs",

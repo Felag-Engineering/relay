@@ -22,8 +22,7 @@
 //! "means" — that road is exactly what ADR-0018/0019 had to keep patching.
 //! Instead it asks the **real** Policy engine the same question a dispatch
 //! would: it builds concrete probe actions that touch the daemon's own trust
-//! root and evaluates each through `Policy::evaluate` /
-//! `Policy::evaluate_raw_exec`. A finding therefore always means "this exact
+//! root and decides each through `Policy::decide`. A finding therefore always means "this exact
 //! action would be allowed on that Node" — never a guess, and deny-beats-allow
 //! is honored for free because the engine applies it.
 //!
@@ -52,7 +51,7 @@ use std::path::PathBuf;
 use crate::config;
 use crate::enroll::state_dir_from_env;
 use crate::operations::FILE_READ;
-use crate::policy::{Decision, LintFinding, LintSeverity, Policy};
+use crate::policy::{Decision, LintFinding, LintSeverity, Policy, Request, Rule};
 
 /// One protected target: a path inside the daemon's own trust root, and what it
 /// means for Policy's reach to include it — separately for a *read* (the
@@ -184,7 +183,14 @@ pub fn lint(policy: &Policy, path_slot_ops: &[String]) -> Vec<LintFinding> {
         for name in op_names {
             // A single-argument probe: the arg-shape a path-taking Operation
             // (and a path-slotted template) presents to the Policy engine.
-            if let Decision::Allow(rule) = policy.evaluate(name, std::slice::from_ref(&path)) {
+            let probe = Request::Operation {
+                name,
+                // The one argument is the path, so position 0 is the path slot
+                // for every probed Operation (no `path_arg_positions()` needed).
+                positional: std::slice::from_ref(&path),
+                path_positions: &[0],
+            };
+            if let Some(rule) = probe_allows(policy, &probe) {
                 findings.push(LintFinding {
                     severity: LintSeverity::Warning,
                     location: format!("[[operation]] (name={name:?})"),
@@ -202,7 +208,7 @@ pub fn lint(policy: &Policy, path_slot_ops: &[String]) -> Vec<LintFinding> {
 
         // --- Raw Exec: probe the plausible reach shapes ---
         for argv in raw_exec_probes(&path) {
-            if let Decision::Allow(rule) = policy.evaluate_raw_exec(&argv) {
+            if let Some(rule) = probe_allows(policy, &Request::RawExec { argv: &argv }) {
                 findings.push(LintFinding {
                     severity: LintSeverity::Warning,
                     location: "[raw_exec].allow".to_string(),
@@ -220,6 +226,15 @@ pub fn lint(policy: &Policy, path_slot_ops: &[String]) -> Vec<LintFinding> {
     }
 
     findings
+}
+
+/// The lint's one `Policy::decide` call: the matched `Rule` when `probe` would
+/// be allowed. A hypothetical never runs, so any Raw Exec permit drops here.
+fn probe_allows(policy: &Policy, probe: &Request<'_>) -> Option<Rule> {
+    match policy.decide(probe).decision {
+        Decision::Allow(rule) => Some(rule),
+        Decision::Deny { .. } => None,
+    }
 }
 
 // ---------------------------------------------------------------------------

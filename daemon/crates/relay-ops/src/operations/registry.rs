@@ -35,13 +35,13 @@ use tokio::sync::{oneshot, Semaphore};
 
 use super::schema::{self, ArgSpec};
 use crate::executor::ExecRequest;
-use crate::gen::{Operation, Outcome, RawExec, RiskClass, TaskResult};
+use crate::gen::{Operation, Outcome, RiskClass, TaskResult};
+use crate::not_executed::not_executed;
 use crate::operations::file_read::{file_read, PathCheck};
 use crate::operations::pkg_install::pkg_install;
 use crate::operations::service_restart::service_restart;
 use crate::operations::system_facts::{format_facts_as_kv, gather_facts};
-use crate::policy::{Decision, Policy};
-use crate::raw_exec::run_raw_exec;
+use crate::policy::{Decision, Policy, Request};
 
 // ---------------------------------------------------------------------------
 // Handler plumbing
@@ -58,21 +58,20 @@ pub type OpFuture<'a> = Pin<Box<dyn Future<Output = TaskResult> + Send + 'a>>;
 pub type Handler = for<'a> fn(OpCtx<'a>) -> OpFuture<'a>;
 
 /// Everything a handler may use, assembled by dispatch AFTER the Policy gate
-/// has allowed the action (Raw Exec excepted: its regex gate lives inside
-/// `run_raw_exec`, unchanged).
+/// has allowed the action. Raw Exec does not use it: dispatch gates it and
+/// calls `run_raw_exec` with a permit.
 pub struct OpCtx<'a> {
     /// The Task's unique id, echoed into the returned [`TaskResult`].
     pub task_id: String,
     /// The positional arg vector ([`OpRegistration::positional_args`]) — the
-    /// exact vector the Policy engine evaluated. For [`RAW_EXEC`] this
-    /// carries the raw argv verbatim instead.
+    /// exact vector the Policy engine evaluated.
     pub positional: Vec<String>,
     /// Remaining wall-clock budget (single clock from receipt, ADR-0004).
     pub timeout: Duration,
     /// Per-stream output byte cap (ADR-0004), decided at the dispatch layer.
     pub max_output_bytes: usize,
-    /// The loaded Policy — read-only (ADR-0002). Needed by `file.read`'s
-    /// resolved-path re-check (ADR-0018 layer 2) and Raw Exec's regex gate.
+    /// The loaded Policy — read-only (ADR-0002). Read only by `file.read`'s
+    /// resolved-path re-check (ADR-0018 layer 2).
     pub policy: &'a Policy,
     /// In-flight cancel receiver (ADR-0013); handlers that spawn no process
     /// drop it naturally.
@@ -146,7 +145,7 @@ pub struct OpRegistration {
 ///
 /// - **Policy parity is structural**: both kinds derive their positional args
 ///   through [`ResolvedOp::positional_args`] and are gated by the same
-///   `policy.evaluate(name, positional)` call — a Template Operation is denied,
+///   `policy.decide(..)` call — a Template Operation is denied,
 ///   allowed, and argument-constrained exactly like a Native Operation
 ///   (deny-by-default, deny-beats-allow), because the Policy engine is
 ///   name-agnostic and there is only one gate.
@@ -172,14 +171,14 @@ pub trait ResolvedOp: Send + Sync {
     /// the exact vector Policy evaluates (ADR-0011: no drift between "would
     /// allow" and "actually allows").
     fn positional_args(&self, op: &Operation) -> Vec<String>;
-    /// Positions of `path`-typed arguments, which the dispatch gate holds to
-    /// ADR-0018's canonical-form precondition before Policy evaluates them
-    /// (issue #293).
+    /// Positions of `path`-typed arguments, which `Policy::decide` holds to
+    /// ADR-0018's canonical-form precondition before any rule is read
+    /// (issue #293): they travel in the `Request` as `path_positions`.
     ///
-    /// Empty by default. Native Operations return empty because the engine
-    /// already applies the precondition to `file.read` by name — the one
-    /// native path argument; Template Operations report their `path` slots, so
-    /// an exact-path deny holds against non-canonical spellings there too.
+    /// Empty by default. A Native Operation reports the positions of its
+    /// `path`-keyed arguments (`file.read`'s only); a Template Operation
+    /// reports its `path` slots, so an exact-path deny holds against
+    /// non-canonical spellings there too.
     fn path_arg_positions(&self) -> Vec<usize> {
         Vec::new()
     }
@@ -199,7 +198,7 @@ impl ResolvedOp for OpRegistration {
     }
 
     // RAW_EXEC is never resolved through `ResolvedOp`/`gate_and_invoke` (it is
-    // not in the by-name table); `run_raw_exec` names its own tier.
+    // not in the by-name table); dispatch's Raw Exec gate names its own tier.
     fn tier(&self) -> crate::policy::decision_log::Tier {
         crate::policy::decision_log::Tier::Native
     }
@@ -207,6 +206,15 @@ impl ResolvedOp for OpRegistration {
     fn positional_args(&self, op: &Operation) -> Vec<String> {
         // Delegate to the inherent method (the single mapping definition).
         OpRegistration::positional_args(self, op)
+    }
+
+    fn path_arg_positions(&self) -> Vec<usize> {
+        self.args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.key == schema::OP_ARG_PATH)
+            .map(|(i, _)| i)
+            .collect()
     }
 
     fn invoke<'a>(&'a self, ctx: OpCtx<'a>) -> OpFuture<'a> {
@@ -266,16 +274,18 @@ pub static REGISTRY: [OpRegistration; 4] = [
     },
 ];
 
-/// The Raw Exec entry — same record type and handler seam as the native
-/// Operations, but **never** part of the by-name table (see module doc): it is
-/// resolved only from the `TaskRequest` protocol oneof arm. Always
-/// `RiskClass::Mutate` (ADR-0012 — arbitrary commands take the strict lane by
-/// definition; pinned by test below).
+/// The Raw Exec entry — same record type as the native Operations, but
+/// **never** part of the by-name table (see module doc): it is resolved only
+/// from the `TaskRequest` protocol oneof arm. Always `RiskClass::Mutate`
+/// (ADR-0012 — arbitrary commands take the strict lane by definition; pinned
+/// by test below). Its `handler` is an inert refusal: Raw Exec runs through
+/// dispatch's Policy gate plus `run_raw_exec(permit, ..)`, never through this
+/// entry.
 pub static RAW_EXEC: OpRegistration = OpRegistration {
     name: "raw_exec",
     risk: RiskClass::Mutate,
     args: &[],
-    handler: raw_exec_handler,
+    handler: raw_exec_refused_without_permit,
 };
 
 /// Looks up a name in the production [`REGISTRY`].
@@ -335,6 +345,11 @@ fn system_facts_via(gate: BlockingGate, ctx: OpCtx<'_>) -> OpFuture<'_> {
     })
 }
 
+/// `file.read`'s `path` argument is positional index 0; the layer-2 recheck
+/// holds the resolved path to the same canonical-form precondition as layer 1.
+/// A test pins this to the registration's own `path`-keyed arg.
+const FILE_READ_PATH_POSITIONS: [usize; 1] = [0];
+
 fn file_read_via(gate: BlockingGate, ctx: OpCtx<'_>) -> OpFuture<'_> {
     Box::pin(async move {
         let OpCtx {
@@ -350,16 +365,18 @@ fn file_read_via(gate: BlockingGate, ctx: OpCtx<'_>) -> OpFuture<'_> {
         // back here to re-evaluate Policy on the RESOLVED path, closing
         // `/proc`-magic and symlink evasions that are canonical in form and
         // so pass layer 1.
-        let work = file_read(
-            gate,
-            task_id.clone(),
-            path,
-            max_output_bytes,
-            |resolved| match policy.evaluate(super::FILE_READ, &[resolved.to_string()]) {
+        let work = file_read(gate, task_id.clone(), path, max_output_bytes, |resolved| {
+            let resolved_owned = resolved.to_string();
+            let request = Request::Operation {
+                name: super::FILE_READ,
+                positional: std::slice::from_ref(&resolved_owned),
+                path_positions: &FILE_READ_PATH_POSITIONS,
+            };
+            match policy.decide(&request).decision {
                 Decision::Deny { reason, .. } => PathCheck::Denied(reason),
                 Decision::Allow(_) => PathCheck::Allowed,
-            },
-        );
+            }
+        });
         within_task_timeout(&task_id, timeout, work).await
     })
 }
@@ -508,21 +525,24 @@ fn pkg_install_handler(ctx: OpCtx<'_>) -> OpFuture<'_> {
     })
 }
 
-fn raw_exec_handler(ctx: OpCtx<'_>) -> OpFuture<'_> {
+/// The [`RAW_EXEC`] entry's handler: an inert refusal.
+///
+/// Raw Exec runs through dispatch's Policy gate and `run_raw_exec(permit, ..)`,
+/// which needs a `RawExecPermit` only `Policy::decide` can mint. This entry has
+/// no such permit, so reaching it by any route (`RAW_EXEC.invoke(ctx)`, an
+/// aliased `(e.handler)(ctx)`) must run nothing. It drops the context unread;
+/// a structural guard (`policy_decide_single_gate`) pins that its body names
+/// no runner, executor or Policy.
+fn raw_exec_refused_without_permit(ctx: OpCtx<'_>) -> OpFuture<'_> {
     Box::pin(async move {
-        let OpCtx {
-            task_id,
-            positional,
-            timeout,
-            max_output_bytes,
-            policy,
-            cancel,
-            ..
-        } = ctx;
-        // Raw Exec: fully gated by Policy regex before any spawn (ADR-0001,
-        // ADR-0002) — the gate lives inside run_raw_exec, unchanged.
-        let raw = RawExec { argv: positional };
-        run_raw_exec(task_id, &raw, timeout, max_output_bytes, policy, cancel).await
+        // No log field: relay-ops has no wire-string escaper (`log_field` lives
+        // with the bin), and the message alone says all there is to say.
+        tracing::error!("raw exec reached the registry handler without a Policy permit; refusing");
+        not_executed(
+            ctx.task_id,
+            Outcome::Failure,
+            "raw exec runs only through the dispatch Policy gate",
+        )
     })
 }
 
@@ -767,6 +787,84 @@ allowed_args = [["*"]]
         // unknown name (deny-by-default), exactly as before the registry.
         assert!(lookup(RAW_EXEC.name).is_none());
         assert!(lookup("raw_exec").is_none());
+    }
+
+    #[test]
+    fn native_path_positions_are_exactly_file_read_0() {
+        for entry in REGISTRY.iter().chain(std::iter::once(&RAW_EXEC)) {
+            let expected: Vec<usize> = if entry.name == super::super::FILE_READ {
+                vec![0]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                ResolvedOp::path_arg_positions(entry),
+                expected,
+                "{}",
+                entry.name
+            );
+        }
+    }
+
+    #[test]
+    fn file_read_layer2_positions_match_registration() {
+        let fr = lookup(super::super::FILE_READ).unwrap();
+        assert_eq!(
+            FILE_READ_PATH_POSITIONS.to_vec(),
+            ResolvedOp::path_arg_positions(fr)
+        );
+    }
+
+    /// Records whether the process seam was reached; it spawns nothing.
+    struct FlagRunner(std::sync::atomic::AtomicBool);
+    impl Runner for FlagRunner {
+        fn run(&self, req: ExecRequest) -> OpFuture<'static> {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            let task_id = req.task_id;
+            Box::pin(async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 0,
+                }
+            })
+        }
+    }
+
+    // Raw Exec runs only through dispatch's Policy gate and a `RawExecPermit`.
+    // The registry entry has no permit, so even under an allow-everything Policy
+    // every route to its handler must refuse and run nothing.
+    #[tokio::test]
+    async fn raw_exec_entry_refuses_without_permit() {
+        let policy =
+            crate::policy::from_toml_str("[raw_exec]\nallow = [\"^.*$\"]\n").expect("parse policy");
+        let runner = FlagRunner(std::sync::atomic::AtomicBool::new(false));
+        let ctx = || OpCtx {
+            task_id: "t-raw-stub".to_string(),
+            positional: vec!["/bin/true".to_string()],
+            timeout: Duration::from_secs(5),
+            max_output_bytes: 1024,
+            policy: &policy,
+            cancel: None,
+            runner: &runner,
+        };
+
+        let via_handler = (RAW_EXEC.handler)(ctx()).await;
+        let via_invoke = RAW_EXEC.invoke(ctx()).await;
+
+        for result in [via_handler, via_invoke] {
+            assert_eq!(result.outcome, Outcome::Failure as i32);
+            assert_eq!(result.task_id, "t-raw-stub");
+            assert!(result.stdout.is_empty());
+        }
+        assert!(
+            !runner.0.load(std::sync::atomic::Ordering::SeqCst),
+            "the registry entry must never reach the process runner"
+        );
     }
 
     #[test]

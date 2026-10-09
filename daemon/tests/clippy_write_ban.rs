@@ -1409,8 +1409,6 @@ fn pinned_suppressions() -> BTreeMap<&'static str, usize> {
         // The ADR-0018 read-only open, plus four statement-level test fixtures
         // (mkfifo, symlink, two guard cleanups). The open's chain is pinned by (j).
         ("crates/relay-ops/src/operations/file_read.rs", 5),
-        // One statement-level test cleanup.
-        ("crates/relay-ops/src/raw_exec.rs", 1),
         // `mod tests` fixtures build template trees; exec is covered by the spawn
         // census (h), which no module-level allow can hide from.
         ("crates/relay-ops/src/templates.rs", 1),
@@ -1541,8 +1539,6 @@ fn pinned_test_suppressions() -> BTreeMap<&'static str, usize> {
         ("crates/relay-exec/src/executor.rs", 4),
         // Four statement-level fixtures (mkfifo, symlink, two guard cleanups).
         ("crates/relay-ops/src/operations/file_read.rs", 4),
-        // One statement-level cleanup.
-        ("crates/relay-ops/src/raw_exec.rs", 1),
         // `mod tests` (its placement is pinned below).
         ("crates/relay-ops/src/templates.rs", 1),
     ])

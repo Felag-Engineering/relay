@@ -27,7 +27,7 @@ use crate::config::MAX_OUTPUT_BYTES;
 use crate::dedup::DedupStore;
 use crate::executor::{execute, ExecRequest};
 use crate::gen::{
-    policy_query, task_request, Operation, Outcome, PolicyQuery, PolicyVerdict, RiskClass,
+    policy_query, task_request, Operation, Outcome, PolicyQuery, PolicyVerdict, RawExec, RiskClass,
     TaskRequest, TaskResult,
 };
 use crate::log_field;
@@ -37,8 +37,8 @@ use crate::operations;
 use crate::operations::registry::{self, FnRunner, OpCtx, OpRegistration, ResolvedOp};
 #[cfg(test)]
 use crate::operations::schema::{OP_ARG_NAME, OP_ARG_PATH, OP_ARG_UNIT, OP_ARG_VERSION};
-use crate::policy::decision_log::{self, argv_digest, DecisionFields, DenyDetail};
-use crate::policy::{Decision, Policy};
+use crate::policy::decision_log::{self, argv_digest, DecisionFields, DenyDetail, Tier};
+use crate::policy::{Decision, Explained, MatchedOn, Policy, Request};
 use crate::scheduler::{QueuedOutcome, Scheduler};
 use crate::services::Services;
 use crate::templates::TemplateSet;
@@ -109,8 +109,9 @@ pub async fn dispatch(
 /// Dedup → Policy → execute with an injected runner for hermeticity.
 ///
 /// The `run` closure is the sole process-spawning seam: [`execute`] in
-/// production; a fake that records argv in tests. Only `service.restart` and
-/// `pkg.install` invoke the runner; `system.facts` and `file.read` are data-only.
+/// production; a fake that records argv in tests. `service.restart`,
+/// `pkg.install`, Templates and Raw Exec all run through the runner;
+/// `system.facts` and `file.read` are data-only.
 ///
 /// **Dedup ordering** (ADR-0004, invariant #4): `dedup.run_once` records the
 /// task_id marker BEFORE invoking the pipeline (deny-or-execute). A denied
@@ -235,55 +236,82 @@ where
 /// This function takes **no** `DedupStore` and never reaches the executor — it
 /// is structurally incapable of recording a marker or spawning a process
 /// (ADR-0011). It resolves the name through the same [`resolve`] vocabulary
-/// lookup and calls the exact same `policy.evaluate` /
-/// `policy.evaluate_raw_exec` entry points that the execution path uses, so the
-/// verdict can never diverge from what a real Task dispatch would decide
-/// (ADR-0011 invariant 12) — including the `unsupported` answer.
+/// lookup and makes the one `Policy::decide` call ([`decide_query`]) over the
+/// same [`Request`] the execution path builds, so the verdict can never diverge
+/// from what a real Task dispatch would decide (ADR-0011 invariant 12) —
+/// including the `unsupported` answer.
 pub fn evaluate_policy_query(
     query: &PolicyQuery,
     policy: &Policy,
     templates: &TemplateSet,
 ) -> PolicyVerdict {
     let query_id = query.query_id.clone();
-    match &query.action {
-        Some(policy_query::Action::Operation(op)) => {
-            // Vocabulary before Policy, exactly as on the execution path
-            // (`gate_and_invoke`) — otherwise a Plan would report
-            // deny-by-default for a name a real dispatch reports `unsupported`,
-            // which is precisely the plan/apply divergence ADR-0011 forbids.
-            let Some(entry) = resolve(&registry::REGISTRY, templates, &op.name) else {
-                return PolicyVerdict {
-                    query_id,
-                    allowed: false,
-                    deciding_rule: UNSUPPORTED_REASON.to_string(),
-                    unsupported: true,
-                };
-            };
-            let positional = entry.positional_args(op);
-            // ADR-0018 canonical-path precondition FIRST, exactly as
-            // `gate_and_invoke` applies it on the execution path — otherwise a
-            // Plan reports `allow` for a template path slot in a non-canonical
-            // spelling that a real dispatch would deny (issue #339). One shared
-            // predicate, so the two cannot drift.
-            if let Some(decision) = non_canonical_path_precondition(entry, &positional) {
-                return decision_to_verdict(query_id, decision);
-            }
-            let decision = policy.evaluate(&op.name, &positional);
-            decision_to_verdict(query_id, decision)
-        }
-        Some(policy_query::Action::RawExec(raw)) => {
-            let decision = policy.evaluate_raw_exec(&raw.argv);
-            decision_to_verdict(query_id, decision)
-        }
+    match decide_query(query.action.as_ref(), policy, templates) {
+        QueryDecision::Unsupported => PolicyVerdict {
+            query_id,
+            allowed: false,
+            deciding_rule: UNSUPPORTED_REASON.to_string(),
+            unsupported: true,
+        },
         // Malformed query with no action: deny with a non-empty deciding_rule so
         // the caller can distinguish a protocol error from a Policy deny.
-        None => PolicyVerdict {
+        QueryDecision::NoAction => PolicyVerdict {
             query_id,
             allowed: false,
             deciding_rule: "empty policy query action".to_string(),
             unsupported: false,
         },
+        QueryDecision::Decided(explained) => decision_to_verdict(query_id, explained.decision),
     }
+}
+
+/// What a hypothetical action resolves to: not in this Node's vocabulary, not an
+/// action at all, or a Policy decision with the pass and rule behind it.
+pub(crate) enum QueryDecision {
+    Unsupported,
+    NoAction,
+    Decided(Explained),
+}
+
+/// The plan side's one `Policy::decide` call, shared by the `PolicyQuery`
+/// verdict and `policy check --would-allow` / `policy explain`.
+///
+/// Vocabulary before Policy, exactly as on the execution path
+/// (`gate_and_invoke`) — otherwise a Plan would report deny-by-default for a
+/// name a real dispatch reports `unsupported`, which is precisely the plan/apply
+/// divergence ADR-0011 forbids. The Request is built by [`operation_inputs`],
+/// the same mapping the execution path uses, so the ADR-0018 canonical-path
+/// precondition holds here too (issue #339). A Raw Exec permit in the result
+/// is dropped with it: a hypothetical never runs anything.
+pub(crate) fn decide_query(
+    action: Option<&policy_query::Action>,
+    policy: &Policy,
+    templates: &TemplateSet,
+) -> QueryDecision {
+    let (positional, path_positions);
+    let request = match action {
+        None => return QueryDecision::NoAction,
+        Some(policy_query::Action::Operation(op)) => {
+            let Some(entry) = resolve(&registry::REGISTRY, templates, &op.name) else {
+                return QueryDecision::Unsupported;
+            };
+            (positional, path_positions) = operation_inputs(entry, op);
+            Request::Operation {
+                name: &op.name,
+                positional: &positional,
+                path_positions: &path_positions,
+            }
+        }
+        Some(policy_query::Action::RawExec(raw)) => Request::RawExec { argv: &raw.argv },
+    };
+    QueryDecision::Decided(policy.decide(&request))
+}
+
+/// The positional vector and path-argument positions a resolved Operation is
+/// decided on — the one mapping the execution path and the plan path share, so
+/// they cannot drift between "would allow" and "actually allows" (ADR-0011).
+fn operation_inputs(entry: &dyn ResolvedOp, op: &Operation) -> (Vec<String>, Vec<usize>) {
+    (entry.positional_args(op), entry.path_arg_positions())
 }
 
 /// Convert an engine `Decision` into a `PolicyVerdict`.
@@ -312,42 +340,13 @@ fn decision_to_verdict(query_id: String, decision: Decision) -> PolicyVerdict {
     }
 }
 
-/// ADR-0018 canonical-form precondition for a resolved Operation's `path`-typed
-/// slots, shared by the dispatch path and the plan path (issue #339).
-///
-/// Returns the engine's own non-canonical `Decision::Deny` for the first path
-/// slot that is not in canonical form, or `None` when every path slot is
-/// canonical (or the entry has none). The engine already applies this rule to
-/// `file.read` *by name* inside `policy.evaluate`; a Template Operation's path
-/// slots are gated here, outside the engine, so this is the one place that
-/// covers them.
-///
-/// It is a **precondition**, applied before the allow pass on BOTH paths, on the
-/// SAME predicate (`policy::path_is_canonical`, one definition) — so a Plan can
-/// never report `allow` where a real dispatch denies a non-canonical spelling
-/// such as `/etc/../etc/shadow` (ADR-0011 plan/apply parity). Previously only
-/// `gate_and_invoke` ran it, and `evaluate_policy_query` diverged on exactly
-/// these template path slots.
-fn non_canonical_path_precondition(
-    entry: &dyn ResolvedOp,
-    positional: &[String],
-) -> Option<Decision> {
-    for i in entry.path_arg_positions() {
-        if let Some(path) = positional.get(i) {
-            if !crate::policy::path_is_canonical(path) {
-                return Some(crate::policy::non_canonical_path_denial(path));
-            }
-        }
-    }
-    None
-}
-
 // The named-args → positional mapping lives on the resolved entry itself
 // (`ResolvedOp::positional_args` — the single mapping definition, ADR-0011), so
 // the execution path (`gate_and_invoke`) and the query path
-// (`evaluate_policy_query`) derive args through the very same call and can never
-// drift between "would allow" and "actually allows". Both reach it through
-// [`resolve`], so both see the same per-Node vocabulary too (issue #291).
+// (`evaluate_policy_query`) derive args through the very same call
+// ([`operation_inputs`]) and can never drift between "would allow" and
+// "actually allows". Both reach it through [`resolve`], so both see the same
+// per-Node vocabulary too (issue #291).
 
 // ---------------------------------------------------------------------------
 // Policy gate and handler dispatch
@@ -376,23 +375,11 @@ where
 
     match &task.action {
         Some(task_request::Action::RawExec(raw)) => {
-            // Raw Exec: resolves through the registry's dedicated entry
-            // (issue #289) — same handler seam as the native Operations, but
-            // reached only from this protocol oneof arm, never by name. Fully
-            // gated by Policy regex before any spawn (ADR-0001, ADR-0002);
-            // the regex gate lives inside the handler's run_raw_exec call,
-            // unchanged.
-            let runner = FnRunner(run);
-            let ctx = OpCtx {
-                task_id,
-                positional: raw.argv.clone(),
-                timeout,
-                max_output_bytes: MAX_OUTPUT_BYTES,
-                policy,
-                cancel,
-                runner: &runner,
-            };
-            (registry::RAW_EXEC.handler)(ctx).await
+            // Raw Exec: reached only from this protocol oneof arm, never by
+            // name. Fully gated by Policy regex before any spawn (ADR-0001,
+            // ADR-0002): the gate is here, and running it needs the permit
+            // the gate mints.
+            gate_and_invoke_raw_exec(task_id, raw, timeout, policy, run, cancel).await
         }
         Some(task_request::Action::Operation(op)) => {
             handle_operation(task_id, op, timeout, policy, templates, run, cancel).await
@@ -495,7 +482,7 @@ where
 /// This is where a Template Operation attains **exact Policy parity** with a
 /// Native Operation: the positional vector comes from the entry's
 /// `positional_args` (ADR-0011 single mapping) and is gated by the one
-/// `policy.evaluate(name, positional)` call — deny-by-default, deny-beats-allow,
+/// `policy.decide(..)` call — deny-by-default, deny-beats-allow,
 /// argument-level constraints — before any handler runs. A denied action never
 /// reaches `invoke`.
 ///
@@ -534,7 +521,7 @@ where
         return unsupported_result(task_id);
     };
 
-    let positional = entry.positional_args(op);
+    let (positional, path_positions) = operation_inputs(entry, op);
 
     // The digest covers the vector Policy evaluates (name + positional), not a
     // Template's rendered `/bin/sh -c` line, and never reaches a log as argv.
@@ -551,58 +538,131 @@ where
         policy_fingerprint: policy.fingerprint(),
     };
 
-    // ADR-0018 canonical-form precondition for path arguments (issue #293),
-    // via the one predicate the plan path also runs (issue #339) so a Plan and
-    // a real dispatch can never diverge on it. The engine already applies the
-    // rule to `file.read` by name; this covers a Template Operation's path
-    // slots, outside the engine. Deliberately BEFORE the allow pass, reported as
-    // DENIED_BY_POLICY with the engine's own reason text — the same decision the
-    // engine makes for file.read, not a second evaluator: an exact-path
-    // `[[deny]]` (the shipped default Policy's confidentiality list, for one)
-    // cannot be evaded by a spelling such as `/etc/../etc/shadow`.
-    if let Some(decision) = non_canonical_path_precondition(entry, &positional) {
-        let Decision::Deny { reason, .. } = decision else {
-            unreachable!("non_canonical_path_precondition only ever returns Deny")
-        };
-        decision_log::emit_deny(
-            &fields,
-            None,
-            &reason,
-            DenyDetail::None,
-            "template path argument is not in canonical form; denied before Policy",
-        );
-        let _ = cancel;
+    // Policy gate: deny-before-execute, deny-by-default (ADR-0002, invariant #3).
+    // The ADR-0018 canonical-form precondition for path arguments (issue #293)
+    // is `decide`'s first step, over the path positions the entry reports — the
+    // very request the plan path builds (issue #339).
+    let request = Request::Operation {
+        name: &op.name,
+        positional: &positional,
+        path_positions: &path_positions,
+    };
+    // cancel drops naturally on a deny — nothing was spawned.
+    if let Err(reason) = policy_gate(
+        policy,
+        &request,
+        &fields,
+        DenyDetail::Args(&positional),
+        "operation denied by policy",
+    ) {
         return denied_by_policy_result(task_id, &reason);
     }
 
-    // Policy gate: deny-before-execute, deny-by-default (ADR-0002, invariant #3).
-    match policy.evaluate(&op.name, &positional) {
+    let runner = FnRunner(run);
+    let ctx = OpCtx {
+        task_id,
+        positional,
+        timeout,
+        max_output_bytes: MAX_OUTPUT_BYTES,
+        policy,
+        cancel,
+        runner: &runner,
+    };
+    entry.invoke(ctx).await
+}
+
+/// The apply side's one `Policy::decide` call: decide, then write the decision
+/// log. `Err` carries the Deny reason; `Ok` carries the [`Explained`] (whose
+/// Raw Exec permit, if any, is what lets Raw Exec run).
+///
+/// A non-canonical path is decided before any rule is read, so its log line
+/// names no rule and quotes nothing the caller chose.
+fn policy_gate(
+    policy: &Policy,
+    request: &Request<'_>,
+    fields: &DecisionFields<'_>,
+    detail: DenyDetail<'_>,
+    deny_message: &'static str,
+) -> Result<Explained, String> {
+    let explained = policy.decide(request);
+    match &explained.decision {
         Decision::Deny { reason, rule } => {
-            // cancel drops naturally here — denied before any process spawned.
-            decision_log::emit_deny(
-                &fields,
-                rule.as_ref(),
-                &reason,
-                DenyDetail::Args(&positional),
-                "operation denied by policy",
-            );
-            denied_by_policy_result(task_id, &reason)
+            if matches!(explained.matched_on, MatchedOn::NonCanonicalPath { .. }) {
+                decision_log::emit_deny(
+                    fields,
+                    None,
+                    reason,
+                    DenyDetail::None,
+                    "path argument is not in canonical form (ADR-0018 precondition)",
+                );
+            } else {
+                decision_log::emit_deny(fields, rule.as_ref(), reason, detail, deny_message);
+            }
+            Err(reason.clone())
         }
         Decision::Allow(rule) => {
-            decision_log::emit_allow(&fields, &rule);
-            let runner = FnRunner(run);
-            let ctx = OpCtx {
-                task_id,
-                positional,
-                timeout,
-                max_output_bytes: MAX_OUTPUT_BYTES,
-                policy,
-                cancel,
-                runner: &runner,
-            };
-            entry.invoke(ctx).await
+            decision_log::emit_allow(fields, rule);
+            Ok(explained)
         }
     }
+}
+
+/// The Raw Exec gate: Policy decides, and only the permit it mints on Allow
+/// runs anything (`run_raw_exec` cannot be called without one).
+async fn gate_and_invoke_raw_exec<R, Fut>(
+    task_id: String,
+    raw: &RawExec,
+    timeout: Duration,
+    policy: &Policy,
+    run: R,
+    cancel: Option<oneshot::Receiver<()>>,
+) -> TaskResult
+where
+    R: Fn(ExecRequest) -> Fut + Sync,
+    Fut: Future<Output = TaskResult> + Send + 'static,
+{
+    // Never log the full argv: Raw Exec arguments are caller-supplied and may
+    // embed credentials (e.g. `curl -H "Authorization: ..."`, a `--password`
+    // flag). A Deny logs the program name (`argv[0]`) plus the argument count; an
+    // Allow logs the argv digest plus the count only. The Policy `reason` is
+    // already bounded to a short, char-boundary-safe fragment (policy
+    // `reason_fragment`), so attribution survives without dumping the whole
+    // command line into the log.
+    let program = raw.argv.first().map_or("", String::as_str);
+    let fields = DecisionFields {
+        task_id: &task_id,
+        operation: "raw_exec",
+        tier: Tier::RawExec,
+        risk_class: relay_ops::raw_exec::RAW_EXEC_RISK_CLASS,
+        argv_digest: argv_digest(&raw.argv),
+        argc: raw.argv.len(),
+        policy_fingerprint: policy.fingerprint(),
+    };
+
+    // cancel drops naturally on a deny — nothing was spawned.
+    let explained = match policy_gate(
+        policy,
+        &Request::RawExec { argv: &raw.argv },
+        &fields,
+        DenyDetail::Program(program),
+        "raw exec denied by policy",
+    ) {
+        Ok(explained) => explained,
+        Err(reason) => return denied_by_policy_result(task_id, &reason),
+    };
+    let Some(permit) = explained.raw_exec_permit else {
+        // Unreachable by construction: `decide` mints a permit on every Raw
+        // Exec Allow. Fail closed rather than run without one.
+        tracing::error!("raw exec allowed without a Policy permit; refusing");
+        return failure_result(
+            task_id,
+            b"raw exec allowed without a Policy permit; refusing",
+        );
+    };
+    relay_ops::raw_exec::run_raw_exec(task_id, permit, timeout, MAX_OUTPUT_BYTES, cancel, |req| {
+        run(req)
+    })
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -1414,7 +1474,7 @@ deny = ["secret"]
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
 
         // Fake runner: always returns Success — hermetic for service.restart.
-        // Raw exec goes through run_raw_exec → execute() internally, not this closure.
+        // Raw exec runs through `run` too, via run_raw_exec once the Policy gate has allowed it.
         let fake_run = move |req: ExecRequest| {
             let task_id = req.task_id.clone();
             async move {
@@ -4188,5 +4248,511 @@ allow = ["^/bin/echo .+$"]
 
         assert!(ops.allowed && raw.allowed, "both hypotheticals are allowed");
         assert!(captured.events_with_target(ALLOW_TARGET).is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The Raw Exec gate (#898): Policy decides in `gate_and_invoke_raw_exec`, not in
+// `run_raw_exec`. These tests moved here from the relay-ops runner's own test
+// module, with their assertions unchanged, because the gate they exercise moved.
+// Only their setup and invoke lines changed: they build a Task and go through
+// `dispatch_with_runner` with the real `execute`, instead of calling
+// `run_raw_exec` with a Policy.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod raw_exec_gate_tests {
+    use super::*;
+    use crate::policy::decision_log::{argv_digest, ALLOW_TARGET, DENY_TARGET};
+    use crate::policy::from_toml_str;
+    use crate::test_support::args as argv;
+    use crate::test_support::TempDir;
+
+    /// Same shape as `mod tests`' private `make_task_raw_exec`.
+    fn raw_task(task_id: &str, argv: Vec<String>) -> TaskRequest {
+        TaskRequest {
+            risk_class: 0,
+            task_id: task_id.to_string(),
+            timeout_seconds: 5,
+            action: Some(task_request::Action::RawExec(crate::gen::RawExec { argv })),
+        }
+    }
+
+    async fn run_raw(task_id: &str, raw_argv: Vec<String>, policy: &Policy) -> TaskResult {
+        let state_dir = TempDir::created("raw-gate");
+        let dedup = DedupStore::open(state_dir.path()).expect("open dedup");
+        dispatch_with_runner(
+            &raw_task(task_id, raw_argv),
+            policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            execute,
+            None,
+        )
+        .await
+    }
+
+    // -----------------------------------------------------------------------
+    // 2. Denied command spawns nothing (deny-by-default; no marker file created)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn denied_raw_exec_spawns_nothing() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        // Unique marker path so parallel test runs don't collide.
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let marker = std::env::temp_dir().join(format!(
+            "relay-raw-exec-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let marker_str = marker.to_string_lossy().into_owned();
+
+        // argv[2] (the shell script) contains whitespace, so the ADR-0019
+        // whitespace guard refuses this before any allow pattern runs, and
+        // deny-by-default is moot here — no process is spawned either way.
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^/bin/echo .+$"]
+"#,
+        )
+        .expect("policy must parse");
+
+        let cmd = format!("echo x > {marker_str}");
+        let result = run_raw("t-deny", argv(&["/bin/sh", "-c", &cmd]), &policy).await;
+
+        assert_eq!(
+            result.outcome,
+            Outcome::DeniedByPolicy as i32,
+            "must be denied by policy"
+        );
+        assert_eq!(result.exit_code, -1);
+
+        // No process was spawned, so the marker must not exist.
+        assert!(
+            !marker.exists(),
+            "marker file must not exist — no process must have been spawned"
+        );
+
+        // Cleanup in case the assertion above fires and the file somehow exists.
+        let _ = std::fs::remove_file(&marker);
+    }
+
+    // -----------------------------------------------------------------------
+    // 2a. A secret-bearing whitespace argument never appears in the Deny
+    // reason. `denied_by_policy_result` puts the reason verbatim into
+    // `TaskResult.stderr`, and the gate logs the same `reason` string -- the
+    // full argv is never logged for exactly this reason (a Raw Exec argument
+    // may embed a credential, e.g. a `curl -H "Authorization: ..."` header).
+    // The ADR-0019 whitespace-guard reason must uphold that: it names the
+    // offending index, never the argument's value.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn secret_bearing_whitespace_argument_never_appears_in_deny_reason() {
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^/bin/curl .+$"]
+"#,
+        )
+        .expect("policy must parse");
+
+        // argv[2] carries whitespace, so the ADR-0019 guard denies this
+        // before any allow pattern is consulted -- no allow pattern needs to
+        // "leak" the secret; the guard's own Deny reason must not either.
+        let secret = "Authorization: Bearer topsecrettoken";
+        let result = run_raw("t-secret", argv(&["/bin/curl", "-H", secret]), &policy).await;
+
+        assert_eq!(
+            result.outcome,
+            Outcome::DeniedByPolicy as i32,
+            "must be denied by the whitespace guard"
+        );
+
+        // The Task result's stderr IS the Deny reason (denied_by_policy_result).
+        let reason = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            reason.contains("argv[2]"),
+            "the reason must name the offending index; got {reason:?}"
+        );
+        assert!(
+            !reason.contains("topsecrettoken") && !reason.contains(secret),
+            "the Deny reason must never quote a caller-controlled argument, which may hold a \
+             secret (ADR-0019; AGENTS.md security posture: never log secrets); got {reason:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 3. Deny beats an overlapping allow (deny-beats-allow)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn deny_beats_overlapping_allow() {
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^/bin/echo .+$"]
+deny = ["secret"]
+"#,
+        )
+        .expect("policy must parse");
+
+        // Joined argv "/bin/echo secret" matches the allow regex, but the
+        // deny pattern "secret" matches the element "secret" — deny wins.
+        let result = run_raw(
+            "t-deny-beats-allow",
+            argv(&["/bin/echo", "secret"]),
+            &policy,
+        )
+        .await;
+
+        assert_eq!(
+            result.outcome,
+            Outcome::DeniedByPolicy as i32,
+            "deny must beat an overlapping allow"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 6. The Node's decision log (#888): Allow carries digest + argc only
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn raw_exec_allow_event_carries_digest_and_argc_only() {
+        use crate::test_support::trace_capture::capture;
+
+        let (captured, _guard) = capture();
+        // Neither the sentinel nor "/bin/echo" appears in the pattern, because
+        // the event logs the matched rule.
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^/bin/ech[o] [a-z0-9-]+$"]
+"#,
+        )
+        .unwrap();
+
+        let result = run_raw(
+            "t-raw-log",
+            argv(&["/bin/echo", "s3cret-token-91"]),
+            &policy,
+        )
+        .await;
+        assert_eq!(result.outcome, Outcome::Success as i32);
+
+        let events = captured.events_with_target(ALLOW_TARGET);
+        assert_eq!(events.len(), 1, "exactly one Allow event");
+        let e = &events[0];
+        let mut names = e.field_names();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            [
+                "argc",
+                "argv_digest",
+                "message",
+                "operation",
+                "policy_fingerprint",
+                "risk_class",
+                "rule",
+                "task_id",
+                "tier"
+            ]
+        );
+        assert_eq!(e.fields["argc"], "2");
+        assert_eq!(e.fields["operation"], "\"raw_exec\"");
+        assert_eq!(e.fields["tier"], "raw_exec");
+        assert_eq!(e.fields["risk_class"], "mutate");
+        assert_eq!(
+            e.fields["argv_digest"],
+            argv_digest(&["/bin/echo", "s3cret-token-91"])
+        );
+        assert_eq!(
+            e.fields["argv_digest"],
+            "2b36a31b7a7bbef040fac5ff92a17a71d3377ae79814e72c1e1fcc504951872c"
+        );
+        for value in e.fields.values() {
+            assert!(!value.contains("s3cret-token-91"), "argv leaked: {value}");
+            assert!(!value.contains("/bin/echo"), "argv[0] leaked: {value}");
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_exec_deny_logs_at_deny_target_with_shared_fields() {
+        use crate::test_support::trace_capture::capture;
+
+        let (captured, _guard) = capture();
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^/bin/echo hello$"]
+"#,
+        )
+        .unwrap();
+
+        let result = run_raw("t-raw-deny-log", argv(&["/bin/echo", "nope"]), &policy).await;
+        assert_eq!(result.outcome, Outcome::DeniedByPolicy as i32);
+
+        assert!(captured.events_with_target(ALLOW_TARGET).is_empty());
+        let denies = captured.events_with_target(DENY_TARGET);
+        assert_eq!(denies.len(), 1);
+        let e = &denies[0];
+        for shared in [
+            "task_id",
+            "operation",
+            "tier",
+            "risk_class",
+            "argv_digest",
+            "argc",
+            "policy_fingerprint",
+        ] {
+            assert!(e.fields.contains_key(shared), "deny event lacks {shared}");
+        }
+        assert_eq!(e.fields["operation"], "\"raw_exec\"");
+        assert_eq!(e.fields["tier"], "raw_exec");
+        assert_eq!(e.fields["policy_fingerprint"], policy.fingerprint());
+        assert!(
+            !e.fields.values().any(|v| v.contains("nope")),
+            "no argument value may reach the log"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plan and apply agree (#898, ADR-0011): for every generated request, the
+// `PolicyQuery` verdict equals what the real apply path decides, and the argv a
+// Raw Exec runs is the argv Policy allowed.
+//
+// Hermetic by fixture. No generated case reaches `execute` or spawns anything:
+// Raw Exec, service.restart, pkg.install and the Template all go through the
+// recording runner. The only host contact is (i) `file.read`'s one read-only
+// `open(2)` of `/nonexistent/relay-plan-apply`, the single path the fixture
+// allows, which fails with ENOENT -> `Outcome::Failure` (the layer-2 recheck is
+// never reached), and (ii) `pkg.install`'s `detect_package_manager()`, three
+// read-only `Path::exists` probes; with no package manager it returns Failure
+// without calling the runner. No assertion depends on file contents, on which
+// package manager the host has, or on whether the runner was called for an
+// allowed case.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod plan_apply_proptests {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::operations::template::{RiskClassDef, SlotDef, SlotType, TemplateDef};
+    use crate::policy::{from_toml_str, Pass};
+
+    const POLICY: &str = r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx", "sshd"]]
+
+[[deny]]
+name = "service.restart"
+args = [["sshd"]]
+
+[[operation]]
+name = "file.read"
+allowed_args = [["/nonexistent/relay-plan-apply"]]
+
+[[deny]]
+name = "file.read"
+args = [["/etc/shadow"]]
+
+[[operation]]
+name = "pkg.install"
+allowed_args = [["curl"], ["*"]]
+
+[[operation]]
+name = "disk.usage"
+allowed_args = [["*"]]
+
+[raw_exec]
+allow = ["^/bin/echo [a-z]*$", "^/bin/true$"]
+deny = ["--force", "^rm$"]
+"#;
+
+    fn disk_usage_templates() -> TemplateSet {
+        TemplateSet::for_test(&[TemplateDef {
+            name: "disk.usage".to_string(),
+            risk_class: RiskClassDef::Read,
+            body: "df -PT {{path}}".to_string(),
+            slots: vec![SlotDef {
+                name: "path".to_string(),
+                ty: SlotType::Path,
+            }],
+        }])
+    }
+
+    #[derive(Debug, Clone)]
+    enum Case {
+        Raw(Vec<String>),
+        Op(String, HashMap<String, String>),
+    }
+
+    fn raw_argv() -> impl Strategy<Value = Vec<String>> {
+        let elem = prop_oneof![
+            prop::sample::select(vec![
+                "/bin/echo",
+                "/bin/true",
+                "rm",
+                "--force",
+                "",
+                "a b",
+                "x\ty"
+            ])
+            .prop_map(str::to_string),
+            "\\PC{0,8}",
+        ];
+        prop::collection::vec(elem, 0..7)
+    }
+
+    fn op_case() -> impl Strategy<Value = Case> {
+        let name = prop_oneof![
+            prop::sample::select(vec![
+                "system.facts",
+                "file.read",
+                "service.restart",
+                "pkg.install",
+                "disk.usage",
+            ])
+            .prop_map(str::to_string),
+            "[a-z.]{0,10}",
+        ];
+        let key =
+            prop::sample::select(vec!["unit", "path", "name", "version"]).prop_map(str::to_string);
+        let value = prop_oneof![
+            prop::sample::select(vec![
+                "nginx",
+                "sshd",
+                "curl",
+                "/etc/shadow",
+                "/etc/../etc/shadow",
+                "//etc/shadow",
+                "/nonexistent/relay-plan-apply",
+                "/nonexistent/../nonexistent/relay-plan-apply",
+            ])
+            .prop_map(str::to_string),
+            "\\PC{0,8}",
+        ];
+        (name, prop::collection::hash_map(key, value, 0..4)).prop_map(|(n, a)| Case::Op(n, a))
+    }
+
+    fn case() -> impl Strategy<Value = Case> {
+        prop_oneof![raw_argv().prop_map(Case::Raw), op_case()]
+    }
+
+    fn task_for(case: &Case) -> TaskRequest {
+        let action = match case {
+            Case::Raw(argv) => task_request::Action::RawExec(RawExec { argv: argv.clone() }),
+            Case::Op(name, args) => task_request::Action::Operation(Operation {
+                name: name.clone(),
+                args: args.clone(),
+            }),
+        };
+        TaskRequest {
+            risk_class: 0,
+            task_id: "t-plan-apply".to_string(),
+            timeout_seconds: 5,
+            action: Some(action),
+        }
+    }
+
+    fn query_for(case: &Case) -> PolicyQuery {
+        let action = match case {
+            Case::Raw(argv) => policy_query::Action::RawExec(RawExec { argv: argv.clone() }),
+            Case::Op(name, args) => policy_query::Action::Operation(Operation {
+                name: name.clone(),
+                args: args.clone(),
+            }),
+        };
+        PolicyQuery {
+            query_id: "q".to_string(),
+            action: Some(action),
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn plan_and_apply_agree_for_every_generated_request(case in case()) {
+            let policy = from_toml_str(POLICY).unwrap();
+            let templates = disk_usage_templates();
+            let task = task_for(&case);
+            let query = query_for(&case);
+
+            let ran: Mutex<Vec<Vec<String>>> = Mutex::new(Vec::new());
+            let recording = |req: ExecRequest| {
+                ran.lock().unwrap().push(req.argv.clone());
+                std::future::ready(TaskResult {
+                    task_id: req.task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 0,
+                })
+            };
+
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let result = runtime.block_on(evaluate_and_execute(
+                &task,
+                Duration::from_secs(5),
+                &policy,
+                &templates,
+                recording,
+                None,
+            ));
+            let verdict = evaluate_policy_query(&query, &policy, &templates);
+
+            let outcome = result.outcome;
+            let unsupported = outcome == Outcome::Unsupported as i32;
+            let denied = outcome == Outcome::DeniedByPolicy as i32;
+            prop_assert_eq!(verdict.unsupported, unsupported);
+            prop_assert_eq!(verdict.allowed, !unsupported && !denied);
+
+            if denied {
+                prop_assert_eq!(
+                    &verdict.deciding_rule,
+                    &String::from_utf8(result.stderr.clone()).unwrap()
+                );
+                prop_assert!(ran.lock().unwrap().is_empty(), "a denied Task spawned something");
+            }
+
+            match decide_query(query.action.as_ref(), &policy, &templates) {
+                QueryDecision::Unsupported => prop_assert!(unsupported),
+                QueryDecision::NoAction => prop_assert!(false, "a generated query has an action"),
+                QueryDecision::Decided(e) => {
+                    prop_assert!(!unsupported);
+                    prop_assert_eq!(e.pass == Pass::Allow, verdict.allowed);
+                    if let Case::Raw(argv) = &case {
+                        prop_assert_eq!(e.raw_exec_permit.is_some(), verdict.allowed);
+                        // The argv that ran is the argv Policy allowed.
+                        if verdict.allowed {
+                            let ran = ran.lock().unwrap();
+                            prop_assert!(ran.len() <= 1);
+                            if let Some(first) = ran.first() {
+                                prop_assert_eq!(first, argv);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

@@ -21,19 +21,24 @@
 //!   non-empty: any offending element is refused before the allow pass runs
 //!   (ADR-0019, amended 2026-09-16).
 //!
-//! **Not yet wired**: this module provides a pure evaluation API. Task-dispatch
-//! wiring lands in a later v0.0.3 issue.
+//! Every verdict comes from one function, [`Policy::decide`], over a typed
+//! [`Request`]; it returns an [`Explained`] naming the pass and rule that
+//! decided. Raw Exec runs only with the [`RawExecPermit`] that `decide` mints
+//! on Allow.
 
 #![cfg_attr(not(test), forbid(unsafe_code))]
 
+use std::fmt;
 use std::fmt::Write as _;
 use std::io::Read;
+use std::ops::Range;
 use std::path::Path;
 
 use regex::Regex;
 use serde::Deserialize;
 
 use crate::hardened_open::{open_hardened, HardenedRejection};
+use crate::model::{compile_allow_args, compile_deny_args, CompiledAllow, CompiledDeny, DenyScope};
 use crate::natives as operations;
 
 // Crate-private aliases so the `crate::x::...` paths in the moved files resolve
@@ -46,7 +51,10 @@ pub(crate) use relay_test_support as test_support;
 
 pub mod decision_log;
 pub mod hardened_open;
+mod model;
 pub mod natives;
+
+pub use model::{Explained, MatchedOn, Pass, Request, RuleRef, RuleSection};
 
 #[cfg(feature = "ban-probe")]
 #[allow(dead_code)]
@@ -65,9 +73,9 @@ mod ban_probe;
 #[derive(Debug, Deserialize, Default)]
 struct PolicyFile {
     #[serde(default)]
-    operation: Vec<OperationRuleRaw>,
+    operation: Vec<toml::Spanned<OperationRuleRaw>>,
     #[serde(default)]
-    deny: Vec<DenyRuleRaw>,
+    deny: Vec<toml::Spanned<DenyRuleRaw>>,
     #[serde(default)]
     raw_exec: RawExecRaw,
 }
@@ -108,9 +116,9 @@ struct DenyRuleRaw {
 #[derive(Debug, Deserialize, Default)]
 struct RawExecRaw {
     #[serde(default)]
-    allow: Vec<String>,
+    allow: Vec<toml::Spanned<String>>,
     #[serde(default)]
-    deny: Vec<String>,
+    deny: Vec<toml::Spanned<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +133,7 @@ struct RawExecRaw {
 struct CompiledRe {
     pattern: String,
     re: Regex,
+    at: RuleRef,
 }
 
 /// The compiled, in-memory Policy derived from a `PolicyFile`.
@@ -132,8 +141,8 @@ struct CompiledRe {
 /// All regex patterns are compiled once at load time; evaluation is pure.
 #[derive(Debug)]
 pub struct Policy {
-    operations: Vec<OperationRuleRaw>,
-    denies: Vec<DenyRuleRaw>,
+    operations: Vec<CompiledAllow>,
+    denies: Vec<CompiledDeny>,
     raw_allow: Vec<CompiledRe>,
     raw_deny: Vec<CompiledRe>,
     fingerprint: String,
@@ -192,6 +201,52 @@ pub enum Decision {
     /// `reason` is a human-readable explanation. `rule` is `Some` when a
     /// specific deny rule fired; `None` when deny-by-default applies.
     Deny { reason: String, rule: Option<Rule> },
+}
+
+/// Proof that [`Policy::decide`] allowed one exact Raw Exec argv.
+///
+/// Running Raw Exec requires one, and only `decide` mints one — on Allow, for
+/// the argv it evaluated — so the argv that runs is by construction the argv
+/// Policy allowed, and a call that skipped the gate does not compile. It has no
+/// constructor, no `Clone`, no `Default` and no deserializer. `Debug` prints
+/// the argument count only: an argv may hold a secret.
+///
+/// The positive control and both negative cases name the type by the same path,
+/// so a typo in it fails the first and cannot make the others pass:
+///
+/// ```
+/// let policy = relay_policy::from_toml_str("[raw_exec]\nallow = [\"^/bin/true$\"]\n").unwrap();
+/// let argv = vec!["/bin/true".to_string()];
+/// let permit: relay_policy::RawExecPermit = policy
+///     .decide(&relay_policy::Request::RawExec { argv: &argv })
+///     .raw_exec_permit
+///     .expect("allowed");
+/// assert_eq!(permit.into_argv(), argv);
+/// ```
+///
+/// ```compile_fail
+/// let _ = relay_policy::RawExecPermit { argv: vec![String::new()] };
+/// ```
+///
+/// ```compile_fail
+/// let _ = <relay_policy::RawExecPermit as Default>::default();
+/// ```
+#[must_use]
+pub struct RawExecPermit {
+    argv: Vec<String>,
+}
+
+impl RawExecPermit {
+    /// The argv Policy allowed, to execute.
+    pub fn into_argv(self) -> Vec<String> {
+        self.argv
+    }
+}
+
+impl fmt::Debug for RawExecPermit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "RawExecPermit {{ argc: {} }}", self.argv.len())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -289,17 +344,84 @@ fn policy_fingerprint(bytes: &[u8]) -> String {
 /// rather than silently skipping the pattern.
 pub fn from_toml_str(s: &str) -> Result<Policy, PolicyError> {
     let file: PolicyFile = toml::from_str(s)?;
+    compile(file, s)
+}
 
-    let raw_allow =
-        compile_regexes(file.raw_exec.allow, compile_allow_regex).map_err(with_allow_regex_hint)?;
-    let raw_deny = compile_regexes(file.raw_exec.deny, compile_deny_regex)?;
+/// The 1-based source line a TOML span starts on, or `None` when the parser
+/// gave no usable span. Counts bytes, so it never slices a `str`.
+fn line_of(src: &str, span: Range<usize>) -> Option<usize> {
+    if span.start >= span.end || span.end > src.len() {
+        return None;
+    }
+    let newlines = src.as_bytes()[..span.start]
+        .iter()
+        .filter(|&&b| b == b'\n')
+        .count();
+    Some(newlines + 1)
+}
+
+/// Compiles the parsed file into the evaluated model, recording where each
+/// rule sits in `source` (the text `file` was parsed from).
+fn compile(file: PolicyFile, source: &str) -> Result<Policy, PolicyError> {
+    let raw_allow = compile_regexes(
+        file.raw_exec.allow,
+        RuleSection::RawExecAllow,
+        source,
+        compile_allow_regex,
+    )
+    .map_err(with_allow_regex_hint)?;
+    let raw_deny = compile_regexes(
+        file.raw_exec.deny,
+        RuleSection::RawExecDeny,
+        source,
+        compile_deny_regex,
+    )?;
+
+    let operations = file
+        .operation
+        .into_iter()
+        .enumerate()
+        .map(|(index, spanned)| {
+            let at = RuleRef {
+                section: RuleSection::Operation,
+                index,
+                line: line_of(source, spanned.span()),
+            };
+            let rule = spanned.into_inner();
+            CompiledAllow {
+                name: rule.name,
+                matchers: compile_allow_args(&rule.allowed_args),
+                source_args: rule.allowed_args,
+                at,
+            }
+        })
+        .collect();
+    let denies = file
+        .deny
+        .into_iter()
+        .enumerate()
+        .map(|(index, spanned)| {
+            let at = RuleRef {
+                section: RuleSection::Deny,
+                index,
+                line: line_of(source, spanned.span()),
+            };
+            let rule = spanned.into_inner();
+            CompiledDeny {
+                name: rule.name,
+                scope: compile_deny_args(&rule.args),
+                source_args: rule.args,
+                at,
+            }
+        })
+        .collect();
 
     Ok(Policy {
-        operations: file.operation,
-        denies: file.deny,
+        operations,
+        denies,
         raw_allow,
         raw_deny,
-        fingerprint: policy_fingerprint(s.as_bytes()),
+        fingerprint: policy_fingerprint(source.as_bytes()),
     })
 }
 
@@ -342,16 +464,26 @@ fn compile_allow_regex(pattern: &str) -> Result<Regex, regex::Error> {
 }
 
 fn compile_regexes(
-    patterns: Vec<String>,
+    patterns: Vec<toml::Spanned<String>>,
+    section: RuleSection,
+    source: &str,
     compile: fn(&str) -> Result<Regex, regex::Error>,
 ) -> Result<Vec<CompiledRe>, PolicyError> {
     patterns
         .into_iter()
-        .map(|pattern| {
+        .enumerate()
+        .map(|(index, spanned)| {
+            let at = RuleRef {
+                section,
+                index,
+                line: line_of(source, spanned.span()),
+            };
+            let pattern = spanned.into_inner();
             compile(&pattern)
                 .map(|re| CompiledRe {
                     pattern: pattern.clone(),
                     re,
+                    at,
                 })
                 .map_err(|source| PolicyError::InvalidRegex {
                     pattern,
@@ -576,7 +708,7 @@ impl LintReport {
 ///    Error-vs-Warning rule, which depends on whether the caller supplied the
 ///    Node's Template Operation names.
 /// 4. Allow rules fully shadowed by a `[[deny]]` rule of the same name
-///    (`Warning`) — see [`allow_is_shadowed_by_deny`].
+///    (`Warning`) — see `lint_shadowed_allows`.
 /// 5. `[[deny]]` rules whose `args` contain a `"*"` or an empty inner list and
 ///    can therefore never fire (`Warning`) — see [`lint_deny_arg_noops`].
 /// 6. A `[raw_exec]` allow pattern not anchored `^...$` (`Warning`) — its
@@ -670,7 +802,7 @@ pub fn lint_with_vocabulary(
         )
     };
 
-    for (i, op) in file.operation.iter().enumerate() {
+    for (i, op) in file.operation.iter().map(|s| s.get_ref()).enumerate() {
         if !known(&op.name) {
             findings.push(LintFinding {
                 severity,
@@ -680,7 +812,7 @@ pub fn lint_with_vocabulary(
         }
     }
 
-    for (i, deny) in file.deny.iter().enumerate() {
+    for (i, deny) in file.deny.iter().map(|s| s.get_ref()).enumerate() {
         if !known(&deny.name) {
             findings.push(LintFinding {
                 severity,
@@ -704,10 +836,10 @@ pub fn lint_with_vocabulary(
 ///
 /// Pure and I/O-free — it does NOT fold case or Unicode (ADR-0018 records that
 /// as a narrow residual), and it is deliberately the SINGLE definition used
-/// both by [`Policy::evaluate`]'s `file.read` precondition and by the dispatch
-/// gate that applies the same precondition to a Template Operation's
-/// `path`-typed slots (issue #293). One predicate, two call sites — never two
-/// notions of "canonical".
+/// by [`Policy::decide`]'s path precondition, which every dispatch path
+/// (Native and Template `path`-typed slots, issue #293) reaches through
+/// `decide`. Outside `decide` only the catalog tests call it — never a second
+/// notion of "canonical".
 pub fn path_is_canonical(path: &str) -> bool {
     path == "/"
         || (path.starts_with('/')
@@ -746,13 +878,13 @@ pub fn non_canonical_path_denial(path: &str) -> Decision {
 /// misattribute the cause. `is_allow` gates the hint accordingly, matching
 /// `with_allow_regex_hint`'s loader-side scoping.
 fn lint_raw_exec_regexes(
-    patterns: &[String],
+    patterns: &[toml::Spanned<String>],
     section: &str,
     compile: fn(&str) -> Result<Regex, regex::Error>,
     is_allow: bool,
     findings: &mut Vec<LintFinding>,
 ) {
-    for (i, pattern) in patterns.iter().enumerate() {
+    for (i, pattern) in patterns.iter().map(|s| s.get_ref()).enumerate() {
         if let Err(e) = compile(pattern) {
             let hint = if is_allow {
                 verbose_trailing_comment_hint(pattern)
@@ -786,8 +918,11 @@ fn lint_raw_exec_regexes(
 /// actually anchored at the start (the pattern parses as `(^a)|(b$)`) — its
 /// meaning still narrowed by the ADR-0019 amendment, same as an unanchored
 /// pattern, but this textual check cannot see inside the alternation.
-fn lint_raw_exec_allow_anchoring(patterns: &[String], findings: &mut Vec<LintFinding>) {
-    for (i, pattern) in patterns.iter().enumerate() {
+fn lint_raw_exec_allow_anchoring(
+    patterns: &[toml::Spanned<String>],
+    findings: &mut Vec<LintFinding>,
+) {
+    for (i, pattern) in patterns.iter().map(|s| s.get_ref()).enumerate() {
         if compile_allow_regex(pattern).is_err() {
             // Already an Error from lint_raw_exec_regexes; don't pile on.
             continue;
@@ -868,7 +1003,7 @@ fn strip_leading_flag_group(pattern: &str) -> &str {
 /// defense (Policy, ADR-0002), a deny that looks active but matches nothing is
 /// a false sense of security, and catching exactly that is the lint's job.
 ///
-/// `Policy::evaluate`'s deny pass matches each argument position by EXACT VALUE
+/// `Policy::decide`'s deny pass matches each argument position by EXACT VALUE
 /// (`denied_vals.contains(arg)`); unlike the allow pass, it gives deny args no
 /// wildcard semantics. So two constructs are dead:
 ///
@@ -883,11 +1018,11 @@ fn strip_leading_flag_group(pattern: &str) -> &str {
 /// Both are `Warning`s (promoted to failure by `--strict`), matching the
 /// shadowed-allow lint. The legitimate unconditional deny — an empty OUTER
 /// args list (`args = []`, "block every invocation", handled at
-/// `evaluate`'s deny pass) — is explicitly NOT flagged; only a non-empty rule
+/// `decide`'s deny pass) — is explicitly NOT flagged; only a non-empty rule
 /// with a dead inner position is. Real exact-match denies
 /// (`args = [["nginx"]]`) contain neither construct and are never flagged.
-fn lint_deny_arg_noops(denies: &[DenyRuleRaw], findings: &mut Vec<LintFinding>) {
-    for (di, deny) in denies.iter().enumerate() {
+fn lint_deny_arg_noops(denies: &[toml::Spanned<DenyRuleRaw>], findings: &mut Vec<LintFinding>) {
+    for (di, deny) in denies.iter().map(|s| s.get_ref()).enumerate() {
         // `args = []` is the legitimate unconditional deny-all, not a no-op.
         if deny.args.is_empty() {
             continue;
@@ -920,18 +1055,25 @@ fn lint_deny_arg_noops(denies: &[DenyRuleRaw], findings: &mut Vec<LintFinding>) 
 }
 
 /// Flags every `[[operation]]` allow rule that is fully shadowed by some
-/// `[[deny]]` rule of the same name (see [`allow_is_shadowed_by_deny`]).
+/// `[[deny]]` rule of the same name (see `DenyScope::covers`).
+///
+/// A deny covers an allow iff the allow can never fire: an empty `args` blocks
+/// the whole operation; otherwise for every position the allow lists, the deny
+/// either lists no such position (vacuous) or its value set subsumes the
+/// allow's. A `"*"` allow position is never subsumed, because a deny has no
+/// wildcard.
 fn lint_shadowed_allows(
-    allows: &[OperationRuleRaw],
-    denies: &[DenyRuleRaw],
+    allows: &[toml::Spanned<OperationRuleRaw>],
+    denies: &[toml::Spanned<DenyRuleRaw>],
     findings: &mut Vec<LintFinding>,
 ) {
-    for (ai, allow) in allows.iter().enumerate() {
-        for (di, deny) in denies.iter().enumerate() {
+    for (ai, allow) in allows.iter().map(|s| s.get_ref()).enumerate() {
+        let allow_matchers = compile_allow_args(&allow.allowed_args);
+        for (di, deny) in denies.iter().map(|s| s.get_ref()).enumerate() {
             if deny.name != allow.name {
                 continue;
             }
-            if allow_is_shadowed_by_deny(allow, deny) {
+            if compile_deny_args(&deny.args).covers(&allow_matchers) {
                 findings.push(LintFinding {
                     severity: LintSeverity::Warning,
                     location: format!("[[operation]] #{ai} (name={:?})", allow.name),
@@ -943,46 +1085,6 @@ fn lint_shadowed_allows(
             }
         }
     }
-}
-
-/// `true` if `deny` (same operation name as `allow`, checked by the caller)
-/// covers every invocation `allow` would otherwise permit — i.e. the allow
-/// rule can never fire.
-///
-/// Mirrors [`Policy::evaluate`]'s own deny/allow semantics exactly, so a
-/// flagged allow provably can never fire:
-/// - An empty `deny.args` blocks the whole operation unconditionally
-///   (`Policy::evaluate`'s empty-`args` deny branch) → always shadowed.
-/// - Otherwise, `deny` covers `allow` iff for **every** position `i` in
-///   `0..allow.allowed_args.len()`:
-///   - if `i < deny.args.len()`: `allow.allowed_args[i]` contains no `"*"`
-///     wildcard **and** every value in it is present in `deny.args[i]`
-///     (finite subset — a deny has no wildcard, so a `"*"` allow position is
-///     never coverable);
-///   - if `i >= deny.args.len()`: covered (the deny's vacuous-satisfaction
-///     rule fires for absent trailing positions, matching `Policy::evaluate`,
-///     and `allow`'s fixed arg count means the invocation has exactly
-///     `allow.allowed_args.len()` args).
-///
-/// Positions beyond `allow.allowed_args.len()` (when `deny` is longer than
-/// `allow`) are not examined: they index beyond the invocation's args and are
-/// vacuously satisfied on the deny side, so they never block coverage.
-fn allow_is_shadowed_by_deny(allow: &OperationRuleRaw, deny: &DenyRuleRaw) -> bool {
-    if deny.args.is_empty() {
-        return true;
-    }
-
-    allow
-        .allowed_args
-        .iter()
-        .enumerate()
-        .all(|(i, allowed_vals)| match deny.args.get(i) {
-            Some(denied_vals) => {
-                !allowed_vals.iter().any(|v| v == "*")
-                    && allowed_vals.iter().all(|v| denied_vals.contains(v))
-            }
-            None => true,
-        })
 }
 
 // ---------------------------------------------------------------------------
@@ -1005,15 +1107,27 @@ fn first_raw_deny_match<'a>(
     joined: &'a str,
     argv: &'a [String],
     canonical: &[&'a str],
-) -> Option<(&'static str, &'a str)> {
+) -> Option<(&'static str, &'a str, MatchedOn)> {
     if re.is_match(joined) {
-        return Some(("joined command", joined));
+        return Some(("joined command", joined, MatchedOn::JoinedCommand));
     }
-    if let Some(arg) = argv.iter().find(|arg| re.is_match(arg)) {
-        return Some(("argv element", arg.as_str()));
+    if let Some((index, arg)) = argv.iter().enumerate().find(|(_, arg)| re.is_match(arg)) {
+        return Some((
+            "argv element",
+            arg.as_str(),
+            MatchedOn::ArgvElement { index },
+        ));
     }
-    if let Some(elem) = canonical.iter().find(|elem| re.is_match(elem)) {
-        return Some(("canonical element", elem));
+    if let Some((index, elem)) = canonical
+        .iter()
+        .enumerate()
+        .find(|(_, elem)| re.is_match(elem))
+    {
+        return Some((
+            "canonical element",
+            elem,
+            MatchedOn::CanonicalElement { index },
+        ));
     }
     None
 }
@@ -1060,7 +1174,7 @@ impl Policy {
     /// Report-only / display-only (ADR-0002): this reads the live engine's own
     /// loaded state for the `PolicySnapshot` the Relay displays; it never
     /// evaluates or grants anything itself. An empty (or absent) `allow` list
-    /// means Raw Exec is denied-by-default, matching `evaluate_raw_exec`.
+    /// means Raw Exec is denied-by-default, matching `decide`'s Raw Exec chain.
     pub fn raw_exec_enabled(&self) -> bool {
         !self.raw_allow.is_empty()
     }
@@ -1069,7 +1183,7 @@ impl Policy {
     ///
     /// Report-only / display-only (ADR-0002) — for the `PolicySnapshot` the
     /// Relay displays; not used for evaluation (the compiled `Regex` on
-    /// `CompiledRe` is what `evaluate_raw_exec` uses).
+    /// `CompiledRe` is what `decide` uses).
     pub fn raw_allow_patterns(&self) -> Vec<String> {
         self.raw_allow.iter().map(|c| c.pattern.clone()).collect()
     }
@@ -1087,7 +1201,7 @@ impl Policy {
     /// Report-only / display-only (ADR-0002): a raw report of allow-rule
     /// names for the `PolicySnapshot` the Relay displays. `[[deny]]` rule
     /// names are NOT included — this is not a re-evaluation of what is
-    /// actually permitted (that would reimplement `Policy::evaluate`,
+    /// actually permitted (that would reimplement `Policy::decide`,
     /// forbidden by ADR-0011); it mirrors the proto field's own contract.
     pub fn allowed_operations(&self) -> Vec<String> {
         let mut names = Vec::new();
@@ -1106,14 +1220,14 @@ impl Policy {
     /// [`Policy::allowed_operations`], this does NOT dedup by name — a name
     /// may appear in multiple blocks with different `allowed_args`, and every
     /// block is preserved. This is not a re-evaluation of what is actually
-    /// permitted (that would reimplement `Policy::evaluate`, forbidden by
+    /// permitted (that would reimplement `Policy::decide`, forbidden by
     /// ADR-0011); it is a verbatim copy of the loaded rules.
     pub fn operation_allow_rules(&self) -> Vec<OperationAllowRule> {
         self.operations
             .iter()
             .map(|op| OperationAllowRule {
                 name: op.name.clone(),
-                allowed_args: op.allowed_args.clone(),
+                allowed_args: op.source_args.clone(),
             })
             .collect()
     }
@@ -1123,111 +1237,197 @@ impl Policy {
     /// Report-only / display-only (ADR-0002): a raw mirror of the Policy
     /// file's deny rules for the `PolicySnapshot` the Relay displays. It
     /// never folds allow and deny together into an effective verdict — that
-    /// would reimplement `Policy::evaluate`, forbidden by ADR-0011.
+    /// would reimplement `Policy::decide`, forbidden by ADR-0011.
     pub fn deny_rules(&self) -> Vec<OperationDenyRule> {
         self.denies
             .iter()
             .map(|d| OperationDenyRule {
                 name: d.name.clone(),
-                args: d.args.clone(),
+                args: d.source_args.clone(),
             })
             .collect()
     }
 
-    /// Evaluate whether `operation_name` may run with the given `args`.
+    /// The one Policy decision: may this [`Request`] run?
     ///
-    /// Semantics (ADR-0002):
-    /// 1. **Deny pass first** — any matching `[[deny]]` rule wins immediately.
-    ///    Vacuous-deny: if an invocation has fewer args than a deny rule lists,
-    ///    the unlisted trailing positions are vacuously satisfied (the deny
-    ///    still fires). This is the more-restrictive interpretation.
-    /// 2. **Allow pass** — a matching `[[operation]]` rule with exact arg count
-    ///    and all positions satisfied (or `"*"` wildcard) → `Allow`.
-    /// 3. **Deny-by-default** — no rule matched → `Deny{rule: None}`.
-    pub fn evaluate(&self, operation_name: &str, args: &[String]) -> Decision {
-        // --- 0. Path-argument canonical-form precondition (ADR-0018) --------
-        // `file.read`'s `path` is the only path-typed argument today. A path
-        // argument must be in strict canonical form, else Deny (fail closed):
-        // this makes an exact-string path deny (e.g. `/etc/shadow`) hold
-        // against lexical evasions like `/etc/../etc/shadow` or `//etc/shadow`.
-        // Pure lexical test, no I/O — does NOT fold case/Unicode (ADR-0018
-        // records that as a narrow residual). The executor additionally
-        // re-checks the *resolved* target for `/proc`-magic and symlink
-        // evasions that are canonical in form (ADR-0018 layer 2).
-        if operation_name == operations::FILE_READ {
-            if let Some(path) = args.first() {
-                if !path_is_canonical(path) {
-                    return non_canonical_path_denial(path);
+    /// Every entry path — Task apply, `PolicyQuery`, `policy check
+    /// --would-allow`, `file.read`'s layer-2 recheck, the self-reference lint —
+    /// makes exactly one call here, so there is a single place where Policy is
+    /// evaluated (invariant 12).
+    ///
+    /// An Operation request runs: canonical-path precondition (ADR-0018), deny
+    /// pass, allow pass, deny-by-default. A Raw Exec request runs: empty-argv
+    /// precondition, deny pass, whitespace guard, allow pass, deny-by-default
+    /// (ADR-0019). Deny always runs before the guard and the guard before
+    /// allow; a deny written for N arguments also blocks a shorter invocation.
+    ///
+    /// The returned [`Explained`] carries the verdict, the pass and rule that
+    /// produced it and, for an allowed Raw Exec only, the [`RawExecPermit`].
+    pub fn decide(&self, request: &Request<'_>) -> Explained {
+        match request {
+            Request::Operation {
+                name,
+                positional,
+                path_positions,
+            } => {
+                if let Some(e) = self.evaluate_path_precondition(positional, path_positions) {
+                    return e;
                 }
+                if let Some(e) = self.evaluate_operation_deny(name, positional) {
+                    return e;
+                }
+                if let Some(e) = self.evaluate_operation_allow(name, positional) {
+                    return e;
+                }
+                self.evaluate_operation_default(name, positional)
+            }
+            Request::RawExec { argv } => {
+                let mut explained = 'chain: {
+                    // Empty argv is always denied (nothing to run).
+                    if argv.is_empty() {
+                        break 'chain Explained {
+                            decision: Decision::Deny {
+                                reason: "empty argv".to_string(),
+                                rule: None,
+                            },
+                            pass: Pass::Precondition,
+                            rule: None,
+                            matched_on: MatchedOn::EmptyArgv,
+                            raw_exec_permit: None,
+                        };
+                    }
+
+                    let joined = argv.join(" ");
+
+                    // Canonical elements: the joined command re-split on
+                    // whitespace. This collapses attacker-chosen element
+                    // boundaries (merged, padded, empty, or tab/newline/CR-
+                    // separated) onto one normal form, so an element-anchored
+                    // deny sees the tokens an operator wrote it against
+                    // (ADR-0019). Computed once; the deny lists are short.
+                    let canonical: Vec<&str> = joined.split_whitespace().collect();
+
+                    if let Some(e) = self.evaluate_raw_exec_deny(&joined, argv, &canonical) {
+                        break 'chain e;
+                    }
+                    if let Some(e) = self.evaluate_raw_exec_guard(argv) {
+                        break 'chain e;
+                    }
+                    if let Some(e) = self.evaluate_raw_exec_allow(&joined) {
+                        break 'chain e;
+                    }
+                    self.evaluate_raw_exec_default()
+                };
+                if matches!(explained.decision, Decision::Allow(_)) {
+                    explained.raw_exec_permit = Some(RawExecPermit {
+                        argv: argv.to_vec(),
+                    });
+                }
+                explained
             }
         }
+    }
 
-        // --- 1. Deny pass (deny-beats-allow, evaluated first) ---------------
+    /// Path-argument canonical-form precondition (ADR-0018).
+    ///
+    /// A path argument must be in strict canonical form, else Deny (fail
+    /// closed): this makes an exact-string path deny (e.g. `/etc/shadow`) hold
+    /// against lexical evasions like `/etc/../etc/shadow` or `//etc/shadow`.
+    /// Pure lexical test, no I/O — does NOT fold case/Unicode (ADR-0018 records
+    /// that as a narrow residual). The first non-canonical position wins. The
+    /// executor additionally re-checks the *resolved* target for `/proc`-magic
+    /// and symlink evasions that are canonical in form (ADR-0018 layer 2).
+    fn evaluate_path_precondition(
+        &self,
+        positional: &[String],
+        path_positions: &[usize],
+    ) -> Option<Explained> {
+        for &position in path_positions {
+            let Some(path) = positional.get(position) else {
+                continue;
+            };
+            if !path_is_canonical(path) {
+                return Some(Explained {
+                    decision: non_canonical_path_denial(path),
+                    pass: Pass::Precondition,
+                    rule: None,
+                    matched_on: MatchedOn::NonCanonicalPath { position },
+                    raw_exec_permit: None,
+                });
+            }
+        }
+        None
+    }
+
+    /// Operation deny pass (deny-beats-allow, evaluated first).
+    fn evaluate_operation_deny(&self, operation_name: &str, args: &[String]) -> Option<Explained> {
         for deny_rule in &self.denies {
             if deny_rule.name != operation_name {
                 continue;
             }
 
-            // An empty `args` list blocks any invocation of the operation.
-            if deny_rule.args.is_empty() {
-                return Decision::Deny {
-                    reason: format!("denied by explicit rule for operation '{operation_name}'"),
-                    rule: Some(Rule::OperationDeny {
-                        operation: operation_name.to_string(),
-                    }),
+            // An empty `args` list blocks any invocation of the operation;
+            // otherwise each listed position must match, and positions beyond
+            // args.len() are vacuously satisfied (a deny written for N args
+            // also blocks shorter invocations).
+            if deny_rule.scope.matches(args) {
+                let matched_on = match deny_rule.scope {
+                    DenyScope::Every => MatchedOn::WholeOperation,
+                    DenyScope::Positions(_) => MatchedOn::Arguments,
                 };
-            }
-
-            // Check each listed position. Positions beyond args.len() are
-            // vacuously satisfied (absent arg → deny still fires). This is the
-            // more-restrictive deny-beats-allow reading: a deny written for N
-            // args also blocks shorter invocations.
-            let matches = deny_rule.args.iter().enumerate().all(|(i, denied_vals)| {
-                if i >= args.len() {
-                    // Vacuously satisfied: argument absent, deny still fires.
-                    return true;
-                }
-                denied_vals.contains(&args[i])
-            });
-
-            if matches {
-                return Decision::Deny {
-                    reason: format!("denied by explicit rule for operation '{operation_name}'"),
-                    rule: Some(Rule::OperationDeny {
-                        operation: operation_name.to_string(),
-                    }),
-                };
+                return Some(Explained {
+                    decision: Decision::Deny {
+                        reason: format!("denied by explicit rule for operation '{operation_name}'"),
+                        rule: Some(Rule::OperationDeny {
+                            operation: operation_name.to_string(),
+                        }),
+                    },
+                    pass: Pass::Deny,
+                    rule: Some(deny_rule.at),
+                    matched_on,
+                    raw_exec_permit: None,
+                });
             }
         }
+        None
+    }
 
-        // --- 2. Allow pass --------------------------------------------------
+    /// Operation allow pass: exact argument count, every position matched.
+    fn evaluate_operation_allow(&self, operation_name: &str, args: &[String]) -> Option<Explained> {
         for op_rule in &self.operations {
             if op_rule.name != operation_name {
                 continue;
             }
 
             // Argument count must match exactly.
-            if args.len() != op_rule.allowed_args.len() {
+            if args.len() != op_rule.matchers.len() {
                 continue;
             }
 
             // Every position must be in the allowed set or be a wildcard.
             let allowed = op_rule
-                .allowed_args
+                .matchers
                 .iter()
-                .enumerate()
-                .all(|(i, allowed_vals)| {
-                    allowed_vals.iter().any(|s| s == "*") || allowed_vals.contains(&args[i])
-                });
+                .zip(args)
+                .all(|(matcher, arg)| matcher.matches(arg));
 
             if allowed {
-                return Decision::Allow(Rule::OperationAllow {
-                    operation: operation_name.to_string(),
+                return Some(Explained {
+                    decision: Decision::Allow(Rule::OperationAllow {
+                        operation: operation_name.to_string(),
+                    }),
+                    pass: Pass::Allow,
+                    rule: Some(op_rule.at),
+                    matched_on: MatchedOn::Arguments,
+                    raw_exec_permit: None,
                 });
             }
         }
+        None
+    }
 
-        // --- 3. Deny-by-default ---------------------------------------------
+    fn evaluate_operation_default(&self, operation_name: &str, args: &[String]) -> Explained {
+        // --- Deny-by-default ------------------------------------------------
         // Neither the deny pass nor the allow pass matched: this is still a
         // plain deny-by-default (`rule: None` in both branches below). The
         // reason text only distinguishes *why* no allow rule matched, for
@@ -1246,21 +1446,32 @@ impl Policy {
         // grow with the Operation's slot count. The cost is that the cut may
         // land mid-escape or drop the closing `"]`; the `…` marks it, and
         // nothing parses this text (ADR-0019).
-        let reason = if self.operations.iter().any(|op| op.name == operation_name) {
-            format!(
-                "no allow rule matched args {} for operation '{operation_name}' \
-                 (allow rules exist for other arguments)",
-                reason_fragment(&format!("{args:?}"))
+        let (reason, matched_on) = if self.operations.iter().any(|op| op.name == operation_name) {
+            (
+                format!(
+                    "no allow rule matched args {} for operation '{operation_name}' \
+                     (allow rules exist for other arguments)",
+                    reason_fragment(&format!("{args:?}"))
+                ),
+                MatchedOn::NoMatchingArguments,
             )
         } else {
-            format!("deny-by-default: no allow rule for operation '{operation_name}'")
+            (
+                format!("deny-by-default: no allow rule for operation '{operation_name}'"),
+                MatchedOn::NoAllowRule,
+            )
         };
-        Decision::Deny { reason, rule: None }
+        Explained {
+            decision: Decision::Deny { reason, rule: None },
+            pass: Pass::Default,
+            rule: None,
+            matched_on,
+            raw_exec_permit: None,
+        }
     }
 
-    /// Evaluate whether the Raw Exec command `argv` may run.
-    ///
-    /// Semantics (ADR-0001, ADR-0002, ADR-0019, amended 2026-09-16):
+    /// The Raw Exec deny pass. Semantics of the whole Raw Exec chain, as
+    /// `decide` runs it (ADR-0001, ADR-0002, ADR-0019, amended 2026-09-16):
     /// - No shell is invoked; `argv` is the exact argument vector the executor
     ///   will pass to `execv`. The join here is only for regex matching.
     /// - Allow patterns are tested against `argv.join(" ")`, and must match it
@@ -1308,46 +1519,43 @@ impl Policy {
     ///   element boundaries are ambiguous (invariant #1: an argument must
     ///   never change *which* command runs).
     /// - Deny-by-default: no allow match → deny with `rule: None`.
-    pub fn evaluate_raw_exec(&self, argv: &[String]) -> Decision {
-        // Empty argv is always denied (nothing to run).
-        if argv.is_empty() {
-            return Decision::Deny {
-                reason: "empty argv".to_string(),
-                rule: None,
-            };
-        }
-
-        let joined = argv.join(" ");
-
-        // Canonical elements: the joined command re-split on whitespace. This
-        // collapses attacker-chosen element boundaries (merged, padded, empty,
-        // or tab/newline/CR-separated) onto one normal form, so an
-        // element-anchored deny sees the tokens an operator wrote it against
-        // (ADR-0019). Computed once; the deny lists are short.
-        let canonical: Vec<&str> = joined.split_whitespace().collect();
-
+    fn evaluate_raw_exec_deny(
+        &self,
+        joined: &str,
+        argv: &[String],
+        canonical: &[&str],
+    ) -> Option<Explained> {
         // --- Deny pass (deny-beats-allow, evaluated first) ------------------
         // Test deny patterns against the joined command, each raw element, AND
         // each canonical element. All three are kept: dropping the raw-element
         // pass would lose the only form that matches a deny written against a
         // merged element (`^--force x$`).
         for compiled in &self.raw_deny {
-            if let Some((form, matched)) =
-                first_raw_deny_match(&compiled.re, &joined, argv, &canonical)
+            if let Some((form, matched, matched_on)) =
+                first_raw_deny_match(&compiled.re, joined, argv, canonical)
             {
-                return Decision::Deny {
-                    reason: format!(
-                        "raw exec denied by pattern {:?} (matched {form} {:?})",
-                        compiled.pattern,
-                        reason_fragment(matched)
-                    ),
-                    rule: Some(Rule::RawExecDeny {
-                        pattern: compiled.pattern.clone(),
-                    }),
-                };
+                return Some(Explained {
+                    decision: Decision::Deny {
+                        reason: format!(
+                            "raw exec denied by pattern {:?} (matched {form} {:?})",
+                            compiled.pattern,
+                            reason_fragment(matched)
+                        ),
+                        rule: Some(Rule::RawExecDeny {
+                            pattern: compiled.pattern.clone(),
+                        }),
+                    },
+                    pass: Pass::Deny,
+                    rule: Some(compiled.at),
+                    matched_on,
+                    raw_exec_permit: None,
+                });
             }
         }
+        None
+    }
 
+    fn evaluate_raw_exec_guard(&self, argv: &[String]) -> Option<Explained> {
         // --- Whitespace guard (ADR-0019, amended 2026-09-16) -----------------
         // Fail closed: `argv[0]` must be exactly one non-empty program token,
         // and every OTHER element must carry no whitespace at all — an allow
@@ -1373,46 +1581,103 @@ impl Policy {
         for (i, elem) in argv.iter().enumerate() {
             if i == 0 {
                 if elem.is_empty() || elem.chars().any(char::is_whitespace) {
-                    return Decision::Deny {
-                        reason: format!(
+                    return Some(guard_denial(
+                        format!(
                             "raw exec argv[0] {:?} is not a single program token (empty or \
                              containing whitespace): the program to execute must be exactly one \
                              argv element (ADR-0019)",
                             reason_fragment(elem)
                         ),
-                        rule: None,
-                    };
+                        i,
+                    ));
                 }
             } else if elem.chars().any(char::is_whitespace) {
-                return Decision::Deny {
-                    reason: format!(
+                return Some(guard_denial(
+                    format!(
                         "raw exec argv[{i}] contains whitespace: no Raw Exec argument may carry \
                          whitespace, so the command Policy matched is exactly the argv that \
                          runs; pass such an argument through a Template Operation (ADR-0019)"
                     ),
-                    rule: None,
-                };
+                    i,
+                ));
             }
         }
+        None
+    }
 
+    fn evaluate_raw_exec_allow(&self, joined: &str) -> Option<Explained> {
         // --- Allow pass -------------------------------------------------
         // `re` is the full-match regex `compile_allow_regex` compiled
         // (`\A(?:pattern)\z`): matching the joined command against it is
         // already a whole-command test, so the call below needs no change
         // from a substring `is_match` — only what `re` means changed.
         for compiled in &self.raw_allow {
-            if compiled.re.is_match(&joined) {
-                return Decision::Allow(Rule::RawExecAllow {
-                    pattern: compiled.pattern.clone(),
+            if compiled.re.is_match(joined) {
+                return Some(Explained {
+                    decision: Decision::Allow(Rule::RawExecAllow {
+                        pattern: compiled.pattern.clone(),
+                    }),
+                    pass: Pass::Allow,
+                    rule: Some(compiled.at),
+                    matched_on: MatchedOn::WholeCommand,
+                    raw_exec_permit: None,
                 });
             }
         }
+        None
+    }
 
+    fn evaluate_raw_exec_default(&self) -> Explained {
         // --- Deny-by-default ------------------------------------------------
-        Decision::Deny {
-            reason: "deny-by-default: no raw_exec allow pattern matched".to_string(),
+        Explained {
+            decision: Decision::Deny {
+                reason: "deny-by-default: no raw_exec allow pattern matched".to_string(),
+                rule: None,
+            },
+            pass: Pass::Default,
             rule: None,
+            matched_on: MatchedOn::NoRawExecAllow,
+            raw_exec_permit: None,
         }
+    }
+}
+
+/// The Raw Exec whitespace guard's refusal for `argv[index]`.
+fn guard_denial(reason: String, index: usize) -> Explained {
+    Explained {
+        decision: Decision::Deny { reason, rule: None },
+        pass: Pass::Guard,
+        rule: None,
+        matched_on: MatchedOn::WhitespaceElement { index },
+        raw_exec_permit: None,
+    }
+}
+
+// Test shims: they keep the pre-`decide` call shape for the suites that predate
+// it, and are compiled only for tests and the bin's `test-util` dev-dependency.
+// Production must call `decide`; `tests/policy_decide_single_gate.rs` enforces it.
+#[cfg(any(test, feature = "test-util"))]
+impl Policy {
+    /// Test shim; production must call `decide`. Treats `file.read`'s first
+    /// argument as the path position, as the engine did before `Request`
+    /// carried positions.
+    pub fn evaluate(&self, name: &str, args: &[String]) -> Decision {
+        let path_positions: &[usize] = if name == operations::FILE_READ {
+            &[0]
+        } else {
+            &[]
+        };
+        self.decide(&Request::Operation {
+            name,
+            positional: args,
+            path_positions,
+        })
+        .decision
+    }
+
+    /// Test shim; production must call `decide`. Drops the permit.
+    pub fn evaluate_raw_exec(&self, argv: &[String]) -> Decision {
+        self.decide(&Request::RawExec { argv }).decision
     }
 }
 
@@ -3937,6 +4202,417 @@ mod raw_exec_redteam {
             ),
             "canonical /etc/shadow must remain denied by its [[deny]] rule"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `Policy::decide` — the pass, the rule and the evidence behind each verdict.
+// A sibling module: it never edits the suites above, which reach the engine
+// through the `evaluate*` test shims and so prove `decide`'s verdicts are
+// unchanged.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod decide_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn s(items: &[&str]) -> Vec<String> {
+        items.iter().map(|x| (*x).to_string()).collect()
+    }
+
+    /// A Policy whose rules sit on known lines (the first line is line 1).
+    fn lined_policy() -> Policy {
+        let text = [
+            "# a leading comment",                    // 1
+            "[[operation]]",                          // 2
+            "name = \"service.restart\"",             // 3
+            "allowed_args = [[\"nginx\", \"sshd\"]]", // 4
+            "",                                       // 5
+            "[[deny]]  # trailing comment",           // 6
+            "name = \"service.restart\"",             // 7
+            "args = [[\"sshd\"]]",                    // 8
+            "",                                       // 9
+            "[[deny]]",                               // 10
+            "name = \"pkg.remove\"",                  // 11
+            "args = []",                              // 12
+            "",                                       // 13
+            "[raw_exec]",                             // 14
+            "allow = [",                              // 15
+            "  \"^/bin/echo [a-z]*$\",",              // 16
+            "  \"^/bin/true$\",",                     // 17
+            "]",                                      // 18
+            "deny = [",                               // 19
+            "  \"^--force$\",",                       // 20
+            "]",                                      // 21
+        ]
+        .join("\n");
+        from_toml_str(&text).expect("fixture parses")
+    }
+
+    fn op<'a>(name: &'a str, positional: &'a [String], paths: &'a [usize]) -> Request<'a> {
+        Request::Operation {
+            name,
+            positional,
+            path_positions: paths,
+        }
+    }
+
+    fn reason(e: &Explained) -> &str {
+        match &e.decision {
+            Decision::Deny { reason, .. } => reason,
+            Decision::Allow(_) => "",
+        }
+    }
+
+    fn at(section: RuleSection, index: usize, line: Option<usize>) -> Option<RuleRef> {
+        Some(RuleRef {
+            section,
+            index,
+            line,
+        })
+    }
+
+    #[test]
+    fn decide_reports_pass_rule_and_matched_on() {
+        let p = lined_policy();
+        let nginx = s(&["nginx"]);
+        let sshd = s(&["sshd"]);
+        let other = s(&["cron"]);
+        let bad_path = s(&["/etc/../shadow"]);
+        let none: Vec<String> = Vec::new();
+
+        // Operation requests: (request, pass, rule, matched_on, reason).
+        let e = p.decide(&op("service.restart", &nginx, &[]));
+        assert!(matches!(e.decision, Decision::Allow(_)));
+        assert_eq!(e.pass, Pass::Allow);
+        assert_eq!(e.rule, at(RuleSection::Operation, 0, Some(2)));
+        assert_eq!(e.matched_on, MatchedOn::Arguments);
+        assert!(e.raw_exec_permit.is_none());
+
+        let e = p.decide(&op("service.restart", &sshd, &[]));
+        assert_eq!(e.pass, Pass::Deny);
+        assert_eq!(e.rule, at(RuleSection::Deny, 0, Some(6)));
+        assert_eq!(e.matched_on, MatchedOn::Arguments);
+        assert_eq!(
+            reason(&e),
+            "denied by explicit rule for operation 'service.restart'"
+        );
+
+        let e = p.decide(&op("pkg.remove", &nginx, &[]));
+        assert_eq!(e.pass, Pass::Deny);
+        assert_eq!(e.rule, at(RuleSection::Deny, 1, Some(10)));
+        assert_eq!(e.matched_on, MatchedOn::WholeOperation);
+
+        let e = p.decide(&op("service.restart", &other, &[]));
+        assert_eq!(e.pass, Pass::Default);
+        assert_eq!(e.rule, None);
+        assert_eq!(e.matched_on, MatchedOn::NoMatchingArguments);
+        assert_eq!(
+            reason(&e),
+            "no allow rule matched args [\"cron\"] for operation 'service.restart' \
+             (allow rules exist for other arguments)"
+        );
+
+        let e = p.decide(&op("pkg.install", &nginx, &[]));
+        assert_eq!(e.pass, Pass::Default);
+        assert_eq!(e.matched_on, MatchedOn::NoAllowRule);
+        assert_eq!(
+            reason(&e),
+            "deny-by-default: no allow rule for operation 'pkg.install'"
+        );
+
+        let e = p.decide(&op("file.read", &bad_path, &[0]));
+        assert_eq!(e.pass, Pass::Precondition);
+        assert_eq!(e.rule, None);
+        assert_eq!(e.matched_on, MatchedOn::NonCanonicalPath { position: 0 });
+        assert!(reason(&e).contains("not in canonical form (ADR-0018)"));
+
+        // Raw Exec requests.
+        let e = p.decide(&Request::RawExec { argv: &none });
+        assert_eq!(e.pass, Pass::Precondition);
+        assert_eq!(e.matched_on, MatchedOn::EmptyArgv);
+        assert_eq!(reason(&e), "empty argv");
+        assert!(e.raw_exec_permit.is_none());
+
+        let argv = s(&["/bin/echo", "hi"]);
+        let e = p.decide(&Request::RawExec { argv: &argv });
+        assert!(matches!(e.decision, Decision::Allow(_)));
+        assert_eq!(e.pass, Pass::Allow);
+        assert_eq!(e.rule, at(RuleSection::RawExecAllow, 0, Some(16)));
+        assert_eq!(e.matched_on, MatchedOn::WholeCommand);
+        assert_eq!(e.raw_exec_permit.expect("permit").into_argv(), argv);
+
+        let argv = s(&["/bin/echo", "--force"]);
+        let e = p.decide(&Request::RawExec { argv: &argv });
+        assert_eq!(e.pass, Pass::Deny);
+        assert_eq!(e.rule, at(RuleSection::RawExecDeny, 0, Some(20)));
+        assert_eq!(e.matched_on, MatchedOn::ArgvElement { index: 1 });
+        assert_eq!(
+            reason(&e),
+            "raw exec denied by pattern \"^--force$\" (matched argv element \"--force\")"
+        );
+        assert!(e.raw_exec_permit.is_none());
+
+        let argv = s(&["/bin/echo", "x --force"]);
+        let e = p.decide(&Request::RawExec { argv: &argv });
+        assert_eq!(e.pass, Pass::Deny);
+        // The joined command re-split on whitespace: ["/bin/echo", "x", "--force"].
+        assert_eq!(e.matched_on, MatchedOn::CanonicalElement { index: 2 });
+
+        let argv = s(&["/bin/echo", "a b"]);
+        let e = p.decide(&Request::RawExec { argv: &argv });
+        assert_eq!(e.pass, Pass::Guard);
+        assert_eq!(e.rule, None);
+        assert_eq!(e.matched_on, MatchedOn::WhitespaceElement { index: 1 });
+        assert_eq!(
+            reason(&e),
+            "raw exec argv[1] contains whitespace: no Raw Exec argument may carry \
+             whitespace, so the command Policy matched is exactly the argv that \
+             runs; pass such an argument through a Template Operation (ADR-0019)"
+        );
+
+        let argv = s(&["/bin/ls"]);
+        let e = p.decide(&Request::RawExec { argv: &argv });
+        assert_eq!(e.pass, Pass::Default);
+        assert_eq!(e.matched_on, MatchedOn::NoRawExecAllow);
+        assert_eq!(
+            reason(&e),
+            "deny-by-default: no raw_exec allow pattern matched"
+        );
+        assert!(e.raw_exec_permit.is_none());
+
+        // A deny that matches the joined command only.
+        let p2 = from_toml_str("[raw_exec]\ndeny = [\"echo hi\"]\n").unwrap();
+        let argv = s(&["/bin/echo", "hi"]);
+        let e = p2.decide(&Request::RawExec { argv: &argv });
+        assert_eq!(e.matched_on, MatchedOn::JoinedCommand);
+    }
+
+    #[test]
+    fn rule_ref_display_uses_the_lint_location_grammar() {
+        let r = |section, index, line| RuleRef {
+            section,
+            index,
+            line,
+        };
+        assert_eq!(
+            r(RuleSection::Operation, 1, None).to_string(),
+            "[[operation]] #1"
+        );
+        assert_eq!(
+            r(RuleSection::Deny, 0, Some(6)).to_string(),
+            "[[deny]] #0, line 6"
+        );
+        assert_eq!(
+            r(RuleSection::RawExecAllow, 2, Some(3)).to_string(),
+            "[raw_exec].allow[2], line 3"
+        );
+        assert_eq!(
+            r(RuleSection::RawExecDeny, 0, None).to_string(),
+            "[raw_exec].deny[0]"
+        );
+    }
+
+    fn line_of_rule(text: &str, section: RuleSection, index: usize) -> Option<usize> {
+        let p = from_toml_str(text).expect("parses");
+        let name = |sec: RuleSection| match sec {
+            RuleSection::Operation => p.operations[index].at,
+            RuleSection::Deny => p.denies[index].at,
+            RuleSection::RawExecAllow => p.raw_allow[index].at,
+            RuleSection::RawExecDeny => p.raw_deny[index].at,
+        };
+        name(section).line
+    }
+
+    #[test]
+    fn rule_lines_point_at_the_header_or_pattern() {
+        // A plain header.
+        let t = "[[operation]]\nname = \"x\"\n\n[[operation]]\nname = \"y\"\n";
+        assert_eq!(line_of_rule(t, RuleSection::Operation, 0), Some(1));
+        assert_eq!(line_of_rule(t, RuleSection::Operation, 1), Some(4));
+
+        // A header with a trailing comment.
+        let t = "# c\n[[operation]]  # note\nname = \"x\"\n";
+        assert_eq!(line_of_rule(t, RuleSection::Operation, 0), Some(2));
+
+        // An [[operation]] placed after [raw_exec].
+        let t = "[raw_exec]\nallow = []\n\n[[operation]]\nname = \"x\"\n";
+        assert_eq!(line_of_rule(t, RuleSection::Operation, 0), Some(4));
+
+        // The inline form: the line of the `{`.
+        let t = "\noperation = [{ name = \"x\", allowed_args = [] }]\n";
+        assert_eq!(line_of_rule(t, RuleSection::Operation, 0), Some(2));
+
+        // A multi-line allowed_args array stays on the header's line.
+        let t = "[[operation]]\nname = \"x\"\nallowed_args = [\n  [\"a\"],\n  [\"b\"],\n]\n\n[[operation]]\nname = \"y\"\n";
+        assert_eq!(line_of_rule(t, RuleSection::Operation, 0), Some(1));
+        assert_eq!(line_of_rule(t, RuleSection::Operation, 1), Some(8));
+
+        // [[deny]].
+        let t = "[[operation]]\nname = \"x\"\n\n[[deny]]\nname = \"x\"\nargs = []\n";
+        assert_eq!(line_of_rule(t, RuleSection::Deny, 0), Some(4));
+
+        // Each raw_exec pattern on its own line inside a multi-line array.
+        let t =
+            "[raw_exec]\nallow = [\n  \"^a$\",\n  \"^b$\",\n]\ndeny = [\n  \"c\",\n  \"d\",\n]\n";
+        assert_eq!(line_of_rule(t, RuleSection::RawExecAllow, 0), Some(3));
+        assert_eq!(line_of_rule(t, RuleSection::RawExecAllow, 1), Some(4));
+        assert_eq!(line_of_rule(t, RuleSection::RawExecDeny, 0), Some(7));
+        assert_eq!(line_of_rule(t, RuleSection::RawExecDeny, 1), Some(8));
+    }
+
+    #[test]
+    fn line_of_is_none_without_a_usable_span() {
+        assert_eq!(line_of("a\nb\n", 0..0), None);
+        assert_eq!(line_of("a\nb\n", 2..2), None);
+        assert_eq!(line_of("a\nb\n", 0..99), None);
+        assert_eq!(line_of("a\nb\n", 2..3), Some(2));
+    }
+
+    #[test]
+    fn deny_star_is_literal_allow_star_is_any() {
+        let p = from_toml_str(
+            "[[operation]]\nname = \"a\"\nallowed_args = [[\"*\"]]\n\
+             [[operation]]\nname = \"d\"\nallowed_args = [[\"x\", \"*\"]]\n\
+             [[deny]]\nname = \"d\"\nargs = [[\"*\"]]\n",
+        )
+        .unwrap();
+        // Allow `*` accepts any value.
+        assert_eq!(p.decide(&op("a", &s(&["whatever"]), &[])).pass, Pass::Allow);
+        // Deny `*` matches only the literal "*"; every other value falls
+        // through to the allow pass.
+        assert_eq!(p.decide(&op("d", &s(&["*"]), &[])).pass, Pass::Deny);
+        assert_eq!(p.decide(&op("d", &s(&["x"]), &[])).pass, Pass::Allow);
+    }
+
+    #[test]
+    fn precondition_runs_before_deny_for_template_path_positions() {
+        let p = from_toml_str("[[deny]]\nname = \"disk.usage\"\nargs = []\n").unwrap();
+        let args = s(&["/var/../etc"]);
+        let e = p.decide(&op("disk.usage", &args, &[0]));
+        assert_eq!(e.pass, Pass::Precondition);
+        assert_eq!(e.matched_on, MatchedOn::NonCanonicalPath { position: 0 });
+        // Without a declared path position the deny rule decides, as before.
+        let e = p.decide(&op("disk.usage", &args, &[]));
+        assert_eq!(e.pass, Pass::Deny);
+        // The first non-canonical position wins.
+        let two = s(&["/ok", "/a//b", "/c/."]);
+        let e = p.decide(&op("disk.usage", &two, &[0, 1, 2]));
+        assert_eq!(e.matched_on, MatchedOn::NonCanonicalPath { position: 1 });
+        // A position past the arguments is ignored.
+        let e = p.decide(&op("disk.usage", &two, &[9]));
+        assert_eq!(e.pass, Pass::Deny);
+    }
+
+    #[test]
+    fn guard_runs_after_deny_and_before_allow() {
+        let p = from_toml_str("[raw_exec]\nallow = [\".*\"]\ndeny = [\"^--force$\"]\n").unwrap();
+        // Whitespace argv that a deny claims: the deny keeps the attribution.
+        let denied = s(&["/bin/x", "--force y"]);
+        assert_eq!(
+            p.decide(&Request::RawExec { argv: &denied }).pass,
+            Pass::Deny
+        );
+        // Whitespace argv no deny claims: the guard refuses it, though an
+        // allow-everything pattern would otherwise approve it.
+        let guarded = s(&["/bin/x", "a b"]);
+        let e = p.decide(&Request::RawExec { argv: &guarded });
+        assert_eq!(e.pass, Pass::Guard);
+        assert!(e.raw_exec_permit.is_none());
+        // An empty argv[0] is the guard's too.
+        let empty0 = s(&["", "x"]);
+        assert_eq!(
+            p.decide(&Request::RawExec { argv: &empty0 }).matched_on,
+            MatchedOn::WhitespaceElement { index: 0 }
+        );
+    }
+
+    #[test]
+    fn permit_debug_never_prints_the_argv() {
+        let p = from_toml_str("[raw_exec]\nallow = [\".*\"]\n").unwrap();
+        let argv = s(&["/bin/x", "SECRET-TOKEN"]);
+        let permit = p
+            .decide(&Request::RawExec { argv: &argv })
+            .raw_exec_permit
+            .expect("allowed");
+        let shown = format!("{permit:?}");
+        assert_eq!(shown, "RawExecPermit { argc: 2 }");
+        assert!(!shown.contains("SECRET"));
+    }
+
+    /// The deleted `allow_is_shadowed_by_deny`, verbatim, as the oracle the
+    /// matcher-subsumption check must agree with.
+    fn reference_shadow(allow: &[Vec<String>], deny: &[Vec<String>]) -> bool {
+        if deny.is_empty() {
+            return true;
+        }
+        allow
+            .iter()
+            .enumerate()
+            .all(|(i, allowed_vals)| match deny.get(i) {
+                Some(denied_vals) => {
+                    !allowed_vals.iter().any(|v| v == "*")
+                        && allowed_vals.iter().all(|v| denied_vals.contains(v))
+                }
+                None => true,
+            })
+    }
+
+    fn arg_lists() -> impl Strategy<Value = Vec<Vec<String>>> {
+        let val = prop::sample::select(vec!["a", "b", "c", "*", ""]).prop_map(str::to_string);
+        prop::collection::vec(prop::collection::vec(val, 0..4), 0..4)
+    }
+
+    fn request_strategy() -> impl Strategy<Value = (bool, String, Vec<String>)> {
+        let names =
+            prop::sample::select(vec!["service.restart", "pkg.remove", "file.read", "other"])
+                .prop_map(str::to_string);
+        let arg = prop_oneof![
+            prop::sample::select(vec![
+                "nginx", "sshd", "/ok", "/a/../b", "--force", "a b", ""
+            ])
+            .prop_map(str::to_string),
+            "\\PC{0,8}",
+        ];
+        (any::<bool>(), names, prop::collection::vec(arg, 0..4))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn subsumption_agrees_with_reference_shadow_predicate(
+            allow in arg_lists(),
+            deny in arg_lists(),
+        ) {
+            let got = compile_deny_args(&deny).covers(&compile_allow_args(&allow));
+            prop_assert_eq!(got, reference_shadow(&allow, &deny));
+        }
+
+        #[test]
+        fn explained_is_consistent_with_decision((raw, name, args) in request_strategy()) {
+            let p = lined_policy();
+            let paths: &[usize] = if name == "file.read" { &[0] } else { &[] };
+            let request = if raw {
+                Request::RawExec { argv: &args }
+            } else {
+                Request::Operation { name: &name, positional: &args, path_positions: paths }
+            };
+            let e = p.decide(&request);
+            let allowed = matches!(e.decision, Decision::Allow(_));
+            prop_assert_eq!(e.pass == Pass::Allow, allowed);
+            prop_assert_eq!(
+                e.rule.is_some(),
+                matches!(e.pass, Pass::Deny | Pass::Allow)
+            );
+            let deny_with_rule = matches!(e.decision, Decision::Deny { rule: Some(_), .. });
+            prop_assert_eq!(deny_with_rule, e.pass == Pass::Deny);
+            prop_assert_eq!(e.raw_exec_permit.is_some(), raw && e.pass == Pass::Allow);
+            if let Some(permit) = e.raw_exec_permit {
+                prop_assert_eq!(permit.into_argv(), args);
+            }
+        }
     }
 }
 
