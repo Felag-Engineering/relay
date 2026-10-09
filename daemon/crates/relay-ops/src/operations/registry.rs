@@ -42,7 +42,6 @@ use crate::operations::service_restart::service_restart;
 use crate::operations::system_facts::{format_facts_as_kv, gather_facts};
 use crate::policy::{Decision, Policy};
 use crate::raw_exec::run_raw_exec;
-use crate::scheduler::READ_CONCURRENCY;
 
 // ---------------------------------------------------------------------------
 // Handler plumbing
@@ -142,7 +141,7 @@ pub struct OpRegistration {
 /// compiled shell template).
 ///
 /// Dispatch's Policy gate + handler invocation
-/// ([`crate::dispatch`]'s `gate_and_invoke`) is written once against
+/// (the bin's `dispatch::gate_and_invoke`) is written once against
 /// `&dyn ResolvedOp`, so:
 ///
 /// - **Policy parity is structural**: both kinds derive their positional args
@@ -364,6 +363,12 @@ fn file_read_via(gate: BlockingGate, ctx: OpCtx<'_>) -> OpFuture<'_> {
         within_task_timeout(&task_id, timeout, work).await
     })
 }
+
+/// Fixed upper bound on concurrent read Tasks per Node.
+///
+/// Not configurable in this milestone (ADR-0004 amendment). A future ADR may
+/// expose this as a Policy field; for now this constant is the sole definition.
+pub const READ_CONCURRENCY: usize = 4;
 
 /// How many data-only blocking calls may be in flight at once, stuck or not.
 ///

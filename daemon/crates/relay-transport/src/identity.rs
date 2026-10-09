@@ -66,7 +66,7 @@ pub struct Identity {
 /// error. Called early in `from_env`, again defensively in `call_enroll_owned`
 /// (defense-in-depth), and inside `build_channel` as the authoritative
 /// fail-closed guard for every gRPC connection (enrollment and mTLS tunnel).
-pub(crate) fn validate_endpoint_scheme(endpoint: &str) -> Result<()> {
+pub fn validate_endpoint_scheme(endpoint: &str) -> Result<()> {
     if endpoint.starts_with("https://") {
         return Ok(());
     }
@@ -317,14 +317,14 @@ pub(crate) async fn build_channel(
 /// Callers pass the ceiling as a **literal, never the production constant**:
 /// derived from the constant it rises in lockstep with any edit to it, and the
 /// check can then never fail on a widened one (#509, ADR-0036).
-#[cfg(test)]
-pub(crate) mod mode_assert {
+#[cfg(any(test, feature = "test-util"))]
+pub mod mode_assert {
     use std::os::unix::fs::MetadataExt;
     use std::path::Path;
 
     /// Asserts `path` carries no permission bit beyond `declared`, and none of
     /// `forbidden`.
-    pub(crate) fn assert_within(path: &Path, declared: u32, forbidden: u32, what: &str) {
+    pub fn assert_within(path: &Path, declared: u32, forbidden: u32, what: &str) {
         let mode = std::fs::metadata(path)
             .unwrap_or_else(|e| panic!("stat {}: {}", path.display(), e))
             .mode()

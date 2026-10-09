@@ -70,7 +70,7 @@ type LocalField = (
 
 const LOCAL_FIELDS: &[LocalField] = &[
     (
-        "src/enroll.rs",
+        "crates/relay-transport/src/enroll.rs",
         "hostname",
         "hostname",
         "already enrolled, reusing persisted identity",
@@ -78,7 +78,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "local hostname (operator host)",
     ),
     (
-        "src/enroll.rs",
+        "crates/relay-transport/src/enroll.rs",
         "hostname",
         "hostname",
         "enrollment complete",
@@ -86,7 +86,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "local hostname (operator host)",
     ),
     (
-        "src/enroll.rs",
+        "crates/relay-transport/src/enroll.rs",
         "hostname",
         "hostname",
         "starting enrollment",
@@ -94,7 +94,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "local hostname (operator host)",
     ),
     (
-        "src/enroll.rs",
+        "crates/relay-transport/src/enroll.rs",
         "label_count",
         "label_count",
         "enrollment complete",
@@ -102,7 +102,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "count",
     ),
     (
-        "src/enroll.rs",
+        "crates/relay-transport/src/enroll.rs",
         "label_count",
         "label_count",
         "starting enrollment",
@@ -398,7 +398,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "&'static str, \"SIGTERM\" or \"SIGINT\"",
     ),
     (
-        "src/templates.rs",
+        "crates/relay-ops/src/templates.rs",
         "error",
         "%e",
         "failed to load template set; continuing with NO Template Operations (fail closed)",
@@ -406,7 +406,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "error from local root-owned Template files",
     ),
     (
-        "src/templates.rs",
+        "crates/relay-ops/src/templates.rs",
         "path",
         "%entry.path().display()",
         "template path is not valid UTF-8; skipped",
@@ -414,7 +414,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "directory entry of the local Template root",
     ),
     (
-        "src/templates.rs",
+        "crates/relay-ops/src/templates.rs",
         "path",
         "%pack_path.display()",
         "template pack contains a nested directory; not traversed (packs are one level deep)",
@@ -422,7 +422,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "directory entry of the local Template root",
     ),
     (
-        "src/templates.rs",
+        "crates/relay-ops/src/templates.rs",
         "root",
         "%root.display()",
         "failed to load template set; continuing with NO Template Operations (fail closed)",
@@ -430,7 +430,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set Template root",
     ),
     (
-        "src/templates.rs",
+        "crates/relay-ops/src/templates.rs",
         "root",
         "%root.display()",
         "loaded template set",
@@ -438,7 +438,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set Template root",
     ),
     (
-        "src/templates.rs",
+        "crates/relay-ops/src/templates.rs",
         "template_set_fingerprint",
         "%set.fingerprint()",
         "loaded template set",
@@ -446,7 +446,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "local SHA-256 hex of the Template set",
     ),
     (
-        "src/templates.rs",
+        "crates/relay-ops/src/templates.rs",
         "templates",
         "set.len()",
         "loaded template set",
@@ -454,7 +454,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "count",
     ),
     (
-        "src/tunnel.rs",
+        "crates/relay-transport/src/tunnel.rs",
         "relay",
         "relay",
         "Relay unreachable; will retry",
@@ -462,7 +462,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set relay address from the EnvironmentFile",
     ),
     (
-        "src/tunnel.rs",
+        "crates/relay-transport/src/tunnel.rs",
         "relay",
         "relay",
         "TLS handshake rejected by Relay — client cert untrusted, expired, or revoked; will retry",
@@ -470,7 +470,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set relay address from the EnvironmentFile",
     ),
     (
-        "src/tunnel.rs",
+        "crates/relay-transport/src/tunnel.rs",
         "relay",
         "relay",
         "connect failed; will retry",
@@ -478,7 +478,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "operator-set relay address from the EnvironmentFile",
     ),
     (
-        "src/tunnel.rs",
+        "crates/relay-transport/src/tunnel.rs",
         "retry_in",
         "?retry_in",
         "Relay unreachable; will retry",
@@ -486,7 +486,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "Duration",
     ),
     (
-        "src/tunnel.rs",
+        "crates/relay-transport/src/tunnel.rs",
         "retry_in",
         "?retry_in",
         "TLS handshake rejected by Relay — client cert untrusted, expired, or revoked; will retry",
@@ -494,7 +494,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "Duration",
     ),
     (
-        "src/tunnel.rs",
+        "crates/relay-transport/src/tunnel.rs",
         "retry_in",
         "?retry_in",
         "connect failed; will retry",

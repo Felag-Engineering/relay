@@ -8,25 +8,15 @@ use tracing::{debug, error, info, warn};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
-mod cancel;
 mod catalog;
 mod config;
 mod dedup;
 mod dispatch;
-mod enroll;
-mod executor;
-mod identity;
-mod not_executed;
-mod operations;
 mod policy_check;
-mod raw_exec;
-mod renew;
 mod scheduler;
 mod selfref;
 mod services;
 mod shutdown;
-mod templates;
-mod tunnel;
 mod version;
 
 use cancel::CancelRegistry;
@@ -38,14 +28,17 @@ use tunnel::{Backoff, RECONNECT_BACKOFF_BASE, RECONNECT_BACKOFF_CAP};
 
 // Crate-private aliases so `crate::x::...` paths in the remaining modules resolve
 // unchanged after the workspace split (#889).
+pub(crate) use relay_exec::{cancel, executor, not_executed};
 pub(crate) use relay_log as log_field;
+pub(crate) use relay_ops::{operations, templates};
 pub(crate) use relay_policy as policy;
-pub(crate) use relay_policy::hardened_open;
 pub(crate) use relay_proto as gen;
 #[cfg(test)]
 pub(crate) use relay_test_support as test_support;
+pub(crate) use relay_transport::{enroll, identity, renew, tunnel};
 
 use relay_log::log_fmt_layer;
+use relay_transport::rand_unit;
 
 use gen::{
     daemon_message, relay_message, tunnel_client::TunnelClient, ArgMatcher, DaemonMessage,
@@ -92,22 +85,6 @@ fn heartbeat_delay(interval: Duration, jitter_frac: f64, sample: f64) -> Duratio
     interval.mul_f64(scale)
 }
 
-/// Returns a pseudo-random sample in [0, 1) using only `std` — no extra crates.
-///
-/// Uses the sub-second nanoseconds of `SystemTime::now()` XOR'd with the
-/// process ID. The XOR with `std::process::id()` ensures that a bulk-restarted
-/// fleet whose daemons all start within the same second produces distinct jitter
-/// values rather than reconverging on the same send time.
-pub(crate) fn rand_unit() -> f64 {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    // XOR in the PID so daemons started in the same second diverge.
-    let mixed = (nanos ^ std::process::id()) % 1_000_000_000;
-    mixed as f64 / 1e9
-}
-
 /// Acquires an enrolled identity before connecting to the Relay.
 ///
 /// Fail closed: if no enrollment token is configured and no persisted identity
@@ -116,7 +93,7 @@ pub(crate) fn rand_unit() -> f64 {
 async fn acquire_identity(
     config: &Config,
 ) -> Result<crate::identity::Identity, Box<dyn std::error::Error>> {
-    let identity = match enroll::EnrollConfig::from_config(config)? {
+    let identity = match config::enroll_config(config)? {
         Some(cfg) => enroll::ensure_enrolled(&cfg).await?,
         None => identity::load_identity(&config.state_dir)?.ok_or(
             "no enrolled identity in state dir; refusing to connect (fail closed, no plaintext)",

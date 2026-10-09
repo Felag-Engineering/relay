@@ -25,6 +25,10 @@ disallowed-methods = [
   { path = "libc::posix_spawn", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
   { path = "libc::posix_spawnp", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
   { path = "libc::system", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  # glibc only: the libc crate has no execveat for musl, so allow-invalid keeps the musl
+  # lint pass free of a does-not-resolve warning; the gnu passes still ban it.
+  { path = "libc::execveat", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)", allow-invalid = true },
+  { path = "libc::clone", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
   # The filesystem-write ban. The nearest clippy.toml REPLACES a parent's rather than
   # merging, so this file repeats the exec ban above in full; the read-only crates'
   # copies are byte-identical (tests/clippy_write_ban.rs). A path whose first segment

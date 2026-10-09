@@ -14,9 +14,9 @@ use std::time::Duration;
 
 use tokio::sync::oneshot;
 
-use crate::config::ResourceLimits;
 use crate::executor::ExecRequest;
 use crate::gen::{Outcome, TaskResult};
+use crate::limits::ResourceLimits;
 use crate::not_executed::not_executed;
 
 /// Validates that `unit` is a safe systemd unit name.
@@ -32,10 +32,10 @@ use crate::not_executed::not_executed;
 ///    metacharacter. It also matches the Policy fixture charset so any name
 ///    that validates here is one Policy can also express.
 ///
-/// `pub(crate)`: also called directly by `operations::schema`'s exhaustive
-/// byte-space proof test, which binds the schema's independently-declared
+/// `pub`: called by `operations::schema`'s exhaustive byte-space proof test
+/// and by the bin's dispatch tests; the proof test binds the schema's independently-declared
 /// charset to this real validator (ADR-0015) without rewriting it.
-pub(crate) fn validate_unit_name(unit: &str) -> Result<(), super::OperationError> {
+pub fn validate_unit_name(unit: &str) -> Result<(), super::OperationError> {
     if unit.is_empty() {
         return Err(super::OperationError::InvalidUnitName(unit.to_string()));
     }

@@ -2,7 +2,7 @@
 //! IP addresses from the running Node at Task time.
 //!
 //! [`gather_facts`] is the **single Facts collector** for the whole daemon: the
-//! live `system.facts` Operation, the enrollment path (`EnrollConfig::from_config`),
+//! live `system.facts` Operation, the enrollment path (the bin's `config::enroll_config`),
 //! and the Hello/connect path (`Config::from_env`, threaded through every
 //! reconnect) all call it. There is no second, hand-built Facts source — this
 //! is what keeps the Relay's registry in sync with a live `system.facts` run.

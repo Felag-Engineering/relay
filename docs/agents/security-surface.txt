@@ -49,17 +49,9 @@ relay/packaging/**
 daemon/src/policy_check.rs
 daemon/tests/policy_never_opened_for_write.rs
 daemon/src/selfref.rs
-daemon/src/executor.rs
-daemon/src/raw_exec.rs
-daemon/src/templates.rs
 daemon/src/catalog.rs
-daemon/src/operations/**
 daemon/src/dedup.rs
 daemon/src/dispatch.rs
-daemon/src/tunnel.rs
-daemon/src/identity.rs
-daemon/src/enroll.rs
-daemon/src/renew.rs
 daemon/src/config.rs
 daemon/src/main.rs
 
@@ -82,7 +74,6 @@ relay/cmd/relay/control_surfaces.go
 relay/cmd/relay/dispatch_wiring.go
 relay/cmd/relay/host_audit.go
 relay/cmd/relay/tunnel.go
-daemon/src/cancel.rs
 daemon/src/scheduler.rs
 daemon/src/shutdown.rs
 daemon/src/version.rs
@@ -124,6 +115,8 @@ relay/govulncheck-exceptions.txt
 # build.rs) is the code and the clippy write ban the lines above used to name; the smoke
 # test that guards that ban sits beside the other daemon structural guards. The lines for
 # daemon/src/policy.rs, hardened_open.rs and policy/** are retired: those files moved here.
+# Step 2 (#889) retires daemon/src/{executor,cancel,raw_exec,templates,tunnel,identity,enroll,renew}.rs
+# and operations/**: they moved to relay-exec, relay-ops and relay-transport under daemon/crates/**.
 daemon/crates/**
 daemon/tests/clippy_write_ban.rs
 

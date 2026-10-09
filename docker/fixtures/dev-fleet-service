@@ -25,7 +25,7 @@ set -u
 
 # Literal PATH, no environment reads: the daemon's executor calls env_clear()
 # and sets a fixed PATH before exec (see SAFE_CHILD_PATH in
-# daemon/src/executor.rs), so this script sets the identical PATH itself —
+# relay-exec's executor), so this script sets the identical PATH itself —
 # the entrypoint call site and the Task call site then behave identically.
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH

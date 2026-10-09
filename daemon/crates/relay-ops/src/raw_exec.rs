@@ -12,9 +12,9 @@ use std::time::Duration;
 
 use tokio::sync::oneshot;
 
-use crate::config::ResourceLimits;
 use crate::executor::{execute, ExecRequest};
 use crate::gen::{RawExec, TaskResult};
+use crate::limits::ResourceLimits;
 use crate::not_executed::denied_by_policy_result;
 use crate::policy::decision_log::{self, argv_digest, DecisionFields, DenyDetail, Tier};
 use crate::policy::{Decision, Policy};
@@ -194,6 +194,10 @@ allow = ["^/bin/echo .+$"]
         );
 
         // Cleanup in case the assertion above fires and the file somehow exists.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "test fixture cleanup; the exec ban stays live in this module"
+        )]
         let _ = std::fs::remove_file(&marker);
     }
 

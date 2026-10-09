@@ -92,7 +92,7 @@ on the first screen a new operator sees is worse than a path they can look for.
 **The CA fingerprint is described as a value to compare, not as a value anything pins.** ADR-0031
 decision 3 makes it the number a daemon pins, through a join string; neither is built — nothing in
 `relay/`, `daemon/` or `proto/` carries a CA fingerprint, and a daemon trusts this Relay because it
-was installed with the CA bundle (`daemon/src/tunnel.rs`). The copy says what the value is for
+was installed with the CA bundle (relay-transport `tunnel`). The copy says what the value is for
 without asserting a mechanism the tree does not have.
 
 **The watch states ten minutes, not "the last hour".** The event seam retains 1,000 events or

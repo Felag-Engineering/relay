@@ -303,7 +303,7 @@ impl TemplateSet {
     /// Build a set directly from in-memory definitions, bypassing the file
     /// layer — for tests that exercise dispatch/scheduling against a template
     /// vocabulary rather than the loader itself.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn for_test(defs: &[TemplateDef]) -> TemplateSet {
         let mut templates = BTreeMap::new();
         for def in defs {
@@ -319,7 +319,7 @@ impl TemplateSet {
     /// A process-wide empty set with a `'static` lifetime, for tests that need
     /// to borrow one across a `tokio::join!` (a temporary `TemplateSet::empty()`
     /// would not live long enough).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn empty_static() -> &'static TemplateSet {
         static EMPTY: std::sync::OnceLock<TemplateSet> = std::sync::OnceLock::new();
         EMPTY.get_or_init(TemplateSet::empty)
@@ -340,6 +340,11 @@ impl TemplateSet {
     /// Number of loaded Template Operations.
     pub fn len(&self) -> usize {
         self.templates.len()
+    }
+
+    /// Whether no Template Operation is loaded.
+    pub fn is_empty(&self) -> bool {
+        self.templates.is_empty()
     }
 
     /// The wire report of this Node's template vocabulary (display + discovery
@@ -739,6 +744,10 @@ fn fingerprint_files(files: &[(String, PathBuf, Vec<u8>)]) -> String {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "test fixtures build template trees; spawn calls are refused by clippy_write_ban.rs's spawn-site census"
+)]
 mod tests {
     use super::*;
     use crate::gen::RiskClass;

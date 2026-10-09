@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 
 use tracing::info;
 
-use crate::config::Config;
 use crate::gen::{enrollment_client::EnrollmentClient, EnrollRequest, Facts, Label};
 use crate::identity::{
     build_channel, build_keypair_and_csr, cert_pubkey_matches_key, load_identity, persist_identity,
@@ -46,8 +45,8 @@ impl From<tonic::Status> for EnrollError {
     }
 }
 
-/// Configuration for the enrollment bootstrap step. Constructed via
-/// [`EnrollConfig::from_config`]; returns `None` when enrollment is not
+/// Configuration for the enrollment bootstrap step. Constructed by the bin's
+/// `config::enroll_config`; that returns `None` when enrollment is not
 /// configured, leaving the existing Tunnel path intact.
 pub struct EnrollConfig {
     /// Enrollment Token — never logged.
@@ -76,55 +75,6 @@ pub fn state_dir_from_env() -> PathBuf {
     )
 }
 
-impl EnrollConfig {
-    /// Builds enrollment configuration from the shared `Config` plus the
-    /// enroll-only env vars.
-    ///
-    /// Returns `Ok(None)` when `RELAY_ENROLLMENT_TOKEN` or
-    /// `RELAY_CA_BUNDLE_PATH` are absent or empty, so callers can skip the
-    /// enrollment step and fall through to the existing Tunnel path.
-    ///
-    /// Environment keys read here (enroll-only):
-    /// - `RELAY_ENROLLMENT_TOKEN` — required; never logged
-    /// - `RELAY_CA_BUNDLE_PATH`   — required; path to pinned bootstrap CA
-    /// - `RELAY_ENROLL_ENDPOINT`  — overrides `cfg.endpoint` when set
-    ///
-    /// All other values (`relay_domain`, `state_dir`, `node_labels`, `facts`)
-    /// are taken from `cfg` — they are not re-read from the environment.
-    pub fn from_config(cfg: &Config) -> Result<Option<EnrollConfig>> {
-        let token = match std::env::var("RELAY_ENROLLMENT_TOKEN") {
-            Ok(v) if !v.is_empty() => v,
-            _ => return Ok(None),
-        };
-        let ca_bundle_str = match std::env::var("RELAY_CA_BUNDLE_PATH") {
-            Ok(v) if !v.is_empty() => v,
-            _ => return Ok(None),
-        };
-
-        // cfg.endpoint is already normalized (http→https); the override is used
-        // raw so operators can specify a distinct enrollment endpoint if needed.
-        let endpoint =
-            std::env::var("RELAY_ENROLL_ENDPOINT").unwrap_or_else(|_| cfg.endpoint.clone());
-
-        // Fail closed: TLS (and therefore CA pinning) is only active when the
-        // scheme is exactly "https". An "http://" endpoint silently skips TLS
-        // in tonic, exposing the enrollment token and the Node's pinned trust
-        // root to a MITM. `IdentityError` auto-converts into `EnrollError::Identity`
-        // via the existing `#[from]` impl.
-        validate_endpoint_scheme(&endpoint)?;
-
-        Ok(Some(EnrollConfig {
-            token,
-            endpoint,
-            relay_domain: cfg.relay_domain.clone(),
-            ca_bundle_path: PathBuf::from(ca_bundle_str),
-            state_dir: cfg.state_dir.clone(),
-            node_labels: cfg.node_labels.clone(),
-            facts: cfg.facts.clone(),
-        }))
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -132,7 +82,7 @@ impl EnrollConfig {
 /// Reads `RELAY_NODE_LABELS` from the environment and returns bare (key, value)
 /// pairs. The `node:` prefix is stripped here and re-applied at send time by
 /// `node_labels_to_proto`, so there is exactly one prefixing site.
-pub(crate) fn node_labels_from_env() -> Vec<(String, String)> {
+pub fn node_labels_from_env() -> Vec<(String, String)> {
     std::env::var("RELAY_NODE_LABELS")
         .map(|v| parse_node_labels(&v))
         .unwrap_or_default()
@@ -141,7 +91,7 @@ pub(crate) fn node_labels_from_env() -> Vec<(String, String)> {
 /// Converts bare (key, value) label pairs to proto Labels, adding the mandatory
 /// `node:` prefix. This is the single prefixing site for node-space labels
 /// (ADR-0006 two-namespace invariant: a daemon can never inject relay: labels).
-pub(crate) fn node_labels_to_proto(labels: &[(String, String)]) -> Vec<Label> {
+pub fn node_labels_to_proto(labels: &[(String, String)]) -> Vec<Label> {
     labels
         .iter()
         .map(|(k, v)| Label {
@@ -306,101 +256,17 @@ pub async fn ensure_enrolled(cfg: &EnrollConfig) -> Result<Identity> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::gen::Facts;
     use crate::identity::mode_assert;
     use crate::identity::test_ca::self_signed_identity;
     use crate::identity::{load_identity, persist_identity, IdentityError};
     use crate::test_support::TempDir;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
-
-    // Serialize env-touching tests within this module so they don't race.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use std::sync::Arc;
 
     // Compile-time Send+Sync assertion for EnrollError.
     fn _assert_enroll_error_send_sync() {
         fn _assert<T: Send + Sync>() {}
         _assert::<EnrollError>();
-    }
-
-    // -----------------------------------------------------------------------
-    // EnrollConfig::from_config smoke tests
-    // -----------------------------------------------------------------------
-
-    /// Constructs a minimal fake Config for use in from_config tests.
-    /// No env vars are read — fields are set directly.
-    fn fake_config() -> Config {
-        Config {
-            template_dir: std::path::PathBuf::from("/nonexistent/templates.d"),
-            relay_addr: "http://relay:7654".to_string(),
-            endpoint: "https://relay:7654".to_string(),
-            relay_domain: None,
-            state_dir: PathBuf::from("/var/lib/relay-daemon"),
-            policy_path: PathBuf::from("/etc/relay-daemon/policy.toml"),
-            node_labels: vec![],
-            facts: Facts {
-                hostname: "test-node".to_string(),
-                os: "linux".to_string(),
-                arch: "x86_64".to_string(),
-                kernel: String::new(),
-                ip_addresses: vec![],
-            },
-        }
-    }
-
-    #[test]
-    fn from_config_none_when_token_absent() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("RELAY_ENROLLMENT_TOKEN");
-        std::env::remove_var("RELAY_CA_BUNDLE_PATH");
-        std::env::remove_var("RELAY_ENROLL_ENDPOINT");
-
-        let cfg = fake_config();
-        let result = EnrollConfig::from_config(&cfg).expect("from_config should not error");
-        assert!(
-            result.is_none(),
-            "from_config must return None when RELAY_ENROLLMENT_TOKEN is absent"
-        );
-    }
-
-    #[test]
-    fn from_config_none_when_ca_bundle_absent() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        std::env::set_var("RELAY_ENROLLMENT_TOKEN", "tok-test");
-        std::env::remove_var("RELAY_CA_BUNDLE_PATH");
-        std::env::remove_var("RELAY_ENROLL_ENDPOINT");
-
-        let cfg = fake_config();
-        let result = EnrollConfig::from_config(&cfg).expect("from_config should not error");
-        assert!(
-            result.is_none(),
-            "from_config must return None when RELAY_CA_BUNDLE_PATH is absent"
-        );
-
-        std::env::remove_var("RELAY_ENROLLMENT_TOKEN");
-    }
-
-    #[test]
-    fn from_config_enroll_endpoint_override() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        std::env::set_var("RELAY_ENROLLMENT_TOKEN", "tok-test");
-        std::env::set_var("RELAY_CA_BUNDLE_PATH", "/some/fake/ca.pem");
-        std::env::set_var("RELAY_ENROLL_ENDPOINT", "https://override:9000");
-
-        let cfg = fake_config();
-        let ec = EnrollConfig::from_config(&cfg)
-            .expect("from_config should not error")
-            .expect("from_config should return Some when all required vars set");
-
-        assert_eq!(
-            ec.endpoint, "https://override:9000",
-            "RELAY_ENROLL_ENDPOINT must take precedence over cfg.endpoint"
-        );
-
-        std::env::remove_var("RELAY_ENROLLMENT_TOKEN");
-        std::env::remove_var("RELAY_CA_BUNDLE_PATH");
-        std::env::remove_var("RELAY_ENROLL_ENDPOINT");
     }
 
     // -----------------------------------------------------------------------

@@ -8,7 +8,8 @@
 //!
 //! The probe lives outside `src/` so no source-text guard reads it as production.
 //! Entries whose first path segment is not a dependency of this crate (`tokio::*`)
-//! are skipped by clippy and cannot be probed here. `forbid(unsafe_code)` holds
+//! are skipped by clippy and cannot be probed here (the `tokio::*` entries are
+//! probed in relay-exec and relay-ops). `forbid(unsafe_code)` holds
 //! in the real crate, so the libc entries are probed as function-item references,
 //! never calls.
 #![allow(unused, deprecated)]
@@ -360,6 +361,14 @@ fn probe_libc_posix_spawnp() {
 
 fn probe_libc_system() {
     let _ = libc::system; // PROBE
+}
+
+fn probe_libc_execveat() {
+    let _ = libc::execveat; // PROBE
+}
+
+fn probe_libc_clone() {
+    let _ = libc::clone; // PROBE
 }
 
 fn probe_file_set_times() {

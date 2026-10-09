@@ -18,8 +18,8 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::oneshot;
 
-use crate::config::ResourceLimits;
 use crate::gen::{Outcome, TaskResult};
+use crate::limits::ResourceLimits;
 use crate::not_executed::not_executed_after;
 
 /// Grace period between SIGTERM and SIGKILL when killing a Task's group.
@@ -177,7 +177,7 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
             let msg = format!(
                 "spawn {}: {}",
                 req.argv[0],
-                crate::config::clean_io_error(&e)
+                crate::limits::clean_io_error(&e)
             );
             return failure_result(&req.task_id, msg.as_bytes(), started);
         }
@@ -585,8 +585,8 @@ fn failure_result(task_id: &str, stderr: &[u8], started: Instant) -> TaskResult 
 #[cfg(test)]
 mod tests {
     use super::{execute, ExecRequest, SAFE_CHILD_PATH};
-    use crate::config::ResourceLimits;
     use crate::gen::Outcome;
+    use crate::limits::ResourceLimits;
     use rustix::io::Errno;
     use rustix::process::{test_kill_process, Pid};
     use std::time::{Duration, Instant};
@@ -1241,6 +1241,10 @@ mod tests {
              FSIZE cap ({fsize_cap} bytes)"
         );
 
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "test fixture cleanup; the exec ban stays live in this module"
+        )]
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1387,6 +1391,10 @@ mod tests {
         .await
         .expect("execute must return at its timeout, not wait for the pipe holder to exit");
         let elapsed = started.elapsed();
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "test fixture cleanup; the exec ban stays live in this module"
+        )]
         let _ = std::fs::remove_file(&pid_file);
 
         assert_eq!(result.outcome, Outcome::Timeout as i32);
@@ -1434,6 +1442,10 @@ mod tests {
         // own `child.wait()` collected it, so the run phase is over and `execute`
         // is in the drain: the cancel below lands there, deterministically.
         let leader = crate::test_support::read_pid_file(&pid_file).await;
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "test fixture cleanup; the exec ban stays live in this module"
+        )]
         let _ = std::fs::remove_file(&pid_file);
         crate::test_support::wait_until_reaped(leader, Duration::from_secs(5)).await;
         cancel_tx
@@ -1495,6 +1507,10 @@ mod tests {
             assert!(Instant::now() < deadline, "no pid written within 5 s");
             std::thread::yield_now();
         };
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "test fixture cleanup; the exec ban stays live in this module"
+        )]
         let _ = std::fs::remove_file(&pid_file);
         // Gone from /proc means reaped already.
         while let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {

@@ -18,7 +18,7 @@
 //! # Lifetime across reconnects (issue #337)
 //!
 //! A single registry is shared by `Arc` across every reconnect for the process's
-//! lifetime (it lives in [`ShutdownContext`](crate::shutdown::ShutdownContext)), so a
+//! lifetime (it lives in the bin's `shutdown::ShutdownContext`), so a
 //! `TaskCancel` — or a shutdown-kill — for a Task that outlives the connection that
 //! started it still reaches that Task's executor. When it was recreated per-connection,
 //! such a cancel hit a fresh empty registry and was a silent no-op.

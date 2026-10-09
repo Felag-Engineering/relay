@@ -71,9 +71,9 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::ResourceLimits;
 use crate::executor::ExecRequest;
 use crate::gen::{Operation, Outcome, RiskClass};
+use crate::limits::ResourceLimits;
 use crate::not_executed::not_executed;
 
 use super::registry::{OpCtx, OpFuture, ResolvedOp};

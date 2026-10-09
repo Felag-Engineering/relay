@@ -878,7 +878,7 @@ because it changes on any edit to the file, including a comment.
 ### What varies, and what cannot
 
 `node:` labels vary as the table above shows. Of the Facts a Node reports
-(`daemon/src/operations/system_facts.rs`), only `hostname` and `ip_addresses` can
+(relay-ops `operations::system_facts`), only `hostname` and `ip_addresses` can
 actually differ in a single-host Docker fleet — `os`, `arch`, and `kernel` all come
 from one shared kernel and one image, so every Node reports the same values for
 those regardless of label. Faking them (e.g. per-Node `/etc/os-release` variants) was
