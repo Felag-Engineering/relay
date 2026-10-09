@@ -56,6 +56,7 @@ import (
 // into d.capability itself (main.go) and into the Tunnel handler, which
 // remains their only writer.
 type surfaceDeps struct {
+	logger     *slog.Logger // the process logger (main.go); nil means slog.Default()
 	ops        mcp.OperationLister
 	capability *capability.Service // one instance: mcp.Executor AND api.Freezer
 	jobs       jobs.JobRepository
@@ -176,6 +177,7 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// invocation, read and execution alike, feeds the Console's live
 		// view via toolCallObserver below.
 		mcp.WithToolCallObserver(toolCallObserver{bus: d.events}),
+		mcp.WithLogger(d.logger),
 	}
 	opts = append(opts, d.testMCPOptions...)
 
@@ -192,6 +194,7 @@ type apiSurface struct{}
 func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	api.Register(mux, api.Deps{
 		Tokens:       d.tokens,
+		Logger:       d.logger,
 		TokenRevoker: d.revocation,
 		Nodes:        d.revocation,
 		Freeze:       d.capability,
@@ -274,7 +277,8 @@ type consoleSurface struct{}
 func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	consoleMux := http.NewServeMux()
 	console.Register(consoleMux, console.Deps{
-		Auth: d.consoleAuth,
+		Auth:   d.consoleAuth,
+		Logger: d.logger,
 		// Execution is v0.7.0 (spec 05, issue #438). Until it lands there is
 		// no execution route for console_execution to gate, and shipping the
 		// flag ahead of the surface would be a knob that turns nothing off.
@@ -351,7 +355,7 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// composes or dispatches anything.
 		AccountAdmin: d.capability,
 	})
-	mux.Handle("/console/", console.Secure(consoleMux))
+	mux.Handle("/console/", console.Secure(consoleMux, d.logger))
 }
 
 // defaultControlSurfaces returns every control surface newServer mounts when

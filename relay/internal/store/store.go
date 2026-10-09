@@ -262,6 +262,7 @@ func (s *Store) Registry() registry.Repository {
 			db:               s.db,
 			maxNodes:         s.maxNodes,
 			minDaemonVersion: s.minDaemonVersion,
+			logger:           s.logger,
 			connected:        make(map[string]struct{}),
 		}
 	})

@@ -66,6 +66,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
@@ -244,6 +245,9 @@ type jobEngine struct {
 	// comment.
 	events JobEventSink
 
+	// log is propagated from Service.New; nil means slog.Default() (logger).
+	log *slog.Logger
+
 	// intents persists a Job's Tasks together with its dispatch-intent audit
 	// record (#887). Service.New propagates it from the AuditSink; run refuses
 	// to persist Tasks without one.
@@ -251,6 +255,22 @@ type jobEngine struct {
 }
 
 var _ dispatcher = (*jobEngine)(nil)
+
+func (e *jobEngine) logger() *slog.Logger { return logctx.Or(e.log) }
+
+// advance checks ev against task's in-memory state (jobs.Task.Transition) and
+// only then persists it. A refused transition never reaches the store; the
+// store's own ErrInvalidTaskState means another writer moved the row first.
+func (e *jobEngine) advance(task jobs.Task, ev jobs.TaskEvent, persist func(next jobs.Task) error) (jobs.Task, error) {
+	next, err := task.Transition(ev, e.now())
+	if err != nil {
+		return task, err
+	}
+	if err := persist(next); err != nil {
+		return task, err
+	}
+	return next, nil
+}
 
 // run implements dispatcher. See the at-most-once design note above for why
 // IDs are minted before persistence and every Task is persisted (Pending)
@@ -323,6 +343,8 @@ func (e *jobEngine) persist(ctx context.Context, d dispatch, detach bool) (pj *p
 			return nil, fmt.Errorf("capability: generate job id: %w", err)
 		}
 	}
+
+	ctx = logctx.WithJobID(ctx, jobID)
 
 	// runCtx: for a RESERVED id, the approval's release claim (BindJob)
 	// already committed before run was ever called — there is no un-claim
@@ -595,7 +617,7 @@ func (e *jobEngine) dispatchOneRecovered(ctx context.Context, gate *jobGate, pt 
 		}); ok {
 			attrs = append(attrs, "panic", re.Error())
 		}
-		slog.ErrorContext(ctx, "capability: dispatch worker panicked; Task reported as failed, store state left as-is", attrs...)
+		e.logger().ErrorContext(ctx, "capability: dispatch worker panicked; Task reported as failed, store state left as-is", attrs...)
 		res = jobs.Result{Outcome: jobs.OutcomeFailure}
 		err = fmt.Errorf("capability: task %q on node %q: %w", pt.task.ID, pt.task.NodeID, errDispatchPanicked)
 	}()
@@ -648,7 +670,9 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 	// Excluded from a Template dispatch before the cap was ever counted
 	// (ADR-0042): never sent, whatever its version or connectivity.
 	if pt.unsupported != "" {
-		if err := e.tasksRepo.MarkUnsupported(ctx, task.ID, pt.unsupported, e.now()); err != nil {
+		if _, err := e.advance(task, jobs.TaskEvent{Kind: jobs.TaskEventUnsupported, Reason: pt.unsupported}, func(n jobs.Task) error {
+			return e.tasksRepo.MarkUnsupported(ctx, n.ID, pt.unsupported, n.ResolvedAt)
+		}); err != nil {
 			if res, ok := e.resolvedByCancel(ctx, task.ID, err); ok {
 				return res, nil
 			}
@@ -664,7 +688,9 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 	}
 
 	if pt.outdated {
-		if err := e.tasksRepo.MarkVersionRefused(ctx, task.ID, e.now()); err != nil {
+		if _, err := e.advance(task, jobs.TaskEvent{Kind: jobs.TaskEventVersionRefused}, func(n jobs.Task) error {
+			return e.tasksRepo.MarkVersionRefused(ctx, n.ID, n.ResolvedAt)
+		}); err != nil {
 			if res, ok := e.resolvedByCancel(ctx, task.ID, err); ok {
 				return res, nil
 			}
@@ -674,7 +700,9 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 	}
 
 	if !e.conduit.Connected(task.NodeID) {
-		if err := e.tasksRepo.MarkUnreachable(ctx, task.ID, e.now()); err != nil {
+		if _, err := e.advance(task, jobs.TaskEvent{Kind: jobs.TaskEventUnreachable}, func(n jobs.Task) error {
+			return e.tasksRepo.MarkUnreachable(ctx, n.ID, n.ResolvedAt)
+		}); err != nil {
 			if res, ok := e.resolvedByCancel(ctx, task.ID, err); ok {
 				return res, nil
 			}
@@ -683,8 +711,16 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 		return jobs.Result{Outcome: jobs.OutcomeUnreachable}, nil
 	}
 
+	// dispatched is the in-memory Task after MarkDispatched, used only for the
+	// later in-memory checks. task stays the Pending snapshot, which is what
+	// Conduit.Dispatch has always been handed.
+	var dispatched jobs.Task
 	admitted, err := gate.admit(func() error {
-		return e.tasksRepo.MarkDispatched(ctx, task.ID, e.now())
+		next, err := e.advance(task, jobs.TaskEvent{Kind: jobs.TaskEventDispatch}, func(n jobs.Task) error {
+			return e.tasksRepo.MarkDispatched(ctx, n.ID, n.DispatchedAt)
+		})
+		dispatched = next
+		return err
 	})
 	if !admitted {
 		// The Job was cancelled first; this Task was never sent.
@@ -716,7 +752,9 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 			// Router's per-Task critical section, where a Reconciler resend
 			// of this Task is ordered against it. See withholdCancelled.
 			committed = true
-			commitErr = e.tasksRepo.MarkCancelledBeforeSend(ctx, task.ID, e.now())
+			_, commitErr = e.advance(dispatched, jobs.TaskEvent{Kind: jobs.TaskEventCancelBeforeSend}, func(n jobs.Task) error {
+				return e.tasksRepo.MarkCancelledBeforeSend(ctx, n.ID, n.ResolvedAt)
+			})
 			return true
 		})
 	}
@@ -727,7 +765,7 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 				return e.withheldOutcome(ctx, task, commitErr)
 			}
 			// A Conduit that withheld without consulting the guard.
-			return e.withholdCancelled(ctx, task)
+			return e.withholdCancelled(ctx, dispatched)
 		}
 		// Connected but the send/exec did not complete: the Task stays
 		// Dispatched (no Resolve), so it is reconciled on restart via
@@ -735,7 +773,9 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 		return jobs.Result{Outcome: jobs.OutcomeFailure}, fmt.Errorf("capability: dispatch task %q to node %q: %w", task.ID, task.NodeID, dispatchErr)
 	}
 
-	if err := e.tasksRepo.Resolve(ctx, task.ID, result); err != nil {
+	if _, err := e.advance(dispatched, jobs.TaskEvent{Kind: jobs.TaskEventResolve, Result: result}, func(jobs.Task) error {
+		return e.tasksRepo.Resolve(ctx, task.ID, result)
+	}); err != nil {
 		return jobs.Result{Outcome: jobs.OutcomeFailure}, fmt.Errorf("capability: resolve task %q: %w", task.ID, err)
 	}
 	return result, nil
@@ -764,7 +804,10 @@ func (e *jobEngine) resolvedByCancel(ctx context.Context, taskID string, err err
 // under daemon dedup. If cancel() already resolved it, that truthful outcome
 // is returned instead.
 func (e *jobEngine) withholdCancelled(ctx context.Context, task jobs.Task) (jobs.Result, error) {
-	return e.withheldOutcome(ctx, task, e.tasksRepo.MarkCancelledBeforeSend(ctx, task.ID, e.now()))
+	_, err := e.advance(task, jobs.TaskEvent{Kind: jobs.TaskEventCancelBeforeSend}, func(n jobs.Task) error {
+		return e.tasksRepo.MarkCancelledBeforeSend(ctx, n.ID, n.ResolvedAt)
+	})
+	return e.withheldOutcome(ctx, task, err)
 }
 
 // withheldOutcome turns the result of a MarkCancelledBeforeSend into the Task's
@@ -782,7 +825,9 @@ func (e *jobEngine) withheldOutcome(ctx context.Context, task jobs.Task, err err
 // resolveCancelled resolves a never-sent Task of a cancelled Job as Cancelled.
 // If cancel() already resolved it, that truthful outcome is returned instead.
 func (e *jobEngine) resolveCancelled(ctx context.Context, task jobs.Task) (jobs.Result, error) {
-	err := e.tasksRepo.MarkCancelled(ctx, task.ID, e.now())
+	_, err := e.advance(task, jobs.TaskEvent{Kind: jobs.TaskEventCancel}, func(n jobs.Task) error {
+		return e.tasksRepo.MarkCancelled(ctx, n.ID, n.ResolvedAt)
+	})
 	if err == nil {
 		return jobs.Result{Outcome: jobs.OutcomeCancelled}, nil
 	}
@@ -821,6 +866,7 @@ func (e *jobEngine) resolveCancelled(ctx context.Context, task jobs.Task) (jobs.
 // guard, is described in dispatch/reconcile.go. Cancel only ever *asks*; it never fabricates an outcome for a Task
 // that won the race.
 func (e *jobEngine) cancel(ctx context.Context, jobID string) error {
+	ctx = logctx.WithJobID(ctx, jobID)
 	if _, err := e.jobsRepo.GetJob(ctx, jobID); err != nil {
 		return err
 	}
@@ -837,7 +883,9 @@ func (e *jobEngine) cancel(ctx context.Context, jobID string) error {
 	for _, task := range tasks {
 		switch task.State {
 		case jobs.DispatchStatePending:
-			err := e.tasksRepo.MarkCancelled(ctx, task.ID, e.now())
+			_, err := e.advance(task, jobs.TaskEvent{Kind: jobs.TaskEventCancel}, func(n jobs.Task) error {
+				return e.tasksRepo.MarkCancelled(ctx, n.ID, n.ResolvedAt)
+			})
 			if err == nil {
 				break
 			}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
@@ -1287,6 +1288,12 @@ func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 		// import test (approval.TestApprovalImportsStayNarrow) so widening this
 		// list does not create a transitive back door into the wire types.
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval": true,
+		// logctx joined with #902: request-scoped log correlation (Job id).
+		// Stdlib-only (`context`, `log/slog`) — no proto, no database/sql, no
+		// HTTP, no Relay configuration — and held there by logctx's own
+		// TestLogctxImportsStayNarrow, the same admission bar every entry here
+		// clears.
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx": true,
 		// internal/mcptask joined with #374 (ADR-0028), on exactly the same
 		// terms: a domain package with no proto, no database/sql, and — its own
 		// guard adds this one — no MCP SDK, so admitting it here cannot become
@@ -1726,6 +1733,38 @@ func TestJobEngine_FanOutRunsConcurrentlyUnderTheBound(t *testing.T) {
 		if want := fmt.Sprintf("node-%d", i+1); r.NodeID != want || r.Outcome != jobs.OutcomeSuccess {
 			t.Errorf("results[%d] = %s/%v, want %s/success", i, r.NodeID, r.Outcome, want)
 		}
+	}
+}
+
+// TestJobEngine_ContextCarriesJobID pins two things about the Conduit seam
+// (#902): the context handed to Dispatch carries the Job's id for log
+// correlation, and the Task it receives is still the Pending snapshot it has
+// always been handed — the in-memory Dispatched copy the engine keeps for its
+// own later checks never reaches the Conduit.
+func TestJobEngine_ContextCarriesJobID(t *testing.T) {
+	var (
+		gotCtx  context.Context
+		gotTask jobs.Task
+	)
+	c := newScriptConduit()
+	c.dispatchFn = func(ctx context.Context, _ string, task jobs.Task) (jobs.Result, error) {
+		gotCtx, gotTask = ctx, task
+		return jobs.Result{Outcome: jobs.OutcomeSuccess}, nil
+	}
+	e, _ := newConcurrentEngine(t, c, 1)
+
+	dr, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodeSet(1), fanOutAction))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotCtx == nil {
+		t.Fatal("Dispatch was never called")
+	}
+	if id, ok := logctx.JobIDFrom(gotCtx); !ok || id != dr.jobID {
+		t.Errorf("JobIDFrom(ctx) = (%q, %v), want %q", id, ok, dr.jobID)
+	}
+	if gotTask.State != jobs.DispatchStatePending || !gotTask.DispatchedAt.IsZero() {
+		t.Errorf("Conduit received state %v, DispatchedAt %v; want the Pending snapshot", gotTask.State, gotTask.DispatchedAt)
 	}
 }
 

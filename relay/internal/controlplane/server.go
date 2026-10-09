@@ -2,12 +2,32 @@ package controlplane
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 )
+
+// withRequestID gives every request a Relay-minted id for log correlation. It
+// never reads an inbound header (a caller-chosen id would be log injection)
+// and never writes a response header, so nothing changes on the wire. If the
+// entropy source fails the request is served without an id rather than failed.
+func withRequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b [8]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		ctx := logctx.WithRequestID(r.Context(), hex.EncodeToString(b[:]))
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
 
 // Connection bounds for the control-plane listener. It faces operators and AI-agent
 // harnesses over the network, and every connection is accepted before anyone has
@@ -109,7 +129,7 @@ func New(cfg Config, authn *Authenticator) *Server {
 		mux: mux,
 		http: &http.Server{
 			Addr:      cfg.Addr,
-			Handler:   public,
+			Handler:   withRequestID(public),
 			TLSConfig: tlsCfg,
 			// No server-wide ReadTimeout or WriteTimeout. On HTTP/1.1 a read deadline
 			// that expires while a handler is still running cancels the request's

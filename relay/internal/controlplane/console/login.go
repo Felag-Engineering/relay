@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -499,7 +498,7 @@ func handleLogout(d Deps) http.HandlerFunc {
 			// hole; it is a 500 because the next consumer of this seam (#428's
 			// step-up POST) will copy whatever shape it finds here, and the
 			// shape it must copy is "no session, no action".
-			slog.Error("console sign-out reached without a resolved browser session",
+			d.logger().ErrorContext(r.Context(), "console sign-out reached without a resolved browser session",
 				"path", r.URL.Path)
 			http.Error(w, "the Relay could not identify the session to end", http.StatusInternalServerError)
 			return

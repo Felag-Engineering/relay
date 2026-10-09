@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
@@ -88,7 +89,7 @@ func (s routerSink) deliverVerdict(nodeID string, verdict *relayv1.PolicyVerdict
 //
 // violations is passed straight through to NewRouter, which requires it
 // positionally; see that doc comment for why nil is a supported mode.
-func newDispatchStack(tasks jobs.TaskRepository, violations dispatch.ViolationRecorder) (*dispatch.Router, *dispatch.Reconciler, taskSink) {
+func newDispatchStack(tasks jobs.TaskRepository, violations dispatch.ViolationRecorder, logger *slog.Logger) (*dispatch.Router, *dispatch.Reconciler, taskSink) {
 	// reconciler is filled in after router exists (it needs router as its
 	// Conduit); the onConnect closure captures the *dispatch.Reconciler
 	// variable itself, not a snapshot, so it always sees the fully-built
@@ -104,7 +105,7 @@ func newDispatchStack(tasks jobs.TaskRepository, violations dispatch.ViolationRe
 			// dependency to this file.
 			_ = err
 		}
-	}, violations)
+	}, violations, dispatch.WithLogger(logger))
 	reconciler = dispatch.NewReconciler(tasks, router)
 
 	return router, reconciler, routerSink{r: router}

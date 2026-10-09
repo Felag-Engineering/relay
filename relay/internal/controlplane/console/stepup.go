@@ -38,7 +38,6 @@ package console
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
@@ -99,7 +98,7 @@ func requireStepUp(d Deps, w http.ResponseWriter, r *http.Request, pg *Page, ask
 		// FAIL CLOSED: an authenticated request reached a gated /console/
 		// route with no resolved browser session, which the cookie lane
 		// cannot produce. There is no session to step up.
-		slog.Error("console step-up reached without a resolved browser session",
+		d.logger().ErrorContext(r.Context(), "console step-up reached without a resolved browser session",
 			"act", ask.act, "path", r.URL.Path)
 		http.Error(w, "the Relay could not identify the session to step up", http.StatusInternalServerError)
 		return false
@@ -127,7 +126,7 @@ func requireStepUp(d Deps, w http.ResponseWriter, r *http.Request, pg *Page, ask
 		ask.refuseSessionEnded(w, *pg)
 	default:
 		// Never the password, and never the error text to the page.
-		slog.Error("console step-up returned an error",
+		d.logger().ErrorContext(r.Context(), "console step-up returned an error",
 			"act", ask.act, "path", r.URL.Path, "error", err)
 		ask.render(w, *pg, http.StatusInternalServerError, "The Relay could not verify your password. "+ask.undone, "", "")
 	}
@@ -152,7 +151,7 @@ func stepUpWithoutPassword(d Deps, w http.ResponseWriter, r *http.Request, pg Pa
 	case errors.Is(err, consoleauth.ErrNoSession):
 		ask.refuseSessionEnded(w, pg)
 	default:
-		slog.Error("console step-up window check returned an error",
+		d.logger().ErrorContext(r.Context(), "console step-up window check returned an error",
 			"act", ask.act, "path", r.URL.Path, "error", err)
 		ask.render(w, pg, http.StatusInternalServerError, "The Relay could not verify your password. "+ask.undone, "", "")
 	}

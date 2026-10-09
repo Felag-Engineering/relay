@@ -3,9 +3,11 @@ package console
 import (
 	"embed"
 	"html/template"
+	"log/slog"
 	"net/http"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 )
 
 //go:embed assets/*
@@ -89,6 +91,10 @@ type Page struct {
 	// browser session is in context — see page()'s comment for why that
 	// renders rather than fails.
 	CSRFToken string
+
+	// log is the request-correlated logger screens report errors to (nil means
+	// slog.Default()). Unexported, so a template cannot reach it.
+	log *slog.Logger
 
 	// Scripts are external script files this page loads, each an absolute
 	// path under /console/assets/.
@@ -198,8 +204,11 @@ func page(d Deps, w http.ResponseWriter, r *http.Request, title string) (Page, b
 		Role:      role,
 		Nav:       Nav(d, role, r.URL.Path),
 		CSRFToken: token,
+		log:       d.logger().With(logctx.Attrs(r.Context())...),
 	}, true
 }
+
+func (p Page) logger() *slog.Logger { return logctx.Or(p.log) }
 
 // placeholder renders the shell around a screen that has not been built yet,
 // naming the specification that will replace it.

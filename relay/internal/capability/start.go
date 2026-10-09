@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -318,7 +317,7 @@ func compensateContext(ctx context.Context) (context.Context, context.CancelFunc
 // logKeyWrite logs a failed compensating write. It never names the key.
 func (s *Service) logKeyWrite(ctx context.Context, op string, err error) {
 	if err != nil {
-		slog.ErrorContext(ctx, "capability: idempotency key compensating write failed; the key stays bound until its window passes", "op", op, "error", err)
+		s.logger().ErrorContext(ctx, "capability: idempotency key compensating write failed; the key stays bound until its window passes", "op", op, "error", err)
 	}
 }
 

@@ -42,6 +42,7 @@
 package console
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -49,6 +50,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 )
 
 // Deps is everything the Console needs from the rest of the Relay.
@@ -59,6 +61,10 @@ import (
 // API: it mirrors a root-owned value the composition root reads at startup, and
 // this package can only be told what it is.
 type Deps struct {
+	// Logger is where the Console's operational errors go; nil means
+	// slog.Default(). Wiring, not configuration.
+	Logger *slog.Logger
+
 	// Execution mirrors the root-owned console_execution setting (ADR-0026
 	// decision 5). When false the execution routes are NOT MOUNTED and the
 	// composer is not rendered — an absent capability, not an RBAC refusal.
@@ -190,6 +196,9 @@ type Deps struct {
 	// answer unavailable.
 	AccountAdmin AccountAdministrator
 }
+
+// logger resolves Deps.Logger, falling back to slog.Default() when unset.
+func (d Deps) logger() *slog.Logger { return logctx.Or(d.Logger) }
 
 // now reads the clock, defaulting when the composition root left it unset.
 //

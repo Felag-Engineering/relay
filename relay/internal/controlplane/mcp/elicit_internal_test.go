@@ -102,7 +102,7 @@ func TestElicit_LegacyHeaderWithModernMetaDoesNotAsk(t *testing.T) {
 	}
 
 	srv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "relay-elicit-test", Version: "0.0.1"}, nil)
-	registerExecutionTools(srv, parkingExecutor{parked: parked}, nil, stubOpsLister{}, newQuestioner(), nil, nil, time.Now)
+	registerExecutionTools(srv, parkingExecutor{parked: parked}, nil, stubOpsLister{}, newQuestioner(nil), nil, nil, time.Now)
 
 	serverTransport, clientTransport := sdkmcp.NewInMemoryTransports()
 

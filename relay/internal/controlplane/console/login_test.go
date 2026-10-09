@@ -140,7 +140,7 @@ func buildLoginFixture(t *testing.T, audited bool, mutate func(*Deps)) *loginFix
 	Register(mux, d)
 
 	return &loginFixture{
-		handler:   authn.Middleware(Secure(mux)),
+		handler:   authn.Middleware(Secure(mux, nil)),
 		svc:       svc,
 		sessions:  sessions,
 		accounts:  st.Accounts(),
