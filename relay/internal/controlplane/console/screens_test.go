@@ -4727,3 +4727,53 @@ func TestFleet_RoleFacetTitleRendersAsCode(t *testing.T) {
 		t.Error("the node:role facet title is not rendered as code")
 	}
 }
+
+// TestApprovals_ScopeRules pins the audience rule (never-empty default,
+// explicit "mine", explicit "all") that buildApprovalsView wraps around the
+// narrowing filters.
+func TestApprovals_ScopeRules(t *testing.T) {
+	mine := approvalRow{ID: "mine", Waiting: waitingYes}
+	theirs := approvalRow{ID: "theirs", Waiting: waitingNo}
+	own := approvalRow{ID: "own", Waiting: waitingNo, Own: true}
+
+	cases := []struct {
+		name                          string
+		rows                          []approvalRow
+		f                             approvalFilter
+		wantIDs                       []string
+		scopeMine, defaulted, notAppl bool
+		hiddenByScope                 int
+	}{
+		{"default keeps mine and own", []approvalRow{mine, theirs, own}, approvalFilter{},
+			[]string{"mine", "own"}, true, true, false, 1},
+		{"default never empties a non-empty queue", []approvalRow{theirs}, approvalFilter{},
+			[]string{"theirs"}, false, false, true, 0},
+		{"default on an empty queue is the mine scope", nil, approvalFilter{},
+			nil, true, true, false, 0},
+		{"explicit mine may empty the queue", []approvalRow{theirs}, approvalFilter{Scope: scopeMine},
+			nil, true, false, false, 1},
+		{"explicit all shows everything", []approvalRow{mine, theirs}, approvalFilter{Scope: scopeAll},
+			[]string{"mine", "theirs"}, false, false, false, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v := buildApprovalsView(c.rows, c.f)
+			var got []string
+			for _, r := range v.Rows {
+				got = append(got, r.ID)
+			}
+			if strings.Join(got, ",") != strings.Join(c.wantIDs, ",") {
+				t.Errorf("rows = %v, want %v", got, c.wantIDs)
+			}
+			if v.ScopeMine != c.scopeMine || v.ScopeDefaulted != c.defaulted ||
+				v.ScopeNotApplied != c.notAppl || v.HiddenByScope != c.hiddenByScope {
+				t.Errorf("scope flags = mine:%v defaulted:%v notApplied:%v hiddenByScope:%d, want %v/%v/%v/%d",
+					v.ScopeMine, v.ScopeDefaulted, v.ScopeNotApplied, v.HiddenByScope,
+					c.scopeMine, c.defaulted, c.notAppl, c.hiddenByScope)
+			}
+			if v.Shown != len(c.wantIDs) || v.Hidden != len(c.rows)-len(c.wantIDs) {
+				t.Errorf("shown/hidden = %d/%d", v.Shown, v.Hidden)
+			}
+		})
+	}
+}
