@@ -5,13 +5,17 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
@@ -256,6 +260,184 @@ func TestNewDispatchStack_AProtocolViolationOnAReadClassTaskIsRecordedWithNoOutp
 	if violationRows != 1 {
 		t.Fatalf("found %d KindProtocolViolation rows for node-1, want exactly 1", violationRows)
 	}
+}
+
+// allowAllTestAuthorizer authorizes everything; the dev harness's authorizer
+// is behind a build tag, and this test is about dispatch, not authorization.
+type allowAllTestAuthorizer struct{}
+
+func (allowAllTestAuthorizer) Authorize(context.Context, capability.Principal, jobs.Action, capability.Selector) error {
+	return nil
+}
+
+func (allowAllTestAuthorizer) AuthorizeControl(context.Context, capability.Principal, capability.ControlAction) error {
+	return nil
+}
+
+// holdingConduit is the real Router with one seam: the second Task to enter
+// Dispatch publishes its Job ID and blocks until release, BEFORE reaching
+// Router.Dispatch. That makes "past MarkDispatched, not yet at the Tunnel
+// write" deterministic through the public capability surface. The engine's
+// send guard rides in ctx, untouched.
+type holdingConduit struct {
+	*dispatch.Router
+	mu      sync.Mutex
+	entered []string
+	held    chan string // the held Task's ID
+	release chan struct{}
+}
+
+func (h *holdingConduit) Dispatch(ctx context.Context, nodeID string, task jobs.Task) (jobs.Result, error) {
+	h.mu.Lock()
+	h.entered = append(h.entered, task.ID)
+	second := len(h.entered) == 2
+	h.mu.Unlock()
+	if second {
+		h.held <- task.ID
+		<-h.release
+	}
+	return h.Router.Dispatch(ctx, nodeID, task)
+}
+
+// TestDispatchWiring_ACancelDuringFanOutWithholdsUnsentTasksThroughTheRealRouter
+// is #943's composed guarantee: a real store, the real Router and the real
+// engine. A cancel that lands while one worker is past MarkDispatched and
+// before the Tunnel write means that Task is never written, and the Task
+// behind the dispatch bound is never dispatched.
+func TestDispatchWiring_ACancelDuringFanOutWithholdsUnsentTasksThroughTheRealRouter(t *testing.T) {
+	tasks, st := testTaskRepositoryWithStore(t)
+	router, _, _ := newDispatchStack(tasks, nil)
+
+	var mu sync.Mutex
+	requested := map[string]string{} // task ID -> node ID, TaskRequests that reached a Tunnel
+	cancelRequested := map[string]bool{}
+	for _, id := range []string{"node-1", "node-2", "node-3"} {
+		if _, err := st.Registry().Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("Upsert(%s): %v", id, err)
+		}
+		router.Register(id, func(msg *relayv1.RelayMessage) error {
+			switch {
+			case msg.GetTask() != nil:
+				mu.Lock()
+				requested[msg.GetTask().GetTaskId()] = id
+				mu.Unlock()
+			case msg.GetTaskCancel() != nil:
+				taskID := msg.GetTaskCancel().GetTaskId()
+				mu.Lock()
+				_, wasSent := requested[taskID]
+				cancelRequested[taskID] = true
+				mu.Unlock()
+				// A relay-daemon reports a cancel only for a Task it received.
+				if wasSent {
+					router.Deliver(id, &relayv1.TaskResult{TaskId: taskID, Outcome: relayv1.Outcome_OUTCOME_CANCELLED})
+				}
+			}
+			return nil
+		})
+	}
+
+	hold := &holdingConduit{Router: router, held: make(chan string, 1), release: make(chan struct{})}
+	capSvc := capability.New(st.Registry(),
+		capability.WithExecution(st.Jobs(), tasks, hold, capability.WithExecDispatchConcurrency(2)),
+		capability.WithAuthorizer(allowAllTestAuthorizer{}),
+		capability.WithCapChecker(capability.NewBlastCap(10, 10)),
+		capability.WithAuditSink(auditsink.New(st.Audit())),
+		capability.WithFreeze(st.Freeze()))
+
+	type runOut struct {
+		results []capability.NodeResult
+		err     error
+	}
+	done := make(chan runOut, 1)
+	go func() {
+		res, err := capSvc.Run(context.Background(), capability.Principal{Account: "devharness"}, capability.Selector{},
+			jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
+		done <- runOut{res, err}
+	}()
+
+	var heldID string
+	select {
+	case heldID = <-hold.held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no Task was held before the Tunnel write")
+	}
+	// The other in-flight Task has now been written (or is about to be);
+	// wait until its TaskRequest is on a Tunnel.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		n := len(requested)
+		mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected exactly one TaskRequest on a Tunnel, saw %d", n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	hold.mu.Lock()
+	firstID := hold.entered[0]
+	hold.mu.Unlock()
+	jobID := mustTask(t, tasks, firstID).JobID
+	if err := capSvc.CancelJob(context.Background(), capability.Principal{Account: "devharness", Kind: capability.PrincipalKindHuman}, jobID); err != nil {
+		t.Fatalf("CancelJob: %v", err)
+	}
+	close(hold.release)
+
+	var out runOut
+	select {
+	case out = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	if out.err != nil {
+		t.Fatalf("Run: %v", out.err)
+	}
+	if len(out.results) != 3 {
+		t.Fatalf("results = %d, want 3", len(out.results))
+	}
+	for _, r := range out.results {
+		if r.Outcome != jobs.OutcomeCancelled {
+			t.Errorf("result for %s = %v, want cancelled", r.NodeID, r.Outcome)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requested) != 1 {
+		t.Errorf("TaskRequests on Tunnels = %v, want only the first Task", requested)
+	}
+	if _, ok := requested[heldID]; ok {
+		t.Errorf("held Task %s was written to a Tunnel after the cancel", heldID)
+	}
+	all, err := tasks.ByJob(context.Background(), jobID)
+	if err != nil || len(all) != 3 {
+		t.Fatalf("ByJob = %d tasks, %v; want 3", len(all), err)
+	}
+	for _, task := range all {
+		if task.State != jobs.DispatchStateResolved || task.Outcome != jobs.OutcomeCancelled {
+			t.Errorf("task %s = %v/%v, want Resolved/Cancelled", task.ID, task.State, task.Outcome)
+		}
+		_, wasSent := requested[task.ID]
+		if wasSent == task.DispatchedAt.IsZero() {
+			t.Errorf("task %s sent=%v but DispatchedAt=%v", task.ID, wasSent, task.DispatchedAt)
+		}
+	}
+	inFlight, err := tasks.InFlight(context.Background())
+	if err != nil || len(inFlight) != 0 {
+		t.Errorf("InFlight = %v, %v; want empty", inFlight, err)
+	}
+}
+
+func mustTask(t *testing.T, tasks jobs.TaskRepository, id string) jobs.Task {
+	t.Helper()
+	task, err := tasks.Get(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", id, err)
+	}
+	return task
 }
 
 // TestViolationRecorder_RecordProtocolViolation is the six-line composer

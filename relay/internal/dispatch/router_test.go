@@ -211,6 +211,259 @@ func TestRouter_DispatchNotConnected(t *testing.T) {
 	}
 }
 
+// TestRouter_DispatchWithheldBeforeSend asserts a send guard that reports
+// "withhold" stops the TaskRequest reaching the Tunnel and leaves no waiter.
+func TestRouter_DispatchWithheldBeforeSend(t *testing.T) {
+	r := NewRouter(nil, nil)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	ctx := jobs.WithSendGuard(context.Background(), func() bool { return true })
+	_, err := r.Dispatch(ctx, "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+	if !errors.Is(err, jobs.ErrSendWithheld) {
+		t.Fatalf("Dispatch error = %v, want ErrSendWithheld", err)
+	}
+	if n := send.len(); n != 0 {
+		t.Errorf("sends = %d, want 0", n)
+	}
+	r.mu.Lock()
+	_, stillWaiting := r.waiters["task-1"]
+	r.mu.Unlock()
+	if stillWaiting {
+		t.Error("waiter for task-1 leaked after a withheld send")
+	}
+}
+
+// TestRouter_DispatchGuardNotWithheldSends asserts a guard that allows the
+// send changes nothing.
+func TestRouter_DispatchGuardNotWithheldSends(t *testing.T) {
+	r := NewRouter(nil, nil)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	ctx := jobs.WithSendGuard(context.Background(), func() bool { return false })
+	type out struct {
+		res jobs.Result
+		err error
+	}
+	done := make(chan out, 1)
+	go func() {
+		res, err := r.Dispatch(ctx, "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		done <- out{res, err}
+	}()
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+	r.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+
+	select {
+	case o := <-done:
+		if o.err != nil {
+			t.Fatalf("Dispatch: %v", o.err)
+		}
+		if o.res.Outcome != jobs.OutcomeSuccess {
+			t.Errorf("outcome = %v, want success", o.res.Outcome)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Dispatch did not return")
+	}
+	if n := send.len(); n != 1 {
+		t.Errorf("sends = %d, want 1", n)
+	}
+}
+
+// TestRouter_DispatchNotConnectedIgnoresGuard asserts the connectivity gate
+// comes first: an unregistered Node is ErrNotConnected, not a withheld send.
+func TestRouter_DispatchNotConnectedIgnoresGuard(t *testing.T) {
+	r := NewRouter(nil, nil)
+	ctx := jobs.WithSendGuard(context.Background(), func() bool { return true })
+	_, err := r.Dispatch(ctx, "node-absent", jobs.Task{ID: "task-1", NodeID: "node-absent"})
+	if !errors.Is(err, ErrNotConnected) {
+		t.Errorf("Dispatch error = %v, want ErrNotConnected", err)
+	}
+}
+
+// TestRouter_WithheldDispatchDoesNotRemoveAnotherCallersWaiter asserts a
+// withheld send removes only its own waiter: a concurrent caller that
+// overwrote the entry for the same task ID (a Reconciler resend) still
+// receives its Result.
+func TestRouter_WithheldDispatchDoesNotRemoveAnotherCallersWaiter(t *testing.T) {
+	r := NewRouter(nil, nil)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	inGuard := make(chan struct{})
+	releaseGuard := make(chan struct{})
+	guardA := func() bool {
+		close(inGuard)
+		<-releaseGuard
+		return true
+	}
+	task := jobs.Task{ID: "task-1", NodeID: "node-1"}
+
+	errA := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(jobs.WithSendGuard(context.Background(), guardA), "node-1", task)
+		errA <- err
+	}()
+	<-inGuard // A's waiter is registered.
+
+	type out struct {
+		res jobs.Result
+		err error
+	}
+	doneB := make(chan out, 1)
+	go func() {
+		res, err := r.Dispatch(context.Background(), "node-1", task)
+		doneB <- out{res, err}
+	}()
+	// B registers its waiter (overwriting A's) and then queues on the Task's
+	// send slot behind A's guard.
+	waitUntil(t, time.Second, func() bool { return slotRefs(r, "task-1") == 2 })
+
+	close(releaseGuard)
+	select {
+	case err := <-errA:
+		if !errors.Is(err, jobs.ErrSendWithheld) {
+			t.Fatalf("A error = %v, want ErrSendWithheld", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("A did not return")
+	}
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+	r.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+	select {
+	case o := <-doneB:
+		if o.err != nil || o.res.Outcome != jobs.OutcomeSuccess {
+			t.Errorf("B = (%v, %v), want success", o.res.Outcome, o.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("B never received its Result: A's withheld send removed B's waiter")
+	}
+}
+
+// slotRefs reports how many Dispatch calls currently hold taskID's send slot.
+func slotRefs(r *Router, taskID string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s := r.sendSlots[taskID]; s != nil {
+		return s.refs
+	}
+	return 0
+}
+
+func slotCount(r *Router) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.sendSlots)
+}
+
+// TestRouter_CallerAfterASentCallerNeverConsultsItsGuard: once one caller has
+// handed a task ID to the Tunnel, a later caller for the same ID sends too (a
+// resend the daemon dedups) and its guard is never called, so the Task cannot
+// be recorded as never sent after it was sent.
+func TestRouter_CallerAfterASentCallerNeverConsultsItsGuard(t *testing.T) {
+	r := NewRouter(nil, nil)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+	task := jobs.Task{ID: "task-1", NodeID: "node-1"}
+
+	firstCtx, cancelFirst := context.WithCancel(jobs.WithSendGuard(context.Background(), func() bool { return false }))
+	defer cancelFirst()
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(firstCtx, "node-1", task)
+		firstDone <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	var secondGuardCalls int
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := r.Dispatch(jobs.WithSendGuard(context.Background(), func() bool {
+			secondGuardCalls++
+			return true
+		}), "node-1", task)
+		secondDone <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return send.len() == 2 })
+
+	// The second call's waiter replaced the first's, so it gets the Result.
+	r.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second Dispatch: %v", err)
+	}
+	if secondGuardCalls != 0 {
+		t.Errorf("second caller's guard called %d times, want 0", secondGuardCalls)
+	}
+	cancelFirst()
+	if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		t.Errorf("first Dispatch error = %v, want context.Canceled", err)
+	}
+}
+
+// TestRouter_SecondCallerSeesTheFirstCallersWithhold: the first guard's side
+// effect (the engine's store commit) is visible to the second caller's guard,
+// because the guards are serialised per task ID, so both withhold.
+func TestRouter_SecondCallerSeesTheFirstCallersWithhold(t *testing.T) {
+	r := NewRouter(nil, nil)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+	task := jobs.Task{ID: "task-1", NodeID: "node-1"}
+
+	var committed bool // guarded by the Router's per-Task slot
+	first := func() bool { committed = true; return true }
+	second := func() bool { return committed }
+
+	if _, err := r.Dispatch(jobs.WithSendGuard(context.Background(), first), "node-1", task); !errors.Is(err, jobs.ErrSendWithheld) {
+		t.Fatalf("first error = %v, want ErrSendWithheld", err)
+	}
+	if _, err := r.Dispatch(jobs.WithSendGuard(context.Background(), second), "node-1", task); !errors.Is(err, jobs.ErrSendWithheld) {
+		t.Fatalf("second error = %v, want ErrSendWithheld", err)
+	}
+	if n := send.len(); n != 0 {
+		t.Errorf("sends = %d, want 0", n)
+	}
+}
+
+// TestRouter_SendSlotsDoNotLeak: the slot map is empty once every Dispatch has
+// returned, on the success, withheld, send-error and ctx-timeout paths.
+func TestRouter_SendSlotsDoNotLeak(t *testing.T) {
+	r := NewRouter(nil, nil)
+	ok := &recordingSend{}
+	bad := &recordingSend{err: errors.New("boom")}
+	unregOK := r.Register("node-ok", ok.send)
+	unregBad := r.Register("node-bad", bad.send)
+	defer unregOK()
+	defer unregBad()
+
+	// Withheld.
+	_, _ = r.Dispatch(jobs.WithSendGuard(context.Background(), func() bool { return true }), "node-ok", jobs.Task{ID: "t-withheld"})
+	// Send error.
+	_, _ = r.Dispatch(context.Background(), "node-bad", jobs.Task{ID: "t-senderr"})
+	// ctx timeout while waiting for a Result.
+	tctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, _ = r.Dispatch(tctx, "node-ok", jobs.Task{ID: "t-timeout"})
+	// Success.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = r.Dispatch(context.Background(), "node-ok", jobs.Task{ID: "t-ok"})
+	}()
+	waitUntil(t, time.Second, func() bool { return ok.len() == 2 })
+	r.Deliver("node-ok", &relayv1.TaskResult{TaskId: "t-ok", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+	<-done
+
+	if n := slotCount(r); n != 0 {
+		t.Errorf("sendSlots has %d entries after every Dispatch returned, want 0", n)
+	}
+}
+
 // TestRouter_CancelSendsTaskCancel asserts Cancel sends the TaskCancel body
 // and returns immediately (never waits for a Result).
 func TestRouter_CancelSendsTaskCancel(t *testing.T) {

@@ -24,6 +24,16 @@
 //     but persist-then-dispatch and persist-then-send still hold per Task:
 //     every Task is Pending before any dispatch goroutine starts, and each
 //     goroutine does MarkDispatched before Conduit.Dispatch.
+//   - Cancel is re-checked by the Conduit immediately before each wire write,
+//     through jobs.WithSendGuard (#943). The guard commits the withhold itself
+//     (MarkCancelledBeforeSend: Dispatched -> Resolved/Cancelled, DispatchedAt
+//     cleared), inside the Router's per-Task critical section, so a Reconciler
+//     resend of the same Task is ordered against it: it either already sent
+//     (and the worker then sends too, resolving truthfully) or reads Resolved
+//     and sends nothing. What remains is cancel's best-effort residual under
+//     ADR-0013: a Task already inside the Tunnel write, and a Task a Reconciler
+//     sent whose Dispatch finished before the worker reached its guard (see
+//     dispatch/reconcile.go).
 //   - On restart, the Relay reconciles via TaskRepository.InFlight(): those
 //     Tasks may be safely re-sent-for-result because the relay-daemon dedups
 //     Task execution by Task ID (ADR-0004) — resend is safe ONLY because of
@@ -622,6 +632,16 @@ func (e *jobEngine) dispatchOneRecovered(ctx context.Context, gate *jobGate, pt 
 // failure — the Task already reached a terminal, truthful outcome (Resolved,
 // OutcomeCancelled) — so dispatchOne honors it rather than dispatching an
 // already-cancelled Task or fabricating OutcomeFailure over a real cancel.
+//
+// After MarkDispatched the gate is consulted as a send guard
+// (jobs.WithSendGuard) by the Conduit immediately before the wire write
+// (#943); there is deliberately no earlier check, so every withhold goes
+// through the Conduit's per-Task serialisation. The guard takes gate.mu, so it
+// can wait behind another worker's MarkDispatched inside admit, and it commits
+// a withhold itself: Dispatched -> Resolved/Cancelled with DispatchedAt
+// cleared (MarkCancelledBeforeSend). jobs.ErrSendWithheld is the one Conduit
+// error that does not leave the Task Dispatched, and only when the gate
+// confirms the cancel.
 func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTask) (jobs.Result, error) {
 	task := pt.task
 
@@ -681,8 +701,34 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 		return jobs.Result{Outcome: jobs.OutcomeFailure}, fmt.Errorf("capability: mark task %q dispatched: %w", task.ID, err)
 	}
 
-	result, dispatchErr := e.conduit.Dispatch(ctx, task.NodeID, task)
+	// No early gate check here on purpose (#943): a withhold must go through
+	// the Conduit's per-Task serialisation (the guard), or a Reconciler that
+	// already sent this Task would be contradicted by a "never sent" record.
+	sendCtx := ctx
+	var committed bool // written only by the guard, on Dispatch's goroutine
+	var commitErr error
+	if gate != nil {
+		sendCtx = jobs.WithSendGuard(ctx, func() bool {
+			if !gate.isCancelled() {
+				return false
+			}
+			// A side effect on purpose: the commit must sit inside the
+			// Router's per-Task critical section, where a Reconciler resend
+			// of this Task is ordered against it. See withholdCancelled.
+			committed = true
+			commitErr = e.tasksRepo.MarkCancelledBeforeSend(ctx, task.ID, e.now())
+			return true
+		})
+	}
+	result, dispatchErr := e.conduit.Dispatch(sendCtx, task.NodeID, task)
 	if dispatchErr != nil {
+		if errors.Is(dispatchErr, jobs.ErrSendWithheld) && gate.isCancelled() {
+			if committed {
+				return e.withheldOutcome(ctx, task, commitErr)
+			}
+			// A Conduit that withheld without consulting the guard.
+			return e.withholdCancelled(ctx, task)
+		}
 		// Connected but the send/exec did not complete: the Task stays
 		// Dispatched (no Resolve), so it is reconciled on restart via
 		// InFlight() rather than silently declared unreachable.
@@ -707,6 +753,30 @@ func (e *jobEngine) resolvedByCancel(ctx context.Context, taskID string, err err
 		return jobs.Result{}, false
 	}
 	return jobs.Result{Outcome: cur.Outcome, Stdout: cur.Stdout, Stderr: cur.Stderr}, true
+}
+
+// withholdCancelled resolves a Task this worker MarkDispatched but will never
+// send, because its Job's cancel was seen before the send began (#943), as
+// Cancelled with DispatchedAt cleared. dispatchOne's send guard performs this
+// commit itself, inside the Router's per-Task critical section; this method
+// is the fallback for a Conduit that withheld without consulting the guard. A crash before this commit leaves the
+// Task Dispatched, which is today's persist-then-send shape and is reconciled
+// under daemon dedup. If cancel() already resolved it, that truthful outcome
+// is returned instead.
+func (e *jobEngine) withholdCancelled(ctx context.Context, task jobs.Task) (jobs.Result, error) {
+	return e.withheldOutcome(ctx, task, e.tasksRepo.MarkCancelledBeforeSend(ctx, task.ID, e.now()))
+}
+
+// withheldOutcome turns the result of a MarkCancelledBeforeSend into the Task's
+// outcome.
+func (e *jobEngine) withheldOutcome(ctx context.Context, task jobs.Task, err error) (jobs.Result, error) {
+	if err == nil {
+		return jobs.Result{Outcome: jobs.OutcomeCancelled}, nil
+	}
+	if res, ok := e.resolvedByCancel(ctx, task.ID, err); ok {
+		return res, nil
+	}
+	return jobs.Result{Outcome: jobs.OutcomeCancelled}, fmt.Errorf("capability: mark task %q cancelled before send: %w", task.ID, err)
 }
 
 // resolveCancelled resolves a never-sent Task of a cancelled Job as Cancelled.
@@ -740,10 +810,15 @@ func (e *jobEngine) resolveCancelled(ctx context.Context, task jobs.Task) (jobs.
 // Pending -> Dispatched window in-process.
 //
 // What stays best-effort under ADR-0013: (i) a Dispatched Task that wins the
-// race keeps its real outcome; (ii) the pre-send window — a TaskCancel can
-// reach the daemon before the TaskRequest of a Task already MarkDispatched,
+// race keeps its real outcome; (ii) the pre-send window — Tasks already inside
+// the Tunnel write when the cancel is recorded, at most -dispatch-concurrency
+// per Job. A TaskCancel can reach the daemon before such a Task's TaskRequest,
 // and the daemon treats a cancel for an unknown id as a no-op, so that Task
-// runs. Cancel only ever *asks*; it never fabricates an outcome for a Task
+// runs. Every other Dispatched Task's worker sees the gate and withholds its
+// send (#943); for such a Task the TaskCancel sent from this snapshot is
+// harmless. A Task a Reconciler already sent is not withheld by its worker;
+// the one exception, a resend that finished before the worker reached its
+// guard, is described in dispatch/reconcile.go. Cancel only ever *asks*; it never fabricates an outcome for a Task
 // that won the race.
 func (e *jobEngine) cancel(ctx context.Context, jobID string) error {
 	if _, err := e.jobsRepo.GetJob(ctx, jobID); err != nil {
