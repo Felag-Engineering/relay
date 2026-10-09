@@ -30,8 +30,8 @@ var ErrJobNotFound = errors.New("jobs: job not found")
 var ErrTaskNotFound = errors.New("jobs: task not found")
 
 // ErrInvalidTaskState is returned when a Task state transition is attempted
-// out of order: MarkDispatched on a Task that is not Pending, or Resolve on a
-// Task that is not Dispatched. This is the at-most-once reconciliation guard —
+// out of order: MarkDispatched on a Task that is not Pending, or Resolve or
+// MarkCancelledBeforeSend on a Task that is not Dispatched. This is the at-most-once reconciliation guard —
 // a Relay restart must never re-dispatch a Task it already resolved, and must
 // never resolve a Task it never dispatched.
 var ErrInvalidTaskState = errors.New("jobs: invalid task state transition")
@@ -440,6 +440,16 @@ type TaskRepository interface {
 	// does not exist, or ErrInvalidTaskState if the Task is not currently
 	// Pending.
 	MarkCancelled(ctx context.Context, taskID string, at time.Time) error
+
+	// MarkCancelledBeforeSend transitions a Task from Dispatched to Resolved
+	// with OutcomeCancelled, clears DispatchedAt and records the resolve time —
+	// the row is identical to MarkCancelled's. The engine marked the Task
+	// Dispatched (persist-then-send), but its Job's cancel was seen before the
+	// send began, so the Task never left the Relay (#943). Only the engine that
+	// MarkDispatched the Task calls it, and only when nothing was sent. Returns
+	// ErrTaskNotFound if the Task does not exist, or ErrInvalidTaskState if the
+	// Task is not currently Dispatched.
+	MarkCancelledBeforeSend(ctx context.Context, taskID string, at time.Time) error
 
 	// Get returns the Task with the given ID, or ErrTaskNotFound.
 	Get(ctx context.Context, taskID string) (Task, error)

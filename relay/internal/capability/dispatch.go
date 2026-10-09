@@ -144,6 +144,22 @@ type dispatcher interface {
 	reserveJobID() (string, error)
 }
 
+// starter is the optional half of a dispatcher that can return once a Job is
+// persisted (Service.Start, #895). Only the real Job engine implements it;
+// it is deliberately not part of dispatcher, so a dispatcher that cannot
+// persist ahead of its fan-out (noopDispatcher, a test spy) is simply run
+// synchronously.
+type starter interface {
+	// start persists d's Job and returns its ID, with finish to run the
+	// fan-out. finish must be called exactly once.
+	start(ctx context.Context, d dispatch) (jobID string, finish func() (dispatchResult, error), err error)
+
+	// jobPersisted reports whether jobID's Tasks are committed.
+	jobPersisted(ctx context.Context, jobID string) (bool, error)
+}
+
+var _ starter = (*jobEngine)(nil)
+
 // noopDispatcher is the v0.0.5 default. It performs no execution and says
 // so honestly: every matched Node gets OutcomeUnspecified, never a
 // fabricated success. #99 replaces this with the real Job engine.

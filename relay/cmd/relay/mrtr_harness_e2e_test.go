@@ -41,8 +41,9 @@ const gateAllMutatesInBand = `{
 // identical between them, so the two parks are directly comparable.
 func restartNginxArgs() map[string]any {
 	return map[string]any{
-		"operation": "service.restart",
-		"args":      map[string]string{"unit": "nginx"},
+		"operation":    "service.restart",
+		"args":         map[string]string{"unit": "nginx"},
+		"wait_seconds": 300,
 	}
 }
 

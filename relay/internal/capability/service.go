@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
@@ -123,6 +124,26 @@ type Service struct {
 	// way to look up whose credential it is).
 	accountsStore AccountStore
 	apiTokens     APITokenStore
+
+	// idem persists dispatch idempotency keys (#895, start.go). Nil means a call
+	// carrying a key is refused (ErrIdempotencyUnavailable), never run unkeyed.
+	idem jobs.IdempotencyRepository
+
+	// bg tracks the background Jobs Start has launched; bgMu guards bg.Add
+	// against Drain's Wait, and draining makes Start refuse once Drain began.
+	bg       sync.WaitGroup
+	bgMu     sync.Mutex
+	draining bool
+
+	// claims is the in-process half of the idempotency keys this Service has
+	// claimed and not yet settled, keyed by accountID + "\x00" + key.
+	// reattachPersistWait bounds how long a re-issue waits for such a claimer
+	// to finish persisting; a field only so a test can shorten it.
+	// Invariant: a settled claim is never visible in claims (settle removes the
+	// entry before closing settled).
+	claimsMu            sync.Mutex
+	claims              map[string]*keyClaim
+	reattachPersistWait time.Duration
 }
 
 // Option configures a Service built by New.
@@ -396,6 +417,9 @@ func New(reg registry.Repository, opts ...Option) *Service {
 
 		now:           func() time.Time { return time.Now().UTC() },
 		newApprovalID: defaultID,
+
+		claims:              make(map[string]*keyClaim),
+		reattachPersistWait: defaultReattachPersistWait,
 	}
 	for _, o := range opts {
 		o(s)
@@ -525,12 +549,57 @@ func (s *Service) stateEval() StateEval {
 // is no anonymous caller to leak the Freeze state to — and no real
 // per-Principal Authorizer exists this milestone anyway.
 func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.Action) ([]NodeResult, error) {
+	pr, err := s.prepareDispatch(ctx, p, sel, act, "")
+	if err != nil {
+		return nil, err
+	}
+	if pr.reattach != nil {
+		return pr.reattach.results, nil
+	}
+	res, dispatchErr := s.disp.run(ctx, pr.d)
+	return s.account(ctx, p, sel, pr, res, dispatchErr, false)
+}
+
+// prep is what prepareDispatch hands back: either a dispatch ready to run, or a
+// re-attachment to a Job that already exists. Run and Start share it, so the
+// two can never diverge on a gate.
+type prep struct {
+	d   dispatch
+	act jobs.Action
+	ap  approvalDecision
+
+	// reserved is true when d.jobID was reserved before dispatch (an approval's
+	// release claim, AP-77, or an idempotency key, #895): the Job's pipeline and
+	// accounting then outlive the caller's context.
+	reserved bool
+
+	// claim is the idempotency key this call won, nil when it carried none. The
+	// caller must settle it once the Job is persisted or the dispatch failed.
+	claim *keyClaim
+
+	reattach *reattachment
+}
+
+// reattachment is an answer that dispatched nothing: the Job an earlier call
+// created. results is populated only where the caller wants a NodeResult per
+// Node (Run's approval re-attach); Start reads jobID alone.
+type reattachment struct {
+	jobID   string
+	results []NodeResult
+}
+
+// prepareDispatch is Run's pipeline up to, and not including, the dispatcher:
+// Freeze, Selector resolution, authorization, the no-Nodes-matched and Template
+// refusals, the blast cap, the approval gate and the Job-ID claims. key is an
+// idempotency key and is only ever non-empty from Start; "" is exactly Run.
+func (s *Service) prepareDispatch(ctx context.Context, p Principal, sel Selector, act jobs.Action, key string) (prep, error) {
+	reqAct := act
 	frozen, err := s.freeze.Frozen(ctx)
 	if err != nil {
-		return nil, s.recordRefusal(ctx, p, sel, act, RefusalInternal, fmt.Errorf("capability: read freeze state: %w", err))
+		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalInternal, fmt.Errorf("capability: read freeze state: %w", err))
 	}
 	if frozen {
-		return nil, s.recordRefusal(ctx, p, sel, act, RefusalFrozen, &FrozenError{})
+		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalFrozen, &FrozenError{})
 	}
 
 	matched := sel.Resolve(s.reg, s.stateEval())
@@ -549,7 +618,29 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	// withoutAssertions: an authorization decision must not be able to read
 	// anything the caller asserted (see assertions.go).
 	if err := s.authz.Authorize(withoutAssertions(ctx), p, act, sel); err != nil {
-		return nil, s.recordRefusal(ctx, p, sel, act, RefusalUnauthorized, err)
+		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalUnauthorized, err)
+	}
+
+	// An idempotency key (#895) is handled after Freeze and authorization, so a
+	// caller who may not dispatch learns nothing about keys, and before the
+	// zero-match, cap and approval stages, so a re-issue is neither refused
+	// because the fleet changed since the original call nor spends a Grant use.
+	digest := ""
+	if key != "" {
+		if err := validateIdempotencyKey(key); err != nil {
+			return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalMalformed, err)
+		}
+		if _, ok := s.disp.(starter); !ok || s.idem == nil || p.AccountID == "" {
+			return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalInternal, ErrIdempotencyUnavailable)
+		}
+		digest = jobs.RequestDigest(sel.String(), reqAct)
+		rec, found, err := s.idem.Lookup(ctx, p.AccountID, key, s.clock().Add(-IdempotencyWindow))
+		if err != nil {
+			return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalInternal, fmt.Errorf("capability: look up idempotency key: %w", err))
+		}
+		if found {
+			return s.keyedReattach(ctx, p, sel, act, digest, rec)
+		}
 	}
 
 	// A Selector that resolved to zero Nodes is refused HERE — after
@@ -568,20 +659,20 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	//       than refusing it — ADR-0011: "A Plan never hard-fails on
 	//       guardrails — it reports."
 	if len(matched) == 0 {
-		return nil, s.recordRefusal(ctx, p, sel, act, RefusalNoNodesMatched, &NoNodesMatchedError{Selector: sel.String()})
+		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalNoNodesMatched, &NoNodesMatchedError{Selector: sel.String()})
 	}
 
 	// A Template no matched Node reports, a malformed Template call, or an
 	// Action of any kind an adapter tried to classify (ADR-0042, invariant 13). Like
 	// no_nodes_matched: after authorization, before the cap, and with no Job.
 	if ra.refusal != nil {
-		return nil, s.recordRefusal(ctx, p, sel, act, ra.refusalKind, ra.refusal)
+		return prep{}, s.recordRefusal(ctx, p, sel, act, ra.refusalKind, ra.refusal)
 	}
 
 	// The cap counts the Nodes that will actually be dispatched: a Node
 	// excluded from a Template dispatch is never sent anything (ADR-0042).
 	if err := s.cap.Check(act.RiskClass, len(nodes)); err != nil {
-		return nil, s.recordRefusal(ctx, p, sel, act, RefusalBlastCap, err)
+		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalBlastCap, err)
 	}
 
 	// The approval gate (ADR-0027) sits HERE — after Selector resolution,
@@ -597,13 +688,13 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	// was denied and nothing ran. It is audited as its own kind.
 	ap, err := s.checkApproval(ctx, p, sel, act, nodeIDs(nodes))
 	if err != nil {
-		return nil, s.recordRefusal(ctx, p, sel, act, RefusalInternal, err)
+		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalInternal, err)
 	}
 	// The Request checkApproval found had ALREADY released a Job (AP-77): a
 	// sequential re-drive of an already-answered approval. Re-attach and
 	// dispatch nothing — see Service.reattach.
 	if ap.reattachJobID != "" {
-		return s.reattach(ctx, p, sel, nodes, ap.requestID, ap.reattachJobID)
+		return s.approvalReattach(ctx, p, sel, nodes, ap.requestID, ap.reattachJobID)
 	}
 	if ap.parked != nil {
 		s.metrics.IncRefusal(RefusalPendingApproval)
@@ -629,7 +720,7 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 			// below, never notified either, since NotifyParked is skipped on
 			// this same error path.
 			ap.parked.Askable = false
-			return nil, errors.Join(ap.parked, fmt.Errorf("capability: record audit entry: %w", auditErr))
+			return prep{}, errors.Join(ap.parked, fmt.Errorf("capability: record audit entry: %w", auditErr))
 		}
 		// Notify only on a park this call CREATED, and only after it is durably
 		// recorded and audited: a notification about a request that failed to
@@ -645,7 +736,7 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 		// shim deleted — so a handle store that is down costs a client its poll
 		// handle and costs the dispatch nothing.
 		ap.parked.TaskID, ap.parked.TaskExpiresAt = s.mintTaskHandle(ctx, p, ap.parked.RequestID)
-		return nil, ap.parked
+		return prep{}, ap.parked
 	}
 
 	d := newDispatch(p, sel, nodes, act)
@@ -677,33 +768,88 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	// (TestRun_ReleasedApprovalReAttachesEvenWhenAGrantCoversThePlan). Once the
 	// approval's deadline passes, Satisfied goes false, the released Request no
 	// longer shadows the Grant, and the Grant releases the dispatch normally.
+	//
+	// A keyed dispatch (#895) reserves its Job ID the same way and claims the
+	// key against it BEFORE the approval's BindJob, so neither join can be lost
+	// to a dropped stream. A keyed dispatch released by a Grant still never
+	// binds the Request: BindJob runs only under the condition above.
+	//
+	// The compensating writes below (Release, Rebind) run on a detached,
+	// bounded context: a dropped stream cancels ctx, and a key left bound for
+	// 24h to a Job that never existed is avoidable.
 	reserved := false
-	if ap.grantID == "" && ap.requestID != "" {
+	var claim *keyClaim
+	bindApproval := ap.grantID == "" && ap.requestID != ""
+	if key != "" || bindApproval {
 		jobID, err := s.disp.reserveJobID()
 		if err != nil {
-			return nil, s.recordRefusal(ctx, p, sel, act, RefusalInternal, fmt.Errorf("capability: reserve job id for approval release: %w", err))
+			return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalInternal, fmt.Errorf("capability: reserve job id: %w", err))
 		}
-		claimed, err := s.approvals.BindJob(ctx, ap.requestID, jobID, s.clock())
-		switch {
-		case err == nil:
-			d.jobID = jobID
-			reserved = true
-		case errors.Is(err, approval.ErrAlreadyReleased) && claimed.JobID != "":
-			// Lost the claim to a concurrent dispatch of the same plan. Nothing
-			// is dispatched here (AP-77) — re-attach to the winner's Job.
-			return s.reattach(ctx, p, sel, nodes, ap.requestID, claimed.JobID)
-		default:
-			// ErrNotReleasable (the deadline passed between read and claim),
-			// ErrNotFound, a store failure, or — defensively — ErrAlreadyReleased
-			// with no JobID to re-attach to (the store's belt-and-braces
-			// backstop should never produce this, but a re-attach to nothing
-			// must never be attempted). Fail closed: nothing is dispatched, and
-			// the next re-drive re-evaluates from scratch.
-			return nil, s.recordRefusal(ctx, p, sel, act, RefusalInternal, fmt.Errorf("capability: claim approval release: %w", err))
+		if key != "" {
+			existing, won, err := s.idem.Claim(ctx, jobs.IdempotencyRecord{
+				AccountID: p.AccountID, Key: key, RequestDigest: digest, JobID: jobID, CreatedAt: s.clock(),
+			}, s.clock().Add(-IdempotencyWindow))
+			if err == nil && won {
+				// A re-issue can read the row in the instant before this
+				// registration; it then finds no live claimer and answers
+				// Pending from the row itself, which is still true and still
+				// never suggests a new key (resolveKeyedReattach).
+				claim = s.registerClaim(p.AccountID, key, jobID)
+			}
+			if err != nil {
+				return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalInternal, fmt.Errorf("capability: claim idempotency key: %w", err))
+			}
+			if !won {
+				return s.keyedReattach(ctx, p, sel, act, digest, existing)
+			}
 		}
+		if bindApproval {
+			claimed, err := s.approvals.BindJob(ctx, ap.requestID, jobID, s.clock())
+			switch {
+			case err == nil:
+			case errors.Is(err, approval.ErrAlreadyReleased) && claimed.JobID != "":
+				// Lost the claim to a concurrent dispatch of the same plan. Nothing
+				// is dispatched here (AP-77) — re-attach to the winner's Job.
+				if claim != nil {
+					cctx, cancel := compensateContext(ctx)
+					s.logKeyWrite(cctx, "rebind", s.idem.Rebind(cctx, p.AccountID, key, jobID, claimed.JobID))
+					cancel()
+					s.settle(claim)
+				}
+				return s.approvalReattach(ctx, p, sel, nodes, ap.requestID, claimed.JobID)
+			default:
+				// ErrNotReleasable (the deadline passed between read and claim),
+				// ErrNotFound, a store failure, or — defensively — ErrAlreadyReleased
+				// with no JobID to re-attach to (the store's belt-and-braces
+				// backstop should never produce this, but a re-attach to nothing
+				// must never be attempted). Fail closed: nothing is dispatched, and
+				// the next re-drive re-evaluates from scratch.
+				s.releaseClaim(ctx, claim)
+				return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalInternal, fmt.Errorf("capability: claim approval release: %w", err))
+			}
+		}
+		d.jobID = jobID
+		reserved = true
 	}
 
-	res, dispatchErr := s.disp.run(ctx, d)
+	return prep{d: d, act: act, ap: ap, reserved: reserved, claim: claim}, nil
+}
+
+// approvalReattach is reattach in prep's shape.
+func (s *Service) approvalReattach(ctx context.Context, p Principal, sel Selector, nodes []registry.Node, requestID, jobID string) (prep, error) {
+	results, err := s.reattach(ctx, p, sel, nodes, requestID, jobID)
+	if err != nil {
+		return prep{}, err
+	}
+	return prep{reattach: &reattachment{jobID: jobID, results: results}}, nil
+}
+
+// account is Run's post-dispatch half: it binds the Job onto an MCP task
+// handle, counts the outcomes, and writes the KindDispatch audit record. It is
+// shared by Run and Start. alwaysLog logs an audit-write failure even off the
+// reserved path, for Start's background accounting, whose caller is gone.
+func (s *Service) account(ctx context.Context, p Principal, sel Selector, pr prep, res dispatchResult, dispatchErr error, alwaysLog bool) ([]NodeResult, error) {
+	act, ap, reserved := pr.act, pr.ap, pr.reserved
 
 	// acctCtx is the context every post-dispatch accounting write below uses.
 	// On the RESERVED path (reserved == true), the release claim above already
@@ -765,7 +911,7 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 		// not silently vanish, so it is surfaced as an error alongside the
 		// (still valid) results rather than swallowed.
 		auditErr = fmt.Errorf("capability: record audit entry: %w", auditErr)
-		if reserved {
+		if reserved || alwaysLog {
 			// On the reserved path specifically, the caller this error is
 			// about to be returned to may already be gone (the same client
 			// drop acctCtx above was detached to survive) — an approved

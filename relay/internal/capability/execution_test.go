@@ -2165,6 +2165,333 @@ func TestJobEngine_CancelRaceStress(t *testing.T) {
 	}
 }
 
+// cancelBuffer remembers Conduit.Cancel calls per task ID, so a fake Dispatch
+// that starts waiting after its Cancel arrived never hangs.
+type cancelBuffer struct {
+	mu  sync.Mutex
+	chs map[string]chan struct{}
+}
+
+func newCancelBuffer() *cancelBuffer { return &cancelBuffer{chs: map[string]chan struct{}{}} }
+
+func (b *cancelBuffer) chFor(taskID string) chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ch, ok := b.chs[taskID]
+	if !ok {
+		ch = make(chan struct{})
+		b.chs[taskID] = ch
+	}
+	return ch
+}
+
+// cancel records a Cancel for taskID without ever blocking.
+func (b *cancelBuffer) cancel(taskID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ch, ok := b.chs[taskID]
+	if !ok {
+		ch = make(chan struct{})
+		b.chs[taskID] = ch
+	}
+	select {
+	case <-ch:
+	default:
+		close(ch)
+	}
+}
+
+// TestJobEngine_NoTaskSentAfterCancelObservedUnderConcurrentFanOut pins #943:
+// with bound 2 over 4 Nodes, node-1 is sent before the cancel; node-2 is past
+// MarkDispatched and inside Conduit.Dispatch, but has not yet evaluated its
+// send guard when the cancel is recorded. node-2 must be withheld, and nodes 3
+// and 4 must never be dispatched at all.
+func TestJobEngine_NoTaskSentAfterCancelObservedUnderConcurrentFanOut(t *testing.T) {
+	const jobID = "job-id-1"
+
+	var mu sync.Mutex
+	var sent []string
+	entered1 := make(chan struct{}, 1)
+	entered2 := make(chan struct{}, 1)
+	release2 := make(chan struct{})
+	cancels := newCancelBuffer()
+
+	c := newScriptConduit()
+	c.dispatchFn = func(ctx context.Context, nodeID string, task jobs.Task) (jobs.Result, error) {
+		if nodeID == "node-2" {
+			entered2 <- struct{}{}
+			select {
+			case <-release2:
+			case <-time.After(testWaitTimeout):
+			}
+		}
+		if jobs.SendWithheld(ctx) {
+			return jobs.Result{}, jobs.ErrSendWithheld
+		}
+		mu.Lock()
+		sent = append(sent, nodeID)
+		mu.Unlock()
+		if nodeID == "node-1" {
+			entered1 <- struct{}{}
+		}
+		select {
+		case <-cancels.chFor(task.ID):
+		case <-time.After(testWaitTimeout):
+			t.Errorf("%s was sent but never received a Cancel", nodeID)
+		}
+		return jobs.Result{Outcome: jobs.OutcomeCancelled}, nil
+	}
+	// node-2 was never sent, yet cancel() still calls Cancel for it; the fake
+	// must answer without blocking.
+	c.cancelFn = func(_, taskID string) { cancels.cancel(taskID) }
+
+	e, tasksRepo := newConcurrentEngine(t, c, 2)
+
+	type runOut struct {
+		dr  dispatchResult
+		err error
+	}
+	done := make(chan runOut, 1)
+	go func() {
+		dr, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodeSet(4), fanOutAction))
+		done <- runOut{dr, err}
+	}()
+
+	waitFor(t, entered1, "node-1 sent")
+	waitFor(t, entered2, "node-2 inside Dispatch")
+	if err := e.cancel(context.Background(), jobID); err != nil {
+		t.Errorf("cancel returned %v, want nil", err)
+	}
+	close(release2)
+	out := waitFor(t, done, "run to finish")
+	if out.err != nil {
+		t.Errorf("run: %v", out.err)
+	}
+
+	mu.Lock()
+	gotSent := append([]string(nil), sent...)
+	mu.Unlock()
+	if len(gotSent) != 1 || gotSent[0] != "node-1" {
+		t.Errorf("sent = %v, want exactly [node-1]", gotSent)
+	}
+	got := c.dispatchedNodes()
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"node-1", "node-2"}) {
+		t.Errorf("Dispatch entered for %v, want [node-1 node-2]", got)
+	}
+	tasks, err := tasksRepo.ByJob(context.Background(), jobID)
+	if err != nil || len(tasks) != 4 {
+		t.Fatalf("ByJob = %d tasks, %v; want 4", len(tasks), err)
+	}
+	for _, task := range tasks {
+		if task.State != jobs.DispatchStateResolved || task.Outcome != jobs.OutcomeCancelled {
+			t.Errorf("task %s = %v/%v, want Resolved/Cancelled", task.NodeID, task.State, task.Outcome)
+		}
+		if sentOnWire := task.NodeID == "node-1"; sentOnWire == task.DispatchedAt.IsZero() {
+			t.Errorf("task %s DispatchedAt = %v, want set only for node-1", task.NodeID, task.DispatchedAt)
+		}
+	}
+	inFlight, err := tasksRepo.InFlight(context.Background())
+	if err != nil || len(inFlight) != 0 {
+		t.Errorf("InFlight = %v, %v; want empty", inFlight, err)
+	}
+	if len(out.dr.results) != 4 {
+		t.Fatalf("results = %d, want 4", len(out.dr.results))
+	}
+	for _, r := range out.dr.results {
+		if r.Outcome != jobs.OutcomeCancelled {
+			t.Errorf("result %s = %v, want cancelled", r.NodeID, r.Outcome)
+		}
+	}
+}
+
+// cancelAfterDispatchTasks cancels the Job's gate from inside MarkDispatched
+// of the watched Task. That is legal here: admit holds gate.mu, so the write
+// is serialised exactly as a cancel landing right after admit would be.
+type cancelAfterDispatchTasks struct {
+	jobs.TaskRepository
+	e       *jobEngine
+	jobID   string
+	watched string
+}
+
+func (w *cancelAfterDispatchTasks) MarkDispatched(ctx context.Context, id string, at time.Time) error {
+	err := w.TaskRepository.MarkDispatched(ctx, id, at)
+	if id == w.watched && err == nil {
+		w.e.gateFor(w.jobID).cancelled = true
+	}
+	return err
+}
+
+// TestJobEngine_CancelAfterAdmitWithholdsThroughTheGuard covers the engine's
+// guard: a cancel recorded right after admit is seen by the guard the Conduit
+// consults before its wire write; the guard commits the withhold itself and the
+// Task is never sent. The engine has no check of its own ahead of the Conduit.
+func TestJobEngine_CancelAfterAdmitWithholdsThroughTheGuard(t *testing.T) {
+	const jobID, taskID = "job-id-1", "task-id-3"
+	c := newScriptConduit()
+	var mu sync.Mutex
+	var sent int
+	c.dispatchFn = func(ctx context.Context, _ string, _ jobs.Task) (jobs.Result, error) {
+		if jobs.SendWithheld(ctx) {
+			return jobs.Result{}, jobs.ErrSendWithheld
+		}
+		mu.Lock()
+		sent++
+		mu.Unlock()
+		return jobs.Result{Outcome: jobs.OutcomeSuccess}, nil
+	}
+	e, tasksRepo := newConcurrentEngine(t, c, 16)
+	e.tasksRepo = &cancelAfterDispatchTasks{TaskRepository: tasksRepo, e: e, jobID: jobID, watched: taskID}
+
+	dr, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodeSet(1), fanOutAction))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	mu.Lock()
+	if sent != 0 {
+		t.Errorf("sent = %d, want 0", sent)
+	}
+	mu.Unlock()
+	task, err := tasksRepo.Get(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if task.State != jobs.DispatchStateResolved || task.Outcome != jobs.OutcomeCancelled || !task.DispatchedAt.IsZero() {
+		t.Errorf("task = %v/%v dispatchedAt=%v, want Resolved/Cancelled and never sent", task.State, task.Outcome, task.DispatchedAt)
+	}
+	if len(dr.results) != 1 || dr.results[0].Outcome != jobs.OutcomeCancelled {
+		t.Errorf("results = %+v, want one cancelled", dr.results)
+	}
+}
+
+// TestJobEngine_WithheldErrorWithoutCancelLeavesTaskInFlight: a Conduit cannot
+// turn a Task into a "never sent" record on its own. ErrSendWithheld with no
+// cancel recorded is an ordinary failure and the Task stays Dispatched.
+func TestJobEngine_WithheldErrorWithoutCancelLeavesTaskInFlight(t *testing.T) {
+	c := newScriptConduit()
+	c.dispatchFn = func(context.Context, string, jobs.Task) (jobs.Result, error) {
+		return jobs.Result{}, jobs.ErrSendWithheld
+	}
+	e, tasksRepo := newConcurrentEngine(t, c, 16)
+
+	dr, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodeSet(1), fanOutAction))
+	if !errors.Is(err, jobs.ErrSendWithheld) {
+		t.Errorf("run error = %v, want it to wrap ErrSendWithheld", err)
+	}
+	if len(dr.results) != 1 || dr.results[0].Outcome != jobs.OutcomeFailure {
+		t.Errorf("results = %+v, want one failure", dr.results)
+	}
+	inFlight, ferr := tasksRepo.InFlight(context.Background())
+	if ferr != nil || len(inFlight) != 1 {
+		t.Errorf("InFlight = %v, %v; want the Task still in flight", inFlight, ferr)
+	}
+}
+
+// TestJobEngine_CancelRecheckRaceStress fires cancel at a random moment across
+// many Jobs under -race, with a fake that honours the send guard. Every Task
+// ends Resolved/Cancelled; every sent Task received a Cancel; every withheld
+// Task was never sent, has no DispatchedAt and is not in flight.
+func TestJobEngine_CancelRecheckRaceStress(t *testing.T) {
+	const iterations, nodes = 100, 6
+	jobsRepo, tasksRepo := testEngineStore(t)
+	for iter := range iterations {
+		var mu sync.Mutex
+		sent := map[string]bool{}
+		withheld := map[string]bool{}
+		cancels := newCancelBuffer()
+
+		c := newScriptConduit()
+		c.dispatchFn = func(ctx context.Context, _ string, task jobs.Task) (jobs.Result, error) {
+			if jobs.SendWithheld(ctx) {
+				mu.Lock()
+				withheld[task.ID] = true
+				mu.Unlock()
+				return jobs.Result{}, jobs.ErrSendWithheld
+			}
+			mu.Lock()
+			sent[task.ID] = true
+			mu.Unlock()
+			select {
+			case <-cancels.chFor(task.ID):
+			case <-time.After(2 * time.Second):
+				t.Errorf("iter %d: sent %s never saw a Cancel", iter, task.ID)
+				return jobs.Result{Outcome: jobs.OutcomeSuccess}, nil
+			}
+			return jobs.Result{Outcome: jobs.OutcomeCancelled}, nil
+		}
+		c.cancelFn = func(_, taskID string) { cancels.cancel(taskID) }
+
+		jobID := fmt.Sprintf("job-i%d-1", iter)
+		e := &jobEngine{
+			jobsRepo:    jobsRepo,
+			tasksRepo:   tasksRepo,
+			intents:     &nonAtomicIntents{tr: tasksRepo},
+			conduit:     c,
+			newID:       sequentialIDs(fmt.Sprintf("i%d-", iter)),
+			now:         func() time.Time { return time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC) },
+			concurrency: 3,
+		}
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := e.run(context.Background(), newDispatch(Principal{Account: "alice"}, Selector{}, nodeSet(nodes), fanOutAction))
+			done <- err
+		}()
+		for {
+			if _, err := e.jobsRepo.GetJob(context.Background(), jobID); err == nil {
+				break
+			}
+			time.Sleep(100 * time.Microsecond)
+		}
+		time.Sleep(time.Duration(rand.Int64N(int64(5 * time.Millisecond))))
+		if err := e.cancel(context.Background(), jobID); err != nil {
+			t.Fatalf("iter %d: cancel returned %v, want nil", iter, err)
+		}
+		if err := waitFor(t, done, "run to finish"); err != nil {
+			t.Fatalf("iter %d: run: %v", iter, err)
+		}
+
+		tasks, err := tasksRepo.ByJob(context.Background(), jobID)
+		if err != nil || len(tasks) != nodes {
+			t.Fatalf("iter %d: ByJob = %d tasks, %v; want %d", iter, len(tasks), err, nodes)
+		}
+		inFlight, err := tasksRepo.InFlight(context.Background())
+		if err != nil {
+			t.Fatalf("iter %d: InFlight: %v", iter, err)
+		}
+		mu.Lock()
+		for _, task := range tasks {
+			if task.State != jobs.DispatchStateResolved || task.Outcome != jobs.OutcomeCancelled {
+				t.Errorf("iter %d: task %s = %v/%v, want Resolved/Cancelled", iter, task.NodeID, task.State, task.Outcome)
+			}
+			if withheld[task.ID] {
+				if sent[task.ID] {
+					t.Errorf("iter %d: task %s was both withheld and sent", iter, task.NodeID)
+				}
+				if !task.DispatchedAt.IsZero() {
+					t.Errorf("iter %d: withheld task %s has DispatchedAt set", iter, task.NodeID)
+				}
+				for _, f := range inFlight {
+					if f.ID == task.ID {
+						t.Errorf("iter %d: withheld task %s is still in flight", iter, task.NodeID)
+					}
+				}
+			}
+		}
+		mu.Unlock()
+		cancelledNodes := c.cancelledNodes()
+		for _, task := range tasks {
+			mu.Lock()
+			wasSent := sent[task.ID]
+			mu.Unlock()
+			if wasSent && !slices.Contains(cancelledNodes, task.NodeID) {
+				t.Errorf("iter %d: %s was sent but never received Conduit.Cancel", iter, task.NodeID)
+			}
+		}
+	}
+}
+
 // staleByJob returns every Task as Pending, as a snapshot read just before a
 // worker resolved them would.
 type staleByJob struct {
