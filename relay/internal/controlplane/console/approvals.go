@@ -651,38 +651,8 @@ func buildApprovalsView(rows []approvalRow, f approvalFilter) approvalsView {
 		ClearHref: "/console/approvals?scope=" + scopeAll,
 	}
 
-	narrowed := make([]approvalRow, 0, len(rows))
-	for _, r := range rows {
-		if f.matches(r) {
-			narrowed = append(narrowed, r)
-		}
-	}
-
-	shown := narrowed
-	scope := f.Scope
-	defaulted := scope == ""
-	if defaulted {
-		scope = scopeMine
-	}
-	if scope == scopeMine {
-		mine := make([]approvalRow, 0, len(narrowed))
-		for _, r := range narrowed {
-			if r.mine() {
-				mine = append(mine, r)
-			}
-		}
-		switch {
-		case defaulted && len(mine) == 0 && len(narrowed) > 0:
-			// The default would have emptied a queue that has entries in it.
-			// Render everything and say the filter was not applied.
-			v.ScopeNotApplied = true
-		default:
-			shown = mine
-			v.ScopeMine = true
-			v.ScopeDefaulted = defaulted
-			v.HiddenByScope = len(narrowed) - len(mine)
-		}
-	}
+	narrowed := selectRows(rows, f.matches)
+	shown := v.applyScope(narrowed, f.Scope)
 
 	if v.ScopeNotApplied {
 		// The chip bar is built before the never-empty rule runs, so the
@@ -696,6 +666,40 @@ func buildApprovalsView(rows []approvalRow, f approvalFilter) approvalsView {
 	v.Hidden = len(rows) - len(shown)
 	v.Filtered = v.Hidden > 0
 	return v
+}
+
+// applyScope is the audience rule wrapped around the narrowing filters: it
+// returns the rows to show and records on v which scope produced them. An
+// unset scope defaults to "mine" unless that would empty a queue that has
+// entries in it.
+func (v *approvalsView) applyScope(narrowed []approvalRow, scope string) []approvalRow {
+	defaulted := scope == ""
+	if defaulted {
+		scope = scopeMine
+	}
+	if scope != scopeMine {
+		return narrowed
+	}
+	mine := selectRows(narrowed, approvalRow.mine)
+	if defaulted && len(mine) == 0 && len(narrowed) > 0 {
+		// Render everything and say the filter was not applied.
+		v.ScopeNotApplied = true
+		return narrowed
+	}
+	v.ScopeMine = true
+	v.ScopeDefaulted = defaulted
+	v.HiddenByScope = len(narrowed) - len(mine)
+	return mine
+}
+
+func selectRows(rows []approvalRow, keep func(approvalRow) bool) []approvalRow {
+	out := make([]approvalRow, 0, len(rows))
+	for _, r := range rows {
+		if keep(r) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func clearWaitingChip(groups []filterGroup) {
