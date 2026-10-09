@@ -19,7 +19,8 @@
 //!   `disallowed_methods` outside the probe script;
 //! * (b) the read-only crates' `clippy.toml` files are byte-identical, and each
 //!   carries every root entry (the exec ban: the nearest `clippy.toml` REPLACES
-//!   a parent's, it does not merge) plus the pinned write ban;
+//!   a parent's, it does not merge) plus the pinned write ban, and the root and each
+//!   copy carry the pinned exec ban, with `allow-invalid` on `libc::execveat` only;
 //! * (c) every workspace member opts into the workspace lints, `disallowed_methods`
 //!   is `deny` there, and the key set of `[workspace.lints.clippy]` is exactly
 //!   pinned (a higher-priority group `allow` would override the ban);
@@ -39,12 +40,17 @@
 //!   way (a module mounted from outside the walked tree would escape the census);
 //!   and `relay-proto/src/lib.rs` is exactly the generated-module wrapper;
 //!   production suppressions (each pinned to the statement it covers) are pinned
-//!   apart from those inside `#[cfg(test)]` items, so a test allow cannot be moved
-//!   onto production code at an unchanged count;
+//!   apart from those inside `#[cfg(test)]` items (an item only: a `#[cfg(test)]` on
+//!   a statement, block, match arm or macro call does not make anything test code),
+//!   so a test allow cannot be moved onto production code at an unchanged count;
 //! * (h) the spawn family (`Command`, `pre_exec`, libc `exec*`/`fork`/`clone`/`system`/
-//!   `syscall`, `SYS_execve`-style numbers, in any aliased spelling) appears only in
-//!   `relay-exec`'s `executor.rs`, in every crate and the bin, whatever lint allow is
-//!   in scope;
+//!   `syscall`, `SYS_execve`-style numbers) appears only in `relay-exec`'s
+//!   `executor.rs`, in every crate and the bin, whatever lint allow is in scope. The
+//!   regex catches a `Command` alias (the alias names `Command` in its `use`),
+//!   brace-imported libc names, and bare `system(`/`syscall(` calls. It misses a
+//!   module alias such as `use libc as l; l::syscall`; clippy's resolved-path ban
+//!   (which resolves `l::syscall` to `libc::syscall`) and the `unsafe` census (i),
+//!   since any libc call needs `unsafe`, back that case;
 //! * (i) the `unsafe` census: every `unsafe` in the daemon (the bin and
 //!   `relay-transport` pinned to none) is pinned, since an `unsafe` block can call a
 //!   libc function the clippy.toml does not name;
@@ -63,9 +69,10 @@
 //! environment this repository does not control ((a) covers the repo's own
 //! Makefile and CI). The textual spawn census (h) likewise cannot see an
 //! identifier built by a macro; `macro_rules!` is refused in the read-only crates
-//! and the bin has no exec suppression. A read-only crate's non-test code that
-//! needs a write must be refused by review, not by this test: the pinned map
-//! below is where a reviewer sees a new suppression.
+//! and the bin has no exec suppression. The census (h) also misses a module alias
+//! of `libc`; the clippy ban and the `unsafe` census catch it instead. A read-only
+//! crate's non-test code that needs a write must be refused by review, not by this
+//! test: the pinned map below is where a reviewer sees a new suppression.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -424,10 +431,9 @@ struct Site {
     covered: String,
 }
 
-/// Where the item or statement that starts at `from` ends: at the `;` that closes
-/// it, or (for a `fn`, `mod`, `impl` and the like) at the `}` that closes its body.
-/// Brackets are balanced on literal-blanked text, so a brace in a string is not one.
-fn item_end(b: &[char], from: usize) -> usize {
+/// Whether the code starting at `from` begins with an item keyword (`fn`, `mod`,
+/// `impl`, `pub`, …).
+fn target_is_item_like(b: &[char], from: usize) -> bool {
     let mut i = from;
     while b.get(i).is_some_and(|c| c.is_whitespace()) {
         i += 1;
@@ -436,11 +442,34 @@ fn item_end(b: &[char], from: usize) -> usize {
         .iter()
         .take_while(|c| c.is_alphanumeric() || **c == '_')
         .collect();
-    let item_like = [
+    [
         "fn", "pub", "mod", "impl", "struct", "enum", "trait", "unsafe", "async", "extern",
         "const", "static", "use", "type", "union",
     ]
-    .contains(&word.as_str());
+    .contains(&word.as_str())
+}
+
+/// Whether the attribute starting at `at` is in item or statement position: what
+/// precedes it, ignoring whitespace, is `{`, `}`, `;`, `]` or nothing. Consecutive
+/// outer attributes are grouped, so in practice that `]` closes an inner `#![...]`
+/// attribute.
+fn in_item_position(b: &[char], at: usize) -> bool {
+    b[..at]
+        .iter()
+        .rev()
+        .find(|c| !c.is_whitespace())
+        .is_none_or(|c| matches!(c, '{' | '}' | ';' | ']'))
+}
+
+/// Where the item or statement that starts at `from` ends: at the `;` that closes
+/// it, or (for a `fn`, `mod`, `impl` and the like) at the `}` that closes its body.
+/// Brackets are balanced on literal-blanked text, so a brace in a string is not one.
+fn item_end(b: &[char], from: usize) -> usize {
+    let mut i = from;
+    while b.get(i).is_some_and(|c| c.is_whitespace()) {
+        i += 1;
+    }
+    let item_like = target_is_item_like(b, from);
     let mut depth = 0i32;
     while i < b.len() {
         match b[i] {
@@ -465,14 +494,35 @@ fn item_end(b: &[char], from: usize) -> usize {
 
 /// Every write- or exec-ban suppression in `src`, classified production or test.
 /// An attribute group (consecutive outer attributes, in either order) holding
-/// `#[cfg(test)]` makes its item, and everything in it, test code.
+/// `#[cfg(test)]` makes its target, and everything in it, test code, but only when
+/// that target is an item (`target_is_item_like`) and the group sits in item or
+/// statement position (`in_item_position`).
+///
+/// A `#[cfg(test)]` on a bare block, an `if`/`match`, a `let`, a match arm or a
+/// braced macro call creates no test span: `item_end` ends such a target only at
+/// the next top-level `;`, so it would swallow the statement that follows. Any
+/// suppression after it or inside it is classified production and must match the
+/// production pin exactly. That is the fail-closed direction.
+///
+/// Position matters as much as the target. A `#[cfg(test)]` on a generic parameter
+/// (`fn f<#[cfg(test)] const N: usize>()`), a function parameter, a field after a
+/// `,` or an expression strips only that fragment, not the item around it, yet
+/// `const N` reads as item-like and `item_end` would run on to the enclosing
+/// `}`, swallowing production code after it. So the group counts only when the
+/// first non-whitespace character before it is `{`, `}`, `;`, `]` or the start of
+/// the file; after anything else (`<`, `,`, `(`, `=`) it is production, which is
+/// the fail-closed direction.
+///
+/// One harmless case remains: a struct's first `pub` field follows `{` and reads as
+/// item-like, so its span runs to the struct's closing `}`. A struct body holds no
+/// runtime code, so nothing hidden there can write or spawn.
 fn suppression_sites(src: &str) -> Vec<Site> {
     let scrubbed = scrub(src, true);
     let b: Vec<char> = scrubbed.chars().collect();
     let attrs = attr_spans(&b);
     // Per group of consecutive outer attributes: (first attr index, last attr index,
-    // end of the item the group is attached to).
-    let mut groups: Vec<(usize, usize, usize)> = Vec::new();
+    // end of the item the group is attached to, whether that target is item-like).
+    let mut groups: Vec<(usize, usize, usize, bool)> = Vec::new();
     let mut i = 0;
     while i < attrs.len() {
         if attrs[i].inner {
@@ -488,17 +538,24 @@ fn suppression_sites(src: &str) -> Vec<Site> {
         {
             j += 1;
         }
-        groups.push((i, j, item_end(&b, attrs[j].end + 1)));
+        groups.push((
+            i,
+            j,
+            item_end(&b, attrs[j].end + 1),
+            target_is_item_like(&b, attrs[j].end + 1),
+        ));
         i = j + 1;
     }
     let test_spans: Vec<(usize, usize)> = groups
         .iter()
-        .filter(|(first, last, _)| {
-            attrs[*first..=*last]
-                .iter()
-                .any(|a| a.text == "[cfg(test)]")
+        .filter(|(first, last, _, item_like)| {
+            *item_like
+                && in_item_position(&b, attrs[*first].start)
+                && attrs[*first..=*last]
+                    .iter()
+                    .any(|a| a.text == "[cfg(test)]")
         })
-        .map(|(first, _, end)| (attrs[*first].start, *end))
+        .map(|(first, _, end, _)| (attrs[*first].start, *end))
         .collect();
     let mut out = Vec::new();
     for (n, a) in attrs.iter().enumerate() {
@@ -510,8 +567,8 @@ fn suppression_sites(src: &str) -> Vec<Site> {
             .any(|(s, e)| a.start >= *s && a.start <= *e);
         let covered = groups
             .iter()
-            .find(|(first, last, _)| (*first..=*last).contains(&n))
-            .map(|(_, _, end)| squeeze(&b[a.end + 1..=*end].iter().collect::<String>()))
+            .find(|(first, last, _, _)| (*first..=*last).contains(&n))
+            .map(|(_, _, end, _)| squeeze(&b[a.end + 1..=*end].iter().collect::<String>()))
             .unwrap_or_default();
         out.push(Site {
             test,
@@ -907,6 +964,93 @@ fn required_write_ban() -> BTreeSet<String> {
         ],
     );
     out
+}
+
+/// The exec ban (invariant 1) carried by the root file and by every read-only
+/// crate's file. It is named here so that deleting an entry from every clippy.toml
+/// and every probe file at once still fails.
+fn required_exec_ban() -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut add = |prefix: &str, names: &[&str]| {
+        for n in names {
+            out.insert(format!("{prefix}{n}"));
+        }
+    };
+    add(
+        "",
+        &["std::process::Command::new", "tokio::process::Command::new"],
+    );
+    add(
+        "libc::",
+        &[
+            "execv",
+            "execve",
+            "execvp",
+            "execvpe",
+            "execl",
+            "execle",
+            "execlp",
+            "fexecve",
+            "fork",
+            "vfork",
+            "posix_spawn",
+            "posix_spawnp",
+            "system",
+            "execveat",
+            "clone",
+            "syscall",
+        ],
+    );
+    out
+}
+
+/// `(path, allow-invalid value)` of every `disallowed-methods` entry whose table
+/// carries an `allow-invalid` key at all.
+fn allow_invalid_entries(path: &Path) -> BTreeSet<(String, Option<bool>)> {
+    let v = parse(path);
+    v.get("disallowed-methods")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("{} has no disallowed-methods", path.display()))
+        .iter()
+        .filter_map(|e| {
+            let value = e.get("allow-invalid")?;
+            let p = e
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{}: an entry without a path", path.display()));
+            Some((p.to_string(), value.as_bool()))
+        })
+        .collect()
+}
+
+#[test]
+fn root_and_read_only_clippy_configs_carry_the_exec_ban() {
+    let mut files = vec![daemon().join("clippy.toml")];
+    files.extend(
+        READ_ONLY
+            .iter()
+            .map(|c| daemon().join("crates").join(c).join("clippy.toml")),
+    );
+    let required = required_exec_ban();
+    let expected_invalid = BTreeSet::from([("libc::execveat".to_string(), Some(true))]);
+    for path in files {
+        let have = clippy_paths(&path);
+        let missing: Vec<_> = required.difference(&have).collect();
+        assert!(
+            missing.is_empty(),
+            "{} is missing exec-ban entries {missing:?} (invariant 1)",
+            path.display()
+        );
+        assert_eq!(
+            allow_invalid_entries(&path),
+            expected_invalid,
+            "{}: `allow-invalid = true` belongs on `libc::execveat` and on no other entry. \
+             It silences clippy's warning that a path refers to no reachable function, so on \
+             any other entry a mistyped or removed path would go inert silently, and the \
+             probe script would no longer see it",
+            path.display()
+        );
+    }
 }
 
 #[test]
@@ -1494,6 +1638,53 @@ fn suppression_sites_tell_production_from_test_code() {
         "#[cfg(any(test, feature = \"test-util\"))]\nfn g() {\n #[allow(clippy::disallowed_methods)]\n w();\n}",
     );
     assert!(!s[0].test);
+    // A cfg(test) on a bare block is not an item: it must not swallow the statement
+    // that follows, which is production.
+    let s = sites(
+        "fn f() {\n #[cfg(test)] {}\n #[allow(clippy::disallowed_methods)]\n let _ = fs::write(p, b);\n}",
+    );
+    assert_eq!(s.len(), 1);
+    assert!(!s[0].test);
+    assert_eq!(s[0].covered, "let_=fs::write(p,b);");
+    // The same for a module-level braced macro call, with the allow after it...
+    let s = sites(
+        "#[cfg(test)]\nsome_macro! { x }\n#[allow(clippy::disallowed_methods)]\nfn g() { w(); }",
+    );
+    assert!(!s[0].test);
+    assert_eq!(s[0].covered, "fng(){w();}");
+    // ...and inside its braces (`covered` is a parser artefact there, so not pinned).
+    let s = sites("#[cfg(test)]\nsome_macro! { #[allow(clippy::disallowed_methods)] x }");
+    assert!(!s[0].test);
+    // An `if` statement.
+    let s = sites(
+        "fn f() {\n #[cfg(test)] if x { y(); }\n #[allow(clippy::disallowed_methods)]\n w();\n}",
+    );
+    assert!(!s[0].test);
+    // A match arm: the next arm's allow is production.
+    let s = sites(
+        "fn f(x: i32) { match x { #[cfg(test)] 0 => g(), _ => { #[allow(clippy::disallowed_methods)] w(); } } }",
+    );
+    assert!(!s[0].test);
+    // Item-like keyword blocks are pins, not revert checks: the span ends at the
+    // block's own `}`, so the statement after it is production under any filter.
+    for kw in ["unsafe", "async", "const"] {
+        let s = sites(&format!(
+            "fn f() {{\n #[cfg(test)] {kw} {{}}\n #[allow(clippy::disallowed_methods)]\n let _ = fs::write(p, b);\n}}"
+        ));
+        assert!(!s[0].test, "{kw}");
+        assert_eq!(s[0].covered, "let_=fs::write(p,b);", "{kw}");
+    }
+    // A cfg(test) on a generic parameter strips that parameter, not the item: the
+    // `const` makes it item-like, so only the position rule keeps it production.
+    let s = sites(
+        "trait Tr<#[cfg(test)] const N: usize = 0> { fn go(&self) { #[allow(clippy::disallowed_methods)] let _ = fs::write(p, b); } }",
+    );
+    assert_eq!(s.len(), 1);
+    assert!(!s[0].test);
+    let s =
+        sites("fn f<#[cfg(test)] const N: usize>() { #[allow(clippy::disallowed_methods)] w(); }");
+    assert_eq!(s.len(), 1);
+    assert!(!s[0].test);
 }
 
 #[test]
@@ -1961,10 +2152,11 @@ fn suppression_scanner_flags_every_form_and_ignores_text() {
 // ---------------------------------------------------------------------------
 
 /// The spawn family, matched on code with comments and literals blanked: the
-/// `Command` type under any spelling or alias (an alias still names `Command` in its
-/// `use`), `pre_exec`, libc's exec/fork/spawn functions (a brace import names them
-/// too), and `system`/`syscall` calls. A word-boundary match, so `system_facts` and
-/// `ConnectFailure` are not hits.
+/// `Command` type (an alias still names `Command` in its `use`), `pre_exec`, libc's
+/// exec/fork/spawn functions (a brace import names them too), and `system`/`syscall`
+/// calls. A word-boundary match, so `system_facts` and `ConnectFailure` are not
+/// hits. A module alias (`use libc as l; l::syscall`) misses it; clippy's
+/// resolved-path ban and the `unsafe` census catch that case.
 fn spawn_family() -> Regex {
     Regex::new(
         r"\b(Command|CommandExt|pre_exec|fork|vfork|fexecve|execv|execve|execveat|execvp|execvpe|execl|execle|execlp|posix_spawn|posix_spawnp|popen)\b|\blibc::(system|syscall|clone|clone3)\b|\blibc::\{[^}]*\b(system|syscall|clone|clone3)\b|\b(system|syscall)\s*\(|\bSYS_(execve|execveat|fork|vfork|clone|clone3)\b",
