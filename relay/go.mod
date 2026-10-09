@@ -1,6 +1,6 @@
 module github.com/Felag-Engineering/gleipnir-relay/relay
 
-go 1.26.8
+go 1.26.9
 
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
