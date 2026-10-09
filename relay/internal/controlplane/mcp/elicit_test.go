@@ -48,8 +48,8 @@ const (
 // taskgolden_test.go's goldenParker.
 type askableParker struct{ askable bool }
 
-func (p askableParker) Run(context.Context, capability.Principal, capability.Selector, jobs.Action) ([]capability.NodeResult, error) {
-	return nil, &capability.ParkedError{
+func (p askableParker) Start(context.Context, capability.Principal, capability.Selector, jobs.Action, capability.StartOptions) (capability.StartedJob, error) {
+	return capability.StartedJob{}, &capability.ParkedError{
 		RequestID:     askableElicitRequestID,
 		PlanHash:      askableElicitPlanHash,
 		Summary:       `service.restart(unit="nginx") [mutate] on 1 node(s): node-a`,
@@ -77,9 +77,9 @@ type countingAskableParker struct {
 	plans *atomic.Int32
 }
 
-func (p countingAskableParker) Run(ctx context.Context, principal capability.Principal, sel capability.Selector, act jobs.Action) ([]capability.NodeResult, error) {
+func (p countingAskableParker) Start(ctx context.Context, principal capability.Principal, sel capability.Selector, act jobs.Action, o capability.StartOptions) (capability.StartedJob, error) {
 	p.runs.Add(1)
-	return p.askableParker.Run(ctx, principal, sel, act)
+	return p.askableParker.Start(ctx, principal, sel, act, o)
 }
 
 func (p countingAskableParker) Plan(context.Context, capability.Principal, capability.Selector, jobs.Action) (capability.PlanResult, error) {

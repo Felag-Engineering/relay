@@ -99,6 +99,17 @@ type fakeConduit struct {
 	blockNode string
 	ready     chan struct{}
 	unblock   chan struct{}
+
+	// dispatches counts Dispatch calls per Node, so an idempotency test can
+	// prove a re-issued call sent nothing (#895).
+	dispatches map[string]int
+}
+
+// dispatchCount is how many Tasks were sent to nodeID.
+func (f *fakeConduit) dispatchCount(nodeID string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.dispatches[nodeID]
 }
 
 func newFakeConduit() *fakeConduit {
@@ -109,6 +120,7 @@ func newFakeConduit() *fakeConduit {
 		timeoutSeconds: map[string]int32{},
 		verdicts:       map[string]jobs.Verdict{},
 		queryErrs:      map[string]error{},
+		dispatches:     map[string]int{},
 	}
 }
 
@@ -130,6 +142,7 @@ func (f *fakeConduit) Connected(nodeID string) bool {
 func (f *fakeConduit) Dispatch(ctx context.Context, nodeID string, task jobs.Task) (jobs.Result, error) {
 	f.mu.Lock()
 	f.timeoutSeconds[nodeID] = task.TimeoutSeconds
+	f.dispatches[nodeID]++
 	block := f.blockNode != "" && nodeID == f.blockNode
 	ready := f.ready
 	unblock := f.unblock
@@ -219,7 +232,7 @@ func TestMCP_RunOperation_PerNodeResults(t *testing.T) {
 	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeSuccess, ExitCode: 0, Stdout: []byte(`{"hostname":"db-1"}`)}
 
 	session := ts.connect(t)
-	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts"})
+	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 300})
 	var out mcp.ExecutionOutput
 	decodeResult(t, res, &out)
 
@@ -254,7 +267,7 @@ func TestMCP_RunOperation_OutdatedNodeVersionRefused(t *testing.T) {
 	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeSuccess}
 
 	session := ts.connect(t)
-	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts"})
+	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 300})
 	var out mcp.ExecutionOutput
 	decodeResult(t, res, &out)
 
@@ -294,7 +307,8 @@ func TestMCP_RawExec_AllowedVsDenied_ThenStructuredSucceeds(t *testing.T) {
 
 	session := ts.connect(t)
 	res := callTool(t, session, "raw_exec", map[string]any{
-		"argv": []string{"/usr/bin/systemctl", "restart", "nginx"},
+		"argv":         []string{"/usr/bin/systemctl", "restart", "nginx"},
+		"wait_seconds": 300,
 	})
 	var out mcp.ExecutionOutput
 	decodeResult(t, res, &out)
@@ -315,7 +329,7 @@ func TestMCP_RawExec_AllowedVsDenied_ThenStructuredSucceeds(t *testing.T) {
 	// success for both, proving run_operation dispatches through the same
 	// pipeline, not a separate one.
 	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeSuccess}
-	res2 := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts"})
+	res2 := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 300})
 	var out2 mcp.ExecutionOutput
 	decodeResult(t, res2, &out2)
 	for _, r := range out2.Results {
@@ -340,7 +354,7 @@ func TestMCP_ExitCode_OmittedWhenNoProcessRan(t *testing.T) {
 	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeDeniedByPolicy, ExitCode: -1, Stderr: []byte("no allow rule matched")}
 
 	session := ts.connect(t)
-	res := callTool(t, session, "raw_exec", map[string]any{"argv": []string{"/usr/bin/systemctl", "restart", "nginx"}})
+	res := callTool(t, session, "raw_exec", map[string]any{"argv": []string{"/usr/bin/systemctl", "restart", "nginx"}, "wait_seconds": 300})
 
 	var out struct {
 		Results []map[string]json.RawMessage `json:"results"`
@@ -512,7 +526,7 @@ func TestMCP_CancelJob_InFlightAndPendingSibling(t *testing.T) {
 
 	runDone := make(chan *sdkmcp.CallToolResult, 1)
 	go func() {
-		runDone <- callTool(t, runSession, "run_operation", map[string]any{"operation": "system.facts"})
+		runDone <- callTool(t, runSession, "run_operation", map[string]any{"operation": "system.facts", "wait_seconds": 300})
 	}()
 
 	<-ts.conduit.ready // node A's Dispatch is now in-flight, blocked.
@@ -583,8 +597,8 @@ func TestMCP_TimeoutSeconds_ThreadsToTask(t *testing.T) {
 		tool string
 		args map[string]any
 	}{
-		{"run_operation", map[string]any{"selector": "node:role=web", "operation": "system.facts"}},
-		{"raw_exec", map[string]any{"selector": "node:role=web", "argv": []string{"/bin/true"}}},
+		{"run_operation", map[string]any{"selector": "node:role=web", "operation": "system.facts", "wait_seconds": 300}},
+		{"raw_exec", map[string]any{"selector": "node:role=web", "argv": []string{"/bin/true"}, "wait_seconds": 300}},
 	}
 
 	for _, tt := range tests {
@@ -631,8 +645,9 @@ func TestMCP_RunOperation_AuditedWithPrincipal(t *testing.T) {
 
 	session := ts.connect(t)
 	res := callTool(t, session, "run_operation", map[string]any{
-		"selector":  "node:role=web",
-		"operation": "system.facts",
+		"selector":     "node:role=web",
+		"operation":    "system.facts",
+		"wait_seconds": 300,
 	})
 	var out mcp.ExecutionOutput
 	decodeResult(t, res, &out)

@@ -24,6 +24,16 @@
 //     but persist-then-dispatch and persist-then-send still hold per Task:
 //     every Task is Pending before any dispatch goroutine starts, and each
 //     goroutine does MarkDispatched before Conduit.Dispatch.
+//   - Cancel is re-checked by the Conduit immediately before each wire write,
+//     through jobs.WithSendGuard (#943). The guard commits the withhold itself
+//     (MarkCancelledBeforeSend: Dispatched -> Resolved/Cancelled, DispatchedAt
+//     cleared), inside the Router's per-Task critical section, so a Reconciler
+//     resend of the same Task is ordered against it: it either already sent
+//     (and the worker then sends too, resolving truthfully) or reads Resolved
+//     and sends nothing. What remains is cancel's best-effort residual under
+//     ADR-0013: a Task already inside the Tunnel write, and a Task a Reconciler
+//     sent whose Dispatch finished before the worker reached its guard (see
+//     dispatch/reconcile.go).
 //   - On restart, the Relay reconciles via TaskRepository.InFlight(): those
 //     Tasks may be safely re-sent-for-result because the relay-daemon dedups
 //     Task execution by Task ID (ADR-0004) — resend is safe ONLY because of
@@ -244,8 +254,62 @@ var _ dispatcher = (*jobEngine)(nil)
 
 // run implements dispatcher. See the at-most-once design note above for why
 // IDs are minted before persistence and every Task is persisted (Pending)
-// before any Task is dispatched.
+// before any Task is dispatched. It is persist followed by fanOut on the
+// caller's own context; start (below) is the same two halves split across a
+// return.
 func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error) {
+	pj, err := e.persist(ctx, d, false)
+	if err != nil {
+		return dispatchResult{}, err
+	}
+	return e.fanOut(pj)
+}
+
+// persistedJob is a Job whose Tasks and dispatch intent are committed and whose
+// cancel gate is open: everything fanOut needs, and nothing it must re-derive.
+type persistedJob struct {
+	jobID   string
+	runCtx  context.Context
+	gate    *jobGate
+	release func()
+	pending []pendingTask
+	d       dispatch
+}
+
+// start persists d's Job and returns its ID as soon as the Tasks and the
+// dispatch intent are committed, with finish to run the fan-out. The Job's
+// whole pipeline runs on a context detached from ctx, for the reason the
+// reserved path always has (see persist): once start returns, a caller who
+// stops waiting can no more abandon the Job than a reserved one can. Its
+// lifetime is bounded the same way, by each Task's 300s hard wall clock.
+//
+// finish must be called exactly once; it releases the Job's cancel gate.
+func (e *jobEngine) start(ctx context.Context, d dispatch) (string, func() (dispatchResult, error), error) {
+	pj, err := e.persist(ctx, d, true)
+	if err != nil {
+		return "", nil, err
+	}
+	return pj.jobID, func() (dispatchResult, error) { return e.fanOut(pj) }, nil
+}
+
+// jobPersisted reports whether jobID's Tasks are committed. The engine commits a
+// Job's Tasks and its dispatch intent in one transaction (RecordIntent, #887),
+// and a zero-match Selector is refused before any Job exists, so "has at least
+// one Task" is exactly "was persisted".
+func (e *jobEngine) jobPersisted(ctx context.Context, jobID string) (bool, error) {
+	tasks, err := e.tasksRepo.ByJob(ctx, jobID)
+	if err != nil {
+		return false, fmt.Errorf("capability: read tasks of job %q: %w", jobID, err)
+	}
+	return len(tasks) > 0, nil
+}
+
+// persist is run's first half: it mints (or takes the reserved) Job ID, opens
+// the cancel gate, and commits the Job, its Stage, every Pending Task and the
+// dispatch intent. On success the gate stays open for fanOut to release; on any
+// error persist has released it. detach runs the pipeline on a context cut off
+// from ctx's cancellation, as a reserved Job ID always does.
+func (e *jobEngine) persist(ctx context.Context, d dispatch, detach bool) (pj *persistedJob, err error) {
 	// d.jobID carries a Job ID already reserved and bound to a releasing
 	// approval (AP-77, checkApproval/Service.Run). Using it here, rather than
 	// minting a fresh one, is what makes the release claim and the Job it
@@ -256,7 +320,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 		var err error
 		jobID, err = e.prefixedID("job-")
 		if err != nil {
-			return dispatchResult{}, fmt.Errorf("capability: generate job id: %w", err)
+			return nil, fmt.Errorf("capability: generate job id: %w", err)
 		}
 	}
 
@@ -294,17 +358,21 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	// SQLite calls already bounded by the driver's own busy_timeout
 	// (store.go's busyTimeoutMillis).
 	runCtx := ctx
-	if reserved {
+	if reserved || detach {
 		runCtx = context.WithoutCancel(ctx)
 	}
 
 	// The gate exists before any Task does, so a cancel can never find a
 	// persisted Task whose Job has no gate.
 	gate, release := e.openGate(jobID)
-	defer release()
+	defer func() {
+		if err != nil {
+			release()
+		}
+	}()
 
 	if err := e.jobsRepo.CreateJob(runCtx, jobs.Job{ID: jobID, CreatedAt: e.now(), Requester: requesterOf(d.principal)}); err != nil {
-		return dispatchResult{}, fmt.Errorf("capability: create job %q: %w", jobID, err)
+		return nil, fmt.Errorf("capability: create job %q: %w", jobID, err)
 	}
 	// Published error-free by construction (#416): the sink is
 	// observational and can never change dispatch control flow — the same
@@ -320,10 +388,10 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 
 	stageID, err := e.prefixedID("stage-")
 	if err != nil {
-		return dispatchResult{}, fmt.Errorf("capability: generate stage id: %w", err)
+		return nil, fmt.Errorf("capability: generate stage id: %w", err)
 	}
 	if err := e.jobsRepo.AddStage(runCtx, jobs.Stage{ID: stageID, JobID: jobID, Index: 0}); err != nil {
-		return dispatchResult{}, fmt.Errorf("capability: add stage %q to job %q: %w", stageID, jobID, err)
+		return nil, fmt.Errorf("capability: add stage %q to job %q: %w", stageID, jobID, err)
 	}
 
 	// Build ALL Pending Tasks here; they are committed together with the
@@ -366,12 +434,12 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	}
 	for _, x := range d.excluded {
 		if err := stageTask(x.node, x.reason); err != nil {
-			return dispatchResult{}, err
+			return nil, err
 		}
 	}
 	for _, n := range d.nodes {
 		if err := stageTask(n, ""); err != nil {
-			return dispatchResult{}, err
+			return nil, err
 		}
 	}
 
@@ -379,7 +447,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	// transaction (#887), before any resolve: a failed commit leaves no Task,
 	// so there is nothing to dispatch or reconcile, and no retry path exists.
 	if e.intents == nil {
-		return dispatchResult{}, errors.New("capability: job engine has no IntentRecorder; refusing to persist Tasks without a dispatch intent record")
+		return nil, errors.New("capability: job engine has no IntentRecorder; refusing to persist Tasks without a dispatch intent record")
 	}
 	tasks := make([]jobs.Task, len(pending))
 	for i := range pending {
@@ -397,8 +465,17 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 		CapCleared: len(d.nodes),
 	}
 	if err := e.intents.RecordIntent(runCtx, intent, tasks); err != nil {
-		return dispatchResult{}, fmt.Errorf("capability: record dispatch intent and tasks for job %q: %w", jobID, err)
+		return nil, fmt.Errorf("capability: record dispatch intent and tasks for job %q: %w", jobID, err)
 	}
+	return &persistedJob{jobID: jobID, runCtx: runCtx, gate: gate, release: release, pending: pending, d: d}, nil
+}
+
+// fanOut is run's second half: it resolves every persisted Task, concurrently
+// and bounded, then publishes the Job's completion. It releases the cancel gate
+// when it returns.
+func (e *jobEngine) fanOut(pj *persistedJob) (dispatchResult, error) {
+	defer pj.release()
+	jobID, runCtx, gate, pending, d := pj.jobID, pj.runCtx, pj.gate, pj.pending, pj.d
 
 	// Each worker writes only its own index, so results come out in pending
 	// order (excluded first, then d.nodes) and need no lock.
@@ -555,6 +632,16 @@ func (e *jobEngine) dispatchOneRecovered(ctx context.Context, gate *jobGate, pt 
 // failure — the Task already reached a terminal, truthful outcome (Resolved,
 // OutcomeCancelled) — so dispatchOne honors it rather than dispatching an
 // already-cancelled Task or fabricating OutcomeFailure over a real cancel.
+//
+// After MarkDispatched the gate is consulted as a send guard
+// (jobs.WithSendGuard) by the Conduit immediately before the wire write
+// (#943); there is deliberately no earlier check, so every withhold goes
+// through the Conduit's per-Task serialisation. The guard takes gate.mu, so it
+// can wait behind another worker's MarkDispatched inside admit, and it commits
+// a withhold itself: Dispatched -> Resolved/Cancelled with DispatchedAt
+// cleared (MarkCancelledBeforeSend). jobs.ErrSendWithheld is the one Conduit
+// error that does not leave the Task Dispatched, and only when the gate
+// confirms the cancel.
 func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTask) (jobs.Result, error) {
 	task := pt.task
 
@@ -614,8 +701,34 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 		return jobs.Result{Outcome: jobs.OutcomeFailure}, fmt.Errorf("capability: mark task %q dispatched: %w", task.ID, err)
 	}
 
-	result, dispatchErr := e.conduit.Dispatch(ctx, task.NodeID, task)
+	// No early gate check here on purpose (#943): a withhold must go through
+	// the Conduit's per-Task serialisation (the guard), or a Reconciler that
+	// already sent this Task would be contradicted by a "never sent" record.
+	sendCtx := ctx
+	var committed bool // written only by the guard, on Dispatch's goroutine
+	var commitErr error
+	if gate != nil {
+		sendCtx = jobs.WithSendGuard(ctx, func() bool {
+			if !gate.isCancelled() {
+				return false
+			}
+			// A side effect on purpose: the commit must sit inside the
+			// Router's per-Task critical section, where a Reconciler resend
+			// of this Task is ordered against it. See withholdCancelled.
+			committed = true
+			commitErr = e.tasksRepo.MarkCancelledBeforeSend(ctx, task.ID, e.now())
+			return true
+		})
+	}
+	result, dispatchErr := e.conduit.Dispatch(sendCtx, task.NodeID, task)
 	if dispatchErr != nil {
+		if errors.Is(dispatchErr, jobs.ErrSendWithheld) && gate.isCancelled() {
+			if committed {
+				return e.withheldOutcome(ctx, task, commitErr)
+			}
+			// A Conduit that withheld without consulting the guard.
+			return e.withholdCancelled(ctx, task)
+		}
 		// Connected but the send/exec did not complete: the Task stays
 		// Dispatched (no Resolve), so it is reconciled on restart via
 		// InFlight() rather than silently declared unreachable.
@@ -640,6 +753,30 @@ func (e *jobEngine) resolvedByCancel(ctx context.Context, taskID string, err err
 		return jobs.Result{}, false
 	}
 	return jobs.Result{Outcome: cur.Outcome, Stdout: cur.Stdout, Stderr: cur.Stderr}, true
+}
+
+// withholdCancelled resolves a Task this worker MarkDispatched but will never
+// send, because its Job's cancel was seen before the send began (#943), as
+// Cancelled with DispatchedAt cleared. dispatchOne's send guard performs this
+// commit itself, inside the Router's per-Task critical section; this method
+// is the fallback for a Conduit that withheld without consulting the guard. A crash before this commit leaves the
+// Task Dispatched, which is today's persist-then-send shape and is reconciled
+// under daemon dedup. If cancel() already resolved it, that truthful outcome
+// is returned instead.
+func (e *jobEngine) withholdCancelled(ctx context.Context, task jobs.Task) (jobs.Result, error) {
+	return e.withheldOutcome(ctx, task, e.tasksRepo.MarkCancelledBeforeSend(ctx, task.ID, e.now()))
+}
+
+// withheldOutcome turns the result of a MarkCancelledBeforeSend into the Task's
+// outcome.
+func (e *jobEngine) withheldOutcome(ctx context.Context, task jobs.Task, err error) (jobs.Result, error) {
+	if err == nil {
+		return jobs.Result{Outcome: jobs.OutcomeCancelled}, nil
+	}
+	if res, ok := e.resolvedByCancel(ctx, task.ID, err); ok {
+		return res, nil
+	}
+	return jobs.Result{Outcome: jobs.OutcomeCancelled}, fmt.Errorf("capability: mark task %q cancelled before send: %w", task.ID, err)
 }
 
 // resolveCancelled resolves a never-sent Task of a cancelled Job as Cancelled.
@@ -673,10 +810,15 @@ func (e *jobEngine) resolveCancelled(ctx context.Context, task jobs.Task) (jobs.
 // Pending -> Dispatched window in-process.
 //
 // What stays best-effort under ADR-0013: (i) a Dispatched Task that wins the
-// race keeps its real outcome; (ii) the pre-send window — a TaskCancel can
-// reach the daemon before the TaskRequest of a Task already MarkDispatched,
+// race keeps its real outcome; (ii) the pre-send window — Tasks already inside
+// the Tunnel write when the cancel is recorded, at most -dispatch-concurrency
+// per Job. A TaskCancel can reach the daemon before such a Task's TaskRequest,
 // and the daemon treats a cancel for an unknown id as a no-op, so that Task
-// runs. Cancel only ever *asks*; it never fabricates an outcome for a Task
+// runs. Every other Dispatched Task's worker sees the gate and withholds its
+// send (#943); for such a Task the TaskCancel sent from this snapshot is
+// harmless. A Task a Reconciler already sent is not withheld by its worker;
+// the one exception, a resend that finished before the worker reached its
+// guard, is described in dispatch/reconcile.go. Cancel only ever *asks*; it never fabricates an outcome for a Task
 // that won the race.
 func (e *jobEngine) cancel(ctx context.Context, jobID string) error {
 	if _, err := e.jobsRepo.GetJob(ctx, jobID); err != nil {

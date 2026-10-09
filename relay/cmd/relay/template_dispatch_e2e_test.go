@@ -74,8 +74,9 @@ func TestTemplateDispatchE2E_RunOperationByName(t *testing.T) {
 
 	t.Run("apply", func(t *testing.T) {
 		res := relaytest.CallTool(t, session, "run_operation", map[string]any{
-			"operation": "e2e.template",
-			"selector":  "relay:env=test",
+			"operation":    "e2e.template",
+			"selector":     "relay:env=test",
+			"wait_seconds": 300,
 		})
 		if res.IsError {
 			t.Fatalf("run_operation(e2e.template): IsError=true; content = %+v", res.Content)

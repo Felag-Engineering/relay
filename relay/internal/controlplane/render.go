@@ -127,20 +127,39 @@ func RenderTaskResult(task jobs.Task) RenderedTaskResult {
 // by NodeID for a stable response. It is the shared path for a dispatch's own
 // result and a later polling re-read of the same Job, on both surfaces.
 func RenderJobResults(ctx context.Context, results JobResultReader, jobID string) ([]RenderedTaskResult, error) {
+	items, _, err := RenderJobState(ctx, results, jobID)
+	return items, err
+}
+
+// Job statuses reported by a surface that returns a Job before it finishes
+// (#895). A Job is running while any of its Tasks is unresolved, and complete
+// once every Task has a terminal outcome.
+const (
+	JobStatusRunning  = "running"
+	JobStatusComplete = "complete"
+)
+
+// RenderJobState is RenderJobResults plus the Job's status: JobStatusRunning if
+// any Task is not yet Resolved, else JobStatusComplete.
+func RenderJobState(ctx context.Context, results JobResultReader, jobID string) ([]RenderedTaskResult, string, error) {
 	if _, err := results.GetJob(ctx, jobID); err != nil {
-		return nil, fmt.Errorf("get job %q: %w", jobID, err)
+		return nil, "", fmt.Errorf("get job %q: %w", jobID, err)
 	}
 	tasks, err := results.TasksByJob(ctx, jobID)
 	if err != nil {
-		return nil, fmt.Errorf("list tasks for job %q: %w", jobID, err)
+		return nil, "", fmt.Errorf("list tasks for job %q: %w", jobID, err)
 	}
 
+	status := JobStatusComplete
 	items := make([]RenderedTaskResult, 0, len(tasks))
 	for _, task := range tasks {
+		if task.State != jobs.DispatchStateResolved {
+			status = JobStatusRunning
+		}
 		items = append(items, RenderTaskResult(task))
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].NodeID < items[j].NodeID })
-	return items, nil
+	return items, status, nil
 }
 
 // RenderPlan renders a capability.PlanResult: verdicts sorted by NodeID for a

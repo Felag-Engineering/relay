@@ -101,6 +101,19 @@ type ViolationRecorder interface {
 	RecordProtocolViolation(ctx context.Context, ev jobs.ProtocolViolationEvent) error
 }
 
+// sendSlot is one task ID's send critical section. A worker's Dispatch and a
+// Reconciler resend can run for the same Task at once; mu orders their guard
+// decisions, and sent records that some caller has already handed the Task to
+// a Tunnel, after which no later caller consults its guard: the Task has run
+// or may run, so withholding it again would make the record untruthful. refs
+// counts the Dispatch calls holding the slot; the last one out deletes it.
+// refs and the map entry are guarded by Router.mu; mu and sent by mu.
+type sendSlot struct {
+	mu   sync.Mutex
+	sent bool
+	refs int
+}
+
 // Router is the production capability.Conduit: it sends Tasks down a
 // connected Node's authenticated Tunnel (the existing mTLS stream and its
 // cert-derived node_id — ADR-0005/0006; Router creates no new transport or
@@ -115,6 +128,11 @@ type ViolationRecorder interface {
 // proto-free import lock (TestCapabilityImportsOnlyRegistryAndJobs) stays
 // intact.
 //
+// Router still never touches the store and decides nothing: it only evaluates
+// a send guard its caller supplied in the ctx (jobs.WithSendGuard, #943). The
+// guard is a ctx value so that Conduit's domain-typed signature, and callers
+// that set none, stay unchanged.
+//
 // Lock discipline: mu guards ONLY the conns, waiters, and verdictWaiters
 // maps. It is taken only around map reads/writes, never around a network
 // send or the blocking wait for a Result — a slow or stalled write to one
@@ -126,6 +144,10 @@ type Router struct {
 	conns          map[string]*conn
 	waiters        map[string]*waiter
 	verdictWaiters map[string]*verdictWaiter
+
+	// sendSlots serialises, per task ID, the send guard's decision against
+	// "this Task was handed to a Tunnel by some caller" (#943). Guarded by mu.
+	sendSlots map[string]*sendSlot
 
 	// onConnect, if non-nil, is invoked (in its own goroutine, so it never
 	// blocks the Tunnel handler) every time a Node registers a live send
@@ -164,6 +186,7 @@ func NewRouter(onConnect func(nodeID string), violations ViolationRecorder) *Rou
 		conns:          make(map[string]*conn),
 		waiters:        make(map[string]*waiter),
 		verdictWaiters: make(map[string]*verdictWaiter),
+		sendSlots:      make(map[string]*sendSlot),
 		onConnect:      onConnect,
 		violations:     violations,
 	}
@@ -250,6 +273,20 @@ func (r *Router) ConnectedNodes() []string {
 // The map read (send func) and the waiter registration happen under mu; the
 // network send and the blocking wait happen OUTSIDE mu (see the Router doc
 // comment's lock-discipline note) so one slow Node never stalls another.
+//
+// The send guard (jobs.WithSendGuard) is evaluated after the waiter is
+// registered and immediately before c.send, under the Task's send slot: the
+// guard decision and "some caller handed this task ID to the Tunnel" are
+// serialised per task ID. The first caller whose guard does not withhold marks
+// the slot sent; a caller arriving after that never consults its guard and
+// sends (a resend of an already-sent Task, deduped by the relay-daemon by
+// task_id), so the Task resolves truthfully. On a withheld send nothing is
+// written, only this call's own waiter is removed, and jobs.ErrSendWithheld is
+// returned. A send already inside c.send is past the guard: that is the
+// residual pre-send window under ADR-0013 (#943).
+//
+// Neither mu nor the slot's lock is held while the other is taken, and the
+// slot's lock is never held across c.send.
 func (r *Router) Dispatch(ctx context.Context, nodeID string, t jobs.Task) (jobs.Result, error) {
 	r.mu.Lock()
 	c, ok := r.conns[nodeID]
@@ -259,7 +296,25 @@ func (r *Router) Dispatch(ctx context.Context, nodeID string, t jobs.Task) (jobs
 	}
 	w := &waiter{nodeID: nodeID, owner: c, ch: make(chan *relayv1.TaskResult, 1)}
 	r.waiters[t.ID] = w
+	slot := r.sendSlots[t.ID]
+	if slot == nil {
+		slot = &sendSlot{}
+		r.sendSlots[t.ID] = slot
+	}
+	slot.refs++
 	r.mu.Unlock()
+	defer r.releaseSendSlot(t.ID, slot)
+
+	// Outside mu on purpose: the guard may take the Job gate's mutex, commit
+	// to the store, or read it, and mu guards map access only.
+	slot.mu.Lock()
+	if !slot.sent && jobs.SendWithheld(ctx) {
+		slot.mu.Unlock()
+		r.removeWaiterIfOwn(t.ID, w)
+		return jobs.Result{}, jobs.ErrSendWithheld
+	}
+	slot.sent = true
+	slot.mu.Unlock()
 
 	msg := &relayv1.RelayMessage{Body: &relayv1.RelayMessage_Task{Task: taskRequest(t)}}
 	if err := c.send(msg); err != nil {
@@ -294,12 +349,35 @@ func (r *Router) Dispatch(ctx context.Context, nodeID string, t jobs.Task) (jobs
 	}
 }
 
+// releaseSendSlot drops one Dispatch call's reference on taskID's slot and
+// deletes the slot when it was the last.
+func (r *Router) releaseSendSlot(taskID string, slot *sendSlot) {
+	r.mu.Lock()
+	slot.refs--
+	if slot.refs == 0 && r.sendSlots[taskID] == slot {
+		delete(r.sendSlots, taskID)
+	}
+	r.mu.Unlock()
+}
+
 // removeWaiter deletes taskID's waiter, if still present, under mu. It does
 // NOT close the channel — the caller (Dispatch) is the only reader and is
 // abandoning it, not signalling disconnect to some other reader.
 func (r *Router) removeWaiter(taskID string) {
 	r.mu.Lock()
 	delete(r.waiters, taskID)
+	r.mu.Unlock()
+}
+
+// removeWaiterIfOwn deletes taskID's waiter only if it is still w. The waiters
+// map is keyed by task ID, and a concurrent Reconciler resend can overwrite
+// this call's entry (see ReconcileNode's doc); a withheld send must never
+// delete another caller's waiter, or that caller would hang until its timeout.
+func (r *Router) removeWaiterIfOwn(taskID string, w *waiter) {
+	r.mu.Lock()
+	if r.waiters[taskID] == w {
+		delete(r.waiters, taskID)
+	}
 	r.mu.Unlock()
 }
 

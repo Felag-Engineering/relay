@@ -48,14 +48,17 @@ import (
 // and fails closed otherwise.
 
 // Executor is the narrow capability-layer entry point the execution tools
-// dispatch through — Service.Run and Service.CancelJob's exact shape,
+// dispatch through — Service.Start and Service.CancelJob's exact shape,
 // declared locally so no mcp file needs to import *capability.Service
 // itself (mirrors NodeReader/PolicyReader/OperationLister in mcp.go, but for
 // the execution stages: Selector -> authz -> blast-cap -> dispatch -> audit,
 // invariant 10). *capability.Service satisfies Executor structurally (Go
 // structural typing) — the composition root passes it in directly.
 type Executor interface {
-	Run(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) ([]capability.NodeResult, error)
+	// Start is Service.Start (#895): the same pipeline as Run, returning once
+	// the Job's Tasks are persisted. This adapter chooses how long to wait for
+	// the Job afterwards (wait_seconds); it decides nothing about the dispatch.
+	Start(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action, o capability.StartOptions) (capability.StartedJob, error)
 	CancelJob(ctx context.Context, p capability.Principal, jobID string) error
 
 	// Plan is Service.Plan's exact shape (#119, ADR-0011): resolves sel,
@@ -79,8 +82,8 @@ type execAdapter struct {
 	r Executor
 }
 
-func (a execAdapter) Run(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) ([]capability.NodeResult, error) {
-	return a.r.Run(ctx, p, sel, act)
+func (a execAdapter) Start(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action, o capability.StartOptions) (capability.StartedJob, error) {
+	return a.r.Start(ctx, p, sel, act, o)
 }
 
 func (a execAdapter) CancelJob(ctx context.Context, p capability.Principal, jobID string) error {
@@ -146,12 +149,11 @@ func perNodeResultFromTask(task jobs.Task) PerNodeResult {
 
 // renderJob re-reads jobID via results (the injected JobResultReader) and
 // renders every one of its Tasks as a PerNodeResult, sorted by NodeID for a
-// stable response (controlplane.RenderJobResults). It is the shared rendering
-// path for run_operation/raw_exec's own result (once exec.Run returns a
-// non-empty NodeResult set) and get_job's polling re-read of the same Job
-// later.
+// stable response, with the Job's status (controlplane.RenderJobState). It is
+// the shared rendering path for run_operation/raw_exec's own result (once
+// exec.Start returns a Job) and get_job's polling re-read of the same Job later.
 func renderJob(ctx context.Context, results JobResultReader, jobID string) (ExecutionOutput, error) {
-	rendered, err := controlplane.RenderJobResults(ctx, results, jobID)
+	rendered, status, err := controlplane.RenderJobState(ctx, results, jobID)
 	if err != nil {
 		return ExecutionOutput{}, err
 	}
@@ -159,10 +161,10 @@ func renderJob(ctx context.Context, results JobResultReader, jobID string) (Exec
 	for _, r := range rendered {
 		items = append(items, PerNodeResult(r))
 	}
-	return ExecutionOutput{JobID: jobID, Results: items}, nil
+	return ExecutionOutput{JobID: jobID, JobStatus: status, Results: items}, nil
 }
 
-// renderRunError translates an error returned by Executor.Run into the tool
+// renderRunError translates an error returned by Executor.Start into the tool
 // error the SDK renders (IsError=true, message = err.Error()): a Freeze
 // refusal becomes a distinct, legible "the Relay is frozen" message; a
 // blast-radius cap rejection is returned verbatim (CapExceededError.Error()
@@ -189,6 +191,17 @@ func renderRunError(err error) error {
 	var unknownErr *capability.UnknownOperationError
 	var malformedErr *capability.MalformedCallError
 	if errors.As(err, &unknownErr) || errors.As(err, &malformedErr) {
+		return err
+	}
+	// Idempotency outcomes (#895) each say precisely what the caller may do
+	// next, and whether a new key is safe; wrapping them would bury that.
+	var conflictErr *capability.IdempotencyConflictError
+	var keyErr *capability.IdempotencyKeyError
+	var pendingErr *capability.IdempotencyPendingError
+	var releasedErr *capability.IdempotencyReleasedError
+	var abandonedErr *capability.IdempotencyAbandonedError
+	if errors.As(err, &conflictErr) || errors.As(err, &keyErr) || errors.As(err, &pendingErr) ||
+		errors.As(err, &releasedErr) || errors.As(err, &abandonedErr) || errors.Is(err, capability.ErrIdempotencyUnavailable) {
 		return err
 	}
 	return fmt.Errorf("mcp: dispatch failed: %w", err)
@@ -264,6 +277,10 @@ type runOperationInput struct {
 	TimeoutSeconds int32 `json:"timeout_seconds,omitempty" jsonschema:"Optional per-Task timeout in seconds. 0 or omitted uses the daemon/engine default; max 86400 (24h)."`
 	// Plan: see the type doc comment above.
 	Plan bool `json:"plan,omitempty" jsonschema:"If true, resolve/authorize/check exactly as a real run would but execute nothing — return per-Node Policy verdicts (allow/deny(rule)/unknown(offline)) plus would_be_rejected instead of dispatching (ADR-0011). Advisory and point-in-time: Policy may change before a real run."`
+	// WaitSeconds and IdempotencyKey: omitempty, so callArgsDigest is unchanged
+	// for a call that omits them (AP-65).
+	WaitSeconds    int32  `json:"wait_seconds,omitempty" jsonschema:"0/omitted returns as soon as every Task is persisted, with job_id and job_status=running; poll get_job. 1-300 waits up to that many seconds for every Task to finish and returns full per-Node results if they did, otherwise the running Job. A lapsed wait never cancels the Job. A call that re-attaches to an existing Job (a repeated idempotency_key) does not wait: it returns the Job as it stands. Ignored with plan=true. Re-send the call unchanged (wait_seconds and idempotency_key included) when answering an approval."`
+	IdempotencyKey string `json:"idempotency_key,omitempty" jsonschema:"Optional, at most 128 printable ASCII bytes. A repeat of the same key by the same Account within 24h returns the existing Job and dispatches nothing; the same key with different arguments is refused. Send a fresh key per intended run, and re-send it unchanged when re-issuing after a lost response. Ignored with plan=true: a preflight claims no key."`
 }
 
 // rawExecInput is raw_exec's argument: argv only — no shell, no
@@ -277,6 +294,9 @@ type rawExecInput struct {
 	// argv verbatim and always risk class mutate (ADR-0012, invariant 13) —
 	// no client field can change either.
 	Plan bool `json:"plan,omitempty" jsonschema:"If true, resolve/authorize/check exactly as a real run would but execute nothing — return per-Node Policy verdicts (allow/deny(rule)/unknown(offline)) plus would_be_rejected instead of dispatching (ADR-0011). Advisory and point-in-time: Policy may change before a real run."`
+	// WaitSeconds and IdempotencyKey: see runOperationInput's field docs.
+	WaitSeconds    int32  `json:"wait_seconds,omitempty" jsonschema:"0/omitted returns as soon as every Task is persisted, with job_id and job_status=running; poll get_job. 1-300 waits up to that many seconds for every Task to finish and returns full per-Node results if they did, otherwise the running Job. A lapsed wait never cancels the Job. A call that re-attaches to an existing Job (a repeated idempotency_key) does not wait: it returns the Job as it stands. Ignored with plan=true. Re-send the call unchanged (wait_seconds and idempotency_key included) when answering an approval."`
+	IdempotencyKey string `json:"idempotency_key,omitempty" jsonschema:"Optional, at most 128 printable ASCII bytes. A repeat of the same key by the same Account within 24h returns the existing Job and dispatches nothing; the same key with different arguments is refused. Send a fresh key per intended run, and re-send it unchanged when re-issuing after a lost response. Ignored with plan=true: a preflight claims no key."`
 }
 
 // tightenExecInputSchema infers In's schema, then makes it stricter than the
@@ -300,6 +320,13 @@ func tightenExecInputSchema[In any]() *schema.Schema {
 		p.Minimum = schema.Ptr(float64(0))
 		p.Maximum = schema.Ptr(float64(controlplane.MaxTimeoutSeconds)) // 86400
 	}
+	if p := s.Properties["wait_seconds"]; p != nil {
+		p.Minimum = schema.Ptr(float64(0))
+		p.Maximum = schema.Ptr(float64(controlplane.MaxWaitSeconds))
+	}
+	if p := s.Properties["idempotency_key"]; p != nil {
+		p.MaxLength = schema.Ptr(capability.MaxIdempotencyKeyBytes)
+	}
 	return s
 }
 
@@ -321,8 +348,8 @@ func tightenExecInputSchema[In any]() *schema.Schema {
 // execution tools share one construction of the result shape; having each call
 // site assemble its own is how the park branch would get added to one tool and
 // forgotten in the other.
-func dispatch(ctx context.Context, exec Executor, results JobResultReader, p capability.Principal, sel capability.Selector, act jobs.Action) (RunOrPlanOutput, *capability.ParkedError, error) {
-	nodeResults, err := exec.Run(ctx, p, sel, act)
+func dispatch(ctx context.Context, exec Executor, results JobResultReader, p capability.Principal, sel capability.Selector, act jobs.Action, o dispatchOpts) (RunOrPlanOutput, *capability.ParkedError, error) {
+	sj, err := exec.Start(ctx, p, sel, act, capability.StartOptions{IdempotencyKey: o.key})
 	if err != nil {
 		var parked *capability.ParkedError
 		if errors.As(err, &parked) {
@@ -333,18 +360,37 @@ func dispatch(ctx context.Context, exec Executor, results JobResultReader, p cap
 		}
 		return RunOrPlanOutput{}, nil, renderRunError(err)
 	}
-	// *capability.Service can never return a zero-length nodeResults with a
-	// nil error (a zero-match Selector is refused as no_nodes_matched before
-	// this call returns). This branch exists only so an out-of-contract
-	// Executor can't index an empty slice below.
-	if len(nodeResults) == 0 {
+	// *capability.Service can never return an empty JobID with a nil error from
+	// the real engine (a zero-match Selector is refused as no_nodes_matched
+	// before this call returns). The no-op dispatcher, which creates no Job,
+	// does; nothing was dispatched then, so there is nothing to read back.
+	if sj.JobID == "" {
 		return RunOrPlanOutput{Results: []PerNodeResult{}}, nil, nil
 	}
-	out, err := renderJob(ctx, results, nodeResults[0].JobID)
+	// wait_seconds is presentation only: it decides how long this call holds
+	// before reading the Job back, never what was dispatched. A lapsed wait, a
+	// dropped caller and a re-attach all leave the Job exactly as it was.
+	if o.wait > 0 && !sj.Reattached && sj.Done != nil {
+		t := time.NewTimer(o.wait)
+		select {
+		case <-sj.Done:
+		case <-t.C:
+		case <-ctx.Done():
+		}
+		t.Stop()
+	}
+	out, err := renderJob(ctx, results, sj.JobID)
 	if err != nil {
 		return RunOrPlanOutput{}, nil, err
 	}
-	return RunOrPlanOutput{JobID: out.JobID, Results: out.Results}, nil, nil
+	return RunOrPlanOutput{JobID: out.JobID, Results: out.Results, JobStatus: out.JobStatus, Reattached: sj.Reattached}, nil, nil
+}
+
+// dispatchOpts are the two presentation inputs of a real (non-plan) call: how
+// long to hold for the Job (wait_seconds) and the idempotency key to forward.
+type dispatchOpts struct {
+	wait time.Duration
+	key  string
 }
 
 // renderParked projects a capability.ParkedError into the AI-agent-facing
@@ -386,6 +432,15 @@ const planModeClause = "Plan mode — the no-execution preview of whether each N
 	"the action (ADR-0011) — is the sanctioned probe before mutating; prefer it over learning Policy " +
 	"boundaries by triggering real executions."
 
+// jobReturnClause is the SINGLE, IDENTICAL sentence stating when run_operation
+// and raw_exec return and how to get the outcomes (#895, ADR-0004's wait
+// budget). Shared for the reason planModeClause is.
+const jobReturnClause = "Returns as soon as every matched Node's Task is persisted, with job_id and " +
+	"job_status=running; poll get_job with job_id until job_status=complete. Pass wait_seconds (max 300) to " +
+	"wait up to that long for full per-Node results; a lapsed wait never cancels the Job, and a call that re-attaches through its idempotency_key does not wait. Pass an " +
+	"idempotency_key (a fresh one per intended run) so a call re-issued after a lost response returns the " +
+	"existing Job instead of dispatching again — re-send it unchanged. Without a key, a repeated call is a new dispatch."
+
 // resultShapeClause is the SINGLE, IDENTICAL result-shape contract sentence
 // shared by run_operation's and raw_exec's Description (#207/#253, mirroring
 // planModeClause's pattern): both tools render the same RunOrPlanOutput, so
@@ -399,7 +454,10 @@ const resultShapeClause = "Result shape: per-Node exit_code is present only when
 	"Relay-authored rather than the daemon's own bytes. job_id is present only when a Job was created; it is " +
 	"absent on plan=true responses (a Plan executes nothing) and on a dispatch parked for approval, so an " +
 	"absent job_id always means nothing was dispatched. A Selector that matches no Nodes is refused as " +
-	"no_nodes_matched and creates no Job; with plan=true it is reported as would_be_rejected no_nodes_matched."
+	"no_nodes_matched and creates no Job; with plan=true it is reported as would_be_rejected no_nodes_matched. " +
+	"job_status is running while any Task is unresolved (its outcome reads unspecified) and complete once " +
+	"every Task has a terminal outcome; reattached is true when this call dispatched nothing and returned " +
+	"the Job an earlier call created."
 
 // toolRunOperation and toolRawExec are the two execution tools' registered
 // Names, for elicit.go's question() call (and its own tests) to pass the
@@ -470,7 +528,7 @@ func isAnsweredRetry(ask *questioner, req *sdkmcp.CallToolRequest, p capability.
 func answerThenDispatch(
 	ctx context.Context, req *sdkmcp.CallToolRequest, p capability.Principal,
 	exec Executor, results JobResultReader, reads ReadAuditor, decider ApprovalDecider,
-	ask *questioner, now func() time.Time, tool string, in any, sel capability.Selector, act jobs.Action,
+	ask *questioner, now func() time.Time, tool string, in any, sel capability.Selector, act jobs.Action, o dispatchOpts,
 ) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
 	digest, err := callArgsDigest(in)
 	if err != nil {
@@ -502,7 +560,7 @@ func answerThenDispatch(
 		// capability-layer claim is bounded by Satisfied(now) — a re-drive
 		// past the deadline parks afresh rather than re-attaching forever
 		// (AP-25).
-		out, parked, err := dispatch(ctx, exec, results, p, sel, act)
+		out, parked, err := dispatch(ctx, exec, results, p, sel, act, o)
 		if err != nil {
 			return nil, RunOrPlanOutput{}, r.dispatchError(err)
 		}
@@ -535,7 +593,7 @@ func answerThenDispatch(
 		if err != nil {
 			return nil, RunOrPlanOutput{}, r.reattachError(err)
 		}
-		out := RunOrPlanOutput{JobID: job.JobID, Results: job.Results}
+		out := RunOrPlanOutput{JobID: job.JobID, Results: job.Results, JobStatus: job.JobStatus}
 		out.Decision = r.decisionOutput(out)
 		return nil, out, nil
 
@@ -583,9 +641,8 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			"the vocabulary — each Operation's purpose, risk class, argument names/types/constraints, and a " +
 			"usage example — so you pick the right one and build its args correctly, without trial-and-error. " +
 			planModeClause + " If a result comes back outcome=denied_by_policy, call describe_node to see the " +
-			"Node's effective Policy and narrow your request rather than guessing again. Blocks until every " +
-			"matched Node's Task reaches a terminal outcome and returns per-Node results plus the Job id; " +
-			"get_job re-reads the same Job later. " + resultShapeClause,
+			"Node's effective Policy and narrow your request rather than guessing again. " +
+			jobReturnClause + " " + resultShapeClause,
 		InputSchema: tightenExecInputSchema[runOperationInput](),
 	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, in runOperationInput) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
 		logPrincipal(ctx, "run_operation")
@@ -605,6 +662,8 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		}
 
 		if in.Plan {
+			// idempotency_key and wait_seconds are deliberately ignored here: a
+			// preflight creates nothing, no dedup entry (PF-8).
 			plan, err := planAndRender(ctx, exec, p, sel, act)
 			if err != nil {
 				return nil, RunOrPlanOutput{}, err
@@ -614,6 +673,12 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			return nil, RunOrPlanOutput{Results: []PerNodeResult{}, Plan: &plan}, nil
 		}
 
+		wait, err := controlplane.ResolveWaitSeconds(in.WaitSeconds)
+		if err != nil {
+			return nil, RunOrPlanOutput{}, err
+		}
+		o := dispatchOpts{wait: wait, key: in.IdempotencyKey}
+
 		// An answered retry (#727) decides before anything dispatches, then
 		// re-enters the pipeline below at most once itself — it never falls
 		// through to the plain dispatch() call that follows. A plan=true
@@ -621,10 +686,10 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		// plan=true is handled exactly like today's call regardless of this
 		// check (AP-70: "a call that did not park").
 		if isAnsweredRetry(ask, req, p) {
-			return answerThenDispatch(ctx, req, p, exec, results, reads, decider, ask, now, toolRunOperation, in, sel, act)
+			return answerThenDispatch(ctx, req, p, exec, results, reads, decider, ask, now, toolRunOperation, in, sel, act, o)
 		}
 
-		out, parked, err := dispatch(ctx, exec, results, p, sel, act)
+		out, parked, err := dispatch(ctx, exec, results, p, sel, act, o)
 		if err != nil {
 			return nil, RunOrPlanOutput{}, err
 		}
@@ -654,7 +719,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			"regardless of what argv does — raw_exec always takes the strict mutate-cap, even for a " +
 			"read-only-looking command. argv runs verbatim — no shell, no client-side splitting — and the " +
 			"daemon's Policy regex decides per Node whether it is allowed (a per-Node refusal renders " +
-			"outcome=denied_by_policy). " + planModeClause + " " + resultShapeClause,
+			"outcome=denied_by_policy). " + planModeClause + " " + jobReturnClause + " " + resultShapeClause,
 		InputSchema: tightenExecInputSchema[rawExecInput](),
 	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, in rawExecInput) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
 		logPrincipal(ctx, "raw_exec")
@@ -682,6 +747,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: in.Argv, TimeoutSeconds: timeoutSeconds}
 
 		if in.Plan {
+			// See run_operation's identical branch: the key is ignored (PF-8).
 			plan, err := planAndRender(ctx, exec, p, sel, act)
 			if err != nil {
 				return nil, RunOrPlanOutput{}, err
@@ -691,12 +757,18 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			return nil, RunOrPlanOutput{Results: []PerNodeResult{}, Plan: &plan}, nil
 		}
 
+		wait, err := controlplane.ResolveWaitSeconds(in.WaitSeconds)
+		if err != nil {
+			return nil, RunOrPlanOutput{}, err
+		}
+		o := dispatchOpts{wait: wait, key: in.IdempotencyKey}
+
 		// See run_operation's identical branch above.
 		if isAnsweredRetry(ask, req, p) {
-			return answerThenDispatch(ctx, req, p, exec, results, reads, decider, ask, now, toolRawExec, in, sel, act)
+			return answerThenDispatch(ctx, req, p, exec, results, reads, decider, ask, now, toolRawExec, in, sel, act, o)
 		}
 
-		out, parked, err := dispatch(ctx, exec, results, p, sel, act)
+		out, parked, err := dispatch(ctx, exec, results, p, sel, act, o)
 		if err != nil {
 			return nil, RunOrPlanOutput{}, err
 		}

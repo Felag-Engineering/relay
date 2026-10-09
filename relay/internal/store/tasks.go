@@ -141,6 +141,22 @@ func (t *sqliteTasks) MarkCancelled(ctx context.Context, taskID string, at time.
 	})
 }
 
+// MarkCancelledBeforeSend transitions a Task from Dispatched to Resolved with
+// jobs.OutcomeCancelled and sets dispatched_at back to NULL — the engine marked
+// the Task Dispatched but its Job's cancel was seen before the send began, so
+// the Task never left the Relay (#943). The row is identical to MarkCancelled's,
+// so the Console reads it as never sent and InFlight never returns it. Returns
+// jobs.ErrTaskNotFound if the Task does not exist, or jobs.ErrInvalidTaskState
+// if it is not currently Dispatched.
+func (t *sqliteTasks) MarkCancelledBeforeSend(ctx context.Context, taskID string, at time.Time) error {
+	return t.transition(ctx, taskID, "dispatched", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state = 'resolved', outcome = ?, dispatched_at = NULL, resolved_at = ? WHERE task_id = ?`,
+			int(jobs.OutcomeCancelled), formatTime(roundTripTime(at)), taskID)
+		return err
+	})
+}
+
 // transition runs fn inside a tx after verifying taskID currently has
 // requiredState, translating "not found" / "wrong state" into the sentinel
 // errors jobs.ErrTaskNotFound / jobs.ErrInvalidTaskState.

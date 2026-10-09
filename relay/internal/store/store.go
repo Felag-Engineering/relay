@@ -361,6 +361,13 @@ func (s *Store) MCPTasks() mcptask.Repository {
 	return &sqliteMCPTasks{db: s.db}
 }
 
+// IdempotencyKeys returns the SQLite-backed jobs.IdempotencyRepository (#895):
+// the dispatch idempotency keys that let a re-issued MCP call re-attach to the
+// Job it already created instead of dispatching again.
+func (s *Store) IdempotencyKeys() jobs.IdempotencyRepository {
+	return &sqliteIdempotency{db: s.db}
+}
+
 // Accounts returns the SQLite-backed accounts.Repository — the control
 // plane's identity substrate (ADR-0010). Persisted rather than in-memory
 // because an Account is a durable identity: a disabled Account must stay

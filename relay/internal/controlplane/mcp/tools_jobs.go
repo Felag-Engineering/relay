@@ -28,14 +28,11 @@ type getJobInput struct {
 
 // registerJobTools registers cancel_job and get_job on srv.
 //
-// The long-running-Job contract this issue settles: run_operation/raw_exec
-// are synchronous — they block until every matched Node's Task reaches a
-// terminal outcome and return the full per-Node result set directly. get_job
-// exists to re-read that same Job's results later by id (e.g. after using
-// cancel_job to stop it, or simply to poll a still-in-flight Job's Tasks
-// from a second call) — the simplest result-retrieval shape that covers both
-// "I already have my results" and "let me check again", without requiring a
-// second, separate polling protocol.
+// The long-running-Job contract (#895, ADR-0004): run_operation/raw_exec
+// return as soon as the Job's Tasks are persisted (or, with wait_seconds, once
+// they finish), and get_job is the polling path — it re-reads the same Job by
+// id and reports job_status running or complete — without a second, separate
+// polling protocol.
 func registerJobTools(srv *sdkmcp.Server, exec Executor, results JobResultReader, reads ReadAuditor) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "cancel_job",
@@ -62,9 +59,9 @@ func registerJobTools(srv *sdkmcp.Server, exec Executor, results JobResultReader
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "get_job",
 		Description: "Re-read a Job's per-Node results by id — the result-retrieval/polling shape for a " +
-			"Job started via run_operation/raw_exec (which already block and return full results; " +
-			"get_job re-reads the same Job later, e.g. after cancel_job, or to check on a still-in-flight " +
-			"Job from a second call). Per-Node exit_code is present only when a process actually ran and " +
+			"Job started via run_operation/raw_exec (which return as soon as the Job is persisted: poll " +
+			"get_job until job_status=complete; it also re-reads the Job after cancel_job). While " +
+			"job_status=running an unfinished Task's outcome reads unspecified. Per-Node exit_code is present only when a process actually ran and " +
 			"exited with a status; a Task that never executed or was killed without one has no exit_code " +
 			"key — outcome is the authoritative state. A Task whose daemon report the Relay refused as a " +
 			"protocol violation also has no exit_code key and is neither of those: it may well have executed.",

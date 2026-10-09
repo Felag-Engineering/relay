@@ -210,6 +210,92 @@ func TestResolve_InvalidState(t *testing.T) {
 	}
 }
 
+// TestMarkCancelledBeforeSend_FromDispatched: a Dispatched Task whose send was
+// withheld (#943) becomes Resolved/Cancelled with DispatchedAt cleared, is
+// absent from InFlight, and the row survives a reopen.
+func TestMarkCancelledBeforeSend_FromDispatched(t *testing.T) {
+	st, path := openTestStore(t)
+	ctx := context.Background()
+	seedJobAndStage(t, st, "job-1", "stage-1")
+	taskRepo := st.Tasks()
+
+	task := jobs.Task{ID: "task-1", JobID: "job-1", StageID: "stage-1", NodeID: "node-1", Action: testAction(), CreatedAt: time.Now().UTC()}
+	if err := taskRepo.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := taskRepo.MarkDispatched(ctx, "task-1", time.Now().UTC()); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+	resolvedAt := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	if err := taskRepo.MarkCancelledBeforeSend(ctx, "task-1", resolvedAt); err != nil {
+		t.Fatalf("MarkCancelledBeforeSend: %v", err)
+	}
+
+	check := func(label string, repo jobs.TaskRepository) {
+		t.Helper()
+		got, err := repo.Get(ctx, "task-1")
+		if err != nil {
+			t.Fatalf("%s: Get: %v", label, err)
+		}
+		if got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeCancelled {
+			t.Errorf("%s: got %v/%v, want Resolved/Cancelled", label, got.State, got.Outcome)
+		}
+		if !got.DispatchedAt.IsZero() {
+			t.Errorf("%s: DispatchedAt = %v, want zero (never sent)", label, got.DispatchedAt)
+		}
+		if !got.ResolvedAt.Equal(resolvedAt) {
+			t.Errorf("%s: ResolvedAt = %v, want %v", label, got.ResolvedAt, resolvedAt)
+		}
+		inFlight, err := repo.InFlight(ctx)
+		if err != nil {
+			t.Fatalf("%s: InFlight: %v", label, err)
+		}
+		if len(inFlight) != 0 {
+			t.Errorf("%s: InFlight = %v, want empty", label, inFlight)
+		}
+	}
+	check("before reopen", taskRepo)
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	st2, err := Open(path)
+	if err != nil {
+		t.Fatalf("re-Open: %v", err)
+	}
+	t.Cleanup(func() { st2.Close() }) //nolint:errcheck
+	check("after reopen", st2.Tasks())
+}
+
+func TestMarkCancelledBeforeSend_InvalidState(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	seedJobAndStage(t, st, "job-1", "stage-1")
+	taskRepo := st.Tasks()
+
+	task := jobs.Task{ID: "task-1", JobID: "job-1", StageID: "stage-1", NodeID: "node-1", Action: testAction(), CreatedAt: time.Now().UTC()}
+	if err := taskRepo.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := taskRepo.MarkCancelledBeforeSend(ctx, "task-1", time.Now().UTC()); !errors.Is(err, jobs.ErrInvalidTaskState) {
+		t.Errorf("on Pending: want ErrInvalidTaskState, got %v", err)
+	}
+
+	if err := taskRepo.MarkDispatched(ctx, "task-1", time.Now().UTC()); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+	if err := taskRepo.Resolve(ctx, "task-1", jobs.Result{Outcome: jobs.OutcomeSuccess}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if err := taskRepo.MarkCancelledBeforeSend(ctx, "task-1", time.Now().UTC()); !errors.Is(err, jobs.ErrInvalidTaskState) {
+		t.Errorf("on Resolved: want ErrInvalidTaskState, got %v", err)
+	}
+
+	if err := taskRepo.MarkCancelledBeforeSend(ctx, "does-not-exist", time.Now().UTC()); !errors.Is(err, jobs.ErrTaskNotFound) {
+		t.Errorf("unknown task: want ErrTaskNotFound, got %v", err)
+	}
+}
+
 // TestMarkUnreachable_FromPending is the offline-fail-fast contract
 // (ADR-0004): a Pending Task moves straight to Resolved/OutcomeUnreachable
 // with no DispatchedAt, and is absent from InFlight (it was never sent).
