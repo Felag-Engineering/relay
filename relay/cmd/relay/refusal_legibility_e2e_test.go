@@ -28,9 +28,10 @@ import (
 // plan review's blocking finding was about (the daemon's own stderr on this
 // row says a different argument would be allowed).
 var deniedOperationArgs = map[string]any{
-	"operation": "service.restart",
-	"args":      map[string]string{"unit": "sshd"},
-	"selector":  "relay:env=test",
+	"operation":    "service.restart",
+	"args":         map[string]string{"unit": "sshd"},
+	"selector":     "relay:env=test",
+	"wait_seconds": 300,
 }
 
 // TestRefusalLegibilityE2E_NodePolicyDenyExplainsItself proves box 1 at the
@@ -76,8 +77,15 @@ func TestRefusalLegibilityE2E_NodePolicyDenyExplainsItself(t *testing.T) {
 		t.Errorf("MCP refusal_explanation = %q, want capability.PolicyDenyExplanation", mr.RefusalExplanation)
 	}
 
+	// wait_seconds is an MCP-only field; the Control API body does not take it.
+	apiArgs := map[string]any{}
+	for k, v := range deniedOperationArgs {
+		if k != "wait_seconds" {
+			apiArgs[k] = v
+		}
+	}
 	resp := controlAPIRequest(t, f.clientFor(f.relay.Credential), http.MethodPost,
-		f.relay.ControlBase+"/api/v1/operations", f.relay.Credential, deniedOperationArgs)
+		f.relay.ControlBase+"/api/v1/operations", f.relay.Credential, apiArgs)
 	defer resp.Body.Close() //nolint:errcheck
 	var apiOut struct {
 		Results []mcp.PerNodeResult `json:"results"`

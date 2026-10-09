@@ -67,6 +67,25 @@ func TestMCP_ExecutionToolsInputSchemaConstraints(t *testing.T) {
 		if timeout.Maximum == nil || *timeout.Maximum != 86400 {
 			t.Errorf("%s timeout_seconds Maximum = %v, want 86400", toolName, timeout.Maximum)
 		}
+
+		wait, ok := s.Properties["wait_seconds"]
+		if !ok {
+			t.Fatalf("%s InputSchema has no %q property", toolName, "wait_seconds")
+		}
+		if wait.Minimum == nil || *wait.Minimum != 0 {
+			t.Errorf("%s wait_seconds Minimum = %v, want 0", toolName, wait.Minimum)
+		}
+		if wait.Maximum == nil || *wait.Maximum != 300 {
+			t.Errorf("%s wait_seconds Maximum = %v, want 300", toolName, wait.Maximum)
+		}
+
+		key, ok := s.Properties["idempotency_key"]
+		if !ok {
+			t.Fatalf("%s InputSchema has no %q property", toolName, "idempotency_key")
+		}
+		if key.MaxLength == nil || *key.MaxLength != 128 {
+			t.Errorf("%s idempotency_key MaxLength = %v, want 128", toolName, key.MaxLength)
+		}
 	}
 }
 
@@ -111,16 +130,21 @@ func TestMCP_ResultShapeSemanticsAdvertisedInOutputSchema(t *testing.T) {
 			"Present only when a process actually ran and exited with a status",
 			"Present only when a Job was created",
 			"an absent job_id always means nothing was dispatched",
+			"running while any Task is unresolved",
+			"true when this call dispatched nothing",
 		}},
 		{"raw_exec", []string{
 			"exit_code",
 			"Present only when a process actually ran and exited with a status",
 			"Present only when a Job was created",
 			"an absent job_id always means nothing was dispatched",
+			"running while any Task is unresolved",
+			"true when this call dispatched nothing",
 		}},
 		{"get_job", []string{
 			"exit_code",
 			"Present only when a process actually ran and exited with a status",
+			"running while any Task is unresolved",
 		}},
 		{"describe_node", []string{
 			"allowed_args",

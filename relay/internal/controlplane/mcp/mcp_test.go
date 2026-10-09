@@ -161,11 +161,35 @@ func newTestServerWithBlastCap(t *testing.T, readCap, mutateCap int) testServer 
 	return newTestServerWithConfig(t, readCap, mutateCap, "")
 }
 
+// drainOnCleanup waits for the Service's background Jobs (Start, #895) when the
+// test ends. Registered right after capability.New, so (cleanups run
+// last-in-first-out) it runs after the test's own cleanups and the server's
+// Shutdown and before the store closes: a Job still fanning out never writes
+// to a closed store.
+func drainOnCleanup(t *testing.T, svc *capability.Service) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := svc.Drain(ctx); err != nil {
+			t.Errorf("background Jobs did not drain before the store closed: %v", err)
+		}
+	})
+}
+
 // newTestServerWithConfig is newTestServerWithBlastCap, additionally
 // parameterized on the registry's min_daemon_version gate (ADR-0014); ""
 // leaves the gate off, exactly like newTestServerWithBlastCap. execOpts are
 // applied to the Job engine after the deterministic ID seam.
 func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVersion string, execOpts ...capability.ExecOption) testServer {
+	t.Helper()
+	return newTestServerWithAccount(t, "", readCap, mutateCap, minDaemonVersion, execOpts...)
+}
+
+// newTestServerWithAccount is newTestServerWithConfig for a credential that
+// authenticates as the Account with the given ID. The default ID is "": an
+// Account with no ID can use no idempotency key (#895).
+func newTestServerWithAccount(t *testing.T, accountID string, readCap, mutateCap int, minDaemonVersion string, execOpts ...capability.ExecOption) testServer {
 	t.Helper()
 
 	const nodeA = "node-a"
@@ -255,7 +279,9 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 		capability.WithFreeze(st.Freeze()),
 		capability.WithPolicyView(policyCache),
 		capability.WithTemplateVocabulary(vocabCache),
+		capability.WithIdempotency(st.IdempotencyKeys()),
 	)
+	drainOnCleanup(t, capSvc)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 
 	handler := mcp.New(testReadLane{svc: capSvc}, opsLister{}, capSvc, results, nil, nil)
@@ -269,7 +295,7 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 			// certificate is all this test needs.
 			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &cert, nil },
 		},
-		controlplane.NewAuthenticator(staticVerifier{credential: testToken}),
+		controlplane.NewAuthenticator(staticVerifier{credential: testToken, accountID: accountID}),
 	)
 	controlSrv.Mux().Handle("/mcp", handler)
 
@@ -352,6 +378,7 @@ func newTestServerWithFailingReadSink(t *testing.T) testServer {
 		capability.WithAuditSink(failingReadSink{Sink: auditsink.New(st.Audit())}),
 		capability.WithFreeze(st.Freeze()),
 	)
+	drainOnCleanup(t, capSvc)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 	handler := mcp.New(testReadLane{svc: capSvc}, opsLister{}, capSvc, results, nil, nil)
 
@@ -1336,13 +1363,19 @@ func TestMCP_RequiresCredential(t *testing.T) {
 // credential, as the founding admin Account — enough for the MCP surface
 // tests, whose subject is the tool surface rather than the credential path
 // (that is internal/controlplane's and the cmd/relay e2e's job).
-type staticVerifier struct{ credential string }
+type staticVerifier struct {
+	credential string
+	// accountID, when set, is the authenticated Account's ID. Empty by default:
+	// most tests need no verified AccountID (#895's keys do).
+	accountID string
+}
 
 func (v staticVerifier) Verify(_ context.Context, credential string) (accounts.Account, accounts.APIToken, error) {
 	if credential != v.credential {
 		return accounts.Account{}, accounts.APIToken{}, accounts.ErrTokenInvalid
 	}
 	return accounts.Account{
+		ID:      v.accountID,
 		Name:    accounts.FoundingAdminName,
 		Kind:    accounts.KindHuman,
 		Role:    accounts.RoleAdmin,

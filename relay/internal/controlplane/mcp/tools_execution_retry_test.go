@@ -52,13 +52,13 @@ type scriptedRetryExecutor struct {
 	}
 }
 
-func (e *scriptedRetryExecutor) Run(context.Context, capability.Principal, capability.Selector, jobs.Action) ([]capability.NodeResult, error) {
+func (e *scriptedRetryExecutor) Start(context.Context, capability.Principal, capability.Selector, jobs.Action, capability.StartOptions) (capability.StartedJob, error) {
 	e.mu.Lock()
 	e.n++
 	call := e.n
 	e.mu.Unlock()
 	if call == 1 {
-		return nil, &capability.ParkedError{
+		return capability.StartedJob{}, &capability.ParkedError{
 			RequestID: answerRequestID,
 			PlanHash:  answerPlanHash,
 			Summary:   `service.restart(unit="nginx") [mutate] on 1 node(s): node-a`,
@@ -68,7 +68,7 @@ func (e *scriptedRetryExecutor) Run(context.Context, capability.Principal, capab
 			Askable:   true,
 		}
 	}
-	return e.second.results, e.second.err
+	return startedJobOf(e.second.results, e.second.err)
 }
 
 func (e *scriptedRetryExecutor) CancelJob(context.Context, capability.Principal, string) error {

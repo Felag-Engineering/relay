@@ -79,8 +79,9 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 	session := relaytest.Connect(t, f.ControlBase, f.Client())
 
 	res := relaytest.CallTool(t, session, "run_operation", map[string]any{
-		"operation": "system.facts",
-		"selector":  "relay:env=test",
+		"operation":    "system.facts",
+		"selector":     "relay:env=test",
+		"wait_seconds": 300,
 	})
 	if res.IsError {
 		t.Fatalf("run_operation returned IsError=true; content = %+v", res.Content)

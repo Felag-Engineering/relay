@@ -380,7 +380,7 @@ capability, so the result is a plain tool result, not a task handle):
 
 ```console
 $ scripts/dev-fleet-mcp.sh call run_operation \
-    '{"selector":"node:role=bastion","operation":"file.read","args":{"path":"/etc/shadow"}}' \
+    '{"selector":"node:role=bastion","operation":"file.read","args":{"path":"/etc/shadow"},"wait_seconds":60}' \
     | python3 -c 'import json,sys; [print(r["outcome"] + ": " + r["stderr"]) for r in json.load(sys.stdin)["result"]["structuredContent"]["results"]]'
 ```
 
@@ -978,7 +978,8 @@ $ scripts/dev-fleet-mcp.sh api-approver POST /api/v1/approvals/<request_id>/deci
     '{"approve":true,"plan_hash":"<plan_hash>","reason":"repair the dev-fleet demo service"}'
 ```
 
-then re-issue the same call unchanged → **6 × `success, exit_code: 0`** *(predicted)*
+then re-issue the same call unchanged (with `wait_seconds`, or poll `get_job` until
+`job_status` is `complete`) → **6 × `success, exit_code: 0`** *(predicted)*
 and **3 × `denied_by_policy`** *(tested — `daemon-3` and `daemon-7` by the existing
 `raw_exec_verdicts_match_the_web_db_split`; `daemon-8` by
 `bastion_fixture_denies_every_raw_exec`, both in

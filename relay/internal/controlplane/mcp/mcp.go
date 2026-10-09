@@ -6,7 +6,7 @@
 // registry or cache of their own — every registry, Policy-view and
 // Template-vocabulary read goes through the capability read lane, which
 // records it before returning content and fails closed (QRY-28). The
-// execution tools adapt an injected Executor (Service.Run/CancelJob's exact
+// execution tools adapt an injected Executor (Service.Start/CancelJob's exact
 // shape) and JobResultReader (per-Job Task read-back for rendering per-Node
 // results).
 //
