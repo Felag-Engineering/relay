@@ -539,10 +539,11 @@ func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *
 	waitForInFlightTasks(t, fr.harness, jobID, 2)
 	// list_inflight shows a Task once MarkDispatched commits, which is
 	// microseconds BEFORE the TaskRequest is sent (the pre-send window,
-	// ADR-0013). A cancel that overtakes the send is a no-op on the daemon and
-	// /bin/sleep 30 would then run to completion. The settle makes sure both
-	// TaskRequests are on the wire, so the test checks what it claims
-	// (cancelling concurrent in-flight Tasks) and not the pre-send residual.
+	// ADR-0013). A cancel that overtakes the send now withholds it, so that Task
+	// still resolves cancelled; one already being written is a no-op on the
+	// daemon and /bin/sleep 30 would run to completion. The settle makes sure
+	// both TaskRequests are on the wire, so the test exercises cancelling Tasks
+	// actually on the wire and not the withheld path (#943).
 	// No observable signal for "sent" exists; the crash-mid-Job test settles
 	// for the same reason.
 	time.Sleep(500 * time.Millisecond)
