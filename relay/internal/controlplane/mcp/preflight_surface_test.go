@@ -256,8 +256,8 @@ func TestNoPreflightToolOrMethodIsRegistered(t *testing.T) {
 // here is an unreached stub.
 type noopExecutor struct{}
 
-func (noopExecutor) Run(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) ([]capability.NodeResult, error) {
-	return nil, nil
+func (noopExecutor) Start(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action, o capability.StartOptions) (capability.StartedJob, error) {
+	return capability.StartedJob{}, nil
 }
 func (noopExecutor) CancelJob(ctx context.Context, p capability.Principal, jobID string) error {
 	return nil

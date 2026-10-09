@@ -277,8 +277,9 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	// to both baseline Nodes; per-Node success plus a real hostname fact.
 	t.Run("facts_fanout", func(t *testing.T) {
 		res := relaytest.CallTool(t, session, "run_operation", map[string]any{
-			"operation": "system.facts",
-			"selector":  "relay:env=test",
+			"operation":    "system.facts",
+			"selector":     "relay:env=test",
+			"wait_seconds": 300,
 		})
 		if res.IsError {
 			t.Fatalf("run_operation(system.facts): IsError=true; content = %+v", res.Content)
@@ -374,7 +375,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	// structured Operation (system.facts) still succeeds afterward.
 	t.Run("raw_exec_allowed_denied_and_typed", func(t *testing.T) {
 		sleepRes := relaytest.CallTool(t, session, "raw_exec", map[string]any{
-			"argv": []string{"/bin/sleep", "1"}, "selector": "relay:env=test",
+			"argv": []string{"/bin/sleep", "1"}, "selector": "relay:env=test", "wait_seconds": 300,
 		})
 		if sleepRes.IsError {
 			t.Fatalf("raw_exec(/bin/sleep 1): IsError=true; content = %+v", sleepRes.Content)
@@ -389,7 +390,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 
 		echoRes := relaytest.CallTool(t, session, "raw_exec", map[string]any{
-			"argv": []string{"/bin/echo", "hello"}, "selector": "relay:env=test",
+			"argv": []string{"/bin/echo", "hello"}, "selector": "relay:env=test", "wait_seconds": 300,
 		})
 		if echoRes.IsError {
 			t.Fatalf("raw_exec(/bin/echo hello): IsError=true; content = %+v", echoRes.Content)
@@ -404,7 +405,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 
 		factsRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
-			"operation": "system.facts", "selector": "relay:env=test",
+			"operation": "system.facts", "selector": "relay:env=test", "wait_seconds": 300,
 		})
 		if factsRes.IsError {
 			t.Fatalf("run_operation(system.facts): IsError=true; content = %+v", factsRes.Content)
@@ -440,7 +441,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			}
 
 			applyRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
-				"operation": "system.facts", "selector": "relay:env=test",
+				"operation": "system.facts", "selector": "relay:env=test", "wait_seconds": 300,
 			})
 			if applyRes.IsError {
 				t.Fatalf("run_operation(plan=false): IsError=true; content = %+v", applyRes.Content)
@@ -477,7 +478,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			}
 
 			applyRes := relaytest.CallTool(t, session, "raw_exec", map[string]any{
-				"argv": []string{"/bin/echo", "x"}, "selector": "relay:env=test",
+				"argv": []string{"/bin/echo", "x"}, "selector": "relay:env=test", "wait_seconds": 300,
 			})
 			if applyRes.IsError {
 				t.Fatalf("raw_exec(plan=false): IsError=true; content = %+v", applyRes.Content)
@@ -550,7 +551,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 
 		restoredRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
-			"operation": "system.facts", "selector": "relay:env=test",
+			"operation": "system.facts", "selector": "relay:env=test", "wait_seconds": 300,
 		})
 		if restoredRes.IsError {
 			t.Fatalf("run_operation after release: IsError=true; content = %+v", restoredRes.Content)

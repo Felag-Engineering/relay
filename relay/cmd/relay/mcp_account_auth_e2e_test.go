@@ -118,12 +118,14 @@ func TestMCPAccountAuth_RoleLadder_E2E(t *testing.T) {
 	// /bin/sleep 0 is allowed by FixturePolicy's raw_exec allow list, so a
 	// refusal here can only be the Relay's role gate — never the Node's.
 	rawExecArgs := map[string]any{
-		"selector": "relay:env=test",
-		"argv":     []string{"/bin/sleep", "0"},
+		"selector":     "relay:env=test",
+		"argv":         []string{"/bin/sleep", "0"},
+		"wait_seconds": 300,
 	}
 	operationArgs := map[string]any{
-		"operation": "system.facts",
-		"selector":  "relay:env=test",
+		"operation":    "system.facts",
+		"selector":     "relay:env=test",
+		"wait_seconds": 300,
 	}
 
 	t.Run("operator runs an Operation", func(t *testing.T) {
@@ -348,8 +350,9 @@ func TestMCPAccountAuth_AttributionLanes_E2E(t *testing.T) {
 
 	session := relaytest.Connect(t, f.relay.ControlBase, client)
 	res := relaytest.CallTool(t, session, "run_operation", map[string]any{
-		"operation": "system.facts",
-		"selector":  "relay:env=test",
+		"operation":    "system.facts",
+		"selector":     "relay:env=test",
+		"wait_seconds": 300,
 	})
 	if res.IsError {
 		t.Fatalf("run_operation returned IsError=true: %+v", res.Content)

@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -135,6 +136,23 @@ func (f *fakeTaskRepository) MarkCancelled(_ context.Context, taskID string, _ t
 	return nil
 }
 
+func (f *fakeTaskRepository) MarkCancelledBeforeSend(_ context.Context, taskID string, _ time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	task, ok := f.tasks[taskID]
+	if !ok {
+		return jobs.ErrTaskNotFound
+	}
+	if task.State != jobs.DispatchStateDispatched {
+		return jobs.ErrInvalidTaskState
+	}
+	task.State = jobs.DispatchStateResolved
+	task.Outcome = jobs.OutcomeCancelled
+	task.DispatchedAt = time.Time{}
+	f.tasks[taskID] = task
+	return nil
+}
+
 func (f *fakeTaskRepository) Get(_ context.Context, taskID string) (jobs.Task, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -167,6 +185,198 @@ func (f *fakeTaskRepository) ByJob(_ context.Context, jobID string) ([]jobs.Task
 		}
 	}
 	return out, nil
+}
+
+// snapshotTasks wraps fakeTaskRepository so InFlight returns a fixed, ordered
+// snapshot (as one taken before later changes) and Get can be made to fail.
+type snapshotTasks struct {
+	*fakeTaskRepository
+	snapshot []jobs.Task
+	getErr   error
+}
+
+func (s *snapshotTasks) InFlight(context.Context) ([]jobs.Task, error) { return s.snapshot, nil }
+
+func (s *snapshotTasks) Get(ctx context.Context, taskID string) (jobs.Task, error) {
+	if s.getErr != nil {
+		return jobs.Task{}, s.getErr
+	}
+	return s.fakeTaskRepository.Get(ctx, taskID)
+}
+
+func hasWaiter(r *Router, taskID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.waiters[taskID]
+	return ok
+}
+
+// TestReconciler_StaleSnapshotNeverSendsATaskResolvedSinceTheSnapshot asserts
+// a Task resolved (withheld by its worker on a cancel, #943) after the
+// InFlight snapshot was taken is not sent when the Reconciler reaches it.
+func TestReconciler_StaleSnapshotNeverSendsATaskResolvedSinceTheSnapshot(t *testing.T) {
+	t1 := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	t2 := jobs.Task{ID: "task-2", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	fake := newFakeTaskRepository(t1, t2)
+	tasks := &snapshotTasks{fakeTaskRepository: fake, snapshot: []jobs.Task{t1, t2}}
+	router := NewRouter(nil, nil)
+	reconciler := NewReconciler(tasks, router)
+
+	send := &recordingSend{}
+	unregister := router.Register("node-1", send.send)
+	defer unregister()
+
+	done := make(chan error, 1)
+	go func() { done <- reconciler.ReconcileNode(context.Background(), "node-1") }()
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+	if err := fake.MarkCancelledBeforeSend(context.Background(), "task-2", time.Now()); err != nil {
+		t.Fatalf("MarkCancelledBeforeSend: %v", err)
+	}
+	router.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ReconcileNode: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReconcileNode did not return")
+	}
+
+	if n := send.len(); n != 1 {
+		t.Errorf("sends = %d, want 1 (task-2 must not be sent)", n)
+	}
+	got, _ := fake.Get(context.Background(), "task-2")
+	if got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeCancelled || !got.DispatchedAt.IsZero() {
+		t.Errorf("task-2 = %+v, want unchanged Resolved/Cancelled with zero DispatchedAt", got)
+	}
+	if fake.resolveCalls != 1 {
+		t.Errorf("resolveCalls = %d, want 1", fake.resolveCalls)
+	}
+	if hasWaiter(router, "task-2") {
+		t.Error("waiter for task-2 left behind")
+	}
+}
+
+// TestReconciler_ResendBeforeTheWorkersGuardIsNotRecordedNeverSent is the
+// sequence of #943's security review: a Reconciler resends a Task its live
+// worker has MarkDispatched but not yet sent, and the cancel lands afterwards.
+// The worker's guard (which would commit "cancelled, never sent") must not run:
+// the Task was sent, so the worker sends too and the Task resolves from the
+// delivered Result with its dispatched_at kept.
+func TestReconciler_ResendBeforeTheWorkersGuardIsNotRecordedNeverSent(t *testing.T) {
+	dispatchedAt := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
+	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched, DispatchedAt: dispatchedAt}
+	fake := newFakeTaskRepository(task)
+	router := NewRouter(nil, nil)
+	reconciler := NewReconciler(fake, router)
+
+	send := &recordingSend{}
+	unregister := router.Register("node-1", send.send)
+	defer unregister()
+
+	rctx, stopReconcile := context.WithCancel(context.Background())
+	defer stopReconcile()
+	reconcileDone := make(chan error, 1)
+	go func() { reconcileDone <- reconciler.ReconcileNode(rctx, "node-1") }()
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	// The cancel lands after the Reconciler's send; the worker reaches its guard.
+	var mu sync.Mutex
+	var guardCalls int
+	guard := func() bool {
+		mu.Lock()
+		guardCalls++
+		mu.Unlock()
+		_ = fake.MarkCancelledBeforeSend(context.Background(), "task-1", time.Now())
+		return true
+	}
+	type out struct {
+		res jobs.Result
+		err error
+	}
+	workerDone := make(chan out, 1)
+	go func() {
+		res, err := router.Dispatch(jobs.WithSendGuard(context.Background(), guard), "node-1", task)
+		workerDone <- out{res, err}
+	}()
+	waitUntil(t, time.Second, func() bool { return send.len() == 2 })
+	router.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+
+	var o out
+	select {
+	case o = <-workerDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker Dispatch did not return")
+	}
+	if o.err != nil {
+		t.Fatalf("worker Dispatch: %v", o.err)
+	}
+	if err := fake.Resolve(context.Background(), "task-1", o.res); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	stopReconcile() // its waiter was overwritten by the worker's; see ReconcileNode's doc
+	<-reconcileDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	if guardCalls != 0 {
+		t.Errorf("worker guard called %d times after the Task was sent, want 0", guardCalls)
+	}
+	got, _ := fake.Get(context.Background(), "task-1")
+	if got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeSuccess || !got.DispatchedAt.Equal(dispatchedAt) {
+		t.Errorf("task = %+v, want Resolved/Success with dispatched_at kept", got)
+	}
+}
+
+// TestReconciler_StaleSnapshotResolvedTaskIsZeroSends asserts a snapshot Task
+// the store already shows Resolved is neither sent nor an error.
+func TestReconciler_StaleSnapshotResolvedTaskIsZeroSends(t *testing.T) {
+	stale := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	fake := newFakeTaskRepository(jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeCancelled})
+	tasks := &snapshotTasks{fakeTaskRepository: fake, snapshot: []jobs.Task{stale}}
+	router := NewRouter(nil, nil)
+	reconciler := NewReconciler(tasks, router)
+
+	send := &recordingSend{}
+	unregister := router.Register("node-1", send.send)
+	defer unregister()
+
+	if err := reconciler.ReconcileNode(context.Background(), "node-1"); err != nil {
+		t.Fatalf("ReconcileNode: %v", err)
+	}
+	if n := send.len(); n != 0 {
+		t.Errorf("sends = %d, want 0", n)
+	}
+}
+
+// TestReconciler_ReReadFailureWithholdsAndReportsError asserts the Reconciler
+// fails closed: if it cannot re-read a Task's state it sends nothing, reports
+// the error, and leaves the Task Dispatched for the next reconnect.
+func TestReconciler_ReReadFailureWithholdsAndReportsError(t *testing.T) {
+	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	fake := newFakeTaskRepository(task)
+	readErr := errors.New("store unavailable")
+	tasks := &snapshotTasks{fakeTaskRepository: fake, snapshot: []jobs.Task{task}, getErr: readErr}
+	router := NewRouter(nil, nil)
+	reconciler := NewReconciler(tasks, router)
+
+	send := &recordingSend{}
+	unregister := router.Register("node-1", send.send)
+	defer unregister()
+
+	err := reconciler.ReconcileNode(context.Background(), "node-1")
+	if !errors.Is(err, readErr) {
+		t.Fatalf("ReconcileNode error = %v, want it to wrap the read error", err)
+	}
+	if n := send.len(); n != 0 {
+		t.Errorf("sends = %d, want 0", n)
+	}
+	got, _ := fake.Get(context.Background(), "task-1")
+	if got.State != jobs.DispatchStateDispatched {
+		t.Errorf("task-1 state = %v, want still Dispatched", got.State)
+	}
 }
 
 // TestReconciler_ResendResolvesInFlightTask is the core restart-recovery

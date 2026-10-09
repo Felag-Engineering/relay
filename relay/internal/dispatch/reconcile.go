@@ -29,6 +29,20 @@ const reconcileDispatchTimeout = 35 * time.Second
 // Result. The Relay itself never re-executes a Task; ReconcileNode only ever
 // asks "what happened to the Task I already dispatched", never "run this
 // again."
+//
+// A resend and a live worker's send of the same Task are serialised per task
+// ID by Router.Dispatch's send slot (#943): the worker's cancel guard commits
+// its withhold inside that critical section and the Reconciler's guard re-reads
+// the store inside it, so a Reconciler send either comes after the withhold
+// (and reads Resolved, sending nothing) or before it (and the worker then
+// sends too, never recording a Task that was sent as never sent).
+//
+// Residual (#943): the slot lives only while a Dispatch call for the Task is
+// in progress. If a Reconciler resend has fully returned (with a Result, or
+// with a timeout or disconnect error) before the live worker reaches its guard,
+// the slot is gone and the worker's guard can still record the Task cancelled,
+// never sent, for a Task the Reconciler did send. The daemon still dedups by
+// task_id (at-most-once holds), but the record is untruthful for that Task.
 type Reconciler struct {
 	tasks   jobs.TaskRepository
 	conduit *Router
@@ -102,11 +116,37 @@ func (r *Reconciler) ReconcileNode(ctx context.Context, nodeID string) error {
 // concurrent reconcile (or the original dispatch, if it actually completed
 // after all) already resolved this Task — the exact idempotency InFlight()'s
 // contract promises (once Resolved, a Task no longer appears in InFlight()).
+//
+// Before each resend the Task's state is re-read immediately before the wire
+// write (#943). A Task no longer Dispatched is never sent from a stale
+// snapshot: this matters because reconcileTask runs serially under a 35s
+// per-Task bound, so a snapshot can be minutes old by its last Task. A failed
+// re-read withholds the send and returns an error; the Task stays Dispatched
+// and is retried on the next reconnect.
 func (r *Reconciler) reconcileTask(ctx context.Context, nodeID string, task jobs.Task) error {
 	dctx, cancel := context.WithTimeout(ctx, reconcileDispatchTimeout)
 	defer cancel()
 
-	res, err := r.conduit.Dispatch(dctx, nodeID, task)
+	// The guard runs synchronously on this goroutine inside Router.Dispatch,
+	// so writing readErr needs no lock.
+	var readErr error
+	guard := func() bool {
+		cur, err := r.tasks.Get(dctx, task.ID)
+		if err != nil {
+			readErr = err
+			return true
+		}
+		return cur.State != jobs.DispatchStateDispatched
+	}
+	res, err := r.conduit.Dispatch(jobs.WithSendGuard(dctx, guard), nodeID, task)
+	if errors.Is(err, jobs.ErrSendWithheld) {
+		if readErr != nil {
+			return fmt.Errorf("dispatch: reconcile task %q on node %q: re-read before resend: %w", task.ID, nodeID, readErr)
+		}
+		// Resolved since the InFlight snapshot (e.g. withheld by its worker
+		// on a cancel, #943): nothing to send, nothing to write.
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("dispatch: reconcile task %q on node %q: %w", task.ID, nodeID, err)
 	}

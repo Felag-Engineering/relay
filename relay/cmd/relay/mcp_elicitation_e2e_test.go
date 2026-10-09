@@ -60,8 +60,9 @@ const elicitResponderUserID = "01J9ZX5K8QH3M4N6P7R2S0T1VW"
 // two live requests to coexist, one of them asks about sshd instead.
 func sshdRestartArgs() map[string]any {
 	return map[string]any{
-		"operation": "service.restart",
-		"args":      map[string]string{"unit": "sshd"},
+		"operation":    "service.restart",
+		"args":         map[string]string{"unit": "sshd"},
+		"wait_seconds": 300,
 	}
 }
 

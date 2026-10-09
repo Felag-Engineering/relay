@@ -290,8 +290,24 @@ func TestBuildOperationAction_ValidArgsSucceed(t *testing.T) {
 // a park can be tested without standing up a gate, a store, and a fleet.
 type parkingExecutor struct{ parked *capability.ParkedError }
 
-func (e parkingExecutor) Run(context.Context, capability.Principal, capability.Selector, jobs.Action) ([]capability.NodeResult, error) {
-	return nil, e.parked
+func (e parkingExecutor) Start(context.Context, capability.Principal, capability.Selector, jobs.Action, capability.StartOptions) (capability.StartedJob, error) {
+	return capability.StartedJob{}, e.parked
+}
+
+// startedJobOf adapts a fake's scripted (results, err) to Start's shape: the
+// Job is the first result's, already finished (Done closed), so a fake keeps
+// scripting what its Node results said.
+func startedJobOf(results []capability.NodeResult, err error) (capability.StartedJob, error) {
+	if err != nil {
+		return capability.StartedJob{}, err
+	}
+	done := make(chan struct{})
+	close(done)
+	sj := capability.StartedJob{Done: done}
+	if len(results) > 0 {
+		sj.JobID = results[0].JobID
+	}
+	return sj, nil
 }
 
 func (parkingExecutor) CancelJob(context.Context, capability.Principal, string) error { return nil }
@@ -320,7 +336,7 @@ func testParkedError() *capability.ParkedError {
 func TestDispatch_ParkIsAResultNotAnError(t *testing.T) {
 	out, parked, err := dispatch(context.Background(),
 		parkingExecutor{parked: testParkedError()}, nil,
-		capability.Principal{Account: "gleipnir-prod"}, capability.Selector{}, jobs.Action{Kind: jobs.ActionOperation})
+		capability.Principal{Account: "gleipnir-prod"}, capability.Selector{}, jobs.Action{Kind: jobs.ActionOperation}, dispatchOpts{})
 	if err != nil {
 		t.Fatalf("dispatch returned an error for a park: %v — a park must render as a RESULT", err)
 	}

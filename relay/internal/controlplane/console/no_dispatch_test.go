@@ -289,6 +289,10 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 			// All six are reachable from Deps.Approvals, Deps.Queries, or
 			// Deps.Cancel today (see the comment above).
 			"Run", "Plan", "Engage", "Release", "Cancel", "Resolve",
+			// #895: Start is Run's non-blocking sibling — the same dispatch
+			// pipeline — and Drain closes the Service to every later Start,
+			// so a Console file recovering it is a denial of service.
+			"Start", "Drain",
 			// The account lane's reveal-once credential write (#654):
 			// MintAPIToken, reachable from any of the five seams wired to
 			// the same *capability.Service.
@@ -827,6 +831,35 @@ func f(c any) {
 }
 `,
 			wantSubstr: "Run",
+		},
+		{
+			// #895: Start is Run's non-blocking sibling; the same hole.
+			name: "anonymous interface recovering Start from the query seam",
+			src: `package console
+import (
+	"context"
+	` + capImport + `
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+)
+func f(q any) {
+	_, _ = q.(interface {
+		Start(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action, o capability.StartOptions) (capability.StartedJob, error)
+	})
+}
+`,
+			wantSubstr: "Start",
+		},
+		{
+			name: "anonymous interface recovering Drain from the query seam",
+			src: `package console
+import "context"
+func f(q any) {
+	_, _ = q.(interface {
+		Drain(ctx context.Context) error
+	})
+}
+`,
+			wantSubstr: "Drain",
 		},
 		{
 			name: "anonymous interface recovering CancelTask from the cancel seam",
