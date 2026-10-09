@@ -40,7 +40,7 @@ jobs:
           cache: false # its built-in cache looks for go.sum at the repo root
 
       - name: Set up Rust stable
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
           toolchain: stable
 
@@ -252,7 +252,7 @@ jobs:
       # Same pinned action as the stable setup in `scan`; the `toolchain` input
       # selects nightly, which cargo-fuzz needs for its -Z sanitizer flags.
       - name: Set up Rust nightly
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
           toolchain: nightly
 
