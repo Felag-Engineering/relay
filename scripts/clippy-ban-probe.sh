@@ -19,13 +19,15 @@
 # The whole workspace is linted at once, not `-p <crate>`: clippy resolves a path
 # against the features the workspace unifies (tokio's `fs`, `process`), which a
 # single-crate build does not have. An entry naming a crate that a read-only crate
-# does not depend on (libc, tokio in relay-log) is probed in the crate that has it.
+# does not depend on (libc in relay-log, relay-proto and relay-exec; tokio in relay-log,
+# relay-proto and relay-policy) is probed in a crate that has it: libc in relay-policy
+# and relay-ops, tokio in relay-exec and relay-ops.
 set -euo pipefail
 cd "$(dirname "$0")/../daemon"
 
 command -v jq >/dev/null || { echo "clippy-ban-probe: jq is required" >&2; exit 1; }
 
-PROBE_CRATES=(relay-policy relay-log relay-proto)
+PROBE_CRATES=(relay-policy relay-log relay-proto relay-exec relay-ops)
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

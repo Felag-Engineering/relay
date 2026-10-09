@@ -1,0 +1,31 @@
+[package]
+name = "relay-exec"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "The only crate that spawns processes (invariant 1). Read-only by construction: clippy.toml bans filesystem writes."
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Compiles ban_probe.rs, which proves every clippy.toml entry fires
+# (scripts/clippy-ban-probe.sh). Never enabled by a dependency.
+ban-probe = []
+
+[dependencies]
+relay-proto = { workspace = true }
+tokio = { workspace = true, features = ["process", "io-util", "sync", "time", "rt", "macros"] }
+# No `features` key, and none may be added: `apply_rlimits` in the `pre_exec`
+# closure stays async-signal-safe only while no workspace member enables rustix
+# `use-libc` or `fs` (Cargo unifies features crate-graph-wide). Enforced by
+# tests/clippy_write_ban.rs (test (f) and
+# `rustix_resolves_without_fs_or_use_libc_in_the_shipped_build`).
+rustix = { workspace = true }
+
+[dev-dependencies]
+relay-test-support = { workspace = true }
+# `timeout_beats_buffered_cancel_biased` uses the paused clock.
+tokio = { workspace = true, features = ["test-util", "rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -39,11 +39,7 @@ use crate::operations;
 use crate::operations::registry::ResolvedOp;
 use crate::templates::TemplateSet;
 
-/// Fixed upper bound on concurrent read Tasks per Node.
-///
-/// Not configurable in this milestone (ADR-0004 amendment). A future ADR may
-/// expose this as a Policy field; for now this constant is the sole definition.
-pub const READ_CONCURRENCY: usize = 4;
+pub use crate::operations::registry::READ_CONCURRENCY;
 
 /// Risk class for a Task, used to route it to the correct semaphore gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

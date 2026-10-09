@@ -2,7 +2,7 @@
 #
 # DEV-ONLY. A template pack (ADR-0021) — one immediate subdirectory of the
 # template root, per the layout documented on the `templates` module
-# (daemon/src/templates.rs), modelled on
+# (relay-ops `templates`), modelled on
 # daemon/packaging/templates.d/relay-read/catalog.toml.
 #
 # FILE PLACEMENT:

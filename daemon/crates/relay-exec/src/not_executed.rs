@@ -14,11 +14,7 @@ use crate::gen::{Outcome, TaskResult};
 
 /// A never-executed [`TaskResult`]: `exit_code` `-1`, empty stdout,
 /// `truncated` false, `duration_millis` `0`.
-pub(crate) fn not_executed(
-    task_id: String,
-    outcome: Outcome,
-    stderr: impl Into<Vec<u8>>,
-) -> TaskResult {
+pub fn not_executed(task_id: String, outcome: Outcome, stderr: impl Into<Vec<u8>>) -> TaskResult {
     TaskResult {
         task_id,
         outcome: outcome as i32,
@@ -32,14 +28,14 @@ pub(crate) fn not_executed(
 
 /// An `OUTCOME_DENIED_BY_POLICY` result — no process was spawned. Shared by
 /// the Operation dispatch path and Raw Exec.
-pub(crate) fn denied_by_policy_result(task_id: String, reason: &str) -> TaskResult {
+pub fn denied_by_policy_result(task_id: String, reason: &str) -> TaskResult {
     not_executed(task_id, Outcome::DeniedByPolicy, reason)
 }
 
 /// [`not_executed`], with `duration_millis` set to `elapsed` — for the paths
 /// that report the time a Task spent (queued, or before a spawn failed)
 /// before it was answered.
-pub(crate) fn not_executed_after(
+pub fn not_executed_after(
     task_id: String,
     outcome: Outcome,
     stderr: impl Into<Vec<u8>>,

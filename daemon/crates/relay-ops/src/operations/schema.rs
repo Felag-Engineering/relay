@@ -129,7 +129,7 @@ impl ArgSpec {
     /// restrictive: a charset-validated argument can only be declared here in
     /// `schema.rs`, next to the ADR-0015 proof tests that bind its charset to
     /// its real validator.
-    pub(crate) const fn data_only(key: &'static str, kind: ArgKind) -> Self {
+    pub const fn data_only(key: &'static str, kind: ArgKind) -> Self {
         ArgSpec {
             key,
             charset: None,

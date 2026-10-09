@@ -39,9 +39,9 @@ pub async fn connect_mtls(
 // ---------------------------------------------------------------------------
 
 /// Base delay for the first reconnect attempt.
-pub(crate) const RECONNECT_BACKOFF_BASE: Duration = Duration::from_secs(1);
+pub const RECONNECT_BACKOFF_BASE: Duration = Duration::from_secs(1);
 /// Backoff ceiling — reached at attempt 5 for a 1 s base (1,2,4,8,16,30,...).
-pub(crate) const RECONNECT_BACKOFF_CAP: Duration = Duration::from_secs(30);
+pub const RECONNECT_BACKOFF_CAP: Duration = Duration::from_secs(30);
 
 /// Jittered exponential backoff for the daemon's reconnect loop.
 ///
@@ -50,14 +50,14 @@ pub(crate) const RECONNECT_BACKOFF_CAP: Duration = Duration::from_secs(30);
 /// a healthy session (client.open() succeeded), so a daemon that connects
 /// fine and later drops reconnects quickly, while one that can never
 /// authenticate (revoked/wrong-CA) ramps to `cap` and stays there.
-pub(crate) struct Backoff {
+pub struct Backoff {
     base: Duration,
     cap: Duration,
     attempt: u32,
 }
 
 impl Backoff {
-    pub(crate) fn new(base: Duration, cap: Duration) -> Self {
+    pub fn new(base: Duration, cap: Duration) -> Self {
         Self {
             base,
             cap,
@@ -70,7 +70,7 @@ impl Backoff {
     /// factor = 2^attempt (capped at 2^32 to avoid shift overflow); the result
     /// is saturating-multiplied against `base` and clamped to `cap`. For
     /// `(base=1s, cap=30s)` the sequence is 1,2,4,8,16,30,30,… seconds.
-    pub(crate) fn base_delay(&self) -> Duration {
+    pub fn base_delay(&self) -> Duration {
         let factor = 1u64 << self.attempt.min(32);
         let ms = (self.base.as_millis() as u64)
             .saturating_mul(factor)
@@ -82,15 +82,15 @@ impl Backoff {
     /// the PRE-advance attempt count, i.e. based on `base_delay()` as it was
     /// before this call.
     ///
-    /// `sample` must be in `[0, 1)` (see `main::rand_unit`).
-    pub(crate) fn next_delay(&mut self, sample: f64) -> Duration {
+    /// `sample` must be in `[0, 1)` (see `crate::rand_unit`).
+    pub fn next_delay(&mut self, sample: f64) -> Duration {
         let d = self.base_delay();
         self.attempt = self.attempt.saturating_add(1);
         jitter(d, sample)
     }
 
     /// Resets the attempt counter to 0. Called after a healthy session.
-    pub(crate) fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.attempt = 0;
     }
 }
@@ -178,7 +178,7 @@ pub(crate) fn classify_connect_error(err: &IdentityError) -> ConnectFailure {
 /// Logs one legible, single-line warning per failure class (Display only,
 /// never a `{:?}` dump above debug). The full debug chain is logged
 /// separately at `debug` level for troubleshooting.
-pub(crate) fn log_connect_failure(err: &IdentityError, relay: &str, retry_in: Duration) {
+pub fn log_connect_failure(err: &IdentityError, relay: &str, retry_in: Duration) {
     match classify_connect_error(err) {
         ConnectFailure::Unreachable => {
             warn!(relay, ?retry_in, "Relay unreachable; will retry");

@@ -203,9 +203,17 @@ $ journalctl -u relay-daemon | grep -E 'relay_daemon::(allow|deny):'
 
 A `RUST_LOG` filter above `info` drops Allows. To quiet the daemon and keep the
 record, use `RUST_LOG=warn,relay_daemon::allow=info`. Directives keyed on module
-paths (`relay_daemon::dispatch=...`, `relay_daemon::raw_exec=...`) no longer
-govern decision events, which sit at `relay_daemon::allow` and
-`relay_daemon::deny`.
+paths no longer govern decision events, which sit at `relay_daemon::allow` and
+`relay_daemon::deny`. A module directive names the crate that holds the module:
+
+- `relay_daemon`: the bin (dispatch, scheduler, dedup, shutdown, startup);
+- `relay_exec`: the executor;
+- `relay_ops`: Operations, Templates, Raw Exec;
+- `relay_transport`: Tunnel, enrollment, renewal, identity;
+- `relay_policy`: Policy loading and lint.
+
+A bare `relay_daemon=<level>` reaches only the bin's modules and the two
+decision targets. Example: `RUST_LOG=info,relay_ops::raw_exec=debug`.
 
 ## 7. Lifecycle
 

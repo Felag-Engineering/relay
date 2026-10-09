@@ -83,7 +83,7 @@ pub fn read_capped_from(f: std::fs::File, cap: usize) -> std::io::Result<(Vec<u8
 /// async side, which is what lets it borrow the live Policy. The descriptor
 /// is moved from the open to the read, so the check-to-read guarantee above
 /// is unchanged. The caller bounds the whole by the Task's timeout.
-pub async fn file_read(
+pub(crate) async fn file_read(
     gate: BlockingGate,
     task_id: String,
     path: String,
@@ -122,11 +122,15 @@ fn open_and_resolve(task_id: &str, path: &str) -> Result<(std::fs::File, String)
     // (following symlinks), reads the resolved target back off the descriptor,
     // and re-checks *that* target — adding `O_NOFOLLOW` here would defeat the
     // resolved-target recheck entirely.
-    let f = match std::fs::OpenOptions::new()
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "file.read's one read-only open (ADR-0018): .read(true) plus O_NONBLOCK|O_NOCTTY, never a write flag; chain pinned by clippy_write_ban.rs"
+    )]
+    let opened = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
-        .open(path)
-    {
+        .open(path);
+    let f = match opened {
         Ok(f) => f,
         Err(e) => return Err(read_failure(task_id, path, &e)),
     };
@@ -151,7 +155,7 @@ fn open_and_resolve(task_id: &str, path: &str) -> Result<(std::fs::File, String)
             task_id,
             &format!(
                 "cannot resolve opened path {path:?} for policy re-check (ADR-0018): {}",
-                crate::config::clean_io_error(&e)
+                crate::limits::clean_io_error(&e)
             ),
         )),
     }
@@ -194,7 +198,7 @@ fn read_failure(task_id: &str, path: &str, e: &std::io::Error) -> TaskResult {
     not_executed(
         task_id.to_string(),
         Outcome::Failure,
-        format!("read {}: {}", path, crate::config::clean_io_error(e)),
+        format!("read {}: {}", path, crate::limits::clean_io_error(e)),
     )
 }
 
@@ -313,6 +317,10 @@ mod tests {
             nanos
         ));
         let c_path = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "test fixture: makes the FIFO the test refuses to read"
+        )]
         // Safety: `mkfifo` takes a NUL-terminated path and a mode; no memory is
         // shared. Returns 0 on success.
         let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
@@ -321,6 +329,10 @@ mod tests {
         struct FifoGuard(std::path::PathBuf);
         impl Drop for FifoGuard {
             fn drop(&mut self) {
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "test fixture cleanup of the FIFO"
+                )]
                 let _ = std::fs::remove_file(&self.0);
             }
         }
@@ -400,11 +412,19 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let link = std::path::PathBuf::from(format!("{}.link", target.path().display()));
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "test fixture: the symlink whose resolved target is denied"
+        )]
         symlink(target.path(), &link).unwrap();
 
         struct LinkGuard(std::path::PathBuf);
         impl Drop for LinkGuard {
             fn drop(&mut self) {
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "test fixture cleanup of the symlink"
+                )]
                 let _ = std::fs::remove_file(&self.0);
             }
         }

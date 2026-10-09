@@ -4,7 +4,8 @@
 //! `scripts/clippy-ban-probe.sh` lints the workspace with that feature and
 //! requires clippy to report `disallowed_methods` on EXACTLY the lines ending in
 //! the marker below. The `libc::` and `tokio::` entries of the shared clippy.toml
-//! name crates this one does not depend on, so they are proven in `relay-policy`.
+//! name crates this one does not depend on: `libc::` entries are proven in
+//! `relay-policy` and `relay-ops`, `tokio::` entries in `relay-exec` and `relay-ops`.
 //! The probe lives outside `src/` so no source-text guard reads it as production.
 #![allow(unused, deprecated)]
 

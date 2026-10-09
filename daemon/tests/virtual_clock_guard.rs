@@ -428,7 +428,7 @@ fn scanner_sees_the_real_tree() {
     let mut templates_scrubbed = None;
     for (rel, text) in tree_files() {
         let scrubbed = scrub(&text);
-        if rel == "src/templates.rs" {
+        if rel == "crates/relay-ops/src/templates.rs" {
             templates_scrubbed = Some(scrubbed.clone());
         }
         let tests = tokio_tests(&rel, &scrubbed);
@@ -463,7 +463,7 @@ fn scanner_sees_the_real_tree() {
         "queued_timeout_returns_timeout must run on virtual time"
     );
 
-    let templates = templates_scrubbed.expect("src/templates.rs not scanned");
+    let templates = templates_scrubbed.expect("crates/relay-ops/src/templates.rs not scanned");
     assert!(
         templates.contains("r#type"),
         "raw identifier `r#type` must survive scrubbing as code"

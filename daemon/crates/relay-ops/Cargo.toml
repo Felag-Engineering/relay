@@ -1,0 +1,36 @@
+[package]
+name = "relay-ops"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "The Operation vocabulary: registry, schema, Templates, the four Natives and Raw Exec. Read-only by construction: clippy.toml bans filesystem writes."
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Items the bin's tests reach across the crate boundary. Only the bin's
+# [dev-dependencies] may enable it (tests/clippy_write_ban.rs).
+test-util = []
+# Compiles ban_probe.rs, which proves every clippy.toml entry fires
+# (scripts/clippy-ban-probe.sh). Never enabled by a dependency.
+ban-probe = []
+
+[dependencies]
+relay-proto = { workspace = true }
+relay-policy = { workspace = true }
+relay-exec = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
+serde = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+ring = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+relay-test-support = { workspace = true }
+proptest = { workspace = true }
+rustix = { workspace = true }
+
+[lints]
+workspace = true

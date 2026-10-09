@@ -24,9 +24,9 @@ use std::time::Duration;
 
 use tokio::sync::oneshot;
 
-use crate::config::ResourceLimits;
 use crate::executor::ExecRequest;
 use crate::gen::{Outcome, TaskResult};
+use crate::limits::ResourceLimits;
 use crate::not_executed::not_executed;
 
 /// The system package manager, detected by which binary is present on the Node.
@@ -63,10 +63,11 @@ impl PackageManager {
 ///    excludes `=` so a name can never smuggle an apt `name=version`
 ///    pkgspec separator.
 ///
-/// `pub(crate)`: also called directly by `operations::schema`'s exhaustive
-/// byte-space proof test, which binds the schema's independently-declared
-/// charset to this real validator (ADR-0015) without rewriting it.
-pub(crate) fn validate_pkg_name(name: &str) -> Result<(), super::OperationError> {
+/// `pub`: called by `operations::schema`'s exhaustive byte-space proof test
+/// and by the bin's dispatch tests; the proof test binds the schema's
+/// independently-declared charset to this real validator (ADR-0015) without
+/// rewriting it.
+pub fn validate_pkg_name(name: &str) -> Result<(), super::OperationError> {
     let invalid = || Err(super::OperationError::InvalidPackageName(name.to_string()));
 
     let Some(first) = name.chars().next() else {
@@ -100,10 +101,11 @@ pub(crate) fn validate_pkg_name(name: &str) -> Result<(), super::OperationError>
 /// same install→remove flip [`validate_pkg_name`] closes on the name side,
 /// now closed on the version side.
 ///
-/// `pub(crate)`: also called directly by `operations::schema`'s exhaustive
-/// byte-space proof test, which binds the schema's independently-declared
-/// charset to this real validator (ADR-0015) without rewriting it.
-pub(crate) fn validate_pkg_version(version: &str) -> Result<(), super::OperationError> {
+/// `pub`: called by `operations::schema`'s exhaustive byte-space proof test
+/// and by the bin's dispatch tests; the proof test binds the schema's
+/// independently-declared charset to this real validator (ADR-0015) without
+/// rewriting it.
+pub fn validate_pkg_version(version: &str) -> Result<(), super::OperationError> {
     let invalid = || {
         Err(super::OperationError::InvalidPackageVersion(
             version.to_string(),

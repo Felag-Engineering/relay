@@ -5,7 +5,7 @@
 # PID1 via systemctl and pkg.install writes the system package database. It
 # also carries a resource-containment stanza (v0.0.8 exec audit) — a
 # pids-cgroup `TasksMax` fork-bomb backstop that complements the per-Task
-# `setrlimit` bounds the daemon itself applies (`daemon/src/executor.rs`) —
+# `setrlimit` bounds the daemon itself applies (relay-exec's `executor`) —
 # and, as of #224, a v0.0.8 syscall + W^X hardening stanza (SystemCallFilter/
 # SystemCallArchitectures/MemoryDenyWriteExecute).
 # See docs/operations/daemon-privilege-posture.md for the per-Operation

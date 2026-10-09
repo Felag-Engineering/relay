@@ -214,7 +214,7 @@ independently of whether anyone noticed and revoked it. Automatic renewal is wha
 lifetime free to the operator.
 
 **Settled in review: 25% of `LeafValidity` remaining** (84h). The daemon renews at a jittered
-50–75% of the lifetime (`daemon/src/renew.rs`), so under a quarter left means the whole renewal
+50–75% of the lifetime (relay-transport `renew`), so under a quarter left means the whole renewal
 window was missed. A threshold inside the jitter window would alarm on a healthy fleet. File-only
 configuration (invariant #11), as a fraction so it tracks any change to the lifetime. The registry
 must persist `cert_not_after` first (#440).

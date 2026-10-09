@@ -54,6 +54,9 @@ publish = false
 relay-proto = { path = "crates/relay-proto", version = "0.0.0" }
 relay-log = { path = "crates/relay-log", version = "0.0.0" }
 relay-policy = { path = "crates/relay-policy", version = "0.0.0" }
+relay-exec = { path = "crates/relay-exec", version = "0.0.0" }
+relay-ops = { path = "crates/relay-ops", version = "0.0.0" }
+relay-transport = { path = "crates/relay-transport", version = "0.0.0" }
 relay-test-support = { path = "crates/relay-test-support", version = "0.0.0" }
 
 # External dependencies, declared once; members opt in with `workspace = true`.
@@ -149,6 +152,9 @@ disallowed_methods = "deny"
 relay-proto = { workspace = true }
 relay-log = { workspace = true }
 relay-policy = { workspace = true }
+relay-exec = { workspace = true }
+relay-ops = { workspace = true }
+relay-transport = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tonic = { workspace = true, features = ["codegen", "transport", "tls-ring"] }
 prost = { workspace = true }
@@ -171,25 +177,16 @@ libc = { workspace = true }
 relay-test-support = { workspace = true }
 # The bin's tests read the decision-log journalctl pattern.
 relay-policy = { workspace = true, features = ["test-util"] }
-# Enables the paused/virtual clock (tokio::time::pause / advance) used only by
-# executor.rs's timeout_beats_buffered_cancel_biased test to deterministically
-# tie the wait-arm and cancel-arm select branches without a process-timing
+# Enables the paused/virtual clock (tokio::time::pause / advance, `start_paused`)
+# the bin's scheduler and dispatch tests use to drive time without a wall-clock
 # race. test-util is dev-only: it does not ship in the production binary.
 tokio = { workspace = true, features = ["test-util"] }
-# Used only by tunnel.rs wrong-CA refusal test (wrong_ca_relay_is_refused).
-# ABI-matched to the rustls = "0.23" runtime dependency. default-features = false
-# prevents the dev build from re-enabling rustls/aws_lc_rs via tokio-rustls defaults.
-tokio-rustls = { workspace = true }
-# Used by renew.rs tests to construct rcgen certs with specific validity windows.
-# (rcgen's not_before/not_after fields are time::OffsetDateTime.)
-time = { workspace = true }
 proptest = { workspace = true }
-# Test-only CSR parsing and self-signature check for the enroll/renew tests'
-# test CA (identity::test_ca). It is the same 0.18 as the runtime dependency,
-# so there is no second ASN.1 stack. The verify feature uses ring, which is
-# already in the tree. It is dev-only (resolver 2) and does not reach the
-# production binary.
-x509-parser = { workspace = true, features = ["verify"] }
+# Items the bin's tests reach across the crate boundary
+# (TemplateSet::{for_test, empty_static}, identity::mode_assert). Only
+# dev-dependencies may enable test-util (tests/clippy_write_ban.rs).
+relay-ops = { workspace = true, features = ["test-util"] }
+relay-transport = { workspace = true, features = ["test-util"] }
 
 # Lints that guard the root daemon itself, in every target and every editor, not only
 # under `make lint-daemon`. clippy.toml holds the configuration they read.

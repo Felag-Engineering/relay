@@ -16,14 +16,14 @@
 //! # It proves
 //!
 //! * no daemon code path opens or mutates a file, except the two reviewed
-//!   writers (`src/identity.rs`, `src/dedup.rs`) and the dev-only
+//!   writers (`crates/relay-transport/src/identity.rs`, `src/dedup.rs`) and the dev-only
 //!   `relay-test-support` fixtures, and none of those is a module that names
 //!   the Policy path — subject to the limits below;
 //! * the Policy path is named only by three non-writing modules
 //!   (`src/config.rs`, `src/main.rs`, `src/selfref.rs`);
 //! * the loader's open call names no write flag: the Policy loader
 //!   (relay-policy's `lib.rs`) and the Template Operation loader
-//!   (`src/templates.rs`) open their files only through the shared hardened
+//!   (`crates/relay-ops/src/templates.rs`) open their files only through the shared hardened
 //!   open (relay-policy's `hardened_open.rs`),
 //!   whose single `OpenOptions` chain is `.read(true)` plus
 //!   `O_NOFOLLOW | O_NONBLOCK` and nothing else, and none of the three modules
@@ -922,7 +922,7 @@ fn policy_modules_never_write() {
         "crates/relay-policy/src/hardened_open.rs",
         "crates/relay-policy/src/decision_log.rs",
         "crates/relay-policy/src/natives.rs",
-        "src/templates.rs",
+        "crates/relay-ops/src/templates.rs",
         "src/policy_check.rs",
         "src/config.rs",
         "src/selfref.rs",
@@ -967,7 +967,7 @@ fn policy_modules_never_write() {
 fn production_write_sites_are_exactly_the_allowlist() {
     let allowlist: BTreeMap<&str, &str> = BTreeMap::from([
         (
-            "src/identity.rs",
+            "crates/relay-transport/src/identity.rs",
             "the mTLS key/cert write, rename and DirBuilder — persist_identity/write_atomic \
              (ADR-0006)",
         ),
@@ -1037,7 +1037,7 @@ fn policy_path_reaches_only_the_read_only_loader() {
     let ident_re = POLICY_PATH_IDENT.get_or_init(|| Regex::new(r"\bpolicy_path\b").unwrap());
 
     let write_allowlist = [
-        "src/identity.rs",
+        "crates/relay-transport/src/identity.rs",
         "src/dedup.rs",
         "crates/relay-test-support/src/lib.rs",
     ];
@@ -1098,7 +1098,7 @@ fn policy_path_reaches_only_the_read_only_loader() {
 /// on top of [`policy_modules_never_write`] scanning the module for every
 /// write pattern.
 ///
-/// (ii) relay-policy's `lib.rs` and `src/templates.rs` have no opener of their
+/// (ii) relay-policy's `lib.rs` and `crates/relay-ops/src/templates.rs` have no opener of their
 /// own in production (`OpenOptions`, `File::open`, `File::options`), `lib.rs`
 /// has no path-based `fs::read`/`fs::read_to_string` and `templates.rs` exactly
 /// one (its linter's), and each still hands its path to `open_hardened` — so
@@ -1142,12 +1142,12 @@ fn trust_files_open_only_through_the_read_only_hardened_open() {
     let path_read = Regex::new(r"\bfs::read(_to_string)?\(").unwrap();
     let delegates = Regex::new(r"\bopen_hardened\(\s*path\s*\)").unwrap();
     // (file, how many `fs::read`/`fs::read_to_string` calls it may have):
-    // `src/templates.rs` has exactly one, `lint_dir`'s deliberately ungated read
+    // `crates/relay-ops/src/templates.rs` has exactly one, `lint_dir`'s deliberately ungated read
     // for the pre-deployment linter (`relay-daemon policy check`), which never
     // feeds the runtime template set; a second one fails here for review.
     for (rel, allowed_path_reads) in [
         ("crates/relay-policy/src/lib.rs", 0usize),
-        ("src/templates.rs", 1usize),
+        ("crates/relay-ops/src/templates.rs", 1usize),
     ] {
         let text = &view(rel).prod_scrubbed;
         let hits: Vec<usize> = private_open
@@ -1580,11 +1580,11 @@ mod tests {
     );
     let templates_view = views
         .iter()
-        .find(|v| v.rel == "src/templates.rs")
-        .expect("src/templates.rs not found under daemon/");
+        .find(|v| v.rel == "crates/relay-ops/src/templates.rs")
+        .expect("crates/relay-ops/src/templates.rs not found under daemon/");
     assert!(
         templates_view.prod_scrubbed.contains("r#type"),
-        "src/templates.rs's production text must still contain the raw identifier r#type — this \
+        "crates/relay-ops/src/templates.rs's production text must still contain the raw identifier r#type — this \
          is what ties the raw-identifier fixture above to a real production file rather than \
          only a synthetic one"
     );

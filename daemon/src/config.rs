@@ -5,11 +5,14 @@
 //! Also hosts daemon-local hard limits (e.g. [`MAX_OUTPUT_BYTES`]) that are
 //! compile-time constants, not env-derived — kept here as the daemon's single
 //! neutral config-adjacent home rather than scattered per call site.
+//! The spawned-child `setrlimit` bounds (`ResourceLimits`) live in relay-exec's
+//! `limits` module (#889).
 
 use std::path::PathBuf;
 
-use crate::enroll::{node_labels_from_env, state_dir_from_env};
+use crate::enroll::{node_labels_from_env, state_dir_from_env, EnrollConfig, EnrollError};
 use crate::gen::Facts;
+use crate::identity::validate_endpoint_scheme;
 
 /// All daemon configuration derived from environment variables (and `--relay`
 /// CLI arg). Constructed exactly once in `main` via `Config::from_env()` and
@@ -55,7 +58,7 @@ impl Config {
     ///
     /// Infallible: defaults are applied for every missing or unparsable env
     /// var. The only fallible config step — enroll endpoint scheme validation —
-    /// lives in `EnrollConfig::from_config` and returns a typed `EnrollError`.
+    /// lives in [`enroll_config`] and returns a typed `EnrollError`.
     pub fn from_env() -> Config {
         let relay_addr = relay_addr_from_args_env();
         let endpoint = normalize_scheme(&relay_addr);
@@ -105,70 +108,50 @@ pub fn template_dir_from_env() -> PathBuf {
 /// and `truncated` is set. Sane default; a Policy/env-tunable value is future work.
 pub const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB
 
-/// `setrlimit` bounds applied to every spawned child (`executor::execute`'s
-/// `pre_exec` hook). Daemon-local and wire-immutable: the Relay can never set
-/// or raise these over the wire (invariant #11 analog for the daemon;
-/// ADR-0002/0004) — they live here, next to [`MAX_OUTPUT_BYTES`], as a
-/// compile-time constant, not env-derived. A Policy/env-tunable value is
-/// future work; the operator's runtime lever today is the systemd unit
-/// (`TasksMax=`, an optional `MemoryMax=` drop-in).
+/// Builds enrollment configuration from the shared `Config` plus the
+/// enroll-only env vars.
 ///
-/// `None` leaves that resource unbounded (inherits the process's own limit);
-/// `Some(v)` sets `rlim_cur == rlim_max == v`, so the child is always bounded
-/// even when the inherited hard limit is unlimited (deny-closed: a setrlimit
-/// failure aborts the spawn rather than ever running a child with a
-/// weaker-than-configured limit — see `executor::apply_rlimits`).
-#[derive(Clone, Copy, Debug)]
-pub struct ResourceLimits {
-    /// `RLIMIT_NPROC` — processes/threads per real UID.
-    pub nproc: Option<u64>,
-    /// `RLIMIT_DATA` — brk + anonymous mmap (NOT `RLIMIT_AS`; file-backed mmap
-    /// is uncounted so package-manager mmap'd reads aren't capped by this).
-    pub data_bytes: Option<u64>,
-    /// `RLIMIT_NOFILE` — open file descriptors.
-    pub nofile: Option<u64>,
-    /// `RLIMIT_CPU` — CPU-seconds backstop above the wall-clock Task timeout;
-    /// bounds CPU-bound (spin/compute) runaways only, not sleeping/hung-I/O
-    /// children (those are bounded by the existing wall-clock timeout kill).
-    pub cpu_seconds: Option<u64>,
-    /// `RLIMIT_FSIZE` — largest single file a child may write.
-    pub fsize_bytes: Option<u64>,
-}
-
-impl ResourceLimits {
-    /// The shipped default profile: a single generous global cap sized to
-    /// contain a fork/allocation/fd/write bomb while giving the heaviest
-    /// legitimate Operation (`pkg.install`'s package-manager fan-out) ample
-    /// headroom.
-    pub const DEFAULT: ResourceLimits = ResourceLimits {
-        nproc: Some(2048),
-        data_bytes: Some(2 * 1024 * 1024 * 1024), // 2 GiB
-        nofile: Some(4096),
-        cpu_seconds: Some(600),
-        fsize_bytes: Some(4 * 1024 * 1024 * 1024), // 4 GiB
+/// Returns `Ok(None)` when `RELAY_ENROLLMENT_TOKEN` or
+/// `RELAY_CA_BUNDLE_PATH` are absent or empty, so callers can skip the
+/// enrollment step and fall through to the existing Tunnel path.
+///
+/// Environment keys read here (enroll-only):
+/// - `RELAY_ENROLLMENT_TOKEN` — required; never logged
+/// - `RELAY_CA_BUNDLE_PATH`   — required; path to pinned bootstrap CA
+/// - `RELAY_ENROLL_ENDPOINT`  — overrides `cfg.endpoint` when set
+///
+/// All other values (`relay_domain`, `state_dir`, `node_labels`, `facts`)
+/// are taken from `cfg` — they are not re-read from the environment.
+pub fn enroll_config(cfg: &Config) -> Result<Option<EnrollConfig>, EnrollError> {
+    let token = match std::env::var("RELAY_ENROLLMENT_TOKEN") {
+        Ok(v) if !v.is_empty() => v,
+        _ => return Ok(None),
     };
-}
+    let ca_bundle_str = match std::env::var("RELAY_CA_BUNDLE_PATH") {
+        Ok(v) if !v.is_empty() => v,
+        _ => return Ok(None),
+    };
 
-impl Default for ResourceLimits {
-    fn default() -> Self {
-        Self::DEFAULT
-    }
-}
+    // cfg.endpoint is already normalized (http→https); the override is used
+    // raw so operators can specify a distinct enrollment endpoint if needed.
+    let endpoint = std::env::var("RELAY_ENROLL_ENDPOINT").unwrap_or_else(|_| cfg.endpoint.clone());
 
-/// Renders an `io::Error`'s human message without the trailing `" (os error N)"`.
-///
-/// E.g. `NotFound` -> `"No such file or directory"`, not
-/// `"No such file or directory (os error 2)"`. Used to build subject-naming
-/// error strings (`spawn <argv0>: <reason>`, `read <path>: <reason>`) without
-/// noisy errno suffixes. Errors without a raw OS error code pass through unchanged.
-pub(crate) fn clean_io_error(e: &std::io::Error) -> String {
-    let s = e.to_string();
-    if e.raw_os_error().is_some() {
-        if let Some(idx) = s.rfind(" (os error ") {
-            return s[..idx].to_string();
-        }
-    }
-    s
+    // Fail closed: TLS (and therefore CA pinning) is only active when the
+    // scheme is exactly "https". An "http://" endpoint silently skips TLS
+    // in tonic, exposing the enrollment token and the Node's pinned trust
+    // root to a MITM. `IdentityError` auto-converts into `EnrollError::Identity`
+    // via the existing `#[from]` impl.
+    validate_endpoint_scheme(&endpoint)?;
+
+    Ok(Some(EnrollConfig {
+        token,
+        endpoint,
+        relay_domain: cfg.relay_domain.clone(),
+        ca_bundle_path: PathBuf::from(ca_bundle_str),
+        state_dir: cfg.state_dir.clone(),
+        node_labels: cfg.node_labels.clone(),
+        facts: cfg.facts.clone(),
+    }))
 }
 
 /// Normalizes `http://` to `https://` in a Relay address.
@@ -315,43 +298,80 @@ mod tests {
         std::env::remove_var("RELAY_ADDR");
     }
 
-    // --- clean_io_error ------------------------------------------------------
+    // --- enroll_config smoke tests --------------------------------------------
 
-    #[test]
-    fn clean_io_error_strips_os_error_suffix() {
-        let e = std::io::Error::from_raw_os_error(2); // ENOENT
-        let cleaned = clean_io_error(&e);
-        assert!(
-            cleaned.contains("No such file or directory"),
-            "got {cleaned:?}"
-        );
-        assert!(!cleaned.contains("(os error"), "got {cleaned:?}");
+    /// Constructs a minimal fake Config for use in enroll_config tests.
+    /// No env vars are read — fields are set directly.
+    fn fake_config() -> Config {
+        Config {
+            template_dir: std::path::PathBuf::from("/nonexistent/templates.d"),
+            relay_addr: "http://relay:7654".to_string(),
+            endpoint: "https://relay:7654".to_string(),
+            relay_domain: None,
+            state_dir: PathBuf::from("/var/lib/relay-daemon"),
+            policy_path: PathBuf::from("/etc/relay-daemon/policy.toml"),
+            node_labels: vec![],
+            facts: Facts {
+                hostname: "test-node".to_string(),
+                os: "linux".to_string(),
+                arch: "x86_64".to_string(),
+                kernel: String::new(),
+                ip_addresses: vec![],
+            },
+        }
     }
 
     #[test]
-    fn clean_io_error_non_os_error_passthrough() {
-        let e = std::io::Error::other("boom");
-        assert_eq!(clean_io_error(&e), "boom");
+    fn from_config_none_when_token_absent() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("RELAY_ENROLLMENT_TOKEN");
+        std::env::remove_var("RELAY_CA_BUNDLE_PATH");
+        std::env::remove_var("RELAY_ENROLL_ENDPOINT");
+
+        let cfg = fake_config();
+        let result = enroll_config(&cfg).expect("enroll_config should not error");
+        assert!(
+            result.is_none(),
+            "enroll_config must return None when RELAY_ENROLLMENT_TOKEN is absent"
+        );
     }
 
-    // --- ResourceLimits::DEFAULT ---------------------------------------------
+    #[test]
+    fn from_config_none_when_ca_bundle_absent() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("RELAY_ENROLLMENT_TOKEN", "tok-test");
+        std::env::remove_var("RELAY_CA_BUNDLE_PATH");
+        std::env::remove_var("RELAY_ENROLL_ENDPOINT");
+
+        let cfg = fake_config();
+        let result = enroll_config(&cfg).expect("enroll_config should not error");
+        assert!(
+            result.is_none(),
+            "enroll_config must return None when RELAY_CA_BUNDLE_PATH is absent"
+        );
+
+        std::env::remove_var("RELAY_ENROLLMENT_TOKEN");
+    }
 
     #[test]
-    fn resource_limits_default_is_bounded() {
-        let d = ResourceLimits::DEFAULT;
-        assert!(d.nproc.is_some(), "nproc must be bounded, not unlimited");
-        assert!(
-            d.data_bytes.is_some(),
-            "data_bytes must be bounded, not unlimited"
+    fn from_config_enroll_endpoint_override() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("RELAY_ENROLLMENT_TOKEN", "tok-test");
+        std::env::set_var("RELAY_CA_BUNDLE_PATH", "/some/fake/ca.pem");
+        std::env::set_var("RELAY_ENROLL_ENDPOINT", "https://override:9000");
+
+        let cfg = fake_config();
+        let ec = enroll_config(&cfg)
+            .expect("enroll_config should not error")
+            .expect("enroll_config should return Some when all required vars set");
+
+        assert_eq!(
+            ec.endpoint, "https://override:9000",
+            "RELAY_ENROLL_ENDPOINT must take precedence over cfg.endpoint"
         );
-        assert!(d.nofile.is_some(), "nofile must be bounded, not unlimited");
-        assert!(
-            d.cpu_seconds.is_some(),
-            "cpu_seconds must be bounded, not unlimited"
-        );
-        assert!(
-            d.fsize_bytes.is_some(),
-            "fsize_bytes must be bounded, not unlimited"
-        );
+
+        std::env::remove_var("RELAY_ENROLLMENT_TOKEN");
+        std::env::remove_var("RELAY_CA_BUNDLE_PATH");
+        std::env::remove_var("RELAY_ENROLL_ENDPOINT");
     }
 }

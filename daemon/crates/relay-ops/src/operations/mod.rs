@@ -57,7 +57,7 @@ pub fn descriptors() -> Vec<crate::gen::OperationDescriptor> {
 /// Returns the [`RiskClass`] for a named Operation, or `None` if the name is
 /// not in the v1 vocabulary — a [`registry::lookup`] view.
 ///
-/// Called by [`crate::scheduler::Scheduler::classify`] to route Tasks to the
+/// Called by the bin's `scheduler::Scheduler::classify` to route Tasks to the
 /// correct concurrency gate, and by the Policy linter's unknown-name check
 /// (Policy itself evaluates at the dispatch layer, not here).
 pub fn risk_class(name: &str) -> Option<RiskClass> {

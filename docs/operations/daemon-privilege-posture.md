@@ -43,10 +43,10 @@ unit to remove every privilege the daemon does not exercise.**
 
 | Operation | Mechanism (source) | Privilege actually needed |
 | --- | --- | --- |
-| `system.facts` (read) | `/proc/sys/kernel/{hostname,osrelease}` reads + `libc::getifaddrs` over an `AF_NETLINK` socket; no subprocess (`daemon/src/operations/system_facts.rs`) | None beyond default process privilege; needs the `AF_NETLINK` address family available. Fully compatible with the strict hardened baseline. |
-| `file.read` (read) | `std::fs::File::open` on an arbitrary target path; no subprocess (`daemon/src/operations/file_read.rs`) | Read access to whatever path Policy's argument constraints allow. `CAP_DAC_READ_SEARCH` grants universal read (no write, no privilege bypass) so `file.read` isn't limited to files the process's own UID happens to own. |
-| `service.restart` (mutate) | `["systemctl", "restart", <unit>]` argv, unit name validated against a strict charset (`daemon/src/operations/service_restart.rs`) | Root to authorize systemctl → PID 1. The daemon itself performs no filesystem writes for this Operation, so it works unmodified under `ProtectSystem=strict`. |
-| `pkg.install` (mutate) | `["apt-get"\|"dnf"\|"yum", "install", "-y", <pkgspec>]` argv, name/version validated against a strict charset before argv is built (`daemon/src/operations/pkg_install.rs`) | Broad root: the package manager writes `/usr`, `/etc`, `/var` and needs (derived and confirmed by the audit below) `CAP_CHOWN`, `CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_SETUID`, `CAP_SETGID`, `CAP_SETFCAP` to install file ownership/permissions/capabilities correctly — see [Candidate minimal capability set](#candidate-minimal-capability-set). **Conflicts** with the strict baseline's `ProtectSystem=strict` and minimal `CapabilityBoundingSet` — see [Documented exceptions](#documented-exceptions). |
+| `system.facts` (read) | `/proc/sys/kernel/{hostname,osrelease}` reads + `libc::getifaddrs` over an `AF_NETLINK` socket; no subprocess (relay-ops `operations::system_facts`) | None beyond default process privilege; needs the `AF_NETLINK` address family available. Fully compatible with the strict hardened baseline. |
+| `file.read` (read) | `std::fs::File::open` on an arbitrary target path; no subprocess (relay-ops `operations::file_read`) | Read access to whatever path Policy's argument constraints allow. `CAP_DAC_READ_SEARCH` grants universal read (no write, no privilege bypass) so `file.read` isn't limited to files the process's own UID happens to own. |
+| `service.restart` (mutate) | `["systemctl", "restart", <unit>]` argv, unit name validated against a strict charset (relay-ops `operations::service_restart`) | Root to authorize systemctl → PID 1. The daemon itself performs no filesystem writes for this Operation, so it works unmodified under `ProtectSystem=strict`. |
+| `pkg.install` (mutate) | `["apt-get"\|"dnf"\|"yum", "install", "-y", <pkgspec>]` argv, name/version validated against a strict charset before argv is built (relay-ops `operations::pkg_install`) | Broad root: the package manager writes `/usr`, `/etc`, `/var` and needs (derived and confirmed by the audit below) `CAP_CHOWN`, `CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_SETUID`, `CAP_SETGID`, `CAP_SETFCAP` to install file ownership/permissions/capabilities correctly — see [Candidate minimal capability set](#candidate-minimal-capability-set). **Conflicts** with the strict baseline's `ProtectSystem=strict` and minimal `CapabilityBoundingSet` — see [Documented exceptions](#documented-exceptions). |
 | Raw Exec (mutate) | Arbitrary argv, gated by Policy allow/deny regexes (ADR-0001/0002); no daemon-side restriction beyond what Policy admits | Unbounded — whatever the operator's Policy allows. A read-only Raw Exec command works under the strict baseline; a filesystem-mutating one needs the same relaxations as `pkg.install`. |
 
 ## What the unit restricts
@@ -76,7 +76,7 @@ Directive-by-directive, from `daemon/packaging/relay-daemon.service`:
   inherited capability set.
 - **`StateDirectory=relay-daemon`, `StateDirectoryMode=0700`** — the one writable path,
   holding the daemon's persisted identity (`key.pem`/`cert.pem`/`ca_bundle.pem`/
-  `node_id`, `daemon/src/identity.rs`) and the at-most-once dedup **marker-file** store:
+  `node_id`, relay-transport `identity`) and the at-most-once dedup **marker-file** store:
   `<state_dir>/seen-tasks/`, a directory (mode 0700) holding one empty marker file (mode
   0600) per seen `task_id` — **not** a SQL database; there is no `rusqlite` dependency in
   the daemon (`daemon/src/dedup.rs:27-31`, ADR-0004).
@@ -171,7 +171,7 @@ the process group, but not before resource exhaustion.
 **The choice: BOTH `setrlimit` and a cgroup `TasksMax` backstop, with a clear division of
 labor.**
 
-- `setrlimit` via a tokio `pre_exec` hook (`daemon/src/executor.rs::execute`,
+- `setrlimit` via a tokio `pre_exec` hook (relay-exec `executor::execute`,
   `apply_rlimits`) is the **primary, in-tree, per-Task, unit-tested layer**. It runs in
   the forked child after `fork()` and before `exec()`, for every child at the single spawn
   chokepoint that Raw Exec, `service.restart`, and `pkg.install` all funnel through — no
@@ -199,7 +199,7 @@ labor.**
     being redundant (never harmful) under the hardened one.
 
 **The specific rlimits, defaults, and why** (`ResourceLimits::DEFAULT`,
-`daemon/src/config.rs`) — a single generous global profile, not a per-Operation-class
+relay-exec `limits`) — a single generous global profile, not a per-Operation-class
 split:
 
 | Limit | Default | Why |
