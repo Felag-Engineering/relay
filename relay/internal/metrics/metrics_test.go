@@ -369,3 +369,82 @@ func TestHandler_BuildInfoOmittedWhenUnset(t *testing.T) {
 		t.Errorf("body must omit relay_build_info when Build is unset; body = %s", body)
 	}
 }
+
+// TestHandler_FullExposition pins the complete scrape body byte for byte, so a
+// change to how series are rendered cannot alter ordering, HELP/TYPE text or
+// label escaping unnoticed.
+func TestHandler_FullExposition(t *testing.T) {
+	m := New(GaugeSources{
+		Connected:      func() int { return 3 },
+		Nodes:          func() (int, int, error) { return 10, 2, nil },
+		Frozen:         func() (bool, error) { return true, nil },
+		Build:          BuildInfo{Version: "1.2.3", Commit: "abc", BuildDate: "2026-01-02"},
+		LabelsDeclined: func() (int64, int64) { return 4, 5 },
+	})
+	m.IncDispatch(jobs.OutcomeSuccess)
+	m.IncRefusal(capability.RefusalBlastCap)
+	m.IncEnrollment()
+	m.IncServerCertRotation(ListenerControlPlane)
+	m.IncProtocolViolation(jobs.ViolationRelayOnlyOutcome)
+	m.IncProtocolViolationUnrecorded()
+
+	_, body := scrape(t, m)
+	if body != wantFullExposition {
+		t.Errorf("exposition changed.\ngot:\n%s\nwant:\n%s", body, wantFullExposition)
+	}
+}
+const wantFullExposition = `# HELP relay_build_info Relay build identity; always 1, the build stamp is in the labels.
+# TYPE relay_build_info gauge
+relay_build_info{version="1.2.3",commit="abc",build_date="2026-01-02"} 1
+# HELP relay_nodes_connected Number of Nodes with at least one live Tunnel stream.
+# TYPE relay_nodes_connected gauge
+relay_nodes_connected 3
+# HELP relay_nodes_enrolled Total Nodes ever enrolled (including revoked).
+# TYPE relay_nodes_enrolled gauge
+relay_nodes_enrolled 10
+# HELP relay_nodes_revoked Nodes currently revoked.
+# TYPE relay_nodes_revoked gauge
+relay_nodes_revoked 2
+# HELP relay_freeze_engaged Whether the Relay-wide Freeze (ADR-0013) is currently engaged (1) or not (0).
+# TYPE relay_freeze_engaged gauge
+relay_freeze_engaged 1
+# HELP relay_dispatches_total Total Task dispatch outcomes, by outcome.
+# TYPE relay_dispatches_total counter
+relay_dispatches_total{outcome="success"} 1
+relay_dispatches_total{outcome="failure"} 0
+relay_dispatches_total{outcome="timeout"} 0
+relay_dispatches_total{outcome="denied_by_policy"} 0
+relay_dispatches_total{outcome="cancelled"} 0
+relay_dispatches_total{outcome="unreachable"} 0
+relay_dispatches_total{outcome="version_refused"} 0
+relay_dispatches_total{outcome="unsupported"} 0
+relay_dispatches_total{outcome="unspecified"} 0
+# HELP relay_refusals_total Total dispatch refusals before any Task was sent, by reason.
+# TYPE relay_refusals_total counter
+relay_refusals_total{reason="frozen"} 0
+relay_refusals_total{reason="unauthorized"} 0
+relay_refusals_total{reason="blast_cap"} 1
+relay_refusals_total{reason="internal"} 0
+relay_refusals_total{reason="no_nodes_matched"} 0
+relay_refusals_total{reason="unknown_operation"} 0
+relay_refusals_total{reason="malformed"} 0
+# HELP relay_enrollments_total Total successful Node enrollments.
+# TYPE relay_enrollments_total counter
+relay_enrollments_total 1
+# HELP relay_server_cert_rotations_total Total in-process re-issuances of the Relay's own TLS server certificate, by listener.
+# TYPE relay_server_cert_rotations_total counter
+relay_server_cert_rotations_total{listener="node_plane"} 0
+relay_server_cert_rotations_total{listener="control_plane"} 1
+# HELP relay_protocol_violations_total Total relay-daemon reports refused at the wire boundary as protocol violations, by rule.
+# TYPE relay_protocol_violations_total counter
+relay_protocol_violations_total{rule="relay_only_outcome"} 1
+relay_protocol_violations_total{rule="unresolved_outcome"} 0
+relay_protocol_violations_total{rule="other"} 0
+# HELP relay_protocol_violations_unrecorded_total Total protocol violations the Relay refused but could not durably record in the audit trail.
+# TYPE relay_protocol_violations_unrecorded_total counter
+relay_protocol_violations_unrecorded_total 1
+# HELP relay_labels_declined_total Total stored Label pairs declined at read-back as not well-formed (threat model R13), by namespace. Counts read-back events, not distinct Labels.
+# TYPE relay_labels_declined_total counter
+relay_labels_declined_total{namespace="node"} 4
+relay_labels_declined_total{namespace="relay"} 5
+`
