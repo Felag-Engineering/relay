@@ -1211,6 +1211,33 @@ func buildApprovalView(ctx context.Context, d Deps, caller capability.Principal,
 	if req.JobID != "" {
 		v.JobHref = "/console/jobs/" + req.JobID
 	}
+	v.applyDecisions(req, caller, now)
+
+	grant, lookup := grantForApproval(ctx, d, req.ID)
+	switch lookup {
+	case grantFound:
+		v.Grant = buildGrantCard(ctx, d, caller, grant)
+	case grantIsAPlan:
+		// Fetched ONCE and used twice: the action block below and the diff's
+		// current-side arguments are the same audit record.
+		v.Action = buildApprovalAction(ctx, d, caller, req.ID)
+	case grantUnreadable:
+		// Neither block. The action block would describe a Plan this Request
+		// may well not be.
+		v.GrantUnreadable = true
+	}
+	v.Diff = buildApprovalDiff(ctx, d, caller, req, grant, lookup, v.Action, now)
+
+	v.DecideSeamsUnwired = d.Decide == nil || d.Auth == nil
+	v.CallerRoleBelowFloor = !accounts.Role(caller.Role).AtLeast(accounts.RoleOperator)
+
+	v.Decide = decideControlFor(d, caller, req, v, csrfToken)
+	return v
+}
+
+// applyDecisions renders req's Decisions onto v and records whether the caller
+// is one of the signers.
+func (v *approvalView) applyDecisions(req approval.Request, caller capability.Principal, now time.Time) {
 	for _, dec := range req.Decisions {
 		row := decisionRow{
 			Account:  dec.Account,
@@ -1234,46 +1261,33 @@ func buildApprovalView(ctx context.Context, d Deps, caller capability.Principal,
 			v.CallerSignedAt = row.At
 		}
 	}
+}
 
-	grant, lookup := grantForApproval(ctx, d, req.ID)
-	switch lookup {
-	case grantFound:
-		v.Grant = buildGrantCard(ctx, d, caller, grant)
-	case grantIsAPlan:
-		// Fetched ONCE and used twice: the action block below and the diff's
-		// current-side arguments are the same audit record.
-		v.Action = buildApprovalAction(ctx, d, caller, req.ID)
-	case grantUnreadable:
-		// Neither block. The action block would describe a Plan this Request
-		// may well not be.
-		v.GrantUnreadable = true
-	}
-	v.Diff = buildApprovalDiff(ctx, d, caller, req, grant, lookup, v.Action, now)
-
-	v.DecideSeamsUnwired = d.Decide == nil || d.Auth == nil
-	v.CallerRoleBelowFloor = !accounts.Role(caller.Role).AtLeast(accounts.RoleOperator)
-
-	// Every one of these is an EXPLANATION of a refusal the domain would make
-	// anyway, never the control itself: the POST is refused by the
-	// capability layer and the domain regardless of what was drawn here
-	// (invariant 10 — an adapter narrows only). Decide is populated only when
-	// every one holds, so the absence of a form is never the only thing
-	// standing between a caller and a decision.
-	if decideOffered(d, accounts.Role(caller.Role)) &&
+// decideControlFor returns the decide form for v, or nil when any condition
+// for offering it fails.
+//
+// Every one of these is an EXPLANATION of a refusal the domain would make
+// anyway, never the control itself: the POST is refused by the
+// capability layer and the domain regardless of what was drawn here
+// (invariant 10 — an adapter narrows only). Decide is populated only when
+// every one holds, so the absence of a form is never the only thing
+// standing between a caller and a decision.
+func decideControlFor(d Deps, caller capability.Principal, req approval.Request, v approvalView, csrfToken string) *approvalDecideControl {
+	if !(decideOffered(d, accounts.Role(caller.Role)) &&
 		v.Pending &&
 		!v.CallerIsExcludedRequester &&
 		!v.CallerAlreadySigned &&
 		!v.Grant.Present &&
 		!v.GrantUnreadable &&
-		!v.AudienceMalformed {
-		v.Decide = &approvalDecideControl{
-			Action:      decideApprovalAction(req.ID),
-			CSRFToken:   csrfToken,
-			PlanHash:    req.PlanHash,
-			Authorising: decideAuthorising(v.Operation, v.Summary),
-		}
+		!v.AudienceMalformed) {
+		return nil
 	}
-	return v
+	return &approvalDecideControl{
+		Action:      decideApprovalAction(req.ID),
+		CSRFToken:   csrfToken,
+		PlanHash:    req.PlanHash,
+		Authorising: decideAuthorising(v.Operation, v.Summary),
+	}
 }
 
 // approvalState renders the state the card colours on.
