@@ -1273,13 +1273,13 @@ func (v *approvalView) applyDecisions(req approval.Request, caller capability.Pr
 // every one holds, so the absence of a form is never the only thing
 // standing between a caller and a decision.
 func decideControlFor(d Deps, caller capability.Principal, req approval.Request, v approvalView, csrfToken string) *approvalDecideControl {
-	if !(decideOffered(d, accounts.Role(caller.Role)) &&
-		v.Pending &&
-		!v.CallerIsExcludedRequester &&
-		!v.CallerAlreadySigned &&
-		!v.Grant.Present &&
-		!v.GrantUnreadable &&
-		!v.AudienceMalformed) {
+	if !decideOffered(d, accounts.Role(caller.Role)) ||
+		!v.Pending ||
+		v.CallerIsExcludedRequester ||
+		v.CallerAlreadySigned ||
+		v.Grant.Present ||
+		v.GrantUnreadable ||
+		v.AudienceMalformed {
 		return nil
 	}
 	return &approvalDecideControl{
