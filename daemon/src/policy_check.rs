@@ -12,10 +12,11 @@
 //! `--would-allow` is answered by building a [`crate::gen::PolicyQuery`] and
 //! calling the exact same [`crate::dispatch::evaluate_policy_query`] entry
 //! point the live wire path uses — ADR-0011: no second evaluator. Reusing
-//! that function (rather than calling `Policy::evaluate`/`evaluate_raw_exec`
-//! directly) also reuses its `operation_positional_args` arg-key mapping and
-//! `deciding_rule` formatting, so a `--would-allow` verdict can never diverge
-//! from what a real Task dispatch would decide.
+//! that function (rather than calling `Policy::decide` directly) also reuses
+//! its `operation_inputs` arg-key mapping and `deciding_rule` formatting, so a
+//! `--would-allow` verdict can never diverge from what a real Task dispatch
+//! would decide. `policy explain` makes the same `decide_query` call and prints
+//! the pass and rule behind the verdict.
 //!
 //! This module runs **before** `tracing_subscriber::fmt().init()` in `main`
 //! (it is fully offline and needs no network/identity setup) — it must print
@@ -25,7 +26,7 @@
 use std::collections::HashMap;
 
 use crate::config;
-use crate::dispatch::evaluate_policy_query;
+use crate::dispatch::{decide_query, evaluate_policy_query, QueryDecision, UNSUPPORTED_REASON};
 use crate::gen::{policy_query, Operation, PolicyQuery, RawExec};
 use crate::policy;
 use crate::selfref;
@@ -94,6 +95,42 @@ Exit codes:
                   or UNSUPPORTED (the Operation is not in the vocabulary).
 
 Precedence: 1 (invalid) > 2 (would-deny) > 0 (valid).
+
+See also: relay-daemon policy explain --help (which pass and rule decided).
+";
+
+const EXPLAIN_HELP: &str = "\
+Usage: relay-daemon policy explain <file> [--templates <dir>] <spec>
+
+Asks the same hypothetical as `policy check --would-allow`, through the same
+Policy code the live wire path uses (ADR-0011), and prints which pass and
+rule decided it.
+
+<spec> is one of:
+  operation <name> [key=value ...]
+  raw-exec -- <argv...>
+
+Output (stdout):
+  explain: ALLOW | DENY | UNSUPPORTED
+  pass: <precondition|deny|guard|allow|default>
+  rule: <the deciding rule and, where known, its line> | none
+  matched on: <what the pass matched, by position -- never an argument value>
+  reason: <the Deny reason>                         (deny only)
+
+Passes:
+  precondition  decided before any rule ran: a non-canonical path argument
+                (ADR-0018), or an empty Raw Exec argv.
+  deny          a deny rule matched; deny beats allow.
+  guard         the Raw Exec whitespace guard refused (ADR-0019). It runs after
+                the deny pass and before the allow pass, so a deny pattern that
+                matches keeps the attribution.
+  allow         an allow rule matched.
+  default       nothing matched: deny-by-default (rule: none).
+
+Exit codes:
+  0   ALLOW
+  1   invalid     bad arguments, an unreadable file, or an invalid Policy.
+  2   DENY or UNSUPPORTED (the Operation is not in the vocabulary).
 ";
 
 // ---------------------------------------------------------------------------
@@ -108,7 +145,7 @@ Precedence: 1 (invalid) > 2 (would-deny) > 0 (valid).
 pub fn run(argv: &[String]) -> i32 {
     let args = &argv[3.min(argv.len())..];
 
-    if args.iter().any(|a| a == "-h" || a == "--help") {
+    if wants_help(args) {
         print!("{HELP}");
         return EXIT_VALID;
     }
@@ -195,21 +232,7 @@ pub fn run(argv: &[String]) -> i32 {
         let compiled =
             compiled.expect("policy::lint reported no errors; from_toml_str must succeed");
         let query = build_query(would_allow);
-        // Resolve names against the same per-Node vocabulary the live engine
-        // uses (ADR-0011): Native Operations plus the Template Operations of
-        // the root the caller named — or, absent `--templates`, whatever is
-        // installed on THIS machine. Loaded silently (this subcommand runs
-        // before tracing is initialized and its output is a machine-readable
-        // contract) and fail-closed, so a broken or absent root simply yields
-        // no template vocabulary and a template name then answers
-        // `unsupported`, exactly as a dispatch here would.
-        let template_dir = parsed
-            .templates
-            .clone()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(config::template_dir_from_env);
-        let templates = templates::TemplateSet::load(&template_dir)
-            .unwrap_or_else(|_| templates::TemplateSet::unloadable());
+        let templates = load_vocabulary_templates(parsed.templates.as_deref());
         let verdict = evaluate_policy_query(&query, &compiled, &templates);
         if verdict.allowed {
             println!("would-allow: ALLOW");
@@ -226,6 +249,144 @@ pub fn run(argv: &[String]) -> i32 {
     }
 
     EXIT_VALID
+}
+
+/// Runs `policy explain` and returns the process exit code.
+///
+/// `argv` is what follows `policy explain` on the command line:
+/// `<file> [--templates <dir>] <spec>`. Prints which pass and rule decided the
+/// hypothetical — the same `decide` call `--would-allow` makes
+/// ([`decide_query`]), so the two can never disagree. Prints plain text to
+/// stdout (never `tracing`, which is not yet initialised here); a rule's line
+/// is where the loader knew it, and no argument value is ever printed except in
+/// the Deny reason, which Policy already bounds.
+///
+/// Exit codes: 0 allow, 2 deny or unsupported, 1 invalid.
+pub fn run_explain(argv: &[String]) -> i32 {
+    let out = explain(argv);
+    print!("{}", out.stdout);
+    eprint!("{}", out.stderr);
+    out.code
+}
+
+/// Whether `-h`/`--help` appears before the first `--`. What follows `--` is a
+/// Raw Exec argv, so a `--help` there is the command's own argument, not ours.
+fn wants_help(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|a| a.as_str() != "--")
+        .any(|a| a == "-h" || a == "--help")
+}
+
+/// What `policy explain` would print, and its exit code — separate from
+/// [`run_explain`] so the output can be asserted on.
+struct Explanation {
+    code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+fn explain(argv: &[String]) -> Explanation {
+    let invalid = |message: String| Explanation {
+        code: EXIT_INVALID,
+        stdout: String::new(),
+        stderr: format!("error: {message}\n"),
+    };
+
+    if wants_help(argv) {
+        return Explanation {
+            code: EXIT_VALID,
+            stdout: EXPLAIN_HELP.to_string(),
+            stderr: String::new(),
+        };
+    }
+
+    let (file, templates_dir, spec) = match parse_explain_args(argv) {
+        Ok(p) => p,
+        Err(e) => return invalid(e),
+    };
+    let contents = match std::fs::read_to_string(&file) {
+        Ok(c) => c,
+        Err(e) => return invalid(format!("failed to read {file:?}: {e}")),
+    };
+    let compiled = match policy::from_toml_str(&contents) {
+        Ok(p) => p,
+        Err(e) => return invalid(e.to_string()),
+    };
+
+    let templates = load_vocabulary_templates(templates_dir.as_deref());
+    let query = build_query(&spec);
+    match decide_query(query.action.as_ref(), &compiled, &templates) {
+        QueryDecision::Unsupported => Explanation {
+            code: EXIT_WOULD_DENY,
+            stdout: format!("explain: UNSUPPORTED\nreason: {UNSUPPORTED_REASON}\n"),
+            stderr: String::new(),
+        },
+        QueryDecision::NoAction => invalid("empty policy query action".to_string()),
+        QueryDecision::Decided(e) => {
+            let allowed = matches!(e.decision, policy::Decision::Allow(_));
+            let rule = match (e.rule, e.pass) {
+                (Some(rule), _) => rule.to_string(),
+                (None, policy::Pass::Default) => "none (deny-by-default)".to_string(),
+                (None, _) => "none".to_string(),
+            };
+            let mut stdout = format!(
+                "explain: {}\npass: {}\nrule: {rule}\nmatched on: {}\n",
+                if allowed { "ALLOW" } else { "DENY" },
+                e.pass,
+                e.matched_on
+            );
+            if let policy::Decision::Deny { reason, .. } = &e.decision {
+                stdout.push_str(&format!("reason: {reason}\n"));
+            }
+            Explanation {
+                code: if allowed { EXIT_VALID } else { EXIT_WOULD_DENY },
+                stdout,
+                stderr: String::new(),
+            }
+        }
+    }
+}
+
+/// Parses `<file> [--templates <dir>] <spec>`.
+fn parse_explain_args(args: &[String]) -> Result<(String, Option<String>, WouldAllow), String> {
+    let mut iter = args.iter().peekable();
+    let file = iter
+        .next()
+        .ok_or_else(|| "missing <file> argument".to_string())?
+        .clone();
+
+    let mut templates = None;
+    while iter.peek().map(|a| a.as_str()) == Some("--templates") {
+        iter.next();
+        templates = Some(
+            iter.next()
+                .ok_or_else(|| "--templates requires a directory".to_string())?
+                .clone(),
+        );
+    }
+
+    let spec = parse_spec(&mut iter, "explain")?;
+    if let Some(extra) = iter.next() {
+        return Err(format!("unrecognized argument {extra:?}"));
+    }
+    Ok((file, templates, spec))
+}
+
+/// Loads the Template Operations a hypothetical resolves names against.
+///
+/// The same per-Node vocabulary the live engine uses (ADR-0011): Native
+/// Operations plus the Template Operations of the root the caller named — or,
+/// absent `--templates`, whatever is installed on THIS machine. Loaded silently
+/// (this subcommand runs before tracing is initialized and its output is a
+/// machine-readable contract) and fail-closed, so a broken or absent root simply
+/// yields no template vocabulary and a template name then answers
+/// `unsupported`, exactly as a dispatch here would.
+fn load_vocabulary_templates(dir: Option<&str>) -> templates::TemplateSet {
+    let template_dir = dir
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(config::template_dir_from_env);
+    templates::TemplateSet::load(&template_dir)
+        .unwrap_or_else(|_| templates::TemplateSet::unloadable())
 }
 
 /// Prints all lint findings to stderr, `error:`/`warning:` prefixed.
@@ -296,55 +457,7 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
                         .clone(),
                 );
             }
-            "--would-allow" => {
-                let kind = iter.next().ok_or_else(|| {
-                    "--would-allow requires a spec: 'operation' or 'raw-exec'".to_string()
-                })?;
-                match kind.as_str() {
-                    "operation" => {
-                        let name = iter
-                            .next()
-                            .ok_or_else(|| "--would-allow operation requires <name>".to_string())?
-                            .clone();
-                        let mut op_args = HashMap::new();
-                        while let Some(next) = iter.peek() {
-                            if next.starts_with("--") {
-                                break;
-                            }
-                            let kv = iter.next().expect("peek confirmed Some");
-                            let (k, v) = kv
-                                .split_once('=')
-                                .ok_or_else(|| format!("invalid key=value pair: {kv:?}"))?;
-                            op_args.insert(k.to_string(), v.to_string());
-                        }
-                        would_allow = Some(WouldAllow::Operation {
-                            name,
-                            args: op_args,
-                        });
-                    }
-                    "raw-exec" => {
-                        let sep = iter.next();
-                        if sep.map(String::as_str) != Some("--") {
-                            return Err(
-                                "--would-allow raw-exec requires '--' before the argv".to_string()
-                            );
-                        }
-                        let argv: Vec<String> = iter.by_ref().cloned().collect();
-                        if argv.is_empty() {
-                            return Err(
-                                "--would-allow raw-exec requires a non-empty argv after '--'"
-                                    .to_string(),
-                            );
-                        }
-                        would_allow = Some(WouldAllow::RawExec { argv });
-                    }
-                    other => {
-                        return Err(format!(
-                        "unknown --would-allow spec {other:?}; expected 'operation' or 'raw-exec'"
-                    ))
-                    }
-                }
-            }
+            "--would-allow" => would_allow = Some(parse_spec(&mut iter, "--would-allow")?),
             other => return Err(format!("unrecognized argument {other:?}")),
         }
     }
@@ -355,6 +468,57 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
         templates,
         would_allow,
     })
+}
+
+/// Parses an action spec — `operation <name> [key=value ...]` or
+/// `raw-exec -- <argv...>` — shared by `--would-allow` and `policy explain`.
+/// `flag` names the option in the error messages.
+fn parse_spec(
+    iter: &mut std::iter::Peekable<std::slice::Iter<'_, String>>,
+    flag: &str,
+) -> Result<WouldAllow, String> {
+    let kind = iter
+        .next()
+        .ok_or_else(|| format!("{flag} requires a spec: 'operation' or 'raw-exec'"))?;
+    match kind.as_str() {
+        "operation" => {
+            let name = iter
+                .next()
+                .ok_or_else(|| format!("{flag} operation requires <name>"))?
+                .clone();
+            let mut op_args = HashMap::new();
+            while let Some(next) = iter.peek() {
+                if next.starts_with("--") {
+                    break;
+                }
+                let kv = iter.next().expect("peek confirmed Some");
+                let (k, v) = kv
+                    .split_once('=')
+                    .ok_or_else(|| format!("invalid key=value pair: {kv:?}"))?;
+                op_args.insert(k.to_string(), v.to_string());
+            }
+            Ok(WouldAllow::Operation {
+                name,
+                args: op_args,
+            })
+        }
+        "raw-exec" => {
+            let sep = iter.next();
+            if sep.map(String::as_str) != Some("--") {
+                return Err(format!("{flag} raw-exec requires '--' before the argv"));
+            }
+            let argv: Vec<String> = iter.by_ref().cloned().collect();
+            if argv.is_empty() {
+                return Err(format!(
+                    "{flag} raw-exec requires a non-empty argv after '--'"
+                ));
+            }
+            Ok(WouldAllow::RawExec { argv })
+        }
+        other => Err(format!(
+            "unknown {flag} spec {other:?}; expected 'operation' or 'raw-exec'"
+        )),
+    }
 }
 
 /// Builds the `PolicyQuery` for a parsed `--would-allow` spec.
@@ -1202,6 +1366,198 @@ deny = ["secret"]
                 verdict.allowed, exec_allowed,
                 "[{}] --would-allow verdict must match the actual dispatch outcome",
                 case.label
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `policy explain` (#898): which pass and rule decided, through the same
+// `decide_query` call `--would-allow` makes.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod explain_tests {
+    use super::*;
+    use crate::test_support::{TempDir, TempFile};
+
+    const POLICY: &str = "\
+[[operation]]
+name = \"service.restart\"
+allowed_args = [[\"nginx\"]]
+
+[[deny]]
+name = \"service.restart\"
+args = [[\"sshd\"]]
+
+[raw_exec]
+allow = [\".*\"]
+";
+
+    fn s(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|p| p.to_string()).collect()
+    }
+
+    fn explain_with(policy: &TempFile, rest: &[&str]) -> Explanation {
+        let mut a = vec![policy.path_str()];
+        a.extend(rest.iter().map(|p| p.to_string()));
+        explain(&a)
+    }
+
+    #[test]
+    fn explain_prints_allow_pass_and_rule_line() {
+        let f = TempFile::new("explain-allow", POLICY);
+        let out = explain_with(&f, &["operation", "service.restart", "unit=nginx"]);
+        assert_eq!(out.code, EXIT_VALID);
+        assert_eq!(
+            out.stdout,
+            "explain: ALLOW\npass: allow\nrule: [[operation]] #0, line 1\n\
+             matched on: the invocation's arguments\n"
+        );
+        assert!(out.stderr.is_empty());
+    }
+
+    #[test]
+    fn explain_deny_by_rule_exit_two() {
+        let f = TempFile::new("explain-deny", POLICY);
+        let out = explain_with(&f, &["operation", "service.restart", "unit=sshd"]);
+        assert_eq!(out.code, EXIT_WOULD_DENY);
+        assert_eq!(
+            out.stdout,
+            "explain: DENY\npass: deny\nrule: [[deny]] #0, line 5\n\
+             matched on: the invocation's arguments\n\
+             reason: denied by explicit rule for operation 'service.restart'\n"
+        );
+    }
+
+    #[test]
+    fn explain_default_prints_no_rule() {
+        let f = TempFile::new("explain-default", POLICY);
+        let out = explain_with(&f, &["operation", "service.restart", "unit=cron"]);
+        assert_eq!(out.code, EXIT_WOULD_DENY);
+        assert!(out.stdout.contains("pass: default\n"), "{}", out.stdout);
+        assert!(
+            out.stdout.contains("rule: none (deny-by-default)\n"),
+            "{}",
+            out.stdout
+        );
+    }
+
+    #[test]
+    fn explain_precondition_non_canonical() {
+        let f = TempFile::new("explain-precondition", POLICY);
+        let out = explain_with(&f, &["operation", "file.read", "path=/etc/../shadow"]);
+        assert_eq!(out.code, EXIT_WOULD_DENY);
+        assert!(
+            out.stdout.contains("pass: precondition\n"),
+            "{}",
+            out.stdout
+        );
+        assert!(out.stdout.contains("rule: none\n"), "{}", out.stdout);
+        assert!(
+            out.stdout
+                .contains("matched on: argument 0 is not a canonical path\n"),
+            "{}",
+            out.stdout
+        );
+    }
+
+    #[test]
+    fn explain_raw_exec_guard_names_index_not_value() {
+        let f = TempFile::new("explain-guard", POLICY);
+        let out = explain_with(&f, &["raw-exec", "--", "/bin/echo", "TOPSECRET value"]);
+        assert_eq!(out.code, EXIT_WOULD_DENY);
+        assert!(out.stdout.contains("pass: guard\n"), "{}", out.stdout);
+        assert!(out.stdout.contains("argv[1]"), "{}", out.stdout);
+        assert!(!out.stdout.contains("TOPSECRET"), "{}", out.stdout);
+    }
+
+    #[test]
+    fn explain_unsupported_exit_two() {
+        let f = TempFile::new("explain-unsupported", POLICY);
+        let root = TempDir::created("explain-unsupported-root");
+        let out = explain_with(
+            &f,
+            &["--templates", &root.path_str(), "operation", "no.such.op"],
+        );
+        assert_eq!(out.code, EXIT_WOULD_DENY);
+        assert!(
+            out.stdout.starts_with("explain: UNSUPPORTED\n"),
+            "{}",
+            out.stdout
+        );
+        assert!(!out.stdout.contains("pass:"), "{}", out.stdout);
+    }
+
+    #[test]
+    fn explain_invalid_file_exit_one() {
+        let bad = TempFile::new("explain-bad", "[[operation\n");
+        let out = explain_with(&bad, &["operation", "service.restart"]);
+        assert_eq!(out.code, EXIT_INVALID);
+        assert!(out.stdout.is_empty());
+        assert!(out.stderr.starts_with("error: "), "{}", out.stderr);
+
+        let missing = explain(&s(&["/nonexistent/relay-explain.toml", "operation", "x"]));
+        assert_eq!(missing.code, EXIT_INVALID);
+
+        let no_spec = explain_with(&bad, &[]);
+        assert_eq!(no_spec.code, EXIT_INVALID);
+    }
+
+    #[test]
+    fn help_flag_after_the_raw_exec_separator_is_the_commands_own() {
+        assert!(wants_help(&s(&["f.toml", "--help"])));
+        assert!(wants_help(&s(&["-h"])));
+        assert!(!wants_help(&s(&[
+            "f.toml", "raw-exec", "--", "/bin/foo", "--help"
+        ])));
+        assert!(!wants_help(&s(&["f.toml", "raw-exec", "--", "-h"])));
+    }
+
+    #[test]
+    fn explain_help_returns_zero() {
+        let out = explain(&s(&["--help"]));
+        assert_eq!(out.code, EXIT_VALID);
+        for pass in ["precondition", "deny", "guard", "allow", "default"] {
+            assert!(out.stdout.contains(pass), "help must document {pass}");
+        }
+        assert_eq!(run_explain(&s(&["-h"])), EXIT_VALID);
+    }
+
+    #[test]
+    fn explain_and_would_allow_agree() {
+        let f = TempFile::new("explain-agree", POLICY);
+        let root = TempDir::created("explain-agree-root");
+        let specs: [&[&str]; 6] = [
+            &["operation", "service.restart", "unit=nginx"],
+            &["operation", "service.restart", "unit=sshd"],
+            &["operation", "service.restart", "unit=cron"],
+            &["operation", "file.read", "path=/a/../b"],
+            &["raw-exec", "--", "/bin/echo", "hi"],
+            &["raw-exec", "--", "/bin/echo", "a b"],
+        ];
+        for spec in specs {
+            let mut would = vec![
+                "relay-daemon".to_string(),
+                "policy".to_string(),
+                "check".to_string(),
+                f.path_str(),
+                "--templates".to_string(),
+                root.path_str(),
+                "--would-allow".to_string(),
+            ];
+            would.extend(spec.iter().map(|p| p.to_string()));
+            let would_code = run(&would);
+
+            let root_path = root.path_str();
+            let mut explain_args = vec!["--templates", root_path.as_str()];
+            explain_args.extend_from_slice(spec);
+            let out = explain_with(&f, &explain_args);
+
+            assert_eq!(out.code, would_code, "{spec:?}");
+            assert_eq!(
+                out.code == EXIT_VALID,
+                out.stdout.starts_with("explain: ALLOW")
             );
         }
     }

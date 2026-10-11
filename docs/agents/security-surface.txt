@@ -48,6 +48,7 @@ relay/packaging/**
 # Daemon: everything is privileged, but these are the lines
 daemon/src/policy_check.rs
 daemon/tests/policy_never_opened_for_write.rs
+daemon/tests/policy_decide_single_gate.rs
 daemon/src/selfref.rs
 daemon/src/catalog.rs
 daemon/src/dedup.rs

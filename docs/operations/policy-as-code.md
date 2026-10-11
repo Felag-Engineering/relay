@@ -127,6 +127,47 @@ would-allow: DENY (deciding rule: ...)
   `1` invalid (file is broken), `2` would-deny (file is fine, action isn't
   permitted). Precedence `1 > 2 > 0`.
 
+### Explain a verdict: `policy explain`
+
+`policy explain` asks the same hypothetical as `--would-allow`, through the same
+code, and prints **which pass and rule decided it** — so a deny can be traced to
+the line of the rule that caused it:
+
+```console
+$ relay-daemon policy explain policies/web-prod.toml \
+    operation service.restart unit=sshd
+explain: DENY
+pass: deny
+rule: [[deny]] #0, line 12
+matched on: the invocation's arguments
+reason: denied by explicit rule for operation 'service.restart'
+
+$ relay-daemon policy explain policies/web-prod.toml \
+    operation service.restart unit=nginx
+explain: ALLOW
+pass: allow
+rule: [[operation]] #0, line 4
+matched on: the invocation's arguments
+```
+
+The form is `policy explain <file> [--templates <dir>] <spec>`, where `<spec>` is
+the same `operation <name> [key=value ...]` or `raw-exec -- <argv...>` as
+`--would-allow`. The `pass` line is one of:
+
+- `precondition` — decided before any rule ran: a non-canonical path argument
+  (ADR-0018) or an empty Raw Exec argv. `rule: none`.
+- `deny` — a deny rule matched. Deny beats allow.
+- `guard` — the Raw Exec whitespace guard refused (ADR-0019). It runs after the
+  deny pass and before the allow pass, so a deny pattern that matches an argv
+  keeps the attribution. `rule: none`; `matched on` names the argv index, never
+  its value.
+- `allow` — an allow rule matched.
+- `default` — nothing matched: deny-by-default. `rule: none (deny-by-default)`.
+
+A rule's `line` is where the loader knew it; a rule the parser gave no position
+for prints without one. Exit codes: `0` ALLOW, `2` DENY or UNSUPPORTED, `1`
+invalid (bad arguments, unreadable file, invalid Policy).
+
 A minimal CI gate: run `policy check --strict` on every `policies/*.toml`, plus
 `--would-allow` assertions for the invariants you care about (e.g. "web-prod must
 never allow `file.read /etc/shadow`" as an expected-exit-2 test).

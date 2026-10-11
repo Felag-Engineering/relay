@@ -716,6 +716,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(code);
     }
 
+    // `policy explain` is the same offline, synchronous kind: it prints the
+    // pass and rule that decided a verdict, straight to stdout/stderr.
+    if args.get(1).map(String::as_str) == Some("policy")
+        && args.get(2).map(String::as_str) == Some("explain")
+    {
+        let code = policy_check::run_explain(&args[3..]);
+        std::process::exit(code);
+    }
+
     // `dump-operation-schema` (ADR-0015) is the same kind of fully offline,
     // synchronous subcommand as `policy check` above: it prints the canonical
     // Operation schema JSON (operations::schema) and exits, so it too is
