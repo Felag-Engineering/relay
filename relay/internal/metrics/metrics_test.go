@@ -393,6 +393,7 @@ func TestHandler_FullExposition(t *testing.T) {
 		t.Errorf("exposition changed.\ngot:\n%s\nwant:\n%s", body, wantFullExposition)
 	}
 }
+
 const wantFullExposition = `# HELP relay_build_info Relay build identity; always 1, the build stamp is in the labels.
 # TYPE relay_build_info gauge
 relay_build_info{version="1.2.3",commit="abc",build_date="2026-01-02"} 1
