@@ -50,21 +50,38 @@ import (
 //
 // After #680 no surface is handed the registry or a display-only cache
 // directly: every registry, Policy-view and Template-vocabulary read goes
-// through d.capability, the capability read lane, which records the read
+// through d.readLane, the capability read lane, which records the read
 // before it answers and fails closed (invariant 10, QRY-28). The registry,
 // the Policy-view cache and the Template-vocabulary cache are wired only
-// into d.capability itself (main.go) and into the Tunnel handler, which
+// into d.readLane itself (main.go) and into the Tunnel handler, which
 // remains their only writer.
+//
+// Each capability service is handed to a surface as the narrow type that
+// surface uses, never as one value that carries every method: the Freeze
+// (d.freezeControl), Account administration (d.accountAdmin) and the read lane
+// (d.readLane) are separate services over one Recorder, so an adapter seam
+// cannot reach a method it was not given.
 type surfaceDeps struct {
-	logger     *slog.Logger // the process logger (main.go); nil means slog.Default()
-	ops        mcp.OperationLister
-	capability *capability.Service // one instance: mcp.Executor AND api.Freezer
-	jobs       jobs.JobRepository
-	tasks      jobs.TaskRepository
-	tokens     *enroll.Service
-	revocation *revocation.Service
-	audit      audit.Repository
-	auditSink  *auditsink.Sink
+	logger *slog.Logger // the process logger (main.go); nil means slog.Default()
+	ops    mcp.OperationLister
+	// capability is Execution and Approvals: mcp Executor, TaskResolver and
+	// ApprovalDecider; api Exec, Approvals and ApprovalGrants; console
+	// Approvals, Cancel and Decide.
+	capability *capability.Service
+	// freezeControl is the Freeze and its role floor (api.Freezer).
+	freezeControl *capability.Control
+	// readLane backs the MCP read tools (through mcpReadLane), api.NodeReader
+	// and console.Queries.
+	readLane *capability.ReadLane
+	// accountAdmin backs api.AccountAdmin, console.Accounts and
+	// console.AccountAdmin.
+	accountAdmin *capability.AccountAdmin
+	jobs         jobs.JobRepository
+	tasks        jobs.TaskRepository
+	tokens       *enroll.Service
+	revocation   *revocation.Service
+	audit        audit.Repository
+	auditSink    *auditsink.Sink
 	// roleGate is the ONE authz.RoleGate the process holds — the same object
 	// the capability layer authorizes dispatches and Freeze with. The Control
 	// API needs it directly for the administrative routes that never reach the
@@ -142,7 +159,7 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	//
 	// mcp.WithCertExpiringWindow is gone (#680): the MCP read tools no longer
 	// resolve or evaluate anything — state: Labels arrive already evaluated
-	// on the lane's StateEval, which d.capability resolves against the same
+	// on the lane's StateEval, which d.readLane resolves against the same
 	// root-owned window every other surface uses (invariant 11).
 	// opts holds exactly the three production options, in this order, with
 	// d.testMCPOptions appended after them — test-only
@@ -181,7 +198,7 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	}
 	opts = append(opts, d.testMCPOptions...)
 
-	mux.Handle("/mcp", mcp.New(mcpReadLane{svc: d.capability}, d.ops, d.capability,
+	mux.Handle("/mcp", mcp.New(mcpReadLane{svc: d.readLane}, d.ops, d.capability,
 		jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
 		readAuditor{sink: d.auditSink}, d.capability, opts...))
 }
@@ -197,23 +214,23 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		Logger:       d.logger,
 		TokenRevoker: d.revocation,
 		Nodes:        d.revocation,
-		Freeze:       d.capability,
+		Freeze:       d.freezeControl,
 		Audit:        d.audit,
 		// The role floor for mint/revoke (#397). Same *authz.RoleGate the
 		// capability layer holds — one ladder, consulted from both places,
 		// never re-derived here.
 		Authz: d.roleGate,
 		// Account and API-Token administration (#653) — the SAME
-		// *capability.Service instance every other surface here holds: the
+		// *capability.AccountAdmin instance every other surface here holds: the
 		// same floor, the same self-target/last-admin refusals, and the same
 		// audit row as every other administrative act, rather than this
 		// surface re-deriving any of them (invariant 10).
-		AccountAdmin: d.capability,
+		AccountAdmin: d.accountAdmin,
 		// The Node read route (#440, #680). The capability read lane — the
-		// same *capability.Service every other surface holds — records the
+		// same *capability.ReadLane every other surface holds — records the
 		// read before it answers and fails closed, rather than reading the
 		// registry directly.
-		NodeReader: d.capability,
+		NodeReader: d.readLane,
 		Now:        d.now,
 		// Execution (#356): the SAME *capability.Service instance the MCP
 		// surface dispatches through — one capability layer, two thin surfaces
@@ -307,20 +324,20 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// consoleEventsOrNil for Go's typed-nil trap and what it would cost
 		// here.
 		Events: consoleEventsOrNil(d.events),
-		// The read lane (#441). d.capability (*capability.Service) already
+		// The read lane (#441). d.readLane (*capability.ReadLane) already
 		// implements console.QueryReader's six methods (#450 added the
 		// registry half; #539 added RecordEventSubscription). Job detail
 		// (#423) reads Jobs and Tasks through it and through nothing else,
 		// which is why the Console is handed no Job repository of its own.
-		Queries: d.capability,
-		// The Accounts screen's read seam (#654). d.capability already
+		Queries: d.readLane,
+		// The Accounts screen's read seam (#654). d.accountAdmin already
 		// carries Accounts and APITokens (#653), so no adapter is built for
 		// it, and console.AccountReader declares none of the account lane's
 		// five write verbs (CreateAccount, SetAccountRole, SetAccountEnabled,
 		// MintAPIToken, RevokeAPIToken). The admin floor on both reads is the capability
 		// layer's (authz.go), as is the decision that a successful read
 		// records nothing — #659 tracks the latter, in front of a human.
-		Accounts: d.capability,
+		Accounts: d.accountAdmin,
 		// state:cert-expiring's warning window (#414, ADR-0034) — the same
 		// value every other surface resolves `state:` against.
 		CertExpiringWithin: d.certExpiringWithin,
@@ -343,17 +360,17 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// d.consoleAuth is already wired above as Auth, so step-up needs no
 		// new wiring.
 		Decide: d.capability,
-		// AccountAdmin (#655): the Console's third write seam. d.capability
+		// AccountAdmin (#655): the Console's third write seam. d.accountAdmin
 		// already carries all five verbs (#653) — CreateAccount,
 		// SetAccountRole, SetAccountEnabled, MintAPIToken and RevokeAPIToken
 		// — so no adapter is built for it. The admin floor on every one, the
 		// self-target refusal, the last-enabled-admin refusal and all six
 		// audit rows are the capability layer's. d.consoleAuth is already
-		// wired above as Auth and d.capability as Accounts, so the per-action
+		// wired above as Auth and d.accountAdmin as Accounts, so the per-action
 		// step-up and the role route's current-role read need no new wiring
 		// either. Execution stays false, unchanged: none of these five
 		// composes or dispatches anything.
-		AccountAdmin: d.capability,
+		AccountAdmin: d.accountAdmin,
 	})
 	mux.Handle("/console/", console.Secure(consoleMux, d.logger))
 }
@@ -370,7 +387,7 @@ func defaultControlSurfaces() []controlSurface {
 	return []controlSurface{mcpSurface{}, apiSurface{}, metricsSurface{}}
 }
 
-// mcpReadLane adapts *capability.Service to mcp.ReadLane (#680, QRY-28): the
+// mcpReadLane adapts *capability.ReadLane to mcp.ReadLane (#680, QRY-28): the
 // ONE audited seam the MCP read tools call for every registry, Policy-view
 // and Template-vocabulary read.
 //
@@ -380,7 +397,7 @@ func defaultControlSurfaces() []controlSurface {
 // on THIS side of the seam. Every error passes through unwrapped, so
 // errors.Is(err, capability.ErrNodeNotFound) still works at the tool
 // boundary (tools_nodes.go, tools_operations.go).
-type mcpReadLane struct{ svc *capability.Service }
+type mcpReadLane struct{ svc *capability.ReadLane }
 
 func (l mcpReadLane) principal(ctx context.Context) (capability.Principal, error) {
 	p, ok := controlplane.PrincipalFromContext(ctx)

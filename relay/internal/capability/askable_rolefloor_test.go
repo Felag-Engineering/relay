@@ -52,25 +52,57 @@ type capSeams struct {
 	now           func() time.Time
 }
 
+// neverFrozen is a FreezeStore that is never frozen, standing in for
+// capability's unexported noopFreezeStore: NewControl requires a store.
+type neverFrozen struct{}
+
+func (neverFrozen) Frozen(context.Context) (bool, error)          { return false, nil }
+func (neverFrozen) Engage(context.Context, string) error          { return nil }
+func (neverFrozen) Release(context.Context, string, string) error { return nil }
+
+// emptyQueries implements capability.AuditQuery and capability.JobQuery with
+// zero values: NewReadLane requires both query seams, and this test reads
+// neither.
+type emptyQueries struct{}
+
+func (emptyQueries) QueryAudit(context.Context, capability.AuditFilter, capability.PageRequest) (capability.AuditPage, error) {
+	return capability.AuditPage{}, nil
+}
+
+func (emptyQueries) AuditCounts(context.Context, capability.AuditFilter, time.Duration) ([]capability.PrincipalBucket, error) {
+	return nil, nil
+}
+
+func (emptyQueries) AuditReach(context.Context, capability.AuditFilter) (capability.Reach, error) {
+	return capability.Reach{}, nil
+}
+
+func (emptyQueries) QueryJobs(context.Context, capability.JobFilter, capability.PageRequest) (capability.JobPage, error) {
+	return capability.JobPage{}, nil
+}
+
+func (emptyQueries) QueryTasks(context.Context, capability.TaskFilter, capability.PageRequest) (capability.TaskPage, error) {
+	return capability.TaskPage{}, nil
+}
+
 // newCapService builds the capability layer for a test: a thin wrapper over
-// capability.New and the With* options, so the layer's constructor changes in
-// one place.
+// the capability constructors, so the layer's shape changes in one place.
 func newCapService(t *testing.T, s capSeams) *capability.Service {
 	t.Helper()
+	if s.audit == nil || s.authz == nil {
+		t.Fatalf("newCapService: audit and authz are required")
+	}
+	rec := capability.NewRecorder(s.audit, nil, nil)
+	ctl := capability.NewControl(rec, s.authz, neverFrozen{})
+	read := capability.NewReadLane(rec, s.reg, emptyQueries{}, emptyQueries{}, nil, nil, 0, s.now)
 	var opts []capability.Option
-	if s.authz != nil {
-		opts = append(opts, capability.WithAuthorizer(s.authz))
-	}
-	if s.audit != nil {
-		opts = append(opts, capability.WithAuditSink(s.audit))
-	}
 	if s.gate != nil || s.approvals != nil || s.approvalAuthz != nil {
 		opts = append(opts, capability.WithApprovals(s.gate, s.approvals, s.approvalAuthz))
 	}
 	if s.now != nil {
 		opts = append(opts, capability.WithClock(s.now))
 	}
-	return capability.New(s.reg, opts...)
+	return capability.New(ctl, read, opts...)
 }
 
 // maxSweptActionKind bounds TestRoleFloorCannotRefuseAnAskablePark's sweep.

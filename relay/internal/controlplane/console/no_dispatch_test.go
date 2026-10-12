@@ -51,6 +51,23 @@ func writeSeamName(name string) bool {
 	}
 }
 
+// bannedCapabilityServices maps every capability service type, and its
+// constructor, to the narrowed seam a Console file must use instead. They are
+// banned by EXACT name beside capability.Service and capability.New: a prefix
+// match would falsely flag unrelated identifiers such as
+// capability.ControlAction and capability.AccountAdminEvent, which the
+// Console legitimately uses.
+var bannedCapabilityServices = map[string]string{
+	"Recorder":        "the Recorder belongs to the composition root alone",
+	"NewRecorder":     "the Recorder belongs to the composition root alone",
+	"Control":         "the Console holds only the store's FreezeReader, never the Control",
+	"NewControl":      "the Console holds only the store's FreezeReader, never the Control",
+	"AccountAdmin":    "use AccountReader / AccountAdministrator",
+	"NewAccountAdmin": "use AccountReader / AccountAdministrator",
+	"ReadLane":        "use QueryReader",
+	"NewReadLane":     "use QueryReader",
+}
+
 const (
 	capabilityImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	registryImportPath   = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -245,36 +262,34 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	// ApprovalReader that #427 closed for events.Bus.
 	//
 	// The dispatch/control verbs (#595) close the SAME hole, not a new one
-	// the Cancel seam introduced: Deps.Approvals and Deps.Queries were
-	// already wired to that same *capability.Service before this issue, so
-	// an anonymous-interface assertion could already have recovered Run,
-	// Plan, EngageFreeze, ReleaseFreeze or ResolveTask from either seam with
-	// no import and no banned type named. Deps.Cancel (cancel.go) is a THIRD
-	// field wired to the same object, and closing the pre-existing hole
-	// belongs in the same change that adds another way to reach it.
+	// the Cancel seam introduced: Deps.Approvals (before #899) was already wired to the
+	// *capability.Service before this issue, so an anonymous-interface
+	// assertion could already have recovered Run, Plan, EngageFreeze,
+	// ReleaseFreeze or ResolveTask from it with no import and no banned type
+	// named. Deps.Cancel (cancel.go) is another field wired to the same
+	// object, and closing the pre-existing hole belongs in the same change
+	// that adds another way to reach it.
 	// ResolveTask (mcptask.go) writes a task handle's status — a real write,
 	// not exposed by ApprovalReader or QueryReader, so "Resolve" belongs on
 	// this list for the identical reason "Decide" and "Revoke" already are.
 	//
 	// Mint (#654) closes the SAME hole, not a new one the Accounts seam
-	// introduced. Deps.Approvals, Deps.Queries, Deps.Cancel and Deps.Decide
-	// are all already wired to one *capability.Service
-	// (control_surfaces.go), and MintAPIToken landed on that type in #653 —
-	// so `d.Approvals.(interface{ MintAPIToken(…) })` compiles on main
-	// TODAY, with this guard silent, and recovers the reveal-once credential
-	// mint with no import and no banned type named. Deps.Accounts
-	// (seams.go) is a FIFTH field wired to the same object, and closing the
-	// pre-existing hole belongs in the same change that adds another way to
-	// reach it. MintAPIToken is the last uncovered write verb on that type.
+	// introduced. MintAPIToken now lives on *capability.AccountAdmin, which
+	// control_surfaces.go wires to Deps.Accounts and Deps.AccountAdmin — so
+	// an anonymous-interface assertion on either field would recover the
+	// reveal-once credential mint with no import and no banned type named.
+	// Closing the pre-existing hole belongs in the same change that adds
+	// another way to reach it. MintAPIToken is the last uncovered write verb
+	// on that type.
 	//
 	// Record is deliberately NOT here, and the distinction is worth being
-	// precise about: *capability.Service has exactly one Record* method,
+	// precise about: *capability.ReadLane has exactly one Record* method,
 	// RecordEventSubscription, and it is not a hole this list would close —
 	// it is QueryReader's OWN declared method (seams.go), the one every
 	// screen on this seam is already meant to call. Banning "Record" would
 	// not stop an escalation; it would ban re-declaring the read this
 	// package is supposed to make. A prefix belongs on this list only when
-	// the seam's underlying *capability.Service has a write under that name
+	// the seam's underlying capability type has a write under that name
 	// which the seam's OWN interface does not already expose.
 	writeSurfaceMethod := func(name string) bool {
 		for _, prefix := range []string{
@@ -286,16 +301,19 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 			// The capability layer's dispatch and control-action verbs
 			// (#595): Run and Plan dispatch; Engage/Release and Cancel are
 			// ControlActions; Resolve is ResolveTask, a task-handle write.
-			// All six are reachable from Deps.Approvals, Deps.Queries, or
-			// Deps.Cancel today (see the comment above).
+			// Run, Plan, Cancel and Resolve are reachable from
+			// Deps.Approvals or Deps.Cancel (the *capability.Service).
+			// Engage/Release left *capability.Service in #899 and stay
+			// listed so that re-wiring a Control onto any Deps field
+			// cannot reopen them (see the comment above).
 			"Run", "Plan", "Engage", "Release", "Cancel", "Resolve",
 			// #895: Start is Run's non-blocking sibling — the same dispatch
 			// pipeline — and Drain closes the Service to every later Start,
 			// so a Console file recovering it is a denial of service.
 			"Start", "Drain",
 			// The account lane's reveal-once credential write (#654):
-			// MintAPIToken, reachable from any of the five seams wired to
-			// the same *capability.Service.
+			// MintAPIToken, reachable from the two seams wired to the
+			// *capability.AccountAdmin.
 			"Mint",
 		} {
 			if strings.HasPrefix(name, prefix) {
@@ -416,6 +434,12 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 						violations = append(violations, fmt.Sprintf(
 							"%s references capability.GrantRequest — the Console never asks for a Grant; naming the argument type of a write is the first half of undoing that",
 							fileName))
+					default:
+						if advice := bannedCapabilityServices[v.Sel.Name]; advice != "" {
+							violations = append(violations, fmt.Sprintf(
+								"%s references capability.%s — a concrete capability service or its constructor; %s (no-dispatch structural guarantee, ADR-0026 decision 1)",
+								fileName, v.Sel.Name, advice))
+						}
 					}
 				}
 			}
@@ -908,10 +932,10 @@ func f(c canceller) { _ = c.CancelJob(context.Background(), nil, "job-1") }
 		{
 			// The pre-existing hole the Mint prefix closes (#654): this
 			// compiles against today's wiring, because every seam on Deps
-			// that is a *capability.Service carries MintAPIToken since
-			// #653. Recovering a reveal-once credential mint from a read
-			// seam is the escalation; which of the five fields it is
-			// spelled through is incidental.
+			// that is a *capability.AccountAdmin carries MintAPIToken.
+			// Recovering a reveal-once credential mint from a read seam is
+			// the escalation; which field it is spelled through is
+			// incidental.
 			name: "anonymous interface recovering MintAPIToken from a read seam",
 			src: `package console
 import (
@@ -1071,6 +1095,63 @@ func f(err error) bool { return errors.Is(err, authz.ErrUnauthorized) }
 			t.Fatalf("dispatchViolations() = %v, want a violation containing %q", violations, tc.wantSubstr)
 		})
 	}
+}
+
+// TestDispatchViolations_BansConcreteCapabilityServices proves every capability
+// service type and constructor is refused by exact name — named directly, or
+// through an alias — and that similarly named identifiers the Console
+// legitimately uses are not. The list is spelled out here rather than read from
+// the map, so deleting a name from the map cannot delete its row.
+func TestDispatchViolations_BansConcreteCapabilityServices(t *testing.T) {
+	const capImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"`
+	check := func(t *testing.T, src string) []string {
+		t.Helper()
+		file, err := parser.ParseFile(token.NewFileSet(), "fixture.go", src, 0)
+		if err != nil {
+			t.Fatalf("parser.ParseFile: %v", err)
+		}
+		return dispatchViolations("fixture.go", file)
+	}
+	mustContain := func(t *testing.T, violations []string, want string) {
+		t.Helper()
+		for _, v := range violations {
+			if strings.Contains(v, want) {
+				return
+			}
+		}
+		t.Fatalf("dispatchViolations() = %v, want one containing %q", violations, want)
+	}
+
+	for _, name := range []string{
+		"Recorder", "NewRecorder", "Control", "NewControl",
+		"AccountAdmin", "NewAccountAdmin", "ReadLane", "NewReadLane",
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := "package console\nimport " + capImport + "\nvar _ = capability." + name + "\n"
+			mustContain(t, check(t, src), "capability."+name+" — a concrete capability service")
+		})
+	}
+
+	t.Run("an aliased import cannot dodge the ban", func(t *testing.T) {
+		src := "package console\nimport c2 " + capImport + "\nvar _ *c2.ReadLane\n"
+		mustContain(t, check(t, src), "capability.ReadLane — a concrete capability service")
+	})
+
+	t.Run("a type alias of a service is refused where it names it", func(t *testing.T) {
+		src := "package console\nimport " + capImport + "\ntype q = capability.ReadLane\n"
+		mustContain(t, check(t, src), "capability.ReadLane — a concrete capability service")
+	})
+
+	t.Run("exact match leaves similarly-named identifiers alone", func(t *testing.T) {
+		src := "package console\nimport " + capImport + `
+var _ capability.ControlAction
+var _ capability.AccountAdminEvent
+var _ capability.IntentRecorder
+`
+		if violations := check(t, src); len(violations) != 0 {
+			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
+		}
+	})
 }
 
 // TestNoAdapterSetsARiskClass is the structural half of invariant 13 for this

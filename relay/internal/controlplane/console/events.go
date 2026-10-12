@@ -66,7 +66,7 @@ package console
 //
 // A subscription to this route is a read of the fleet's live activity, and
 // ADR-0025 audits it exactly as it audits QueryJobs or ListNodes: one
-// KindRead record, written through capability.Service.RecordEventSubscription
+// KindRead record, written through capability.ReadLane.RecordEventSubscription
 // (the read lane, never a RecordRead call in this package — invariant 10),
 // BEFORE d.Events.Subscribe runs.
 //
@@ -119,7 +119,7 @@ package console
 // reusing what the loop built — and the entire suite still passed, because
 // for a clean query string the re-derivation happens to equal the original.
 // The comment was true and the property was still unenforced.
-// capability.Service.RecordEventSubscription now returns the canonicalised
+// capability.ReadLane.RecordEventSubscription now returns the canonicalised
 // names it actually recorded, and THAT return value — not wanted.Kinds, not
 // a second parse of the query string — is the only thing kindsFromNames
 // below ever turns into d.Events.Subscribe's argument. A caller cannot

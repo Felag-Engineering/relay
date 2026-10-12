@@ -24,7 +24,7 @@ import (
 // deliberate and always carries an audited reason (SIGUSR2 +
 // RELAY_FREEZE_RELEASE_REASON). Both engage and release are attributed to
 // principal "local-host" and durably audited (RecordFreeze) via
-// capability.Service.EngageFreezeLocal/ReleaseFreezeLocal. The Control API
+// capability.Control.EngageFreezeLocal/ReleaseFreezeLocal. The Control API
 // path for Freeze (remote engage/release, richer principals) lands in v0.0.6
 // — this is deliberately the local-only half.
 //
@@ -36,7 +36,7 @@ import (
 // API credential itself, root-on-the-box must still be able to pull the cord.
 // Signal privilege on the Relay host is strictly greater than any credential
 // the gate could check, so the split is honest rather than a bypass.
-func watchFreezeSignals(ctx context.Context, svc *capability.Service) {
+func watchFreezeSignals(ctx context.Context, ctl *capability.Control) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGUSR1, syscall.SIGUSR2)
 	defer signal.Stop(sigCh)
@@ -48,14 +48,14 @@ func watchFreezeSignals(ctx context.Context, svc *capability.Service) {
 		case sig := <-sigCh:
 			switch sig {
 			case syscall.SIGUSR1:
-				if err := svc.EngageFreezeLocal(ctx); err != nil {
+				if err := ctl.EngageFreezeLocal(ctx); err != nil {
 					slog.Error("engage freeze failed", "err", err)
 					continue
 				}
 				slog.Info("freeze engaged", "principal", "local-host")
 			case syscall.SIGUSR2:
 				reason := envOr("RELAY_FREEZE_RELEASE_REASON", "released locally on relay host")
-				if err := svc.ReleaseFreezeLocal(ctx, reason); err != nil {
+				if err := ctl.ReleaseFreezeLocal(ctx, reason); err != nil {
 					slog.Error("release freeze failed", "err", err)
 					continue
 				}

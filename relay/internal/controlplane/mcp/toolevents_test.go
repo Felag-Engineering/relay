@@ -15,6 +15,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditquery"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
@@ -73,18 +74,21 @@ func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolC
 	t.Cleanup(func() { st.Close() }) //nolint:errcheck
 
 	conduit := newFakeConduit()
+	q := auditquery.New(st.AuditQueries(), st.JobQueries())
 	capSvc := newCapService(t, capSeams{
 		reg:       reg,
 		authz:     testAuthorizer{},
 		cap:       capability.NewBlastCap(0, 0),
 		audit:     auditsink.New(st.Audit()),
 		freeze:    st.Freeze(),
+		auditQ:    q,
+		jobQ:      q,
 		jobsRepo:  st.Jobs(),
 		tasksRepo: st.Tasks(),
 		conduit:   conduit,
 		newID:     deterministicIDs(),
 	})
-	drainOnCleanup(t, capSvc)
+	drainOnCleanup(t, capSvc.Service)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 
 	var opts []mcp.Option
@@ -94,7 +98,7 @@ func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolC
 	// capSvc doubles as the Tasks resolver (last arg), exactly like
 	// cmd/relay/control_surfaces.go's mcpSurface.Mount — needed so tasks/get
 	// is actually registered for TestToolCallMiddleware_DoesNotFireFor.
-	handler := mcp.New(testReadLane{svc: capSvc}, opsLister{}, capSvc, results, nil, capSvc, opts...)
+	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Service, results, nil, capSvc.Service, opts...)
 
 	cert := relaytest.SelfSignedServerCert(t, "mcp-test")
 	controlSrv := controlplane.New(

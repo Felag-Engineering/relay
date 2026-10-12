@@ -23,12 +23,12 @@ type freezeResponse struct {
 // handleFreezeEngage implements POST /api/v1/freeze/engage: engage the
 // Relay-wide Freeze via Freezer.EngageFreeze (ADR-0013 — cheap, no reason
 // required) and return 200. No request body. Freeze's audit trail
-// (KindFreezeEngage) is written intrinsically by capability.Service, so this
+// (KindFreezeEngage) is written intrinsically by capability.Control, so this
 // handler deliberately does NOT call recordLifecycle — doing so would
 // double-audit the same event.
 //
 // **The floor — a human `operator`+ (#397) — is NOT checked here.** It lives
-// in capability.Service.EngageFreeze, which consults the same authz.RoleGate
+// in capability.Control.EngageFreeze, which consults the same authz.RoleGate
 // every other authorization answer comes from, and audits the refusal in the
 // same trail. This handler renders that refusal as 403; re-deriving the rule
 // here would be the second control path invariant 10 forbids, and the one
@@ -53,7 +53,7 @@ func handleFreezeEngage(d Deps) http.HandlerFunc {
 // Relay-wide Freeze via Freezer.ReleaseFreeze. ADR-0013's asymmetric
 // activation requires a non-empty reason to release (engage is reason-free,
 // release is deliberate); an empty or absent reason is a 400. Freeze's audit
-// trail (KindFreezeRelease) is written intrinsically by capability.Service —
+// trail (KindFreezeRelease) is written intrinsically by capability.Control —
 // this handler does NOT call recordLifecycle (would double-audit).
 //
 // **Requires `admin` (#397), checked in the capability layer**, exactly as

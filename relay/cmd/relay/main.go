@@ -202,7 +202,12 @@ type appDeps struct {
 	conns      *revocation.Connections
 	revocation *revocation.Service
 	limiter    *ratelimit.Limiter
-	// capability is the Relay's single capability layer (ADR-0009/0010). When
+	// freezeControl is the Freeze and its role floor — the part of the
+	// capability layer the SIGUSR1/SIGUSR2 host lever (watchFreezeSignals)
+	// drives. Always built, independent of ControlEnabled.
+	freezeControl *capability.Control
+	// capability is the Relay's execution and approvals service (ADR-0009/0010),
+	// composed with freezeControl and the read lane. When
 	// Config.ControlEnabled, newServer wires it with the real Job engine
 	// (capability.WithExecution) over the real mTLS tunnel and the real
 	// role-gated Authorizer (authz.NewRoleGate) — this is the "#154 flip": MCP/
@@ -638,11 +643,13 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// base is the capability.Option set common to both branches below: the
 	// real BlastCap (ADR-0004/0012; see the ReadBlastCap/MutateBlastCap doc
 	// comment on Config for the file-vs-flag deviation flagged for human
-	// review), the real adapter to the SQLite-backed audit trail (#102), and
-	// the real persisted Relay-wide emergency stop (#101, ADR-0013 — see
+	// review) and the approval, idempotency and event seams. The real adapter
+	// to the SQLite-backed audit trail (#102) is the Recorder below, and the
+	// real persisted Relay-wide emergency stop (#101, ADR-0013 — see
 	// watchFreezeSignals in freeze_signal.go for the local engage/release
-	// lever). A fresh slice is built per branch below (not appended to) so
-	// neither branch aliases or mutates the other's backing array.
+	// lever) is the Control. A fresh slice is built per branch below (not
+	// appended to) so neither branch aliases or mutates the other's backing
+	// array.
 	// One audit sink, shared by the capability layer and the MCP read surface
 	// (#288): read-access records land in the same trail as dispatches, via
 	// the same writer.
@@ -675,32 +682,52 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	roleGate := authz.NewRoleGate()
 
 	// The one TokenService in the process: the authenticator VERIFIES through
-	// it and the Control API MINTS through it (via capability.WithAccountAdmin
+	// it and the Control API MINTS through it (via capability.NewAccountAdmin
 	// below), but each is handed a narrow interface exposing only its half
 	// (controlplane.TokenVerifier / capability.APITokenStore), so neither
-	// surface holds the other's power. Constructed here, above base, because
-	// base itself needs it (#653) and both branches below share base.
+	// surface holds the other's power. Constructed here, above the shared
+	// capability objects, because NewAccountAdmin needs it (#653) and both
+	// branches below share the AccountAdmin it builds.
 	apiTokenSvc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
+
+	// The ONE Recorder: audit trail, metrics and log, shared by the Control,
+	// the read lane and so the whole capability layer (capability.New refuses
+	// a read lane over a different one).
+	rec := capability.NewRecorder(auditSink, appMetrics, logger)
+
+	// The Freeze and its role floor (ADR-0013, #101) over the real RoleGate
+	// (#653): both branches below carry a real Authorizer, not just the
+	// ControlEnabled one, which is what makes NewAccountAdmin below
+	// satisfiable — its fail-open guard requires a real Authorizer. Tightening
+	// the disabled branch this way changes no caller's outcome there: nothing
+	// is mounted on that path (see the ControlEnabled==false branch's comment
+	// below).
+	freezeControl := capability.NewControl(rec, roleGate, st.Freeze())
+
+	// Account and API-Token administration (#653): the same Accounts store and
+	// TokenService the authenticator and bootstrap-token use, so identity
+	// administration inherits one floor (invariant 10) instead of the Control
+	// API deciding role itself per handler. Built over the Control, so it
+	// shares its Authorizer and trail.
+	accountAdmin := capability.NewAccountAdmin(freezeControl, st.Accounts(), apiTokenSvc)
+
+	// The read lane (#441): filtered, paginated queries over the audit trail
+	// and over Jobs/Tasks — one seam, shared by every surface (invariant 10).
+	// certExpiringWithin is state:cert-expiring's warning window (#414,
+	// ADR-0034), computed once above and shared by every surface below. The
+	// Policy-view and Template-vocabulary reads (#680, QRY-28) are the same
+	// policyCache/vocabCache the Tunnel handler writes into below (ts),
+	// Get-only from this side. Wiring them here is what lets
+	// describe_node/list_operations disclose a Node's Policy and Template
+	// vocabulary through the ONE capability layer, on every surface, instead
+	// of each surface holding its own cache reference — and, for vocabCache,
+	// what lets a Template Operation be dispatched at all: the capability
+	// layer resolves its fan-out and class from it (ADR-0042). Without it
+	// every Template dispatch is refused. A nil clock is the real one.
+	readLane := capability.NewReadLane(rec, reg, queries, queries, policyCache, vocabCache, certExpiringWithin, nil)
 
 	base := []capability.Option{
 		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
-		capability.WithLogger(logger),
-		capability.WithAuditSink(auditSink),
-		// The real RoleGate (#653): both branches below now carry a real
-		// Authorizer, not just the ControlEnabled one, which is what makes
-		// capability.WithAccountAdmin below satisfiable — New's fail-open
-		// guard requires a real Authorizer wherever WithAccountAdmin is used.
-		// Tightening the disabled branch this way changes no caller's
-		// outcome there: nothing is mounted on that path (see the
-		// ControlEnabled==false branch's comment below).
-		capability.WithAuthorizer(roleGate),
-		// Account and API-Token administration (#653): the same Accounts
-		// store and TokenService the authenticator and bootstrap-token use,
-		// so identity administration inherits one floor (invariant 10)
-		// instead of the Control API deciding role itself per handler.
-		capability.WithAccountAdmin(st.Accounts(), apiTokenSvc),
-		capability.WithFreeze(st.Freeze()),
-		capability.WithMetrics(appMetrics),
 		capability.WithApprovals(approvalGate, st.Approvals(), roleGate),
 		// Batch/window grants (#378, ADR-0027 decision 12). Wired
 		// unconditionally alongside the gate: a Grant can only ever be created
@@ -717,24 +744,6 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		// optional key so a call re-issued after a lost response re-attaches to
 		// its Job. Without this a keyed call is refused, never run unkeyed.
 		capability.WithIdempotency(st.IdempotencyKeys()),
-		// The read lane (#441): filtered, paginated queries over the audit
-		// trail and over Jobs/Tasks — one seam, shared by every surface
-		// (invariant 10).
-		capability.WithQueries(queries, queries),
-		// state:cert-expiring's warning window (#414, ADR-0034), computed
-		// once above and shared by every surface below.
-		capability.WithCertExpiringWindow(certExpiringWithin),
-		// The Policy-view and Template-vocabulary reads (#680, QRY-28): the
-		// same policyCache/vocabCache the Tunnel handler writes into below
-		// (ts), Get-only from this side. Wiring them here is what lets
-		// describe_node/list_operations disclose a Node's Policy and Template
-		// vocabulary through the ONE capability layer, on every surface,
-		// instead of each surface holding its own cache reference — and, for
-		// vocabCache, what lets a Template Operation be dispatched at all:
-		// the capability layer resolves its fan-out and class from it
-		// (ADR-0042). Without it every Template dispatch is refused.
-		capability.WithPolicyView(policyCache),
-		capability.WithTemplateVocabulary(vocabCache),
 		// The event seam's Job-grained publisher (#416). Appended last so
 		// this hunk stays additive alongside concurrent branches also
 		// touching the end of this slice.
@@ -808,14 +817,8 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		enabledOpts := append([]capability.Option{}, base...)
 		enabledOpts = append(enabledOpts,
 			capability.WithExecution(st.Jobs(), st.Tasks(), router,
-				capability.WithExecDispatchConcurrency(cfg.DispatchConcurrency)),
-			// Passing WithAuthorizer(roleGate) again here is idempotent —
-			// base (#653) already carries it, and Option application is
-			// last-write-wins over the same object — kept explicit so this
-			// branch reads correctly on its own rather than depending on a
-			// reader having base's contents in mind.
-			capability.WithAuthorizer(roleGate))
-		capSvc = capability.New(reg, enabledOpts...)
+				capability.WithExecDispatchConcurrency(cfg.DispatchConcurrency)))
+		capSvc = capability.New(freezeControl, readLane, enabledOpts...)
 
 		// Seed the founding admin Account (#295, ADR-0010). Idempotent and
 		// deterministic: it creates the row on first start and returns the
@@ -834,8 +837,8 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 			"enabled", foundingAdmin.Enabled,
 		)
 
-		// apiTokenSvc is constructed above, alongside base (#653: base itself
-		// needs it for WithAccountAdmin), and reused here.
+		// apiTokenSvc is constructed above, before the shared capability
+		// objects (#653: NewAccountAdmin needs it), and reused here.
 
 		// OAuth 2.1 protected-resource support (#299, ADR-0024). Discovery
 		// happens ONCE, here at startup, so a misconfigured issuer fails the
@@ -938,11 +941,19 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 			logger:     logger,
 			ops:        opvocabLister{},
 			capability: capSvc,
-			jobs:       st.Jobs(),
-			tasks:      st.Tasks(),
-			tokens:     tokenSvc,
-			revocation: revocationSvc,
-			audit:      st.Audit(),
+			// The leaf capability services (invariant 10): each surface is
+			// handed the narrow one it uses, not the Service — see
+			// surfaceDeps. A field forgotten here is a nil pointer behind a
+			// non-nil interface, so the Console's account routes and the
+			// read-lane routes are exercised end to end by the e2e tests.
+			freezeControl: freezeControl,
+			readLane:      readLane,
+			accountAdmin:  accountAdmin,
+			jobs:          st.Jobs(),
+			tasks:         st.Tasks(),
+			tokens:        tokenSvc,
+			revocation:    revocationSvc,
+			audit:         st.Audit(),
 			// The read-access sink (#288, ADR-0025). This assignment was
 			// MISSING until #357: surfaceDeps.auditSink stayed nil, so
 			// readAuditor's defensive `sink == nil` skip silently disabled every
@@ -1021,13 +1032,14 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	} else {
 		// No consumer surface is mounted (MCP/API require ControlEnabled),
 		// so capSvc keeps the v0.0.5 default no-op dispatcher — but, since
-		// #653, base carries a REAL RoleGate (capability.WithAuthorizer) and
-		// real Account/API-Token administration (capability.WithAccountAdmin),
-		// not the "allow-all authz" this comment described before that issue.
-		// Nothing is mounted on this path, so no caller's outcome changes;
-		// what changes is that New's fail-open guard for WithAccountAdmin
-		// (a real Authorizer + a real AuditSink) is satisfiable here too.
-		capSvc = capability.New(reg, base...)
+		// #653, the Control carries a REAL RoleGate (capability.NewControl) and
+		// there is real Account/API-Token administration
+		// (capability.NewAccountAdmin), not the "allow-all authz" this comment
+		// described before that issue. Nothing is mounted on this path, so no
+		// caller's outcome changes; what changes is that NewAccountAdmin's
+		// fail-open guard (a real Authorizer + a real AuditSink) is
+		// satisfiable here too.
+		capSvc = capability.New(freezeControl, readLane, base...)
 	}
 
 	srv := grpc.NewServer(
@@ -1051,13 +1063,15 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		revocation: revocationSvc,
 		limiter:    limiter,
 		capability: capSvc,
-		tunnel:     ts,
-		control:    controlSrv,
-		dispatch:   dispatchRouter,
-		metrics:    appMetrics,
-		events:     eventBus,
-		hooks:      hooks,
-		logger:     logger,
+
+		freezeControl: freezeControl,
+		tunnel:        ts,
+		control:       controlSrv,
+		dispatch:      dispatchRouter,
+		metrics:       appMetrics,
+		events:        eventBus,
+		hooks:         hooks,
+		logger:        logger,
 	}
 	return srv, deps, nil
 }
@@ -1110,7 +1124,7 @@ func main() {
 	// Freeze (#101, ADR-0013) — see freeze_signal.go for the asymmetric-
 	// activation rationale. It must start before Serve so a signal sent
 	// immediately after startup is never missed.
-	go watchFreezeSignals(context.Background(), deps.capability)
+	go watchFreezeSignals(context.Background(), deps.freezeControl)
 	lis, err := net.Listen("tcp", cfg.Addr) //nolint:noctx // process-lifetime listener opened at startup; there is no context to bound it
 	if err != nil {
 		slog.Error("listen failed", "addr", cfg.Addr, "err", err)

@@ -161,7 +161,7 @@ func (e *jobEngine) query(ctx context.Context, d dispatch) (planResult, error) {
 //  7. audit as AuditKindPlan — Principal/Selector/Action only, no
 //     JobID/Results (no Job/Task rows were ever created).
 func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.Action) (PlanResult, error) {
-	matched := sel.Resolve(s.reg, s.stateEval())
+	matched := sel.Resolve(s.read.reg, s.read.stateEval())
 
 	// The same resolution Run makes, which fixes the class of every Action
 	// kind (ADR-0042, invariant 13), so a preflight and a real run agree on
@@ -170,7 +170,7 @@ func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.
 	act = ra.act
 	nodes := ra.nodes
 
-	if err := s.authz.Authorize(withoutAssertions(ctx), p, act, sel); err != nil {
+	if err := s.control.authz.Authorize(withoutAssertions(ctx), p, act, sel); err != nil {
 		return PlanResult{}, s.recordRefusal(ctx, p, sel, act, RefusalUnauthorized, err)
 	}
 
@@ -191,12 +191,12 @@ func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.
 		excluded = append(excluded, NodeVerdict{NodeID: x.node.NodeID, Status: VerdictUnsupported, DecidingRule: x.reason, Outdated: x.node.Outdated})
 	}
 
-	frozen, _ := s.freeze.Frozen(ctx)
+	frozen, _ := s.control.freeze.Frozen(ctx)
 
 	if capErr := s.cap.Check(act.RiskClass, len(nodes)); capErr != nil {
 		var ce *CapExceededError
 		errors.As(capErr, &ce)
-		if err := s.audit.Record(ctx, AuditEntry{Kind: AuditKindPlan, Principal: p, Selector: sel, Action: act, Asserted: AssertionsFromContext(ctx)}); err != nil {
+		if err := s.recorder().audit.Record(ctx, AuditEntry{Kind: AuditKindPlan, Principal: p, Selector: sel, Action: act, Asserted: AssertionsFromContext(ctx)}); err != nil {
 			return PlanResult{Matched: len(matched), Frozen: frozen, CapExceeded: ce, NoNodesMatched: noMatch},
 				fmt.Errorf("capability: record audit entry: %w", err)
 		}
@@ -209,7 +209,7 @@ func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.
 	// mirroring Run's own "a partially-executed dispatch must never go
 	// unaudited" discipline (service.go) — and a failed write is joined
 	// into the returned error rather than silently swallowed.
-	auditErr := s.audit.Record(ctx, AuditEntry{Kind: AuditKindPlan, Principal: p, Selector: sel, Action: act, Asserted: AssertionsFromContext(ctx)})
+	auditErr := s.recorder().audit.Record(ctx, AuditEntry{Kind: AuditKindPlan, Principal: p, Selector: sel, Action: act, Asserted: AssertionsFromContext(ctx)})
 	if auditErr != nil {
 		auditErr = fmt.Errorf("capability: record audit entry: %w", auditErr)
 	}

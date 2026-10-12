@@ -32,9 +32,9 @@ func (f fakeTemplateVocab) Get(nodeID string) (nodevocab.Snapshot, bool) {
 // registryLaneFixture builds a Service over a seeded registry with a spy
 // AuditSink — the registry read lane's half of readLaneFixture.
 //
-// WithQueries is supplied too, not because these methods use it, but because
-// the production Service always has it and a fixture that quietly differs from
-// production is a fixture that proves less than it looks like it does.
+// The query seams are supplied too, not because these methods use them, but
+// because the production ReadLane always has them and a fixture that quietly
+// differs from production is a fixture that proves less than it looks like it does.
 func registryLaneFixture(t *testing.T, nodes ...registry.Report) (*testSvc, *spyAuditSink) {
 	t.Helper()
 	reg := registry.NewInMemory()
@@ -343,11 +343,10 @@ func TestReadLane_TrailHalfAlsoWrapsErrReadUnaudited(t *testing.T) {
 // TestRegistryLane_RefusesWithoutARealAuditSink is the fail-open guard for
 // this half of the lane.
 //
-// New already refuses WithQueries paired with the no-op sink (F5, #441). The
-// registry half cannot be guarded at construction — reg is New's first
-// argument and is always present — so the check is at the call instead. A
-// Service that cannot record must not answer a read, whichever way it was
-// built.
+// NewReadLane already refuses the no-op sink (F5, #441); this is the same
+// property enforced at the call, for a lane the in-package assembler built
+// with no queries (build). A lane that cannot record must not answer a read,
+// whichever way it was built.
 func TestRegistryLane_RefusesWithoutARealAuditSink(t *testing.T) {
 	svc := build(t, seams{reg: registry.NewInMemory()})
 
@@ -357,6 +356,44 @@ func TestRegistryLane_RefusesWithoutARealAuditSink(t *testing.T) {
 	}
 	if _, err := svc.DescribeNode(context.Background(), testPrincipal, "node-1"); !errors.Is(err, ErrReadUnaudited) {
 		t.Errorf("DescribeNode on a Service with the no-op sink = %v, want ErrReadUnaudited", err)
+	}
+}
+
+// TestNewReadLaneRefusesNoopAuditSink is F5 (#441 cycle-2 security review):
+// a ReadLane over a Recorder holding the no-op AuditSink must panic at
+// construction, the same class of composition-root guard
+// TestWithExecutionRefusesDefaultSeams asserts for a real dispatcher —
+// otherwise every trail query is answered while recording nothing, exactly
+// the "unauditable read succeeded" state ADR-0025 forbids. Every collaborator
+// is built outside the recover scope, so only NewReadLane can be the panic.
+func TestNewReadLaneRefusesNoopAuditSink(t *testing.T) {
+	rec := NewRecorder(noopAuditSink{}, nil, nil)
+	reg := registry.NewInMemory()
+	auditQ := &spyAuditQuery{}
+	jobQ := &spyJobQuery{}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("NewReadLane(...) without a real AuditSink should panic")
+		}
+		msg, _ := r.(string)
+		if !strings.Contains(msg, "capability: NewReadLane:") || !strings.Contains(msg, "noopAuditSink") {
+			t.Errorf("panic = %v, want NewReadLane's noopAuditSink refusal", r)
+		}
+	}()
+	NewReadLane(rec, reg, auditQ, jobQ, nil, nil, 0, nil)
+}
+
+// TestNewReadLaneAcceptsRealAuditSink is the positive twin of
+// TestNewReadLaneRefusesNoopAuditSink: NewReadLane over a real (spy) AuditSink
+// constructs successfully.
+func TestNewReadLaneAcceptsRealAuditSink(t *testing.T) {
+	reg := registry.NewInMemory()
+	rec := NewRecorder(&spyAuditSink{}, nil, nil)
+
+	if NewReadLane(rec, reg, &spyAuditQuery{}, &spyJobQuery{}, nil, nil, 0, nil) == nil {
+		t.Fatal("NewReadLane over a real AuditSink returned nil")
 	}
 }
 

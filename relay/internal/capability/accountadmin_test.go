@@ -133,8 +133,8 @@ func (f *fakeAPITokenStore) List(context.Context, string) ([]accounts.APIToken, 
 	return f.listOut, f.listErr
 }
 
-// newAccountAdminFixture builds a Service with a permissive authorizer, a
-// spyAuditSink, and the given fakes wired via WithAccountAdmin.
+// newAccountAdminFixture builds an AccountAdmin with a permissive authorizer, a
+// spyAuditSink, and the given fakes.
 func newAccountAdminFixture(t *testing.T, authz Authorizer, accountStore AccountStore, tokenStore APITokenStore) (*testSvc, *spyAuditSink) {
 	t.Helper()
 	audit := &spyAuditSink{}
@@ -147,43 +147,65 @@ func newAccountAdminFixture(t *testing.T, authz Authorizer, accountStore Account
 }
 
 // -----------------------------------------------------------------------
-// New's fail-open guard for WithAccountAdmin (security review finding 1):
-// every sibling guard (TestWithExecutionRefusesDefaultSeams,
-// TestWithExecutionRefusesWithoutFreeze, TestWithQueriesRefusesNoopAuditSink)
-// has a panic test; this is WithAccountAdmin's.
+// NewAccountAdmin's fail-open guard (security review finding 1): every
+// sibling guard (TestWithExecutionRefusesDefaultSeams,
+// TestWithExecutionRefusesWithoutFreeze, TestNewReadLaneRefusesNoopAuditSink)
+// has a panic test; this is AccountAdmin's. Each builds its Control outside the
+// recover scope, so only NewAccountAdmin can be the panic under test.
 // -----------------------------------------------------------------------
 
-// TestNewRefusesAccountAdminWithoutARealAuthorizer: a Service built with
-// WithAccountAdmin but no WithAuthorizer must panic at construction — an
+// TestNewRefusesAccountAdminWithoutARealAuthorizer: an AccountAdmin over a
+// Control with no real Authorizer must panic at construction — an
 // allowAllAuthorizer paired with a real account store would answer
 // account_role/account_enable/api_token_mint for every role, the identity
 // surface's own fail-open.
 func TestNewRefusesAccountAdminWithoutARealAuthorizer(t *testing.T) {
+	ctl := NewControl(NewRecorder(&spyAuditSink{}, nil, nil), allowAllAuthorizer{}, &fakeFreezeStore{})
 	defer func() {
 		if recover() == nil {
 			t.Fatal("New(reg, WithAccountAdmin(...)) without a real Authorizer should panic")
 		}
 	}()
-	New(registry.NewInMemory(),
-		WithAuditSink(&spyAuditSink{}),
-		WithAccountAdmin(&fakeAccountStore{}, &fakeAPITokenStore{}),
-	)
+	NewAccountAdmin(ctl, &fakeAccountStore{}, &fakeAPITokenStore{})
 }
 
-// TestNewRefusesAccountAdminWithoutARealAuditSink: a Service built with
-// WithAccountAdmin but no WithAuditSink must panic at construction — every
-// Account/API-Token administration act would go unrecorded, exactly the
+// TestNewRefusesAccountAdminWithoutARealAuditSink: an AccountAdmin over a
+// Control whose Recorder holds the no-op AuditSink must panic at construction —
+// every Account/API-Token administration act would go unrecorded, exactly the
 // "unauditable act succeeded" state ADR-0025 forbids for the read lane.
 func TestNewRefusesAccountAdminWithoutARealAuditSink(t *testing.T) {
+	ctl := NewControl(NewRecorder(noopAuditSink{}, nil, nil), &permissiveControlAuthorizer{}, &fakeFreezeStore{})
 	defer func() {
 		if recover() == nil {
 			t.Fatal("New(reg, WithAccountAdmin(...)) without a real AuditSink should panic")
 		}
 	}()
-	New(registry.NewInMemory(),
-		WithAuthorizer(&permissiveControlAuthorizer{}),
-		WithAccountAdmin(&fakeAccountStore{}, &fakeAPITokenStore{}),
-	)
+	NewAccountAdmin(ctl, &fakeAccountStore{}, &fakeAPITokenStore{})
+}
+
+// TestNewAccountAdmin_UsesControlsAuthorizerAndTrail: an AccountAdmin shares
+// its Control's role floor and its Recorder's trail, so a refusal from the
+// Control's Authorizer is audited on the Control's sink.
+func TestNewAccountAdmin_UsesControlsAuthorizerAndTrail(t *testing.T) {
+	denied := errors.New("denied by the control's authorizer")
+	audit := &spyAuditSink{}
+	ctl := NewControl(NewRecorder(audit, nil, nil), &permissiveControlAuthorizer{err: denied}, &fakeFreezeStore{})
+	acct := NewAccountAdmin(ctl, &fakeAccountStore{}, &fakeAPITokenStore{})
+
+	p := Principal{AccountID: "acct-1", Account: "me", Role: "admin", Kind: PrincipalKindHuman}
+	_, err := acct.CreateAccount(context.Background(), p, accounts.Account{Name: "x"})
+	if !errors.Is(err, denied) {
+		t.Fatalf("CreateAccount error = %v, want the Control's authorizer error", err)
+	}
+	var refusals int
+	for _, e := range audit.entries {
+		if e.Kind == AuditKindRefusal && e.Principal.AccountID == p.AccountID {
+			refusals++
+		}
+	}
+	if refusals != 1 {
+		t.Fatalf("refusal rows on the Control's trail = %d, want 1; entries = %+v", refusals, audit.entries)
+	}
 }
 
 // -----------------------------------------------------------------------

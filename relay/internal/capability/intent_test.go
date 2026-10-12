@@ -130,6 +130,11 @@ func TestEngineWithoutIntentRecorderRefusesToPersist(t *testing.T) {
 
 func TestNewPanicsWhenRealDispatcherHasNoIntentRecorder(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
+	rec := NewRecorder(&spyAuditSink{}, nil, nil)
+	ctl := NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{})
+	read := newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, 0, nil)
+	capOpt := WithCapChecker(&spyCapChecker{})
+	execOpt := WithExecution(jobsRepo, tasksRepo, newFakeConduit(nil))
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -139,13 +144,7 @@ func TestNewPanicsWhenRealDispatcherHasNoIntentRecorder(t *testing.T) {
 			t.Errorf("panic = %v, want it to name IntentRecorder", r)
 		}
 	}()
-	New(registry.NewInMemory(),
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		WithExecution(jobsRepo, tasksRepo, newFakeConduit(nil)),
-	)
+	New(ctl, read, capOpt, execOpt)
 }
 
 // nonAtomicIntents is the IntentRecorder the in-package tests use when their

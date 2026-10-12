@@ -38,6 +38,23 @@ const (
 	nodevocabImportPath  = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 )
 
+// bannedCapabilityServices maps every capability service type, and its
+// constructor, to the narrowed seam an api file must use instead. They are
+// banned by EXACT name beside capability.Service and capability.New: a prefix
+// match would falsely flag unrelated identifiers such as
+// capability.ControlAction and capability.AccountAdminEvent, which routes
+// legitimately use.
+var bannedCapabilityServices = map[string]string{
+	"Recorder":        "the Recorder belongs to the composition root alone",
+	"NewRecorder":     "the Recorder belongs to the composition root alone",
+	"Control":         "use the Freezer interface",
+	"NewControl":      "use the Freezer interface",
+	"AccountAdmin":    "use the AccountAdmin interface",
+	"NewAccountAdmin": "use the AccountAdmin interface",
+	"ReadLane":        "use the NodeReader interface",
+	"NewReadLane":     "use the NodeReader interface",
+}
+
 // dispatchViolations AST-inspects file (fileName is used only in messages) and
 // returns one message per rule it catches:
 //
@@ -46,6 +63,10 @@ const (
 //     through the injected Executor.
 //   - capability.New (or an alias's .New): the exported dispatch constructor;
 //     holding its result is equivalent to holding a Service.
+//   - the other capability services and their constructors
+//     (bannedCapabilityServices): Control, AccountAdmin, ReadLane and
+//     Recorder, by exact name. Each route holds the narrow interface it uses,
+//     never the concrete service.
 //   - the unexported newDispatch identifier: capability's internal constructor,
 //     sealed to package capability. A reference here would not compile, but the
 //     guard gives an explicit message instead of an opaque compiler error.
@@ -123,6 +144,12 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 						violations = append(violations, fmt.Sprintf(
 							"%s references capability.New — the exported dispatch constructor must never be called from a Control API route file (no-dispatch structural guarantee)",
 							fileName))
+					default:
+						if advice := bannedCapabilityServices[v.Sel.Name]; advice != "" {
+							violations = append(violations, fmt.Sprintf(
+								"%s references capability.%s — a concrete capability service or its constructor; %s (no-dispatch structural guarantee)",
+								fileName, v.Sel.Name, advice))
+						}
 					}
 				}
 			}
@@ -202,6 +229,59 @@ func TestNoDispatchConstruction(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("checked 0 files — the guard must actually inspect this package's sources")
 	}
+}
+
+// TestDispatchViolations_BansConcreteCapabilityServices proves every capability
+// service type and constructor is refused by exact name, and that similarly
+// named identifiers routes legitimately use are not. The list is spelled out
+// here rather than read from the map, so deleting a name from the map cannot
+// delete its row.
+func TestDispatchViolations_BansConcreteCapabilityServices(t *testing.T) {
+	const capImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"`
+	check := func(t *testing.T, src string) []string {
+		t.Helper()
+		file, err := parser.ParseFile(token.NewFileSet(), "fixture.go", src, 0)
+		if err != nil {
+			t.Fatalf("parser.ParseFile: %v", err)
+		}
+		return dispatchViolations("fixture.go", file)
+	}
+	mustContain := func(t *testing.T, violations []string, want string) {
+		t.Helper()
+		for _, v := range violations {
+			if strings.Contains(v, want) {
+				return
+			}
+		}
+		t.Fatalf("dispatchViolations() = %v, want one containing %q", violations, want)
+	}
+
+	for _, name := range []string{
+		"Recorder", "NewRecorder", "Control", "NewControl",
+		"AccountAdmin", "NewAccountAdmin", "ReadLane", "NewReadLane",
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := "package api\nimport " + capImport + "\nvar _ = capability." + name + "\n"
+			mustContain(t, check(t, src), "capability."+name+" — a concrete capability service")
+		})
+	}
+
+	t.Run("an aliased import cannot dodge the ban", func(t *testing.T) {
+		src := "package api\nimport c2 " + capImport + "\nvar _ *c2.ReadLane\n"
+		mustContain(t, check(t, src), "capability.ReadLane — a concrete capability service")
+	})
+
+	t.Run("exact match leaves similarly-named identifiers alone", func(t *testing.T) {
+		src := "package api\nimport " + capImport + `
+var _ capability.ControlAction
+var _ = capability.ControlFreezeEngage
+var _ capability.AccountAdminEvent
+var _ capability.IntentRecorder
+`
+		if violations := check(t, src); len(violations) != 0 {
+			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
+		}
+	})
 }
 
 // TestDispatchViolations_Fixtures runs dispatchViolations against synthetic

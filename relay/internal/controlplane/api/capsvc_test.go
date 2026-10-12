@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -9,8 +10,8 @@ import (
 )
 
 // capSeams is the set of collaborators a test hands to newCapService. A zero
-// field means "not supplied": the option is not emitted and capability.New
-// keeps its default.
+// field means "not supplied": the service that needs it is not built. audit is
+// required, as capability.NewRecorder requires it.
 type capSeams struct {
 	reg        registry.Repository
 	authz      capability.Authorizer
@@ -22,26 +23,65 @@ type capSeams struct {
 	apiTokens     capability.APITokenStore
 }
 
-// newCapService builds the capability layer for a test: a thin wrapper over
-// capability.New and the With* options, so the layer's constructor changes in
-// one place.
-func newCapService(t *testing.T, s capSeams) *capability.Service {
+// capLayer is what a test holds a built capability layer as: the leaf services
+// embedded, so a test calls any of their methods unqualified, and a call site
+// that hands one to an adapter seam names the narrow embedded field, as the
+// composition root does. Control and AccountAdmin are nil unless supplied.
+type capLayer struct {
+	*capability.ReadLane
+	*capability.Control
+	*capability.AccountAdmin
+}
+
+// neverFrozen is a FreezeStore that is never frozen, standing in for
+// capability's unexported no-op store: NewControl requires a store.
+type neverFrozen struct{}
+
+func (neverFrozen) Frozen(context.Context) (bool, error)          { return false, nil }
+func (neverFrozen) Engage(context.Context, string) error          { return nil }
+func (neverFrozen) Release(context.Context, string, string) error { return nil }
+
+// emptyQueries implements capability.AuditQuery and capability.JobQuery with
+// zero values: NewReadLane requires both query seams, and no api test reads
+// either.
+type emptyQueries struct{}
+
+func (emptyQueries) QueryAudit(context.Context, capability.AuditFilter, capability.PageRequest) (capability.AuditPage, error) {
+	return capability.AuditPage{}, nil
+}
+
+func (emptyQueries) AuditCounts(context.Context, capability.AuditFilter, time.Duration) ([]capability.PrincipalBucket, error) {
+	return nil, nil
+}
+
+func (emptyQueries) AuditReach(context.Context, capability.AuditFilter) (capability.Reach, error) {
+	return capability.Reach{}, nil
+}
+
+func (emptyQueries) QueryJobs(context.Context, capability.JobFilter, capability.PageRequest) (capability.JobPage, error) {
+	return capability.JobPage{}, nil
+}
+
+func (emptyQueries) QueryTasks(context.Context, capability.TaskFilter, capability.PageRequest) (capability.TaskPage, error) {
+	return capability.TaskPage{}, nil
+}
+
+// newCapService builds the capability layer for a test: a thin wrapper over the
+// capability constructors, so the layer's shape changes in one place.
+func newCapService(t *testing.T, s capSeams) *capLayer {
 	t.Helper()
-	var opts []capability.Option
+	if s.audit == nil {
+		t.Fatalf("newCapService: audit is required")
+	}
+	rec := capability.NewRecorder(s.audit, nil, nil)
+	layer := &capLayer{
+		ReadLane: capability.NewReadLane(rec, s.reg, emptyQueries{}, emptyQueries{}, nil, nil, s.certWindow, s.now),
+	}
 	if s.authz != nil {
-		opts = append(opts, capability.WithAuthorizer(s.authz))
-	}
-	if s.audit != nil {
-		opts = append(opts, capability.WithAuditSink(s.audit))
-	}
-	if s.now != nil {
-		opts = append(opts, capability.WithClock(s.now))
-	}
-	if s.certWindow != 0 {
-		opts = append(opts, capability.WithCertExpiringWindow(s.certWindow))
+		layer.Control = capability.NewControl(rec, s.authz, neverFrozen{})
 	}
 	if s.accountsStore != nil || s.apiTokens != nil {
-		opts = append(opts, capability.WithAccountAdmin(s.accountsStore, s.apiTokens))
+		layer.AccountAdmin = capability.NewAccountAdmin(layer.Control, s.accountsStore, s.apiTokens)
 	}
-	return capability.New(s.reg, opts...)
+	return layer
 }

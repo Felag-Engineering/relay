@@ -43,13 +43,12 @@ type identityFixture struct {
 }
 
 // newIdentityFixture wires the identity routes through a REAL
-// *capability.Service (#653), exactly as cmd/relay does: a real RoleGate, a
-// real auditsink.Sink over the store's own audit.Repository, and
-// WithAccountAdmin(st.Accounts(), tokenSvc). package api's import and
-// no-dispatch guards both skip _test.go files, so constructing a real
-// *capability.Service here is permitted — no real dispatcher is wired, so
-// New's fail-open guard is satisfied by the Authorizer + AuditSink above,
-// exactly as WithQueries' guard is satisfied elsewhere without a dispatcher.
+// *capability.AccountAdmin (#653), exactly as cmd/relay does: a real RoleGate,
+// a real auditsink.Sink over the store's own audit.Repository, and
+// st.Accounts() with tokenSvc. package api's import and no-dispatch guards
+// both skip _test.go files, so constructing a real *capability.AccountAdmin
+// here is permitted — no dispatcher is involved, and NewAccountAdmin's
+// construction guard is satisfied by the Authorizer + AuditSink above.
 //
 // CONSEQUENCE: the last-admin SQL guard (internal/store/accounts.go) is
 // therefore LIVE in every identity API test. The one place this could bite
@@ -109,7 +108,7 @@ func newIdentityFixtureWith(t *testing.T, wrap func(capability.AccountStore) cap
 
 	mux := http.NewServeMux()
 	Register(mux, Deps{
-		AccountAdmin: capSvc,
+		AccountAdmin: capSvc.AccountAdmin,
 		Audit:        &fakeAuditor{}, // unused by the identity routes; kept so Register never sees a nil Auditor.
 		Now:          fixedNow,
 	})

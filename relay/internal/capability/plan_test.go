@@ -290,6 +290,64 @@ func TestPlanFrozenReportsAdvisoryWhileRunRefuses(t *testing.T) {
 	}
 }
 
+// countingFreezeStore counts Frozen reads.
+type countingFreezeStore struct {
+	fakeFreezeStore
+	frozenCalls int
+}
+
+func (c *countingFreezeStore) Frozen(ctx context.Context) (bool, error) {
+	c.frozenCalls++
+	return c.fakeFreezeStore.Frozen(ctx)
+}
+
+// TestPlan_ReadsFreezeOnlyAfterAuthorization: Plan's advisory Frozen read sits
+// after Authorize, so a caller who may not ask learns nothing about the Freeze.
+func TestPlan_ReadsFreezeOnlyAfterAuthorization(t *testing.T) {
+	freezeStore := &countingFreezeStore{}
+	svc := build(t, seams{reg: seedOneNode(t),
+		authz:  &spyAuthorizer{err: errors.New("denied")},
+		audit:  &spyAuditSink{},
+		freeze: freezeStore,
+	})
+
+	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
+	if _, err := svc.Plan(context.Background(), Principal{Account: "alice"}, sel, act); err == nil {
+		t.Fatal("Plan() with a denying Authorizer should fail")
+	}
+	if freezeStore.frozenCalls != 0 {
+		t.Errorf("Frozen was read %d times before authorization refused, want 0", freezeStore.frozenCalls)
+	}
+}
+
+// TestPlan_FreezeReadErrorIsAdvisoryNotARefusal: unlike Run, which fails closed
+// on a Frozen read error, Plan reports and never refuses on guardrails (PF-3).
+func TestPlan_FreezeReadErrorIsAdvisoryNotARefusal(t *testing.T) {
+	var log []string
+	conduit := newFakeConduit(&log)
+	conduit.connected["node-1"] = true
+	conduit.verdicts["node-1"] = jobs.Verdict{Allowed: true}
+	jobsRepo, tasksRepo := testEngineStore(t)
+	svc := build(t, seams{reg: seedOneNode(t),
+		authz:    &spyAuthorizer{},
+		cap:      &spyCapChecker{},
+		audit:    &spyAuditSink{},
+		freeze:   &fakeFreezeStore{frozenErr: errors.New("store unavailable")},
+		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit,
+	})
+
+	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
+	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, sel, act)
+	if err != nil {
+		t.Fatalf("Plan() with a Frozen read error = %v, want nil (advisory)", err)
+	}
+	if pr.Frozen {
+		t.Error("PlanResult.Frozen = true, want false when the Freeze could not be read")
+	}
+}
+
 // TestPlanZeroMatchReportsNoNodesMatchedWhileRunRefuses is the no-Nodes-
 // matched parity line (#571, ADR-0011): a Selector resolving to zero Nodes is
 // reported by a Policy preflight (NoNodesMatched, err nil, no query fan-out)

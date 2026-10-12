@@ -10,7 +10,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// readlane.go is the TRAIL AND JOB half of the read lane on *Service (#441):
+// readlane.go is the TRAIL AND JOB half of the read lane on *ReadLane (#441):
 // the capability layer's seam over the audit trail's and Jobs/Tasks'
 // filtered, paginated queries. Its registry half — the fleet enumeration and
 // the single-Node read — is readlane_registry.go (#450); both obey the order
@@ -71,17 +71,17 @@ func clampPage(p PageRequest) int {
 }
 
 // QueryAudit returns one page of AuditRow matching f, newest first.
-func (s *Service) QueryAudit(ctx context.Context, p Principal, f AuditFilter, page PageRequest) (AuditPage, error) {
-	if s.auditQ == nil {
+func (l *ReadLane) QueryAudit(ctx context.Context, p Principal, f AuditFilter, page PageRequest) (AuditPage, error) {
+	if l.auditQ == nil {
 		return AuditPage{}, ErrQueriesUnavailable
 	}
 	if err := f.validate(); err != nil {
 		return AuditPage{}, err
 	}
-	if err := s.recordQueryRead(ctx, p, toolQueryAudit, f.summary(), f.NodeID, f.JobID); err != nil {
+	if err := l.recordQueryRead(ctx, p, toolQueryAudit, f.summary(), f.NodeID, f.JobID); err != nil {
 		return AuditPage{}, err
 	}
-	return s.auditQ.QueryAudit(ctx, f, PageRequest{Limit: clampPage(page), Cursor: page.Cursor})
+	return l.auditQ.QueryAudit(ctx, f, PageRequest{Limit: clampPage(page), Cursor: page.Cursor})
 }
 
 // AuditCounts returns f's matching Records grouped by verified Account and
@@ -92,8 +92,8 @@ func (s *Service) QueryAudit(ctx context.Context, p Principal, f AuditFilter, pa
 // review: unlike QueryAudit, this path has no LIMIT, so AuditFilter{} with a
 // caller-chosen sub-second bucket would otherwise be an unbounded,
 // repeatable multi-GB allocation on a large trail.
-func (s *Service) AuditCounts(ctx context.Context, p Principal, f AuditFilter, bucket time.Duration) ([]PrincipalBucket, error) {
-	if s.auditQ == nil {
+func (l *ReadLane) AuditCounts(ctx context.Context, p Principal, f AuditFilter, bucket time.Duration) ([]PrincipalBucket, error) {
+	if l.auditQ == nil {
 		return nil, ErrQueriesUnavailable
 	}
 	if err := f.validate(); err != nil {
@@ -103,10 +103,10 @@ func (s *Service) AuditCounts(ctx context.Context, p Principal, f AuditFilter, b
 		return nil, err
 	}
 	bucket = clampBucket(bucket)
-	if err := s.recordQueryRead(ctx, p, toolAuditCounts, f.summary(), f.NodeID, f.JobID); err != nil {
+	if err := l.recordQueryRead(ctx, p, toolAuditCounts, f.summary(), f.NodeID, f.JobID); err != nil {
 		return nil, err
 	}
-	return s.auditQ.AuditCounts(ctx, f, bucket)
+	return l.auditQ.AuditCounts(ctx, f, bucket)
 }
 
 // AuditReach returns f's call count, distinct-target count, and
@@ -116,8 +116,8 @@ func (s *Service) AuditCounts(ctx context.Context, p Principal, f AuditFilter, b
 // cycle-2 security review: AuditReach has no LIMIT either, and its
 // distinct-target expression evaluates a json_extract COALESCE per matching
 // row (F6), so an unbounded filter is a full scan of the largest table.
-func (s *Service) AuditReach(ctx context.Context, p Principal, f AuditFilter) (Reach, error) {
-	if s.auditQ == nil {
+func (l *ReadLane) AuditReach(ctx context.Context, p Principal, f AuditFilter) (Reach, error) {
+	if l.auditQ == nil {
 		return Reach{}, ErrQueriesUnavailable
 	}
 	if err := f.validate(); err != nil {
@@ -126,17 +126,17 @@ func (s *Service) AuditReach(ctx context.Context, p Principal, f AuditFilter) (R
 	if err := f.validateWindow(); err != nil {
 		return Reach{}, err
 	}
-	if err := s.recordQueryRead(ctx, p, toolAuditReach, f.summary(), f.NodeID, f.JobID); err != nil {
+	if err := l.recordQueryRead(ctx, p, toolAuditReach, f.summary(), f.NodeID, f.JobID); err != nil {
 		return Reach{}, err
 	}
-	return s.auditQ.AuditReach(ctx, f)
+	return l.auditQ.AuditReach(ctx, f)
 }
 
 // QueryJobs returns one page of JobSummary matching f, in f.Order's direction
 // (newest CreatedAt first by default). A requested count is part of this one
 // audited read, not a second.
-func (s *Service) QueryJobs(ctx context.Context, p Principal, f JobFilter, page PageRequest) (JobPage, error) {
-	if s.jobQ == nil {
+func (l *ReadLane) QueryJobs(ctx context.Context, p Principal, f JobFilter, page PageRequest) (JobPage, error) {
+	if l.jobQ == nil {
 		return JobPage{}, ErrQueriesUnavailable
 	}
 	if err := f.validate(); err != nil {
@@ -145,10 +145,10 @@ func (s *Service) QueryJobs(ctx context.Context, p Principal, f JobFilter, page 
 	// The Job ID is recorded on the read record itself, not only inside the
 	// summary, so the trail can answer "who looked at this Job" by the same
 	// indexed column every other lookup uses.
-	if err := s.recordQueryRead(ctx, p, toolQueryJobs, f.summary(), "", f.JobID); err != nil {
+	if err := l.recordQueryRead(ctx, p, toolQueryJobs, f.summary(), "", f.JobID); err != nil {
 		return JobPage{}, err
 	}
-	return s.jobQ.QueryJobs(ctx, f, PageRequest{Limit: clampPage(page), Cursor: page.Cursor})
+	return l.jobQ.QueryJobs(ctx, f, PageRequest{Limit: clampPage(page), Cursor: page.Cursor})
 }
 
 // QueryTasks returns one page of TaskRow for f.JobID, optionally filtered by
@@ -174,17 +174,17 @@ func (s *Service) QueryJobs(ctx context.Context, p Principal, f JobFilter, page 
 // must not silently turn a permissive default into a read-output leak. This
 // deliberately diverges from auditsink.go's `!= RiskClassRead`
 // (retain-unless-Read): that call site is unchanged by this issue.
-func (s *Service) QueryTasks(ctx context.Context, p Principal, f TaskFilter, page PageRequest) (TaskPage, error) {
-	if s.jobQ == nil {
+func (l *ReadLane) QueryTasks(ctx context.Context, p Principal, f TaskFilter, page PageRequest) (TaskPage, error) {
+	if l.jobQ == nil {
 		return TaskPage{}, ErrQueriesUnavailable
 	}
 	if err := f.validate(); err != nil {
 		return TaskPage{}, err
 	}
-	if err := s.recordQueryRead(ctx, p, toolQueryTasks, f.summary(), "", f.JobID); err != nil {
+	if err := l.recordQueryRead(ctx, p, toolQueryTasks, f.summary(), "", f.JobID); err != nil {
 		return TaskPage{}, err
 	}
-	tp, err := s.jobQ.QueryTasks(ctx, f, PageRequest{Limit: clampPage(page), Cursor: page.Cursor})
+	tp, err := l.jobQ.QueryTasks(ctx, f, PageRequest{Limit: clampPage(page), Cursor: page.Cursor})
 	if err != nil {
 		return TaskPage{}, err
 	}
@@ -209,8 +209,8 @@ func (s *Service) QueryTasks(ctx context.Context, p Principal, f TaskFilter, pag
 // you asked to read could not be read" — two failures that send an operator
 // to opposite components, and one of which is the audit trail itself. The
 // underlying error is still wrapped, so a log or a test can say why.
-func (s *Service) recordQueryRead(ctx context.Context, p Principal, tool, selector, nodeID, jobID string) error {
-	if err := s.audit.RecordRead(ctx, p, tool, selector, nodeID, jobID); err != nil {
+func (l *ReadLane) recordQueryRead(ctx context.Context, p Principal, tool, selector, nodeID, jobID string) error {
+	if err := l.rec.audit.RecordRead(ctx, p, tool, selector, nodeID, jobID); err != nil {
 		return fmt.Errorf("%w: recording %s: %w", ErrReadUnaudited, tool, err)
 	}
 	return nil
@@ -279,15 +279,15 @@ func (s *Service) recordQueryRead(ctx context.Context, p Principal, tool, select
 // memory-only and epoch-scoped, so a cursor recorded today names nothing
 // after a restart. "This stream may have covered up to one retention window
 // before its own timestamp" is fully carried by the boolean.
-func (s *Service) RecordEventSubscription(ctx context.Context, p Principal, kinds []string, resumed bool) ([]string, error) {
-	if err := s.auditSinkPresent(); err != nil {
+func (l *ReadLane) RecordEventSubscription(ctx context.Context, p Principal, kinds []string, resumed bool) ([]string, error) {
+	if err := l.auditSinkPresent(); err != nil {
 		return nil, err
 	}
 	names, err := canonicalEventKinds(kinds)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.recordQueryRead(ctx, p, toolWatchEvents, eventSubscriptionSummary(names, resumed), "", ""); err != nil {
+	if err := l.recordQueryRead(ctx, p, toolWatchEvents, eventSubscriptionSummary(names, resumed), "", ""); err != nil {
 		return nil, err
 	}
 	return names, nil

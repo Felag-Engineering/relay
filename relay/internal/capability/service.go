@@ -20,13 +20,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
@@ -34,21 +32,14 @@ import (
 // with New; the composition root (cmd/relay/main.go) owns the instance so
 // later issues can swap in real seams via Option.
 type Service struct {
-	reg    registry.Repository
-	authz  Authorizer
-	cap    CapChecker
-	disp   dispatcher
-	audit  AuditSink
-	freeze FreezeStore
+	// control carries the Freeze, the Authorizer and (through its Recorder) the
+	// audit trail, metrics and log. read is the registry and the read lane;
+	// New requires the two to share one Recorder.
+	control *Control
+	read    *ReadLane
 
-	// metrics is best-effort observability only (MetricsSink, seams.go); it
-	// never affects a dispatch, authz, cap, or Freeze decision.
-	metrics MetricsSink
-
-	// log is where this layer's operational errors go; nil means
-	// slog.Default() (logger). Propagated onto the Job engine at the end of
-	// New, like jobEvents.
-	log *slog.Logger
+	cap  CapChecker
+	disp dispatcher
 
 	// jobEvents is the event seam's Job-grained publisher (#416,
 	// JobEventSink, seams.go) — the same "purely observational" contract as
@@ -85,26 +76,8 @@ type Service struct {
 	// notification plumbing. Best-effort by construction — see ApprovalNotifier.
 	approvalNotifier ApprovalNotifier
 
-	// auditQ and jobQ are the read lane (#441): filtered, paginated queries
-	// over the audit trail and over Jobs/Tasks. Nil means the read lane is
-	// not wired — readlane.go's methods return ErrQueriesUnavailable rather
-	// than an empty page, since an empty page is a claim ("there is nothing
-	// here") and a nil seam has not actually looked.
-	auditQ AuditQuery
-	jobQ   JobQuery
-
-	// policyView and nodeVocab are the Policy-view and Template-vocabulary
-	// reads (#680, seams.go). policyView is display-only. nodeVocab is also
-	// read by template.go to decide a Template dispatch's fan-out and class
-	// (ADR-0042), and by nothing else outside the read lane. Both nil by
-	// default: DescribeNode and ListOperations report *Reported=false for a
-	// nil seam rather than an empty Policy or vocabulary — absence is never
-	// rendered as "nothing restricted" (QRY-7) — and a Template dispatch with
-	// no vocabulary wired excludes every Node rather than dispatching blind.
-	policyView PolicyViewSource
-	nodeVocab  TemplateVocabularySource
-
-	// now and newApprovalID are seams so tests get deterministic parks.
+	// now is the approval clock (clock()); Selector resolution uses
+	// ReadLane.now. newApprovalID is a seam so tests get deterministic parks.
 	now           func() time.Time
 	newApprovalID idGen
 
@@ -113,23 +86,6 @@ type Service struct {
 	// real dispatcher riding the allow-all/no-op default seams — see the
 	// contract note below.
 	realDispatcher bool
-
-	// certExpiringWithin is the state:cert-expiring warning window
-	// (ADR-0034), threaded into every Selector resolution via stateEval.
-	// Zero (the default) means the marker never fires — set only by
-	// WithCertExpiringWindow, which the composition root always calls with a
-	// real value (invariant 11: file-only, no API reads or sets it).
-	certExpiringWithin time.Duration
-
-	// accountsStore and apiTokens back Account and API-Token administration
-	// (#653, accountadmin.go). Both nil means the surface is unconfigured:
-	// every method in accountadmin.go returns ErrAccountsUnavailable rather
-	// than a claim about state it never looked at. Wired together by
-	// WithAccountAdmin, since one without the other is half a surface (an
-	// Account with no way to issue it a credential, or a token store with no
-	// way to look up whose credential it is).
-	accountsStore AccountStore
-	apiTokens     APITokenStore
 
 	// idem persists dispatch idempotency keys (#895, start.go). Nil means a call
 	// carrying a key is refused (ErrIdempotencyUnavailable), never run unkeyed.
@@ -155,44 +111,12 @@ type Service struct {
 // Option configures a Service built by New.
 type Option func(*Service)
 
-// WithLogger sets the logger the capability layer reports operational errors
-// to. Observational only. Without it the layer logs through slog.Default().
-func WithLogger(l *slog.Logger) Option {
-	return func(s *Service) { s.log = l }
-}
-
-func (s *Service) logger() *slog.Logger { return logctx.Or(s.log) }
-
-// WithAuthorizer overrides the default allow-all Authorizer.
-func WithAuthorizer(a Authorizer) Option {
-	if a == nil {
-		panic("capability: WithAuthorizer: authorizer must not be nil")
-	}
-	return func(s *Service) { s.authz = a }
-}
-
 // WithCapChecker overrides the default no-op CapChecker.
 func WithCapChecker(c CapChecker) Option {
 	if c == nil {
 		panic("capability: WithCapChecker: capChecker must not be nil")
 	}
 	return func(s *Service) { s.cap = c }
-}
-
-// WithAuditSink overrides the default no-op AuditSink.
-func WithAuditSink(a AuditSink) Option {
-	if a == nil {
-		panic("capability: WithAuditSink: auditSink must not be nil")
-	}
-	return func(s *Service) { s.audit = a }
-}
-
-// WithFreeze overrides the default noopFreezeStore (ADR-0013).
-func WithFreeze(f FreezeStore) Option {
-	if f == nil {
-		panic("capability: WithFreeze: freezeStore must not be nil")
-	}
-	return func(s *Service) { s.freeze = f }
 }
 
 // WithApprovals wires the approval callout (ADR-0027): gate decides which
@@ -266,88 +190,9 @@ func WithApprovalNotifier(n ApprovalNotifier) Option {
 	return func(s *Service) { s.approvalNotifier = n }
 }
 
-// WithQueries wires the read lane (#441): audit is the trail's filtered/
-// paginated/aggregating seam, job is the same for Jobs/Tasks. Both required
-// together — a Job lane with no audit lane would leave Activity able to list
-// Jobs and unable to attribute them, mirroring WithApprovals' "all required
-// together" reasoning.
-//
-// Optional overall: a Service built without WithQueries still dispatches
-// exactly as before #441, and its own read-lane methods (readlane.go) return
-// ErrQueriesUnavailable rather than degrading. Its own fail-closed property
-// is RecordRead's "record first" ordering in readlane.go — but New's guard
-// now ALSO requires a real AuditSink whenever WithQueries was used (F5,
-// #441 cycle-2 security review): WithQueries sat outside the real-dispatcher
-// fail-open guard, so a Service built with WithQueries but no WithAuditSink
-// answered every trail query while auditing none of them — exactly the
-// "unauditable read succeeded" state ADR-0025 forbids, and a composition-root
-// footgun distinct from (and checked independently of) the real-dispatcher
-// case. See New.
-func WithQueries(audit AuditQuery, job JobQuery) Option {
-	if audit == nil {
-		panic("capability: WithQueries: audit query seam must not be nil")
-	}
-	if job == nil {
-		panic("capability: WithQueries: job query seam must not be nil")
-	}
-	return func(s *Service) {
-		s.auditQ = audit
-		s.jobQ = job
-	}
-}
-
-// WithPolicyView wires the DISPLAY-ONLY Policy-view read (#680): source is
-// typically a *policyview.Cache, narrowed to Get only. Absence (the default)
-// is the honest state of a Relay that has just restarted, before any Node
-// reconnects — DescribeNode reports PolicyReported=false, never an empty
-// Policy (QRY-7).
-func WithPolicyView(source PolicyViewSource) Option {
-	if source == nil {
-		panic("capability: WithPolicyView: source must not be nil")
-	}
-	return func(s *Service) { s.policyView = source }
-}
-
-// WithTemplateVocabulary wires the Template-vocabulary read (#680): source
-// is typically a *nodevocab.Cache, narrowed to Get only. The read lane
-// displays it, and Template dispatch reads it for fan-out and class
-// (ADR-0042). Absence (the default) means DescribeNode and ListOperations
-// report Reported=false rather than an empty vocabulary, and no Template
-// can be dispatched.
-func WithTemplateVocabulary(source TemplateVocabularySource) Option {
-	if source == nil {
-		panic("capability: WithTemplateVocabulary: source must not be nil")
-	}
-	return func(s *Service) { s.nodeVocab = source }
-}
-
-// WithAccountAdmin wires Account and API-Token administration (#653,
-// accountadmin.go). store and tokens are required together — an Account
-// store with no Token store can create identities with no way to issue them
-// a credential, and a Token store with no Account store cannot resolve
-// whose credential it is minting or revoking; passing an incomplete set is a
-// composition-root bug, so it panics rather than degrading (mirrors
-// WithApprovals' "all required together" reasoning).
-//
-// Optional overall: a Service built without this option answers every
-// accountadmin.go method with ErrAccountsUnavailable, exactly the posture
-// WithQueries' absence gives the read lane.
-func WithAccountAdmin(store AccountStore, tokens APITokenStore) Option {
-	if store == nil {
-		panic("capability: WithAccountAdmin: account store must not be nil")
-	}
-	if tokens == nil {
-		panic("capability: WithAccountAdmin: API token store must not be nil")
-	}
-	return func(s *Service) {
-		s.accountsStore = store
-		s.apiTokens = tokens
-	}
-}
-
-// WithClock overrides the Service's clock. Test seam only: approval expiry and
-// park timestamps are time-dependent, and a test that sleeps is a test that
-// flakes.
+// WithClock overrides the Service's approval clock only; Selector resolution
+// uses the ReadLane's. Test seam only: approval expiry and park timestamps are
+// time-dependent, and a test that sleeps is a test that flakes.
 func WithClock(now func() time.Time) Option {
 	if now == nil {
 		panic("capability: WithClock: now must not be nil")
@@ -355,42 +200,18 @@ func WithClock(now func() time.Time) Option {
 	return func(s *Service) { s.now = now }
 }
 
-// WithMetrics overrides the default noopMetricsSink. Metrics are never
-// security-relevant, so — unlike WithAuthorizer/WithCapChecker/WithAuditSink/
-// WithFreeze — New's real-dispatcher fail-open guard does not require this
-// option to have been supplied.
-func WithMetrics(m MetricsSink) Option {
-	return func(s *Service) { s.metrics = m }
-}
-
-// WithJobEvents overrides the default noopJobEventSink (#416). Like
-// WithMetrics, this is never security-relevant — New's real-dispatcher
+// WithJobEvents overrides the default noopJobEventSink (#416). Like the
+// Recorder's metrics, this is never security-relevant — New's real-dispatcher
 // fail-open guard does not require it.
 func WithJobEvents(s JobEventSink) Option {
 	return func(svc *Service) { svc.jobEvents = s }
 }
 
-// WithCertExpiringWindow sets the state:cert-expiring warning window
-// (ADR-0034): a Node fires the marker once less than d of its certificate's
-// remaining lifetime is left. d is a Duration rather than a fraction because
-// this package must never import internal/ca (its own import allowlist bars
-// it) — the composition root computes d once via
-// nodestate.CertExpiringWindow(ca.LeafValidity, fraction) and hands every
-// surface, including this one, the same value (invariant 11).
-//
-// Panics on d < 0: a negative window is a composition-root bug, not a
-// runtime condition to degrade under. The zero value (never calling this
-// option) is the safe default and means the marker never fires.
-func WithCertExpiringWindow(d time.Duration) Option {
-	if d < 0 {
-		panic("capability: WithCertExpiringWindow: d must not be negative")
-	}
-	return func(s *Service) { s.certExpiringWithin = d }
-}
-
-// New returns a Service backed by reg, with allowAllAuthorizer,
-// noopCapChecker, noopDispatcher, noopAuditSink, and noopFreezeStore
-// defaults (functional-option pattern, mirroring registry.NewInMemory).
+// New returns a Service over control and read, with noopCapChecker and
+// noopDispatcher defaults (functional-option pattern, mirroring
+// registry.NewInMemory). The Freeze, the role floor and the audit trail come
+// from control; Selector resolution and the read lane come from read. Both are
+// required, and must share one Recorder so the layer has a single audit trail.
 // There is deliberately no exported WithDispatcher: dispatcher is unexported
 // (see dispatch.go), so only files inside this package can supply a real
 // one. #99 adds the exported WithExecution(...) option (execution.go) that
@@ -401,30 +222,32 @@ func WithCertExpiringWindow(d time.Duration) Option {
 // because v0.0.5 has no consumer surface and the default dispatcher is a
 // no-op — nothing is actually authorized, capped, audited, or stoppable.
 // Once WithExecution (or any option wiring a real dispatcher) is used, New
-// requires real Authorizer, CapChecker, AuditSink, and FreezeStore —
-// WithAuthorizer, WithCapChecker, WithAuditSink, and WithFreeze must all
-// have been supplied too — rather than silently letting a real dispatcher
-// ride these defaults, and panics otherwise (a composition-root wiring bug,
-// not a recoverable runtime condition). A real dispatcher paired with an
-// allow-all Authorizer, a no-op CapChecker, or a no-op AuditSink is a
+// requires real Authorizer, CapChecker, AuditSink, and FreezeStore — the
+// first, third and fourth through NewControl and NewRecorder, and
+// WithCapChecker for the CapChecker — rather than silently letting a real
+// dispatcher ride these defaults, and panics otherwise (a composition-root
+// wiring bug, not a recoverable runtime condition). A real dispatcher paired
+// with an allow-all Authorizer, a no-op CapChecker, or a no-op AuditSink is a
 // fail-open: every Node would match, every Action would be permitted, and
 // nothing would be recorded. A real dispatcher paired with a noopFreezeStore
 // is the same class of bug: an un-stoppable executor, since "never frozen"
 // means the emergency stop (ADR-0013) can never actually halt it. See
 // dispatcher's doc comment in dispatch.go.
-//
-// Separately, and regardless of s.realDispatcher: WithQueries also requires
-// a real AuditSink (F5, #441 cycle-2 security review) — see WithQueries' doc
-// comment.
-func New(reg registry.Repository, opts ...Option) *Service {
+func New(control *Control, read *ReadLane, opts ...Option) *Service {
+	if control == nil {
+		panic("capability: New: control must not be nil")
+	}
+	if read == nil {
+		panic("capability: New: read lane must not be nil")
+	}
+	if read.rec != control.rec {
+		panic("capability: New: the read lane and the Control must share one Recorder; two Recorders would split the audit trail")
+	}
 	s := &Service{
-		reg:              reg,
-		authz:            allowAllAuthorizer{},
+		control:          control,
+		read:             read,
 		cap:              noopCapChecker{},
 		disp:             noopDispatcher{},
-		audit:            noopAuditSink{},
-		freeze:           noopFreezeStore{},
-		metrics:          noopMetricsSink{},
 		jobEvents:        noopJobEventSink{},
 		gate:             noopApprovalGate{},
 		approvalNotifier: noopApprovalNotifier{},
@@ -446,89 +269,49 @@ func New(reg registry.Repository, opts ...Option) *Service {
 	// same sink.
 	if e, ok := s.disp.(*jobEngine); ok {
 		e.events = s.jobEvents
-		e.log = s.log
+		e.log = control.rec.log
 		// Likewise the dispatch-intent recorder (#887): the AuditSink that
 		// records the Job's outcome is the one that can record its intent in
 		// the Tasks' transaction. Order-independent, like events.
 		if e.intents == nil {
-			if r, ok := s.audit.(IntentRecorder); ok {
+			if r, ok := control.rec.audit.(IntentRecorder); ok {
 				e.intents = r
 			}
 		}
 	}
 	if s.realDispatcher {
-		if _, ok := s.authz.(allowAllAuthorizer); ok {
-			panic("capability: New: a real dispatcher (WithExecution) requires a real Authorizer (WithAuthorizer); allowAllAuthorizer would fail open")
+		if _, ok := control.authz.(allowAllAuthorizer); ok {
+			panic("capability: New: a real dispatcher (WithExecution) requires a real Authorizer (NewControl); allowAllAuthorizer would fail open")
 		}
 		if _, ok := s.cap.(noopCapChecker); ok {
 			panic("capability: New: a real dispatcher (WithExecution) requires a real CapChecker (WithCapChecker); noopCapChecker would fail open")
 		}
-		if _, ok := s.audit.(noopAuditSink); ok {
-			panic("capability: New: a real dispatcher (WithExecution) requires a real AuditSink (WithAuditSink); noopAuditSink would record nothing")
+		if _, ok := control.rec.audit.(noopAuditSink); ok {
+			panic("capability: New: a real dispatcher (WithExecution) requires a real AuditSink (NewRecorder); noopAuditSink would record nothing")
 		}
-		if _, ok := s.freeze.(noopFreezeStore); ok {
-			panic("capability: New: a real dispatcher (WithExecution) requires a real FreezeStore (WithFreeze); noopFreezeStore is never frozen, making the emergency stop unreachable")
+		if _, ok := control.freeze.(noopFreezeStore); ok {
+			panic("capability: New: a real dispatcher (WithExecution) requires a real FreezeStore (NewControl); noopFreezeStore is never frozen, making the emergency stop unreachable")
 		}
 		if e, ok := s.disp.(*jobEngine); ok && e.intents == nil {
 			panic("capability: New: a real dispatcher (WithExecution) requires an AuditSink that records dispatch intent (IntentRecorder); without it Tasks cannot be persisted")
 		}
 	}
-	// WithQueries requires a real AuditSink (F5, #441 cycle-2 security
-	// review), independent of s.realDispatcher and checked here — not inside
-	// WithQueries itself — so the result does not depend on the order two
-	// Options were passed to New. Without this, a Service built with
-	// WithQueries but no WithAuditSink answers every trail query while
-	// recording none of them: exactly the "unauditable read succeeded" state
-	// ADR-0025 forbids, the read-lane analogue of the real-dispatcher guard
-	// above.
-	if s.auditQ != nil {
-		if _, ok := s.audit.(noopAuditSink); ok {
-			panic("capability: New: WithQueries requires a real AuditSink (WithAuditSink); noopAuditSink would answer every trail query while recording none of them")
-		}
-	}
-	// WithAccountAdmin requires a real AuditSink AND a real Authorizer (#653),
-	// independent of s.realDispatcher and checked here for the same reason
-	// WithQueries' guard above is: the result must not depend on the order
-	// two Options were passed to New. An un-floored Account-administration
-	// surface is a fail-open no less serious than an un-floored dispatch —
-	// every role would pass account_role/account_disable/api_token_mint —
-	// and an unaudited one means "who created this Account" is unanswerable
-	// after a compromise, exactly what ADR-0025 forbids for the read lane.
-	//
-	// Checked on EITHER field, not just accountsStore: WithAccountAdmin sets
-	// both together and panics on a nil argument, so today the two can never
-	// disagree — but a guard that keys on only one of two fields a future
-	// option (or a hand-built Service literal in a test) could set
-	// independently is exactly the kind of guard that silently stops
-	// covering what it claims to (TestNewRefusesAccountAdminWithoutA...
-	// falsifies this by construction, see accountadmin_test.go).
-	if s.accountsStore != nil || s.apiTokens != nil {
-		if _, ok := s.authz.(allowAllAuthorizer); ok {
-			panic("capability: New: WithAccountAdmin requires a real Authorizer (WithAuthorizer); allowAllAuthorizer would fail open on every Account/API-Token administration act")
-		}
-		if _, ok := s.audit.(noopAuditSink); ok {
-			panic("capability: New: WithAccountAdmin requires a real AuditSink (WithAuditSink); noopAuditSink would record no Account/API-Token administration act")
-		}
-	}
 	return s
 }
 
-// stateEval is the StateEval every Selector resolution inside this Service
-// evaluates against: the Service's own clock (the same seam WithClock
-// overrides for deterministic tests) and its configured cert-expiring
-// window. One method, so Run and Plan can never resolve the same Selector
-// against two different instants.
-//
-// Falls back to time.Now().UTC() when now is unset, mirroring New's own
-// default — a *Service built as a struct literal in a test (bypassing New)
-// must stay callable rather than panic on a nil func field.
-func (s *Service) stateEval() StateEval {
-	now := s.now
-	if now == nil {
-		now = func() time.Time { return time.Now().UTC() }
-	}
-	return StateEval{Now: now(), CertExpiringWithin: s.certExpiringWithin}
+// recorder is the audit trail, metrics and log the Service records to: the
+// Control's Recorder, which New requires the read lane to share.
+func (s *Service) recorder() *Recorder { return s.control.rec }
+
+func (s *Service) recordRefusal(ctx context.Context, p Principal, sel Selector, act jobs.Action, kind RefusalKind, refusalErr error) error {
+	return s.recorder().recordRefusal(ctx, p, sel, act, kind, refusalErr)
 }
+
+func (s *Service) refuseControl(ctx context.Context, p Principal, refusalErr error) error {
+	return s.recorder().refuseControl(ctx, p, refusalErr)
+}
+
+func (s *Service) logger() *slog.Logger { return s.recorder().logger() }
 
 // Run is the pipeline every surface must call to act on Nodes: check the
 // Freeze, resolve the Selector, resolve a Template Operation's class and
@@ -609,7 +392,7 @@ type reattachment struct {
 // idempotency key and is only ever non-empty from Start; "" is exactly Run.
 func (s *Service) prepareDispatch(ctx context.Context, p Principal, sel Selector, act jobs.Action, key string) (prep, error) {
 	reqAct := act
-	frozen, err := s.freeze.Frozen(ctx)
+	frozen, err := s.control.freeze.Frozen(ctx)
 	if err != nil {
 		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalInternal, fmt.Errorf("capability: read freeze state: %w", err))
 	}
@@ -617,7 +400,7 @@ func (s *Service) prepareDispatch(ctx context.Context, p Principal, sel Selector
 		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalFrozen, &FrozenError{})
 	}
 
-	matched := sel.Resolve(s.reg, s.stateEval())
+	matched := sel.Resolve(s.read.reg, s.read.stateEval())
 
 	// Every Action's class is fixed here (invariant 13): a Native Operation's
 	// from opvocab, Raw Exec's as mutate, and a Template Operation's — with its
@@ -632,7 +415,7 @@ func (s *Service) prepareDispatch(ctx context.Context, p Principal, sel Selector
 
 	// withoutAssertions: an authorization decision must not be able to read
 	// anything the caller asserted (see assertions.go).
-	if err := s.authz.Authorize(withoutAssertions(ctx), p, act, sel); err != nil {
+	if err := s.control.authz.Authorize(withoutAssertions(ctx), p, act, sel); err != nil {
 		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalUnauthorized, err)
 	}
 
@@ -712,7 +495,7 @@ func (s *Service) prepareDispatch(ctx context.Context, p Principal, sel Selector
 		return s.approvalReattach(ctx, p, sel, nodes, ap.requestID, ap.reattachJobID)
 	}
 	if ap.parked != nil {
-		s.metrics.IncRefusal(RefusalPendingApproval)
+		s.recorder().metrics.IncRefusal(RefusalPendingApproval)
 		// approval_requested means A REQUEST WAS CREATED (#379). A re-drive
 		// that bounced off an already-pending Request — which is how a caller
 		// polls while waiting — is recorded under its own kind, so the trail's
@@ -726,7 +509,7 @@ func (s *Service) prepareDispatch(ctx context.Context, p Principal, sel Selector
 			Reason: ap.parked.Error(), ApprovalID: ap.parked.RequestID, PlanHash: ap.parked.PlanHash,
 			Asserted: AssertionsFromContext(ctx),
 		}
-		if auditErr := s.audit.Record(ctx, entry); auditErr != nil {
+		if auditErr := s.recorder().audit.Record(ctx, entry); auditErr != nil {
 			// An unaudited park is a dispatch nobody can account for. Surface
 			// the write failure alongside the park rather than swallowing it.
 			//
@@ -905,7 +688,7 @@ func (s *Service) account(ctx context.Context, p Principal, sel Selector, pr pre
 	s.bindTaskHandleJob(acctCtx, ap.requestID, res.jobID)
 
 	for _, r := range res.results {
-		s.metrics.IncDispatch(r.Outcome)
+		s.recorder().metrics.IncDispatch(r.Outcome)
 	}
 
 	// The AuditSink is recorded unconditionally, even when the dispatcher
@@ -920,7 +703,7 @@ func (s *Service) account(ctx context.Context, p Principal, sel Selector, pr pre
 	// does not close this — it is flagged here so it is not mistaken for a
 	// gap in #102's redaction guarantee.
 	entry := AuditEntry{Kind: AuditKindDispatch, Principal: p, Selector: sel, Action: act, JobID: res.jobID, Results: res.results, ApprovalID: ap.requestID, GrantID: ap.grantID, Asserted: AssertionsFromContext(acctCtx)}
-	auditErr := s.audit.Record(acctCtx, entry)
+	auditErr := s.recorder().audit.Record(acctCtx, entry)
 	if auditErr != nil {
 		// The dispatch itself already happened; a failed audit write must
 		// not silently vanish, so it is surfaced as an error alongside the
@@ -964,132 +747,6 @@ func (s *Service) account(ctx context.Context, p Principal, sel Selector, pr pre
 // short enough that a wedged store cannot hang the calling goroutine forever
 // once the client that started the call is long gone.
 const reservedPostDispatchAccountingTimeout = 30 * time.Second
-
-// recordRefusal audits a Freeze-engaged, authz-deny, no-Nodes-matched, or
-// cap-reject short-circuit — the dispatcher was never reached, so there is
-// no JobID or Results, only the refusal's Reason. It also increments the
-// MetricsSink for kind. It returns refusalErr, joined with a wrapped
-// audit-write error if the audit write itself failed, so a failed audit
-// write is never silently swallowed.
-func (s *Service) recordRefusal(ctx context.Context, p Principal, sel Selector, act jobs.Action, kind RefusalKind, refusalErr error) error {
-	s.metrics.IncRefusal(kind)
-	entry := AuditEntry{Kind: AuditKindRefusal, Principal: p, Selector: sel, Action: act, Reason: refusalErr.Error(), Asserted: AssertionsFromContext(ctx)}
-	var auditErr error
-	if err := s.audit.Record(ctx, entry); err != nil {
-		auditErr = fmt.Errorf("capability: record audit entry: %w", err)
-	}
-	return errors.Join(refusalErr, auditErr)
-}
-
-// ErrFreezeReasonRequired is returned by ReleaseFreeze when reason is empty
-// or whitespace. ADR-0013's asymmetric activation is not decoration: engaging
-// the emergency stop is cheap and reason-free, and releasing it is the
-// deliberate act that must say why, because the reason is what a later reader
-// has to reconstruct the incident from. Enforced here rather than per surface
-// so a Console or a future CLI cannot release without one.
-var ErrFreezeReasonRequired = errors.New("capability: releasing the Freeze requires a non-empty reason (ADR-0013)")
-
-// localHostPrincipal attributes an engage/release performed by root on the
-// Relay host itself (the signal lever, cmd/relay/freeze_signal.go). It is
-// deliberately role-less and kind-less: it is not an Account, it holds no
-// credential, and its authority is process-signal privilege on the box —
-// which is strictly greater than any API credential's.
-//
-// Defined here, once, so the attribution string recorded for the host lever
-// cannot drift from the two methods allowed to use it.
-func localHostPrincipal() Principal { return Principal{Account: "local-host"} }
-
-// EngageFreeze sets the Relay-wide Freeze (ADR-0013), attributed to p:
-// authorized first, then persisted (so a crash after the store call still
-// leaves the Freeze engaged), then recorded via AuditSink.RecordFreeze. If
-// persistence fails, the audit call is skipped — there is nothing true to
-// record — and the persistence error is returned.
-//
-// The floor is `operator`, AND the Principal must be a human Account (#397).
-// The role half is ADR-0013's "engage cheap": anyone who may run anything may
-// also pull the cord. The human half is the amendment #397 records, and it is
-// not a role question at all — a machine Account at `operator` freezing the
-// fleet is a jailbroken AI-agent switching off its own overseers, a denial of
-// service the fire-alarm argument does not cover. Authority is still the Role
-// (principal.go); Kind answers only the question authority cannot.
-//
-// A refusal is audited as a refusal, with the Principal, exactly like a
-// refused dispatch — see refuseControl.
-func (s *Service) EngageFreeze(ctx context.Context, p Principal) error {
-	if err := s.authz.AuthorizeControl(ctx, p, ControlFreezeEngage); err != nil {
-		return s.refuseControl(ctx, p, err)
-	}
-	return s.engageFreeze(ctx, p)
-}
-
-// EngageFreezeLocal engages the Freeze on behalf of root on the Relay host —
-// ADR-0013's second activation path ("or locally on the Relay host"), which
-// exists precisely for the case where the distrusted thing IS the API
-// credential.
-//
-// It is a separate method rather than a Principal the role gate happens to
-// wave through, because the two are different roots of authority and that
-// difference should be visible at the call site. Authority-by-call-site is
-// also what keeps it unreachable from any surface: the Control API holds a
-// Freezer interface carrying only the gated pair (api.Freezer), so no route
-// can reach this even by accident.
-func (s *Service) EngageFreezeLocal(ctx context.Context) error {
-	return s.engageFreeze(ctx, localHostPrincipal())
-}
-
-func (s *Service) engageFreeze(ctx context.Context, p Principal) error {
-	if err := s.freeze.Engage(ctx, p.Attribution()); err != nil {
-		return fmt.Errorf("capability: engage freeze: %w", err)
-	}
-	return s.audit.RecordFreeze(ctx, FreezeEvent{Principal: p, Engage: true, Asserted: AssertionsFromContext(ctx)})
-}
-
-// ReleaseFreeze clears the Relay-wide Freeze (ADR-0013), attributed to p with
-// reason recorded for why: authorized first, then persisted, then recorded
-// via AuditSink.RecordFreeze, mirroring EngageFreeze.
-//
-// The floor is `admin` and the reason is mandatory (#397, ADR-0013): the
-// fire-alarm asymmetry is that anyone may pull the handle and the chief
-// clears re-entry. Both refusals are audited with the Principal.
-func (s *Service) ReleaseFreeze(ctx context.Context, p Principal, reason string) error {
-	if err := s.authz.AuthorizeControl(ctx, p, ControlFreezeRelease); err != nil {
-		return s.refuseControl(ctx, p, err)
-	}
-	if strings.TrimSpace(reason) == "" {
-		return s.refuseControl(ctx, p, ErrFreezeReasonRequired)
-	}
-	return s.releaseFreeze(ctx, p, reason)
-}
-
-// ReleaseFreezeLocal is EngageFreezeLocal's counterpart: release by root on
-// the Relay host. The reason stays mandatory — the local lever is a different
-// root of authority, not an exemption from saying why the fleet is running
-// again.
-func (s *Service) ReleaseFreezeLocal(ctx context.Context, reason string) error {
-	if strings.TrimSpace(reason) == "" {
-		return ErrFreezeReasonRequired
-	}
-	return s.releaseFreeze(ctx, localHostPrincipal(), reason)
-}
-
-func (s *Service) releaseFreeze(ctx context.Context, p Principal, reason string) error {
-	if err := s.freeze.Release(ctx, p.Attribution(), reason); err != nil {
-		return fmt.Errorf("capability: release freeze: %w", err)
-	}
-	return s.audit.RecordFreeze(ctx, FreezeEvent{Principal: p, Engage: false, Reason: reason, Asserted: AssertionsFromContext(ctx)})
-}
-
-// refuseControl audits a refused ControlAction and returns the refusal.
-//
-// It is recordRefusal's sibling for the acts that carry no Selector and no
-// Action: nothing was resolved, nothing was dispatched, and there is no
-// fan-out to describe — only who was refused and why. It goes to the SAME
-// AuditKindRefusal the dispatch path uses, so "show me everything this
-// Account was refused" stays one query rather than two (invariant 10 applied
-// to the trail, not only to the code path).
-func (s *Service) refuseControl(ctx context.Context, p Principal, refusalErr error) error {
-	return s.recordRefusal(ctx, p, Selector{}, jobs.Action{}, RefusalUnauthorized, refusalErr)
-}
 
 // ErrJobNotRequestedByCaller is CancelJob's refusal for a machine Account
 // asking to cancel a Job that is not its own (owner decision 2026-09-17,
@@ -1163,7 +820,7 @@ var ErrJobNotRequestedByCaller = errors.New(
 // reaching CancelJob, so that path stays owner-scoped and ungated; only a
 // Job-backed cancel is gated here.
 func (s *Service) CancelJob(ctx context.Context, p Principal, jobID string) error {
-	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlCancelJob); err != nil {
+	if err := s.control.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlCancelJob); err != nil {
 		return s.refuseControl(ctx, p, err)
 	}
 	if !p.Human() {
@@ -1183,13 +840,13 @@ func (s *Service) CancelJob(ctx context.Context, p Principal, jobID string) erro
 	if s.jobEvents != nil {
 		s.jobEvents.RecordJob(JobEvent{Transition: JobCancelled, JobID: jobID, Principal: p})
 	}
-	return s.audit.RecordCancel(ctx, p, jobID)
+	return s.recorder().audit.RecordCancel(ctx, p, jobID)
 }
 
 // authorizeMachineCancel decides CancelJob's machine-Account scope (owner
 // decision 2026-09-17, execution.md §Cancellation, #614): may accountID
 // cancel jobID? It queries s.jobQ directly rather than through
-// Service.QueryJobs — this is an authorization decision, not a
+// ReadLane.QueryJobs — this is an authorization decision, not a
 // caller-invoked read, so it must not append its own entry to the read-lane
 // trail (recordQueryRead); CancelJob's own refuseCancel/RecordCancel is what
 // gets recorded for it.
@@ -1228,10 +885,10 @@ func (s *Service) authorizeMachineCancel(ctx context.Context, jobID, accountID s
 	if jobID == "" || validateJobID(jobID) != nil {
 		return "", ErrJobNotRequestedByCaller
 	}
-	if s.jobQ == nil {
+	if s.read.jobQ == nil {
 		return "", ErrJobNotRequestedByCaller
 	}
-	page, queryErr := s.jobQ.QueryJobs(ctx, JobFilter{JobID: jobID}, PageRequest{Limit: 1})
+	page, queryErr := s.read.jobQ.QueryJobs(ctx, JobFilter{JobID: jobID}, PageRequest{Limit: 1})
 	if queryErr != nil {
 		// Logged here, not folded into the caller-facing reason: the query
 		// failure is operational detail (a store blip, a malformed filter)
@@ -1262,10 +919,10 @@ func (s *Service) authorizeMachineCancel(ctx context.Context, jobID, accountID s
 // authorizeMachineCancel's doc comment for why an unresolved id is never
 // recorded here either, exactly like refuseControl's role-floor refusal.
 func (s *Service) refuseCancel(ctx context.Context, p Principal, jobID string, refusalErr error) error {
-	s.metrics.IncRefusal(RefusalUnauthorized)
+	s.recorder().metrics.IncRefusal(RefusalUnauthorized)
 	entry := AuditEntry{Kind: AuditKindRefusal, Principal: p, JobID: jobID, Reason: refusalErr.Error(), Asserted: AssertionsFromContext(ctx)}
 	var auditErr error
-	if err := s.audit.Record(ctx, entry); err != nil {
+	if err := s.recorder().audit.Record(ctx, entry); err != nil {
 		auditErr = fmt.Errorf("capability: record audit entry: %w", err)
 	}
 	return errors.Join(refusalErr, auditErr)

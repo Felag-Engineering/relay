@@ -1068,13 +1068,17 @@ func TestWithExecutionRefusesDefaultSeams(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	conduit := newFakeConduit(nil)
 	reg := registry.NewInMemory()
+	rec := NewRecorder(noopAuditSink{}, nil, nil)
+	ctl := newControl(rec, allowAllAuthorizer{}, noopFreezeStore{})
+	read := newReadLane(rec, reg, nil, nil, nil, nil, 0, nil)
+	execOpt := WithExecution(jobsRepo, tasksRepo, conduit)
 
 	defer func() {
 		if recover() == nil {
 			t.Fatal("New(reg, WithExecution(...)) without real Authorizer/CapChecker/AuditSink should panic")
 		}
 	}()
-	New(reg, WithExecution(jobsRepo, tasksRepo, conduit))
+	New(ctl, read, execOpt)
 }
 
 // TestWithExecutionAcceptsRealSeams: with real (spy) Authorizer, CapChecker,
@@ -1096,11 +1100,10 @@ func TestWithExecutionAcceptsRealSeams(t *testing.T) {
 	audit := &spyAuditSink{}
 	freezeStore := &fakeFreezeStore{}
 
-	svc := New(reg,
-		WithAuthorizer(authz),
+	rec := NewRecorder(audit, nil, nil)
+	svc := New(NewControl(rec, authz, freezeStore),
+		newReadLane(rec, reg, nil, nil, nil, nil, 0, nil),
 		WithCapChecker(capChecker),
-		WithAuditSink(audit),
-		WithFreeze(freezeStore),
 		testExecution(jobsRepo, tasksRepo, conduit, WithExecNewID(sequentialIDs("id-"))),
 	)
 
@@ -1142,7 +1145,7 @@ func (c *probeAtFirstConnected) Connected(nodeID string) bool {
 // capability-package guard) proves the requester is durable and readable
 // through the real store while every Task is still Pending — before
 // dispatchOne's first MarkDispatched, and before the audit sink has
-// recorded anything. The read-lane counterpart (through Service.QueryJobs
+// recorded anything. The read-lane counterpart (through ReadLane.QueryJobs
 // and CancelJob) lives in internal/auditquery, which can import capability
 // without a cycle; this package cannot import auditquery.
 func TestRun_RequesterIsOnTheJobWhileEveryTaskIsPending(t *testing.T) {
@@ -1228,18 +1231,73 @@ func TestWithExecutionRefusesWithoutFreeze(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	conduit := newFakeConduit(nil)
 	reg := registry.NewInMemory()
+	// testExecution wires an IntentRecorder, so the freeze check is the only
+	// real-dispatcher check left that can fire here.
+	rec := NewRecorder(&spyAuditSink{}, nil, nil)
+	ctl := newControl(rec, &spyAuthorizer{}, noopFreezeStore{})
+	read := newReadLane(rec, reg, nil, nil, nil, nil, 0, nil)
+	capOpt := WithCapChecker(&spyCapChecker{})
+	execOpt := testExecution(jobsRepo, tasksRepo, conduit)
 
 	defer func() {
 		if recover() == nil {
 			t.Fatal("New(reg, WithExecution(...)) with real Authorizer/CapChecker/AuditSink but no WithFreeze should panic")
 		}
 	}()
-	New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithExecution(jobsRepo, tasksRepo, conduit),
-	)
+	New(ctl, read, capOpt, execOpt)
+}
+
+// TestExecution_ResolvesStateAgainstTheReadLanesWindow: Run resolves a
+// `state:` Selector against the ReadLane's clock and cert-expiring window — the
+// same StateEval ListNodes uses — so the two can never disagree about which
+// Nodes are expiring. With the window at zero the marker never fires.
+func TestExecution_ResolvesStateAgainstTheReadLanesWindow(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceState, Key: "cert-expiring"}}}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
+
+	run := func(t *testing.T, window time.Duration) (*testSvc, []NodeResult, error) {
+		t.Helper()
+		reg := registry.NewInMemory()
+		if _, err := reg.Upsert(registry.Report{NodeID: "node-1"}); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+		if err := reg.RecordEnrollment("node-1", registry.Certificate{NotAfter: now.Add(time.Hour)}, now); err != nil {
+			t.Fatalf("RecordEnrollment: %v", err)
+		}
+		conduit := newFakeConduit(nil)
+		conduit.connected["node-1"] = true
+		conduit.results["node-1"] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+		jobsRepo, tasksRepo := testEngineStore(t)
+		svc := build(t, seams{reg: reg,
+			authz: &spyAuthorizer{}, cap: &spyCapChecker{}, audit: &spyAuditSink{}, freeze: &fakeFreezeStore{},
+			jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit,
+			now: func() time.Time { return now }, certWindow: window,
+		})
+		results, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, act)
+		return svc, results, err
+	}
+
+	svc, results, err := run(t, 2*time.Hour)
+	if err != nil {
+		t.Fatalf("Run with a 2h window: %v", err)
+	}
+	if len(results) != 1 || results[0].NodeID != "node-1" {
+		t.Fatalf("Run results = %+v, want one result for node-1", results)
+	}
+	listing, err := svc.ListNodes(context.Background(), Principal{Account: "alice"}, "state:cert-expiring")
+	if err != nil {
+		t.Fatalf("ListNodes: %v", err)
+	}
+	if len(listing.Nodes) != 1 || listing.Nodes[0].NodeID != "node-1" {
+		t.Fatalf("ListNodes = %+v, want the same Node Run dispatched to", listing.Nodes)
+	}
+
+	_, _, err = run(t, 0)
+	var nnm *NoNodesMatchedError
+	if !errors.As(err, &nnm) {
+		t.Fatalf("Run with a zero window = %v, want a *NoNodesMatchedError (the marker never fires)", err)
+	}
 }
 
 // TestCapabilityImportsOnlyRegistryAndJobs is an import-boundary AST guard

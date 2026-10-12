@@ -160,7 +160,7 @@ func (s *Service) RequestGrant(ctx context.Context, p Principal, in GrantRequest
 		Reason:   "batch/window grant requested: " + summary,
 		Asserted: AssertionsFromContext(ctx),
 	}
-	if auditErr := s.audit.Record(ctx, entry); auditErr != nil {
+	if auditErr := s.recorder().audit.Record(ctx, entry); auditErr != nil {
 		return grant, request, fmt.Errorf("capability: record audit entry: %w", auditErr)
 	}
 	if s.approvalNotifier != nil {
@@ -269,7 +269,7 @@ func (s *Service) RevokeGrant(ctx context.Context, p Principal, id, reason strin
 		// Job — and GrantID above is already this entry's structural
 		// discriminator from a real answer.
 	}
-	if auditErr := s.audit.Record(ctx, entry); auditErr != nil {
+	if auditErr := s.recorder().audit.Record(ctx, entry); auditErr != nil {
 		return revoked, fmt.Errorf("capability: record audit entry: %w", auditErr)
 	}
 	return revoked, nil

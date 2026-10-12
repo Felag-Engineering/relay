@@ -249,7 +249,7 @@ func (s *Service) DecideApproval(ctx context.Context, p Principal, in ApprovalDe
 		ApprovalAnswer:  approvalAnswerOf(d.Approve),
 		DecisionChannel: d.Channel,
 	}
-	if auditErr := s.audit.Record(ctx, entry); auditErr != nil {
+	if auditErr := s.recorder().audit.Record(ctx, entry); auditErr != nil {
 		return updated, fmt.Errorf("capability: record audit entry: %w", auditErr)
 	}
 	return updated, nil

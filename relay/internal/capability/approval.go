@@ -456,7 +456,7 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 // (ADR-0025), the same precedent AP-67's adapter-level re-attach set. The
 // join from this read to the approval is approval_requests.job_id = jobID.
 func (s *Service) reattach(ctx context.Context, p Principal, sel Selector, nodes []registry.Node, requestID, jobID string) ([]NodeResult, error) {
-	if err := s.recordQueryRead(ctx, p, toolApprovalReattach, sel.String(), "", jobID); err != nil {
+	if err := s.read.recordQueryRead(ctx, p, toolApprovalReattach, sel.String(), "", jobID); err != nil {
 		return nil, fmt.Errorf("capability: re-attach to approval %s's released job: %w", requestID, err)
 	}
 	// One NodeResult per resolved Node, carrying the bound JobID: these are

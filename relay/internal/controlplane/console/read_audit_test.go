@@ -33,7 +33,7 @@ package console
 // review, in words.
 //
 // For an audited route it does not take the classification's word for it: it
-// drives the route through a REAL *capability.Service over a REAL
+// drives the route through a REAL *capability.ReadLane over a REAL
 // *auditsink.Sink and asserts a KindRead record came out the other end,
 // attributed to the signed-in Account. The fakes in fakes_test.go cannot
 // prove this — fakeQueries does not audit, because nothing that is not the
@@ -634,7 +634,7 @@ func rowOfRecord(r audit.Record) capability.AuditRow {
 	}
 }
 
-// realLaneDeps is a Console wired to a REAL *capability.Service over a REAL
+// realLaneDeps is a Console wired to a REAL *capability.ReadLane over a REAL
 // *auditsink.Sink appending into trail.
 //
 // Everything on the audited path is production code. The registry is
@@ -659,7 +659,7 @@ func realLaneDeps(trail *recordingTrail) Deps {
 	}
 
 	sink := auditsink.New(trail, auditsink.WithClock(func() time.Time { return testNow }))
-	// WithPolicyView gives the comparison screen and the Node-detail Policy
+	// The Policy view gives the comparison screen and the Node-detail Policy
 	// panel something to render (#680) — both now read it through
 	// DescribeNode, the same audited call this fixture proves recorded.
 	policy := policyview.New()
@@ -673,7 +673,7 @@ func realLaneDeps(trail *recordingTrail) Deps {
 	})
 
 	d := renderableDeps()
-	d.Queries = svc
+	d.Queries = svc.ReadLane
 	d.Approvals = &fakeApprovals{resolved: []approval.Request{{ID: auditFixtureApproval}}}
 	// Without this, GET /console/events 503s before RecordEventSubscription
 	// is ever reached — d.Events == nil is checked first — which would make
@@ -813,12 +813,12 @@ func (t *recordingTrail) ofKind(kind string) []audit.Record {
 	return out
 }
 
-// emptyAuditQuery and emptyJobQuery satisfy capability.WithQueries with an
+// emptyAuditQuery and emptyJobQuery satisfy the capability query seams with an
 // empty trail and no Jobs.
 //
-// They are here so a REAL Service can be constructed: WithQueries is what the
-// trail/Job half of the read lane needs, and New refuses a Service that has
-// it without a real AuditSink. Their answers are empty because this file is
+// They are here so a REAL ReadLane can be constructed: the query seams are
+// what the trail/Job half of the read lane needs, and NewReadLane refuses a
+// lane that has them without a real AuditSink. Their answers are empty because this file is
 // about the RECORD a screen writes, not about the rows it renders — the
 // screens' own tests cover those against fakeQueries.
 type emptyAuditQuery struct{}

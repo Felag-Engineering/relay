@@ -126,7 +126,7 @@ type ApprovalReader interface {
 }
 
 // AccountReader is the Account registry and its API Tokens, read-only (#654,
-// spec 15). *capability.Service satisfies both methods, which landed on it in
+// spec 15). *capability.AccountAdmin satisfies both methods, which landed in
 // #653 (PR #657), so no adapter is built for this seam.
 //
 // EVERY WRITE VERB ON THE ACCOUNT LANE IS STILL ABSENT FROM THIS INTERFACE:
@@ -178,9 +178,10 @@ type AccountReader interface {
 
 // QueryReader is the capability layer's read lane (#441): filtered,
 // paginated, aggregating queries over the audit trail and over Jobs/Tasks.
-// *capability.Service satisfies it, exactly as ApprovalReader is satisfied
-// above — nothing here dispatches or decides, and the narrowed method set is
-// what keeps this package's grip on the capability layer to reads only.
+// *capability.ReadLane satisfies it, as *capability.Service satisfies
+// ApprovalReader above — nothing here dispatches or decides, and the narrowed
+// method set is what keeps this package's grip on the capability layer to
+// reads only.
 //
 // Job detail (#423) was its first consumer, read egress (#425, retired
 // 2026-10-01) its second, Activity (#422) its third, and agent history (#542)
@@ -225,7 +226,7 @@ type QueryReader interface {
 	// list from this return value, never from a kind list it computed
 	// earlier or re-derived from the request — that is what makes it
 	// structurally impossible for the stream to carry a kind set the record
-	// does not name. See capability.Service.RecordEventSubscription's doc
+	// does not name. See capability.ReadLane.RecordEventSubscription's doc
 	// comment for the mutation this closes.
 	RecordEventSubscription(ctx context.Context, p capability.Principal, kinds []string, resumed bool) ([]string, error)
 }

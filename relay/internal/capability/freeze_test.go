@@ -132,6 +132,61 @@ func TestRunFreezeReadErrorFailsClosed(t *testing.T) {
 	}
 }
 
+// TestNewControlPanicsOnNilFreezeStore: a Control with no FreezeStore has no
+// emergency stop to engage. The Recorder is built outside the recover scope,
+// so only the freezeStore check can be the panic.
+func TestNewControlPanicsOnNilFreezeStore(t *testing.T) {
+	rec := NewRecorder(&spyAuditSink{}, nil, nil)
+	defer func() {
+		if got := recover(); got != "capability: NewControl: freezeStore must not be nil" {
+			t.Fatalf("panic = %v, want NewControl's freezeStore refusal", got)
+		}
+	}()
+	NewControl(rec, &spyAuthorizer{}, nil)
+}
+
+// latchingFreezeStore is a FreezeStore whose Engage really latches Frozen.
+type latchingFreezeStore struct{ frozen bool }
+
+func (f *latchingFreezeStore) Frozen(context.Context) (bool, error) { return f.frozen, nil }
+func (f *latchingFreezeStore) Engage(context.Context, string) error { f.frozen = true; return nil }
+func (f *latchingFreezeStore) Release(context.Context, string, string) error {
+	f.frozen = false
+	return nil
+}
+
+// TestExecution_FreezeEngagedThroughControlRefusesRun: the Freeze engaged
+// through the Control (EngageFreeze) is the one Run's outermost gate reads, and
+// both land on the one trail.
+func TestExecution_FreezeEngagedThroughControlRefusesRun(t *testing.T) {
+	audit := &spyAuditSink{}
+	svc := build(t, seams{reg: seedOneNode(t), authz: &spyAuthorizer{}, audit: audit, freeze: &latchingFreezeStore{}})
+
+	ctx := context.Background()
+	p := Principal{Account: "alice"}
+	if err := svc.EngageFreeze(ctx, p); err != nil {
+		t.Fatalf("EngageFreeze: %v", err)
+	}
+	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
+	_, err := svc.Run(ctx, p, sel, jobs.Action{})
+	var frozenErr *FrozenError
+	if !errors.As(err, &frozenErr) {
+		t.Fatalf("Run() error = %v, want errors.As to find a *FrozenError", err)
+	}
+	if len(audit.freezeCalls) != 1 || !audit.freezeCalls[0].Engage {
+		t.Errorf("freeze events = %+v, want one engage", audit.freezeCalls)
+	}
+	var refusals int
+	for _, e := range audit.entries {
+		if e.Kind == AuditKindRefusal && e.Reason == (&FrozenError{}).Error() {
+			refusals++
+		}
+	}
+	if refusals != 1 {
+		t.Errorf("frozen refusal rows on the shared trail = %d, want 1; entries = %+v", refusals, audit.entries)
+	}
+}
+
 // TestEngageFreezePersistsAndAudits is acceptance criterion 6 (engage half):
 // EngageFreeze persists via FreezeStore.Engage and records a RecordFreeze
 // audit event attributed to the local-host principal.

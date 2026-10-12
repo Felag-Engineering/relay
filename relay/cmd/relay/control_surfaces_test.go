@@ -201,7 +201,7 @@ func (stubVerifier) Verify(_ context.Context, credential string) (accounts.Accou
 // snapshot without a context; this test stops the ROOT from WIRING one.
 // After this issue no surface is handed the registry or a display-only
 // cache directly — every registry, Policy-view and Template-vocabulary
-// read goes through d.capability, the capability read lane.
+// read goes through d.readLane, the capability read lane.
 func TestSurfaceDeps_NoSurfaceIsHandedTheRegistryOrACache(t *testing.T) {
 	// Keyed by PkgPath, not a type-name substring: a substring match would
 	// pass a field concretely typed *registry.InMemory (it never spells
@@ -224,7 +224,7 @@ func TestSurfaceDeps_NoSurfaceIsHandedTheRegistryOrACache(t *testing.T) {
 		if bannedPkgs[elem.PkgPath()] {
 			t.Errorf("surfaceDeps.%s has type %s, whose element %s is from a banned package — no "+
 				"surface may be handed the registry or a display-only cache directly; read through "+
-				"d.capability (invariant 10, QRY-28)",
+				"d.readLane (invariant 10, QRY-28)",
 				f.Name, f.Type, elem)
 		}
 	}

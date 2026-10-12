@@ -15,7 +15,7 @@ import (
 // TestQueryAudit_AProtocolViolationIsQueryableByKind is #638's headline
 // acceptance test: "no queryable event exists" was the issue's first
 // measured gap, so this proves the opposite — a Kind filter over the real
-// capability.Service.QueryAudit seam, the one every trail surface reads
+// capability.ReadLane.QueryAudit seam, the one every trail surface reads
 // through, returns the violation row with the facts an operator or
 // AI-agent needs and with no authenticated actor attached to the Node.
 func TestQueryAudit_AProtocolViolationIsQueryableByKind(t *testing.T) {

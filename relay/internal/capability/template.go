@@ -182,10 +182,10 @@ func (s *Service) resolveAction(act jobs.Action, matched []registry.Node) resolv
 // with no vocabulary source wired holds no report for any Node, which
 // excludes every Node rather than dispatching blind.
 func (s *Service) templateSnapshot(nodeID string) (nodevocab.Snapshot, bool) {
-	if s.nodeVocab == nil {
+	if s.read.nodeVocab == nil {
 		return nodevocab.Snapshot{}, false
 	}
-	return s.nodeVocab.Get(nodeID)
+	return s.read.nodeVocab.Get(nodeID)
 }
 
 // findTemplate returns the Template named name in snap, if the Node reports it.

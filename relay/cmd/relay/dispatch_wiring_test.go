@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditquery"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
@@ -337,12 +338,15 @@ func TestDispatchWiring_ACancelDuringFanOutWithholdsUnsentTasksThroughTheRealRou
 	}
 
 	hold := &holdingConduit{Router: router, held: make(chan string, 1), release: make(chan struct{})}
+	q := auditquery.New(st.AuditQueries(), st.JobQueries())
 	capSvc := newCapService(t, capSeams{
 		reg:         st.Registry(),
 		authz:       allowAllTestAuthorizer{},
 		cap:         capability.NewBlastCap(10, 10),
 		audit:       auditsink.New(st.Audit()),
 		freeze:      st.Freeze(),
+		auditQ:      q,
+		jobQ:        q,
 		jobsRepo:    st.Jobs(),
 		tasksRepo:   tasks,
 		conduit:     hold,
@@ -501,14 +505,17 @@ func TestViolationRecorder_RecordProtocolViolation(t *testing.T) {
 }
 
 // capSeams is the set of collaborators a test hands to newCapService. A zero
-// field means "not supplied": the option is not emitted and capability.New
-// keeps its default.
+// execution field means "not supplied": the option is not emitted and
+// capability.New keeps its default. audit, authz, freeze and both query seams
+// are required, as the capability constructors require them.
 type capSeams struct {
 	reg         registry.Repository
 	authz       capability.Authorizer
 	cap         capability.CapChecker
 	audit       capability.AuditSink
 	freeze      capability.FreezeStore
+	auditQ      capability.AuditQuery
+	jobQ        capability.JobQuery
 	jobsRepo    jobs.JobRepository
 	tasksRepo   jobs.TaskRepository
 	conduit     capability.Conduit
@@ -516,22 +523,18 @@ type capSeams struct {
 }
 
 // newCapService builds the capability layer for a test: a thin wrapper over
-// capability.New and the With* options, so the layer's constructor changes in
-// one place.
+// the capability constructors, so the layer's shape changes in one place.
 func newCapService(t *testing.T, s capSeams) *capability.Service {
 	t.Helper()
-	var opts []capability.Option
-	if s.authz != nil {
-		opts = append(opts, capability.WithAuthorizer(s.authz))
+	if s.audit == nil || s.authz == nil || s.freeze == nil || s.auditQ == nil || s.jobQ == nil {
+		t.Fatalf("newCapService: audit, authz, freeze, auditQ and jobQ are required")
 	}
+	rec := capability.NewRecorder(s.audit, nil, nil)
+	ctl := capability.NewControl(rec, s.authz, s.freeze)
+	read := capability.NewReadLane(rec, s.reg, s.auditQ, s.jobQ, nil, nil, 0, nil)
+	var opts []capability.Option
 	if s.cap != nil {
 		opts = append(opts, capability.WithCapChecker(s.cap))
-	}
-	if s.audit != nil {
-		opts = append(opts, capability.WithAuditSink(s.audit))
-	}
-	if s.freeze != nil {
-		opts = append(opts, capability.WithFreeze(s.freeze))
 	}
 	if s.jobsRepo != nil || s.tasksRepo != nil || s.conduit != nil {
 		var eo []capability.ExecOption
@@ -540,5 +543,5 @@ func newCapService(t *testing.T, s capSeams) *capability.Service {
 		}
 		opts = append(opts, capability.WithExecution(s.jobsRepo, s.tasksRepo, s.conduit, eo...))
 	}
-	return capability.New(s.reg, opts...)
+	return capability.New(ctl, read, opts...)
 }

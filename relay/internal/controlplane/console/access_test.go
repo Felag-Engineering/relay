@@ -48,7 +48,7 @@ func accessDeps(q *fakeQueries) Deps {
 	return d
 }
 
-// accessStoreDeps is a Console wired to a REAL *capability.Service over a
+// accessStoreDeps is a Console wired to a REAL *capability.ReadLane over a
 // REAL *auditsink.Sink and *auditquery.Queries, built exactly like
 // read_audit_test.go's realLaneDeps
 // — the fixture that reproduces the read lane's own ordering rather than
@@ -80,7 +80,7 @@ func accessStoreDeps(t *testing.T) (Deps, *auditsink.Sink, *store.Store, capabil
 	}
 
 	d := renderableDeps()
-	d.Queries = svc
+	d.Queries = svc.ReadLane
 	d.Now = func() time.Time { return testNow }
 	return d, sink, st, actor
 }
@@ -574,7 +574,7 @@ func TestAccess_AFailedSignInShowsTheNameOnlyWhenItIsARealAccounts(t *testing.T)
 	q := auditquery.New(st.AuditQueries(), st.JobQueries())
 	svcCap := newCapService(capSeams{reg: registry.NewInMemory(), audit: sink, auditQ: q, jobQ: q})
 	d := renderableDeps()
-	d.Queries = svcCap
+	d.Queries = svcCap.ReadLane
 	d.Now = func() time.Time { return testNow }
 
 	// The page read writes its own read-audit records, so every assertion on

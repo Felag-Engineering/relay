@@ -44,7 +44,7 @@ const (
 
 	// floorCapability: the floor is enforced inside the capability layer, and
 	// this surface only renders the refusal. Execution (authz.RoleGate via
-	// capability.Service.Run), Freeze (AuthorizeControl via EngageFreeze/
+	// capability.Service.Run), Freeze (capability.Control; AuthorizeControl via EngageFreeze/
 	// ReleaseFreeze), approvals (AuthorizeApprovalDecision), and identity
 	// management (#653: AuthorizeControl via Accounts/CreateAccount/
 	// SetAccountRole/...) are all here. A handler in this class must NOT
@@ -90,7 +90,7 @@ var routeFloors = map[string]floorKind{
 	"POST /api/v1/freeze/engage":  floorCapability,
 	"POST /api/v1/freeze/release": floorCapability,
 
-	// Identity management (#297; #653: the floor moved into capability.Service
+	// Identity management (#297; #653: the floor moved into capability.AccountAdmin
 	// behind AuthorizeControl; this surface renders the refusal and re-derives
 	// nothing).
 	"POST /api/v1/accounts":                floorCapability,

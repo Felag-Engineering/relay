@@ -375,13 +375,13 @@ func (s *Service) resolveKeyedReattach(ctx context.Context, p Principal, sel Sel
 		if !persisted {
 			return nil, false, nil
 		}
-		if err := s.recordQueryRead(ctx, p, toolIdempotentReattach, sel.String(), "", jobID); err != nil {
+		if err := s.read.recordQueryRead(ctx, p, toolIdempotentReattach, sel.String(), "", jobID); err != nil {
 			return nil, false, fmt.Errorf("capability: re-attach to idempotency key's Job: %w", err)
 		}
 		return &reattachment{jobID: jobID}, true, nil
 	}
 	pending := func(jobID string) (*reattachment, error) {
-		if err := s.recordQueryRead(ctx, p, toolIdempotentPending, sel.String(), "", jobID); err != nil {
+		if err := s.read.recordQueryRead(ctx, p, toolIdempotentPending, sel.String(), "", jobID); err != nil {
 			return nil, fmt.Errorf("capability: report pending idempotency key: %w", err)
 		}
 		return nil, &IdempotencyPendingError{JobID: jobID}
@@ -401,7 +401,7 @@ func (s *Service) resolveKeyedReattach(ctx context.Context, p Principal, sel Sel
 		return nil, internal(err)
 	}
 	if !found {
-		if err := s.recordQueryRead(ctx, p, toolIdempotentReleased, sel.String(), "", ""); err != nil {
+		if err := s.read.recordQueryRead(ctx, p, toolIdempotentReleased, sel.String(), "", ""); err != nil {
 			return nil, fmt.Errorf("capability: report released idempotency key: %w", err)
 		}
 		return nil, &IdempotencyReleasedError{}
@@ -416,7 +416,7 @@ func (s *Service) resolveKeyedReattach(ctx context.Context, p Principal, sel Sel
 	if now.Sub(cur.CreatedAt) < IdempotencyAbandonAfter {
 		return pending(cur.JobID)
 	}
-	if err := s.recordQueryRead(ctx, p, toolIdempotentAbandoned, sel.String(), "", cur.JobID); err != nil {
+	if err := s.read.recordQueryRead(ctx, p, toolIdempotentAbandoned, sel.String(), "", cur.JobID); err != nil {
 		return nil, fmt.Errorf("capability: report abandoned idempotency key: %w", err)
 	}
 	return nil, &IdempotencyAbandonedError{JobID: cur.JobID, ClaimedAt: cur.CreatedAt}

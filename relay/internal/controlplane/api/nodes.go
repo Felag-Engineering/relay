@@ -135,7 +135,7 @@ func handleRevokeNode(d Deps) http.HandlerFunc {
 }
 
 // NodeReader is the capability read lane's DescribeNode call, narrowed to
-// the one method this route needs (#680). capability.Service satisfies it
+// the one method this route needs (#680). capability.ReadLane satisfies it
 // with no adapter, exactly as Exec/Approvals/AccountAdmin already do.
 //
 // The narrowing here is no longer "a read route has no business holding

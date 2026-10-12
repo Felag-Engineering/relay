@@ -45,10 +45,59 @@ import (
 // tests, which expect a create/mint to be the only rows a read-only session
 // produces.
 
-// ErrAccountsUnavailable is returned by every method in this file when the
-// Service was built without WithAccountAdmin — mirrors ErrQueriesUnavailable
-// (readlane.go): never an empty slice or a zero Account, either of which
-// would be a claim about state this Service has not actually looked at.
+// AccountAdmin is Account and API-Token administration (#653): the eight
+// ControlActions above, authorized by the Control's Authorizer and recorded on
+// its Recorder's trail. Construct it with NewAccountAdmin.
+type AccountAdmin struct {
+	control      *Control
+	accountStore AccountStore
+	tokens       APITokenStore
+}
+
+// NewAccountAdmin returns an AccountAdmin over control and the two stores. All
+// three are required together — an Account store with no Token store can
+// create identities with no way to issue them a credential, and a Token store
+// with no Account store cannot resolve whose credential it is minting or
+// revoking; passing an incomplete set is a composition-root bug, so it panics
+// rather than degrading.
+//
+// It also requires a real Authorizer AND a real AuditSink (#653), read through
+// control: an un-floored Account-administration surface is a fail-open no less
+// serious than an un-floored dispatch — every role would pass
+// account_role/account_disable/api_token_mint — and an unaudited one means
+// "who created this Account" is unanswerable after a compromise, exactly what
+// ADR-0025 forbids for the read lane.
+func NewAccountAdmin(control *Control, accountStore AccountStore, tokens APITokenStore) *AccountAdmin {
+	if control == nil {
+		panic("capability: NewAccountAdmin: control must not be nil")
+	}
+	if accountStore == nil {
+		panic("capability: NewAccountAdmin: account store must not be nil")
+	}
+	if tokens == nil {
+		panic("capability: NewAccountAdmin: API token store must not be nil")
+	}
+	if _, ok := control.authz.(allowAllAuthorizer); ok {
+		panic("capability: NewAccountAdmin: requires a real Authorizer (NewControl); allowAllAuthorizer would fail open on every Account/API-Token administration act")
+	}
+	if _, ok := control.rec.audit.(noopAuditSink); ok {
+		panic("capability: NewAccountAdmin: requires a real AuditSink (NewRecorder); noopAuditSink would record no Account/API-Token administration act")
+	}
+	return newAccountAdmin(control, accountStore, tokens)
+}
+
+// newAccountAdmin assembles an AccountAdmin with no checks. Only NewAccountAdmin
+// and _test.go files call it; it is the only route to an AccountAdmin with no
+// stores.
+func newAccountAdmin(control *Control, accountStore AccountStore, tokens APITokenStore) *AccountAdmin {
+	return &AccountAdmin{control: control, accountStore: accountStore, tokens: tokens}
+}
+
+// ErrAccountsUnavailable is returned by every method in this file on an
+// AccountAdmin assembled with no store (unreachable through NewAccountAdmin) —
+// mirrors ErrQueriesUnavailable (readlane.go): never an empty slice or a zero
+// Account, either of which would be a claim about state this AccountAdmin has
+// not actually looked at.
 var ErrAccountsUnavailable = errors.New("capability: account administration is not configured on this Relay")
 
 // ErrSelfTargeted is returned by SetAccountRole and by SetAccountEnabled(id,
@@ -73,45 +122,45 @@ func SelfTargeted(p Principal, accountID string) bool {
 
 // Accounts lists every Account (#653). Authorized at ControlAccountRead;
 // records nothing on success (see this file's header).
-func (s *Service) Accounts(ctx context.Context, p Principal) ([]accounts.Account, error) {
-	if s.accountsStore == nil {
+func (a *AccountAdmin) Accounts(ctx context.Context, p Principal) ([]accounts.Account, error) {
+	if a.accountStore == nil {
 		return nil, ErrAccountsUnavailable
 	}
-	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAccountRead); err != nil {
-		return nil, s.refuseControl(ctx, p, err)
+	if err := a.control.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAccountRead); err != nil {
+		return nil, a.control.rec.refuseControl(ctx, p, err)
 	}
-	return s.accountsStore.List(ctx)
+	return a.accountStore.List(ctx)
 }
 
 // Account reads one Account by id (#653). Authorized at ControlAccountRead;
 // records nothing on success.
-func (s *Service) Account(ctx context.Context, p Principal, id string) (accounts.Account, error) {
-	if s.accountsStore == nil {
+func (a *AccountAdmin) Account(ctx context.Context, p Principal, id string) (accounts.Account, error) {
+	if a.accountStore == nil {
 		return accounts.Account{}, ErrAccountsUnavailable
 	}
-	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAccountRead); err != nil {
-		return accounts.Account{}, s.refuseControl(ctx, p, err)
+	if err := a.control.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAccountRead); err != nil {
+		return accounts.Account{}, a.control.rec.refuseControl(ctx, p, err)
 	}
-	return s.accountsStore.Get(ctx, id)
+	return a.accountStore.Get(ctx, id)
 }
 
 // CreateAccount creates a new Account (#653). Authorized at
 // ControlAccountCreate; the create is audited (AccountAdminCreate) with the
 // Account's assigned id, name, kind, and initial role.
-func (s *Service) CreateAccount(ctx context.Context, p Principal, a accounts.Account) (accounts.Account, error) {
-	if s.accountsStore == nil {
+func (a *AccountAdmin) CreateAccount(ctx context.Context, p Principal, acct accounts.Account) (accounts.Account, error) {
+	if a.accountStore == nil {
 		return accounts.Account{}, ErrAccountsUnavailable
 	}
-	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAccountCreate); err != nil {
-		return accounts.Account{}, s.refuseControl(ctx, p, err)
+	if err := a.control.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAccountCreate); err != nil {
+		return accounts.Account{}, a.control.rec.refuseControl(ctx, p, err)
 	}
 
-	created, err := s.accountsStore.Create(ctx, a)
+	created, err := a.accountStore.Create(ctx, acct)
 	if err != nil {
 		return accounts.Account{}, err
 	}
 
-	if auditErr := s.audit.RecordAccountAdmin(ctx, p, AccountAdminEvent{
+	if auditErr := a.control.rec.audit.RecordAccountAdmin(ctx, p, AccountAdminEvent{
 		Kind:        AccountAdminCreate,
 		AccountID:   created.ID,
 		AccountName: created.Name,
@@ -137,15 +186,15 @@ func (s *Service) CreateAccount(ctx context.Context, p Principal, a accounts.Acc
 // possible only if another writer lands between that read and the UPDATE; the
 // caller may simply retry. A surface whose own decision depended on the role
 // it read uses SetAccountRoleFrom.
-func (s *Service) SetAccountRole(ctx context.Context, p Principal, id string, role accounts.Role) error {
-	if s.accountsStore == nil {
+func (a *AccountAdmin) SetAccountRole(ctx context.Context, p Principal, id string, role accounts.Role) error {
+	if a.accountStore == nil {
 		return ErrAccountsUnavailable
 	}
-	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAccountRole); err != nil {
-		return s.refuseControl(ctx, p, err)
+	if err := a.control.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAccountRole); err != nil {
+		return a.control.rec.refuseControl(ctx, p, err)
 	}
 	if SelfTargeted(p, id) {
-		return s.refuseControl(ctx, p, ErrSelfTargeted)
+		return a.control.rec.refuseControl(ctx, p, ErrSelfTargeted)
 	}
 
 	// Validate before the read so an invalid role is a 400 whether or not
@@ -153,11 +202,11 @@ func (s *Service) SetAccountRole(ctx context.Context, p Principal, id string, ro
 	if !role.Valid() {
 		return accounts.ErrInvalidRole
 	}
-	cur, err := s.accountsStore.Get(ctx, id)
+	cur, err := a.accountStore.Get(ctx, id)
 	if err != nil {
 		return err
 	}
-	return s.setAccountRole(ctx, p, id, cur.Role, role)
+	return a.setAccountRole(ctx, p, id, cur.Role, role)
 }
 
 // SetAccountRoleFrom changes id's role from `from` to `to`, refusing with
@@ -166,29 +215,29 @@ func (s *Service) SetAccountRole(ctx context.Context, p Principal, id string, ro
 // step-up classification): the decision and the write become one
 // compare-and-set in the store. Authorized at ControlAccountRole and
 // self-target-refused exactly as SetAccountRole is, in the same order.
-func (s *Service) SetAccountRoleFrom(ctx context.Context, p Principal, id string, from, to accounts.Role) error {
-	if s.accountsStore == nil {
+func (a *AccountAdmin) SetAccountRoleFrom(ctx context.Context, p Principal, id string, from, to accounts.Role) error {
+	if a.accountStore == nil {
 		return ErrAccountsUnavailable
 	}
-	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAccountRole); err != nil {
-		return s.refuseControl(ctx, p, err)
+	if err := a.control.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAccountRole); err != nil {
+		return a.control.rec.refuseControl(ctx, p, err)
 	}
 	if SelfTargeted(p, id) {
-		return s.refuseControl(ctx, p, ErrSelfTargeted)
+		return a.control.rec.refuseControl(ctx, p, ErrSelfTargeted)
 	}
-	return s.setAccountRole(ctx, p, id, from, to)
+	return a.setAccountRole(ctx, p, id, from, to)
 }
 
 // setAccountRole is the post-authorization body shared by SetAccountRole and
 // SetAccountRoleFrom. Store refusals (ErrRoleChanged, ErrLastAdmin,
 // ErrNotFound, ErrInvalidRole) return unwrapped and unaudited: nothing
 // changed, and they are store conflicts, not authorization refusals.
-func (s *Service) setAccountRole(ctx context.Context, p Principal, id string, from, to accounts.Role) error {
-	if err := s.accountsStore.SetRole(ctx, id, from, to); err != nil {
+func (a *AccountAdmin) setAccountRole(ctx context.Context, p Principal, id string, from, to accounts.Role) error {
+	if err := a.accountStore.SetRole(ctx, id, from, to); err != nil {
 		return err
 	}
 
-	if auditErr := s.audit.RecordAccountAdmin(ctx, p, AccountAdminEvent{
+	if auditErr := a.control.rec.audit.RecordAccountAdmin(ctx, p, AccountAdminEvent{
 		Kind:      AccountAdminRole,
 		AccountID: id,
 		Role:      string(to),
@@ -207,8 +256,8 @@ func (s *Service) setAccountRole(ctx context.Context, p Principal, id string, fr
 // mirrors the Control API's own rule that only self-DISABLE and self-
 // re-role are lockout risks. The change is audited (AccountAdminEnable/
 // AccountAdminDisable).
-func (s *Service) SetAccountEnabled(ctx context.Context, p Principal, id string, enabled bool) error {
-	if s.accountsStore == nil {
+func (a *AccountAdmin) SetAccountEnabled(ctx context.Context, p Principal, id string, enabled bool) error {
+	if a.accountStore == nil {
 		return ErrAccountsUnavailable
 	}
 	act := ControlAccountEnable
@@ -217,18 +266,18 @@ func (s *Service) SetAccountEnabled(ctx context.Context, p Principal, id string,
 		act = ControlAccountDisable
 		kind = AccountAdminDisable
 	}
-	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, act); err != nil {
-		return s.refuseControl(ctx, p, err)
+	if err := a.control.authz.AuthorizeControl(withoutAssertions(ctx), p, act); err != nil {
+		return a.control.rec.refuseControl(ctx, p, err)
 	}
 	if !enabled && SelfTargeted(p, id) {
-		return s.refuseControl(ctx, p, ErrSelfTargeted)
+		return a.control.rec.refuseControl(ctx, p, ErrSelfTargeted)
 	}
 
-	if err := s.accountsStore.SetEnabled(ctx, id, enabled); err != nil {
+	if err := a.accountStore.SetEnabled(ctx, id, enabled); err != nil {
 		return err
 	}
 
-	if auditErr := s.audit.RecordAccountAdmin(ctx, p, AccountAdminEvent{
+	if auditErr := a.control.rec.audit.RecordAccountAdmin(ctx, p, AccountAdminEvent{
 		Kind:      kind,
 		AccountID: id,
 		Asserted:  AssertionsFromContext(ctx),
@@ -240,14 +289,14 @@ func (s *Service) SetAccountEnabled(ctx context.Context, p Principal, id string,
 
 // APITokens lists accountID's API Tokens, redacted (#653). Authorized at
 // ControlAPITokenRead; records nothing on success.
-func (s *Service) APITokens(ctx context.Context, p Principal, accountID string) ([]accounts.APIToken, error) {
-	if s.apiTokens == nil {
+func (a *AccountAdmin) APITokens(ctx context.Context, p Principal, accountID string) ([]accounts.APIToken, error) {
+	if a.tokens == nil {
 		return nil, ErrAccountsUnavailable
 	}
-	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAPITokenRead); err != nil {
-		return nil, s.refuseControl(ctx, p, err)
+	if err := a.control.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAPITokenRead); err != nil {
+		return nil, a.control.rec.refuseControl(ctx, p, err)
 	}
-	return s.apiTokens.List(ctx, accountID)
+	return a.tokens.List(ctx, accountID)
 }
 
 // MintAPIToken issues a new credential for accountID (#653). Authorized at
@@ -256,20 +305,20 @@ func (s *Service) APITokens(ctx context.Context, p Principal, accountID string) 
 // no log line, no audit field, no error-string interpolation (#653's
 // acceptance criterion, "the mint audit row has no field a Plaintext could
 // occupy", enforced structurally by AccountAdminEvent's shape).
-func (s *Service) MintAPIToken(ctx context.Context, p Principal, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error) {
-	if s.apiTokens == nil {
+func (a *AccountAdmin) MintAPIToken(ctx context.Context, p Principal, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error) {
+	if a.tokens == nil {
 		return accounts.APIToken{}, accounts.Plaintext{}, ErrAccountsUnavailable
 	}
-	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAPITokenMint); err != nil {
-		return accounts.APIToken{}, accounts.Plaintext{}, s.refuseControl(ctx, p, err)
+	if err := a.control.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAPITokenMint); err != nil {
+		return accounts.APIToken{}, accounts.Plaintext{}, a.control.rec.refuseControl(ctx, p, err)
 	}
 
-	tok, plaintext, err := s.apiTokens.Mint(ctx, accountID, name, ttl)
+	tok, plaintext, err := a.tokens.Mint(ctx, accountID, name, ttl)
 	if err != nil {
 		return accounts.APIToken{}, accounts.Plaintext{}, err
 	}
 
-	if auditErr := s.audit.RecordAccountAdmin(ctx, p, AccountAdminEvent{
+	if auditErr := a.control.rec.audit.RecordAccountAdmin(ctx, p, AccountAdminEvent{
 		Kind:      AccountAdminTokenMint,
 		AccountID: accountID,
 		TokenID:   tok.ID,
@@ -284,19 +333,19 @@ func (s *Service) MintAPIToken(ctx context.Context, p Principal, accountID, name
 // Idempotent, mirroring accounts.TokenService.Revoke: revoking an
 // already-revoked token is a success, not an error, and is still recorded —
 // an operator racing themselves mid-incident should not see a failure.
-func (s *Service) RevokeAPIToken(ctx context.Context, p Principal, id string) error {
-	if s.apiTokens == nil {
+func (a *AccountAdmin) RevokeAPIToken(ctx context.Context, p Principal, id string) error {
+	if a.tokens == nil {
 		return ErrAccountsUnavailable
 	}
-	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAPITokenRevoke); err != nil {
-		return s.refuseControl(ctx, p, err)
+	if err := a.control.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlAPITokenRevoke); err != nil {
+		return a.control.rec.refuseControl(ctx, p, err)
 	}
 
-	if err := s.apiTokens.Revoke(ctx, id); err != nil {
+	if err := a.tokens.Revoke(ctx, id); err != nil {
 		return err
 	}
 
-	if auditErr := s.audit.RecordAccountAdmin(ctx, p, AccountAdminEvent{
+	if auditErr := a.control.rec.audit.RecordAccountAdmin(ctx, p, AccountAdminEvent{
 		Kind:     AccountAdminTokenRevoke,
 		TokenID:  id,
 		Asserted: AssertionsFromContext(ctx),

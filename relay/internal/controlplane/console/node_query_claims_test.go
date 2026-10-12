@@ -3,7 +3,7 @@ package console
 // node_query_claims_test.go carries the Query capability's two Console
 // claims: QRY-5's rendering half and QRY-14's absence.
 //
-// Both run on a REAL *capability.Service over a real registry, not on
+// Both run on a REAL *capability.ReadLane over a real registry, not on
 // fakeQueries. QRY-5 says "the capability read lane's Node detail, AS
 // RENDERED BY the Console", and fakeQueries.DescribeNode hand-copies the
 // lane's peer-count loop — so a panel test driven through it would prove the
@@ -25,13 +25,13 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
-// lanePanelDeps wires renderableDeps' Console onto a real *capability.Service
+// lanePanelDeps wires renderableDeps' Console onto a real *capability.ReadLane
 // reading reg, and returns both so a test can compare what the lane computed
 // against what the page rendered.
 //
 // Modelled on realLaneDeps, and deliberately separate from it: read_audit_test
 // .go's sweeps depend on that fixture's exact registry contents.
-func lanePanelDeps(t *testing.T, reg *registry.InMemory, vocab capability.TemplateVocabularySource) (Deps, *capability.Service) {
+func lanePanelDeps(t *testing.T, reg *registry.InMemory, vocab capability.TemplateVocabularySource) (Deps, *capability.ReadLane) {
 	t.Helper()
 	sink := auditsink.New(&recordingTrail{}, auditsink.WithClock(func() time.Time { return testNow }))
 	svc := newCapService(capSeams{
@@ -40,7 +40,7 @@ func lanePanelDeps(t *testing.T, reg *registry.InMemory, vocab capability.Templa
 		auditQ:    emptyAuditQuery{},
 		jobQ:      emptyJobQuery{},
 		nodeVocab: vocab,
-	})
+	}).ReadLane
 	d := renderableDeps()
 	d.Queries = svc
 	return d, svc
@@ -68,7 +68,7 @@ func fingerprintPanelOf(body string) string {
 // Policy fingerprint and template-set fingerprint — and says "not reported" /
 // "no templates installed" rather than a count when the Node reported neither.
 //
-// The numbers come from a real capability.Service, so this proves the lane's
+// The numbers come from a real capability.ReadLane, so this proves the lane's
 // arithmetic reaches the panel rather than a test double's copy of it.
 //
 // Residual: proves THIS screen, not every Console page. fingerprintPanelOf is

@@ -306,8 +306,8 @@ func TestCertExpiringWindow_IsOneValueAcrossSurfaces(t *testing.T) {
 		t.Fatalf("RecordEnrollment: %v", err)
 	}
 
-	// The Control API resolves through the SAME capability.Service Plan
-	// threads a Selector resolution through (service.go's stateEval).
+	// The Control API resolves through the SAME stateEval Plan threads a
+	// Selector resolution through (the ReadLane's, readlane_registry.go).
 	resp := controlAPIRequest(t, f.Client(), http.MethodPost, f.ControlBase+"/api/v1/operations",
 		f.Credential, map[string]any{"operation": "system.facts", "selector": "state:cert-expiring", "plan": true})
 	defer resp.Body.Close() //nolint:errcheck

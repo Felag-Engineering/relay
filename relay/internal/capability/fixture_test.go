@@ -8,11 +8,18 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
-// testSvc is the type every test in this package holds a built Service as.
-// Tests build one through build or buildRaw and never name Service's
-// constructor or fields directly, so the capability layer's shape can change
-// behind this one file.
-type testSvc = Service
+// testSvc is the type every test in this package holds a built capability layer
+// as: the Service and the leaf services it is composed with, embedded so a test
+// calls any of their methods unqualified. The four method sets are disjoint.
+// Tests build one through build or buildRaw and never name the constructors or
+// fields directly, so the capability layer's shape can change behind this one
+// file.
+type testSvc struct {
+	*Service
+	*ReadLane
+	*Control
+	*AccountAdmin
+}
 
 // seams is the set of collaborators a test hands to build or buildRaw. A zero
 // field means "not supplied": build leaves New's default in place, and
@@ -40,6 +47,9 @@ type seams struct {
 	jobQ       JobQuery
 	policyView PolicyViewSource
 	nodeVocab  TemplateVocabularySource
+
+	// certWindow is the state:cert-expiring window handed to the ReadLane.
+	certWindow time.Duration
 
 	accountsStore AccountStore
 	apiTokens     APITokenStore
@@ -69,21 +79,37 @@ func build(t *testing.T, s seams) *testSvc {
 	if s.intents != nil && !s.hasExecution() {
 		t.Fatalf("build: intents is set but no execution seam is")
 	}
-	var opts []Option
-	if s.authz != nil {
-		opts = append(opts, WithAuthorizer(s.authz))
+	if s.newID != nil && !s.hasExecution() {
+		t.Fatalf("build: newID is set but no execution seam is")
 	}
+	audit, authz, freeze := s.audit, s.authz, s.freeze
+	if audit == nil {
+		audit = noopAuditSink{}
+	}
+	if authz == nil {
+		authz = allowAllAuthorizer{}
+	}
+	if freeze == nil {
+		freeze = noopFreezeStore{}
+	}
+	rec := NewRecorder(audit, s.metrics, nil)
+	control := newControl(rec, authz, freeze)
+	var read *ReadLane
+	if s.auditQ != nil || s.jobQ != nil {
+		read = NewReadLane(rec, s.reg, s.auditQ, s.jobQ, s.policyView, s.nodeVocab, s.certWindow, s.now)
+	} else {
+		read = newReadLane(rec, s.reg, nil, nil, s.policyView, s.nodeVocab, s.certWindow, s.now)
+	}
+	var acct *AccountAdmin
+	if s.accountsStore != nil || s.apiTokens != nil {
+		acct = NewAccountAdmin(control, s.accountsStore, s.apiTokens)
+	} else {
+		acct = newAccountAdmin(control, nil, nil)
+	}
+
+	var opts []Option
 	if s.cap != nil {
 		opts = append(opts, WithCapChecker(s.cap))
-	}
-	if s.audit != nil {
-		opts = append(opts, WithAuditSink(s.audit))
-	}
-	if s.freeze != nil {
-		opts = append(opts, WithFreeze(s.freeze))
-	}
-	if s.metrics != nil {
-		opts = append(opts, WithMetrics(s.metrics))
 	}
 	if s.jobEvents != nil {
 		opts = append(opts, WithJobEvents(s.jobEvents))
@@ -99,18 +125,6 @@ func build(t *testing.T, s seams) *testSvc {
 	}
 	if s.approvalNotifier != nil {
 		opts = append(opts, WithApprovalNotifier(s.approvalNotifier))
-	}
-	if s.auditQ != nil || s.jobQ != nil {
-		opts = append(opts, WithQueries(s.auditQ, s.jobQ))
-	}
-	if s.policyView != nil {
-		opts = append(opts, WithPolicyView(s.policyView))
-	}
-	if s.nodeVocab != nil {
-		opts = append(opts, WithTemplateVocabulary(s.nodeVocab))
-	}
-	if s.accountsStore != nil || s.apiTokens != nil {
-		opts = append(opts, WithAccountAdmin(s.accountsStore, s.apiTokens))
 	}
 	if s.idem != nil {
 		opts = append(opts, WithIdempotency(s.idem))
@@ -129,7 +143,7 @@ func build(t *testing.T, s seams) *testSvc {
 		}
 		opts = append(opts, WithExecution(s.jobsRepo, s.tasksRepo, s.conduit, eo...))
 	}
-	return New(s.reg, opts...)
+	return &testSvc{New(control, read, opts...), read, control, acct}
 }
 
 // buildRaw is a struct literal: no defaults and no construction guards, for
@@ -139,14 +153,19 @@ func buildRaw(t *testing.T, s seams) *testSvc {
 	if s.hasExecution() || s.intents != nil || s.newID != nil {
 		t.Fatalf("buildRaw: a struct literal has no Job engine; use build")
 	}
-	return &Service{
-		reg:              s.reg,
-		authz:            s.authz,
+	rec := &Recorder{audit: s.audit, metrics: s.metrics}
+	control := &Control{rec: rec, authz: s.authz, freeze: s.freeze}
+	read := &ReadLane{
+		rec: rec, reg: s.reg, auditQ: s.auditQ, jobQ: s.jobQ,
+		policyView: s.policyView, nodeVocab: s.nodeVocab,
+		certExpiringWithin: s.certWindow, now: s.now,
+	}
+	acct := &AccountAdmin{control: control, accountStore: s.accountsStore, tokens: s.apiTokens}
+	svc := &Service{
+		control:          control,
+		read:             read,
 		cap:              s.cap,
 		disp:             s.disp,
-		audit:            s.audit,
-		freeze:           s.freeze,
-		metrics:          s.metrics,
 		jobEvents:        s.jobEvents,
 		gate:             s.gate,
 		approvals:        s.approvals,
@@ -154,13 +173,8 @@ func buildRaw(t *testing.T, s seams) *testSvc {
 		grants:           s.grants,
 		mcpTasks:         s.mcpTasks,
 		approvalNotifier: s.approvalNotifier,
-		auditQ:           s.auditQ,
-		jobQ:             s.jobQ,
-		policyView:       s.policyView,
-		nodeVocab:        s.nodeVocab,
-		accountsStore:    s.accountsStore,
-		apiTokens:        s.apiTokens,
 		idem:             s.idem,
 		now:              s.now,
 	}
+	return &testSvc{svc, read, control, acct}
 }

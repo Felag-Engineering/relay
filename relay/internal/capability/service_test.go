@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -514,7 +515,7 @@ func TestRunThreadsPrincipalToAudit(t *testing.T) {
 
 func TestRunHappyPathDefaultsToNoopDispatcher(t *testing.T) {
 	reg := seedOneNode(t)
-	svc := New(reg)
+	svc := build(t, seams{reg: reg})
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{})
@@ -568,32 +569,91 @@ func TestRunAuditsPartialResultsOnDispatchError(t *testing.T) {
 	}
 }
 
-// TestWithOptionsPanicOnNilSeam asserts that WithAuthorizer, WithCapChecker,
-// and WithAuditSink all panic on a nil seam at construction, matching
+// TestConstructorsPanicOnNilSeam asserts that every capability constructor and
+// option panics on a nil required seam at construction, matching
 // WithExecution's own nil guard (execution.go): a nil seam here is a
 // composition-root wiring bug, not a recoverable runtime condition, so every
 // seam surface must fail identically rather than let a nil slip through to
-// panic later (or not at all) inside Run.
-func TestWithOptionsPanicOnNilSeam(t *testing.T) {
+// panic later (or not at all) inside Run. Each row asserts the panic names the
+// constructor and the argument, so a runtime nil dereference — which is not a
+// string — cannot satisfy it. The collaborators are built outside the recover
+// scope, over one shared Recorder.
+func TestConstructorsPanicOnNilSeam(t *testing.T) {
+	rec := NewRecorder(&spyAuditSink{}, nil, nil)
+	reg := registry.NewInMemory()
+	aq := &spyAuditQuery{}
+	jq := &spyJobQuery{}
+	authz := &permissiveControlAuthorizer{}
+	freeze := &fakeFreezeStore{}
+	store := &fakeAccountStore{}
+	tokens := &fakeAPITokenStore{}
+	ctl := NewControl(rec, authz, freeze)
+	read := NewReadLane(rec, reg, aq, jq, nil, nil, 0, nil)
+
 	tests := []struct {
 		name string
 		call func()
+		want string
 	}{
-		{"WithAuthorizer", func() { WithAuthorizer(nil) }},
-		{"WithCapChecker", func() { WithCapChecker(nil) }},
-		{"WithAuditSink", func() { WithAuditSink(nil) }},
+		{"WithCapChecker", func() { WithCapChecker(nil) }, "capability: WithCapChecker: capChecker"},
+		{"NewRecorder", func() { NewRecorder(nil, nil, nil) }, "capability: NewRecorder: auditSink"},
+		{"NewControl/recorder", func() { NewControl(nil, authz, freeze) }, "NewControl: recorder"},
+		{"NewControl/authorizer", func() { NewControl(rec, nil, freeze) }, "NewControl: authorizer"},
+		{"NewControl/freezeStore", func() { NewControl(rec, authz, nil) }, "NewControl: freezeStore"},
+		{"NewAccountAdmin/control", func() { NewAccountAdmin(nil, store, tokens) }, "NewAccountAdmin: control"},
+		{"NewAccountAdmin/account store", func() { NewAccountAdmin(ctl, nil, tokens) }, "NewAccountAdmin: account store"},
+		{"NewAccountAdmin/API token store", func() { NewAccountAdmin(ctl, store, nil) }, "NewAccountAdmin: API token store"},
+		{"NewReadLane/recorder", func() { NewReadLane(nil, reg, aq, jq, nil, nil, 0, nil) }, "NewReadLane: recorder"},
+		{"NewReadLane/registry", func() { NewReadLane(rec, nil, aq, jq, nil, nil, 0, nil) }, "NewReadLane: registry"},
+		{"NewReadLane/audit query seam", func() { NewReadLane(rec, reg, nil, jq, nil, nil, 0, nil) }, "NewReadLane: audit query seam"},
+		{"NewReadLane/job query seam", func() { NewReadLane(rec, reg, aq, nil, nil, nil, 0, nil) }, "NewReadLane: job query seam"},
+		{"NewReadLane/certExpiringWithin", func() { NewReadLane(rec, reg, aq, jq, nil, nil, -time.Second, nil) }, "NewReadLane: certExpiringWithin"},
+		{"New/control", func() { New(nil, read) }, "capability: New: control"},
+		{"New/read lane", func() { New(ctl, nil) }, "capability: New: read lane"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			defer func() {
-				if recover() == nil {
+				r := recover()
+				if r == nil {
 					t.Fatalf("%s(nil) should panic", tt.name)
+				}
+				if msg, _ := r.(string); !strings.Contains(msg, tt.want) {
+					t.Fatalf("%s panic = %v, want a string containing %q", tt.name, r, tt.want)
 				}
 			}()
 			tt.call()
 		})
 	}
+}
+
+// TestNew_RefusesReadLaneOverADifferentRecorder: the Control and the read lane
+// must share one Recorder, or the layer would hold two audit trails.
+func TestNew_RefusesReadLaneOverADifferentRecorder(t *testing.T) {
+	spy := &spyAuditSink{}
+	recA := NewRecorder(spy, nil, nil)
+	recB := NewRecorder(spy, nil, nil)
+	reg := registry.NewInMemory()
+	ctl := NewControl(recA, &spyAuthorizer{}, &fakeFreezeStore{})
+	other := newReadLane(recB, reg, nil, nil, nil, nil, 0, nil)
+	same := newReadLane(recA, reg, nil, nil, nil, nil, 0, nil)
+
+	if New(ctl, same) == nil {
+		t.Fatal("New over a read lane sharing the Control's Recorder returned nil")
+	}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("New over a read lane with a different Recorder should panic")
+		}
+		msg, _ := r.(string)
+		if !strings.Contains(msg, "capability: New:") || !strings.Contains(msg, "share one Recorder") {
+			t.Fatalf("panic = %v, want New's shared-Recorder refusal", r)
+		}
+	}()
+	New(ctl, other)
 }
 
 func TestRunJoinsDispatchAndAuditErrors(t *testing.T) {
