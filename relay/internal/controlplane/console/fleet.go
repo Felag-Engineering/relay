@@ -1314,23 +1314,9 @@ func stateFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 // re-keying is needed here — only routing the term through nodestate.Facts
 // instead of concatenating it.
 func daemonVersionFacet(nodes []fleetNode, link linkContext) (facet, bool) {
-	tally := newFactTally()
-	for _, n := range nodes {
-		if n.DaemonVersion == "" {
-			// Counted, not skipped, so the facet sums to the group's Node count.
-			tally.addSentinel(factSentinelUnreported)
-			continue
-		}
-		tally.addValue(n.DaemonVersion, n.versionTerm)
-	}
-	return tally.facet("Daemon version", link, func(k string) (string, string, bool) {
-		if k == factSentinelUnreported {
-			// Absence is not a label — there is nothing to target.
-			return "not reported", "", false
-		}
-		term := tally.terms[k]
-		return strings.TrimPrefix(k, facetValuePrefix), term, term != ""
-	})
+	return reportedValueFacet("Daemon version", nodes, link,
+		func(n fleetNode) (value, term string) { return n.DaemonVersion, n.versionTerm },
+		func(full string) string { return full })
 }
 
 // policyFingerprintFacet builds the Policy fingerprint facet; false when no Node contributes a value.
@@ -1346,20 +1332,33 @@ func daemonVersionFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 // with no recorded fingerprint; real values are keyed through facetValueKey so
 // a Node self-reporting the literal "not reported" never joins the sentinel row.
 func policyFingerprintFacet(nodes []fleetNode, link linkContext) (facet, bool) {
+	return reportedValueFacet("Policy fingerprint", nodes, link,
+		func(n fleetNode) (value, term string) { return n.PolicyFingerprint, n.policyTerm },
+		shortHash)
+}
+
+// reportedValueFacet builds a self-reported value facet with one sentinel,
+// "not reported", for a Node whose field is empty (Daemon version, Policy
+// fingerprint). field picks a Node's full value and the Selector term recorded
+// for it; display turns a full value into the row's label.
+func reportedValueFacet(title string, nodes []fleetNode, link linkContext, field func(fleetNode) (value, term string), display func(full string) string) (facet, bool) {
 	tally := newFactTally()
 	for _, n := range nodes {
-		if n.PolicyFingerprint == "" {
+		value, term := field(n)
+		if value == "" {
+			// Counted, not skipped, so the facet sums to the group's Node count.
 			tally.addSentinel(factSentinelUnreported)
 			continue
 		}
-		tally.addValue(n.PolicyFingerprint, n.policyTerm)
+		tally.addValue(value, term)
 	}
-	return tally.facet("Policy fingerprint", link, func(k string) (string, string, bool) {
+	return tally.facet(title, link, func(k string) (string, string, bool) {
 		if k == factSentinelUnreported {
+			// Absence is not a label — there is nothing to target.
 			return "not reported", "", false
 		}
 		term := tally.terms[k]
-		return shortHash(strings.TrimPrefix(k, facetValuePrefix)), term, term != ""
+		return display(strings.TrimPrefix(k, facetValuePrefix)), term, term != ""
 	})
 }
 
