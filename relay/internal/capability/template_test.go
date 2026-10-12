@@ -86,7 +86,7 @@ func (m *recordingMetrics) IncRefusal(k RefusalKind) {
 }
 
 type templateFixture struct {
-	svc     *Service
+	svc     *testSvc
 	audit   *spyAuditSink
 	authz   *capturingAuthorizer
 	tasks   jobs.TaskRepository
@@ -95,22 +95,22 @@ type templateFixture struct {
 
 // newTemplateTestService wires a real jobEngine and a real SQLite store
 // behind a Service with the given vocabulary source and cap checker.
-func newTemplateTestService(t *testing.T, reg registry.Repository, conduit *fakeConduit, vocab TemplateVocabularySource, capc CapChecker) (*Service, *templateFixture) {
+func newTemplateTestService(t *testing.T, reg registry.Repository, conduit *fakeConduit, vocab TemplateVocabularySource, capc CapChecker) (*testSvc, *templateFixture) {
 	t.Helper()
 	jobsRepo, tasksRepo := testEngineStore(t)
 	f := &templateFixture{audit: &spyAuditSink{}, authz: &capturingAuthorizer{}, tasks: tasksRepo, metrics: &recordingMetrics{}}
-	opts := []Option{
-		WithAuthorizer(f.authz),
-		WithCapChecker(capc),
-		WithAuditSink(f.audit),
-		WithFreeze(&fakeFreezeStore{}),
-		WithMetrics(f.metrics),
-		testExecution(jobsRepo, tasksRepo, conduit),
-	}
-	if vocab != nil {
-		opts = append(opts, WithTemplateVocabulary(vocab))
-	}
-	f.svc = New(reg, opts...)
+	f.svc = build(t, seams{
+		reg:       reg,
+		authz:     f.authz,
+		cap:       capc,
+		audit:     f.audit,
+		freeze:    &fakeFreezeStore{},
+		metrics:   f.metrics,
+		jobsRepo:  jobsRepo,
+		tasksRepo: tasksRepo,
+		conduit:   conduit,
+		nodeVocab: vocab,
+	})
 	return f.svc, f
 }
 
@@ -131,7 +131,7 @@ func templateAction(name string, args map[string]string) jobs.Action {
 // --- resolveAction: the rules, one at a time ------------------------------
 
 func TestResolveAction_NativeAndRawExecTakeTheirFixedClass(t *testing.T) {
-	s := &Service{nodeVocab: staticVocab{}}
+	s := buildRaw(t, seams{nodeVocab: staticVocab{}})
 	nodes := []registry.Node{{NodeID: "node-0"}, {NodeID: "node-1"}}
 	tests := []struct {
 		act  jobs.Action
@@ -184,7 +184,7 @@ func TestResolveAction_ClassIsMostRestrictiveOverReportingNodes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := &Service{nodeVocab: tt.vocab}
+			s := buildRaw(t, seams{nodeVocab: tt.vocab})
 			ra := s.resolveAction(templateAction("svc.status", nil), nodes)
 			if ra.refusal != nil {
 				t.Fatalf("refusal = %v, want none", ra.refusal)
@@ -197,12 +197,12 @@ func TestResolveAction_ClassIsMostRestrictiveOverReportingNodes(t *testing.T) {
 }
 
 func TestResolveAction_ExcludesNodesThatDoNotReportOrHaveNoReport(t *testing.T) {
-	s := &Service{nodeVocab: staticVocab{
+	s := buildRaw(t, seams{nodeVocab: staticVocab{
 		"has":   {Templates: []nodevocab.Template{readTemplate("svc.status")}},
 		"lacks": {Templates: []nodevocab.Template{readTemplate("other")}},
 		"empty": {},
 		// "silent" is deliberately absent: no report at all.
-	}}
+	}})
 	nodes := []registry.Node{{NodeID: "has"}, {NodeID: "lacks"}, {NodeID: "empty"}, {NodeID: "silent"}}
 
 	ra := s.resolveAction(templateAction("svc.status", nil), nodes)
@@ -227,7 +227,7 @@ func TestResolveAction_ExcludesNodesThatDoNotReportOrHaveNoReport(t *testing.T) 
 }
 
 func TestResolveAction_NoReportingNodeIsAnUnknownOperation(t *testing.T) {
-	s := &Service{nodeVocab: staticVocab{"a": {}}}
+	s := buildRaw(t, seams{nodeVocab: staticVocab{"a": {}}})
 	ra := s.resolveAction(templateAction("nope.notreal", nil), []registry.Node{{NodeID: "a"}, {NodeID: "b"}})
 	var unk *UnknownOperationError
 	if !errors.As(ra.refusal, &unk) || ra.refusalKind != RefusalUnknownOperation {
@@ -242,7 +242,7 @@ func TestResolveAction_NoReportingNodeIsAnUnknownOperation(t *testing.T) {
 }
 
 func TestResolveAction_NoVocabularySourceDispatchesNothingBlind(t *testing.T) {
-	s := &Service{}
+	s := buildRaw(t, seams{})
 	ra := s.resolveAction(templateAction("svc.status", nil), []registry.Node{{NodeID: "a"}})
 	var unk *UnknownOperationError
 	if !errors.As(ra.refusal, &unk) || len(ra.nodes) != 0 {
@@ -254,7 +254,7 @@ func TestResolveAction_NoVocabularySourceDispatchesNothingBlind(t *testing.T) {
 // choose a Template's class, because the capability layer refuses one that
 // arrives already set rather than trusting it.
 func TestResolveAction_RefusesATemplateActionThatArrivesWithAClass(t *testing.T) {
-	s := &Service{nodeVocab: staticVocab{"a": {Templates: []nodevocab.Template{mutateTemplate("svc.restart")}}}}
+	s := buildRaw(t, seams{nodeVocab: staticVocab{"a": {Templates: []nodevocab.Template{mutateTemplate("svc.restart")}}}})
 	for _, preset := range []jobs.RiskClass{jobs.RiskClassRead, jobs.RiskClassMutate} {
 		act := templateAction("svc.restart", nil)
 		act.RiskClass = preset
@@ -267,10 +267,10 @@ func TestResolveAction_RefusesATemplateActionThatArrivesWithAClass(t *testing.T)
 }
 
 func TestResolveAction_ArgumentNamesAreCheckedAgainstTheSlots(t *testing.T) {
-	s := &Service{nodeVocab: staticVocab{
+	s := buildRaw(t, seams{nodeVocab: staticVocab{
 		"a": {Templates: []nodevocab.Template{readTemplate("log.tail", "unit")}},
 		"b": {Templates: []nodevocab.Template{readTemplate("log.tail", "unit")}},
-	}}
+	}})
 	nodes := []registry.Node{{NodeID: "a"}, {NodeID: "b"}}
 	tests := []struct {
 		name    string
@@ -299,10 +299,10 @@ func TestResolveAction_ArgumentNamesAreCheckedAgainstTheSlots(t *testing.T) {
 }
 
 func TestResolveAction_NodesThatDisagreeAboutSlotsRefuseTheCall(t *testing.T) {
-	s := &Service{nodeVocab: staticVocab{
+	s := buildRaw(t, seams{nodeVocab: staticVocab{
 		"a": {Templates: []nodevocab.Template{readTemplate("log.tail", "unit")}},
 		"b": {Templates: []nodevocab.Template{readTemplate("log.tail", "unit", "lines")}},
-	}}
+	}})
 	ra := s.resolveAction(templateAction("log.tail", map[string]string{"unit": "nginx"}), []registry.Node{{NodeID: "a"}, {NodeID: "b"}})
 	var mal *MalformedCallError
 	if !errors.As(ra.refusal, &mal) {
@@ -503,15 +503,15 @@ func TestPreflightTemplateExclusionNeverDecidesAVerdict(t *testing.T) {
 	pv := &recordingPolicyView{snap: policyview.Snapshot{PolicyFingerprint: "cache-says-nothing-is-allowed"}}
 
 	jobsRepo, tasksRepo := testEngineStore(t)
-	svc := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		testExecution(jobsRepo, tasksRepo, conduit),
-		WithPolicyView(pv),
-		WithTemplateVocabulary(vocab),
-	)
+	svc := build(t, seams{reg: reg,
+		authz:    &spyAuthorizer{},
+		cap:      &spyCapChecker{},
+		audit:    &spyAuditSink{},
+		freeze:   &fakeFreezeStore{},
+		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit,
+		policyView: pv,
+		nodeVocab:  vocab,
+	})
 
 	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("svc.status", nil))
 	if err != nil {
@@ -607,10 +607,10 @@ func TestRun_TemplateTasksRecordTheirOwnNodesClass(t *testing.T) {
 // report, so a Template whose class changed across the restart cannot be
 // dispatched under the old one.
 func TestResolveAction_StaleReportCountsAsNotReported(t *testing.T) {
-	s := &Service{nodeVocab: staticVocab{
+	s := buildRaw(t, seams{nodeVocab: staticVocab{
 		"fresh": {Fingerprint: "fp-new", Templates: []nodevocab.Template{readTemplate("svc.status")}},
 		"stale": {Fingerprint: "fp-old", Templates: []nodevocab.Template{readTemplate("svc.status")}},
-	}}
+	}})
 	nodes := []registry.Node{
 		{NodeID: "fresh", TemplateSetFingerprint: "fp-new"},
 		{NodeID: "stale", TemplateSetFingerprint: "fp-new"},
@@ -651,14 +651,14 @@ func TestRun_ExcludedTasksAreResolvedBeforeAnyDispatch(t *testing.T) {
 	var log []string
 	jobsRepo, tasksRepo := testEngineStore(t)
 	conduit := &orderCheckingConduit{fakeConduit: connectedConduit(&log, "node-0", "node-1"), t: t, tasks: tasksRepo, excluded: "node-1"}
-	svc := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		testExecution(jobsRepo, tasksRepo, conduit),
-		WithTemplateVocabulary(staticVocab{"node-0": {Templates: []nodevocab.Template{readTemplate("svc.status")}}}),
-	)
+	svc := build(t, seams{reg: reg,
+		authz:    &spyAuthorizer{},
+		cap:      &spyCapChecker{},
+		audit:    &spyAuditSink{},
+		freeze:   &fakeFreezeStore{},
+		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit,
+		nodeVocab: staticVocab{"node-0": {Templates: []nodevocab.Template{readTemplate("svc.status")}}},
+	})
 	if _, err := svc.Run(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("svc.status", nil)); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -668,7 +668,7 @@ func TestRun_ExcludedTasksAreResolvedBeforeAnyDispatch(t *testing.T) {
 }
 
 // templateApprovalFixture is approvalFixture with a Template vocabulary wired.
-func templateApprovalFixture(t *testing.T, nodes []string, vocab TemplateVocabularySource, gate ApprovalGate, store ApprovalStore) (*Service, *spyDispatcher) {
+func templateApprovalFixture(t *testing.T, nodes []string, vocab TemplateVocabularySource, gate ApprovalGate, store ApprovalStore) (*testSvc, *spyDispatcher) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, id := range nodes {
@@ -677,15 +677,15 @@ func templateApprovalFixture(t *testing.T, nodes []string, vocab TemplateVocabul
 		}
 	}
 	disp := &spyDispatcher{jobID: "job-1"}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
-		WithTemplateVocabulary(vocab),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  &spyAuditSink{},
+		freeze: &fakeFreezeStore{},
+		gate:   gate, approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
+		nodeVocab: vocab,
+		now:       func() time.Time { return apNow },
+	})
 	s.disp = disp
 	return s, disp
 }
@@ -884,15 +884,15 @@ func TestRun_TemplateJobEventsCountExcludedNodes(t *testing.T) {
 	var log []string
 	events := &spyJobEventSink{}
 	jobsRepo, tasksRepo := testEngineStore(t)
-	svc := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		testExecution(jobsRepo, tasksRepo, connectedConduit(&log, "node-0", "node-1", "node-2")),
-		WithJobEvents(events),
-		WithTemplateVocabulary(staticVocab{"node-0": {Templates: []nodevocab.Template{readTemplate("svc.status")}}}),
-	)
+	svc := build(t, seams{reg: reg,
+		authz:    &spyAuthorizer{},
+		cap:      &spyCapChecker{},
+		audit:    &spyAuditSink{},
+		freeze:   &fakeFreezeStore{},
+		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: connectedConduit(&log, "node-0", "node-1", "node-2"),
+		jobEvents: events,
+		nodeVocab: staticVocab{"node-0": {Templates: []nodevocab.Template{readTemplate("svc.status")}}},
+	})
 	if _, err := svc.Run(context.Background(), Principal{Account: "alice"}, webSelector(), templateAction("svc.status", nil)); err != nil {
 		t.Fatalf("Run: %v", err)
 	}

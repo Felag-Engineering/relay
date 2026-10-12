@@ -35,7 +35,7 @@ func (f fakeTemplateVocab) Get(nodeID string) (nodevocab.Snapshot, bool) {
 // WithQueries is supplied too, not because these methods use it, but because
 // the production Service always has it and a fixture that quietly differs from
 // production is a fixture that proves less than it looks like it does.
-func registryLaneFixture(t *testing.T, nodes ...registry.Report) (*Service, *spyAuditSink) {
+func registryLaneFixture(t *testing.T, nodes ...registry.Report) (*testSvc, *spyAuditSink) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, r := range nodes {
@@ -44,13 +44,13 @@ func registryLaneFixture(t *testing.T, nodes ...registry.Report) (*Service, *spy
 		}
 	}
 	sink := &spyAuditSink{}
-	return New(reg, WithQueries(&spyAuditQuery{}, &spyJobQuery{}), WithAuditSink(sink)), sink
+	return build(t, seams{reg: reg, auditQ: &spyAuditQuery{}, jobQ: &spyJobQuery{}, audit: sink}), sink
 }
 
 // registryLaneFixtureWithViews is registryLaneFixture, additionally wired
 // with a PolicyViewSource and a TemplateVocabularySource — the fixture for
 // DescribeNode/ListOperations tests that need something to report.
-func registryLaneFixtureWithViews(t *testing.T, policy PolicyViewSource, vocab TemplateVocabularySource, nodes ...registry.Report) (*Service, *spyAuditSink) {
+func registryLaneFixtureWithViews(t *testing.T, policy PolicyViewSource, vocab TemplateVocabularySource, nodes ...registry.Report) (*testSvc, *spyAuditSink) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, r := range nodes {
@@ -59,12 +59,12 @@ func registryLaneFixtureWithViews(t *testing.T, policy PolicyViewSource, vocab T
 		}
 	}
 	sink := &spyAuditSink{}
-	return New(reg,
-		WithQueries(&spyAuditQuery{}, &spyJobQuery{}),
-		WithAuditSink(sink),
-		WithPolicyView(policy),
-		WithTemplateVocabulary(vocab),
-	), sink
+	return build(t, seams{reg: reg,
+		auditQ: &spyAuditQuery{}, jobQ: &spyJobQuery{},
+		audit:      sink,
+		policyView: policy,
+		nodeVocab:  vocab,
+	}), sink
 }
 
 // TestListNodes_RecordsTheEnumeration is QRY-16 (also ADR-0025 decision 1)
@@ -349,7 +349,7 @@ func TestReadLane_TrailHalfAlsoWrapsErrReadUnaudited(t *testing.T) {
 // Service that cannot record must not answer a read, whichever way it was
 // built.
 func TestRegistryLane_RefusesWithoutARealAuditSink(t *testing.T) {
-	svc := New(registry.NewInMemory())
+	svc := build(t, seams{reg: registry.NewInMemory()})
 
 	if _, err := svc.ListNodes(context.Background(), testPrincipal, ""); !errors.Is(err, ErrReadUnaudited) {
 		t.Errorf("ListNodes on a Service with the no-op sink = %v, want ErrReadUnaudited — it "+

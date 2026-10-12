@@ -514,7 +514,7 @@ func TestMCP_CancelJob_InFlightAndPendingSibling(t *testing.T) {
 	// the default bound both would be in flight. Concurrent in-flight cancel is
 	// proven at the capability seam (TestJobEngine_NoTaskDispatchedAfterCancelRecorded,
 	// TestJobEngine_CancelRaceStress) and end-to-end in the fleet e2e cancel test.
-	ts := newTestServerWithConfig(t, 0, 0, "", capability.WithExecDispatchConcurrency(1))
+	ts := newTestServerWithConcurrency(t, "", 0, 0, "", 1)
 	ts.conduit.connect(ts.nodeA, ts.nodeB)
 	ts.conduit.blockNode = ts.nodeA
 	ts.conduit.ready = make(chan struct{})

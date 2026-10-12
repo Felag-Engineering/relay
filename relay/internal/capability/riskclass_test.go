@@ -19,7 +19,7 @@ func twoNodes() []registry.Node {
 }
 
 func TestResolveAction_RefusesANativeActionThatArrivesWithAClass(t *testing.T) {
-	s := &Service{nodeVocab: staticVocab{}}
+	s := buildRaw(t, seams{nodeVocab: staticVocab{}})
 	for _, preset := range []jobs.RiskClass{jobs.RiskClassRead, jobs.RiskClassMutate} {
 		act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart",
 			OperationArgs: map[string]string{"unit": "nginx"}, RiskClass: preset}
@@ -41,7 +41,7 @@ func TestResolveAction_RefusesANativeActionThatArrivesWithAClass(t *testing.T) {
 }
 
 func TestResolveAction_NativeWithNoClassResolvesToItsOpvocabClass(t *testing.T) {
-	s := &Service{nodeVocab: staticVocab{}}
+	s := buildRaw(t, seams{nodeVocab: staticVocab{}})
 
 	restart := s.resolveAction(jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart",
 		OperationArgs: map[string]string{"unit": "nginx"}}, twoNodes())
@@ -73,7 +73,7 @@ func TestResolveAction_NativeWithNoClassResolvesToItsOpvocabClass(t *testing.T) 
 }
 
 func TestResolveAction_RawExecIsMutateWhateverTheAdapterPassed(t *testing.T) {
-	s := &Service{nodeVocab: staticVocab{}}
+	s := buildRaw(t, seams{nodeVocab: staticVocab{}})
 	for _, preset := range []jobs.RiskClass{jobs.RiskClassUnspecified, jobs.RiskClassRead, jobs.RiskClassMutate} {
 		act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/cat", "/etc/hostname"}, RiskClass: preset}
 		ra := s.resolveAction(act, twoNodes())
@@ -95,7 +95,7 @@ func TestRun_NativePresetClassIsRefusedAndAuditedBeforeAnyJob(t *testing.T) {
 	capChecker := &spyCapChecker{}
 	disp := &spyDispatcher{}
 	audit := &spyAuditSink{}
-	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}, metrics: noopMetricsSink{}}
+	svc := buildRaw(t, seams{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}, metrics: noopMetricsSink{}})
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart",
@@ -123,8 +123,8 @@ func TestRun_NativePresetClassIsRefusedAndAuditedBeforeAnyJob(t *testing.T) {
 func TestRun_RawExecTakesTheMutateCap(t *testing.T) {
 	reg := seedOneNode(t)
 	capChecker := &spyCapChecker{}
-	svc := &Service{reg: reg, authz: &spyAuthorizer{}, cap: capChecker, disp: &spyDispatcher{jobID: "job-1"},
-		audit: &spyAuditSink{}, freeze: noopFreezeStore{}, metrics: noopMetricsSink{}}
+	svc := buildRaw(t, seams{reg: reg, authz: &spyAuthorizer{}, cap: capChecker, disp: &spyDispatcher{jobID: "job-1"},
+		audit: &spyAuditSink{}, freeze: noopFreezeStore{}, metrics: noopMetricsSink{}})
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 	act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/cat", "/etc/hostname"}}
@@ -147,13 +147,13 @@ func TestPlan_NativeClassIsDerived(t *testing.T) {
 	}
 	jobsRepo, tasksRepo := testEngineStore(t)
 	capChecker := &spyCapChecker{}
-	svc := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(capChecker),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		testExecution(jobsRepo, tasksRepo, conduit),
-	)
+	svc := build(t, seams{reg: reg,
+		authz:    &spyAuthorizer{},
+		cap:      capChecker,
+		audit:    &spyAuditSink{},
+		freeze:   &fakeFreezeStore{},
+		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit,
+	})
 
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	if _, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), act); err != nil {

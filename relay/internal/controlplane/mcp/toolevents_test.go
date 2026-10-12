@@ -73,13 +73,17 @@ func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolC
 	t.Cleanup(func() { st.Close() }) //nolint:errcheck
 
 	conduit := newFakeConduit()
-	capSvc := capability.New(reg,
-		capability.WithExecution(st.Jobs(), st.Tasks(), conduit, capability.WithExecNewID(deterministicIDs())),
-		capability.WithAuthorizer(testAuthorizer{}),
-		capability.WithCapChecker(capability.NewBlastCap(0, 0)),
-		capability.WithAuditSink(auditsink.New(st.Audit())),
-		capability.WithFreeze(st.Freeze()),
-	)
+	capSvc := newCapService(t, capSeams{
+		reg:       reg,
+		authz:     testAuthorizer{},
+		cap:       capability.NewBlastCap(0, 0),
+		audit:     auditsink.New(st.Audit()),
+		freeze:    st.Freeze(),
+		jobsRepo:  st.Jobs(),
+		tasksRepo: st.Tasks(),
+		conduit:   conduit,
+		newID:     deterministicIDs(),
+	})
 	drainOnCleanup(t, capSvc)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 

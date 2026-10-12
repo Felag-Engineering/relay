@@ -33,7 +33,7 @@ func TestAssertions_ContextRoundTrip(t *testing.T) {
 func TestAssertionsAreNotAnAuthorizationInput(t *testing.T) {
 	spy := &assertionSpyAuthorizer{}
 	reg := registry.NewInMemory()
-	svc := New(reg, WithAuthorizer(spy))
+	svc := build(t, seams{reg: reg, authz: spy})
 
 	ctx := WithAssertions(context.Background(), Assertions{
 		OnBehalfOf:  "ops-team",

@@ -804,13 +804,13 @@ func TestServiceRunDispatchPanicReachesAuditAndResults(t *testing.T) {
 		fc.results[n] = jobs.Result{Outcome: jobs.OutcomeSuccess}
 	}
 	audit := &spyAuditSink{}
-	svc := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit),
-		WithFreeze(&fakeFreezeStore{}),
-		testExecution(st.Jobs(), st.Tasks(), &panicConduit{fakeConduit: fc, dispatchPanic: "node-a"}),
-	)
+	svc := build(t, seams{reg: reg,
+		authz:    &spyAuthorizer{},
+		cap:      &spyCapChecker{},
+		audit:    audit,
+		freeze:   &fakeFreezeStore{},
+		jobsRepo: st.Jobs(), tasksRepo: st.Tasks(), conduit: &panicConduit{fakeConduit: fc, dispatchPanic: "node-a"},
+	})
 
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, Selector{}, act)
@@ -974,13 +974,13 @@ func TestEngineMixedFleetVersionGate(t *testing.T) {
 	audit := &spyAuditSink{}
 	freezeStore := &fakeFreezeStore{}
 
-	svc := New(reg,
-		WithAuthorizer(authz),
-		WithCapChecker(capChecker),
-		WithAuditSink(audit),
-		WithFreeze(freezeStore),
-		testExecution(st.Jobs(), st.Tasks(), conduit),
-	)
+	svc := build(t, seams{reg: reg,
+		authz:    authz,
+		cap:      capChecker,
+		audit:    audit,
+		freeze:   freezeStore,
+		jobsRepo: st.Jobs(), tasksRepo: st.Tasks(), conduit: conduit,
+	})
 
 	sel := Selector{} // Selector{} matches every Node (see selector.go)
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
@@ -1195,13 +1195,13 @@ func TestRun_RequesterIsOnTheJobWhileEveryTaskIsPending(t *testing.T) {
 		}
 	}}
 
-	svc := New(reg,
-		WithAuthorizer(authz),
-		WithCapChecker(capChecker),
-		WithAuditSink(auditSink),
-		WithFreeze(freezeStore),
-		testExecution(st.Jobs(), st.Tasks(), conduit, WithExecNewID(sequentialIDs("id-"))),
-	)
+	svc := build(t, seams{reg: reg,
+		authz:    authz,
+		cap:      capChecker,
+		audit:    auditSink,
+		freeze:   freezeStore,
+		jobsRepo: st.Jobs(), tasksRepo: st.Tasks(), conduit: conduit, newID: sequentialIDs("id-"),
+	})
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
@@ -1521,7 +1521,7 @@ func TestService_CancelJob_PublishesJobCancelled(t *testing.T) {
 
 	e := &jobEngine{jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: newFakeConduit(nil), now: func() time.Time { return at }}
 	sink := &spyJobEventSink{}
-	svc := &Service{disp: e, audit: &spyAuditSink{}, metrics: noopMetricsSink{}, jobEvents: sink, authz: &spyAuthorizer{}}
+	svc := buildRaw(t, seams{disp: e, audit: &spyAuditSink{}, metrics: noopMetricsSink{}, jobEvents: sink, authz: &spyAuthorizer{}})
 
 	principal := Principal{Account: "bob", Role: "operator", Kind: PrincipalKindHuman}
 	if err := svc.CancelJob(ctx, principal, jobID); err != nil {

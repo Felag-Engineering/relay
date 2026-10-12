@@ -664,11 +664,13 @@ func realLaneDeps(trail *recordingTrail) Deps {
 	// DescribeNode, the same audited call this fixture proves recorded.
 	policy := policyview.New()
 	policy.Set(auditFixtureNode, policyview.Snapshot{AllowedOperations: []string{"system.facts"}})
-	svc := capability.New(reg,
-		capability.WithAuditSink(sink),
-		capability.WithQueries(emptyAuditQuery{}, emptyJobQuery{}),
-		capability.WithPolicyView(policy),
-	)
+	svc := newCapService(capSeams{
+		reg:        reg,
+		audit:      sink,
+		auditQ:     emptyAuditQuery{},
+		jobQ:       emptyJobQuery{},
+		policyView: policy,
+	})
 
 	d := renderableDeps()
 	d.Queries = svc

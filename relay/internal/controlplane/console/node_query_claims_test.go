@@ -31,14 +31,16 @@ import (
 //
 // Modelled on realLaneDeps, and deliberately separate from it: read_audit_test
 // .go's sweeps depend on that fixture's exact registry contents.
-func lanePanelDeps(t *testing.T, reg *registry.InMemory, opts ...capability.Option) (Deps, *capability.Service) {
+func lanePanelDeps(t *testing.T, reg *registry.InMemory, vocab capability.TemplateVocabularySource) (Deps, *capability.Service) {
 	t.Helper()
 	sink := auditsink.New(&recordingTrail{}, auditsink.WithClock(func() time.Time { return testNow }))
-	svc := capability.New(reg,
-		append([]capability.Option{
-			capability.WithAuditSink(sink),
-			capability.WithQueries(emptyAuditQuery{}, emptyJobQuery{}),
-		}, opts...)...)
+	svc := newCapService(capSeams{
+		reg:       reg,
+		audit:     sink,
+		auditQ:    emptyAuditQuery{},
+		jobQ:      emptyJobQuery{},
+		nodeVocab: vocab,
+	})
 	d := renderableDeps()
 	d.Queries = svc
 	return d, svc
@@ -85,7 +87,7 @@ func TestNode_FingerprintPanelReportsThePeerCounts(t *testing.T) {
 			t.Fatalf("seed %s: %v", r.NodeID, err)
 		}
 	}
-	d, _ := lanePanelDeps(t, reg)
+	d, _ := lanePanelDeps(t, reg, nil)
 	h := newTestHandler(d, accounts.RoleViewer)
 
 	t.Run("a Node reporting both fingerprints", func(t *testing.T) {
@@ -211,7 +213,7 @@ func TestNode_DetailShowsTheTemplateFingerprintAndNeverTheTemplateVocabulary(t *
 			{Name: "tmpl.zebra.tail", Slots: []nodevocab.Slot{{Name: "zqlines", Type: "integer"}}},
 		},
 	})
-	d, svc := lanePanelDeps(t, reg, capability.WithTemplateVocabulary(vocab))
+	d, svc := lanePanelDeps(t, reg, vocab)
 
 	// Armed: the lane really does hand this screen a vocabulary to decline.
 	detail, err := svc.DescribeNode(context.Background(), capability.Principal{AccountID: "acct-test"}, nodeID)

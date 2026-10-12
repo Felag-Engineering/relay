@@ -63,7 +63,7 @@ func TestCancelJobStopsPendingSendsCancelToDispatchedLeavesResolved(t *testing.T
 		now:       func() time.Time { return at },
 	}
 	audit := &spyAuditSink{}
-	svc := &Service{disp: e, audit: audit, metrics: noopMetricsSink{}, authz: &spyAuthorizer{}}
+	svc := buildRaw(t, seams{disp: e, audit: audit, metrics: noopMetricsSink{}, authz: &spyAuthorizer{}})
 
 	principal := Principal{Account: "alice", Role: "operator", Kind: PrincipalKindHuman}
 	if err := svc.CancelJob(ctx, principal, jobID); err != nil {
@@ -136,7 +136,7 @@ func TestCancelJobUnknownJobReturnsErrJobNotFound(t *testing.T) {
 		now:       func() time.Time { return time.Now().UTC() },
 	}
 	audit := &spyAuditSink{}
-	svc := &Service{disp: e, audit: audit, metrics: noopMetricsSink{}, authz: &spyAuthorizer{}}
+	svc := buildRaw(t, seams{disp: e, audit: audit, metrics: noopMetricsSink{}, authz: &spyAuthorizer{}})
 
 	err := svc.CancelJob(context.Background(), Principal{Account: "alice", Role: "operator", Kind: PrincipalKindHuman}, "job-does-not-exist")
 	if !errors.Is(err, jobs.ErrJobNotFound) {
@@ -163,7 +163,7 @@ func TestCancelJobRefusesBelowOperatorBeforeTouchingAnyTask(t *testing.T) {
 		newID:   sequentialIDs("id-"),
 		now:     func() time.Time { return time.Now().UTC() },
 	}
-	svc := &Service{disp: e, audit: audit, metrics: noopMetricsSink{}, authz: authz}
+	svc := buildRaw(t, seams{disp: e, audit: audit, metrics: noopMetricsSink{}, authz: authz})
 
 	principal := Principal{Account: "eve", Role: "viewer"}
 	err := svc.CancelJob(context.Background(), principal, "job-1")
@@ -206,7 +206,7 @@ func TestCancelJobRefusalDoesNotRevealWhetherTheJobExists(t *testing.T) {
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Now().UTC() },
 	}
-	svc := &Service{disp: e, audit: &spyAuditSink{}, metrics: noopMetricsSink{}, authz: authz}
+	svc := buildRaw(t, seams{disp: e, audit: &spyAuditSink{}, metrics: noopMetricsSink{}, authz: authz})
 
 	err := svc.CancelJob(context.Background(), Principal{Account: "eve", Role: "viewer"}, "job-does-not-exist")
 	if errors.Is(err, jobs.ErrJobNotFound) {
@@ -236,7 +236,7 @@ func TestCancelJobAuthorizesWithoutAssertions(t *testing.T) {
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return at },
 	}
-	svc := &Service{disp: e, audit: &spyAuditSink{}, metrics: noopMetricsSink{}, authz: authz}
+	svc := buildRaw(t, seams{disp: e, audit: &spyAuditSink{}, metrics: noopMetricsSink{}, authz: authz})
 
 	ctx := WithAssertions(context.Background(), Assertions{OnBehalfOf: "ops-team"})
 	if err := svc.CancelJob(ctx, Principal{Account: "alice", Role: "operator", Kind: PrincipalKindHuman}, jobID); err != nil {
@@ -264,7 +264,7 @@ func TestCancelJobAuthorizesWithoutAssertions(t *testing.T) {
 // New(), so the test stays a white-box exercise of
 // authorizeMachineCancel/refuseCancel without the rest of New's wiring
 // guards.
-func machineCancelFixture(t *testing.T, jobID string, jobQ JobQuery) (*Service, *spyAuditSink) {
+func machineCancelFixture(t *testing.T, jobID string, jobQ JobQuery) (*testSvc, *spyAuditSink) {
 	t.Helper()
 	jobsRepo, tasksRepo := testEngineStore(t)
 	at := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
@@ -280,7 +280,7 @@ func machineCancelFixture(t *testing.T, jobID string, jobQ JobQuery) (*Service, 
 		now:       func() time.Time { return at },
 	}
 	audit := &spyAuditSink{}
-	svc := &Service{disp: e, audit: audit, metrics: noopMetricsSink{}, authz: &spyAuthorizer{}, jobQ: jobQ}
+	svc := buildRaw(t, seams{disp: e, audit: audit, metrics: noopMetricsSink{}, authz: &spyAuthorizer{}, jobQ: jobQ})
 	return svc, audit
 }
 

@@ -46,18 +46,18 @@ import (
 
 // newPreflightServiceWithCaches wires a Service exactly like plan_test.go's
 // newPlanTestService, plus the two display-only cache seams under test.
-func newPreflightServiceWithCaches(t *testing.T, reg registry.Repository, conduit *fakeConduit, pv PolicyViewSource, nv TemplateVocabularySource) *Service {
+func newPreflightServiceWithCaches(t *testing.T, reg registry.Repository, conduit *fakeConduit, pv PolicyViewSource, nv TemplateVocabularySource) *testSvc {
 	t.Helper()
 	jobsRepo, tasksRepo := testEngineStore(t)
-	return New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		testExecution(jobsRepo, tasksRepo, conduit),
-		WithPolicyView(pv),
-		WithTemplateVocabulary(nv),
-	)
+	return build(t, seams{reg: reg,
+		authz:    &spyAuthorizer{},
+		cap:      &spyCapChecker{},
+		audit:    &spyAuditSink{},
+		freeze:   &fakeFreezeStore{},
+		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit,
+		policyView: pv,
+		nodeVocab:  nv,
+	})
 }
 
 // recordingPolicyView records every nodeID it was asked about and always

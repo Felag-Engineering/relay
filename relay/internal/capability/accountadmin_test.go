@@ -135,14 +135,14 @@ func (f *fakeAPITokenStore) List(context.Context, string) ([]accounts.APIToken, 
 
 // newAccountAdminFixture builds a Service with a permissive authorizer, a
 // spyAuditSink, and the given fakes wired via WithAccountAdmin.
-func newAccountAdminFixture(t *testing.T, authz Authorizer, accountStore AccountStore, tokenStore APITokenStore) (*Service, *spyAuditSink) {
+func newAccountAdminFixture(t *testing.T, authz Authorizer, accountStore AccountStore, tokenStore APITokenStore) (*testSvc, *spyAuditSink) {
 	t.Helper()
 	audit := &spyAuditSink{}
-	svc := New(registry.NewInMemory(),
-		WithAuthorizer(authz),
-		WithAuditSink(audit),
-		WithAccountAdmin(accountStore, tokenStore),
-	)
+	svc := build(t, seams{reg: registry.NewInMemory(),
+		authz:         authz,
+		audit:         audit,
+		accountsStore: accountStore, apiTokens: tokenStore,
+	})
 	return svc, audit
 }
 

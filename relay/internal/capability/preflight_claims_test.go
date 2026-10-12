@@ -85,15 +85,15 @@ func TestPreflightNeverConsultsTheApprovalGate(t *testing.T) {
 	store := newMemApprovals()
 	gate := &countingApprovalGate{inner: gateEverything(t, 1)}
 
-	svc := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
-		WithClock(func() time.Time { return apNow }),
-		testExecution(jobsRepo, tasksRepo, conduit),
-	)
+	svc := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  &spyAuditSink{},
+		freeze: &fakeFreezeStore{},
+		gate:   gate, approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
+		now:      func() time.Time { return apNow },
+		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit,
+	})
 
 	sel := webSelector()
 	act := mutateAct()
@@ -159,15 +159,15 @@ func TestPlanPreflightNeverEmitsAQuestion(t *testing.T) {
 	store := newMemApprovals()
 	gate := &countingApprovalGate{inner: ruleGate(t, inBandRule("askable"))}
 
-	svc := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
-		WithClock(func() time.Time { return apNow }),
-		testExecution(jobsRepo, tasksRepo, conduit),
-	)
+	svc := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  &spyAuditSink{},
+		freeze: &fakeFreezeStore{},
+		gate:   gate, approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
+		now:      func() time.Time { return apNow },
+		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit,
+	})
 
 	sel := webSelector()
 	act := mutateAct()
@@ -290,13 +290,13 @@ func TestPreflightCarriesAnIllFormedArgumentValueToTheDaemon(t *testing.T) {
 	conduit := &queryRecordingConduit{fakeConduit: inner}
 
 	jobsRepo, tasksRepo := testEngineStore(t)
-	svc := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		testExecution(jobsRepo, tasksRepo, conduit),
-	)
+	svc := build(t, seams{reg: reg,
+		authz:    &spyAuthorizer{},
+		cap:      &spyCapChecker{},
+		audit:    &spyAuditSink{},
+		freeze:   &fakeFreezeStore{},
+		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit,
+	})
 
 	const illFormedPath = "/etc/../etc/shadow"
 	act := jobs.Action{

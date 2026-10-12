@@ -46,7 +46,7 @@ func TestRunRefusedWhenFrozen(t *testing.T) {
 	disp := &spyDispatcher{}
 	audit := &spyAuditSink{}
 	freezeStore := &fakeFreezeStore{frozen: true}
-	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: freezeStore, metrics: noopMetricsSink{}}
+	svc := buildRaw(t, seams{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: freezeStore, metrics: noopMetricsSink{}})
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 
@@ -96,7 +96,7 @@ func TestRunNotFrozenProceedsNormally(t *testing.T) {
 	disp := &spyDispatcher{jobID: "job-1"}
 	audit := &spyAuditSink{}
 	freezeStore := &fakeFreezeStore{frozen: false}
-	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: freezeStore, metrics: noopMetricsSink{}}
+	svc := buildRaw(t, seams{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: freezeStore, metrics: noopMetricsSink{}})
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{})
@@ -117,7 +117,7 @@ func TestRunFreezeReadErrorFailsClosed(t *testing.T) {
 	disp := &spyDispatcher{}
 	audit := &spyAuditSink{}
 	freezeStore := &fakeFreezeStore{frozenErr: errors.New("store unavailable")}
-	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: freezeStore, metrics: noopMetricsSink{}}
+	svc := buildRaw(t, seams{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: freezeStore, metrics: noopMetricsSink{}})
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{})
@@ -139,7 +139,7 @@ func TestEngageFreezePersistsAndAudits(t *testing.T) {
 	reg := seedOneNode(t)
 	freezeStore := &fakeFreezeStore{}
 	audit := &spyAuditSink{}
-	svc := &Service{reg: reg, authz: allowAllAuthorizer{}, cap: noopCapChecker{}, disp: noopDispatcher{}, audit: audit, freeze: freezeStore, metrics: noopMetricsSink{}}
+	svc := buildRaw(t, seams{reg: reg, authz: allowAllAuthorizer{}, cap: noopCapChecker{}, disp: noopDispatcher{}, audit: audit, freeze: freezeStore, metrics: noopMetricsSink{}})
 
 	principal := Principal{Account: "local-host"}
 	if err := svc.EngageFreeze(context.Background(), principal); err != nil {
@@ -168,7 +168,7 @@ func TestReleaseFreezePersistsAndAudits(t *testing.T) {
 	reg := seedOneNode(t)
 	freezeStore := &fakeFreezeStore{}
 	audit := &spyAuditSink{}
-	svc := &Service{reg: reg, authz: allowAllAuthorizer{}, cap: noopCapChecker{}, disp: noopDispatcher{}, audit: audit, freeze: freezeStore, metrics: noopMetricsSink{}}
+	svc := buildRaw(t, seams{reg: reg, authz: allowAllAuthorizer{}, cap: noopCapChecker{}, disp: noopDispatcher{}, audit: audit, freeze: freezeStore, metrics: noopMetricsSink{}})
 
 	principal := Principal{Account: "local-host"}
 	reason := "released locally on relay host"
@@ -213,7 +213,7 @@ func TestFreezeSurvivesRestart(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	svcA := New(reg, WithFreeze(st.Freeze()))
+	svcA := build(t, seams{reg: reg, freeze: st.Freeze()})
 	if err := svcA.EngageFreeze(context.Background(), Principal{Account: "local-host"}); err != nil {
 		t.Fatalf("EngageFreeze: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestFreezeSurvivesRestart(t *testing.T) {
 	}
 	t.Cleanup(func() { st2.Close() }) //nolint:errcheck
 
-	svcB := New(reg, WithFreeze(st2.Freeze()))
+	svcB := build(t, seams{reg: reg, freeze: st2.Freeze()})
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 	_, err = svcB.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{})
 

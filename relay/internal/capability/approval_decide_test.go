@@ -19,7 +19,7 @@ import (
 
 // decideFixture builds a Service whose gate parks everything, with the given
 // approval authorizer, and returns it alongside the store and audit spy.
-func decideFixture(t *testing.T, count int, authorizer ApprovalAuthorizer) (*Service, *memApprovals, *spyAuditSink) {
+func decideFixture(t *testing.T, count int, authorizer ApprovalAuthorizer) (*testSvc, *memApprovals, *spyAuditSink) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, id := range []string{"node-a", "node-b"} {
@@ -29,14 +29,14 @@ func decideFixture(t *testing.T, count int, authorizer ApprovalAuthorizer) (*Ser
 	}
 	store := newMemApprovals()
 	audit := &spyAuditSink{}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, count), store, authorizer),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  audit,
+		freeze: &fakeFreezeStore{},
+		gate:   gateEverything(t, count), approvals: store, approvalAuthz: authorizer,
+		now: func() time.Time { return apNow },
+	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
 	return s, store, audit
 }
@@ -46,7 +46,7 @@ func decideFixture(t *testing.T, count int, authorizer ApprovalAuthorizer) (*Ser
 // matching approvalFixture's shape (nodes, gate/req, store, now) rather than
 // inventing a third fixture shape — for tests that need to shape
 // audience/channel/requester rules, substitute a failing store, or move time.
-func decideFixtureWithRequirement(t *testing.T, req approval.Requirement, store ApprovalStore, authorizer ApprovalAuthorizer, now func() time.Time) (*Service, *spyAuditSink) {
+func decideFixtureWithRequirement(t *testing.T, req approval.Requirement, store ApprovalStore, authorizer ApprovalAuthorizer, now func() time.Time) (*testSvc, *spyAuditSink) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, id := range []string{"node-a", "node-b"} {
@@ -59,14 +59,14 @@ func decideFixtureWithRequirement(t *testing.T, req approval.Requirement, store 
 		t.Fatalf("NewGate: %v", err)
 	}
 	audit := &spyAuditSink{}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gate, store, authorizer),
-		WithClock(now),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  audit,
+		freeze: &fakeFreezeStore{},
+		gate:   gate, approvals: store, approvalAuthz: authorizer,
+		now: now,
+	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
 	return s, audit
 }
@@ -97,7 +97,7 @@ func countApprovalDecided(audit *spyAuditSink) int {
 }
 
 // park drives one gated dispatch and returns the resulting ParkedError.
-func park(t *testing.T, s *Service, p Principal) *ParkedError {
+func park(t *testing.T, s *testSvc, p Principal) *ParkedError {
 	t.Helper()
 	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
 	var parked *ParkedError
@@ -372,15 +372,15 @@ func TestNotifierFiresOncePerPark(t *testing.T) {
 		t.Fatalf("seed registry: %v", err)
 	}
 	spy := &spyNotifier{}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}),
-		WithApprovalNotifier(spy),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  &spyAuditSink{},
+		freeze: &fakeFreezeStore{},
+		gate:   gateEverything(t, 1), approvals: newMemApprovals(), approvalAuthz: &spyApprovalAuthorizer{},
+		approvalNotifier: spy,
+		now:              func() time.Time { return apNow },
+	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
 
 	park(t, s, machineRequester)
@@ -410,14 +410,14 @@ func TestRedriveAuditsPendingObservedNotRequested(t *testing.T) {
 		t.Fatalf("seed registry: %v", err)
 	}
 	audit := &spyAuditSink{}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  audit,
+		freeze: &fakeFreezeStore{},
+		gate:   gateEverything(t, 1), approvals: newMemApprovals(), approvalAuthz: &spyApprovalAuthorizer{},
+		now: func() time.Time { return apNow },
+	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
 
 	first := park(t, s, machineRequester)
@@ -458,15 +458,15 @@ func TestNotifierSilentWhenNothingParks(t *testing.T) {
 		t.Fatalf("NewGate: %v", err)
 	}
 	spy := &spyNotifier{}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(empty, newMemApprovals(), &spyApprovalAuthorizer{}),
-		WithApprovalNotifier(spy),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  &spyAuditSink{},
+		freeze: &fakeFreezeStore{},
+		gate:   empty, approvals: newMemApprovals(), approvalAuthz: &spyApprovalAuthorizer{},
+		approvalNotifier: spy,
+		now:              func() time.Time { return apNow },
+	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
 
 	if _, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct()); err != nil {
@@ -574,7 +574,7 @@ func (m *memGrants) RevokeGrant(_ context.Context, id, by, reason string, now ti
 	return g, nil
 }
 
-func grantFixture(t *testing.T, store *memGrants) (*Service, *spyDispatcher, *spyAuditSink) {
+func grantFixture(t *testing.T, store *memGrants) (*testSvc, *spyDispatcher, *spyAuditSink) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, id := range []string{"node-a", "node-b"} {
@@ -584,15 +584,15 @@ func grantFixture(t *testing.T, store *memGrants) (*Service, *spyDispatcher, *sp
 	}
 	audit := &spyAuditSink{}
 	disp := &spyDispatcher{jobID: "job-1"}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}),
-		WithApprovalGrants(store),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  audit,
+		freeze: &fakeFreezeStore{},
+		gate:   gateEverything(t, 1), approvals: newMemApprovals(), approvalAuthz: &spyApprovalAuthorizer{},
+		grants: store,
+		now:    func() time.Time { return apNow },
+	})
 	s.disp = disp
 	return s, disp, audit
 }
@@ -668,15 +668,15 @@ func TestLegacyNamespacePinnedGrantParksInsteadOfReleasing(t *testing.T) {
 
 		store := &memGrants{grant: g}
 		d := &spyDispatcher{jobID: "job-1"}
-		s := New(reg,
-			WithAuthorizer(&spyAuthorizer{}),
-			WithCapChecker(&spyCapChecker{}),
-			WithAuditSink(&spyAuditSink{}),
-			WithFreeze(&fakeFreezeStore{}),
-			WithApprovals(gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}),
-			WithApprovalGrants(store),
-			WithClock(func() time.Time { return apNow }),
-		)
+		s := build(t, seams{reg: reg,
+			authz:  &spyAuthorizer{},
+			cap:    &spyCapChecker{},
+			audit:  &spyAuditSink{},
+			freeze: &fakeFreezeStore{},
+			gate:   gateEverything(t, 1), approvals: newMemApprovals(), approvalAuthz: &spyApprovalAuthorizer{},
+			grants: store,
+			now:    func() time.Time { return apNow },
+		})
 		s.disp = d
 
 		sel, err := ParseSelector("relay:quarantine=on,node:role=web")
@@ -731,13 +731,13 @@ func TestGrantIsConsultedOnlyAfterTheGate(t *testing.T) {
 		t.Fatalf("NewGate: %v", err)
 	}
 	store := &memGrants{grant: coveringGrant()}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}), WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(empty, newMemApprovals(), &spyApprovalAuthorizer{}),
-		WithApprovalGrants(store),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
+		audit: &spyAuditSink{}, freeze: &fakeFreezeStore{},
+		gate: empty, approvals: newMemApprovals(), approvalAuthz: &spyApprovalAuthorizer{},
+		grants: store,
+		now:    func() time.Time { return apNow },
+	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
 
 	if _, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct()); err != nil {
@@ -800,14 +800,14 @@ func TestGrantNeverBypassesTheBlastCap(t *testing.T) {
 		}
 	}
 	capErr := &CapExceededError{Matched: 2, Cap: 1}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{err: capErr}),
-		WithAuditSink(&spyAuditSink{}), WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}),
-		WithApprovalGrants(store),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz: &spyAuthorizer{},
+		cap:   &spyCapChecker{err: capErr},
+		audit: &spyAuditSink{}, freeze: &fakeFreezeStore{},
+		gate: gateEverything(t, 1), approvals: newMemApprovals(), approvalAuthz: &spyApprovalAuthorizer{},
+		grants: store,
+		now:    func() time.Time { return apNow },
+	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
 
 	_, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
@@ -839,13 +839,13 @@ func TestGrantDoesNotBindItsRequestToOneJob(t *testing.T) {
 		t.Fatalf("seed registry: %v", err)
 	}
 	audit := &spyAuditSink{}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit), WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), approvals, &spyApprovalAuthorizer{}),
-		WithApprovalGrants(store),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
+		audit: audit, freeze: &fakeFreezeStore{},
+		gate: gateEverything(t, 1), approvals: approvals, approvalAuthz: &spyApprovalAuthorizer{},
+		grants: store,
+		now:    func() time.Time { return apNow },
+	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
 
 	for i := 0; i < 2; i++ {
@@ -902,14 +902,14 @@ func TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel(t *testing.T) {
 	}
 	store := newMemApprovals()
 	auditSink := &spyAuditSink{}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(auditSink),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  auditSink,
+		freeze: &fakeFreezeStore{},
+		gate:   gate, approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
+		now: func() time.Time { return apNow },
+	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
 
 	// Two distinct Actions so the two dispatches park as two distinct
@@ -1270,12 +1270,12 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 		name       string
 		wantErr    error  // checked with errors.Is when set
 		wantErrSub string // checked with strings.Contains when wantErr is nil
-		build      func(t *testing.T) (s *Service, p Principal, in ApprovalDecision, audit *spyAuditSink, checkStore func(t *testing.T))
+		build      func(t *testing.T) (s *testSvc, p Principal, in ApprovalDecision, audit *spyAuditSink, checkStore func(t *testing.T))
 	}{
 		{
 			name:    "role floor",
 			wantErr: errRoleFloorDenied,
-			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
 				s, store, audit := decideFixture(t, 1, &spyApprovalAuthorizer{err: errRoleFloorDenied})
 				parked := park(t, s, machineRequester)
 				return s, humanApprover("acct-viewer", "vi"), ApprovalDecision{
@@ -1290,7 +1290,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 		{
 			name:    "requester excluded",
 			wantErr: approval.ErrRequesterExcluded,
-			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
 				requester := humanApprover("acct-req", "requester")
 				req := approval.Requirement{Count: 1, RequesterAllowed: false, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
 				store := newMemApprovals()
@@ -1308,7 +1308,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 		{
 			name:    "audience",
 			wantErr: approval.ErrNotInAudience,
-			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
 				req := approval.Requirement{Count: 1, RequesterAllowed: true, Audience: []string{"bo"}, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
 				store := newMemApprovals()
 				s, audit := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
@@ -1325,7 +1325,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 		{
 			name:    "machine self-decision",
 			wantErr: approval.ErrMachineSelfDecision,
-			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
 				req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
 				store := newMemApprovals()
 				s, audit := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
@@ -1342,7 +1342,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 		{
 			name:    "plan hash",
 			wantErr: approval.ErrPlanChanged,
-			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
 				s, store, audit := decideFixture(t, 1, &spyApprovalAuthorizer{})
 				parked := park(t, s, machineRequester)
 				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
@@ -1357,7 +1357,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 		{
 			name:    "weak channel",
 			wantErr: approval.ErrWeakChannel,
-			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
 				// The rule demands ChannelOutOfBand explicitly — never
 				// simplify this to InBand, or the decision's own
 				// ChannelUnspecified would no longer be weaker than what is
@@ -1378,16 +1378,16 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 		{
 			name:    "unavailable",
 			wantErr: ErrApprovalUnavailable,
-			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
 				reg := registry.NewInMemory()
 				audit := &spyAuditSink{}
-				s := New(reg,
-					WithAuthorizer(&spyAuthorizer{}),
-					WithCapChecker(&spyCapChecker{}),
-					WithAuditSink(audit),
-					WithFreeze(&fakeFreezeStore{}),
-					WithClock(func() time.Time { return apNow }),
-				)
+				s := build(t, seams{reg: reg,
+					authz:  &spyAuthorizer{},
+					cap:    &spyCapChecker{},
+					audit:  audit,
+					freeze: &fakeFreezeStore{},
+					now:    func() time.Time { return apNow },
+				})
 				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
 					RequestID: "req-x", PlanHash: "hash", Approve: true, Channel: approval.ChannelOutOfBand,
 				}, audit, func(t *testing.T) {}
@@ -1396,7 +1396,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 		{
 			name:       "missing ID",
 			wantErrSub: "request id is required",
-			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
 				s, _, audit := decideFixture(t, 1, &spyApprovalAuthorizer{})
 				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
 					RequestID: "", PlanHash: "hash", Approve: true, Channel: approval.ChannelOutOfBand,
@@ -1406,7 +1406,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 		{
 			name:    "not found",
 			wantErr: approval.ErrNotFound,
-			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
 				s, _, audit := decideFixture(t, 1, &spyApprovalAuthorizer{})
 				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
 					RequestID: "req-nope", PlanHash: "hash", Approve: true, Channel: approval.ChannelOutOfBand,
@@ -1416,7 +1416,7 @@ func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
 		{
 			name:    "store failure",
 			wantErr: errStoreFailure,
-			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+			build: func(t *testing.T) (*testSvc, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
 				inner := newMemApprovals()
 				failing := &failingApprovals{memApprovals: inner, err: errStoreFailure}
 				req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour}

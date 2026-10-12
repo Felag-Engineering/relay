@@ -83,13 +83,13 @@ func (s *spyJobQuery) QueryTasks(_ context.Context, f TaskFilter, page PageReque
 
 // readLaneFixture builds a Service wired with spy read-lane seams and a spy
 // AuditSink, for the tests below.
-func readLaneFixture(t *testing.T) (*Service, *spyAuditQuery, *spyJobQuery, *spyAuditSink) {
+func readLaneFixture(t *testing.T) (*testSvc, *spyAuditQuery, *spyJobQuery, *spyAuditSink) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	auditQ := &spyAuditQuery{}
 	jobQ := &spyJobQuery{}
 	audit := &spyAuditSink{}
-	svc := New(reg, WithQueries(auditQ, jobQ), WithAuditSink(audit))
+	svc := build(t, seams{reg: reg, auditQ: auditQ, jobQ: jobQ, audit: audit})
 	return svc, auditQ, jobQ, audit
 }
 
@@ -114,12 +114,12 @@ func TestReadLane_RecordsReadBeforeQuerying(t *testing.T) {
 	cases := []struct {
 		name string
 		tool string
-		call func(svc *Service) error
+		call func(svc *testSvc) error
 		spy  func(auditQ *spyAuditQuery, jobQ *spyJobQuery) bool // returns whether the underlying seam was called
 	}{
 		{
 			"QueryAudit", toolQueryAudit,
-			func(svc *Service) error {
+			func(svc *testSvc) error {
 				_, err := svc.QueryAudit(context.Background(), testPrincipal, AuditFilter{}, PageRequest{})
 				return err
 			},
@@ -127,7 +127,7 @@ func TestReadLane_RecordsReadBeforeQuerying(t *testing.T) {
 		},
 		{
 			"AuditCounts", toolAuditCounts,
-			func(svc *Service) error {
+			func(svc *testSvc) error {
 				_, err := svc.AuditCounts(context.Background(), testPrincipal, validAggWindow, time.Hour)
 				return err
 			},
@@ -135,7 +135,7 @@ func TestReadLane_RecordsReadBeforeQuerying(t *testing.T) {
 		},
 		{
 			"AuditReach", toolAuditReach,
-			func(svc *Service) error {
+			func(svc *testSvc) error {
 				_, err := svc.AuditReach(context.Background(), testPrincipal, validAggWindow)
 				return err
 			},
@@ -143,7 +143,7 @@ func TestReadLane_RecordsReadBeforeQuerying(t *testing.T) {
 		},
 		{
 			"QueryJobs", toolQueryJobs,
-			func(svc *Service) error {
+			func(svc *testSvc) error {
 				_, err := svc.QueryJobs(context.Background(), testPrincipal, JobFilter{}, PageRequest{})
 				return err
 			},
@@ -151,7 +151,7 @@ func TestReadLane_RecordsReadBeforeQuerying(t *testing.T) {
 		},
 		{
 			"QueryTasks", toolQueryTasks,
-			func(svc *Service) error {
+			func(svc *testSvc) error {
 				_, err := svc.QueryTasks(context.Background(), testPrincipal, TaskFilter{JobID: "job-1"}, PageRequest{})
 				return err
 			},
@@ -300,7 +300,7 @@ func TestReadLane_QueryTasksStripsReadClassOutput(t *testing.T) {
 // WithQueries returns ErrQueriesUnavailable — never an empty page, which
 // would be a claim ("there is nothing here") rather than an absence.
 func TestReadLane_NilSeamReturnsError(t *testing.T) {
-	svc := New(registry.NewInMemory())
+	svc := build(t, seams{reg: registry.NewInMemory()})
 	ctx := context.Background()
 
 	if _, err := svc.QueryAudit(ctx, testPrincipal, AuditFilter{}, PageRequest{}); !errors.Is(err, ErrQueriesUnavailable) {
@@ -730,7 +730,7 @@ func TestRecordEventSubscription_FailsClosedOnASinkError(t *testing.T) {
 	reg := registry.NewInMemory()
 	sinkErr := errors.New("trail is down")
 	sink := &spyAuditSink{err: sinkErr}
-	svc := New(reg, WithQueries(&spyAuditQuery{}, &spyJobQuery{}), WithAuditSink(sink))
+	svc := build(t, seams{reg: reg, auditQ: &spyAuditQuery{}, jobQ: &spyJobQuery{}, audit: sink})
 
 	names, err := svc.RecordEventSubscription(context.Background(), testPrincipal, []string{"job"}, false)
 	if !errors.Is(err, ErrReadUnaudited) {
@@ -759,7 +759,7 @@ func TestRecordEventSubscription_FailsClosedOnASinkError(t *testing.T) {
 // nothing at all.
 func TestRecordEventSubscription_RefusesOnTheNoopSink(t *testing.T) {
 	reg := registry.NewInMemory()
-	svc := New(reg)
+	svc := build(t, seams{reg: reg})
 
 	_, err := svc.RecordEventSubscription(context.Background(), testPrincipal, []string{"job"}, false)
 	if !errors.Is(err, ErrReadUnaudited) {
