@@ -15,18 +15,18 @@ import (
 // Service, exactly like execution_test.go's TestWithExecutionAcceptsRealSeams
 // — plan_test.go's Plan tests need the real query path (jobEngine.query),
 // not spyDispatcher's no-op, to prove the offline/allow/deny fan-out.
-func newPlanTestService(t *testing.T, reg registry.Repository, conduit *fakeConduit, opts ...ExecOption) (*Service, *spyAuditSink, *fakeFreezeStore) {
+func newPlanTestService(t *testing.T, reg registry.Repository, conduit *fakeConduit) (*testSvc, *spyAuditSink, *fakeFreezeStore) {
 	t.Helper()
 	jobsRepo, tasksRepo := testEngineStore(t)
 	audit := &spyAuditSink{}
 	freezeStore := &fakeFreezeStore{}
-	svc := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit),
-		WithFreeze(freezeStore),
-		testExecution(jobsRepo, tasksRepo, conduit, opts...),
-	)
+	svc := build(t, seams{reg: reg,
+		authz:    &spyAuthorizer{},
+		cap:      &spyCapChecker{},
+		audit:    audit,
+		freeze:   freezeStore,
+		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit,
+	})
 	return svc, audit, freezeStore
 }
 
@@ -212,13 +212,13 @@ func TestPlanOverCapReportsNotErrors(t *testing.T) {
 
 	jobsRepo, tasksRepo := testEngineStore(t)
 	audit := &spyAuditSink{}
-	svc := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(NewBlastCap(100, 2)), // mutate-cap = 2, 5 Nodes matched
-		WithAuditSink(audit),
-		WithFreeze(&fakeFreezeStore{}),
-		testExecution(jobsRepo, tasksRepo, conduit),
-	)
+	svc := build(t, seams{reg: reg,
+		authz:    &spyAuthorizer{},
+		cap:      NewBlastCap(100, 2), // mutate-cap = 2, 5 Nodes matched
+		audit:    audit,
+		freeze:   &fakeFreezeStore{},
+		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit,
+	})
 
 	act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}}
 	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), act)
@@ -261,13 +261,13 @@ func TestPlanFrozenReportsAdvisoryWhileRunRefuses(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	audit := &spyAuditSink{}
 	freezeStore := &fakeFreezeStore{frozen: true}
-	svc := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit),
-		WithFreeze(freezeStore),
-		testExecution(jobsRepo, tasksRepo, conduit),
-	)
+	svc := build(t, seams{reg: reg,
+		authz:    &spyAuthorizer{},
+		cap:      &spyCapChecker{},
+		audit:    audit,
+		freeze:   freezeStore,
+		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit,
+	})
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
@@ -302,13 +302,13 @@ func TestPlanZeroMatchReportsNoNodesMatchedWhileRunRefuses(t *testing.T) {
 
 	jobsRepo, tasksRepo := testEngineStore(t)
 	audit := &spyAuditSink{}
-	svc := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit),
-		WithFreeze(&fakeFreezeStore{}),
-		testExecution(jobsRepo, tasksRepo, conduit, WithExecNewID(sequentialIDs("id-"))),
-	)
+	svc := build(t, seams{reg: reg,
+		authz:    &spyAuthorizer{},
+		cap:      &spyCapChecker{},
+		audit:    audit,
+		freeze:   &fakeFreezeStore{},
+		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit, newID: sequentialIDs("id-"),
+	})
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "db"}}}
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
@@ -431,7 +431,7 @@ func TestPlanAuthzDeniedRecordsRefusalNoVerdicts(t *testing.T) {
 	capChecker := &spyCapChecker{}
 	disp := &spyDispatcher{}
 	audit := &spyAuditSink{}
-	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}, metrics: noopMetricsSink{}}
+	svc := buildRaw(t, seams{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}, metrics: noopMetricsSink{}})
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{})

@@ -179,17 +179,23 @@ func drainOnCleanup(t *testing.T, svc *capability.Service) {
 
 // newTestServerWithConfig is newTestServerWithBlastCap, additionally
 // parameterized on the registry's min_daemon_version gate (ADR-0014); ""
-// leaves the gate off, exactly like newTestServerWithBlastCap. execOpts are
-// applied to the Job engine after the deterministic ID seam.
-func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVersion string, execOpts ...capability.ExecOption) testServer {
+// leaves the gate off, exactly like newTestServerWithBlastCap.
+func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVersion string) testServer {
 	t.Helper()
-	return newTestServerWithAccount(t, "", readCap, mutateCap, minDaemonVersion, execOpts...)
+	return newTestServerWithAccount(t, "", readCap, mutateCap, minDaemonVersion)
 }
 
 // newTestServerWithAccount is newTestServerWithConfig for a credential that
 // authenticates as the Account with the given ID. The default ID is "": an
 // Account with no ID can use no idempotency key (#895).
-func newTestServerWithAccount(t *testing.T, accountID string, readCap, mutateCap int, minDaemonVersion string, execOpts ...capability.ExecOption) testServer {
+func newTestServerWithAccount(t *testing.T, accountID string, readCap, mutateCap int, minDaemonVersion string) testServer {
+	t.Helper()
+	return newTestServerWithConcurrency(t, accountID, readCap, mutateCap, minDaemonVersion, 0)
+}
+
+// newTestServerWithConcurrency is newTestServerWithAccount with the Job
+// engine's dispatch concurrency pinned; 0 keeps the engine's default.
+func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutateCap int, minDaemonVersion string, concurrency int) testServer {
 	t.Helper()
 
 	const nodeA = "node-a"
@@ -270,17 +276,21 @@ func newTestServerWithAccount(t *testing.T, accountID string, readCap, mutateCap
 	t.Cleanup(func() { st.Close() }) //nolint:errcheck
 
 	conduit := newFakeConduit()
-	capSvc := capability.New(reg,
-		capability.WithExecution(st.Jobs(), st.Tasks(), conduit,
-			append([]capability.ExecOption{capability.WithExecNewID(deterministicIDs())}, execOpts...)...),
-		capability.WithAuthorizer(testAuthorizer{}),
-		capability.WithCapChecker(capability.NewBlastCap(readCap, mutateCap)),
-		capability.WithAuditSink(auditsink.New(st.Audit())),
-		capability.WithFreeze(st.Freeze()),
-		capability.WithPolicyView(policyCache),
-		capability.WithTemplateVocabulary(vocabCache),
-		capability.WithIdempotency(st.IdempotencyKeys()),
-	)
+	capSvc := newCapService(t, capSeams{
+		reg:         reg,
+		authz:       testAuthorizer{},
+		cap:         capability.NewBlastCap(readCap, mutateCap),
+		audit:       auditsink.New(st.Audit()),
+		freeze:      st.Freeze(),
+		policyView:  policyCache,
+		nodeVocab:   vocabCache,
+		idem:        st.IdempotencyKeys(),
+		jobsRepo:    st.Jobs(),
+		tasksRepo:   st.Tasks(),
+		conduit:     conduit,
+		newID:       deterministicIDs(),
+		concurrency: concurrency,
+	})
 	drainOnCleanup(t, capSvc)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 
@@ -371,13 +381,17 @@ func newTestServerWithFailingReadSink(t *testing.T) testServer {
 	t.Cleanup(func() { st.Close() }) //nolint:errcheck
 
 	conduit := newFakeConduit()
-	capSvc := capability.New(reg,
-		capability.WithExecution(st.Jobs(), st.Tasks(), conduit, capability.WithExecNewID(deterministicIDs())),
-		capability.WithAuthorizer(testAuthorizer{}),
-		capability.WithCapChecker(capability.NewBlastCap(0, 0)),
-		capability.WithAuditSink(failingReadSink{Sink: auditsink.New(st.Audit())}),
-		capability.WithFreeze(st.Freeze()),
-	)
+	capSvc := newCapService(t, capSeams{
+		reg:       reg,
+		authz:     testAuthorizer{},
+		cap:       capability.NewBlastCap(0, 0),
+		audit:     failingReadSink{Sink: auditsink.New(st.Audit())},
+		freeze:    st.Freeze(),
+		jobsRepo:  st.Jobs(),
+		tasksRepo: st.Tasks(),
+		conduit:   conduit,
+		newID:     deterministicIDs(),
+	})
 	drainOnCleanup(t, capSvc)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 	handler := mcp.New(testReadLane{svc: capSvc}, opsLister{}, capSvc, results, nil, nil)

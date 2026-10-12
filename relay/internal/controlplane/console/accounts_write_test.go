@@ -2260,10 +2260,13 @@ func newRealWriteFix(t *testing.T, opts ...func(*Deps)) *realWriteFix {
 
 	sink := auditsink.New(st.Audit())
 	tokenSvc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
-	capSvc := capability.New(registry.NewInMemory(),
-		capability.WithAuthorizer(authz.NewRoleGate()),
-		capability.WithAuditSink(sink),
-		capability.WithAccountAdmin(st.Accounts(), tokenSvc))
+	capSvc := newCapService(capSeams{
+		reg:           registry.NewInMemory(),
+		authz:         authz.NewRoleGate(),
+		audit:         sink,
+		accountsStore: st.Accounts(),
+		apiTokens:     tokenSvc,
+	})
 
 	clk := &testClock{t: time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)}
 	sessions := consoleauth.NewStore(consoleauth.WithClock(clk.now))

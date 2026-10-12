@@ -173,14 +173,14 @@ func TestRun_ReservedDispatchIsAuditedAndBoundWhenTheClientDropsMidDispatch(t *t
 	auditSink := &ctxSensitiveAuditSink{repo: st.Audit(), newID: defaultID, now: func() time.Time { return apNow }}
 	tasks := st.MCPTasks()
 
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(auditSink), WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), approvalsRepo, &spyApprovalAuthorizer{}),
-		WithMCPTasks(tasks),
-		testExecution(st.Jobs(), st.Tasks(), conduit),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
+		audit: auditSink, freeze: &fakeFreezeStore{},
+		gate: gateEverything(t, 1), approvals: approvalsRepo, approvalAuthz: &spyApprovalAuthorizer{},
+		mcpTasks: tasks,
+		jobsRepo: st.Jobs(), tasksRepo: st.Tasks(), conduit: conduit,
+		now: func() time.Time { return apNow },
+	})
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
 	_, err = s.Run(ctx, p, Selector{}, mutateAct())
@@ -275,12 +275,12 @@ func TestRun_ReservedDispatchAuditWriteFailureIsLoggedForAnOperator(t *testing.T
 	}
 	disp := &spyDispatcher{jobID: "job-audit-fail"}
 	auditSink := &spyAuditSink{err: errors.New("boom: audit store unavailable")}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(auditSink), WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), store, &spyApprovalAuthorizer{}),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
+		audit: auditSink, freeze: &fakeFreezeStore{},
+		gate: gateEverything(t, 1), approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
+		now: func() time.Time { return apNow },
+	})
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 

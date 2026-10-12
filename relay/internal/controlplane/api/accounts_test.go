@@ -99,10 +99,13 @@ func newIdentityFixtureWith(t *testing.T, wrap func(capability.AccountStore) cap
 	// and the store gives no secondary sort key to break that tie, so the
 	// end-to-end test below (which asserts an exact kind ORDER) would be at
 	// the mercy of an unspecified tie-break rather than real insertion order.
-	capSvc := capability.New(registry.NewInMemory(),
-		capability.WithAuthorizer(authz.NewRoleGate()),
-		capability.WithAuditSink(auditsink.New(st.Audit())),
-		capability.WithAccountAdmin(wrap(st.Accounts()), tokenSvc))
+	capSvc := newCapService(t, capSeams{
+		reg:           registry.NewInMemory(),
+		authz:         authz.NewRoleGate(),
+		audit:         auditsink.New(st.Audit()),
+		accountsStore: wrap(st.Accounts()),
+		apiTokens:     tokenSvc,
+	})
 
 	mux := http.NewServeMux()
 	Register(mux, Deps{

@@ -65,13 +65,17 @@ func runWithRepo(t *testing.T, wrap func(audit.Repository) audit.Repository) (st
 			t.Fatalf("Upsert(%s): %v", id, err)
 		}
 	}
-	svc := capability.New(reg,
-		capability.WithAuthorizer(authz.NewRoleGate()),
-		capability.WithCapChecker(capability.NewBlastCap(10, 10)),
-		capability.WithAuditSink(auditsink.New(wrap(st.Audit()))),
-		capability.WithFreeze(st.Freeze()),
-		capability.WithExecution(st.Jobs(), st.Tasks(), &probeConduit{probe: func() {}}, capability.WithExecNewID(counterID("id-"))),
-	)
+	svc := newCapService(t, capSeams{
+		reg:       reg,
+		authz:     authz.NewRoleGate(),
+		cap:       capability.NewBlastCap(10, 10),
+		audit:     auditsink.New(wrap(st.Audit())),
+		freeze:    st.Freeze(),
+		jobsRepo:  st.Jobs(),
+		tasksRepo: st.Tasks(),
+		conduit:   &probeConduit{probe: func() {}},
+		newID:     counterID("id-"),
+	})
 	sel := capability.Selector{Predicates: []capability.Predicate{{Namespace: capability.NamespaceNode, Key: "role", Value: "web"}}}
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
 	_, runErr := svc.Run(context.Background(), intentTestRequester, sel, act)
@@ -87,11 +91,13 @@ func afterRestart(t *testing.T, path string) (*capability.Service, *store.Store)
 	}
 	t.Cleanup(func() { st.Close() }) //nolint:errcheck
 	q := New(st.AuditQueries(), st.JobQueries())
-	svc := capability.New(registry.NewInMemory(),
-		capability.WithAuthorizer(authz.NewRoleGate()),
-		capability.WithAuditSink(auditsink.New(st.Audit())),
-		capability.WithQueries(q, q),
-	)
+	svc := newCapService(t, capSeams{
+		reg:    registry.NewInMemory(),
+		authz:  authz.NewRoleGate(),
+		audit:  auditsink.New(st.Audit()),
+		auditQ: q,
+		jobQ:   q,
+	})
 	return svc, st
 }
 

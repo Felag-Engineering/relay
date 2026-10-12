@@ -152,7 +152,7 @@ func (s *spyIdem) Lookup(ctx context.Context, a, k string, nb time.Time) (jobs.I
 }
 
 type startFx struct {
-	svc     *Service
+	svc     *testSvc
 	st      *store.Store
 	conduit *gateConduit
 	audit   *spyAuditSink
@@ -187,7 +187,7 @@ var (
 // newStartFx wires a real Job engine over a real store with the spies above.
 // Cleanups run last-in-first-out: the conduit is released, the Service is
 // drained, and only then does the store close.
-func newStartFx(t *testing.T, extra ...Option) *startFx {
+func newStartFx(t *testing.T, mods ...func(*seams)) *startFx {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
 	if err != nil {
@@ -211,16 +211,24 @@ func newStartFx(t *testing.T, extra ...Option) *startFx {
 		now:     startNow,
 	}
 	f.intents = &hookIntents{inner: &nonAtomicIntents{tr: st.Tasks()}}
-	opts := append([]Option{
-		WithAuthorizer(f.authz),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(f.audit),
-		WithFreeze(f.freeze),
-		WithClock(f.clockNow),
-		WithIdempotency(f.idem),
-		WithExecution(st.Jobs(), st.Tasks(), f.conduit, withExecIntents(f.intents)),
-	}, extra...)
-	f.svc = New(reg, opts...)
+	s := seams{
+		reg:       reg,
+		authz:     f.authz,
+		cap:       &spyCapChecker{},
+		audit:     f.audit,
+		freeze:    f.freeze,
+		now:       f.clockNow,
+		idem:      f.idem,
+		jobsRepo:  st.Jobs(),
+		tasksRepo: st.Tasks(),
+		conduit:   f.conduit,
+		intents:   f.intents,
+	}
+	// A caller's mod runs after the fixture's, so it wins, as a later Option did.
+	for _, mod := range mods {
+		mod(&s)
+	}
+	f.svc = build(t, s)
 
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -871,14 +879,16 @@ func TestStart_ASettleOfAnotherKeyDoesNotDisturbAWaiter(t *testing.T) {
 
 // --- approval interaction ---
 
-func approvalStartFx(t *testing.T, extra ...Option) (*startFx, *memApprovals) {
+func approvalStartFx(t *testing.T, mods ...func(*seams)) (*startFx, *memApprovals) {
 	t.Helper()
 	store := newMemApprovals()
-	opts := append([]Option{
-		WithApprovals(gateEverything(t, 1), store, &spyApprovalAuthorizer{}),
-		WithClock(func() time.Time { return apNow }),
-	}, extra...)
-	return newStartFx(t, opts...), store
+	approvals := func(s *seams) {
+		s.gate = gateEverything(t, 1)
+		s.approvals = store
+		s.approvalAuthz = &spyApprovalAuthorizer{}
+		s.now = func() time.Time { return apNow }
+	}
+	return newStartFx(t, append([]func(*seams){approvals}, mods...)...), store
 }
 
 func TestStart_ParkClaimsNoKey(t *testing.T) {
@@ -929,10 +939,12 @@ func (l *loseBind) BindJob(ctx context.Context, id, jobID string, now time.Time)
 func TestStart_ReleasedApprovalReattachesAndRebindsTheKey(t *testing.T) {
 	mem := newMemApprovals()
 	lb := &loseBind{ApprovalStore: mem}
-	f := newStartFx(t,
-		WithApprovals(gateEverything(t, 1), lb, &spyApprovalAuthorizer{}),
-		WithClock(func() time.Time { return apNow }),
-	)
+	f := newStartFx(t, func(s *seams) {
+		s.gate = gateEverything(t, 1)
+		s.approvals = lb
+		s.approvalAuthz = &spyApprovalAuthorizer{}
+		s.now = func() time.Time { return apNow }
+	})
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
 	_, err := f.svc.Start(context.Background(), p, Selector{}, mutateAct(), keyed("k-1"))
@@ -969,7 +981,7 @@ func TestStart_ReleasedApprovalReattachesAndRebindsTheKey(t *testing.T) {
 // releases many Jobs, and a Request carries one job_id.
 func TestStart_KeyedGrantReleaseDoesNotBindTheRequest(t *testing.T) {
 	grants := &memGrants{grant: coveringGrant()}
-	f, store := approvalStartFx(t, WithApprovalGrants(grants))
+	f, store := approvalStartFx(t, func(s *seams) { s.grants = grants })
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
 	sj, err := f.svc.Start(context.Background(), p, Selector{}, mutateAct(), keyed("k-1"))

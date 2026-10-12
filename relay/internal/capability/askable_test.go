@@ -32,7 +32,7 @@ func ruleGate(t *testing.T, rules ...approval.Rule) ApprovalGate {
 // askableFixture is approvalFixture's shape, fixed to one Node and apNow:
 // every test here is about the gate's decision, not about fan-out or the
 // clock.
-func askableFixture(t *testing.T, gate ApprovalGate) (*Service, *memApprovals, *spyDispatcher) {
+func askableFixture(t *testing.T, gate ApprovalGate) (*testSvc, *memApprovals, *spyDispatcher) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
@@ -40,14 +40,14 @@ func askableFixture(t *testing.T, gate ApprovalGate) (*Service, *memApprovals, *
 	}
 	store := newMemApprovals()
 	disp := &spyDispatcher{jobID: "job-1"}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  &spyAuditSink{},
+		freeze: &fakeFreezeStore{},
+		gate:   gate, approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
+		now: func() time.Time { return apNow },
+	})
 	s.disp = disp
 	return s, store, disp
 }
@@ -248,14 +248,14 @@ func TestParkWithAFailingAuditIsNotAskable(t *testing.T) {
 		t.Fatalf("seed registry: %v", err)
 	}
 	audit := &spyAuditSink{err: errors.New("audit store is down")}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(ruleGate(t, inBandRule("askable")), newMemApprovals(), &spyApprovalAuthorizer{}),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  audit,
+		freeze: &fakeFreezeStore{},
+		gate:   ruleGate(t, inBandRule("askable")), approvals: newMemApprovals(), approvalAuthz: &spyApprovalAuthorizer{},
+		now: func() time.Time { return apNow },
+	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
 
 	_, err := s.Run(context.Background(), askCaller, Selector{}, mutateAct())

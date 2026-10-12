@@ -110,7 +110,7 @@ func (m *memTasks) Cancel(_ context.Context, id, accountID string, now time.Time
 // value (no Jobs) makes every such cancel refuse — ErrJobNotRequestedByCaller
 // — until a test opts in, which is the fail-closed default this fixture
 // should have.
-func taskFixture(t *testing.T) (*Service, *memApprovals, *memTasks, *spyDispatcher, *spyJobQuery) {
+func taskFixture(t *testing.T) (*testSvc, *memApprovals, *memTasks, *spyDispatcher, *spyJobQuery) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
@@ -119,16 +119,16 @@ func taskFixture(t *testing.T) (*Service, *memApprovals, *memTasks, *spyDispatch
 	approvals, tasks := newMemApprovals(), newMemTasks()
 	disp := &spyDispatcher{jobID: "job-1"}
 	jobQ := &spyJobQuery{}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), approvals, &spyApprovalAuthorizer{}),
-		WithMCPTasks(tasks),
-		WithQueries(&spyAuditQuery{}, jobQ),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  &spyAuditSink{},
+		freeze: &fakeFreezeStore{},
+		gate:   gateEverything(t, 1), approvals: approvals, approvalAuthz: &spyApprovalAuthorizer{},
+		mcpTasks: tasks,
+		auditQ:   &spyAuditQuery{}, jobQ: jobQ,
+		now: func() time.Time { return apNow },
+	})
 	s.disp = disp
 	return s, approvals, tasks, disp, jobQ
 }

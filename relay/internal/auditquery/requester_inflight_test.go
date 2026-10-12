@@ -121,14 +121,19 @@ func TestRun_RequesterIsReadableAndEnforcedWhileEveryTaskIsPending(t *testing.T)
 	q := New(st.AuditQueries(), st.JobQueries())
 	conduit := &probeConduit{}
 
-	svc := capability.New(reg,
-		capability.WithAuthorizer(authz.NewRoleGate()),
-		capability.WithCapChecker(capability.NewBlastCap(10, 10)),
-		capability.WithAuditSink(auditsink.New(st.Audit())),
-		capability.WithFreeze(st.Freeze()),
-		capability.WithQueries(q, q),
-		capability.WithExecution(st.Jobs(), st.Tasks(), conduit, capability.WithExecNewID(counterID("id-"))),
-	)
+	svc := newCapService(t, capSeams{
+		reg:       reg,
+		authz:     authz.NewRoleGate(),
+		cap:       capability.NewBlastCap(10, 10),
+		audit:     auditsink.New(st.Audit()),
+		freeze:    st.Freeze(),
+		auditQ:    q,
+		jobQ:      q,
+		jobsRepo:  st.Jobs(),
+		tasksRepo: st.Tasks(),
+		conduit:   conduit,
+		newID:     counterID("id-"),
+	})
 
 	conduit.probe = func() {
 		// (a) Every Task is still Pending.

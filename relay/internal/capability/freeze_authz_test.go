@@ -19,11 +19,11 @@ import (
 
 // newFreezeService builds a Service with the given Authorizer and spies,
 // wired exactly as the Freeze methods need (no dispatcher, no cap).
-func newFreezeService(t *testing.T, gate Authorizer) (*Service, *fakeFreezeStore, *spyAuditSink) {
+func newFreezeService(t *testing.T, gate Authorizer) (*testSvc, *fakeFreezeStore, *spyAuditSink) {
 	t.Helper()
 	store := &fakeFreezeStore{}
 	audit := &spyAuditSink{}
-	svc := &Service{
+	svc := buildRaw(t, seams{
 		reg:     seedOneNode(t),
 		authz:   gate,
 		cap:     noopCapChecker{},
@@ -31,7 +31,7 @@ func newFreezeService(t *testing.T, gate Authorizer) (*Service, *fakeFreezeStore
 		audit:   audit,
 		freeze:  store,
 		metrics: noopMetricsSink{},
-	}
+	})
 	return svc, store, audit
 }
 

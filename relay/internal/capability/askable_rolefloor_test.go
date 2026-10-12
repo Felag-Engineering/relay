@@ -39,6 +39,40 @@ func (nopAuditSink) RecordAccountAdmin(context.Context, capability.Principal, ca
 	return nil
 }
 
+// capSeams is the set of collaborators a test hands to newCapService. A zero
+// field means "not supplied": the option is not emitted and capability.New
+// keeps its default.
+type capSeams struct {
+	reg           registry.Repository
+	authz         capability.Authorizer
+	audit         capability.AuditSink
+	gate          capability.ApprovalGate
+	approvals     capability.ApprovalStore
+	approvalAuthz capability.ApprovalAuthorizer
+	now           func() time.Time
+}
+
+// newCapService builds the capability layer for a test: a thin wrapper over
+// capability.New and the With* options, so the layer's constructor changes in
+// one place.
+func newCapService(t *testing.T, s capSeams) *capability.Service {
+	t.Helper()
+	var opts []capability.Option
+	if s.authz != nil {
+		opts = append(opts, capability.WithAuthorizer(s.authz))
+	}
+	if s.audit != nil {
+		opts = append(opts, capability.WithAuditSink(s.audit))
+	}
+	if s.gate != nil || s.approvals != nil || s.approvalAuthz != nil {
+		opts = append(opts, capability.WithApprovals(s.gate, s.approvals, s.approvalAuthz))
+	}
+	if s.now != nil {
+		opts = append(opts, capability.WithClock(s.now))
+	}
+	return capability.New(s.reg, opts...)
+}
+
 // maxSweptActionKind bounds TestRoleFloorCannotRefuseAnAskablePark's sweep.
 // jobs.ActionKind knows exactly three values today (Unspecified, Operation,
 // RawExec); 32 leaves generous headroom above that so a kind added later,
@@ -109,12 +143,15 @@ func TestRoleFloorCannotRefuseAnAskablePark(t *testing.T) {
 				}
 				// A fresh Service per pair, so no pair bounces off another
 				// pair's pending request for the identical Action/Selector.
-				s := capability.New(reg,
-					capability.WithAuthorizer(roleGate),
-					capability.WithAuditSink(nopAuditSink{}),
-					capability.WithApprovals(gate, capability.NewMemApprovalStoreForTest(), roleGate),
-					capability.WithClock(func() time.Time { return now }),
-				)
+				s := newCapService(t, capSeams{
+					reg:           reg,
+					authz:         roleGate,
+					audit:         nopAuditSink{},
+					gate:          gate,
+					approvals:     capability.NewMemApprovalStoreForTest(),
+					approvalAuthz: roleGate,
+					now:           func() time.Time { return now },
+				})
 
 				p := capability.Principal{
 					AccountID: "acct-" + string(role), Account: "acct-" + string(role),

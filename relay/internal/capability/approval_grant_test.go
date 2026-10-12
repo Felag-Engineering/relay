@@ -24,22 +24,22 @@ import (
 
 // grantMgmtFixture builds a Service with the given gate, plus both approval
 // stores, and returns the pieces a management test needs to inspect.
-func grantMgmtFixture(t *testing.T, gate ApprovalGate, authorizer ApprovalAuthorizer) (*Service, *memApprovals, *memGrants, *spyAuditSink) {
+func grantMgmtFixture(t *testing.T, gate ApprovalGate, authorizer ApprovalAuthorizer) (*testSvc, *memApprovals, *memGrants, *spyAuditSink) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
 	approvals, grants, audit := newMemApprovals(), &memGrants{}, &spyAuditSink{}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gate, approvals, authorizer),
-		WithApprovalGrants(grants),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  audit,
+		freeze: &fakeFreezeStore{},
+		gate:   gate, approvals: approvals, approvalAuthz: authorizer,
+		grants: grants,
+		now:    func() time.Time { return apNow },
+	})
 	s.disp = &spyDispatcher{jobID: "job-1"}
 	return s, approvals, grants, audit
 }

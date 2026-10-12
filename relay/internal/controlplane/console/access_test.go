@@ -65,10 +65,12 @@ func accessStoreDeps(t *testing.T) (Deps, *auditsink.Sink, *store.Store, capabil
 
 	sink := auditsink.New(st.Audit(), auditsink.WithClock(func() time.Time { return testNow }))
 	q := auditquery.New(st.AuditQueries(), st.JobQueries())
-	svc := capability.New(registry.NewInMemory(),
-		capability.WithAuditSink(sink),
-		capability.WithQueries(q, q),
-	)
+	svc := newCapService(capSeams{
+		reg:    registry.NewInMemory(),
+		audit:  sink,
+		auditQ: q,
+		jobQ:   q,
+	})
 
 	actor := capability.Principal{
 		AccountID: testAccountID(accounts.RoleAdmin),
@@ -570,7 +572,7 @@ func TestAccess_AFailedSignInShowsTheNameOnlyWhenItIsARealAccounts(t *testing.T)
 	clk.advance(consoleauth.DefaultAccountMaxDelay)
 
 	q := auditquery.New(st.AuditQueries(), st.JobQueries())
-	svcCap := capability.New(registry.NewInMemory(), capability.WithAuditSink(sink), capability.WithQueries(q, q))
+	svcCap := newCapService(capSeams{reg: registry.NewInMemory(), audit: sink, auditQ: q, jobQ: q})
 	d := renderableDeps()
 	d.Queries = svcCap
 	d.Now = func() time.Time { return testNow }

@@ -220,7 +220,7 @@ func gateEverything(t *testing.T, count int) ApprovalGate {
 	return g
 }
 
-func approvalFixture(t *testing.T, nodes []string, gate ApprovalGate, store ApprovalStore, now func() time.Time) (*Service, *spyDispatcher) {
+func approvalFixture(t *testing.T, nodes []string, gate ApprovalGate, store ApprovalStore, now func() time.Time) (*testSvc, *spyDispatcher) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, id := range nodes {
@@ -229,14 +229,14 @@ func approvalFixture(t *testing.T, nodes []string, gate ApprovalGate, store Appr
 		}
 	}
 	disp := &spyDispatcher{jobID: "job-1"}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
-		WithClock(now),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  &spyAuditSink{},
+		freeze: &fakeFreezeStore{},
+		gate:   gate, approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
+		now: now,
+	})
 	s.disp = disp
 	return s, disp
 }
@@ -244,7 +244,7 @@ func approvalFixture(t *testing.T, nodes []string, gate ApprovalGate, store Appr
 // approvalFixtureWithAudit is approvalFixture with the AuditSink handed back
 // too, for the AP-77 tests that need to inspect RecordRead calls
 // (toolApprovalReattach) or count AuditKindDispatch entries.
-func approvalFixtureWithAudit(t *testing.T, nodes []string, gate ApprovalGate, store ApprovalStore, now func() time.Time) (*Service, *spyDispatcher, *spyAuditSink) {
+func approvalFixtureWithAudit(t *testing.T, nodes []string, gate ApprovalGate, store ApprovalStore, now func() time.Time) (*testSvc, *spyDispatcher, *spyAuditSink) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	for _, id := range nodes {
@@ -254,14 +254,14 @@ func approvalFixtureWithAudit(t *testing.T, nodes []string, gate ApprovalGate, s
 	}
 	disp := &spyDispatcher{jobID: "job-1"}
 	audit := &spyAuditSink{}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
-		WithClock(now),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  audit,
+		freeze: &fakeFreezeStore{},
+		gate:   gate, approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
+		now: now,
+	})
 	s.disp = disp
 	return s, disp, audit
 }
@@ -448,11 +448,11 @@ func TestRegistryDriftReParksAnApprovedPlan(t *testing.T) {
 	}
 	store := newMemApprovals()
 	disp := &spyDispatcher{jobID: "job-1"}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}), WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), store, &spyApprovalAuthorizer{}), WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
+		audit: &spyAuditSink{}, freeze: &fakeFreezeStore{},
+		gate: gateEverything(t, 1), approvals: store, approvalAuthz: &spyApprovalAuthorizer{}, now: func() time.Time { return apNow },
+	})
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
@@ -521,11 +521,11 @@ func TestFrozenRelayNeverEvenParks(t *testing.T) {
 	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}), WithFreeze(&fakeFreezeStore{frozen: true}),
-		WithApprovals(gateEverything(t, 1), store, &spyApprovalAuthorizer{}), WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
+		audit: &spyAuditSink{}, freeze: &fakeFreezeStore{frozen: true},
+		gate: gateEverything(t, 1), approvals: store, approvalAuthz: &spyApprovalAuthorizer{}, now: func() time.Time { return apNow },
+	})
 
 	_, err := s.Run(context.Background(), Principal{Account: "gleipnir-prod"}, Selector{}, mutateAct())
 	var frozen *FrozenError
@@ -542,7 +542,7 @@ func TestFrozenRelayNeverEvenParks(t *testing.T) {
 // shapeFixture is approvalFixture with the registry handed back, so a test can
 // grow the fleet BETWEEN dispatches — which is the whole point of test
 // TestSameShapeDifferentPlanStillParks.
-func shapeFixture(t *testing.T, labelled map[string]map[string]string, gate ApprovalGate, store ApprovalStore) (*Service, *spyDispatcher, registry.Repository) {
+func shapeFixture(t *testing.T, labelled map[string]map[string]string, gate ApprovalGate, store ApprovalStore) (*testSvc, *spyDispatcher, registry.Repository) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	for id, labels := range labelled {
@@ -551,14 +551,14 @@ func shapeFixture(t *testing.T, labelled map[string]map[string]string, gate Appr
 		}
 	}
 	disp := &spyDispatcher{jobID: "job-1"}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}),
-		WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}),
-		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz:  &spyAuthorizer{},
+		cap:    &spyCapChecker{},
+		audit:  &spyAuditSink{},
+		freeze: &fakeFreezeStore{},
+		gate:   gate, approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
+		now: func() time.Time { return apNow },
+	})
 	s.disp = disp
 	return s, disp, reg
 }
@@ -714,7 +714,7 @@ func TestLastApprovedOfSameShape(t *testing.T) {
 // TestLastApprovedOfSameShape_Unwired: the read is unavailable rather
 // than a nil-map panic on a Service built without approvals.
 func TestLastApprovedOfSameShape_Unwired(t *testing.T) {
-	s := New(registry.NewInMemory())
+	s := build(t, seams{reg: registry.NewInMemory()})
 	if _, err := s.LastApprovedOfSameShape(context.Background(), approval.Request{ShapeKey: "abc"}); !errors.Is(err, ErrApprovalUnavailable) {
 		t.Errorf("err = %v, want ErrApprovalUnavailable", err)
 	}
@@ -874,12 +874,12 @@ func TestRun_ReAttachThatCannotBeAuditedReturnsNothing(t *testing.T) {
 	}
 	disp := &spyDispatcher{jobID: "job-1"}
 	audit := &failingReadAuditSink{spyAuditSink: &spyAuditSink{}}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit), WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), store, &spyApprovalAuthorizer{}),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
+		audit: audit, freeze: &fakeFreezeStore{},
+		gate: gateEverything(t, 1), approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
+		now: func() time.Time { return apNow },
+	})
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
@@ -1043,13 +1043,13 @@ func TestRun_ReleasedApprovalReAttachesEvenWhenAGrantCoversThePlan(t *testing.T)
 	}
 	disp := &spyDispatcher{jobID: "job-1"}
 	audit := &spyAuditSink{}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit), WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), store, &spyApprovalAuthorizer{}),
-		WithApprovalGrants(grants),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
+		audit: audit, freeze: &fakeFreezeStore{},
+		gate: gateEverything(t, 1), approvals: store, approvalAuthz: &spyApprovalAuthorizer{},
+		grants: grants,
+		now:    func() time.Time { return apNow },
+	})
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
@@ -1138,13 +1138,13 @@ func TestRun_StoreErrorReadingForAPlanIsRefusedBeforeAGrantIsConsulted(t *testin
 	}
 	disp := &spyDispatcher{jobID: "job-1"}
 	audit := &spyAuditSink{}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit), WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), failing, &spyApprovalAuthorizer{}),
-		WithApprovalGrants(grants),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
+		audit: audit, freeze: &fakeFreezeStore{},
+		gate: gateEverything(t, 1), approvals: failing, approvalAuthz: &spyApprovalAuthorizer{},
+		grants: grants,
+		now:    func() time.Time { return apNow },
+	})
 	s.disp = disp
 
 	_, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
@@ -1207,12 +1207,12 @@ func TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch(t *testing.T
 
 	ctx, cancel := context.WithCancel(context.Background())
 	disp := &cancelMidRunDispatcher{cancelFn: cancel}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}), WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), repo, &spyApprovalAuthorizer{}),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
+		audit: &spyAuditSink{}, freeze: &fakeFreezeStore{},
+		gate: gateEverything(t, 1), approvals: repo, approvalAuthz: &spyApprovalAuthorizer{},
+		now: func() time.Time { return apNow },
+	})
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
@@ -1302,12 +1302,12 @@ func TestRun_CallCancelledBeforeTheClaimDispatchesNothingAndLeavesTheApprovalRel
 	audit := &spyAuditSink{}
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	wrapped := &claimCancelingApprovalStore{ApprovalStore: repo, cancel: cancel}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(audit), WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), wrapped, &spyApprovalAuthorizer{}),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
+		audit: audit, freeze: &fakeFreezeStore{},
+		gate: gateEverything(t, 1), approvals: wrapped, approvalAuthz: &spyApprovalAuthorizer{},
+		now: func() time.Time { return apNow },
+	})
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 
@@ -1525,12 +1525,12 @@ func TestRun_ConcurrentReDrivesDispatchExactlyOneJob(t *testing.T) {
 	}
 
 	disp := &reserveCountingDispatcher{}
-	s := New(reg,
-		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
-		WithAuditSink(&spyAuditSink{}), WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), repo, &spyApprovalAuthorizer{}),
-		WithClock(func() time.Time { return apNow }),
-	)
+	s := build(t, seams{reg: reg,
+		authz: &spyAuthorizer{}, cap: &spyCapChecker{},
+		audit: &spyAuditSink{}, freeze: &fakeFreezeStore{},
+		gate: gateEverything(t, 1), approvals: repo, approvalAuthz: &spyApprovalAuthorizer{},
+		now: func() time.Time { return apNow },
+	})
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
 

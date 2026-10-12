@@ -151,7 +151,7 @@ func TestRunBlastCapRejectsOversizedSelector(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := seedNodes(t, 5)
 			disp := &spyDispatcher{}
-			svc := New(reg, WithCapChecker(NewBlastCap(tt.readCap, tt.mutateCap)))
+			svc := build(t, seams{reg: reg, cap: NewBlastCap(tt.readCap, tt.mutateCap)})
 			svc.disp = disp
 
 			sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}

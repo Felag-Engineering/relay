@@ -24,9 +24,12 @@ func TestQueryAudit_AProtocolViolationIsQueryableByKind(t *testing.T) {
 
 	sink := auditsink.New(st.Audit())
 	q := New(st.AuditQueries(), st.JobQueries())
-	svc := capability.New(registry.NewInMemory(),
-		capability.WithAuditSink(sink),
-		capability.WithQueries(q, q))
+	svc := newCapService(t, capSeams{
+		reg:    registry.NewInMemory(),
+		audit:  sink,
+		auditQ: q,
+		jobQ:   q,
+	})
 
 	if err := sink.RecordProtocolViolation(ctx, jobs.ProtocolViolationEvent{
 		NodeID:        "node-1",

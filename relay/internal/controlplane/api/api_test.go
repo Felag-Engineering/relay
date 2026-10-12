@@ -138,11 +138,12 @@ func (*fakeCapabilityAuditSink) RecordAccountAdmin(context.Context, capability.P
 // clock (detail.Eval), not from Deps.Now/Deps.CertExpiringWithin.
 func newNodeReaderLane(t *testing.T, reg registry.Repository, sink capability.AuditSink, now func() time.Time, certExpiringWithin time.Duration) NodeReader {
 	t.Helper()
-	return capability.New(reg,
-		capability.WithAuditSink(sink),
-		capability.WithClock(now),
-		capability.WithCertExpiringWindow(certExpiringWithin),
-	)
+	return newCapService(t, capSeams{
+		reg:        reg,
+		audit:      sink,
+		now:        now,
+		certWindow: certExpiringWithin,
+	})
 }
 
 // releaseCall captures one ReleaseFreeze invocation.
