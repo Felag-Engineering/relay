@@ -238,13 +238,7 @@ func (b *Bus) Subscribe(kinds []Kind, lastEventID string) *Subscription {
 	defer b.mu.Unlock()
 
 	now := b.now()
-	kindSet := make(map[Kind]bool, len(kinds))
-	for _, k := range kinds {
-		kindSet[k] = true
-		if r, ok := b.rings[k]; ok {
-			r.prune(now, b.maxAge)
-		}
-	}
+	kindSet := b.pruneKinds(kinds, now)
 
 	sub := &Subscription{
 		bus:   b,
@@ -281,6 +275,20 @@ func (b *Bus) Subscribe(kinds []Kind, lastEventID string) *Subscription {
 
 	b.subs[sub] = struct{}{}
 	return sub
+}
+
+// pruneKinds returns kinds as a set, first pruning each kind's ring against
+// the age bound as of now. Kinds with no ring are kept in the set and simply
+// have nothing to prune. Called with b.mu already held.
+func (b *Bus) pruneKinds(kinds []Kind, now time.Time) map[Kind]bool {
+	kindSet := make(map[Kind]bool, len(kinds))
+	for _, k := range kinds {
+		kindSet[k] = true
+		if r, ok := b.rings[k]; ok {
+			r.prune(now, b.maxAge)
+		}
+	}
+	return kindSet
 }
 
 // replayBacklog collects every retained event across kinds' rings with
@@ -325,14 +333,7 @@ func (b *Bus) Recent(kinds []Kind, n int) []Event {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	now := b.now()
-	kindSet := make(map[Kind]bool, len(kinds))
-	for _, k := range kinds {
-		kindSet[k] = true
-		if r, ok := b.rings[k]; ok {
-			r.prune(now, b.maxAge)
-		}
-	}
+	kindSet := b.pruneKinds(kinds, b.now())
 
 	// One kind is the common case — a screen subscribes to what it renders —
 	// and a single ring is already ascending by Seq, so take its tail
@@ -341,17 +342,15 @@ func (b *Bus) Recent(kinds []Kind, n int) []Event {
 	// over up to maxEvents entries, and running it under this lock for the
 	// one-kind case would put a page refresh in front of a Node enrolling.
 	if len(kindSet) == 1 {
-		for k := range kindSet {
-			r, ok := b.rings[k]
-			if !ok {
-				return nil
-			}
-			tail := r.events
-			if len(tail) > n {
-				tail = tail[len(tail)-n:]
-			}
-			return append([]Event(nil), tail...)
+		r, ok := b.rings[kinds[0]]
+		if !ok {
+			return nil
 		}
+		tail := r.events
+		if len(tail) > n {
+			tail = tail[len(tail)-n:]
+		}
+		return append([]Event(nil), tail...)
 	}
 
 	// Seq 0 is below every published event, so this is "everything retained",

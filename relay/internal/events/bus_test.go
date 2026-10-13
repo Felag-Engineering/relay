@@ -400,6 +400,23 @@ func TestBus_RecentClampsToN(t *testing.T) {
 	}
 }
 
+// TestBus_RecentTreatsRepeatedAndUnknownKindsAsSets pins the single-kind fast
+// path's edges: a kind named twice is still one kind (its ring's tail, not a
+// doubled one), and a kind with no ring yields nothing rather than a panic.
+func TestBus_RecentTreatsRepeatedAndUnknownKindsAsSets(t *testing.T) {
+	b := NewBus()
+	b.PublishEnrollment(EnrollmentEvent{Outcome: EnrollmentRejected, TokenID: "a"})
+	b.PublishEnrollment(EnrollmentEvent{Outcome: EnrollmentRejected, TokenID: "b"})
+
+	got := b.Recent([]Kind{KindEnrollment, KindEnrollment}, 10)
+	if len(got) != 2 {
+		t.Fatalf("Recent with a repeated kind returned %d events, want 2", len(got))
+	}
+	if got := b.Recent([]Kind{Kind("no-such-kind")}, 10); len(got) != 0 {
+		t.Fatalf("Recent of an unknown kind returned %d events, want none", len(got))
+	}
+}
+
 // TestBus_RecentMergesKindsAndFiltersTheRest: one process-global sequence
 // multiplexing the kinds asked for, and nothing from the kinds that were not.
 func TestBus_RecentMergesKindsAndFiltersTheRest(t *testing.T) {
