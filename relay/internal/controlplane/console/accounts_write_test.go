@@ -2198,7 +2198,7 @@ func TestAccountsWrite_AnUnchangedOrMissingRoleIsRefusedAndNeverWrites(t *testin
 // ---------------------------------------------------------------------------
 
 // realWriteFix wires the Console's write half over a REAL store, a real
-// accounts.TokenService, a real capability.Service (with the real RoleGate and
+// accounts.TokenService, a real capability.AccountAdmin (with the real RoleGate and
 // a real auditsink over a real trail) and a real consoleauth.Service.
 //
 // It exists because three of this issue's acceptance criteria cannot be proved

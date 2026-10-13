@@ -171,7 +171,7 @@ func decodeInto(t *testing.T, rec *httptest.ResponseRecorder, dst any) {
 
 // auditRecords returns every Record the real store's audit trail holds,
 // ordered by timestamp — re-pointed at f.store.Audit().List (#653) now that
-// the identity routes' capability.Service audits through auditsink.Sink onto
+// the identity routes' capability.AccountAdmin audits through auditsink.Sink onto
 // the real store rather than the fakeAuditor.
 func (f *identityFixture) auditRecords(t *testing.T) []audit.Record {
 	t.Helper()
@@ -349,7 +349,7 @@ func TestIdentityAPI_NonAdminIsRefusedEveryIdentityEndpoint(t *testing.T) {
 
 	// AMENDED AC (coordinator ruling, #653): moving the floor into the
 	// capability layer is precisely what makes refusals audited — refuseControl
-	// writes an AuditKindRefusal row on every denial (service.go). "want 0"
+	// writes an AuditKindRefusal row on every denial (recorder.go). "want 0"
 	// encoded the pre-#653 behaviour; the assertion now proves BOTH that
 	// refusals are audited AND that nothing mutated: one refusal row per
 	// refused call (2 roles x 9 routes = 18), every one a KindRefusal.

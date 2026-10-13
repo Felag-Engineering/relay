@@ -89,7 +89,7 @@ func (c *probeConduit) Query(context.Context, string, jobs.Action) (jobs.Verdict
 // a Job is durable and enforced WHILE every one of its Tasks is still
 // Pending — before any dispatch has been attempted — reading and cancelling
 // through the same seams a real surface uses (ReadLane.QueryJobs,
-// Service.CancelJob), against one real SQLite store, wired the way
+// Execution.CancelJob), against one real SQLite store, wired the way
 // cmd/relay/main.go wires the production execution path.
 //
 // This test fails on main: main's requester is joined from the audit

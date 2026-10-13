@@ -279,11 +279,11 @@ const (
 // behavioural assertions catch it regardless of which file it lives in.
 //
 // readlane_registry.go is now the sole wholesale-allowlisted file on all four
-// lists: service.go, which used to be allowlisted on the field and type lists
+// lists: pipeline.go, which used to be allowlisted on the field and type lists
 // (SR4, security review cycle 2) because it declared and wired the two
 // fields, has no access at all — the fields moved to ReadLane, declared in
-// readlane_registry.go. A method placed in service.go (e.g.
-// `func (s *Service) cachedVerdict(...)` reading `s.read.policyView.Get(...)`)
+// readlane_registry.go. A method placed in pipeline.go (e.g.
+// `func (s *Execution) cachedVerdict(...)` reading `s.read.policyView.Get(...)`)
 // now trips the field list.
 //
 // A third, larger residual (also SR4): these four allowlists pin the two
@@ -313,7 +313,7 @@ func TestCachedPolicyAndVocabularyReachOnlyTheDisplayReadLane(t *testing.T) {
 	// non-display use PF-7 now admits. It produces no verdict — every allow
 	// and deny is still the daemon's, which
 	// TestPreflightTemplateExclusionNeverDecidesAVerdict proves behaviourally
-	// — and it is the only file admitted; plan.go and service.go reach it
+	// — and it is the only file admitted; plan.go and pipeline.go reach it
 	// only through resolveAction. It is NOT on the type list: it never names
 	// a seam type, so a new cached field there would still trip this test.
 	fieldAllow := map[string]bool{"readlane_registry.go": true, "template.go": true}

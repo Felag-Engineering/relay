@@ -227,7 +227,7 @@ var consoleReadAudit = map[string]readAuditRule{
 	"GET /console/run": {
 		path: "",
 		why: "the v0.7.0 composer placeholder (#438). It renders no data at all today; " +
-			"the screen that replaces it dispatches, and dispatch is audited by Service.Run",
+			"the screen that replaces it dispatches, and dispatch is audited by Execution.Run",
 	},
 	"POST /console/jobs/{job_id}/cancel": {
 		path: "",
@@ -348,7 +348,7 @@ func TestConsole_EveryRouteIsClassifiedForReadAuditing(t *testing.T) {
 }
 
 // TestConsole_AuditedRoutesRecordTheirReadThroughTheRealLane drives every
-// audited route through a real capability.Service over a real auditsink.Sink
+// audited route through a real capability.ReadLane over a real auditsink.Sink
 // and asserts the record that came out.
 //
 // The whole chain is production code: the handler, the read lane, the sink's

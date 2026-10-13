@@ -128,7 +128,7 @@ type Cache struct {
 type Option func(*Cache)
 
 // WithClock overrides the Cache's clock (production default: time.Now, UTC).
-// Mirrors events.WithClock and capability.WithExecClock — a test seam for the
+// Mirrors events.WithClock — a test seam for the
 // receipt stamp, never a production knob.
 func WithClock(now func() time.Time) Option {
 	return func(c *Cache) { c.now = now }

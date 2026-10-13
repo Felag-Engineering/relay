@@ -74,7 +74,7 @@ type authResult struct {
 
 // PrincipalFromContext returns the Principal that Middleware injected into ctx
 // after successful authentication. It is the seam the Control API and the MCP
-// surface read to pass a Principal into capability.Service.Run for audit
+// surface read to pass a Principal into capability.Execution.Run for audit
 // attribution. ok is false if ctx was never authenticated by Middleware.
 func PrincipalFromContext(ctx context.Context) (capability.Principal, bool) {
 	p, ok := ctx.Value(principalContextKey{}).(capability.Principal)

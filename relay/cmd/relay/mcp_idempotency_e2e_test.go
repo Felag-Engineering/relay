@@ -11,7 +11,7 @@ import (
 
 // TestMCPExecution_ReissuedCallWithTheSameKeyReturnsTheSameJob proves #895
 // through the composition root: main wires the idempotency-key store
-// (capability.WithIdempotency), so a run_operation re-issued with the same
+// (NewExecution's idempotency store), so a run_operation re-issued with the same
 // idempotency_key by the same Account returns the Job the first call created
 // and creates no second one. The in-package suites prove the logic; only this
 // one fails if the wiring is dropped.

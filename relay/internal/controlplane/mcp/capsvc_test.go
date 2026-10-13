@@ -11,10 +11,11 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
-// capSeams is the set of collaborators a test hands to newCapService. A zero
-// execution field means "not supplied": the option is not emitted and
-// capability.New keeps its default. audit, authz, freeze and both query seams
-// are required, as the capability constructors require them.
+// capSeams is the set of collaborators a test hands to newCapService. idem,
+// newID and concurrency may be zero (NewExecution's safe absences; a zero
+// concurrency takes the default). audit, authz, freeze, both query seams, cap
+// and the execution seams are required, as the capability constructors
+// require them.
 type capSeams struct {
 	reg    registry.Repository
 	authz  capability.Authorizer
@@ -35,12 +36,12 @@ type capSeams struct {
 	concurrency int
 }
 
-// capLayer is what a test holds a built capability layer as: the Service and
+// capLayer is what a test holds a built capability layer as: the Execution and
 // the leaf services it is composed with, embedded so a test calls any of their
 // methods unqualified, and a call site that hands one to the MCP server names
 // the narrow embedded field, as the composition root does.
 type capLayer struct {
-	*capability.Service
+	*capability.Execution
 	*capability.ReadLane
 	*capability.Control
 }
@@ -56,22 +57,12 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 	ctl := capability.NewControl(rec, s.authz, s.freeze)
 	read := capability.NewReadLane(rec, s.reg, s.auditQ, s.jobQ, s.policyView, s.nodeVocab, 0, nil)
 
-	var opts []capability.Option
-	if s.cap != nil {
-		opts = append(opts, capability.WithCapChecker(s.cap))
+	if s.cap == nil || s.jobsRepo == nil || s.tasksRepo == nil || s.conduit == nil {
+		t.Fatalf("newCapService: cap, jobsRepo, tasksRepo and conduit are required")
 	}
-	if s.idem != nil {
-		opts = append(opts, capability.WithIdempotency(s.idem))
-	}
-	if s.jobsRepo != nil || s.tasksRepo != nil || s.conduit != nil {
-		var eo []capability.ExecOption
-		if s.newID != nil {
-			eo = append(eo, capability.WithExecNewID(s.newID))
-		}
-		if s.concurrency != 0 {
-			eo = append(eo, capability.WithExecDispatchConcurrency(s.concurrency))
-		}
-		opts = append(opts, capability.WithExecution(s.jobsRepo, s.tasksRepo, s.conduit, eo...))
+	conc := s.concurrency
+	if conc == 0 {
+		conc = capability.DefaultDispatchConcurrency
 	}
 	// A gate with no rules: nothing parks, so the store and authorizer below it
 	// are unreachable on every path these tests drive.
@@ -80,7 +71,8 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 		t.Fatalf("approval.NewGate: %v", err)
 	}
 	appr := capability.NewApprovals(rec, gate, unreachableApprovalStore{}, denyApprovalDecisions{}, nil, nil, nil, nil)
-	return &capLayer{Service: capability.New(ctl, read, appr, opts...), ReadLane: read, Control: ctl}
+	exec := capability.NewExecution(ctl, read, appr, s.cap, s.idem, s.jobsRepo, s.tasksRepo, s.conduit, conc, s.newID, nil)
+	return &capLayer{Execution: exec, ReadLane: read, Control: ctl}
 }
 
 // unreachableApprovalStore is the approval store behind an empty gate: nothing

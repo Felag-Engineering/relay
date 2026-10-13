@@ -290,7 +290,7 @@ func TestRecordDispatchLogsDecisionLine(t *testing.T) {
 
 // TestRecordZeroMatchRefusalRecordsActorOperationAndSelector is #571's audit
 // acceptance line: a zero-match dispatch arrives at the AuditSink as a
-// Refusal entry (capability.Service.Run refuses it before any Job exists),
+// Refusal entry (capability.Execution.Run refuses it before any Job exists),
 // and is recorded as one KindRefusal row carrying the actor, the Selector,
 // and the Action — never a job-level KindDispatch row.
 func TestRecordZeroMatchRefusalRecordsActorOperationAndSelector(t *testing.T) {
@@ -384,7 +384,7 @@ func TestRecordRefusalOneRowNoNodeID(t *testing.T) {
 }
 
 // TestRecordRefusalPersistsJobIDWhenSet is #614's regression test for the
-// refusal branch dropping e.JobID: Service.CancelJob's machine-Account
+// refusal branch dropping e.JobID: Execution.CancelJob's machine-Account
 // scoping (authorizeMachineCancel/refuseCancel) attributes a refusal to a
 // real, already-resolved Job by setting AuditEntry.JobID, and that value
 // must reach the PERSISTED audit.Record — not just be accepted by the

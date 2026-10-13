@@ -486,7 +486,7 @@ func TestNewApprovalsRequiresAnAuthorizer(t *testing.T) {
 	gate, store := gateEverything(t, 1), newMemApprovals()
 	defer func() {
 		if recover() == nil {
-			t.Fatal("WithApprovals(gate, store, nil) must panic")
+			t.Fatal("NewApprovals with a gate and store but no approval authorizer must panic")
 		}
 	}()
 	NewApprovals(rec, gate, store, nil, nil, nil, nil, nil)

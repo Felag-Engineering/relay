@@ -6,7 +6,7 @@
 // it already released rather than dispatching a second one.
 //
 // The Console is not exercised here: it does not execute yet (invariant 10's
-// gap table, #438), so it is covered by construction through Service.Run and
+// gap table, #438), so it is covered by construction through Execution.Run and
 // needs no screen test of its own.
 package main
 

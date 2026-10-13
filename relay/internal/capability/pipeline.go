@@ -1,18 +1,3 @@
-// Package capability is the Relay's single capability layer: the pipeline
-// every control-path surface (MCP, the Control API, the Admin Console, any
-// future CLI) must go through to act on Nodes — Selector -> authz ->
-// blast-cap -> dispatch -> audit (ADR-0009/0010, invariant 10). No
-// surface may build a parallel path to a Node: the dispatch type and its
-// constructor are unexported, so a surface that tries to dispatch without
-// going through Service.Run fails to compile (dispatch.go,
-// dispatch_construction_test.go).
-//
-// v0.0.5 [3/8] wires this pipeline with seams and safe no-op/allow-all
-// defaults only: no real Job engine (#99), no real blast-radius cap
-// (#100/[5/8]), no real audit writes (#102/[7/8]). capability imports
-// registry and jobs only — no database/sql, no audit, no relayv1 proto —
-// preserving the store-swap and contract boundaries the rest of the Relay
-// relies on.
 package capability
 
 import (
@@ -28,14 +13,14 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
-// Service is the exported facade over the capability pipeline. Construct it
-// with New; the composition root (cmd/relay/main.go) owns the instance so
-// later issues can swap in real seams via Option.
-type Service struct {
+// Execution is the dispatch pipeline: Run, Start, Drain, Plan, CancelJob and
+// the MCP task verbs. Construct it with NewExecution; the composition root
+// owns the one instance.
+type Execution struct {
 	// control carries the Freeze, the Authorizer and (through its Recorder) the
 	// audit trail, metrics and log. read is the registry and the read lane;
-	// approvals is the approval callout (ADR-0027). New requires all three to
-	// share one Recorder.
+	// approvals is the approval callout (ADR-0027). NewExecution requires all
+	// three to share one Recorder.
 	control   *Control
 	read      *ReadLane
 	approvals *Approvals
@@ -45,16 +30,10 @@ type Service struct {
 
 	// jobEvents is the event seam's Job-grained publisher (#416,
 	// JobEventSink, seams.go) — the same "purely observational" contract as
-	// metrics. propagated onto the real Job engine (jobEngine.events) at
-	// the end of New, below, because both Service.CancelJob and
-	// jobEngine.run need the same sink and option order must not matter.
+	// metrics. propagated onto the real Job engine (jobEngine.events) by
+	// newExecution, because both Execution.CancelJob and jobEngine.run need
+	// the same sink.
 	jobEvents JobEventSink
-
-	// realDispatcher is set by WithExecution (execution.go) once a real Job
-	// engine is wired. New's end-of-construction guard uses it to refuse a
-	// real dispatcher riding the allow-all/no-op default seams — see the
-	// contract note below.
-	realDispatcher bool
 
 	// idem persists dispatch idempotency keys (#895, start.go). Nil means a call
 	// carrying a key is refused (ErrIdempotencyUnavailable), never run unkeyed.
@@ -66,7 +45,7 @@ type Service struct {
 	bgMu     sync.Mutex
 	draining bool
 
-	// claims is the in-process half of the idempotency keys this Service has
+	// claims is the in-process half of the idempotency keys this Execution has
 	// claimed and not yet settled, keyed by accountID + "\x00" + key.
 	// reattachPersistWait bounds how long a re-issue waits for such a claimer
 	// to finish persisting; a field only so a test can shorten it.
@@ -77,136 +56,147 @@ type Service struct {
 	reattachPersistWait time.Duration
 }
 
-// Option configures a Service built by New.
-type Option func(*Service)
-
-// WithCapChecker overrides the default no-op CapChecker.
-func WithCapChecker(c CapChecker) Option {
-	if c == nil {
-		panic("capability: WithCapChecker: capChecker must not be nil")
-	}
-	return func(s *Service) { s.cap = c }
-}
-
-// WithJobEvents overrides the default noopJobEventSink (#416). Like the
-// Recorder's metrics, this is never security-relevant — New's real-dispatcher
-// fail-open guard does not require it.
-func WithJobEvents(s JobEventSink) Option {
-	return func(svc *Service) { svc.jobEvents = s }
-}
-
-// New returns a Service over control, read and approvals, with noopCapChecker
-// and noopDispatcher defaults (functional-option pattern, mirroring
-// registry.NewInMemory). The Freeze, the role floor and the audit trail come
-// from control; Selector resolution and the read lane come from read; the
-// approval callout comes from approvals. All three are required, and must share
-// one Recorder so the layer has a single audit trail.
-// There is deliberately no exported WithDispatcher: dispatcher is unexported
-// (see dispatch.go), so only files inside this package can supply a real
-// one. #99 adds the exported WithExecution(...) option (execution.go) that
-// constructs the in-package sealed Job-engine dispatcher from its own
-// collaborators.
+// NewExecution returns the dispatch pipeline over control, read and approvals,
+// with the real Job engine built here from jr, tr, conduit and concurrency
+// (fans a resolved Selector to one persisted Task per matched Node, fails
+// offline Nodes fast, ADR-0004, and dispatches the rest through conduit
+// concurrently, at most concurrency at a time). The Freeze, the role floor
+// and the audit trail come from control; Selector resolution and the read
+// lane come from read; the approval callout comes from approvals. All three
+// must share one Recorder so the layer has a single audit trail.
 //
-// Contract enforced here: these allow-all/no-op defaults are safe ONLY
-// because v0.0.5 has no consumer surface and the default dispatcher is a
-// no-op — nothing is actually authorized, capped, audited, or stoppable.
-// Once WithExecution (or any option wiring a real dispatcher) is used, New
-// requires real Authorizer, CapChecker, AuditSink, and FreezeStore — the
-// first, third and fourth through NewControl and NewRecorder, and
-// WithCapChecker for the CapChecker — rather than silently letting a real
-// dispatcher ride these defaults, and panics otherwise (a composition-root
-// wiring bug, not a recoverable runtime condition). A real dispatcher paired
-// with an allow-all Authorizer, a no-op CapChecker, or a no-op AuditSink is a
-// fail-open: every Node would match, every Action would be permitted, and
-// nothing would be recorded. A real dispatcher paired with a noopFreezeStore
-// is the same class of bug: an un-stoppable executor, since "never frozen"
-// means the emergency stop (ADR-0013) can never actually halt it. See
-// dispatcher's doc comment in dispatch.go.
-func New(control *Control, read *ReadLane, approvals *Approvals, opts ...Option) *Service {
+// Required: control, read, approvals, capc (the blast-radius cap, ADR-0004),
+// jr, tr, conduit, and concurrency >= 1 (it bounds reach and is startup-only,
+// invariant 11). A nil one is a composition-root wiring bug, not a
+// recoverable runtime condition, so NewExecution panics.
+//
+// Safe absences: a nil idem means a call carrying an idempotency key is
+// refused (ErrIdempotencyUnavailable), never run unkeyed; a nil newID means
+// the production Job-ID generator; a nil jobEvents means the no-op sink,
+// which is purely observational (#416) and never security-relevant.
+//
+// There is deliberately no exported dispatcher seam: dispatcher is unexported
+// (see dispatch.go), so only files inside this package can supply one.
+//
+// Contract enforced here: a real dispatcher is always wired here, so
+// NewExecution always requires a real Authorizer, CapChecker, AuditSink and
+// FreezeStore — the first, third and fourth through NewControl and
+// NewRecorder, and the second through NewBlastCap — rather than silently
+// letting the engine ride an allow-all/no-op seam, and panics otherwise. A
+// real dispatcher paired with an allow-all Authorizer, a no-op CapChecker, or
+// a no-op AuditSink is a fail-open: every Node would match, every Action
+// would be permitted, and nothing would be recorded. A real dispatcher paired
+// with a noopFreezeStore is the same class of bug: an un-stoppable executor,
+// since "never frozen" means the emergency stop (ADR-0013) can never actually
+// halt it. The AuditSink must also implement IntentRecorder (#887): the Job's
+// Tasks are persisted through it, in one transaction with its
+// dispatch-intent record. See dispatcher's doc comment in dispatch.go.
+func NewExecution(control *Control, read *ReadLane, approvals *Approvals, capc CapChecker, idem jobs.IdempotencyRepository, jr jobs.JobRepository, tr jobs.TaskRepository, conduit Conduit, concurrency int, newID func() (string, error), jobEvents JobEventSink) *Execution {
 	if control == nil {
-		panic("capability: New: control must not be nil")
+		panic("capability: NewExecution: control must not be nil")
 	}
 	if read == nil {
-		panic("capability: New: read lane must not be nil")
+		panic("capability: NewExecution: read lane must not be nil")
 	}
 	if approvals == nil {
-		panic("capability: New: approvals must not be nil")
+		panic("capability: NewExecution: approvals must not be nil")
 	}
 	if read.rec != control.rec {
-		panic("capability: New: the read lane and the Control must share one Recorder; two Recorders would split the audit trail")
+		panic("capability: NewExecution: the read lane and the Control must share one Recorder; two Recorders would split the audit trail")
 	}
 	if approvals.rec != control.rec {
-		panic("capability: New: the approvals service and the Control must share one Recorder; two Recorders would split the audit trail")
+		panic("capability: NewExecution: the approvals service and the Control must share one Recorder; two Recorders would split the audit trail")
 	}
-	s := &Service{
+	if capc == nil {
+		panic("capability: NewExecution: capChecker must not be nil")
+	}
+	if jr == nil || tr == nil || conduit == nil {
+		panic("capability: NewExecution: jobsRepo, tasksRepo, and conduit must not be nil")
+	}
+	if concurrency < 1 {
+		panic("capability: NewExecution: dispatch concurrency must be at least 1")
+	}
+	x := newExecution(control, read, approvals, capc, idem, newJobEngine(jr, tr, conduit, concurrency, newID), jobEvents)
+	checkRealDispatch(x)
+	return x
+}
+
+// newExecution assembles an Execution with no checks. Only NewExecution and
+// _test.go files call it (fixture_test.go, export_test.go); it is the only
+// route to an Execution over the no-op dispatcher.
+func newExecution(control *Control, read *ReadLane, approvals *Approvals, capc CapChecker, idem jobs.IdempotencyRepository, disp dispatcher, jobEvents JobEventSink) *Execution {
+	if jobEvents == nil {
+		jobEvents = noopJobEventSink{}
+	}
+	x := &Execution{
 		control:   control,
 		read:      read,
 		approvals: approvals,
-		cap:       noopCapChecker{},
-		disp:      noopDispatcher{},
-		jobEvents: noopJobEventSink{},
+		cap:       capc,
+		disp:      disp,
+		idem:      idem,
+		jobEvents: jobEvents,
 
 		claims:              make(map[string]*keyClaim),
 		reattachPersistWait: defaultReattachPersistWait,
 	}
-	for _, o := range opts {
-		o(s)
-	}
 	// Propagate the Job-event sink onto the real Job engine, if one is
-	// wired (WithExecution, execution.go). This is here — AFTER the option
-	// loop, alongside this fail-open validation — rather than as an
-	// ExecOption, because option order must not matter and both
-	// Service.CancelJob (below) and jobEngine.run (execution.go) need the
-	// same sink.
-	if e, ok := s.disp.(*jobEngine); ok {
-		e.events = s.jobEvents
+	// wired, because both Execution.CancelJob (below) and jobEngine.run
+	// (execution.go) need the same sink.
+	if e, ok := x.disp.(*jobEngine); ok {
+		e.events = x.jobEvents
 		e.log = control.rec.log
 		// Likewise the dispatch-intent recorder (#887): the AuditSink that
 		// records the Job's outcome is the one that can record its intent in
-		// the Tasks' transaction. Order-independent, like events.
+		// the Tasks' transaction.
 		if e.intents == nil {
 			if r, ok := control.rec.audit.(IntentRecorder); ok {
 				e.intents = r
 			}
 		}
 	}
-	if s.realDispatcher {
-		if _, ok := control.authz.(allowAllAuthorizer); ok {
-			panic("capability: New: a real dispatcher (WithExecution) requires a real Authorizer (NewControl); allowAllAuthorizer would fail open")
-		}
-		if _, ok := s.cap.(noopCapChecker); ok {
-			panic("capability: New: a real dispatcher (WithExecution) requires a real CapChecker (WithCapChecker); noopCapChecker would fail open")
-		}
-		if _, ok := control.rec.audit.(noopAuditSink); ok {
-			panic("capability: New: a real dispatcher (WithExecution) requires a real AuditSink (NewRecorder); noopAuditSink would record nothing")
-		}
-		if _, ok := control.freeze.(noopFreezeStore); ok {
-			panic("capability: New: a real dispatcher (WithExecution) requires a real FreezeStore (NewControl); noopFreezeStore is never frozen, making the emergency stop unreachable")
-		}
-		if e, ok := s.disp.(*jobEngine); ok && e.intents == nil {
-			panic("capability: New: a real dispatcher (WithExecution) requires an AuditSink that records dispatch intent (IntentRecorder); without it Tasks cannot be persisted")
-		}
-	}
-	return s
+	return x
 }
 
-// recorder is the audit trail, metrics and log the Service records to: the
-// Control's Recorder, which New requires the read lane to share.
-func (s *Service) recorder() *Recorder { return s.control.rec }
+// checkRealDispatch refuses a real dispatcher riding the allow-all/no-op
+// seams, and panics otherwise (a composition-root wiring bug, not a
+// recoverable runtime condition). It is shared by NewExecution and the test
+// builder build (fixture_test.go).
+func checkRealDispatch(x *Execution) {
+	if _, ok := x.control.authz.(allowAllAuthorizer); ok {
+		panic("capability: NewExecution: a real dispatcher requires a real Authorizer (NewControl); allowAllAuthorizer would fail open")
+	}
+	if _, ok := x.cap.(noopCapChecker); ok {
+		panic("capability: NewExecution: a real dispatcher requires a real CapChecker (NewBlastCap); noopCapChecker would fail open")
+	}
+	if _, ok := x.control.rec.audit.(noopAuditSink); ok {
+		panic("capability: NewExecution: a real dispatcher requires a real AuditSink (NewRecorder); noopAuditSink would record nothing")
+	}
+	if _, ok := x.control.freeze.(noopFreezeStore); ok {
+		panic("capability: NewExecution: a real dispatcher requires a real FreezeStore (NewControl); noopFreezeStore is never frozen, making the emergency stop unreachable")
+	}
+	if e, ok := x.disp.(*jobEngine); ok && e.intents == nil {
+		panic("capability: NewExecution: a real dispatcher requires an AuditSink that records dispatch intent (IntentRecorder); without it Tasks cannot be persisted")
+	}
+}
 
-func (s *Service) recordRefusal(ctx context.Context, p Principal, sel Selector, act jobs.Action, kind RefusalKind, refusalErr error) error {
+// recorder is the audit trail, metrics and log the Execution records to: the
+// Control's Recorder, which NewExecution requires the read lane to share.
+func (s *Execution) recorder() *Recorder { return s.control.rec }
+
+func (s *Execution) recordRefusal(ctx context.Context, p Principal, sel Selector, act jobs.Action, kind RefusalKind, refusalErr error) error {
 	return s.recorder().recordRefusal(ctx, p, sel, act, kind, refusalErr)
 }
 
-func (s *Service) refuseControl(ctx context.Context, p Principal, refusalErr error) error {
+func (s *Execution) refuseControl(ctx context.Context, p Principal, refusalErr error) error {
 	return s.recorder().refuseControl(ctx, p, refusalErr)
 }
 
-func (s *Service) logger() *slog.Logger { return s.recorder().logger() }
+func (s *Execution) logger() *slog.Logger { return s.recorder().logger() }
 
 // clock is the approval clock, which also stamps idempotency claims (start.go,
 // prepareDispatch) — one clock, as before.
-func (s *Service) clock() time.Time { return s.approvals.clock() }
+func (s *Execution) clock() time.Time { return s.approvals.clock() }
 
 // Run is the pipeline every surface must call to act on Nodes: check the
 // Freeze, resolve the Selector, resolve a Template Operation's class and
@@ -241,7 +231,7 @@ func (s *Service) clock() time.Time { return s.approvals.clock() }
 // caller reaching Run is already mTLS-authenticated (ADR-0005/0006) — there
 // is no anonymous caller to leak the Freeze state to — and no real
 // per-Principal Authorizer exists this milestone anyway.
-func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.Action) ([]NodeResult, error) {
+func (s *Execution) Run(ctx context.Context, p Principal, sel Selector, act jobs.Action) ([]NodeResult, error) {
 	pr, err := s.prepareDispatch(ctx, p, sel, act, "")
 	if err != nil {
 		return nil, err
@@ -285,7 +275,7 @@ type reattachment struct {
 // Freeze, Selector resolution, authorization, the no-Nodes-matched and Template
 // refusals, the blast cap, the approval gate and the Job-ID claims. key is an
 // idempotency key and is only ever non-empty from Start; "" is exactly Run.
-func (s *Service) prepareDispatch(ctx context.Context, p Principal, sel Selector, act jobs.Action, key string) (prep, error) {
+func (s *Execution) prepareDispatch(ctx context.Context, p Principal, sel Selector, act jobs.Action, key string) (prep, error) {
 	reqAct := act
 	frozen, err := s.control.freeze.Frozen(ctx)
 	if err != nil {
@@ -348,7 +338,7 @@ func (s *Service) prepareDispatch(ctx context.Context, p Principal, sel Selector
 	//       (AGENTS.md section 9: prefer the more restrictive option).
 	//   (c) it is audited as a refusal (recordRefusal), not as a job-level
 	//       dispatch row.
-	//   (d) Service.Plan reports the same condition as NoNodesMatched rather
+	//   (d) Execution.Plan reports the same condition as NoNodesMatched rather
 	//       than refusing it — ADR-0011: "A Plan never hard-fails on
 	//       guardrails — it reports."
 	if len(matched) == 0 {
@@ -385,7 +375,7 @@ func (s *Service) prepareDispatch(ctx context.Context, p Principal, sel Selector
 	}
 	// The Request checkApproval found had ALREADY released a Job (AP-77): a
 	// sequential re-drive of an already-answered approval. Re-attach and
-	// dispatch nothing — see Service.reattach.
+	// dispatch nothing — see Execution.reattach.
 	if ap.reattachJobID != "" {
 		return s.approvalReattach(ctx, p, sel, nodes, ap.requestID, ap.reattachJobID)
 	}
@@ -529,7 +519,7 @@ func (s *Service) prepareDispatch(ctx context.Context, p Principal, sel Selector
 }
 
 // approvalReattach is reattach in prep's shape.
-func (s *Service) approvalReattach(ctx context.Context, p Principal, sel Selector, nodes []registry.Node, requestID, jobID string) (prep, error) {
+func (s *Execution) approvalReattach(ctx context.Context, p Principal, sel Selector, nodes []registry.Node, requestID, jobID string) (prep, error) {
 	results, err := s.reattach(ctx, p, sel, nodes, requestID, jobID)
 	if err != nil {
 		return prep{}, err
@@ -541,7 +531,7 @@ func (s *Service) approvalReattach(ctx context.Context, p Principal, sel Selecto
 // (AP-77), recording an audited read instead of dispatching anything.
 //
 // It is reached two ways: checkApproval found a Satisfied, Released Request
-// (a sequential re-drive), or Service.Run lost the release claim to a
+// (a sequential re-drive), or Execution.Run lost the release claim to a
 // concurrent winner (BindJob's ErrAlreadyReleased). Either way nothing may be
 // dispatched — the plan hash matched, so nodes are exactly the approved
 // Nodes, and their outcomes live on the Job identified by jobID, which every
@@ -551,7 +541,7 @@ func (s *Service) approvalReattach(ctx context.Context, p Principal, sel Selecto
 // (ErrReadUnaudited): an unaudited re-attach must not hand out a Job
 // (ADR-0025), the same precedent AP-67's adapter-level re-attach set. The
 // join from this read to the approval is approval_requests.job_id = jobID.
-func (s *Service) reattach(ctx context.Context, p Principal, sel Selector, nodes []registry.Node, requestID, jobID string) ([]NodeResult, error) {
+func (s *Execution) reattach(ctx context.Context, p Principal, sel Selector, nodes []registry.Node, requestID, jobID string) ([]NodeResult, error) {
 	if err := s.read.recordQueryRead(ctx, p, toolApprovalReattach, sel.String(), "", jobID); err != nil {
 		return nil, fmt.Errorf("capability: re-attach to approval %s's released job: %w", requestID, err)
 	}
@@ -572,7 +562,7 @@ func (s *Service) reattach(ctx context.Context, p Principal, sel Selector, nodes
 // handle, counts the outcomes, and writes the KindDispatch audit record. It is
 // shared by Run and Start. alwaysLog logs an audit-write failure even off the
 // reserved path, for Start's background accounting, whose caller is gone.
-func (s *Service) account(ctx context.Context, p Principal, sel Selector, pr prep, res dispatchResult, dispatchErr error, alwaysLog bool) ([]NodeResult, error) {
+func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr prep, res dispatchResult, dispatchErr error, alwaysLog bool) ([]NodeResult, error) {
 	act, ap, reserved := pr.act, pr.ap, pr.reserved
 
 	// acctCtx is the context every post-dispatch accounting write below uses.
@@ -745,7 +735,7 @@ var ErrJobNotRequestedByCaller = errors.New(
 // created but no dispatch has claimed yet — is cancelled without ever
 // reaching CancelJob, so that path stays owner-scoped and ungated; only a
 // Job-backed cancel is gated here.
-func (s *Service) CancelJob(ctx context.Context, p Principal, jobID string) error {
+func (s *Execution) CancelJob(ctx context.Context, p Principal, jobID string) error {
 	if err := s.control.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlCancelJob); err != nil {
 		return s.refuseControl(ctx, p, err)
 	}
@@ -761,8 +751,8 @@ func (s *Service) CancelJob(ctx context.Context, p Principal, jobID string) erro
 	// Published after the cancel succeeded, and never in a way that changes
 	// the returned error (#416, JobEventSink) — observational only, exactly
 	// like the MetricsSink calls elsewhere in this file. Nil-checked because
-	// this package's own white-box tests construct &Service{} literals
-	// directly, bypassing New's noopJobEventSink default.
+	// this package's own white-box tests construct &Execution{} literals
+	// (buildRaw), bypassing newExecution's noopJobEventSink default.
 	if s.jobEvents != nil {
 		s.jobEvents.RecordJob(JobEvent{Transition: JobCancelled, JobID: jobID, Principal: p})
 	}
@@ -807,7 +797,7 @@ func (s *Service) CancelJob(ctx context.Context, p Principal, jobID string) erro
 // requiring page.Jobs[0].JobID == jobID before any ownership comparison is
 // what closes that off even if a JobQuery implementation (or a test spy)
 // ever returned the wrong row for an exact-JobID filter.
-func (s *Service) authorizeMachineCancel(ctx context.Context, jobID, accountID string) (auditJobID string, err error) {
+func (s *Execution) authorizeMachineCancel(ctx context.Context, jobID, accountID string) (auditJobID string, err error) {
 	if jobID == "" || validateJobID(jobID) != nil {
 		return "", ErrJobNotRequestedByCaller
 	}
@@ -844,7 +834,7 @@ func (s *Service) authorizeMachineCancel(ctx context.Context, jobID, accountID s
 // lookup actually resolved the caller-supplied id to a Job that exists — see
 // authorizeMachineCancel's doc comment for why an unresolved id is never
 // recorded here either, exactly like refuseControl's role-floor refusal.
-func (s *Service) refuseCancel(ctx context.Context, p Principal, jobID string, refusalErr error) error {
+func (s *Execution) refuseCancel(ctx context.Context, p Principal, jobID string, refusalErr error) error {
 	s.recorder().metrics.IncRefusal(RefusalUnauthorized)
 	entry := AuditEntry{Kind: AuditKindRefusal, Principal: p, JobID: jobID, Reason: refusalErr.Error(), Asserted: AssertionsFromContext(ctx)}
 	var auditErr error

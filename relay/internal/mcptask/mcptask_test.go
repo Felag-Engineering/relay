@@ -72,7 +72,7 @@ func TestStatusFollowsTheApprovalRequest(t *testing.T) {
 }
 
 // TestStatusCompletedOnceAJobIsBound: a bound Job means the approved dispatch
-// ran. Service.Run is synchronous, so there is no in-between.
+// ran. Execution.Run is synchronous, so there is no in-between.
 func TestStatusCompletedOnceAJobIsBound(t *testing.T) {
 	h := mintedHandle()
 	h.JobID = "job-1"

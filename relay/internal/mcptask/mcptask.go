@@ -290,7 +290,7 @@ func (h Handle) Status(req approval.Request, now time.Time) Status {
 		return StatusFailed
 	}
 
-	// Service.Run is synchronous (ADR-0028), so a bound Job is a finished one.
+	// Execution.Run is synchronous (ADR-0028), so a bound Job is a finished one.
 	if h.JobID != "" {
 		return StatusCompleted
 	}

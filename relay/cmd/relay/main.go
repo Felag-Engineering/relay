@@ -206,16 +206,13 @@ type appDeps struct {
 	// capability layer the SIGUSR1/SIGUSR2 host lever (watchFreezeSignals)
 	// drives. Always built, independent of ControlEnabled.
 	freezeControl *capability.Control
-	// capability is the Relay's execution service (ADR-0009/0010), composed with
-	// freezeControl, the read lane and the Approvals. When
-	// Config.ControlEnabled, newServer wires it with the real Job engine
-	// (capability.WithExecution) over the real mTLS tunnel and the real
+	// execution is the Relay's execution service (ADR-0009/0010), built over
+	// freezeControl, the read lane and the Approvals by capability.NewExecution
+	// with the real Job engine over the real mTLS tunnel and the real
 	// role-gated Authorizer (authz.NewRoleGate) — this is the "#154 flip": MCP/
-	// Control API dispatch actually runs on the fleet. When disabled, capSvc
-	// keeps the v0.0.5 default no-op dispatcher/allow-all-by-construction-
-	// unreachable seams (no consumer surface is mounted either), exactly as
-	// before this issue.
-	capability *capability.Service
+	// Control API dispatch actually runs on the fleet. Built only when
+	// Config.ControlEnabled; nil otherwise (nothing is mounted to call it).
+	execution *capability.Execution
 	// tunnel is the registered tunnelServer. Its sink is set by newServer
 	// ONLY when Config.ControlEnabled (production execution, #154), by
 	// installDevHarness in a devharness-tagged build, or injected directly by
@@ -227,7 +224,7 @@ type appDeps struct {
 	// gRPC server above.
 	control *controlplane.Server
 	// dispatch is the real dispatch.Router newServer builds when
-	// Config.ControlEnabled — the same Conduit capSvc's Job engine dispatches
+	// Config.ControlEnabled — the same Conduit execution's Job engine dispatches
 	// through — exposed so integration tests (and a later real-fleet e2e
 	// surface, #121) can block on a live Tunnel via Router.WaitForAny/
 	// Connected before dispatching, rather than racing the offline
@@ -640,17 +637,10 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// installDevHarness in a devharness-tagged build, may also inject a
 	// taskSink directly.
 
-	// base is the capability.Option set common to both branches below: the
-	// real BlastCap (ADR-0004/0012; see the ReadBlastCap/MutateBlastCap doc
-	// comment on Config for the file-vs-flag deviation flagged for human
-	// review) and the idempotency and event seams; the Approvals is built
-	// above it. The real adapter
-	// to the SQLite-backed audit trail (#102) is the Recorder below, and the
-	// real persisted Relay-wide emergency stop (#101, ADR-0013 — see
-	// watchFreezeSignals in freeze_signal.go for the local engage/release
-	// lever) is the Control. A fresh slice is built per branch below (not
-	// appended to) so neither branch aliases or mutates the other's backing
-	// array.
+	// The real adapter to the SQLite-backed audit trail (#102) is the Recorder
+	// below, and the real persisted Relay-wide emergency stop (#101, ADR-0013 —
+	// see watchFreezeSignals in freeze_signal.go for the local engage/release
+	// lever) is the Control.
 	// One audit sink, shared by the capability layer and the MCP read surface
 	// (#288): read-access records land in the same trail as dispatches, via
 	// the same writer.
@@ -693,7 +683,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 
 	// The ONE Recorder: audit trail, metrics and log, shared by the Control,
 	// the read lane and the Approvals, and so the whole capability layer
-	// (capability.New refuses a read lane or an Approvals over a different one).
+	// (capability.NewExecution refuses a read lane or an Approvals over a different one).
 	rec := capability.NewRecorder(auditSink, appMetrics, logger)
 
 	// The Freeze and its role floor (ADR-0013, #101) over the real RoleGate
@@ -758,19 +748,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// clock is the real one.
 	approvals := capability.NewApprovals(rec, approvalGate, st.Approvals(), roleGate, st.Grants(), st.MCPTasks(), notifier, nil)
 
-	base := []capability.Option{
-		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
-		// Dispatch idempotency keys (#895): the MCP execution tools forward an
-		// optional key so a call re-issued after a lost response re-attaches to
-		// its Job. Without this a keyed call is refused, never run unkeyed.
-		capability.WithIdempotency(st.IdempotencyKeys()),
-		// The event seam's Job-grained publisher (#416). Appended last so
-		// this hunk stays additive alongside concurrent branches also
-		// touching the end of this slice.
-		capability.WithJobEvents(eventsink.Jobs(eventBus)),
-	}
-
-	var capSvc *capability.Service
+	var execution *capability.Execution
 	var controlSrv *controlplane.Server
 	var dispatchRouter *dispatch.Router
 	if cfg.ControlEnabled {
@@ -811,15 +789,20 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		ts.sink = sink
 		dispatchRouter = router
 
-		// A FRESH slice, not append(base, ...): base's backing array must
-		// never be aliased/mutated by this branch (there is only one
-		// newServer call per Config today, but the two branches must stay
-		// independently safe regardless).
-		enabledOpts := append([]capability.Option{}, base...)
-		enabledOpts = append(enabledOpts,
-			capability.WithExecution(st.Jobs(), st.Tasks(), router,
-				capability.WithExecDispatchConcurrency(cfg.DispatchConcurrency)))
-		capSvc = capability.New(freezeControl, readLane, approvals, enabledOpts...)
+		execution = capability.NewExecution(freezeControl, readLane, approvals,
+			// The real BlastCap (ADR-0004/0012; see the ReadBlastCap/MutateBlastCap
+			// doc comment on Config for the file-vs-flag deviation flagged for
+			// human review).
+			capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap),
+			// Dispatch idempotency keys (#895): the MCP execution tools forward an
+			// optional key so a call re-issued after a lost response re-attaches to
+			// its Job. Without this a keyed call is refused, never run unkeyed.
+			st.IdempotencyKeys(),
+			st.Jobs(), st.Tasks(), router,
+			cfg.DispatchConcurrency,
+			nil, // newID: the production default
+			// The event seam's Job-grained publisher (#416).
+			eventsink.Jobs(eventBus))
 
 		// Seed the founding admin Account (#295, ADR-0010). Idempotent and
 		// deterministic: it creates the row on first start and returns the
@@ -933,17 +916,17 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		)
 
 		// sd bundles every collaborator a control surface's Mount may need,
-		// assembled exactly once (invariant 10: capSvc above is a single
+		// assembled exactly once (invariant 10: execution above is a single
 		// instance, delivered to every surface below — no surface constructs
-		// its own capability.Service or dispatcher). See control_surfaces.go
+		// its own capability.Execution or dispatcher). See control_surfaces.go
 		// for the ControlSurface seam (#162) this replaces the two inline
 		// mount stanzas with.
 		sd := surfaceDeps{
-			logger:     logger,
-			ops:        opvocabLister{},
-			capability: capSvc,
+			logger:    logger,
+			ops:       opvocabLister{},
+			execution: execution,
 			// The leaf capability services (invariant 10): each surface is
-			// handed the narrow one it uses, not the Service — see
+			// handed the narrow one it uses, not the Execution — see
 			// surfaceDeps. A field forgotten here is a nil pointer behind a
 			// non-nil interface, so the Console's account routes and the
 			// read-lane routes are exercised end to end by the e2e tests.
@@ -1031,18 +1014,12 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		for _, s := range surfaces {
 			s.Mount(controlSrv.Mux(), sd)
 		}
-	} else {
-		// No consumer surface is mounted (MCP/API require ControlEnabled),
-		// so capSvc keeps the v0.0.5 default no-op dispatcher — but, since
-		// #653, the Control carries a REAL RoleGate (capability.NewControl) and
-		// there is real Account/API-Token administration
-		// (capability.NewAccountAdmin), not the "allow-all authz" this comment
-		// described before that issue. Nothing is mounted on this path, so no
-		// caller's outcome changes; what changes is that NewAccountAdmin's
-		// fail-open guard (a real Authorizer + a real AuditSink) is
-		// satisfiable here too.
-		capSvc = capability.New(freezeControl, readLane, approvals, base...)
 	}
+	// With ControlEnabled off no consumer surface is mounted (MCP and API
+	// require it), so no Execution is built: before #899 a no-op-dispatcher
+	// Service was built here and never called. The Control (a real RoleGate,
+	// #653), AccountAdmin, read lane and Approvals above are still built, as
+	// before, and SIGUSR1/2 drives freezeControl.
 
 	srv := grpc.NewServer(
 		grpc.Creds(creds),
@@ -1064,7 +1041,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		conns:      conns,
 		revocation: revocationSvc,
 		limiter:    limiter,
-		capability: capSvc,
+		execution:  execution,
 
 		freezeControl: freezeControl,
 		tunnel:        ts,

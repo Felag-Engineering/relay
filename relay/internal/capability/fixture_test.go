@@ -9,14 +9,14 @@ import (
 )
 
 // testSvc is the type every test in this package holds a built capability layer
-// as: the Service and the leaf services it is composed with, embedded so a test
+// as: the Execution and the leaf services it is composed with, embedded so a test
 // calls any of their methods unqualified. The five method sets are disjoint
 // apart from the unexported clock, which no test calls unqualified.
 // Tests build one through build or buildRaw and never name the constructors or
 // fields directly, so the capability layer's shape can change behind this one
 // file.
 type testSvc struct {
-	*Service
+	*Execution
 	*ReadLane
 	*Control
 	*AccountAdmin
@@ -24,15 +24,15 @@ type testSvc struct {
 }
 
 // seams is the set of collaborators a test hands to build or buildRaw. A zero
-// field means "not supplied": build leaves New's default in place, and
+// field means "not supplied": build leaves the no-op default in place, and
 // buildRaw leaves the zero value a struct literal would. Field names copy
-// Service's own so buildRaw reads one-to-one against the literals it replaced.
+// Execution's own so buildRaw reads one-to-one against the literals it replaced.
 type seams struct {
 	reg registry.Repository
 
 	authz     Authorizer
 	cap       CapChecker
-	disp      dispatcher // buildRaw only: New has no option for it
+	disp      dispatcher // buildRaw only: NewExecution has no dispatcher seam
 	audit     AuditSink
 	freeze    FreezeStore
 	metrics   MetricsSink
@@ -64,15 +64,17 @@ type seams struct {
 	tasksRepo jobs.TaskRepository
 	conduit   Conduit
 	newID     idGen
-	intents   IntentRecorder // nil: a nonAtomicIntents over tasksRepo, as testExecution
+	intents   IntentRecorder // nil: a nonAtomicIntents over tasksRepo, as NewExecution's tests
 }
 
 func (s seams) hasExecution() bool {
 	return s.jobsRepo != nil || s.tasksRepo != nil || s.conduit != nil
 }
 
-// build is New with an option emitted for each supplied seam. An omitted seam
-// keeps New's default, so a test states only what it cares about.
+// build assembles an Execution from the supplied seams, as NewExecution does
+// but over no-op defaults for an omitted one, so a test states only what it
+// cares about. When an execution seam is set it wires the real Job engine and
+// keeps NewExecution's fail-open guard (checkRealDispatch).
 func build(t *testing.T, s seams) *testSvc {
 	t.Helper()
 	if s.disp != nil {
@@ -122,28 +124,29 @@ func build(t *testing.T, s seams) *testSvc {
 		appr = newApprovals(rec, noopApprovalGate{}, nil, nil, s.grants, s.mcpTasks, notifier, s.now)
 	}
 
-	var opts []Option
-	if s.cap != nil {
-		opts = append(opts, WithCapChecker(s.cap))
+	if s.hasExecution() && (s.jobsRepo == nil || s.tasksRepo == nil || s.conduit == nil) {
+		t.Fatalf("build: execution needs jobsRepo, tasksRepo and conduit together")
 	}
-	if s.jobEvents != nil {
-		opts = append(opts, WithJobEvents(s.jobEvents))
+	capc := s.cap
+	if capc == nil {
+		capc = noopCapChecker{}
 	}
-	if s.idem != nil {
-		opts = append(opts, WithIdempotency(s.idem))
-	}
+	var disp dispatcher = noopDispatcher{}
 	if s.hasExecution() {
 		intents := s.intents
 		if intents == nil {
 			intents = &nonAtomicIntents{tr: s.tasksRepo}
 		}
-		eo := []ExecOption{withExecIntents(intents)}
-		if s.newID != nil {
-			eo = append(eo, WithExecNewID(s.newID))
-		}
-		opts = append(opts, WithExecution(s.jobsRepo, s.tasksRepo, s.conduit, eo...))
+		eng := newJobEngine(s.jobsRepo, s.tasksRepo, s.conduit, DefaultDispatchConcurrency, s.newID)
+		eng.intents = intents
+		disp = eng
 	}
-	return &testSvc{New(control, read, appr, opts...), read, control, acct, appr}
+	x := newExecution(control, read, appr, capc, s.idem, disp, s.jobEvents)
+	// The same guard NewExecution runs, whenever a real engine is wired.
+	if s.hasExecution() {
+		checkRealDispatch(x)
+	}
+	return &testSvc{x, read, control, acct, appr}
 }
 
 // buildRaw is a struct literal: no defaults and no construction guards, for
@@ -165,7 +168,7 @@ func buildRaw(t *testing.T, s seams) *testSvc {
 		rec: rec, gate: s.gate, store: s.approvals, authz: s.approvalAuthz,
 		grants: s.grants, tasks: s.mcpTasks, notifier: s.approvalNotifier, now: s.now,
 	}
-	svc := &Service{
+	svc := &Execution{
 		control:   control,
 		read:      read,
 		approvals: appr,

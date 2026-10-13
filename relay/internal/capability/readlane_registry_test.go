@@ -362,7 +362,7 @@ func TestRegistryLane_RefusesWithoutARealAuditSink(t *testing.T) {
 // TestNewReadLaneRefusesNoopAuditSink is F5 (#441 cycle-2 security review):
 // a ReadLane over a Recorder holding the no-op AuditSink must panic at
 // construction, the same class of composition-root guard
-// TestWithExecutionRefusesDefaultSeams asserts for a real dispatcher —
+// TestNewExecutionRefusesDefaultSeams asserts for a real dispatcher —
 // otherwise every trail query is answered while recording nothing, exactly
 // the "unauditable read succeeded" state ADR-0025 forbids. Every collaborator
 // is built outside the recover scope, so only NewReadLane can be the panic.
@@ -451,7 +451,7 @@ func TestDescribeNode_CarriesThePolicyViewAndTemplateVocabulary(t *testing.T) {
 
 // TestDescribeNode_AnUnwiredCacheReportsNotReportedNotAnEmptyPolicy is QRY-7's
 // "never absence as an unrestricted or empty Policy", proved at the lane: a
-// nil PolicyViewSource/TemplateVocabularySource (the New default) must
+// nil PolicyViewSource/TemplateVocabularySource (the newReadLane default) must
 // report *Reported=false, not a zero-value Snapshot that reads as "nothing
 // restricted".
 func TestDescribeNode_AnUnwiredCacheReportsNotReportedNotAnEmptyPolicy(t *testing.T) {

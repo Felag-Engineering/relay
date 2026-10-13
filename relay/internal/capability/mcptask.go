@@ -165,7 +165,7 @@ func (a *Approvals) bindTaskHandleJob(ctx context.Context, requestID, jobID stri
 // matters more for this method than it looks, because resolving is not merely a
 // read — it is the entry point [4/6] extends to hand a stored call back through
 // the dispatch path.
-func (s *Service) ResolveTask(ctx context.Context, p Principal, taskID string) (TaskView, error) {
+func (s *Execution) ResolveTask(ctx context.Context, p Principal, taskID string) (TaskView, error) {
 	if s.approvals.tasks == nil || s.approvals.store == nil {
 		return TaskView{}, ErrTasksUnavailable
 	}
@@ -222,7 +222,7 @@ func (s *Service) ResolveTask(ctx context.Context, p Principal, taskID string) (
 // The second case is the security boundary this method exists to hold. See the
 // file header: nothing below writes to s.approvals.store, and that absence is the
 // enforcement.
-func (s *Service) CancelTask(ctx context.Context, p Principal, taskID string) (TaskView, error) {
+func (s *Execution) CancelTask(ctx context.Context, p Principal, taskID string) (TaskView, error) {
 	if s.approvals.tasks == nil || s.approvals.store == nil {
 		return TaskView{}, ErrTasksUnavailable
 	}

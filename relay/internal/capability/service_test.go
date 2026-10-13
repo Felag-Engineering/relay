@@ -569,9 +569,8 @@ func TestRunAuditsPartialResultsOnDispatchError(t *testing.T) {
 	}
 }
 
-// TestConstructorsPanicOnNilSeam asserts that every capability constructor and
-// option panics on a nil required seam at construction, matching
-// WithExecution's own nil guard (execution.go): a nil seam here is a
+// TestConstructorsPanicOnNilSeam asserts that every capability constructor
+// panics on a nil required seam at construction: a nil seam here is a
 // composition-root wiring bug, not a recoverable runtime condition, so every
 // seam surface must fail identically rather than let a nil slip through to
 // panic later (or not at all) inside Run. Each row asserts the panic names the
@@ -580,6 +579,9 @@ func TestRunAuditsPartialResultsOnDispatchError(t *testing.T) {
 // scope, over one shared Recorder.
 func TestConstructorsPanicOnNilSeam(t *testing.T) {
 	rec := NewRecorder(&spyAuditSink{}, nil, nil)
+	jr, tr := testEngineStore(t)
+	conduit := newFakeConduit(nil)
+	capc := &spyCapChecker{}
 	reg := registry.NewInMemory()
 	aq := &spyAuditQuery{}
 	jq := &spyJobQuery{}
@@ -599,7 +601,6 @@ func TestConstructorsPanicOnNilSeam(t *testing.T) {
 		call func()
 		want string
 	}{
-		{"WithCapChecker", func() { WithCapChecker(nil) }, "capability: WithCapChecker: capChecker"},
 		{"NewRecorder", func() { NewRecorder(nil, nil, nil) }, "capability: NewRecorder: auditSink"},
 		{"NewControl/recorder", func() { NewControl(nil, authz, freeze) }, "NewControl: recorder"},
 		{"NewControl/authorizer", func() { NewControl(rec, nil, freeze) }, "NewControl: authorizer"},
@@ -616,9 +617,29 @@ func TestConstructorsPanicOnNilSeam(t *testing.T) {
 		{"NewApprovals/gate", func() { NewApprovals(rec, nil, astore, aauthz, nil, nil, nil, nil) }, "NewApprovals: gate"},
 		{"NewApprovals/store", func() { NewApprovals(rec, gate, nil, aauthz, nil, nil, nil, nil) }, "NewApprovals: store"},
 		{"NewApprovals/approval authorizer", func() { NewApprovals(rec, gate, astore, nil, nil, nil, nil, nil) }, "NewApprovals: approval authorizer"},
-		{"New/control", func() { New(nil, read, appr) }, "capability: New: control"},
-		{"New/read lane", func() { New(ctl, nil, appr) }, "capability: New: read lane"},
-		{"New/approvals", func() { New(ctl, read, nil) }, "capability: New: approvals"},
+		{"NewExecution/control", func() {
+			NewExecution(nil, read, appr, capc, nil, jr, tr, conduit, 1, nil, nil)
+		}, "capability: NewExecution: control"},
+		{"NewExecution/read lane", func() {
+			NewExecution(ctl, nil, appr, capc, nil, jr, tr, conduit, 1, nil, nil)
+		}, "capability: NewExecution: read lane"},
+		{"NewExecution/approvals", func() {
+			NewExecution(ctl, read, nil, capc, nil, jr, tr, conduit, 1, nil, nil)
+		}, "capability: NewExecution: approvals"},
+		// rec's AuditSink cannot record intent, so without this check the call
+		// would panic anyway, but with the IntentRecorder text, not this one.
+		{"NewExecution/capChecker", func() {
+			NewExecution(ctl, read, appr, nil, nil, jr, tr, conduit, 1, nil, nil)
+		}, "capability: NewExecution: capChecker"},
+		{"NewExecution/jobsRepo", func() {
+			NewExecution(ctl, read, appr, capc, nil, nil, tr, conduit, 1, nil, nil)
+		}, "NewExecution: jobsRepo, tasksRepo, and conduit"},
+		{"NewExecution/tasksRepo", func() {
+			NewExecution(ctl, read, appr, capc, nil, jr, nil, conduit, 1, nil, nil)
+		}, "NewExecution: jobsRepo, tasksRepo, and conduit"},
+		{"NewExecution/conduit", func() {
+			NewExecution(ctl, read, appr, capc, nil, jr, tr, nil, 1, nil, nil)
+		}, "NewExecution: jobsRepo, tasksRepo, and conduit"},
 	}
 
 	for _, tt := range tests {
@@ -637,10 +658,11 @@ func TestConstructorsPanicOnNilSeam(t *testing.T) {
 	}
 }
 
-// TestNew_RefusesReadLaneOverADifferentRecorder: the Control and the read lane
-// must share one Recorder, or the layer would hold two audit trails.
-func TestNew_RefusesReadLaneOverADifferentRecorder(t *testing.T) {
-	spy := &spyAuditSink{}
+// TestNewExecution_RefusesReadLaneOverADifferentRecorder: the Control and the
+// read lane must share one Recorder, or the layer would hold two audit trails.
+func TestNewExecution_RefusesReadLaneOverADifferentRecorder(t *testing.T) {
+	jr, tr := testEngineStore(t)
+	spy := &intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}
 	recA := NewRecorder(spy, nil, nil)
 	recB := NewRecorder(spy, nil, nil)
 	reg := registry.NewInMemory()
@@ -649,27 +671,28 @@ func TestNew_RefusesReadLaneOverADifferentRecorder(t *testing.T) {
 	same := newReadLane(recA, reg, nil, nil, nil, nil, 0, nil)
 	appr := newApprovals(recA, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 
-	if New(ctl, same, appr) == nil {
-		t.Fatal("New over a read lane sharing the Control's Recorder returned nil")
+	if NewExecution(ctl, same, appr, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), 1, nil, nil) == nil {
+		t.Fatal("NewExecution over a read lane sharing the Control's Recorder returned nil")
 	}
 
 	defer func() {
 		r := recover()
 		if r == nil {
-			t.Fatal("New over a read lane with a different Recorder should panic")
+			t.Fatal("NewExecution over a read lane with a different Recorder should panic")
 		}
 		msg, _ := r.(string)
-		if !strings.Contains(msg, "capability: New:") || !strings.Contains(msg, "share one Recorder") {
-			t.Fatalf("panic = %v, want New's shared-Recorder refusal", r)
+		if !strings.Contains(msg, "capability: NewExecution:") || !strings.Contains(msg, "share one Recorder") {
+			t.Fatalf("panic = %v, want NewExecution's shared-Recorder refusal", r)
 		}
 	}()
-	New(ctl, other, appr)
+	NewExecution(ctl, other, appr, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), 1, nil, nil)
 }
 
-// TestNew_RefusesApprovalsOverADifferentRecorder: the Control and the Approvals
-// must share one Recorder, or the layer would hold two audit trails.
-func TestNew_RefusesApprovalsOverADifferentRecorder(t *testing.T) {
-	spy := &spyAuditSink{}
+// TestNewExecution_RefusesApprovalsOverADifferentRecorder: the Control and the
+// Approvals must share one Recorder, or the layer would hold two audit trails.
+func TestNewExecution_RefusesApprovalsOverADifferentRecorder(t *testing.T) {
+	jr, tr := testEngineStore(t)
+	spy := &intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}
 	recA := NewRecorder(spy, nil, nil)
 	recB := NewRecorder(spy, nil, nil)
 	reg := registry.NewInMemory()
@@ -678,21 +701,21 @@ func TestNew_RefusesApprovalsOverADifferentRecorder(t *testing.T) {
 	apprA := newApprovals(recA, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 	apprB := newApprovals(recB, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 
-	if New(ctl, same, apprA) == nil {
-		t.Fatal("New over an Approvals sharing the Control's Recorder returned nil")
+	if NewExecution(ctl, same, apprA, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), 1, nil, nil) == nil {
+		t.Fatal("NewExecution over an Approvals sharing the Control's Recorder returned nil")
 	}
 
 	defer func() {
 		r := recover()
 		if r == nil {
-			t.Fatal("New over an Approvals with a different Recorder should panic")
+			t.Fatal("NewExecution over an Approvals with a different Recorder should panic")
 		}
 		msg, _ := r.(string)
-		if !strings.Contains(msg, "capability: New:") || !strings.Contains(msg, "share one Recorder") || !strings.Contains(msg, "approvals") {
-			t.Fatalf("panic = %v, want New's approvals shared-Recorder refusal", r)
+		if !strings.Contains(msg, "capability: NewExecution:") || !strings.Contains(msg, "share one Recorder") || !strings.Contains(msg, "approvals") {
+			t.Fatalf("panic = %v, want NewExecution's approvals shared-Recorder refusal", r)
 		}
 	}()
-	New(ctl, same, apprB)
+	NewExecution(ctl, same, apprB, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), 1, nil, nil)
 }
 
 // TestNewApprovals_NilNotifierParksWithoutNotifying: production passes a nil
@@ -703,7 +726,7 @@ func TestNewApprovals_NilNotifierParksWithoutNotifying(t *testing.T) {
 	appr := NewApprovals(rec, gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}, nil, nil, nil, nil)
 	ctl := NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{})
 	read := newReadLane(rec, seedOneNode(t), nil, nil, nil, nil, 0, nil)
-	svc := New(ctl, read, appr)
+	svc := newExecution(ctl, read, appr, noopCapChecker{}, nil, noopDispatcher{}, nil)
 
 	_, err := svc.Run(context.Background(), machineRequester, Selector{}, mutateAct())
 	var parked *ParkedError

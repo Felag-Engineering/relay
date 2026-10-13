@@ -65,7 +65,7 @@ var ErrRevokeReasonMalformed = errors.New("capability: a Node-revocation reason 
 // THE LIMIT OF THE GUARANTEE, stated because the comment on
 // ErrFreezeReasonRequired promises something stronger for Freeze and the
 // difference is not obvious. ReleaseFreeze cannot be bypassed: the ACTION
-// itself is a method on Service, so a surface that skips the check does not get
+// itself is a method on Control, so a surface that skips the check does not get
 // to release the Freeze at all. Node revocation has no such method — the
 // Control API calls revocation.Service.RevokeNodeRecorded directly, and only
 // authorization routes through the capability layer — so this is a validator a

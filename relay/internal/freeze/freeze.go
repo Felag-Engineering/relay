@@ -29,7 +29,7 @@ type State struct {
 // assignable to that seam at the composition root (cmd/relay/main.go).
 type Repository interface {
 	// Frozen reports whether the Freeze is currently engaged. This is the
-	// hot-path read consulted before every dispatch (capability.Service.Run).
+	// hot-path read consulted before every dispatch (capability.Execution.Run).
 	Frozen(ctx context.Context) (bool, error)
 
 	// Engage sets the Freeze, recording principal as who engaged it.

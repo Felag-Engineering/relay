@@ -13,7 +13,7 @@ import (
 // Start is Run's non-blocking sibling (#895): the same pipeline, returning as
 // soon as the Job's Tasks and its dispatch intent are committed. The fan-out and
 // the post-dispatch accounting (metrics, the KindDispatch audit record) finish
-// in a background goroutine the Service tracks (Drain). A surface that wants the
+// in a background goroutine the Execution tracks (Drain). A surface that wants the
 // outcomes reads the Job back, or waits on StartedJob.Done.
 //
 // With an idempotency key, a call re-issued after a lost response is answered
@@ -25,7 +25,7 @@ import (
 // persisted. On the persisting engine path this call then dispatched nothing; a
 // dispatcher without that path (a test spy) runs the call whole, so an error from
 // the accounting after it can follow a dispatch.
-func (s *Service) Start(ctx context.Context, p Principal, sel Selector, act jobs.Action, o StartOptions) (StartedJob, error) {
+func (s *Execution) Start(ctx context.Context, p Principal, sel Selector, act jobs.Action, o StartOptions) (StartedJob, error) {
 	if !s.bgAcquire() {
 		return StartedJob{}, s.recordRefusal(ctx, p, sel, act, RefusalInternal, ErrDraining)
 	}
@@ -116,7 +116,7 @@ func closedChan() <-chan struct{} {
 // KindDispatch audit record and its metrics can therefore be lost. At-most-once
 // still holds: the dispatch intent is persisted before any Task is sent, and the
 // daemon dedups by Task ID.
-func (s *Service) Drain(ctx context.Context) error {
+func (s *Execution) Drain(ctx context.Context) error {
 	s.bgMu.Lock()
 	s.draining = true
 	s.bgMu.Unlock()
@@ -134,7 +134,7 @@ func (s *Service) Drain(ctx context.Context) error {
 	}
 }
 
-func (s *Service) bgAcquire() bool {
+func (s *Execution) bgAcquire() bool {
 	s.bgMu.Lock()
 	defer s.bgMu.Unlock()
 	if s.draining {
@@ -142,16 +142,6 @@ func (s *Service) bgAcquire() bool {
 	}
 	s.bg.Add(1)
 	return true
-}
-
-// WithIdempotency wires the dispatch idempotency-key store (#895). Optional: a
-// Service without it refuses a call that carries a key rather than ignoring the
-// key, because dispatching a keyed call twice is the very thing the key is for.
-func WithIdempotency(repo jobs.IdempotencyRepository) Option {
-	if repo == nil {
-		panic("capability: WithIdempotency: repository must not be nil")
-	}
-	return func(s *Service) { s.idem = repo }
 }
 
 const (
@@ -200,7 +190,7 @@ func (e *IdempotencyKeyError) Error() string {
 var ErrIdempotencyUnavailable = errors.New("capability: this Relay cannot honour an idempotency key here " +
 	"(no key store, no verified Account, or no persisting dispatcher); this call dispatched nothing — send it without a key only if a repeat is acceptable")
 
-// ErrDraining is Start refusing because the Service is shutting down.
+// ErrDraining is Start refusing because the Execution is shutting down.
 var ErrDraining = errors.New("capability: the Relay is shutting down; this call dispatched nothing")
 
 // IdempotencyPendingError means an earlier call with this key may still be
@@ -261,7 +251,7 @@ type keyClaim struct {
 
 func claimMapKey(accountID, key string) string { return accountID + "\x00" + key }
 
-func (s *Service) registerClaim(accountID, key, jobID string) *keyClaim {
+func (s *Execution) registerClaim(accountID, key, jobID string) *keyClaim {
 	c := &keyClaim{mapKey: claimMapKey(accountID, key), accountID: accountID, key: key, jobID: jobID, settled: make(chan struct{})}
 	s.claimsMu.Lock()
 	s.claims[c.mapKey] = c
@@ -273,7 +263,7 @@ func (s *Service) registerClaim(accountID, key, jobID string) *keyClaim {
 // a late settle must not close the claim of a later caller that re-claimed the
 // key. The entry goes before settled closes, so a waiter woken by the close can
 // never find the settled claim through liveClaim.
-func (s *Service) settle(c *keyClaim) {
+func (s *Execution) settle(c *keyClaim) {
 	if c == nil {
 		return
 	}
@@ -288,7 +278,7 @@ func (s *Service) settle(c *keyClaim) {
 }
 
 // liveClaim returns the unsettled claim naming jobID for (accountID, key).
-func (s *Service) liveClaim(accountID, key, jobID string) *keyClaim {
+func (s *Execution) liveClaim(accountID, key, jobID string) *keyClaim {
 	s.claimsMu.Lock()
 	defer s.claimsMu.Unlock()
 	if c := s.claims[claimMapKey(accountID, key)]; c != nil && c.jobID == jobID {
@@ -300,7 +290,7 @@ func (s *Service) liveClaim(accountID, key, jobID string) *keyClaim {
 // releaseClaim gives c's key back, because its Job was never persisted, then
 // settles it. Detached and bounded: a dropped stream must not leave a key bound
 // for the window to a Job that never existed.
-func (s *Service) releaseClaim(ctx context.Context, c *keyClaim) {
+func (s *Execution) releaseClaim(ctx context.Context, c *keyClaim) {
 	if c == nil {
 		return
 	}
@@ -315,7 +305,7 @@ func compensateContext(ctx context.Context) (context.Context, context.CancelFunc
 }
 
 // logKeyWrite logs a failed compensating write. It never names the key.
-func (s *Service) logKeyWrite(ctx context.Context, op string, err error) {
+func (s *Execution) logKeyWrite(ctx context.Context, op string, err error) {
 	if err != nil {
 		s.logger().ErrorContext(ctx, "capability: idempotency key compensating write failed; the key stays bound until its window passes", "op", op, "error", err)
 	}
@@ -323,7 +313,7 @@ func (s *Service) logKeyWrite(ctx context.Context, op string, err error) {
 
 // keyedReattach answers a call whose key already has a live record: a conflict
 // if the arguments differ, otherwise the Job the record names.
-func (s *Service) keyedReattach(ctx context.Context, p Principal, sel Selector, act jobs.Action, digest string, rec jobs.IdempotencyRecord) (prep, error) {
+func (s *Execution) keyedReattach(ctx context.Context, p Principal, sel Selector, act jobs.Action, digest string, rec jobs.IdempotencyRecord) (prep, error) {
 	if rec.RequestDigest != digest {
 		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalMalformed, &IdempotencyConflictError{})
 	}
@@ -341,7 +331,7 @@ func (s *Service) keyedReattach(ctx context.Context, p Principal, sel Selector, 
 //
 // Every outcome that discloses a Job ID is an audited read and fails closed
 // (ErrReadUnaudited). None is a refusal metric: none refuses the request.
-func (s *Service) resolveKeyedReattach(ctx context.Context, p Principal, sel Selector, act jobs.Action, rec jobs.IdempotencyRecord) (*reattachment, error) {
+func (s *Execution) resolveKeyedReattach(ctx context.Context, p Principal, sel Selector, act jobs.Action, rec jobs.IdempotencyRecord) (*reattachment, error) {
 	st, ok := s.disp.(starter)
 	if !ok {
 		return nil, s.recordRefusal(ctx, p, sel, act, RefusalInternal, ErrIdempotencyUnavailable)

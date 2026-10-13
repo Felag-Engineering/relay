@@ -148,7 +148,7 @@ type JobSummary struct {
 	// Recording is how much of the Job's dispatch audit record exists (#887),
 	// worked out from counts: the Job's dispatch_intent and dispatch rows
 	// against Total. The comparison is exact because run returns one result
-	// per persisted Task and Service.Run appends one dispatch row per result.
+	// per persisted Task and Execution.Run appends one dispatch row per result.
 	Recording JobRecording
 }
 

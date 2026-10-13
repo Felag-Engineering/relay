@@ -56,7 +56,7 @@ const (
 	// 2026-09-14). The SCOPE differs by Kind (#614, owner decision
 	// 2026-09-17): a human Account may cancel any Job, a machine Account
 	// only one whose recorded requester is itself — see
-	// Service.CancelJob/authorizeMachineCancel.
+	// Execution.CancelJob/authorizeMachineCancel.
 	ControlCancelJob ControlAction = "cancel_job"
 
 	// Account and API-Token administration (#653): GET/POST
@@ -149,7 +149,7 @@ type Authorizer interface {
 // allowAllAuthorizer is the v0.0.5 default: every request is authorized.
 // Real Grant-based authorization is a later v0.0.5/v0.0.6 issue.
 //
-// New's fail-open guard refuses to build a Service that pairs this with a
+// NewExecution's fail-open guard refuses to build an Execution that pairs this with a
 // real dispatcher, which is what keeps it out of production for BOTH halves
 // of the interface — a Relay whose Freeze anyone may engage is the same class
 // of wiring bug as one whose Raw Exec anyone may run.
@@ -194,7 +194,7 @@ type AuditSink interface {
 	// [5/8], owner DECISION 2). Cancellation is durably recorded on each
 	// affected Task via OutcomeCancelled regardless (ADR-0013) — this adds
 	// the principal-attributed audit row so *who* asked for the stop is
-	// queryable, mirroring RecordFreeze. Service.CancelJob calls this only
+	// queryable, mirroring RecordFreeze. Execution.CancelJob calls this only
 	// after the cancel itself was attempted successfully; see CancelJob's
 	// doc comment.
 	RecordCancel(ctx context.Context, p Principal, jobID string) error
@@ -210,8 +210,8 @@ type AuditSink interface {
 	// getting its own seam — the same reason Record/RecordFreeze/
 	// RecordCancel are one interface (this file's doc comment above): a
 	// separately-wired read auditor is how a deployment ends up with audited
-	// dispatch and an unaudited trail, and New's real-dispatcher fail-open
-	// guard (service.go) then covers the read lane for free, with no new
+	// dispatch and an unaudited trail, and NewExecution's real-dispatcher fail-open
+	// guard (pipeline.go) then covers the read lane for free, with no new
 	// guard to remember.
 	RecordRead(ctx context.Context, p Principal, tool, selector, nodeID, jobID string) error
 
@@ -220,7 +220,7 @@ type AuditSink interface {
 	// it, or minting/revoking an API Token. It joins this interface rather
 	// than getting its own seam for the same reason RecordRead does: a
 	// separately-wired administration auditor is how a deployment ends up
-	// with audited dispatch and unaudited identity changes, and New's
+	// with audited dispatch and unaudited identity changes, and NewExecution's
 	// real-dispatcher/NewReadLane fail-open guards then cover it for free.
 	//
 	// Reads (Accounts/Account/APITokens) never call this — see
@@ -422,7 +422,7 @@ type AuditEntry struct {
 	GrantID string
 
 	// Asserted is the caller-claimed attribution lane (#300), read off the
-	// request context by Service.Run/Plan. Recorded, never consulted — see
+	// request context by Execution.Run/Plan. Recorded, never consulted — see
 	// assertions.go.
 	Asserted Assertions
 
@@ -484,7 +484,7 @@ func (noopAuditSink) RecordAccountAdmin(context.Context, Principal, AccountAdmin
 }
 
 // FreezeStore is the persisted, Relay-wide emergency stop (ADR-0013): "I
-// don't trust what's driving this, stop dispatching everything." Service.Run
+// don't trust what's driving this, stop dispatching everything." Execution.Run
 // consults Frozen before every dispatch (both risk classes); EngageFreeze/
 // ReleaseFreeze call Engage/Release. This seam takes only a context, so it is
 // allowlist-safe for capability's import-boundary guard
@@ -506,8 +506,8 @@ type FreezeStore interface {
 }
 
 // noopFreezeStore is the v0.0.5 default: "never frozen". This is a missing
-// stop-button, not a fail-open of authz/cap/audit — but see New's fail-open
-// guard (service.go), which requires a real FreezeStore alongside a real
+// stop-button, not a fail-open of authz/cap/audit — but see NewExecution's fail-open
+// guard (pipeline.go), which requires a real FreezeStore alongside a real
 // dispatcher for exactly that reason: an un-stoppable real executor is the
 // same class of composition-root wiring bug.
 type noopFreezeStore struct{}
@@ -524,7 +524,7 @@ func (noopFreezeStore) Release(context.Context, string, string) error {
 	return nil
 }
 
-// RefusalKind classifies why Service.Run or Service.Plan short-circuited
+// RefusalKind classifies why Execution.Run or Execution.Plan short-circuited
 // before dispatch, for MetricsSink.IncRefusal. It is a fixed, small enum —
 // never the human-readable refusal error text — so /metrics stays free of
 // unbounded cardinality.
@@ -649,7 +649,7 @@ type TemplateVocabularySource interface {
 	Get(nodeID string) (nodevocab.Snapshot, bool)
 }
 
-// FrozenError is returned by Service.Run when the Relay-wide Freeze is
+// FrozenError is returned by Execution.Run when the Relay-wide Freeze is
 // engaged: dispatch is refused before any Task is sent. It is exported and
 // typed so a surface can recognize a Freeze refusal via errors.As without
 // string-matching (mirrors CapExceededError, caps.go).

@@ -29,7 +29,7 @@
 // That still makes the configured endpoint a disclosure boundary: point it at
 // infrastructure trusted with the same material as the audit trail. The known
 // residual that a secret passed as an Operation ARGUMENT reaches the audit trail
-// verbatim (capability.Service.Run) reaches this body by the same route.
+// verbatim (capability.Execution.Run) reaches this body by the same route.
 //
 // # Signing
 //

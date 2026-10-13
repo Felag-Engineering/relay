@@ -156,7 +156,7 @@ type releaseCall struct {
 // returns configurable errors.
 //
 // gate, when set, runs the REAL authz.RoleGate before the canned result,
-// standing in for what capability.Service does with the same object (#397).
+// standing in for what capability.Execution does with the same object (#397).
 // The reasoning is fakeExecutor's, and identical: the Freeze floor is the
 // central ladder's answer, so proving it against a fake that returns a canned
 // 403 would prove only that this file can spell errors. What these tests own

@@ -362,7 +362,7 @@ func callOutcome(f trailFacts) (outcome, state string) {
 		// "requested" says the one thing the record does carry, and carries
 		// honestly: the stop was asked for. It is not a hedge — CancelJob
 		// writes this row only AFTER the cancel itself succeeded, and records
-		// nothing at all when it fails (capability/service.go) — so an ask
+		// nothing at all when it fails (capability/pipeline.go) — so an ask
 		// that reached the trail is an ask that landed. What each Task then
 		// did is one click away.
 		return "requested", ""

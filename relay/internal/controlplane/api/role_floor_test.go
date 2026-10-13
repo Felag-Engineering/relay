@@ -44,7 +44,7 @@ const (
 
 	// floorCapability: the floor is enforced inside the capability layer, and
 	// this surface only renders the refusal. Execution (authz.RoleGate via
-	// capability.Service.Run), Freeze (capability.Control; AuthorizeControl via EngageFreeze/
+	// capability.Execution.Run), Freeze (capability.Control; AuthorizeControl via EngageFreeze/
 	// ReleaseFreeze), approvals (AuthorizeApprovalDecision), and identity
 	// management (#653: AuthorizeControl via Accounts/CreateAccount/
 	// SetAccountRole/...) are all here. A handler in this class must NOT
@@ -104,7 +104,7 @@ var routeFloors = map[string]floorKind{
 	"DELETE /api/v1/api-tokens/{token_id}": floorCapability,
 
 	// Execution (#356): operator for a typed Operation, admin for Raw Exec —
-	// authz.RoleGate, reached through capability.Service.Run/Plan.
+	// authz.RoleGate, reached through capability.Execution.Run/Plan.
 	"POST /api/v1/operations": floorCapability,
 	"POST /api/v1/raw-exec":   floorCapability,
 
@@ -134,7 +134,7 @@ var routeFloors = map[string]floorKind{
 // request itself, so reaching it is reaching a decision.
 //
 // requireAdmin is GONE (#653): the identity routes' role floor moved into
-// capability.Service, so the only surface-level role check left in this
+// capability.AccountAdmin, so the only surface-level role check left in this
 // package is authorizeControl, for the three routes (both enrollment-token
 // routes, Node revoke) that still call it directly.
 var surfaceGateFuncs = map[string]bool{

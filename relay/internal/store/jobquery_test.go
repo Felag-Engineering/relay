@@ -124,7 +124,7 @@ func TestJobQuery_StateDerivation(t *testing.T) {
 
 // nonDispatchAuditRecord appends a job_id-carrying audit row of the given
 // Kind (KindRefusal or KindJobCancel) attributed to accountID — the shape
-// CancelJob's refuseCancel/RecordCancel write (capability/service.go). Used
+// CancelJob's refuseCancel/RecordCancel write (capability/pipeline.go). Used
 // by TestJobQuery_RequesterJoinIgnoresNonDispatchRows to prove these rows
 // never feed the requester join.
 func nonDispatchAuditRecord(t *testing.T, ctx context.Context, st *Store, id, kind, jobID, accountID, accountName string, ts time.Time) {

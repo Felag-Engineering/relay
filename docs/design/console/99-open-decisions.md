@@ -429,7 +429,7 @@ per ADR-0020's incident ladder. The gates are specified and absent.
 `authz.RoleGate` the capability layer already held: mint `admin`, token revoke `admin`
 (the fourth route, which this entry's table did not name — found by the structural guard),
 Node revoke `admin`, Freeze engage a human `operator`+, Freeze release `admin` with a
-reason. Freeze's floor lives in `capability.Service`, so the Console inherits it rather
+reason. Freeze's floor lives in `capability.Control`, so the Console inherits it rather
 than re-deriving it; mint and revoke are checked at the Control API surface because
 `capability`'s import allowlist bars `internal/enroll` and `internal/revocation`, leaving
 no capability-layer method to gate. Every refusal is audited as a `refusal` with the

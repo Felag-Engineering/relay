@@ -224,7 +224,7 @@ func newStartFx(t *testing.T, mods ...func(*seams)) *startFx {
 		conduit:   f.conduit,
 		intents:   f.intents,
 	}
-	// A caller's mod runs after the fixture's, so it wins, as a later Option did.
+	// A caller's mod runs after the fixture's, so it wins: mods apply in order, last one wins.
 	for _, mod := range mods {
 		mod(&s)
 	}

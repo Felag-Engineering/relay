@@ -273,7 +273,7 @@ func (l *ReadLane) ListNodes(ctx context.Context, p Principal, selector string) 
 
 // stateEval is the StateEval every Selector resolution inside the capability
 // layer evaluates against: the lane's own clock and its configured
-// cert-expiring window. One method, so Run and Plan (through Service.read) and
+// cert-expiring window. One method, so Run and Plan (through Execution.read) and
 // the read lane can never resolve the same Selector against two different
 // instants.
 //
@@ -417,7 +417,7 @@ func (l *ReadLane) ListOperations(ctx context.Context, p Principal, nodeID strin
 }
 
 // registryReadable refuses the registry read lane on a ReadLane that cannot
-// actually audit — the read-lane analogue of New's fail-open guards.
+// actually audit — the read-lane analogue of NewExecution's fail-open guards.
 //
 // NewReadLane already refuses the no-op sink (F5, #441), because a lane that
 // answers every query while recording none of them is the "unauditable read

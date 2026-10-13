@@ -133,7 +133,7 @@ type ApprovalNotice struct {
 // the guarantee: the decision endpoint stands alone, and a deployment whose
 // webhook is down loses a notification, never safety.
 //
-// It returns nothing, and Service.Run ignores its timing entirely, because a
+// It returns nothing, and Execution.Run ignores its timing entirely, because a
 // park must not be able to fail — or stall — on someone else's HTTP server.
 type ApprovalNotifier interface {
 	NotifyParked(ctx context.Context, n ApprovalNotice)
@@ -149,7 +149,7 @@ func (noopApprovalNotifier) NotifyParked(context.Context, ApprovalNotice) {}
 // store, the Grant store, the MCP task handles, the role floor on a decision and
 // the notifier. It never dispatches — it cannot reach Run, Start or CancelJob —
 // which is what lets the approval seams of every adapter be handed this and not
-// the Service. Build it with NewApprovals.
+// the Execution. Build it with NewApprovals.
 type Approvals struct {
 	rec *Recorder
 
@@ -268,7 +268,7 @@ func (a *Approvals) notifyParked(ctx context.Context, r approval.Request) {
 	a.notifier.NotifyParked(ctx, noticeFor(r))
 }
 
-// ParkedError is returned by Service.Run when a dispatch is gated and now waits
+// ParkedError is returned by Execution.Run when a dispatch is gated and now waits
 // for a human. It is exported and typed so a surface can recognize a park via
 // errors.As and render it as "accepted, pending approval" rather than as a
 // failure — mirroring FrozenError and CapExceededError.
@@ -369,13 +369,13 @@ type approvalDecision struct {
 	// requestID is the satisfied Request that released this dispatch, empty
 	// when no approval was required — the satisfied Request whose release this
 	// dispatch must claim (or re-attach to). For a single-Plan approval,
-	// Service.Run must claim it with approvals.BindJob before dispatching
+	// Execution.Run must claim it with approvals.BindJob before dispatching
 	// (AP-77); for a grant-released dispatch (grantID non-empty) it is never
 	// claimed — see Run's grant-rationale comment.
 	requestID string
 	// reattachJobID is set when the satisfied Request named by requestID has
 	// ALREADY bound a Job (AP-77: an approval releases one execution). Set
-	// only together with requestID. Service.Run must re-attach to this Job and
+	// only together with requestID. Execution.Run must re-attach to this Job and
 	// dispatch nothing.
 	reattachJobID string
 	// parked is set when the dispatch was parked instead.

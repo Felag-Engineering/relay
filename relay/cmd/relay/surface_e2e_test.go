@@ -9,7 +9,7 @@
 // real relay-daemon subprocesses, with newServer wired for production
 // (Config.ControlEnabled=true, the #154 path this repo's other e2e suites
 // already prove piecewise). This file adds no assertion path that reaches
-// into deps.capability directly (unlike control_api_e2e_test.go's Freeze
+// into deps.execution directly (unlike control_api_e2e_test.go's Freeze
 // probe) — deps.audit reads and the direct node-plane Enroll RPC (for the
 // deterministic revoked-token negative) are the only non-MCP/non-HTTP
 // observation points, both read-only/negative-only, never part of the

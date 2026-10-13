@@ -193,7 +193,7 @@ func TestNewDispatchStack_ReconcilerUsesRouter(t *testing.T) {
 // is (a) the end-to-end proof that the production assembly —
 // newDispatchStack -> Router -> *auditsink.Sink -> store — is wired, which is
 // the substitute for the fail-open guard decision 3 (plan.md) explains this
-// seam cannot borrow from capability.New; and (b) a REGRESSION PIN on risk
+// seam cannot borrow from capability.NewExecution; and (b) a REGRESSION PIN on risk
 // class: no branch on this path reads RiskClass today, and this test exists
 // so that none ever appears. It is deliberately NOT a demonstration that some
 // read-class branch was handled — there is none — and must not be read as
@@ -506,9 +506,9 @@ func TestViolationRecorder_RecordProtocolViolation(t *testing.T) {
 }
 
 // capSeams is the set of collaborators a test hands to newCapService. A zero
-// execution field means "not supplied": the option is not emitted and
-// capability.New keeps its default. audit, authz, freeze and both query seams
-// are required, as the capability constructors require them.
+// concurrency takes capability.DefaultDispatchConcurrency. audit, authz,
+// freeze, both query seams, cap and the execution seams are required, as
+// capability.NewExecution requires them.
 type capSeams struct {
 	reg         registry.Repository
 	authz       capability.Authorizer
@@ -525,7 +525,7 @@ type capSeams struct {
 
 // newCapService builds the capability layer for a test: a thin wrapper over
 // the capability constructors, so the layer's shape changes in one place.
-func newCapService(t *testing.T, s capSeams) *capability.Service {
+func newCapService(t *testing.T, s capSeams) *capability.Execution {
 	t.Helper()
 	if s.audit == nil || s.authz == nil || s.freeze == nil || s.auditQ == nil || s.jobQ == nil {
 		t.Fatalf("newCapService: audit, authz, freeze, auditQ and jobQ are required")
@@ -533,16 +533,12 @@ func newCapService(t *testing.T, s capSeams) *capability.Service {
 	rec := capability.NewRecorder(s.audit, nil, nil)
 	ctl := capability.NewControl(rec, s.authz, s.freeze)
 	read := capability.NewReadLane(rec, s.reg, s.auditQ, s.jobQ, nil, nil, 0, nil)
-	var opts []capability.Option
-	if s.cap != nil {
-		opts = append(opts, capability.WithCapChecker(s.cap))
+	if s.cap == nil || s.jobsRepo == nil || s.tasksRepo == nil || s.conduit == nil {
+		t.Fatalf("newCapService: cap, jobsRepo, tasksRepo and conduit are required")
 	}
-	if s.jobsRepo != nil || s.tasksRepo != nil || s.conduit != nil {
-		var eo []capability.ExecOption
-		if s.concurrency != 0 {
-			eo = append(eo, capability.WithExecDispatchConcurrency(s.concurrency))
-		}
-		opts = append(opts, capability.WithExecution(s.jobsRepo, s.tasksRepo, s.conduit, eo...))
+	conc := s.concurrency
+	if conc == 0 {
+		conc = capability.DefaultDispatchConcurrency
 	}
 	// A gate with no rules: nothing parks, so the store and authorizer below it
 	// are unreachable on every path these tests drive.
@@ -551,7 +547,7 @@ func newCapService(t *testing.T, s capSeams) *capability.Service {
 		t.Fatalf("approval.NewGate: %v", err)
 	}
 	appr := capability.NewApprovals(rec, gate, unreachableApprovalStore{}, denyApprovalDecisions{}, nil, nil, nil, nil)
-	return capability.New(ctl, read, appr, opts...)
+	return capability.NewExecution(ctl, read, appr, s.cap, nil, s.jobsRepo, s.tasksRepo, s.conduit, conc, nil, nil)
 }
 
 // unreachableApprovalStore is the approval store behind an empty gate: nothing

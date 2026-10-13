@@ -22,7 +22,7 @@ import (
 
 // testAuthorizer is the execution-wired fixture's allow-all Authorizer, a
 // DISTINCT type from capability's own unexported allowAllAuthorizer so
-// capability.New's fail-open guard ("a real dispatcher must never ride the
+// capability.NewExecution's fail-open guard ("a real dispatcher must never ride the
 // package's own allow-all default") is satisfied by construction, mirroring
 // cmd/relay/devharness.go's devHarnessAuthorizer.
 type testAuthorizer struct{}
@@ -33,7 +33,7 @@ func (testAuthorizer) Authorize(context.Context, capability.Principal, jobs.Acti
 
 // AuthorizeControl completes capability.Authorizer's administrative half
 // (#397). It is NOT unreachable: cancel_job and tasks/cancel now reach
-// AuthorizeControl(ControlCancelJob) through capability.Service.CancelJob
+// AuthorizeControl(ControlCancelJob) through capability.Execution.CancelJob
 // (#595), and this allow-all answer is what lets this file's cancel tests
 // through without asserting on the role floor themselves. The real floor —
 // a viewer refused, an operator permitted — is proven once in
@@ -45,7 +45,7 @@ func (testAuthorizer) AuthorizeControl(context.Context, capability.Principal, ca
 	return nil
 }
 
-// deterministicIDs returns a capability.WithExecNewID-compatible generator
+// deterministicIDs returns a NewExecution newID-compatible generator
 // that yields "id-1", "id-2", ... in call order, mutex-guarded (the cancel
 // test drives two concurrent tool calls, and the whole suite runs under
 // -race). The Job engine mints IDs job-id-N first, then stage-id-N, then one
@@ -508,7 +508,7 @@ func TestMCP_ZeroMatch_RefusesBothExecutionTools(t *testing.T) {
 // on that channel before calling cancel_job.
 func TestMCP_CancelJob_InFlightAndPendingSibling(t *testing.T) {
 	// registry.List() is sorted by NodeID, and this test pins the Job engine to
-	// one Task in flight at a time (capability.WithExecDispatchConcurrency(1)),
+	// one Task in flight at a time (an Execution built with concurrency 1),
 	// so blocking node A's Dispatch leaves node B Pending in the store. That
 	// pin is what produces the "in-flight + pending sibling" scenario; under
 	// the default bound both would be in flight. Concurrent in-flight cancel is

@@ -9,7 +9,7 @@
 // the Selector is resolved, and a Node is exactly the party whose compromise
 // the rest of the system is built to survive. resolveAction is the one place
 // that decides a class for any Action, and it is reached only from
-// Service.Run and Service.Plan — never from an adapter, which builds an Action
+// Execution.Run and Execution.Plan — never from an adapter, which builds an Action
 // with no class at all (invariants 10 and 13). An Action that arrives with a
 // class is refused.
 //
@@ -112,7 +112,7 @@ func isTemplateAction(act jobs.Action) bool {
 // resolveAction decides an Action's class and, for a Template, its dispatch
 // over matched; see this file's header for the rules. It never refuses on its own: a refusal is
 // returned as data for the caller to act on after authorization.
-func (s *Service) resolveAction(act jobs.Action, matched []registry.Node) resolvedAction {
+func (s *Execution) resolveAction(act jobs.Action, matched []registry.Node) resolvedAction {
 	if !isTemplateAction(act) {
 		out := resolvedAction{act: act, nodes: matched}
 		// Written even on the refusal path, so a refused Action never carries
@@ -178,10 +178,10 @@ func (s *Service) resolveAction(act jobs.Action, matched []registry.Node) resolv
 	return out
 }
 
-// templateSnapshot reads one Node's reported Template vocabulary. A Service
+// templateSnapshot reads one Node's reported Template vocabulary. An Execution
 // with no vocabulary source wired holds no report for any Node, which
 // excludes every Node rather than dispatching blind.
-func (s *Service) templateSnapshot(nodeID string) (nodevocab.Snapshot, bool) {
+func (s *Execution) templateSnapshot(nodeID string) (nodevocab.Snapshot, bool) {
 	if s.read.nodeVocab == nil {
 		return nodevocab.Snapshot{}, false
 	}

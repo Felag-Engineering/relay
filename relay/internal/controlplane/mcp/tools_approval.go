@@ -443,7 +443,7 @@ const (
 // re-attaching to the existing Job (AP-67) is still safe, because it
 // dispatches nothing new.
 //
-// The contract for elicitedStillPending: the caller re-drives Service.Run
+// The contract for elicitedStillPending: the caller re-drives Execution.Run
 // with the same call to observe the park. The park it observes is not
 // askable (AP-62: a partial quorum is an OBSERVED park, not a created one),
 // so the caller renders pending_approval and asks no new question — it does
@@ -1144,7 +1144,7 @@ func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
 
 // dispatchError wraps an error dispatch() returned AFTER this answer was
 // already taken (BLOCKING 2, plan review cycle 1). It is deliberately
-// neutral about whether anything ran: Service.Run can return per-Node
+// neutral about whether anything ran: Execution.Run can return per-Node
 // results together with an error (a failed dispatch audit write, or a
 // failed BindJob), and dispatch() also returns an error when renderJob fails
 // AFTER a successful Run — in both cases a Job may already exist, so the

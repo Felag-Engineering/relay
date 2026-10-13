@@ -148,8 +148,8 @@ func newAccountAdminFixture(t *testing.T, authz Authorizer, accountStore Account
 
 // -----------------------------------------------------------------------
 // NewAccountAdmin's fail-open guard (security review finding 1): every
-// sibling guard (TestWithExecutionRefusesDefaultSeams,
-// TestWithExecutionRefusesWithoutFreeze, TestNewReadLaneRefusesNoopAuditSink)
+// sibling guard (TestNewExecutionRefusesDefaultSeams,
+// TestNewExecutionRefusesWithoutFreeze, TestNewReadLaneRefusesNoopAuditSink)
 // has a panic test; this is AccountAdmin's. Each builds its Control outside the
 // recover scope, so only NewAccountAdmin can be the panic under test.
 // -----------------------------------------------------------------------
@@ -163,7 +163,7 @@ func TestNewRefusesAccountAdminWithoutARealAuthorizer(t *testing.T) {
 	ctl := NewControl(NewRecorder(&spyAuditSink{}, nil, nil), allowAllAuthorizer{}, &fakeFreezeStore{})
 	defer func() {
 		if recover() == nil {
-			t.Fatal("New(reg, WithAccountAdmin(...)) without a real Authorizer should panic")
+			t.Fatal("NewAccountAdmin without a real Authorizer should panic")
 		}
 	}()
 	NewAccountAdmin(ctl, &fakeAccountStore{}, &fakeAPITokenStore{})
@@ -177,7 +177,7 @@ func TestNewRefusesAccountAdminWithoutARealAuditSink(t *testing.T) {
 	ctl := NewControl(NewRecorder(noopAuditSink{}, nil, nil), &permissiveControlAuthorizer{}, &fakeFreezeStore{})
 	defer func() {
 		if recover() == nil {
-			t.Fatal("New(reg, WithAccountAdmin(...)) without a real AuditSink should panic")
+			t.Fatal("NewAccountAdmin without a real AuditSink should panic")
 		}
 	}()
 	NewAccountAdmin(ctl, &fakeAccountStore{}, &fakeAPITokenStore{})

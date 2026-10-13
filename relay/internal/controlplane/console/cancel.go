@@ -32,7 +32,7 @@ package console
 // Job, a machine Account only a Job it requested (#614) — and that
 // distinction, like the floor itself, is decided in the capability layer,
 // not here. It and the audit row are the capability layer's, exactly as
-// invariant 10 requires: this file renders what capability.Service.CancelJob
+// invariant 10 requires: this file renders what capability.Execution.CancelJob
 // decided, and decides nothing itself.
 
 import (
@@ -52,8 +52,8 @@ import (
 // is read-only — this is deliberately the one exception, and it gets its
 // own file to keep that claim true of seams.go without qualification.
 //
-// *capability.Service satisfies it. The single method mirrors
-// capability.Service.CancelJob's signature exactly: the role floor and the
+// *capability.Execution satisfies it. The single method mirrors
+// capability.Execution.CancelJob's signature exactly: the role floor and the
 // audit row are decided and recorded there, never here.
 type JobCanceller interface {
 	CancelJob(ctx context.Context, p capability.Principal, jobID string) error

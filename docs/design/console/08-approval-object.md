@@ -130,7 +130,7 @@ section (spec 13) draws the same label from the same record.
       criterion above: a browser has not painted the two pixel-for-pixel identical.
 - [x] Neither decision submits without step-up. **(#453.)** A password field is inline on the
       decision form itself and `POST /console/approvals/{id}/decision` verifies it, in the same
-      request, immediately before calling `capability.Service.DecideApproval` — never a separate
+      request, immediately before calling `capability.Approvals.DecideApproval` — never a separate
       re-auth round trip. **Deviation from the window model this criterion implies:** step-up is
       demanded on **every** decision rather than consulting the five-minute recent-auth window
       (`StepUpFresh`/`ErrStepUpRequired` stay uncalled) — approving three requests costs three

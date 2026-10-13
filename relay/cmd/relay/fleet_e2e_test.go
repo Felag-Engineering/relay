@@ -92,7 +92,7 @@ func startFleetRelay(t *testing.T, relayBin string, extraEnv []string) *fleetRel
 // restart kills the current Relay subprocess (SIGKILL — a real crash, not a
 // graceful shutdown) and relaunches it against the SAME store path, address,
 // and CA dir, then redials the devharness socket. Jobs/Tasks/audit persist in
-// storePath across this; only the in-memory Router/capSvc are rebuilt.
+// storePath across this; only the in-memory Router/Execution are rebuilt.
 func (r *fleetRelay) restart(t *testing.T, extraEnv []string) {
 	t.Helper()
 	if r.cmd.Process != nil {
@@ -202,7 +202,7 @@ func waitForFrozen(t *testing.T, harness *harnessClient, want bool) {
 }
 
 // waitForInFlightJobID polls list_inflight until some Task is in flight and
-// returns its job_id. Service.Run blocks until every matched Node's Task
+// returns its job_id. Execution.Run blocks until every matched Node's Task
 // reaches a terminal state, so a caller can never learn a long-running Job's
 // ID from run_job's own response while it is still in flight on another
 // connection — list_inflight (TaskRepository.InFlight, ADR-0004) is the only

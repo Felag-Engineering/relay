@@ -106,7 +106,7 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 		t.Errorf("result.NodeID = %q, want %q", result.NodeID, nodeID)
 	}
 	// SUCCESS (not UNREACHABLE/UNSPECIFIED) proves the production sink
-	// round-tripped the daemon's real TaskResult back to capSvc's caller —
+	// round-tripped the daemon's real TaskResult back to the Execution's caller —
 	// the whole point of the #154 flip.
 	if result.Outcome != "success" {
 		t.Fatalf("result.Outcome = %q, want %q; stderr=%q", result.Outcome, "success", result.Stderr)

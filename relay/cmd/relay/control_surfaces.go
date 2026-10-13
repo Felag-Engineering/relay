@@ -11,8 +11,8 @@ package main
 // can be mounted from without tripping either guard.
 //
 // surfaceDeps is assembled exactly once per newServer call (invariant 10:
-// capSvc is a single instance, delivered to every surface here — no surface
-// constructs its own capability.Service or dispatcher). Mount takes
+// the capability services are single instances, delivered to every surface
+// here — no surface constructs its own capability service or dispatcher). Mount takes
 // *http.ServeMux (from controlplane.Server.Mux()), never *controlplane.Server:
 // a surface can reach the routes it registers but never the listener, TLS
 // config, or the Authenticator that wraps the mux.
@@ -64,9 +64,9 @@ import (
 type surfaceDeps struct {
 	logger *slog.Logger // the process logger (main.go); nil means slog.Default()
 	ops    mcp.OperationLister
-	// capability is Execution: mcp Executor and TaskResolver; api Exec; console
+	// execution is Execution: mcp Executor and TaskResolver; api Exec; console
 	// Cancel.
-	capability *capability.Service
+	execution *capability.Execution
 	// approvals is the approval callout: mcp ApprovalDecider; api Approvals and
 	// ApprovalGrants; console Approvals and Decide.
 	approvals *capability.Approvals
@@ -155,7 +155,7 @@ type mcpSurface struct{}
 
 func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	// The last argument is the MCP Tasks resolver (#374, ADR-0028) — the SAME
-	// *capability.Service once more. Resolving a task handle reads an approval
+	// *capability.Execution once more. Resolving a task handle reads an approval
 	// Request and may cancel a Job, so it goes through the one capability layer
 	// like everything else (invariant 10) rather than reaching a store.
 	//
@@ -200,9 +200,9 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	}
 	opts = append(opts, d.testMCPOptions...)
 
-	mux.Handle("/mcp", mcp.New(mcpReadLane{svc: d.readLane}, d.ops, d.capability,
+	mux.Handle("/mcp", mcp.New(mcpReadLane{svc: d.readLane}, d.ops, d.execution,
 		jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
-		readAuditor{sink: d.auditSink}, d.capability, opts...))
+		readAuditor{sink: d.auditSink}, d.execution, opts...))
 }
 
 // apiSurface mounts the /api/v1 Control API slice (#116) onto the same mux —
@@ -234,11 +234,11 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// registry directly.
 		NodeReader: d.readLane,
 		Now:        d.now,
-		// Execution (#356): the SAME *capability.Service instance the MCP
+		// Execution (#356): the SAME *capability.Execution instance the MCP
 		// surface dispatches through — one capability layer, two thin surfaces
 		// (invariant 10), so Freeze/authz/blast-cap/audit and at-most-once carry
 		// over identically rather than being re-proven per surface.
-		Exec: d.capability,
+		Exec: d.execution,
 		Jobs: jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
 		// The out-of-band approval decision channel (#270, ADR-0027) — the same
 		// *capability.Approvals again. The decision is the same act however it
@@ -269,7 +269,7 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 // metricsSurface mounts the Prometheus text /metrics endpoint (#182) onto the
 // same mux — no new listener, no new auth (invariant 10). It is
 // observability-only, reached solely through the Authenticator.Middleware
-// wrapping mux: it never calls capability.Service.Run and has no execution
+// wrapping mux: it never calls capability.Execution.Run and has no execution
 // capability whatsoever (invariant 10, ADR-0009/0010).
 type metricsSurface struct{}
 
@@ -343,7 +343,7 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// state:cert-expiring's warning window (#414, ADR-0034) — the same
 		// value every other surface resolves `state:` against.
 		CertExpiringWithin: d.certExpiringWithin,
-		// Cancel (#595): one of the Console's two write seams. d.capability
+		// Cancel (#595): one of the Console's two write seams. d.execution
 		// already implements CancelJob — the same method the Control API and
 		// MCP call — so no adapter is built for it; the role floor is
 		// operator, the scope beyond it differs by Account kind (human: any
@@ -351,7 +351,7 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// the audit row live in the capability layer, not here. Execution
 		// stays false, unchanged: Cancel cannot run anything, only ask
 		// something already running to stop.
-		Cancel: d.capability,
+		Cancel: d.execution,
 		// Decide (#453): the Console's other write seam, and the same
 		// *capability.Approvals the Control API's out-of-band decision
 		// endpoint (POST /api/v1/approvals/{id}/decision) and MCP's

@@ -16,7 +16,7 @@
 // outside capabilityReadAllowlist (e.g. capability.StateEval, needed for
 // NodeListing/NodeDescription's Eval field), and never
 // capability.Principal, a concrete capability service
-// (capability.Service, ReadLane, Control, AccountAdmin, Approvals, Recorder) or their
+// (capability.Execution, ReadLane, Control, AccountAdmin, Approvals, Recorder) or their
 // constructors (bannedCapabilityServices). ReadLane below
 // is a read-only, Principal-free interface — the Principal is resolved on
 // the composition root's side of the seam (the ReadAuditor precedent,
@@ -25,7 +25,7 @@
 // EXEC files: they may reference capability.Principal/Selector/NodeResult/
 // FrozenError/CapExceededError (needed for Executor's signature and error
 // rendering) but, like every file in this package, may never spell
-// capability.Service/capability.New/newDispatch or type-assert to
+// capability.Execution/capability.NewExecution/newDispatch or type-assert to
 // registry.Repository — those remain unconditionally forbidden.
 // no_dispatch_test.go AST-guards this whole partition: every non-test .go
 // file must be classified as a read file or an exec file (an unclassified
@@ -44,7 +44,7 @@
 //
 // The narrow interfaces here are a compile-time guarantee, not a runtime one
 // on their own: composition roots pass concrete values (e.g. a
-// *capability.Service-backed adapter) whose dynamic type could be wider than
+// *capability.Execution-backed adapter) whose dynamic type could be wider than
 // the interface. Without more, a value read through ReadLane could still be
 // type-asserted back to something wider. New immediately re-wraps every
 // input in an unexported adapter (readLaneAdapter / operationListerAdapter /
@@ -200,13 +200,12 @@ const serverVersion = "0.1.0"
 // Authenticator.Middleware (invariant 10: one control path, auth inherited
 // from the mux, not reimplemented here).
 //
-// exec is typically a *capability.Service (which satisfies Executor
+// exec is typically a *capability.Execution (which satisfies Executor
 // structurally); results is typically a tiny jobs.JobRepository+
 // TaskRepository adapter built by the composition root. See #118's DECISION
-// 1: passing a *capability.Service here wires the tools but does NOT itself
-// turn on production dispatch — that depends on whether exec's own
-// dispatcher was configured with capability.WithExecution, which is the
-// composition root's call, isolated to #154.
+// 1: an Execution always carries the real Job engine; whether production
+// dispatch is on is the composition root's ControlEnabled call, isolated to
+// #154.
 //
 // A nil lane is legal only for a server whose read tools (list_nodes,
 // describe_node, list_operations) are never called — e.g. a golden-file
