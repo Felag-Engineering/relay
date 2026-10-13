@@ -28,6 +28,33 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
+// TestConsoleAccounts_AdminSessionListsAccountsThroughTheAccountAdmin proves the
+// composition root handed the Console its AccountAdmin: an admin session reads
+// /console/accounts through the capability layer's AccountAdmin and sees the
+// Account. A surfaceDeps field forgotten in newServer would otherwise surface
+// only as a nil dereference at request time, because the Console's account
+// writes are not exercised end to end elsewhere.
+func TestConsoleAccounts_AdminSessionListsAccountsThroughTheAccountAdmin(t *testing.T) {
+	f := startRelay(t, WithControlPlane(), WithConfig(func(c *Config) { c.ConsoleEnabled = true }))
+
+	const password = "ledger keeper's console password"
+	mintConsoleHumanAccount(t, f, "ledger-keeper", password, accounts.RoleAdmin)
+	browser := consoleClient(t, f)
+	consoleSignIn(t, browser, f, "ledger-keeper", password)
+
+	resp, err := browser.Get(f.ControlBase + "/console/accounts")
+	if err != nil {
+		t.Fatalf("GET /console/accounts: %v", err)
+	}
+	body := readAll(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /console/accounts as admin = %d, want 200; body = %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, "ledger-keeper") {
+		t.Errorf("the Accounts page does not list the signed-in Account — it was not read through the AccountAdmin")
+	}
+}
+
 // TestQueryReadFloor_IsViewerOnMCPTheControlAPIAndTheConsole proves QRY-15's
 // Control API and Console halves: the same `viewer` Account reaches every
 // query surface on all three adapters, and the same credential is still

@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditquery"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
@@ -132,14 +133,16 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	_ = reconciler
 	deps.tunnel.sink = sink
 
-	capSvc := capability.New(deps.registry,
+	rec := capability.NewRecorder(harnessAudit, nil, deps.logger)
+	ctl := capability.NewControl(rec, devHarnessAuthorizer{}, deps.store.Freeze())
+	// NewReadLane requires both query seams. The harness reaches capSvc only
+	// through Run and a human CancelJob, neither of which consults them.
+	q := auditquery.New(deps.store.AuditQueries(), deps.store.JobQueries())
+	read := capability.NewReadLane(rec, deps.registry, q, q, nil, nil, 0, nil)
+	capSvc := capability.New(ctl, read,
 		capability.WithExecution(deps.jobs, deps.tasks, router,
 			capability.WithExecDispatchConcurrency(cfg.DispatchConcurrency)),
-		capability.WithAuthorizer(devHarnessAuthorizer{}),
-		capability.WithLogger(deps.logger),
-		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
-		capability.WithAuditSink(harnessAudit),
-		capability.WithFreeze(deps.store.Freeze()))
+		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)))
 
 	st := &harnessState{deps: deps, router: router, capSvc: capSvc}
 

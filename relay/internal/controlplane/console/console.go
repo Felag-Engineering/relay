@@ -129,11 +129,11 @@ type Deps struct {
 	Queries QueryReader
 
 	// Accounts is the Account registry and its API Tokens, read-only
-	// (#654, seams.go). It is satisfied by the same *capability.Service as
-	// Queries above, and it is deliberately NOT the same field: that comment
-	// is about the registry/Policy-view door and says a new screen asks
-	// there, and this seam must not read as having inherited that permission
-	// by sitting next to it.
+	// (#654, seams.go). It is satisfied by *capability.AccountAdmin, not the
+	// *capability.ReadLane behind Queries above, and it is deliberately NOT
+	// the same field: that comment is about the registry/Policy-view door and
+	// says a new screen asks there, and this seam must not read as having
+	// inherited that permission by sitting next to it.
 	//
 	// It is, though, a FOURTH door whose successful reads record nothing.
 	// ControlAccountRead and ControlAPITokenRead are authorized and answered
@@ -181,7 +181,7 @@ type Deps struct {
 	Decide ApprovalDecider
 
 	// AccountAdmin is the Console's THIRD write seam (#655,
-	// accounts_write.go): the same five capability.Service verbs the Control
+	// accounts_write.go): the same five capability.AccountAdmin verbs the Control
 	// API calls — CreateAccount, SetAccountRole, SetAccountEnabled,
 	// MintAPIToken and RevokeAPIToken. The admin floor on all of them, the
 	// self-target refusal, the last-enabled-admin refusal and every audit row
@@ -369,7 +369,7 @@ func Routes(d Deps) []Route {
 		// admin is a Console-only narrowing (invariant 10, subtractive only):
 		// the records stay on the audit read lane under its existing role
 		// rules, and the handler sends every request to
-		// capability.Service.QueryAudit with the caller unchanged. The path
+		// capability.ReadLane.QueryAudit with the caller unchanged. The path
 		// owns itself exclusively; because this route constrainsReach(),
 		// Register also mounts methodMismatch on the bare "/console/access",
 		// which collides with nothing else in this table

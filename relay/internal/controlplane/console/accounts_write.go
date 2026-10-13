@@ -99,9 +99,9 @@ import (
 )
 
 // AccountAdministrator is the write seam this file holds. Every method
-// mirrors capability.Service's signature EXACTLY, so *capability.Service
-// satisfies it with no adapter — the same shape JobCanceller and
-// ApprovalDecider already take.
+// mirrors capability.AccountAdmin's signature EXACTLY, so
+// *capability.AccountAdmin satisfies it with no adapter — the same shape
+// JobCanceller and ApprovalDecider already take.
 type AccountAdministrator interface {
 	CreateAccount(ctx context.Context, p capability.Principal, a accounts.Account) (accounts.Account, error)
 	SetAccountRole(ctx context.Context, p capability.Principal, id string, role accounts.Role) error

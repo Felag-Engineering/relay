@@ -26,24 +26,34 @@ const (
 	nodevocabImportPath  = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 )
 
+// bannedCapabilityServices maps every capability service type, and its
+// constructor, to the narrowed seam an mcp file must use instead. They are
+// banned by EXACT name in every file, read or exec, beside capability.Service
+// and capability.New: a prefix match would falsely flag unrelated identifiers
+// such as capability.ControlAction and capability.AccountAdminEvent.
+var bannedCapabilityServices = map[string]string{
+	"Recorder":        "the Recorder belongs to the composition root alone",
+	"NewRecorder":     "the Recorder belongs to the composition root alone",
+	"Control":         "the Freeze is not an MCP tool",
+	"NewControl":      "the Freeze is not an MCP tool",
+	"AccountAdmin":    "Account administration is not on MCP",
+	"NewAccountAdmin": "Account administration is not on MCP",
+	"ReadLane":        "use the Principal-free mcp.ReadLane (mcp.go); capability.ReadLane carries a Principal",
+	"NewReadLane":     "use the Principal-free mcp.ReadLane (mcp.go); capability.ReadLane carries a Principal",
+}
+
 // capabilityReadAllowlist is the exhaustive set of capability-package
-// identifiers a STRICT (read) file may reference: pure, stateless
-// Selector/Predicate parsing helpers with no path to a *capability.Service
-// or dispatch. Everything else on the capability import — including
-// capability.Service and the exported capability.New dispatch constructor,
-// both of which are forbidden in every file regardless of strictness — is a
-// violation for a strict file. It does not govern exec files; see
-// strictCapabilityIdents below.
+// identifiers a STRICT (read) file may reference: the Selector parser and the
+// inert values the read tools need, with no path to a capability service or to
+// dispatch. It is exactly the code identifiers the strict files use today, so
+// a new reference — including Selector, Predicate and ErrReadUnaudited, which
+// appear only in comments — must be audited before it is added. Everything
+// else on the capability import — including capability.Service and the
+// exported capability.New dispatch constructor, both of which are forbidden in
+// every file regardless of strictness — is a violation for a strict file. It
+// does not govern exec files; see strictCapabilityIdents below.
 var capabilityReadAllowlist = map[string]bool{
-	"ParseSelector":        true,
-	"Selector":             true,
-	"Predicate":            true,
-	"Namespace":            true,
-	"NamespaceUnspecified": true,
-	"NamespaceNode":        true,
-	"NamespaceRelay":       true,
-	"NamespaceTag":         true,
-	"NamespaceState":       true,
+	"ParseSelector": true,
 	// StateEval (#414, ADR-0034) is the evaluation context Selector.Matches
 	// needs beyond a Node's own record — a clock reading and the
 	// cert-expiring window. It carries no dispatch capability of its own: a
@@ -51,13 +61,12 @@ var capabilityReadAllowlist = map[string]bool{
 	// straight to Matches, exactly as it already hands ParseSelector's
 	// output there.
 	"StateEval": true,
-	// ErrNodeNotFound, ErrInvalidFilter and ErrReadUnaudited (#680) are inert
-	// sentinel VALUES the read tools need for errors.Is, so they can tell "no
-	// such Node" from "this Relay is broken" from "the trail is down" and
-	// render honestly — none of them carries any path to a *capability.Service.
+	// ErrNodeNotFound and ErrInvalidFilter (#680) are inert sentinel VALUES the
+	// read tools need for errors.Is, so they can tell "no such Node" from "this
+	// Relay is broken" and render honestly — neither carries any path to a
+	// capability service.
 	"ErrNodeNotFound":  true,
 	"ErrInvalidFilter": true,
-	"ErrReadUnaudited": true,
 }
 
 // readFiles and execFiles partition this package's non-test .go files
@@ -234,6 +243,10 @@ func dispatchViolations(fileName string, file *ast.File, strictCapabilityIdents 
 						violations = append(violations, fmt.Sprintf(
 							"%s references capability.New — the exported dispatch constructor must never be called from an mcp tool file (no-dispatch structural guarantee)",
 							fileName))
+					case bannedCapabilityServices[v.Sel.Name] != "":
+						violations = append(violations, fmt.Sprintf(
+							"%s references capability.%s — a concrete capability service or its constructor; %s (no-dispatch structural guarantee)",
+							fileName, v.Sel.Name, bannedCapabilityServices[v.Sel.Name]))
 					case strictCapabilityIdents && !capabilityReadAllowlist[v.Sel.Name]:
 						violations = append(violations, fmt.Sprintf(
 							"%s references capability.%s, which is not on the pure-read allow-list (%v) — audit it before allowing it here (no-dispatch structural guarantee)",
@@ -684,17 +697,23 @@ import . ` + capImport + `
 
 // TestDispatchViolations_AllowsReadHelpers proves the strict allow-list
 // isn't so strict it would flag this package's actual, legitimate use of
-// capability.ParseSelector (tools_nodes.go) — a false positive here would be
-// as bad as a false negative on the fixtures above.
+// the four capability identifiers the strict files reference (tools_nodes.go,
+// tools_operations.go, mcp.go) — a false positive here would be as bad as a
+// false negative on the fixtures above.
 func TestDispatchViolations_AllowsReadHelpers(t *testing.T) {
 	const src = `package mcp
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+import (
+	"errors"
 
-func f(s string) {
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+)
+
+func f(s string, err error) {
 	sel, _ := capability.ParseSelector(s)
-	var p capability.Predicate
-	p.Namespace = capability.NamespaceNode
-	_ = sel
+	ev := capability.StateEval{}
+	_ = errors.Is(err, capability.ErrNodeNotFound)
+	_ = capability.ErrInvalidFilter
+	_, _ = sel, ev
 }
 `
 	fset := token.NewFileSet()
@@ -706,6 +725,67 @@ func f(s string) {
 	if violations := dispatchViolations("fixture.go", file, true); len(violations) != 0 {
 		t.Fatalf("dispatchViolations() = %v, want none (this is legitimate pure-read Selector usage)", violations)
 	}
+}
+
+// TestDispatchViolations_BansConcreteCapabilityServices proves every capability
+// service type and constructor is refused by exact name, in a file of EITHER
+// strictness: strict=false is the mode where only the ban can fire, so a row
+// here fails if its name is dropped from bannedCapabilityServices. The list is
+// spelled out here rather than read from the map, so deleting a name from the
+// map cannot delete its row.
+func TestDispatchViolations_BansConcreteCapabilityServices(t *testing.T) {
+	const capImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"`
+	check := func(t *testing.T, src string, strict bool) []string {
+		t.Helper()
+		file, err := parser.ParseFile(token.NewFileSet(), "fixture.go", src, 0)
+		if err != nil {
+			t.Fatalf("parser.ParseFile: %v", err)
+		}
+		return dispatchViolations("fixture.go", file, strict)
+	}
+	mustContain := func(t *testing.T, violations []string, want string) {
+		t.Helper()
+		for _, v := range violations {
+			if strings.Contains(v, want) {
+				return
+			}
+		}
+		t.Fatalf("dispatchViolations() = %v, want one containing %q", violations, want)
+	}
+
+	for _, name := range []string{
+		"Recorder", "NewRecorder", "Control", "NewControl",
+		"AccountAdmin", "NewAccountAdmin", "ReadLane", "NewReadLane",
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := "package mcp\nimport " + capImport + "\nvar _ = capability." + name + "\n"
+			mustContain(t, check(t, src, false), "capability."+name+" — a concrete capability service")
+		})
+	}
+
+	t.Run("an aliased import cannot dodge the ban", func(t *testing.T) {
+		src := "package mcp\nimport c2 " + capImport + "\nvar _ *c2.ReadLane\n"
+		mustContain(t, check(t, src, false), "capability.ReadLane — a concrete capability service")
+	})
+
+	for _, name := range []string{"Predicate", "Selector", "ErrReadUnaudited"} {
+		t.Run("strict refuses "+name+", which left the allow-list", func(t *testing.T) {
+			src := "package mcp\nimport " + capImport + "\nvar _ = capability." + name + "\n"
+			mustContain(t, check(t, src, true), "not on the pure-read allow-list")
+		})
+	}
+
+	t.Run("exact match leaves similarly-named identifiers alone", func(t *testing.T) {
+		src := "package mcp\nimport " + capImport + `
+var _ capability.ControlAction
+var _ = capability.ControlFreezeEngage
+var _ capability.AccountAdminEvent
+var _ capability.IntentRecorder
+`
+		if violations := check(t, src, false); len(violations) != 0 {
+			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
+		}
+	})
 }
 
 // TestDispatchViolations_ExecModeAllowsExecutionCapabilityIdents proves the

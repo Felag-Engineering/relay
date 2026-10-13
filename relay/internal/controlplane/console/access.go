@@ -11,7 +11,7 @@ package console
 // to any Account those rules already allow — making the records themselves
 // admin-only would be a capability-layer decision, and it has not been
 // taken. This file interprets no role: it sends every request to
-// capability.Service.QueryAudit with the caller unchanged, exactly as every
+// capability.ReadLane.QueryAudit with the caller unchanged, exactly as every
 // other screen on Deps.Queries does (invariant 10, ADR-0025).
 //
 // # Why a failed sign-in or step-up reconstructs nothing

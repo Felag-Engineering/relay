@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
@@ -32,7 +33,7 @@ import (
 // is a screen count that only goes up. Here, the audit write and the read are
 // the same call: there is no way to reach the registry through this lane
 // without the record, because the record is written first and its failure
-// returns before s.reg is touched.
+// returns before l.reg is touched.
 //
 // # Why the tool names are the MCP tools' names
 //
@@ -65,6 +66,84 @@ const (
 	toolDescribeNode   = "describe_node"
 	toolListOperations = "list_operations"
 )
+
+// ReadLane is the capability layer's read side (#441, #450): the registry
+// reads, the audit-trail and Job queries, and Selector resolution, each audited
+// before it is served. Construct it with NewReadLane.
+type ReadLane struct {
+	rec *Recorder
+	reg registry.Repository
+
+	// auditQ and jobQ are the read lane (#441): filtered, paginated queries
+	// over the audit trail and over Jobs/Tasks. Nil means the read lane is
+	// not wired — readlane.go's methods return ErrQueriesUnavailable rather
+	// than an empty page, since an empty page is a claim ("there is nothing
+	// here") and a nil seam has not actually looked. NewReadLane requires
+	// both, so only the in-package assembler can produce a lane without them.
+	auditQ AuditQuery
+	jobQ   JobQuery
+
+	// policyView and nodeVocab are the Policy-view and Template-vocabulary
+	// reads (#680, seams.go). policyView is display-only. nodeVocab is also
+	// read by template.go to decide a Template dispatch's fan-out and class
+	// (ADR-0042), and by nothing else outside the read lane. Both nil by
+	// default: DescribeNode and ListOperations report *Reported=false for a
+	// nil seam rather than an empty Policy or vocabulary — absence is never
+	// rendered as "nothing restricted" (QRY-7) — and a Template dispatch with
+	// no vocabulary wired excludes every Node rather than dispatching blind.
+	policyView PolicyViewSource
+	nodeVocab  TemplateVocabularySource
+
+	// certExpiringWithin is the state:cert-expiring warning window
+	// (ADR-0034), threaded into every Selector resolution via stateEval.
+	// Zero means the marker never fires; the composition root always passes a
+	// real value (invariant 11: file-only, no API reads or sets it).
+	certExpiringWithin time.Duration
+
+	// now is the clock Selector resolution reads; nil means time.Now().UTC().
+	now func() time.Time
+}
+
+// NewReadLane returns a ReadLane over rec, reg and the two query seams. rec,
+// reg, auditQ and jobQ are required: a lane with no trail cannot audit its
+// reads, one with no registry or query seam has nothing to read — all
+// composition-root bugs, so each panics rather than degrading. A negative
+// certExpiringWithin panics for the same reason; zero means the
+// state:cert-expiring marker never fires.
+//
+// NewReadLane also refuses a Recorder over the no-op AuditSink (F5, #441
+// cycle-2 security review): a lane that answers every query while recording
+// none of them is exactly the "unauditable read succeeded" state ADR-0025
+// forbids. policyView, nodeVocab and now may be nil — absence is documented on
+// the fields; a nil now means time.Now().UTC().
+func NewReadLane(rec *Recorder, reg registry.Repository, auditQ AuditQuery, jobQ JobQuery, policyView PolicyViewSource, nodeVocab TemplateVocabularySource, certExpiringWithin time.Duration, now func() time.Time) *ReadLane {
+	if rec == nil {
+		panic("capability: NewReadLane: recorder must not be nil")
+	}
+	if reg == nil {
+		panic("capability: NewReadLane: registry must not be nil")
+	}
+	if auditQ == nil {
+		panic("capability: NewReadLane: audit query seam must not be nil")
+	}
+	if jobQ == nil {
+		panic("capability: NewReadLane: job query seam must not be nil")
+	}
+	if certExpiringWithin < 0 {
+		panic("capability: NewReadLane: certExpiringWithin must not be negative")
+	}
+	if _, ok := rec.audit.(noopAuditSink); ok {
+		panic("capability: NewReadLane: requires a real AuditSink (NewRecorder); noopAuditSink would answer every read while recording none of them")
+	}
+	return newReadLane(rec, reg, auditQ, jobQ, policyView, nodeVocab, certExpiringWithin, now)
+}
+
+// newReadLane assembles a ReadLane with no checks. Only NewReadLane and _test.go
+// files call it; it is the only route to a lane with no query seams or over the
+// no-op sink, which the QRY-17 call-time tests need.
+func newReadLane(rec *Recorder, reg registry.Repository, auditQ AuditQuery, jobQ JobQuery, policyView PolicyViewSource, nodeVocab TemplateVocabularySource, certExpiringWithin time.Duration, now func() time.Time) *ReadLane {
+	return &ReadLane{rec: rec, reg: reg, auditQ: auditQ, jobQ: jobQ, policyView: policyView, nodeVocab: nodeVocab, certExpiringWithin: certExpiringWithin, now: now}
+}
 
 // ErrNodeNotFound is returned by DescribeNode for an id the registry does not
 // hold. Distinct from an error: a surface renders "no such Node" for this and
@@ -176,8 +255,8 @@ type NodeListing struct {
 //
 // Node-ID ordering within Nodes (QRY-3) comes from registry.InMemory.List
 // and is preserved by Selector.Resolve, so no surface needs to sort again.
-func (s *Service) ListNodes(ctx context.Context, p Principal, selector string) (NodeListing, error) {
-	if err := s.registryReadable(); err != nil {
+func (l *ReadLane) ListNodes(ctx context.Context, p Principal, selector string) (NodeListing, error) {
+	if err := l.registryReadable(); err != nil {
 		return NodeListing{}, err
 	}
 	sel, err := ParseSelector(selector)
@@ -185,11 +264,28 @@ func (s *Service) ListNodes(ctx context.Context, p Principal, selector string) (
 		return NodeListing{}, fmt.Errorf("%w: %w", ErrInvalidFilter, err)
 	}
 	canonical := sel.String()
-	if err := s.recordQueryRead(ctx, p, toolListNodes, canonical, "", ""); err != nil {
+	if err := l.recordQueryRead(ctx, p, toolListNodes, canonical, "", ""); err != nil {
 		return NodeListing{}, err
 	}
-	ev := s.stateEval()
-	return NodeListing{Nodes: sel.Resolve(s.reg, ev), Eval: ev, Selector: canonical}, nil
+	ev := l.stateEval()
+	return NodeListing{Nodes: sel.Resolve(l.reg, ev), Eval: ev, Selector: canonical}, nil
+}
+
+// stateEval is the StateEval every Selector resolution inside the capability
+// layer evaluates against: the lane's own clock and its configured
+// cert-expiring window. One method, so Run and Plan (through Service.read) and
+// the read lane can never resolve the same Selector against two different
+// instants.
+//
+// Falls back to time.Now().UTC() when now is unset — a *ReadLane built as a
+// struct literal in a test (bypassing NewReadLane) must stay callable rather
+// than panic on a nil func field.
+func (l *ReadLane) stateEval() StateEval {
+	now := l.now
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
+	return StateEval{Now: now(), CertExpiringWithin: l.certExpiringWithin}
 }
 
 // DescribeNode returns one Node, its fingerprint peer counts, and its
@@ -205,8 +301,8 @@ func (s *Service) ListNodes(ctx context.Context, p Principal, selector string) (
 //
 // Returns ErrNodeNotFound — after the record — for an unknown id.
 //
-// The Policy view and the Template vocabulary are filled from s.policyView/
-// s.nodeVocab with NO second record: they are part of what describe_node
+// The Policy view and the Template vocabulary are filled from l.policyView/
+// l.nodeVocab with NO second record: they are part of what describe_node
 // discloses (ADR-0025 names a Node's Policy explicitly), and the record
 // above already covers this Node ID.
 //
@@ -226,22 +322,22 @@ func (s *Service) ListNodes(ctx context.Context, p Principal, selector string) (
 // written down here rather than fixed because making the count lazy or
 // opt-in would widen this change across every adapter's DescribeNode
 // signature, and that is out of scope for this issue.
-func (s *Service) DescribeNode(ctx context.Context, p Principal, nodeID string) (NodeDetail, error) {
-	if err := s.registryReadable(); err != nil {
+func (l *ReadLane) DescribeNode(ctx context.Context, p Principal, nodeID string) (NodeDetail, error) {
+	if err := l.registryReadable(); err != nil {
 		return NodeDetail{}, err
 	}
 	if err := validateNodeID(nodeID); err != nil {
 		return NodeDetail{}, err
 	}
-	if err := s.recordQueryRead(ctx, p, toolDescribeNode, "", nodeID, ""); err != nil {
+	if err := l.recordQueryRead(ctx, p, toolDescribeNode, "", nodeID, ""); err != nil {
 		return NodeDetail{}, err
 	}
-	n, ok := s.reg.Get(nodeID)
+	n, ok := l.reg.Get(nodeID)
 	if !ok {
 		return NodeDetail{}, fmt.Errorf("%w: %s", ErrNodeNotFound, nodeID)
 	}
-	d := NodeDetail{Node: n, Eval: s.stateEval()}
-	for _, other := range s.reg.List() {
+	d := NodeDetail{Node: n, Eval: l.stateEval()}
+	for _, other := range l.reg.List() {
 		if n.PolicyFingerprint != "" && other.PolicyFingerprint == n.PolicyFingerprint {
 			d.PolicyPeers++
 		}
@@ -249,13 +345,13 @@ func (s *Service) DescribeNode(ctx context.Context, p Principal, nodeID string) 
 			d.TemplatePeers++
 		}
 	}
-	if s.policyView != nil {
-		if snap, ok := s.policyView.Get(nodeID); ok {
+	if l.policyView != nil {
+		if snap, ok := l.policyView.Get(nodeID); ok {
 			d.Policy, d.PolicyReported = snap, true
 		}
 	}
-	if s.nodeVocab != nil {
-		if snap, ok := s.nodeVocab.Get(nodeID); ok {
+	if l.nodeVocab != nil {
+		if snap, ok := l.nodeVocab.Get(nodeID); ok {
 			d.Templates, d.TemplatesReported = snap, true
 		}
 	}
@@ -293,8 +389,8 @@ type OperationVocabulary struct {
 // An unknown, well-formed Node ID is refused as ErrNodeNotFound — after the
 // record — so the refused probe is on the trail with the id it asked about
 // (QRY-26).
-func (s *Service) ListOperations(ctx context.Context, p Principal, nodeID string) (OperationVocabulary, error) {
-	if err := s.registryReadable(); err != nil {
+func (l *ReadLane) ListOperations(ctx context.Context, p Principal, nodeID string) (OperationVocabulary, error) {
+	if err := l.registryReadable(); err != nil {
 		return OperationVocabulary{}, err
 	}
 	if nodeID != "" {
@@ -302,61 +398,55 @@ func (s *Service) ListOperations(ctx context.Context, p Principal, nodeID string
 			return OperationVocabulary{}, err
 		}
 	}
-	if err := s.recordQueryRead(ctx, p, toolListOperations, "", nodeID, ""); err != nil {
+	if err := l.recordQueryRead(ctx, p, toolListOperations, "", nodeID, ""); err != nil {
 		return OperationVocabulary{}, err
 	}
 	if nodeID == "" {
 		return OperationVocabulary{}, nil
 	}
-	if _, ok := s.reg.Get(nodeID); !ok {
+	if _, ok := l.reg.Get(nodeID); !ok {
 		return OperationVocabulary{}, fmt.Errorf("%w: %s", ErrNodeNotFound, nodeID)
 	}
 	var vocab OperationVocabulary
-	if s.nodeVocab != nil {
-		if snap, ok := s.nodeVocab.Get(nodeID); ok {
+	if l.nodeVocab != nil {
+		if snap, ok := l.nodeVocab.Get(nodeID); ok {
 			vocab.Templates, vocab.Reported = snap, true
 		}
 	}
 	return vocab, nil
 }
 
-// registryReadable refuses the registry read lane on a Service that cannot
+// registryReadable refuses the registry read lane on a ReadLane that cannot
 // actually audit — the read-lane analogue of New's fail-open guards.
 //
-// New already refuses WithQueries paired with the no-op sink (F5, #441),
-// because a Service that answers every trail query while recording none of
-// them is the "unauditable read succeeded" state ADR-0025 forbids. The
-// registry half cannot be guarded the same way: reg is New's first ARGUMENT,
-// always present, so there is no option whose use signals "this lane is
-// wired" and no construction-time moment at which to panic without breaking
-// every Service built for a dispatch test.
-//
-// So the check moves to the call. It is the same property, enforced later and
-// narrower: a Service with the no-op sink refuses these three methods
-// (ListNodes, DescribeNode, ListOperations) and nothing else. Fail closed,
-// and it fails as ErrReadUnaudited rather than as a wiring error, because
-// from the caller's side the two are the same fact — this Relay will not
-// serve a read it cannot record.
-func (s *Service) registryReadable() error {
-	if s.reg == nil {
+// NewReadLane already refuses the no-op sink (F5, #441), because a lane that
+// answers every query while recording none of them is the "unauditable read
+// succeeded" state ADR-0025 forbids. This check stays at the call as defence
+// in depth for a lane built by the in-package assembler (newReadLane), and as
+// QRY-17's cited proof: it is the same property, enforced at the read, and it
+// refuses these three methods (ListNodes, DescribeNode, ListOperations) and
+// nothing else. Fail closed, and it fails as ErrReadUnaudited rather than as
+// a wiring error, because from the caller's side the two are the same fact —
+// this Relay will not serve a read it cannot record.
+func (l *ReadLane) registryReadable() error {
+	if l.reg == nil {
 		return fmt.Errorf("%w: no registry is configured on this Relay", ErrQueriesUnavailable)
 	}
-	return s.auditSinkPresent()
+	return l.auditSinkPresent()
 }
 
 // auditSinkPresent is registryReadable's sink guard, extracted (#539) so a
 // read-lane method with no registry coupling of its own — RecordEventSubscription,
-// readlane.go — can still refuse a Service built on the no-op sink.
-// registryReadable keeps its own s.reg == nil check and then calls this.
+// readlane.go — can still refuse a lane built on the no-op sink.
+// registryReadable keeps its own l.reg == nil check and then calls this.
 //
-// Without it, a Service constructed with New(reg) alone (no WithAuditSink)
-// would "record" a subscription successfully through noopAuditSink.RecordRead,
-// which unconditionally returns nil, and open an UNAUDITED live stream — the
-// exact "unauditable read succeeded" state ADR-0025 forbids. New's own
-// fail-open guards do not cover this: they trip on WithExecution or
-// WithQueries, and a bare event-subscription lane needs neither.
-func (s *Service) auditSinkPresent() error {
-	if _, noop := s.audit.(noopAuditSink); noop {
+// Without it, a lane assembled over the no-op sink would "record" a
+// subscription successfully through noopAuditSink.RecordRead, which
+// unconditionally returns nil, and open an UNAUDITED live stream — the exact
+// "unauditable read succeeded" state ADR-0025 forbids. NewReadLane refuses the
+// no-op sink at construction; this is the same property enforced at the call.
+func (l *ReadLane) auditSinkPresent() error {
+	if _, noop := l.rec.audit.(noopAuditSink); noop {
 		return fmt.Errorf("%w: no audit sink is configured on this Relay", ErrReadUnaudited)
 	}
 	return nil

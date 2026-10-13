@@ -107,7 +107,7 @@ func (f *fakeNodeRevoker) RevokeNodeRecorded(_ context.Context, nodeID string, r
 
 // fakeCapabilityAuditSink is a minimal capability.AuditSink test double
 // (#680): NodeReader is now the capability read lane itself, so exercising
-// it needs a real *capability.Service, which needs a real (non-noop)
+// it needs a real *capability.ReadLane, which needs a real (non-noop)
 // AuditSink. Only RecordRead is exercised by DescribeNode; the rest of the
 // interface is a no-op.
 type fakeCapabilityAuditSink struct {
@@ -130,8 +130,8 @@ func (*fakeCapabilityAuditSink) RecordAccountAdmin(context.Context, capability.P
 	return nil
 }
 
-// newNodeReaderLane builds a real *capability.Service over reg, wired as a
-// NodeReader (#680): capability.Service satisfies NodeReader directly, with
+// newNodeReaderLane builds a real *capability.ReadLane over reg, wired as a
+// NodeReader (#680): capability.ReadLane satisfies NodeReader directly, with
 // no adapter, exactly like Exec/Approvals/AccountAdmin already do. now and
 // certExpiringWithin are pinned so a test asserting a state: label does not
 // race the wall clock — the `state:` instant now comes from the lane's own
@@ -143,7 +143,7 @@ func newNodeReaderLane(t *testing.T, reg registry.Repository, sink capability.Au
 		audit:      sink,
 		now:        now,
 		certWindow: certExpiringWithin,
-	})
+	}).ReadLane
 }
 
 // releaseCall captures one ReleaseFreeze invocation.
@@ -1086,7 +1086,7 @@ func TestHandleGetNode_StateLabels(t *testing.T) {
 
 // TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded is the Control
 // API's half of QRY-28's fail-closed proof, and closes the "QRY-17, Control
-// API half" no-row gap: a real *capability.Service over an AuditSink whose
+// API half" no-row gap: a real *capability.ReadLane over an AuditSink whose
 // RecordRead errors must answer 500 with the problem body — never a
 // node_id, Labels or Facts in the response.
 func TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded(t *testing.T) {
@@ -1203,7 +1203,7 @@ func TestHandleFreeze_EngageAndRelease(t *testing.T) {
 		t.Errorf("ReleaseFreeze reason = %q, want %q", fz.releaseCalls[0].Reason, "incident resolved")
 	}
 
-	// Freeze's audit trail is intrinsic to capability.Service (RecordFreeze):
+	// Freeze's audit trail is intrinsic to capability.Control (RecordFreeze):
 	// this package must NEVER call recordLifecycle for freeze routes, or the
 	// event would be double-audited.
 	if got := auditor.all(); len(got) != 0 {

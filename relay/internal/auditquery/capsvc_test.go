@@ -1,6 +1,7 @@
 package auditquery
 
 import (
+	"context"
 	"testing"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
@@ -9,8 +10,9 @@ import (
 )
 
 // capSeams is the set of collaborators a test hands to newCapService. A zero
-// field means "not supplied": the option is not emitted and capability.New
-// keeps its default.
+// field means "not supplied". audit, auditQ and jobQ are required, as
+// capability.NewReadLane requires them; authz builds the Control and the
+// Service over it, and a test that sets none reads through the lane alone.
 type capSeams struct {
 	reg    registry.Repository
 	authz  capability.Authorizer
@@ -27,33 +29,57 @@ type capSeams struct {
 	newID     func() (string, error)
 }
 
-// newCapService builds the capability layer for a test: a thin wrapper over
-// capability.New and the With* options, so the layer's constructor changes in
-// one place.
-func newCapService(t *testing.T, s capSeams) *capability.Service {
+// capLayer is what a test holds a built capability layer as: the leaf services
+// embedded, so a test calls any of their methods unqualified. Service and
+// Control are nil when the test supplied no authorizer.
+type capLayer struct {
+	*capability.Service
+	*capability.ReadLane
+	*capability.Control
+}
+
+// neverFrozen is a FreezeStore that is never frozen, standing in for
+// capability's unexported no-op store: NewControl requires a store.
+type neverFrozen struct{}
+
+func (neverFrozen) Frozen(context.Context) (bool, error)          { return false, nil }
+func (neverFrozen) Engage(context.Context, string) error          { return nil }
+func (neverFrozen) Release(context.Context, string, string) error { return nil }
+
+// newCapService builds the capability layer for a test: a thin wrapper over the
+// capability constructors, so the layer's shape changes in one place.
+func newCapService(t *testing.T, s capSeams) *capLayer {
 	t.Helper()
-	var opts []capability.Option
-	if s.authz != nil {
-		opts = append(opts, capability.WithAuthorizer(s.authz))
+	if s.audit == nil || s.auditQ == nil || s.jobQ == nil {
+		t.Fatalf("newCapService: audit, auditQ and jobQ are required")
 	}
+	hasExec := s.jobsRepo != nil || s.tasksRepo != nil || s.conduit != nil
+	if hasExec && (s.freeze == nil || s.authz == nil) {
+		t.Fatalf("newCapService: execution seams need a freeze store and an authorizer")
+	}
+	rec := capability.NewRecorder(s.audit, nil, nil)
+	read := capability.NewReadLane(rec, s.reg, s.auditQ, s.jobQ, nil, nil, 0, nil)
+	layer := &capLayer{ReadLane: read}
+	if s.authz == nil {
+		return layer
+	}
+	freeze := s.freeze
+	if freeze == nil {
+		freeze = neverFrozen{}
+	}
+	layer.Control = capability.NewControl(rec, s.authz, freeze)
+
+	var opts []capability.Option
 	if s.cap != nil {
 		opts = append(opts, capability.WithCapChecker(s.cap))
 	}
-	if s.audit != nil {
-		opts = append(opts, capability.WithAuditSink(s.audit))
-	}
-	if s.freeze != nil {
-		opts = append(opts, capability.WithFreeze(s.freeze))
-	}
-	if s.auditQ != nil || s.jobQ != nil {
-		opts = append(opts, capability.WithQueries(s.auditQ, s.jobQ))
-	}
-	if s.jobsRepo != nil || s.tasksRepo != nil || s.conduit != nil {
+	if hasExec {
 		var eo []capability.ExecOption
 		if s.newID != nil {
 			eo = append(eo, capability.WithExecNewID(s.newID))
 		}
 		opts = append(opts, capability.WithExecution(s.jobsRepo, s.tasksRepo, s.conduit, eo...))
 	}
-	return capability.New(s.reg, opts...)
+	layer.Service = capability.New(layer.Control, read, opts...)
+	return layer
 }

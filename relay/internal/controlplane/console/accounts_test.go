@@ -578,8 +578,8 @@ func TestAccounts_AFailedTokenReadDegradesOnePanel(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestAccounts_AnUnwiredSeamRefusesRatherThanClaimingThereAreNoAccounts. Both
-// shapes of "not wired" — a nil seam and a Service built without
-// WithAccountAdmin — must say so. "You have no Accounts" is a claim about who
+// shapes of "not wired" — a nil seam and an AccountAdmin built without
+// its stores — must say so. "You have no Accounts" is a claim about who
 // can reach this Relay, and it is the worst one to make by accident.
 func TestAccounts_AnUnwiredSeamRefusesRatherThanClaimingThereAreNoAccounts(t *testing.T) {
 	cases := map[string]AccountReader{

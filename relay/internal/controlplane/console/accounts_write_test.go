@@ -2284,8 +2284,8 @@ func newRealWriteFix(t *testing.T, opts ...func(*Deps)) *realWriteFix {
 	mux := http.NewServeMux()
 	d := renderableDeps()
 	d.Auth = svc
-	d.Accounts = capSvc
-	d.AccountAdmin = capSvc
+	d.Accounts = capSvc.AccountAdmin
+	d.AccountAdmin = capSvc.AccountAdmin
 	for _, opt := range opts {
 		opt(&d)
 	}

@@ -1,13 +1,17 @@
 package console
 
 import (
+	"context"
+
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
 // capSeams is the set of collaborators a test hands to newCapService. A zero
-// field means "not supplied": the option is not emitted and capability.New
-// keeps its default.
+// field means "not supplied": the service that needs it is not built. audit is
+// required, as capability.NewRecorder requires it. If neither query seam is
+// supplied both default to the empty fakes; a half-wired pair is passed
+// through, and NewReadLane panics on it.
 type capSeams struct {
 	reg   registry.Repository
 	authz capability.Authorizer
@@ -22,28 +26,44 @@ type capSeams struct {
 	apiTokens     capability.APITokenStore
 }
 
-// newCapService builds the capability layer for a test: a thin wrapper over
-// capability.New and the With* options, so the layer's constructor changes in
-// one place.
-func newCapService(s capSeams) *capability.Service {
-	var opts []capability.Option
+// capLayer is what a test holds a built capability layer as: the leaf services
+// embedded, so a test calls any of their methods unqualified, and a call site
+// that hands one to a Deps seam names the narrow embedded field, as the
+// composition root does. Control and AccountAdmin are nil unless supplied.
+type capLayer struct {
+	*capability.ReadLane
+	*capability.Control
+	*capability.AccountAdmin
+}
+
+// neverFrozen is a FreezeStore that is never frozen, standing in for
+// capability's unexported no-op store: NewControl requires a store.
+type neverFrozen struct{}
+
+func (neverFrozen) Frozen(context.Context) (bool, error)          { return false, nil }
+func (neverFrozen) Engage(context.Context, string) error          { return nil }
+func (neverFrozen) Release(context.Context, string, string) error { return nil }
+
+// newCapService builds the capability layer for a test: a thin wrapper over the
+// capability constructors, so the layer's shape changes in one place.
+//
+// Takes no *testing.T because realLaneDeps (read_audit_test.go) builds its lane
+// for a fixture that has none; a wiring mistake here panics, which fails the
+// calling test just as loudly.
+func newCapService(s capSeams) *capLayer {
+	rec := capability.NewRecorder(s.audit, nil, nil)
+	auditQ, jobQ := s.auditQ, s.jobQ
+	if auditQ == nil && jobQ == nil {
+		auditQ, jobQ = emptyAuditQuery{}, emptyJobQuery{}
+	}
+	layer := &capLayer{
+		ReadLane: capability.NewReadLane(rec, s.reg, auditQ, jobQ, s.policyView, s.nodeVocab, 0, nil),
+	}
 	if s.authz != nil {
-		opts = append(opts, capability.WithAuthorizer(s.authz))
-	}
-	if s.audit != nil {
-		opts = append(opts, capability.WithAuditSink(s.audit))
-	}
-	if s.auditQ != nil || s.jobQ != nil {
-		opts = append(opts, capability.WithQueries(s.auditQ, s.jobQ))
-	}
-	if s.policyView != nil {
-		opts = append(opts, capability.WithPolicyView(s.policyView))
-	}
-	if s.nodeVocab != nil {
-		opts = append(opts, capability.WithTemplateVocabulary(s.nodeVocab))
+		layer.Control = capability.NewControl(rec, s.authz, neverFrozen{})
 	}
 	if s.accountsStore != nil || s.apiTokens != nil {
-		opts = append(opts, capability.WithAccountAdmin(s.accountsStore, s.apiTokens))
+		layer.AccountAdmin = capability.NewAccountAdmin(layer.Control, s.accountsStore, s.apiTokens)
 	}
-	return capability.New(s.reg, opts...)
+	return layer
 }

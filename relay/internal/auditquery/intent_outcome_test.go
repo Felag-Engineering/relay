@@ -65,12 +65,15 @@ func runWithRepo(t *testing.T, wrap func(audit.Repository) audit.Repository) (st
 			t.Fatalf("Upsert(%s): %v", id, err)
 		}
 	}
+	q := New(st.AuditQueries(), st.JobQueries())
 	svc := newCapService(t, capSeams{
 		reg:       reg,
 		authz:     authz.NewRoleGate(),
 		cap:       capability.NewBlastCap(10, 10),
 		audit:     auditsink.New(wrap(st.Audit())),
 		freeze:    st.Freeze(),
+		auditQ:    q,
+		jobQ:      q,
 		jobsRepo:  st.Jobs(),
 		tasksRepo: st.Tasks(),
 		conduit:   &probeConduit{probe: func() {}},
@@ -83,7 +86,7 @@ func runWithRepo(t *testing.T, wrap func(audit.Repository) audit.Repository) (st
 }
 
 // afterRestart reopens path and returns a Service over it with the read lane.
-func afterRestart(t *testing.T, path string) (*capability.Service, *store.Store) {
+func afterRestart(t *testing.T, path string) (*capLayer, *store.Store) {
 	t.Helper()
 	st, err := store.Open(path)
 	if err != nil {
@@ -101,7 +104,7 @@ func afterRestart(t *testing.T, path string) (*capability.Service, *store.Store)
 	return svc, st
 }
 
-func queryRows(t *testing.T, svc *capability.Service, kind string) []capability.AuditRow {
+func queryRows(t *testing.T, svc *capLayer, kind string) []capability.AuditRow {
 	t.Helper()
 	page, err := svc.QueryAudit(context.Background(), intentTestRequester,
 		capability.AuditFilter{Kinds: []string{kind}, JobID: "job-id-1"}, capability.PageRequest{Limit: 50})
@@ -111,7 +114,7 @@ func queryRows(t *testing.T, svc *capability.Service, kind string) []capability.
 	return page.Rows
 }
 
-func jobSummary(t *testing.T, svc *capability.Service) capability.JobSummary {
+func jobSummary(t *testing.T, svc *capLayer) capability.JobSummary {
 	t.Helper()
 	page, err := svc.QueryJobs(context.Background(), intentTestRequester,
 		capability.JobFilter{JobID: "job-id-1"}, capability.PageRequest{Limit: 1})

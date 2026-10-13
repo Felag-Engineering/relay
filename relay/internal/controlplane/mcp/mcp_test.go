@@ -20,6 +20,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditquery"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
@@ -41,14 +42,14 @@ type opsLister struct{}
 
 func (opsLister) Operations() []opvocab.Descriptor { return opvocab.Operations() }
 
-// testReadLane adapts a *capability.Service to mcp.ReadLane, mirroring
+// testReadLane adapts a *capability.ReadLane to mcp.ReadLane, mirroring
 // cmd/relay/main.go's composition-root adapter (mcpReadLane,
 // control_surfaces.go, #680): mcp.ReadLane is deliberately Principal-free,
 // so the Principal is resolved from ctx here, on this side of the seam,
 // exactly like the production adapter — and the real audit sink underneath
 // ts.store means every read this fixture makes is genuinely recorded.
 type testReadLane struct {
-	svc *capability.Service
+	svc *capability.ReadLane
 }
 
 var errNoPrincipalInContext = errors.New("mcp_test: no authenticated principal in context")
@@ -276,12 +277,15 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 	t.Cleanup(func() { st.Close() }) //nolint:errcheck
 
 	conduit := newFakeConduit()
+	q := auditquery.New(st.AuditQueries(), st.JobQueries())
 	capSvc := newCapService(t, capSeams{
 		reg:         reg,
 		authz:       testAuthorizer{},
 		cap:         capability.NewBlastCap(readCap, mutateCap),
 		audit:       auditsink.New(st.Audit()),
 		freeze:      st.Freeze(),
+		auditQ:      q,
+		jobQ:        q,
 		policyView:  policyCache,
 		nodeVocab:   vocabCache,
 		idem:        st.IdempotencyKeys(),
@@ -291,10 +295,10 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 		newID:       deterministicIDs(),
 		concurrency: concurrency,
 	})
-	drainOnCleanup(t, capSvc)
+	drainOnCleanup(t, capSvc.Service)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 
-	handler := mcp.New(testReadLane{svc: capSvc}, opsLister{}, capSvc, results, nil, nil)
+	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Service, results, nil, nil)
 
 	cert := relaytest.SelfSignedServerCert(t, "mcp-test")
 	controlSrv := controlplane.New(
@@ -381,20 +385,23 @@ func newTestServerWithFailingReadSink(t *testing.T) testServer {
 	t.Cleanup(func() { st.Close() }) //nolint:errcheck
 
 	conduit := newFakeConduit()
+	q := auditquery.New(st.AuditQueries(), st.JobQueries())
 	capSvc := newCapService(t, capSeams{
 		reg:       reg,
 		authz:     testAuthorizer{},
 		cap:       capability.NewBlastCap(0, 0),
 		audit:     failingReadSink{Sink: auditsink.New(st.Audit())},
 		freeze:    st.Freeze(),
+		auditQ:    q,
+		jobQ:      q,
 		jobsRepo:  st.Jobs(),
 		tasksRepo: st.Tasks(),
 		conduit:   conduit,
 		newID:     deterministicIDs(),
 	})
-	drainOnCleanup(t, capSvc)
+	drainOnCleanup(t, capSvc.Service)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
-	handler := mcp.New(testReadLane{svc: capSvc}, opsLister{}, capSvc, results, nil, nil)
+	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Service, results, nil, nil)
 
 	cert := relaytest.SelfSignedServerCert(t, "mcp-test")
 	controlSrv := controlplane.New(

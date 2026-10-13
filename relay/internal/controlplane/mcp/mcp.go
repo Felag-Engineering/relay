@@ -15,7 +15,9 @@
 // is a strict READ file: its non-test source names no capability. identifier
 // outside capabilityReadAllowlist (e.g. capability.StateEval, needed for
 // NodeListing/NodeDescription's Eval field), and never
-// capability.Principal, capability.Service or capability.New. ReadLane below
+// capability.Principal, a concrete capability service
+// (capability.Service, ReadLane, Control, AccountAdmin, Recorder) or their
+// constructors (bannedCapabilityServices). ReadLane below
 // is a read-only, Principal-free interface — the Principal is resolved on
 // the composition root's side of the seam (the ReadAuditor precedent,
 // readaudit.go) — so a read tool structurally cannot reach the execution

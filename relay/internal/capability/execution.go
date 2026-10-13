@@ -966,7 +966,7 @@ func WithExecClock(f func() time.Time) ExecOption {
 //
 // Per the contract on New (service.go), a Service configured with
 // WithExecution MUST also be configured with a real Authorizer, CapChecker,
-// and AuditSink (WithAuthorizer/WithCapChecker/WithAuditSink); New enforces
+// and AuditSink (NewControl/WithCapChecker/NewRecorder); New enforces
 // this at construction and panics otherwise, regardless of Option order. That
 // AuditSink must also implement IntentRecorder (#887): the Job's Tasks are
 // persisted through it, in one transaction with its dispatch-intent record.

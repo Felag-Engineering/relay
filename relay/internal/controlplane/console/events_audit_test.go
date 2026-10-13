@@ -1,7 +1,7 @@
 package console
 
 // events_audit_test.go is #539's route-specific guard for GET
-// /console/events, driven through the REAL *capability.Service over a REAL
+// /console/events, driven through the REAL *capability.ReadLane over a REAL
 // *auditsink.Sink, exactly as read_audit_test.go drives every other audited
 // route (realLaneDeps, recordingTrail, driveStream — all defined there).
 //

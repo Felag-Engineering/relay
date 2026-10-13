@@ -376,7 +376,7 @@ func (f *fakeQueries) QueryAudit(_ context.Context, _ capability.Principal, filt
 // also the limit of what any screen test built on this fake can prove: it can
 // assert that a screen asks the LANE, and it cannot assert that the lane
 // records anything. The record itself is proved in read_audit_test.go against
-// a real *capability.Service over a real *auditsink.Sink, because a fake that
+// a real *capability.ReadLane over a real *auditsink.Sink, because a fake that
 // answered "yes, audited" would be asserting its own implementation.
 // ListNodes ignores selector — the fake does not resolve Selectors, and the
 // lane's own tests (readlane_registry_test.go) prove that resolution; a

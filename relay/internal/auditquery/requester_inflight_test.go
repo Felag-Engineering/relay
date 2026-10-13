@@ -88,7 +88,7 @@ func (c *probeConduit) Query(context.Context, string, jobs.Action) (jobs.Verdict
 // is the capability read lane's end-to-end proof: the requester recorded on
 // a Job is durable and enforced WHILE every one of its Tasks is still
 // Pending — before any dispatch has been attempted — reading and cancelling
-// through the same seams a real surface uses (Service.QueryJobs,
+// through the same seams a real surface uses (ReadLane.QueryJobs,
 // Service.CancelJob), against one real SQLite store, wired the way
 // cmd/relay/main.go wires the production execution path.
 //

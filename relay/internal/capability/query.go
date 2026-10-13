@@ -318,9 +318,10 @@ var ErrInvalidFilter = errors.New("capability: invalid query filter")
 // cannot be parsed. Never a silent reset to page one — see readlane.go.
 var ErrInvalidCursor = errors.New("capability: invalid pagination cursor")
 
-// ErrQueriesUnavailable is returned by the read-lane methods on a Service
-// built without WithQueries. A wiring fault, surfaced as a legible error
-// rather than a nil-seam panic — mirrors ErrApprovalUnavailable.
+// ErrQueriesUnavailable is returned by the read-lane methods on a ReadLane
+// assembled with no query seams (unreachable through NewReadLane). A wiring
+// fault, surfaced as a legible error rather than a nil-seam panic — mirrors
+// ErrApprovalUnavailable.
 var ErrQueriesUnavailable = errors.New("capability: audit/Job queries are not configured on this Relay")
 
 // validate checks f before it reaches any seam. Caller-controlled inputs are

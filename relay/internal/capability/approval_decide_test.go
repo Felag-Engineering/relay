@@ -324,7 +324,7 @@ func TestPendingApprovalsHidesExpired(t *testing.T) {
 	}
 
 	// Move the clock past the deadline without running any sweeper.
-	s.now = func() time.Time { return parked.ExpiresAt.Add(time.Second) }
+	s.Service.now = func() time.Time { return parked.ExpiresAt.Add(time.Second) }
 	after, err := s.PendingApprovals(context.Background())
 	if err != nil {
 		t.Fatalf("PendingApprovals: %v", err)

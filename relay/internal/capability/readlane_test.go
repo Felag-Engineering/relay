@@ -296,8 +296,8 @@ func TestReadLane_QueryTasksStripsReadClassOutput(t *testing.T) {
 	}
 }
 
-// TestReadLane_NilSeamReturnsError asserts a Service built without
-// WithQueries returns ErrQueriesUnavailable — never an empty page, which
+// TestReadLane_NilSeamReturnsError asserts a ReadLane built without
+// the query seams returns ErrQueriesUnavailable — never an empty page, which
 // would be a claim ("there is nothing here") rather than an absence.
 func TestReadLane_NilSeamReturnsError(t *testing.T) {
 	svc := build(t, seams{reg: registry.NewInMemory()})
@@ -430,40 +430,6 @@ func TestReadLane_AuditCounts_ClampsBucket(t *testing.T) {
 	if auditQ.gotBucket != time.Hour {
 		t.Errorf("bucket reaching the seam = %s, want 1h (unchanged)", auditQ.gotBucket)
 	}
-}
-
-// TestWithQueriesRefusesNoopAuditSink is F5 (#441 cycle-2 security review):
-// a Service built with WithQueries but no WithAuditSink must panic at
-// construction, the same class of composition-root guard
-// TestWithExecutionRefusesDefaultSeams asserts for a real dispatcher —
-// otherwise every trail query is answered while recording nothing, exactly
-// the "unauditable read succeeded" state ADR-0025 forbids.
-func TestWithQueriesRefusesNoopAuditSink(t *testing.T) {
-	reg := registry.NewInMemory()
-	auditQ := &spyAuditQuery{}
-	jobQ := &spyJobQuery{}
-
-	defer func() {
-		if recover() == nil {
-			t.Fatal("New(reg, WithQueries(...)) without a real AuditSink should panic")
-		}
-	}()
-	New(reg, WithQueries(auditQ, jobQ))
-}
-
-// TestWithQueriesAcceptsRealAuditSink is the positive twin of
-// TestWithQueriesRefusesNoopAuditSink: WithQueries plus a real (spy)
-// AuditSink constructs successfully regardless of the two Options' order.
-func TestWithQueriesAcceptsRealAuditSink(t *testing.T) {
-	reg := registry.NewInMemory()
-	auditQ := &spyAuditQuery{}
-	jobQ := &spyJobQuery{}
-	audit := &spyAuditSink{}
-
-	// WithAuditSink BEFORE WithQueries.
-	New(reg, WithAuditSink(audit), WithQueries(auditQ, jobQ))
-	// WithAuditSink AFTER WithQueries — the guard must not depend on order.
-	New(reg, WithQueries(auditQ, jobQ), WithAuditSink(audit))
 }
 
 // TestReadLane_JobFilterCarriesOneJob is the Job-detail screen's read (#423):
@@ -747,10 +713,9 @@ func TestRecordEventSubscription_FailsClosedOnASinkError(t *testing.T) {
 
 // A6: a Service with no real audit sink refuses rather than "recording"
 // through noopAuditSink, which unconditionally returns nil — the exact
-// unaudited-stream state this ticket exists to prevent. New(reg) alone (no
-// WithQueries, no WithAuditSink) is the shape a caller could reach this
-// method on: New's own fail-open guards trip on WithExecution or
-// WithQueries, not on a bare event-subscription lane.
+// unaudited-stream state this ticket exists to prevent. A lane assembled over
+// the no-op sink (newReadLane, which NewReadLane refuses at construction) is
+// the shape that could reach this method.
 //
 // MUT delete auditSinkPresent() from RecordEventSubscription -> this test
 // goes red, because canonicalEventKinds would then run to completion and

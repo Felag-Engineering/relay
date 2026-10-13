@@ -221,7 +221,7 @@ type AuditSink interface {
 	// than getting its own seam for the same reason RecordRead does: a
 	// separately-wired administration auditor is how a deployment ends up
 	// with audited dispatch and unaudited identity changes, and New's
-	// real-dispatcher/WithQueries fail-open guards then cover it for free.
+	// real-dispatcher/NewReadLane fail-open guards then cover it for free.
 	//
 	// Reads (Accounts/Account/APITokens) never call this — see
 	// accountadmin.go's file header for why that is load-bearing, not an
@@ -490,7 +490,7 @@ func (noopAuditSink) RecordAccountAdmin(context.Context, Principal, AccountAdmin
 // allowlist-safe for capability's import-boundary guard
 // (TestCapabilityImportsOnlyRegistryAndJobs); the SQLite-backed
 // implementation (internal/store, behind internal/freeze.Repository, whose
-// method set mirrors this one) is wired in via WithFreeze, kept out of
+// method set mirrors this one) is wired in via NewControl, kept out of
 // package capability for the same import-boundary reason as Conduit/
 // AuditSink.
 type FreezeStore interface {
@@ -564,7 +564,7 @@ const (
 // pipeline: a dispatch outcome per Node, or a refusal kind. Mirrors AuditSink's
 // seam doc: this must never affect a dispatch decision — it is purely
 // observational. The real adapter (internal/metrics) is wired in via
-// WithMetrics; this seam only imports jobs, staying within capability's
+// NewRecorder; this seam only imports jobs, staying within capability's
 // import allowlist (execution_test.go guard).
 type MetricsSink interface {
 	IncDispatch(outcome jobs.Outcome)

@@ -74,12 +74,12 @@ type NodeRevoker interface {
 }
 
 // Freezer engages and releases the Relay-wide Freeze (ADR-0013).
-// *capability.Service satisfies this interface.
+// *capability.Control satisfies this interface.
 //
 // Both methods are role-gated INSIDE the capability layer (#397): engage
 // needs a human `operator`+, release needs `admin` and a reason, and the
 // refusal is audited there. This interface deliberately does not expose
-// capability.Service's EngageFreezeLocal/ReleaseFreezeLocal — the host-signal
+// capability.Control's EngageFreezeLocal/ReleaseFreezeLocal — the host-signal
 // lever is root-on-the-box authority (ADR-0013) and must not be reachable
 // from an HTTP route, so the narrow interface is what keeps it out of reach.
 type Freezer interface {
@@ -100,10 +100,10 @@ type Auditor interface {
 }
 
 // AccountAdmin is Account and API-Token administration (#653): the identity
-// routes' single collaborator, mirroring capability.Service's own
+// routes' single collaborator, mirroring capability.AccountAdmin's own
 // accountadmin.go methods exactly (each takes the acting Principal, since
 // the role floor AND the self-targeting/last-admin refusals now live in the
-// capability layer, not here) — so *capability.Service satisfies this
+// capability layer, not here) — so *capability.AccountAdmin satisfies this
 // interface with no adapter, the same shape as Freezer/Executor/
 // ApprovalService above.
 //
@@ -415,7 +415,7 @@ var newAuditID = audit.NewID
 // recordLifecycle appends one lifecycle audit.Record (token mint/revoke, or
 // a refusal of one — see authorizeControl) attributed to p. Freeze
 // engage/release, and a refused Freeze, are audited intrinsically by
-// capability.Service (RecordFreeze) and must never call this — doing so
+// capability.Control (RecordFreeze) and must never call this — doing so
 // would double-audit (see freeze.go). reason must never carry an Enrollment
 // Token plaintext.
 //

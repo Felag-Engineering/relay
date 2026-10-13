@@ -125,7 +125,7 @@ const maxAPITokenNameLen = 128
 //
 // This does NOT decide role. Since #653 the floor — admin, in full — and the
 // self-targeting and last-enabled-admin refusals all live inside the
-// capability layer (capability.Service.Accounts/CreateAccount/
+// capability layer (capability.AccountAdmin.Accounts/CreateAccount/
 // SetAccountRole/...), reached through d.AccountAdmin below; this surface
 // renders whatever it answers and re-derives nothing
 // (role_floor_test.go's TestCapabilityFlooredRoutesDoNotReachASurfaceGate

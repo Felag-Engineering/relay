@@ -222,8 +222,8 @@ func TestPreflightNeverConsultsCachedPolicyOrVocabulary(t *testing.T) {
 	}
 
 	// ARMED CONTROL (BLOCKING 2, plan review cycle 1): the zero-Gets
-	// assertions above are vacuous on a Service where WithPolicyView/
-	// WithTemplateVocabulary never actually landed (a typo in the bespoke
+	// assertions above are vacuous on a Service where the Policy view and
+	// Template vocabulary never actually landed (a typo in the bespoke
 	// constructor, a spy that silently fails to satisfy the seam). Proving
 	// the same Service's DescribeNode DOES reach both spies is what confirms
 	// the absence measured above is real. Ordered after the zero-call
@@ -254,14 +254,14 @@ const (
 // and mcp/no_dispatch_test.go's parse-and-inspect style:
 //
 //   - the FIELDS: an *ast.Ident named policyView or nodeVocab may appear
-//     only in service.go (declaration, WithPolicyView/WithTemplateVocabulary)
-//     and readlane_registry.go (DescribeNode/ListOperations — the display
-//     read lane itself).
+//     only in readlane_registry.go (the ReadLane declaration and
+//     NewReadLane, DescribeNode/ListOperations — the display read lane
+//     itself) and template.go (below).
 //   - the SEAM TYPES: an *ast.Ident named PolicyViewSource or
 //     TemplateVocabularySource may appear only in seams.go (declaration) and
-//     service.go (field type, Option parameter). This closes the rename
-//     hole: a new field of this type elsewhere would evade the field-name
-//     allowlist above.
+//     readlane_registry.go (the ReadLane field types and NewReadLane's
+//     parameters). This closes the rename hole: a new field of this type
+//     elsewhere would evade the field-name allowlist above.
 //   - the IMPORTS: internal/policyview and internal/nodevocab may be
 //     imported only by seams.go and readlane_registry.go, so no other file
 //     can reach the cache types directly.
@@ -278,18 +278,13 @@ const (
 // reviewed as a read-lane change — and TestPreflightNeverConsultsCachedPolicyOrVocabulary's
 // behavioural assertions catch it regardless of which file it lives in.
 //
-// A second residual, understated in the previous revision (security review
-// cycle 2, SR4): service.go is ALSO allowlisted wholesale on the field list,
-// because it is where policyView/nodeVocab are declared and wired by
-// WithPolicyView/WithTemplateVocabulary. A method placed in service.go
-// itself — e.g. `func (s *Service) cachedVerdict(...)` reading
-// `s.policyView.Get(...)` — passes the field, type, import AND method
-// allowlists: it needs no new import (Go resolves s.policyView's method
-// through type inference on an existing field) and calls neither
-// DescribeNode nor ListOperations. That is the same acceptance as
-// readlane_registry.go above, for the same reason: it is the seam's own
-// declaring file, and a change there would be reviewed as touching the seam
-// directly.
+// readlane_registry.go is now the sole wholesale-allowlisted file on all four
+// lists: service.go, which used to be allowlisted on the field and type lists
+// (SR4, security review cycle 2) because it declared and wired the two
+// fields, has no access at all — the fields moved to ReadLane, declared in
+// readlane_registry.go. A method placed in service.go (e.g.
+// `func (s *Service) cachedVerdict(...)` reading `s.read.policyView.Get(...)`)
+// now trips the field list.
 //
 // A third, larger residual (also SR4): these four allowlists pin the two
 // cached SOURCES THAT EXIST TODAY, by name — the fields policyView/
@@ -321,8 +316,8 @@ func TestCachedPolicyAndVocabularyReachOnlyTheDisplayReadLane(t *testing.T) {
 	// — and it is the only file admitted; plan.go and service.go reach it
 	// only through resolveAction. It is NOT on the type list: it never names
 	// a seam type, so a new cached field there would still trip this test.
-	fieldAllow := map[string]bool{"service.go": true, "readlane_registry.go": true, "template.go": true}
-	typeAllow := map[string]bool{"seams.go": true, "service.go": true}
+	fieldAllow := map[string]bool{"readlane_registry.go": true, "template.go": true}
+	typeAllow := map[string]bool{"seams.go": true, "readlane_registry.go": true}
 	importAllow := map[string]bool{"seams.go": true, "readlane_registry.go": true, "template.go": true}
 	methodAllow := map[string]bool{"readlane_registry.go": true}
 
@@ -377,13 +372,13 @@ func TestCachedPolicyAndVocabularyReachOnlyTheDisplayReadLane(t *testing.T) {
 			case "policyView", "nodeVocab":
 				seen["field"]++
 				if !fieldAllow[name] {
-					t.Errorf("%s:%d references %q outside service.go/readlane_registry.go — PF-7: only the display read lane may touch a cached Policy-view or Template-vocabulary field",
+					t.Errorf("%s:%d references %q outside readlane_registry.go/template.go — PF-7: only the display read lane may touch a cached Policy-view or Template-vocabulary field",
 						name, line, id.Name)
 				}
 			case "PolicyViewSource", "TemplateVocabularySource":
 				seen["type"]++
 				if !typeAllow[name] {
-					t.Errorf("%s:%d references %q outside seams.go/service.go — a new field of this type elsewhere would evade the field allowlist above; PF-7 needs it named here too",
+					t.Errorf("%s:%d references %q outside seams.go/readlane_registry.go — a new field of this type elsewhere would evade the field allowlist above; PF-7 needs it named here too",
 						name, line, id.Name)
 				}
 			case "DescribeNode", "ListOperations":

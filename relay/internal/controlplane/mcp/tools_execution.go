@@ -72,12 +72,15 @@ type Executor interface {
 // tool sibling of nodeReaderAdapter/policyReaderAdapter/operationListerAdapter
 // (mcp.go): it is what makes a `.(*capability.Service)` type assertion on
 // the value New() was given fail at runtime, not just at the static-
-// interface boundary, so an exec tool can never reach back through it to
-// EngageFreeze/ReleaseFreeze (which *capability.Service also exposes but
-// Executor does not). RB1 (plan review): defined HERE, an exec file, rather
-// than mcp.go, so mcp.go's source never spells a capability. token and stays
-// a strict readFile under no_dispatch_test.go's guard — mcp.go wires this
-// with an unqualified `execAdapter{r: exec}` composite literal.
+// interface boundary, so an exec tool can never reach back through it to a
+// wider method set (*capability.Service exposes Plan, Start and more than
+// Executor does). The Freeze is no longer one of them: it lives on
+// *capability.Control, which Service does not expose.
+//
+// RB1 (plan review): defined HERE, an exec file, rather than mcp.go, so
+// mcp.go's source never spells a capability. token and stays a strict
+// readFile under no_dispatch_test.go's guard — mcp.go wires this with an
+// unqualified `execAdapter{r: exec}` composite literal.
 type execAdapter struct {
 	r Executor
 }
