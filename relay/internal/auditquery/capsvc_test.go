@@ -13,8 +13,8 @@ import (
 
 // capSeams is the set of collaborators a test hands to newCapService. A zero
 // field means "not supplied". audit, auditQ and jobQ are required, as
-// capability.NewReadLane requires them; authz builds the Control and the
-// Service over it, and a test that sets none reads through the lane alone.
+// capability.NewReadLane requires them; authz builds the Control over it, the
+// execution seams build the Execution, and a test that sets none reads through the lane alone.
 type capSeams struct {
 	reg    registry.Repository
 	authz  capability.Authorizer
@@ -32,10 +32,11 @@ type capSeams struct {
 }
 
 // capLayer is what a test holds a built capability layer as: the leaf services
-// embedded, so a test calls any of their methods unqualified. Service and
-// Control are nil when the test supplied no authorizer.
+// embedded, so a test calls any of their methods unqualified. Control is nil
+// when the test supplied no authorizer, and Execution unless it also supplied
+// the execution seams.
 type capLayer struct {
-	*capability.Service
+	*capability.Execution
 	*capability.ReadLane
 	*capability.Control
 }
@@ -59,6 +60,9 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 	if hasExec && (s.freeze == nil || s.authz == nil) {
 		t.Fatalf("newCapService: execution seams need a freeze store and an authorizer")
 	}
+	if hasExec && s.cap == nil {
+		t.Fatalf("newCapService: execution seams need a CapChecker")
+	}
 	rec := capability.NewRecorder(s.audit, nil, nil)
 	read := capability.NewReadLane(rec, s.reg, s.auditQ, s.jobQ, nil, nil, 0, nil)
 	layer := &capLayer{ReadLane: read}
@@ -71,17 +75,6 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 	}
 	layer.Control = capability.NewControl(rec, s.authz, freeze)
 
-	var opts []capability.Option
-	if s.cap != nil {
-		opts = append(opts, capability.WithCapChecker(s.cap))
-	}
-	if hasExec {
-		var eo []capability.ExecOption
-		if s.newID != nil {
-			eo = append(eo, capability.WithExecNewID(s.newID))
-		}
-		opts = append(opts, capability.WithExecution(s.jobsRepo, s.tasksRepo, s.conduit, eo...))
-	}
 	// A gate with no rules: nothing parks, so the store and authorizer below it
 	// are unreachable on every path these tests drive.
 	gate, err := approval.NewGate(nil)
@@ -89,7 +82,9 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 		t.Fatalf("approval.NewGate: %v", err)
 	}
 	appr := capability.NewApprovals(rec, gate, unreachableApprovalStore{}, denyApprovalDecisions{}, nil, nil, nil, nil)
-	layer.Service = capability.New(layer.Control, read, appr, opts...)
+	if hasExec {
+		layer.Execution = capability.NewExecution(layer.Control, read, appr, s.cap, nil, s.jobsRepo, s.tasksRepo, s.conduit, capability.DefaultDispatchConcurrency, s.newID, nil)
+	}
 	return layer
 }
 

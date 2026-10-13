@@ -28,7 +28,7 @@ import (
 // the right Action (Kind=ActionRawExec) and Principal, and that the refusal
 // the gate returns renders as 403 rather than a 500.
 //
-// What it does NOT claim to prove is that capability.Service calls the
+// What it does NOT claim to prove is that capability.Execution calls the
 // Authorizer at all; that is capability's own test's job and is already
 // covered there.
 // -----------------------------------------------------------------------
@@ -712,7 +712,7 @@ func TestExecutionResponse_ExitCodeAndJobIDShape(t *testing.T) {
 	})
 
 	t.Run("an Executor returning no results renders no job_id and an empty array", func(t *testing.T) {
-		exec := &fakeExecutor{runResults: nil} // out-of-contract: *capability.Service refuses zero-match as no_nodes_matched
+		exec := &fakeExecutor{runResults: nil} // out-of-contract: *capability.Execution refuses zero-match as no_nodes_matched
 		h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts"})

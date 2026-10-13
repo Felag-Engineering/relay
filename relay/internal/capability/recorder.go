@@ -24,7 +24,7 @@ type Recorder struct {
 
 	// log is where this layer's operational errors go; nil means
 	// slog.Default() (logger). Propagated onto the Job engine at the end of
-	// New, like jobEvents.
+	// newExecution, like jobEvents.
 	log *slog.Logger
 }
 

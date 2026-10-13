@@ -414,5 +414,7 @@ hygiene, so the review bar is correspondingly high.
 
 The Console is a **thin adapter over the one capability layer**. It renders and requests; it never
 decides. The `no_dispatch` structural guard extends to the Console package: a Console file that
-holds a `*capability.Service`, calls `capability.New`, or reaches capability's internal dispatch
+holds any concrete capability service (`*capability.Execution`, `Approvals`, `ReadLane`,
+`AccountAdmin`, `Control`, `Recorder` — or the retired `capability.Service`), calls any of their
+constructors (or the retired `capability.New`), or reaches capability's internal dispatch
 must fail to compile the test suite.

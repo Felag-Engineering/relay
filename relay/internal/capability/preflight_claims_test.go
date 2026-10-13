@@ -61,10 +61,10 @@ func (g *countingApprovalGate) Evaluate(d approval.Dispatch) (approval.Requireme
 // say whether a real run would require approval."
 //
 // approvalFixture (approval_test.go) is deliberately NOT reused here: it
-// sets the Service's dispatcher field directly rather than calling
-// WithExecution, so a Plan run against it would have no real jobEngine to
-// query through. This builds an Approvals with a gate AND a Service with WithExecution
-// together, which New accepts (Run parks before ever reaching the
+// sets the Execution's dispatcher field directly rather than calling
+// NewExecution, so a Plan run against it would have no real jobEngine to
+// query through. This builds an Approvals with a gate AND an Execution with the
+// real engine together, which NewExecution accepts (Run parks before ever reaching the
 // dispatcher, so pairing them is not a fail-open combination).
 func TestPreflightNeverConsultsTheApprovalGate(t *testing.T) {
 	reg := registry.NewInMemory()

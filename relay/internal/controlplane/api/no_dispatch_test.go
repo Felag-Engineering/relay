@@ -18,8 +18,8 @@ import (
 // added with the execution routes (#356) and mirroring
 // mcp/no_dispatch_test.go: the ONLY path from a route to a dispatch is the
 // injected Executor interface (execution.go). A file here that held a
-// *capability.Service, called the exported capability.New constructor, or
-// reached capability's internal newDispatch would be a second control path —
+// *capability.Execution (or any concrete capability service), called a
+// capability constructor, or reached capability's internal newDispatch would be a second control path —
 // the thing ADR-0009/0010 exist to prevent — so it fails this guard with an
 // explicit message rather than passing review unnoticed.
 //
@@ -40,11 +40,13 @@ const (
 
 // bannedCapabilityServices maps every capability service type, and its
 // constructor, to the narrowed seam an api file must use instead. They are
-// banned by EXACT name beside capability.Service and capability.New: a prefix
-// match would falsely flag unrelated identifiers such as
-// capability.ControlAction and capability.AccountAdminEvent, which routes
-// legitimately use.
+// banned by EXACT name beside the retired capability.Service and
+// capability.New, which stay banned permanently: a prefix match would falsely
+// flag unrelated identifiers such as capability.ControlAction and
+// capability.AccountAdminEvent, which routes legitimately use.
 var bannedCapabilityServices = map[string]string{
+	"Execution":       "use the Executor interface (execution.go)",
+	"NewExecution":    "use the Executor interface (execution.go)",
 	"Recorder":        "the Recorder belongs to the composition root alone",
 	"NewRecorder":     "the Recorder belongs to the composition root alone",
 	"Control":         "use the Freezer interface",
@@ -60,14 +62,14 @@ var bannedCapabilityServices = map[string]string{
 // dispatchViolations AST-inspects file (fileName is used only in messages) and
 // returns one message per rule it catches:
 //
-//   - capability.Service (or an alias's .Service): the execution layer's entry
-//     point. No api file may hold one directly — routes reach dispatch only
-//     through the injected Executor.
-//   - capability.New (or an alias's .New): the exported dispatch constructor;
-//     holding its result is equivalent to holding a Service.
-//   - the other capability services and their constructors
-//     (bannedCapabilityServices): Control, AccountAdmin, ReadLane, Approvals
-//     and Recorder, by exact name. Each route holds the narrow interface it uses,
+//   - capability.Service and capability.New (or an alias's .Service/.New): the
+//     retired monolith's names, banned permanently. The execution layer's entry
+//     point is capability.Execution, banned with the other services below: no
+//     api file may hold one directly — routes reach dispatch only through the
+//     injected Executor.
+//   - the concrete capability services and their constructors
+//     (bannedCapabilityServices): Execution, Control, AccountAdmin, ReadLane,
+//     Approvals and Recorder, by exact name. Each route holds the narrow interface it uses,
 //     never the concrete service.
 //   - the unexported newDispatch identifier: capability's internal constructor,
 //     sealed to package capability. A reference here would not compile, but the
@@ -91,7 +93,7 @@ var bannedCapabilityServices = map[string]string{
 // This guard is flat by design — no read/exec partition, because every file
 // in package api legitimately handles capability.Principal (see the file
 // header) — so both new rules are unconditional, alongside the
-// capability.Service/capability.New/newDispatch ones, and a new source file
+// capability.Execution/capability.Service/capability.New/newDispatch ones, and a new source file
 // is covered automatically.
 func dispatchViolations(fileName string, file *ast.File) []string {
 	var violations []string
@@ -261,7 +263,7 @@ func TestDispatchViolations_BansConcreteCapabilityServices(t *testing.T) {
 	for _, name := range []string{
 		"Recorder", "NewRecorder", "Control", "NewControl",
 		"AccountAdmin", "NewAccountAdmin", "ReadLane", "NewReadLane",
-		"Approvals", "NewApprovals",
+		"Approvals", "NewApprovals", "Execution", "NewExecution",
 	} {
 		t.Run(name, func(t *testing.T) {
 			src := "package api\nimport " + capImport + "\nvar _ = capability." + name + "\n"
@@ -291,6 +293,35 @@ var _ capability.IntentRecorder
 		violations := check(t, src)
 		mustContain(t, violations, "capability.Approvals — a concrete capability service")
 		mustContain(t, violations, "capability.NewApprovals — a concrete capability service")
+	})
+
+	t.Run("an aliased import cannot dodge the execution ban", func(t *testing.T) {
+		src := "package api\nimport c2 " + capImport + "\nvar _ *c2.Execution\nvar _ = c2.NewExecution\n"
+		violations := check(t, src)
+		mustContain(t, violations, "capability.Execution — a concrete capability service")
+		mustContain(t, violations, "capability.NewExecution — a concrete capability service")
+	})
+
+	t.Run("exact match leaves the execution-path identifiers alone", func(t *testing.T) {
+		src := "package api\nimport " + capImport + `
+var _ capability.StartOptions
+var _ capability.StartedJob
+var _ capability.NodeResult
+var _ capability.PlanResult
+var _ capability.TaskView
+var _ capability.ParkedError
+var _ capability.FrozenError
+var _ capability.CapExceededError
+var _ capability.NoNodesMatchedError
+var _ = capability.ErrDraining
+var _ = capability.ErrIdempotencyUnavailable
+var _ = capability.ErrJobNotRequestedByCaller
+var _ = capability.DefaultDispatchConcurrency
+var _ capability.JobEventSink
+`
+		if violations := check(t, src); len(violations) != 0 {
+			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
+		}
 	})
 
 	t.Run("exact match leaves the approval seam identifiers alone", func(t *testing.T) {
@@ -346,8 +377,16 @@ var _ = c2.Service{}
 		{
 			name: "exported capability.New dispatch constructor",
 			src: `package api
+import c2 ` + capImport + `
+func f() { c2.New(nil) }
+`,
+			wantSubstr: "capability.New",
+		},
+		{
+			name: "capability.New named without a call, default import",
+			src: `package api
 import ` + capImport + `
-func f() { capability.New(nil) }
+var _ = capability.New
 `,
 			wantSubstr: "capability.New",
 		},

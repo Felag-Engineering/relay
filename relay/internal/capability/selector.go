@@ -289,7 +289,7 @@ func (sel Selector) String() string {
 // list_nodes(selector?) is deliberately callable with no selector at all).
 // Resolve itself never bounds the number of Nodes returned; guarding
 // fan-out size against the blast-radius cap is the pipeline's job
-// (Service.Run), not the resolver's.
+// (Execution.Run), not the resolver's.
 // NamespaceNames returns the distinct label namespaces this Selector targets,
 // as the lower-case names the approval-gate config uses ("node", "relay",
 // "tag", "state"). It is how a gate rule expresses "anything targeting the
@@ -374,7 +374,7 @@ func (sel Selector) Shape() (approval.SelectorShape, error) {
 // ADR-0003's list_nodes(selector?) is deliberately callable with no selector
 // at all). Resolve itself never bounds the number of Nodes returned; guarding
 // fan-out size against the blast-radius cap is the pipeline's job
-// (Service.Run), not the resolver's.
+// (Execution.Run), not the resolver's.
 //
 // Every Node in one Resolve call is evaluated against the SAME ev — one
 // instant, one cert-expiring window — so a single resolution is internally
@@ -390,7 +390,7 @@ func (sel Selector) Resolve(reg registry.Repository, ev StateEval) []registry.No
 	return matched
 }
 
-// NoNodesMatchedError is returned by Service.Run when the Selector resolves to
+// NoNodesMatchedError is returned by Execution.Run when the Selector resolves to
 // zero Nodes. It is exported and typed so a surface recognises it via
 // errors.As without string-matching (mirrors FrozenError, seams.go, and
 // CapExceededError, caps.go). Selector is the Selector's canonical form

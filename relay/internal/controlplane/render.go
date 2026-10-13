@@ -170,7 +170,7 @@ func RenderJobState(ctx context.Context, results JobResultReader, jobID string) 
 // the same "the reason nothing was asked" rule that already puts exceeds_cap
 // ahead of frozen. Zero-match and over-cap cannot occur together under
 // BlastCap, whose caps are clamped positive. A Plan can otherwise be both
-// over-cap and Frozen at once (Service.Plan computes Frozen before the cap
+// over-cap and Frozen at once (Execution.Plan computes Frozen before the cap
 // check); the over-cap report takes priority there since it is the reason the
 // query fan-out never even ran (Verdicts is empty in that case too).
 //

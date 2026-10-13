@@ -16,8 +16,8 @@ import (
 // newServer (main.go) calls newDispatchStack and sets tunnel.sink whenever
 // Config.ControlEnabled — the production execution flip (#154) — over the
 // real mTLS Tunnel, paired with the real staged Authorizer
-// (internal/authz.NewStaged, ADR-0010) capability.New's fail-open guard
-// requires alongside a real dispatcher (service.go). The dev harness
+// (internal/authz.NewStaged, ADR-0010) capability.NewExecution's fail-open guard
+// requires alongside a real dispatcher (pipeline.go). The dev harness
 // (devharness.go, installDevHarness) uses this SAME assembly — the only
 // difference is its own allow-all devHarnessAuthorizer, never
 // authz.NewRoleGate — see TestTunnelSink_GatedByControlEnabled for the

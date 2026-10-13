@@ -128,24 +128,22 @@ func TestEngineWithoutIntentRecorderRefusesToPersist(t *testing.T) {
 	}
 }
 
-func TestNewPanicsWhenRealDispatcherHasNoIntentRecorder(t *testing.T) {
+func TestNewExecutionPanicsWhenAuditSinkHasNoIntentRecorder(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	rec := NewRecorder(&spyAuditSink{}, nil, nil)
 	ctl := NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{})
 	read := newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, 0, nil)
-	capOpt := WithCapChecker(&spyCapChecker{})
-	execOpt := WithExecution(jobsRepo, tasksRepo, newFakeConduit(nil))
 	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 	defer func() {
 		r := recover()
 		if r == nil {
-			t.Fatal("New with a real dispatcher and an AuditSink that cannot record intent should panic")
+			t.Fatal("NewExecution with a real dispatcher and an AuditSink that cannot record intent should panic")
 		}
 		if msg, _ := r.(string); !strings.Contains(msg, "IntentRecorder") {
 			t.Errorf("panic = %v, want it to name IntentRecorder", r)
 		}
 	}()
-	New(ctl, read, appr, capOpt, execOpt)
+	NewExecution(ctl, read, appr, &spyCapChecker{}, nil, jobsRepo, tasksRepo, newFakeConduit(nil), DefaultDispatchConcurrency, nil, nil)
 }
 
 // nonAtomicIntents is the IntentRecorder the in-package tests use when their
@@ -182,15 +180,10 @@ func (n *nonAtomicIntents) recorded() []AuditEntry {
 	return append([]AuditEntry(nil), n.entries...)
 }
 
-// withExecIntents sets the engine's IntentRecorder, which Service.New would
-// otherwise take from the AuditSink.
-func withExecIntents(r IntentRecorder) ExecOption {
-	return func(e *jobEngine) { e.intents = r }
-}
-
-// testExecution is WithExecution for tests whose AuditSink is a spy that
-// cannot record an intent: the engine gets a nonAtomicIntents over tr.
-func testExecution(jr jobs.JobRepository, tr jobs.TaskRepository, c Conduit, opts ...ExecOption) Option {
-	opts = append([]ExecOption{withExecIntents(&nonAtomicIntents{tr: tr})}, opts...)
-	return WithExecution(jr, tr, c, opts...)
+// intentSpySink is a spy AuditSink that also records dispatch intent, so a test
+// can call NewExecution itself, which takes the engine's IntentRecorder from
+// the Recorder's sink.
+type intentSpySink struct {
+	*spyAuditSink
+	*nonAtomicIntents
 }

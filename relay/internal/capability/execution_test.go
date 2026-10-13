@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -784,7 +785,7 @@ func TestJobEngine_DispatchPanicBeforeMarkDispatchedIsNeverSent(t *testing.T) {
 	}
 }
 
-// TestServiceRunDispatchPanicReachesAuditAndResults: through Service.Run, the
+// TestServiceRunDispatchPanicReachesAuditAndResults: through Execution.Run, the
 // panicking Node's OutcomeFailure is in the returned results and in the
 // KindDispatch audit record — the durable record of the failure (#942).
 func TestServiceRunDispatchPanicReachesAuditAndResults(t *testing.T) {
@@ -1061,10 +1062,10 @@ func TestEngineMixedFleetVersionGate(t *testing.T) {
 	}
 }
 
-// TestWithExecutionRefusesDefaultSeams is the New fail-open guard: wiring a
-// real dispatcher via WithExecution without also supplying a real
-// Authorizer/CapChecker/AuditSink must panic.
-func TestWithExecutionRefusesDefaultSeams(t *testing.T) {
+// TestNewExecutionRefusesDefaultSeams is the NewExecution fail-open guard:
+// building the real dispatcher over the allow-all/no-op default seams, instead
+// of a real Authorizer/CapChecker/AuditSink, must panic.
+func TestNewExecutionRefusesDefaultSeams(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	conduit := newFakeConduit(nil)
 	reg := registry.NewInMemory()
@@ -1072,20 +1073,19 @@ func TestWithExecutionRefusesDefaultSeams(t *testing.T) {
 	ctl := newControl(rec, allowAllAuthorizer{}, noopFreezeStore{})
 	read := newReadLane(rec, reg, nil, nil, nil, nil, 0, nil)
 	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
-	execOpt := WithExecution(jobsRepo, tasksRepo, conduit)
 
 	defer func() {
 		if recover() == nil {
-			t.Fatal("New(reg, WithExecution(...)) without real Authorizer/CapChecker/AuditSink should panic")
+			t.Fatal("NewExecution over the allow-all/no-op default seams should panic")
 		}
 	}()
-	New(ctl, read, appr, execOpt)
+	NewExecution(ctl, read, appr, noopCapChecker{}, nil, jobsRepo, tasksRepo, conduit, DefaultDispatchConcurrency, nil, nil)
 }
 
-// TestWithExecutionAcceptsRealSeams: with real (spy) Authorizer, CapChecker,
-// and AuditSink supplied, New constructs successfully and Run drives the
-// engine end to end.
-func TestWithExecutionAcceptsRealSeams(t *testing.T) {
+// TestNewExecutionAcceptsRealSeams: with real (spy) Authorizer, CapChecker,
+// and AuditSink supplied, NewExecution constructs successfully and Run drives
+// the engine end to end.
+func TestNewExecutionAcceptsRealSeams(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	conduit := newFakeConduit(nil)
 	conduit.connected["node-1"] = true
@@ -1101,12 +1101,11 @@ func TestWithExecutionAcceptsRealSeams(t *testing.T) {
 	audit := &spyAuditSink{}
 	freezeStore := &fakeFreezeStore{}
 
-	rec := NewRecorder(audit, nil, nil)
-	svc := New(NewControl(rec, authz, freezeStore),
+	rec := NewRecorder(&intentSpySink{audit, &nonAtomicIntents{tr: tasksRepo}}, nil, nil)
+	svc := NewExecution(NewControl(rec, authz, freezeStore),
 		newReadLane(rec, reg, nil, nil, nil, nil, 0, nil),
 		newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
-		WithCapChecker(capChecker),
-		testExecution(jobsRepo, tasksRepo, conduit, WithExecNewID(sequentialIDs("id-"))),
+		capChecker, nil, jobsRepo, tasksRepo, conduit, DefaultDispatchConcurrency, sequentialIDs("id-"), nil,
 	)
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
@@ -1223,31 +1222,147 @@ func TestRun_RequesterIsOnTheJobWhileEveryTaskIsPending(t *testing.T) {
 	}
 }
 
-// TestWithExecutionRefusesWithoutFreeze is New's fail-open guard extended
-// for FreezeStore (amendment D): wiring a real dispatcher via WithExecution
-// with real Authorizer/CapChecker/AuditSink but WITHOUT a real FreezeStore
-// must still panic — a real executor riding the noopFreezeStore default is
+// TestNewExecutionRefusesWithoutFreeze is NewExecution's fail-open guard
+// extended for FreezeStore (amendment D): building the real dispatcher with
+// real Authorizer/CapChecker/AuditSink but WITHOUT a real FreezeStore must
+// still panic — a real executor riding the noopFreezeStore default is
 // un-stoppable, exactly the composition-root wiring bug the guard exists to
 // catch.
-func TestWithExecutionRefusesWithoutFreeze(t *testing.T) {
+func TestNewExecutionRefusesWithoutFreeze(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	conduit := newFakeConduit(nil)
 	reg := registry.NewInMemory()
-	// testExecution wires an IntentRecorder, so the freeze check is the only
+	// intentSpySink records an intent, so the freeze check is the only
 	// real-dispatcher check left that can fire here.
-	rec := NewRecorder(&spyAuditSink{}, nil, nil)
+	rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tasksRepo}}, nil, nil)
 	ctl := newControl(rec, &spyAuthorizer{}, noopFreezeStore{})
 	read := newReadLane(rec, reg, nil, nil, nil, nil, 0, nil)
-	capOpt := WithCapChecker(&spyCapChecker{})
-	execOpt := testExecution(jobsRepo, tasksRepo, conduit)
 	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 
 	defer func() {
 		if recover() == nil {
-			t.Fatal("New(reg, WithExecution(...)) with real Authorizer/CapChecker/AuditSink but no WithFreeze should panic")
+			t.Fatal("NewExecution with real Authorizer/CapChecker/AuditSink but a never-frozen FreezeStore should panic")
 		}
 	}()
-	New(ctl, read, appr, capOpt, execOpt)
+	NewExecution(ctl, read, appr, &spyCapChecker{}, nil, jobsRepo, tasksRepo, conduit, DefaultDispatchConcurrency, nil, nil)
+}
+
+// TestNewExecution_RefusesEachFailOpenSeam: each fail-open seam, alone, makes
+// NewExecution panic naming that seam. Every other seam is real, so only that
+// row's check can fire.
+func TestNewExecution_RefusesEachFailOpenSeam(t *testing.T) {
+	cases := []struct {
+		name   string
+		marker string
+		build  func(t *testing.T, tr jobs.TaskRepository) (*Control, *ReadLane, *Approvals, CapChecker)
+	}{
+		{"allow-all Authorizer", "allowAllAuthorizer", func(t *testing.T, tr jobs.TaskRepository) (*Control, *ReadLane, *Approvals, CapChecker) {
+			rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}, nil, nil)
+			return newControl(rec, allowAllAuthorizer{}, &fakeFreezeStore{}),
+				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, 0, nil),
+				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
+				&spyCapChecker{}
+		}},
+		{"no-op CapChecker", "noopCapChecker", func(t *testing.T, tr jobs.TaskRepository) (*Control, *ReadLane, *Approvals, CapChecker) {
+			rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}, nil, nil)
+			return newControl(rec, &spyAuthorizer{}, &fakeFreezeStore{}),
+				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, 0, nil),
+				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
+				noopCapChecker{}
+		}},
+		{"no-op AuditSink", "noopAuditSink", func(t *testing.T, tr jobs.TaskRepository) (*Control, *ReadLane, *Approvals, CapChecker) {
+			rec := NewRecorder(noopAuditSink{}, nil, nil)
+			return newControl(rec, &spyAuthorizer{}, &fakeFreezeStore{}),
+				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, 0, nil),
+				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
+				&spyCapChecker{}
+		}},
+		{"no-op FreezeStore", "noopFreezeStore", func(t *testing.T, tr jobs.TaskRepository) (*Control, *ReadLane, *Approvals, CapChecker) {
+			rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}, nil, nil)
+			return newControl(rec, &spyAuthorizer{}, noopFreezeStore{}),
+				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, 0, nil),
+				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
+				&spyCapChecker{}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			jobsRepo, tasksRepo := testEngineStore(t)
+			ctl, read, appr, capc := tc.build(t, tasksRepo)
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("NewExecution over a %s should panic", tc.name)
+				}
+				if msg, _ := r.(string); !strings.Contains(msg, tc.marker) {
+					t.Errorf("panic = %v, want it to name %s", r, tc.marker)
+				}
+			}()
+			NewExecution(ctl, read, appr, capc, nil, jobsRepo, tasksRepo, newFakeConduit(nil), DefaultDispatchConcurrency, nil, nil)
+		})
+	}
+}
+
+// TestNewExecution_NilOptionalSeamsTakeTheirSafeDefaults: a nil idem, newID and
+// jobEvents are the documented safe absences — the no-op event sink, the
+// production Job-ID generator, and a keyed call refused rather than run
+// unkeyed — and the engine still takes its IntentRecorder from the Recorder's
+// AuditSink.
+func TestNewExecution_NilOptionalSeamsTakeTheirSafeDefaults(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	conduit := newFakeConduit(nil)
+	conduit.connected["node-1"] = true
+	conduit.results["node-1"] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+	reg := seedOneNode(t)
+
+	intents := &nonAtomicIntents{tr: tasksRepo}
+	rec := NewRecorder(&intentSpySink{&spyAuditSink{}, intents}, nil, nil)
+	x := NewExecution(NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{}),
+		newReadLane(rec, reg, nil, nil, nil, nil, 0, nil),
+		newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
+		&spyCapChecker{}, nil, jobsRepo, tasksRepo, conduit, DefaultDispatchConcurrency, nil, nil)
+
+	if _, ok := x.jobEvents.(noopJobEventSink); !ok {
+		t.Errorf("jobEvents = %T, want noopJobEventSink", x.jobEvents)
+	}
+	if _, ok := x.disp.(*jobEngine).events.(noopJobEventSink); !ok {
+		t.Errorf("engine events = %T, want noopJobEventSink", x.disp.(*jobEngine).events)
+	}
+
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
+	p := Principal{AccountID: "a1", Account: "a1"}
+	results, err := x.Run(context.Background(), p, Selector{}, act)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(results) != 1 || !regexp.MustCompile(`^job-[0-9a-f]{32}$`).MatchString(results[0].JobID) {
+		t.Errorf("results = %+v, want one JobID of the form job-<32 hex> (defaultID)", results)
+	}
+	if n := len(intents.recorded()); n != 1 {
+		t.Errorf("recorded intents = %d, want 1 (taken from the Recorder's AuditSink)", n)
+	}
+
+	_, err = x.Start(context.Background(), p, Selector{}, act, StartOptions{IdempotencyKey: "k-1"})
+	if !errors.Is(err, ErrIdempotencyUnavailable) {
+		t.Errorf("keyed Start with a nil idem: err = %v, want ErrIdempotencyUnavailable", err)
+	}
+}
+
+// TestBuild_KeepsNewExecutionsRealDispatchGuard: the test builder wires a real
+// engine through the same checkRealDispatch NewExecution runs, so a fixture
+// over the allow-all default Authorizer panics rather than silently dispatching.
+func TestBuild_KeepsNewExecutionsRealDispatchGuard(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("build with an execution seam over the allow-all default should panic")
+		}
+		if msg, _ := r.(string); !strings.Contains(msg, "allowAllAuthorizer") {
+			t.Errorf("panic = %v, want it to name allowAllAuthorizer", r)
+		}
+	}()
+	build(t, seams{reg: registry.NewInMemory(), jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: newFakeConduit(nil)})
 }
 
 // TestExecution_ResolvesStateAgainstTheReadLanesWindow: Run resolves a
@@ -1564,7 +1679,7 @@ func TestEngine_JobEvents_NeverCarryOutput(t *testing.T) {
 	}
 }
 
-// TestService_CancelJob_PublishesJobCancelled proves Service.CancelJob
+// TestService_CancelJob_PublishesJobCancelled proves Execution.CancelJob
 // publishes exactly one JobCancelled event, attributed to the calling
 // Principal, after the cancel itself succeeds.
 func TestService_CancelJob_PublishesJobCancelled(t *testing.T) {
@@ -2653,16 +2768,21 @@ func TestJobEngine_OpenGatePanicsOnADuplicateJob(t *testing.T) {
 	release2()
 }
 
-func TestWithExecutionPanicsOnNonPositiveDispatchConcurrency(t *testing.T) {
+func TestNewExecutionPanicsOnNonPositiveDispatchConcurrency(t *testing.T) {
 	jr, tr := testEngineStore(t)
+	// Every other argument is valid, so only the concurrency check can fire.
+	rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}, nil, nil)
+	ctl := NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{})
+	read := newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, 0, nil)
+	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 	for _, n := range []int{0, -1} {
 		func() {
 			defer func() {
 				if recover() == nil {
-					t.Errorf("WithExecDispatchConcurrency(%d) did not panic", n)
+					t.Errorf("NewExecution(concurrency=%d) did not panic", n)
 				}
 			}()
-			WithExecution(jr, tr, newFakeConduit(nil), WithExecDispatchConcurrency(n))
+			NewExecution(ctl, read, appr, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), n, nil, nil)
 		}()
 	}
 }

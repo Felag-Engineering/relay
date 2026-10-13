@@ -131,7 +131,7 @@ func jobOrderBy(order jobs.JobOrder) (string, error) {
 // The third join counts the Job's dispatch_intent and dispatch rows, which
 // scanJobSummary compares with the Task total to say how much of the Job's
 // dispatch record exists (jobs.JobRecording). The count is exact because run
-// returns one result per persisted Task and Service.Run appends one dispatch
+// returns one result per persisted Task and Execution.Run appends one dispatch
 // row per result. `+kind IN (...)` keeps the planner off idx_audit_kind_ts in
 // the same way `a` does.
 //

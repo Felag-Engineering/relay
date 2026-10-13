@@ -15,7 +15,7 @@ import "context"
 // and nothing else. A field a caller controls must never be able to widen what
 // a caller may do.
 //
-// That is enforced, not merely intended: Service.Run and Service.Plan strip
+// That is enforced, not merely intended: Execution.Run and Execution.Plan strip
 // assertions from the context before calling the Authorizer (see
 // withoutAssertions), so an Authorizer implementation cannot reach them even
 // though it is handed a context. The blast cap counts Nodes and takes no

@@ -124,7 +124,7 @@ func (r testJobResultReader) TasksByJob(ctx context.Context, jobID string) ([]jo
 // testServer is the fixture for every test in this file: a control-plane
 // Server with the real MCP handler mounted at /mcp behind
 // Authenticator.Middleware, seeded with two Nodes and one Policy snapshot,
-// and (#118) a REAL execution-wired capability.Service — store, conduit,
+// and (#118) a REAL capability.Execution — store, conduit,
 // authz, blast-cap, audit sink, and Freeze store are all real, so
 // run_operation/raw_exec/cancel_job/get_job exercise the exact same
 // pipeline (Freeze -> Selector -> authz -> blast-cap -> dispatch -> audit)
@@ -162,12 +162,12 @@ func newTestServerWithBlastCap(t *testing.T, readCap, mutateCap int) testServer 
 	return newTestServerWithConfig(t, readCap, mutateCap, "")
 }
 
-// drainOnCleanup waits for the Service's background Jobs (Start, #895) when the
-// test ends. Registered right after capability.New, so (cleanups run
+// drainOnCleanup waits for the Execution's background Jobs (Start, #895) when the
+// test ends. Registered right after capability.NewExecution, so (cleanups run
 // last-in-first-out) it runs after the test's own cleanups and the server's
 // Shutdown and before the store closes: a Job still fanning out never writes
 // to a closed store.
-func drainOnCleanup(t *testing.T, svc *capability.Service) {
+func drainOnCleanup(t *testing.T, svc *capability.Execution) {
 	t.Helper()
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -295,10 +295,10 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 		newID:       deterministicIDs(),
 		concurrency: concurrency,
 	})
-	drainOnCleanup(t, capSvc.Service)
+	drainOnCleanup(t, capSvc.Execution)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 
-	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Service, results, nil, nil)
+	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Execution, results, nil, nil)
 
 	cert := relaytest.SelfSignedServerCert(t, "mcp-test")
 	controlSrv := controlplane.New(
@@ -399,9 +399,9 @@ func newTestServerWithFailingReadSink(t *testing.T) testServer {
 		conduit:   conduit,
 		newID:     deterministicIDs(),
 	})
-	drainOnCleanup(t, capSvc.Service)
+	drainOnCleanup(t, capSvc.Execution)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
-	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Service, results, nil, nil)
+	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Execution, results, nil, nil)
 
 	cert := relaytest.SelfSignedServerCert(t, "mcp-test")
 	controlSrv := controlplane.New(

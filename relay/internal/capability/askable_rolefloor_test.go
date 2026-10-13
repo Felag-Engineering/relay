@@ -99,13 +99,13 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 	ctl := capability.NewControl(rec, s.authz, neverFrozen{})
 	read := capability.NewReadLane(rec, s.reg, emptyQueries{}, emptyQueries{}, nil, nil, 0, s.now)
 	appr := capability.NewApprovals(rec, s.gate, s.approvals, s.approvalAuthz, nil, nil, nil, s.now)
-	return &capLayer{capability.New(ctl, read, appr), appr}
+	return &capLayer{capability.NewExecutionWithoutEngineForTest(ctl, read, appr), appr}
 }
 
-// capLayer is the Service and the Approvals it is built over, embedded so a
+// capLayer is the Execution and the Approvals it is built over, embedded so a
 // test calls Run and DecideApproval on one value.
 type capLayer struct {
-	*capability.Service
+	*capability.Execution
 	*capability.Approvals
 }
 

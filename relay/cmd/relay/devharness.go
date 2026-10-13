@@ -24,13 +24,14 @@
 // this file self-auditing.
 //
 // Capability-layer wiring (#103): unlike the composition root (main.go),
-// which defers WithExecution to v0.0.6's real Authorizer, this file supplies
-// its own allow-all devHarnessAuthorizer — a type distinct from capability's
-// own allowAllAuthorizer, so New's fail-open guard is satisfied — precisely
-// what dispatch_wiring.go's doc comment reserves for "the #103 integration
-// harness." Every op below is driven through capSvc (invariant 10): this is
-// what makes the audit trail, blast-cap, and Freeze acceptance criteria real
-// rather than faked at the harness. The daemon's live Policy engine remains
+// which builds its Execution only under Config.ControlEnabled over the real
+// RoleGate, this file supplies its own allow-all devHarnessAuthorizer — a
+// type distinct from capability's own allowAllAuthorizer, so NewExecution's
+// fail-open guard is satisfied — precisely what dispatch_wiring.go's doc
+// comment reserves for "the #103 integration harness." Every op below is
+// driven through execution (invariant 10): this is what makes the audit
+// trail, blast-cap, and Freeze acceptance criteria real rather than faked at
+// the harness. The daemon's live Policy engine remains
 // the sole source of Policy verdicts (ADR-0002/0011) — nothing here
 // evaluates or mutates Policy.
 package main
@@ -59,18 +60,18 @@ import (
 
 // harnessState is threaded through every socket handler: deps for
 // registry/tokens/Freeze/store access, router as the transport-level Conduit
-// (raw "dispatch" op + list_connected/get_node's connected field), and capSvc
+// (raw "dispatch" op + list_connected/get_node's connected field), and execution
 // as the sole entry point for anything that must go through the capability
 // pipeline (run_job/cancel_job/get_freeze).
 type harnessState struct {
-	deps   *appDeps
-	router *dispatch.Router
-	capSvc *capability.Service
+	deps      *appDeps
+	router    *dispatch.Router
+	execution *capability.Execution
 }
 
 // devHarnessAuthorizer is the #103 integration harness's allow-all
 // Authorizer. It is a DISTINCT type from capability's own unexported
-// allowAllAuthorizer so capability.New's fail-open guard — "a real dispatcher
+// allowAllAuthorizer so capability.NewExecution's fail-open guard — "a real dispatcher
 // must never ride the package's own allow-all default" — is satisfied by
 // construction, not by convention. Real Grant-based authorization is
 // v0.0.6+ scope; this harness only proves the pipeline wiring, never a real
@@ -107,7 +108,7 @@ func (devHarnessAuthorizer) AuthorizeApprovalDecision(context.Context, capabilit
 // strictly before main's srv.Serve is called (installDevHarness runs between
 // newServer and Serve), so there is no concurrency with the tunnel handler at
 // the moment the sink is assigned. It then constructs an execution-wired
-// capability.Service (WithExecution) over the SAME Router, so run_job's
+// capability.Execution over the SAME Router, so run_job's
 // dispatch and the "dispatch" op's raw send share one Conduit and one set of
 // live connections.
 func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
@@ -118,10 +119,10 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 
 	// Mutual exclusion (RB2, plan review): the production execution flip
 	// (#154) makes newServer itself set deps.tunnel.sink when
-	// Config.ControlEnabled, wiring its own capability.Service around the
+	// Config.ControlEnabled, wiring its own capability.Execution around the
 	// SAME dispatch.Router assembly this function builds below. Installing
 	// the dev harness on top of that would silently orphan newServer's
-	// production sink/capSvc (split-brain: two Routers, two Services, one
+	// production sink/execution (split-brain: two Routers, two Executions, one
 	// Tunnel) — never enable the control plane and the dev harness together.
 	// This is a composition-root wiring bug, not a recoverable runtime
 	// condition, so it panics rather than silently overwriting the sink.
@@ -152,17 +153,16 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 
 	rec := capability.NewRecorder(harnessAudit, nil, deps.logger)
 	ctl := capability.NewControl(rec, devHarnessAuthorizer{}, deps.store.Freeze())
-	// NewReadLane requires both query seams. The harness reaches capSvc only
+	// NewReadLane requires both query seams. The harness reaches execution only
 	// through Run and a human CancelJob, neither of which consults them.
 	q := auditquery.New(deps.store.AuditQueries(), deps.store.JobQueries())
 	read := capability.NewReadLane(rec, deps.registry, q, q, nil, nil, 0, nil)
 	approvals := capability.NewApprovals(rec, gate, deps.store.Approvals(), devHarnessAuthorizer{}, nil, nil, nil, nil)
-	capSvc := capability.New(ctl, read, approvals,
-		capability.WithExecution(deps.jobs, deps.tasks, router,
-			capability.WithExecDispatchConcurrency(cfg.DispatchConcurrency)),
-		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)))
+	execution := capability.NewExecution(ctl, read, approvals,
+		capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap), nil,
+		deps.jobs, deps.tasks, router, cfg.DispatchConcurrency, nil, nil)
 
-	st := &harnessState{deps: deps, router: router, capSvc: capSvc}
+	st := &harnessState{deps: deps, router: router, execution: execution}
 
 	if dir := filepath.Dir(sockPath); dir != "." {
 		if err := os.MkdirAll(dir, 0700); err != nil {
@@ -482,7 +482,7 @@ func harnessRunJob(ctx context.Context, st *harnessState, req harnessRequest) ha
 		return harnessResponse{Error: fmt.Sprintf("run_job: %v", err)}
 	}
 
-	results, err := st.capSvc.Run(ctx, capability.Principal{Account: "devharness"}, sel, act)
+	results, err := st.execution.Run(ctx, capability.Principal{Account: "devharness"}, sel, act)
 	if err != nil {
 		return harnessResponse{Error: err.Error()}
 	}
@@ -529,7 +529,7 @@ func harnessCancelJob(ctx context.Context, st *harnessState, req harnessRequest)
 		return harnessResponse{Error: "cancel_job: job_id is required"}
 	}
 	p := capability.Principal{Account: "devharness", Kind: capability.PrincipalKindHuman}
-	if err := st.capSvc.CancelJob(ctx, p, req.JobID); err != nil {
+	if err := st.execution.CancelJob(ctx, p, req.JobID); err != nil {
 		return harnessResponse{Error: err.Error()}
 	}
 	return harnessResponse{}
@@ -537,7 +537,7 @@ func harnessCancelJob(ctx context.Context, st *harnessState, req harnessRequest)
 
 // harnessGetFreeze reads whether the Relay-wide Freeze (ADR-0013) is
 // currently engaged, directly off the same persisted FreezeStore the local
-// SIGUSR1/SIGUSR2 lever (freeze_signal.go) and st.capSvc share.
+// SIGUSR1/SIGUSR2 lever (freeze_signal.go) and st.execution share.
 func harnessGetFreeze(ctx context.Context, st *harnessState) harnessResponse {
 	frozen, err := st.deps.store.Freeze().Frozen(ctx)
 	if err != nil {
@@ -582,7 +582,7 @@ func harnessQueryJob(ctx context.Context, st *harnessState, req harnessRequest) 
 // harnessListInFlight returns every Task currently Dispatched with no Result
 // yet (TaskRepository.InFlight — the same set a Relay restart reconciles,
 // ADR-0004), each carrying its JobID. Not in the original plan enumeration:
-// added because Service.Run blocks until EVERY matched Node's Task reaches a
+// added because Execution.Run blocks until EVERY matched Node's Task reaches a
 // terminal state, so a caller can never learn a Job's ID from run_job's own
 // response while a long-running Task (e.g. a raw_exec sleep) is still
 // in-flight on another connection. list_inflight is the test's only way to

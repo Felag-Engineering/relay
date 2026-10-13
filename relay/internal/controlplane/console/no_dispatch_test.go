@@ -23,6 +23,9 @@ import (
 // never dropped — a new execution surface is exactly when the temptation to
 // shortcut appears."
 //
+// Since #899 the execution service is capability.Execution; Service and New
+// no longer exist and stay banned by name, permanently, beside it.
+//
 // The guard exists at package creation rather than arriving with the composer
 // (issue #438). Adding it later would mean the window in which the shortcut is
 // cheapest is the window in which nothing is watching, and a guard that arrives
@@ -53,11 +56,13 @@ func writeSeamName(name string) bool {
 
 // bannedCapabilityServices maps every capability service type, and its
 // constructor, to the narrowed seam a Console file must use instead. They are
-// banned by EXACT name beside capability.Service and capability.New: a prefix
-// match would falsely flag unrelated identifiers such as
-// capability.ControlAction and capability.AccountAdminEvent, which the
-// Console legitimately uses.
+// banned by EXACT name beside the retired capability.Service and
+// capability.New, which stay banned permanently: a prefix match would falsely
+// flag unrelated identifiers such as capability.ControlAction and
+// capability.AccountAdminEvent, which the Console legitimately uses.
 var bannedCapabilityServices = map[string]string{
+	"Execution":       "use JobCanceller (cancel.go)",
+	"NewExecution":    "use JobCanceller (cancel.go)",
 	"Recorder":        "the Recorder belongs to the composition root alone",
 	"NewRecorder":     "the Recorder belongs to the composition root alone",
 	"Control":         "the Console holds only the store's FreezeReader, never the Control",
@@ -264,8 +269,8 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	// ApprovalReader that #427 closed for events.Bus.
 	//
 	// The dispatch/control verbs (#595) close the SAME hole, not a new one
-	// the Cancel seam introduced: Deps.Approvals (before #899) was already wired to the
-	// *capability.Service before this issue, so an anonymous-interface
+	// the Cancel seam introduced: Deps.Approvals was already wired
+	// (before #899) to the *capability.Service, so an anonymous-interface
 	// assertion could already have recovered Run, Plan, EngageFreeze,
 	// ReleaseFreeze or ResolveTask from it with no import and no banned type
 	// named. Deps.Cancel (cancel.go) is another field wired to the same
@@ -304,14 +309,14 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 			// (#595): Run and Plan dispatch; Engage/Release and Cancel are
 			// ControlActions; Resolve is ResolveTask, a task-handle write.
 			// Run, Plan, Cancel and Resolve are reachable from
-			// Deps.Cancel (the *capability.Service); Deps.Approvals is the
+			// Deps.Cancel (the *capability.Execution); Deps.Approvals is the
 			// narrower *capability.Approvals and carries none of them.
-			// Engage/Release left *capability.Service in #899 and stay
+			// Engage/Release left the execution service in #899 and stay
 			// listed so that re-wiring a Control onto any Deps field
 			// cannot reopen them (see the comment above).
 			"Run", "Plan", "Engage", "Release", "Cancel", "Resolve",
 			// #895: Start is Run's non-blocking sibling — the same dispatch
-			// pipeline — and Drain closes the Service to every later Start,
+			// pipeline — and Drain closes the Execution to every later Start,
 			// so a Console file recovering it is a denial of service.
 			"Start", "Drain",
 			// The account lane's reveal-once credential write (#654):
@@ -695,6 +700,22 @@ var _ = c2.Service{}
 			wantSubstr: "capability.Service",
 		},
 		{
+			name: "exported capability.New via an alias",
+			src: `package console
+import c2 ` + capImport + `
+func f() { c2.New(nil) }
+`,
+			wantSubstr: "capability.New",
+		},
+		{
+			name: "capability.New named without a call, default import",
+			src: `package console
+import ` + capImport + `
+var _ = capability.New
+`,
+			wantSubstr: "capability.New",
+		},
+		{
 			// The evasion that actually compiles against today's wiring:
 			// Deps.Approvals IS a *capability.Approvals, so this assertion
 			// succeeds at runtime and recovers the decision path from a seam
@@ -839,7 +860,7 @@ func f(a approvals) { _, _ = a.PendingApprovals(context.Background()) }
 		},
 		{
 			// The SAME pre-existing hole (#595), reached through a third
-			// door: Deps.Cancel is wired to the same *capability.Service
+			// door: Deps.Cancel is wired to the same *capability.Execution
 			// Deps.Approvals and Deps.Queries already were, so an anonymous
 			// interface matching Run's signature recovers dispatch from the
 			// Cancel seam too — nothing this issue added made Run reachable,
@@ -1046,7 +1067,7 @@ var _ *authz.RoleGate
 			// built from the literal package name, never the local alias
 			// (cycle-2 review, finding 4) — the same evasion "aliased
 			// capability import dodging the literal package name" above
-			// tests for capability.Service.
+			// tests for capability.Execution.
 			name: "an aliased authz import still names the gate",
 			src: `package console
 import az ` + authzImport + `
@@ -1128,7 +1149,7 @@ func TestDispatchViolations_BansConcreteCapabilityServices(t *testing.T) {
 	for _, name := range []string{
 		"Recorder", "NewRecorder", "Control", "NewControl",
 		"AccountAdmin", "NewAccountAdmin", "ReadLane", "NewReadLane",
-		"Approvals", "NewApprovals",
+		"Approvals", "NewApprovals", "Execution", "NewExecution",
 	} {
 		t.Run(name, func(t *testing.T) {
 			src := "package console\nimport " + capImport + "\nvar _ = capability." + name + "\n"
@@ -1164,6 +1185,35 @@ var _ capability.IntentRecorder
 		mustContain(t, violations, "capability.NewApprovals — a concrete capability service")
 	})
 
+	t.Run("an aliased import cannot dodge the execution ban", func(t *testing.T) {
+		src := "package console\nimport c2 " + capImport + "\nvar _ *c2.Execution\nvar _ = c2.NewExecution\n"
+		violations := check(t, src)
+		mustContain(t, violations, "capability.Execution — a concrete capability service")
+		mustContain(t, violations, "capability.NewExecution — a concrete capability service")
+	})
+
+	t.Run("exact match leaves the execution-path identifiers alone", func(t *testing.T) {
+		src := "package console\nimport " + capImport + `
+var _ capability.StartOptions
+var _ capability.StartedJob
+var _ capability.NodeResult
+var _ capability.PlanResult
+var _ capability.TaskView
+var _ capability.ParkedError
+var _ capability.FrozenError
+var _ capability.CapExceededError
+var _ capability.NoNodesMatchedError
+var _ = capability.ErrDraining
+var _ = capability.ErrIdempotencyUnavailable
+var _ = capability.ErrJobNotRequestedByCaller
+var _ = capability.DefaultDispatchConcurrency
+var _ capability.JobEventSink
+`
+		if violations := check(t, src); len(violations) != 0 {
+			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
+		}
+	})
+
 	t.Run("exact match leaves the approval seam identifiers alone", func(t *testing.T) {
 		// ApprovalDecision and GrantRequest are left out on purpose: this guard
 		// bans them from every file but decide.go (and bans GrantRequest there too).
@@ -1195,6 +1245,22 @@ var _ *capability.Approvals
 			t.Fatalf("dispatchViolations() = %v, want exactly one violation (Approvals)", violations)
 		}
 		mustContain(t, violations, "capability.Approvals — a concrete capability service")
+	})
+
+	t.Run("decide.go's ApprovalDecision allowance does not admit Execution", func(t *testing.T) {
+		src := "package console\nimport " + capImport + `
+var _ capability.ApprovalDecision
+var _ *capability.Execution
+`
+		file, err := parser.ParseFile(token.NewFileSet(), "decide.go", src, 0)
+		if err != nil {
+			t.Fatalf("parser.ParseFile: %v", err)
+		}
+		violations := dispatchViolations("decide.go", file)
+		if len(violations) != 1 {
+			t.Fatalf("dispatchViolations() = %v, want exactly one violation (Execution)", violations)
+		}
+		mustContain(t, violations, "capability.Execution — a concrete capability service")
 	})
 }
 

@@ -28,10 +28,13 @@ const (
 
 // bannedCapabilityServices maps every capability service type, and its
 // constructor, to the narrowed seam an mcp file must use instead. They are
-// banned by EXACT name in every file, read or exec, beside capability.Service
-// and capability.New: a prefix match would falsely flag unrelated identifiers
-// such as capability.ControlAction and capability.AccountAdminEvent.
+// banned by EXACT name in every file, read or exec, beside the retired
+// capability.Service and capability.New, which stay banned permanently: a
+// prefix match would falsely flag unrelated identifiers such as
+// capability.ControlAction and capability.AccountAdminEvent.
 var bannedCapabilityServices = map[string]string{
+	"Execution":       "use the Executor / TaskResolver seams (tools_execution.go, tasks.go)",
+	"NewExecution":    "use the Executor / TaskResolver seams (tools_execution.go, tasks.go)",
 	"Recorder":        "the Recorder belongs to the composition root alone",
 	"NewRecorder":     "the Recorder belongs to the composition root alone",
 	"Control":         "the Freeze is not an MCP tool",
@@ -50,9 +53,10 @@ var bannedCapabilityServices = map[string]string{
 // dispatch. It is exactly the code identifiers the strict files use today, so
 // a new reference — including Selector, Predicate and ErrReadUnaudited, which
 // appear only in comments — must be audited before it is added. Everything
-// else on the capability import — including capability.Service and the
-// exported capability.New dispatch constructor, both of which are forbidden in
-// every file regardless of strictness — is a violation for a strict file. It
+// else on the capability import — including the retired capability.Service and
+// capability.New (banned permanently) and every concrete capability service,
+// all forbidden in every file regardless of strictness — is a violation for a
+// strict file. It
 // does not govern exec files; see strictCapabilityIdents below.
 var capabilityReadAllowlist = map[string]bool{
 	"ParseSelector": true,
@@ -78,7 +82,8 @@ var capabilityReadAllowlist = map[string]bool{
 // are relaxed to also reference capability.Principal/Selector/NodeResult/
 // FrozenError/CapExceededError — needed for Executor's signature and error
 // rendering — but remain subject to every unconditional rule below
-// (capability.Service, capability.New, newDispatch, registry.Repository).
+// (capability.Execution, the retired capability.Service/New, newDispatch,
+// registry.Repository).
 //
 // TestNoDispatchConstruction asserts readFiles ∪ execFiles covers EVERY
 // non-test .go file actually present in this directory: a new source file
@@ -123,14 +128,14 @@ var execFiles = map[string]bool{
 	// capability.Principal and capability.TaskView for the TaskResolver seam's
 	// signature, so it classifies relaxed alongside the other execution files —
 	// and remains subject to every unconditional rule, including the one that
-	// matters most here: it may never reach capability.Service or newDispatch,
+	// matters most here: it may never reach capability.Execution or newDispatch,
 	// so resolving a task handle can never become a second path to a Node.
 	"tasks.go": true,
 	// tools_approval.go (#391, ADR-0029) serves approve_request, the in-band
 	// approval rung. It spells capability.Principal and
 	// capability.ApprovalDecision for the ApprovalDecider seam, so it
 	// classifies relaxed — but the rule that matters most here is
-	// unconditional and still binds: it may never reach capability.Service or
+	// unconditional and still binds: it may never reach capability.Execution or
 	// newDispatch. Approving releases a Plan; it does not run one. Answering a
 	// gate must never become a second path to a Node, and this is what makes
 	// that structural rather than a matter of review.
@@ -141,7 +146,7 @@ var execFiles = map[string]bool{
 	// but it names no decision identifier at all (no_decision_test.go needs
 	// no new exemption for it) and remains bound by every unconditional rule,
 	// including the one that matters most: it may never reach
-	// capability.Service or newDispatch.
+	// capability.Execution or newDispatch.
 	"elicit.go": true,
 }
 
@@ -164,11 +169,11 @@ func classifyFile(name string) (strict, classified bool) {
 // used only in messages) and returns one message per rule it catches. Every
 // rule below fires regardless of strictCapabilityIdents:
 //
-//   - capability.Service (or an alias's .Service): the execution layer's
-//     entry point. No mcp file may ever hold one directly — the only path to
+//   - capability.Service and capability.New (or an alias's .Service/.New): the
+//     retired monolith's names, banned permanently. The execution layer's entry
+//     point is capability.Execution, banned with the other concrete services
+//     below: no mcp file may ever hold one directly — the only path to
 //     dispatch is through the injected Executor interface.
-//   - capability.New (or an alias's .New): the exported dispatch
-//     constructor. Holding its result is equivalent to holding a Service.
 //   - the unexported newDispatch identifier: capability's internal
 //     constructor, sealed to package capability by dispatch_construction_test.go
 //     (a reference here wouldn't even compile, but this gives an explicit
@@ -312,8 +317,8 @@ func dispatchViolations(fileName string, file *ast.File, strictCapabilityIdents 
 // never Run) and their runtime narrowing via readLaneAdapter/
 // operationListerAdapter in New (mcp.go), PLUS #118's execution tools
 // dispatching only through the injected Executor/JobResultReader
-// (execAdapter/jobResultReaderAdapter), never a capability.Service or
-// capability.New held directly, and never registry.Repository recovered
+// (execAdapter/jobResultReaderAdapter), never a capability.Execution or
+// its constructor held directly, and never registry.Repository recovered
 // from a narrowed reader. This test is defense in depth that catches the
 // mistake at `go test` time with an explicit message, rather than an opaque
 // compiler error or runtime panic.
@@ -435,19 +440,32 @@ var _ = c2.Service{}
 			wantSubstr: "capability.Service",
 		},
 		{
-			name: "exported capability.New dispatch constructor, default import name (strict/read mode)",
+			// wantSubstr is the ban arm's own message: in strict mode the
+			// allow-list message also contains "capability.New", so the bare
+			// name would pass without the arm.
+			name: "exported capability.New dispatch constructor via the c2 alias (strict/read mode)",
 			src: `package mcp
-import ` + capImport + `
-func f() { capability.New(nil) }
+import c2 ` + capImport + `
+func f() { c2.New(nil) }
 `,
 			strict:     true,
-			wantSubstr: "capability.New",
+			wantSubstr: "capability.New — the exported dispatch constructor",
 		},
 		{
 			name: "exported capability.New fires in exec mode too",
 			src: `package mcp
+import c2 ` + capImport + `
+func f() { c2.New(nil) }
+`,
+			strict:     false,
+			wantSubstr: "capability.New",
+		},
+		{
+			// Exec mode, so the strict allow-list message cannot satisfy it.
+			name: "capability.New named without a call, default import, exec mode",
+			src: `package mcp
 import ` + capImport + `
-func f() { capability.New(nil) }
+var _ = capability.New
 `,
 			strict:     false,
 			wantSubstr: "capability.New",
@@ -459,7 +477,7 @@ import cap ` + capImport + `
 func f() { cap.New(nil) }
 `,
 			strict:     true,
-			wantSubstr: "capability.New",
+			wantSubstr: "capability.New — the exported dispatch constructor",
 		},
 		{
 			name: "capability selector not on the pure-read allow-list (strict/read mode)",
@@ -758,7 +776,7 @@ func TestDispatchViolations_BansConcreteCapabilityServices(t *testing.T) {
 	for _, name := range []string{
 		"Recorder", "NewRecorder", "Control", "NewControl",
 		"AccountAdmin", "NewAccountAdmin", "ReadLane", "NewReadLane",
-		"Approvals", "NewApprovals",
+		"Approvals", "NewApprovals", "Execution", "NewExecution",
 	} {
 		t.Run(name, func(t *testing.T) {
 			src := "package mcp\nimport " + capImport + "\nvar _ = capability." + name + "\n"
@@ -795,6 +813,35 @@ var _ capability.IntentRecorder
 		violations := check(t, src, false)
 		mustContain(t, violations, "capability.Approvals — a concrete capability service")
 		mustContain(t, violations, "capability.NewApprovals — a concrete capability service")
+	})
+
+	t.Run("an aliased import cannot dodge the execution ban", func(t *testing.T) {
+		src := "package mcp\nimport c2 " + capImport + "\nvar _ *c2.Execution\nvar _ = c2.NewExecution\n"
+		violations := check(t, src, false)
+		mustContain(t, violations, "capability.Execution — a concrete capability service")
+		mustContain(t, violations, "capability.NewExecution — a concrete capability service")
+	})
+
+	t.Run("exact match leaves the execution-path identifiers alone", func(t *testing.T) {
+		src := "package mcp\nimport " + capImport + `
+var _ capability.StartOptions
+var _ capability.StartedJob
+var _ capability.NodeResult
+var _ capability.PlanResult
+var _ capability.TaskView
+var _ capability.ParkedError
+var _ capability.FrozenError
+var _ capability.CapExceededError
+var _ capability.NoNodesMatchedError
+var _ = capability.ErrDraining
+var _ = capability.ErrIdempotencyUnavailable
+var _ = capability.ErrJobNotRequestedByCaller
+var _ = capability.DefaultDispatchConcurrency
+var _ capability.JobEventSink
+`
+		if violations := check(t, src, false); len(violations) != 0 {
+			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
+		}
 	})
 
 	t.Run("exact match leaves the approval seam identifiers alone", func(t *testing.T) {

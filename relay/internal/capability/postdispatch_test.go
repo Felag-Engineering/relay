@@ -20,7 +20,7 @@ import (
 // POST-dispatch accounting (bindTaskHandleJob, the KindDispatch audit
 // record): once a Job's release claim has committed, a client that drops mid-
 // dispatch must not leave that Job's accounting stranded on a ctx the same
-// drop already cancelled — see the acctCtx block in Run (service.go).
+// drop already cancelled — see the acctCtx block in Run (pipeline.go).
 
 // ctxSensitiveAuditSink is a minimal capability.AuditSink over a REAL
 // audit.Repository (SQLite, store.Open) rather than a spy that always
@@ -189,7 +189,7 @@ func TestRun_ReservedDispatchIsAuditedAndBoundWhenTheClientDropsMidDispatch(t *t
 		t.Fatalf("first Run: err = %v, want a park", err)
 	}
 	if parked.TaskID == "" {
-		t.Fatal("first Run: want a minted MCP task handle (WithMCPTasks was wired)")
+		t.Fatal("first Run: want a minted MCP task handle (an MCP task store was wired)")
 	}
 	approveViaRecordDecision(t, approvalsRepo, parked.RequestID, parked.PlanHash, apNow.Add(time.Minute))
 

@@ -12,7 +12,7 @@ import (
 )
 
 // newPlanTestService wires a real jobEngine (fakeConduit-backed) behind a
-// Service, exactly like execution_test.go's TestWithExecutionAcceptsRealSeams
+// Execution, exactly like execution_test.go's TestNewExecutionAcceptsRealSeams
 // — plan_test.go's Plan tests need the real query path (jobEngine.query),
 // not spyDispatcher's no-op, to prove the offline/allow/deny fan-out.
 func newPlanTestService(t *testing.T, reg registry.Repository, conduit *fakeConduit) (*testSvc, *spyAuditSink, *fakeFreezeStore) {

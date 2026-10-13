@@ -20,20 +20,18 @@ import (
 // plan review): unlike mcp.go/tools_nodes.go/tools_operations.go/
 // attribution.go, it is allowed to spell capability.Principal/Selector/
 // NodeResult/FrozenError/CapExceededError — needed for Executor's signature
-// and renderRunError's error rendering. It must never spell capability.
-// Service, capability.New, or newDispatch — those remain forbidden in every
-// mcp file, exec or not, by no_dispatch_test.go's unconditional rules; this
-// file's only path to a real dispatch is the Executor interface below,
-// injected by the composition root (cmd/relay/main.go), never constructed
-// here.
+// and renderRunError's error rendering. It must never spell
+// capability.Execution, capability.NewExecution, or newDispatch — those
+// remain forbidden in every mcp file, exec or not, by no_dispatch_test.go's
+// unconditional rules; this file's only path to a real dispatch is the
+// Executor interface below, injected by the composition root
+// (cmd/relay/main.go), never constructed here.
 //
-// #118 wires these tools against a capability.Service but does NOT flip
-// production dispatch on: main.go's capSvc still has no WithExecution call,
-// so its dispatcher is the v0.0.5 default noopDispatcher — every matched
-// Node reports OutcomeUnspecified, nothing is actually sent. That flip is
-// isolated to #154 (owner DECISION 1). All acceptance for #118 is proven
-// in-package against a test-wired execution capability (mcp_test.go/
-// mcp_exec_test.go).
+// #118 wires these tools against the capability layer's execution service
+// but does NOT flip production dispatch on: whether main.go builds an
+// Execution at all is Config.ControlEnabled's call, isolated to #154 (owner
+// DECISION 1). All acceptance for #118 is proven in-package against a
+// test-wired execution capability (mcp_test.go/mcp_exec_test.go).
 //
 // #727 (ADR-0029 decision 6): run_operation and raw_exec are the answered
 // retry's only callers. This file reaches exactly ONE decision-side function
@@ -48,20 +46,20 @@ import (
 // and fails closed otherwise.
 
 // Executor is the narrow capability-layer entry point the execution tools
-// dispatch through — Service.Start and Service.CancelJob's exact shape,
-// declared locally so no mcp file needs to import *capability.Service
+// dispatch through — Execution.Start and Execution.CancelJob's exact shape,
+// declared locally so no mcp file needs to import *capability.Execution
 // itself (mirrors NodeReader/PolicyReader/OperationLister in mcp.go, but for
 // the execution stages: Selector -> authz -> blast-cap -> dispatch -> audit,
-// invariant 10). *capability.Service satisfies Executor structurally (Go
+// invariant 10). *capability.Execution satisfies Executor structurally (Go
 // structural typing) — the composition root passes it in directly.
 type Executor interface {
-	// Start is Service.Start (#895): the same pipeline as Run, returning once
+	// Start is Execution.Start (#895): the same pipeline as Run, returning once
 	// the Job's Tasks are persisted. This adapter chooses how long to wait for
 	// the Job afterwards (wait_seconds); it decides nothing about the dispatch.
 	Start(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action, o capability.StartOptions) (capability.StartedJob, error)
 	CancelJob(ctx context.Context, p capability.Principal, jobID string) error
 
-	// Plan is Service.Plan's exact shape (#119, ADR-0011): resolves sel,
+	// Plan is Execution.Plan's exact shape (#119, ADR-0011): resolves sel,
 	// authorizes p against act, and reports per-Node PolicyVerdicts instead
 	// of dispatching — no Job/Task/dedup entry is ever created.
 	Plan(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) (capability.PlanResult, error)
@@ -70,12 +68,12 @@ type Executor interface {
 // execAdapter narrows an arbitrary Executor down to a value whose dynamic
 // type is execAdapter itself, exposing only Run/CancelJob — the execution-
 // tool sibling of nodeReaderAdapter/policyReaderAdapter/operationListerAdapter
-// (mcp.go): it is what makes a `.(*capability.Service)` type assertion on
+// (mcp.go): it is what makes a `.(*capability.Execution)` type assertion on
 // the value New() was given fail at runtime, not just at the static-
 // interface boundary, so an exec tool can never reach back through it to a
-// wider method set (*capability.Service exposes Plan, Start and more than
+// wider method set (*capability.Execution exposes Plan, Start and more than
 // Executor does). The Freeze is no longer one of them: it lives on
-// *capability.Control, which Service does not expose.
+// *capability.Control, which Execution does not expose.
 //
 // RB1 (plan review): defined HERE, an exec file, rather than mcp.go, so
 // mcp.go's source never spells a capability. token and stays a strict
@@ -363,7 +361,7 @@ func dispatch(ctx context.Context, exec Executor, results JobResultReader, p cap
 		}
 		return RunOrPlanOutput{}, nil, renderRunError(err)
 	}
-	// *capability.Service can never return an empty JobID with a nil error from
+	// *capability.Execution can never return an empty JobID with a nil error from
 	// the real engine (a zero-match Selector is refused as no_nodes_matched
 	// before this call returns). The no-op dispatcher, which creates no Job,
 	// does; nothing was dispatched then, so there is nothing to read back.
@@ -551,7 +549,7 @@ func answerThenDispatch(
 	case elicitedApproved, elicitedLapsed, elicitedStillPending:
 		// A concurrent approving retry, or a plain re-drive carrying no
 		// request state at all, is now resolved in the capability layer
-		// (#713, AP-77): Service.Run claims a single-Plan approval's release
+		// (#713, AP-77): Execution.Run claims a single-Plan approval's release
 		// exactly once, inside a store transaction, before it dispatches, and
 		// a loser re-attaches to the winner's Job instead of dispatching a
 		// second one. This branch therefore cannot mint a second Job.
@@ -701,10 +699,10 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		// the SEP-2663 task shim — which keys off
 		// structuredContent.pending_approval — passes it through untouched
 		// and mints no task envelope (AP-71; ADR-0028 amendment 2026-09-24).
-		// Service.Run may still have minted an orphan task handle above
+		// Execution.Run may still have minted an orphan task handle above
 		// (parked.TaskID) — expected and harmless, because nothing ever reads
 		// it once the question is rendered instead; do NOT add a conditional
-		// to Service.Run to suppress it.
+		// to Execution.Run to suppress it.
 		if parked != nil {
 			if q, ok := ask.question(req, p, parked, toolRunOperation, in); ok {
 				return q, RunOrPlanOutput{}, nil

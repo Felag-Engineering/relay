@@ -480,7 +480,7 @@ func TestMCPElicitation_CrossAccountStateIsRefused(t *testing.T) {
 // TestMCPElicitation_WrongCallStateIsRefused is AP-65's proof that a sealed
 // state is bound to the exact tool AND the exact arguments it was sealed
 // for: replaying it onto a different tool, or the same tool with different
-// arguments, is refused by the binding check — never reaching Service.Run,
+// arguments, is refused by the binding check — never reaching Execution.Run,
 // so neither retry parks a second request.
 func TestMCPElicitation_WrongCallStateIsRefused(t *testing.T) {
 	f, token, _ := startElicitingRelay(t)
@@ -504,7 +504,7 @@ func TestMCPElicitation_WrongCallStateIsRefused(t *testing.T) {
 		assertStateRefusedNothingRecorded(t, f, res, requeststate.ErrBindingMismatch.Error()+": args digest", before, rid)
 	})
 
-	// The refused retries never reached Service.Run: no sshd or raw_exec
+	// The refused retries never reached Execution.Run: no sshd or raw_exec
 	// request was ever parked, so the queue still holds exactly the one
 	// original request.
 	listResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals", f.Credential, nil)

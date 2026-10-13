@@ -14,7 +14,7 @@ import (
 // constructor — this is the compile-enforced half of "one capability
 // layer" (ADR-0009/0010, invariant 10): no package outside
 // capability can construct a dispatch, so a surface reaching around
-// Service.Run to dispatch directly fails to compile rather than relying on
+// Execution.Run to dispatch directly fails to compile rather than relying on
 // review discipline. See dispatch_construction_test.go.
 type dispatch struct {
 	principal Principal
@@ -25,7 +25,7 @@ type dispatch struct {
 	// excluded are matched Nodes left out of a Template dispatch (ADR-0042):
 	// each gets a Task resolved unsupported without ever being sent, so the
 	// Job records every matched Node truthfully. Empty for a Native Operation
-	// or Raw Exec. Set by Service.Run from resolveAction, never by
+	// or Raw Exec. Set by Execution.Run from resolveAction, never by
 	// newDispatch itself.
 	excluded []excludedNode
 
@@ -37,26 +37,26 @@ type dispatch struct {
 
 	// jobID is a Job ID reserved — and already bound to the releasing
 	// approval — before dispatch (AP-77). When empty, the dispatcher mints
-	// its own, exactly as before. Set by Service.Run after the release claim
+	// its own, exactly as before. Set by Execution.Run after the release claim
 	// wins, never by newDispatch itself.
 	jobID string
 
 	// approvalID and grantID are the approval Request and batch/window Grant
 	// that released this dispatch, copied onto its dispatch-intent record
-	// (#887). Set by Service.Run, never by newDispatch itself.
+	// (#887). Set by Execution.Run, never by newDispatch itself.
 	approvalID, grantID string
 }
 
 // newDispatch builds a dispatch from an already-authorized, already-resolved
 // unit of work. It is unexported for the same reason dispatch itself is:
-// only Service.Run may call it.
+// only Execution.Run may call it.
 func newDispatch(p Principal, sel Selector, nodes []registry.Node, act jobs.Action) dispatch {
 	return dispatch{principal: p, selector: sel, nodes: nodes, action: act}
 }
 
 // NodeResult is one Node's outcome from executing a dispatch. JobID is
 // denormalized onto every NodeResult (rather than added as a new return value
-// on Service.Run) so a caller that only sees Run's results — the #103
+// on Execution.Run) so a caller that only sees Run's results — the #103
 // devharness's run_job op, and any future real surface — can learn which Job
 // it belongs to (to later query_job/CancelJob it) without widening Run's
 // signature. It is set by the real Job engine (execution.go); noopDispatcher
@@ -92,7 +92,7 @@ type NodeResult struct {
 // per-Node results. jobID is entry-level (one Job per Run) rather than read
 // off results, so a dispatcher that fails before producing any result still
 // reports its Job to the audit stage. A zero-match dispatch never reaches the
-// dispatcher (Service.Run refuses it as no_nodes_matched).
+// dispatcher (Execution.Run refuses it as no_nodes_matched).
 type dispatchResult struct {
 	jobID   string
 	results []NodeResult
@@ -105,17 +105,17 @@ type dispatchResult struct {
 // pass. The real Job engine (#99) must therefore be added as new files
 // inside package capability (not internal/jobs), injecting its external
 // collaborators (revocation.Connections, jobs.TaskRepository) through their
-// own exported Option, e.g. WithExecution(...) — see service.go.
+// own exported constructor, NewExecution, which builds the in-package Job
+// engine — see pipeline.go.
 //
 // Sealing the constructor and this seam only guarantees that dispatch is
-// unreachable except through Service.Run; it does not by itself guarantee
-// that dispatch is safe. New's allow-all/no-op Authorizer/CapChecker/
-// AuditSink defaults are safe today only because the default dispatcher is
-// noopDispatcher, which performs no execution. Any option that swaps in a
-// real dispatcher (e.g. #99's WithExecution) MUST require real Authorizer,
-// CapChecker, and AuditSink implementations rather than letting a real
-// dispatcher ride these defaults — see the contract note on New in
-// service.go.
+// unreachable except through Execution.Run; it does not by itself guarantee
+// that dispatch is safe. The allow-all/no-op Authorizer/CapChecker/AuditSink
+// seams are safe only when the dispatcher is noopDispatcher, which performs
+// no execution (reachable only from tests). Anything that swaps in a real
+// dispatcher MUST require real Authorizer, CapChecker, and AuditSink
+// implementations rather than letting a real dispatcher ride these
+// defaults — see checkRealDispatch in pipeline.go.
 type dispatcher interface {
 	run(ctx context.Context, d dispatch) (dispatchResult, error)
 
@@ -145,7 +145,7 @@ type dispatcher interface {
 }
 
 // starter is the optional half of a dispatcher that can return once a Job is
-// persisted (Service.Start, #895). Only the real Job engine implements it;
+// persisted (Execution.Start, #895). Only the real Job engine implements it;
 // it is deliberately not part of dispatcher, so a dispatcher that cannot
 // persist ahead of its fan-out (noopDispatcher, a test spy) is simply run
 // synchronously.
@@ -178,7 +178,7 @@ func (noopDispatcher) cancel(context.Context, string) error {
 }
 
 // reserveJobID implements dispatcher. It runs nothing, so a bound ID that no
-// Job ever carries is harmless, and the claim path in Service.Run stays
+// Job ever carries is harmless, and the claim path in Execution.Run stays
 // unconditional whether or not a real dispatcher is wired.
 func (noopDispatcher) reserveJobID() (string, error) {
 	id, err := defaultID()

@@ -39,7 +39,7 @@
 // RecordIntent (#887) logs the same way for dispatch_intent: the job_id and
 // the Node count, never the Node IDs or args. RecordFreeze and RecordCancel
 // are unchanged and remain unlogged. Errors
-// from Record/RecordFreeze/RecordCancel propagate up to Service.Run, which
+// from Record/RecordFreeze/RecordCancel propagate up to Execution.Run, which
 // wraps but does not dump the entry's contents.
 package auditsink
 
@@ -130,13 +130,13 @@ func New(repo audit.Repository, opts ...Option) *Sink {
 // unit) so each is independently queryable by NodeID; a Dispatch entry with
 // no Results (a dispatcher that failed before producing any) still gets
 // exactly one job-level Record with an empty NodeID. A zero-match dispatch
-// is refused in capability.Service.Run and arrives here as a Refusal entry.
+// is refused in capability.Execution.Run and arrives here as a Refusal entry.
 // A Refusal entry (authz-deny, cap-reject, or no_nodes_matched: the
 // dispatcher was never reached) gets exactly one Record with the refusal's
 // Reason, jobs.OutcomeUnspecified, no NodeID, and JobID copied verbatim from
 // e.JobID — empty for a role-floor refusal that
 // precedes any existence check (refuseControl), and set only when
-// Service.CancelJob's machine-Account scoping (#614) refused after
+// Execution.CancelJob's machine-Account scoping (#614) refused after
 // resolving jobID to a real Job (refuseCancel/authorizeMachineCancel); never
 // caller-supplied text the Relay never validated. A Plan entry (#119,
 // ADR-0011: a no-execution PolicyQuery probe)

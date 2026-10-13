@@ -261,8 +261,8 @@ func TestCancelJobAuthorizesWithoutAssertions(t *testing.T) {
 // argument an actually-nil interface rather than a non-nil interface
 // wrapping a nil *spyJobQuery, which would panic instead of exercising the
 // branch. It mirrors the other CancelJob fixtures in this file rather than
-// New(), so the test stays a white-box exercise of
-// authorizeMachineCancel/refuseCancel without the rest of New's wiring
+// NewExecution(), so the test stays a white-box exercise of
+// authorizeMachineCancel/refuseCancel without the rest of NewExecution's wiring
 // guards.
 func machineCancelFixture(t *testing.T, jobID string, jobQ JobQuery) (*testSvc, *spyAuditSink) {
 	t.Helper()

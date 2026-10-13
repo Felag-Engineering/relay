@@ -43,7 +43,7 @@
 // Role alone cannot answer — this is one of them. The other two are decided
 // elsewhere, deliberately not here: CancelJob's machine-Account scoping (a
 // human Account may cancel any Job, a machine Account only one whose
-// recorded requester is itself) lives in capability.Service.CancelJob/
+// recorded requester is itself) lives in capability.Execution.CancelJob/
 // authorizeMachineCancel, because it needs Job data this package does not
 // hold; ADR-0027's confirmation ladder rung 2 (self-confirmation is
 // human-requesters-only) lives in capability's approval decision path. This
@@ -66,7 +66,7 @@ import (
 // ErrUnauthorized is returned by RoleGate.Authorize when p is denied. It is
 // exported and typed, mirroring capability.FrozenError/CapExceededError, so a
 // refusal is recognizable via errors.Is without string-matching — legible in
-// the audit trail (capability.Service.Run records refusalErr.Error() as
+// the audit trail (capability.Execution.Run records refusalErr.Error() as
 // AuditEntry.Reason).
 var ErrUnauthorized = errors.New("authz: unauthorized")
 
@@ -267,7 +267,7 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 // its own dispatch. Whether it may reach ANY Job or only its own is a
 // separate question this gate does not decide — it needs the Job's recorded
 // requester, which is capability-layer data this package does not hold.
-// capability.Service.CancelJob layers that machine-Account scoping on top of
+// capability.Execution.CancelJob layers that machine-Account scoping on top of
 // this floor (owner decision 2026-09-17, execution.md §Cancellation, #614):
 // a human Account may still cancel any Job, but a machine Account may cancel
 // only a Job whose recorded requester is itself.

@@ -146,14 +146,18 @@ func startRelay(t *testing.T, opts ...FixtureOption) *relayFixture {
 		t.Fatalf("newServer: %v", err)
 	}
 	t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
-	// A background Job (Service.Start, #895) must finish before the store
+	// A background Job (Execution.Start, #895) must finish before the store
 	// closes. Registered right after the store's cleanup, so (last-in-first-out)
 	// it runs after the node plane and the control plane have stopped serving
 	// and before the store closes.
 	t.Cleanup(func() {
+		// A control-disabled fixture has no Execution, so no background Jobs.
+		if deps.execution == nil {
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := deps.capability.Drain(ctx); err != nil {
+		if err := deps.execution.Drain(ctx); err != nil {
 			t.Errorf("background Jobs did not drain before the store closed: %v", err)
 		}
 	})

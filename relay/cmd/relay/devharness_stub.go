@@ -10,7 +10,7 @@ package main
 //
 // cfg is accepted (but unused) so the signature matches the devharness-tagged
 // build, which needs it to read the file-configured blast caps when
-// constructing its own capability.Service.
+// constructing its own capability.Execution.
 func installDevHarness(cfg Config, deps *appDeps) (func(), error) {
 	return func() {}, nil
 }

@@ -131,8 +131,10 @@ stacked mitigations that made the execution surface acceptable.
 
 ## The structural guard
 
-The `no_dispatch`-style test extends to the Console package: a Console file that holds a
-`*capability.Service`, calls `capability.New`, or reaches capability's internal dispatch **must
+The `no_dispatch`-style test extends to the Console package: a Console file that holds
+any concrete capability service (`*capability.Execution`, `Approvals`, `ReadLane`,
+`AccountAdmin`, `Control`, `Recorder` — or the retired `capability.Service`), calls any of their
+constructors (or the retired `capability.New`), or reaches capability's internal dispatch **must
 fail to compile the test suite**. Extend the guard when the package is created, not when the
 composer is.
 

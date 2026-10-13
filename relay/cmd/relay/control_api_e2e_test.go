@@ -27,6 +27,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
@@ -279,7 +280,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	// denied with authz.ErrUnauthorized before ever reaching the Freeze
 	// check's dispatch outcome.
 	admin := controlplane.FoundingAdmin()
-	_, runErr := deps.capability.Run(ctx, admin, sel, act)
+	_, runErr := deps.execution.Run(ctx, admin, sel, act)
 	var frozenErr *capability.FrozenError
 	if !errors.As(runErr, &frozenErr) {
 		t.Fatalf("capability.Run after engage: err = %v, want a *capability.FrozenError", runErr)
@@ -293,7 +294,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	if noReasonResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("freeze release without reason status = %d, want %d", noReasonResp.StatusCode, http.StatusBadRequest)
 	}
-	if _, runErr := deps.capability.Run(ctx, admin, sel, act); !errors.As(runErr, &frozenErr) {
+	if _, runErr := deps.execution.Run(ctx, admin, sel, act); !errors.As(runErr, &frozenErr) {
 		t.Fatalf("capability.Run after refused release: err = %v, want still a *capability.FrozenError", runErr)
 	}
 
@@ -307,7 +308,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	// After a genuine release, dispatch must genuinely succeed for an
 	// authorized (admin) Principal — not merely "not a FrozenError", which an
 	// authz denial would also satisfy (RB1, plan review).
-	if _, runErr := deps.capability.Run(ctx, admin, sel, act); runErr != nil {
+	if _, runErr := deps.execution.Run(ctx, admin, sel, act); runErr != nil {
 		t.Fatalf("capability.Run after release: err = %v, want nil (dispatch unblocked for an admin Principal)", runErr)
 	}
 
@@ -333,6 +334,41 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	if !sawEngage || !sawRelease {
 		t.Errorf("audit records missing freeze_engage/freeze_release: sawEngage=%v sawRelease=%v (records=%+v)", sawEngage, sawRelease, records)
 	}
+}
+
+// TestControlAPI_DispatchPublishesItsJobOnTheEventBus is the wiring guard for
+// the composition root's jobEvents argument to capability.NewExecution (#416):
+// a dispatch through the real Execution publishes its Job on the one event bus,
+// carrying the Job ID Run returned. A nil sink there would be accepted
+// silently, so nothing else pins it.
+func TestControlAPI_DispatchPublishesItsJobOnTheEventBus(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	_, deps, _, _, _ := startControlAPIServer(t)
+	if _, err := deps.registry.Upsert(registry.Report{NodeID: "node-events-e2e"}); err != nil {
+		t.Fatalf("seed registry: %v", err)
+	}
+
+	results, err := deps.execution.Run(ctx, controlplane.FoundingAdmin(), capability.Selector{},
+		jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(results) != 1 || results[0].JobID == "" {
+		t.Fatalf("results = %+v, want one result carrying a Job ID", results)
+	}
+
+	recent := deps.events.Recent([]events.Kind{events.KindJob}, 10)
+	if len(recent) == 0 {
+		t.Fatal("no KindJob event on the bus after a dispatch")
+	}
+	for _, ev := range recent {
+		if ev.Job != nil && ev.Job.JobID == results[0].JobID {
+			return
+		}
+	}
+	t.Fatalf("no KindJob event carries Job %q: %+v", results[0].JobID, recent)
 }
 
 // TestControlAPI_RequiresCredential drives the v0.0.6 acceptance criterion 4/4:

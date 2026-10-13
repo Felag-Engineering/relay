@@ -15,7 +15,7 @@
 //
 // The execution routes hold to the same rule structurally, not just by
 // convention: no_dispatch_test.go fails any file here that names
-// capability.Service, capability.New, or newDispatch, so the only path to a
+// capability.Execution, capability.NewExecution, or newDispatch, so the only path to a
 // dispatch is the injected Executor interface (execution.go).
 package api
 
@@ -254,7 +254,7 @@ func Routes() []Route {
 		{"POST", "/api/v1/freeze/release", handleFreezeRelease},
 
 		// Identity management (#297; #653: the floor moved into
-		// capability.Service behind AuthorizeControl). Every route here is
+		// capability.Control behind AuthorizeControl). Every route here is
 		// admin-only in full. Deps carries no store for these routes at all —
 		// only AccountAdmin, the capability seam — so this surface renders the
 		// refusal and re-derives nothing (role_floor_test.go's

@@ -75,7 +75,7 @@ type planResult struct {
 	verdicts []NodeVerdict
 }
 
-// PlanResult is Service.Plan's exported surface. CapExceeded, when non-nil,
+// PlanResult is Execution.Plan's exported surface. CapExceeded, when non-nil,
 // carries the blast-cap rejection AS DATA (ADR-0011: a Plan never hard-fails
 // on a guardrail) — Verdicts is empty in that case, since the query fan-out
 // is skipped rather than probing an unbounded fleet. Frozen is advisory: it
@@ -160,7 +160,7 @@ func (e *jobEngine) query(ctx context.Context, d dispatch) (planResult, error) {
 //     dispatcher seam.
 //  7. audit as AuditKindPlan — Principal/Selector/Action only, no
 //     JobID/Results (no Job/Task rows were ever created).
-func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.Action) (PlanResult, error) {
+func (s *Execution) Plan(ctx context.Context, p Principal, sel Selector, act jobs.Action) (PlanResult, error) {
 	matched := sel.Resolve(s.read.reg, s.read.stateEval())
 
 	// The same resolution Run makes, which fixes the class of every Action
@@ -207,7 +207,7 @@ func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.
 
 	// The audit write is unconditional, even when query itself errored —
 	// mirroring Run's own "a partially-executed dispatch must never go
-	// unaudited" discipline (service.go) — and a failed write is joined
+	// unaudited" discipline (pipeline.go) — and a failed write is joined
 	// into the returned error rather than silently swallowed.
 	auditErr := s.recorder().audit.Record(ctx, AuditEntry{Kind: AuditKindPlan, Principal: p, Selector: sel, Action: act, Asserted: AssertionsFromContext(ctx)})
 	if auditErr != nil {

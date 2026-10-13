@@ -48,9 +48,9 @@ func (o *capturingObserver) snapshot() []mcp.ToolCallEvent {
 }
 
 // newObservedServer is toolevents_test.go's own fixture: newTestServer's
-// shape (one Node, a real execution-wired capability.Service over a
+// shape (one Node, a real capability.Execution over a
 // fakeConduit), minus the Policy/Template caches this file's tests don't
-// need, plus observer wired via mcp.WithToolCallObserver and capSvc wired
+// need, plus observer wired via mcp.WithToolCallObserver and the Execution wired
 // as the Tasks resolver too — tasks/get must never publish a tool-call
 // event, and exercising that needs the extension actually registered.
 func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolCallObserver) (testServer, *fakeConduit) {
@@ -88,17 +88,17 @@ func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolC
 		conduit:   conduit,
 		newID:     deterministicIDs(),
 	})
-	drainOnCleanup(t, capSvc.Service)
+	drainOnCleanup(t, capSvc.Execution)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 
 	var opts []mcp.Option
 	if observer != nil {
 		opts = append(opts, mcp.WithToolCallObserver(observer))
 	}
-	// capSvc doubles as the Tasks resolver (last arg), exactly like
+	// The Execution doubles as the Tasks resolver (last arg), exactly like
 	// cmd/relay/control_surfaces.go's mcpSurface.Mount — needed so tasks/get
 	// is actually registered for TestToolCallMiddleware_DoesNotFireFor.
-	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Service, results, nil, capSvc.Service, opts...)
+	handler := mcp.New(testReadLane{svc: capSvc.ReadLane}, opsLister{}, capSvc.Execution, results, nil, capSvc.Execution, opts...)
 
 	cert := relaytest.SelfSignedServerCert(t, "mcp-test")
 	controlSrv := controlplane.New(

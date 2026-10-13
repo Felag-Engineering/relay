@@ -158,7 +158,7 @@ type Deps struct {
 	CertExpiringWithin time.Duration
 
 	// Cancel is one of the Console's two write seams (#595, cancel.go): the
-	// same capability.Service.CancelJob the Control API and MCP call. The role
+	// same capability.Execution.CancelJob the Control API and MCP call. The role
 	// floor is operator; the scope beyond that floor differs by Account kind
 	// (human: any Job, machine: only a Job it requested — #614). Both the
 	// floor and that scope, plus the audit row, are the capability layer's;

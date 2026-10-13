@@ -22,7 +22,7 @@ import (
 // decision of its own; each of those is the capability layer's, so both
 // surfaces inherit one answer (invariant 10). The structural half of that
 // promise is no_dispatch_test.go in this package: a route that reached around
-// the Executor to a capability.Service, capability.New, or newDispatch fails
+// the Executor to a capability.Execution, capability.NewExecution, or newDispatch fails
 // the guard.
 //
 // **Raw Exec's admin gate is deliberately NOT re-implemented here.**
@@ -35,15 +35,15 @@ import (
 // of the ladder.
 
 // Executor is the narrow capability-layer entry point the execution routes
-// dispatch through — capability.Service.Run/Plan's exact shape, declared
-// locally so this package never names *capability.Service itself (mirroring
-// mcp.Executor, and TokenMinter/Freezer's style here). *capability.Service
+// dispatch through — capability.Execution.Run/Plan's exact shape, declared
+// locally so this package never names *capability.Execution itself (mirroring
+// mcp.Executor, and TokenMinter/Freezer's style here). *capability.Execution
 // satisfies it structurally; the composition root passes it in.
 //
 // CancelJob arrived with the Job routes (#357, jobs.go) and completes the
-// mirror of capability.Service's execution methods. It stays on this one
+// mirror of capability.Execution's execution methods. It stays on this one
 // interface rather than a separate JobCanceller because the composition root
-// passes a single *capability.Service for all three — one capability layer,
+// passes the one *capability.Execution for all three — one capability layer,
 // one seam (invariant 10).
 type Executor interface {
 	Run(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) ([]capability.NodeResult, error)
@@ -342,7 +342,7 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 		writeExecError(w, err)
 		return
 	}
-	// *capability.Service can never reach this branch: a zero-match Selector
+	// *capability.Execution can never reach this branch: a zero-match Selector
 	// is refused as no_nodes_matched before Run returns. It exists only so an
 	// out-of-contract Executor can't index an empty slice below.
 	if len(nodeResults) == 0 {

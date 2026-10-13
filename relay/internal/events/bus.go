@@ -55,7 +55,7 @@ type Bus struct {
 type Option func(*Bus)
 
 // WithClock overrides the Bus's clock (production default: time.Now, UTC).
-// Mirrors capability.WithExecClock / mcp.WithClock — a test seam for age
+// Mirrors mcp.WithClock — a test seam for age
 // eviction, never a production knob.
 func WithClock(now func() time.Time) Option {
 	return func(b *Bus) { b.now = now }

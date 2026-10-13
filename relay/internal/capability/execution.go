@@ -20,7 +20,7 @@
 //     MarkDispatched but before (or during) the send/result leaves the Task
 //     Dispatched with no Result — exactly TaskRepository.InFlight()'s
 //     definition.
-//   - Dispatch is concurrent (bounded per Job, WithExecDispatchConcurrency),
+//   - Dispatch is concurrent (bounded per Job, NewExecution's concurrency argument),
 //     but persist-then-dispatch and persist-then-send still hold per Task:
 //     every Task is Pending before any dispatch goroutine starts, and each
 //     goroutine does MarkDispatched before Conduit.Dispatch.
@@ -211,7 +211,7 @@ func (e *jobEngine) gateFor(jobID string) *jobGate {
 }
 
 // dispatchLimit is the per-Job in-flight bound. The fallback to 1 exists only
-// for &jobEngine{} literals in white-box tests; WithExecution refuses < 1.
+// for &jobEngine{} literals in white-box tests; NewExecution refuses < 1.
 func (e *jobEngine) dispatchLimit() int {
 	if e.concurrency < 1 {
 		return 1
@@ -220,7 +220,7 @@ func (e *jobEngine) dispatchLimit() int {
 }
 
 // jobEngine is the real Job engine: it implements the unexported dispatcher
-// interface (dispatch.go) and is reachable only through Service.Run, never
+// interface (dispatch.go) and is reachable only through Execution.Run, never
 // directly by a foreign package. It fans a resolved dispatch out to one
 // persisted Task per matched Node, fails offline Nodes fast, sends the rest
 // through Conduit, and reports truthful per-Node outcomes.
@@ -231,7 +231,7 @@ type jobEngine struct {
 	newID     idGen
 	now       func() time.Time
 
-	// concurrency is the per-Job in-flight bound; WithExecution guarantees >= 1.
+	// concurrency is the per-Job in-flight bound; NewExecution guarantees >= 1.
 	concurrency int
 
 	// gates holds the cancel gate of every Job running in THIS process.
@@ -239,17 +239,18 @@ type jobEngine struct {
 	gates   map[string]*jobGate
 
 	// events is the event seam's Job-grained publisher (#416). Defaulted to
-	// noopJobEventSink by WithExecution so a directly-constructed engine is
-	// never nil; Service.New propagates a real one on top when WithJobEvents
-	// was used (service.go). Purely observational — see JobEventSink's doc
+	// noopJobEventSink by newJobEngine so a directly-constructed engine is
+	// never nil; newExecution (pipeline.go) propagates the real sink, the
+	// Recorder's logger and the IntentRecorder from the Recorder's AuditSink
+	// on top. Purely observational — see JobEventSink's doc
 	// comment.
 	events JobEventSink
 
-	// log is propagated from Service.New; nil means slog.Default() (logger).
+	// log is propagated from newExecution; nil means slog.Default() (logger).
 	log *slog.Logger
 
 	// intents persists a Job's Tasks together with its dispatch-intent audit
-	// record (#887). Service.New propagates it from the AuditSink; run refuses
+	// record (#887). newExecution propagates it from the Recorder's AuditSink; run refuses
 	// to persist Tasks without one.
 	intents IntentRecorder
 }
@@ -331,7 +332,7 @@ func (e *jobEngine) jobPersisted(ctx context.Context, jobID string) (bool, error
 // from ctx's cancellation, as a reserved Job ID always does.
 func (e *jobEngine) persist(ctx context.Context, d dispatch, detach bool) (pj *persistedJob, err error) {
 	// d.jobID carries a Job ID already reserved and bound to a releasing
-	// approval (AP-77, checkApproval/Service.Run). Using it here, rather than
+	// approval (AP-77, checkApproval/Execution.Run). Using it here, rather than
 	// minting a fresh one, is what makes the release claim and the Job it
 	// authorizes the SAME id — the join a re-attach depends on.
 	jobID := d.jobID
@@ -362,7 +363,7 @@ func (e *jobEngine) persist(ctx context.Context, d dispatch, detach bool) (pj *p
 	// (context.WithoutCancel): once the claim commits, a client
 	// timeout/drop/cancel can neither strand the approval nor abandon the
 	// approved work. The Job runs to completion, and a re-drive re-attaches
-	// to the running or finished Job. The claim itself (Service.Run's
+	// to the running or finished Job. The claim itself (Execution.Run's
 	// BindJob, before run is ever called) stays on the request ctx
 	// unchanged: a call cancelled before the claim commits dispatches
 	// nothing.
@@ -398,7 +399,7 @@ func (e *jobEngine) persist(ctx context.Context, d dispatch, detach bool) (pj *p
 	}
 	// Published error-free by construction (#416): the sink is
 	// observational and can never change dispatch control flow — the same
-	// MetricsSink precedent as service.go's IncDispatch/IncRefusal calls.
+	// MetricsSink precedent as pipeline.go's IncDispatch/IncRefusal calls.
 	e.publishJobEvent(JobEvent{
 		Transition: JobCreated,
 		JobID:      jobID,
@@ -559,10 +560,10 @@ func (e *jobEngine) fanOut(pj *persistedJob) (dispatchResult, error) {
 	return dispatchResult{jobID: jobID, results: results}, errors.Join(errs...)
 }
 
-// publishJobEvent publishes ev via e.events if one is wired. WithExecution
+// publishJobEvent publishes ev via e.events if one is wired. newJobEngine
 // defaults events to noopJobEventSink so a *jobEngine built through it is
 // never nil, but this package's own white-box tests construct &jobEngine{}
-// literals directly (bypassing WithExecution) — the nil check keeps run
+// literals directly (bypassing newJobEngine) — the nil check keeps run
 // safe for those too, exactly like s.observer's nil check in
 // enroll.Server.Enroll and mcp's `cfg.toolCalls != nil` guard.
 func (e *jobEngine) publishJobEvent(ev JobEvent) {
@@ -637,7 +638,7 @@ func (e *jobEngine) dispatchOneRecovered(ctx context.Context, gate *jobGate, pt 
 // connectivity-independent refusal (ADR-0014's minimum-daemon-version gate),
 // so an outdated Node is refused whether or not it currently has a Tunnel, and
 // the Conduit is never opened for it. It runs AFTER the upstream blast-cap
-// check (Service.Run) — outdated Nodes still matched the Selector and still
+// check (Execution.Run) — outdated Nodes still matched the Selector and still
 // count against the cap (invariant #5); only the send is refused.
 //
 // gate is the Job's cancel gate (nil means ungated). Once the Job's cancel is
@@ -934,66 +935,22 @@ func (e *jobEngine) prefixedID(prefix string) (string, error) {
 	return prefix + id, nil
 }
 
-// ExecOption configures a jobEngine built by WithExecution, primarily so
-// tests can inject deterministic newID/now seams.
-type ExecOption func(*jobEngine)
-
-// WithExecNewID overrides the jobEngine's idGen seam (production default:
-// defaultID).
-func WithExecNewID(f idGen) ExecOption {
-	return func(e *jobEngine) { e.newID = f }
-}
-
-// WithExecDispatchConcurrency sets the per-Job dispatch bound (default
-// DefaultDispatchConcurrency). It bounds reach and is startup-only (invariant 11).
-func WithExecDispatchConcurrency(n int) ExecOption {
-	return func(e *jobEngine) { e.concurrency = n }
-}
-
-// WithExecClock overrides the jobEngine's clock seam (production default:
-// time.Now, UTC).
-func WithExecClock(f func() time.Time) ExecOption {
-	return func(e *jobEngine) { e.now = f }
-}
-
-// WithExecution wires the real Job engine into a Service: it fans a resolved
-// Selector to one persisted Task per matched Node, fails offline Nodes fast
-// (ADR-0004), and dispatches the rest through c concurrently, at most
-// WithExecDispatchConcurrency at a time. jr, tr, and c must not be
-// nil — a nil collaborator here is a composition-root wiring bug, not a
-// recoverable runtime condition, so WithExecution panics rather than
-// constructing a half-wired engine.
-//
-// Per the contract on New (service.go), a Service configured with
-// WithExecution MUST also be configured with a real Authorizer, CapChecker,
-// and AuditSink (NewControl/WithCapChecker/NewRecorder); New enforces
-// this at construction and panics otherwise, regardless of Option order. That
-// AuditSink must also implement IntentRecorder (#887): the Job's Tasks are
-// persisted through it, in one transaction with its dispatch-intent record.
-func WithExecution(jr jobs.JobRepository, tr jobs.TaskRepository, c Conduit, opts ...ExecOption) Option {
-	if jr == nil || tr == nil || c == nil {
-		panic("capability: WithExecution: jobsRepo, tasksRepo, and conduit must not be nil")
+// newJobEngine builds the real Job engine with no checks. Only NewExecution and
+// _test.go files call it; NewExecution validates first. A nil newID takes
+// defaultID.
+func newJobEngine(jr jobs.JobRepository, tr jobs.TaskRepository, c Conduit, concurrency int, newID idGen) *jobEngine {
+	if newID == nil {
+		newID = defaultID
 	}
-	e := &jobEngine{
+	return &jobEngine{
 		jobsRepo:    jr,
 		tasksRepo:   tr,
 		conduit:     c,
-		newID:       defaultID,
-		concurrency: DefaultDispatchConcurrency,
+		newID:       newID,
+		concurrency: concurrency,
 		now:         func() time.Time { return time.Now().UTC() },
-		// A directly-constructed engine (e.g. in a test that never calls
-		// Service.New) must never hold a nil sink. Service.New overwrites
-		// this with the real one when WithJobEvents was used (service.go).
+		// A directly-constructed engine must never hold a nil sink.
+		// newExecution (pipeline.go) overwrites this with the real one.
 		events: noopJobEventSink{},
-	}
-	for _, o := range opts {
-		o(e)
-	}
-	if e.concurrency < 1 {
-		panic("capability: WithExecution: dispatch concurrency must be at least 1")
-	}
-	return func(s *Service) {
-		s.disp = e
-		s.realDispatcher = true
 	}
 }
