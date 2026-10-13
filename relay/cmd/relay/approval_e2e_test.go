@@ -13,12 +13,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
@@ -409,5 +412,53 @@ func TestApprovalCallout_ReadsAreNotGatedByAMutateRule(t *testing.T) {
 	defer resp.Body.Close() //nolint:errcheck
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("read-class dispatch status = %d, want 200 — a mutate rule must not park it", resp.StatusCode)
+	}
+}
+
+// TestApprovalWebhook_AParkNotifiesTheConfiguredEndpoint pins the composition
+// root's notifier wiring (#270, ADR-0027): with a webhook configured, a park the
+// Relay creates is pushed to that endpoint, naming the same Request the 202
+// returned. Nothing else covers it — the unit tests build the Approvals with a
+// spy — so a root that dropped the notifier, or always passed nil, would park
+// silently and pass every other test.
+func TestApprovalWebhook_AParkNotifiesTheConfiguredEndpoint(t *testing.T) {
+	bodies := make(chan []byte, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		select {
+		case bodies <- b:
+		default:
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	f := startGatedRelay(t, gateAllMutates, WithConfig(func(c *Config) {
+		c.ApprovalWebhookURL = srv.URL
+	}))
+
+	parkResp := restartMutate(t, f, f.Credential)
+	defer parkResp.Body.Close() //nolint:errcheck
+	if parkResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", parkResp.StatusCode)
+	}
+	var parked parkedBody
+	if err := json.NewDecoder(parkResp.Body).Decode(&parked); err != nil {
+		t.Fatalf("decode park: %v", err)
+	}
+
+	select {
+	case b := <-bodies:
+		var notice struct {
+			RequestID string `json:"request_id"`
+		}
+		if err := json.Unmarshal(b, &notice); err != nil {
+			t.Fatalf("decode webhook body %q: %v", b, err)
+		}
+		if notice.RequestID != parked.RequestID {
+			t.Errorf("webhook request_id = %q, want the park's %q", notice.RequestID, parked.RequestID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no webhook POST within 5s of the park")
 	}
 }

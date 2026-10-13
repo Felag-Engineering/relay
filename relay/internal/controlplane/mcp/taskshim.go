@@ -102,7 +102,7 @@ const (
 // for a bug in this file.
 //
 // now is a seam so the shim's ttlMs arithmetic is testable, mirroring the
-// capability layer's WithClock. Production passes time.Now().UTC().
+// capability Approvals' clock. Production passes time.Now().UTC().
 func withTaskShim(next http.Handler, now func() time.Time, log *slog.Logger) http.Handler {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }

@@ -40,8 +40,8 @@ func (nopAuditSink) RecordAccountAdmin(context.Context, capability.Principal, ca
 }
 
 // capSeams is the set of collaborators a test hands to newCapService. A zero
-// field means "not supplied": the option is not emitted and capability.New
-// keeps its default.
+// field means "not supplied": the default of the underlying constructor stays.
+// gate, approvals and approvalAuthz are all required, because NewApprovals is.
 type capSeams struct {
 	reg           registry.Repository
 	authz         capability.Authorizer
@@ -87,22 +87,26 @@ func (emptyQueries) QueryTasks(context.Context, capability.TaskFilter, capabilit
 
 // newCapService builds the capability layer for a test: a thin wrapper over
 // the capability constructors, so the layer's shape changes in one place.
-func newCapService(t *testing.T, s capSeams) *capability.Service {
+func newCapService(t *testing.T, s capSeams) *capLayer {
 	t.Helper()
 	if s.audit == nil || s.authz == nil {
 		t.Fatalf("newCapService: audit and authz are required")
 	}
+	if s.gate == nil || s.approvals == nil || s.approvalAuthz == nil {
+		t.Fatalf("newCapService: gate, approvals and approvalAuthz are required")
+	}
 	rec := capability.NewRecorder(s.audit, nil, nil)
 	ctl := capability.NewControl(rec, s.authz, neverFrozen{})
 	read := capability.NewReadLane(rec, s.reg, emptyQueries{}, emptyQueries{}, nil, nil, 0, s.now)
-	var opts []capability.Option
-	if s.gate != nil || s.approvals != nil || s.approvalAuthz != nil {
-		opts = append(opts, capability.WithApprovals(s.gate, s.approvals, s.approvalAuthz))
-	}
-	if s.now != nil {
-		opts = append(opts, capability.WithClock(s.now))
-	}
-	return capability.New(ctl, read, opts...)
+	appr := capability.NewApprovals(rec, s.gate, s.approvals, s.approvalAuthz, nil, nil, nil, s.now)
+	return &capLayer{capability.New(ctl, read, appr), appr}
+}
+
+// capLayer is the Service and the Approvals it is built over, embedded so a
+// test calls Run and DecideApproval on one value.
+type capLayer struct {
+	*capability.Service
+	*capability.Approvals
 }
 
 // maxSweptActionKind bounds TestRoleFloorCannotRefuseAnAskablePark's sweep.

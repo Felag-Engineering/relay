@@ -10,7 +10,8 @@ import (
 
 // testSvc is the type every test in this package holds a built capability layer
 // as: the Service and the leaf services it is composed with, embedded so a test
-// calls any of their methods unqualified. The four method sets are disjoint.
+// calls any of their methods unqualified. The five method sets are disjoint
+// apart from the unexported clock, which no test calls unqualified.
 // Tests build one through build or buildRaw and never name the constructors or
 // fields directly, so the capability layer's shape can change behind this one
 // file.
@@ -19,6 +20,7 @@ type testSvc struct {
 	*ReadLane
 	*Control
 	*AccountAdmin
+	*Approvals
 }
 
 // seams is the set of collaborators a test hands to build or buildRaw. A zero
@@ -107,6 +109,19 @@ func build(t *testing.T, s seams) *testSvc {
 		acct = newAccountAdmin(control, nil, nil)
 	}
 
+	// The same s.now reaches the read lane and the Approvals, as WithClock did.
+	var appr *Approvals
+	if s.gate != nil || s.approvals != nil || s.approvalAuthz != nil {
+		// Panics on a partial set, as WithApprovals did.
+		appr = NewApprovals(rec, s.gate, s.approvals, s.approvalAuthz, s.grants, s.mcpTasks, s.approvalNotifier, s.now)
+	} else {
+		notifier := s.approvalNotifier
+		if notifier == nil {
+			notifier = noopApprovalNotifier{}
+		}
+		appr = newApprovals(rec, noopApprovalGate{}, nil, nil, s.grants, s.mcpTasks, notifier, s.now)
+	}
+
 	var opts []Option
 	if s.cap != nil {
 		opts = append(opts, WithCapChecker(s.cap))
@@ -114,23 +129,8 @@ func build(t *testing.T, s seams) *testSvc {
 	if s.jobEvents != nil {
 		opts = append(opts, WithJobEvents(s.jobEvents))
 	}
-	if s.gate != nil || s.approvals != nil || s.approvalAuthz != nil {
-		opts = append(opts, WithApprovals(s.gate, s.approvals, s.approvalAuthz))
-	}
-	if s.grants != nil {
-		opts = append(opts, WithApprovalGrants(s.grants))
-	}
-	if s.mcpTasks != nil {
-		opts = append(opts, WithMCPTasks(s.mcpTasks))
-	}
-	if s.approvalNotifier != nil {
-		opts = append(opts, WithApprovalNotifier(s.approvalNotifier))
-	}
 	if s.idem != nil {
 		opts = append(opts, WithIdempotency(s.idem))
-	}
-	if s.now != nil {
-		opts = append(opts, WithClock(s.now))
 	}
 	if s.hasExecution() {
 		intents := s.intents
@@ -143,7 +143,7 @@ func build(t *testing.T, s seams) *testSvc {
 		}
 		opts = append(opts, WithExecution(s.jobsRepo, s.tasksRepo, s.conduit, eo...))
 	}
-	return &testSvc{New(control, read, opts...), read, control, acct}
+	return &testSvc{New(control, read, appr, opts...), read, control, acct, appr}
 }
 
 // buildRaw is a struct literal: no defaults and no construction guards, for
@@ -161,20 +161,18 @@ func buildRaw(t *testing.T, s seams) *testSvc {
 		certExpiringWithin: s.certWindow, now: s.now,
 	}
 	acct := &AccountAdmin{control: control, accountStore: s.accountsStore, tokens: s.apiTokens}
-	svc := &Service{
-		control:          control,
-		read:             read,
-		cap:              s.cap,
-		disp:             s.disp,
-		jobEvents:        s.jobEvents,
-		gate:             s.gate,
-		approvals:        s.approvals,
-		approvalAuthz:    s.approvalAuthz,
-		grants:           s.grants,
-		mcpTasks:         s.mcpTasks,
-		approvalNotifier: s.approvalNotifier,
-		idem:             s.idem,
-		now:              s.now,
+	appr := &Approvals{
+		rec: rec, gate: s.gate, store: s.approvals, authz: s.approvalAuthz,
+		grants: s.grants, tasks: s.mcpTasks, notifier: s.approvalNotifier, now: s.now,
 	}
-	return &testSvc{svc, read, control, acct}
+	svc := &Service{
+		control:   control,
+		read:      read,
+		approvals: appr,
+		cap:       s.cap,
+		disp:      s.disp,
+		jobEvents: s.jobEvents,
+		idem:      s.idem,
+	}
+	return &testSvc{svc, read, control, acct, appr}
 }

@@ -8,7 +8,7 @@ package console
 // The role floor, the requester exclusion, the machine-self-decision rule,
 // the audience, the duplicate-decider rule, the plan-hash binding, channel
 // strength and the quorum arithmetic are ALL decided in
-// capability.Service.DecideApproval, exactly as they are for the Control
+// capability.Approvals.DecideApproval, exactly as they are for the Control
 // API's out-of-band endpoint and the MCP surface — and are re-decided
 // NOWHERE in this file. The audit record is capability's too
 // (approval_decide.go:226-239); this file holds no appender and writes none.
@@ -112,8 +112,8 @@ import (
 )
 
 // ApprovalDecider is the one write seam this file holds. Its single method
-// mirrors capability.Service.DecideApproval's signature EXACTLY, so
-// *capability.Service satisfies it with no adapter — the same shape
+// mirrors capability.Approvals.DecideApproval's signature EXACTLY, so
+// *capability.Approvals satisfies it with no adapter — the same shape
 // JobCanceller (cancel.go) takes for CancelJob. The returned approval.Request
 // is discarded by the handler; it stays in the signature only to keep the
 // mirror exact.

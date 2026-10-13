@@ -34,9 +34,11 @@ import (
 type Service struct {
 	// control carries the Freeze, the Authorizer and (through its Recorder) the
 	// audit trail, metrics and log. read is the registry and the read lane;
-	// New requires the two to share one Recorder.
-	control *Control
-	read    *ReadLane
+	// approvals is the approval callout (ADR-0027). New requires all three to
+	// share one Recorder.
+	control   *Control
+	read      *ReadLane
+	approvals *Approvals
 
 	cap  CapChecker
 	disp dispatcher
@@ -47,39 +49,6 @@ type Service struct {
 	// the end of New, below, because both Service.CancelJob and
 	// jobEngine.run need the same sink and option order must not matter.
 	jobEvents JobEventSink
-
-	// gate and approvals are the approval callout (ADR-0027). The defaults
-	// gate nothing, which is a deployment with no approval rules — safe
-	// because a gate can only add a reason to stop. approvals is only
-	// consulted when gate says a dispatch is gated, so the nil store is
-	// unreachable unless a real gate was wired without one, which New refuses.
-	gate      ApprovalGate
-	approvals ApprovalStore
-
-	// grants is the batch/window Grant store (ADR-0027 decision 12). Nil means
-	// no grant ever covers anything, which is both the default and the safe
-	// direction.
-	grants ApprovalGrantStore
-
-	// mcpTasks persists MCP task handles (#374, ADR-0028). Nil disables the
-	// Tasks extension entirely, which is the pre-#374 behaviour and loses
-	// nothing: the universal pending_approval result path does not use handles.
-	mcpTasks MCPTaskStore
-
-	// approvalAuthz is the role floor on a DECISION (#270): deciding a Request
-	// requires the role that Action would have needed to be requested. Nil only
-	// on a Service built without WithApprovals, where there is nothing to
-	// decide.
-	approvalAuthz ApprovalAuthorizer
-
-	// approvalNotifier pushes a parked dispatch to the operator's own
-	// notification plumbing. Best-effort by construction — see ApprovalNotifier.
-	approvalNotifier ApprovalNotifier
-
-	// now is the approval clock (clock()); Selector resolution uses
-	// ReadLane.now. newApprovalID is a seam so tests get deterministic parks.
-	now           func() time.Time
-	newApprovalID idGen
 
 	// realDispatcher is set by WithExecution (execution.go) once a real Job
 	// engine is wired. New's end-of-construction guard uses it to refuse a
@@ -119,87 +88,6 @@ func WithCapChecker(c CapChecker) Option {
 	return func(s *Service) { s.cap = c }
 }
 
-// WithApprovals wires the approval callout (ADR-0027): gate decides which
-// dispatches must wait for a human, store persists the parked Requests, and
-// authorizer is the role floor on answering one (#270).
-//
-// All three are required together. A gate with no store could decide a dispatch
-// needs approval and then have nowhere to record it — which would either drop
-// the dispatch silently or, worse, let it through. A store with no gate is
-// inert. A store with no authorizer would accept a decision from any
-// authenticated caller, including a viewer releasing a Raw Exec, which is the
-// approval mechanism handing out authority instead of withholding it. Passing
-// an incomplete set is a composition-root bug, so it panics rather than
-// degrading.
-func WithApprovals(gate ApprovalGate, store ApprovalStore, authorizer ApprovalAuthorizer) Option {
-	if gate == nil {
-		panic("capability: WithApprovals: gate must not be nil")
-	}
-	if store == nil {
-		panic("capability: WithApprovals: store must not be nil")
-	}
-	if authorizer == nil {
-		panic("capability: WithApprovals: approval authorizer must not be nil; without it any authenticated caller could release a parked dispatch")
-	}
-	return func(s *Service) {
-		s.gate = gate
-		s.approvals = store
-		s.approvalAuthz = authorizer
-	}
-}
-
-// WithApprovalGrants wires the batch/window Grant store (ADR-0027 decision 12).
-//
-// Optional and separate from WithApprovals. Omitting it means no grant ever
-// covers anything, which is the safe direction and the behaviour of every
-// deployment that never creates one — a grant can only ever RELEASE a dispatch
-// the gate already gated, so its absence can never let something through.
-func WithApprovalGrants(g ApprovalGrantStore) Option {
-	if g == nil {
-		panic("capability: WithApprovalGrants: grant store must not be nil")
-	}
-	return func(s *Service) { s.grants = g }
-}
-
-// WithMCPTasks wires the MCP task-handle store (#374, ADR-0028), enabling the
-// Tasks extension's server side.
-//
-// Optional, and its absence is not a degraded mode but the prior one: with no
-// store, dispatches park and return the universal `pending_approval` result
-// (#371) exactly as before. ADR-0028 requires that path to keep working with
-// the shim deleted, so nothing below it may come to depend on a handle
-// existing.
-func WithMCPTasks(store MCPTaskStore) Option {
-	if store == nil {
-		panic("capability: WithMCPTasks: task handle store must not be nil")
-	}
-	return func(s *Service) { s.mcpTasks = store }
-}
-
-// WithApprovalNotifier wires the out-of-band notification envelope (ADR-0027):
-// where to push a freshly parked dispatch so an approver hears about it.
-//
-// Optional, and deliberately so. The notification is a delivery convenience;
-// the guarantee is the authenticated decision endpoint, which stands alone. A
-// deployment with no notifier configured still parks, still audits, and still
-// waits — approvers just have to poll the queue.
-func WithApprovalNotifier(n ApprovalNotifier) Option {
-	if n == nil {
-		panic("capability: WithApprovalNotifier: notifier must not be nil")
-	}
-	return func(s *Service) { s.approvalNotifier = n }
-}
-
-// WithClock overrides the Service's approval clock only; Selector resolution
-// uses the ReadLane's. Test seam only: approval expiry and park timestamps are
-// time-dependent, and a test that sleeps is a test that flakes.
-func WithClock(now func() time.Time) Option {
-	if now == nil {
-		panic("capability: WithClock: now must not be nil")
-	}
-	return func(s *Service) { s.now = now }
-}
-
 // WithJobEvents overrides the default noopJobEventSink (#416). Like the
 // Recorder's metrics, this is never security-relevant — New's real-dispatcher
 // fail-open guard does not require it.
@@ -207,11 +95,12 @@ func WithJobEvents(s JobEventSink) Option {
 	return func(svc *Service) { svc.jobEvents = s }
 }
 
-// New returns a Service over control and read, with noopCapChecker and
-// noopDispatcher defaults (functional-option pattern, mirroring
+// New returns a Service over control, read and approvals, with noopCapChecker
+// and noopDispatcher defaults (functional-option pattern, mirroring
 // registry.NewInMemory). The Freeze, the role floor and the audit trail come
-// from control; Selector resolution and the read lane come from read. Both are
-// required, and must share one Recorder so the layer has a single audit trail.
+// from control; Selector resolution and the read lane come from read; the
+// approval callout comes from approvals. All three are required, and must share
+// one Recorder so the layer has a single audit trail.
 // There is deliberately no exported WithDispatcher: dispatcher is unexported
 // (see dispatch.go), so only files inside this package can supply a real
 // one. #99 adds the exported WithExecution(...) option (execution.go) that
@@ -233,27 +122,29 @@ func WithJobEvents(s JobEventSink) Option {
 // is the same class of bug: an un-stoppable executor, since "never frozen"
 // means the emergency stop (ADR-0013) can never actually halt it. See
 // dispatcher's doc comment in dispatch.go.
-func New(control *Control, read *ReadLane, opts ...Option) *Service {
+func New(control *Control, read *ReadLane, approvals *Approvals, opts ...Option) *Service {
 	if control == nil {
 		panic("capability: New: control must not be nil")
 	}
 	if read == nil {
 		panic("capability: New: read lane must not be nil")
 	}
+	if approvals == nil {
+		panic("capability: New: approvals must not be nil")
+	}
 	if read.rec != control.rec {
 		panic("capability: New: the read lane and the Control must share one Recorder; two Recorders would split the audit trail")
 	}
+	if approvals.rec != control.rec {
+		panic("capability: New: the approvals service and the Control must share one Recorder; two Recorders would split the audit trail")
+	}
 	s := &Service{
-		control:          control,
-		read:             read,
-		cap:              noopCapChecker{},
-		disp:             noopDispatcher{},
-		jobEvents:        noopJobEventSink{},
-		gate:             noopApprovalGate{},
-		approvalNotifier: noopApprovalNotifier{},
-
-		now:           func() time.Time { return time.Now().UTC() },
-		newApprovalID: defaultID,
+		control:   control,
+		read:      read,
+		approvals: approvals,
+		cap:       noopCapChecker{},
+		disp:      noopDispatcher{},
+		jobEvents: noopJobEventSink{},
 
 		claims:              make(map[string]*keyClaim),
 		reattachPersistWait: defaultReattachPersistWait,
@@ -312,6 +203,10 @@ func (s *Service) refuseControl(ctx context.Context, p Principal, refusalErr err
 }
 
 func (s *Service) logger() *slog.Logger { return s.recorder().logger() }
+
+// clock is the approval clock, which also stamps idempotency claims (start.go,
+// prepareDispatch) — one clock, as before.
+func (s *Service) clock() time.Time { return s.approvals.clock() }
 
 // Run is the pipeline every surface must call to act on Nodes: check the
 // Freeze, resolve the Selector, resolve a Template Operation's class and
@@ -484,7 +379,7 @@ func (s *Service) prepareDispatch(ctx context.Context, p Principal, sel Selector
 	//
 	// A park is not a refusal, so it does not go through recordRefusal: nothing
 	// was denied and nothing ran. It is audited as its own kind.
-	ap, err := s.checkApproval(ctx, p, sel, act, nodeIDs(nodes))
+	ap, err := s.approvals.checkApproval(ctx, p, sel, act, nodeIDs(nodes))
 	if err != nil {
 		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalInternal, err)
 	}
@@ -526,14 +421,14 @@ func (s *Service) prepareDispatch(ctx context.Context, p Principal, sel Selector
 		// is already waiting deliberately does not re-notify — see
 		// approvalDecision.created.
 		if ap.created != nil {
-			s.approvalNotifier.NotifyParked(ctx, noticeFor(*ap.created))
+			s.approvals.notifyParked(ctx, *ap.created)
 		}
 		// Attach an MCP task handle, if Tasks are wired. Last, and never
 		// fatally: the park is already durable and already audited, and
 		// ADR-0028 requires the universal result path to stay whole with the
 		// shim deleted — so a handle store that is down costs a client its poll
 		// handle and costs the dispatch nothing.
-		ap.parked.TaskID, ap.parked.TaskExpiresAt = s.mintTaskHandle(ctx, p, ap.parked.RequestID)
+		ap.parked.TaskID, ap.parked.TaskExpiresAt = s.approvals.mintTaskHandle(ctx, p, ap.parked.RequestID)
 		return prep{}, ap.parked
 	}
 
@@ -602,7 +497,7 @@ func (s *Service) prepareDispatch(ctx context.Context, p Principal, sel Selector
 			}
 		}
 		if bindApproval {
-			claimed, err := s.approvals.BindJob(ctx, ap.requestID, jobID, s.clock())
+			claimed, err := s.approvals.bindRelease(ctx, ap.requestID, jobID)
 			switch {
 			case err == nil:
 			case errors.Is(err, approval.ErrAlreadyReleased) && claimed.JobID != "":
@@ -640,6 +535,37 @@ func (s *Service) approvalReattach(ctx context.Context, p Principal, sel Selecto
 		return prep{}, err
 	}
 	return prep{reattach: &reattachment{jobID: jobID, results: results}}, nil
+}
+
+// reattach re-attaches a dispatch to a Job an approval already released
+// (AP-77), recording an audited read instead of dispatching anything.
+//
+// It is reached two ways: checkApproval found a Satisfied, Released Request
+// (a sequential re-drive), or Service.Run lost the release claim to a
+// concurrent winner (BindJob's ErrAlreadyReleased). Either way nothing may be
+// dispatched — the plan hash matched, so nodes are exactly the approved
+// Nodes, and their outcomes live on the Job identified by jobID, which every
+// adapter already re-reads (renderJob).
+//
+// The read is recorded BEFORE anything is returned, and fails closed
+// (ErrReadUnaudited): an unaudited re-attach must not hand out a Job
+// (ADR-0025), the same precedent AP-67's adapter-level re-attach set. The
+// join from this read to the approval is approval_requests.job_id = jobID.
+func (s *Service) reattach(ctx context.Context, p Principal, sel Selector, nodes []registry.Node, requestID, jobID string) ([]NodeResult, error) {
+	if err := s.read.recordQueryRead(ctx, p, toolApprovalReattach, sel.String(), "", jobID); err != nil {
+		return nil, fmt.Errorf("capability: re-attach to approval %s's released job: %w", requestID, err)
+	}
+	// One NodeResult per resolved Node, carrying the bound JobID: these are
+	// exactly the approved Nodes, and outcomes/output are read from the Job
+	// by the caller, as every surface already does via renderJob. This call
+	// ran nothing, so it reports no outcome of its own — Outcome stays
+	// OutcomeUnspecified rather than fabricating a result this call never
+	// produced.
+	out := make([]NodeResult, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, NodeResult{NodeID: n.NodeID, JobID: jobID, Outcome: jobs.OutcomeUnspecified})
+	}
+	return out, nil
 }
 
 // account is Run's post-dispatch half: it binds the Job onto an MCP task
@@ -685,7 +611,7 @@ func (s *Service) account(ctx context.Context, p Principal, sel Selector, pr pre
 	// release reports `completed` rather than `working` forever. Unlike the
 	// binding above this one covers grant-released dispatches too: a handle is
 	// per parked dispatch, so there is exactly one Job to record against it.
-	s.bindTaskHandleJob(acctCtx, ap.requestID, res.jobID)
+	s.approvals.bindTaskHandleJob(acctCtx, ap.requestID, res.jobID)
 
 	for _, r := range res.results {
 		s.recorder().metrics.IncDispatch(r.Outcome)

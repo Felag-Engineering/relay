@@ -25,7 +25,7 @@ import (
 //
 // Cancelling a task handle NEVER touches the approval Request. That is not a
 // convention observed by the code below; it is visible in it — CancelTask reads
-// s.approvals only to render the answer, and writes to it nowhere. A cancel
+// s.approvals.store only to render the answer, and writes to it nowhere. A cancel
 // arrives over the MCP session, which is the AI's own channel, and if it could
 // withdraw or decide a pending approval the requesting session would hold a
 // lever over exactly the decision ADR-0027 exists to keep off that channel: an
@@ -92,8 +92,8 @@ type TaskView struct {
 // to exactly that path rather than turning a working park into a failed
 // dispatch. The caller gets an empty task id and the ordinary
 // `pending_approval` result.
-func (s *Service) mintTaskHandle(ctx context.Context, p Principal, requestID string) (id string, expiresAt time.Time) {
-	if s.mcpTasks == nil || s.approvals == nil || requestID == "" {
+func (a *Approvals) mintTaskHandle(ctx context.Context, p Principal, requestID string) (id string, expiresAt time.Time) {
+	if a.tasks == nil || a.store == nil || requestID == "" {
 		return "", time.Time{}
 	}
 
@@ -101,17 +101,17 @@ func (s *Service) mintTaskHandle(ctx context.Context, p Principal, requestID str
 	// handle rather than mint a second one for the same wait: one handle per
 	// parked dispatch is the mapping ADR-0028 fixes, and two handles pointing at
 	// one Request would let a client believe it had two things to wait for.
-	if existing, err := s.mcpTasks.ByApprovalRequest(ctx, requestID); err == nil {
+	if existing, err := a.tasks.ByApprovalRequest(ctx, requestID); err == nil {
 		return existing.ID, existing.ExpiresAt
 	} else if !errors.Is(err, mcptask.ErrNotFound) {
 		return "", time.Time{}
 	}
 
-	req, err := s.approvals.Get(ctx, requestID)
+	req, err := a.store.Get(ctx, requestID)
 	if err != nil {
 		return "", time.Time{}
 	}
-	mint := s.newApprovalID
+	mint := a.newApprovalID
 	if mint == nil {
 		mint = defaultID
 	}
@@ -120,11 +120,11 @@ func (s *Service) mintTaskHandle(ctx context.Context, p Principal, requestID str
 		return "", time.Time{}
 	}
 
-	h := mcptask.NewHandle(id, req, p.AccountID, p.Account, s.clock())
-	if err := s.mcpTasks.Create(ctx, h); err != nil {
+	h := mcptask.NewHandle(id, req, p.AccountID, p.Account, a.clock())
+	if err := a.tasks.Create(ctx, h); err != nil {
 		// Lost a race with a concurrent re-drive: the unique index refused the
 		// second handle, so the first one is the answer.
-		if existing, getErr := s.mcpTasks.ByApprovalRequest(ctx, requestID); getErr == nil {
+		if existing, getErr := a.tasks.ByApprovalRequest(ctx, requestID); getErr == nil {
 			return existing.ID, existing.ExpiresAt
 		}
 		return "", time.Time{}
@@ -139,20 +139,20 @@ func (s *Service) mintTaskHandle(ctx context.Context, p Principal, requestID str
 // Non-fatal for the same reason mintTaskHandle is: the dispatch has already
 // happened and is already audited. A missed binding costs a client a stale
 // `working` until the handle expires; it costs the fleet nothing.
-func (s *Service) bindTaskHandleJob(ctx context.Context, requestID, jobID string) {
-	if s.mcpTasks == nil || requestID == "" || jobID == "" {
+func (a *Approvals) bindTaskHandleJob(ctx context.Context, requestID, jobID string) {
+	if a.tasks == nil || requestID == "" || jobID == "" {
 		return
 	}
-	h, err := s.mcpTasks.ByApprovalRequest(ctx, requestID)
+	h, err := a.tasks.ByApprovalRequest(ctx, requestID)
 	if err != nil {
 		return
 	}
-	if err := s.mcpTasks.BindJob(ctx, h.ID, jobID, mcptask.StatusCompleted, s.clock()); err != nil {
+	if err := a.tasks.BindJob(ctx, h.ID, jobID, mcptask.StatusCompleted, a.clock()); err != nil {
 		// Still non-fatal — see the doc comment above — but a client left
 		// polling a handle that never reports its Job is a symptom an
 		// operator should be able to find, so it goes to the log rather
 		// than vanishing the way it did before.
-		s.logger().WarnContext(ctx, "capability: binding the MCP task handle to its Job failed",
+		a.rec.logger().WarnContext(ctx, "capability: binding the MCP task handle to its Job failed",
 			"job_id", jobID, "approval_id", requestID, "error", err)
 	}
 }
@@ -166,15 +166,15 @@ func (s *Service) bindTaskHandleJob(ctx context.Context, requestID, jobID string
 // read — it is the entry point [4/6] extends to hand a stored call back through
 // the dispatch path.
 func (s *Service) ResolveTask(ctx context.Context, p Principal, taskID string) (TaskView, error) {
-	if s.mcpTasks == nil || s.approvals == nil {
+	if s.approvals.tasks == nil || s.approvals.store == nil {
 		return TaskView{}, ErrTasksUnavailable
 	}
 
-	h, err := s.mcpTasks.Get(ctx, taskID, p.AccountID)
+	h, err := s.approvals.tasks.Get(ctx, taskID, p.AccountID)
 	if err != nil {
 		return TaskView{}, err
 	}
-	req, err := s.approvals.Get(ctx, h.ApprovalRequestID)
+	req, err := s.approvals.store.Get(ctx, h.ApprovalRequestID)
 	if err != nil {
 		return TaskView{}, fmt.Errorf("capability: read approval request for task handle %q: %w", taskID, err)
 	}
@@ -190,7 +190,7 @@ func (s *Service) ResolveTask(ctx context.Context, p Principal, taskID string) (
 	// where the bookkeeping and the answer disagree, and this Relay's posture
 	// on that is to stop rather than to answer invisibly.
 	if view.Status != h.LastStatus {
-		if err := s.mcpTasks.RecordStatus(ctx, h.ID, view.Status, now); err != nil {
+		if err := s.approvals.tasks.RecordStatus(ctx, h.ID, view.Status, now); err != nil {
 			return TaskView{}, fmt.Errorf("capability: record task handle status: %w", err)
 		}
 	}
@@ -214,20 +214,20 @@ func (s *Service) ResolveTask(ctx context.Context, p Principal, taskID string) (
 //     can cancel itself through this path.
 //   - Still parked, so there is nothing running to stop and CancelJob is never
 //     called. Only the handle is marked, and that stays owner-scoped and
-//     UNGATED by role: s.mcpTasks.Get already requires p.AccountID to own the
+//     UNGATED by role: s.approvals.tasks.Get already requires p.AccountID to own the
 //     handle, and there is no Job for AuthorizeControl to gate. The approval
 //     Request is left exactly as it was: pending, visible in the queue,
 //     decidable by a human, and re-attachable by a re-drive of the same Plan.
 //
 // The second case is the security boundary this method exists to hold. See the
-// file header: nothing below writes to s.approvals, and that absence is the
+// file header: nothing below writes to s.approvals.store, and that absence is the
 // enforcement.
 func (s *Service) CancelTask(ctx context.Context, p Principal, taskID string) (TaskView, error) {
-	if s.mcpTasks == nil || s.approvals == nil {
+	if s.approvals.tasks == nil || s.approvals.store == nil {
 		return TaskView{}, ErrTasksUnavailable
 	}
 
-	h, err := s.mcpTasks.Get(ctx, taskID, p.AccountID)
+	h, err := s.approvals.tasks.Get(ctx, taskID, p.AccountID)
 	if err != nil {
 		return TaskView{}, err
 	}
@@ -242,11 +242,11 @@ func (s *Service) CancelTask(ctx context.Context, p Principal, taskID string) (T
 	}
 
 	now := s.clock()
-	cancelled, err := s.mcpTasks.Cancel(ctx, taskID, p.AccountID, now)
+	cancelled, err := s.approvals.tasks.Cancel(ctx, taskID, p.AccountID, now)
 	if err != nil {
 		return TaskView{}, err
 	}
-	req, err := s.approvals.Get(ctx, cancelled.ApprovalRequestID)
+	req, err := s.approvals.store.Get(ctx, cancelled.ApprovalRequestID)
 	if err != nil {
 		return TaskView{}, fmt.Errorf("capability: read approval request for task handle %q: %w", taskID, err)
 	}

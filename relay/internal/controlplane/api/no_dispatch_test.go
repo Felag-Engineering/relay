@@ -53,6 +53,8 @@ var bannedCapabilityServices = map[string]string{
 	"NewAccountAdmin": "use the AccountAdmin interface",
 	"ReadLane":        "use the NodeReader interface",
 	"NewReadLane":     "use the NodeReader interface",
+	"Approvals":       "use the ApprovalService / ApprovalGrantService interfaces",
+	"NewApprovals":    "use the ApprovalService / ApprovalGrantService interfaces",
 }
 
 // dispatchViolations AST-inspects file (fileName is used only in messages) and
@@ -64,8 +66,8 @@ var bannedCapabilityServices = map[string]string{
 //   - capability.New (or an alias's .New): the exported dispatch constructor;
 //     holding its result is equivalent to holding a Service.
 //   - the other capability services and their constructors
-//     (bannedCapabilityServices): Control, AccountAdmin, ReadLane and
-//     Recorder, by exact name. Each route holds the narrow interface it uses,
+//     (bannedCapabilityServices): Control, AccountAdmin, ReadLane, Approvals
+//     and Recorder, by exact name. Each route holds the narrow interface it uses,
 //     never the concrete service.
 //   - the unexported newDispatch identifier: capability's internal constructor,
 //     sealed to package capability. A reference here would not compile, but the
@@ -259,6 +261,7 @@ func TestDispatchViolations_BansConcreteCapabilityServices(t *testing.T) {
 	for _, name := range []string{
 		"Recorder", "NewRecorder", "Control", "NewControl",
 		"AccountAdmin", "NewAccountAdmin", "ReadLane", "NewReadLane",
+		"Approvals", "NewApprovals",
 	} {
 		t.Run(name, func(t *testing.T) {
 			src := "package api\nimport " + capImport + "\nvar _ = capability." + name + "\n"
@@ -277,6 +280,31 @@ var _ capability.ControlAction
 var _ = capability.ControlFreezeEngage
 var _ capability.AccountAdminEvent
 var _ capability.IntentRecorder
+`
+		if violations := check(t, src); len(violations) != 0 {
+			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
+		}
+	})
+
+	t.Run("an aliased import cannot dodge the approvals ban", func(t *testing.T) {
+		src := "package api\nimport c2 " + capImport + "\nvar _ *c2.Approvals\nvar _ = c2.NewApprovals\n"
+		violations := check(t, src)
+		mustContain(t, violations, "capability.Approvals — a concrete capability service")
+		mustContain(t, violations, "capability.NewApprovals — a concrete capability service")
+	})
+
+	t.Run("exact match leaves the approval seam identifiers alone", func(t *testing.T) {
+		src := "package api\nimport " + capImport + `
+var _ capability.ApprovalDecision
+var _ = capability.ErrApprovalUnavailable
+var _ capability.ApprovalGate
+var _ capability.ApprovalStore
+var _ capability.ApprovalAuthorizer
+var _ capability.ApprovalNotifier
+var _ capability.ApprovalNotice
+var _ capability.ApprovalGrantStore
+var _ capability.GrantRequest
+var _ = capability.ErrGrantCoversNothingGated
 `
 		if violations := check(t, src); len(violations) != 0 {
 			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)

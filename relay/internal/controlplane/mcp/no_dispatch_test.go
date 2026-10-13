@@ -40,6 +40,8 @@ var bannedCapabilityServices = map[string]string{
 	"NewAccountAdmin": "Account administration is not on MCP",
 	"ReadLane":        "use the Principal-free mcp.ReadLane (mcp.go); capability.ReadLane carries a Principal",
 	"NewReadLane":     "use the Principal-free mcp.ReadLane (mcp.go); capability.ReadLane carries a Principal",
+	"Approvals":       "use the ApprovalDecider seam (tools_approval.go)",
+	"NewApprovals":    "use the ApprovalDecider seam (tools_approval.go)",
 }
 
 // capabilityReadAllowlist is the exhaustive set of capability-package
@@ -756,6 +758,7 @@ func TestDispatchViolations_BansConcreteCapabilityServices(t *testing.T) {
 	for _, name := range []string{
 		"Recorder", "NewRecorder", "Control", "NewControl",
 		"AccountAdmin", "NewAccountAdmin", "ReadLane", "NewReadLane",
+		"Approvals", "NewApprovals",
 	} {
 		t.Run(name, func(t *testing.T) {
 			src := "package mcp\nimport " + capImport + "\nvar _ = capability." + name + "\n"
@@ -781,6 +784,29 @@ var _ capability.ControlAction
 var _ = capability.ControlFreezeEngage
 var _ capability.AccountAdminEvent
 var _ capability.IntentRecorder
+`
+		if violations := check(t, src, false); len(violations) != 0 {
+			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
+		}
+	})
+
+	t.Run("an aliased import cannot dodge the approvals ban", func(t *testing.T) {
+		src := "package mcp\nimport c2 " + capImport + "\nvar _ *c2.Approvals\nvar _ = c2.NewApprovals\n"
+		violations := check(t, src, false)
+		mustContain(t, violations, "capability.Approvals — a concrete capability service")
+		mustContain(t, violations, "capability.NewApprovals — a concrete capability service")
+	})
+
+	t.Run("exact match leaves the approval seam identifiers alone", func(t *testing.T) {
+		src := "package mcp\nimport " + capImport + `
+var _ capability.ApprovalDecision
+var _ = capability.ErrApprovalUnavailable
+var _ capability.ApprovalGate
+var _ capability.ApprovalStore
+var _ capability.ApprovalAuthorizer
+var _ capability.ApprovalNotifier
+var _ capability.ApprovalNotice
+var _ capability.ApprovalGrantStore
 `
 		if violations := check(t, src, false); len(violations) != 0 {
 			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)

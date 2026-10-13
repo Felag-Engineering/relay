@@ -184,12 +184,13 @@ type Deps struct {
 	Exec Executor
 	Jobs JobResultReader
 	// Approvals backs the out-of-band decision channel (#270, ADR-0027). It is
-	// the same capability layer Exec is — the composition root passes one
-	// *capability.Service for both — kept as a separate interface only so this
-	// package's seams stay named after what each route needs.
+	// backed by *capability.Approvals, not the Service Exec uses: the approval
+	// routes hold no path to Run, Start or CancelJob (invariant 10). Kept as a
+	// separate interface so this package's seams stay named after what each
+	// route needs.
 	Approvals ApprovalService
 	// ApprovalGrants backs the batch/window grant routes (#378, ADR-0027
-	// decision 12) — the same *capability.Service again, named separately for
+	// decision 12) — the same *capability.Approvals again, named separately for
 	// the same reason Approvals is. Nil disables the routes with a 500 rather
 	// than silently accepting requests that would grant nothing.
 	ApprovalGrants ApprovalGrantService

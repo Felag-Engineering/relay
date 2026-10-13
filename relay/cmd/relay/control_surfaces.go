@@ -64,10 +64,12 @@ import (
 type surfaceDeps struct {
 	logger *slog.Logger // the process logger (main.go); nil means slog.Default()
 	ops    mcp.OperationLister
-	// capability is Execution and Approvals: mcp Executor, TaskResolver and
-	// ApprovalDecider; api Exec, Approvals and ApprovalGrants; console
-	// Approvals, Cancel and Decide.
+	// capability is Execution: mcp Executor and TaskResolver; api Exec; console
+	// Cancel.
 	capability *capability.Service
+	// approvals is the approval callout: mcp ApprovalDecider; api Approvals and
+	// ApprovalGrants; console Approvals and Decide.
+	approvals *capability.Approvals
 	// freezeControl is the Freeze and its role floor (api.Freezer).
 	freezeControl *capability.Control
 	// readLane backs the MCP read tools (through mcpReadLane), api.NodeReader
@@ -169,7 +171,7 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	// WithToolCallObserver), but the production list itself is unchanged.
 	opts := []mcp.Option{
 		// The in-band approval rung (#391, ADR-0029): the SAME
-		// *capability.Service the API's decision endpoint uses. One decision
+		// *capability.Approvals the API's decision endpoint uses. One decision
 		// model, two delivery envelopes — a decision made through the tool is
 		// the same act, recorded by the same code, differing only in the
 		// channel it is stamped with and the fact that its approver is
@@ -179,7 +181,7 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// reachable at all. A deployment that wants the previous posture
 		// changes nothing in code: leave its gate rules `out-of-band` and
 		// ErrWeakChannel refuses every tool-delivered answer.
-		mcp.WithApprovalDecider(d.capability),
+		mcp.WithApprovalDecider(d.approvals),
 		// The MRTR envelope over the same decision seam (#730, ADR-0029
 		// decision 6; ADR-0028 as amended 2026-09-24): an askable in-band
 		// park from a client that can be asked is answered with an approval
@@ -239,15 +241,15 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		Exec: d.capability,
 		Jobs: jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
 		// The out-of-band approval decision channel (#270, ADR-0027) — the same
-		// *capability.Service again. The decision is the same act however it
+		// *capability.Approvals again. The decision is the same act however it
 		// arrives, so the API endpoint, the MCP elicitation envelope, and the
 		// Console's approval queue all reach it through this one object.
-		Approvals: d.capability,
+		Approvals: d.approvals,
 		// Batch/window approval grants (#378, ADR-0027 decision 12) — the same
 		// object once more. Requesting a grant creates an ordinary approval
 		// Request answered through the decision route above, so the two share
 		// one quorum implementation rather than each carrying its own.
-		ApprovalGrants: d.capability,
+		ApprovalGrants: d.approvals,
 		// Read auditing for the Job read route (#357, ADR-0025). *auditsink.Sink
 		// satisfies api.ReadAuditor directly — no adapter needed here, unlike
 		// mcp's readAuditor below, because package api may name capability
@@ -306,7 +308,7 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// itself derived from the same live-Tunnel set, so the fleet view
 		// and a state:offline Selector read one fact instead of two.
 		Audit:     d.audit,
-		Approvals: d.capability,
+		Approvals: d.approvals,
 		Freeze:    d.freeze,
 		Now:       d.now,
 		// The two fingerprints day one renders. Digests over public
@@ -351,7 +353,7 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// something already running to stop.
 		Cancel: d.capability,
 		// Decide (#453): the Console's other write seam, and the same
-		// *capability.Service the Control API's out-of-band decision
+		// *capability.Approvals the Control API's out-of-band decision
 		// endpoint (POST /api/v1/approvals/{id}/decision) and MCP's
 		// approve_request call — so quorum, audience, requester exclusion,
 		// channel strength and the audit record stay one implementation.
@@ -359,7 +361,7 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// answers a Plan the Relay already built (decide.go's header).
 		// d.consoleAuth is already wired above as Auth, so step-up needs no
 		// new wiring.
-		Decide: d.capability,
+		Decide: d.approvals,
 		// AccountAdmin (#655): the Console's third write seam. d.accountAdmin
 		// already carries all five verbs (#653) — CreateAccount,
 		// SetAccountRole, SetAccountEnabled, MintAPIToken and RevokeAPIToken

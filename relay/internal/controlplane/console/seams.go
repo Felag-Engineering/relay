@@ -97,7 +97,7 @@ type AuditReader interface {
 }
 
 // ApprovalReader is the approval queue and the approval object, read-only
-// (ADR-0027). *capability.Service satisfies all five methods.
+// (ADR-0027). *capability.Approvals satisfies all five methods.
 //
 // DecideApproval is still absent FROM THIS INTERFACE, which is still
 // read-only — the decision method lives on ApprovalDecider in decide.go
@@ -178,7 +178,7 @@ type AccountReader interface {
 
 // QueryReader is the capability layer's read lane (#441): filtered,
 // paginated, aggregating queries over the audit trail and over Jobs/Tasks.
-// *capability.ReadLane satisfies it, as *capability.Service satisfies
+// *capability.ReadLane satisfies it, as *capability.Approvals satisfies
 // ApprovalReader above — nothing here dispatches or decides, and the narrowed
 // method set is what keeps this package's grip on the capability layer to
 // reads only.

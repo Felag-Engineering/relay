@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditquery"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
@@ -543,5 +544,24 @@ func newCapService(t *testing.T, s capSeams) *capability.Service {
 		}
 		opts = append(opts, capability.WithExecution(s.jobsRepo, s.tasksRepo, s.conduit, eo...))
 	}
-	return capability.New(ctl, read, opts...)
+	// A gate with no rules: nothing parks, so the store and authorizer below it
+	// are unreachable on every path these tests drive.
+	gate, err := approval.NewGate(nil)
+	if err != nil {
+		t.Fatalf("approval.NewGate: %v", err)
+	}
+	appr := capability.NewApprovals(rec, gate, unreachableApprovalStore{}, denyApprovalDecisions{}, nil, nil, nil, nil)
+	return capability.New(ctl, read, appr, opts...)
+}
+
+// unreachableApprovalStore is the approval store behind an empty gate: nothing
+// ungated reaches it; a call panics on the nil embed, so a test that did would
+// fail loudly.
+type unreachableApprovalStore struct{ capability.ApprovalStore }
+
+// denyApprovalDecisions is the decision floor behind an empty gate.
+type denyApprovalDecisions struct{}
+
+func (denyApprovalDecisions) AuthorizeApprovalDecision(context.Context, capability.Principal, jobs.ActionKind) error {
+	return errors.New("test: approval decisions are not wired")
 }
