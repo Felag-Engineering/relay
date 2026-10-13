@@ -42,11 +42,27 @@
 //!
 //! [`compile`] parses the template body once, tracking shell quote state, and
 //! refuses any template where a placeholder is not a **standalone,
-//! whitespace-delimited token in an unquoted context**. That single rule makes
-//! the runtime guarantee trivial: a standalone token replaced by one quoted
-//! word stays one word, so no value can change the token count or the operators
-//! around it. (The more-restrictive reading of ADR-0021's "fills exactly one
-//! lexical position" — see the PR body for the judgment calls.)
+//! space-, tab- or newline-delimited token in an unquoted context**. That single
+//! rule makes the runtime guarantee trivial: a standalone token replaced by one
+//! quoted word stays one word, so no value can change the token count or the
+//! operators around it. (The more-restrictive reading of ADR-0021's "fills
+//! exactly one lexical position" — see the PR body for the judgment calls.)
+//!
+//! The rule is only as good as the tracker's agreement with the shell (#974).
+//! "Standalone" means bounded by the start or end of the body or by a shell
+//! separator (space, tab or newline), never form feed or carriage return, which
+//! the shell treats as word characters; a placeholder may not follow
+//! backslash-escaped whitespace. The tracker follows only `'`, `"`, `\` and
+//! separators, so a body with a placeholder may not also contain a construct
+//! whose lexing it cannot follow: a here-document or here-string, a backquote,
+//! `$(` (including `$((` and `$[`), `${`, `$'`, an unquoted `#`, a backslash
+//! before a line end, a `((` arithmetic command, a `name[` array subscript or
+//! `=(` compound assignment, or the word `alias`. See [`ShellConstruct`].
+//!
+//! That list is the set of constructs found to desynchronise the tracker from
+//! dash and from bash-as-`/bin/sh` (#974). Refusal is by denylist, so a
+//! construct not listed is not guaranteed safe. Residual, not refused:
+//! eval-class commands and dynamically built command names.
 //!
 //! # Policy parity
 //!
@@ -169,7 +185,7 @@ pub struct TemplateDef {
     /// Mandatory risk class (ADR-0012).
     pub risk_class: RiskClassDef,
     /// The shell template body: author-fixed structure with `{{slot}}`
-    /// placeholders standing as whole, whitespace-delimited tokens.
+    /// placeholders standing as whole, space-, tab- or newline-delimited tokens.
     pub body: String,
     /// The declared parameter slots. Every slot must be referenced by the body
     /// exactly as `{{name}}`, and every `{{name}}` in the body must resolve to
@@ -181,6 +197,57 @@ pub struct TemplateDef {
 // ---------------------------------------------------------------------------
 // Errors — structured, and deliberately never echo the raw caller value.
 // ---------------------------------------------------------------------------
+
+/// A shell construct the loader's quote tracker (which follows only `'`, `"`,
+/// `\` and separators) cannot follow. [`compile`] refuses a body that has a
+/// placeholder and also contains one (#974).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellConstruct {
+    /// `<<`, `<<-` or `<<<`.
+    HereDocument,
+    /// A backquote command substitution.
+    Backquote,
+    /// `$(`, `$((` or `$[`.
+    CommandSubstitution,
+    /// `${`.
+    ParameterExpansion,
+    /// `$'`.
+    AnsiCQuote,
+    /// An unquoted `#`.
+    Comment,
+    /// A backslash before a line end (newline or carriage return).
+    LineContinuation,
+    /// The word `alias`, in any ASCII case.
+    Alias,
+    /// A `((` arithmetic command, including `for ((`.
+    ArithmeticCommand,
+    /// A bash array subscript or compound array assignment (`name[` or `=(`).
+    ArraySubscript,
+}
+
+impl ShellConstruct {
+    /// A fixed, value-free description for error messages.
+    pub fn reason(self) -> &'static str {
+        match self {
+            ShellConstruct::HereDocument => "a here-document or here-string operator (<<, <<-, <<<): single quotes are literal in an unquoted here-document body, so a slot value there is expanded",
+            ShellConstruct::Backquote => "a backquote command substitution: a backquote in a slot value would end it early",
+            ShellConstruct::CommandSubstitution => "a $( command substitution, or a $(( or $[ arithmetic expansion: the shell re-lexes quoting inside it, which the loader cannot follow",
+            ShellConstruct::ParameterExpansion => "a ${ parameter expansion: quoting inside it is shell-specific, which the loader cannot follow",
+            ShellConstruct::AnsiCQuote => "a $' quote: under bash it ends at a different quote than the loader tracks",
+            ShellConstruct::Comment => "an unquoted '#': the shell discards the rest of the line, quotes included, which desynchronises the loader's quote tracking",
+            ShellConstruct::LineContinuation => "a backslash before a line end (newline or carriage return): the shell re-joins or splits the text on either side differently from the loader",
+            ShellConstruct::Alias => "the word 'alias' (matched case-insensitively, ignoring quote and backslash characters; this includes bash's BASH_ALIASES): alias expansion re-lexes later text with quote state the loader cannot follow",
+            ShellConstruct::ArithmeticCommand => "a (( arithmetic command (including for (( ): bash expands its contents as if double-quoted, so single quotes in a slot value are literal and a $( in it runs",
+            ShellConstruct::ArraySubscript => "a bash array subscript or compound array assignment (name[ or =( ): bash joins it into one word and expands the subscript as if double-quoted, so a $( in a slot value runs",
+        }
+    }
+}
+
+impl std::fmt::Display for ShellConstruct {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason())
+    }
+}
 
 /// Errors from compiling or rendering a Template Operation.
 ///
@@ -221,13 +288,24 @@ pub enum TemplateError {
 
     #[error(
         "a placeholder near byte {at} is not a standalone whitespace-delimited token \
-         (a slot must fill exactly one lexical position; it may not be glued to \
-         adjacent text or quotes)"
+         (a slot must fill exactly one lexical position, bounded by a space, tab or \
+         newline or by the start or end of the body; it may not be glued to adjacent \
+         text or quotes, and a carriage return or form feed is not a boundary — save \
+         template files with LF line endings)"
     )]
     PlaceholderNotStandalone { at: usize },
 
     #[error("a placeholder appears inside a quoted region near byte {at}; slots must sit in an unquoted context")]
     PlaceholderInQuotedContext { at: usize },
+
+    #[error("a placeholder near byte {at} follows backslash-escaped whitespace; the shell joins it to the preceding word, so it is not a standalone token")]
+    PlaceholderAfterEscapedWhitespace { at: usize },
+
+    #[error("template body has a placeholder and, near byte {at}, {construct}; a slot value could change the command's structure there, so the template is refused")]
+    UntrackableConstructWithPlaceholder {
+        at: usize,
+        construct: ShellConstruct,
+    },
 
     #[error("a placeholder near byte {at} is malformed: {detail}")]
     MalformedPlaceholder { at: usize, detail: &'static str },
@@ -451,8 +529,11 @@ impl ResolvedOp for TemplateOp {
 /// - the name and every slot name are well-formed and unique;
 /// - the body is non-empty and bounded;
 /// - the body's quoting is balanced;
-/// - every `{{slot}}` is a **standalone, whitespace-delimited token in an
-///   unquoted context** and resolves to a declared slot;
+/// - every `{{slot}}` is a **standalone, space-, tab- or newline-delimited
+///   token in an unquoted context** and resolves to a declared slot;
+/// - no placeholder follows backslash-escaped whitespace;
+/// - a body with a placeholder contains no [`ShellConstruct`] the quote tracker
+///   cannot follow;
 /// - every declared slot is referenced.
 pub fn compile(def: &TemplateDef) -> Result<TemplateOp, TemplateError> {
     // --- name ---
@@ -526,6 +607,77 @@ pub fn compile(def: &TemplateDef) -> Result<TemplateOp, TemplateError> {
     })
 }
 
+/// The characters dash and bash actually end a word on (outside
+/// metacharacters, which the loader never accepts as a boundary anyway): space
+/// and tab are blanks, newline ends the command.
+///
+/// `char::is_ascii_whitespace` also accepts form feed and carriage return. The
+/// shell treats both as ordinary word characters, so a value next to one joins
+/// the neighbouring word (#974).
+fn is_shell_separator(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n')
+}
+
+/// A backquote or `$`-expansion starting at `chars[i]`, if any. `$'` is only an
+/// ANSI-C quote outside double quotes.
+fn expansion_at(chars: &[char], i: usize, in_double: bool) -> Option<ShellConstruct> {
+    match chars[i] {
+        '`' => Some(ShellConstruct::Backquote),
+        '$' => match chars.get(i + 1) {
+            Some('(') | Some('[') => Some(ShellConstruct::CommandSubstitution),
+            Some('{') => Some(ShellConstruct::ParameterExpansion),
+            Some('\'') if !in_double => Some(ShellConstruct::AnsiCQuote),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The original char index of the first `alias` (ASCII case-insensitive) left
+/// once every `'`, `"` and `\` is removed from `chars`.
+///
+/// - It runs over the whole body, single-quoted text included, because
+///   `'alias'` as a command name still runs the builtin.
+/// - Case-insensitivity catches bash's `BASH_ALIASES[q]=...`, which defines an
+///   alias without the lower-case word `alias` and still works under
+///   `bash --posix`.
+/// - It catches `alias`, `"alias"`, `a'l'ias`, `al\ias`, `unalias` and
+///   `command alias`, and over-matches words like `aliases` (deliberate,
+///   fail-closed).
+/// - The offset is the exact index of the matched `a`, but the match may span
+///   removed quote characters.
+/// - `al\<newline>ias` is not matched here; it is already refused as a line
+///   continuation.
+///
+/// The match is literal text only: it cannot see a command name or an
+/// assignment target built by expansion (`$a`, `al$x'ias'`).
+fn alias_at(chars: &[char]) -> Option<usize> {
+    let kept: Vec<(usize, char)> = chars
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, c)| !matches!(c, '\'' | '"' | '\\'))
+        .collect();
+    kept.windows(5)
+        .find(|w| {
+            w.iter()
+                .map(|&(_, c)| c.to_ascii_lowercase())
+                .eq("alias".chars())
+        })
+        .map(|w| w[0].0)
+}
+
+/// Record `construct` at `char_index` unless an earlier hazard is already held.
+fn note(
+    hazard: &mut Option<(usize, ShellConstruct)>,
+    char_index: usize,
+    construct: ShellConstruct,
+) {
+    if hazard.is_none() {
+        *hazard = Some((char_index, construct));
+    }
+}
+
 /// Parse `body` into literal/slot segments, tracking shell quote state.
 ///
 /// Returns the segments plus the set of referenced slot indices. Enforces the
@@ -545,6 +697,10 @@ fn parse_body(body: &str, slots: &[Slot]) -> Result<(Vec<Segment>, HashSet<usize
     let mut in_single = false;
     let mut in_double = false;
     let mut escaped = false;
+    let mut escaped_char_at: Option<usize> = None;
+    // The earliest construct the quote tracker cannot follow; only refused if
+    // the body turns out to have a placeholder.
+    let mut hazard: Option<(usize, ShellConstruct)> = None;
 
     while i < n {
         let c = chars[i];
@@ -552,6 +708,13 @@ fn parse_body(body: &str, slots: &[Slot]) -> Result<(Vec<Segment>, HashSet<usize
         // A backslash-escaped char is always literal (unquoted or double-quoted
         // context; single quotes have no escape).
         if escaped {
+            // `escaped` is only set by a backslash at i - 1. Backslash-CR is
+            // noted too: in a CRLF body the shell escapes the CR and the LF ends
+            // the command, so the next line starts a new one.
+            if c == '\n' || c == '\r' {
+                note(&mut hazard, i - 1, ShellConstruct::LineContinuation);
+            }
+            escaped_char_at = Some(i);
             lit.push(c);
             escaped = false;
             i += 1;
@@ -578,6 +741,9 @@ fn parse_body(body: &str, slots: &[Slot]) -> Result<(Vec<Segment>, HashSet<usize
             if c == '{' && i + 1 < n && chars[i + 1] == '{' {
                 return Err(TemplateError::PlaceholderInQuotedContext { at: byte_at(i) });
             }
+            if let Some(k) = expansion_at(&chars, i, true) {
+                note(&mut hazard, i, k);
+            }
             if c == '\\' {
                 lit.push(c);
                 escaped = true;
@@ -594,9 +760,15 @@ fn parse_body(body: &str, slots: &[Slot]) -> Result<(Vec<Segment>, HashSet<usize
 
         // --- unquoted context ---
         if c == '{' && i + 1 < n && chars[i + 1] == '{' {
-            // Left boundary: start-of-body or ASCII whitespace only.
-            if !(i == 0 || chars[i - 1].is_ascii_whitespace()) {
+            // Left boundary: start-of-body or a shell separator (space, tab,
+            // newline) only.
+            if !(i == 0 || is_shell_separator(chars[i - 1])) {
                 return Err(TemplateError::PlaceholderNotStandalone { at: byte_at(i) });
+            }
+            // An escaped separator is a word character to the shell, so the
+            // value would join the preceding word (#974).
+            if i > 0 && escaped_char_at == Some(i - 1) {
+                return Err(TemplateError::PlaceholderAfterEscapedWhitespace { at: byte_at(i) });
             }
             // Find the closing `}}`.
             let mut j = i + 2;
@@ -622,8 +794,9 @@ fn parse_body(body: &str, slots: &[Slot]) -> Result<(Vec<Segment>, HashSet<usize
                 });
             };
 
-            // Right boundary: end-of-body or ASCII whitespace only.
-            if !(j + 2 >= n || chars[j + 2].is_ascii_whitespace()) {
+            // Right boundary: end-of-body or a shell separator (space, tab,
+            // newline) only.
+            if !(j + 2 >= n || is_shell_separator(chars[j + 2])) {
                 return Err(TemplateError::PlaceholderNotStandalone { at: byte_at(i) });
             }
 
@@ -650,6 +823,24 @@ fn parse_body(body: &str, slots: &[Slot]) -> Result<(Vec<Segment>, HashSet<usize
             continue;
         }
 
+        if let Some(k) = expansion_at(&chars, i, false) {
+            note(&mut hazard, i, k);
+        }
+        if c == '<' && chars.get(i + 1) == Some(&'<') {
+            note(&mut hazard, i, ShellConstruct::HereDocument);
+        }
+        if c == '(' && chars.get(i + 1) == Some(&'(') {
+            note(&mut hazard, i, ShellConstruct::ArithmeticCommand);
+        }
+        let after_name_char =
+            i > 0 && (chars[i - 1].is_ascii_alphanumeric() || chars[i - 1] == '_');
+        if (c == '[' && after_name_char) || (c == '=' && chars.get(i + 1) == Some(&'(')) {
+            note(&mut hazard, i, ShellConstruct::ArraySubscript);
+        }
+        if c == '#' {
+            note(&mut hazard, i, ShellConstruct::Comment);
+        }
+
         // Track quote/escape transitions; keep the char as literal structure.
         match c {
             '\'' => in_single = true,
@@ -663,6 +854,19 @@ fn parse_body(body: &str, slots: &[Slot]) -> Result<(Vec<Segment>, HashSet<usize
 
     if in_single || in_double || escaped {
         return Err(TemplateError::UnbalancedQuotes);
+    }
+    if !referenced.is_empty() {
+        if let Some(ai) = alias_at(&chars) {
+            if hazard.is_none_or(|(ci, _)| ai < ci) {
+                hazard = Some((ai, ShellConstruct::Alias));
+            }
+        }
+        if let Some((ci, construct)) = hazard {
+            return Err(TemplateError::UntrackableConstructWithPlaceholder {
+                at: byte_at(ci),
+                construct,
+            });
+        }
     }
     if !lit.is_empty() {
         segments.push(Segment::Literal(lit));
@@ -1221,6 +1425,311 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // compile() — shell contexts the quote tracker cannot follow (#974)
+    // -----------------------------------------------------------------------
+
+    fn untrackable(at: usize, construct: ShellConstruct) -> TemplateError {
+        TemplateError::UntrackableConstructWithPlaceholder { at, construct }
+    }
+
+    fn compile_p(body: &str) -> Result<TemplateOp, TemplateError> {
+        compile(&def("t.x", body, vec![slot("p", SlotType::Path)]))
+    }
+
+    fn compile_n(body: &str) -> Result<TemplateOp, TemplateError> {
+        compile(&def("t.x", body, vec![slot("n", SlotType::Integer)]))
+    }
+
+    /// An escaped space/tab/newline is a word character, so the value joins the
+    /// preceding word: `printf '[%s]\n' a\ '/tmp/x'` prints `[a /tmp/x]` (one
+    /// word); `a\<LF>'/tmp/x'` prints `[a/tmp/x]`; `a\<TAB>'/tmp/x'` keeps the
+    /// tab. `'/tmp/x'\ b` (row a4) was already refused: `\` is not a separator.
+    #[test]
+    fn compile_rejects_placeholder_after_escaped_whitespace() {
+        for body in ["echo a\\ {{p}}", "echo a\\\t{{p}}", "echo a\\\n{{p}}"] {
+            assert_eq!(
+                compile_p(body).unwrap_err(),
+                TemplateError::PlaceholderAfterEscapedWhitespace { at: 8 },
+                "{body:?}"
+            );
+        }
+        assert_eq!(
+            compile_p("echo {{p}}\\ b").unwrap_err(),
+            TemplateError::PlaceholderNotStandalone { at: 5 }
+        );
+        // An escaped backslash followed by a real space is a real separator.
+        let t = compile_p("echo a\\\\ {{p}}").unwrap();
+        assert_eq!(
+            render_cmd(&t, &[("p", "/tmp/x")]).unwrap(),
+            "echo a\\\\ '/tmp/x'"
+        );
+    }
+
+    /// Single quotes are literal in an unquoted here-document body, so the
+    /// shell expands `$(…)` in the value: `cat <<EOF⏎'/tmp/$(echo INJECTED)'⏎EOF`
+    /// prints `'/tmp/INJECTED'` (same for `<<-`). A quoted `<<` is literal
+    /// (`echo "a<<b" '/tmp/x' '<<'`), so it stays allowed.
+    #[test]
+    fn compile_rejects_heredoc_operator_in_a_body_with_a_placeholder() {
+        for body in [
+            "cat <<EOF\n{{p}}\nEOF",
+            "cat <<-EOF\n\t{{p}}\n\tEOF",
+            "cat <<< {{p}}",
+        ] {
+            assert_eq!(
+                compile_p(body).unwrap_err(),
+                untrackable(4, ShellConstruct::HereDocument),
+                "{body:?}"
+            );
+        }
+        for (body, rendered) in [
+            ("echo \"a<<b\" {{p}}", "echo \"a<<b\" '/tmp/x'"),
+            ("echo '<<' {{p}}", "echo '<<' '/tmp/x'"),
+        ] {
+            let t = compile_p(body).unwrap();
+            assert_eq!(render_cmd(&t, &[("p", "/tmp/x")]).unwrap(), rendered);
+        }
+    }
+
+    /// ``echo `echo '/tmp/x`'`` is a dash syntax error: the value's quote is
+    /// re-lexed inside the backquotes.
+    #[test]
+    fn compile_rejects_backquote_in_a_body_with_a_placeholder() {
+        assert_eq!(
+            compile_p("echo ` echo {{p}} `").unwrap_err(),
+            untrackable(5, ShellConstruct::Backquote)
+        );
+        assert_eq!(
+            compile_p("echo \"`date`\" {{p}}").unwrap_err(),
+            untrackable(6, ShellConstruct::Backquote)
+        );
+    }
+
+    /// The desync row compiled before the fix and dash ran the value: the
+    /// tracker reads the `'` inside `"…"` as literal while the shell re-lexes it
+    /// inside `$(`, so `echo "$(echo ')" '/tmp/x;echo PWNED' "')"` runs
+    /// `echo PWNED`. `$[ … ]` is a live re-lexing arithmetic expansion under
+    /// `bash --posix` (`echo $[ 1 + 1 ]` prints `2`).
+    #[test]
+    fn compile_rejects_command_substitution_in_a_body_with_a_placeholder() {
+        for body in [
+            "echo $( echo {{n}} )",
+            "echo $(( {{n}} + 1 ))",
+            "echo $[ {{n}} ]",
+        ] {
+            assert_eq!(
+                compile_n(body).unwrap_err(),
+                untrackable(5, ShellConstruct::CommandSubstitution),
+                "{body:?}"
+            );
+        }
+        assert_eq!(
+            compile_p("echo \"$(echo ')\" {{p}} \"')\"").unwrap_err(),
+            untrackable(6, ShellConstruct::CommandSubstitution)
+        );
+    }
+
+    /// Quoting inside `${…}` is partly unspecified by POSIX and dash and bash
+    /// diverge (`echo ${u:- '/tmp/}x'}` prints `/tmp/}x`).
+    #[test]
+    fn compile_rejects_parameter_expansion_in_a_body_with_a_placeholder() {
+        assert_eq!(
+            compile_p("echo ${u:- {{p}} }").unwrap_err(),
+            untrackable(5, ShellConstruct::ParameterExpansion)
+        );
+        assert_eq!(
+            compile_p("echo \"${HOME}\" {{p}}").unwrap_err(),
+            untrackable(6, ShellConstruct::ParameterExpansion)
+        );
+    }
+
+    /// `echo $'\' '/tmp/x;echo PWNED_ANSI' \'`: dash is inert, but under
+    /// `bash --posix` (`/bin/sh` on RHEL) `$'\'` ends at a different quote than
+    /// the loader tracks and the value ran as a command (PWNED_ANSI).
+    #[test]
+    fn compile_rejects_ansi_c_quote_in_a_body_with_a_placeholder() {
+        assert_eq!(
+            compile_p("echo $'\\' {{p}} \\'").unwrap_err(),
+            untrackable(5, ShellConstruct::AnsiCQuote)
+        );
+    }
+
+    /// A comment hides a `'` from the shell that the tracker still counts:
+    /// `true #'⏎echo ' '/tmp/x;echo PWNED_COMMENT' \'` ran the value.
+    #[test]
+    fn compile_rejects_comment_in_a_body_with_a_placeholder() {
+        assert_eq!(
+            compile_p("true #'\necho ' {{p}} \\'").unwrap_err(),
+            untrackable(5, ShellConstruct::Comment)
+        );
+        assert_eq!(
+            compile_p("echo hi # note {{p}}").unwrap_err(),
+            untrackable(8, ShellConstruct::Comment)
+        );
+    }
+
+    /// A line continuation builds a `<<` (`cat <\⏎<EOF…`) or a `$(`
+    /// (`echo $\⏎(…)`) out of characters the tracker saw separately. In a CRLF
+    /// body `\`+CR+LF escapes the CR and the LF ends the command, so the next
+    /// line runs as its own command with the quoted word in command position:
+    /// `echo a\<CR><LF>'/bin/echo' RAN` prints `a<CR>` then `RAN`.
+    #[test]
+    fn compile_rejects_line_continuation_in_a_body_with_a_placeholder() {
+        assert_eq!(
+            compile_p("cat <\\\n<EOF\n{{p}}\nEOF").unwrap_err(),
+            untrackable(5, ShellConstruct::LineContinuation)
+        );
+        assert_eq!(
+            compile_p("echo $\\\n( echo {{p}} )").unwrap_err(),
+            untrackable(6, ShellConstruct::LineContinuation)
+        );
+        assert_eq!(
+            compile_p("echo a\\\r\n{{p}}").unwrap_err(),
+            untrackable(6, ShellConstruct::LineContinuation)
+        );
+    }
+
+    /// A placeholder-free body has no slot to subvert: every construct above
+    /// still compiles and renders byte-for-byte.
+    #[test]
+    fn constructs_without_a_placeholder_still_compile_and_render_unchanged() {
+        for body in [
+            "cat <<EOF\nhi\nEOF",
+            "echo `date`",
+            "echo $(date) $((1+1)) $[1+1] ${HOME}",
+            "echo hi # c",
+            "echo a\\\nb",
+            "echo a\\\r\nb",
+            "echo $'x'",
+            "alias ll='ls -l'",
+            "(( 1 ))",
+            "a[1]=2; b=(x y)",
+            "if command -v dpkg-query > /dev/null 2>&1; then dpkg-query -W -f '${Package}\\t${Version}\\n'; elif command -v rpm > /dev/null 2>&1; then rpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\n'; else echo 'no supported package manager (dpkg/rpm)' 1>&2; exit 1; fi",
+        ] {
+            let t = compile(&def("t.x", body, vec![])).unwrap_or_else(|e| panic!("{body:?}: {e}"));
+            assert_eq!(render_cmd(&t, &[]).unwrap(), body);
+        }
+    }
+
+    /// dash and `bash --posix` end a word only on space and tab: `printf
+    /// '[%s]\n' a<FF>'/tmp/x' b<CR>'/tmp/y'` prints `[a<FF>/tmp/x]` and
+    /// `[b<CR>/tmp/y]` (one word each); `'/tmp/z'<FF>c` and `'/tmp/w'<CR><LF>`
+    /// join the same way (the CR of a CRLF line ending joins the value).
+    #[test]
+    fn compile_rejects_placeholder_bounded_by_non_shell_whitespace() {
+        for body in ["echo a\x0c{{p}}", "echo a\r{{p}}"] {
+            assert_eq!(
+                compile_p(body).unwrap_err(),
+                TemplateError::PlaceholderNotStandalone { at: 7 },
+                "{body:?}"
+            );
+        }
+        for body in [
+            "echo {{p}}\x0cb",
+            "echo {{p}}\rb",
+            "echo {{p}}\r\necho done",
+        ] {
+            assert_eq!(
+                compile_p(body).unwrap_err(),
+                TemplateError::PlaceholderNotStandalone { at: 5 },
+                "{body:?}"
+            );
+        }
+        compile_p("echo a\t{{p}}\nx").unwrap();
+        compile_p("echo a {{p}} b").unwrap();
+    }
+
+    /// bash expands the contents of a `((` arithmetic command as if
+    /// double-quoted, so single quotes in a slot value are literal and a `$(`
+    /// in it runs: `bash --posix -c "(( '/x\$(echo PWNED_DPAREN >&2)' ))"`
+    /// printed PWNED_DPAREN, and the `for ((` form printed PWNED_FOR. dash is
+    /// inert (it reads `((` as nested subshells); `let`, `declare -i` and
+    /// `[[ … -eq … ]]` were probed and are inert. `$((` is noted at the `$`
+    /// first, so it stays a `CommandSubstitution`.
+    #[test]
+    fn compile_rejects_arithmetic_command_in_a_body_with_a_placeholder() {
+        for (body, at) in [
+            ("(( {{p}} ))", 0),
+            ("for (( i= {{p}} ; 0; )); do :; done", 4),
+        ] {
+            assert_eq!(
+                compile_p(body).unwrap_err(),
+                untrackable(at, ShellConstruct::ArithmeticCommand),
+                "{body:?}"
+            );
+        }
+    }
+
+    /// bash joins `name[ … ]` into one word and expands the subscript as if
+    /// double-quoted, so a single-quoted slot value there is literal and a `$(`
+    /// in it runs. Under `bash --posix -c`, `a[ '/x$(echo PWNED_SUB >&2)' ]=1`
+    /// printed PWNED_SUB, the `]+=1` form printed PWNED_PLUSEQ, and
+    /// `a=( [ '/x$(echo PWNED_COMPOUND >&2)' ]=1 )` printed PWNED_COMPOUND.
+    /// `[ -f … ]` and `[[ -e … ]]` are inert, as is dash. The offset is the `[`
+    /// (or, for a compound assignment, the `=`).
+    #[test]
+    fn compile_rejects_array_subscript_in_a_body_with_a_placeholder() {
+        for (body, at) in [
+            ("a[ {{p}} ]=1", 1),
+            ("a=( [ {{p}} ]=1 )", 1),
+            ("echo x; a[ {{p}} ]+=1", 9),
+        ] {
+            assert_eq!(
+                compile_p(body).unwrap_err(),
+                untrackable(at, ShellConstruct::ArraySubscript),
+                "{body:?}"
+            );
+        }
+        for body in ["[ -f {{p}} ]", "[[ -e {{p}} ]]", "test -f {{p}}"] {
+            let t = compile_p(body).unwrap_or_else(|e| panic!("{body:?}: {e}"));
+            assert_eq!(
+                render_cmd(&t, &[("p", "/x")]).unwrap(),
+                body.replace("{{p}}", "'/x'"),
+                "{body:?}"
+            );
+        }
+    }
+
+    /// Alias expansion carries an open `'` into text the loader already lexed:
+    /// `alias q="echo '"⏎q '/tmp/x;echo PWNED_ALIAS' \'` prints ` /tmp/x` then
+    /// `PWNED_ALIAS \` in dash and `bash --posix` (plain `bash -c` does not
+    /// expand aliases). This body compiled before the fix. The quoted spellings
+    /// (`a'l'ias`, `al\ias`, `"alias"`, `command alias`) reach the builtin after
+    /// quote removal and were reproduced the same way. The offset is the matched
+    /// `a`; the match ignores `'`, `"`, `\` and ASCII case.
+    #[test]
+    fn compile_rejects_alias_word_in_a_body_with_a_placeholder() {
+        for (body, at) in [
+            ("alias q=\"echo '\"\nq {{p}} \\'", 0),
+            ("a'l'ias q=\"echo '\"\nq {{p}} \\'", 0),
+            ("true; al\\ias q=\"echo '\"\nq {{p}} \\'", 6),
+            ("command \"alias\" q=x\necho {{p}}", 9),
+            // Over-match, deliberately fail-closed.
+            ("cat /etc/aliases {{p}}", 9),
+            // The earliest hazard wins, whichever kind.
+            ("alias x=y; echo $(x) {{p}}", 0),
+        ] {
+            assert_eq!(
+                compile_p(body).unwrap_err(),
+                untrackable(at, ShellConstruct::Alias),
+                "{body:?}"
+            );
+        }
+    }
+
+    /// bash defines an alias without the lower-case word `alias`:
+    /// `bash --posix -c` with `BASH_ALIASES[q]="echo '"⏎q '/tmp/x;echo PWNED_BA' \'`
+    /// printed ` /tmp/x` then `PWNED_BA \` (dash has no BASH_ALIASES). The
+    /// offset is the `A` after `BASH_`.
+    #[test]
+    fn compile_rejects_bash_aliases_assignment_with_a_placeholder() {
+        assert_eq!(
+            compile_p("BASH_ALIASES[q]=\"echo '\"\nq {{p}} \\'").unwrap_err(),
+            untrackable(5, ShellConstruct::Alias)
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // render() — substitution correctness
     // -----------------------------------------------------------------------
 
@@ -1357,6 +1866,45 @@ type = "path"
         let t = compile(&def).expect("must compile");
         let cmd = render_cmd(&t, &[("lines", "20"), ("path", "/var/log/x")]).unwrap();
         assert_eq!(cmd, "tail -n '20' '/var/log/x'");
+    }
+
+    /// toml_parser 1.1.3 (spec 1.1.0) keeps the CR of a CRLF line ending in a
+    /// multi-line string: `decode_ml_basic_string` pushes the raw `"\r\n"`
+    /// slice and only a leading newline is stripped. So a CRLF-saved body whose
+    /// slot ends a line reaches `compile` with the CR and is refused, while one
+    /// whose slots do not end a line renders exactly as before.
+    #[test]
+    fn crlf_multiline_toml_body_keeps_the_cr_and_is_checked() {
+        let head = "name = \"t.crlf\"\r\nrisk_class = \"read\"\r\n";
+        let tail = "[[slots]]\r\nname = \"p\"\r\ntype = \"path\"\r\n";
+
+        let src = format!("{head}body = \"\"\"\r\ncat {{{{p}}}}\r\necho done\"\"\"\r\n{tail}");
+        let d: TemplateDef = toml::from_str(&src).expect("must deserialize");
+        assert_eq!(d.body, "cat {{p}}\r\necho done");
+        assert_eq!(
+            compile(&d).unwrap_err(),
+            TemplateError::PlaceholderNotStandalone { at: 4 }
+        );
+
+        let src =
+            format!("{head}body = \"\"\"\r\ncat {{{{p}}}} /dev/null\r\necho done\"\"\"\r\n{tail}");
+        let d: TemplateDef = toml::from_str(&src).expect("must deserialize");
+        assert_eq!(d.body, "cat {{p}} /dev/null\r\necho done");
+        let t = compile(&d).unwrap();
+        assert_eq!(
+            render_cmd(&t, &[("p", "/tmp/x")]).unwrap(),
+            "cat '/tmp/x' /dev/null\r\necho done"
+        );
+
+        // A literal ''' string: in """ TOML itself consumes a line-ending
+        // backslash.
+        let src = format!("{head}body = '''\r\necho a\\\r\n{{{{p}}}}'''\r\n{tail}");
+        let d: TemplateDef = toml::from_str(&src).expect("must deserialize");
+        assert_eq!(d.body, "echo a\\\r\n{{p}}");
+        assert_eq!(
+            compile(&d).unwrap_err(),
+            untrackable(6, ShellConstruct::LineContinuation)
+        );
     }
 
     #[test]

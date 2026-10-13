@@ -76,14 +76,37 @@ Slot types: `identifier`, `integer`, `path`, `enum` (with `values`). Prefer
 `enum` whenever the value space is genuinely finite — it is the only type whose
 accept-set you control completely.
 
-Two authoring rules the loader enforces, both refusals at load time:
+Three authoring rules the loader enforces, all refusals at load time:
 
-- **Every `{{slot}}` must be a standalone, whitespace-delimited token in an
-  unquoted context.** `--file={{path}}` and `'{{path}}'` fail to load. That rule
-  is what makes "one slot fills exactly one word" true by construction.
+- **Every `{{slot}}` must be a standalone, space-, tab- or newline-delimited
+  token in an unquoted context** (a form feed or carriage return next to a slot
+  is refused, because the shell does not split there). `--file={{path}}` and
+  `'{{path}}'` fail to load. That rule is what makes "one slot fills exactly one
+  word" true by construction.
+- **A body with a `{{slot}}` may not also contain** any of the following.
+  Refused only when unquoted (they stay allowed inside single or double quotes):
+  a here-document or here-string (`<<`, `<<-`, `<<<`), a `((` arithmetic
+  command (`for ((` included), a bash array subscript or compound assignment
+  (`name[`, `=(`), `$'…'`, and `#` (comments and `$#` included). Refused when
+  unquoted and also inside double quotes:
+  backquotes, `$(…)`, `$((…))`, `$[…]` and `${…}`. Refused anywhere outside
+  single quotes: a backslash before a line end. Refused anywhere at all: the
+  word `alias`, in any ASCII case (so `BASH_ALIASES` too), quoted or not,
+  including inside longer words such as `aliases`; the match is literal text
+  only. Nor may a slot follow an escaped space (`a\ {{path}}`). Each is a place
+  where the shell would read a quoted value differently from how the loader
+  does, so the template fails to load and the error names the byte offset and
+  the reason. Placeholder-free bodies may use all of them.
 - **`risk_class` is mandatory**, and a template may not shadow a Native
   Operation (`system.facts`, `file.read`, `service.restart`, `pkg.install`) or
   `raw_exec`. The native vocabulary is frozen (ADR-0021) and always wins.
+
+**Save template files with LF line endings.** In a multi-line body the TOML
+parser keeps a Windows (CRLF) line ending's carriage return, so a `{{slot}}` at
+the end of a line is refused as not standalone. The shell would otherwise have
+glued the CR onto the value. A backslash at the end of a CRLF line is refused
+too. Because one invalid file takes the whole template set offline, run
+`relay-daemon policy check <policy.toml> --templates <dir>` before deploying.
 
 ## 2. Validate
 
@@ -99,7 +122,8 @@ error: relay-read/catalog.toml: [[template]] #2 (name="log.tail") — a placehol
 What it reports:
 
 - **Per template**: a malformed body (a placeholder that is not a standalone
-  token, unbalanced quoting), an invalid or missing `risk_class`, bad slot
+  token, unbalanced quoting, a shell construct a slot value could escape
+  through), an invalid or missing `risk_class`, bad slot
   names/types, an empty `enum`, a name that shadows a Native Operation, and a
   duplicate name across the set — every one of them an error, because every one
   of them makes the whole set fail to load on the Node.

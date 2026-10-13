@@ -40,10 +40,16 @@ body = "df -P -T"
 [[template]]
 name = "log.tail"
 risk_class = "read"
-# Every {{slot}} must be a STANDALONE, whitespace-delimited token in an
-# UNQUOTED context — the daemon refuses to compile anything else, because that
+# Every {{slot}} must be a STANDALONE, space-, tab- or newline-delimited token in
+# an UNQUOTED context — the daemon refuses to compile anything else, because that
 # rule is what makes "one slot fills exactly one word" true by construction.
 # Do NOT write "--file={{path}}" or "'{{path}}'"; both fail to load.
+# A body that has a {{slot}} may also not contain <<, a (( arithmetic command,
+# an array subscript name[ or =( assignment, backquotes, $(...), $((...)),
+# $[...], ${...}, $'...', an unquoted '#', a backslash before a line end, or
+# the word "alias" (any ASCII case, quoted or not), and a slot may not follow
+# an escaped space. Save this file with LF line endings. See
+# docs/operations/template-packs.md, "Three authoring rules".
 body = "tail -n {{lines}} -- {{path}}"
 
 [[template.slots]]
