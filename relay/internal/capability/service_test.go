@@ -589,6 +589,10 @@ func TestConstructorsPanicOnNilSeam(t *testing.T) {
 	tokens := &fakeAPITokenStore{}
 	ctl := NewControl(rec, authz, freeze)
 	read := NewReadLane(rec, reg, aq, jq, nil, nil, 0, nil)
+	gate := gateEverything(t, 1)
+	astore := newMemApprovals()
+	aauthz := &spyApprovalAuthorizer{}
+	appr := NewApprovals(rec, gate, astore, aauthz, nil, nil, nil, nil)
 
 	tests := []struct {
 		name string
@@ -608,8 +612,13 @@ func TestConstructorsPanicOnNilSeam(t *testing.T) {
 		{"NewReadLane/audit query seam", func() { NewReadLane(rec, reg, nil, jq, nil, nil, 0, nil) }, "NewReadLane: audit query seam"},
 		{"NewReadLane/job query seam", func() { NewReadLane(rec, reg, aq, nil, nil, nil, 0, nil) }, "NewReadLane: job query seam"},
 		{"NewReadLane/certExpiringWithin", func() { NewReadLane(rec, reg, aq, jq, nil, nil, -time.Second, nil) }, "NewReadLane: certExpiringWithin"},
-		{"New/control", func() { New(nil, read) }, "capability: New: control"},
-		{"New/read lane", func() { New(ctl, nil) }, "capability: New: read lane"},
+		{"NewApprovals/recorder", func() { NewApprovals(nil, gate, astore, aauthz, nil, nil, nil, nil) }, "NewApprovals: recorder"},
+		{"NewApprovals/gate", func() { NewApprovals(rec, nil, astore, aauthz, nil, nil, nil, nil) }, "NewApprovals: gate"},
+		{"NewApprovals/store", func() { NewApprovals(rec, gate, nil, aauthz, nil, nil, nil, nil) }, "NewApprovals: store"},
+		{"NewApprovals/approval authorizer", func() { NewApprovals(rec, gate, astore, nil, nil, nil, nil, nil) }, "NewApprovals: approval authorizer"},
+		{"New/control", func() { New(nil, read, appr) }, "capability: New: control"},
+		{"New/read lane", func() { New(ctl, nil, appr) }, "capability: New: read lane"},
+		{"New/approvals", func() { New(ctl, read, nil) }, "capability: New: approvals"},
 	}
 
 	for _, tt := range tests {
@@ -638,8 +647,9 @@ func TestNew_RefusesReadLaneOverADifferentRecorder(t *testing.T) {
 	ctl := NewControl(recA, &spyAuthorizer{}, &fakeFreezeStore{})
 	other := newReadLane(recB, reg, nil, nil, nil, nil, 0, nil)
 	same := newReadLane(recA, reg, nil, nil, nil, nil, 0, nil)
+	appr := newApprovals(recA, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 
-	if New(ctl, same) == nil {
+	if New(ctl, same, appr) == nil {
 		t.Fatal("New over a read lane sharing the Control's Recorder returned nil")
 	}
 
@@ -653,7 +663,53 @@ func TestNew_RefusesReadLaneOverADifferentRecorder(t *testing.T) {
 			t.Fatalf("panic = %v, want New's shared-Recorder refusal", r)
 		}
 	}()
-	New(ctl, other)
+	New(ctl, other, appr)
+}
+
+// TestNew_RefusesApprovalsOverADifferentRecorder: the Control and the Approvals
+// must share one Recorder, or the layer would hold two audit trails.
+func TestNew_RefusesApprovalsOverADifferentRecorder(t *testing.T) {
+	spy := &spyAuditSink{}
+	recA := NewRecorder(spy, nil, nil)
+	recB := NewRecorder(spy, nil, nil)
+	reg := registry.NewInMemory()
+	ctl := NewControl(recA, &spyAuthorizer{}, &fakeFreezeStore{})
+	same := newReadLane(recA, reg, nil, nil, nil, nil, 0, nil)
+	apprA := newApprovals(recA, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
+	apprB := newApprovals(recB, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
+
+	if New(ctl, same, apprA) == nil {
+		t.Fatal("New over an Approvals sharing the Control's Recorder returned nil")
+	}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("New over an Approvals with a different Recorder should panic")
+		}
+		msg, _ := r.(string)
+		if !strings.Contains(msg, "capability: New:") || !strings.Contains(msg, "share one Recorder") || !strings.Contains(msg, "approvals") {
+			t.Fatalf("panic = %v, want New's approvals shared-Recorder refusal", r)
+		}
+	}()
+	New(ctl, same, apprB)
+}
+
+// TestNewApprovals_NilNotifierParksWithoutNotifying: production passes a nil
+// notifier when no webhook is configured, and the park path calls NotifyParked
+// with no nil check — so NewApprovals must map nil to the no-op.
+func TestNewApprovals_NilNotifierParksWithoutNotifying(t *testing.T) {
+	rec := NewRecorder(&spyAuditSink{}, nil, nil)
+	appr := NewApprovals(rec, gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}, nil, nil, nil, nil)
+	ctl := NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{})
+	read := newReadLane(rec, seedOneNode(t), nil, nil, nil, nil, 0, nil)
+	svc := New(ctl, read, appr)
+
+	_, err := svc.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("Run: err = %v, want a park", err)
+	}
 }
 
 func TestRunJoinsDispatchAndAuditErrors(t *testing.T) {

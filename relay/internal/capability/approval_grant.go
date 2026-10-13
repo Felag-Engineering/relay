@@ -52,8 +52,8 @@ var ErrGrantCoversNothingGated = errors.New("capability: nothing in this scope r
 // something, but it cannot be claimed until that Request reaches approved —
 // enforced in the store's claim query, not here (see store/grants.go). So the
 // window this opens is closed until a human opens it.
-func (s *Service) RequestGrant(ctx context.Context, p Principal, in GrantRequest) (approval.Grant, approval.Request, error) {
-	if s.approvals == nil || s.grants == nil {
+func (a *Approvals) RequestGrant(ctx context.Context, p Principal, in GrantRequest) (approval.Grant, approval.Request, error) {
+	if a.store == nil || a.grants == nil {
 		return approval.Grant{}, approval.Request{}, ErrApprovalUnavailable
 	}
 	if err := in.Scope.Validate(); err != nil {
@@ -67,7 +67,7 @@ func (s *Service) RequestGrant(ctx context.Context, p Principal, in GrantRequest
 	// cheaply than the work it replaces. Its approver audience is the union of
 	// those dispatches' audiences instead, which can be wider (ADR-0027
 	// amendment 2026-09-16).
-	req, rules, gated := approval.RequirementForScope(in.Scope, s.gate.Evaluate)
+	req, rules, gated := approval.RequirementForScope(in.Scope, a.gate.Evaluate)
 	if !gated {
 		return approval.Grant{}, approval.Request{}, ErrGrantCoversNothingGated
 	}
@@ -76,8 +76,8 @@ func (s *Service) RequestGrant(ctx context.Context, p Principal, in GrantRequest
 	// powerful thing it can release (Scope.ActionKind). Checked here on the
 	// REQUESTER so an operator cannot even ask for a Raw Exec window; the
 	// approver is checked again on the way in through DecideApproval.
-	if s.approvalAuthz != nil {
-		if err := s.approvalAuthz.AuthorizeApprovalDecision(withoutAssertions(ctx), p, in.Scope.ActionKind()); err != nil {
+	if a.authz != nil {
+		if err := a.authz.AuthorizeApprovalDecision(withoutAssertions(ctx), p, in.Scope.ActionKind()); err != nil {
 			return approval.Grant{}, approval.Request{}, err
 		}
 	}
@@ -100,13 +100,13 @@ func (s *Service) RequestGrant(ctx context.Context, p Principal, in GrantRequest
 			"capability: grant approval requirement from rules %s: require.audience: %w", strings.Join(rules, ", "), err)
 	}
 
-	now := s.clock()
+	now := a.clock()
 	startsAt := in.StartsAt
 	if startsAt.IsZero() {
 		startsAt = now
 	}
 
-	mint := s.newApprovalID
+	mint := a.newApprovalID
 	if mint == nil {
 		mint = defaultID
 	}
@@ -143,10 +143,10 @@ func (s *Service) RequestGrant(ctx context.Context, p Principal, in GrantRequest
 	// gives a single dispatch.
 	request := approval.NewGrantRequest(grant, p.AccountID, p.Account, rules, req, now)
 
-	if err := s.approvals.Create(ctx, request); err != nil {
+	if err := a.store.Create(ctx, request); err != nil {
 		return approval.Grant{}, approval.Request{}, fmt.Errorf("capability: create grant approval request: %w", err)
 	}
-	if err := s.grants.CreateGrant(ctx, grant); err != nil {
+	if err := a.grants.CreateGrant(ctx, grant); err != nil {
 		return approval.Grant{}, approval.Request{}, fmt.Errorf("capability: create approval grant: %w", err)
 	}
 
@@ -160,11 +160,11 @@ func (s *Service) RequestGrant(ctx context.Context, p Principal, in GrantRequest
 		Reason:   "batch/window grant requested: " + summary,
 		Asserted: AssertionsFromContext(ctx),
 	}
-	if auditErr := s.recorder().audit.Record(ctx, entry); auditErr != nil {
+	if auditErr := a.rec.audit.Record(ctx, entry); auditErr != nil {
 		return grant, request, fmt.Errorf("capability: record audit entry: %w", auditErr)
 	}
-	if s.approvalNotifier != nil {
-		s.approvalNotifier.NotifyParked(ctx, ApprovalNotice{
+	if a.notifier != nil {
+		a.notifier.NotifyParked(ctx, ApprovalNotice{
 			RequestID: requestID, PlanHash: request.PlanHash, Summary: summary,
 			RequestedBy: p.Account, Rules: rules, Progress: request.Progress(),
 			Count: req.Count, Channel: req.Channel.String(), ExpiresAt: request.ExpiresAt,
@@ -174,11 +174,11 @@ func (s *Service) RequestGrant(ctx context.Context, p Principal, in GrantRequest
 }
 
 // ActiveGrants returns every Grant that could still cover something now.
-func (s *Service) ActiveGrants(ctx context.Context) ([]approval.Grant, error) {
-	if s.grants == nil {
+func (a *Approvals) ActiveGrants(ctx context.Context) ([]approval.Grant, error) {
+	if a.grants == nil {
 		return nil, ErrApprovalUnavailable
 	}
-	out, err := s.grants.ActiveGrants(ctx, s.clock())
+	out, err := a.grants.ActiveGrants(ctx, a.clock())
 	if err != nil {
 		return nil, fmt.Errorf("capability: list approval grants: %w", err)
 	}
@@ -188,11 +188,11 @@ func (s *Service) ActiveGrants(ctx context.Context) ([]approval.Grant, error) {
 // Grant returns one Grant by ID, in whatever state it is in — including
 // revoked and expired ones, because "what did that window actually cover, and
 // who closed it" is the question asked after the fact.
-func (s *Service) Grant(ctx context.Context, id string) (approval.Grant, error) {
-	if s.grants == nil {
+func (a *Approvals) Grant(ctx context.Context, id string) (approval.Grant, error) {
+	if a.grants == nil {
 		return approval.Grant{}, ErrApprovalUnavailable
 	}
-	g, err := s.grants.GetGrant(ctx, id)
+	g, err := a.grants.GetGrant(ctx, id)
 	if err != nil {
 		if errors.Is(err, approval.ErrGrantNotFound) {
 			return approval.Grant{}, err
@@ -213,11 +213,11 @@ func (s *Service) Grant(ctx context.Context, id string) (approval.Grant, error) 
 //
 // approval.ErrGrantNotFound travels UNWRAPPED, so a surface can render "this is
 // not a Grant request" by matching the sentinel rather than the text.
-func (s *Service) GrantForApproval(ctx context.Context, requestID string) (approval.Grant, error) {
-	if s.grants == nil {
+func (a *Approvals) GrantForApproval(ctx context.Context, requestID string) (approval.Grant, error) {
+	if a.grants == nil {
 		return approval.Grant{}, ErrApprovalUnavailable
 	}
-	g, err := s.grants.GrantByRequest(ctx, requestID)
+	g, err := a.grants.GrantByRequest(ctx, requestID)
 	if err != nil {
 		if errors.Is(err, approval.ErrGrantNotFound) {
 			return approval.Grant{}, err
@@ -235,22 +235,22 @@ func (s *Service) GrantForApproval(ctx context.Context, requestID string) (appro
 // mid-flight is an operational act with real consequences for whoever is
 // relying on it. It is not, however, gated on being the original approver:
 // during an incident the person at the keyboard is whoever is there.
-func (s *Service) RevokeGrant(ctx context.Context, p Principal, id, reason string) (approval.Grant, error) {
-	if s.grants == nil {
+func (a *Approvals) RevokeGrant(ctx context.Context, p Principal, id, reason string) (approval.Grant, error) {
+	if a.grants == nil {
 		return approval.Grant{}, ErrApprovalUnavailable
 	}
 
-	current, err := s.Grant(ctx, id)
+	current, err := a.Grant(ctx, id)
 	if err != nil {
 		return approval.Grant{}, err
 	}
-	if s.approvalAuthz != nil {
-		if err := s.approvalAuthz.AuthorizeApprovalDecision(withoutAssertions(ctx), p, current.Scope.ActionKind()); err != nil {
+	if a.authz != nil {
+		if err := a.authz.AuthorizeApprovalDecision(withoutAssertions(ctx), p, current.Scope.ActionKind()); err != nil {
 			return approval.Grant{}, err
 		}
 	}
 
-	revoked, err := s.grants.RevokeGrant(ctx, id, p.Account, reason, s.clock())
+	revoked, err := a.grants.RevokeGrant(ctx, id, p.Account, reason, a.clock())
 	if err != nil {
 		if errors.Is(err, approval.ErrGrantNotFound) || errors.Is(err, approval.ErrGrantNotActive) {
 			return approval.Grant{}, err
@@ -269,7 +269,7 @@ func (s *Service) RevokeGrant(ctx context.Context, p Principal, id, reason strin
 		// Job — and GrantID above is already this entry's structural
 		// discriminator from a real answer.
 	}
-	if auditErr := s.recorder().audit.Record(ctx, entry); auditErr != nil {
+	if auditErr := a.rec.audit.Record(ctx, entry); auditErr != nil {
 		return revoked, fmt.Errorf("capability: record audit entry: %w", auditErr)
 	}
 	return revoked, nil

@@ -1071,6 +1071,7 @@ func TestWithExecutionRefusesDefaultSeams(t *testing.T) {
 	rec := NewRecorder(noopAuditSink{}, nil, nil)
 	ctl := newControl(rec, allowAllAuthorizer{}, noopFreezeStore{})
 	read := newReadLane(rec, reg, nil, nil, nil, nil, 0, nil)
+	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 	execOpt := WithExecution(jobsRepo, tasksRepo, conduit)
 
 	defer func() {
@@ -1078,7 +1079,7 @@ func TestWithExecutionRefusesDefaultSeams(t *testing.T) {
 			t.Fatal("New(reg, WithExecution(...)) without real Authorizer/CapChecker/AuditSink should panic")
 		}
 	}()
-	New(ctl, read, execOpt)
+	New(ctl, read, appr, execOpt)
 }
 
 // TestWithExecutionAcceptsRealSeams: with real (spy) Authorizer, CapChecker,
@@ -1103,6 +1104,7 @@ func TestWithExecutionAcceptsRealSeams(t *testing.T) {
 	rec := NewRecorder(audit, nil, nil)
 	svc := New(NewControl(rec, authz, freezeStore),
 		newReadLane(rec, reg, nil, nil, nil, nil, 0, nil),
+		newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
 		WithCapChecker(capChecker),
 		testExecution(jobsRepo, tasksRepo, conduit, WithExecNewID(sequentialIDs("id-"))),
 	)
@@ -1238,13 +1240,14 @@ func TestWithExecutionRefusesWithoutFreeze(t *testing.T) {
 	read := newReadLane(rec, reg, nil, nil, nil, nil, 0, nil)
 	capOpt := WithCapChecker(&spyCapChecker{})
 	execOpt := testExecution(jobsRepo, tasksRepo, conduit)
+	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 
 	defer func() {
 		if recover() == nil {
 			t.Fatal("New(reg, WithExecution(...)) with real Authorizer/CapChecker/AuditSink but no WithFreeze should panic")
 		}
 	}()
-	New(ctl, read, capOpt, execOpt)
+	New(ctl, read, appr, capOpt, execOpt)
 }
 
 // TestExecution_ResolvesStateAgainstTheReadLanesWindow: Run resolves a

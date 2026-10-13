@@ -64,7 +64,7 @@ import (
 // the one exempt file, by the same choice that put approve_request here —
 // the seal check (package requeststate), the responder-assertion rule, the
 // verified-decision rule (AP-78/AP-79, below), and the classification of what
-// capability.Service.DecideApproval returned are ALL written in this file, so
+// capability.Approvals.DecideApproval returned are ALL written in this file, so
 // a reviewer can audit the whole of this hole by opening one file, and that
 // promise is kept by what is written in the file rather than by the AST scan
 // (no_decision_test.go still enforces the scan; this paragraph is the
@@ -92,7 +92,7 @@ import (
 //
 // Deliberately one method wide. The MCP surface has no business reading the
 // approval queue through this seam, listing grants, or reaching anything else
-// on capability.Service — a narrow interface is what keeps "this file may
+// on capability.Approvals — a narrow interface is what keeps "this file may
 // record a decision" from drifting into "this file has the approval API".
 type ApprovalDecider interface {
 	DecideApproval(ctx context.Context, p capability.Principal, in capability.ApprovalDecision) (approval.Request, error)
@@ -667,7 +667,7 @@ func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, open sta
 	return out
 }
 
-// classifyElicitedDecision turns what capability.Service.DecideApproval
+// classifyElicitedDecision turns what capability.Approvals.DecideApproval
 // returned into an elicitedOutcome, deciding nothing itself: it only reads
 // the state the domain already decided.
 //

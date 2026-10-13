@@ -56,8 +56,9 @@ type ApprovalDecision struct {
 	Channel approval.Channel
 }
 
-// ErrApprovalUnavailable is returned by the approval read/decide methods on a
-// Service built without WithApprovals. It is a wiring fault, surfaced as a
+// ErrApprovalUnavailable is returned by the approval read/decide methods on
+// an Approvals assembled without a store (in-package tests only — NewApprovals
+// requires one). It is a wiring fault, surfaced as a
 // legible error rather than a nil-map panic reaching the caller as a reset
 // connection.
 var ErrApprovalUnavailable = errors.New("capability: approvals are not configured on this Relay")
@@ -73,15 +74,15 @@ var ErrApprovalUnavailable = errors.New("capability: approvals are not configure
 //
 // Requests whose deadline has passed are filtered out even if the sweeper has
 // not retired them yet, so the queue never advertises something undecidable.
-func (s *Service) PendingApprovals(ctx context.Context) ([]approval.Request, error) {
-	if s.approvals == nil {
+func (a *Approvals) PendingApprovals(ctx context.Context) ([]approval.Request, error) {
+	if a.store == nil {
 		return nil, ErrApprovalUnavailable
 	}
-	all, err := s.approvals.Pending(ctx)
+	all, err := a.store.Pending(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("capability: list pending approvals: %w", err)
 	}
-	now := s.clock()
+	now := a.clock()
 	out := make([]approval.Request, 0, len(all))
 	for _, r := range all {
 		if r.Expired(now) {
@@ -95,11 +96,11 @@ func (s *Service) PendingApprovals(ctx context.Context) ([]approval.Request, err
 // Approval returns one Request by ID, in whatever state it is in — including
 // terminal ones, because "what became of that request?" is exactly the question
 // a decider asks after being told their answer was too late.
-func (s *Service) Approval(ctx context.Context, id string) (approval.Request, error) {
-	if s.approvals == nil {
+func (a *Approvals) Approval(ctx context.Context, id string) (approval.Request, error) {
+	if a.store == nil {
 		return approval.Request{}, ErrApprovalUnavailable
 	}
-	r, err := s.approvals.Get(ctx, id)
+	r, err := a.store.Get(ctx, id)
 	if err != nil {
 		// approval.ErrNotFound travels unwrapped so a surface can map it to a
 		// 404 with errors.Is without matching on text.
@@ -125,14 +126,14 @@ func (s *Service) Approval(ctx context.Context, id string) (approval.Request, er
 // refused before the store is touched: its true shape is unknown, and a diff
 // against an unknown shape is exactly the misleading grouping the shape key
 // exists to avoid.
-func (s *Service) LastApprovedOfSameShape(ctx context.Context, r approval.Request) (approval.Request, error) {
-	if s.approvals == nil {
+func (a *Approvals) LastApprovedOfSameShape(ctx context.Context, r approval.Request) (approval.Request, error) {
+	if a.store == nil {
 		return approval.Request{}, ErrApprovalUnavailable
 	}
 	if r.ShapeKey == "" || approval.IsLegacyShapeKey(r.ShapeKey) {
 		return approval.Request{}, approval.ErrNotFound
 	}
-	prior, err := s.approvals.LastApprovedByShape(ctx, r.ShapeKey, r.ID)
+	prior, err := a.store.LastApprovedByShape(ctx, r.ShapeKey, r.ID)
 	if err != nil {
 		if errors.Is(err, approval.ErrNotFound) {
 			return approval.Request{}, err
@@ -160,7 +161,7 @@ func (s *Service) LastApprovedOfSameShape(ctx context.Context, r approval.Reques
 //
 // On ErrNotPending or ErrDuplicateDecider, the returned Request is the one as
 // it now stands, read atomically with the refusal (state, decisions, bound
-// JobID) — see requestOnRefusal and the rationale on Service.Approval. A
+// JobID) — see requestOnRefusal and the rationale on Approvals.Approval. A
 // lapsed Request the sweeper has not retired yet comes back as StatePending
 // with ExpiresAt in the past; a caller asks Expired(now) or PastDeadline(now)
 // to tell it apart from one still genuinely open. Every other refusal returns
@@ -173,24 +174,24 @@ func (s *Service) LastApprovedOfSameShape(ctx context.Context, r approval.Reques
 // check still gets the terminal or lapsed Request here — it is a read of what
 // the Request now is, not proof p could have decided it. A surface that
 // exposes this value must narrow it to what that surface may already read.
-func (s *Service) DecideApproval(ctx context.Context, p Principal, in ApprovalDecision) (approval.Request, error) {
-	if s.approvals == nil {
+func (a *Approvals) DecideApproval(ctx context.Context, p Principal, in ApprovalDecision) (approval.Request, error) {
+	if a.store == nil {
 		return approval.Request{}, ErrApprovalUnavailable
 	}
 	if strings.TrimSpace(in.RequestID) == "" {
 		return approval.Request{}, fmt.Errorf("capability: decide approval: request id is required")
 	}
 
-	current, err := s.Approval(ctx, in.RequestID)
+	current, err := a.Approval(ctx, in.RequestID)
 	if err != nil {
 		return approval.Request{}, err
 	}
 
-	if s.approvalAuthz != nil {
+	if a.authz != nil {
 		// withoutAssertions for the same reason Run uses it: an authorization
 		// decision must never be able to read anything the caller asserted
 		// about itself (assertions.go).
-		if err := s.approvalAuthz.AuthorizeApprovalDecision(withoutAssertions(ctx), p, current.ActionKind); err != nil {
+		if err := a.authz.AuthorizeApprovalDecision(withoutAssertions(ctx), p, current.ActionKind); err != nil {
 			return approval.Request{}, err
 		}
 	}
@@ -217,10 +218,10 @@ func (s *Service) DecideApproval(ctx context.Context, p Principal, in ApprovalDe
 		// authorization input. It is attribution, and attribution is exactly
 		// what it is used for here.
 		OnBehalfOf: AssertionsFromContext(ctx).OnBehalfOf,
-		At:         s.clock(),
+		At:         a.clock(),
 	}
 
-	updated, err := s.approvals.RecordDecision(ctx, in.RequestID, d, d.At)
+	updated, err := a.store.RecordDecision(ctx, in.RequestID, d, d.At)
 	if err != nil {
 		// Every eligibility error from the domain is returned unwrapped so a
 		// surface maps it with errors.Is; only genuine store failures are
@@ -249,7 +250,7 @@ func (s *Service) DecideApproval(ctx context.Context, p Principal, in ApprovalDe
 		ApprovalAnswer:  approvalAnswerOf(d.Approve),
 		DecisionChannel: d.Channel,
 	}
-	if auditErr := s.recorder().audit.Record(ctx, entry); auditErr != nil {
+	if auditErr := a.rec.audit.Record(ctx, entry); auditErr != nil {
 		return updated, fmt.Errorf("capability: record audit entry: %w", auditErr)
 	}
 	return updated, nil
@@ -337,11 +338,11 @@ func approvalDecisionReason(r approval.Request, d approval.Decision) string {
 	return line
 }
 
-// clock returns the Service's time source, defaulting to wall time for a
-// Service built as a struct literal (in-package tests) rather than by New.
-func (s *Service) clock() time.Time {
-	if s.now != nil {
-		return s.now()
+// clock returns the Approvals' time source, defaulting to wall time for an
+// Approvals built as a struct literal (in-package tests) rather than by NewApprovals.
+func (a *Approvals) clock() time.Time {
+	if a.now != nil {
+		return a.now()
 	}
 	return time.Now().UTC()
 }

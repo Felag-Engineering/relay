@@ -1392,7 +1392,7 @@ func TestRun_ClaimThatFindsTheDeadlinePassedDispatchesNothing(t *testing.T) {
 	}
 	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
 
-	s.approvals = laterNowOnBindJobApprovalStore{ApprovalStore: store, now: apNow.Add(2 * time.Hour)}
+	s.store = laterNowOnBindJobApprovalStore{ApprovalStore: store, now: apNow.Add(2 * time.Hour)}
 
 	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
 	if !errors.Is(err, approval.ErrNotReleasable) {
@@ -1415,7 +1415,7 @@ func TestRun_ClaimThatFindsTheDeadlinePassedDispatchesNothing(t *testing.T) {
 
 	// Restore the plain store — the deadline-overshoot was only ever the
 	// PREVIOUS Run's claim, not a lasting change to what "now" means.
-	s.approvals = store
+	s.store = store
 	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
 	if err != nil {
 		t.Fatalf("live Run: %v", err)
@@ -1461,7 +1461,7 @@ func TestRun_ClaimAlreadyReleasedWithNoJobIDIsRefusedRatherThanReattachingToNoth
 	}
 	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
 
-	s.approvals = alwaysAlreadyReleasedNoJobIDApprovalStore{ApprovalStore: store}
+	s.store = alwaysAlreadyReleasedNoJobIDApprovalStore{ApprovalStore: store}
 
 	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
 	if err == nil {

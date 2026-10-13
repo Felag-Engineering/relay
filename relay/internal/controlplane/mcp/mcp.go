@@ -16,7 +16,7 @@
 // outside capabilityReadAllowlist (e.g. capability.StateEval, needed for
 // NodeListing/NodeDescription's Eval field), and never
 // capability.Principal, a concrete capability service
-// (capability.Service, ReadLane, Control, AccountAdmin, Recorder) or their
+// (capability.Service, ReadLane, Control, AccountAdmin, Approvals, Recorder) or their
 // constructors (bannedCapabilityServices). ReadLane below
 // is a read-only, Principal-free interface — the Principal is resolved on
 // the composition root's side of the seam (the ReadAuditor precedent,

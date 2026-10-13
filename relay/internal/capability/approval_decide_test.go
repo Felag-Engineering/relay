@@ -324,7 +324,7 @@ func TestPendingApprovalsHidesExpired(t *testing.T) {
 	}
 
 	// Move the clock past the deadline without running any sweeper.
-	s.Service.now = func() time.Time { return parked.ExpiresAt.Add(time.Second) }
+	s.Approvals.now = func() time.Time { return parked.ExpiresAt.Add(time.Second) }
 	after, err := s.PendingApprovals(context.Background())
 	if err != nil {
 		t.Fatalf("PendingApprovals: %v", err)
@@ -477,17 +477,19 @@ func TestNotifierSilentWhenNothingParks(t *testing.T) {
 	}
 }
 
-// TestWithApprovalsRequiresAnAuthorizer: wiring a store with no decision floor
+// TestNewApprovalsRequiresAnAuthorizer: wiring a store with no decision floor
 // would let any authenticated caller release a parked dispatch. That is a
 // composition-root bug, and it must fail loudly at construction rather than
 // quietly at 3am.
-func TestWithApprovalsRequiresAnAuthorizer(t *testing.T) {
+func TestNewApprovalsRequiresAnAuthorizer(t *testing.T) {
+	rec := NewRecorder(&spyAuditSink{}, nil, nil)
+	gate, store := gateEverything(t, 1), newMemApprovals()
 	defer func() {
 		if recover() == nil {
 			t.Fatal("WithApprovals(gate, store, nil) must panic")
 		}
 	}()
-	WithApprovals(gateEverything(t, 1), newMemApprovals(), nil)
+	NewApprovals(rec, gate, store, nil, nil, nil, nil, nil)
 }
 
 type spyNotifier struct{ notices []ApprovalNotice }

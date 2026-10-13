@@ -66,6 +66,8 @@ var bannedCapabilityServices = map[string]string{
 	"NewAccountAdmin": "use AccountReader / AccountAdministrator",
 	"ReadLane":        "use QueryReader",
 	"NewReadLane":     "use QueryReader",
+	"Approvals":       "use ApprovalReader / ApprovalDecider",
+	"NewApprovals":    "use ApprovalReader / ApprovalDecider",
 }
 
 const (
@@ -254,7 +256,7 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	// at all for opening or closing a Grant window. That is a fact about the
 	// TYPES the composition root hands this package, not a promise about the
 	// handlers, and it only holds if a fourth door cannot open by anonymous
-	// recovery: Deps.Approvals is wired to the same *capability.Service that
+	// recovery: Deps.Approvals is wired to the same *capability.Approvals that
 	// carries DecideApproval, RequestGrant and RevokeGrant
 	// (control_surfaces.go), so an anonymous-interface assertion would
 	// recover any of them without naming a banned type or adding an import.
@@ -302,7 +304,8 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 			// (#595): Run and Plan dispatch; Engage/Release and Cancel are
 			// ControlActions; Resolve is ResolveTask, a task-handle write.
 			// Run, Plan, Cancel and Resolve are reachable from
-			// Deps.Approvals or Deps.Cancel (the *capability.Service).
+			// Deps.Cancel (the *capability.Service); Deps.Approvals is the
+			// narrower *capability.Approvals and carries none of them.
 			// Engage/Release left *capability.Service in #899 and stay
 			// listed so that re-wiring a Control onto any Deps field
 			// cannot reopen them (see the comment above).
@@ -693,7 +696,7 @@ var _ = c2.Service{}
 		},
 		{
 			// The evasion that actually compiles against today's wiring:
-			// Deps.Approvals IS a *capability.Service, so this assertion
+			// Deps.Approvals IS a *capability.Approvals, so this assertion
 			// succeeds at runtime and recovers the decision path from a seam
 			// whose whole point is not having one.
 			name: "anonymous interface recovering DecideApproval from the approval seam",
@@ -1125,6 +1128,7 @@ func TestDispatchViolations_BansConcreteCapabilityServices(t *testing.T) {
 	for _, name := range []string{
 		"Recorder", "NewRecorder", "Control", "NewControl",
 		"AccountAdmin", "NewAccountAdmin", "ReadLane", "NewReadLane",
+		"Approvals", "NewApprovals",
 	} {
 		t.Run(name, func(t *testing.T) {
 			src := "package console\nimport " + capImport + "\nvar _ = capability." + name + "\n"
@@ -1151,6 +1155,46 @@ var _ capability.IntentRecorder
 		if violations := check(t, src); len(violations) != 0 {
 			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
 		}
+	})
+
+	t.Run("an aliased import cannot dodge the approvals ban", func(t *testing.T) {
+		src := "package console\nimport c2 " + capImport + "\nvar _ *c2.Approvals\nvar _ = c2.NewApprovals\n"
+		violations := check(t, src)
+		mustContain(t, violations, "capability.Approvals — a concrete capability service")
+		mustContain(t, violations, "capability.NewApprovals — a concrete capability service")
+	})
+
+	t.Run("exact match leaves the approval seam identifiers alone", func(t *testing.T) {
+		// ApprovalDecision and GrantRequest are left out on purpose: this guard
+		// bans them from every file but decide.go (and bans GrantRequest there too).
+		src := "package console\nimport " + capImport + `
+var _ capability.ApprovalGate
+var _ capability.ApprovalStore
+var _ capability.ApprovalAuthorizer
+var _ capability.ApprovalNotifier
+var _ capability.ApprovalNotice
+var _ capability.ApprovalGrantStore
+var _ = capability.ErrApprovalUnavailable
+`
+		if violations := check(t, src); len(violations) != 0 {
+			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
+		}
+	})
+
+	t.Run("decide.go's ApprovalDecision allowance does not admit Approvals", func(t *testing.T) {
+		src := "package console\nimport " + capImport + `
+var _ capability.ApprovalDecision
+var _ *capability.Approvals
+`
+		file, err := parser.ParseFile(token.NewFileSet(), "decide.go", src, 0)
+		if err != nil {
+			t.Fatalf("parser.ParseFile: %v", err)
+		}
+		violations := dispatchViolations("decide.go", file)
+		if len(violations) != 1 {
+			t.Fatalf("dispatchViolations() = %v, want exactly one violation (Approvals)", violations)
+		}
+		mustContain(t, violations, "capability.Approvals — a concrete capability service")
 	})
 }
 

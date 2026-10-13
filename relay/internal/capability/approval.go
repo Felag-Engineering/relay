@@ -32,7 +32,8 @@ type ApprovalGate interface {
 	Evaluate(d approval.Dispatch) (approval.Requirement, []string, bool)
 }
 
-// noopApprovalGate is the default: nothing is ever gated.
+// noopApprovalGate gates nothing. It is no longer a default: NewApprovals
+// requires a gate, so only newApprovals (in-package tests) can install this one.
 type noopApprovalGate struct{}
 
 func (noopApprovalGate) Evaluate(approval.Dispatch) (approval.Requirement, []string, bool) {
@@ -74,7 +75,7 @@ type ApprovalStore interface {
 // (approval_grant.go).
 //
 // It mirrors approval.GrantRepository exactly rather than narrowing to the
-// claim, because both halves live behind this one Service — the surfaces adapt
+// claim, because both halves live behind this one Approvals — the surfaces adapt
 // the capability layer, they do not reach past it to a store (invariant 10).
 //
 // Nil means grants are not wired, which behaves exactly as "no grant covers
@@ -143,6 +144,129 @@ type ApprovalNotifier interface {
 type noopApprovalNotifier struct{}
 
 func (noopApprovalNotifier) NotifyParked(context.Context, ApprovalNotice) {}
+
+// Approvals is the approval callout (ADR-0027): the gate, the parked-Request
+// store, the Grant store, the MCP task handles, the role floor on a decision and
+// the notifier. It never dispatches — it cannot reach Run, Start or CancelJob —
+// which is what lets the approval seams of every adapter be handed this and not
+// the Service. Build it with NewApprovals.
+type Approvals struct {
+	rec *Recorder
+
+	// gate decides which dispatches must wait for a human. A gate can only add a
+	// reason to stop, so the no-op gate is safe. store is only consulted when
+	// gate says a dispatch is gated, so a nil store is unreachable unless a real
+	// gate was wired without one, which NewApprovals refuses.
+	gate  ApprovalGate
+	store ApprovalStore
+
+	// grants is the batch/window Grant store (ADR-0027 decision 12). Nil means
+	// no grant ever covers anything, which is both the default and the safe
+	// direction.
+	grants ApprovalGrantStore
+
+	// tasks persists MCP task handles (#374, ADR-0028). Nil disables the
+	// Tasks extension entirely, which is the pre-#374 behaviour and loses
+	// nothing: the universal pending_approval result path does not use handles.
+	tasks MCPTaskStore
+
+	// authz is the role floor on a DECISION (#270): deciding a Request
+	// requires the role that Action would have needed to be requested. Nil only
+	// on an Approvals assembled by newApprovals, where there is nothing to
+	// decide.
+	authz ApprovalAuthorizer
+
+	// notifier pushes a parked dispatch to the operator's own
+	// notification plumbing. Best-effort by construction — see ApprovalNotifier.
+	notifier ApprovalNotifier
+
+	// now is the approval clock (clock()); Selector resolution uses
+	// ReadLane.now. newApprovalID is a seam so tests get deterministic parks.
+	now           func() time.Time
+	newApprovalID idGen
+}
+
+// NewApprovals wires the approval callout (ADR-0027): gate decides which
+// dispatches must wait for a human, store persists the parked Requests, and
+// authz is the role floor on answering one (#270).
+//
+// rec, gate, store and authz are required together. A gate with no store could
+// decide a dispatch needs approval and then have nowhere to record it — which
+// would either drop the dispatch silently or, worse, let it through. A store
+// with no gate is inert. A store with no authorizer would accept a decision from
+// any authenticated caller, including a viewer releasing a Raw Exec, which is the
+// approval mechanism handing out authority instead of withholding it. Passing an
+// incomplete set is a composition-root bug, so it panics rather than degrading.
+//
+// grants is the batch/window Grant store (ADR-0027 decision 12). Optional.
+// Nil means no grant ever covers anything, which is the safe direction and the
+// behaviour of every deployment that never creates one — a grant can only ever
+// RELEASE a dispatch the gate already gated, so its absence can never let
+// something through.
+//
+// tasks is the MCP task-handle store (#374, ADR-0028), enabling the Tasks
+// extension's server side. Optional, and its absence is not a degraded mode but
+// the prior one: with no store, dispatches park and return the universal
+// `pending_approval` result (#371) exactly as before. ADR-0028 requires that
+// path to keep working with the shim deleted, so nothing below it may come to
+// depend on a handle existing.
+//
+// notifier is the out-of-band notification envelope (ADR-0027): where to push a
+// freshly parked dispatch so an approver hears about it. Optional, and
+// deliberately so. The notification is a delivery convenience; the guarantee is
+// the authenticated decision endpoint, which stands alone. Nil maps to a no-op:
+// a deployment with no notifier configured still parks, still audits, and still
+// waits — approvers just have to poll the queue.
+//
+// now is the approval clock, a test seam: approval expiry and park timestamps
+// are time-dependent, and a test that sleeps is a test that flakes. Nil is the
+// wall clock in UTC.
+func NewApprovals(rec *Recorder, gate ApprovalGate, store ApprovalStore, authz ApprovalAuthorizer, grants ApprovalGrantStore, tasks MCPTaskStore, notifier ApprovalNotifier, now func() time.Time) *Approvals {
+	if rec == nil {
+		panic("capability: NewApprovals: recorder must not be nil")
+	}
+	if gate == nil {
+		panic("capability: NewApprovals: gate must not be nil")
+	}
+	if store == nil {
+		panic("capability: NewApprovals: store must not be nil")
+	}
+	if authz == nil {
+		panic("capability: NewApprovals: approval authorizer must not be nil; without it any authenticated caller could release a parked dispatch")
+	}
+	if notifier == nil {
+		notifier = noopApprovalNotifier{}
+	}
+	return newApprovals(rec, gate, store, authz, grants, tasks, notifier, now)
+}
+
+// newApprovals assembles an Approvals with no checks. Only NewApprovals and
+// _test.go files call it; it is the only route to an Approvals with the no-op
+// gate or no store.
+func newApprovals(rec *Recorder, gate ApprovalGate, store ApprovalStore, authz ApprovalAuthorizer, grants ApprovalGrantStore, tasks MCPTaskStore, notifier ApprovalNotifier, now func() time.Time) *Approvals {
+	return &Approvals{
+		rec:           rec,
+		gate:          gate,
+		store:         store,
+		authz:         authz,
+		grants:        grants,
+		tasks:         tasks,
+		notifier:      notifier,
+		now:           now,
+		newApprovalID: defaultID,
+	}
+}
+
+// bindRelease is the release claim (AP-77) on the approval's store, stamped by
+// the approval clock.
+func (a *Approvals) bindRelease(ctx context.Context, requestID, jobID string) (approval.Request, error) {
+	return a.store.BindJob(ctx, requestID, jobID, a.clock())
+}
+
+// notifyParked tells the notifier about a Request this call created.
+func (a *Approvals) notifyParked(ctx context.Context, r approval.Request) {
+	a.notifier.NotifyParked(ctx, noticeFor(r))
+}
 
 // ParkedError is returned by Service.Run when a dispatch is gated and now waits
 // for a human. It is exported and typed so a surface can recognize a park via
@@ -277,12 +401,12 @@ type approvalDecision struct {
 // for it, and the dispatch parks again — exactly ADR-0027's requirement, with
 // no separate drift detector to get wrong. There is no code path that compares
 // "close enough" plans, because there is no such thing.
-func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, act jobs.Action, nodes []string) (approvalDecision, error) {
-	// A nil gate gates nothing. New always installs noopApprovalGate, so this
-	// only fires for a Service built as a struct literal (in-package tests) —
+func (a *Approvals) checkApproval(ctx context.Context, p Principal, sel Selector, act jobs.Action, nodes []string) (approvalDecision, error) {
+	// A nil gate gates nothing. NewApprovals requires a gate, so this
+	// only fires for an Approvals built as a struct literal (in-package tests) —
 	// but it is written as a guard rather than an assumption, because the
 	// failure mode of getting it wrong is a nil-panic on the dispatch path.
-	if s.gate == nil {
+	if a.gate == nil {
 		return approvalDecision{proceed: true}, nil
 	}
 
@@ -295,7 +419,7 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 		RawExec:    act.Kind == jobs.ActionRawExec,
 	}
 
-	req, rules, gated := s.gate.Evaluate(d)
+	req, rules, gated := a.gate.Evaluate(d)
 	if !gated {
 		return approvalDecision{proceed: true}, nil
 	}
@@ -314,8 +438,8 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 	}
 
 	now := time.Now().UTC()
-	if s.now != nil {
-		now = s.now()
+	if a.now != nil {
+		now = a.now()
 	}
 
 	planHash := approval.HashPlan(act, nodes)
@@ -327,7 +451,7 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 	// never consulted here and must never be: it deliberately excludes the
 	// resolved fan-out, so releasing on it would release a dispatch over a Node
 	// set nobody approved.
-	existing, lookupErr := s.approvals.ByPlanHash(ctx, planHash)
+	existing, lookupErr := a.store.ByPlanHash(ctx, planHash)
 
 	// An approval releases one execution (AP-77), and that check runs BEFORE a
 	// batch/window Grant is even consulted — deliberately ahead of the Grant
@@ -380,8 +504,8 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 	// The claim is atomic (see GrantRepository.ClaimGrant): find-and-consume in
 	// one transaction, because a bound enforced outside a transaction is not a
 	// bound under concurrency.
-	if s.grants != nil {
-		g, ok, err := s.grants.ClaimGrant(ctx, d, now)
+	if a.grants != nil {
+		g, ok, err := a.grants.ClaimGrant(ctx, d, now)
 		if err != nil {
 			return approvalDecision{}, fmt.Errorf("capability: claim approval grant: %w", err)
 		}
@@ -410,7 +534,7 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 
 	// Park: create the Request and report it. No Job and no Task exist yet, by
 	// design — see approval.NewRequest.
-	mint := s.newApprovalID
+	mint := a.newApprovalID
 	if mint == nil {
 		mint = defaultID
 	}
@@ -427,49 +551,18 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 		return approvalDecision{}, fmt.Errorf("capability: normalise selector for shape key: %w", err)
 	}
 	r := approval.NewRequest(id, planHash, p.AccountID, p.Account, act, nodes, shape, rules, req, now)
-	if err := s.approvals.Create(ctx, r); err != nil {
+	if err := a.store.Create(ctx, r); err != nil {
 		return approvalDecision{}, fmt.Errorf("capability: park dispatch for approval: %w", err)
 	}
 	// This call CREATED r (as opposed to the "already waiting" branch above,
 	// which observed one), so — and only so — Askable is computed against it.
-	// r.Require is the normalized Requirement s.gate.Evaluate returned, already
+	// r.Require is the normalized Requirement a.gate.Evaluate returned, already
 	// merged across every matching rule for a real *approval.Gate
 	// (mergeStricter): the boolean below is read from that merge, never from
 	// one rule.
 	pe := parkedErrorFor(r)
 	pe.Askable = askableBy(r, p)
 	return approvalDecision{parked: pe, created: &r}, nil
-}
-
-// reattach re-attaches a dispatch to a Job an approval already released
-// (AP-77), recording an audited read instead of dispatching anything.
-//
-// It is reached two ways: checkApproval found a Satisfied, Released Request
-// (a sequential re-drive), or Service.Run lost the release claim to a
-// concurrent winner (BindJob's ErrAlreadyReleased). Either way nothing may be
-// dispatched — the plan hash matched, so nodes are exactly the approved
-// Nodes, and their outcomes live on the Job identified by jobID, which every
-// adapter already re-reads (renderJob).
-//
-// The read is recorded BEFORE anything is returned, and fails closed
-// (ErrReadUnaudited): an unaudited re-attach must not hand out a Job
-// (ADR-0025), the same precedent AP-67's adapter-level re-attach set. The
-// join from this read to the approval is approval_requests.job_id = jobID.
-func (s *Service) reattach(ctx context.Context, p Principal, sel Selector, nodes []registry.Node, requestID, jobID string) ([]NodeResult, error) {
-	if err := s.read.recordQueryRead(ctx, p, toolApprovalReattach, sel.String(), "", jobID); err != nil {
-		return nil, fmt.Errorf("capability: re-attach to approval %s's released job: %w", requestID, err)
-	}
-	// One NodeResult per resolved Node, carrying the bound JobID: these are
-	// exactly the approved Nodes, and outcomes/output are read from the Job
-	// by the caller, as every surface already does via renderJob. This call
-	// ran nothing, so it reports no outcome of its own — Outcome stays
-	// OutcomeUnspecified rather than fabricating a result this call never
-	// produced.
-	out := make([]NodeResult, 0, len(nodes))
-	for _, n := range nodes {
-		out = append(out, NodeResult{NodeID: n.NodeID, JobID: jobID, Outcome: jobs.OutcomeUnspecified})
-	}
-	return out, nil
 }
 
 // askableBy decides ParkedError.Askable's non-channel, non-created terms: does

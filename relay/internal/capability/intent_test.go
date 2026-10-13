@@ -135,6 +135,7 @@ func TestNewPanicsWhenRealDispatcherHasNoIntentRecorder(t *testing.T) {
 	read := newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, 0, nil)
 	capOpt := WithCapChecker(&spyCapChecker{})
 	execOpt := WithExecution(jobsRepo, tasksRepo, newFakeConduit(nil))
+	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -144,7 +145,7 @@ func TestNewPanicsWhenRealDispatcherHasNoIntentRecorder(t *testing.T) {
 			t.Errorf("panic = %v, want it to name IntentRecorder", r)
 		}
 	}()
-	New(ctl, read, capOpt, execOpt)
+	New(ctl, read, appr, capOpt, execOpt)
 }
 
 // nonAtomicIntents is the IntentRecorder the in-package tests use when their

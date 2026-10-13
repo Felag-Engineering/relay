@@ -48,6 +48,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditquery"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
@@ -73,7 +74,8 @@ type harnessState struct {
 // must never ride the package's own allow-all default" — is satisfied by
 // construction, not by convention. Real Grant-based authorization is
 // v0.0.6+ scope; this harness only proves the pipeline wiring, never a real
-// authz decision.
+// authz decision. It is allow-all for dispatch and Freeze and deny-all for
+// approval decisions (AuthorizeApprovalDecision, below).
 type devHarnessAuthorizer struct{}
 
 func (devHarnessAuthorizer) Authorize(context.Context, capability.Principal, jobs.Action, capability.Selector) error {
@@ -86,6 +88,14 @@ func (devHarnessAuthorizer) Authorize(context.Context, capability.Principal, job
 // local socket with no Account model behind it.
 func (devHarnessAuthorizer) AuthorizeControl(context.Context, capability.Principal, capability.ControlAction) error {
 	return nil
+}
+
+// AuthorizeApprovalDecision completes capability.ApprovalAuthorizer, and
+// DENIES EVERYTHING, unlike its allow-all siblings: the harness has no approval
+// op and an empty gate never parks, so a decision path here is never
+// legitimate.
+func (devHarnessAuthorizer) AuthorizeApprovalDecision(context.Context, capability.Principal, jobs.ActionKind) error {
+	return errors.New("devharness: approval decisions are not available in the dev harness")
 }
 
 // installDevHarness wires the dev-harness control socket into deps, iff
@@ -125,6 +135,13 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	// and its normal capability-layer audit entries, as main.go does.
 	harnessAudit := auditsink.New(deps.audit)
 
+	// Empty rules: nothing parks, as before #899; NewApprovals requires a gate.
+	// Built before newDispatchStack so a failure leaves deps untouched.
+	gate, err := approval.NewGate(nil)
+	if err != nil {
+		return nil, fmt.Errorf("devharness: build empty approval gate: %w", err)
+	}
+
 	router, reconciler, sink := newDispatchStack(deps.tasks, harnessAudit, deps.logger)
 	// reconciler is captured by router's onConnect closure (dispatch_wiring.go)
 	// and fires on every Node registration, including reconnects — this is
@@ -139,7 +156,8 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	// through Run and a human CancelJob, neither of which consults them.
 	q := auditquery.New(deps.store.AuditQueries(), deps.store.JobQueries())
 	read := capability.NewReadLane(rec, deps.registry, q, q, nil, nil, 0, nil)
-	capSvc := capability.New(ctl, read,
+	approvals := capability.NewApprovals(rec, gate, deps.store.Approvals(), devHarnessAuthorizer{}, nil, nil, nil, nil)
+	capSvc := capability.New(ctl, read, approvals,
 		capability.WithExecution(deps.jobs, deps.tasks, router,
 			capability.WithExecDispatchConcurrency(cfg.DispatchConcurrency)),
 		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)))

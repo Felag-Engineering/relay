@@ -168,7 +168,7 @@ type Deps struct {
 	Cancel JobCanceller
 
 	// Decide is the Console's other write seam (#453, decide.go): the same
-	// capability.Service.DecideApproval the Control API's out-of-band
+	// capability.Approvals.DecideApproval the Control API's out-of-band
 	// endpoint and MCP call. Quorum, audience, requester exclusion, the
 	// machine-self-decision rule, channel strength and the audit row are all
 	// the capability layer's; this package only renders what it decided.

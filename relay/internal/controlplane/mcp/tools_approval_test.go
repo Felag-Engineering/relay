@@ -291,7 +291,7 @@ func machineSelfDecisionErrorText(t *testing.T) string {
 // -----------------------------------------------------------------------
 
 func TestElicitedAnswer_RecordsTheSameDecisionAsApproveRequest(t *testing.T) {
-	// capability.Service.DecideApproval builds a Decision solely from
+	// capability.Approvals.DecideApproval builds a Decision solely from
 	// (Principal, ApprovalDecision, the context's asserted attribution) —
 	// see internal/capability/approval_decide.go — so identical inputs
 	// produce the identical Decision. This test proves the INPUTS are

@@ -206,8 +206,8 @@ type appDeps struct {
 	// capability layer the SIGUSR1/SIGUSR2 host lever (watchFreezeSignals)
 	// drives. Always built, independent of ControlEnabled.
 	freezeControl *capability.Control
-	// capability is the Relay's execution and approvals service (ADR-0009/0010),
-	// composed with freezeControl and the read lane. When
+	// capability is the Relay's execution service (ADR-0009/0010), composed with
+	// freezeControl, the read lane and the Approvals. When
 	// Config.ControlEnabled, newServer wires it with the real Job engine
 	// (capability.WithExecution) over the real mTLS tunnel and the real
 	// role-gated Authorizer (authz.NewRoleGate) — this is the "#154 flip": MCP/
@@ -643,7 +643,8 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// base is the capability.Option set common to both branches below: the
 	// real BlastCap (ADR-0004/0012; see the ReadBlastCap/MutateBlastCap doc
 	// comment on Config for the file-vs-flag deviation flagged for human
-	// review) and the approval, idempotency and event seams. The real adapter
+	// review) and the idempotency and event seams; the Approvals is built
+	// above it. The real adapter
 	// to the SQLite-backed audit trail (#102) is the Recorder below, and the
 	// real persisted Relay-wide emergency stop (#101, ADR-0013 — see
 	// watchFreezeSignals in freeze_signal.go for the local engage/release
@@ -691,8 +692,8 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	apiTokenSvc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
 
 	// The ONE Recorder: audit trail, metrics and log, shared by the Control,
-	// the read lane and so the whole capability layer (capability.New refuses
-	// a read lane over a different one).
+	// the read lane and the Approvals, and so the whole capability layer
+	// (capability.New refuses a read lane or an Approvals over a different one).
 	rec := capability.NewRecorder(auditSink, appMetrics, logger)
 
 	// The Freeze and its role floor (ADR-0013, #101) over the real RoleGate
@@ -726,20 +727,39 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// every Template dispatch is refused. A nil clock is the real one.
 	readLane := capability.NewReadLane(rec, reg, queries, queries, policyCache, vocabCache, certExpiringWithin, nil)
 
+	// The out-of-band notification envelope (#270, ADR-0027). Optional: with no
+	// URL configured nothing is pushed and approvers poll the queue. Configured
+	// but unusable is a startup error, on the gate config's precedent — a
+	// notifier the operator asked for and did not get is a silent gap in how
+	// they learn a fleet action is waiting.
+	var notifier capability.ApprovalNotifier
+	if cfg.ApprovalWebhookURL != "" {
+		n, err := approvalnotify.New(approvalnotify.Config{
+			URL:        cfg.ApprovalWebhookURL,
+			SecretPath: cfg.ApprovalWebhookSecretPath,
+			Timeout:    cfg.ApprovalWebhookTimeout,
+		}, approvalnotify.WithLogger(logger))
+		if err != nil {
+			return nil, nil, fmt.Errorf("configure approval webhook: %w", err)
+		}
+		notifier = n
+		slog.Info("approval webhook enabled",
+			"url", cfg.ApprovalWebhookURL, "signed", cfg.ApprovalWebhookSecretPath != "")
+	}
+
+	// The approval callout (ADR-0027), over the one Recorder and the same
+	// RoleGate as dispatch (#270). Batch/window grants (#378, ADR-0027 decision
+	// 12) are wired unconditionally alongside the gate: a Grant can only ever be
+	// created through an approval Request the gate itself required, so with no
+	// rules configured nothing is gated, nothing can be granted, and the store
+	// simply holds no rows. MCP task handles (#374, ADR-0028) are wired for the
+	// same reason: a handle is only ever minted for a dispatch the gate parked,
+	// so with no rules configured nothing parks and the table stays empty. A nil
+	// clock is the real one.
+	approvals := capability.NewApprovals(rec, approvalGate, st.Approvals(), roleGate, st.Grants(), st.MCPTasks(), notifier, nil)
+
 	base := []capability.Option{
 		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
-		capability.WithApprovals(approvalGate, st.Approvals(), roleGate),
-		// Batch/window grants (#378, ADR-0027 decision 12). Wired
-		// unconditionally alongside the gate: a Grant can only ever be created
-		// through an approval Request the gate itself required, so with no
-		// rules configured nothing is gated, nothing can be granted, and the
-		// store simply holds no rows.
-		capability.WithApprovalGrants(st.Grants()),
-		// MCP task handles (#374, ADR-0028). Wired alongside the gate for the
-		// same reason grants are: a handle is only ever minted for a dispatch
-		// the gate parked, so with no rules configured nothing parks and the
-		// table stays empty.
-		capability.WithMCPTasks(st.MCPTasks()),
 		// Dispatch idempotency keys (#895): the MCP execution tools forward an
 		// optional key so a call re-issued after a lost response re-attaches to
 		// its Job. Without this a keyed call is refused, never run unkeyed.
@@ -748,25 +768,6 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		// this hunk stays additive alongside concurrent branches also
 		// touching the end of this slice.
 		capability.WithJobEvents(eventsink.Jobs(eventBus)),
-	}
-
-	// The out-of-band notification envelope (#270, ADR-0027). Optional: with no
-	// URL configured nothing is pushed and approvers poll the queue. Configured
-	// but unusable is a startup error, on the gate config's precedent — a
-	// notifier the operator asked for and did not get is a silent gap in how
-	// they learn a fleet action is waiting.
-	if cfg.ApprovalWebhookURL != "" {
-		notifier, err := approvalnotify.New(approvalnotify.Config{
-			URL:        cfg.ApprovalWebhookURL,
-			SecretPath: cfg.ApprovalWebhookSecretPath,
-			Timeout:    cfg.ApprovalWebhookTimeout,
-		}, approvalnotify.WithLogger(logger))
-		if err != nil {
-			return nil, nil, fmt.Errorf("configure approval webhook: %w", err)
-		}
-		base = append(base, capability.WithApprovalNotifier(notifier))
-		slog.Info("approval webhook enabled",
-			"url", cfg.ApprovalWebhookURL, "signed", cfg.ApprovalWebhookSecretPath != "")
 	}
 
 	var capSvc *capability.Service
@@ -818,7 +819,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		enabledOpts = append(enabledOpts,
 			capability.WithExecution(st.Jobs(), st.Tasks(), router,
 				capability.WithExecDispatchConcurrency(cfg.DispatchConcurrency)))
-		capSvc = capability.New(freezeControl, readLane, enabledOpts...)
+		capSvc = capability.New(freezeControl, readLane, approvals, enabledOpts...)
 
 		// Seed the founding admin Account (#295, ADR-0010). Idempotent and
 		// deterministic: it creates the row on first start and returns the
@@ -949,6 +950,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 			freezeControl: freezeControl,
 			readLane:      readLane,
 			accountAdmin:  accountAdmin,
+			approvals:     approvals,
 			jobs:          st.Jobs(),
 			tasks:         st.Tasks(),
 			tokens:        tokenSvc,
@@ -1039,7 +1041,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		// caller's outcome changes; what changes is that NewAccountAdmin's
 		// fail-open guard (a real Authorizer + a real AuditSink) is
 		// satisfiable here too.
-		capSvc = capability.New(freezeControl, readLane, base...)
+		capSvc = capability.New(freezeControl, readLane, approvals, base...)
 	}
 
 	srv := grpc.NewServer(

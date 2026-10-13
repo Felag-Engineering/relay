@@ -29,7 +29,7 @@ import (
 //     decision.** Guarded structurally by mcp/no_decision_test.go, not by this
 //     file's existence.
 //   - **The role floor and every eligibility rule live below this handler** —
-//     in capability.Service.DecideApproval and the approval domain. This file
+//     in capability.Approvals.DecideApproval and the approval domain. This file
 //     decodes, calls, and renders; it decides nothing, so the Console's
 //     approval queue (v0.7.0) and the MCP elicitation envelope ([5/6]) inherit
 //     one answer rather than each re-deriving it (invariant 10).
@@ -43,8 +43,8 @@ import (
 // registry drift re-parks with no drift detector anywhere.
 
 // ApprovalService is the capability-layer entry point the approval routes use,
-// declared locally so this package never names *capability.Service (mirroring
-// Executor). *capability.Service satisfies it structurally.
+// declared locally so this package never names *capability.Approvals (mirroring
+// Executor). *capability.Approvals satisfies it structurally.
 type ApprovalService interface {
 	PendingApprovals(ctx context.Context) ([]approval.Request, error)
 	Approval(ctx context.Context, id string) (approval.Request, error)

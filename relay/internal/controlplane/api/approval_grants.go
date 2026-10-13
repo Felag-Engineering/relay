@@ -43,8 +43,8 @@ import (
 // decides anything is in capability and approval (invariant 10).
 
 // ApprovalGrantService is the capability-layer entry point the grant routes
-// use, declared locally so this package never names *capability.Service.
-// *capability.Service satisfies it structurally.
+// use, declared locally so this package never names *capability.Approvals.
+// *capability.Approvals satisfies it structurally.
 type ApprovalGrantService interface {
 	RequestGrant(ctx context.Context, p capability.Principal, in capability.GrantRequest) (approval.Grant, approval.Request, error)
 	ActiveGrants(ctx context.Context) ([]approval.Grant, error)
