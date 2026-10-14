@@ -45,10 +45,12 @@ it needs an ADR, not a quiet workaround.
    change which command runs, append a second one, or reach past what the Operation's author
    fixed. Execution is three tiers ordered by trust, each holding the line its own way: **Native**
    Operations by argv and never `/bin/sh`; **Template** Operations by a structure fixed in a
-   root-owned local file with every slot single-quoted; **Raw Exec** — the caller-supplied,
-   exceptional tier — by being argv-only and regex-gated by Policy. New vocabulary is Templates,
-   never new Natives: the Native vocabulary is frozen at four. Per-tier mechanism lives in
-   `docs/specs/execution.md`. (ADR-0001, ADR-0021)
+   root-owned local file, with no slot value ever part of the text the Template's shell parses;
+   **Raw Exec** —
+   the caller-supplied, exceptional tier — by being argv-only and regex-gated by Policy. New
+   vocabulary is Templates, never new Natives: the Native vocabulary is frozen at four.
+   Per-tier mechanism lives in `docs/specs/execution.md`. (ADR-0001, ADR-0021; Template clause
+   amended 2026-10-14)
 2. **Policy is locally-rooted and remotely-immutable.** The Relay may *query* a Node's Policy; it
    may **never** modify it over the wire. The daemon enforces; the Relay only reads. (ADR-0002)
 3. **Deny-by-default, deny-beats-allow,** with argument-level granularity. (ADR-0002)
@@ -130,7 +132,8 @@ amending ADR says it amends — each of those must record the amendment on its o
 
 ### Known gaps between these invariants and the code
 
-Found by adversarial review (2026-09-08) and during a spec migration (2026-09-21), and left in
+Found by adversarial review (2026-09-08), during a spec migration (2026-09-21), and in #974
+(2026-10-14), and left in
 place deliberately: correcting invariant text needs an ADR amendment in
 front of a human, which is a separate change.
 **Until that lands, believe this table over the invariant text above.**
@@ -141,6 +144,7 @@ and that rule is the only thing keeping it honest.
 
 | # | The clause | What is actually true today | Tracked |
 |---|---|---|---|
+| 1 | The Template clause, and so the headline sentence for author-written Templates | Slot values are still validated, single-quoted and **spliced into the shell text**, which does not hold in every author-written context: inside a here-document, a backquoted or `$( … )` substitution, or after an escaped space a value can change the command's structure (reproduced against dash; bash-as-`/bin/sh` adds more). The shipped `relay-read` catalog's bodies use none of those contexts (checked 2026-10-14); a customer-authored Template can. The fix — values as positional parameters — is ADR-0021's 2026-10-14 amendment. | #974 |
 | 7 | `tag:`'s writer, and `relay:`'s | `tag:` has **no storage on the Node record and no write path**, so nothing can be written to the namespace the invariant says an operator writes. Since #561 a `tag:` term is **refused at parse** with a recognisable sentinel rather than silently matching nothing, identically on every surface — so the gap is now an honest refusal instead of a false negative. `relay:` labels are stamped at enrollment today; the Relay actions that write them afterwards (quarantine engage and lift, `quarantine-node.md`) are unbuilt, so quarantine by either `relay:` or `tag:` does not exist yet. Behaviour detail in `docs/specs/selectors-and-labels.md`. | #430 |
 | 10 | Console execution | The Console does **not** execute yet. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today. | #438 |
 | 11 | Secret files are root-owned | Nothing checks a secret file's **owner**. The webhook secret must be `0600`, so under both shipped deployments it is owned by the Relay's own UID, not root: the clause cannot be met as packaged. The CA private key is read back with no mode or owner check at all. Whether to amend the clause or change how secrets are read is an open owner decision; detail in `docs/operations/relay-install.md`. | #864 |
