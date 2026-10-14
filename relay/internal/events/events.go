@@ -1,8 +1,7 @@
 // Package events is the Relay's in-process event seam: one bounded,
 // in-memory pub/sub with exactly four publishers — registry transitions, Job
 // transitions, MCP tool calls, and enrollment attempts — feeding the Admin
-// Console's live views. This issue builds and wires the seam only; the SSE
-// HTTP route that reads it is #422.
+// Console's live views, which read it through the Console's SSE route.
 //
 // The load-bearing property (ADR-0025; D9 in
 // docs/design/console/99-open-decisions.md): this package carries tool-call
@@ -140,7 +139,7 @@ const (
 )
 
 // EnrollmentReason is the closed vocabulary of Relay-side rejection reasons
-// (#427's day-one watch consumes these). It is deliberately distinct from
+// (the Console's day-one screen consumes these). It is deliberately distinct from
 // the collapsed codes.PermissionDenied every rejection returns over the
 // wire (enroll.Server.Enroll) — the reason travels on this authenticated,
 // in-process bus only, never in the RPC response, so it can never become an
@@ -208,8 +207,8 @@ const (
 //
 // A GapEvent's ID and Seq are always the zero value: a gap has no position
 // of its own on the sequence it is reporting a hole in. Subscribe and
-// publish's slow-consumer branch fill in only At. #422's SSE route should
-// omit the `id:` field for a gap event entirely rather than render an empty
+// publish's slow-consumer branch fill in only At. The Console's SSE route
+// omits the `id:` field for a gap event entirely rather than render an empty
 // one — an empty `id:` resets a browser EventSource's own Last-Event-ID to
 // "", which would turn the NEXT reconnect into a fresh session instead of a
 // resume.

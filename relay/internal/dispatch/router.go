@@ -62,8 +62,8 @@ type waiter struct {
 	ch     chan *relayv1.TaskResult
 }
 
-// verdictWaiter is waiter's sibling for a Plan's PolicyQuery (#119,
-// ADR-0011): correlates one in-flight Query call with the PolicyVerdict that
+// verdictWaiter is waiter's sibling for a Plan's PolicyQuery
+// (ADR-0011): correlates one in-flight Query call with the PolicyVerdict that
 // will eventually arrive on the Node's Tunnel, keyed by query_id rather than
 // task_id — a wholly separate ID space, so a query_id can never collide
 // with, or be mistaken for, a real Task's dedup key. ch is buffered(1) for
@@ -227,8 +227,8 @@ func (r *Router) logger() *slog.Logger { return logctx.Or(r.log) }
 // unregister is also the disconnect-mid-dispatch correctness point: under mu,
 // it deletes the conn (if still current) AND fails every waiter it owns
 // (waiter.owner == this *conn) by deleting it from waiters and closing its
-// channel — and, identically, every verdictWaiter it owns (a blocked Query,
-// #119). Scoping by owner rather than nodeID means a stale unregister can
+// channel — and, identically, every verdictWaiter it owns (a blocked Query).
+// Scoping by owner rather than nodeID means a stale unregister can
 // never close a FRESH waiter that a newer registration created after reusing
 // the same nodeID (and potentially the same task_id/query_id). This
 // guarantees any Dispatch or Query call blocked in its select on a waiter it
@@ -276,7 +276,7 @@ func (r *Router) Connected(nodeID string) bool {
 
 // ConnectedNodes returns a snapshot of every Node currently registered with a
 // live Tunnel. It is transport-only (mirrors Connected's locking) and exists
-// for callers that need to enumerate the live fleet (e.g. the #103 devharness
+// for callers that need to enumerate the live fleet (e.g. the devharness
 // list_connected op) rather than test one Node at a time.
 func (r *Router) ConnectedNodes() []string {
 	r.mu.Lock()

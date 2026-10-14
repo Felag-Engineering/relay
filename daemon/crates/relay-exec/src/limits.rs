@@ -1,5 +1,5 @@
 //! Daemon-local, wire-immutable `setrlimit` bounds on a Task's spawned child, and
-//! the shared io-error renderer (moved from the bin's config.rs).
+//! the shared io-error renderer.
 
 /// `setrlimit` bounds applied to every spawned child (`executor::execute`'s
 /// `pre_exec` hook). Daemon-local and wire-immutable: the Relay can never set

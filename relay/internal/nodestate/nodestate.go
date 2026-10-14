@@ -424,11 +424,6 @@ func LabelSet(in Input) map[string]string {
 
 // CertExpiryKnown reports whether the Relay records enough about a Node's
 // certificate to say anything about its expiry.
-//
-// Until #440 this returned a constant false and every caller rendered "not
-// recorded". It now delegates, so the panels that were honest about the gap
-// became live by changing one function rather than by finding every screen that
-// had guessed — which was the point of routing them all through here.
 func CertExpiryKnown(n registry.Node) bool { return n.CertProvenanceKnown() }
 
 // Attention reports whether any marker for in demands attention. It is the

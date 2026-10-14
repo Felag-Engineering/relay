@@ -218,11 +218,10 @@ func ShapeArgs(operation string, args map[string]string) map[string]string {
 // declared required name must be provided.
 //
 // It exists here — beside the ArgConstraints convention it reads — because
-// **every** control surface needs it and a per-surface copy would drift. That
-// drift is not hypothetical: issue #345 was exactly this gap on MCP, where an
-// unknown arg name was silently dropped and a misspelled REQUIRED name then
-// defaulted to empty, so the daemon's refusal surfaced as `denied_by_policy`
-// rather than a validation error — sending the AI-agent into a
+// **every** control surface needs it and a per-surface copy would drift
+// (ADR-0042). Without it, an unknown arg name is silently dropped and a
+// misspelled REQUIRED name defaults to empty, so the daemon's refusal surfaces
+// as `denied_by_policy` rather than a validation error — sending the AI-agent into a
 // describe_node/narrow/retry loop it could never exit, because the request was
 // malformed rather than forbidden. A second surface re-implementing this would
 // reopen the same trap on its own schedule.

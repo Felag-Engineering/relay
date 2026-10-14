@@ -9,8 +9,8 @@
 //
 // This package is the domain model only: no proto dependency, no HTTP, no
 // token handling, no persistence. The store implements [Repository]
-// (internal/store), the API Token lifecycle that binds credentials to Accounts
-// is issue #296, and role-gating the MCP surface is #298. Keeping those apart
+// (internal/store); the API Token lifecycle that binds credentials to Accounts
+// and role-gating live elsewhere (ADR-0023). Keeping those apart
 // is deliberate — an Account is a *durable identity*, a token is a *revocable
 // credential for one*, and conflating them is how "revoke the token" and
 // "disable the human" become the same button by accident.
@@ -71,8 +71,8 @@ var (
 	// ErrRoleChanged is returned by SetRole when the Account's stored role is
 	// not the `from` role the caller named: another writer changed it after
 	// the caller read it. Nothing was written. A caller whose decision
-	// depended on the role it read (the Console's step-up classification,
-	// #912) must re-read and re-decide, never retry blindly.
+	// depended on the role it read (the Console's step-up classification)
+	// must re-read and re-decide, never retry blindly.
 	ErrRoleChanged = errors.New("accounts: the account's role changed since it was read")
 )
 
@@ -260,8 +260,7 @@ type Repository interface {
 	//     stored role is always valid (the schema constrains it), so an
 	//     invalid `from` can never match; it is refused up front;
 	//   - ErrRoleChanged if the stored role is not `from`;
-	//   - ErrLastAdmin if the change would demote the last enabled admin
-	//     (#653).
+	//   - ErrLastAdmin if the change would demote the last enabled admin.
 	//
 	// The role compare MUST be in the SAME single statement as the
 	// last-admin guard below, for the same reason: a check-then-write above

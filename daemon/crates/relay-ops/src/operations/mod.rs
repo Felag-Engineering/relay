@@ -34,7 +34,7 @@ pub use relay_policy::natives::{FILE_READ, PKG_INSTALL, SERVICE_RESTART, SYSTEM_
 
 // ---------------------------------------------------------------------------
 // Vocabulary views over the registry ([`registry::REGISTRY`] — the single
-// name→(handler, arg-shape, risk class) table, issue #289; ADR-0012).
+// name→(handler, arg-shape, risk class) table; ADR-0012, ADR-0021).
 // ---------------------------------------------------------------------------
 
 /// Returns all v1 Operation descriptors in canonical order, derived from

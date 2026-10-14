@@ -183,8 +183,8 @@ const PKG_VERSION_CHARSET: CharsetSpec = CharsetSpec {
 
 // ---------------------------------------------------------------------------
 // The arg-shape tables — the single definition of each Operation's declared
-// args, referenced by the vocabulary registry ([`super::registry::REGISTRY`],
-// issue #289), which feeds dispatch's arg mapping, this golden schema, and
+// args, referenced by the vocabulary registry ([`super::registry::REGISTRY`]),
+// which feeds dispatch's arg mapping, this golden schema, and
 // `opvocab`'s prose alike.
 // ---------------------------------------------------------------------------
 

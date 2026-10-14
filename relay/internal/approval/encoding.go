@@ -7,7 +7,7 @@ import (
 
 // encoding.go is the shared preimage encoding for every content-addressed
 // hash in this package: HashPlan (plan.go), HashScope (grant.go), and the
-// shape keys (shape.go, #415/D10). All three are LIVE STORED BINDINGS —
+// shape keys (shape.go, D10). All three are LIVE STORED BINDINGS —
 // HashPlan and HashScope are written into approval_requests.plan_hash and
 // consulted by capability's release lookup, and the shape keys are written
 // into approval_requests.shape_key — so editing either primitive below
@@ -20,9 +20,8 @@ import (
 //
 //  1. Every field NAME is a compile-time literal. No caller-influenced byte
 //     ever occupies a field name, which is what makes the key/value boundary
-//     unique — see #494, where folding a caller-controlled argument key into
-//     the field name (write("arg."+k, v)) made the boundary ambiguous and
-//     collidable.
+//     unique; folding a caller-controlled argument key into the field name
+//     (write("arg."+k, v)) would make the boundary ambiguous and collidable.
 //  2. Every variable-length VALUE is written as its byte length, a colon, then
 //     its bytes (writeField), so the decoder always knows where a value ends
 //     regardless of its contents.

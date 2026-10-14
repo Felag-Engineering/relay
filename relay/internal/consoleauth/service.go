@@ -178,7 +178,7 @@ type Service struct {
 // refusal. A found row costs a little more than no row, so without a floor
 // repeated 429 timings could reveal whether a name is an Account. The floor
 // sits well above a registry lookup's normal cost, so the refusal's duration
-// no longer depends on what the lookup found.
+// does not depend on what the lookup found.
 //
 // It is deliberately NOT KDF work: the throttle exists partly to cap KDF
 // cost, and burning a derivation on a refusal would make throttling a CPU
@@ -290,15 +290,14 @@ func (s *Service) StepUpWindow() time.Duration { return s.stepUpWindow }
 // early return for "no such account" is the obvious one) is the bug this
 // arrangement exists to prevent.
 //
-// The audit trail is the one place that now tells them apart, and only as D19
+// The audit trail is the one place that tells them apart, and only as D19
 // says: a failure records the typed name when it is an existing Account's and
 // no typed text otherwise. That existence lookup runs first, on every attempt
 // and before anything branches on its result. What that does and does not
 // buy: the lookup is unconditional; the throttled branch is padded to
 // ThrottledFloor so a found row cannot be told from no row by how fast the
 // refusal returns; the failed branch is dominated by the KDF, and still has
-// the pre-existing GetPassword asymmetry for an enabled human Account, which
-// this change neither introduces nor fixes.
+// a GetPassword asymmetry for an enabled human Account.
 func (s *Service) Login(ctx context.Context, a Attempt) (SessionID, Session, error) {
 	start := s.now()
 	name := accounts.NormalizeName(a.Name)
@@ -480,11 +479,11 @@ func (s *Service) CSRFToken(id SessionID) CSRFToken {
 // expired, unknown or disabled session) returns before the comparison, never
 // because of it. It is the gap worth knowing about — a caller probing this
 // endpoint with a stale or invented session identifier leaves nothing in the
-// trail, and audit.AuthFailureKinds cannot recover what was never written. That is
-// pre-existing behaviour, shared with every other route that resolves a
-// session, and closing it belongs with the session lane rather than with this
-// function; it is recorded here rather than left for a reader to discover
-// that "audited" quietly meant "mostly".
+// trail, and audit.AuthFailureKinds cannot recover what was never written. That
+// behaviour is shared with every other route that resolves a session, and
+// closing it belongs with the session lane rather than with this function; it
+// is recorded here rather than left for a reader to discover that "audited"
+// quietly meant "mostly".
 //
 // The record is written BEFORE the stamp, and an unrecorded step-up stamps and
 // rotates nothing: once the window is consulted, a stamp left behind by a

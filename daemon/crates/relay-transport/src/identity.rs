@@ -229,9 +229,8 @@ fn fsync_dir(dir: &Path) -> Result<()> {
 /// Do **not** add a umask-proof `set_permissions` call after it. That is the
 /// flat prohibition of ADR-0036: `chmod` is not umask-masked, so it overrides
 /// the operator on their own Node, and node code never does that — not even
-/// where the declared mode is tight enough that forcing it could only tighten
-/// (the narrower rule this file used to cite, superseded with the three sites
-/// that relied on it). Here the looser direction is immediate anyway: forcing
+/// where the declared mode is tight enough that forcing it could only tighten.
+/// Here the looser direction is immediate anyway: forcing
 /// `0644` would hand an operator running `umask 077` a world-readable
 /// `cert.pem`. The tests assert the direction (no bit beyond the declared mode,
 /// and the security-relevant bits clear), never exact equality; asserting

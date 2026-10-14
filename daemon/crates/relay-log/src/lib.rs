@@ -3,7 +3,7 @@
 //! Debug escaping turns `\n`, `\r`, ESC and other non-printables (U+2028
 //! included) into visible escapes, so one event is one journald line. The cap
 //! bounds how long that line is. Output for a value under the cap is
-//! byte-identical to the bare `?` formatting #913 used on the decision events.
+//! byte-identical to bare `?` formatting.
 //!
 //! `tests/log_fields_escaped.rs` fails `cargo test` (and so `make verify`) when
 //! a tracing field is neither wrapped here nor a reviewed local-only value.

@@ -39,8 +39,8 @@ const (
 	// one: forcing dirPerm or keyPerm could only ever tighten, but forcing
 	// certPerm would hand an operator running `umask 077` a world-readable
 	// ca-cert.pem where they get 0600 today — looser than what they have, on
-	// the fleet's trust anchor, produced by the CA itself (#509; the daemon
-	// side reached the same conclusion for its identity files in #507).
+	// the fleet's trust anchor, produced by the CA itself (ADR-0036; the daemon's
+	// identity files follow the same rule).
 	//
 	// The tests therefore assert the direction — no bit beyond the declared
 	// mode, and the security-relevant bits clear outright — never exact

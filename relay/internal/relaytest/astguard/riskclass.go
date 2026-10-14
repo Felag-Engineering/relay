@@ -19,8 +19,8 @@ var riskClassConstants = map[string]bool{
 }
 
 // RiskClassViolations is the structural half of invariant 13 for an adapter
-// package (the Control API, the MCP surface, the Console; ADR-0012, ADR-0042,
-// #878): no adapter sets an Action's risk class. Only the capability layer
+// package (the Control API, the MCP surface, the Console; ADR-0012,
+// ADR-0042): no adapter sets an Action's risk class. Only the capability layer
 // derives it, and refuses an Action that arrives carrying one; this guard
 // makes "an adapter sets a class" fail `go test` rather than rely on that
 // refusal being the first anyone hears of it.

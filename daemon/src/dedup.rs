@@ -8,7 +8,7 @@
 //! executing the Task. A retry with the same task_id (after a reconnect or restart)
 //! finds the marker and returns a benign already-processed result without re-executing.
 //!
-//! Dispatch-agnostic: no tunnel/mpsc types here. Wired into the live tunnel loop by #82.
+//! Dispatch-agnostic: no tunnel/mpsc types here; dispatch wires it into the live tunnel loop.
 //!
 //! # Record-before-execute ordering
 //!

@@ -1,6 +1,6 @@
 //! The daemon's single environment/config surface, read once at startup and
-//! threaded down. Centralizes the previously double-read RELAY_ADDR /
-//! RELAY_DOMAIN and the http→https scheme normalization.
+//! threaded down. Centralizes RELAY_ADDR / RELAY_DOMAIN and the http→https
+//! scheme normalization.
 //!
 //! Also hosts daemon-local hard limits (e.g. [`MAX_OUTPUT_BYTES`]) that are
 //! compile-time constants, not env-derived — kept here as the daemon's single

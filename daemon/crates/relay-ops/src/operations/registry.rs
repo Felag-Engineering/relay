@@ -151,8 +151,7 @@ pub struct OpRegistration {
 ///   name-agnostic and there is only one gate.
 /// - **Adding a template is a registration, not a dispatch edit**: a new
 ///   `TemplateOp` implements this trait and resolves through the same lookup —
-///   no per-name match arm (the #310 seam, extended; proven by the structural
-///   test in dispatch.rs).
+///   no per-name match arm (proven by the structural test in dispatch.rs).
 ///
 /// `Send + Sync` because a resolved entry is borrowed across the `.await` inside
 /// `tokio::spawn` (the tunnel loop).
@@ -172,8 +171,8 @@ pub trait ResolvedOp: Send + Sync {
     /// allow" and "actually allows").
     fn positional_args(&self, op: &Operation) -> Vec<String>;
     /// Positions of `path`-typed arguments, which `Policy::decide` holds to
-    /// ADR-0018's canonical-form precondition before any rule is read
-    /// (issue #293): they travel in the `Request` as `path_positions`.
+    /// ADR-0018's canonical-form precondition before any rule is read: they
+    /// travel in the `Request` as `path_positions`.
     ///
     /// Empty by default. A Native Operation reports the positions of its
     /// `path`-keyed arguments (`file.read`'s only); a Template Operation
@@ -301,8 +300,7 @@ pub fn lookup_in<'r>(entries: &'r [OpRegistration], name: &str) -> Option<&'r Op
 }
 
 // ---------------------------------------------------------------------------
-// Handlers — the bodies formerly inlined as dispatch.rs match arms, moved
-// verbatim (issue #289 pure refactor; no behavior change).
+// Handlers
 // ---------------------------------------------------------------------------
 
 // The data-only Natives (`system.facts`, `file.read`) spawn no process, but

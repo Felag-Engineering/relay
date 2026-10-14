@@ -31,18 +31,17 @@ import (
 // Node IDs and argument keys are sorted, so the hash is a property of the Plan
 // rather than of map iteration order or the registry's result ordering.
 //
-// # #494: the argument encoding used to be ambiguous
+// # Argument keys are fields, never part of a field name
 //
-// Until #494, an Operation argument's KEY was folded into the field NAME
-// (write("arg."+k, v)) instead of being written as its own field. Because the
-// key is caller-controlled and unescaped inside the field name, the key/value
-// boundary was not unique. Witness, executed against the old encoding:
+// Folding an Operation argument's KEY into the field NAME (write("arg."+k, v))
+// would make the key/value boundary non-unique, because the key is
+// caller-controlled and unescaped inside the field name:
 //
 //	{"a": "1=1:x"}   ->  arg.a=5:1=1:x\n
 //	{"a=5:1": "x"}   ->  arg.a=5:1=1:x\n     byte-identical
 //
-// Two different Actions produced the same bytes and therefore the same
-// PlanHash. Every argument is now written as TWO separate length-prefixed
+// Two different Actions would produce the same bytes and therefore the same
+// PlanHash. Every argument is therefore written as TWO separate length-prefixed
 // fields — its key under the literal field name "arg.k" and its value under
 // the literal field name "arg.v" — matching HashPlanShape (shape.go). No
 // caller-influenced byte occupies a field name anywhere in this function, so
@@ -50,13 +49,13 @@ import (
 // name ends at "=", because the name is a compile-time literal, and always
 // knows where its value ends, because the value is length-prefixed.
 //
-// The reachable path for this was Template Operations (ADR-0021): native
+// The reachable path for this is Template Operations (ADR-0021): native
 // Operations are constrained to opvocab's declared argument names
 // (opvocab.ValidateArgNames), which cannot carry the "="/":" needed to forge
 // the split, but a Template Operation's argument keys are exactly the ones
 // opvocab has never declared. The two ValidateArgNames call sites
-// (mcp/tools_execution.go, api/execution.go) were the only thing holding the
-// boundary shut — a validator on two surfaces, not a property of the hash.
+// (mcp/tools_execution.go, api/execution.go) are a validator on two surfaces,
+// not a property of the hash.
 //
 // Changing this encoding changes every Plan's hash, including every value
 // already stored in approval_requests.plan_hash. A stale row can never equal a

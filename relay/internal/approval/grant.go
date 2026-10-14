@@ -163,8 +163,8 @@ type Grant struct {
 	// config would quietly rewrite history.
 	Summary string
 
-	// LegacyNamespacePin is the Selector namespace a Grant stored before #482
-	// was pinned to. Only the store's read path sets it. Validate refuses it,
+	// LegacyNamespacePin is the Selector namespace a legacy stored Grant was
+	// pinned to (AP-33). Only the store's read path sets it. Validate refuses it,
 	// so a new Grant can never carry one. A pinned Grant was PRICED over that
 	// one namespace but COVERED any dispatch whose Selector merely used it, so
 	// it may have been approved more cheaply than work it could release.
@@ -253,7 +253,7 @@ func (s Scope) Validate() error {
 }
 
 // Active reports whether g may cover anything at now: not revoked, inside its
-// window, not exhausted, and not a pre-#482 namespace-pinned Grant (fail
+// window, not exhausted, and not a legacy namespace-pinned Grant (fail
 // closed, see LegacyNamespacePin).
 func (g Grant) Active(now time.Time) bool {
 	if g.LegacyNamespacePin != "" {
@@ -414,12 +414,12 @@ func (g Grant) ShapeKey() string { return hashGrantShape(g.Scope, g.LegacyNamesp
 // union for audience (owner-accepted residual risk, ADR-0027 amendment
 // 2026-09-16).
 //
-// Before #482 a pinned Scope was priced over its one namespace while Covers
-// admitted any dispatch CONTAINING it, so a Grant could release work needing a
-// stronger approval than it was issued under. That class of defect is removed
-// by removing the pin, not by patching either side.
+// A pinned Scope would be priced over its one namespace while Covers admitted
+// any dispatch CONTAINING it, so a Grant could release work needing a stronger
+// approval than it was issued under. That class of defect is removed by having
+// no pin (AP-33), not by patching either side.
 //
-// This list is now load-bearing: dropping a namespace a gate rule can name
+// This list is load-bearing: dropping a namespace a gate rule can name
 // would let a Grant be priced below a rule in that namespace. Rule.Validate
 // (gate.go) accepts a Match.SelectorNamespace by consulting THIS list rather
 // than a second hardcoded set, so the two vocabularies cannot drift apart —

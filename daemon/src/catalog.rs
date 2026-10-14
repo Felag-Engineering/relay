@@ -83,8 +83,7 @@ fn catalog_is_the_seven_read_templates() {
 }
 
 /// Every caller-fillable slot is a *constrained* type, and the bounded log
-/// tail's line cap is template-fixed — not a slot a caller could raise
-/// (#293: "line/byte caps are template-fixed, not wire-fillable").
+/// tail's line cap is template-fixed — not a slot a caller could raise.
 #[test]
 fn catalog_slots_are_constrained_and_the_log_tail_bound_is_fixed() {
     for def in catalog() {

@@ -41,8 +41,7 @@ import (
 // Outcome falls back to the OutcomeUnspecified bucket rather than panicking or
 // growing unbounded. Every value in range has a series in outcomeOrder below —
 // a counted outcome that nothing renders would be silently dropped at scrape
-// time, which is how OutcomeVersionRefused was previously invisible here
-// (added to the order alongside OutcomeUnsupported).
+// time.
 const nOutcomes = 9
 
 // nRefusalKinds sizes the refusals counter array to cover every
@@ -221,9 +220,8 @@ var refusalOrder = []capability.RefusalKind{
 
 // violationSlotOrder is the rendering order of the
 // relay_protocol_violations_total series — the fallback bucket ("other")
-// last and still RENDERED, exactly like outcomeOrder's "unspecified" (the
-// #291 lesson: a counted value nothing renders is silently dropped at scrape
-// time).
+// last and still RENDERED, exactly like outcomeOrder's "unspecified" (a
+// counted value nothing renders is silently dropped at scrape time).
 var violationSlotOrder = []int{violationSlotRelayOnly, violationSlotUnresolved, violationSlotOther}
 
 // Metrics is the real capability.MetricsSink and enroll.EnrollmentObserver,

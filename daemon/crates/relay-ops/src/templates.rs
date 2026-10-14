@@ -20,8 +20,8 @@
 //! ```
 //!
 //! A **template pack** is one immediate subdirectory of the template root,
-//! installed and versioned as a unit (the shipped read catalog, #293, is the
-//! first one). Loose `*.toml` files directly in the root are equally valid for
+//! installed and versioned as a unit (the shipped read catalog, ADR-0021, is
+//! the first one). Loose `*.toml` files directly in the root are equally valid for
 //! an operator's own templates. Nesting stops there: a directory inside a pack
 //! is skipped with a warning rather than silently traversed, so what loads is
 //! always exactly what an operator can see in two levels of `ls`.

@@ -23,8 +23,8 @@
 //! from a template. Invariant 1 ("argv, never `/bin/sh`") governs *Native
 //! Operations* (tier 1); the template tier is tier 2, whose whole reason to
 //! exist is shell composition. The command *structure* is author-fixed (from a
-//! root-owned local file, ADR-0002 trust root — file loading is #291); only the
-//! quoted slot values vary.
+//! root-owned local file, ADR-0002 trust root — loaded by [`crate::templates`]);
+//! only the quoted slot values vary.
 //!
 //! # Two-layer defense (belt-and-suspenders, mirroring `service_restart.rs`)
 //!
@@ -64,8 +64,7 @@
 //! This module is the engine: definitions, compilation, typed
 //! validation, quoting, and rendering. Loading those definitions from
 //! root-owned local files, the template-set fingerprint, the `unsupported`
-//! per-Node outcome, and live discovery are [`crate::templates`];
-//! the shipped read catalog is #293.
+//! per-Node outcome, and live discovery are [`crate::templates`].
 
 use std::collections::HashSet;
 
@@ -100,7 +99,8 @@ const MAX_PATH_BYTES: usize = 4096;
 const MAX_INTEGER_DIGITS: usize = 19;
 
 // ---------------------------------------------------------------------------
-// Serde-ready definition model (#291 deserializes into these; no loader here)
+// Serde-ready definition model ([`crate::templates`] deserializes into these;
+// no loader here)
 // ---------------------------------------------------------------------------
 
 /// A template's risk class as authored. **Mandatory** (ADR-0012): there is no
@@ -159,8 +159,8 @@ pub struct SlotDef {
     pub ty: SlotType,
 }
 
-/// A Template Operation definition, as authored (and, in #291, deserialized
-/// from a root-owned local file).
+/// A Template Operation definition, as authored (and deserialized from a
+/// root-owned local file by [`crate::templates`]).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TemplateDef {
     /// The Operation name this template registers under (enters the Policy
@@ -373,8 +373,8 @@ impl TemplateOp {
 
 // ---------------------------------------------------------------------------
 // Registry integration — a compiled template resolves through the SAME
-// name → (handler, arg-shape, risk class) contract as a Native Operation
-// (issue #310), so Policy governs it identically and dispatch needs no
+// name → (handler, arg-shape, risk class) contract as a Native Operation,
+// so Policy governs it identically and dispatch needs no
 // per-name arm (the structural test in dispatch.rs proves zero dispatch edits).
 // ---------------------------------------------------------------------------
 
@@ -805,7 +805,7 @@ pub(crate) fn shell_single_quote(value: &str) -> String {
 // Name predicates
 // ---------------------------------------------------------------------------
 
-/// `^[a-z][a-z0-9_.]*$` and not `raw_exec` (reserved; ADR-0001 / issue #310).
+/// `^[a-z][a-z0-9_.]*$` and not `raw_exec` (reserved; ADR-0001).
 fn is_valid_template_name(name: &str) -> bool {
     if name == "raw_exec" {
         return false;

@@ -77,7 +77,7 @@ const (
 	//
 	// Relay NEVER produces this — a security boundary, not an unfinished
 	// feature. An `inputRequests` elicitation would be an approval answered over
-	// the AI's own session (open question on #272; ADR-0028). Defined only so
+	// the AI's own session (ADR-0028). Defined only so
 	// the vocabulary is complete.
 	StatusInputRequired
 
@@ -154,8 +154,8 @@ const MaxTTL = 24 * time.Hour
 //
 // The two bindings are separate and both nullable on purpose. SEP-2663 wants a
 // task id in the `tools/call` response the instant the dispatch parks, but a
-// parked dispatch creates no Job (#269: a restart reconciler would mistake it
-// for interrupted work). At mint time there is only an approval Request; the
+// parked dispatch creates no Job (a restart reconciler would mistake it for
+// interrupted work). At mint time there is only an approval Request; the
 // Job arrives later or never.
 type Handle struct {
 	// ID is what the client polls. It is unguessable-by-construction (minted

@@ -72,7 +72,7 @@ type EnrollmentObserver interface {
 }
 
 // AttemptReason is the closed vocabulary of Relay-side outcomes for one
-// Enroll attempt (feeding #427's day-one watch). It is distinct from
+// Enroll attempt (feeding the Console's day-one screen). It is distinct from
 // EnrollmentObserver: that counter is success-only; this covers every
 // terminal point of Enroll, success and rejection alike.
 type AttemptReason string
@@ -209,8 +209,8 @@ func WithServerLogger(l *slog.Logger) ServerOption {
 
 func (s *Server) logger() *slog.Logger { return logctx.Or(s.log) }
 
-// WithServerClock overrides the clock used to stamp certificate provenance
-// (#440). Tests use it so an assertion about enrolled_at is not a race with the
+// WithServerClock overrides the clock used to stamp certificate provenance.
+// Tests use it so an assertion about enrolled_at is not a race with the
 // wall clock. Defaults to time.Now().UTC().
 //
 // Named apart from WithClock, which already configures the token Service in this
@@ -371,8 +371,8 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 	//    boundary: a daemon can never inject relay-space labels (ADR-0006
 	//    two-namespace invariant), and it can never enroll a label that
 	//    would render as more than one Selector term. The relay-space
-	//    sibling of this refuse-vs-drop argument lives at Service.Validate
-	//    (#555): the scope is refused before Validate returns, for the same
+	//    sibling of this refuse-vs-drop argument lives at Service.Validate:
+	//    the scope is refused before Validate returns, for the same
 	//    fail-closed reason — this is one-shot and supervised, so a
 	//    rejection here tears down nothing that was already up.
 	//
@@ -507,8 +507,8 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 	//     (n) IncEnrollment, then returns success. Publishing here would emit
 	//     a phantom rejection ahead of the real Accepted:true event for what
 	//     is, from the enrolling daemon's point of view, a successful
-	//     enrollment — exactly the false alarm #427's day-one watch must not
-	//     see.
+	//     enrollment — exactly the false alarm the Console's day-one screen
+	//     must not show.
 	if err := s.registry.RecordEnrollment(nodeID, issued, s.now()); err != nil {
 		s.logger().WarnContext(ctx, "recording enrollment certificate provenance failed",
 			"node_id", nodeID, "err", err)

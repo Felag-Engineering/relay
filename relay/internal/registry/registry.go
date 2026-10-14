@@ -253,7 +253,7 @@ func (r Report) WithNodeLabels(labels map[string]string) Report {
 // It copies because unexporting the field bounds who may SET the map, not who
 // may MUTATE it: handing out the live map would let any holder of a Report do
 // `rep.NodeLabels()["role"] = "web, relay:quarantine=on"` and put back exactly
-// the value #504's ingress gate exists to reject, with neither the compiler
+// the value the ingress gate exists to reject, with neither the compiler
 // nor the ingress guard able to see it. The two writers are the only writers
 // by construction only if this is a copy.
 func (r Report) NodeLabels() map[string]string {
@@ -348,7 +348,7 @@ type Repository interface {
 	// for every id in nodeIDs, all under ONE transaction. On a nil error
 	// every id that has a registry row was written; on a non-nil error none
 	// were, and missing is nil. Same all-or-nothing contract as
-	// audit.Repository.AppendAll, which #601 used for the cascade's
+	// audit.Repository.AppendAll, which the cascade uses for its
 	// records — deliberately the same shape.
 	//
 	// A missing row is NOT an error. An id with no registry row is returned
@@ -363,8 +363,8 @@ type Repository interface {
 	// bound to the Control API's cascade audit budget, a budget expiry
 	// would stop persisting revocations while the in-memory denylist kept
 	// adding them, and the next Relay restart — which rehydrates the
-	// denylist from RevokedNodeIDs() — would let those Nodes back in (#133,
-	// ADR-0006). Over-denying beats under-denying; an un-persisted revoke is
+	// denylist from RevokedNodeIDs() — would let those Nodes back in
+	// (ADR-0006). Over-denying beats under-denying; an un-persisted revoke is
 	// under-denying.
 	//
 	// nodeIDs is a READ-ONLY BORROW: implementations must not modify it in

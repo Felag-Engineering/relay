@@ -388,8 +388,8 @@ type Request struct {
 	// normalised Selector, WITHOUT the resolved fan-out (see HashPlanShape).
 	//
 	// It is a rendering and grouping key and NEVER a release lookup — only
-	// PlanHash releases a dispatch (see capability.checkApproval). Rows written
-	// before #415 carry a LegacyShapeKey, which is unique per record and
+	// PlanHash releases a dispatch (see capability.checkApproval). Rows with no
+	// stored Selector carry a LegacyShapeKey, which is unique per record and
 	// therefore matches nothing but itself.
 	ShapeKey string
 

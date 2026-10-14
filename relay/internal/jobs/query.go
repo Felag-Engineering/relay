@@ -22,9 +22,8 @@ var ErrInvalidCursor = errors.New("jobs: invalid pagination cursor")
 // still Pending or Dispatched, and JobStateComplete once every Task is
 // Resolved. A zero-Task Job is Complete — nothing is left to happen, so
 // there is nothing to wait for. No new dispatch creates one: a zero-match
-// dispatch has been refused before any Job exists since #571, but rows
-// written before that still exist in older stores, so this derivation must
-// keep handling them.
+// dispatch is refused before any Job exists, but older stores still hold such
+// rows, so this derivation must keep handling them.
 type JobState int
 
 const (
@@ -32,9 +31,8 @@ const (
 	JobStateComplete
 )
 
-// JobOrder is a Job list's direction. The zero value is newest first, which
-// every caller before #795 relies on. Oldest first over running Jobs means
-// longest-running first, because CreatedAt is the only start time a Job has.
+// JobOrder is a Job list's direction. The zero value is newest first. Oldest
+// first over running Jobs means longest-running first, because CreatedAt is the only start time a Job has.
 type JobOrder int
 
 const (
@@ -156,7 +154,7 @@ type JobSummary struct {
 type JobRecording int
 
 const (
-	// JobRecordingNone: neither an intent nor an outcome row. A pre-#887
+	// JobRecordingNone: neither an intent nor an outcome row. A legacy
 	// zero-Task Job, or one whose rows are gone.
 	JobRecordingNone JobRecording = iota
 
@@ -168,7 +166,7 @@ const (
 	JobRecordingOutcomePartial
 
 	// JobRecordingOutcome: at least one dispatch row and no fewer than the
-	// Job has Tasks. Includes legacy pre-#887 Jobs (outcome rows, no intent)
+	// Job has Tasks. Includes legacy Jobs (outcome rows, no intent)
 	// and Jobs whose Task rows were pruned (Total 0).
 	JobRecordingOutcome
 )
@@ -195,8 +193,8 @@ type TaskQuery struct {
 
 // TaskSummary is one row of a Job's Task list.
 //
-// Stdout, Stderr, and RiskClass ARE present here, unlike audit.Row: #423
-// (job detail) clusters Tasks by identical output and renders the deny rule
+// Stdout, Stderr, and RiskClass ARE present here, unlike audit.Row: job
+// detail clusters Tasks by identical output and renders the deny rule
 // verbatim, which needs the captured bytes for mutate-class Tasks, and the
 // tasks table already stores them (store/tasks.go). RiskClass is what lets a
 // caller one layer up (capability.QueryTasks) strip output for read-class
@@ -212,8 +210,8 @@ type TaskQuery struct {
 // contradict this query's own reason for reading tasks instead of audit in
 // the first place: an in-flight Job has no audit row yet (see JobSummary's
 // Selector/Requester doc comment), and Task state must never depend on
-// whether the trail has caught up. #423 keeps today's audit-trail fallback
-// for this one signal until a follow-up gives Tasks a real truncated column.
+// whether the trail has caught up. Job detail keeps an audit-trail fallback
+// for this one signal.
 type TaskSummary struct {
 	TaskID   string
 	NodeID   string

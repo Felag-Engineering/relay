@@ -162,7 +162,7 @@ func (v ProtocolViolation) Violated() bool { return v.Rule != ViolationNone }
 //
 // Drafting rules, mirroring capability/refusal.go's five-rule idiom:
 //  1. Never say "never sent", "was not sent" or "nothing executed" — that is
-//     the exact lie #632 is about. The Task WAS dispatched and may have run.
+//     false: the Task WAS dispatched and may have run.
 //  2. Names no file path and no Account.
 //  3. Relay-authored, never daemon output — this is prose, never an echo of
 //     anything the Node actually sent.
@@ -191,15 +191,14 @@ func (v ProtocolViolation) Explanation() string {
 	}
 	// A ViolationRule Violated() reports true but with no case above: a future
 	// rule added to the const block without a matching case here. Returning ""
-	// would be indistinguishable from "no violation" — the exact failure mode
-	// #632 exists to prevent — so this stays non-empty even though it names no
-	// specific rule (code review, cycle 2; TestEveryWireOutcomeIsClassified's
+	// would be indistinguishable from "no violation", so this stays non-empty
+	// even though it names no specific rule (TestEveryWireOutcomeIsClassified's
 	// non-empty-Stderr assertion is what would catch this going forward).
 	return base
 }
 
 // ProtocolViolationEvent is one relay-daemon's protocol violation as
-// observed at the wire boundary (#632's refusal point), carried to the
+// observed at the wire boundary, carried to the
 // audit lane so the violation is a durable, queryable event and not only
 // a log line.
 //

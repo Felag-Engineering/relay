@@ -144,7 +144,7 @@ func (r *Reconciler) reconcileTask(ctx context.Context, nodeID string, task jobs
 			return fmt.Errorf("dispatch: reconcile task %q on node %q: re-read before resend: %w", task.ID, nodeID, readErr)
 		}
 		// Resolved since the InFlight snapshot (e.g. withheld by its worker
-		// on a cancel, #943): nothing to send, nothing to write.
+		// on a cancel): nothing to send, nothing to write.
 		return nil
 	}
 	if err != nil {

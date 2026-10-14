@@ -35,8 +35,8 @@ func FactsFromProto(pf *relayv1.Facts) registry.Facts {
 // drop-vs-reject policy (Hello omits the label, Enroll rejects the request).
 //
 // Taking the value is the point: a caller cannot check the key and forget the
-// value. Before #504 only the key was validated, so a `node:role` value of
-// "web, relay:quarantine=on" rendered as two Selector predicates, the second
+// value. Validating only the key would let a `node:role` value of
+// "web, relay:quarantine=on" render as two Selector predicates, the second
 // spelled relay:.
 func ParseNodeLabel(key, value string) (bare string, ok bool) {
 	if !strings.HasPrefix(key, "node:") {

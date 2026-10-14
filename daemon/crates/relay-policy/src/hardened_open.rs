@@ -2,8 +2,7 @@
 //! files — the Policy file (`policy::load_policy`, ADR-0002) and each Template
 //! Operation file (`templates::read_hardened`, ADR-0021 on ADR-0002).
 //!
-//! Both loaders used to carry their own copy of this sequence; they now share
-//! this one, and each maps a [`HardenedRejection`] to its own error type and
+//! Both loaders share this one sequence, and each maps a [`HardenedRejection`] to its own error type and
 //! keeps its own logging. This module decides nothing beyond the checks below
 //! and logs nothing: what a rejection means to its caller is the caller's.
 //!

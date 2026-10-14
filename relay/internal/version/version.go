@@ -16,7 +16,7 @@
 // the target's numeric core as a `-0.dev` prerelease with the commit as build
 // metadata ("0.0.9-0.dev+g<sha>[.dirty]"). The dev marker's leading NUMERIC
 // identifier is what keeps a dev build sorted below a prerelease target
-// (0.1.0-0.dev < 0.1.0-beta — issue #261).
+// (0.1.0-0.dev < 0.1.0-beta).
 //
 // This package holds no fleet-visible contract: only the relay-daemon's
 // version is compared by the ADR-0014 minimum-version gate. It has no

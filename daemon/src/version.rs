@@ -39,7 +39,7 @@
 //! was fail-**open** for prerelease targets: `0.1.0-beta-dev` is a single
 //! identifier lexically *greater* than `beta`, so an unreleased dev build
 //! reported as newer than `0.1.0-beta` and passed a `min-daemon-version =
-//! 0.1.0-beta` gate. Issue #261 replaced it with the numeric marker — one
+//! 0.1.0-beta` gate. The numeric marker replaced it — one
 //! rule for plain and prerelease targets alike, verified by executing the
 //! Relay's real comparator (`golang.org/x/mod/semver`) in
 //! `relay/internal/registry/daemon_version_contract_test.go`.

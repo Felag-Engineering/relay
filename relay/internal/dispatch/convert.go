@@ -131,7 +131,7 @@ func result(tr *relayv1.TaskResult) (jobs.Result, jobs.ProtocolViolation) {
 			// ExitCode is the repo-wide no-exit-status sentinel (see
 			// api/execution.go's perNodeResult.ExitCode and this package's
 			// sibling doc comments): a 0 here would render as "exit 0" beside
-			// a failure — the same lie #632 is about, in a smaller font.
+			// a failure.
 			ExitCode: -1,
 			// The daemon's own Stdout/Stderr/Truncated are DISCARDED, not
 			// carried alongside: this row is Relay-authored end to end, and

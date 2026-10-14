@@ -167,8 +167,7 @@ func (c *Cache) Set(nodeID string, s Snapshot) {
 
 // Get returns a deep copy of the most recently reported Snapshot for
 // nodeID, or (Snapshot{}, false) if none has been captured yet — e.g. the
-// Node hasn't (re)connected since the Relay last started, or the daemon
-// doesn't yet emit PolicySnapshot (follow-up #151).
+// Node hasn't (re)connected since the Relay last started.
 func (c *Cache) Get(nodeID string) (Snapshot, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

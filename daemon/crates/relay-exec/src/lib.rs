@@ -1,5 +1,5 @@
 //! The only crate in the daemon workspace that spawns a process (AGENTS.md
-//! invariant 1, #889).
+//! invariant 1).
 //!
 //! `executor` builds every child from an argv already fixed by Policy or a
 //! Template, never through `/bin/sh`; `cancel` is the in-flight cancel registry

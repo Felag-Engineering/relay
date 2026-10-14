@@ -101,16 +101,15 @@ func (e *unauthorizedError) Unwrap() error {
 }
 
 // notHumanError is the refusal for a control Action that no machine Account
-// may perform at any role (#397: Freeze engage). It is a distinct type from
+// may perform at any role (Freeze engage; ADR-0013). It is a distinct type from
 // unauthorizedError because the two say genuinely different things to an
 // audit reader — "your role is too low" invites an escalation request, while
 // "this act is human-only" says no amount of role will help — but it unwraps
 // to the same ErrUnauthorized sentinel so every surface's existing
 // refusal-to-403 mapping covers it without knowing it exists.
 //
-// The Principal's KIND is named in the message on purpose: #397's acceptance
-// asks for the refusal to be audited with it, and the reason string is what
-// reaches the trail.
+// The Principal's KIND is named in the message on purpose: the refusal is
+// audited with it, and the reason string is what reaches the trail.
 type notHumanError struct {
 	principal capability.Principal
 	action    string
@@ -141,8 +140,8 @@ func (e *notHumanError) Unwrap() error {
 // nothing (accounts.Role.AtLeast fails closed).
 //
 // Not scoped by Selector yet: per-Account/per-Selector Grants are the next
-// narrowing (ADR-0010, and see #285 on whether to adopt Cedar rather than
-// hand-roll one). A later Authorizer must narrow *within* this seam — no
+// narrowing (ADR-0010; whether to adopt Cedar rather than hand-roll one is an
+// open question in ADR-0041). A later Authorizer must narrow *within* this seam — no
 // version of it may ever be more permissive than the ladder above.
 type RoleGate struct{}
 
@@ -190,8 +189,8 @@ func (*RoleGate) Authorize(_ context.Context, p capability.Principal, act jobs.A
 	return nil
 }
 
-// AuthorizeApprovalDecision implements capability.ApprovalAuthorizer (#270,
-// ADR-0027): may p answer a parked dispatch whose Action is of this kind?
+// AuthorizeApprovalDecision implements capability.ApprovalAuthorizer
+// (ADR-0027): may p answer a parked dispatch whose Action is of this kind?
 //
 // The floor is **the same requiredRole table** the request itself passed, and
 // that identity is the point rather than a convenience. Approval must not be a
@@ -235,7 +234,7 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 //	revoke a Node                admin      ADR-0020's incident ladder
 //	engage the Freeze            operator   ADR-0013 (+ human-only)
 //	release the Freeze           admin      ADR-0013
-//	cancel a Job                 operator   execution.md §Cancellation (owner decision 2026-09-14), #346
+//	cancel a Job                 operator   execution.md §Cancellation (owner decision 2026-09-14)
 //	read Accounts                admin      accounts-and-access.md: "Administer Accounts and API Tokens — admin"
 //	create an Account            admin      accounts-and-access.md
 //	change an Account's role     admin      accounts-and-access.md

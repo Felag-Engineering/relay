@@ -56,8 +56,8 @@ type Rotation struct {
 //
 // It exists because a server certificate minted once at process start is a
 // fleet-wide outage on a timer: when the leaf expires, every daemon's chain
-// verification fails and the fleet — correctly — fail-closes off the Relay
-// (#403). Rotation here is not a network protocol and not an operator ritual;
+// verification fails and the fleet — correctly — fail-closes off the Relay.
+// Rotation here is not a network protocol and not an operator ritual;
 // the Relay is its own CA, so it is a function call against a key already open
 // in this address space.
 //

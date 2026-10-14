@@ -52,21 +52,14 @@ import (
 // themselves are golden-pinned (TestEncodingFormatIsPinned), HashScope's
 // output is golden-pinned separately (TestHashScopeDigestIsPinned, because it
 // must not move), and HashPlan's is instead held to the injectivity property
-// (TestHashPlanIsInjectiveOverDistinctPlans) rather than a literal digest,
-// because #494 changes its bytes on purpose. So a shared edit to either
-// primitive shows up as a failing test rather than a silent re-point of the
-// stored bindings. This file used to keep its own byte-identical copy rather
-// than share one, on the premise that even a byte-identical refactor of a
-// live binding was risk with no upside; that premise expired the moment #494
-// changed HashPlan's bytes on purpose (see plan.go), so the refactor rides on
-// a break already happening rather than causing a new one.
+// (TestHashPlanIsInjectiveOverDistinctPlans) rather than a literal digest.
+// So a shared edit to either primitive shows up as a failing test rather than
+// a silent re-point of the stored bindings.
 //
-// FIXED: #494 gave HashPlan the same argument KEY/VALUE split this file
-// always used — the key and the value are now separate length-prefixed
-// fields (arg.k, arg.v) instead of the key being folded into the field name.
-// All three constructions in this package now share encoding.go's
-// primitives and none of them folds caller-controlled bytes into a field
-// name.
+// HashPlan uses the same argument KEY/VALUE split as this file — the key and
+// the value are separate length-prefixed fields (arg.k, arg.v). All three
+// constructions in this package share encoding.go's primitives and none of
+// them folds caller-controlled bytes into a field name.
 
 // ShapeKeyVersion is written as the first bytes of every shape preimage, so a
 // future encoding change produces a visibly different key rather than silently
@@ -114,8 +107,7 @@ type SelectorShape struct {
 }
 
 // LegacyShapePrefix marks a shape key that could not be computed — a record
-// written before #415, whose Selector was never stored (migration 0012) and so
-// cannot be recovered. D10 rules out reconstructing one: "normalising a
+// whose Selector was never stored (migration 0012) and so cannot be recovered. D10 rules out reconstructing one: "normalising a
 // Selector after the fact is guesswork, and the approval trail is exactly the
 // data you least want to guess about."
 const LegacyShapePrefix = "legacy:"
@@ -246,8 +238,8 @@ func canonicalTerms(sel []SelectorTerm) []SelectorTerm {
 // Account and Operation names are lower-cased HERE AND ONLY HERE, because
 // Grant.Covers compares both with strings.EqualFold.
 //
-// The namespace field is always empty for a Scope (#482: a Scope has no
-// namespace term). It carries a pre-#482 Grant's legacy pin only through
+// The namespace field is always empty for a Scope (AP-33: a Scope has no
+// namespace term). It carries a legacy Grant's pin only through
 // [Grant.ShapeKey], via hashGrantShape below, so every stored shape_key
 // (pinned or not) recomputes byte-identically.
 func HashGrantShape(s Scope) string { return hashGrantShape(s, "") }

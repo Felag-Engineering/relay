@@ -649,8 +649,8 @@ func RunRepositoryConformance(t *testing.T, newRepo Factory) {
 	// ----------------------------------------------------------------
 
 	t.Run("Provenance_EnrolledAtSurvivesEveryRenewal", func(t *testing.T) {
-		// #440's central acceptance criterion, and the reason RecordEnrollment
-		// and RecordRenewal are two methods rather than one with a flag.
+		// The reason RecordEnrollment and RecordRenewal are two methods rather
+		// than one with a flag.
 		//
 		// Renewal is certificate-authenticated and preserves node_id, so a
 		// Node's join date anchors an unbroken chain back to the Enrollment
