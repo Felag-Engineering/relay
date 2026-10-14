@@ -264,9 +264,10 @@ func equalStrings(a, b []string) bool {
 }
 
 // templateDescriptor presents a Template's slots in opvocab's ArgConstraints
-// convention, so ValidateArgNames — the one definition of #345's name check —
-// serves Templates too rather than a second copy drifting from it. Every slot
-// is required: the daemon's Template engine has no optional slots.
+// convention, so ValidateArgNames — the one definition of the argument-name
+// check (ADR-0042) — serves Templates too rather than a second copy drifting
+// from it. Every slot is required: the daemon's Template engine has no optional
+// slots.
 func templateDescriptor(t nodevocab.Template) opvocab.Descriptor {
 	constraints := make(map[string]string, len(t.Slots))
 	for _, sl := range t.Slots {

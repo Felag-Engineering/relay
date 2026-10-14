@@ -1,17 +1,16 @@
 // At-most-once execution across a Relay restart (ADR-0004) — design note.
 //
 // This is the "written down, not just asserted" discipline this project
-// requires for the Job engine (v0.0.5 [4/8]/#99), feeding the crash test in
-// [8/8]/#103:
+// requires for the Job engine:
 //
 //   - IDs are generated before persistence (jobEngine.newID, an idGen seam
 //     over crypto/rand). A Task ID is therefore never generated twice: it
 //     exists exactly once, the moment it is minted, and is immediately
 //     written to the store.
 //   - The order is persist-then-dispatch: every Task for a Job and the Job's
-//     dispatch_intent audit record commit in ONE transaction (#887,
-//     IntentRecorder) BEFORE any Task is dispatched. A failed commit leaves no
-//     Task, so there is nothing to dispatch or reconcile, and no retry path
+//     dispatch_intent audit record commit in ONE transaction
+//     (IntentRecorder) BEFORE any Task is dispatched. A failed commit leaves
+//     no Task, so there is nothing to dispatch or reconcile, and no retry path
 //     exists. A crash between "generate Job/Tasks" and "start dispatching"
 //     leaves only Pending rows — never a Task that was sent but never
 //     recorded.
@@ -74,8 +73,8 @@ import (
 // Result. It is domain-typed (jobs.Task/jobs.Result), not relayv1, so
 // package capability keeps its narrow import set (registry + jobs only —
 // see TestCapabilityImportsOnlyRegistryAndJobs); the proto-speaking adapter
-// that sends over the real mTLS Tunnel lives outside this package and is
-// deferred (see execution_test.go and the plan for #99).
+// that sends over the real mTLS Tunnel lives outside this package
+// (dispatch.Router).
 type Conduit interface {
 	// Connected reports whether nodeID currently has a live Tunnel. This is
 	// the dispatch-time connectivity gate behind ADR-0004's offline
@@ -657,8 +656,8 @@ func (e *jobEngine) dispatchOneRecovered(ctx context.Context, gate *jobGate, pt 
 // already-cancelled Task or fabricating OutcomeFailure over a real cancel.
 //
 // After MarkDispatched the gate is consulted as a send guard
-// (jobs.WithSendGuard) by the Conduit immediately before the wire write
-// (#943); there is deliberately no earlier check, so every withhold goes
+// (jobs.WithSendGuard) by the Conduit immediately before the wire write;
+// there is deliberately no earlier check, so every withhold goes
 // through the Conduit's per-Task serialisation. The guard takes gate.mu, so it
 // can wait behind another worker's MarkDispatched inside admit, and it commits
 // a withhold itself: Dispatched -> Resolved/Cancelled with DispatchedAt

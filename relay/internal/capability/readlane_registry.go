@@ -27,8 +27,8 @@ import (
 //
 // Invariant 10: one capability layer, three thin surfaces. The MCP surface
 // and the Control API each call an AuditSink at their own door
-// (mcp/readaudit.go, api/nodes.go) — a shape that predates the read lane and
-// that #450 deliberately does not copy a third time. A surface that grows its
+// (mcp/readaudit.go, api/nodes.go) — a shape this lane deliberately does not
+// copy a third time. A surface that grows its
 // own RecordRead call is a surface that can forget one, and the Admin Console
 // is a screen count that only goes up. Here, the audit write and the read are
 // the same call: there is no way to reach the registry through this lane
@@ -50,14 +50,13 @@ import (
 // audit.Record.OperationName, which console/vocab.go's readTargetOf feeds to
 // readTargetName on the Activity trail and node detail. A KindRead record
 // carries no Args, so readTargetName returns the name verbatim: "list_nodes"
-// and "describe_node" read there exactly as the same records from MCP already
-// do. (#463, #517 and #520 were each a case of these records rendering
-// wrongly; the fix for all three was to make one vocabulary, not two.)
+// and "describe_node" read there exactly as the same records from MCP
+// do: one vocabulary, not two.
 //
-// toolListOperations joined with #680 on the same terms: it is the MCP
+// toolListOperations is named on the same terms: it is the MCP
 // tool's own name because ADR-0025's question is "who probed this Node's
 // vocabulary" and an auditor should get one answer across surfaces, and it
-// already renders correctly through console/vocab.go's readTargetName.
+// renders correctly through console/vocab.go's readTargetName.
 
 // Read-lane tool names for the registry half. Low-cardinality and stable for
 // the same reason readlane.go's are: they land in the append-only trail.
@@ -111,7 +110,7 @@ type ReadLane struct {
 // certExpiringWithin panics for the same reason; zero means the
 // state:cert-expiring marker never fires.
 //
-// NewReadLane also refuses a Recorder over the no-op AuditSink (F5, #441
+// NewReadLane also refuses a Recorder over the no-op AuditSink (F5,
 // cycle-2 security review): a lane that answers every query while recording
 // none of them is exactly the "unauditable read succeeded" state ADR-0025
 // forbids. policyView, nodeVocab and now may be nil — absence is documented on
@@ -170,7 +169,7 @@ var ErrReadUnaudited = errors.New("capability: read refused because it could not
 //
 // The value is caller-controlled and lands in the append-only trail as the
 // read record's own NodeID, which is the same reason readlane.go bounds a Job
-// id (F2, #441 cycle-2 security review) and AuditFilter.validate bounds Kinds
+// id (F2, cycle-2 security review) and AuditFilter.validate bounds Kinds
 // and Operations. A real Node id is a short identifier the enrollment path
 // issued; 256 bytes is far above anything real and still a bound, and it is
 // checked BEFORE the record is written so an oversized probe cannot use the
@@ -229,8 +228,7 @@ type NodeListing struct {
 	// Nodes may be a NIL slice when the Selector matched nothing
 	// (Selector.Resolve returns nil, never an empty non-nil slice) — every
 	// surface rendering it must build its response array with an explicit
-	// zero-length, pre-sized make, since arrays are never null on the wire
-	// (#207/#253).
+	// zero-length, pre-sized make, since arrays are never null on the wire.
 	Nodes []registry.Node
 
 	// Eval is the StateEval this listing was resolved at.
@@ -250,8 +248,8 @@ type NodeListing struct {
 // same order DescribeNode uses for a Node ID: a malformed Selector must not
 // be able to use the trail as storage. The recorded selector is the
 // CANONICAL form (sel.String()), not the caller's bytes — the same
-// precedent NoNodesMatchedError sets — which keeps the tag: sentinel and
-// #430 pointer legible on every surface (QRY-20).
+// precedent NoNodesMatchedError sets — which keeps the tag: sentinel and its
+// issue pointer legible on every surface (QRY-20).
 //
 // Node-ID ordering within Nodes (QRY-3) comes from registry.InMemory.List
 // and is preserved by Selector.Resolve, so no surface needs to sort again.
@@ -320,8 +318,7 @@ func (l *ReadLane) stateEval() StateEval {
 // discloses nothing new (the fleet size and every fingerprint were already
 // readable), so it is a performance bound, not a security one; it is
 // written down here rather than fixed because making the count lazy or
-// opt-in would widen this change across every adapter's DescribeNode
-// signature, and that is out of scope for this issue.
+// opt-in would widen every adapter's DescribeNode signature.
 func (l *ReadLane) DescribeNode(ctx context.Context, p Principal, nodeID string) (NodeDetail, error) {
 	if err := l.registryReadable(); err != nil {
 		return NodeDetail{}, err

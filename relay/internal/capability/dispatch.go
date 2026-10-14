@@ -42,8 +42,8 @@ type dispatch struct {
 	jobID string
 
 	// approvalID and grantID are the approval Request and batch/window Grant
-	// that released this dispatch, copied onto its dispatch-intent record
-	// (#887). Set by Execution.Run, never by newDispatch itself.
+	// that released this dispatch, copied onto its dispatch-intent record.
+	// Set by Execution.Run, never by newDispatch itself.
 	approvalID, grantID string
 }
 
@@ -56,7 +56,7 @@ func newDispatch(p Principal, sel Selector, nodes []registry.Node, act jobs.Acti
 
 // NodeResult is one Node's outcome from executing a dispatch. JobID is
 // denormalized onto every NodeResult (rather than added as a new return value
-// on Execution.Run) so a caller that only sees Run's results — the #103
+// on Execution.Run) so a caller that only sees Run's results — the
 // devharness's run_job op, and any future real surface — can learn which Job
 // it belongs to (to later query_job/CancelJob it) without widening Run's
 // signature. It is set by the real Job engine (execution.go); noopDispatcher
@@ -67,7 +67,7 @@ type NodeResult struct {
 	JobID   string
 	// Stdout, Stderr, and Truncated are the full per-Node captured output and
 	// the daemon-side truncated flag, retained whole for the audit trail
-	// (#122 full-output-always). Empty for outcomes with no real execution
+	// (full-output-always, ADR-0025 decision 3). Empty for outcomes with no real execution
 	// (e.g. unreachable) except version-refused, whose Stderr carries the
 	// Relay-synthesized jobs.VersionRefusedMessage (matching the Task row);
 	// always empty for noopDispatcher, which performs no execution. A
@@ -160,9 +160,9 @@ type starter interface {
 
 var _ starter = (*jobEngine)(nil)
 
-// noopDispatcher is the v0.0.5 default. It performs no execution and says
-// so honestly: every matched Node gets OutcomeUnspecified, never a
-// fabricated success. #99 replaces this with the real Job engine.
+// noopDispatcher performs no execution and says so honestly: every matched
+// Node gets OutcomeUnspecified, never a fabricated success. Only in-package
+// tests install it; the real dispatcher is jobEngine (execution.go).
 type noopDispatcher struct{}
 
 func (noopDispatcher) run(_ context.Context, d dispatch) (dispatchResult, error) {
@@ -190,8 +190,8 @@ func (noopDispatcher) reserveJobID() (string, error) {
 
 // query implements dispatcher honestly: it performs no PolicyQuery and says
 // so — every matched Node gets VerdictUnknown, never a fabricated allow.
-// #119's jobEngine.query (plan.go) replaces this with the real per-Node
-// PolicyQuery/PolicyVerdict fan-out.
+// jobEngine.query (plan.go) is the real per-Node PolicyQuery/PolicyVerdict
+// fan-out.
 func (noopDispatcher) query(_ context.Context, d dispatch) (planResult, error) {
 	verdicts := make([]NodeVerdict, 0, len(d.nodes))
 	for _, n := range d.nodes {

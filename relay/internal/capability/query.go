@@ -64,9 +64,9 @@ type VerifiedIdentity struct {
 // AuditRow is the projection QueryAudit returns — capability's mirror of
 // audit.Row.
 //
-// **AuditRow has NO Stdout/Stderr/Truncated field.** That absence is the
-// acceptance criterion for issue #441 ("a read-class query never returns
-// read output — the seam has no field for it"), not an oversight: the SELECT
+// **AuditRow has NO Stdout/Stderr/Truncated field.** That absence is
+// deliberate (ADR-0025: a read-class query never returns read output — the
+// seam has no field for it), not an oversight: the SELECT
 // behind audit.Row does not name those columns either (internal/store/
 // auditquery.go), so no output ever crosses this seam to redact — there is
 // nothing here for a caller of this package to accidentally forward.
@@ -98,9 +98,9 @@ type AuditRow struct {
 
 	// ApprovalAnswer, DecisionChannel, and PlanHash are the structured
 	// counterpart to a decision's prose Reason. This does NOT widen
-	// the seam toward output: #441's criterion is Stdout/Stderr/Truncated,
-	// and these are the same class of field as ApprovalID/GrantID above,
-	// which #441 shipped with. DecisionChannel is a plain string here — a
+	// the seam toward output: the excluded fields are Stdout/Stderr/Truncated,
+	// and these are the same class of field as ApprovalID/GrantID above.
+	// DecisionChannel is a plain string here — a
 	// rendered projection, not a domain value a surface may act on.
 	ApprovalAnswer  ApprovalAnswer
 	DecisionChannel string
@@ -158,8 +158,7 @@ type JobFilter struct {
 	Order jobs.JobOrder
 
 	// CountMatching asks for JobPage.Matching, computed inside the same
-	// audited read. It narrows nothing. The zero value asks for no count,
-	// which is every caller before #795.
+	// audited read. It narrows nothing. The zero value asks for no count.
 	CountMatching bool
 }
 
@@ -176,7 +175,7 @@ type JobSummary struct {
 
 	// Requester, RequesterAccountID and RequesterKind come from the Job row:
 	// present from the moment the Job exists (in-flight Jobs included), and
-	// empty for a Job with no recorded requester (legacy) — never filled
+	// empty for a Job with no recorded requester — never filled
 	// from the trail. Selector is still audit-joined, and is empty for a Job
 	// whose audit row has not been written yet (in-flight) — see
 	// jobs.JobSummary's doc comment.
@@ -209,8 +208,8 @@ type JobSummary struct {
 	Counts     map[jobs.Outcome]int
 	Unresolved int
 
-	// Recording is how much of the Job's dispatch audit record the trail holds
-	// (#887); see jobs.JobSummary.Recording. Read it through OutcomeUnrecorded.
+	// Recording is how much of the Job's dispatch audit record the trail holds;
+	// see jobs.JobSummary.Recording. Read it through OutcomeUnrecorded.
 	Recording jobs.JobRecording
 }
 
@@ -252,23 +251,20 @@ type TaskFilter struct {
 // TaskRow is one row of a Job's Task list — capability's mirror of
 // jobs.TaskSummary.
 //
-// Stdout, Stderr, and RiskClass ARE present here — unlike AuditRow. D3 (the
-// #441 plan's decision, deliberately flagged for human review): #423 (job
-// detail) clusters Tasks by identical output and renders the deny rule
-// verbatim, which needs the captured bytes for mutate-class Tasks, and the
-// tasks table already stores them. RiskClass is what lets readlane.go strip
-// output before a TaskRow ever leaves this package for every Task EXCEPT one
-// whose RiskClass is explicitly RiskClassMutate — see QueryTasks in
-// readlane.go for exactly where and why the condition is "!= Mutate" and not
-// "== Read" (F3, #441 cycle-2 security review: output retention must fail
-// safe toward STRIPPING, the opposite of this codebase's usual
-// Unspecified-means-mutate guardrail default). If a reviewer reads
-// acceptance line 22 ("a read-class query never returns read output") as
-// covering the Task lane too, the
-// alternative is an output-free TaskRow with #423 kept on the existing
-// JobReader for output instead — that reversal touches only this struct and
-// readlane.go's QueryTasks, nothing else in the #441 plan.
-//
+// Stdout, Stderr, and RiskClass ARE present here — unlike AuditRow. D3 (a
+// decision deliberately flagged for human review): job detail clusters Tasks by
+// identical output and renders the deny rule verbatim, which needs the captured
+// bytes for mutate-class Tasks, and the tasks table already stores them.
+// RiskClass is what lets readlane.go strip output before a TaskRow ever leaves
+// this package for every Task EXCEPT one whose RiskClass is explicitly
+// RiskClassMutate — see QueryTasks in readlane.go for exactly where and why the
+// condition is "!= Mutate" and not "== Read" (F3, cycle-2 security review:
+// output retention must fail safe toward STRIPPING, the opposite of this
+// codebase's usual Unspecified-means-mutate guardrail default). If a reviewer
+// reads "a read-class query never returns read output" as covering the Task
+// lane too, the alternative is an output-free TaskRow with job detail kept on
+// the existing JobReader for output instead — that reversal touches only this
+// struct and readlane.go's QueryTasks.
 // Truncated is deliberately ABSENT — see jobs.TaskSummary's doc comment: the
 // tasks table has no truncated column, and this seam does not invent one.
 type TaskRow struct {
@@ -327,7 +323,7 @@ var ErrQueriesUnavailable = errors.New("capability: audit/Job queries are not co
 // validate checks f before it reaches any seam. Caller-controlled inputs are
 // bounded HERE, not just at the store: a query filter reaches an append-only
 // table by way of the read-audit record readlane.go writes for every call
-// (the #255/#258 unbounded-field lesson audit/attribution.go's
+// (the unbounded-field lesson audit/attribution.go's
 // MaxAssertedFieldBytes states — the same reasoning applies to a filter that
 // gets recorded as the search itself).
 func (f AuditFilter) validate() error {
@@ -355,7 +351,7 @@ func (f AuditFilter) validate() error {
 			return fmt.Errorf("%w: kind %q exceeds 64 bytes", ErrInvalidFilter, k)
 		}
 	}
-	// Operations is capped exactly as Kinds is (F2, #441 cycle-2 security
+	// Operations is capped exactly as Kinds is (F2, cycle-2 security
 	// review): buildAuditWhere emits one bound placeholder per entry, and an
 	// uncapped list is an asymmetric caller-driven allocation on a request
 	// path — confirmed empirically to fail SQLite's "too many SQL variables"
@@ -382,7 +378,7 @@ func (f AuditFilter) validate() error {
 }
 
 // MaxAggregateWindow bounds Since..Until on the AGGREGATE paths — AuditCounts
-// and AuditReach — validated by validateWindow (F1, #441 cycle-2 security
+// and AuditReach — validated by validateWindow (F1, cycle-2 security
 // review). Unlike QueryAudit, neither aggregate paginates: AuditCounts has
 // no LIMIT and AuditReach returns one row computed over every matching
 // Record, so an unbounded window is an unbounded scan/allocation reachable
@@ -485,7 +481,7 @@ func (s *filterSummary) String() string {
 // it both render as a maxFilterSummaryBytes-byte string, so the check has to
 // run on the untruncated length. canonicalEventKinds (readlane.go) is the
 // first caller that needs to REFUSE rather than silently accept a
-// truncation (#539 fix round, Finding 2).
+// truncation.
 func (s *filterSummary) wouldTruncate() bool {
 	return len(stripControl(s.b.String())) > maxFilterSummaryBytes
 }

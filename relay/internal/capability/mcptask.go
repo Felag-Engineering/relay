@@ -10,8 +10,8 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask"
 )
 
-// mcptask.go is the capability layer's half of the MCP Tasks extension (#374,
-// ADR-0028): minting a task handle when a dispatch parks, resolving one, and
+// mcptask.go is the capability layer's half of the MCP Tasks extension
+// (ADR-0028): minting a task handle when a dispatch parks, resolving one, and
 // cancelling one.
 //
 // It lives HERE rather than in the MCP surface for the ordinary reason
@@ -37,8 +37,8 @@ import (
 // a control-plane one.
 //
 // Nil means Tasks are not wired: no handle is ever minted, ParkedError carries
-// no task id, and Resolve/Cancel report ErrTasksUnavailable. That is the
-// pre-#374 behaviour and it is fully functional — the universal
+// no task id, and Resolve/Cancel report ErrTasksUnavailable. That is fully
+// functional — the universal
 // `pending_approval` result path does not involve handles at all, which
 // is ADR-0028's requirement that the shim be deletable without loss.
 type MCPTaskStore interface {

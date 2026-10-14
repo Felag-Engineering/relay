@@ -102,10 +102,10 @@ var ErrAccountsUnavailable = errors.New("capability: account administration is n
 
 // ErrSelfTargeted is returned by SetAccountRole and by SetAccountEnabled(id,
 // false) when the acting Principal names itself: "an Account cannot change
-// its own role or disable itself" (#653's own acceptance criterion). This is
-// the ONLY rule in this file that needs the ACTING Principal, which is why it
-// lives here rather than in the store: accounts.Repository has no notion of
-// who is asking, only what is being asked.
+// its own role or disable itself". This is the ONLY rule in this file that
+// needs the ACTING Principal, which is why it lives here rather than in the
+// store: accounts.Repository has no notion of who is asking, only what is
+// being asked.
 //
 // Exported and typed like ErrJobNotRequestedByCaller, so a surface recognizes
 // it via errors.Is without string-matching. The refusal is audited via
@@ -302,9 +302,9 @@ func (a *AccountAdmin) APITokens(ctx context.Context, p Principal, accountID str
 // MintAPIToken issues a new credential for accountID. Authorized at
 // ControlAPITokenMint. The audit event carries TokenID only — never the
 // returned Plaintext, which this method passes back to its caller untouched:
-// no log line, no audit field, no error-string interpolation (#653's
-// acceptance criterion, "the mint audit row has no field a Plaintext could
-// occupy", enforced structurally by AccountAdminEvent's shape).
+// no log line, no audit field, no error-string interpolation ("the mint
+// audit row has no field a Plaintext could occupy", enforced structurally by
+// AccountAdminEvent's shape).
 func (a *AccountAdmin) MintAPIToken(ctx context.Context, p Principal, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error) {
 	if a.tokens == nil {
 		return accounts.APIToken{}, accounts.Plaintext{}, ErrAccountsUnavailable

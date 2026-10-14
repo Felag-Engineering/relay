@@ -32,7 +32,7 @@ type ApprovalGate interface {
 	Evaluate(d approval.Dispatch) (approval.Requirement, []string, bool)
 }
 
-// noopApprovalGate gates nothing. It is no longer a default: NewApprovals
+// noopApprovalGate gates nothing. It is not a default: NewApprovals
 // requires a gate, so only newApprovals (in-package tests) can install this one.
 type noopApprovalGate struct{}
 
@@ -59,7 +59,7 @@ type ApprovalStore interface {
 	BindJob(ctx context.Context, id, jobID string, now time.Time) (approval.Request, error)
 	Get(ctx context.Context, id string) (approval.Request, error)
 	Pending(ctx context.Context) ([]approval.Request, error)
-	// LastApprovedByShape is the approval object's anti-fatigue read (#415,
+	// LastApprovedByShape is the approval object's anti-fatigue read (AP-23,
 	// D10): the newest approved record of the same SHAPE. It releases nothing
 	// — see approval.Repository for why that separation is structural.
 	LastApprovedByShape(ctx context.Context, shapeKey, excludeID string) (approval.Request, error)
@@ -166,8 +166,8 @@ type Approvals struct {
 	grants ApprovalGrantStore
 
 	// tasks persists MCP task handles (ADR-0028). Nil disables the
-	// Tasks extension entirely, which is the pre-#374 behaviour and loses
-	// nothing: the universal pending_approval result path does not use handles.
+	// Tasks extension entirely, which loses nothing: the universal
+	// pending_approval result path does not use handles.
 	tasks MCPTaskStore
 
 	// authz is the role floor on a DECISION: deciding a Request
@@ -431,7 +431,7 @@ func (a *Approvals) checkApproval(ctx context.Context, p Principal, sel Selector
 	// matching rules (mergeStricter): that merge never lets an unrestricted
 	// rule's audience absorb a malformed one — a blank entry survives the
 	// merge (see unionAudience) — so a merge upstream cannot defeat this
-	// check. A real *approval.Gate can no longer produce a malformed
+	// check. A real *approval.Gate cannot produce a malformed
 	// Requirement in the first place (approval.Rule.Validate).
 	if err := approval.ValidateAudience(req.Audience); err != nil {
 		return approvalDecision{}, fmt.Errorf("capability: dispatch approval requirement from rules %s: require.audience: %w", strings.Join(rules, ", "), err)
@@ -470,14 +470,13 @@ func (a *Approvals) checkApproval(ctx context.Context, p Principal, sel Selector
 	// falls into the unbound case below. Once the deadline passes, Satisfied
 	// is false, the approved row is not pending, and the dispatch falls through
 	// to the Grant check and then a fresh park. That keeps a spent approval
-	// from becoming a permanent replay of one Job (the concern #646 and this
-	// issue's body record).
+	// from becoming a permanent replay of one Job (AP-77).
 	if lookupErr == nil && existing.Satisfied(now) && existing.Released() {
 		return approvalDecision{requestID: existing.ID, reattachJobID: existing.JobID}, nil
 	}
 
 	// A store failure reading THIS plan's existing Request is refused HERE,
-	// before a Grant is ever consulted (SEC-2/C2-S1, #713 security review): a
+	// before a Grant is ever consulted (SEC-2/C2-S1, AP-77): a
 	// released Request the Relay cannot currently read must never be silently
 	// shadowed by a covering Grant that goes on to run the plan a second time.
 	// Only ErrNotFound — "no Request exists for this plan" — falls through to

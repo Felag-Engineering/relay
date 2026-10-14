@@ -15,11 +15,11 @@ import (
 // the acts that are not dispatches and so carry no jobs.Action and no
 // Selector, but still have a role floor.
 //
-// It exists because "who may ask" was previously answered only for things
-// that reach a Node. Minting an Enrollment Token, revoking one, revoking a
-// Node, engaging or releasing the Freeze, and cancelling a Job never touch
-// the dispatch pipeline, so authz.RoleGate was never consulted for any of
-// them and every one of them was reachable by a viewer. Naming them here —
+// It exists because "who may ask" is not only a question for things that
+// reach a Node. Minting an Enrollment Token, revoking one, revoking a Node,
+// engaging or releasing the Freeze, and cancelling a Job never touch the
+// dispatch pipeline, so a role gate on dispatch alone would leave every one
+// of them reachable by a viewer. Naming them here —
 // in the capability layer, beside the Action-shaped question — is what lets
 // a single Authorizer answer both, so MCP, the Control API, and the Console
 // inherit one table rather than each surface carrying its own (invariant 10).
@@ -52,8 +52,8 @@ const (
 	// ControlCancelJob is POST /api/v1/jobs/{id}/cancel, MCP's cancel_job and
 	// tasks/cancel, and the Console's Cancel control. The ROLE floor
 	// is operator and not human-only: an AI-agent must be able to cancel its
-	// own dispatch (#346, execution.md §Cancellation, owner decision
-	// 2026-09-14). The SCOPE differs by Kind (#614, owner decision
+	// own dispatch (execution.md §Cancellation, owner decision
+	// 2026-09-14). The SCOPE differs by Kind (owner decision
 	// 2026-09-17): a human Account may cancel any Job, a machine Account
 	// only one whose recorded requester is itself — see
 	// Execution.CancelJob/authorizeMachineCancel.
@@ -95,12 +95,11 @@ const (
 	ControlAPITokenRevoke ControlAction = "api_token_revoke"
 )
 
-// AccountStore is the Account half of the collaborator accountadmin.go needs
-// (#653): the same five methods api.AccountManager narrowed
-// accounts.Repository to, before this issue moved the surface behind the
-// capability layer. Deliberately not accounts.Repository itself:
-// EnsureFoundingAdmin is seeding, a startup act, and GetByName/TouchLastSeen
-// belong to the authentication boundary, not to administering Accounts.
+// AccountStore is the Account half of the collaborator accountadmin.go needs:
+// five methods narrowed from accounts.Repository. Deliberately not
+// accounts.Repository itself: EnsureFoundingAdmin is seeding, a startup act,
+// and GetByName/TouchLastSeen belong to the authentication boundary, not to
+// administering Accounts.
 type AccountStore interface {
 	Create(ctx context.Context, a accounts.Account) (accounts.Account, error)
 	Get(ctx context.Context, id string) (accounts.Account, error)
@@ -128,26 +127,22 @@ type ControlAuthorizer interface {
 	AuthorizeControl(ctx context.Context, p Principal, act ControlAction) error
 }
 
-// Authorizer decides whether p may perform act against sel, and — since
-// #397 — whether p may perform an administrative ControlAction. v0.0.5 had
-// no real authn (the seeded credential arrived in v0.0.6, Accounts in
-// v0.3.0 — ADR-0010's staged adoption); this seam exists so surfaces
-// (MCP, Control API, Admin Console) plug into the pipeline without it being
-// reshaped later.
+// Authorizer decides whether p may perform act against sel, and whether p
+// may perform an administrative ControlAction. This seam is how surfaces
+// (MCP, Control API, Admin Console) plug into the pipeline.
 //
 // The two questions live on ONE interface deliberately. They are the same
 // question asked about different objects, and the production implementation
 // (authz.RoleGate) is one object holding one ladder; splitting them into two
 // independently-wired seams is how a deployment ends up with a real gate on
-// dispatch and an allow-all gate on enrollment, which is precisely the defect
-// #397 records.
+// dispatch and an allow-all gate on enrollment.
 type Authorizer interface {
 	Authorize(ctx context.Context, p Principal, act jobs.Action, sel Selector) error
 	ControlAuthorizer
 }
 
-// allowAllAuthorizer is the v0.0.5 default: every request is authorized.
-// Real Grant-based authorization is a later v0.0.5/v0.0.6 issue.
+// allowAllAuthorizer authorizes every request. Only in-package tests install
+// it: NewExecution and NewAccountAdmin refuse it.
 //
 // NewExecution's fail-open guard refuses to build an Execution that pairs this with a
 // real dispatcher, which is what keeps it out of production for BOTH halves
@@ -165,14 +160,14 @@ func (allowAllAuthorizer) AuthorizeControl(context.Context, Principal, ControlAc
 
 // CapChecker enforces the blast-radius cap (ADR-0004) before any dispatch.
 // The real read-cap/mutate-cap enforcement — including the Raw-Exec-always-
-// mutate-cap rule (ADR-0012) — lands in v0.0.5 [5/8]/#100; the pipeline
-// already passes the resolved RiskClass and matched-Node count, so this
-// signature is final for that issue to implement against.
+// mutate-cap rule (ADR-0012) — is BlastCap (caps.go); the pipeline passes the
+// resolved RiskClass and matched-Node count.
 type CapChecker interface {
 	Check(class jobs.RiskClass, matched int) error
 }
 
-// noopCapChecker is the v0.0.5 default: no cap is enforced.
+// noopCapChecker enforces no cap. Only in-package tests install it:
+// NewExecution refuses it.
 type noopCapChecker struct{}
 
 func (noopCapChecker) Check(jobs.RiskClass, int) error {
@@ -182,12 +177,11 @@ func (noopCapChecker) Check(jobs.RiskClass, int) error {
 // AuditSink records a completed dispatch, a refusal, a Freeze
 // engage/release, or a Job cancel. The real adapter to audit.Repository
 // (deliberately not imported here; capability stays free of the audit
-// package) is internal/auditsink, added in v0.0.5 [7/8]/#102.
+// package) is internal/auditsink.
 type AuditSink interface {
 	Record(ctx context.Context, e AuditEntry) error
 
-	// RecordFreeze records a Freeze engage/release event (ADR-0013). #102
-	// only adds this sink method; #101 implements Freeze itself and calls it.
+	// RecordFreeze records a Freeze engage/release event (ADR-0013).
 	RecordFreeze(ctx context.Context, e FreezeEvent) error
 
 	// RecordCancel records a Job cancel action, attributed to p (v0.0.6
@@ -199,8 +193,8 @@ type AuditSink interface {
 	// doc comment.
 	RecordCancel(ctx context.Context, p Principal, jobID string) error
 
-	// RecordRead records one metadata-only read-access event (#288, ADR-0025;
-	// #441 extends it to the trail's own read lane): who read, which tool,
+	// RecordRead records one metadata-only read-access event (ADR-0025,
+	// including the trail's own read lane): who read, which tool,
 	// what they aimed it at, and when — never the result. tool is a
 	// low-cardinality name (readlane.go's constants); selector, nodeID, and
 	// jobID are whichever of "what was aimed at" apply, empty otherwise.
@@ -247,9 +241,8 @@ const (
 
 // AccountAdminEvent is what accountadmin.go passes to
 // AuditSink.RecordAccountAdmin. THE STRUCT HAS NO FIELD A Plaintext COULD
-// OCCUPY — that is #653's acceptance criterion for the mint audit row,
-// expressed as a type: MintAPIToken records TokenID here, never the minted
-// credential.
+// OCCUPY — the mint audit row's guarantee, expressed as a type: MintAPIToken
+// records TokenID here, never the minted credential.
 type AccountAdminEvent struct {
 	Kind AccountAdminKind
 
@@ -268,9 +261,7 @@ type AccountAdminEvent struct {
 	// trail cannot answer "was this Account created as a machine identity",
 	// which matters on a compromise — the account_id/account_name/role
 	// columns already on this event describe the TARGET, never the acting
-	// Principal, and Kind is the fourth fact recordLifecycle used to write
-	// about that target before #653 moved this surface into the capability
-	// layer.
+	// Principal, and Kind is the fourth fact about that target.
 	AccountKind string
 
 	// TokenID is set for AccountAdminTokenMint/Revoke; empty otherwise.
@@ -371,8 +362,7 @@ const (
 //
 // ApprovalAnswerUnrecorded (the zero value) means "no answer" — a grant
 // revocation, or an AuditEntry a future kind writes without one — and NEVER
-// "denied". Conflating "no value" with "a value that means no" is the #487
-// bug.
+// "denied": "no value" is not "a value that means no".
 type ApprovalAnswer string
 
 const (
@@ -388,7 +378,7 @@ const (
 //
 // For AuditKindDispatch, JobID and Results are set and Reason is empty. For
 // AuditKindRefusal (authz-deny, cap-reject, a zero-match dispatch
-// (no_nodes_matched), or CancelJob's machine-Account scoping, #614),
+// (no_nodes_matched), or CancelJob's machine-Account scoping),
 // Reason is set and Results is empty — the dispatcher was never reached —
 // but JobID is NOT always empty: refuseControl's role-floor refusal leaves
 // it empty (it precedes any existence check, so the id is unvalidated caller

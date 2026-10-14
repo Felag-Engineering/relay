@@ -68,7 +68,7 @@ func localHostPrincipal() Principal { return Principal{Account: "local-host"} }
 //
 // The floor is `operator`, AND the Principal must be a human Account.
 // The role half is ADR-0013's "engage cheap": anyone who may run anything may
-// also pull the cord. The human half is the amendment #397 records, and it is
+// also pull the cord. The human half is ADR-0013's 2026-08-24 amendment, and it is
 // not a role question at all — a machine Account at `operator` freezing the
 // fleet is a jailbroken AI-agent switching off its own overseers, a denial of
 // service the fire-alarm argument does not cover. Authority is still the Role

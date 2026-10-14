@@ -28,8 +28,8 @@ type Execution struct {
 	cap  CapChecker
 	disp dispatcher
 
-	// jobEvents is the event seam's Job-grained publisher (#416,
-	// JobEventSink, seams.go) — the same "purely observational" contract as
+	// jobEvents is the event seam's Job-grained publisher
+	// (JobEventSink, seams.go) — the same "purely observational" contract as
 	// metrics. propagated onto the real Job engine (jobEngine.events) by
 	// newExecution, because both Execution.CancelJob and jobEngine.run need
 	// the same sink.
@@ -205,17 +205,15 @@ func (s *Execution) clock() time.Time { return s.approvals.clock() }
 // call, check the blast-radius cap, consult the approval gate, dispatch, then
 // audit — in that order. The Freeze gate, authorize, the no-Nodes-matched
 // check, the Template refusal and the cap check each short-circuit the
-// remaining stages on error (no
-// dispatch — nothing was executed), but each refusal is itself audited
-// (recordRefusal) — refusals are the most interesting audit events
-// (acceptance criterion for #102). Once dispatch is attempted, the audit
-// record is always written, even if the dispatcher itself returns an error:
-// a dispatcher may execute some Nodes before failing on others, and a
-// partially-executed dispatch must never go unaudited. In that case Run
-// returns the dispatch error (joined with any audit-write error via
-// errors.Join) alongside the partial results. Principal is threaded through
-// to the AuditSink so every recorded entry attributes who asked, even before
-// real authn exists.
+// remaining stages on error (no dispatch — nothing was executed), but each
+// refusal is itself audited (recordRefusal) — refusals are the most interesting
+// audit events. Once dispatch is attempted, the audit record is always written,
+// even if the dispatcher itself returns an error: a dispatcher may execute some
+// Nodes before failing on others, and a partially-executed dispatch must never
+// go unaudited. In that case Run returns the dispatch error (joined with any
+// audit-write error via errors.Join) alongside the partial results. Principal
+// is threaded through to the AuditSink so every recorded entry attributes who
+// asked.
 //
 // The Freeze check (ADR-0013) is the OUTERMOST gate, run before Selector
 // resolution and before authz: a frozen Relay refuses all new dispatch,
@@ -252,7 +250,7 @@ type prep struct {
 	ap  approvalDecision
 
 	// reserved is true when d.jobID was reserved before dispatch (an approval's
-	// release claim, AP-77, or an idempotency key, #895): the Job's pipeline and
+	// release claim, AP-77, or an idempotency key): the Job's pipeline and
 	// accounting then outlive the caller's context.
 	reserved bool
 
@@ -608,16 +606,14 @@ func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr p
 	}
 
 	// The AuditSink is recorded unconditionally, even when the dispatcher
-	// errors: dispatch.run may execute some Nodes before failing on others
-	// (the #99 contract), and a partially-executed dispatch must never be
+	// errors: dispatch.run may execute some Nodes before failing on others,
+	// and a partially-executed dispatch must never be
 	// unaudited. results-so-far are recorded whether or not dispatchErr is
 	// nil.
 	//
-	// Residual risk (inherited from #97/#98, out of #102's scope): Args/
+	// Residual risk (execution.md, Accepted residual risk): Args/
 	// RawExecArgv below are copied verbatim from act, so a secret passed in
-	// an Operation's arguments would land in the audit trail as-is. #102
-	// does not close this — it is flagged here so it is not mistaken for a
-	// gap in #102's redaction guarantee.
+	// an Operation's arguments lands in the audit trail as-is.
 	entry := AuditEntry{Kind: AuditKindDispatch, Principal: p, Selector: sel, Action: act, JobID: res.jobID, Results: res.results, ApprovalID: ap.requestID, GrantID: ap.grantID, Asserted: AssertionsFromContext(acctCtx)}
 	auditErr := s.recorder().audit.Record(acctCtx, entry)
 	if auditErr != nil {
@@ -632,8 +628,8 @@ func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr p
 			// dispatch would then have run with an incomplete or missing
 			// dispatch audit record and nobody watching the return value to
 			// notice. "Incomplete", not just "missing": a timeout partway
-			// through a per-Node audit append (the #99 contract that lets a
-			// dispatch partially execute and still be audited) can leave a
+			// through a per-Node audit append (a dispatch may partially
+			// execute and still be audited) can leave a
 			// partial record rather than none at all. Put it somewhere an
 			// operator IS watching: the structured log, exactly like
 			// authorizeMachineCancel's job-requester-lookup failure above.
@@ -641,7 +637,7 @@ func (s *Execution) account(ctx context.Context, p Principal, sel Selector, pr p
 			// point, and log/slog reads it only for its attached values
 			// (unaffected by WithoutCancel/WithTimeout), never for its own
 			// cancellation. result_count, not the results themselves: the
-			// results carry argv (#102's residual risk above), which never
+			// results carry argv (the residual risk above), which never
 			// belongs in a log line.
 			s.logger().ErrorContext(acctCtx, "capability: reserved-path dispatch audit write failed; an approved dispatch has an incomplete or missing audit record",
 				"job_id", res.jobID, "approval_id", ap.requestID, "result_count", len(res.results), "error", auditErr)
@@ -666,7 +662,7 @@ const reservedPostDispatchAccountingTimeout = 30 * time.Second
 
 // ErrJobNotRequestedByCaller is CancelJob's refusal for a machine Account
 // asking to cancel a Job that is not its own (owner decision 2026-09-17,
-// execution.md §Cancellation, #614). Exported and typed so a surface can
+// execution.md §Cancellation). Exported and typed so a surface can
 // recognize the refusal via errors.Is without string-matching (mirrors
 // FrozenError/CapExceededError).
 //
@@ -674,7 +670,7 @@ const reservedPostDispatchAccountingTimeout = 30 * time.Second
 // requested by a different Account" and "this Job's requester is not
 // recorded at all" — and the caller must not be able to tell which. The
 // requester is recorded on the Job at creation, and a Job with no
-// recorded requester (one created before that) is refused exactly like
+// recorded requester is refused exactly like
 // another Account's Job: distinguishing "not recorded" from "somebody
 // else's" would let a machine Account learn that a Job it cannot cancel
 // exists and is still in flight, one bit at a time. Never inferred: an
@@ -690,14 +686,13 @@ var ErrJobNotRequestedByCaller = errors.New(
 // tasksRepo/Conduit stay inside the engine, mirroring how Run delegates to
 // s.disp.run.
 //
-// The floor is `operator` for every Account, human or machine — that half
-// is unchanged. What differs by Kind is the SCOPE (owner decision
-// 2026-09-17, execution.md §Cancellation, #614, narrowing #595's original
-// "any Job" reading): a human Account may still cancel any Job, but a
-// machine Account may cancel only a Job whose recorded requester is that
-// same Account — see authorizeMachineCancel. AuthorizeControl runs FIRST,
-// before disp.cancel, so a refused caller neither touches a Task nor learns
-// whether the Job exists (see TestCancelJobRefusalDoesNotRevealWhetherTheJobExists).
+// The floor is `operator` for every Account, human or machine. What differs
+// by Kind is the SCOPE (owner decision 2026-09-17, execution.md
+// §Cancellation): a human Account may cancel any Job, but a machine Account
+// may cancel only a Job whose recorded requester is that same Account — see
+// authorizeMachineCancel. AuthorizeControl runs FIRST, before disp.cancel, so
+// a refused caller neither touches a Task nor learns whether the Job exists
+// (see TestCancelJobRefusalDoesNotRevealWhetherTheJobExists).
 // It reads the context with withoutAssertions, for the same reason Run and
 // Plan do: an authorization decision must never be swayed by caller-asserted
 // attribution (assertions.go).
@@ -760,7 +755,7 @@ func (s *Execution) CancelJob(ctx context.Context, p Principal, jobID string) er
 }
 
 // authorizeMachineCancel decides CancelJob's machine-Account scope (owner
-// decision 2026-09-17, execution.md §Cancellation, #614): may accountID
+// decision 2026-09-17, execution.md §Cancellation): may accountID
 // cancel jobID? It queries s.jobQ directly rather than through
 // ReadLane.QueryJobs — this is an authorization decision, not a
 // caller-invoked read, so it must not append its own entry to the read-lane

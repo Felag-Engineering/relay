@@ -88,7 +88,7 @@ func (l *ReadLane) QueryAudit(ctx context.Context, p Principal, f AuditFilter, p
 // by time bucket.
 //
 // f must carry a bounded Since/Until window (validateWindow) and bucket is
-// floored to MinAuditBucket (clampBucket) — F1, #441 cycle-2 security
+// floored to MinAuditBucket (clampBucket) — F1, cycle-2 security
 // review: unlike QueryAudit, this path has no LIMIT, so AuditFilter{} with a
 // caller-chosen sub-second bucket would otherwise be an unbounded,
 // repeatable multi-GB allocation on a large trail.
@@ -112,7 +112,7 @@ func (l *ReadLane) AuditCounts(ctx context.Context, p Principal, f AuditFilter, 
 // AuditReach returns f's call count, distinct-target count, and
 // distinct-Node count: how far a query's matching Records reached.
 //
-// f must carry a bounded Since/Until window (validateWindow) — F1, #441
+// f must carry a bounded Since/Until window (validateWindow) — F1,
 // cycle-2 security review: AuditReach has no LIMIT either, and its
 // distinct-target expression evaluates a json_extract COALESCE per matching
 // row (F6), so an unbounded filter is a full scan of the largest table.
@@ -154,15 +154,15 @@ func (l *ReadLane) QueryJobs(ctx context.Context, p Principal, f JobFilter, page
 // QueryTasks returns one page of TaskRow for f.JobID, optionally filtered by
 // f.Outcome.
 //
-// **D3** (flagged for human review in the #441 plan, TaskRow's doc comment
-// carries the full reasoning): output is stripped here, on the returned
+// **D3** (flagged for human review; TaskRow's doc comment carries the full
+// reasoning): output is stripped here, on the returned
 // TaskRow, for every Task EXCEPT one whose RiskClass is explicitly
 // jobs.RiskClassMutate — keyed on the class, so the Console (or any future
 // caller) is not the layer that has to remember the rule. Mutate-class Tasks
-// keep their captured Stdout/Stderr, which #423 (job detail) needs to
-// cluster identical output.
+// keep their captured Stdout/Stderr, which job detail needs to cluster
+// identical output.
 //
-// The strip condition is "!= Mutate", not "== Read" (F3, #441 cycle-2
+// The strip condition is "!= Mutate", not "== Read" (F3, cycle-2
 // security review): everywhere else in this codebase RiskClassUnspecified is
 // deliberately treated as mutate ("a guardrail must fail safe"), but for
 // OUTPUT RETENTION that direction is inverted — an unrecognised or
@@ -221,29 +221,25 @@ func (l *ReadLane) recordQueryRead(ctx context.Context, p Principal, tool, selec
 // kinds, and whether it asked to resume — never the rows that later cross it.
 //
 // It returns the CANONICALISED names it just recorded, and this is not a
-// convenience — it is the fix for a vacuity a security review found in the
-// #539 fix round. The original shape asked console/events.go to build both
-// Subscribe's kind list and this call's argument from "the same loop" over
-// the query string, and relied on that sentence, unenforced, to keep them
-// from drifting; a mutation that re-derived only the RECORDED argument from
-// the raw query string passed the entire suite, because for a clean query
-// string the re-derivation happened to equal the original. Returning the
-// names this method actually validated and wrote removes the possibility
-// structurally rather than rhetorically: the caller has no OTHER kind list
-// available after a successful call, because handleEvents now builds
+// convenience: two kind lists built from "the same loop" over the query
+// string can drift unnoticed, because for a clean query string a
+// re-derivation of only the RECORDED argument happens to equal the original.
+// Returning the names this method actually validated and wrote removes the
+// possibility structurally rather than rhetorically: the caller has no OTHER
+// kind list available after a successful call, because handleEvents builds
 // Subscribe's argument from this return value, not from anything computed
 // earlier. A caller that still tried to feed Subscribe a different set would
 // have to ignore the return value and reintroduce a second, independent
 // source of kinds — a much louder change than swapping one function
-// argument, and one console/events.go's own doc comment now names as the
+// argument, and one console/events.go's own doc comment names as the
 // thing never to do.
 //
 // # Why this method records without delegating to a seam
 //
 // Every other method in this file follows "validate -> record -> delegate to
 // the seam". This one does not delegate to anything, which is a genuine
-// departure from that shape: the event bus is not on the capability layer,
-// and putting Subscribe there is #543's work, not this one's. The cost is
+// departure from that shape: the event bus is not on the capability layer.
+// The cost is
 // that nothing HERE forces a caller to subscribe at all, or to subscribe only
 // after this returns successfully — that obligation is enforced by
 // console/read_audit_test.go's sweep driving the real handler, not by this
@@ -256,8 +252,8 @@ func (l *ReadLane) recordQueryRead(ctx context.Context, p Principal, tool, selec
 // A subscription is one query with an open-ended page; ?kinds= is its
 // filter, and the kind set is fixed for the stream's whole life
 // (events.Bus.Subscribe builds it once and never widens it) — so ONE record
-// at open completely describes what could ever cross the stream, including,
-// after #543, whether raw_exec argv could. Recording per EVENT would be the
+// at open completely describes what could ever cross the stream, including
+// whether raw_exec argv could. Recording per EVENT would be the
 // first place the trail recorded a read's RESULT SET, which ADR-0025
 // decision 2 forbids, and would couple the trail's write rate to fleet
 // activity times open tabs, synchronously, fail-closed, on the pump path —
@@ -315,7 +311,7 @@ func (l *ReadLane) RecordEventSubscription(ctx context.Context, p Principal, kin
 // property, it is what keeps the trail legible.
 //
 // THE BOUNDS DO NOT COMPOSE ON THEIR OWN, and this function is where that
-// gets fixed (#539 fix round, Finding 2). maxEventKinds (32) times
+// gets fixed. maxEventKinds (32) times
 // maxEventKindBytes (64) is a joined value of roughly 2,079 bytes, and
 // eventSubscriptionSummary's filterSummary.String truncates silently at
 // maxFilterSummaryBytes (256) with no marker — and because names are SORTED
@@ -404,7 +400,7 @@ func (f JobFilter) validate() error {
 // the Relay issued is 32 hex characters (execution.go), so this is four
 // times the real thing and still a bound — the value is caller-controlled
 // and lands in the append-only trail as the read record's own selector, the
-// same reason AuditFilter.validate bounds Kinds and Operations (F2, #441
+// same reason AuditFilter.validate bounds Kinds and Operations (F2,
 // cycle-2 security review).
 const maxJobIDBytes = 128
 
@@ -462,8 +458,8 @@ func (f JobFilter) summary() string {
 	if !f.Until.IsZero() {
 		field("until", f.Until.UTC().Format(time.RFC3339))
 	}
-	// Recorded only when non-default, so the trail says what was asked while
-	// every pre-#795 caller's recorded selector stays byte-identical.
+	// Recorded only when non-default, so the trail says what was asked without
+	// changing a default query's recorded selector.
 	if f.Order == jobs.JobOrderOldestFirst {
 		field("order", "oldest_first")
 	}

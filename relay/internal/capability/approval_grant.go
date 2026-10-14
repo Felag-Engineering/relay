@@ -10,8 +10,8 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 )
 
-// approval_grant.go is the management half of batch/window approvals (#378,
-// ADR-0027 decision 12): requesting one, reading the queue, and revoking one.
+// approval_grant.go is the management half of batch/window approvals
+// (ADR-0027 decision 12): requesting one, reading the queue, and revoking one.
 // The dispatch half — claiming a grant — is in approval.go.
 //
 // Requesting a grant is deliberately NOT the same act as being granted one.
@@ -92,7 +92,7 @@ func (a *Approvals) RequestGrant(ctx context.Context, p Principal, in GrantReque
 	// itself never lets an unrestricted probe absorb a malformed one — a blank
 	// entry survives the merge (see unionAudience) — so this check still fires
 	// even when only one probe's Requirement was malformed. A real
-	// *approval.Gate can no longer produce a malformed Requirement in the
+	// *approval.Gate cannot produce a malformed Requirement in the
 	// first place (Rule.Validate), so this guards any other ApprovalGate
 	// implementation.
 	if err := approval.ValidateAudience(req.Audience); err != nil {
@@ -151,10 +151,10 @@ func (a *Approvals) RequestGrant(ctx context.Context, p Principal, in GrantReque
 	}
 
 	entry := AuditEntry{
-		// #546: its own kind, not AuditKindApprovalRequested. GrantID already
-		// distinguished the two structurally, but every surface had to
-		// remember to check it; a kind that is wrong is caught by audit's
-		// partition machinery instead of rendering a wrong sentence.
+		// Its own kind, not AuditKindApprovalRequested. GrantID distinguishes
+		// the two structurally, but only for a surface that remembers to check
+		// it; a kind that is wrong is caught by audit's partition machinery
+		// instead of rendering a wrong sentence.
 		Kind: AuditKindApprovalGrantRequested, Principal: p,
 		ApprovalID: requestID, PlanHash: request.PlanHash, GrantID: grantID,
 		Reason:   "batch/window grant requested: " + summary,
@@ -264,8 +264,8 @@ func (a *Approvals) RevokeGrant(ctx context.Context, p Principal, id, reason str
 		Reason: fmt.Sprintf("batch/window grant %s revoked by %s after %s: %s — %s",
 			revoked.ID, p.Account, revoked.Progress(), revoked.Summary, reason),
 		Asserted: AssertionsFromContext(ctx),
-		// ApprovalAnswer and DecisionChannel are deliberately left zero
-		// (#545): a revocation is not a Decision — nobody answered a parked
+		// ApprovalAnswer and DecisionChannel are deliberately left zero:
+		// a revocation is not a Decision — nobody answered a parked
 		// Job — and GrantID above is already this entry's structural
 		// discriminator from a real answer.
 	}

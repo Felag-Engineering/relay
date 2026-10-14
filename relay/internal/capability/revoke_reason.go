@@ -29,8 +29,8 @@ const MaxRevokeReasonBytes = 512
 // Revoking a Node is the middle rung of ADR-0020's incident ladder and it is
 // irreversible: the Node's certificate stops being trusted and it must
 // re-enrol. The trail could already answer who revoked and when; without this
-// it could not answer why, which is the half of attribution that matters
-// (#487). The `relay:` lane exists so that security-sensitive actions are
+// it could not answer why, which is the half of attribution that matters.
+// The `relay:` lane exists so that security-sensitive actions are
 // attributable, and an unattributed irreversible action is the gap.
 //
 // Defined in the capability layer, next to ErrFreezeReasonRequired and for the
@@ -45,7 +45,7 @@ var ErrRevokeReasonTooLong = fmt.Errorf("capability: a Node-revocation reason ma
 // ErrRevokeReasonMalformed is returned by ValidateRevokeReason when the reason
 // is not valid UTF-8 or carries a C0 control character.
 //
-// Unlike #504's node-label gate, this is HYGIENE AND NOT DEFENCE, and the
+// Unlike the node-label gate, this is HYGIENE AND NOT DEFENCE, and the
 // distinction is worth stating so a later reader does not mistake it for a
 // trust boundary: a revocation reason is written by an authenticated `admin`,
 // not by a Node, so there is no attacker on this input who is not already
@@ -83,8 +83,8 @@ var ErrRevokeReasonMalformed = errors.New("capability: a Node-revocation reason 
 // surface that authenticated the operator while the set of Nodes is decided
 // inside the cascade's re-scan, the only place that knows it.
 //
-// Since #605, "cannot revoke unattributed" holds on the single-Node route in
-// one of two ways: either this reason is recorded through the caller's own
+// "Cannot revoke unattributed" holds on the single-Node route in one of two
+// ways: either this reason is recorded through the caller's own
 // call, or — when this Relay process already wrote a node_revoke record for
 // this Node through a cascade — the record that already exists is the one
 // that stays attributed, and RevokeNodeRecorded revokes without writing a
@@ -127,7 +127,7 @@ func ValidateRevokeReason(raw string) (string, error) {
 			return "", ErrRevokeReasonMalformed
 		}
 		// Bidi overrides and zero-width characters are refused for the same
-		// reason #504 refused them in node labels: they make the rendered
+		// reason node labels refuse them: they make the rendered
 		// string differ from the stored one. Here the stakes are a trust
 		// screen — a U+202E inside the reason on Node detail visually reorders
 		// the attribution text around it, so the next human reading the trail
