@@ -4,7 +4,7 @@
 # and cannot be read without the tracker open. AGENTS.md "Code comments" is the policy.
 #
 # Checked: tracked non-test Go under relay/ (generated *.pb.go excluded), and tracked Rust
-# under daemon/ outside tests/, benches/ and fuzz/, up to a file's first #[cfg(test)].
+# under daemon/ outside tests/, benches/ and fuzz/, up to a file's first #[cfg(test)] or #![cfg(test)].
 # Exempt: `Deprecated:` lines. Test files may cite the issue they regress.
 #
 # Exit 1 with file:line for each finding; exit 0 when clean.
@@ -19,7 +19,7 @@ files() {
 
 findings=$(files | while IFS= read -r f; do
   awk -v f="$f" '
-    /^#\[cfg\(test\)\]/ && f ~ /\.rs$/ { exit }
+    /^#!?\[cfg\(test\)\]/ && f ~ /\.rs$/ { exit }
     {
       line = $0
       i = index(line, "//")
