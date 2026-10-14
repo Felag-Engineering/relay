@@ -171,8 +171,8 @@ type nodeView struct {
 	// record says nothing", because the registry retains RevokedAt whether or
 	// not the trail was ever wired.
 	//
-	// RevocationReason is why, and is EMPTY FOR EVERY REVOCATION PREDATING
-	// #487, when the endpoint accepted no reason to record. That is a third
+	// RevocationReason is why, and is EMPTY FOR EVERY REVOCATION RECORDED
+	// while the endpoint accepted no reason to record. That is a third
 	// state, not a variant of the other two: the trail has a record, the
 	// record names an Account, and the reason field is blank because there was
 	// nowhere to put one. The template says so rather than rendering an empty
@@ -406,7 +406,7 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 	v.PolicyShared, v.TemplateShared = detail.PolicyPeers, detail.TemplatePeers
 
 	// The reported-Policy panel arrives with the describe_node result itself
-	// (#680): detail.Policy/detail.PolicyReported are the same lane call
+	// (QRY-28): detail.Policy/detail.PolicyReported are the same lane call
 	// already recorded above against this Node id, not a second door into
 	// the display-only policyview cache. ADR-0025 names a Node's Policy as
 	// part of exactly what describe_node discloses.
@@ -445,13 +445,11 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 			// survive in the Activity trail either way; what is protected here
 			// is which one this summary attributes.
 			//
-			// #605 narrows how often a second record exists at all: the
-			// Control API no longer writes one for a Node whose cascade
-			// revocation this Relay process already recorded, so that specific
-			// case is rarer now. A repeat operator revoke, and any revoke that
-			// follows a Relay restart, still produce a second record exactly as
-			// before — so first-match stays the defence this screen needs, not
-			// a formality. No behaviour change on this screen.
+			// The Control API writes no second record for a Node whose cascade
+			// revocation this Relay process already recorded, but a repeat
+			// operator revoke, and any revoke that follows a Relay restart,
+			// still produce one — so first-match stays the defence this screen
+			// needs, not a formality.
 			for i := range recs {
 				if recs[i].Kind == audit.KindNodeRevoke {
 					v.RevokedBy = principalText(factsOfRecord(recs[i]))

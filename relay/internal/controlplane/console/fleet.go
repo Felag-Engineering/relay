@@ -54,8 +54,7 @@ import (
 // "Not reported" is not a fifth hue. It is a hollow cell — an outline with no
 // fill — on the fill-versus-outline channel, which is separate from hue, so
 // the four-hue pop-out argument survives. Without it an unreported Node is
-// drawn as a filled green "normal" cell, which is the false reassurance #833
-// reported.
+// drawn as a filled green "normal" cell, which is false reassurance.
 type wallBucket string
 
 const (
@@ -65,7 +64,7 @@ const (
 
 	// wallUnreported is a Node with no recorded Hello: no daemon version or no
 	// Policy fingerprint. A Console presentation bucket only — not a state:
-	// value and not a Selector term (owner decision on #833, 2026-10-01).
+	// value and not a Selector term (owner decision, 2026-10-01).
 	wallUnreported wallBucket = "unreported"
 
 	// wallFenced is "a person deliberately took this Node out of the fleet" —
@@ -198,7 +197,7 @@ type facetValue struct {
 	// irreversible thing a person did.
 	Fenced string
 	// Targetable is false for a value the Selector parser cannot express yet
-	// (a `state:` or `tag:` term — #414). Rendered as text rather than a
+	// (a `tag:` term). Rendered as text rather than a
 	// link, because a filter link that produced a parse error would teach an
 	// operator that the filter box is unreliable.
 	Targetable bool
@@ -253,8 +252,8 @@ type fleetGroup struct {
 	// Unreported counts Nodes with no recorded Hello (see unreported). They
 	// are counted here once and never in OffMode.
 	Unreported int
-	// Expiring counts state:cert-expiring — the identity-alarm marker #414
-	// adds a threshold for. A marker no rollup counts is a half-landed
+	// Expiring counts state:cert-expiring — the identity-alarm marker
+	// (ADR-0034). A marker no rollup counts is a half-landed
 	// marker: it would render on the row but never surface in the card's
 	// header line.
 	Expiring int
@@ -339,8 +338,7 @@ type fleetView struct {
 	// "Can I reach it?" is answered from a socket state read at render time,
 	// and live updates are not built. Without a stamp, a tab left open
 	// overnight shows a confidently green fleet from twelve hours ago, with
-	// relative last-seen values stale in the same direction. When #416 lands,
-	// the live indicator goes here.
+	// relative last-seen values stale in the same direction.
 	Now time.Time
 
 	Groups []fleetGroup
@@ -707,7 +705,7 @@ func cellSize(n int) string {
 //
 // A Console presentation bucket only. It is NOT a state: value, not a
 // Selector term, and never placed in nodestate — the owner's decision of
-// 2026-10-01 on #833, which leaves the closed state: vocabulary (invariant 7)
+// 2026-10-01, which leaves the closed state: vocabulary (invariant 7)
 // untouched. Node detail uses this same function.
 func unreported(n registry.Node) bool {
 	return n.DaemonVersion == "" || n.PolicyFingerprint == ""
@@ -840,16 +838,15 @@ func stateChips(ls []nodestate.Label) []Label {
 
 // declaredChips returns the labels somebody SET: node:, tag: and relay:.
 //
-// `tag:` is DELIBERATELY ABSENT. It has no storage until #430, so this screen
+// `tag:` is DELIBERATELY ABSENT. It has no storage (ADR-0020), so this screen
 // has no source for one, and the honest rendering is none.
 //
-// An earlier version of this comment claimed tags were read from a `tag.` key
-// prefix inside the relay-label map. They were not, and if #430's interim
-// storage ever does land them there, the loop below would render an operator's
+// Tags are not read from a `tag.` key prefix inside the relay-label map. If
+// `tag:` storage ever lands them there, the loop below would render an operator's
 // ad-hoc grouping label as a `relay:` chip — lock glyph, security hue,
 // data-lane="security" — which is the single confusion the four-namespace
 // grammar exists to prevent (invariant 7: `tag:` is never a valid security-lane
-// target). When #430 lands, split on the prefix HERE, in one place, and assert
+// target). When `tag:` storage lands, split on the prefix HERE, in one place, and assert
 // that a tag never renders with the security lane.
 func declaredChips(n registry.Node) []Label {
 	var out []Label
@@ -867,11 +864,10 @@ func declaredChips(n registry.Node) []Label {
 // names the reason.
 //
 // `tag:` is in the model (invariant 7, ADR-0020) and not resolvable: it has no
-// storage on registry.Node until #430 gives it one. The REFUSAL now lives in
-// capability.ParseSelector, not here. This screen used to guard it
-// itself, which meant MCP's list_nodes answered the same term with 200 and an
-// empty list while this box refused it — the surface-local guard was how the
-// two drifted. What is left here is rendering: recognise the sentinel and say
+// storage on registry.Node. The REFUSAL lives in capability.ParseSelector, not
+// here: a surface-local guard is how MCP's list_nodes and this box would
+// drift, one answering the same term with 200 and an empty list while the
+// other refused it. What is left here is rendering: recognise the sentinel and say
 // it in this screen's register, never re-decide it.
 //
 // `state:` is NOT special-cased at all (ADR-0034): it resolves through
@@ -1383,15 +1379,14 @@ func templateSetFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 
 // nodeRoleFacet builds the node:role facet; false when no Node contributes a value.
 //
-// node:role's value is now well-formed BY CONSTRUCTION at ingress
-// (registry.WellFormedLabel, applied by protoconv.ParseNodeLabel —
-// #504): every node: label stored in the registry has already been
+// node:role's value is well-formed BY CONSTRUCTION at ingress
+// (registry.WellFormedLabel, applied by protoconv.ParseNodeLabel): every node: label stored in the registry has already been
 // refused if it could render as more than one Selector term, so
 // "node:role=" + k below is safe for exactly that reason, at the one
 // gate that protects the registry, the Control API and MCP too, not just
 // this renderer. Naming the predicate here rather than re-deriving the
 // argument is deliberate — a second, Console-local validation path is
-// precisely the fork #488 exists to remove.
+// precisely the fork the single ingress gate exists to prevent.
 func nodeRoleFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 	roles := map[string]int{}
 	for _, n := range nodes {
@@ -1523,8 +1518,8 @@ func sortFacet(f *facet) {
 //
 // render is keyed by the map's FULL-value key, not the display string: the
 // fingerprint and template-set facets bucket by the full self-reported value
-// while displaying a shortHash label, so label and key are no longer the
-// same string. render returns the label, the recorded Selector term, and
+// while displaying a shortHash label, so label and key are not the same
+// string. render returns the label, the recorded Selector term, and
 // whether the value is targetable; a refused value MUST come back with an
 // empty term — facetFrom uses targetable, never term itself, to decide
 // whether to compute an Href, so a caller cannot smuggle a term through

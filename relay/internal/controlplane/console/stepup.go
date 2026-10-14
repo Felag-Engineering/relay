@@ -8,7 +8,7 @@ package console
 //
 //   - stepUpWindowed: the four privilege-granting Account acts. An empty
 //     password proceeds only while consoleauth says this session's step-up
-//     stamp is fresh (owner decision 2026-10-05, #879: one password per
+//     stamp is fresh (owner decision 2026-10-05: one password per
 //     window). the composer uses stepUpPerAct unless a human first
 //     amends ADR-0026 decision 3 and threat-model R11.
 //   - stepUpPerAct: approval decide (approval.md AP-16: "re-authenticates at

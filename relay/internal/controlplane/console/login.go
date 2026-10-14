@@ -1,6 +1,6 @@
 package console
 
-// login.go is the Console's only unauthenticated surface (#418, spec
+// login.go is the Console's only unauthenticated surface (spec
 // docs/design/console/12-login.md).
 //
 // # What this file is careful about
@@ -495,9 +495,9 @@ func handleLogout(d Deps) http.HandlerFunc {
 			// believes happened and did not", which is the exact failure the
 			// comment below refuses to allow for a different reason. It is not
 			// browser-reachable, so this is a wiring alarm rather than a live
-			// hole; it is a 500 because the next consumer of this seam (#428's
-			// step-up POST) will copy whatever shape it finds here, and the
-			// shape it must copy is "no session, no action".
+			// hole; it is a 500 because every consumer of this seam, the
+			// step-up POST included, shares one shape: "no session, no
+			// action".
 			d.logger().ErrorContext(r.Context(), "console sign-out reached without a resolved browser session",
 				"path", r.URL.Path)
 			http.Error(w, "the Relay could not identify the session to end", http.StatusInternalServerError)

@@ -510,8 +510,8 @@ type StepUp struct {
 // make the fleet do more than it was already doing.
 //
 // A third paragraph, beside the two above, so the package does not quietly
-// acquire two step-up idioms: the approval decision form (#453, decide.go
-// and approvals.go's approvalDecideControl) deliberately does NOT use
+// acquire two step-up idioms: the approval decision form (decide.go and
+// approvals.go's approvalDecideControl) deliberately does NOT use
 // [StepUp], even though deciding an approval is exactly the kind of mutate
 // release step-up exists for. StepUp models a STANDALONE confirmation — its
 // own FormAction, one "Authorise" button, and a WindowText that assumes the
@@ -579,9 +579,7 @@ func newRefresh(path string, q url.Values) Refresh {
 // events for a region a user is reading queue behind an explicit control.
 // Build it once").
 //
-// It is built once because day one built the transport half in its own script
-// file and #422 was going to inherit whatever shape that took. Two copies of a
-// reconnect loop is two backoff policies, and the second one is the one nobody
+// It is built once because two copies of a reconnect loop is two backoff policies, and the second one is the one nobody
 // looks at again.
 //
 // What the client is allowed to do to this region is exactly three things:

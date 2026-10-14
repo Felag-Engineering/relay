@@ -43,11 +43,11 @@ package console
 // The cost is stated on screen rather than hidden. An Account whose most
 // recent call is older than the page renders "no tool call in the last N
 // recorded calls" — never blank, never a zero, and never a claim that it has
-// never called. Two alternatives were rejected in #654: one QueryAudit per
-// machine Account (correct for arbitrarily old calls, but it writes N read
-// records per page view, inflating the very trail Activity renders), and a
-// LastToolCallByAccount method on the read lane (the right answer, and scope
-// this issue should not absorb).
+// never called. Two alternatives were rejected: one QueryAudit per machine
+// Account (correct for arbitrarily old calls, but it writes N read records per
+// page view, inflating the very trail Activity renders), and a
+// LastToolCallByAccount method on the read lane (the right answer, and not
+// built).
 //
 // # What must not appear here (spec 15, "Must not appear")
 //
@@ -57,8 +57,8 @@ package console
 // configuration of any kind (invariant 11): the role block is prose about
 // where the boundary falls, never an inventory of editable values.
 //
-// The write half landed in #655 (accounts_write.go), so this file now renders
-// forms as well as rows. The forms for an existing Account render only in the
+// The write half lives in accounts_write.go, and this file renders forms as
+// well as rows. The forms for an existing Account render only in the
 // SELECTED Account's panel; the list is read-only. What stays absent is
 // a role or PERMISSION editor of any kind — the three roles are ADR-0010's
 // closed set and a custom-permission builder is a second authorization model —

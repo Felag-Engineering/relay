@@ -190,7 +190,7 @@ func renderScreen(w http.ResponseWriter, p Page, tmpl *template.Template, data a
 }
 
 // notFoundTmpl is the styled 404, mounted on every unmatched /console/ path
-// and reused by every refusal that used to fall through to net/http's plain
+// and reused by every refusal that would otherwise fall through to net/http's plain
 // "404 page not found" (see console.go's gated and methodMismatch).
 //
 // It echoes NOTHING caller-supplied — no request path, no query, no header —
@@ -397,7 +397,7 @@ func (l *auditLatch) QueryTasks(ctx context.Context, p capability.Principal, f c
 // RecordEventSubscription is here for the same reason every other method on
 // this type is: an un-overridden QueryReader method would bypass the latch
 // silently, which is precisely the hole this type's doc comment claims not
-// to have. It is NOT exercised by #539's own code path — handleEvents calls
+// to have. It is NOT exercised by the events route — handleEvents calls
 // d.Queries.RecordEventSubscription directly, never through latched(d),
 // because it must see the error itself and refuse before writing the 200
 // rather than deferring to a page-render-time latch check. Added for

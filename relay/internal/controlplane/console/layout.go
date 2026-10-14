@@ -240,10 +240,8 @@ func placeholder(title, spec string) func(Deps) http.HandlerFunc {
 //
 // StripPrefix is load-bearing rather than tidy: the embedded FS is rooted at
 // "assets/", and a FileServer handed the request path unmodified looks for
-// "console/assets/console.css" and 404s. That is what it did — every Console
-// page rendered completely unstyled, and no test caught it because the shell
-// landed before anything mounted it (#439, found when #418 first stood the
-// Console up in a browser).
+// "console/assets/console.css" and 404s, and every Console page renders
+// completely unstyled.
 //
 // TestConsole_StylesheetIsActuallyServed is the regression guard, and it
 // asserts the BODY rather than the status, because a 404 page is also a 200-

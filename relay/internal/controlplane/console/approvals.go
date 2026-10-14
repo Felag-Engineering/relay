@@ -2,7 +2,7 @@ package console
 
 // approvals.go is the queue (spec 14) and the single approval object (spec
 // 08). The queue is read-only, structurally; the object carries the decision
-// control since #453 — see the two section headers below.
+// control — see the two section headers below.
 //
 // # Why there is no Approve button here, and will not be one on a row
 //
@@ -140,8 +140,8 @@ type approvalRow struct {
 	//
 	// It is the stored shape key: the Action, its risk class, its shape
 	// arguments and the normalised Selector, WITHOUT the resolved fan-out. A
-	// record with no comparable shape — pre-#415 rows carry a legacy key —
-	// groups with NOTHING rather than with every other such record.
+	// record with no comparable shape — an empty or legacy key — groups with
+	// NOTHING rather than with every other such record.
 	//
 	// IT IS UNEXPORTED, AND THAT IS A SECURITY PROPERTY RATHER THAN A STYLE
 	// CHOICE. html/template refuses an unexported field at execution time, so
@@ -270,7 +270,7 @@ func handleApprovals(d Deps) http.HandlerFunc {
 		// Requests and the live Approval grants below (the Scope lines a
 		// grant row carries) come from d.Approvals, whose methods write no
 		// read record, so neither this page nor a Refresh of it is audited.
-		// That is a known gap, #779, and the screen says so beside Refresh.
+		// That is a known gap, and the screen says so beside Refresh.
 		// The latch is still applied so that any read-lane call added here
 		// later is refused when it cannot be audited, the rule every other
 		// screen follows (screen.go).
@@ -369,7 +369,7 @@ func buildApprovalRows(reqs []approval.Request, grants map[string]approval.Grant
 
 	// Nearest expiry first, on the DURATION, with a lapsed request LAST.
 	//
-	// Lapsed-last reverses what this screen used to do. An undecidable request
+	// Lapsed-last is deliberate. An undecidable request
 	// at the top of the queue pushes decidable ones below the fold, which is
 	// the exact failure spec 14 names — and capability.PendingApprovals already
 	// filters past-deadline rows, so a lapsed row here means the clock moved
@@ -377,8 +377,7 @@ func buildApprovalRows(reqs []approval.Request, grants map[string]approval.Grant
 	//
 	// Spec 14 also asks for "then largest fan-out" as the tiebreak. THAT IS NOT
 	// IMPLEMENTED AND CANNOT BE: the approval record carries no fan-out, and a
-	// park creates no Job to count Tasks on. #462 stays open for it rather than
-	// this comment promising something the data cannot support. The tiebreak is
+	// park creates no Job to count Tasks on. The tiebreak is
 	// creation time and then ID, which is arbitrary but STABLE — a queue that
 	// reorders between two renders of the same data is its own hazard.
 	sort.SliceStable(rows, func(i, j int) bool {
@@ -458,7 +457,7 @@ func grantRowLine(g approval.Grant) string {
 	}
 	// A Scope has no namespace term, so this row never carries one. This
 	// caller is fed only by ActiveGrants (buildApprovalRows), and Grant.Active
-	// refuses a pre-#482 legacy-pinned Grant, so a dead pin can never reach
+	// refuses a legacy-pinned Grant (ADR-0027), so a dead pin can never reach
 	// here to render as if it still covered anything.
 	return strings.Join([]string{
 		"Grant",
@@ -876,9 +875,8 @@ type decisionRow struct {
 	Kind string
 
 	// At is the stamped decision time and Ago its relative form. It is
-	// PERSISTED (approval_decisions.decided_at) and read back by the store;
-	// the card left it blank until #468 noticed, which turned "mike signed 2h
-	// ago" into "mike signed".
+	// PERSISTED (approval_decisions.decided_at) and read back by the store, so
+	// the card reads "mike signed 2h ago", never "mike signed".
 	At  string
 	Ago string
 }
@@ -950,8 +948,8 @@ type grantCard struct {
 	MaxUses    int
 	Progress   string
 
-	// LegacyNamespacePin is set only for a Grant stored before #482 removed
-	// namespace pinning. Such a Grant is never Active and covers nothing (see
+	// LegacyNamespacePin is set only for a Grant stored with a namespace pin,
+	// a term a Scope does not have (ADR-0027). Such a Grant is never Active and covers nothing (see
 	// approval.Grant.Active); the card says so rather than reusing the prose
 	// written for a live Scope.
 	LegacyNamespacePin string
@@ -1041,8 +1039,7 @@ type approvalView struct {
 	// template to infer from Audience. A malformed audience is NON-EMPTY (it
 	// names at least one blank entry), so rendering it through the same
 	// {{with .Audience}} branch as a real audience would read as "these named
-	// Accounts may decide", when the domain admits none of them (#608 cycle
-	// 2). The predicate is consumed from the domain, never re-decided here
+	// Accounts may decide", when the domain admits none of them. The predicate is consumed from the domain, never re-decided here
 	// (invariant 10: an adapter narrows only).
 	AudienceMalformed bool
 
@@ -1507,7 +1504,7 @@ const (
 // approval_grants. That is exactly the spec's headline sentence. The
 // namespace field it hashes is only ever a legacy pin: a Scope has no
 // namespace term, so it is empty for every Grant this Console can create and
-// carries meaning only for a pre-#482 Grant.
+// carries meaning only for a legacy-pinned Grant (ADR-0027).
 //
 // A PLAN gets shape identity plus a scale-argument diff. The shape key already
 // guarantees the Operation, its risk class, its shape arguments and the

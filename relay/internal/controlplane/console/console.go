@@ -95,9 +95,9 @@ type Deps struct {
 	// Every registry and Policy-view read is Deps.Queries now (QRY-28):
 	// the Compare screen and the Node-detail Policy panel ask through
 	// DescribeNode, the same audited door the fleet listing and node detail
-	// have used since #450. There is no unaudited registry door left.
+	// use. There is no unaudited registry door.
 	//
-	// Audit is down to one screen too: #542 moved AI-agent history onto Queries,
+	// Audit has one screen too: AI-agent history reads through Queries,
 	// leaving node detail's Recent Tasks panel and its node_revoke lookup as
 	// the only reader of the whole trail through this seam.
 	Audit     AuditReader
@@ -142,7 +142,7 @@ type Deps struct {
 	// That is not an ADR-0025 violation — decision 1 scopes to non-dispatching
 	// read TOOLS, and these two are ControlActions — and it is not this
 	// package's to fix: a RecordRead here is what read_audit_test.go forbids.
-	// #659 tracks it against internal/capability, where the fix belongs.
+	// It is a known gap in internal/capability, where the fix belongs.
 	//
 	// Nil renders the screen unavailable rather than as an empty Account
 	// list. "You have no Accounts" is a claim about identity, and a Console
@@ -160,7 +160,7 @@ type Deps struct {
 	// Cancel is one of the Console's two write seams (cancel.go): the
 	// same capability.Execution.CancelJob the Control API and MCP call. The role
 	// floor is operator; the scope beyond that floor differs by Account kind
-	// (human: any Job, machine: only a Job it requested — #614). Both the
+	// (human: any Job, machine: only a Job it requested). Both the
 	// floor and that scope, plus the audit row, are the capability layer's;
 	// this package only renders what it decided. Nil means the control does
 	// not render and the route answers unavailable — the same "not wired"
@@ -180,8 +180,7 @@ type Deps struct {
 	// decideOffered and TestDecide_UnwiredSeamsOfferNothing.
 	Decide ApprovalDecider
 
-	// AccountAdmin is the Console's THIRD write seam (#655,
-	// accounts_write.go): the same five capability.AccountAdmin verbs the Control
+	// AccountAdmin is the Console's THIRD write seam (accounts_write.go): the same five capability.AccountAdmin verbs the Control
 	// API calls — CreateAccount, SetAccountRole, SetAccountEnabled,
 	// MintAPIToken and RevokeAPIToken. The admin floor on all of them, the
 	// self-target refusal, the last-enabled-admin refusal and every audit row
@@ -304,13 +303,10 @@ func Routes(d Deps) []Route {
 		// Policy Author (spec 06), Add Nodes (spec 09) and Incident (spec 16)
 		// are v0.7.0 screens, not built yet. They do
 		// not get a placeholder row: a v0.6.0 nav must not advertise a route
-		// that answers "not built yet", and Register no longer needs a
+		// that answers "not built yet", and Register needs no
 		// mounted-but-refusing row to keep a session from reaching one — the
-		// route is simply absent until its screen ships, and that issue adds
-		// its own row with its own MinRole.
-		//
-		// Accounts (spec 15) was the fourth of those until #654 mounted its
-		// read half, below.
+		// route is simply absent until its screen ships, with its own row and
+		// its own MinRole.
 		//
 		// Add Nodes was /console/nodes/add — a LITERAL segment under
 		// GET /console/nodes/{node_id} (above). With that row gone, the path
@@ -333,8 +329,7 @@ func Routes(d Deps) []Route {
 		{"GET", "/console/approvals/{approval_id}", NavEntry{}, accounts.RoleViewer, handleApproval},
 
 		// Accounts, read half (spec 15). The first route in the
-		// Administer group, which has drawn nothing since #464 removed the
-		// four placeholders.
+		// Administer group.
 		//
 		// MinRole is admin because ControlAccountRead is floored at admin on
 		// every surface (authz.go): this gate narrows to exactly the
@@ -480,8 +475,7 @@ func Routes(d Deps) []Route {
 		{"POST", "/console/approvals/{approval_id}/decision", NavEntry{}, accounts.RoleOperator, handleDecideApproval},
 	}
 
-	// This placeholder stays mounted, unlike the four below that were removed
-	// (#464): it is only ever appended when d.Execution is true, the
+	// This placeholder stays mounted: it is only ever appended when d.Execution is true, the
 	// composition root hard-codes Execution:false (control_surfaces.go), so it
 	// is not mounted in any shipped v0.6.0 configuration and is not in a
 	// v0.6.0 nav. It is also the ONLY fixture behind

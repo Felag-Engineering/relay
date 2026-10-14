@@ -302,8 +302,8 @@ type activityRow struct {
 	// everywhere else: on a Job that recorded none, and on every non-dispatch
 	// row, whose audit record carries no kind. It is NEVER looked up from the
 	// Account registry, which would report the Account's kind today and
-	// relabel history once an Account is converted (#540; 04-activity.md,
-	// "Kind is never read from the registry").
+	// relabel history once an Account is converted (04-activity.md, "Kind is
+	// never read from the registry").
 	RequesterKind string
 
 	Selector string
@@ -314,8 +314,8 @@ type activityRow struct {
 	Args      string
 	Risk      string
 
-	// State is #498's `.chip.state` vocabulary (currently just
-	// "approved"/"denied", #545): a decision's structured answer.
+	// State is the `.chip.state` vocabulary (currently just
+	// "approved"/"denied"): a decision's structured answer.
 	// dispatchRowFromJob leaves it empty — a Job is not a Decision.
 	State string
 
@@ -812,9 +812,8 @@ type activityView struct {
 	EventCount   int
 }
 
-// kindChip is one family link. It carries NO COUNT, and that is a deletion
-// rather than an omission: the counts this screen used to print were only ever
-// computable because the entire window was in memory. Counting per family
+// kindChip is one family link. It carries NO COUNT, deliberately: a count is
+// computable only with the entire window in memory. Counting per family
 // across a paginated trail would take one aggregate query per family, each of
 // which writes its own read record — one extra row in the append-only trail
 // for every number it would print. job.go states the rule this follows: a
@@ -1090,8 +1089,8 @@ func activityCollapseKey(r activityRow) (string, bool) {
 	return string(b), true
 }
 
-// collapseActivityRows folds each run of CONSECUTIVE identical rows (#541,
-// spec 04, "Polling") into one row carrying its call count. Rows arrive
+// collapseActivityRows folds each run of CONSECUTIVE identical rows (spec 04,
+// "Polling") into one row carrying its call count. Rows arrive
 // newest-first, so the row folded in is older and FirstWhen ends up the oldest
 // call's When. See foldRuns for why it never reaches past an adjacent row.
 func collapseActivityRows(rows []activityRow) []activityRow {
@@ -1485,7 +1484,7 @@ func summarize(f trailFacts) string {
 	case audit.KindApprovalRequested:
 		return "parked a dispatch for approval"
 	case audit.KindApprovalGrantRequested:
-		// #546: a Grant is an ask for STANDING authority over many future
+		// A Grant is an ask for STANDING authority over many future
 		// dispatches, so it must not read as one Plan waiting for one answer.
 		return "requested an Approval grant"
 	case audit.KindApprovalPendingObserved:
@@ -1494,7 +1493,7 @@ func summarize(f trailFacts) string {
 		// Same discriminators as agents.go's agentCallFrom, no new vocabulary:
 		// GrantID is RevokeGrant's structural marker; the structured
 		// answer otherwise names which way the decision went; a
-		// pre-#545 decision with neither falls back to the original sentence.
+		// decision recorded with neither falls back to the original sentence.
 		switch {
 		case f.GrantID != "":
 			return "revoked an Approval grant"

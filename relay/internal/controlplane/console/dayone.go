@@ -23,8 +23,7 @@ package console
 //
 // It does not embed the quickstart, and it does not render a checklist of steps
 // the Console cannot verify — spec 10's "what this screen is not", in both
-// cases. The three-step tutorial this screen used to carry was exactly that
-// checklist, and it is gone.
+// cases.
 //
 // # The live watch, and what it cannot see
 //

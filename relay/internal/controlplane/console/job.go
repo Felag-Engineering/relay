@@ -166,7 +166,7 @@ type taskRow struct {
 	// here, never a real process result. The daemon uses -1 for "no exit
 	// status": denied before spawn, spawn failure, signal kill, timeout kill.
 	// A Relay-synthesized outcome (unreachable, version_refused) carries a
-	// zero that means nothing at all. And since #632, the Relay itself writes
+	// zero that means nothing at all. And the Relay itself writes
 	// -1 on a failure row whose daemon report the wire boundary refused as a
 	// protocol violation — the Task may well have executed; what happened
 	// there is unknown.
@@ -319,8 +319,8 @@ type jobView struct {
 	// "machine", or empty for a Job that recorded none. It is read from
 	// nothing else — not the dispatch record (which carries no kind), and
 	// never the Account registry, which would report the Account's kind
-	// today and relabel history once an Account is converted (#540;
-	// 04-activity.md, "Kind is never read from the registry").
+	// today and relabel history once an Account is converted
+	// (04-activity.md, "Kind is never read from the registry").
 	// A Job whose Principal fell back to the dispatch record has no recorded
 	// requester on its row, so this is empty for it too.
 	RequesterKind string
@@ -419,8 +419,8 @@ type jobDecider struct {
 	Verified bool
 
 	// Kind is deciderKind(Decision.DeciderHuman): "human" or "machine", read
-	// from the decision's own record and never from the Account registry
-	// (#540). Both render as the kind label beside the chip, so a machine-
+	// from the decision's own record and never from the Account registry.
+	// Both render as the kind label beside the chip, so a machine-
 	// issued approval never reads like a person's and a person's is not the
 	// unmarked case.
 	Kind string

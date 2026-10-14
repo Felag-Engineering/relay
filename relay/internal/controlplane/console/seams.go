@@ -38,29 +38,24 @@ package console
 // gets its own file so this file's "every seam here is read-only" claim stays
 // true of seams.go without qualification.
 //
-// The filtered, paginated, per-principal audit/Job query lane landed in the
-// capability layer as issue #441 — see QueryReader below. Job detail was the
-// first screen to migrate onto it and reads nothing else: its counts
-// are one aggregate row and its Task rows are small per-outcome pages, so
-// the screen is bounded by construction at 10,000 Nodes rather than capped
-// after the fact. Read egress migrated next and reads nothing else
-// either (the screen was retired on 2026-10-01). Activity followed,
-// reading BOTH halves of the lane: its dispatch rows come from QueryJobs one
-// row per Job at any fan-out, and
-// everything else from QueryAudit. #450 then added the lane's REGISTRY half
-// and moved the fleet listing and node detail onto it, which is what made
-// those two screens audited (ADR-0025) rather than merely bounded. #542
-// moved agent history onto QueryAudit too, reshaping its 200-record WINDOW
-// into a 200-row PAGE with an Older link — the last of #450's writing-time
-// exemptions to close. #680 closed the last exemption: every registry and
-// Policy-view read is Deps.Queries now — there is no longer a second,
-// unaudited door (see QueryReader below, and compare.go).
+// The filtered, paginated, per-principal audit/Job query lane is the
+// capability layer's — see QueryReader below. Job detail reads nothing else:
+// its counts are one aggregate row and its Task rows are small per-outcome
+// pages, so the screen is bounded by construction at 10,000 Nodes rather than
+// capped after the fact. Activity reads BOTH halves of the lane: its dispatch
+// rows come from QueryJobs one row per Job at any fan-out, and everything
+// else from QueryAudit. The fleet listing and node detail read the lane's
+// REGISTRY half, which is what makes those two screens audited (ADR-0025)
+// rather than merely bounded. Agent history reads QueryAudit as a 200-row
+// PAGE with an Older link. Every registry and Policy-view read is
+// Deps.Queries (QRY-28) — there is no second, unaudited door (see QueryReader
+// below, and compare.go).
 //
-// AuditReader now serves exactly ONE thing: node detail's Recent Tasks panel
+// AuditReader serves exactly ONE thing: node detail's Recent Tasks panel
 // and its node_revoke lookup, both read BY NODE through ByNode. That panel is
 // covered by the describe_node record node detail already writes for the Node
 // it is about; migrating it onto the lane's paging is its own reshaping work,
-// not #542's, and until it does AuditReader keeps capping what it renders
+// and until it does AuditReader keeps capping what it renders
 // and SAYING it capped it — see nodeTaskRows (node.go).
 
 import (
@@ -85,10 +80,9 @@ import (
 // detail) now reads one bounded page through QueryReader instead. Nothing
 // else asked for it, so the seam does not keep offering it.
 //
-// List is deliberately absent too, since #542: it was agent history's own
-// whole-trail read, and agent history is the last screen that reasoned about
-// the trail as one unbounded slice. Deleting the method rather than merely
-// leaving it unused is the cheap half of a structural win — a future screen
+// List is deliberately absent too: a whole-trail read lets a screen reason
+// about the trail as one unbounded slice. Having no such method is the cheap
+// half of a structural win — a future screen
 // physically cannot re-acquire the whole trail through Deps, because there is
 // no method here to call. ByNode is what remains, for node detail's Recent
 // Tasks panel and its node_revoke lookup.
@@ -100,8 +94,8 @@ type AuditReader interface {
 // (ADR-0027). *capability.Approvals satisfies all five methods.
 //
 // DecideApproval is still absent FROM THIS INTERFACE, which is still
-// read-only — the decision method lives on ApprovalDecider in decide.go
-// (#453), for the same reason JobCanceller lives in cancel.go rather than
+// read-only — the decision method lives on ApprovalDecider in decide.go,
+// for the same reason JobCanceller lives in cancel.go rather than
 // here: this file's "every seam here is read-only" header stays true without
 // qualification. RequestGrant and RevokeGrant both remain absent from every
 // seam this package holds. RevokeGrant is worth naming explicitly because it
@@ -125,13 +119,13 @@ type ApprovalReader interface {
 	GrantForApproval(ctx context.Context, requestID string) (approval.Grant, error)
 }
 
-// AccountReader is the Account registry and its API Tokens, read-only (#654,
-// spec 15). *capability.AccountAdmin satisfies both methods, which landed in
-// #653, so no adapter is built for this seam.
+// AccountReader is the Account registry and its API Tokens, read-only (spec
+// 15). *capability.AccountAdmin satisfies all three methods, so no adapter is
+// built for this seam.
 //
 // EVERY WRITE VERB ON THE ACCOUNT LANE IS STILL ABSENT FROM THIS INTERFACE:
 // CreateAccount, SetAccountRole, SetAccountEnabled, MintAPIToken and
-// RevokeAPIToken. Since #655 all five live on AccountAdministrator in
+// RevokeAPIToken. All five live on AccountAdministrator in
 // accounts_write.go — the same split JobCanceller and ApprovalDecider already
 // take, which is what keeps this file's "every seam here is read-only" claim
 // true unqualified. MintAPIToken is the one worth naming on its own, because
@@ -150,25 +144,24 @@ type ApprovalReader interface {
 // answered and write no audit row on success (capability/accountadmin.go's
 // header); only a REFUSED read is recorded, through refuseControl. So "who
 // holds an identity on this control plane" can be read off this Relay without
-// the trail knowing — a gap tracked by #659 against the capability layer,
-// where the fix belongs. It is not an ADR-0025 defect (decision 1 scopes to
+// the trail knowing — a known gap in the capability layer, where the fix
+// belongs. It is not an ADR-0025 defect (decision 1 scopes to
 // non-dispatching read TOOLS, and these are ControlActions), and it is not
 // fixable here: a RecordRead call inside this package is exactly what
 // read_audit_test.go refuses. console.go's Deps.Accounts paragraph and the
 // consoleReadAudit entry for GET /console/accounts say the same thing, so
 // whichever of the three a reader lands on tells the whole story.
 //
-// Account(ctx, p, id) — the single-Account read — was deliberately absent
-// until #655, because the read half selects an Account out of the list it
-// already holds and this file's culture is to delete an unused method rather
-// than offer it (see AuditReader's List and ByJob). It is here now, for
-// exactly ONE caller: handleSetAccountRole (accounts_write.go) reads the
+// Account(ctx, p, id) — the single-Account read — has exactly ONE caller,
+// because the read half selects an Account out of the list it already holds
+// and this file's culture is to delete an unused method rather than offer it
+// (see AuditReader's List and ByJob): handleSetAccountRole (accounts_write.go) reads the
 // target's CURRENT role so it can tell a raise from a lower, because a raise
 // costs a password and a lower does not (owner decision, 2026-09-19).
 //
 // The read feeds the step-up classification, and the write that follows is a
-// compare-and-set against the role it read (capability.SetAccountRoleFrom,
-// #912), so a concurrent change between the two is refused rather than
+// compare-and-set against the role it read (capability.SetAccountRoleFrom),
+// so a concurrent change between the two is refused rather than
 // letting a raise through without step-up. See accounts_write.go's header.
 type AccountReader interface {
 	Accounts(ctx context.Context, p capability.Principal) ([]accounts.Account, error)
@@ -183,21 +176,16 @@ type AccountReader interface {
 // method set is what keeps this package's grip on the capability layer to
 // reads only.
 //
-// Job detail was its first consumer, read egress (#425, retired
-// 2026-10-01) its second, Activity its third, and agent history
-// its fourth. Landing the seam ahead of any screen using it is what let all
-// four be built against one settled contract instead of four
-// independently-guessed ones.
+// Job detail, Activity and agent history read through it, against one
+// settled contract.
 //
-// #450 added the REGISTRY half — ListNodes and DescribeNode. They are on this
-// seam because a read that goes through the capability layer is audited by
-// construction (ADR-0025). The fleet listing and node detail were the two
-// screens whose reads disclosed the most and recorded the least; they now ask
-// here — and since #680 there is no unaudited door left at all: FleetReader
-// and PolicyReader are gone, and the Compare screen and the Node-detail
-// Policy panel ask here too, through DescribeNode.
+// The REGISTRY half — ListNodes and DescribeNode — is on this seam because a
+// read that goes through the capability layer is audited by construction
+// (ADR-0025). The fleet listing, node detail, the Compare screen and the
+// Node-detail Policy panel all ask here, so there is no unaudited registry
+// door (QRY-28).
 type QueryReader interface {
-	// The registry half (reshaped by #680). ListNodes resolves and
+	// The registry half. ListNodes resolves and
 	// records selector (the empty string means the whole fleet — the
 	// Console's fleet filter is a facet over the page it already read, not a
 	// Selector; Selector-scoped enumeration is MCP's, QRY-3). DescribeNode is
@@ -221,8 +209,7 @@ type QueryReader interface {
 	// d.Events.Subscribe; the two must stay adjacent, because a record
 	// written after Subscribe could not honestly claim nothing was disclosed.
 	//
-	// The returned []string is load-bearing, not a convenience (#539 fix
-	// round, Finding 1): handleEvents MUST build d.Events.Subscribe's kind
+	// The returned []string is load-bearing, not a convenience: handleEvents MUST build d.Events.Subscribe's kind
 	// list from this return value, never from a kind list it computed
 	// earlier or re-derived from the request — that is what makes it
 	// structurally impossible for the stream to carry a kind set the record
@@ -282,8 +269,7 @@ type TrustReader interface {
 // RetentionWindow is here so a screen can state the window it can actually
 // see, read off the bus it is actually reading (events.Bus.RetentionWindow).
 //
-// A Subscription through here is a read the trail must know about (#539,
-// ADR-0025): handleEvents calls QueryReader.RecordEventSubscription
+// A Subscription through here is a read the trail must know about (ADR-0025): handleEvents calls QueryReader.RecordEventSubscription
 // immediately before Subscribe, naming the same kinds this call is about to
 // carry. The two calls must stay adjacent in handleEvents — this interface
 // has no way to enforce that itself, since Subscribe and the record it
