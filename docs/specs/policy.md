@@ -113,7 +113,8 @@ canonical path:
   atomically. Tasks already running finish under the Policy that admitted them; every later
   Task is evaluated against the new one.
 - **Any Policy error rejects the whole Policy** — a fragment that fails to parse, a duplicate
-  Template name, a fragment with unacceptable ownership or permissions, an invalid slot type, an
+  Template name, a fragment with unacceptable ownership or permissions, an invalid slot type, a
+  Template slot in a decidable code-running position (`operations-and-templates.md`), an
   unsupported pattern. The Node then denies every Task, stays connected, and reports
   `invalid` with the error and the fragment at fault. This holds identically at start and on
   reload: there is no last-known-good fallback, no partial load, and no built-in allowance.
@@ -191,7 +192,7 @@ _Not yet written._ This spec's claims are the backlog of its testing issue.
 - **Hypothetical evaluation** (`PolicyQuery`, preflight): `policy-preflight.md`.
 - **Displaying Policy** on the Relay: `query.md`.
 - **The Native vocabulary and the Template language** — the four Natives' argument schemas, slot
-  types and what makes a value well-formed, and how slot values are substituted and quoted:
+  types and what makes a value well-formed, and how slot values reach the shell:
   `operations-and-templates.md`.
 - **Relay-side authorization, approval, the blast-radius cap and Freeze**: `accounts-and-access.md`,
   `approval.md`, `execution.md`, `freeze.md`. Policy never consults them.

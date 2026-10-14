@@ -1,6 +1,6 @@
 # Operations and Templates
 
-**Status:** aspirational — worked through with the owner on `2026-09-13`, awaiting their review
+**Status:** aspirational — worked through with the owner on `2026-09-13`, Template language revised with the owner on `2026-10-14`, awaiting their review
 of this draft. Describes intended behaviour, not the code (see the establishing phase in
 `README.md`).
 
@@ -63,17 +63,32 @@ from those validators, so what a caller is told and what the daemon enforces can
   timeout, and slots, each with a type, a one-line description and an optional `allow` list. A
   Template without a description, or a slot without one, is a Policy error.
 - A Template name may not shadow a Native Operation's name.
-- **The body runs through a shell.** Authors may use pipes, fallbacks and redirection.
-- **Every slot is substituted as exactly one single-quoted word** and must stand alone as a
-  whitespace-delimited token in the body. No value can add a word, an operator, a redirection or
-  an expansion. This quoting path is the single point invariant 1 rests on for the Template tier.
+- **The body runs through a shell.** Authors may use the full shell — pipes, fallbacks,
+  redirection, here-documents, substitutions — because the text the shell parses is theirs alone.
+- **A slot value is never shell text** (ADR-0021, amended 2026-10-14; #974). Each placeholder must
+  stand alone as a whitespace-delimited token outside any quotes (kept, so a value is never glued
+  to the author's text) and becomes a quoted positional parameter (`"$1"`);
+  the values are passed to the shell as separate arguments. The parsed text is identical for every
+  call, so no value can add a word, an operator, a redirection or an expansion, in any POSIX shell. This
+  is the single point invariant 1 rests on for the Template tier. *Built today as single-quoted
+  splicing, which does not hold in every context (`AGENTS.md` gap table, #974; fixed by #977).*
+- **A slot fills only a data position.** A placeholder standing where its value would be executed,
+  where that is decidable from the body, is a Policy error: the command-name position, the operand
+  of `eval`/`.`/`source`, the argument after a shell's or interpreter's `-c`/`-e`, and arithmetic
+  contexts (`(( ))`, `$(( ))`, `let`). Code positions not reliably decidable (an `awk` or `sed` expression, `find -exec`,
+  `xargs` into a shell, an option that takes a command to run) are a `policy check` warning that
+  `--strict` fails. These two lists are the start of the Safe-Template hazard list (Future work)
+  and grow with it.
+- **No well-formed value is an option.** No daemon-owned slot type admits a value beginning with
+  `-`; an `enum` value is a literal the author chose.
 - **Slot types are a closed set owned by the daemon:**
 
   | Type | Well-formed | `allow` narrows by |
   |---|---|---|
   | `identifier` | Letters, digits and a small safe punctuation set, bounded length, never beginning with `-` | Exact values |
   | `integer` | Decimal, bounded digits | Exact values |
-  | `path` | Strict canonical absolute path | Policy's glob dialect |
+  | `path` | Strict canonical absolute path, no C0 control or DEL | Policy's glob dialect |
+  | `enum` | Exactly one of the author's listed values | — (the list is the constraint) |
 
   A slot with no `allow` accepts any well-formed value. Adding a type is a daemon release, a
   change to this spec, and a red-team case.
@@ -128,14 +143,15 @@ from those validators, so what a caller is told and what the daemon enforces can
 - **Class mismatch.** A daemon refuses a Task dispatched under a lower risk class than its own
   Policy declares.
 - **Policy errors in a Template definition** — a missing description, a slot not standing alone,
-  an unknown slot type, a name shadowing a Native — make the whole Policy `invalid` (`policy.md`).
+  a slot in a decidable code-running position, an unknown slot type, a name shadowing a Native — make the whole Policy `invalid` (`policy.md`).
 - **From the wire.** Nothing adds, changes or removes an Operation on a Node. The Relay never
   renders or substitutes a Template body.
 
 ## Governing ADRs and invariants
 
 - **Invariant 1 / ADR-0001** — nothing on the wire can compose or escalate a command. For
-  Templates this rests on the single quoting path and standalone slots; for Natives, on argv.
+  Templates this rests on slot values never being shell text (ADR-0021, amended 2026-10-14);
+  the code-position refusals are defence in depth beside it. For Natives, on argv.
 - **Invariant 13 / ADR-0012** — every Operation declares a risk class, and it chooses the cap. *(Invariant 13 amended 2026-10-02, ADR-0042: a Template Operation's class is Node-reported, and a dispatch takes the most restrictive class the Nodes it reaches report.)*
   Binds through the most-restrictive rule and the daemon's class check.
 - **Invariant 5 / ADR-0004** — the blast cap is enforced on the Relay before dispatch, over the
@@ -172,8 +188,14 @@ _Not yet written._ This spec's claims are the backlog of its testing issue.
   every Node reporting a Template reports `read` — a dispatch to one compromised Node, or to a set
   of them.
 - **An author can write an unsafe Template.** A slot handed to another interpreter, a value read
-  as a flag, a path escaping its root, a command that reads too much. The first pass has only the
-  quoting path, slot types and the existing lint to stop it.
+  as a flag, a path escaping its root, a command that reads too much. Positional parameters, the
+  code-position refusals and slot types narrow this; an undecidable code position the author
+  writes, and a command's own reading of a well-formed argument, remain.
+- **Node output can steer the AI-agent.** A Template's result flows into the model's context and
+  can carry instructions. To be decided as its own track (ADR-0021 amendment, decision 6; #980).
+- **Deceptive characters in a value.** A `path` value may carry invisible or bidirectional
+  characters that mislead a human reader; every surface showing it must render them visibly
+  (ADR-0021 amendment, decision 4; #979).
 
 ## Future work
 
@@ -189,7 +211,7 @@ none is a commitment to an order.
   short list, or something else.
 - **Mixed-vocabulary dispatch.** Candidates: telling the caller before dispatch which Nodes will
   be skipped; a fleet view of vocabulary drift; whether excluded Nodes count toward a mutate cap.
-- **Safe-Template authoring** (shape decided). An escalation catalogue beside the threat model —
+- **Safe-Template authoring** (shape decided). A Safe-Template hazard list, kept in this spec —
   every known way a Template can exceed its author's intent, each tagged mechanical or judgement,
   extended by research into shell tricks, environment and `PATH`, locale, symlink-following,
   privilege-changing and writing commands, and check-to-use races. Every mechanical entry becomes

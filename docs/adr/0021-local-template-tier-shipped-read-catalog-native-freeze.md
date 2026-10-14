@@ -1,6 +1,7 @@
 # A local Template tier, a shipped read catalog, and a frozen native vocabulary
 
-**Status:** Accepted; amended by ADR-0042.
+**Status:** Accepted; amended by ADR-0042; amended 2026-10-14 (slot values as positional
+parameters, #974).
 
 Template **execution** is separable from template **distribution** (owner decision
 2026-08-03, issue #266). ADR-0001 defined tier 2 — **Template Operations**, operator-authored
@@ -177,3 +178,106 @@ class, cap and approval gate are decided; the class is the most restrictive the 
 report; argument names are checked against every remaining Node's slots. The per-Node vocabulary
 cache becomes a dispatch input. Template loading, rendering, quoting and Policy parity are
 unchanged.
+
+## Amendment (2026-10-14, #974): slot values travel as positional parameters, never as shell text
+
+The property this ADR decided is unchanged: **substitution can never alter command
+structure**. What changes is the mechanism that holds it, because the one this ADR named —
+"validation + quoting" — was shown not to hold.
+
+**What failed.** A slot value was validated, single-quoted, and spliced into the body, and the
+result was run as `/bin/sh -c <text>`. Single quotes protect a value only where the shell reads
+them as quotes, and the body is author-written shell: inside a here-document, a backquoted or
+`$( … )` substitution, or after an escaped space, they do not. #974 reproduced each against
+dash, and a value of `/tmp/$(cmd)` ran `cmd` from inside a here-document. `/bin/sh` is a
+different shell per distribution — dash, bash, busybox — and #975's attempt to refuse every
+unsafe construct at load was found incomplete by each of three review passes in turn (`$'…'`,
+`alias`, `BASH_ALIASES`, `((`, `name[…]`). A denylist checked against a shell grammar cannot be
+shown complete, so the defect is the mechanism, not a missing entry.
+
+**The threat this answers.** A prompt-injected AI-agent chooses every slot value. Policy, the
+blast cap and approval bound *which* Template it may call and where; the mechanism below bounds
+what a value can do once the call is allowed.
+
+### Decisions
+
+1. **A slot value is never shell text.** Where a Template body is run through a shell, the text
+   the shell parses is the author's body with each placeholder replaced by a fixed, quoted
+   reference to a positional parameter (`{{path}}` becomes `"$1"`), and the slot values are
+   handed to the shell as separate arguments after it. The existing rule that a placeholder
+   stands alone as a whitespace-delimited token outside any quotes is kept, so a value is never
+   glued to the author's text. The parsed text is therefore a function
+   of the Template definition alone — identical for every call, whatever the caller sent — and a
+   value enters only at expansion, after the shell has fixed the command's structure. A shell
+   never re-parses an expanded parameter for syntax, and the quotes stop field splitting and
+   globbing, so a value is exactly one word, byte for byte, in every POSIX shell. This holds
+   inside here-documents, substitutions and conditionals alike, so **authors keep the full
+   shell**: no construct is refused for being near a slot, beyond the standalone-token rule. The single-quoting path and #975's
+   construct denylist are not adopted.
+2. **A slot fills only a data position.** No mechanism can stop a command the author chose from
+   deliberately turning its argument back into code. A Template is therefore a **Policy error** —
+   under the existing rule, the whole Policy is then `invalid` and the Node denies every Task;
+   `policy check` reports it before deploy — where a placeholder stands in a position that is
+   decidable from the body alone and executes its value: the command-name position of a simple
+   command; the operand of `eval`, `.` or `source`; the argument immediately after `-c` (or an
+   interpreter's equivalent program flag) of a recognised shell or interpreter; and arithmetic
+   contexts (`(( … ))`, `$(( … ))`, `let`), which some bash versions re-evaluate. Code positions
+   that cannot be decided reliably from the body — an `awk` or `sed` program, `find -exec`,
+   `xargs` feeding a shell, an option that takes a program (`tar -I`, `rsync -e`) — are a
+   `policy check` **warning**, which `--strict` fails. The two lists live in
+   `operations-and-templates.md`, not here, and grow there.
+3. **No value is an option.** The well-formed values of every daemon-owned slot type can never
+   begin with `-` — an `identifier` begins alphanumeric, a `path` begins `/`, an `integer` is
+   digits — and an `enum` value is a literal the author chose. A slot type added later keeps
+   that property or the spec that adds it says why not. Combined with decision 1, a value can
+   neither become an option nor be glued onto one.
+4. **The `path` type is not narrowed further** (owner decision, 2026-10-14). It already refuses
+   C0 controls and DEL, but may carry characters a human cannot see or that a terminal
+   interprets — C1 controls, zero-width and other invisible characters, Unicode whitespace and
+   bidirectional controls. Decision 1 makes them inert to the shell; what remains is deception of a reader.
+   So wherever a slot value or any Node-derived string is shown to a human — the Console,
+   approval prompts, audit views, log lines — it is rendered with those characters made visible,
+   never raw. That is owned by the specs of those surfaces (#979).
+5. **Raw Exec gets a tool, not a floor.** `relay-daemon policy check` gains a probe-based
+   interpreter lint in the manner of the self-reference lint above: concrete interpreter- and
+   wrapper-shaped argvs (`sh -c`, `env`, `xargs`, `nice`, `timeout`, `sudo`, `setsid`, `nohup`,
+   `python -c`, `perl -e`, `find -exec`, …) are evaluated through the real Policy engine, and an
+   Allow is a `Warning` that `--strict` fails. It never changes what the daemon runs. Threat
+   model R4 stays accepted, now tooled (#978).
+6. **Node output is an injection source, and is a separate track.** Everything above stops a
+   compromised AI-agent from doing more than it was allowed. Node output reaching the AI-agent —
+   a log line, a file, a package description — is how one *becomes* compromised. That is decided
+   on its own (#980: an untrusted-data envelope on every result an AI-agent receives, beside the
+   output-classification direction already named in this ADR), not in this amendment.
+
+### Considered options
+
+- **Keep single-quoting and refuse unsafe constructs (#975).** Rejected: shown incomplete by
+  three consecutive reviews; breaks author Templates that are safe; would need a new entry each
+  time a shell grows a construct.
+- **Allow only a restricted grammar in bodies that have slots.** Provable, but removes the shell
+  composition this tier exists to provide (the reason "argv-only templates" was rejected above).
+- **Pin the shell** (always dash, or a vendored one). Narrows the grammar to defend but keeps a
+  denylist, and dash is not installed by default on every supported distribution.
+- **Positional parameters** — chosen: the attacker contributes no bytes to the parsed text, so
+  the defence does not depend on knowing any shell's grammar.
+
+### Consequences
+
+- **Invariant 1 is amended** to state the property decision 1 guarantees outright — "no slot
+  value ever part of the text the Template's shell parses" — rather than a mechanism ("with every slot single-quoted"
+  is retired). Decision 2 is deliberately **not** part of the invariant: it can only ever be
+  partly enforced, so it is defence in depth stated here and in the spec, and the invariant stays
+  a claim the code can fully meet. Until the implementing change lands, the gap table in `AGENTS.md`
+  carries the Template clause against #974.
+- #975 is closed unmerged; its reproduced cases become the red-team suite of the implementing
+  change (#977), and #974 stays open as the bug it fixes.
+- The rendered command changes shape (`sh -c <body> relay-template <v1> <v2> …`). Policy is
+  unaffected — it already matches the raw slot values, per this ADR's "Policy governs templates
+  exactly like Native Operations" — and the audit record carries the
+  values beside the body rather than inside it.
+- A property becomes testable outright: the parsed text is identical for all values of a call.
+  The `template_render` fuzz target (#897) asserts exactly that.
+- **Residual risk**, accepted: an author who passes a slot to a code-running position that
+  decision 2 cannot detect; a program's own parsing of a well-formed argument (as ever, out of
+  scope); and Node output steering the AI-agent until decision 6's track lands.
