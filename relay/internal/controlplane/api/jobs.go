@@ -72,7 +72,7 @@ type cancelJobResponse struct {
 // owner column (the jobs table is (job_id, created_at)), so there is no
 // per-Account scoping to enforce here and inventing one in this handler would
 // be a security boundary that only one surface honours. Per-Account visibility
-// is a schema question, noted on #357 — until it is settled, the honest
+// is an open schema question — until it is settled, the honest
 // posture is "authenticated callers may read Jobs, and every read is audited".
 func handleGetJob(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

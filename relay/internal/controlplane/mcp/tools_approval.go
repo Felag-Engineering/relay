@@ -408,8 +408,7 @@ const (
 // reasons (capability.DecideApproval returns it whatever the caller's
 // eligibility turned out to be — see requestOnRefusal), so from a refusal
 // only State, JobID and ExpiresAt are copied here, and nothing that renders
-// this type can reach Decisions, RequestedBy, Summary or Require (#735
-// review).
+// this type can reach Decisions, RequestedBy, Summary or Require.
 //
 // Err nil means this answer was recorded AND audited. A non-nil Err does NOT
 // by itself mean nothing was recorded: a non-domain error — the audit write
@@ -483,12 +482,11 @@ type elicitedAnswerResult struct {
 	OnBehalfOf string
 	// deciderReached is true once acceptElicitedAnswer has called the
 	// decider (whatever it returned) — set right alongside OnBehalfOf. It
-	// replaces "OnBehalfOf is empty" as the was-the-decider-called signal:
+	// is the was-the-decider-called signal, not "OnBehalfOf is empty":
 	// under AP-79 the decider is reached with OnBehalfOf left empty, so that
-	// old signal would mis-render a post-record failure (an audit write that
+	// signal would mis-render a post-record failure (an audit write that
 	// failed after a real decision) as "this call left the request
-	// unchanged" — a false-safe reading security review #727 finding 1
-	// forbade.
+	// unchanged" — a false-safe reading.
 	deciderReached bool
 	Err            error
 }
@@ -513,8 +511,8 @@ type elicitedAnswer struct {
 	// whitespace, or otherwise differ byte-for-byte from what was
 	// originally sent while still decoding to an identical typed value, and
 	// only digesting the re-marshalled typed value survives that. Supplying
-	// this digest on the retried call is the caller wiring's job (#727 /
-	// S4a-2), not this function's — a caller that digests a different
+	// this digest on the retried call is the caller wiring's job, not this
+	// function's — a caller that digests a different
 	// representation (e.g. the raw bytes) makes every answer refuse (fail
 	// closed, but a functional bug, not a security one). This function never
 	// digests arguments itself.
@@ -538,8 +536,7 @@ type elicitedAnswer struct {
 // questioner.opener) — never the Sealer itself: key custody stays in
 // elicit.go's newQuestioner, and this file can only open a state bound to
 // the call it is given, never unbound. tools_execution.go's answerThenDispatch
-// wires this function into run_operation/raw_exec's retry path (#727,
-// S4a-2).
+// wires this function into run_operation/raw_exec's retry path.
 //
 // The machine-self-decision refusal (errNoNamedApprover) must be rendered
 // AS-IS by the caller, never through renderApprovalError: AP-64 requires the
@@ -630,7 +627,7 @@ func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, open sta
 		// traceparent, session_ref).
 		ctx = withAssertedApprover(ctx, "")
 	} else {
-		// AP-64, exactly as before #743: a responder assertion with gate
+		// AP-64: a responder assertion with gate
 		// permission is required. A responder that is absent, malformed
 		// (recognisedResponder not ok), or not gate "permission" is refused
 		// with errNoNamedApprover.
@@ -929,8 +926,7 @@ const answerRefusalNextStepUnchanged = "this call left the request (if any) unch
 // unlike every other refusal isKnownApprovalRefusal recognises — no in-band
 // tool, approve_request included, can ever satisfy it. Sharing
 // answerRefusalNextStepUnchanged's "it can still be answered with
-// approve_request" here would contradict this refusal's own Reason (PR #738
-// follow-up review, finding 1).
+// approve_request" here would contradict this refusal's own Reason.
 const answerRefusalNextStepCannotAnswerHere = "no in-band tool — approve_request included — can decide this one. " +
 	"A human must decide it on the Control API's decision endpoint, with their own out-of-band credential."
 
@@ -992,8 +988,7 @@ const answerRefusalNextStepDeclineNotRecorded = "the decline was not recorded: t
 // NextStep for errDeclineNotHonoured — deliberately its own text rather than
 // answerRefusalNextStepDeclineNotRecorded's, because that text would
 // contradict errDeclineNotHonoured's own Reason (which says the decline WAS
-// recorded, just not honoured as an approval of this call) (security review
-// #727 finding 2 / code review suggestion 1).
+// recorded, just not honoured as an approval of this call).
 const answerRefusalNextStepDeclineRecordedButNotHonoured = "the decline was recorded, but the request still reports approved and is not treated " +
 	"as an approval of this call. This call dispatched nothing."
 
@@ -1002,17 +997,16 @@ const answerRefusalNextStepDeclineRecordedButNotHonoured = "the decline was reco
 // something non-domain failed afterwards, so — unlike
 // answerRefusalNextStepUnchanged — this must never say the request is
 // unchanged or safe to answer again outright; the decision may already be
-// durable (security review #727 finding 1).
+// durable.
 const answerRefusalNextStepMayAlreadyReflectAnswer = "the request may already reflect this answer. Confirm its state with the Control " +
 	"API's approval read before answering again or re-issuing the call."
 
 // knownRefusalNextStep picks refusalOutput's NextStep for a refusal
-// isKnownApprovalRefusal recognises. Chosen per sentinel rather than the one
-// generic "can still be answered with approve_request" text every sentinel
-// used to share: that text is true of exactly one of these
-// (approval.ErrPlanChanged) and false, in a different way, of the rest — see
-// each NextStep constant's own doc for which way (PR #738 follow-up review,
-// finding 1). Called only once r.Err is known to satisfy
+// isKnownApprovalRefusal recognises. Chosen per sentinel rather than one
+// generic "can still be answered with approve_request" text: that text is
+// true of exactly one of these (approval.ErrPlanChanged) and false, in a
+// different way, of the rest — see each NextStep constant's own doc for
+// which way. Called only once r.Err is known to satisfy
 // isKnownApprovalRefusal; every branch below assumes that.
 func (r elicitedAnswerResult) knownRefusalNextStep() string {
 	switch {
@@ -1027,8 +1021,7 @@ func (r elicitedAnswerResult) knownRefusalNextStep() string {
 	case errors.Is(r.Err, approval.ErrNotPending), errors.Is(r.Err, approval.ErrDuplicateDecider):
 		// The decline-not-recorded text applies only when this landed on a
 		// request that stands approved with no Job bound — a decline that
-		// lost the race to an out-of-band approval (security review #727
-		// finding 2). Otherwise ErrNotPending means the REQUEST is closed to
+		// lost the race to an out-of-band approval. Otherwise ErrNotPending means the REQUEST is closed to
 		// everyone, while ErrDuplicateDecider means only THIS Account's say
 		// in it is spent — the request itself may still need more approvals
 		// from someone else, so the two get different text.
@@ -1066,7 +1059,7 @@ func answerStateRefusedOutput() *AnswerRefusalOutput {
 
 // refusalOutput renders r as the refusal block an answered retry carries
 // when Outcome == elicitedRefused. It exposes only RequestID, State, JobID
-// and ExpiresAt (#735 review; issue #727 comment 1) — never the raw
+// and ExpiresAt — never the raw
 // Decisions elicitedAnswerResult itself cannot even carry.
 func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
 	out := &AnswerRefusalOutput{RequestID: r.RequestID}
@@ -1097,8 +1090,7 @@ func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
 		// The Reason says the decline WAS recorded, just not honoured as an
 		// approval of this call, so this gets its own NextStep rather than
 		// answerRefusalNextStepDeclineNotRecorded's "was not recorded" text,
-		// which would contradict it (security review #727 finding 2 / code
-		// review suggestion 1).
+		// which would contradict it.
 		out.Reason = r.Err.Error()
 		out.NextStep = answerRefusalNextStepDeclineRecordedButNotHonoured
 	case errors.Is(r.Err, errUnknownRequestState):
@@ -1120,9 +1112,8 @@ func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
 		// A non-domain failure reaching us AFTER the decider was called: the
 		// decision may already be durable (e.g. an audit write that failed
 		// afterwards — capability.DecideApproval's own doc). This must never
-		// claim the answer was ignored (issue #727 comment 2, point 2), and
-		// the NextStep must not say the request is unchanged either
-		// (security review #727 finding 1).
+		// claim the answer was ignored, and the NextStep must not say the
+		// request is unchanged either.
 		//
 		// One case in this arm never actually recorded anything: an
 		// ApprovalAuthorizer refusal (capability.DecideApproval's
@@ -1132,7 +1123,7 @@ func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
 		// coupling to a specific ApprovalAuthorizer implementation, so the
 		// text stays the safe over-approximation: telling a caller who was
 		// never recorded to confirm the request's state is redundant, never
-		// wrong — unlike the reverse (code review #727 finding 2).
+		// wrong — unlike the reverse.
 		out.Reason = fmt.Sprintf("the answer may have been recorded, but recording or auditing it failed: %v. "+
 			"Confirm the request's state by reading it back — GET /api/v1/approvals/{id} on the Control API — "+
 			"before acting; approve_request records a new decision, it does not read one back.", r.Err)

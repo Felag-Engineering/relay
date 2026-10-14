@@ -22,7 +22,7 @@ const maxTTLSeconds = 365 * 24 * 60 * 60
 // Scope must be non-empty and every entry relay:-prefixed with a non-empty
 // bare key and a (possibly empty) value whose every byte is in
 // [A-Za-z0-9._-] (enforced by enroll.Service.Create -> enroll.validateScope,
-// registry.WellFormedLabel, ADR-0006, #555) — this handler never
+// registry.WellFormedLabel, ADR-0006) — this handler never
 // re-implements or loosens that check. MaxUses <= 0 means unlimited
 // (enroll.WithMaxUses's own convention).
 type mintTokenRequest struct {
@@ -51,9 +51,8 @@ type mintTokenResponse struct {
 // decoded. A token's scope becomes the enrolling Node's relay: labels, and
 // relay: is the namespace the security-sensitive lane targets (invariant 7,
 // ADR-0020) — so minting manufactures Nodes that quarantine, remediation, and
-// secret distribution will treat as authoritative. Until #397 this route
-// checked no role at all: a viewer could stamp `relay:env=prod` onto anything
-// that presented the token.
+// secret distribution will treat as authoritative. Without the floor, a viewer
+// could stamp `relay:env=prod` onto anything that presented the token.
 func handleMintToken(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
@@ -120,13 +119,11 @@ const cascadeAuditBudget = 2 * time.Minute
 // revoking an unknown or already-revoked id still returns 204
 // (revocation.Service.RevokeToken swallows enroll.ErrNotFound).
 //
-// **Requires `admin`**. #397's table named the mint and the Node
-// revoke; this route was the same hole, found by the structural guard that
-// issue asked for. It cascades to every Node the token enrolled, tearing down
+// **Requires `admin`**. It cascades to every Node the token enrolled, tearing down
 // live Tunnels — the same availability blast radius as revoking those Nodes
 // one at a time, which ADR-0020's incident ladder puts at admin.
 //
-// Can now also answer 400 (the token id cannot be rendered into a revocation
+// Can also answer 400 (the token id cannot be rendered into a revocation
 // reason) and a completed-but-unrecorded 500 (the token and its Nodes were
 // revoked, but one or more per-Node records could not be written), and a
 // token-revoked-cascade-incomplete 500 (the token was revoked, but the
@@ -169,10 +166,10 @@ func handleRevokeToken(d Deps) http.HandlerFunc {
 		//
 		// BUT NOT WITHOUT A DEADLINE. Detaching from the request would otherwise
 		// leave these writes unbounded, and they are not cheap: the store runs
-		// on a single connection (SetMaxOpenConns(1)). The records are now
+		// on a single connection (SetMaxOpenConns(1)). The records are
 		// written in chunked transactions (revocation.cascadeRecordChunk), one
 		// commit per chunk rather than one per Node, so a token covering a
-		// large fleet no longer makes every other store-backed request —
+		// large fleet does not make every other store-backed request —
 		// registry reads, Job persistence, the fail-closed read-audit path —
 		// queue behind one commit per Node; the connection is instead held
 		// for one chunk's transaction at a time. The deadline still bounds
@@ -244,9 +241,9 @@ func handleRevokeToken(d Deps) http.HandlerFunc {
 		// unlike handleRevokeNode's record-before-act ordering, deliberately:
 		// RevokeToken CAN return an error, so recording first would risk a
 		// permanent record asserting a revoke that never happened.
-		// revocation.Service.RevokeNodeRecorded's doc explains #487 was allowed
-		// to invert this ordering only because RevokeNode has no error return
-		// to strand; RevokeToken does, so this route keeps recordLifecycle's
+		// revocation.Service.RevokeNodeRecorded's doc explains it may invert
+		// this ordering only because RevokeNode has no error return to
+		// strand; RevokeToken does, so this route keeps recordLifecycle's
 		// ordinary best-effort contract instead.
 		recordLifecycle(r.Context(), d, p, audit.KindTokenRevoke, "", "token_id="+id)
 

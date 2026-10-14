@@ -137,7 +137,7 @@ func (o *oauthResolver) resolve(ctx context.Context, raw string) (capability.Pri
 
 	// No TokenID: an OAuth session presents no API Token. The verified lane
 	// records the method instead, which is what makes the two session kinds
-	// distinguishable in audit (#300 acceptance).
+	// distinguishable in audit.
 	p := principalFromAccount(acct)
 	p.AuthMethod = capability.AuthMethodOAuth
 	return p, nil

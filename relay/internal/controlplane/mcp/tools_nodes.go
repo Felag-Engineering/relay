@@ -39,8 +39,8 @@ func nodeItemFromNode(n registry.Node, ev capability.StateEval) NodeItem {
 }
 
 // normalizeArgSets maps a nil positional arg-set list to an empty one, so a
-// rule's allowed_args/args always render as a JSON array, never null
-// (#207/#253): a policyview rule whose sets arrived as nil (proto empty
+// rule's allowed_args/args always render as a JSON array, never null: a
+// policyview rule whose sets arrived as nil (proto empty
 // repeated field) means exactly the same zero-argument set an explicit []
 // does, and null carried no distinct semantics — it only forced consumers to
 // branch on two spellings. Non-nil sets pass through verbatim (display-only,
@@ -57,7 +57,7 @@ func normalizeArgSets(sets [][]string) [][]string {
 // evaluates, dedups, or resolves wildcards — see policyview.OperationRule.
 // Always returns a non-nil slice with non-nil AllowedArgs, so
 // operation_rules and every allowed_args render as JSON arrays, never null
-// (#207/#253 — see normalizeArgSets and OperationRuleOutput).
+// (see normalizeArgSets and OperationRuleOutput).
 func operationRuleOutputsFromSnapshot(rules []policyview.OperationRule) []OperationRuleOutput {
 	out := make([]OperationRuleOutput, 0, len(rules))
 	for _, r := range rules {
@@ -68,7 +68,7 @@ func operationRuleOutputsFromSnapshot(rules []policyview.OperationRule) []Operat
 
 // denyRuleOutputsFromSnapshot renders the display-only, verbatim [[deny]]
 // rule mirror (ADR-0002) for describe_node. See policyview.DenyRule. Always
-// returns a non-nil slice with non-nil Args (#207/#253, mirroring
+// returns a non-nil slice with non-nil Args (mirroring
 // operationRuleOutputsFromSnapshot).
 func denyRuleOutputsFromSnapshot(rules []policyview.DenyRule) []DenyRuleOutput {
 	out := make([]DenyRuleOutput, 0, len(rules))
@@ -81,7 +81,7 @@ func denyRuleOutputsFromSnapshot(rules []policyview.DenyRule) []DenyRuleOutput {
 // templateVocabularyOutput renders a Node's reported Template Operation
 // vocabulary for describe_node (nodevocab.Snapshot; ADR-0021). Display-only:
 // it never validates a slot or decides anything (invariant 12). Templates and
-// every Slots/EnumValues are ALWAYS arrays, never null (#207/#253 discipline) —
+// every Slots/EnumValues are ALWAYS arrays, never null —
 // `reported` is the sole "no data captured yet" signal.
 func templateVocabularyOutput(snap nodevocab.Snapshot, reported bool) TemplateVocabularyOutput {
 	templates := make([]TemplateOperationOutput, 0, len(snap.Templates))

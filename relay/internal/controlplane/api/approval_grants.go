@@ -13,7 +13,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// approval_grants.go is the surface for batch/window approvals (#378, ADR-0027
+// approval_grants.go is the surface for batch/window approvals (ADR-0027
 // decision 12): one human decision covering a bounded set of future dispatches
 // instead of one Plan.
 //

@@ -95,8 +95,8 @@ type rawExecRequest struct {
 // ExitCode is a pointer so it is OMITTED whenever no real process exit status
 // exists: the daemon's -1 "no exit status" sentinel
 // (denied-before-spawn, spawn failure, signal-kill, timeout/cancel kill), the
-// Relay's synthesized zero value (unreachable, version_refused), and — since
-// #632 — the Relay's own -1 on a Task whose daemon report the wire boundary
+// Relay's synthesized zero value (unreachable, version_refused), and the
+// Relay's own -1 on a Task whose daemon report the wire boundary
 // refused as a protocol violation (it may well have executed; what happened
 // is unknown). Rendering any of these as a plausible `0` would let a caller
 // read "did not run" or "unknown" as "ran and succeeded"; Outcome is the
@@ -376,8 +376,7 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 // decision (ADR-0002/0011, invariant 12): the daemon's live engine remains the
 // gate on argument VALUES. The name validation is [opvocab.ValidateArgNames] —
 // the same function the MCP surface calls — so a misspelled argument cannot
-// come back as denied_by_policy on one surface and a clean 400 on the other
-// (#345).
+// come back as denied_by_policy on one surface and a clean 400 on the other.
 func buildOperationAction(name string, args map[string]string, timeoutSeconds int32) (jobs.Action, error) {
 	timeout, err := controlplane.ResolveTimeoutSeconds(timeoutSeconds)
 	if err != nil {

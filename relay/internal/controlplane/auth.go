@@ -84,11 +84,11 @@ func PrincipalFromContext(ctx context.Context) (capability.Principal, bool) {
 // Authenticator validates the bearer credential presented on the control
 // plane.
 //
-// Since #298 there is exactly one kind of credential: a per-Account API Token
-// (#296). The config-seeded shared credential it replaced is gone — not
-// deprecated, removed — so there is no second comparison path, no digest held
-// in memory, and no identity that several callers share. Every authenticated
-// request now attributes to exactly one Account, and every credential can be
+// Every credential it accepts belongs to exactly one Account — a per-Account
+// API Token, an OAuth session, or a Console session. There is no shared
+// credential, so there is no shared-secret comparison path, no digest held in
+// memory, and no identity that several callers share. Every authenticated
+// request attributes to exactly one Account, and every credential can be
 // revoked without affecting any other caller (ADR-0023).
 //
 // The Authenticator holds no secret material of any kind. It delegates to a
@@ -315,7 +315,7 @@ func hasBearer(r *http.Request) bool {
 // The Account is read fresh by the verifier on every call rather than cached
 // here, which is what makes a role change or a disablement take effect on the
 // very next request instead of at the next restart.
-// Two credential kinds share this boundary since #299: per-Account API Tokens
+// Two credential kinds share this boundary: per-Account API Tokens
 // and OAuth sessions. They are routed by PREFIX, never tried in turn — the
 // rule ADR-0023 set for the retired seeded credential, for the same reasons. A
 // `glp_`-shaped credential is only ever checked against the token verifier, and

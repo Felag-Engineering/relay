@@ -1,16 +1,10 @@
 package mcp
 
 // This file is the single source of truth for every MCP tool's JSON output
-// shape: the 13 structs below were previously unexported, forcing
-// every test package that needed to unmarshal a tool's response — the
-// external mcp_test package (can't see unexported types across a package
-// boundary) and cmd/relay's own e2e suite (can't import _test.go-only types
-// at all) — to hand-copy a "JSON mirror" struct field-for-field instead. That
-// produced 24 mirror decls across 5 files, and one of them (cmd/relay's
-// perNodeResultJSON) had silently drifted to 4 fields against PerNodeResult's
-// real 8 — a green e2e asserting a stale wire shape. Exporting these types
-// here lets every test import and unmarshal into the real type directly, so
-// drift becomes a compile error instead of a silent gap.
+// shape. The structs below are exported so every test package that
+// unmarshals a tool's response — the external mcp_test package and
+// cmd/relay's own e2e suite — uses the real type rather than a hand-copied
+// "JSON mirror" struct, so drift is a compile error instead of a silent gap.
 //
 // Render funcs (renderJob, renderPlan, perNodeResultFromTask, …) stay in
 // tools_execution.go/tools_nodes.go/tools_operations.go — this file is pure
@@ -108,9 +102,8 @@ type DenyRuleOutput struct {
 // (policyview.Snapshot; invariant 12, ADR-0002/0011): the Relay never
 // evaluates Policy, only displays what the daemon last reported. Reported is
 // false when no snapshot has been captured yet for this Node — e.g. it
-// hasn't (re)connected since the Relay last started, or the daemon doesn't
-// yet emit PolicySnapshot (follow-up #151) — never treat absence as "no
-// restrictions".
+// hasn't (re)connected since the Relay last started, or its daemon reported
+// no PolicySnapshot — never treat absence as "no restrictions".
 type EffectivePolicyOutput struct {
 	RawExecEnabled    bool     `json:"raw_exec_enabled"`
 	RawAllowPatterns  []string `json:"raw_allow_patterns"`
@@ -212,8 +205,7 @@ type CertificateOutput struct {
 // OperationItem is one Operation's vocabulary entry, rendered by
 // list_operations: name, risk class, and the model-facing legibility
 // prose — Purpose, ArgConstraints, and a concrete Example — that lives
-// Relay-side in opvocab.Descriptor, never on the wire (invariant 8, central
-// decision in #120's plan). This is what makes list_operations legible
+// Relay-side in opvocab.Descriptor, never on the wire (invariant 8). This is what makes list_operations legible
 // enough that a model chooses the right Operation, and builds valid args for
 // it, without trial-and-error. Raw Exec is deliberately absent from this
 // list: it is not an Operation (ADR-0003, GLOSSARY.md) and has no
@@ -256,7 +248,7 @@ type ListOperationsOutput struct {
 // with NO exit_code key at all: the daemon's -1 "no exit status"
 // sentinel (spawn failure, timeout/cancel kill, signal-kill,
 // denied_by_policy), the Relay's synthesized zero value (unreachable,
-// version_refused), and — since #632 — the Relay's own -1 on a Task whose
+// version_refused), and the Relay's own -1 on a Task whose
 // daemon report the wire boundary refused as a protocol violation (it may
 // well have executed; what happened is unknown) all read as plausible real
 // exit codes, which is exactly the ambiguity ADR-0001/0003's legibility
@@ -338,8 +330,7 @@ type PlanOutput struct {
 }
 
 // RunOrPlanOutput is run_operation/raw_exec's shared result shape:
-// additive over ExecutionOutput. JobID carries omitempty (#207/#253,
-// superseding #119's byte-identical-to-#118 freeze): it is present exactly
+// additive over ExecutionOutput. JobID carries omitempty: it is present exactly
 // when a Job was created, and absent on a plan=true response (a Plan
 // executes nothing — an empty "job_id" read as a missing/failed id) and on
 // a parked dispatch (nothing was dispatched, so there is no Job to read
@@ -362,7 +353,7 @@ type RunOrPlanOutput struct {
 	// results is empty — nothing was dispatched and no Job exists.
 	PendingApproval *PendingApprovalOutput `json:"pending_approval,omitempty"`
 
-	// Decision is present only on an answered retry (#727: an MRTR
+	// Decision is present only on an answered retry (an MRTR
 	// elicitation answer to a parked approval, ADR-0029 decision 6): what was
 	// decided, alongside whatever ran. Absent on every ordinary call — a
 	// question result cannot carry it either, because the SDK forbids
@@ -379,8 +370,7 @@ type RunOrPlanOutput struct {
 	// call AFTER the decider ran (for example an audit write failing once
 	// the decision was already durable) may mean the request already
 	// reflects this very answer, and NextStep tells the caller to confirm
-	// its state rather than assuming either way (security review #727
-	// finding 1).
+	// its state rather than assuming either way.
 	AnswerRefused *AnswerRefusalOutput `json:"answer_refused,omitempty"`
 }
 
@@ -394,7 +384,7 @@ type RunOrPlanOutput struct {
 // unchanged.
 //
 // It holds only the state, the Job ID and the deadline from a refused
-// decision, never the Decisions (#735 review; issue #727 comment 1): a
+// decision, never the Decisions: a
 // refused decision's Request may carry OTHER approvers' identities and
 // reasons, and this type is deliberately too narrow to reach any of that —
 // see elicitedAnswerResult (tools_approval.go), which is what it is built

@@ -1,6 +1,6 @@
 // Package api is the REST/JSON Control API (ADR-0010): Enrollment Token
 // mint/revoke, Node revoke, Freeze engage/release, Account and API-Token
-// management, and — since #356 — execution (run an Operation, Raw Exec, and
+// management, and execution (run an Operation, Raw Exec, and
 // plan mode), all mounted under /api/v1 on the control-plane's existing *http.ServeMux
 // (relay/internal/controlplane.Server.Mux()) behind the single
 // Authenticator.Middleware already wired there — no new listener, no new
@@ -107,12 +107,10 @@ type Auditor interface {
 // interface with no adapter, the same shape as Freezer/Executor/
 // ApprovalService above.
 //
-// Before #653 this surface declared its own AccountManager/APITokenService
-// interfaces bound straight to accounts.Repository/TokenService and gated
-// role itself (requireAdmin, now deleted): a second control path invariant
-// 10 forbids. This interface is what closes it — every method here is
-// authorized, and self-targeting/last-admin refused, inside the capability
-// layer before this surface ever sees a result.
+// Every method here is authorized, and self-targeting/last-admin refused,
+// inside the capability layer before this surface ever sees a result: a
+// surface that gated role itself would be a second control path invariant
+// 10 forbids.
 type AccountAdmin interface {
 	Accounts(ctx context.Context, p capability.Principal) ([]accounts.Account, error)
 	Account(ctx context.Context, p capability.Principal, id string) (accounts.Account, error)
@@ -161,11 +159,11 @@ type Deps struct {
 	// method to be gated inside.
 	//
 	// Nil refuses every route that needs it with a 500 rather than proceeding
-	// ungated: an unwired gate is a composition-root bug, and #397 exists
-	// because the ungated path failed open silently.
+	// ungated: an unwired gate is a composition-root bug, and an ungated path
+	// fails open silently.
 	Authz capability.ControlAuthorizer
-	// AccountAdmin backs the identity-management routes (#297, migrated onto
-	// the capability layer by #653). Nil refuses every identity route with a
+	// AccountAdmin backs the identity-management routes through the
+	// capability layer. Nil refuses every identity route with a
 	// 500, on the same unwired-gate posture Authz above documents.
 	AccountAdmin AccountAdmin
 	// NodeReader is the capability read lane behind GET
@@ -189,14 +187,14 @@ type Deps struct {
 	// separate interface so this package's seams stay named after what each
 	// route needs.
 	Approvals ApprovalService
-	// ApprovalGrants backs the batch/window grant routes (#378, ADR-0027
+	// ApprovalGrants backs the batch/window grant routes (ADR-0027
 	// decision 12) — the same *capability.Approvals again, named separately for
 	// the same reason Approvals is. Nil disables the routes with a 500 rather
 	// than silently accepting requests that would grant nothing.
 	ApprovalGrants ApprovalGrantService
-	// Reads records read-access events for the Job read route (#357,
-	// ADR-0025). Nil skips recording — the pre-#288 behaviour, kept so tests
-	// and any unwired surface work; the composition root always supplies it.
+	// Reads records read-access events for the Job read route (ADR-0025).
+	// Nil skips recording, so tests and any unwired surface work; the
+	// composition root always supplies it.
 	Reads ReadAuditor
 	// Now returns the current time, used to timestamp lifecycle audit
 	// Records. Defaults to time.Now().UTC() when nil.
@@ -204,11 +202,9 @@ type Deps struct {
 	// CertExpiringWithin is the state:cert-expiring warning window
 	// (ADR-0034): a mirror of a root-owned startup value (invariant
 	// 11) — this surface is TOLD it, and no route reads or sets it. Zero
-	// (the default) means the marker never fires. Since #680 it is no
-	// longer read by handleGetNode, whose state: instant now comes from the
-	// capability read lane's own clock (NodeReader.DescribeNode's
-	// capability.NodeDetail.Eval); GET /api/v1/jobs/{id} (jobs.go) still
-	// uses this field directly, so it stays wired and is not dead.
+	// (the default) means the marker never fires. No handler in this package
+	// reads it: handleGetNode's state: instant comes from the capability read
+	// lane's own clock (NodeReader.DescribeNode's capability.NodeDetail.Eval).
 	CertExpiringWithin time.Duration
 }
 
@@ -253,8 +249,8 @@ func Routes() []Route {
 		{"POST", "/api/v1/freeze/engage", handleFreezeEngage},
 		{"POST", "/api/v1/freeze/release", handleFreezeRelease},
 
-		// Identity management (#297; #653: the floor moved into
-		// capability.Control behind AuthorizeControl). Every route here is
+		// Identity management (the floor lives in capability.Control
+		// behind AuthorizeControl). Every route here is
 		// admin-only in full. Deps carries no store for these routes at all —
 		// only AccountAdmin, the capability seam — so this surface renders the
 		// refusal and re-derives nothing (role_floor_test.go's
@@ -360,7 +356,7 @@ func principal(w http.ResponseWriter, r *http.Request) (capability.Principal, bo
 	return p, true
 }
 
-// authorizeControl is the surface-side half of #397's fix for the
+// authorizeControl is the surface-side role gate for the
 // administrative routes that never reach the capability layer's dispatch
 // pipeline (enrollment-token mint/revoke, Node revoke).
 //
@@ -370,9 +366,9 @@ func principal(w http.ResponseWriter, r *http.Request) (capability.Principal, bo
 // answer reaches MCP, the Control API, and the Console (invariant 10). This
 // function's whole job is to ask, audit a refusal, and render it.
 //
-// A nil Authz refuses with 500. That is the deliberate direction: #397 exists
-// because an ungated administrative route failed open and nothing said so, so
-// an unwired gate must be loud and closed rather than quiet and open.
+// A nil Authz refuses with 500. That is the deliberate direction: an ungated
+// administrative route fails open and nothing says so, so an unwired gate
+// must be loud and closed rather than quiet and open.
 //
 // The refusal is recorded as audit.KindRefusal with the acting Principal,
 // matching how the capability layer records a refused dispatch — a refusal is
@@ -428,10 +424,9 @@ var newAuditID = audit.NewID
 // This is a BEST-EFFORT record, deliberately: every remaining caller has
 // already completed its act by the time it calls this, and rolling that act
 // back because the trail write failed would be worse than an incomplete
-// trail. Node revoke no longer calls this — it needed a fail-closed record
-// (#487), which is why it now goes through
-// revocation.Service.RevokeNodeRecorded instead, the one place that
-// ordering can be atomic against a concurrent cascade for the same Node.
+// trail. Node revoke does not call this — it needs a fail-closed record,
+// so it goes through revocation.Service.RevokeNodeRecorded instead, the
+// one place that ordering can be atomic against a concurrent cascade for the same Node.
 func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) {
 	rec, err := newLifecycleRecord(ctx, d, p, kind, nodeID, reason)
 	if err != nil {

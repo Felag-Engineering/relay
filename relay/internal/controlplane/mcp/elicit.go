@@ -13,10 +13,10 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 )
 
-// elicit.go is S2b of #646 (ADR-0029 decision 6; ADR-0028 as amended
-// 2026-09-24): it renders an askable park as an MRTR input-required
+// elicit.go renders an askable park as an MRTR input-required
 // CallToolResult — one elicitation/create form question — instead of the
-// opaque `pending_approval` result.
+// opaque `pending_approval` result (ADR-0029 decision 6; ADR-0028 as amended
+// 2026-09-24).
 //
 // It is an EXEC file (no_dispatch_test.go's relaxed partition, tools_execution.go's
 // header): it spells capability.Principal and capability.ParkedError, needed
@@ -70,13 +70,12 @@ const (
 )
 
 // WithApprovalElicitation turns on the in-band MRTR question path for an
-// askable park (S2b, ADR-0029 decision 6; ADR-0028 amendment 2026-09-24).
+// askable park (ADR-0029 decision 6; ADR-0028 amendment 2026-09-24).
 //
 // Off by default, and effective only together with WithApprovalDecider: Relay
 // never asks a question it cannot accept an answer to. The answer leg is
-// built (#727: tools_execution.go's answered retry, ADR-0029 decision 6) and
-// passed by the composition root (cmd/relay/control_surfaces.go) since #730
-// (S4b of #646).
+// tools_execution.go's answered retry (ADR-0029 decision 6), and the
+// composition root (cmd/relay/control_surfaces.go) passes both options.
 //
 // The seal key this enables is minted inside mcp.New itself, from
 // crypto/rand, never from an Option, a config key, a flag, an environment
@@ -178,7 +177,7 @@ func declaredClientName(meta sdkmcp.Meta) (string, bool) {
 // SDK's own MRTR judgment), 3 (the per-request `_meta` agrees) and 5 (the
 // declared client name is recognised for THIS session, AP-78) — conditions 1
 // (a questioner is wired) and 4 (the park is Askable) are the caller's,
-// question below. It also gates the answered retry (#727's isAnsweredRetry,
+// question below. It also gates the answered retry (isAnsweredRetry,
 // tools_execution.go): a client that cannot be asked never has its retry
 // fields — requestState, inputResponses — read at all, so an unrecognised
 // name's (or an ineligible session's) stray answer fields are ignored exactly

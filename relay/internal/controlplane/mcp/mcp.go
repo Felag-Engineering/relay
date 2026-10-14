@@ -1,8 +1,8 @@
 // Package mcp is the Relay's MCP surface (ADR-0003): three READ meta-tools —
-// list_nodes, describe_node, list_operations — plus, since #118, the
+// list_nodes, describe_node, list_operations — plus the
 // execution meta-tools — run_operation, raw_exec, cancel_job, get_job — all
 // thin adapters over the same control-plane capability layer (invariant 10).
-// Since #680 the read tools adapt ONE audited seam, ReadLane, and hold no
+// The read tools adapt ONE audited seam, ReadLane, and hold no
 // registry or cache of their own — every registry, Policy-view and
 // Template-vocabulary read goes through the capability read lane, which
 // records it before returning content and fails closed (QRY-28). The
@@ -73,8 +73,7 @@ import (
 // NIL slice when the Selector matched nothing (capability.Selector.Resolve
 // returns nil) — the tool must build its response array with an explicit
 // zero-length, pre-sized make rather than range straight into a var-declared
-// slice, so a no-match result renders an empty JSON array, never null
-// (#207/#253).
+// slice, so a no-match result renders an empty JSON array, never null.
 type NodeListing struct {
 	Nodes []registry.Node
 	Eval  capability.StateEval
@@ -202,16 +201,15 @@ const serverVersion = "0.1.0"
 //
 // exec is typically a *capability.Execution (which satisfies Executor
 // structurally); results is typically a tiny jobs.JobRepository+
-// TaskRepository adapter built by the composition root. See #118's DECISION
-// 1: an Execution always carries the real Job engine; whether production
-// dispatch is on is the composition root's ControlEnabled call, isolated to
-// #154.
+// TaskRepository adapter built by the composition root. An Execution always
+// carries the real Job engine; whether production dispatch is on is the
+// composition root's ControlEnabled call.
 //
 // A nil lane is legal only for a server whose read tools (list_nodes,
 // describe_node, list_operations) are never called — e.g. a golden-file
 // fixture exercising only the execution tools; a stray read-tool call
-// through a nil lane panics rather than failing legibly, mirroring the
-// pre-existing nil ReadAuditor.
+// through a nil lane panics rather than failing legibly, mirroring a nil
+// ReadAuditor.
 // Option configures a server built by New — WithClock overrides the Tasks
 // surface's clock, WithApprovalDecider wires the in-band approval tool,
 // WithApprovalElicitation turns on the in-band MRTR question path, and
@@ -238,7 +236,7 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // WithClock overrides the clock the Tasks surface renders timestamps from
-// (production default: time.Now().UTC()). Since #727 cfg.now is also the
+// (production default: time.Now().UTC()). cfg.now is also the
 // clock an answered retry opens its sealed request state against (seal
 // expiry) and passes to acceptElicitedAnswer for its PastDeadline judgement —
 // still a test seam, never configuration (invariant 11).
@@ -282,9 +280,8 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 		srv.AddReceivingMiddleware(toolCallMiddleware(cfg.toolCalls))
 	}
 
-	// ask is the in-band MRTR question path (elicit.go, S2b), and — since
-	// #727 — the same nil check that gates emission also gates the
-	// answered-retry path (isAnsweredRetry, tools_execution.go): a nil ask
+	// ask is the in-band MRTR question path (elicit.go), and the same nil
+	// check that gates emission also gates the answered-retry path (isAnsweredRetry, tools_execution.go): a nil ask
 	// means no question was ever asked, so no retry could ever be answering
 	// one either. It is wired only when the caller both turned the option on
 	// AND wired a decider — an unwired decider leaves ask nil, so the

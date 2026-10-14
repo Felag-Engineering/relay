@@ -17,7 +17,7 @@ import (
 // This is an EXEC file (no_dispatch_test.go's relaxed partition — see
 // tools_execution.go's doc comment for the full rationale).
 
-// tasks.go serves the MCP Tasks extension's read side (#374, SEP-2663,
+// tasks.go serves the MCP Tasks extension's read side (SEP-2663,
 // ADR-0028): `tasks/get` and `tasks/cancel`, registered as custom methods
 // beside the SDK's own dispatch table.
 //
@@ -31,9 +31,8 @@ import (
 //
 // `tasks/update` — the method by which a client answers an `inputRequests`
 // elicitation. That is an approval decision travelling over the AI's own
-// session, and whether an in-band answer can ever count is the open rung-2
-// question on #272. Since S2b (ADR-0028 amendment 2026-09-24), an askable
-// park CAN carry `inputRequests` (elicit.go) — but precedence means it never
+// session, and whether an in-band answer can ever count is ADR-0029's
+// decision. An askable park (ADR-0028 amendment 2026-09-24) CAN carry `inputRequests` (elicit.go) — but precedence means it never
 // also carries a task handle: a question replaces `pending_approval`
 // outright, so there is no Tasks-extension envelope for `tasks/update` to
 // answer even then. ADR-0028 states this as a boundary rather than an

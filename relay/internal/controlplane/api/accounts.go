@@ -123,7 +123,7 @@ const maxAPITokenNameLen = 128
 // revocation routes: an unwired administration surface must be loud and
 // closed, never quietly ungated.
 //
-// This does NOT decide role. Since #653 the floor — admin, in full — and the
+// This does NOT decide role. The floor — admin, in full — and the
 // self-targeting and last-enabled-admin refusals all live inside the
 // capability layer (capability.AccountAdmin.Accounts/CreateAccount/
 // SetAccountRole/...), reached through d.AccountAdmin below; this surface
@@ -152,9 +152,9 @@ func requireAccountAdmin(w http.ResponseWriter, r *http.Request, d Deps) (capabi
 //
 // selfTargetVerb names the act being refused ("re-role", "disable") for the
 // ErrSelfTargeted title, so the two callers that can actually produce it
-// (handleSetAccountRole, handleSetAccountEnabled) render the same specific
-// title `refuseSelfTarget` used to (pre-#653: "cannot re-role your own
-// account" / "cannot disable your own account") rather than a generic one.
+// (handleSetAccountRole, handleSetAccountEnabled) render a specific title
+// ("cannot re-role your own account" / "cannot disable your own account")
+// rather than a generic one.
 // Every other caller passes "" — they cannot reach this branch, since
 // SetAccountRole/SetAccountEnabled are the only two capability methods that
 // return ErrSelfTargeted — and "" would only ever render if that stopped

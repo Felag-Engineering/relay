@@ -69,17 +69,16 @@ type Config struct {
 }
 
 // Server is the Relay's control-plane HTTP surface. Every route registered on
-// its Mux is wrapped by a single Authenticator.Middleware, so #116 (Control
-// API) and #117 (MCP) inherit auth simply by mounting handlers on Mux() — the
-// one control path (invariant 10, ADR-0009/0010).
+// its Mux is wrapped by a single Authenticator.Middleware, so the Control API
+// and MCP inherit auth simply by mounting handlers on Mux() — the one control
+// path (invariant 10, ADR-0009/0010).
 type Server struct {
 	mux  *http.ServeMux
 	http *http.Server
 }
 
 // New constructs a Server. It mounts one authenticated placeholder route so
-// that the auth wiring is provable ahead of #116 landing the real Control
-// API routes:
+// that the auth wiring is provable independently of the Control API routes:
 //   - GET /api/v1/ping  => 200 {"status":"ok"}  (Control API stand-in)
 //
 // The real MCP server is mounted on Mux() by the composition root
@@ -145,8 +144,8 @@ func New(cfg Config, authn *Authenticator) *Server {
 	}
 }
 
-// Mux returns the underlying ServeMux so #116/#117 can register their real
-// routes. Every route registered here — past, present, and future — is
+// Mux returns the underlying ServeMux so the Control API and MCP can
+// register their routes. Every route registered here — past, present, and future — is
 // reached only through the Authenticator.Middleware wrapping installed by New.
 func (s *Server) Mux() *http.ServeMux {
 	return s.mux

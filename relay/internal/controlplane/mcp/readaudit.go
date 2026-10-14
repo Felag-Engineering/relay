@@ -25,12 +25,11 @@ import (
 // the result would copy the very material this decision is worried about into
 // a trail that outlives the Job (ADR-0025).
 //
-// #680 moved list_nodes, describe_node and list_operations onto the
-// capability read lane (ReadLane, mcp.go): the record and the read are now
-// the same call, made there rather than through this seam. This file's
-// ReadAuditor/auditRead now serve only get_job (tools_jobs.go), the Tasks
-// read-back tools (tasks/get, tasks.go), and — since #727 — an answered
-// retry's Job-bound re-attach (run_operation/raw_exec, tools_execution.go),
+// list_nodes, describe_node and list_operations go through the capability
+// read lane (ReadLane, mcp.go): the record and the read are the same call,
+// made there rather than through this seam. This file's
+// ReadAuditor/auditRead serve only get_job (tools_jobs.go), the Tasks
+// read-back tools (tasks/get, tasks.go), and an answered retry's Job-bound re-attach (run_operation/raw_exec, tools_execution.go),
 // which reads back a previously-dispatched Job's Task rows exactly as
 // get_job does: the tools that read back a previously-dispatched Job's own
 // Task rows rather than the registry or a display-only cache.
@@ -72,7 +71,7 @@ type ReadAuditor interface {
 // this side of the system that is the right way round (AGENTS.md: prefer the
 // more restrictive option).
 //
-// A nil auditor is the pre-#288 behaviour — debug log only — and exists so
+// A nil auditor logs at debug only, and exists so
 // tests and any surface that has not been wired yet keep working rather than
 // failing shut on a missing dependency.
 func auditRead(ctx context.Context, a ReadAuditor, tool string, e ReadEvent) error {

@@ -74,13 +74,13 @@ type RenderedPlan struct {
 }
 
 // ExitCode returns the exit_code to render for task, or nil when no real
-// process exit status exists — the #207/#253 did-not-run disambiguation (see
+// process exit status exists — the did-not-run disambiguation (see
 // each surface's per-Node result doc comment). A real status exists only when
 // the Task actually resolved as success/failure AND the daemon reported a
 // non-negative code: the daemon's -1 "no exit status" sentinel (spawn failure,
 // wait failure, signal-kill, timeout/cancel kill, denied-before-spawn — a real
 // Unix exit status is always 0-255), the Relay's synthesized zero value
-// (unreachable, version_refused), and — since #632 — the Relay's own -1 on a
+// (unreachable, version_refused), and the Relay's own -1 on a
 // failure row whose daemon report the wire boundary refused as a protocol
 // violation (it may well have executed; what happened is unknown) all render
 // as no exit_code at all. This is pure presentation — the stored jobs.Task
@@ -131,8 +131,8 @@ func RenderJobResults(ctx context.Context, results JobResultReader, jobID string
 	return items, err
 }
 
-// Job statuses reported by a surface that returns a Job before it finishes
-// (#895). A Job is running while any of its Tasks is unresolved, and complete
+// Job statuses reported by a surface that returns a Job before it finishes.
+// A Job is running while any of its Tasks is unresolved, and complete
 // once every Task has a terminal outcome.
 const (
 	JobStatusRunning  = "running"
