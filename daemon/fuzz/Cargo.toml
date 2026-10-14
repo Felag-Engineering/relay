@@ -8,6 +8,10 @@
 # only consumer is the nightly `make fuzz-daemon` target wired into
 # .github/workflows/security-nightly.yml.
 #
+# Two further targets (#897) fuzz the Policy engine checks a Task's arguments
+# reach: the Raw Exec argv gate (ADR-0019) and the canonical-path precondition
+# (ADR-0018), both through the real `Policy::decide`.
+#
 # Message types come from the daemon workspace's relay-proto crate, which
 # generates them once from /proto (the single source of truth, ADR-0007) — never
 # hand-copied and never hand-edited.
@@ -16,7 +20,7 @@ name = "relay-daemon-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
-description = "cargo-fuzz targets over the relay-daemon's prost wire-decode surface."
+description = "cargo-fuzz targets over the relay-daemon's prost wire-decode surface, the Raw Exec argv gate and the canonical-path precondition."
 license = "Proprietary"
 
 [package.metadata]
@@ -29,6 +33,9 @@ prost = "0.14"
 # The generated wire types. relay-proto declares tonic without `tls-*`, so no TLS
 # stack enters the fuzz build.
 relay-proto = { path = "../crates/relay-proto" }
+# The Policy engine under test. No features: never test-util (its evaluate shims
+# are not the production gate) and never ban-probe.
+relay-policy = { path = "../crates/relay-policy" }
 
 # Standalone workspace root. Keeps this nightly-only crate out of the parent
 # package's build graph so `make build`/`make test`/`make lint` stay stable-only.
@@ -36,7 +43,7 @@ relay-proto = { path = "../crates/relay-proto" }
 members = ["."]
 
 # One [[bin]] per fuzz target; cargo-fuzz enumerates targets from these.
-# Keep each target small and focused on ONE externally-reachable decode path.
+# Keep each target small and focused on ONE externally-reachable parse or check.
 [[bin]]
 name = "fuzz_relay_message_decode"
 path = "fuzz_targets/fuzz_relay_message_decode.rs"
@@ -54,6 +61,20 @@ bench = false
 [[bin]]
 name = "fuzz_renew_response_decode"
 path = "fuzz_targets/fuzz_renew_response_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_raw_exec_gate"
+path = "fuzz_targets/fuzz_raw_exec_gate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_path_canonical"
+path = "fuzz_targets/fuzz_path_canonical.rs"
 test = false
 doc = false
 bench = false

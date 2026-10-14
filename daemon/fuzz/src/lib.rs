@@ -20,6 +20,12 @@
 //! layer #218 explicitly deferred: coverage-guided exploration of the raw
 //! byte-level decode itself, hunting panics, OOM, and unbounded recursion.
 //!
+//! Two further targets (#897) fuzz the Policy engine checks a Task's arguments
+//! reach: the Raw Exec argv gate (ADR-0019) and the canonical-path precondition
+//! (ADR-0018). They drive Policy only through `Policy::decide` (invariant 12),
+//! never the test-only `evaluate` shims; they spawn no process and touch no
+//! filesystem. Their shared helpers live in [`policy_oracle`].
+//!
 //! Only failure modes are asserted (panic / crash / OOM / roundtrip
 //! inconsistency); a plain `Err` from `decode` is the correct outcome for
 //! malformed bytes and is never a finding.
@@ -27,6 +33,8 @@
 /// Prost-generated wire types, from the workspace's relay-proto crate (ADR-0007:
 /// generated once from /proto, never hand-edited).
 pub use relay_proto as pb;
+
+pub mod policy_oracle;
 
 use prost::Message;
 

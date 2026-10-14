@@ -728,6 +728,11 @@ fuzz-relay:
 # ADR-0006). Completes the coverage-guided half that #218's stable-toolchain
 # proptest suite deliberately deferred.
 #
+# Since #897 also two Policy-engine checks a Task's arguments reach, driven
+# through the real Policy::decide (ADR-0011): the Raw Exec argv round-trip
+# (ADR-0019) and the canonical-path precondition (ADR-0018). Neither spawns a
+# process or touches the filesystem.
+#
 # REQUIRES the NIGHTLY Rust toolchain plus cargo-fuzz
 # (`rustup toolchain install nightly` then
 #  `cargo install cargo-fuzz --version 0.13.2 --locked`).
@@ -756,7 +761,7 @@ FUZZ_FLAGS      := -max_total_time=$(FUZZ_TOTAL_TIME) -rss_limit_mb=$(FUZZ_RSS_M
 # and writes new inputs only to <dir>/<target> — libFuzzer adds to the FIRST corpus
 # directory — so a persisted corpus never overwrites or pollutes the committed seeds.
 FUZZ_GROWN_CORPUS ?=
-FUZZ_DAEMON_TARGETS := fuzz_relay_message_decode fuzz_enroll_response_decode fuzz_renew_response_decode
+FUZZ_DAEMON_TARGETS := fuzz_relay_message_decode fuzz_enroll_response_decode fuzz_renew_response_decode fuzz_raw_exec_gate fuzz_path_canonical
 fuzz_corpus = $(if $(FUZZ_GROWN_CORPUS),$(FUZZ_GROWN_CORPUS)/$(1) $(CURDIR)/daemon/fuzz/corpus/$(1))
 #
 # One recipe line per FUZZ_DAEMON_TARGETS entry (the foreach ends each with a newline), so the

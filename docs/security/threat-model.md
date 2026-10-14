@@ -309,8 +309,9 @@ conditionally and are called out.
    fuzz job; `make fuzz-relay`); Rust `proptest` suites over policy and dispatch
    (`daemon/crates/relay-policy/src/lib.rs`, `daemon/src/dispatch.rs`) under `cargo test`. No crash reproducers
    committed. Coverage-guided `cargo-fuzz`, deferred at sign-off to #238, has since landed (PR
-   #306): a nightly `fuzz-daemon` job over the daemon's prost decode surface (`daemon/fuzz/`,
-   `make fuzz-daemon`).
+   #306): a nightly `fuzz-daemon` job over the daemon's prost decode surface and, since #897,
+   the Raw Exec gate's argv round-trip (ADR-0019) and the canonical-path precondition
+   (ADR-0018) through `Policy::decide` (`daemon/fuzz/`, `make fuzz-daemon`).
 4. **Daemon runs a documented least-privilege profile — applied + documented; live
    verification OUTSTANDING.** The shipped unit carries `SystemCallFilter=@system-service`,
    `SystemCallArchitectures=native`, `MemoryDenyWriteExecute=yes`, `CapabilityBoundingSet=CAP_DAC_READ_SEARCH`,
