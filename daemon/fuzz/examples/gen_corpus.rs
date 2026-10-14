@@ -8,6 +8,9 @@
 //! cargo run --example gen_corpus
 //! ```
 //!
+//! The two Policy targets (`fuzz_raw_exec_gate`, `fuzz_path_canonical`) are
+//! text-framed rather than prost-encoded; their seeds are byte-stable.
+//!
 //! All field values are fixed, so re-running is byte-stable except for one
 //! caveat: prost encodes `map` fields in HashMap iteration order, so the
 //! two-entry `pkg.install` args map may serialize its entries in either order.
@@ -24,6 +27,7 @@ use relay_daemon_fuzz::pb::{
     policy_query, relay_message, task_request, EnrollResponse, Label, Operation, Ping, PolicyQuery,
     RawExec, RelayMessage, RenewResponse, RiskClass, TaskCancel, TaskRequest,
 };
+use relay_daemon_fuzz::policy_oracle::SEP;
 
 fn write_seed(dir: &Path, name: &str, bytes: &[u8]) {
     fs::create_dir_all(dir).expect("create corpus dir");
@@ -131,4 +135,143 @@ fn main() {
         ca_bundle: b"-----BEGIN CERTIFICATE-----\nMIIC\n-----END CERTIFICATE-----\n".to_vec(),
     };
     write_seed(&dir, "renew_response", &renew.encode_to_vec());
+
+    write_policy_seeds(&root);
+}
+
+/// One `fuzz_raw_exec_gate` seed: the Policy selector byte, then the argv with
+/// its elements separated by `SEP`. An empty argv is the selector alone.
+fn argv_seed(sel: u8, argv: &[&str]) -> Vec<u8> {
+    let mut out = vec![sel];
+    out.extend_from_slice(argv.join(&SEP.to_string()).as_bytes());
+    out
+}
+
+/// Seeds for the two text-framed Policy targets (#897). Byte-stable.
+fn write_policy_seeds(root: &Path) {
+    // --- fuzz_raw_exec_gate -------------------------------------------------
+    // Selectors: 0 DotAll, 1 DotAllWithDeny, 2 Anchored, 3 DenyAll,
+    // 4 Unanchored. Rows are
+    // ported from relay-policy's `redteam_cases()` (raw_exec_redteam),
+    // `argv0_refused_unless_single_program_token` and
+    // `whitespace_in_any_argv_element_refused_naming_its_index`.
+    let dir = root.join("fuzz_raw_exec_gate");
+    let mut rows: Vec<(u8, Vec<&str>)> = vec![
+        (2, vec!["/usr/bin/systemctl", "restart", "nginx"]),
+        (2, vec!["/usr/bin/uptime"]),
+        (2, vec!["/usr/bin/systemctl", "restart nginx"]),
+        (2, vec!["/usr/bin/systemctl restart nginx"]),
+        (
+            2,
+            vec![
+                "/usr/bin/systemctl",
+                "restart",
+                "nginx",
+                ";",
+                "touch",
+                "/tmp/pwn",
+            ],
+        ),
+        (
+            2,
+            vec![
+                "/bin/rm",
+                "-rf",
+                "/var/log",
+                "&&",
+                "/usr/bin/systemctl",
+                "restart",
+                "nginx",
+            ],
+        ),
+        (2, vec!["/bin/sh", "-c", "/usr/bin/systemctl restart nginx"]),
+        (1, vec!["systemctl", "restart", "nginx", "--force x"]),
+        (1, vec!["systemctl", "restart", "nginx", "--force"]),
+        (1, vec!["prog x", "--force"]),
+        (1, vec!["rm"]),
+        (0, vec!["systemctl\0x", "nginx"]),
+        (0, vec!["a", "", "b"]),
+        (0, vec!["a", ""]),
+        (0, vec!["", "x"]),
+        (0, vec!["a\u{200b}b", "x"]),
+        (0, vec!["a\u{feff}b", "x"]),
+        (0, vec!["a\u{180e}b", "x"]),
+        (0, vec!["a\u{1c}b", "x"]),
+        (0, vec![]),
+        (3, vec!["/usr/bin/uptime"]),
+    ];
+    for bad in [
+        "",
+        "systemctl restart",
+        "\t",
+        "\n",
+        "\r",
+        "\u{a0}",
+        " systemctl",
+        "systemctl ",
+    ] {
+        rows.push((0, vec![bad, "nginx"]));
+    }
+    for x in [
+        "a b",
+        "a\tb",
+        "a\nb",
+        "a\rb",
+        "a\u{a0}b",
+        "a\u{2028}b",
+        " a",
+        "a ",
+    ] {
+        rows.push((0, vec!["prog", "ok", x]));
+    }
+    // Unanchored: the two exact Allows, then near-misses a substring or
+    // multiline match would wrongly allow (ADR-0019 whole-command anchoring).
+    rows.extend([
+        (4, vec!["/usr/bin/uptime"]),
+        (4, vec!["/usr/bin/id"]),
+        (4, vec!["/usr/bin/uptime", "x"]),
+        (4, vec!["x", "/usr/bin/uptime"]),
+        (4, vec!["/usr/bin/uptimex"]),
+        (4, vec!["x\n/usr/bin/id"]),
+        (4, vec!["/usr/bin/id\n"]),
+        (4, vec!["/usr/bin/id", "x"]),
+    ]);
+    for (i, (sel, argv)) in rows.iter().enumerate() {
+        write_seed(&dir, &format!("argv_{i:02}"), &argv_seed(*sel, argv));
+    }
+
+    // --- fuzz_path_canonical ------------------------------------------------
+    // Sources: ADR-0018, relay-policy `file_read_path_cases()` and
+    // `precondition_runs_before_deny_for_template_path_positions`. The joined
+    // rows are built with SEP (U+001F), so they drive the multi-position oracle.
+    let dir = root.join("fuzz_path_canonical");
+    let joined = |parts: &[&str]| parts.join(&SEP.to_string());
+    let paths: Vec<String> = vec![
+        "/".into(),
+        "/etc/shadow".into(),
+        "/etc/hostname".into(),
+        joined(&["/etc/hostname", "extra"]),
+        "/etc/../etc/shadow".into(),
+        "//etc/shadow".into(),
+        "/etc//shadow".into(),
+        "/etc/./shadow".into(),
+        "/etc/shadow/".into(),
+        "/var/../etc".into(),
+        "/.".into(),
+        "/..".into(),
+        "/a/.../b".into(),
+        "relative".into(),
+        "".into(),
+        "etc/shadow".into(),
+        "/proc/self/root/etc/shadow".into(),
+        "/tmp/a b".into(),
+        "/tmp/a\nb".into(),
+        "/etc/shadow\0x".into(),
+        "/\u{202e}x".into(),
+        joined(&["/ok", "/a//b", "/c/."]),
+        joined(&["/ok", "/fine"]),
+    ];
+    for (i, p) in paths.iter().enumerate() {
+        write_seed(&dir, &format!("path_{i:02}"), p.as_bytes());
+    }
 }
