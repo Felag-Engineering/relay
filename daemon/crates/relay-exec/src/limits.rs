@@ -3,7 +3,7 @@
 
 /// `setrlimit` bounds applied to every spawned child (`executor::execute`'s
 /// `pre_exec` hook). Daemon-local and wire-immutable: the Relay can never set
-/// or raise these over the wire (invariant #11 analog for the daemon;
+/// or raise these over the wire (invariant 11 analog for the daemon;
 /// ADR-0002/0004) — they are a compile-time constant like the bin's
 /// `config::MAX_OUTPUT_BYTES` output cap, not env-derived. A Policy/env-tunable value is
 /// future work; the operator's runtime lever today is the systemd unit

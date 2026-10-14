@@ -103,7 +103,7 @@ pub fn template_dir_from_env() -> PathBuf {
 }
 
 /// Per-stream output byte cap for stdout and stderr independently. Daemon-local
-/// and wire-immutable: the Relay can never raise it over the wire (invariant #11
+/// and wire-immutable: the Relay can never raise it over the wire (invariant 11
 /// analog for the daemon; ADR-0004). Bytes past the cap are drained but discarded
 /// and `truncated` is set. Sane default; a Policy/env-tunable value is future work.
 pub const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB
@@ -160,7 +160,7 @@ pub fn enroll_config(cfg: &Config) -> Result<Option<EnrollConfig>, EnrollError> 
 /// hostnames and `grpc://`) is also returned as-is. This is a convenience
 /// transformation for operators who supply plain `http://` addresses; the
 /// authoritative fail-closed guard remains `validate_endpoint_scheme` /
-/// `build_channel` (ADR-0005, invariant #6).
+/// `build_channel` (ADR-0005, invariant 6).
 pub(crate) fn normalize_scheme(addr: &str) -> String {
     addr.replacen("http://", "https://", 1)
 }

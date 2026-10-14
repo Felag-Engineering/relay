@@ -14,7 +14,7 @@
 // node_id, token, account, selector, or human-readable reason string — that
 // would be an unbounded-cardinality label and a secrets-in-metrics risk
 // (AGENTS.md). This package has no execution capability: it only reads
-// gauge-source closures and formats counters (invariant #10).
+// gauge-source closures and formats counters (invariant 10).
 //
 // relay_build_info is the one metric with free-form label values. It is
 // still bounded: its labels are this process's own build stamp, fixed for the

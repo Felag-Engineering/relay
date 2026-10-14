@@ -65,7 +65,7 @@ func WithMaxNodes(n int) Option {
 // to derive each Node's Outdated flag on read. Pass "" (the default) to leave
 // the gate off — every Node is then always non-outdated. This mirrors
 // registry.WithMinDaemonVersion; it is a Relay-side startup config value
-// only, never settable through any API (invariant #11, ADR-0010).
+// only, never settable through any API (invariant 11, ADR-0010).
 func WithMinDaemonVersion(v string) Option {
 	return func(s *Store) {
 		s.minDaemonVersion = v

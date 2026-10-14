@@ -127,7 +127,7 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     let deadline = tokio::time::Instant::now() + req.timeout;
 
     // Guard: empty argv must never reach Command::new. Return immediately without
-    // touching a shell (ADR-0001 invariant #1).
+    // touching a shell (ADR-0001 invariant 1).
     if req.argv.is_empty() {
         return failure_result(&req.task_id, b"empty argv", started);
     }

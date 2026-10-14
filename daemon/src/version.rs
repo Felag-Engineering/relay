@@ -5,7 +5,7 @@
 //! `Hello.daemon_version` is not decoration: it is the sole input to the
 //! Relay's minimum-daemon-version dispatch gate — the *only* lever the Relay
 //! has over daemon upgrades, since the daemon never self-upgrades and the
-//! Relay never pushes binaries (ADR-0014, invariant #14). The Relay validates
+//! Relay never pushes binaries (ADR-0014, invariant 14). The Relay validates
 //! and orders that string with `golang.org/x/mod/semver`
 //! (`relay/internal/registry/version.go`), so whatever this module returns
 //! must be (a) a valid semver version and (b) ordered the way an operator

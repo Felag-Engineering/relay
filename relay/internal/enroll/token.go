@@ -60,7 +60,7 @@ var (
 
 	// ErrInvalidScope is returned when the scope is empty, or when any entry
 	// is not "relay:"-prefixed with a well-formed bare key/value pair
-	// (registry.WellFormedLabel) — ADR-0006 invariant #7. Returned
+	// (registry.WellFormedLabel) — ADR-0006 invariant 7. Returned
 	// verbatim as the Control API's 400 problem detail (api/tokens.go), so
 	// its message states both rules rather than only the prefix one.
 	ErrInvalidScope = errors.New("enroll: scope must be non-empty, and every entry must be " +
@@ -183,7 +183,7 @@ func splitScopeEntry(entry string) (key, value string) {
 
 // validateScope returns ErrInvalidScope if scope is empty, or if any entry is
 // not "relay:"-prefixed with a well-formed bare key/value pair
-// (registry.WellFormedLabel), enforcing ADR-0006 invariant #7.
+// (registry.WellFormedLabel), enforcing ADR-0006 invariant 7.
 //
 // This checks the SAME split Server.Enroll stamps and returns
 // (splitScopeEntry), not the raw entry string: WellFormedLabel over the

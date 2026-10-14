@@ -639,7 +639,7 @@ func (e *jobEngine) dispatchOneRecovered(ctx context.Context, gate *jobGate, pt 
 // so an outdated Node is refused whether or not it currently has a Tunnel, and
 // the Conduit is never opened for it. It runs AFTER the upstream blast-cap
 // check (Execution.Run) — outdated Nodes still matched the Selector and still
-// count against the cap (invariant #5); only the send is refused.
+// count against the cap (invariant 5); only the send is refused.
 //
 // gate is the Job's cancel gate (nil means ungated). Once the Job's cancel is
 // recorded, no Task is MarkDispatched: MarkDispatched runs under the gate lock

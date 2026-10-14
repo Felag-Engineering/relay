@@ -20,7 +20,7 @@
 //! milestone, not a follow-up).
 //!
 //! This is the ONE place in the daemon that constructs a `/bin/sh -c` command
-//! from a template. Invariant #1 ("argv, never `/bin/sh`") governs *Native
+//! from a template. Invariant 1 ("argv, never `/bin/sh`") governs *Native
 //! Operations* (tier 1); the template tier is tier 2, whose whole reason to
 //! exist is shell composition. The command *structure* is author-fixed (from a
 //! root-owned local file, ADR-0002 trust root — file loading is #291); only the

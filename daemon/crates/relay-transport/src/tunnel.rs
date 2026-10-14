@@ -18,7 +18,7 @@ type Result<T, E = crate::identity::IdentityError> = std::result::Result<T, E>;
 /// TLS handshake. `connect()` is eager (not lazy): a mismatched server cert
 /// fails immediately, not on the first RPC.
 ///
-/// Fails closed on any non-`https://` endpoint (ADR-0005, invariant #6).
+/// Fails closed on any non-`https://` endpoint (ADR-0005, invariant 6).
 pub async fn connect_mtls(
     endpoint: String,
     domain: Option<String>,

@@ -7,7 +7,7 @@
 //! `main.rs::run_tunnel`/`reconnect_loop` so `drain()` stays unit-testable in
 //! isolation from any tunnel/tx/log types.
 //!
-//! # At-most-once (ADR-0004, invariant #4)
+//! # At-most-once (ADR-0004, invariant 4)
 //!
 //! Nothing here re-dispatches or retries a Task. The drain only lets a
 //! running Task finish naturally or kills it at grace expiry via the

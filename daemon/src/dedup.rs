@@ -1,4 +1,4 @@
-//! Persisted dedup store for at-most-once Task execution (ADR-0004, invariant #4).
+//! Persisted dedup store for at-most-once Task execution (ADR-0004, invariant 4).
 //!
 //! # Invariant
 //!
@@ -103,7 +103,7 @@ const RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 /// marker younger than this, even when the store is over [`MAX_ENTRIES`]. It is the
 /// guaranteed-live window — below it, a marker might still be needed to dedup a
 /// redelivered Task, and evicting it would let that retry execute twice, violating
-/// at-most-once (ADR-0004, invariant #4).
+/// at-most-once (ADR-0004, invariant 4).
 ///
 /// One hour is a deliberately generous floor: a Task executes for at most `MAX_TIMEOUT`
 /// (5 min) and the Relay's reconnect backoff caps at 30 s, so the real redelivery
@@ -175,7 +175,7 @@ impl DedupStore {
     /// The consequence is accepted, not engineered around. A pathological umask (0o100
     /// strips user-execute from a 0o700 dir) leaves a directory in which no marker file can
     /// be created — and a marker is what makes at-most-once execution durable (ADR-0004,
-    /// invariant #4). `run_once` then **fails closed**: every Task is refused with a
+    /// invariant 4). `run_once` then **fails closed**: every Task is refused with a
     /// durable-record error and nothing executes. That is the correct outcome. Breaking
     /// loudly, attributably, and on the safe side of at-most-once is better than a daemon
     /// that quietly re-widens permissions the operator deliberately removed. See
@@ -904,7 +904,7 @@ mod tests {
     ///   removes a bit its remaining capabilities do not restore — the shipped unit
     ///   bounds the daemon to `CAP_DAC_READ_SEARCH`, so it has no `CAP_DAC_OVERRIDE`):
     ///   the marker cannot be written, `run_once` **fails closed**, and `exec` never
-    ///   runs. At-most-once (invariant #4) holds, and the failure is loud and
+    ///   runs. At-most-once (invariant 4) holds, and the failure is loud and
     ///   attributable to the operator's own setting.
     /// - **DAC is bypassed** (`CAP_DAC_OVERRIDE`): the tightened directory is still
     ///   usable, so the Task runs — exactly once, with its marker durably recorded.

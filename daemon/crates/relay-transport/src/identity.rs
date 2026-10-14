@@ -269,7 +269,7 @@ fn write_atomic(dir: &Path, name: &str, content: &[u8], mode: u32) -> Result<()>
 }
 
 /// Builds a CA-pinned gRPC channel to the Relay. `ca_pem` is the sole trust
-/// root (no system roots — tonic `tls-ring` feature only, ADR-0005 invariant #6).
+/// root (no system roots — tonic `tls-ring` feature only, ADR-0005 invariant 6).
 /// When `client_identity` is `Some`, the channel presents a client cert (mTLS
 /// Tunnel/renew path); when `None`, it is the certless enrollment bootstrap
 /// path (ADR-0006 §2). `connect()` is eager so a wrong-CA Relay is refused at

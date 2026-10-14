@@ -89,7 +89,7 @@ fn heartbeat_delay(interval: Duration, jitter_frac: f64, sample: f64) -> Duratio
 ///
 /// Fail closed: if no enrollment token is configured and no persisted identity
 /// exists in state_dir, this returns an error rather than falling back to a
-/// plaintext dial (ADR-0005, invariant #6).
+/// plaintext dial (ADR-0005, invariant 6).
 async fn acquire_identity(
     config: &Config,
 ) -> Result<crate::identity::Identity, Box<dyn std::error::Error>> {
@@ -185,7 +185,7 @@ enum TunnelExit {
 /// Fixed and deliberately generous: far above any legitimate concurrent fan-out
 /// to a single Node, low enough to bound worst-case memory. Not configurable
 /// this milestone — a constant backstop cannot be raised over the wire, which
-/// is the point (cf. invariant #11, config never rises from the control plane).
+/// is the point (cf. invariant 11, config never rises from the control plane).
 const MAX_INFLIGHT_TASKS: usize = 1024;
 
 /// Sends the initial Hello, followed by a `PolicySnapshot` of the live Policy
@@ -552,7 +552,7 @@ async fn run_tunnel(
 /// `persist_identity` write has no intervening `.await`, so there is no torn
 /// write — the new task simply reschedules from the current cert.
 ///
-/// `connect_mtls`/`build_channel` are never weakened here (invariant #6): a
+/// `connect_mtls`/`build_channel` are never weakened here (invariant 6): a
 /// wrong-CA or revoked Relay/Node is refused at every attempt, just logged
 /// and retried instead of exiting the process. The one exception is
 /// `IdentityError::EndpointScheme`, a non-transient configuration error that
@@ -665,7 +665,7 @@ async fn reconnect_loop(
             }
             Err(identity::IdentityError::EndpointScheme { scheme }) => {
                 // Fatal, non-transient config error: retrying can never
-                // succeed. Fail closed and exit loudly (invariant #6).
+                // succeed. Fail closed and exit loudly (invariant 6).
                 error!(%scheme, "endpoint scheme invalid (must be https); refusing to connect");
                 return Err(Box::new(identity::IdentityError::EndpointScheme { scheme }));
             }
@@ -750,7 +750,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Acquire the enrolled identity before proceeding. Fail closed: if no
     // token is configured and no persisted identity exists, refuse to connect
-    // rather than fall back to a plaintext dial (ADR-0005, invariant #6).
+    // rather than fall back to a plaintext dial (ADR-0005, invariant 6).
     let identity = acquire_identity(&config).await?;
 
     info!(relay = %config.relay_addr, node_id = log_field::untrusted(&identity.node_id), "relay-daemon starting");
