@@ -1,5 +1,5 @@
 // Package approvalnotify pushes a Relay-authored notice to an operator's own
-// notification plumbing when a dispatch parks for approval (#270, ADR-0027).
+// notification plumbing when a dispatch parks for approval (ADR-0027).
 //
 // It is the *delivery* half of the out-of-band envelope, and the distinction
 // from the *decision* half is the whole reason this package is as small and as

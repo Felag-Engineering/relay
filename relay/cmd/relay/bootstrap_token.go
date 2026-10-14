@@ -3,7 +3,7 @@ package main
 // bootstrap_token.go implements `relay bootstrap-token`: the local, root-owned
 // lever that mints the founding admin Account's first API Token (ADR-0023).
 //
-// It exists because retiring the config-seeded shared credential (#298) leaves
+// It exists because retiring the config-seeded shared credential leaves
 // a chicken-and-egg problem — minting an Account's token requires
 // authenticating, and authenticating requires a token. The way out is the same
 // one ADR-0002 uses for Node Policy: root the first credential *locally*, in
@@ -13,8 +13,8 @@ package main
 // it only makes the intended path an obvious one-liner instead of a SQL edit.
 //
 // Minting writes one api_token_mint audit record, attributed to the principal
-// local-host rather than to any Account, in the SAME transaction as the token
-// (#782). If the record cannot be written no token is issued: a credential the
+// local-host rather than to any Account, in the SAME transaction as the token.
+// If the record cannot be written no token is issued: a credential the
 // trail cannot show is not issued. The record names the token's public ID and
 // never its value.
 //

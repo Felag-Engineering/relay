@@ -25,8 +25,8 @@ var (
 	//
 	// Deliberately indistinguishable: a caller learning *why* their token
 	// failed learns whether it was ever real, which turns the auth endpoint
-	// into an oracle for token-guessing. The operator's view (via the API,
-	// #297) reports the real state; the presenter of a bad token learns
+	// into an oracle for token-guessing. The operator's view (via the API)
+	// reports the real state; the presenter of a bad token learns
 	// nothing.
 	ErrTokenInvalid = errors.New("accounts: api token invalid")
 
@@ -56,15 +56,13 @@ func NewPlaintext(secret string) Plaintext { return Plaintext{secret: secret} }
 
 // Reveal returns the secret. Every call site is a place the plaintext
 // escapes, so the permitted ones are enumerated rather than assumed to be
-// singular (#653: there were already two — the mint response on each surface
-// that mints a credential):
+// singular:
 //
 //   - relay/internal/controlplane/api/accounts.go — the Control API's mint
-//     response (#297).
-//   - relay/cmd/relay/bootstrap_token.go — `relay bootstrap-token`'s stdout
-//     (#295).
+//     response.
+//   - relay/cmd/relay/bootstrap_token.go — `relay bootstrap-token`'s stdout.
 //   - relay/internal/controlplane/console/accounts_write.go — the Console's
-//     mint response (#655). It is the one write route on that surface that
+//     mint response. It is the one write route on that surface that
 //     does not post-redirect-get, precisely so the plaintext never enters a
 //     URL.
 //
@@ -171,7 +169,7 @@ type TokenRepository interface {
 
 	// TokensByAccount lists an Account's tokens, newest first. Returns the
 	// stored form — hashes included — so callers must not serialize it
-	// directly to a surface; #297 renders a redacted view.
+	// directly to a surface.
 	TokensByAccount(ctx context.Context, accountID string) ([]APIToken, error)
 
 	// RevokeToken marks a token revoked at the given time. Revoking an

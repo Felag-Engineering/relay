@@ -25,20 +25,18 @@ package console
 // # It renders only the Nodes it was named, and never enumerates the fleet
 //
 // Every id comes from the URL and is resolved one at a time through
-// Queries.DescribeNode (#680) — one audited record per pinned Node, at most
+// Queries.DescribeNode — one audited record per pinned Node, at most
 // maxPins (3). There is no ListNodes call here and there must not be one: an
 // enumerating comparison screen is a fleet surface, and the rule above is only
 // true while this screen cannot become one.
 // TestCompare_ResolvesOnlyThePinnedNodesAndNeverEnumeratesTheFleet is the
 // guard.
 //
-// # Every column it reads is recorded (#680)
+// # Every column it reads is recorded
 //
-// This screen used to read FleetReader/PolicyReader directly and record
-// nothing — the last gap invariant 10 named against this package. It now
-// asks through the SAME audited door node detail does: one describe_node
-// read per pinned Node, which is what makes "who compared which Nodes"
-// answerable on the trail.
+// This screen asks through the SAME audited door node detail does: one
+// describe_node read per pinned Node, which is what makes "who compared which
+// Nodes" answerable on the trail.
 //
 // # It states differences; it never adjudicates them
 //
@@ -203,7 +201,7 @@ func parsePins(raw string) (ids []string, overflow bool) {
 // an operator a Node exists.
 //
 // known is a PARAMETER rather than a read off Deps because the answer is a
-// registry disclosure and #450 made where a screen gets one matter. The two
+// registry disclosure, and where a screen gets one matters. The two
 // screens on the audited read lane resolve pins from what that lane already
 // gave them — the fleet listing from its own audited page, node detail from
 // an audited describe per pinned id — so the pin bar never becomes a second,
@@ -347,7 +345,7 @@ type pinnedResolution struct {
 }
 
 // buildCompareView is the whole screen as a function of the ids named in the
-// URL, each resolved through the audited read lane (#680): one
+// URL, each resolved through the audited read lane: one
 // describe_node record per pinned id, at most maxPins (3) — the same honest
 // accounting pinsKnown (node.go) already documents. An unknown or malformed
 // id resolves to the Unknown list, a dead chip on the pin bar; any OTHER

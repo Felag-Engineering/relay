@@ -13,7 +13,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// approval_grants.go is the surface for batch/window approvals (#378, ADR-0027
+// approval_grants.go is the surface for batch/window approvals (ADR-0027
 // decision 12): one human decision covering a bounded set of future dispatches
 // instead of one Plan.
 //
@@ -63,7 +63,7 @@ type ApprovalGrantService interface {
 // quietly widens the grant, and the domain refuses any that is missing rather
 // than filling in a default.
 //
-// There is deliberately no selector_namespace (#482). decodeJSON refuses
+// There is deliberately no selector_namespace. decodeJSON refuses
 // unknown fields, so a body still carrying one gets a 400 naming the field,
 // never a Grant priced as if the field were honoured.
 type grantScopeRequest struct {
@@ -180,14 +180,7 @@ func renderGrant(g approval.Grant, now time.Time) grantResponse {
 // and a grant written for a read sweep must never silently cover a mutate. An
 // absent or unknown value is an error, not a fallback.
 func parseRiskClass(s string) (jobs.RiskClass, bool) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "read":
-		return jobs.RiskClassRead, true
-	case "mutate":
-		return jobs.RiskClassMutate, true
-	default:
-		return jobs.RiskClassUnspecified, false
-	}
+	return jobs.ParseRiskClass(strings.ToLower(strings.TrimSpace(s)))
 }
 
 // -----------------------------------------------------------------------

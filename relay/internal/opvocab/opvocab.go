@@ -14,7 +14,7 @@
 // Raw Exec is deliberately NOT listed here: it is not an Operation
 // (ADR-0003, GLOSSARY.md) and has no OperationDescriptor on the wire. It is
 // always risk class mutate by definition (arbitrary commands are
-// unclassifiable) and surfaces through its own tool (#118), never this one.
+// unclassifiable) and surfaces through its own tool, never this one.
 package opvocab
 
 import (
@@ -27,7 +27,7 @@ import (
 
 // Descriptor mirrors relayv1.OperationDescriptor's Name and Risk (the wire
 // contract, invariant 8/ADR-0012), plus model-facing legibility PROSE that
-// has no proto counterpart (#120, central decision: NO /proto change).
+// has no proto counterpart (central decision: NO /proto change).
 // Purpose, ArgConstraints, and Example are ADVISORY — they exist so a model
 // reader (list_operations, MCP) can pick the right Operation and build valid
 // args without trial-and-error (ADR-0001's typed-path-by-default safety
@@ -50,7 +50,7 @@ type Descriptor struct {
 	// opvocab_test.go).
 	ArgConstraints map[string]string
 	// ArgClasses declares, per argument, whether it is part of an action's
-	// SHAPE or its SCALE (#415, D10). Every key in ArgConstraints must appear
+	// SHAPE or its SCALE (D10). Every key in ArgConstraints must appear
 	// here — TestArgClasses_CoverEveryDocumentedArg is the mechanical check —
 	// so adding an argument without deciding which it is fails a test rather
 	// than quietly landing on a default.
@@ -61,7 +61,7 @@ type Descriptor struct {
 }
 
 // ArgClass declares whether one argument is part of an Operation's SHAPE —
-// WHAT is being done — or its SCALE — how much of it (#415, D10). It is what
+// WHAT is being done — or its SCALE — how much of it (D10). It is what
 // the approval shape key filters on, so "the last approved action of the same
 // shape" can find a prior record that differs only in a value expected to vary.
 //
@@ -191,7 +191,7 @@ func Lookup(name string) (Descriptor, bool) {
 }
 
 // ShapeArgs returns the subset of args that is part of the SHAPE of a call to
-// operation — what the approval shape key is computed over (#415, D10).
+// operation — what the approval shape key is computed over (D10).
 //
 // The default is STRICT in both directions where a declaration is missing. An
 // Operation this package does not know is a Template Operation (ADR-0021),
@@ -218,11 +218,10 @@ func ShapeArgs(operation string, args map[string]string) map[string]string {
 // declared required name must be provided.
 //
 // It exists here — beside the ArgConstraints convention it reads — because
-// **every** control surface needs it and a per-surface copy would drift. That
-// drift is not hypothetical: issue #345 was exactly this gap on MCP, where an
-// unknown arg name was silently dropped and a misspelled REQUIRED name then
-// defaulted to empty, so the daemon's refusal surfaced as `denied_by_policy`
-// rather than a validation error — sending the AI-agent into a
+// **every** control surface needs it and a per-surface copy would drift
+// (ADR-0042). Without it, an unknown arg name is silently dropped and a
+// misspelled REQUIRED name defaults to empty, so the daemon's refusal surfaces
+// as `denied_by_policy` rather than a validation error — sending the AI-agent into a
 // describe_node/narrow/retry loop it could never exit, because the request was
 // malformed rather than forbidden. A second surface re-implementing this would
 // reopen the same trap on its own schedule.

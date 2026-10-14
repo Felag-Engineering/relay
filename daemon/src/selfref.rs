@@ -1,5 +1,5 @@
 //! Self-reference lint — "does this Policy let the wire rewrite the wire's own
-//! gate?" (issue #287, landed with #292's `policy check` tooling pass).
+//! gate?"
 //!
 //! # The gap this closes
 //!
@@ -37,8 +37,8 @@
 //!
 //! # Why no hardcoded daemon-side deny floor
 //!
-//! #287 also floated an always-on daemon-side deny for its own config
-//! directory. Deliberately not implemented — see the ADR-0021 amendment for the
+//! An always-on daemon-side deny for its own config directory is
+//! deliberately not implemented — see the ADR-0021 amendment for the
 //! full reasoning; in short: a path-string floor is the bypassable mechanism
 //! ADR-0018/0019 spent two ADRs hardening, it cannot distinguish a legitimate
 //! audit read from a rewrite, and it would silently override an explicit
@@ -170,7 +170,7 @@ fn raw_exec_probes(path: &str) -> Vec<Vec<String>> {
 /// exist. Native `file.read` is always probed.
 ///
 /// Every finding is a `Warning` (`--strict` turns it into a pipeline failure),
-/// matching #287's proposal: this is an authoring smell, not an invalid file.
+/// matching the ADR-0021 amendment: this is an authoring smell, not an invalid file.
 pub fn lint(policy: &Policy, path_slot_ops: &[String]) -> Vec<LintFinding> {
     let mut findings = Vec::new();
 

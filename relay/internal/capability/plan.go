@@ -1,4 +1,4 @@
-// Plan mode (#119, ADR-0011): plan=true's Relay-side half. A Plan resolves
+// Plan mode (ADR-0011): plan=true's Relay-side half. A Plan resolves
 // the same Selector, runs the same authz/cap checks as Run, but never
 // dispatches a Task — it asks each matched, connected daemon a read-only
 // PolicyQuery and reports the per-Node PolicyVerdict instead of executing.
@@ -139,7 +139,7 @@ func (e *jobEngine) query(ctx context.Context, d dispatch) (planResult, error) {
 // dispatch would currently be refused (ADR-0011/0013).
 //
 // Order mirrors Run except for the Freeze/cap treatment:
-//  1. resolve the Selector — identical resolution to Run (parity for #121) —
+//  1. resolve the Selector — identical resolution to Run —
 //     and, for a Template Operation, its class and fan-out (ADR-0042),
 //     exactly as Run does.
 //  2. authorize p against act/sel — GATES (returns an error, audited as a

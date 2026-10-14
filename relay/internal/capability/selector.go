@@ -66,8 +66,8 @@ type Selector struct {
 // prefix-stripping style, extended here to every namespace).
 //
 // node: and relay: keep the same "key=value, value required" grammar. tag: is
-// REFUSED outright (ErrSelectorTagUnsupported, #560): the namespace exists in
-// the model (invariant 7) but has no storage until #430, so parsing one would
+// REFUSED outright (ErrSelectorTagUnsupported): the namespace exists in
+// the model (invariant 7) but has no storage yet, so parsing one would
 // hand the caller a Selector that matches nothing for a reason it cannot see.
 // state: is different because it is closed-vocabulary and typed (ADR-0034):
 // a boolean marker term carries no value ("state:offline") and a fact term
@@ -122,23 +122,23 @@ func ParseSelector(s string) (Selector, error) {
 			rest = strings.TrimPrefix(term, "relay:")
 		case strings.HasPrefix(term, "tag:"):
 			// REFUSED, not parsed. tag-space has no storage on registry.Node
-			// until label management lands (#430), so a tag: predicate would
+			// until label management lands, so a tag: predicate would
 			// resolve to false for every Node and the caller would read
 			// "matched nothing" where the truth is "not implemented".
 			//
 			// The refusal lives HERE rather than on a surface because every
 			// surface parses through this function: MCP's list_nodes,
 			// run_operation, raw_exec and plan; the Control API's execution
-			// routes; the Console's fleet filter; and the devharness. Before
-			// #560 only the Console guarded it, so the same term was refused
-			// on one surface and answered 200-with-an-empty-list on another
-			// — one capability layer deciding one question is what invariant
-			// 10 asks for, and a surface-local guard is how the two drifted.
+			// routes; the Console's fleet filter; and the devharness. A
+			// surface-local guard would let the same term be refused on one
+			// surface and answered 200-with-an-empty-list on another — one
+			// capability layer deciding one question is what invariant 10
+			// asks for.
 			//
 			// Deliberately a parse error rather than a silent drop: an
 			// AI-agent handed an empty Node list cannot tell it from a real
 			// empty match, and that is the caller least equipped to notice.
-			// #430 deletes this arm and restores the two lines below it.
+			// This arm is deleted once tag-space has storage.
 			return Selector{}, fmt.Errorf("%w: %q", ErrSelectorTagUnsupported, term)
 		case strings.HasPrefix(term, "state:"):
 			p, err := parseStateTerm(term, strings.TrimPrefix(term, "state:"))
@@ -149,7 +149,7 @@ func ParseSelector(s string) (Selector, error) {
 			continue
 		default:
 			// tag: is deliberately NOT offered here even though it is a real
-			// namespace: since #560 every tag: term is refused, so listing it
+			// namespace: every tag: term is refused, so listing it
 			// as a way out of a typo would advertise the one prefix that
 			// cannot work. Surfaces render this string verbatim (the Console's
 			// fleet filter, sentence-cased, MCP's "invalid selector" wrap, the
@@ -237,12 +237,12 @@ func (sel Selector) Matches(n registry.Node, ev StateEval) bool {
 		case NamespaceState:
 			labels = states
 		case NamespaceTag:
-			// Unreachable through ParseSelector since #560, which refuses a
+			// Unreachable through ParseSelector, which refuses a
 			// tag: term outright rather than letting it resolve to nothing.
 			// Kept because a Selector can also be built as a struct literal
 			// (tests, and any future in-process caller), and for those this
 			// is still the true answer: tag-space has no storage on
-			// registry.Node until #430 gives it one, so no Node carries one.
+			// registry.Node yet, so no Node carries one.
 			return false
 		default:
 			return false
@@ -339,7 +339,7 @@ func (n Namespace) Name() string {
 }
 
 // Shape projects sel into the normalised form the approval shape key is
-// computed over (#415, approval.HashPlanShape).
+// computed over (approval.HashPlanShape).
 //
 // It is built from the TYPED Predicate, never from Selector text: the namespace
 // travels as its own length-prefixed field, so no key or value — however it is

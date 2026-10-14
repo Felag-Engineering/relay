@@ -47,7 +47,7 @@ const jsonMediaType = "application/json"
 // oversized body, or an unknown field) is returned as-is; every caller in this
 // package treats a non-nil error the same way: render a 400 problem response.
 //
-// # Why the media type is checked at all (#459)
+// # Why the media type is checked at all
 //
 // Without it, a body sent as text/plain still decoded — and text/plain is one
 // of the three media types an HTML form can POST with no CORS preflight. That

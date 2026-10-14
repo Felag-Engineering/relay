@@ -42,7 +42,7 @@ use crate::model::{compile_allow_args, compile_deny_args, CompiledAllow, Compile
 use crate::natives as operations;
 
 // Crate-private aliases so the `crate::x::...` paths in the moved files resolve
-// unchanged (#889).
+// unchanged.
 use crate as policy;
 pub(crate) use relay_log as log_field;
 pub(crate) use relay_proto as gen;
@@ -1516,7 +1516,7 @@ impl Policy {
     ///   pattern claimed. Both orders Deny, so this is an audit-legibility
     ///   choice, not a semantic one. The guard runs before the allow pass so
     ///   no allow pattern — however written — can approve a command whose
-    ///   element boundaries are ambiguous (invariant #1: an argument must
+    ///   element boundaries are ambiguous (invariant 1: an argument must
     ///   never change *which* command runs).
     /// - Deny-by-default: no allow match → deny with `rule: None`.
     fn evaluate_raw_exec_deny(
@@ -3546,7 +3546,7 @@ mod raw_exec_redteam {
     // The joined form is a lossy projection of argv: `["systemctl restart",
     // "nginx"]` joins identically to the legitimate three-element form, so an
     // allow pattern can approve a joined string whose argv[0] is not the
-    // program that will actually execute. Invariant #1 is that an argument
+    // program that will actually execute. Invariant 1 is that an argument
     // must never change *which* command runs; for Raw Exec that is argv[0].
     // The guard is fail-closed, so the Deny carries `rule: None` and a reason
     // naming argv[0]; it runs AFTER the deny pass (so an attributable deny
@@ -4824,7 +4824,7 @@ mod proptests {
 
     // -------------------------------------------------------------------
     // PB1 — evaluate / evaluate_raw_exec never panic; an empty Policy denies
-    // everything by default (ADR-0002 invariant #3).
+    // everything by default (ADR-0002 invariant 3).
     // -------------------------------------------------------------------
 
     /// A hand-written, richer fixed Policy for PB1's panic-surface coverage

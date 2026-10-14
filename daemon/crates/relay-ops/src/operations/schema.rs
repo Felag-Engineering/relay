@@ -183,8 +183,8 @@ const PKG_VERSION_CHARSET: CharsetSpec = CharsetSpec {
 
 // ---------------------------------------------------------------------------
 // The arg-shape tables — the single definition of each Operation's declared
-// args, referenced by the vocabulary registry ([`super::registry::REGISTRY`],
-// issue #289), which feeds dispatch's arg mapping, this golden schema, and
+// args, referenced by the vocabulary registry ([`super::registry::REGISTRY`]),
+// which feeds dispatch's arg mapping, this golden schema, and
 // `opvocab`'s prose alike.
 // ---------------------------------------------------------------------------
 
@@ -234,7 +234,7 @@ pub(crate) static PKG_INSTALL_ARGS: [ArgSpec; 2] = [
 /// Returns the canonical v1 Operation schema, derived from the vocabulary
 /// registry ([`super::registry::REGISTRY`]) in its canonical order — the same
 /// single source of truth that feeds dispatch, arg validation, and risk
-/// classification (issue #289), so this golden schema can never drift from
+/// classification, so this golden schema can never drift from
 /// what the daemon actually executes.
 pub fn schemas() -> Vec<OpSchema> {
     super::registry::REGISTRY

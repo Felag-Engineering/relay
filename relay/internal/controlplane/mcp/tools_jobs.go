@@ -28,7 +28,7 @@ type getJobInput struct {
 
 // registerJobTools registers cancel_job and get_job on srv.
 //
-// The long-running-Job contract (#895, ADR-0004): run_operation/raw_exec
+// The long-running-Job contract (ADR-0004): run_operation/raw_exec
 // return as soon as the Job's Tasks are persisted (or, with wait_seconds, once
 // they finish), and get_job is the polling path — it re-reads the same Job by
 // id and reports job_status running or complete — without a second, separate

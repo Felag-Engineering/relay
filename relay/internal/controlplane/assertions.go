@@ -7,8 +7,8 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 )
 
-// Asserted-attribution request headers (#300,
-// ADR-0027 decision 10; docs/specs/approval.md).
+// Asserted-attribution request headers (ADR-0027
+// decision 10; docs/specs/approval.md).
 //
 // Headers rather than tool arguments or a request-body field, for three
 // reasons. They are uniform across both surfaces — MCP rides Streamable HTTP,

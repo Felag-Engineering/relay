@@ -1,7 +1,7 @@
 package auditsink
 
 // hostlever.go builds the audit records for the host-side credential levers
-// (`relay console-password`, `relay bootstrap-token`; #782).
+// (`relay console-password`, `relay bootstrap-token`).
 //
 // These are record BUILDERS, not Sink methods: Sink.append is a write of its
 // own, and the fail-closed rule for these acts needs the record and the

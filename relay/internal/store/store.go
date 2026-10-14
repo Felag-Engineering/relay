@@ -65,7 +65,7 @@ func WithMaxNodes(n int) Option {
 // to derive each Node's Outdated flag on read. Pass "" (the default) to leave
 // the gate off — every Node is then always non-outdated. This mirrors
 // registry.WithMinDaemonVersion; it is a Relay-side startup config value
-// only, never settable through any API (invariant #11, ADR-0010).
+// only, never settable through any API (invariant 11, ADR-0010).
 func WithMinDaemonVersion(v string) Option {
 	return func(s *Store) {
 		s.minDaemonVersion = v
@@ -74,8 +74,8 @@ func WithMinDaemonVersion(v string) Option {
 
 // WithLogger overrides the Store's logger seam (production default:
 // slog.Default()), used to warn once per Open when schema_migrations holds
-// a version newer than this binary ships (#492's tolerate-don't-refuse
-// decision). A nil l falls back to slog.Default(), mirroring
+// a version newer than this binary ships (migrate's tolerate-don't-refuse
+// posture). A nil l falls back to slog.Default(), mirroring
 // auditsink.WithLogger. Exists so a test can assert the warning actually
 // fires, with its attributes, rather than only that Open/migrate returns
 // nil.
@@ -120,8 +120,8 @@ const busyTimeoutMillis = 5000
 // "BEGIN IMMEDIATE", taking the write lock at BEGIN. busy_timeout does not
 // cover a deferred transaction's read-to-write upgrade: SQLite returns
 // SQLITE_BUSY at once (SQLITE_BUSY_SNAPSHOT in WAL mode) instead of invoking
-// the busy handler, so a Hello upsert racing another process failed fast
-// (#833). A read-only transaction must opt out with sql.TxOptions{ReadOnly:
+// the busy handler, so a Hello upsert racing another process would fail
+// fast. A read-only transaction must opt out with sql.TxOptions{ReadOnly:
 // true}. SetMaxOpenConns(1) serialises only this process; "relay
 // bootstrap-token" and "relay console-password" open the same file from
 // another process, so cross-process safety is busy_timeout plus IMMEDIATE.
@@ -209,11 +209,11 @@ func Open(path string, opts ...Option) (*Store, error) {
 		db.Close() //nolint:errcheck
 		return nil, fmt.Errorf("migrate %q: %w", path, err)
 	}
-	// Migration 28 chained every pre-existing audit row, exactly once. There is
+	// Migration 28 chains every audit row present when it runs, exactly once. There is
 	// deliberately no re-chaining here on every Open: it would vouch for any row
 	// inserted outside the chain since the last boot.
 
-	// The approval shape-key backfill (#415) is Go rather than migration SQL
+	// The approval shape-key backfill is Go rather than migration SQL
 	// because it must call the same approval.HashGrantShape the write path
 	// calls: two implementations of one hash is exactly the failure the
 	// property "recomputing a key yields the same key" exists to exclude. It is
@@ -225,7 +225,7 @@ func Open(path string, opts ...Option) (*Store, error) {
 	}
 
 	// Diagnostic only, and deliberately after everything that can fail: it
-	// returns nothing and never gates startup (#656, and #492's
+	// returns nothing and never gates startup (migrate's
 	// tolerate-don't-refuse posture). It shares s.logger, set above before
 	// migrate, so a caller's WithLogger sees it exactly as it sees the
 	// schema-newer-than-binary warning.
@@ -247,7 +247,7 @@ func (s *Store) Close() error {
 // Registry returns the SQLite-backed registry.Repository.
 //
 // MEMOISED, unlike the other repositories on this Store, and deliberately so:
-// since #440 the registry holds one piece of state that is not in SQLite — the
+// the registry holds one piece of state that is not in SQLite — the
 // live Tunnel set behind SetConnected/Node.Connected. Handing out a fresh
 // instance per call would give each caller its own empty connection set, so the
 // transport would mark a Node connected on one object while a screen read
@@ -269,7 +269,7 @@ func (s *Store) Registry() registry.Repository {
 	return s.reg
 }
 
-// LabelsDeclined returns the read-back label filter's live counters (#565):
+// LabelsDeclined returns the read-back label filter's live counters:
 // the number of stored pairs getNode's wellFormedLabels has declined to
 // serve so far this process, by namespace. This is the read side of
 // relay_labels_declined_total.
@@ -303,14 +303,14 @@ func (s *Store) Audit() audit.Repository {
 	return &sqliteAudit{db: s.db}
 }
 
-// AuditChain returns the reader of the audit chain's head (#896), for the
+// AuditChain returns the reader of the audit chain's head, for the
 // checkpoint that gives an operator an anchor to verify against.
 func (s *Store) AuditChain() audit.ChainHeadReader {
 	return &sqliteAudit{db: s.db}
 }
 
 // AuditQueries returns the SQLite-backed audit.QueryRepository — the trail's
-// filtered/paginated/aggregating read lane (#441), the capability layer's
+// filtered/paginated/aggregating read lane, the capability layer's
 // seam for it. Backed by the SAME *sqliteAudit type as Audit(): the two are
 // deliberately separate interfaces (append+by-key vs. query-only), not
 // separate implementations, so there is exactly one place the audit table's
@@ -320,7 +320,7 @@ func (s *Store) AuditQueries() audit.QueryRepository {
 }
 
 // JobQueries returns the SQLite-backed jobs.QueryRepository — the Job/Task
-// read lane (#441), the capability layer's seam for it.
+// read lane, the capability layer's seam for it.
 func (s *Store) JobQueries() jobs.QueryRepository {
 	return &sqliteJobQueries{db: s.db}
 }
@@ -351,18 +351,18 @@ func (s *Store) Grants() approval.GrantRepository {
 }
 
 // MCPTasks returns the SQLite-backed mcptask.Repository — MCP task handles
-// (#373, ADR-0028, SEP-2663).
+// (ADR-0028, SEP-2663).
 //
-// Durable rather than an in-process map because the MCP handler runs stateless
-// (#267): a handle minted by one Relay instance must be resolvable by whichever
+// Durable rather than an in-process map because the MCP handler runs stateless:
+// a handle minted by one Relay instance must be resolvable by whichever
 // instance the client's next poll happens to reach. An in-memory map would work
 // perfectly on one process and fail silently on two, which is the failure mode
-// HA (#139) would inherit.
+// HA would inherit.
 func (s *Store) MCPTasks() mcptask.Repository {
 	return &sqliteMCPTasks{db: s.db}
 }
 
-// IdempotencyKeys returns the SQLite-backed jobs.IdempotencyRepository (#895):
+// IdempotencyKeys returns the SQLite-backed jobs.IdempotencyRepository:
 // the dispatch idempotency keys that let a re-issued MCP call re-attach to the
 // Job it already created instead of dispatching again.
 func (s *Store) IdempotencyKeys() jobs.IdempotencyRepository {
@@ -379,7 +379,7 @@ func (s *Store) Accounts() accounts.Repository {
 }
 
 // Passwords returns the SQLite-backed accounts.PasswordRepository — local
-// Console sign-in credentials for human Accounts (#418).
+// Console sign-in credentials for human Accounts.
 //
 // A distinct accessor from Accounts() rather than a wider Repository, so that
 // the set of components able to read a password hash is exactly the set that
@@ -399,8 +399,7 @@ func (s *Store) APITokens() accounts.TokenRepository {
 
 // Tokens returns the SQLite-backed enroll.Repository — the persisted
 // Enrollment Token store (ADR-0006), authoritative across a Relay restart so a
-// revoked token can never mint a new identity after the process restarts
-// (issue #133).
+// revoked token can never mint a new identity after the process restarts.
 func (s *Store) Tokens() enroll.Repository {
 	return &sqliteTokens{db: s.db}
 }

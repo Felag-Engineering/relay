@@ -3,7 +3,7 @@
 // (relayv1.TemplateSnapshot; ADR-0021).
 //
 // Two consumers, and only two. list_operations/describe_node DISPLAY it, so
-// a caller can see which Operations a given Node has. Since ADR-0042 (#626)
+// a caller can see which Operations a given Node has. Since ADR-0042
 // the capability layer also reads it to decide a Template dispatch's FAN-OUT
 // and RISK CLASS: which matched Nodes are excluded because they do not report
 // the Template, the most restrictive class the rest report, and whether the

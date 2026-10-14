@@ -78,7 +78,7 @@ var screenFuncs = template.FuncMap{
 	// join renders a string slice for display.
 	"join": func(sep string, xs []string) string { return strings.Join(xs, sep) },
 
-	// cancelControl builds a JobCancel for a per-row template (#595): a
+	// cancelControl builds a JobCancel for a per-row template: a
 	// screen that draws a row per Job — Activity — cannot
 	// pre-build one JobCancel per row in the handler without duplicating
 	// cancelJobAction's escaping there too, so the template does it here
@@ -93,7 +93,7 @@ var screenFuncs = template.FuncMap{
 	//
 	// Its Go-side counterpart is countOf (fleet.go), which returns the number
 	// AND the word. See countOf's comment for what the two of them sharing a
-	// name once cost (#550).
+	// name once cost.
 	"plural": func(n int, one, many string) string {
 		if n == 1 {
 			return one
@@ -190,7 +190,7 @@ func renderScreen(w http.ResponseWriter, p Page, tmpl *template.Template, data a
 }
 
 // notFoundTmpl is the styled 404, mounted on every unmatched /console/ path
-// and reused by every refusal that used to fall through to net/http's plain
+// and reused by every refusal that would otherwise fall through to net/http's plain
 // "404 page not found" (see console.go's gated and methodMismatch).
 //
 // It echoes NOTHING caller-supplied — no request path, no query, no header —
@@ -397,7 +397,7 @@ func (l *auditLatch) QueryTasks(ctx context.Context, p capability.Principal, f c
 // RecordEventSubscription is here for the same reason every other method on
 // this type is: an un-overridden QueryReader method would bypass the latch
 // silently, which is precisely the hole this type's doc comment claims not
-// to have. It is NOT exercised by #539's own code path — handleEvents calls
+// to have. It is NOT exercised by the events route — handleEvents calls
 // d.Queries.RecordEventSubscription directly, never through latched(d),
 // because it must see the error itself and refuse before writing the 200
 // rather than deferring to a page-render-time latch check. Added for

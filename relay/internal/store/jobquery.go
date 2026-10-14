@@ -10,9 +10,9 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// jobquery.go implements jobs.QueryRepository: the Job/Task read lane (#441).
+// jobquery.go implements jobs.QueryRepository: the Job/Task read lane.
 // It reads the SAME jobs/stages/tasks tables sqliteJobs/sqliteTasks write.
-// The requester now comes from the jobs row itself (#616); the audit trail
+// The requester now comes from the jobs row itself; the audit trail
 // still supplies the selector, on-behalf-of, approval, grant and args a Job
 // carries nowhere of its own.
 
@@ -93,10 +93,10 @@ func jobOrderBy(order jobs.JobOrder) (string, error) {
 // another page exists. It returns the arguments in text order, all bound
 // inside the page. A bad order or cursor is refused here, the order first.
 //
-// All three joins are LEFT, deliberately: a zero-Task Job (a historical row from
-// before #571, when a zero-match dispatch still created one) has no row in
-// the tasks aggregate, and an IN-FLIGHT Job has only its dispatch_intent row
-// (#887), which the dispatch-only aggregate `a` deliberately ignores; its
+// All three joins are LEFT, deliberately: a zero-Task Job (a historical row, from
+// when a zero-match dispatch still created one) has no row in
+// the tasks aggregate, and an IN-FLIGHT Job has only its dispatch_intent row,
+// which the dispatch-only aggregate `a` deliberately ignores; its
 // outcome rows are written after disp.run returns. An INNER JOIN would make either kind of Job disappear
 // from a query the instant it was created, which is exactly the race a Job
 // list must not have: Job state and risk class come from the tasks table,
@@ -108,7 +108,7 @@ func jobOrderBy(order jobs.JobOrder) (string, error) {
 // SQLite cannot flatten an aggregate subquery, and it does not push an outer
 // WHERE into the right operand of a LEFT JOIN, so an aggregate joined to jobs
 // is a GROUP BY over every row of tasks and every dispatch row of audit no
-// matter how few Jobs the page keeps (#816, #919). So the page's job_ids are
+// matter how few Jobs the page keeps. So the page's job_ids are
 // chosen first, from jobs alone (filters, cursor, ORDER BY, LIMIT; see
 // buildJobWhere for how each filter reads only j or a correlated lookup), and
 // both aggregates are restricted to them with `job_id IN (SELECT job_id FROM
@@ -240,8 +240,8 @@ func jobQueryCount(filter jobs.JobQuery) (stmt string, args []any) {
 
 // jobOutcomeColumnRefs renders "COALESCE(t.o0, 0), COALESCE(t.o1, 0), ..."
 // for the outer SELECT — the inner aggregate's SUM is NULL only when a Job
-// has no matching tasks row at all (the zero-Task case, a historical row
-// from before #571), which COALESCE turns into a truthful zero rather than a
+// has no matching tasks row at all (the zero-Task case, a historical row),
+// which COALESCE turns into a truthful zero rather than a
 // NULL Outcome count.
 func jobOutcomeColumnRefs() []string {
 	refs := make([]string, len(jobOutcomeOrder))
@@ -284,7 +284,7 @@ const jobCreatedAtFixedWidth = `(substr(j.created_at, 1, 19) || '.' || ` +
 //
 // With filter.CountMatching the page and the count of matching Jobs are read
 // in one transaction, so they describe one snapshot; otherwise no
-// transaction is opened and the path is the one every caller had before #795.
+// transaction is opened.
 func (q *sqliteJobQueries) QueryJobs(ctx context.Context, filter jobs.JobQuery, limit int, cursor string) (jobs.JobPage, error) {
 	limit = clampPageSize(limit)
 
@@ -303,7 +303,7 @@ func (q *sqliteJobQueries) QueryJobs(ctx context.Context, filter jobs.JobQuery, 
 	)
 	if filter.CountMatching {
 		// A snapshot read: it must not take the write lock now that write
-		// transactions begin IMMEDIATE (sqliteDSN, #833).
+		// transactions begin IMMEDIATE (sqliteDSN).
 		tx, err := q.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		if err != nil {
 			return jobs.JobPage{}, fmt.Errorf("query jobs: begin: %w", err)
@@ -365,7 +365,7 @@ func (q *sqliteJobQueries) QueryJobs(ctx context.Context, filter jobs.JobQuery, 
 // (ANDed by the caller) and their bound arguments. Every condition names only
 // columns of `j` (a jobs row, or the page's projection of one) or a
 // correlated lookup keyed on j.job_id, because it runs where no aggregate
-// exists: inside the page and in the count (#919). Each lookup is the SAME
+// exists: inside the page and in the count. Each lookup is the SAME
 // MIN, over the same rows, that the page's aggregate projects, so a filter
 // selects exactly the Jobs whose summary shows the value; a Job with no such
 // rows yields NULL, which fails `= ?` as the old LEFT JOIN's NULL did.
@@ -386,7 +386,7 @@ func buildJobWhere(filter jobs.JobQuery) (conds []string, args []any) {
 		}
 	}
 	if filter.RequesterAccountID != "" {
-		// A plain column predicate on the jobs row itself (#616) — no join,
+		// A plain column predicate on the jobs row itself — no join,
 		// no aggregate, and idx_jobs_requester_created_at (migration 0026)
 		// serves it directly.
 		conds = append(conds, `j.requester_account_id = ?`)

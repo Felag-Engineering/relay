@@ -1,9 +1,9 @@
 // Package astguard holds the AST helpers shared by the repository's
 // structural guards: the no_dispatch guards of the Control API, the MCP
 // surface and the Console (invariant 10's `no_dispatch` structural guard,
-// ADR-0009/0010/0025/0026), accounts' secret-logging guard (#674), and the
+// ADR-0009/0010/0025/0026), accounts' secret-logging guard, and the
 // risk-class guard that keeps any adapter from setting an Action's class
-// (RiskClassViolations, invariant 13, ADR-0012, #878).
+// (RiskClassViolations, invariant 13, ADR-0012).
 //
 // Only the pieces that were byte-identical across those guards live here.
 // Each guard's rule set (its dispatchViolations, allowlists and file
@@ -52,7 +52,7 @@ func LocalImportAlias(file *ast.File, importPath string) (alias string, ok bool)
 	return "", false
 }
 
-// SeamHandsBackUnauditedRead is the no_dispatch guards' G2 (#680), applied
+// SeamHandsBackUnauditedRead is the no_dispatch guards' G2, applied
 // identically by the Control API, the MCP surface and the Console: an
 // interface method declared in a non-test file whose RESULTS name
 // registry.Node, policyview.Snapshot or nodevocab.Snapshot (bare, pointer, or

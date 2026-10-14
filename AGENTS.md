@@ -392,6 +392,24 @@ loses its own reasoning.
 never log secrets (tokens, private keys), never make the Relay able to mutate Node Policy.
 When in doubt on the daemon (privileged) side, prefer the more restrictive option and flag it.
 
+## Code comments
+
+A comment says what the code cannot: why it is this way, what it must never do, what would
+break. It is not a changelog and not a design document.
+
+- **No issue or PR numbers in shipped code.** The commit and the PR carry a change's
+  history. Where a comment explains why something is true, cite the ADR (`ADR-0012`), the
+  invariant (`invariant 13`) or the spec claim that holds the reason; where none does,
+  state the reason. `make lint-comments` enforces this; `Deprecated:` lines are exempt,
+  and a test may cite the issue it regresses.
+- **Present tense.** Say what the code does, not what it used to do: no "previously",
+  "no longer", "was moved", "since #NNN".
+- **Short headers.** A package or file header says what the package is in a few lines.
+  Rationale that needs a page belongs in an ADR, cited once by number, not argued again
+  in the code.
+- **Match this section, not the neighbours.** Older code is denser than this; don't copy
+  its density.
+
 ## Agent skills
 
 Agent skills read their per-repo configuration from `docs/agents/`. Keep these current: they

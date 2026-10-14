@@ -39,8 +39,8 @@ const (
 	// one: forcing dirPerm or keyPerm could only ever tighten, but forcing
 	// certPerm would hand an operator running `umask 077` a world-readable
 	// ca-cert.pem where they get 0600 today — looser than what they have, on
-	// the fleet's trust anchor, produced by the CA itself (#509; the daemon
-	// side reached the same conclusion for its identity files in #507).
+	// the fleet's trust anchor, produced by the CA itself (ADR-0036; the daemon's
+	// identity files follow the same rule).
 	//
 	// The tests therefore assert the direction — no bit beyond the declared
 	// mode, and the security-relevant bits clear outright — never exact
@@ -69,7 +69,7 @@ const (
 	// The two must never share a constant again: borrowing LeafValidity for
 	// the server leaf, with nothing renewing it, is exactly how a Relay up
 	// longer than fourteen days came to serve an expired certificate and take
-	// the whole fleet fail-closed off it (#403).
+	// the whole fleet fail-closed off it.
 	ServerLeafValidity = 24 * time.Hour
 
 	clockSkew = 5 * time.Minute
@@ -226,7 +226,7 @@ func (c *CA) SignCSR(csrPEM []byte, nodeID string) ([]byte, error) {
 //
 // A caller that serves TLS must NOT hold the result static: a certificate
 // minted once at process start expires while the process is still running, and
-// every daemon then fail-closes off the Relay (#403). Serve through
+// every daemon then fail-closes off the Relay. Serve through
 // ServerCertificate.GetCertificate instead, which re-issues before expiry.
 // This entry point remains for tests and one-shot issuance.
 func (c *CA) IssueServerCertificate(dnsNames []string, ipAddresses []net.IP) (tls.Certificate, error) {

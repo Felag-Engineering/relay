@@ -17,7 +17,7 @@ const (
 
 // CapExceededError is returned by BlastCap.Check when a Selector resolves to
 // more Nodes than the applicable cap. It is exported and typed so a later
-// audit layer (#102) can recognize a cap rejection via errors.As without
+// audit layer can recognize a cap rejection via errors.As without
 // string-matching.
 type CapExceededError struct {
 	Class   jobs.RiskClass

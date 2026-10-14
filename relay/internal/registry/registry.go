@@ -95,7 +95,7 @@ type Node struct {
 	// it.
 	RevokedAt time.Time
 
-	// The certificate provenance the RELAY issued (#440). Every field here is
+	// The certificate provenance the RELAY issued. Every field here is
 	// Relay-knowledge, not Node-report: the Relay minted the certificate, so it
 	// alone knows when it expires. Report has no field for any of them, exactly
 	// as it has none for RelayLabels or RevokedAt.
@@ -146,7 +146,7 @@ type Node struct {
 }
 
 // The quarantine label, pinned as constants because the Console READS it today
-// and the label-management surface will WRITE it in v0.7.0 (#430, ADR-0020) —
+// and the label-management surface will WRITE it in v0.7.0 (ADR-0020) —
 // and those two must agree exactly.
 //
 // # Why the value is pinned and not just the key
@@ -212,7 +212,7 @@ type Certificate struct {
 // this is the structural half of the node-side immutability boundary. A relay-daemon
 // can never supply relay-space labels through this type, regardless of what it sends.
 //
-// nodeLabels is unexported on purpose (#504): the ONLY way to populate it is
+// nodeLabels is unexported on purpose: the ONLY way to populate it is
 // WithNodeLabels, so `rep.NodeLabels = someMap` — the bare field assignment
 // that would silently create a third write path alongside cmd/relay/tunnel.go
 // and internal/enroll/handler.go — is a compile error from any package
@@ -253,7 +253,7 @@ func (r Report) WithNodeLabels(labels map[string]string) Report {
 // It copies because unexporting the field bounds who may SET the map, not who
 // may MUTATE it: handing out the live map would let any holder of a Report do
 // `rep.NodeLabels()["role"] = "web, relay:quarantine=on"` and put back exactly
-// the value #504's ingress gate exists to reject, with neither the compiler
+// the value the ingress gate exists to reject, with neither the compiler
 // nor the ingress guard able to see it. The two writers are the only writers
 // by construction only if this is a copy.
 func (r Report) NodeLabels() map[string]string {
@@ -348,7 +348,7 @@ type Repository interface {
 	// for every id in nodeIDs, all under ONE transaction. On a nil error
 	// every id that has a registry row was written; on a non-nil error none
 	// were, and missing is nil. Same all-or-nothing contract as
-	// audit.Repository.AppendAll, which #601 used for the cascade's
+	// audit.Repository.AppendAll, which the cascade uses for its
 	// records — deliberately the same shape.
 	//
 	// A missing row is NOT an error. An id with no registry row is returned
@@ -363,8 +363,8 @@ type Repository interface {
 	// bound to the Control API's cascade audit budget, a budget expiry
 	// would stop persisting revocations while the in-memory denylist kept
 	// adding them, and the next Relay restart — which rehydrates the
-	// denylist from RevokedNodeIDs() — would let those Nodes back in (#133,
-	// ADR-0006). Over-denying beats under-denying; an un-persisted revoke is
+	// denylist from RevokedNodeIDs() — would let those Nodes back in
+	// (ADR-0006). Over-denying beats under-denying; an un-persisted revoke is
 	// under-denying.
 	//
 	// nodeIDs is a READ-ONLY BORROW: implementations must not modify it in

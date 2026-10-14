@@ -9,8 +9,8 @@
 //
 // This package is the domain model only: no proto dependency, no HTTP, no
 // token handling, no persistence. The store implements [Repository]
-// (internal/store), the API Token lifecycle that binds credentials to Accounts
-// is issue #296, and role-gating the MCP surface is #298. Keeping those apart
+// (internal/store); the API Token lifecycle that binds credentials to Accounts
+// and role-gating live elsewhere (ADR-0023). Keeping those apart
 // is deliberate — an Account is a *durable identity*, a token is a *revocable
 // credential for one*, and conflating them is how "revoke the token" and
 // "disable the human" become the same button by accident.
@@ -62,7 +62,7 @@ var (
 	ErrReservedName = errors.New("accounts: reserved account name")
 
 	// ErrLastAdmin is returned by SetRole and SetEnabled when the change
-	// would leave zero enabled admin rows (#653): demoting the last enabled
+	// would leave zero enabled admin rows: demoting the last enabled
 	// admin, or disabling it. A disabled admin does not count toward "last
 	// admin" — see SetRole/SetEnabled below for why an implementation MUST
 	// refuse this in one statement rather than a check-then-write.
@@ -71,8 +71,8 @@ var (
 	// ErrRoleChanged is returned by SetRole when the Account's stored role is
 	// not the `from` role the caller named: another writer changed it after
 	// the caller read it. Nothing was written. A caller whose decision
-	// depended on the role it read (the Console's step-up classification,
-	// #912) must re-read and re-decide, never retry blindly.
+	// depended on the role it read (the Console's step-up classification)
+	// must re-read and re-decide, never retry blindly.
 	ErrRoleChanged = errors.New("accounts: the account's role changed since it was read")
 )
 
@@ -85,7 +85,7 @@ type Kind string
 
 const (
 	// KindHuman is a person: an operator who will log into the Console
-	// (v0.6.0) or authenticate through OAuth (#299).
+	// (v0.6.0) or authenticate through OAuth.
 	KindHuman Kind = "human"
 
 	// KindMachine is a headless driver: the AI-agent, CI, a script. Machine
@@ -157,7 +157,7 @@ func (r Role) AtLeast(want Role) bool {
 //
 // Enabled is the durable off-switch, distinct from revoking a credential: a
 // disabled Account authenticates nowhere, immediately, regardless of how many
-// valid tokens exist for it (#296). Disabling the identity and revoking a
+// valid tokens exist for it. Disabling the identity and revoking a
 // token are deliberately different acts.
 type Account struct {
 	// ID is the Relay-assigned stable identifier. It never changes, so audit
@@ -170,7 +170,7 @@ type Account struct {
 	Kind Kind
 	Role Role
 
-	// Enabled is the durable off-switch (#296). A disabled Account
+	// Enabled is the durable off-switch. A disabled Account
 	// authenticates nowhere and authorizes nothing.
 	Enabled bool
 
@@ -252,7 +252,7 @@ type Repository interface {
 	// List returns every Account, ordered by name.
 	List(ctx context.Context) ([]Account, error)
 
-	// SetRole is a compare-and-set (#912): it changes an Account's role to
+	// SetRole is a compare-and-set: it changes an Account's role to
 	// `to` only if the stored role is `from`. Returns:
 	//
 	//   - ErrNotFound if the Account does not exist;
@@ -260,8 +260,7 @@ type Repository interface {
 	//     stored role is always valid (the schema constrains it), so an
 	//     invalid `from` can never match; it is refused up front;
 	//   - ErrRoleChanged if the stored role is not `from`;
-	//   - ErrLastAdmin if the change would demote the last enabled admin
-	//     (#653).
+	//   - ErrLastAdmin if the change would demote the last enabled admin.
 	//
 	// The role compare MUST be in the SAME single statement as the
 	// last-admin guard below, for the same reason: a check-then-write above

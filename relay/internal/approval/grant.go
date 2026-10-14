@@ -163,8 +163,8 @@ type Grant struct {
 	// config would quietly rewrite history.
 	Summary string
 
-	// LegacyNamespacePin is the Selector namespace a Grant stored before #482
-	// was pinned to. Only the store's read path sets it. Validate refuses it,
+	// LegacyNamespacePin is the Selector namespace a legacy stored Grant was
+	// pinned to (AP-33). Only the store's read path sets it. Validate refuses it,
 	// so a new Grant can never carry one. A pinned Grant was PRICED over that
 	// one namespace but COVERED any dispatch whose Selector merely used it, so
 	// it may have been approved more cheaply than work it could release.
@@ -253,7 +253,7 @@ func (s Scope) Validate() error {
 }
 
 // Active reports whether g may cover anything at now: not revoked, inside its
-// window, not exhausted, and not a pre-#482 namespace-pinned Grant (fail
+// window, not exhausted, and not a legacy namespace-pinned Grant (fail
 // closed, see LegacyNamespacePin).
 func (g Grant) Active(now time.Time) bool {
 	if g.LegacyNamespacePin != "" {
@@ -276,7 +276,7 @@ func (g Grant) Active(now time.Time) bool {
 // a conjunction, and the fan-out check is the ceiling that stops a grant
 // written for a handful of Nodes covering the fleet after the registry grows.
 //
-// A Scope has no namespace term (#482), so no dispatch is covered or refused
+// A Scope has no namespace term, so no dispatch is covered or refused
 // because of the label namespaces its Selector used. That is why
 // RequirementForScope prices every Grant over all of them.
 func (g Grant) Covers(d Dispatch, now time.Time) bool {
@@ -367,7 +367,7 @@ func HashScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string {
 	writeField(h, "risk", jobs.RiskClassName(s.RiskClass))
 	// Retained as an always-empty field so the digest of every unpinned Scope
 	// (the only kind that can now exist) is byte-identical to what
-	// approval_requests.plan_hash already stores (#482).
+	// approval_requests.plan_hash already stores.
 	writeField(h, "namespace", "")
 	writeCount(h, "max_fan_out", s.MaxFanOut)
 	// raw_exec is a bool, not an int; writeCount takes an int and there is no
@@ -397,7 +397,7 @@ func HashScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string {
 // against the Scope it describes — which is why migration 0022 adds a shape_key
 // column to approval_requests and deliberately none here.
 //
-// A legacy pinned Grant (LegacyNamespacePin, #482) keeps the key it was stored
+// A legacy pinned Grant (LegacyNamespacePin) keeps the key it was stored
 // under, so the shape-key backfill still recomputes it exactly and the diff
 // callout never shows a dead pinned Grant as "same shape" as a live unpinned
 // one.
@@ -405,7 +405,7 @@ func (g Grant) ShapeKey() string { return hashGrantShape(g.Scope, g.LegacyNamesp
 
 // knownNamespaces are the label namespaces a Selector may use (ADR-0006,
 // ADR-0020, ADR-0034). RequirementForScope ALWAYS walks every one. A Scope has
-// no namespace term (#482), so a Grant can cover a dispatch whose Selector
+// no namespace term, so a Grant can cover a dispatch whose Selector
 // uses any of them, and in any combination. Probing each namespace on its own
 // is exactly that worst case, because a gate Match names at most one namespace
 // and a multi-namespace dispatch matches the union of what its single-namespace
@@ -414,12 +414,12 @@ func (g Grant) ShapeKey() string { return hashGrantShape(g.Scope, g.LegacyNamesp
 // union for audience (owner-accepted residual risk, ADR-0027 amendment
 // 2026-09-16).
 //
-// Before #482 a pinned Scope was priced over its one namespace while Covers
-// admitted any dispatch CONTAINING it, so a Grant could release work needing a
-// stronger approval than it was issued under. That class of defect is removed
-// by removing the pin, not by patching either side.
+// A pinned Scope would be priced over its one namespace while Covers admitted
+// any dispatch CONTAINING it, so a Grant could release work needing a stronger
+// approval than it was issued under. That class of defect is removed by having
+// no pin (AP-33), not by patching either side.
 //
-// This list is now load-bearing: dropping a namespace a gate rule can name
+// This list is load-bearing: dropping a namespace a gate rule can name
 // would let a Grant be priced below a rule in that namespace. Rule.Validate
 // (gate.go) accepts a Match.SelectorNamespace by consulting THIS list rather
 // than a second hardcoded set, so the two vocabularies cannot drift apart —

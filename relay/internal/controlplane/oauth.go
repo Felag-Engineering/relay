@@ -14,7 +14,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 )
 
-// OAuth 2.1 protected-resource support for the MCP endpoint (#299, ADR-0024).
+// OAuth 2.1 protected-resource support for the MCP endpoint (ADR-0024).
 //
 // The Relay validates tokens an external IdP issued and resolves them to
 // Accounts. It is **not** an authorization server: no authorization endpoint,
@@ -88,7 +88,7 @@ type oauthResolver struct {
 // Read-only by construction: resolving a session must never be able to create
 // an Account. Auto-provisioning from a token claim would let whoever
 // administers the IdP mint identities on the control plane, bypassing the
-// audited creation path (#297).
+// audited creation path.
 type AccountLookup interface {
 	GetByName(ctx context.Context, name string) (accounts.Account, error)
 }
@@ -137,7 +137,7 @@ func (o *oauthResolver) resolve(ctx context.Context, raw string) (capability.Pri
 
 	// No TokenID: an OAuth session presents no API Token. The verified lane
 	// records the method instead, which is what makes the two session kinds
-	// distinguishable in audit (#300 acceptance).
+	// distinguishable in audit.
 	p := principalFromAccount(acct)
 	p.AuthMethod = capability.AuthMethodOAuth
 	return p, nil

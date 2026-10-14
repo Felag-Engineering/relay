@@ -11,7 +11,7 @@ import (
 
 // sqliteTokens implements enroll.Repository against the tokens table. Making the
 // store the authority for Enrollment Tokens is what lets a revoked (or partly
-// used) token survive a Relay restart (issue #133, ADR-0006): the memory
+// used) token survive a Relay restart (ADR-0006): the memory
 // repository lost that state at every restart.
 type sqliteTokens struct {
 	db *sql.DB

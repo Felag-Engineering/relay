@@ -1,7 +1,7 @@
 package console
 
-// decide.go is the Console's approve/deny control (#453, specs 08 and 14):
-// the Console's SECOND write route, after Cancel (#595, cancel.go). It lives
+// decide.go is the Console's approve/deny control (specs 08 and 14):
+// the Console's SECOND write route, after Cancel (cancel.go). It lives
 // in its own file, exactly as Cancel does, so seams.go's "every seam here is
 // read-only" claim stays true unqualified.
 //
@@ -81,11 +81,11 @@ package console
 // approval.md AP-16 requires ("re-authenticates at the moment of deciding"):
 // the window is never a bypass here. consoleauth remains the one owner of the
 // step-up window; this handler never consults it, and every decision costs its
-// own password. That is STRICTER than the window the Account acts use (#879),
+// own password. That is STRICTER than the window the Account acts use,
 // which invariant 10 permits (an adapter may offer less, never more), and it
 // is what spec 08 asks for: a one-click second approval is the rubber-stamp
 // failure this whole screen exists to prevent. A successful step-up rotates
-// the session identifier (#879), and the page carries the new CSRF token.
+// the session identifier, and the page carries the new CSRF token.
 //
 // A decision's successful step-up still stamps the session, so it opens the
 // window for the Account acts. That is stated in stepup.go, not a surprise.

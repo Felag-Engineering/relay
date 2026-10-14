@@ -1,7 +1,7 @@
 //! Native Operation vocabulary for the relay-daemon (ADR-0001, ADR-0012).
 //!
 //! Every Operation in this module is **argv-only or data-only** — the argument
-//! can never change which command runs (ADR-0001 invariant #1). Risk classes
+//! can never change which command runs (ADR-0001 invariant 1). Risk classes
 //! (ADR-0012) classify blast radius for the v1 vocabulary:
 //!
 //! | Name               | Kind      | Risk class |
@@ -34,7 +34,7 @@ pub use relay_policy::natives::{FILE_READ, PKG_INSTALL, SERVICE_RESTART, SYSTEM_
 
 // ---------------------------------------------------------------------------
 // Vocabulary views over the registry ([`registry::REGISTRY`] — the single
-// name→(handler, arg-shape, risk class) table, issue #289; ADR-0012).
+// name→(handler, arg-shape, risk class) table; ADR-0012, ADR-0021).
 // ---------------------------------------------------------------------------
 
 /// Returns all v1 Operation descriptors in canonical order, derived from

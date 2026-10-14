@@ -42,8 +42,8 @@ type dispatch struct {
 	jobID string
 
 	// approvalID and grantID are the approval Request and batch/window Grant
-	// that released this dispatch, copied onto its dispatch-intent record
-	// (#887). Set by Execution.Run, never by newDispatch itself.
+	// that released this dispatch, copied onto its dispatch-intent record.
+	// Set by Execution.Run, never by newDispatch itself.
 	approvalID, grantID string
 }
 
@@ -56,7 +56,7 @@ func newDispatch(p Principal, sel Selector, nodes []registry.Node, act jobs.Acti
 
 // NodeResult is one Node's outcome from executing a dispatch. JobID is
 // denormalized onto every NodeResult (rather than added as a new return value
-// on Execution.Run) so a caller that only sees Run's results — the #103
+// on Execution.Run) so a caller that only sees Run's results — the
 // devharness's run_job op, and any future real surface — can learn which Job
 // it belongs to (to later query_job/CancelJob it) without widening Run's
 // signature. It is set by the real Job engine (execution.go); noopDispatcher
@@ -67,13 +67,13 @@ type NodeResult struct {
 	JobID   string
 	// Stdout, Stderr, and Truncated are the full per-Node captured output and
 	// the daemon-side truncated flag, retained whole for the audit trail
-	// (#122 full-output-always). Empty for outcomes with no real execution
+	// (full-output-always, ADR-0025 decision 3). Empty for outcomes with no real execution
 	// (e.g. unreachable) except version-refused, whose Stderr carries the
 	// Relay-synthesized jobs.VersionRefusedMessage (matching the Task row);
 	// always empty for noopDispatcher, which performs no execution. A
 	// failure row may also carry Relay-authored Stderr where the wire
 	// boundary refused the daemon's report as a protocol violation
-	// (jobs.ProtocolViolation.Explanation, #632) — again no daemon bytes.
+	// (jobs.ProtocolViolation.Explanation) — again no daemon bytes.
 	Stdout    []byte
 	Stderr    []byte
 	Truncated bool
@@ -102,7 +102,7 @@ type dispatchResult struct {
 // run method are unexported, and run's parameter type (dispatch) is itself
 // unexported — a foreign package can neither implement dispatcher nor call
 // run, and even if it could, it has no way to fabricate a dispatch value to
-// pass. The real Job engine (#99) must therefore be added as new files
+// pass. The real Job engine must therefore be added as new files
 // inside package capability (not internal/jobs), injecting its external
 // collaborators (revocation.Connections, jobs.TaskRepository) through their
 // own exported constructor, NewExecution, which builds the in-package Job
@@ -119,7 +119,7 @@ type dispatchResult struct {
 type dispatcher interface {
 	run(ctx context.Context, d dispatch) (dispatchResult, error)
 
-	// cancel stops a Job's Tasks (#101, ADR-0013): undispatched Tasks are
+	// cancel stops a Job's Tasks (ADR-0013): undispatched Tasks are
 	// marked cancelled without ever being sent, in-flight Tasks are asked to
 	// cancel over their Tunnels, and already-resolved Tasks are left
 	// untouched. It takes no dispatch value — cancel targets a previously
@@ -127,7 +127,7 @@ type dispatcher interface {
 	// the dispatch/newDispatch seal.
 	cancel(ctx context.Context, jobID string) error
 
-	// query answers a Plan (#119, ADR-0011): for each of d's matched Nodes it
+	// query answers a Plan (ADR-0011): for each of d's matched Nodes it
 	// asks the daemon a read-only PolicyQuery and collects a per-Node
 	// verdict — allow/deny(rule) from the daemon's live engine, or
 	// unknown(offline) for a matched-but-disconnected Node (invariant 12).
@@ -145,7 +145,7 @@ type dispatcher interface {
 }
 
 // starter is the optional half of a dispatcher that can return once a Job is
-// persisted (Execution.Start, #895). Only the real Job engine implements it;
+// persisted (Execution.Start). Only the real Job engine implements it;
 // it is deliberately not part of dispatcher, so a dispatcher that cannot
 // persist ahead of its fan-out (noopDispatcher, a test spy) is simply run
 // synchronously.
@@ -160,9 +160,9 @@ type starter interface {
 
 var _ starter = (*jobEngine)(nil)
 
-// noopDispatcher is the v0.0.5 default. It performs no execution and says
-// so honestly: every matched Node gets OutcomeUnspecified, never a
-// fabricated success. #99 replaces this with the real Job engine.
+// noopDispatcher performs no execution and says so honestly: every matched
+// Node gets OutcomeUnspecified, never a fabricated success. Only in-package
+// tests install it; the real dispatcher is jobEngine (execution.go).
 type noopDispatcher struct{}
 
 func (noopDispatcher) run(_ context.Context, d dispatch) (dispatchResult, error) {
@@ -190,8 +190,8 @@ func (noopDispatcher) reserveJobID() (string, error) {
 
 // query implements dispatcher honestly: it performs no PolicyQuery and says
 // so — every matched Node gets VerdictUnknown, never a fabricated allow.
-// #119's jobEngine.query (plan.go) replaces this with the real per-Node
-// PolicyQuery/PolicyVerdict fan-out.
+// jobEngine.query (plan.go) is the real per-Node PolicyQuery/PolicyVerdict
+// fan-out.
 func (noopDispatcher) query(_ context.Context, d dispatch) (planResult, error) {
 	verdicts := make([]NodeVerdict, 0, len(d.nodes))
 	for _, n := range d.nodes {

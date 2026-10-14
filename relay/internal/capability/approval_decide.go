@@ -10,8 +10,8 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 )
 
-// approval_decide.go is the answering half of the approval callout (#270,
-// ADR-0027): reading the queue of parked dispatches, and recording a human's
+// approval_decide.go is the answering half of the approval callout
+// (ADR-0027): reading the queue of parked dispatches, and recording a human's
 // decision against one.
 //
 // It lives in the capability layer, not in a surface, because the decision is
@@ -113,7 +113,7 @@ func (a *Approvals) Approval(ctx context.Context, id string) (approval.Request, 
 }
 
 // LastApprovedOfSameShape returns the most recent approved Request sharing r's
-// shape key, for the approval object's anti-fatigue diff callout (#415, D10,
+// shape key, for the approval object's anti-fatigue diff callout (AP-23, D10,
 // spec console/08): "same as what you approved Tuesday, except the fan-out grew
 // 1,180 -> 2,214".
 //
@@ -304,7 +304,7 @@ func requestOnRefusal(r approval.Request, err error) approval.Request {
 }
 
 // approvalAnswerOf maps a Decision's boolean Approve onto the structured
-// ApprovalAnswer vocabulary (#545). There is no third case: DecideApproval
+// ApprovalAnswer vocabulary. There is no third case: DecideApproval
 // only ever calls this with a real decider's answer, so
 // ApprovalAnswerUnrecorded is reserved for entries that never went through
 // here at all (RevokeGrant's revocation).
@@ -322,9 +322,8 @@ func approvalAnswerOf(approve bool) ApprovalAnswer {
 // says WHY; it is caller-supplied text, bounded by the surface, and it goes into
 // the same Reason column every other refusal's text does.
 //
-// Reason is no longer the only copy of the answer (#545: see AuditEntry.
-// ApprovalAnswer) — it remains the human sentence a reader wants, and its
-// prose format is unchanged by that split.
+// Reason is not the only copy of the answer (see AuditEntry.ApprovalAnswer)
+// — it is the human sentence a reader wants.
 func approvalDecisionReason(r approval.Request, d approval.Decision) string {
 	answer := "denied"
 	if d.Approve {

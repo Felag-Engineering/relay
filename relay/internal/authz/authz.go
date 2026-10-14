@@ -4,8 +4,8 @@
 //
 // The v0.0.5 predecessor (`Staged`) authorized exactly one thing: an Account
 // whose role was admin. That was correct while the seeded credential
-// authenticated as the one and only Principal. With real Accounts (#295),
-// real credentials (#296), and both on the wire (#297), the gate is now the
+// authenticated as the one and only Principal. With real Accounts,
+// real credentials, and both on the wire, the gate is now the
 // role ladder ADR-0010 describes:
 //
 //	viewer    — may read. May never dispatch anything.
@@ -24,7 +24,7 @@
 // inherit the same answer. A surface that gated Raw Exec itself would be a
 // second control path, and the first one to be forgotten.
 //
-// # The administrative half (#397)
+// # The administrative half
 //
 // The ladder above answers "who may dispatch". It could not answer "who may
 // mint an Enrollment Token, revoke a Node, or engage the Freeze", because
@@ -101,16 +101,15 @@ func (e *unauthorizedError) Unwrap() error {
 }
 
 // notHumanError is the refusal for a control Action that no machine Account
-// may perform at any role (#397: Freeze engage). It is a distinct type from
+// may perform at any role (Freeze engage; ADR-0013). It is a distinct type from
 // unauthorizedError because the two say genuinely different things to an
 // audit reader — "your role is too low" invites an escalation request, while
 // "this act is human-only" says no amount of role will help — but it unwraps
 // to the same ErrUnauthorized sentinel so every surface's existing
 // refusal-to-403 mapping covers it without knowing it exists.
 //
-// The Principal's KIND is named in the message on purpose: #397's acceptance
-// asks for the refusal to be audited with it, and the reason string is what
-// reaches the trail.
+// The Principal's KIND is named in the message on purpose: the refusal is
+// audited with it, and the reason string is what reaches the trail.
 type notHumanError struct {
 	principal capability.Principal
 	action    string
@@ -141,8 +140,8 @@ func (e *notHumanError) Unwrap() error {
 // nothing (accounts.Role.AtLeast fails closed).
 //
 // Not scoped by Selector yet: per-Account/per-Selector Grants are the next
-// narrowing (ADR-0010, and see #285 on whether to adopt Cedar rather than
-// hand-roll one). A later Authorizer must narrow *within* this seam — no
+// narrowing (ADR-0010; whether to adopt Cedar rather than hand-roll one is an
+// open question in ADR-0041). A later Authorizer must narrow *within* this seam — no
 // version of it may ever be more permissive than the ladder above.
 type RoleGate struct{}
 
@@ -190,8 +189,8 @@ func (*RoleGate) Authorize(_ context.Context, p capability.Principal, act jobs.A
 	return nil
 }
 
-// AuthorizeApprovalDecision implements capability.ApprovalAuthorizer (#270,
-// ADR-0027): may p answer a parked dispatch whose Action is of this kind?
+// AuthorizeApprovalDecision implements capability.ApprovalAuthorizer
+// (ADR-0027): may p answer a parked dispatch whose Action is of this kind?
 //
 // The floor is **the same requiredRole table** the request itself passed, and
 // that identity is the point rather than a convenience. Approval must not be a
@@ -228,14 +227,14 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 // action this gate does not recognize.
 //
 // The floors are not new policy — each was already written down and simply
-// never enforced (#397):
+// never enforced:
 //
 //	mint an Enrollment Token     admin      ADR-0032 §5
 //	revoke an Enrollment Token   admin      ADR-0020's incident ladder
 //	revoke a Node                admin      ADR-0020's incident ladder
-//	engage the Freeze            operator   ADR-0013 (+ human-only, #397)
+//	engage the Freeze            operator   ADR-0013 (+ human-only)
 //	release the Freeze           admin      ADR-0013
-//	cancel a Job                 operator   execution.md §Cancellation (owner decision 2026-09-14), #346
+//	cancel a Job                 operator   execution.md §Cancellation (owner decision 2026-09-14)
 //	read Accounts                admin      accounts-and-access.md: "Administer Accounts and API Tokens — admin"
 //	create an Account            admin      accounts-and-access.md
 //	change an Account's role     admin      accounts-and-access.md
@@ -245,7 +244,7 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 //	mint an API Token            admin      accounts-and-access.md
 //	revoke an API Token          admin      accounts-and-access.md
 //
-// The eight Account/API-Token rows (#653) are humanOnly: false — STATUS-QUO
+// The eight Account/API-Token rows are humanOnly: false — STATUS-QUO
 // PRESERVATION, not a claim that admin is already the strongest role (that
 // conflates authority breadth with PERSISTENCE: a machine admin minting a
 // Token converts a transient session compromise into durable access that
@@ -268,7 +267,7 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 // separate question this gate does not decide — it needs the Job's recorded
 // requester, which is capability-layer data this package does not hold.
 // capability.Execution.CancelJob layers that machine-Account scoping on top of
-// this floor (owner decision 2026-09-17, execution.md §Cancellation, #614):
+// this floor (owner decision 2026-09-17, execution.md §Cancellation):
 // a human Account may still cancel any Job, but a machine Account may cancel
 // only a Job whose recorded requester is itself.
 func requiredControlRole(act capability.ControlAction) (role accounts.Role, label string, humanOnly, known bool) {
@@ -306,7 +305,7 @@ func requiredControlRole(act capability.ControlAction) (role accounts.Role, labe
 	}
 }
 
-// AuthorizeControl implements capability.ControlAuthorizer (#397): may p
+// AuthorizeControl implements capability.ControlAuthorizer: may p
 // perform this administrative act on the control plane itself?
 //
 // Deny-by-default in both directions, exactly as Authorize is: an action this

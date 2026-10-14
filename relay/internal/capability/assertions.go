@@ -3,7 +3,7 @@ package capability
 import "context"
 
 // Assertions is the caller-claimed half of the attribution triple
-// (ADR-0027 decision 10, #300; docs/specs/approval.md), carried through the
+// (ADR-0027 decision 10, docs/specs/approval.md), carried through the
 // capability pipeline so the audit sink can record it.
 //
 // It mirrors internal/audit.Asserted rather than importing it, for the same

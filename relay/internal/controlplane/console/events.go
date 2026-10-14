@@ -1,42 +1,39 @@
 package console
 
 // events.go is the Console's ONE live-read path: GET /console/events, a
-// server-sent-event stream over the in-process event seam (#416).
+// server-sent-event stream over the in-process event seam.
 //
 // # One route, extended per screen — never one route per screen
 //
 // Spec 11: "One connection per Console session, multiplexing all event kinds;
-// screens subscribe to the kinds they render." Day one (#427) implements the
-// `enrollment` kind and nothing else. Activity (#422) EXTENDS this route with
+// screens subscribe to the kinds they render." Day one implements the
+// `enrollment` kind and nothing else. Activity EXTENDS this route with
 // its own projection; a second streaming route would be a second live path and
 // would have to be unbuilt (invariant 10).
 //
 // # Every kind names the role that may see it
 //
-// This route's own Route.MinRole is RoleViewer (#464), so Register's
+// This route's own Route.MinRole is RoleViewer, so Register's
 // mount-time gate places a floor at "any valid role" and refuses nothing an
 // authenticated principal can be — it is not double-gating, and the per-kind
 // table below stays the only control that discriminates between kinds. Day
-// one (#427) recorded the earlier, ungated state as a deliberate absence and
+// one recorded the earlier, ungated state as a deliberate absence and
 // said the absence stops being right the moment a second kind is added.
-// Activity (#422) adds one, so the gate is here: consoleEventKinds carries a
+// Activity adds one, so the gate is here: consoleEventKinds carries a
 // MinRole per kind and handleEvents checks it against the acting Principal
 // before a stream is opened. Today every admitted kind sits AT the route's
 // RoleViewer floor (consoleEventKinds below), not above it; the per-kind
 // table is the thing that must move when a kind needing more than Viewer is
 // added, not this route's MinRole. A valid role clears the route gate
 // unconditionally and is judged again per kind; an INVALID role reaches that
-// same per-kind check and is refused there with 403 (events.go, below),
-// exactly as before #464 — the route passes it through unwrapped because its
-// MinRole is RoleViewer, so #464 changed nothing about where an invalid role
-// is refused on this particular route.
+// same per-kind check and is refused there with 403 (events.go, below) — the
+// route passes it through unwrapped because its MinRole is RoleViewer.
 //
 // THE DISCLOSURE TABLE — for each admitted kind, what the PROJECTION carries
 // and why that role:
 //
 //   - enrollment (viewer): a source address, the PUBLIC half of a token ID,
-//     and a refusal reason. Unchanged from #427; every authenticated
-//     principal may see them.
+//     and a refusal reason. Every authenticated principal may see them.
 //
 //   - job (viewer): the JOB ID, a TRANSITION WORD and a TIMESTAMP, and
 //     nothing else. Deliberately NOT the Selector, NOT the Operation, NOT the
@@ -50,8 +47,7 @@ package console
 // Two kinds the seam carries STAY OUT, and why:
 //
 //   - tool_call: events.ToolCallEvent carries raw_exec's full argv. Admitting
-//     it is #424's business and needs its own role decision, not a widening
-//     that inherits this one.
+//     it needs its own role decision, not a widening that inherits this one.
 //   - registry: events.RegistryEvent carries no attribution at all, so it
 //     could only ever produce the unattributed rows spec 04's "Must not
 //     appear" forbids.
@@ -62,7 +58,7 @@ package console
 // same edit. TestConsoleEvents_EveryKindNamesTheRoleThatMaySeeIt is the
 // tripwire, and it asserts the allowlist's exact SIZE for that reason.
 //
-// # THE SUBSCRIPTION IS A RECORDED READ (#539)
+// # THE SUBSCRIPTION IS A RECORDED READ
 //
 // A subscription to this route is a read of the fleet's live activity, and
 // ADR-0025 audits it exactly as it audits QueryJobs or ListNodes: one
@@ -73,8 +69,8 @@ package console
 // PER SUBSCRIPTION, NOT PER EVENT. events.Bus.Subscribe builds its kind set
 // once, at open, and exposes no method that widens a live Subscription — so
 // one record, naming the kinds asked for, completely describes what could
-// ever cross the stream for its whole life, including, once #543 admits
-// tool_call, whether raw_exec argv could. Recording per event would be the
+// ever cross the stream for its whole life, including, were tool_call ever
+// admitted, whether raw_exec argv could. Recording per event would be the
 // first read on this Relay whose trail entry described a RESULT rather than
 // a FILTER (ADR-0025 decision 2 forbids exactly that), and would tie the
 // trail's write rate to fleet activity times open Console tabs, synchronously
@@ -95,7 +91,7 @@ package console
 // that did not say "this resumed" would understate exactly the subscriptions
 // most likely to be interesting.
 //
-// FAIL CLOSED, on #450's reasoning verbatim: the record is written before
+// FAIL CLOSED: the record is written before
 // Subscribe, so a failure to record means no Subscription was ever created,
 // nothing was buffered and nothing replayed — the refusal can honestly say
 // nothing was disclosed. There is deliberately no mid-stream audit write and
@@ -106,20 +102,17 @@ package console
 // close/duration record — fail-closed stops being available for it: the
 // disclosure will already have happened by the time such a write could fail,
 // and a refused close-record could only be logged, never used to undo the
-// stream. Decide that separately, deliberately, if it ever comes up; #543
-// admitting tool_call does not, because the kind set stays fixed at Subscribe.
+// stream. Decide that separately, deliberately, if it ever comes up;
+// admitting tool_call would not, because the kind set stays fixed at Subscribe.
 //
 // THE STREAM SUBSCRIBES TO WHAT THE TRAIL RECORDED, NEVER TO A SEPARATELY
-// COMPUTED SET (#539 fix round, Finding 1). The earlier shape of this file
-// built wanted.Kinds and wanted.Names in the same loop and argued from that
-// sentence alone that they could not drift. A security review defeated the
-// argument with one line: replace the wanted.Names argument to
+// COMPUTED SET. Building wanted.Kinds and wanted.Names in the same loop does
+// not by itself stop them drifting: replace the wanted.Names argument to
 // RecordEventSubscription with strings.Split(r.URL.Query().Get("kinds"), ",")
 // — re-deriving what gets RECORDED from the raw query string instead of
-// reusing what the loop built — and the entire suite still passed, because
-// for a clean query string the re-derivation happens to equal the original.
-// The comment was true and the property was still unenforced.
-// capability.ReadLane.RecordEventSubscription now returns the canonicalised
+// reusing what the loop built — and the entire suite would still pass,
+// because for a clean query string the re-derivation happens to equal the
+// original. capability.ReadLane.RecordEventSubscription returns the canonicalised
 // names it actually recorded, and THAT return value — not wanted.Kinds, not
 // a second parse of the query string — is the only thing kindsFromNames
 // below ever turns into d.Events.Subscribe's argument. A caller cannot
@@ -203,12 +196,11 @@ const (
 	// path a Node enrolls and a Job dispatches, not tidiness.
 	maxConcurrentStreams = 64
 
-	// maxStreamsPerPrincipal is a CONST (#539 fix round, Finding 3 — it was a
-	// mutable package var for one release, restored here): its correctness
-	// as a var depended on this package never calling t.Parallel, and
-	// nothing enforced that. It is still unexported, unreachable from any
-	// surface, and never read from configuration (invariant 11); the test
-	// seam events_audit_test.go's B7 needs is now streamLimiter.perCap
+	// maxStreamsPerPrincipal is a CONST: as a var, its correctness would
+	// depend on this package never calling t.Parallel, and nothing enforces
+	// that. It is unexported, unreachable from any surface, and never read
+	// from configuration (invariant 11); the test seam
+	// events_audit_test.go's B7 needs is streamLimiter.perCap
 	// below, a FIELD initialised from this const rather than the const
 	// itself, so shrinking the cap for one test mutates one *streamLimiter
 	// instance instead of a value every concurrent test in this package
@@ -292,9 +284,8 @@ type sseGap struct {
 //
 // perCap holds the per-principal bound as a FIELD, initialised from the
 // maxStreamsPerPrincipal const by newStreamLimiter, rather than reading the
-// const directly in acquire (#539 fix round, Finding 3). That is the whole
-// fix: the const stays a const — nothing in production code needs it to
-// vary — and events_audit_test.go's B7 shrinks ONE *streamLimiter instance's
+// const directly in acquire. The const stays a const — nothing in production
+// code needs it to vary — and events_audit_test.go's B7 shrinks ONE *streamLimiter instance's
 // field instead of a package-wide var every concurrent test in this package
 // would otherwise share.
 type streamLimiter struct {
@@ -347,7 +338,7 @@ func handleEvents(d Deps) http.HandlerFunc {
 // newEventsHandler is handleEvents parameterised by an explicit
 // *streamLimiter. Production has exactly one caller, handleEvents above,
 // which supplies the shipped default (newStreamLimiter). The parameter
-// exists for events_audit_test.go's B7 (#539 fix round, Finding 3): it
+// exists for events_audit_test.go's B7: it
 // needs a per-principal cap of 1 to reach the limiter's refusal without
 // holding maxConcurrentStreams-many streams open, and does it by
 // constructing a *streamLimiter with perCap set directly, rather than by
@@ -393,7 +384,7 @@ func newEventsHandler(d Deps, limiter *streamLimiter) http.HandlerFunc {
 		// role at zero and returns false for every valid want, so an empty,
 		// corrupted or future role is REFUSED here rather than admitted.
 		//
-		// POSITION (1 of 4, #539): the read record below must come AFTER
+		// POSITION (1 of 4): the read record below must come AFTER
 		// this check, never before it. A refused caller disclosed nothing,
 		// and recording a 403 as a read would put non-accesses into read
 		// egress's enumeration count — the same reasoning DescribeNode's
@@ -412,7 +403,7 @@ func newEventsHandler(d Deps, limiter *streamLimiter) http.HandlerFunc {
 		if key == "" {
 			key = p.Account
 		}
-		// POSITION (2 of 4, #539): the read record below must come AFTER
+		// POSITION (2 of 4): the read record below must come AFTER
 		// this acquire, not before it. The 429 is the cheap refusal this
 		// code already orders first; an audit-store write in front of it
 		// would let any viewer already at their cap make this Relay perform
@@ -441,18 +432,16 @@ func newEventsHandler(d Deps, limiter *streamLimiter) http.HandlerFunc {
 			unavailable(w, queryLaneName)
 			return
 		}
-		// POSITION (3 of 4, #539): the read record MUST be written before
+		// POSITION (3 of 4): the read record MUST be written before
 		// Subscribe, non-negotiable. Subscribe registers this request with
 		// the bus, and a resume replays the retained backlog immediately —
 		// a record written after Subscribe could not honestly claim that
 		// nothing was disclosed.
 		//
 		// recorded is what actually gets subscribed to, below — never
-		// wanted.Kinds (#539 fix round, Finding 1). wanted.Names and
-		// wanted.Kinds being built by the same loop was the ORIGINAL
-		// argument for why the record and the stream could not drift; a
-		// security review showed it was unenforced, because nothing stopped
-		// a future edit from re-deriving the RecordEventSubscription
+		// wanted.Kinds. wanted.Names and wanted.Kinds being built by the
+		// same loop does not keep the record and the stream from drifting,
+		// because nothing stops a future edit from re-deriving the RecordEventSubscription
 		// argument from somewhere else while leaving the Subscribe argument
 		// alone. Building Subscribe's kind set from RecordEventSubscription's
 		// own return value removes that possibility structurally: after a
@@ -557,8 +546,7 @@ func newEventsHandler(d Deps, limiter *streamLimiter) http.HandlerFunc {
 // the exact allowlist names that produced them, and the role gate they
 // impose together.
 //
-// Kinds is NOT what handleEvents hands to d.Events.Subscribe (#539 fix
-// round, Finding 1) — that argument is built by kindsFromNames from
+// Kinds is NOT what handleEvents hands to d.Events.Subscribe — that argument is built by kindsFromNames from
 // RecordEventSubscription's own return value, so the record and the stream
 // cannot drift even under a future edit. Kinds still exists here because
 // resolveEventKinds' own tests (dayone_test.go) assert on it directly — most
@@ -595,13 +583,11 @@ func parseEventKinds(param string) (eventSubscription, bool) {
 //
 // sub.Names is appended in the SAME LOOP, from the SAME `name` variable, that
 // appends sub.Kinds, never reconstructed later by re-splitting param — that
-// is still true and still worth keeping, because it means sub.Names is a
-// faithful record of what this handler actually validated. It is NOT, on its
-// own, what keeps the trail and the stream from drifting (#539 fix round,
-// Finding 1 corrected the doc comment that used to claim otherwise): nothing
-// stopped a later edit from handing something OTHER than sub.Names to
-// RecordEventSubscription while still handing sub.Kinds to Subscribe. That
-// guarantee now lives in handleEvents building Subscribe's argument from
+// is worth keeping, because it means sub.Names is a faithful record of what
+// this handler actually validated. It is NOT, on its own, what keeps the
+// trail and the stream from drifting: nothing stops a later edit from handing
+// something OTHER than sub.Names to RecordEventSubscription while still
+// handing sub.Kinds to Subscribe. That guarantee lives in handleEvents building Subscribe's argument from
 // RecordEventSubscription's own return value via kindsFromNames, not here.
 func resolveEventKinds(param string, allow map[string]consoleEventKind) (sub eventSubscription, ok bool) {
 	if param == "" {
@@ -642,10 +628,10 @@ func resolveEventKinds(param string, allow map[string]consoleEventKind) (sub eve
 // events.Kind values d.Events.Subscribe needs, against the same allowlist
 // resolveEventKinds validated them against in the first place.
 //
-// This is the structural half of #539's Finding 1 fix: handleEvents calls
+// This is what keeps the trail and the stream agreeing: handleEvents calls
 // this on RecordEventSubscription's return value and nothing else, so the
 // kind set a stream is opened with is always the one the trail already holds
-// a record of — there is no code path left that lets the two disagree,
+// a record of — there is no code path that lets the two disagree,
 // because there is no second kind list in scope to disagree with.
 //
 // A name RecordEventSubscription returns that this map does not recognise
@@ -777,7 +763,7 @@ func enrollmentReasonText(r events.EnrollmentReason) string {
 	case events.ReasonInvalidScope:
 		// Deliberately not framed as a daemon-side problem: this names a fault
 		// in the TOKEN's stored scope, minted before this well-formedness gate
-		// existed (#555) — the same "wrong side" concern ReasonMalformed's
+		// existed — the same "wrong side" concern ReasonMalformed's
 		// comment raises, mirrored for relay-space.
 		return "the token's stored scope is not a valid set of relay: labels — mint a replacement token"
 	default:

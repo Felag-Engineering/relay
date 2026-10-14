@@ -19,7 +19,7 @@ import (
 // attempt, a refusal (authz-deny or cap-reject, never dispatched), a Freeze
 // engage/release (ADR-0013), a Job cancel (v0.0.6 [5/8], owner DECISION 2),
 // a Control API lifecycle action (Enrollment Token mint/revoke, Node
-// revoke — #116, ADR-0010), or a Plan (#119, ADR-0011: a no-execution
+// revoke — ADR-0010), or a Plan (ADR-0011: a no-execution
 // PolicyQuery probe, distinct from a real dispatch). Kind is a plain
 // unconstrained TEXT column in the schema (migrations/0002) — no CHECK
 // constraint — so adding KindPlan here needs no migration.
@@ -35,8 +35,8 @@ const (
 	KindPlan          = "plan"
 
 	// KindDispatchIntent is the Job-level record of what was about to be
-	// dispatched. It is written in the same transaction as the Job's Tasks
-	// (#887), so it exists before any Task can be sent; there is exactly one
+	// dispatched. It is written in the same transaction as the Job's Tasks,
+	// so it exists before any Task can be sent; there is exactly one
 	// per Job. The per-Node KindDispatch outcome rows reference it by the
 	// shared job_id, and its seq is lower than every one of them.
 	//
@@ -49,8 +49,8 @@ const (
 	KindDispatchIntent = "dispatch_intent"
 
 	// KindProtocolViolation is a relay-daemon reporting something the wire
-	// contract (/proto) does not permit — the refusal #632 added at the wire
-	// boundary, made queryable (#638). Distinct from KindDispatch because it
+	// contract (/proto) does not permit — the refusal at the wire
+	// boundary, made queryable. Distinct from KindDispatch because it
 	// is not a Task's outcome: the Task still resolves, truthfully, as a
 	// Relay-authored failure and keeps its own dispatch row. Distinct from
 	// KindRefusal because nothing was denied — the Relay refused a REPORT,
@@ -58,7 +58,7 @@ const (
 	//
 	// Its own kind rather than prose in a dispatch row's Reason because
 	// "which Nodes are misbehaving" must be a WHERE clause, and because a
-	// dispatch row's Stderr — where #632's explanation rides — is not
+	// dispatch row's Stderr — where the refusal's explanation rides — is not
 	// retained for a read-class Task (ADR-0025, auditsink's retainOutput). A
 	// kind is queryable on every surface that already filters the trail by
 	// kind, with no new filter to build.
@@ -83,15 +83,15 @@ const (
 	// counter exists.
 	KindProtocolViolation = "protocol_violation"
 
-	// KindApprovalRequested is a dispatch parked for a human (#269, ADR-0027).
+	// KindApprovalRequested is a dispatch parked for a human (ADR-0027).
 	// Distinct from KindDispatch because nothing ran, and distinct from
 	// KindRefusal because nothing was denied — a park is a suspension, and
 	// filing it under either neighbour would make the audit trail assert
 	// something untrue about it.
 	KindApprovalRequested = "approval_requested"
 
-	// KindApprovalPendingObserved is a re-drive of an already-parked dispatch
-	// (#379): the caller attempted the same Plan again and bounced off the
+	// KindApprovalPendingObserved is a re-drive of an already-parked dispatch:
+	// the caller attempted the same Plan again and bounced off the
 	// existing pending Request, creating nothing. Distinct from
 	// KindApprovalRequested so that kind keeps meaning "a request was created"
 	// — re-driving is how a caller polls while waiting for a decision, and an
@@ -101,13 +101,13 @@ const (
 	// hammering a parked request, just not filed as repeat asks.
 	KindApprovalPendingObserved = "approval_pending_observed"
 
-	// KindApprovalGrantRequested is a request for a batch/window Grant (#546,
-	// ADR-0027 decision 12): an ask for STANDING authority over many future
+	// KindApprovalGrantRequested is a request for a batch/window Grant
+	// (ADR-0027 decision 12): an ask for STANDING authority over many future
 	// dispatches, not a single Plan waiting for a single answer.
 	//
-	// Distinct from KindApprovalRequested for the reason #379 split
-	// KindApprovalPendingObserved out of it — so that kind keeps meaning one
-	// thing. Filed together, "somebody asked for a window covering every
+	// Distinct from KindApprovalRequested for the reason
+	// KindApprovalPendingObserved is split out of it — so that kind keeps
+	// meaning one thing. Filed together, "somebody asked for a window covering every
 	// mutate on the fleet for the next hour" rendered identically to "one
 	// dispatch is parked", and the blast radii are not comparable: a Grant
 	// releases many Jobs, a park releases one.
@@ -124,14 +124,14 @@ const (
 	// GrantID, not this kind.
 	KindApprovalGrantRequested = "approval_grant_requested"
 
-	// KindApprovalExpired is a parked dispatch that ran out of time (#269,
-	// ADR-0027). Recorded because an approval that lapsed is a fact the trail
+	// KindApprovalExpired is a parked dispatch that ran out of time
+	// (ADR-0027). Recorded because an approval that lapsed is a fact the trail
 	// must carry: without it a parked dispatch just vanishes from the record
 	// and "what happened to that request?" has no answer.
 	KindApprovalExpired = "approval_expired"
 
-	// KindApprovalDecided is one human's answer to a parked dispatch (#270,
-	// ADR-0027). Distinct from KindDispatch because a decision runs nothing,
+	// KindApprovalDecided is one human's answer to a parked dispatch
+	// (ADR-0027). Distinct from KindDispatch because a decision runs nothing,
 	// and distinct from KindApprovalRequested because it is the other half of
 	// the exchange: together with the request and the eventual dispatch, these
 	// three kinds are what make "who asked / for whom / who approved / what
@@ -140,20 +140,20 @@ const (
 	// Recorded for denials and for partial approvals too, not only for the
 	// decision that releases a Job.
 	//
-	// The answer itself (#545) is the ApprovalAnswer column, not prose in
+	// The answer itself is the ApprovalAnswer column, not prose in
 	// Reason: Reason remains the human sentence, but a query or a renderer
 	// must never parse it to learn which way the decision went.
 	KindApprovalDecided = "approval_decided"
 
 	// KindRead is a non-dispatching read-tool call — list_nodes,
-	// describe_node, list_operations, get_job (#288, ADR-0025). These never
+	// describe_node, list_operations, get_job (ADR-0025). These never
 	// reach a Node, so they produce no Job and no Task, but they do disclose
 	// the fleet's shape (and, via get_job, previously-captured command
 	// output). Recorded as metadata only: who, which tool, what it was aimed
 	// at, when. Never the result.
 	KindRead = "read"
 
-	// Identity-management kinds (#297, ADR-0010). Administering the control
+	// Identity-management kinds (ADR-0010). Administering the control
 	// plane's own identities is itself an audited, attributed act: "who
 	// created this Account", "who made it an admin", and "who minted it a
 	// credential" are the first questions asked after a compromise, and they
@@ -170,7 +170,7 @@ const (
 	KindAccountDisable = "account_disable"
 
 	// KindPasswordSet and KindPasswordClear record a Console password set or
-	// removed for a human Account (#782). Today they are written only by the
+	// removed for a human Account. Today they are written only by the
 	// host-side `relay console-password` lever, attributed to
 	// PrincipalLocalHost; the record names the Account and NEVER the password
 	// or its hash. Two kinds (set vs clear) for the same reason
@@ -178,8 +178,8 @@ const (
 	KindPasswordSet   = "password_set"
 	KindPasswordClear = "password_clear"
 
-	// The Console's human authentication lane (#418,
-	// docs/design/console/12-login.md). Every attempt is recorded, successful
+	// The Console's human authentication lane
+	// (docs/design/console/12-login.md). Every attempt is recorded, successful
 	// or not — this is the first link in the chain the UI advisory requires
 	// end-to-end: login -> action -> audit record.
 	//
@@ -204,7 +204,7 @@ const (
 	KindLoginThrottled = "login_throttled"
 	KindLogout         = "logout"
 
-	// KindStepUp/Failed/Throttled are the step-up door (#477, ADR-0026
+	// KindStepUp/Failed/Throttled are the step-up door (ADR-0026
 	// decision 3), reached only from an ALREADY-AUTHENTICATED session — never
 	// by an anonymous caller, which is what the sign-in door above is for. The
 	// two doors answer different questions: KindLoginFailed/Throttled is
@@ -240,11 +240,11 @@ const (
 )
 
 // ApprovalAnswer values name the structured answer a KindApprovalDecided
-// Record carries (#545, ADR-0027 decision 10). EMPTY means "this row records
-// no approve/deny answer" — a grant revocation, or a row written before
-// #545 — and NEVER "denied": conflating "no value" with "a value that means
-// no" is the #487 bug. Values are byte-identical to
-// approval.StateApproved/StateDenied.String() (#498's vocabulary); this
+// Record carries (ADR-0027 decision 10). EMPTY means "this row records
+// no approve/deny answer" — a grant revocation, or an older row — and
+// NEVER "denied": conflating "no value" with "a value that means no" is a
+// known bug class. Values are byte-identical to
+// approval.StateApproved/StateDenied.String(); this
 // package does not import internal/approval to get them, so a test pins the
 // equality instead.
 const (
@@ -371,7 +371,7 @@ var notAnAuthFailureKinds = []string{
 // and not accepted, at EITHER door — the sign-in form or the step-up prompt.
 //
 // It exists so "someone is grinding a password" stays ONE thing to ask for
-// after #477 split the step-up door out of the sign-in kinds. The trap it
+// now the step-up door has kinds separate from the sign-in kinds. The trap it
 // closes: a consumer that hand-lists KindLoginFailed and KindLoginThrottled is
 // not wrong today, and goes blind the moment an attacker pivots from the
 // sign-in form to the step-up prompt — the cheaper target precisely because
@@ -393,7 +393,7 @@ func AuthFailureKinds() []string {
 // self-contained primitives (no pointers into Job/Task state) so a Record
 // remains meaningful even after the Job or Task it describes is gone.
 type Record struct {
-	// ID is unique, and since #656 also MONOTONIC: NewID mints it so that
+	// ID is unique and MONOTONIC: NewID mints it so that
 	// lexicographic order over ids is mint order. That is what makes the
 	// (Timestamp, ID) tie-break below mean "append order" rather than
 	// "whichever random hex won".
@@ -407,7 +407,7 @@ type Record struct {
 	// against it, not against this string.
 	Principal string
 
-	// Attribution carries the verified and asserted identity lanes (#300).
+	// Attribution carries the verified and asserted identity lanes.
 	// The lanes are structurally distinct here and in the schema — see
 	// attribution.go for why that separation is load-bearing rather than
 	// cosmetic.
@@ -429,9 +429,9 @@ type Record struct {
 	Outcome jobs.Outcome
 	Reason  string
 	// Stdout, Stderr, and Truncated are the full captured per-Task output and
-	// the daemon-side truncated flag (#122 full-output-always: the Relay
-	// stores what it received, entire — the only cap is the daemon-side
-	// size limit). Meaningful only for KindDispatch rows that reached
+	// the daemon-side truncated flag (full-output-always for mutate-class,
+	// ADR-0025: the Relay stores what it received, entire — the only cap is
+	// the daemon-side size limit). Meaningful only for KindDispatch rows that reached
 	// execution, or that carry a Relay-synthesized refusal message (e.g.
 	// version-refused); empty for refusals, plans, freeze, and cancel rows.
 	// Truncated is the daemon-side cap flag: a single flag over the whole
@@ -462,8 +462,8 @@ type Record struct {
 	GrantID    string
 
 	// ApprovalAnswer, DecisionChannel, and PlanHash are the structured
-	// counterpart to a KindApprovalDecided row's prose Reason (#545,
-	// ADR-0027 decision 10: "approved_by (verified, WITH CHANNEL AND
+	// counterpart to a KindApprovalDecided row's prose Reason
+	// (ADR-0027 decision 10: "approved_by (verified, WITH CHANNEL AND
 	// PLAN-HASH)"). Empty for the overwhelming majority of rows, and empty
 	// means "not applicable / not recorded" — never a value. ApprovalAnswer
 	// is one of the ApprovalAnswer* constants above, or empty (see their
@@ -476,10 +476,10 @@ type Record struct {
 // Repository is the interface for the audit trail. Append-only: there is no
 // update or delete. The store enforces that with triggers that refuse UPDATE
 // and DELETE, and makes it tamper-evident with a hash chain over the rows
-// (chain.go, #896).
+// (chain.go).
 //
 // Every reader below returns Records ordered by Timestamp, ties broken by ID.
-// That pair is a TOTAL order (#656): ID is minted monotonically by NewID, so
+// That pair is a TOTAL order: ID is minted monotonically by NewID, so
 // two Records sharing a Timestamp — which a dispatch fan-out guarantees, since
 // every per-Node Record copies one clock reading — come back in the same
 // order on every read, rather than in one that changes with each write.
@@ -503,7 +503,7 @@ type Repository interface {
 	// AppendWithTasks persists every task as Pending, exactly as
 	// jobs.TaskRepository.CreateTask would, and appends r to the hash chain,
 	// in ONE transaction: nil means all of it landed, an error means none of
-	// it did (#887). It is how a Job's dispatch_intent row commits with its
+	// it did. It is how a Job's dispatch_intent row commits with its
 	// Tasks, so a crash cannot leave a Task that was never recorded.
 	AppendWithTasks(ctx context.Context, r Record, tasks []jobs.Task) error
 
@@ -517,7 +517,7 @@ type Repository interface {
 	// ByNode returns all Records for nodeID, ordered by Timestamp, ties
 	// broken by ID — the
 	// "which Node" accountability query (AGENTS.md). Time-range querying is
-	// deferred to the first query surface; no acceptance need yet.
+	// QueryRepository.Query's (Since/Until).
 	ByNode(ctx context.Context, nodeID string) ([]Record, error)
 
 	// ByAccount returns all Records for an Account ID, ordered by Timestamp,
@@ -532,12 +532,12 @@ type Repository interface {
 	// decision themselves, so
 	// one query answers "who asked, who approved, and what then ran". For a
 	// batch/window Grant's Request this is every dispatch the window released,
-	// and each released Job's dispatch_intent row (#887).
+	// and each released Job's dispatch_intent row.
 	ByApproval(ctx context.Context, approvalID string) ([]Record, error)
 
 	// ByGrant returns all Records released by a batch/window Grant, ordered by
 	// Timestamp, ties broken by ID. Narrower than ByApproval on the same Request: this is
-	// the dispatch outcome rows and each released Job's dispatch_intent row (#887).
+	// the dispatch outcome rows and each released Job's dispatch_intent row.
 	// Filter by kind for one or the other.
 	ByGrant(ctx context.Context, grantID string) ([]Record, error)
 

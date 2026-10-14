@@ -1,4 +1,4 @@
-//! The Node's own record of Policy decisions (#888).
+//! The Node's own record of Policy decisions.
 //!
 //! One event per Allow at [`ALLOW_TARGET`] and one per Deny at [`DENY_TARGET`],
 //! with shared field names so a single journald query covers both. Nothing here

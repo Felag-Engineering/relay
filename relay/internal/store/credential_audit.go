@@ -19,7 +19,7 @@ type execer interface {
 
 // recordWith runs change and appends the audit record it returns in ONE
 // transaction: on a nil error both landed, on any error neither did. That is
-// the fail-closed property #782 requires of the host credential levers — a
+// the fail-closed property the host credential levers require — a
 // credential change that cannot be recorded is not made.
 //
 // change returns the record so a change can report what it found (whether a

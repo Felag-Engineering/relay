@@ -1,11 +1,11 @@
-//! Build identity for the relay-daemon binary (issue #249, ADR-0014).
+//! Build identity for the relay-daemon binary (ADR-0014).
 //!
 //! # Why this module exists
 //!
 //! `Hello.daemon_version` is not decoration: it is the sole input to the
 //! Relay's minimum-daemon-version dispatch gate — the *only* lever the Relay
 //! has over daemon upgrades, since the daemon never self-upgrades and the
-//! Relay never pushes binaries (ADR-0014, invariant #14). The Relay validates
+//! Relay never pushes binaries (ADR-0014, invariant 14). The Relay validates
 //! and orders that string with `golang.org/x/mod/semver`
 //! (`relay/internal/registry/version.go`), so whatever this module returns
 //! must be (a) a valid semver version and (b) ordered the way an operator
@@ -35,11 +35,11 @@
 //! to it (fail-closed direction). Any further identifiers must stay *after*
 //! `0.dev` so the leading numeric identifier keeps deciding the order.
 //!
-//! The original scheme (issue #249) appended `-dev` to the full target and
+//! The original scheme appended `-dev` to the full target and
 //! was fail-**open** for prerelease targets: `0.1.0-beta-dev` is a single
 //! identifier lexically *greater* than `beta`, so an unreleased dev build
 //! reported as newer than `0.1.0-beta` and passed a `min-daemon-version =
-//! 0.1.0-beta` gate. Issue #261 replaced it with the numeric marker — one
+//! 0.1.0-beta` gate. The numeric marker replaced it — one
 //! rule for plain and prerelease targets alike, verified by executing the
 //! Relay's real comparator (`golang.org/x/mod/semver`) in
 //! `relay/internal/registry/daemon_version_contract_test.go`.

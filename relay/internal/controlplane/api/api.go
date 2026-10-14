@@ -1,6 +1,6 @@
 // Package api is the REST/JSON Control API (ADR-0010): Enrollment Token
 // mint/revoke, Node revoke, Freeze engage/release, Account and API-Token
-// management, and — since #356 — execution (run an Operation, Raw Exec, and
+// management, and execution (run an Operation, Raw Exec, and
 // plan mode), all mounted under /api/v1 on the control-plane's existing *http.ServeMux
 // (relay/internal/controlplane.Server.Mux()) behind the single
 // Authenticator.Middleware already wired there — no new listener, no new
@@ -45,7 +45,7 @@ type TokenMinter interface {
 // -enrolled Nodes too — see tokens.go).
 //
 // The cascade writes one KindNodeRevoke record per cascaded Node through the
-// record callback this surface supplies (#557) — revocation.Service has no
+// record callback this surface supplies — revocation.Service has no
 // audit sink of its own, so tokens.go's handleRevokeToken builds the closure
 // that authors each record's Principal and reason and hands it in. A
 // returned ErrCascadeNotRecorded means the token and every Node it enrolled
@@ -61,7 +61,7 @@ type TokenRevoker interface {
 // immediately. *revocation.Service satisfies this interface.
 //
 // The recorded variant is what serialises this route against a token
-// cascade revoking the same Node (#605): revocation.Service.RevokeNodeRecorded
+// cascade revoking the same Node: revocation.Service.RevokeNodeRecorded
 // holds the Node's lock across recording and revoking, so this interface
 // deliberately does not expose the unrecorded revocation.Service.RevokeNode
 // primitive at all — the same narrowing rationale Freezer states for
@@ -76,7 +76,7 @@ type NodeRevoker interface {
 // Freezer engages and releases the Relay-wide Freeze (ADR-0013).
 // *capability.Control satisfies this interface.
 //
-// Both methods are role-gated INSIDE the capability layer (#397): engage
+// Both methods are role-gated INSIDE the capability layer: engage
 // needs a human `operator`+, release needs `admin` and a reason, and the
 // refusal is audited there. This interface deliberately does not expose
 // capability.Control's EngageFreezeLocal/ReleaseFreezeLocal — the host-signal
@@ -95,11 +95,11 @@ type Auditor interface {
 	// AppendAll persists every Record in rs atomically: on a nil error all of
 	// them were written, on a non-nil error none were (audit.Repository's
 	// contract). Used by the token-revocation cascade to record a chunk of
-	// Nodes in one commit rather than one per Node (#563).
+	// Nodes in one commit rather than one per Node.
 	AppendAll(ctx context.Context, rs []audit.Record) error
 }
 
-// AccountAdmin is Account and API-Token administration (#653): the identity
+// AccountAdmin is Account and API-Token administration: the identity
 // routes' single collaborator, mirroring capability.AccountAdmin's own
 // accountadmin.go methods exactly (each takes the acting Principal, since
 // the role floor AND the self-targeting/last-admin refusals now live in the
@@ -107,12 +107,10 @@ type Auditor interface {
 // interface with no adapter, the same shape as Freezer/Executor/
 // ApprovalService above.
 //
-// Before #653 this surface declared its own AccountManager/APITokenService
-// interfaces bound straight to accounts.Repository/TokenService and gated
-// role itself (requireAdmin, now deleted): a second control path invariant
-// 10 forbids. This interface is what closes it — every method here is
-// authorized, and self-targeting/last-admin refused, inside the capability
-// layer before this surface ever sees a result.
+// Every method here is authorized, and self-targeting/last-admin refused,
+// inside the capability layer before this surface ever sees a result: a
+// surface that gated role itself would be a second control path invariant
+// 10 forbids.
 type AccountAdmin interface {
 	Accounts(ctx context.Context, p capability.Principal) ([]accounts.Account, error)
 	Account(ctx context.Context, p capability.Principal, id string) (accounts.Account, error)
@@ -149,7 +147,7 @@ type Deps struct {
 	// Authz is the control plane's role ladder for the ADMINISTRATIVE acts
 	// that never construct a jobs.Action and so never reach the capability
 	// layer's dispatch pipeline: enrollment-token mint and revoke, and Node
-	// revoke (#397). The composition root passes the SAME *authz.RoleGate the
+	// revoke. The composition root passes the SAME *authz.RoleGate the
 	// capability layer holds, so a floor is decided in one table for every
 	// surface (invariant 10) — this package consults it and renders the
 	// answer, it never decides one.
@@ -161,21 +159,21 @@ type Deps struct {
 	// method to be gated inside.
 	//
 	// Nil refuses every route that needs it with a 500 rather than proceeding
-	// ungated: an unwired gate is a composition-root bug, and #397 exists
-	// because the ungated path failed open silently.
+	// ungated: an unwired gate is a composition-root bug, and an ungated path
+	// fails open silently.
 	Authz capability.ControlAuthorizer
-	// AccountAdmin backs the identity-management routes (#297, migrated onto
-	// the capability layer by #653). Nil refuses every identity route with a
+	// AccountAdmin backs the identity-management routes through the
+	// capability layer. Nil refuses every identity route with a
 	// 500, on the same unwired-gate posture Authz above documents.
 	AccountAdmin AccountAdmin
 	// NodeReader is the capability read lane behind GET
-	// /api/v1/nodes/{node_id} (#440, #680): it is not a registry narrowing
+	// /api/v1/nodes/{node_id}: it is not a registry narrowing
 	// any more — it is the one door to the registry, which records the read
 	// before it answers (invariant 10, ADR-0025). The revoke route reaches
 	// revocation through Nodes above rather than through this seam. Nil
 	// still 500s.
 	NodeReader NodeReader
-	// Exec and Jobs back the execution routes (#356). Exec is the SAME
+	// Exec and Jobs back the execution routes. Exec is the SAME
 	// capability layer the MCP surface dispatches through — never a second
 	// control path (invariant 10) — and Jobs is a read-only view used to render
 	// per-Node results after a dispatch returns. Neither carries a blast cap or
@@ -183,32 +181,30 @@ type Deps struct {
 	// this surface's reach (invariant 11).
 	Exec Executor
 	Jobs JobResultReader
-	// Approvals backs the out-of-band decision channel (#270, ADR-0027). It is
+	// Approvals backs the out-of-band decision channel (ADR-0027). It is
 	// backed by *capability.Approvals, not the Service Exec uses: the approval
 	// routes hold no path to Run, Start or CancelJob (invariant 10). Kept as a
 	// separate interface so this package's seams stay named after what each
 	// route needs.
 	Approvals ApprovalService
-	// ApprovalGrants backs the batch/window grant routes (#378, ADR-0027
+	// ApprovalGrants backs the batch/window grant routes (ADR-0027
 	// decision 12) — the same *capability.Approvals again, named separately for
 	// the same reason Approvals is. Nil disables the routes with a 500 rather
 	// than silently accepting requests that would grant nothing.
 	ApprovalGrants ApprovalGrantService
-	// Reads records read-access events for the Job read route (#357,
-	// ADR-0025). Nil skips recording — the pre-#288 behaviour, kept so tests
-	// and any unwired surface work; the composition root always supplies it.
+	// Reads records read-access events for the Job read route (ADR-0025).
+	// Nil skips recording, so tests and any unwired surface work; the
+	// composition root always supplies it.
 	Reads ReadAuditor
 	// Now returns the current time, used to timestamp lifecycle audit
 	// Records. Defaults to time.Now().UTC() when nil.
 	Now func() time.Time
 	// CertExpiringWithin is the state:cert-expiring warning window
-	// (ADR-0034, #414): a mirror of a root-owned startup value (invariant
+	// (ADR-0034): a mirror of a root-owned startup value (invariant
 	// 11) — this surface is TOLD it, and no route reads or sets it. Zero
-	// (the default) means the marker never fires. Since #680 it is no
-	// longer read by handleGetNode, whose state: instant now comes from the
-	// capability read lane's own clock (NodeReader.DescribeNode's
-	// capability.NodeDetail.Eval); GET /api/v1/jobs/{id} (jobs.go) still
-	// uses this field directly, so it stays wired and is not dead.
+	// (the default) means the marker never fires. No handler in this package
+	// reads it: handleGetNode's state: instant comes from the capability read
+	// lane's own clock (NodeReader.DescribeNode's capability.NodeDetail.Eval).
 	CertExpiringWithin time.Duration
 }
 
@@ -239,9 +235,9 @@ func (r Route) Pattern() string { return r.Method + " " + r.Path }
 // Register mounts exactly these; the OpenAPI drift gate reads exactly these.
 func Routes() []Route {
 	return []Route{
-		// Enrollment Tokens, Node revocation, Freeze (#116). Every route
+		// Enrollment Tokens, Node revocation, Freeze. Every route
 		// here has a role floor, and every floor is decided by the ONE
-		// authz.RoleGate (#397): the enrollment and revocation routes consult
+		// authz.RoleGate: the enrollment and revocation routes consult
 		// it through authorizeControl below, the Freeze routes inherit it
 		// inside the capability layer. Which of the two applies to a given
 		// route is asserted by TestEveryRouteIsRoleClassified, so a route
@@ -253,8 +249,8 @@ func Routes() []Route {
 		{"POST", "/api/v1/freeze/engage", handleFreezeEngage},
 		{"POST", "/api/v1/freeze/release", handleFreezeRelease},
 
-		// Identity management (#297; #653: the floor moved into
-		// capability.Control behind AuthorizeControl). Every route here is
+		// Identity management (the floor lives in capability.Control
+		// behind AuthorizeControl). Every route here is
 		// admin-only in full. Deps carries no store for these routes at all —
 		// only AccountAdmin, the capability seam — so this surface renders the
 		// refusal and re-derives nothing (role_floor_test.go's
@@ -270,7 +266,7 @@ func Routes() []Route {
 		{"GET", "/api/v1/accounts/{id}/tokens", handleListAPITokens},
 		{"DELETE", "/api/v1/api-tokens/{token_id}", handleRevokeAPIToken},
 
-		// Execution (#356). Both routes dispatch through the shared capability
+		// Execution. Both routes dispatch through the shared capability
 		// layer (Selector -> authz -> blast-cap -> dispatch -> audit); neither
 		// re-implements a role check, a Policy decision, or a cap — see
 		// execution.go's header for why Raw Exec's admin gate deliberately stays
@@ -278,13 +274,13 @@ func Routes() []Route {
 		{"POST", "/api/v1/operations", handleRunOperation},
 		{"POST", "/api/v1/raw-exec", handleRawExec},
 
-		// Job read + cancel (#357). The read route is audited (ADR-0025): it
+		// Job read + cancel. The read route is audited (ADR-0025): it
 		// returns captured Task output, so it discloses material somebody else
 		// produced. Cancel goes through the same capability layer as dispatch.
 		{"GET", "/api/v1/jobs/{id}", handleGetJob},
 		{"POST", "/api/v1/jobs/{id}/cancel", handleCancelJob},
 
-		// The out-of-band approval decision channel (#270, ADR-0027). This is
+		// The out-of-band approval decision channel (ADR-0027). This is
 		// the universal envelope: it works for a harness with zero approval
 		// features and for the API-control drive mode, which has no MCP session
 		// at all — and it is the only channel that is a guarantee rather than a
@@ -294,7 +290,7 @@ func Routes() []Route {
 		{"GET", "/api/v1/approvals/{id}", handleGetApproval},
 		{"POST", "/api/v1/approvals/{id}/decision", handleDecideApproval},
 
-		// Batch/window approvals (#378, ADR-0027 decision 12). Note what is
+		// Batch/window approvals (ADR-0027 decision 12). Note what is
 		// NOT here: a route that approves a grant. Requesting one creates an
 		// ordinary approval Request, answered through the decision route above
 		// — so quorum, audience, requester exclusion, and channel strength are
@@ -360,7 +356,7 @@ func principal(w http.ResponseWriter, r *http.Request) (capability.Principal, bo
 	return p, true
 }
 
-// authorizeControl is the surface-side half of #397's fix for the
+// authorizeControl is the surface-side role gate for the
 // administrative routes that never reach the capability layer's dispatch
 // pipeline (enrollment-token mint/revoke, Node revoke).
 //
@@ -370,9 +366,9 @@ func principal(w http.ResponseWriter, r *http.Request) (capability.Principal, bo
 // answer reaches MCP, the Control API, and the Console (invariant 10). This
 // function's whole job is to ask, audit a refusal, and render it.
 //
-// A nil Authz refuses with 500. That is the deliberate direction: #397 exists
-// because an ungated administrative route failed open and nothing said so, so
-// an unwired gate must be loud and closed rather than quiet and open.
+// A nil Authz refuses with 500. That is the deliberate direction: an ungated
+// administrative route fails open and nothing says so, so an unwired gate
+// must be loud and closed rather than quiet and open.
 //
 // The refusal is recorded as audit.KindRefusal with the acting Principal,
 // matching how the capability layer records a refused dispatch — a refusal is
@@ -401,7 +397,7 @@ func authorizeControl(w http.ResponseWriter, r *http.Request, d Deps, p capabili
 //
 // Its default is the same generator relay/internal/auditsink uses,
 // audit.NewID — one implementation of the ordering property rather than two
-// copies of a shape (#656). The ids it mints are monotonic, so the trail's
+// copies of a shape. The ids it mints are monotonic, so the trail's
 // (ts, audit_id) tie-break orders rows by when they were appended.
 //
 // That is what recordLifecycleAllErr's AppendAll cascade needs: a
@@ -428,10 +424,9 @@ var newAuditID = audit.NewID
 // This is a BEST-EFFORT record, deliberately: every remaining caller has
 // already completed its act by the time it calls this, and rolling that act
 // back because the trail write failed would be worse than an incomplete
-// trail. Node revoke no longer calls this — it needed a fail-closed record
-// (#487), which is why it now goes through
-// revocation.Service.RevokeNodeRecorded instead (#605), the one place that
-// ordering can be atomic against a concurrent cascade for the same Node.
+// trail. Node revoke does not call this — it needs a fail-closed record,
+// so it goes through revocation.Service.RevokeNodeRecorded instead, the
+// one place that ordering can be atomic against a concurrent cascade for the same Node.
 func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) {
 	rec, err := newLifecycleRecord(ctx, d, p, kind, nodeID, reason)
 	if err != nil {

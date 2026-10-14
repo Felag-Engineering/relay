@@ -1,6 +1,6 @@
 package console
 
-// login.go is the Console's only unauthenticated surface (#418, spec
+// login.go is the Console's only unauthenticated surface (spec
 // docs/design/console/12-login.md).
 //
 // # What this file is careful about
@@ -469,7 +469,7 @@ func handleLoginSubmit(d Deps) http.HandlerFunc {
 // credential. Production-identical to the old read; the difference is that
 // there is now exactly one place that turns the cookie into a SessionID.
 //
-// This is also "clear the CSRF token on logout" (#460, spec 11), and there is
+// This is also "clear the CSRF token on logout" (spec 11), and there is
 // no line of code here that does it: d.Auth.Logout ends the session through
 // Store.End, so the very next request carrying the old session cookie fails
 // to resolve a Session at all — Resolve returns ErrNoSession, so no
@@ -495,9 +495,9 @@ func handleLogout(d Deps) http.HandlerFunc {
 			// believes happened and did not", which is the exact failure the
 			// comment below refuses to allow for a different reason. It is not
 			// browser-reachable, so this is a wiring alarm rather than a live
-			// hole; it is a 500 because the next consumer of this seam (#428's
-			// step-up POST) will copy whatever shape it finds here, and the
-			// shape it must copy is "no session, no action".
+			// hole; it is a 500 because every consumer of this seam, the
+			// step-up POST included, shares one shape: "no session, no
+			// action".
 			d.logger().ErrorContext(r.Context(), "console sign-out reached without a resolved browser session",
 				"path", r.URL.Path)
 			http.Error(w, "the Relay could not identify the session to end", http.StatusInternalServerError)
@@ -602,7 +602,7 @@ func setSessionCookie(w http.ResponseWriter, id consoleauth.SessionID) {
 // clearSessionCookie expires the session cookie. The attributes must match
 // setSessionCookie's or the browser keeps the original.
 //
-// There is no CSRF cookie to clear alongside it (#460): the session lane's
+// There is no CSRF cookie to clear alongside it: the session lane's
 // token is derived from the session identifier, not carried in a cookie, so
 // there is nothing here to clear — once d.Auth.Logout ends the session this
 // cookie named, no later request resolves a ConsoleSession to derive or

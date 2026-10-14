@@ -29,7 +29,7 @@ const (
 	// TaskEventCancel: Pending -> Resolved, OutcomeCancelled.
 	TaskEventCancel
 	// TaskEventCancelBeforeSend: Dispatched -> Resolved, OutcomeCancelled,
-	// for a Task marked Dispatched whose send never began (#943).
+	// for a Task marked Dispatched whose send never began.
 	TaskEventCancelBeforeSend
 )
 

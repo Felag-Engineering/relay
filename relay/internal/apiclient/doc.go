@@ -12,7 +12,7 @@
 // (internal/controlplane/api/openapi_test.go) proves the document is valid
 // OpenAPI 3.1 and matches the mounted route table, but a spec can pass both and
 // still be unusable by a real client generator. That happened when this was
-// first generated (#359): five schema names collided with oapi-codegen's own
+// first generated: five schema names collided with oapi-codegen's own
 // `<OperationId>Response` types. Generating and compiling a client in CI makes
 // such a spec fail there rather than for the first integrator.
 //

@@ -8,11 +8,8 @@ import (
 )
 
 // logPrincipal records the calling Principal for attribution, as read from
-// the context controlplane.Authenticator.Middleware injected (FoundingAdmin
-// this milestone; every /mcp request authenticates as it — ADR-0010).
-// Reads are not audited this issue (the audit trail, #102, is dispatch-only:
-// it records Job/Task actions, and these tools never dispatch); this is
-// observability, not the audited record.
+// the context controlplane.Authenticator.Middleware injected (ADR-0010).
+// This is observability, not the audited record.
 func logPrincipal(ctx context.Context, tool string) {
 	p, ok := controlplane.PrincipalFromContext(ctx)
 	if !ok {

@@ -20,6 +20,15 @@ type sqliteApprovals struct {
 
 var _ approval.Repository = (*sqliteApprovals)(nil)
 
+// parseStoredRiskClass reads a persisted risk class. An unrecognised value
+// reads as RiskClassUnspecified rather than failing the row: the stored copy is
+// for rendering and filtering, and the blast cap is always chosen from the live
+// Action at dispatch, never from this column.
+func parseStoredRiskClass(s string) jobs.RiskClass {
+	risk, _ := jobs.ParseRiskClass(s)
+	return risk
+}
+
 // Create persists a new pending Request.
 func (a *sqliteApprovals) Create(ctx context.Context, r approval.Request) error {
 	// The comma-joined require_audience column cannot represent a lone blank
@@ -161,7 +170,7 @@ func scanApproval(scan func(dest ...any) error) (approval.Request, error) {
 	// an unspecified Action kind for every role, so a row this build cannot
 	// interpret becomes undecidable instead of decidable by the weakest floor.
 	r.ActionKind = approval.ParseActionKind(actionKind)
-	r.RiskClass = approval.ParseRiskClassName(riskClass)
+	r.RiskClass = parseStoredRiskClass(riskClass)
 	// Blank entries in a non-empty column (e.g. "ana,", ",", " ") are
 	// deliberately PRESERVED here, never filtered: the domain fails closed on
 	// them (approval.Requirement.AudienceMalformed), and this read never

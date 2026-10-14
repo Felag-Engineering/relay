@@ -9,7 +9,7 @@ import (
 )
 
 // This file is the one-shot boot answer to "which Nodes carry a stored Label
-// this Relay will no longer serve" (threat model R13, #565). getNode's
+// this Relay will no longer serve" (threat model R13). getNode's
 // read-back filter (registry.go's wellFormedLabels) silently drops a pair
 // registry.WellFormedLabel refuses, and does so on every read — Get, List,
 // and Upsert's own read-back — which is exactly why a per-read log line is
@@ -27,7 +27,7 @@ import (
 // unaudited third path a scan could miss.
 //
 // It READS ONLY. Nothing here repairs, deletes, or rewrites a row: "decline
-// to serve, never write" is settled (#504, #555), and a scan that "fixed"
+// to serve, never write" is settled, and a scan that "fixed"
 // what it found would violate the same standing obligation wellFormedLabels'
 // own doc records. It reads the RAW tables directly, not the filtered view
 // getNode returns, so it cannot become the read-modify-write path that
@@ -182,7 +182,7 @@ func (s *Store) ScanDeclinedLabels(ctx context.Context) (DeclinedLabelReport, er
 // read-back counters getNode's readers advance (Store.LabelsDeclined),
 // inflating that live, traffic-driven signal with a boot-time event it was
 // never meant to count and destroying the distinction between the two
-// signals #565 deliberately keeps separate.
+// signals (threat model R13).
 //
 // The query is ORDER BY node_id, key — the same fmt.Sprintf +
 // //nolint:gosec table-literal idiom fetchLabels uses, since table is always
@@ -237,7 +237,7 @@ func scanDeclinedNamespace(ctx context.Context, q queryer, ns labelNamespace) (D
 // refused, using the ONE existing predicate rather than a second copy of its
 // rule — label.go documents exactly five seams for this predicate, and a
 // second predicate written just to answer "which half" would be the drift
-// #488 exists to prevent.
+// that one predicate exists to prevent.
 //
 // WellFormedLabel(key, value) decomposes to
 // (key != "" && wellFormedLabelBytes(key)) && wellFormedLabelBytes(value).

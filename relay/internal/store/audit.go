@@ -19,7 +19,7 @@ var _ audit.Repository = (*sqliteAudit)(nil)
 
 // insertAuditSQL is the one INSERT text shared by every audit writer, so their
 // column list cannot drift apart. The last three placeholders are the chain
-// position (#896). Only insertChained may reference it: a raw insert would
+// position. Only insertChained may reference it: a raw insert would
 // write a row with no chain position, and
 // TestInsertAuditSQL_OnlyReferencedByInsertChained fails the build if one
 // appears.
@@ -35,7 +35,7 @@ const insertAuditSQL = `
 //
 // ts is written through formatAuditTime, not the store-wide formatTime: the
 // audit table's ts is fixed-width so that ORDER BY on it is chronological
-// (#656, migration 0024). Record.Timestamp is unaffected by that choice — the
+// (migration 0024). Record.Timestamp is unaffected by that choice — the
 // driver re-renders the column on read and parseTime accepts either width —
 // so nothing above the store sees a representation change. The roundTripTime
 // call this replaced was doing nothing: an RFC3339Nano format/parse round
@@ -69,13 +69,12 @@ func auditInsertArgs(r audit.Record) ([]any, error) {
 // auditOrderAsc is the ONE ascending order every Repository reader uses:
 // Timestamp, ties broken by ID.
 //
-// Both halves are #656. Without ", audit_id" two rows sharing a ts come back
-// in whatever order the index yields, which was random-hex order and changed
-// on every write — and a dispatch fan-out guarantees rows share a ts, since
-// every per-Node Record copies one clock reading. Without migration 0024's
-// fixed-width ts, "ORDER BY ts" on a TEXT column puts a whole-second row
-// AFTER the .5 row in the same second, because RFC3339Nano trims trailing
-// zeros.
+// Both halves matter. Without ", audit_id" two rows sharing a ts come back
+// in whatever order the index yields — and a dispatch fan-out guarantees
+// rows share a ts, since every per-Node Record copies one clock reading.
+// Without migration 0024's fixed-width ts, "ORDER BY ts" on a TEXT column
+// puts a whole-second row AFTER the .5 row in the same second, because
+// RFC3339Nano trims trailing zeros.
 //
 // auditquery.go's read lane holds the mirror of this, auditOrderDesc.
 // TestAuditSQL_EveryOrderByTsCarriesTheTieBreak is what keeps a clause added
@@ -235,7 +234,7 @@ func (a *sqliteAudit) ByOnBehalfOf(ctx context.Context, onBehalfOf string) ([]au
 
 // query runs one by-key read: the caller supplies only its WHERE (empty for
 // List), and query appends auditOrderAsc itself, so the seven readers cannot
-// spell the order seven ways. That is the refactor half of #656.
+// spell the order seven ways.
 //
 // What it covers, exactly, and no more: every reader ON THIS PATH. A caller
 // that passed its own ORDER BY would get a RUNTIME SQL syntax error, not a

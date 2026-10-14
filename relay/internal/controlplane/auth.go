@@ -1,10 +1,10 @@
-// Package controlplane is the Relay's control-plane HTTP surface: MCP (#117)
-// and the Control API (#116) mount onto the one *Server this package exposes,
+// Package controlplane is the Relay's control-plane HTTP surface: MCP
+// and the Control API mount onto the one *Server this package exposes,
 // behind a single shared bearer-auth Middleware. This is the only control path
 // — never build a parallel one (ADR-0009/0010, AGENTS.md invariant 10).
 //
 // Every request on this listener authenticates as an **Account**, presenting a
-// per-Account API Token (#296). The Relay stores only each token's SHA-256
+// per-Account API Token. The Relay stores only each token's SHA-256
 // hash; a presented credential is never logged, echoed in an error, or
 // otherwise persisted (ADR-0023).
 package controlplane
@@ -84,11 +84,11 @@ func PrincipalFromContext(ctx context.Context) (capability.Principal, bool) {
 // Authenticator validates the bearer credential presented on the control
 // plane.
 //
-// Since #298 there is exactly one kind of credential: a per-Account API Token
-// (#296). The config-seeded shared credential it replaced is gone — not
-// deprecated, removed — so there is no second comparison path, no digest held
-// in memory, and no identity that several callers share. Every authenticated
-// request now attributes to exactly one Account, and every credential can be
+// Every credential it accepts belongs to exactly one Account — a per-Account
+// API Token, an OAuth session, or a Console session. There is no shared
+// credential, so there is no shared-secret comparison path, no digest held in
+// memory, and no identity that several callers share. Every authenticated
+// request attributes to exactly one Account, and every credential can be
 // revoked without affecting any other caller (ADR-0023).
 //
 // The Authenticator holds no secret material of any kind. It delegates to a
@@ -96,12 +96,12 @@ func PrincipalFromContext(ctx context.Context) (capability.Principal, bool) {
 type Authenticator struct {
 	tokens TokenVerifier
 
-	// oauth is the OAuth 2.1 resource-server half (#299, ADR-0024). Nil when
+	// oauth is the OAuth 2.1 resource-server half (ADR-0024). Nil when
 	// no IdP is configured, in which case a non-token credential is simply
 	// refused — the Relay advertises no flow it cannot complete.
 	oauth *oauthResolver
 
-	// console is the human browser lane (#418, ADR-0009). Nil when the Admin
+	// console is the human browser lane (ADR-0009). Nil when the Admin
 	// Console is not mounted, in which case a session cookie is simply
 	// ignored: no Console, no session to resolve it against, and no
 	// unauthenticated surface punched in this wrapper. See consolesession.go.
@@ -236,7 +236,7 @@ func (a *Authenticator) contextWith(ctx context.Context, res authResult) context
 // session alongside a header, and a script cannot fall back to one.
 //
 // Shape picks the lane; it does not decide the lane's REACH. The cookie lane
-// is additionally bounded by where the Console is (#459): a credential binds
+// is additionally bounded by where the Console is: a credential binds
 // to the surface that issued it, and a session cookie the browser attaches to
 // every path — the `__Host-` prefix forces Path=/ — is a credential for the
 // Console and for nothing else on this listener. The token lanes carry no such
@@ -253,7 +253,7 @@ func (a *Authenticator) authenticateRequest(r *http.Request) (authResult, bool) 
 		return authResult{principal: p}, true
 	}
 
-	// The cookie is only a credential ON THE CONSOLE (#459). The `__Host-`
+	// The cookie is only a credential ON THE CONSOLE. The `__Host-`
 	// prefix forces it to Path=/, so the browser presents it on /api/v1 and
 	// /mcp as well; the lane is the Console's, and it ends where the Console
 	// does. Off-scope the cookie is not resolved and not even read, so a
@@ -285,7 +285,7 @@ func SourceAddress(r *http.Request) string {
 // a request for a Console page that presents no bearer header is sent to the
 // sign-in page; everything else gets the generic 401 challenge.
 //
-// Both conditions are needed. Scope (#459) is where the request was going:
+// Both conditions are needed. Scope is where the request was going:
 // `/mcp` and `/api/v1` answer with the challenge whether or not a Console is
 // mounted, because its `resource_metadata` pointer is how an MCP harness
 // discovers the OAuth flow (ADR-0024), and a harness sent to an HTML sign-in
@@ -315,7 +315,7 @@ func hasBearer(r *http.Request) bool {
 // The Account is read fresh by the verifier on every call rather than cached
 // here, which is what makes a role change or a disablement take effect on the
 // very next request instead of at the next restart.
-// Two credential kinds share this boundary since #299: per-Account API Tokens
+// Two credential kinds share this boundary: per-Account API Tokens
 // and OAuth sessions. They are routed by PREFIX, never tried in turn — the
 // rule ADR-0023 set for the retired seeded credential, for the same reasons. A
 // `glp_`-shaped credential is only ever checked against the token verifier, and
@@ -336,7 +336,7 @@ func (a *Authenticator) authenticate(ctx context.Context, credential string) (ca
 		p.AuthMethod = capability.AuthMethodAPIToken
 		// The token ID travels with the identity into the verified audit lane:
 		// "which of this Account's credentials acted" is what makes revoking
-		// the compromised one a targeted act (#300).
+		// the compromised one a targeted act.
 		p.TokenID = tok.ID
 		return p, true
 	}

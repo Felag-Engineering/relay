@@ -5,7 +5,7 @@
 // (ADR-0002) and evaluated only by the daemon's live engine (ADR-0011,
 // invariant 12). The Relay never evaluates Policy itself and never sets a
 // Node's Policy — it only records what a daemon reports (DaemonMessage.policy
-// / relayv1.PolicySnapshot) so describe_node (#117) can show it to an
+// / relayv1.PolicySnapshot) so describe_node can show it to an
 // authorized caller. Nothing in this package parses argv, checks a regex, or
 // makes an allow/deny decision; it is a passive cache, the read-side sibling
 // of registry.Node.PolicyFingerprint.
@@ -167,8 +167,7 @@ func (c *Cache) Set(nodeID string, s Snapshot) {
 
 // Get returns a deep copy of the most recently reported Snapshot for
 // nodeID, or (Snapshot{}, false) if none has been captured yet — e.g. the
-// Node hasn't (re)connected since the Relay last started, or the daemon
-// doesn't yet emit PolicySnapshot (follow-up #151).
+// Node hasn't (re)connected since the Relay last started.
 func (c *Cache) Get(nodeID string) (Snapshot, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

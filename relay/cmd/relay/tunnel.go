@@ -21,12 +21,12 @@ import (
 )
 
 // taskSink is the seam for capturing Task dispatch and results: hermetic
-// unit tests, the #112 cross-binary CI harness (installDevHarness,
-// devharness-tagged build only), and — since #154 — newServer itself, which
+// unit tests, the cross-binary CI harness (installDevHarness,
+// devharness-tagged build only), and newServer itself, which
 // sets it to the real dispatch.Router (via routerSink, dispatch_wiring.go)
 // whenever Config.ControlEnabled, so Tasks dispatched through the capability
 // pipeline actually reach connected daemons over this mTLS Tunnel. Nil when
-// the control plane is disabled (execution off, exactly as before #154).
+// the control plane is disabled (execution off).
 //
 // register is called after the Ping handshake completes; it records the
 // outbound send function for the node and returns a cleanup func. deliver is
@@ -44,21 +44,20 @@ type tunnelServer struct {
 	relayv1.UnimplementedTunnelServer
 	conns *revocation.Connections
 	reg   registry.Repository
-	// policy is the display-only effective-Policy cache (#117, invariant 12 /
+	// policy is the display-only effective-Policy cache (invariant 12 /
 	// ADR-0002): the Relay records what a daemon reports in
 	// DaemonMessage.policy and never evaluates or sets Policy itself. Nil-guarded
 	// like reg/conns so existing tests that construct &tunnelServer{} directly
 	// keep compiling; nil in any test that doesn't need the capture.
 	policy *policyview.Cache
-	// vocab is the per-Node Template Operation vocabulary cache (#291,
-	// ADR-0021): the Relay records what a daemon reports in
+	// vocab is the per-Node Template Operation vocabulary cache (ADR-0021): the Relay records what a daemon reports in
 	// DaemonMessage.templates so describe_node/list_operations can show a
 	// Node's live vocabulary, and so a Template dispatch can resolve its
 	// fan-out and class (ADR-0042). It never sets a Node's templates, exactly as it
 	// never sets Policy (ADR-0002). Nil-guarded like policy/reg/conns.
 	vocab *nodevocab.Cache
 	// sink is set by newServer when Config.ControlEnabled (production
-	// execution, #154), by installDevHarness in a devharness-tagged build, or
+	// execution), by installDevHarness in a devharness-tagged build, or
 	// injected directly by tests; nil when the control plane is disabled.
 	sink taskSink
 }
@@ -116,7 +115,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		cctx = stream.Context()
 	}
 
-	// Mark the Node connected for as long as this stream lives (#440).
+	// Mark the Node connected for as long as this stream lives.
 	//
 	// This is the seam that makes "connected now?" a fact the registry holds
 	// rather than a guess from LastSeen. The defer is what makes it true in the
@@ -158,7 +157,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		// attacker-controlled TokenID and fixed it with looksLikeTokenID,
 		// exact shape validation, rather than with quoting.
 		//
-		// The VALUE is never logged (#504): it is exactly the self-reported
+		// The VALUE is never logged: it is exactly the self-reported
 		// string this check just decided not to trust.
 		if len(refused) > 0 {
 			slog.Warn("refused malformed node labels", "node_id", nodeID,
@@ -192,7 +191,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 
 	// Register the outbound send function with the sink (if set). Nil, and
 	// this block a zero-cost no-op, when the control plane is disabled
-	// (execution off); the real production sink when it's enabled (#154).
+	// (execution off); the real production sink when it's enabled.
 	if s.sink != nil {
 		unregister := s.sink.register(nodeID, stream.Send)
 		defer unregister()
@@ -243,7 +242,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 				}
 			}
 			// Deliver TaskResult to the sink (if set) — the real production
-			// sink (#154) is how a dispatched Task's result reaches the
+			// sink is how a dispatched Task's result reaches the
 			// waiting Router.Dispatch call. Nil, and this block a zero-cost
 			// no-op, when the control plane is disabled.
 			if s.sink != nil {
@@ -259,7 +258,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 				}
 			}
 			// Capture a reported PolicySnapshot into the display-only
-			// policyview.Cache (#117). This RECORDS a report-only daemon
+			// policyview.Cache. This RECORDS a report-only daemon
 			// value for describe_node to display — it never sets or
 			// modifies Node Policy (ADR-0002), exactly like the
 			// PolicyFingerprint the registry already records on Hello.
@@ -270,8 +269,8 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 			if ps := m.GetPolicy(); ps != nil && s.policy != nil {
 				s.policy.Set(nodeID, snapshotFromProto(ps))
 			}
-			// Capture a reported TemplateSnapshot into the nodevocab.Cache
-			// (#291). Same posture as the PolicySnapshot capture above: it
+			// Capture a reported TemplateSnapshot into the nodevocab.Cache.
+			// Same posture as the PolicySnapshot capture above: it
 			// RECORDS a report-only daemon value — for discovery, and since
 			// ADR-0042 as the input to a Template dispatch's fan-out and
 			// class — and can never set or modify the Node's templates
@@ -288,7 +287,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 // a map with bare keys (the "node:" prefix is stripped) and the RAW WIRE KEYS
 // of every label that ParseNodeLabel refused. Only keys with a "node:"
 // prefix, a non-empty bare key, and a well-formed (bare key, value) pair
-// (registry.WellFormedLabel, #504) are accepted; everything else is
+// (registry.WellFormedLabel) are accepted; everything else is
 // omitted from the map, never sanitised into it.
 //
 // WHY relay: labels are dropped: per ADR-0006 and the two-namespace label model,
@@ -297,7 +296,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 // than rejecting with an error) keeps the tunnel resilient — a stray relay: label
 // never tears down a long-lived connection.
 //
-// WHY a malformed node: label is dropped rather than sanitised (#504, ADR-0017):
+// WHY a malformed node: label is dropped rather than sanitised (ADR-0017):
 // sanitising "role=web x" to "role=webx" would make the Node match a Selector
 // NOBODY WROTE — the Relay itself manufacturing the attracting value, ADR-0017's
 // forge-to-attract cell — while omission can only produce forge-to-evade, which
@@ -403,8 +402,7 @@ func argMatchersToArgSets(matchers []*relayv1.ArgMatcher) [][]string {
 
 // boundedRefusedKey bounds a refused wire key for logging. It delegates to
 // registry.BoundLogKey, which owns the one rune-safe truncation for this one
-// hazard — see that function for why a second copy is not allowed (a security
-// review found exactly that fork in #565, with the rune backoff dropped).
+// hazard — see that function for why a second copy is not allowed.
 func boundedRefusedKey(k string) string {
 	bounded, _ := registry.BoundLogKey(k)
 	return bounded

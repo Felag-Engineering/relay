@@ -1,7 +1,7 @@
 package controlplane
 
 // consolesession.go adds the BROWSER credential lane to the one authentication
-// boundary (#418).
+// boundary.
 //
 // # Why here and not in package console
 //
@@ -15,8 +15,8 @@ package controlplane
 //
 // # Why the lanes are chosen structurally and never tried in turn
 //
-// ADR-0023 set the rule for the retired shared credential and #299 kept it: a
-// presented credential is routed to exactly one verifier, never offered to
+// ADR-0023 set the rule for the retired shared credential, and it still holds:
+// a presented credential is routed to exactly one verifier, never offered to
 // each until one accepts. Trying both makes a failure's cost depend on which
 // check rejected it and lets a near-miss on one kind be scored against the
 // other. Here the discriminator is structural and unambiguous — an
@@ -44,7 +44,7 @@ import (
 type ConsoleSessionResolver interface {
 	Resolve(ctx context.Context, id consoleauth.SessionID) (consoleauth.Session, accounts.Account, error)
 
-	// CSRFToken derives id's CSRF token (#460). It is fetched here, at
+	// CSRFToken derives id's CSRF token. It is fetched here, at
 	// resolution time, rather than carried on consoleauth.Session: the CSRF
 	// token is not a session fact to snapshot, it is a value RECOMPUTED per
 	// request from an identifier the boundary just resolved, and this
@@ -72,7 +72,7 @@ type consoleLane struct {
 	public func(*http.Request) bool
 
 	// scope reports whether a request targets the Console at all — the
-	// surface this credential is FOR (#459).
+	// surface this credential is FOR.
 	//
 	// Without it the lane is chosen by request shape alone, and the shape of
 	// a Console request ("no Authorization header, and a Console is
@@ -100,7 +100,7 @@ type ConsoleSessionOptions struct {
 	Public func(*http.Request) bool
 
 	// Scope reports whether a request targets the Console, and so whether a
-	// session cookie is a credential for it at all (#459).
+	// session cookie is a credential for it at all.
 	//
 	// Required, and deliberately not defaulted to "everything": a nil
 	// predicate would silently restore the control-plane-wide cookie this
@@ -163,8 +163,8 @@ type consoleSessionContextKey struct{}
 // Carrying the ID here grants a handler no reach it did not already have: the
 // cookie is on the request regardless, so every handler could read it anyway.
 // What this removes is the REASON to. A handler that wants its session would
-// otherwise parse the cookie itself — the shape handleLogout had before this
-// change, and the one #428's step-up POST must not grow — and a second place
+// otherwise parse the cookie itself — a shape no handler, the step-up POST
+// included, may grow — and a second place
 // that parses the same credential is a second authentication path waiting to
 // disagree with the first.
 //
@@ -189,10 +189,9 @@ type consoleSessionContextKey struct{}
 //
 // Carrying the whole Session here would put a stale Role and Kind on the
 // context right next to the authoritative fresh ones, with nothing in the
-// type saying which is which. The trap is specific and this seam's declared
-// next consumer walks straight into it: #428's step-up POST is the handler
-// that gates mutate applies (ADR-0026 decision 3) and relay:-label
-// management (invariant 7), and it already needs the ID from here — so
+// type saying which is which. The trap is specific and the step-up POST
+// walks straight into it: it gates privilege-granting Account acts and
+// approval decisions (console/stepup.go), and it needs the ID from here — so
 // `cs.Session.Role` would be the nearest field to hand and would read
 // `admin` for a demoted admin until their session lapsed on its own.
 //
@@ -213,7 +212,7 @@ type ConsoleSession struct {
 	// is current as of this request, unlike the identity snapshot below.
 	AuthenticatedAt time.Time
 
-	// CSRFToken is this request's derived Console CSRF token (#460) — NOT a
+	// CSRFToken is this request's derived Console CSRF token — NOT a
 	// stored secret. It is recomputed by ConsoleSessionResolver.CSRFToken on
 	// every resolution from an identifier the boundary just resolved, so
 	// there is no table of these anywhere and its lifetime is this request's,

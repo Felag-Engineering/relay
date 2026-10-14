@@ -1,11 +1,11 @@
 package console
 
-// cancel.go is the Console's Cancel control (#595, specs 13 and 04): a form
+// cancel.go is the Console's Cancel control (specs 13 and 04): a form
 // on Job detail and on Activity that asks the capability layer to
 // stop a Job's Tasks.
 //
 // This was the Console's FIRST route to reach the capability layer's WRITE
-// path; decide.go's decision route (#453) is the second. Every OTHER route
+// path; decide.go's decision route is the second. Every OTHER route
 // in this package (seams.go's header) only ever reads. Cancel is not an
 // execution route, so it is not behind
 // console_execution (see console.go's Routes and control_surfaces.go's
@@ -19,7 +19,7 @@ package console
 // # Import-scope
 //
 // This file was the Console's FIRST importer of internal/authz; decide.go
-// (#453) is the second. Both name exactly one symbol from it: the
+// is the second. Both name exactly one symbol from it: the
 // authz.ErrUnauthorized sentinel, used only to RECOGNIZE a refusal the
 // capability layer already made and RENDER it. Neither constructs, names, or
 // calls a role gate — no_dispatch_test.go's authz allowlist (package-wide,
@@ -27,9 +27,9 @@ package console
 //
 // # Who decides
 //
-// The role floor is operator (#595, execution.md §Cancellation); the SCOPE
+// The role floor is operator (execution.md §Cancellation); the SCOPE
 // beyond that floor differs by Account kind — a human Account may cancel any
-// Job, a machine Account only a Job it requested (#614) — and that
+// Job, a machine Account only a Job it requested — and that
 // distinction, like the floor itself, is decided in the capability layer,
 // not here. It and the audit row are the capability layer's, exactly as
 // invariant 10 requires: this file renders what capability.Execution.CancelJob
@@ -134,7 +134,7 @@ func handleCancelJob(d Deps) http.HandlerFunc {
 			})
 		case errors.Is(err, authz.ErrUnauthorized), errors.Is(err, capability.ErrJobNotRequestedByCaller):
 			// The capability layer made the decision — a role refusal or a
-			// machine Account's scoping refusal (#614) — and this screen
+			// machine Account's scoping refusal — and this screen
 			// only renders it. Informative, not an error: nothing was
 			// stopped and nothing kept running that would not have anyway.
 			w.WriteHeader(http.StatusForbidden)

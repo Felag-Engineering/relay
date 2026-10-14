@@ -1,12 +1,12 @@
 //! The daemon's single environment/config surface, read once at startup and
-//! threaded down. Centralizes the previously double-read RELAY_ADDR /
-//! RELAY_DOMAIN and the http→https scheme normalization.
+//! threaded down. Centralizes RELAY_ADDR / RELAY_DOMAIN and the http→https
+//! scheme normalization.
 //!
 //! Also hosts daemon-local hard limits (e.g. [`MAX_OUTPUT_BYTES`]) that are
 //! compile-time constants, not env-derived — kept here as the daemon's single
 //! neutral config-adjacent home rather than scattered per call site.
 //! The spawned-child `setrlimit` bounds (`ResourceLimits`) live in relay-exec's
-//! `limits` module (#889).
+//! `limits` module.
 
 use std::path::PathBuf;
 
@@ -33,7 +33,7 @@ pub struct Config {
     /// unreadable file → warn and fall back to deny-all (fail-closed for dispatch).
     pub policy_path: PathBuf,
     /// `RELAY_TEMPLATE_DIR` — the root of this Node's Template Operation files
-    /// (ADR-0021, issue #291).
+    /// (ADR-0021).
     ///
     /// Defaults to `/etc/relay-daemon/templates.d` — beside `policy.toml`, the
     /// same root-owned local trust root (ADR-0002); the Relay can read the
@@ -103,7 +103,7 @@ pub fn template_dir_from_env() -> PathBuf {
 }
 
 /// Per-stream output byte cap for stdout and stderr independently. Daemon-local
-/// and wire-immutable: the Relay can never raise it over the wire (invariant #11
+/// and wire-immutable: the Relay can never raise it over the wire (invariant 11
 /// analog for the daemon; ADR-0004). Bytes past the cap are drained but discarded
 /// and `truncated` is set. Sane default; a Policy/env-tunable value is future work.
 pub const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB
@@ -160,7 +160,7 @@ pub fn enroll_config(cfg: &Config) -> Result<Option<EnrollConfig>, EnrollError> 
 /// hostnames and `grpc://`) is also returned as-is. This is a convenience
 /// transformation for operators who supply plain `http://` addresses; the
 /// authoritative fail-closed guard remains `validate_endpoint_scheme` /
-/// `build_channel` (ADR-0005, invariant #6).
+/// `build_channel` (ADR-0005, invariant 6).
 pub(crate) fn normalize_scheme(addr: &str) -> String {
     addr.replacen("http://", "https://", 1)
 }

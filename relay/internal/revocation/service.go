@@ -100,9 +100,8 @@ const cascadeRecordChunk = 500
 // Node's lock is touched.
 //
 // A nil recorder must not be read as "skip recording": a cascade or a
-// single-Node revoke that CAN run unattributed is the bug #557 exists to
-// close, so making that state unreachable IS the fix. This mirrors
-// api.authorizeControl's nil-Authz posture (#397) — loud and closed, never
+// single-Node revoke that CAN run unattributed is the bug, so making that state unreachable IS the fix. This mirrors
+// api.authorizeControl's nil-Authz posture — loud and closed, never
 // quiet and open.
 var ErrRecorderRequired = errors.New("revocation: a Node revocation requires a recorder; refusing to run an unattributed revoke")
 
@@ -219,7 +218,7 @@ type Service struct {
 	log *slog.Logger
 
 	// tokenLocks and nodeLocks serialise RevokeToken per token id and the
-	// decide-record-revoke critical section per Node id (#605): a cascade
+	// decide-record-revoke critical section per Node id: a cascade
 	// holds tokenLocks for the whole of one token's cascade and nodeLocks for
 	// each chunk it records and revokes, RevokeNodeRecorded holds nodeLocks
 	// for the one Node it records and revokes. Keyed, never global, so
@@ -232,7 +231,7 @@ type Service struct {
 	// recorded is the in-process record of which Nodes this cascade has
 	// already recorded a revocation for, consulted by RevokeNodeRecorded to
 	// avoid writing a second node_revoke record for a Node whose cascade
-	// revocation this process already recorded (#605). See recordedSet's doc
+	// revocation this process already recorded. See recordedSet's doc
 	// for why this is not the denylist.
 	recorded *recordedSet
 }
@@ -269,12 +268,12 @@ func (s *Service) logger() *slog.Logger { return logctx.Or(s.log) }
 // registry (the authority), and tears down any live Tunnel stream. The registry
 // is now the source of truth: at startup the denylist is rehydrated from
 // registry.RevokedNodeIDs(), so a revoked Node stays revoked across a Relay
-// restart (issue #133, ADR-0006). The denylist is a derived in-memory cache.
+// restart (ADR-0006). The denylist is a derived in-memory cache.
 //
 // node_id is the verified client-cert CN (ADR-0006) and is not a secret; it is
 // safe to log.
 //
-// MUST STAY LOCK-FREE (#605): revokeChunk and RevokeNodeRecorded both call
+// MUST STAY LOCK-FREE: revokeChunk and RevokeNodeRecorded both call
 // this while already holding the Node's nodeLocks entry, and
 // enroll.Service's post-enrollment cleanup (handler.go:540, through
 // NodeDenylister) calls it with no lock held at all — it has no Principal and
@@ -314,15 +313,15 @@ func (s *Service) RevokeNode(nodeID string) {
 // then persist, then teardown — for every id in the chunk, but persists the
 // whole chunk in ONE registry call instead of one per Node.
 //
-// THE PERSISTENCE TRADE, stated both ways (#607): one transaction per chunk
+// THE PERSISTENCE TRADE, stated both ways: one transaction per chunk
 // instead of one autocommit UPDATE per Node. SetMaxOpenConns(1) serialises
 // statements, not transactions, so the autocommits this replaces already let
 // other store callers interleave between every pair of them; what they cost
 // was one commit per Node, and that total is what a large cascade made
 // everyone else queue behind. The chunk cuts that by the chunk factor and,
 // in exchange, holds the single connection for one chunk's transaction
-// rather than releasing it between every Node. Same trade #601 made for
-// this cascade's audit records.
+// rather than releasing it between every Node. Same trade as this cascade's
+// audit records.
 //
 // Phase (1) — denylist.Add for every id — runs regardless of what phase (2)
 // returns, and phase (2)'s error is logged and never returned: over-denying
@@ -353,16 +352,15 @@ func (s *Service) RevokeNode(nodeID string) {
 // (registry.Repository.SetRevokedAll): one store fault partway through the
 // chunk — SQLITE_FULL, an IOERR, a BUSY or failed COMMIT — rolls back every
 // row in the chunk, not only the one that faulted. Because the in-memory
-// denylist is rehydrated from RevokedNodeIDs() at every start (#133,
-// ADR-0006), an unrecovered batch failure would leave up to
+// denylist is rehydrated from RevokedNodeIDs() at every start (ADR-0006), an unrecovered batch failure would leave up to
 // cascadeRecordChunk Nodes denylisted in memory only, and a restart would
-// let every one of them back in. Falling back to the pre-#607 per-Node
+// let every one of them back in. Falling back to a per-Node
 // SetRevoked loop on error degrades exactly to that loop's behaviour instead
 // of losing the chunk: whichever ids the fallback still manages to persist
 // survive a restart, and the per-id log lines below (the same message and
 // key RevokeNode uses) make every id in the chunk recoverable by an operator
 // even where the fallback itself fails. One batch attempt only, no retry,
-// then the fallback loop, then stop. The happy path above is unchanged.
+// then the fallback loop, then stop.
 //
 // ids is handed to SetRevokedAll WITHOUT a defensive copy, unlike the record
 // call above it in revokeChunk: RevocationRecorder is a caller-supplied
@@ -409,27 +407,26 @@ func (s *Service) revokeAll(ids []string) {
 // RevokeNodeRecorded is the operator-ordered single-Node revoke: it records
 // nodeID's revocation through record and then revokes it, holding the Node's
 // lock across both so a token cascade cannot write a second node_revoke
-// record for the same Node (#605).
+// record for the same Node.
 //
 // record is REQUIRED, refused with ErrRecorderRequired before the Node's
 // lock is even acquired — the same posture RevokeToken takes, for the same
-// reason (#557): a revoke that CAN run unattributed is the bug to close.
+// reason: a revoke that CAN run unattributed is the bug to close.
 //
 // WHY THIS MAY INVERT THE ORDINARY BEST-EFFORT AUDIT POSTURE: nothing has
 // happened yet at the moment record is called, and RevokeNode has no error
 // return to strand — so record is called BEFORE RevokeNode, and a record
 // failure returns the error and revokes nothing (FAIL CLOSED). This is
-// #487's record-before-act ordering, moved down a layer from the Control
-// API's handleRevokeNode and now inside the Node's lock — the only place it
+// record-before-act ordering, held inside the Node's lock — the only place it
 // can be atomic against a concurrent cascade for the same Node.
 //
-// THE HONEST LIMIT, carried down from #487: RevokeNode's DURABLE half can
+// THE HONEST LIMIT: RevokeNode's DURABLE half can
 // still fail quietly. It adds to the in-process denylist first and
 // disconnects reliably, but reg.SetRevoked is best-effort and only logged
 // (see RevokeNode), so a persist failure leaves a permanent, attributed
 // node_revoke record beside a registry that did not record the revocation,
 // and a later restart — which rehydrates the denylist from the registry
-// (#133) — could let the Node reconnect. What this ordering guarantees is
+// — could let the Node reconnect. What this ordering guarantees is
 // narrower and still worth having: no revocation is ATTEMPTED without a
 // durable record of who ordered it and why.
 //
@@ -484,12 +481,12 @@ func (s *Service) RevokeNodeRecorded(ctx context.Context, nodeID string, record 
 // token_id is the public, non-secret half of the Enrollment Token credential —
 // safe to log (see enroll/token.go).
 //
-// record is REQUIRED (#557): every cascaded Node's revocation must be
+// record is REQUIRED: every cascaded Node's revocation must be
 // recorded through it, one call per chunk of at most cascadeRecordChunk
 // Nodes, from inside the pass loop below — see RevocationRecorder's doc for
 // why a callback rather than a sink field, and why it takes no context.
 //
-// SERIALISED PER TOKEN ID (#605): RevokeToken takes tokenID's lock before
+// SERIALISED PER TOKEN ID: RevokeToken takes tokenID's lock before
 // Step 1 and holds it for the whole cascade, every pass included. Three
 // consequences worth knowing: (a) the lock is taken BEFORE s.tokens.Revoke,
 // so a caller whose wait is cancelled has caused nothing at all — the token
@@ -572,7 +569,7 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string, record Revoca
 		}
 
 		// A failed or partial read must never pass for a settled registry:
-		// that is how a store error used to revoke zero Nodes and report
+		// otherwise a store error would revoke zero Nodes and report
 		// success, leaving every Node a leaked token enrolled still trusted.
 		// The Nodes that WERE read are still revoked below — over-denying
 		// beats under-denying — and the cascade then stops and fails loudly
@@ -585,8 +582,8 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string, record Revoca
 			if s.denylist.IsRevoked(n.NodeID) {
 				// Already handled in a prior pass; skip to avoid redundant Disconnect.
 				// This also means an already-revoked Node gets no second record,
-				// preserving the Console's causative-record rule (console/node.go,
-				// #545/#487): the record that already exists for it stays the one
+				// preserving the Console's causative-record rule (console/node.go):
+				// the record that already exists for it stays the one
 				// that answers "who did it".
 				continue
 			}
@@ -633,7 +630,7 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string, record Revoca
 // revokes them regardless of a record failure; it returns how many were
 // revoked and how many of those went unrecorded.
 //
-// LOCKING EVERY id IN THE CHUNK FIRST is what closes #605's duplicate: no
+// LOCKING EVERY id IN THE CHUNK FIRST is what prevents a duplicate record: no
 // other revoke path — a concurrent RevokeNodeRecorded, or another cascade
 // pass, though a Node belongs to exactly one enrolling token so that second
 // case cannot actually contend — can observe one of these Nodes in the
@@ -649,15 +646,14 @@ func (s *Service) revokeChunk(ids []string, record RevocationRecorder, tokenID s
 	// would get a second node_revoke record here, against the
 	// causative-record rule the IsRevoked skip in RevokeToken's pass loop
 	// already enforces across passes. Evaluated under the locks acquired
-	// above, this is no longer a best-effort narrowing: it is the actual
+	// above, this is not a best-effort narrowing: it is the actual
 	// dedup for a single-Node revoke that reached and revoked this Node
 	// first, while it sat unflushed in this chunk. The predicate stays
 	// IsRevoked, deliberately not the recorded set below: the cascade's
-	// "skip what is already revoked" rule is pre-existing (#557/#563) and
-	// this issue does not widen it — keying it on the recorded set instead
-	// would make the cascade start recording Nodes it skips today (a Node
-	// self-denylisted by enroll.Service with no record), which nobody asked
-	// for.
+	// "skip what is already revoked" rule is deliberately not widened —
+	// keying it on the recorded set instead would make the cascade record
+	// Nodes it skips (a Node self-denylisted by enroll.Service with no
+	// record).
 	live := ids[:0]
 	for _, id := range ids {
 		if !s.denylist.IsRevoked(id) {
@@ -670,10 +666,10 @@ func (s *Service) revokeChunk(ids []string, record RevocationRecorder, tokenID s
 	}
 
 	// Record the chunk BEFORE revoking any Node in it, but — unlike
-	// handleRevokeNode's #487 ordering — revoke EVERY Node in the chunk
-	// EITHER WAY, deliberately inverting that posture. #487's fail-closed
-	// order was licensed by two facts that do not hold here: nothing had
-	// happened yet, and RevokeNode has no error return to strand. Here the
+	// RevokeNodeRecorded's record-before-act ordering — revoke EVERY Node in
+	// the chunk EITHER WAY, deliberately inverting that posture. That
+	// fail-closed order is licensed by two facts that do not hold here:
+	// nothing has happened yet, and RevokeNode has no error return to strand. Here the
 	// token is already revoked (RevokeToken's Step 1) and any earlier Node in
 	// this same cascade already is too; refusing to revoke a Node because its
 	// chunk's record failed would leave a Node whose enrolling token is
@@ -687,25 +683,18 @@ func (s *Service) revokeChunk(ids []string, record RevocationRecorder, tokenID s
 	// the caller afterward via ErrCascadeNotRecorded rather than papering
 	// over it.
 	//
-	// This still leaves a wider crash window than the old one-Node-at-a-
-	// time cascade did: a process crash between this chunk's commit and
-	// the end of the revokeAll call below can leave up to
-	// cascadeRecordChunk records for Nodes not yet revoked (the
-	// per-Node cascade before #563: at most 1). That is the same
-	// failure direction #557 chose — a record with no matching revoke
-	// is an audit-trail overstatement, never an unattributed revoke —
-	// just wider now that recording and revoking happen per chunk
-	// instead of per Node. Accepted; do not reorder.
+	// This leaves a crash window: a process crash between this chunk's
+	// commit and the end of the revokeAll call below can leave up to
+	// cascadeRecordChunk records for Nodes not yet revoked. That is the
+	// chosen failure direction — a record with no matching revoke is an
+	// audit-trail overstatement, never an unattributed revoke — widened by
+	// recording and revoking per chunk instead of per Node. Accepted; do not
+	// reorder.
 	//
-	// The revoke half below is now one store transaction per chunk (#607)
-	// rather than len(ids) autocommits — see revokeAll's doc for that trade.
-	// The crash window this comment describes is unchanged in KIND (a
-	// committed record with no matching revoke) and its BOUND is unchanged
-	// (still at most cascadeRecordChunk), but the window no longer decays
-	// across the chunk the way the per-Node loop's did: that loop shrank
-	// the exposed count by one for every Node it revoked, so a crash at a
-	// random point left roughly half the chunk exposed on average. This is
-	// a step function instead — the full chunk is exposed for the entire
+	// The revoke half below is one store transaction per chunk rather than
+	// len(ids) autocommits — see revokeAll's doc for that trade. So the
+	// window does not decay across the chunk as Nodes are revoked; it is a
+	// step function — the full chunk is exposed for the entire
 	// transaction, then zero the instant it commits; on a batch failure the
 	// fallback below closes the window per Node as each autocommit lands,
 	// not in one step.

@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 )
 
 // The audit vocabulary this package writes, named once so the Kind strings
@@ -164,6 +166,7 @@ type Service struct {
 
 	stepUpWindow time.Duration
 	sleep        func(ctx context.Context, d time.Duration) error
+	log          *slog.Logger
 }
 
 // ThrottledFloor is the least time a throttled sign-in refusal takes,
@@ -175,7 +178,7 @@ type Service struct {
 // refusal. A found row costs a little more than no row, so without a floor
 // repeated 429 timings could reveal whether a name is an Account. The floor
 // sits well above a registry lookup's normal cost, so the refusal's duration
-// no longer depends on what the lookup found.
+// does not depend on what the lookup found.
 //
 // It is deliberately NOT KDF work: the throttle exists partly to cap KDF
 // cost, and burning a derivation on a refusal would make throttling a CPU
@@ -201,6 +204,14 @@ func WithThrottledSleep(sleep func(ctx context.Context, d time.Duration) error) 
 		}
 	}
 }
+
+// WithLogger sets the logger the Service reports advisory failures to.
+// Without it the Service logs through slog.Default().
+func WithLogger(l *slog.Logger) ServiceOption {
+	return func(s *Service) { s.log = l }
+}
+
+func (s *Service) logger() *slog.Logger { return logctx.Or(s.log) }
 
 // sleepFor waits d or until ctx is done, whichever is first.
 func sleepFor(ctx context.Context, d time.Duration) error {
@@ -279,15 +290,14 @@ func (s *Service) StepUpWindow() time.Duration { return s.stepUpWindow }
 // early return for "no such account" is the obvious one) is the bug this
 // arrangement exists to prevent.
 //
-// The audit trail is the one place that now tells them apart, and only as D19
+// The audit trail is the one place that tells them apart, and only as D19
 // says: a failure records the typed name when it is an existing Account's and
 // no typed text otherwise. That existence lookup runs first, on every attempt
 // and before anything branches on its result. What that does and does not
 // buy: the lookup is unconditional; the throttled branch is padded to
 // ThrottledFloor so a found row cannot be told from no row by how fast the
 // refusal returns; the failed branch is dominated by the KDF, and still has
-// the pre-existing GetPassword asymmetry for an enabled human Account, which
-// this change neither introduces nor fixes.
+// a GetPassword asymmetry for an enabled human Account.
 func (s *Service) Login(ctx context.Context, a Attempt) (SessionID, Session, error) {
 	start := s.now()
 	name := accounts.NormalizeName(a.Name)
@@ -354,10 +364,10 @@ func (s *Service) Login(ctx context.Context, a Attempt) (SessionID, Session, err
 
 	s.throttle.Succeed(a.Source, name)
 	if err := s.accounts.TouchLastSeen(ctx, acct.ID, s.now()); err != nil {
-		// Advisory bookkeeping ("is this Account still in use?"). It must not
-		// fail a sign-in, but it must not vanish either — the audit record
-		// below is the authoritative trail and it is still written.
-		_ = err
+		// Advisory bookkeeping ("is this Account still in use?"): it must not
+		// fail a sign-in. The audit record below is the authoritative trail.
+		s.logger().WarnContext(ctx, "console sign-in: last-seen update failed",
+			"account_id", acct.ID, "err", err)
 	}
 	if err := s.recordLogin(ctx, LoginEvent{
 		Kind:          auditKindLoginSucceeded,
@@ -424,7 +434,7 @@ func (s *Service) Resolve(ctx context.Context, id SessionID) (Session, accounts.
 		return Session{}, accounts.Account{}, ErrNoSession
 	}
 	if !acct.Enabled {
-		// Disabling an Account is the durable off-switch (#296). It has to
+		// Disabling an Account is the durable off-switch. It has to
 		// reach sessions already in flight, or a disabled human keeps their
 		// Console until the session lapses on its own.
 		s.sessions.EndAllFor(acct.ID)
@@ -469,11 +479,11 @@ func (s *Service) CSRFToken(id SessionID) CSRFToken {
 // expired, unknown or disabled session) returns before the comparison, never
 // because of it. It is the gap worth knowing about — a caller probing this
 // endpoint with a stale or invented session identifier leaves nothing in the
-// trail, and audit.AuthFailureKinds cannot recover what was never written. That is
-// pre-existing behaviour, shared with every other route that resolves a
-// session, and closing it belongs with the session lane rather than with this
-// function; it is recorded here rather than left for a reader to discover
-// that "audited" quietly meant "mostly".
+// trail, and audit.AuthFailureKinds cannot recover what was never written. That
+// behaviour is shared with every other route that resolves a session, and
+// closing it belongs with the session lane rather than with this function; it
+// is recorded here rather than left for a reader to discover that "audited"
+// quietly meant "mostly".
 //
 // The record is written BEFORE the stamp, and an unrecorded step-up stamps and
 // rotates nothing: once the window is consulted, a stamp left behind by a

@@ -7,6 +7,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 )
@@ -14,7 +15,7 @@ import (
 // dispatch_wiring.go is the v0.0.5 dispatch transport's composition-root
 // wiring: it is production-ready code, built by every build (no build tag).
 // newServer (main.go) calls newDispatchStack and sets tunnel.sink whenever
-// Config.ControlEnabled — the production execution flip (#154) — over the
+// Config.ControlEnabled — the production execution flip — over the
 // real mTLS Tunnel, paired with the real staged Authorizer
 // (internal/authz.NewStaged, ADR-0010) capability.NewExecution's fail-open guard
 // requires alongside a real dispatcher (pipeline.go). The dev harness
@@ -27,7 +28,7 @@ var _ dispatch.ViolationRecorder = (*auditsink.Sink)(nil)
 
 // violationRecorder composes the one place a protocol violation's records
 // are written: the durable audit row, the aggregate by-rule counter, and the
-// counter that says the row is missing (#638). It lives here rather than on
+// counter that says the row is missing. It lives here rather than on
 // *auditsink.Sink so the audit adapter gains no dependency on the transport
 // package, and rather than on *metrics.Metrics for the symmetric reason.
 //
@@ -98,12 +99,7 @@ func newDispatchStack(tasks jobs.TaskRepository, violations dispatch.ViolationRe
 	var reconciler *dispatch.Reconciler
 	router := dispatch.NewRouter(func(nodeID string) {
 		if err := reconciler.ReconcileNode(context.Background(), nodeID); err != nil {
-			// Reconciliation errors are per-Task-joined and already surfaced
-			// to the caller of ReconcileNode in tests; a bare drop here
-			// matches the existing "best-effort background hook" idiom
-			// (freeze_signal.go) rather than introducing a new logging
-			// dependency to this file.
-			_ = err
+			logctx.Or(logger).Error("reconcile on connect failed", "node_id", nodeID, "err", err)
 		}
 	}, violations, dispatch.WithLogger(logger))
 	reconciler = dispatch.NewReconciler(tasks, router)

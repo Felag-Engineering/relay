@@ -27,13 +27,12 @@ import (
 // Executor interface below, injected by the composition root
 // (cmd/relay/main.go), never constructed here.
 //
-// #118 wires these tools against the capability layer's execution service
-// but does NOT flip production dispatch on: whether main.go builds an
-// Execution at all is Config.ControlEnabled's call, isolated to #154 (owner
-// DECISION 1). All acceptance for #118 is proven in-package against a
-// test-wired execution capability (mcp_test.go/mcp_exec_test.go).
+// These tools are wired against the capability layer's execution service
+// but do NOT flip production dispatch on: whether an Execution is built at
+// all is Config.ControlEnabled's call. Their acceptance is proven in-package
+// against a test-wired execution capability (mcp_test.go/mcp_exec_test.go).
 //
-// #727 (ADR-0029 decision 6): run_operation and raw_exec are the answered
+// ADR-0029 decision 6: run_operation and raw_exec are the answered
 // retry's only callers. This file reaches exactly ONE decision-side function
 // in tools_approval.go, the one file ADR-0029 decision 5 exempts —
 // acceptElicitedAnswer — and renders whatever it returns through that same
@@ -53,13 +52,13 @@ import (
 // invariant 10). *capability.Execution satisfies Executor structurally (Go
 // structural typing) — the composition root passes it in directly.
 type Executor interface {
-	// Start is Execution.Start (#895): the same pipeline as Run, returning once
+	// Start is Execution.Start: the same pipeline as Run, returning once
 	// the Job's Tasks are persisted. This adapter chooses how long to wait for
 	// the Job afterwards (wait_seconds); it decides nothing about the dispatch.
 	Start(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action, o capability.StartOptions) (capability.StartedJob, error)
 	CancelJob(ctx context.Context, p capability.Principal, jobID string) error
 
-	// Plan is Execution.Plan's exact shape (#119, ADR-0011): resolves sel,
+	// Plan is Execution.Plan's exact shape (ADR-0011): resolves sel,
 	// authorizes p against act, and reports per-Node PolicyVerdicts instead
 	// of dispatching — no Job/Task/dedup entry is ever created.
 	Plan(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) (capability.PlanResult, error)
@@ -72,7 +71,7 @@ type Executor interface {
 // the value New() was given fail at runtime, not just at the static-
 // interface boundary, so an exec tool can never reach back through it to a
 // wider method set (*capability.Execution exposes Plan, Start and more than
-// Executor does). The Freeze is no longer one of them: it lives on
+// Executor does). The Freeze is not one of them: it lives on
 // *capability.Control, which Execution does not expose.
 //
 // RB1 (plan review): defined HERE, an exec file, rather than mcp.go, so
@@ -101,7 +100,7 @@ func (a execAdapter) Plan(ctx context.Context, p capability.Principal, sel capab
 // with an unattributed (zero-value) capability.Principal. This is the
 // execution tools' stricter sibling of attribution.go's logPrincipal, which
 // silently no-ops on !ok — fine for a read tool, not for an RCE surface.
-// Middleware always injects FoundingAdmin in production, so !ok is
+// Middleware always injects a Principal in production, so !ok is
 // unreachable there; "prefer the more restrictive option" (AGENTS.md)
 // requires the explicit guard anyway.
 func requirePrincipal(ctx context.Context) (capability.Principal, error) {
@@ -194,7 +193,7 @@ func renderRunError(err error) error {
 	if errors.As(err, &unknownErr) || errors.As(err, &malformedErr) {
 		return err
 	}
-	// Idempotency outcomes (#895) each say precisely what the caller may do
+	// Idempotency outcomes each say precisely what the caller may do
 	// next, and whether a new key is safe; wrapping them would bury that.
 	var conflictErr *capability.IdempotencyConflictError
 	var keyErr *capability.IdempotencyKeyError
@@ -218,7 +217,7 @@ func renderRunError(err error) error {
 // never a second Policy decision (ADR-0002/0011, invariant 12): the daemon's
 // live Policy engine and its validate_* functions remain the real gate on
 // argument VALUES. What this catches is the failure mode where a malformed call
-// is indistinguishable from a forbidden one (#345):
+// is indistinguishable from a forbidden one:
 //
 //   - an unknown ARGUMENT name (e.g. a misspelled "unitt") — otherwise silently
 //     dropped, leaving the required arg empty so the daemon reports
@@ -228,7 +227,8 @@ func renderRunError(err error) error {
 //
 // The argument-name half lives in [opvocab.ValidateArgNames], beside the
 // ArgConstraints convention it reads, so this surface and the Control API's
-// execution routes share ONE definition and cannot reopen #345 independently.
+// execution routes share ONE definition: a misspelled argument is a
+// malformed call on both, never a per-Node denial (ADR-0042).
 //
 // A name outside the Native vocabulary is a Template Operation (ADR-0021),
 // and this adapter decides NOTHING about it (ADR-0042, invariant 10): it
@@ -265,9 +265,8 @@ func buildOperationAction(ops OperationLister, name string, args map[string]stri
 	}, nil
 }
 
-// runOperationInput is run_operation's argument. Plan is additive (#119):
-// omitted or false keeps today's real-dispatch behavior byte-identical to
-// #118; plan=true resolves/authorizes/checks exactly as a real run would but
+// runOperationInput is run_operation's argument. Plan is additive:
+// omitted or false is a real dispatch; plan=true resolves/authorizes/checks exactly as a real run would but
 // executes nothing, returning per-Node Policy verdicts instead.
 type runOperationInput struct {
 	Selector  string            `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on'. Every term must carry a node: or relay: prefix. Empty or omitted matches every Node."`
@@ -423,18 +422,15 @@ func renderParked(parked *capability.ParkedError) *PendingApprovalOutput {
 const statusPendingApproval = "pending_approval"
 
 // planModeClause is the SINGLE, IDENTICAL sentence cross-referencing plan
-// mode from both run_operation's and raw_exec's Description (#120's plan:
-// "IDENTICAL single delimited <PLAN CLAUSE>"). It is deliberately
-// concept-level — it names plan mode and ADR-0011 but no param name — so it
-// stays accurate regardless of whether #119 (which adds an actual `plan`
-// input field to these same two tools) has landed yet, keeping that merge
-// trivial.
+// mode from both run_operation's and raw_exec's Description. It is
+// deliberately concept-level — it names plan mode and ADR-0011 but no param
+// name.
 const planModeClause = "Plan mode — the no-execution preview of whether each Node's live Policy would allow " +
 	"the action (ADR-0011) — is the sanctioned probe before mutating; prefer it over learning Policy " +
 	"boundaries by triggering real executions."
 
 // jobReturnClause is the SINGLE, IDENTICAL sentence stating when run_operation
-// and raw_exec return and how to get the outcomes (#895, ADR-0004's wait
+// and raw_exec return and how to get the outcomes (ADR-0004's wait
 // budget). Shared for the reason planModeClause is.
 const jobReturnClause = "Returns as soon as every matched Node's Task is persisted, with job_id and " +
 	"job_status=running; poll get_job with job_id until job_status=complete. Pass wait_seconds (max 300) to " +
@@ -443,7 +439,7 @@ const jobReturnClause = "Returns as soon as every matched Node's Task is persist
 	"existing Job instead of dispatching again — re-send it unchanged. Without a key, a repeated call is a new dispatch."
 
 // resultShapeClause is the SINGLE, IDENTICAL result-shape contract sentence
-// shared by run_operation's and raw_exec's Description (#207/#253, mirroring
+// shared by run_operation's and raw_exec's Description (mirroring
 // planModeClause's pattern): both tools render the same RunOrPlanOutput, so
 // the documented job_id/exit_code presence semantics must be stated once and
 // never drift between the two.
@@ -480,7 +476,7 @@ const (
 )
 
 // isAnsweredRetry reports whether req is a retried tool call carrying an
-// answer to a parked approval (#727) — the one condition under which
+// answer to a parked approval — the one condition under which
 // run_operation/raw_exec call answerThenDispatch instead of dispatching
 // directly. True only when ALL of:
 //
@@ -507,7 +503,7 @@ func isAnsweredRetry(ask *questioner, req *sdkmcp.CallToolRequest, p capability.
 }
 
 // answerThenDispatch is the ONE function run_operation and raw_exec both call
-// for an answered retry (#727), so the branch cannot drift between them: it
+// for an answered retry, so the branch cannot drift between them: it
 // decides the answer FIRST, then re-enters the whole dispatch pipeline at
 // most once. See the issue's decision table for the outcome-by-outcome
 // contract; every branch here returns a tool RESULT carrying a decision or a
@@ -518,8 +514,7 @@ func isAnsweredRetry(ask *questioner, req *sdkmcp.CallToolRequest, p capability.
 // tool is the calling tool's registered name (toolRunOperation/toolRawExec)
 // and in is its own typed input value — the SAME value passed to
 // dispatch/ask.question, so the digest acceptElicitedAnswer checks can never
-// drift from what emission sealed (issue #727 comment 2, point 1: there is
-// no second digest function).
+// drift from what emission sealed (there is no second digest function).
 //
 // From the decision side this names ONLY acceptElicitedAnswer, its result
 // type, the elicitedOutcome constants, answerStateRefusedOutput and the
@@ -549,7 +544,7 @@ func answerThenDispatch(
 	case elicitedApproved, elicitedLapsed, elicitedStillPending:
 		// A concurrent approving retry, or a plain re-drive carrying no
 		// request state at all, is now resolved in the capability layer
-		// (#713, AP-77): Execution.Run claims a single-Plan approval's release
+		// (AP-77): Execution.Run claims a single-Plan approval's release
 		// exactly once, inside a store transaction, before it dispatches, and
 		// a loser re-attaches to the winner's Job instead of dispatching a
 		// second one. This branch therefore cannot mint a second Job.
@@ -617,14 +612,14 @@ func answerThenDispatch(
 // audit, at-most-once, plan mode) carries through unchanged.
 //
 // Their Descriptions are the ADR-0001 typed-path-by-default safety
-// assumption engineered into words (#120): run_operation presents itself as
+// assumption engineered into words: run_operation presents itself as
 // the DEFAULT and raw_exec as the ESCAPE HATCH, both cross-reference plan
 // mode via the identical planModeClause, and run_operation's steers a
 // denied_by_policy result toward describe_node rather than blind retries.
 //
 // ask (elicit.go, S2b) is nil-receiver safe: a nil *questioner never asks, so
 // a park always renders pending_approval exactly as before it existed.
-// isAnsweredRetry gates the same nil-receiver-safe path (#727): an answered
+// isAnsweredRetry gates the same nil-receiver-safe path: an answered
 // retry can only exist where a question could have been asked in the first
 // place.
 //
@@ -670,7 +665,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 				return nil, RunOrPlanOutput{}, err
 			}
 			// JobID stays absent (a Plan creates no Job) and Results stays an
-			// empty array, never null — #207/#253, see RunOrPlanOutput.
+			// empty array, never null — see RunOrPlanOutput.
 			return nil, RunOrPlanOutput{Results: []PerNodeResult{}, Plan: &plan}, nil
 		}
 
@@ -680,7 +675,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		}
 		o := dispatchOpts{wait: wait, key: in.IdempotencyKey}
 
-		// An answered retry (#727) decides before anything dispatches, then
+		// An answered retry decides before anything dispatches, then
 		// re-enters the pipeline below at most once itself — it never falls
 		// through to the plain dispatch() call that follows. A plan=true
 		// call never reaches here (it returned above), so a retry carrying
@@ -754,7 +749,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 				return nil, RunOrPlanOutput{}, err
 			}
 			// JobID stays absent (a Plan creates no Job) and Results stays an
-			// empty array, never null — #207/#253, see RunOrPlanOutput.
+			// empty array, never null — see RunOrPlanOutput.
 			return nil, RunOrPlanOutput{Results: []PerNodeResult{}, Plan: &plan}, nil
 		}
 

@@ -38,7 +38,7 @@ const (
 	BannerRelayCertExpiring BannerKind = "relay-cert-expiring"
 
 	// BannerCAExpiring: the trust root every Node pins is running out, and
-	// there is no rotation path today (issue #412).
+	// there is no rotation path today.
 	BannerCAExpiring BannerKind = "ca-expiring"
 )
 
@@ -83,7 +83,7 @@ type Page struct {
 	// script and the content security policy does not touch it — which is the
 	// entire reason the conventions ban hx-on:, which is.
 	//
-	// This is the SESSION's derived secret (#460), not a cookie value: it is
+	// This is the SESSION's derived secret, not a cookie value: it is
 	// sessionCSRFToken's read of the ConsoleSession the authentication
 	// boundary already resolved, so a page and the request it later submits
 	// are checked against the same per-session-per-request derivation rather
@@ -240,10 +240,8 @@ func placeholder(title, spec string) func(Deps) http.HandlerFunc {
 //
 // StripPrefix is load-bearing rather than tidy: the embedded FS is rooted at
 // "assets/", and a FileServer handed the request path unmodified looks for
-// "console/assets/console.css" and 404s. That is what it did — every Console
-// page rendered completely unstyled, and no test caught it because the shell
-// landed before anything mounted it (#439, found when #418 first stood the
-// Console up in a browser).
+// "console/assets/console.css" and 404s, and every Console page renders
+// completely unstyled.
 //
 // TestConsole_StylesheetIsActuallyServed is the regression guard, and it
 // asserts the BODY rather than the status, because a 404 page is also a 200-

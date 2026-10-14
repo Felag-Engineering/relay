@@ -13,13 +13,12 @@ import (
 // surface (invariant 11).
 const DefaultCheckpointInterval = 5 * time.Minute
 
-// Checkpointer periodically logs the audit chain's head (#896). The line is
+// Checkpointer periodically logs the audit chain's head. The line is
 // the ADR-0025 metadata stream's anchor: it carries the chain format, a seq and
 // a hash and nothing about any record's content. An operator who keeps these
 // lines in their log pipeline can later pass any of them to
 // relay-audit-verify -expect SEQ:HASH, which detects tail truncation and
-// re-chaining that the chain alone cannot. External anchoring is #284's
-// follow-up.
+// re-chaining that the chain alone cannot.
 //
 // It is a log line and not an audit row on purpose: a checkpoint inside the
 // chain it anchors cannot anchor that chain.

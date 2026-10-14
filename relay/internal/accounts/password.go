@@ -15,7 +15,7 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// password.go is the Console's local password credential (#418, spec
+// password.go is the Console's local password credential (spec
 // docs/design/console/12-login.md).
 //
 // # Why the Relay holds password hashes at all

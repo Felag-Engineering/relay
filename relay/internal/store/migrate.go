@@ -68,8 +68,8 @@ const migrationSlowThreshold = time.Second
 // schema_migrations, each in its own transaction, recording the applied
 // version as it goes. This is selection by per-version presence, not by
 // comparison against the highest version recorded: a version that is
-// missing gets applied regardless of how many higher versions already are
-// (#492). schema_migrations itself is created by 0001_init.sql, so before
+// missing gets applied regardless of how many higher versions already are.
+// schema_migrations itself is created by 0001_init.sql, so before
 // that has run the applied set is simply empty.
 //
 // One consequence of presence-based selection: repairing a database that
@@ -107,8 +107,8 @@ func migrate(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 
 	// Timed because 0024 is the first migration whose cost is proportional to
 	// the size of a table rather than to the schema — it rewrites every audit
-	// row, at roughly 16 seconds per GB — so a boot that used to be instant can
-	// now take minutes, and the operator is owed the reason. 0028 (#896) is the
+	// row, at roughly 16 seconds per GB — so a boot can take minutes, and the
+	// operator is owed the reason. 0028 is the
 	// second: it chains every existing audit row.
 	//
 	// Info only past migrationSlowThreshold, Debug otherwise. A fresh database
@@ -209,8 +209,8 @@ func appliedVersions(ctx context.Context, db *sql.DB) (map[int]struct{}, error) 
 // per loadMigrations) against applied: pending is every migration whose
 // version is absent from applied, in that same ascending order; unknown is
 // every applied version with no corresponding embedded migration, sorted
-// ascending. A pure function — no ctx, no db — so the exact scenario #492
-// reported (embedded 1, 2, 22, 23 with applied {1, 2, 23}, expecting pending
+// ascending. A pure function — no ctx, no db — so the skipped-migration
+// scenario (embedded 1, 2, 22, 23 with applied {1, 2, 23}, expecting pending
 // [22]) is testable without a real database or an embedded file that does
 // not exist in this repo.
 func pendingMigrations(migrations []migration, applied map[int]struct{}) (pending []migration, unknown []int) {

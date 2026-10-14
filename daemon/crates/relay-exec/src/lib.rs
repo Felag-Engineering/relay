@@ -1,5 +1,5 @@
 //! The only crate in the daemon workspace that spawns a process (AGENTS.md
-//! invariant 1, #889).
+//! invariant 1).
 //!
 //! `executor` builds every child from an argv already fixed by Policy or a
 //! Template, never through `/bin/sh`; `cancel` is the in-flight cancel registry
@@ -10,7 +10,7 @@
 //! second spawn site anywhere in the workspace.
 
 // Crate-private aliases so the `crate::x::...` paths in the moved files resolve
-// unchanged (#889).
+// unchanged.
 pub(crate) use relay_proto as gen;
 #[cfg(test)]
 pub(crate) use relay_test_support as test_support;

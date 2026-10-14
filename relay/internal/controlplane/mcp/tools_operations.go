@@ -121,7 +121,7 @@ func slotConstraintProse(sl nodevocab.Slot) string {
 // per-Node Template half comes from lane.ListOperations, called
 // UNCONDITIONALLY — including for a fleet-wide call with no node_id — so the
 // lane records the whole call under one name and fails closed for both
-// shapes (#680, QRY-28).
+// shapes (QRY-28).
 func registerOperationTools(srv *sdkmcp.Server, ops OperationLister, lane ReadLane) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "list_operations",

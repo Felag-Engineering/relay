@@ -32,7 +32,7 @@ type ApprovalGate interface {
 	Evaluate(d approval.Dispatch) (approval.Requirement, []string, bool)
 }
 
-// noopApprovalGate gates nothing. It is no longer a default: NewApprovals
+// noopApprovalGate gates nothing. It is not a default: NewApprovals
 // requires a gate, so only newApprovals (in-package tests) can install this one.
 type noopApprovalGate struct{}
 
@@ -42,7 +42,7 @@ func (noopApprovalGate) Evaluate(approval.Dispatch) (approval.Requirement, []str
 
 // ApprovalStore is the subset of approval.Repository the capability layer
 // needs: the dispatch path's create/lookup/claim, plus the queue reads and the
-// decision write the surfaces adapt ([3/6], #270).
+// decision write the surfaces adapt ([3/6]).
 //
 // Decisions land HERE rather than in the Control API handler for the same
 // reason dispatch does (invariant 10): the decision endpoint, the MCP
@@ -59,7 +59,7 @@ type ApprovalStore interface {
 	BindJob(ctx context.Context, id, jobID string, now time.Time) (approval.Request, error)
 	Get(ctx context.Context, id string) (approval.Request, error)
 	Pending(ctx context.Context) ([]approval.Request, error)
-	// LastApprovedByShape is the approval object's anti-fatigue read (#415,
+	// LastApprovedByShape is the approval object's anti-fatigue read (AP-23,
 	// D10): the newest approved record of the same SHAPE. It releases nothing
 	// — see approval.Repository for why that separation is structural.
 	LastApprovedByShape(ctx context.Context, shapeKey, excludeID string) (approval.Request, error)
@@ -165,12 +165,12 @@ type Approvals struct {
 	// direction.
 	grants ApprovalGrantStore
 
-	// tasks persists MCP task handles (#374, ADR-0028). Nil disables the
-	// Tasks extension entirely, which is the pre-#374 behaviour and loses
-	// nothing: the universal pending_approval result path does not use handles.
+	// tasks persists MCP task handles (ADR-0028). Nil disables the
+	// Tasks extension entirely, which loses nothing: the universal
+	// pending_approval result path does not use handles.
 	tasks MCPTaskStore
 
-	// authz is the role floor on a DECISION (#270): deciding a Request
+	// authz is the role floor on a DECISION: deciding a Request
 	// requires the role that Action would have needed to be requested. Nil only
 	// on an Approvals assembled by newApprovals, where there is nothing to
 	// decide.
@@ -188,7 +188,7 @@ type Approvals struct {
 
 // NewApprovals wires the approval callout (ADR-0027): gate decides which
 // dispatches must wait for a human, store persists the parked Requests, and
-// authz is the role floor on answering one (#270).
+// authz is the role floor on answering one.
 //
 // rec, gate, store and authz are required together. A gate with no store could
 // decide a dispatch needs approval and then have nowhere to record it — which
@@ -204,10 +204,10 @@ type Approvals struct {
 // RELEASE a dispatch the gate already gated, so its absence can never let
 // something through.
 //
-// tasks is the MCP task-handle store (#374, ADR-0028), enabling the Tasks
+// tasks is the MCP task-handle store (ADR-0028), enabling the Tasks
 // extension's server side. Optional, and its absence is not a degraded mode but
 // the prior one: with no store, dispatches park and return the universal
-// `pending_approval` result (#371) exactly as before. ADR-0028 requires that
+// `pending_approval` result exactly as before. ADR-0028 requires that
 // path to keep working with the shim deleted, so nothing below it may come to
 // depend on a handle existing.
 //
@@ -298,7 +298,7 @@ type ParkedError struct {
 	// ExpiresAt is when the parked request lapses.
 	ExpiresAt time.Time
 
-	// TaskID is the MCP task handle attached to this park (#374, ADR-0028), or
+	// TaskID is the MCP task handle attached to this park (ADR-0028), or
 	// empty when Tasks are not wired or the handle could not be minted.
 	//
 	// Empty is a fully supported answer, not a failure: a surface renders the
@@ -431,7 +431,7 @@ func (a *Approvals) checkApproval(ctx context.Context, p Principal, sel Selector
 	// matching rules (mergeStricter): that merge never lets an unrestricted
 	// rule's audience absorb a malformed one — a blank entry survives the
 	// merge (see unionAudience) — so a merge upstream cannot defeat this
-	// check. A real *approval.Gate can no longer produce a malformed
+	// check. A real *approval.Gate cannot produce a malformed
 	// Requirement in the first place (approval.Rule.Validate).
 	if err := approval.ValidateAudience(req.Audience); err != nil {
 		return approvalDecision{}, fmt.Errorf("capability: dispatch approval requirement from rules %s: require.audience: %w", strings.Join(rules, ", "), err)
@@ -447,7 +447,7 @@ func (a *Approvals) checkApproval(ctx context.Context, p Principal, sel Selector
 	// An already-satisfied approval for exactly this Plan releases the
 	// dispatch. Anything else — pending, denied, expired, or absent — does not.
 	//
-	// The lookup is by PLAN HASH and nothing else. The shape key (#415) is
+	// The lookup is by PLAN HASH and nothing else. The shape key is
 	// never consulted here and must never be: it deliberately excludes the
 	// resolved fan-out, so releasing on it would release a dispatch over a Node
 	// set nobody approved.
@@ -470,14 +470,13 @@ func (a *Approvals) checkApproval(ctx context.Context, p Principal, sel Selector
 	// falls into the unbound case below. Once the deadline passes, Satisfied
 	// is false, the approved row is not pending, and the dispatch falls through
 	// to the Grant check and then a fresh park. That keeps a spent approval
-	// from becoming a permanent replay of one Job (the concern #646 and this
-	// issue's body record).
+	// from becoming a permanent replay of one Job (AP-77).
 	if lookupErr == nil && existing.Satisfied(now) && existing.Released() {
 		return approvalDecision{requestID: existing.ID, reattachJobID: existing.JobID}, nil
 	}
 
 	// A store failure reading THIS plan's existing Request is refused HERE,
-	// before a Grant is ever consulted (SEC-2/C2-S1, #713 security review): a
+	// before a Grant is ever consulted (SEC-2/C2-S1, AP-77): a
 	// released Request the Relay cannot currently read must never be silently
 	// shadowed by a covering Grant that goes on to run the plan a second time.
 	// Only ErrNotFound — "no Request exists for this plan" — falls through to

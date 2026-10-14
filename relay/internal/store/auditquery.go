@@ -13,7 +13,7 @@ import (
 )
 
 // auditquery.go is *sqliteAudit's other interface: audit.QueryRepository, the
-// trail's filtered/paginated/aggregating read lane (#441). audit.go's
+// trail's filtered/paginated/aggregating read lane. audit.go's
 // Repository (Append + the by-key readers) is unchanged; this file adds
 // nothing to it and nothing here can Append.
 
@@ -31,7 +31,7 @@ const auditQueryColumns = `audit_id, ts, kind, principal, selector, job_id, node
 	approval_id, grant_id, approval_answer, decision_channel, plan_hash`
 
 // auditOrderDesc is the read lane's newest-first order, and the exact mirror
-// of audit.go's auditOrderAsc (#656).
+// of audit.go's auditOrderAsc.
 //
 // The ", audit_id DESC" half is not decoration: Query's keyset predicate
 // below is "ts < ? OR (ts = ? AND audit_id < ?)", which presumes the rows
@@ -44,7 +44,7 @@ const auditOrderDesc = `ORDER BY ts DESC, audit_id DESC`
 
 // auditArgKeyPattern bounds Query.ArgKey before it reaches
 // json_extract(args, '$.' || ?): defense in depth alongside
-// capability.AuditFilter.validate (#441 plan) — this store package trusts no
+// capability.AuditFilter.validate — this store package trusts no
 // caller, including one inside the same binary.
 var auditArgKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
@@ -62,8 +62,8 @@ func clampPageSize(n int) int {
 	}
 }
 
-// checkBucketCount is CountsByPrincipal's bucket-count guard (F1, #441
-// cycle-2 security review), factored out so it is testable against a
+// checkBucketCount is CountsByPrincipal's bucket-count guard, factored
+// out so it is testable against a
 // synthetic groupCount without materialising audit.MaxCountBuckets+1 rows in
 // a real SQLite database. groupCount exceeding the limit is
 // audit.ErrInvalidFilter, never a silent truncation.
@@ -86,7 +86,7 @@ func checkBucketCount(groupCount int64) error {
 // caller already turned, never inside the one they are about to fetch).
 //
 // The "ts < ?" and "ts = ?" comparisons are TEXT comparisons, and they are
-// exact only because every stored ts is the same fixed width (#656, migration
+// exact only because every stored ts is the same fixed width (migration
 // 0024). decodeAuditCursor's normalisation is what extends that exactness to
 // a cursor issued by an older binary, whose ts came back from the driver in
 // the trimmed rendering.
@@ -150,8 +150,8 @@ func (a *sqliteAudit) Query(ctx context.Context, q audit.Query, limit int, curso
 		// database/sql then renders that into a Go string as trimmed
 		// RFC3339Nano. So a scanned ts of a 30-character stored row is 20
 		// characters, and a cursor built from it compares unequal to the
-		// column it is compared against — which returned the same row forever
-		// (#656).
+		// column it is compared against — which would return the same row
+		// forever.
 		last := fetched[len(fetched)-1]
 		page.Next = encodeAuditCursor(last.Timestamp.UTC().Format(auditTimeLayout), last.ID)
 	}
@@ -175,7 +175,7 @@ func (a *sqliteAudit) CountsByPrincipal(ctx context.Context, q audit.Query, buck
 		whereClause = ` WHERE ` + strings.Join(conds, " AND ")
 	}
 
-	// Bucket-count guard (F1, #441 cycle-2 security review): count the
+	// Bucket-count guard: count the
 	// (account, bucket) groups BEFORE materialising a Bucket struct per
 	// group, and ERROR rather than silently truncate. This runs even when a
 	// caller's window/bucket combination is otherwise legal — it is the
@@ -239,12 +239,11 @@ func (a *sqliteAudit) CountsByPrincipal(ctx context.Context, q audit.Query, buck
 // reachTargetExpr builds the COALESCE chain that names WHAT a Record's
 // Args touched, in audit.TargetArgKeys' precedence order. Built FROM
 // TargetArgKeys, rather than hand-written and separately pinned, so the SQL
-// cannot drift from the one Go definition (issue #441 plan: "the COALESCE
-// order matches audit.TargetArgKeys").
+// cannot drift from the one Go definition.
 //
 // audit.TargetArgKeys is a package-level `var`, not a const — it is the ONE
 // value interpolated directly into SQL by fmt.Sprintf below rather than
-// bound as a parameter (F4, #441 cycle-2 security review). Nothing assigns
+// bound as a parameter. Nothing assigns
 // to it today, so this is not attacker-reachable, but each key is validated
 // against auditArgKeyPattern before it reaches the query string, exactly as
 // Query.ArgKey is re-validated above — defense in depth so a future
@@ -266,7 +265,7 @@ func reachTargetExpr() (string, error) {
 // matching COUNT(DISTINCT ...)'s own NULL-skipping so an unset Node never
 // counts as one.
 //
-// Residual (F6, #441 cycle-2 security review): this evaluates a 4-way
+// Residual: this evaluates a 4-way
 // json_extract COALESCE per row with no index and no LIMIT, so even a filter
 // that looks narrow to the caller is a full scan of the largest table.
 // capability.AuditFilter's required, bounded Since/Until window on this
@@ -376,11 +375,9 @@ func buildAuditWhere(q audit.Query) (conds []string, args []any, err error) {
 // secondPrefix formats t, floored to the whole second, and returns its
 // 19-character date/time prefix ("2006-01-02T15:04:05").
 //
-// It is NOT a workaround for the text format any more. Since #656 the whole
-// stored string orders correctly as TEXT, because migration 0024 made every
-// ts fixed-width — the claim this comment used to make, that the 19-character
-// prefix is the only part that orders correctly, is no longer true and was
-// the reason the bound looked like a hack.
+// It is NOT a workaround for the text format: the whole stored string
+// orders correctly as TEXT, because migration 0024 made every ts
+// fixed-width.
 //
 // It stays because the WIDENING it produces on Until is a deliberate filter
 // semantic (D4): buildAuditWhere passes secondPrefix(Until + 1s) as an
@@ -424,7 +421,7 @@ func encodeAuditCursor(ts, id string) string {
 // or whose ts part is not RFC3339, is audit.ErrInvalidCursor — never a silent
 // reset to page one, which would loop a paging client forever.
 //
-// The ts part is NORMALISED to the stored rendering (#656). A cursor issued
+// The ts part is NORMALISED to the stored rendering. A cursor issued
 // before migration 0024 and one issued after are byte-identical — both are
 // the driver's trimmed RFC3339Nano re-rendering of the column — so "reject
 // stale cursors" is not implementable: there is nothing to detect. Normalising
@@ -444,10 +441,10 @@ func decodeAuditCursor(cursor string) (ts, id string, err error) {
 
 // scanAuditQueryRow scans one row of auditQueryColumns into an audit.Row.
 //
-// It no longer hands back a "raw stored ts text" for the cursor: there is no
+// It does not hand back a "raw stored ts text" for the cursor: there is no
 // such thing on this path. The driver parses the TIMESTAMP-declared column
 // into a time.Time and database/sql re-renders it as trimmed RFC3339Nano, so
-// the scanned string is not the stored bytes and never was (#656). Query
+// the scanned string is not the stored bytes and never was. Query
 // builds the cursor from Timestamp instead.
 func scanAuditQueryRow(row rowScanner) (audit.Row, error) {
 	var (

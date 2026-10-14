@@ -20,11 +20,11 @@
 //! milestone, not a follow-up).
 //!
 //! This is the ONE place in the daemon that constructs a `/bin/sh -c` command
-//! from a template. Invariant #1 ("argv, never `/bin/sh`") governs *Native
+//! from a template. Invariant 1 ("argv, never `/bin/sh`") governs *Native
 //! Operations* (tier 1); the template tier is tier 2, whose whole reason to
 //! exist is shell composition. The command *structure* is author-fixed (from a
-//! root-owned local file, ADR-0002 trust root — file loading is #291); only the
-//! quoted slot values vary.
+//! root-owned local file, ADR-0002 trust root — loaded by [`crate::templates`]);
+//! only the quoted slot values vary.
 //!
 //! # Two-layer defense (belt-and-suspenders, mirroring `service_restart.rs`)
 //!
@@ -52,7 +52,7 @@
 //!
 //! A compiled [`TemplateOp`] implements [`super::registry::ResolvedOp`], the
 //! same `name → (handler, arg-shape, risk class)` contract Native Operations
-//! resolve through (issue #310). Its [`ResolvedOp::positional_args`] uses the
+//! resolve through. Its [`ResolvedOp::positional_args`] uses the
 //! identical named-args → positional mapping, so `policy.evaluate(name,
 //! positional)` governs a template **byte-for-byte** like a Native Operation:
 //! deny-by-default, deny-beats-allow, argument-level constraints. The Policy
@@ -61,11 +61,10 @@
 //!
 //! # Scope
 //!
-//! This module is the engine (issue #290): definitions, compilation, typed
+//! This module is the engine: definitions, compilation, typed
 //! validation, quoting, and rendering. Loading those definitions from
 //! root-owned local files, the template-set fingerprint, the `unsupported`
-//! per-Node outcome, and live discovery are [`crate::templates`] (issue #291);
-//! the shipped read catalog is #293.
+//! per-Node outcome, and live discovery are [`crate::templates`].
 
 use std::collections::HashSet;
 
@@ -100,7 +99,8 @@ const MAX_PATH_BYTES: usize = 4096;
 const MAX_INTEGER_DIGITS: usize = 19;
 
 // ---------------------------------------------------------------------------
-// Serde-ready definition model (#291 deserializes into these; no loader here)
+// Serde-ready definition model ([`crate::templates`] deserializes into these;
+// no loader here)
 // ---------------------------------------------------------------------------
 
 /// A template's risk class as authored. **Mandatory** (ADR-0012): there is no
@@ -159,8 +159,8 @@ pub struct SlotDef {
     pub ty: SlotType,
 }
 
-/// A Template Operation definition, as authored (and, in #291, deserialized
-/// from a root-owned local file).
+/// A Template Operation definition, as authored (and deserialized from a
+/// root-owned local file by [`crate::templates`]).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TemplateDef {
     /// The Operation name this template registers under (enters the Policy
@@ -287,7 +287,7 @@ pub struct TemplateOp {
 impl TemplateOp {
     /// The positions of `path`-typed slots, in positional (Policy) order.
     ///
-    /// Consumed by the dispatch gate (issue #293) to apply ADR-0018's
+    /// Consumed by the dispatch gate to apply ADR-0018's
     /// canonical-form precondition to a template's path arguments BEFORE Policy
     /// evaluates them — so an exact-path `[[deny]]` on a template cannot be
     /// evaded by a non-canonical spelling like `/etc/../etc/shadow`, exactly as
@@ -303,7 +303,7 @@ impl TemplateOp {
 
     /// The declared parameter slots as `(name, type)`, in declaration order —
     /// which is also the positional order Policy evaluates args in. The
-    /// discovery surface (#291) renders these into `TemplateDescriptor.slots`
+    /// discovery surface renders these into `TemplateDescriptor.slots`
     /// so `list_operations`/`describe_node` can show a Node's live vocabulary
     /// with its argument constraints.
     pub fn slot_specs(&self) -> Vec<(&str, &SlotType)> {
@@ -373,8 +373,8 @@ impl TemplateOp {
 
 // ---------------------------------------------------------------------------
 // Registry integration — a compiled template resolves through the SAME
-// name → (handler, arg-shape, risk class) contract as a Native Operation
-// (issue #310), so Policy governs it identically and dispatch needs no
+// name → (handler, arg-shape, risk class) contract as a Native Operation,
+// so Policy governs it identically and dispatch needs no
 // per-name arm (the structural test in dispatch.rs proves zero dispatch edits).
 // ---------------------------------------------------------------------------
 
@@ -677,7 +677,7 @@ fn parse_body(body: &str, slots: &[Slot]) -> Result<(Vec<Segment>, HashSet<usize
 
 impl SlotType {
     /// A stable label for error messages / audit (never the value), and the
-    /// wire `TemplateSlot.type` string a surface renders for discovery (#291).
+    /// wire `TemplateSlot.type` string a surface renders for discovery.
     pub fn type_name(&self) -> &'static str {
         match self {
             SlotType::Identifier => "identifier",
@@ -688,7 +688,7 @@ impl SlotType {
     }
 
     /// The author-supplied allow-list for an `Enum` slot; empty for every other
-    /// type. Part of the discovery surface (#291): an `enum` slot's finite
+    /// type. Part of the discovery surface: an `enum` slot's finite
     /// value set is exactly what a caller needs to build valid args without
     /// trial-and-error (ADR-0001 legibility).
     pub fn enum_values(&self) -> &[String] {
@@ -805,7 +805,7 @@ pub(crate) fn shell_single_quote(value: &str) -> String {
 // Name predicates
 // ---------------------------------------------------------------------------
 
-/// `^[a-z][a-z0-9_.]*$` and not `raw_exec` (reserved; ADR-0001 / issue #310).
+/// `^[a-z][a-z0-9_.]*$` and not `raw_exec` (reserved; ADR-0001).
 fn is_valid_template_name(name: &str) -> bool {
     if name == "raw_exec" {
         return false;

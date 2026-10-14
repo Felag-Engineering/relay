@@ -1,4 +1,4 @@
-// Package consoleauth is the Console's human authentication lane (#418, specs
+// Package consoleauth is the Console's human authentication lane (specs
 // docs/design/console/12-login.md and 11-console-shell.md): local password
 // verification, session issuance, and the step-up recent-auth window.
 //
@@ -31,7 +31,7 @@
 // clear: a heap dump or a core file is a real artefact that leaves a running
 // process, and hashing costs one SHA-256 per request.
 //
-// HA is out of scope (roadmap: the HA/routing spike, #139). When it arrives,
+// HA is out of scope (roadmap: the HA/routing spike). When it arrives,
 // shared session state is one of the things it has to answer; a durable store
 // added now would prejudge that answer for the wrong reason.
 package consoleauth
@@ -151,7 +151,7 @@ func ParseSessionID(raw string) SessionID { return SessionID{id: raw} }
 //
 // Redacting for SessionID's reason, verbatim: this value is checked by
 // EQUALITY, so a copy of it in a log line is a working credential rather than
-// a cracking target. #460 rejected a STORED per-session secret partly because
+// a cracking target. A STORED per-session secret is rejected partly because
 // "a heap dump, a core file, or a log leak" would each be sufficient — the
 // attacker never needs the session cookie, since the victim's browser attaches
 // it. Deriving rather than storing answers the heap and core-file halves; only
@@ -496,9 +496,9 @@ func (s *Store) CSRFToken(id SessionID) CSRFToken {
 	// token for a session the caller does not own, and nothing in the signature
 	// would warn them. Today's only caller has already resolved the session, so
 	// the check is redundant TODAY — and that is precisely the kind of safety
-	// that stops holding when a second caller appears. #428's step-up POST is
-	// the expected one, and (like handleLoginSubmit already does, deliberately)
-	// it reads the raw cookie rather than a resolved session.
+	// that stops holding when a second caller appears, especially one that
+	// (like handleLoginSubmit, deliberately) reads the raw cookie rather than a
+	// resolved session.
 	//
 	// Refusing an unknown identifier also makes the token's lifetime match the
 	// session's at both ends rather than only at issue.

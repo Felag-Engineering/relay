@@ -37,9 +37,9 @@ const (
 //     stays listed: a mutate, an approval decision, a Cancel, a refusal or a
 //     Preflight is never left out, whatever its method.
 //
-// Nothing here reads the Account registry or an Account's kind: #540's
-// reasoning stands (spec 04: a Kind is never read from the Account registry's
-// current kind), and this rule does not depend on it. The method is never
+// Nothing here reads the Account registry or an Account's kind (spec 04: a
+// Kind is never read from the Account registry's current kind), and this rule
+// does not depend on it. The method is never
 // rendered; it decides what is listed and nothing else.
 func consoleRead(row capability.AuditRow) bool {
 	if capability.AuthMethod(row.Verified.Method) != capability.AuthMethodConsoleSession {

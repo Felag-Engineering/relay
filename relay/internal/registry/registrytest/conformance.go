@@ -21,7 +21,7 @@
 // Also not here: any case that needs a Report CARRYING node-space labels.
 // Being a regular package, this file is inside the tree that
 // protoconv.TestReportNodeLabelsHasTwoWriters walks, and that guard pins
-// exactly two non-test callers of Report.WithNodeLabels (#504). This package
+// exactly two non-test callers of Report.WithNodeLabels. This package
 // does not become a third, and does not route around the guard either: the
 // node-label cases run against both implementations from
 // store.TestRegistryNodeLabelConformance, a _test.go file, which is where the
@@ -329,7 +329,7 @@ func RunRepositoryConformance(t *testing.T, newRepo Factory) {
 	})
 
 	t.Run("RelayLabels_MalformedStoredLabelIsDeclinedOnEveryRead", func(t *testing.T) {
-		// "Decline to serve, never write" (#504/#555): a stored relay: label
+		// "Decline to serve, never write": a stored relay: label
 		// that fails registry.WellFormedLabel is withheld from every read —
 		// Get, List, and Upsert's own read-back — one pair at a time. The
 		// production gate keeps such a label out at ingress, so the stored
@@ -645,12 +645,12 @@ func RunRepositoryConformance(t *testing.T, newRepo Factory) {
 	})
 
 	// ----------------------------------------------------------------
-	// Certificate provenance (#440, ADR-0034)
+	// Certificate provenance (ADR-0034)
 	// ----------------------------------------------------------------
 
 	t.Run("Provenance_EnrolledAtSurvivesEveryRenewal", func(t *testing.T) {
-		// #440's central acceptance criterion, and the reason RecordEnrollment
-		// and RecordRenewal are two methods rather than one with a flag.
+		// The reason RecordEnrollment and RecordRenewal are two methods rather
+		// than one with a flag.
 		//
 		// Renewal is certificate-authenticated and preserves node_id, so a
 		// Node's join date anchors an unbroken chain back to the Enrollment

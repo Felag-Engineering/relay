@@ -1,5 +1,5 @@
 //! Binding tests for the **shipped read catalog** — the first-party template
-//! pack installed with the daemon package (issue #293, ADR-0021).
+//! pack installed with the daemon package (ADR-0021).
 //!
 //! The catalog itself is data, not code: `packaging/templates.d/relay-read/`.
 //! This module is where that data is held to the same bar as the code around
@@ -83,8 +83,7 @@ fn catalog_is_the_seven_read_templates() {
 }
 
 /// Every caller-fillable slot is a *constrained* type, and the bounded log
-/// tail's line cap is template-fixed — not a slot a caller could raise
-/// (#293: "line/byte caps are template-fixed, not wire-fillable").
+/// tail's line cap is template-fixed — not a slot a caller could raise.
 #[test]
 fn catalog_slots_are_constrained_and_the_log_tail_bound_is_fixed() {
     for def in catalog() {

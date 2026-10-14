@@ -39,8 +39,8 @@ func nodeItemFromNode(n registry.Node, ev capability.StateEval) NodeItem {
 }
 
 // normalizeArgSets maps a nil positional arg-set list to an empty one, so a
-// rule's allowed_args/args always render as a JSON array, never null
-// (#207/#253): a policyview rule whose sets arrived as nil (proto empty
+// rule's allowed_args/args always render as a JSON array, never null: a
+// policyview rule whose sets arrived as nil (proto empty
 // repeated field) means exactly the same zero-argument set an explicit []
 // does, and null carried no distinct semantics — it only forced consumers to
 // branch on two spellings. Non-nil sets pass through verbatim (display-only,
@@ -57,7 +57,7 @@ func normalizeArgSets(sets [][]string) [][]string {
 // evaluates, dedups, or resolves wildcards — see policyview.OperationRule.
 // Always returns a non-nil slice with non-nil AllowedArgs, so
 // operation_rules and every allowed_args render as JSON arrays, never null
-// (#207/#253 — see normalizeArgSets and OperationRuleOutput).
+// (see normalizeArgSets and OperationRuleOutput).
 func operationRuleOutputsFromSnapshot(rules []policyview.OperationRule) []OperationRuleOutput {
 	out := make([]OperationRuleOutput, 0, len(rules))
 	for _, r := range rules {
@@ -68,7 +68,7 @@ func operationRuleOutputsFromSnapshot(rules []policyview.OperationRule) []Operat
 
 // denyRuleOutputsFromSnapshot renders the display-only, verbatim [[deny]]
 // rule mirror (ADR-0002) for describe_node. See policyview.DenyRule. Always
-// returns a non-nil slice with non-nil Args (#207/#253, mirroring
+// returns a non-nil slice with non-nil Args (mirroring
 // operationRuleOutputsFromSnapshot).
 func denyRuleOutputsFromSnapshot(rules []policyview.DenyRule) []DenyRuleOutput {
 	out := make([]DenyRuleOutput, 0, len(rules))
@@ -81,7 +81,7 @@ func denyRuleOutputsFromSnapshot(rules []policyview.DenyRule) []DenyRuleOutput {
 // templateVocabularyOutput renders a Node's reported Template Operation
 // vocabulary for describe_node (nodevocab.Snapshot; ADR-0021). Display-only:
 // it never validates a slot or decides anything (invariant 12). Templates and
-// every Slots/EnumValues are ALWAYS arrays, never null (#207/#253 discipline) —
+// every Slots/EnumValues are ALWAYS arrays, never null —
 // `reported` is the sole "no data captured yet" signal.
 func templateVocabularyOutput(snap nodevocab.Snapshot, reported bool) TemplateVocabularyOutput {
 	templates := make([]TemplateOperationOutput, 0, len(snap.Templates))
@@ -113,7 +113,7 @@ func templateVocabularyOutput(snap nodevocab.Snapshot, reported bool) TemplateVo
 // Selector-consuming surface shares. Fail-closed: a term with no
 // node:/relay:/state: prefix is a parse error, not a guess.
 //
-// tag: parses as an error too, and the schema below says so (#560). It used
+// tag: parses as an error too, and the schema below says so. It used
 // to be advertised without a caveat while resolving to nothing, which handed
 // an AI-agent HTTP 200 and an empty list for a namespace that is simply not
 // implemented — a false negative given to the caller least able to notice it.
@@ -127,7 +127,7 @@ type describeNodeInput struct {
 }
 
 // registerNodeTools registers list_nodes and describe_node on srv, both
-// backed by lane — the capability read lane (#680, QRY-28): the record and
+// backed by lane — the capability read lane (QRY-28): the record and
 // the read are the same call, so neither tool can reach the registry without
 // it.
 func registerNodeTools(srv *sdkmcp.Server, lane ReadLane) {
@@ -158,7 +158,7 @@ func registerNodeTools(srv *sdkmcp.Server, lane ReadLane) {
 		// listing.Nodes may be a NIL slice when the Selector matched nothing
 		// (capability.Selector.Resolve never returns an empty non-nil slice) —
 		// an explicit zero-length, pre-sized make keeps the response an empty
-		// JSON array rather than null (#207/#253).
+		// JSON array rather than null.
 		items := make([]NodeItem, 0, len(listing.Nodes))
 		for _, n := range listing.Nodes {
 			items = append(items, nodeItemFromNode(n, listing.Eval))
@@ -227,7 +227,7 @@ func registerNodeTools(srv *sdkmcp.Server, lane ReadLane) {
 			// fingerprint (the Hello-reported drift signal) but mark
 			// reported=false so a caller never mistakes "nothing captured
 			// yet" for "no restrictions". OperationRules/DenyRules stay
-			// empty arrays, never null (#207/#253) — reported=false is the
+			// empty arrays, never null — reported=false is the
 			// only "no data yet" signal.
 			out.EffectivePolicy = EffectivePolicyOutput{
 				PolicyFingerprint: desc.Node.PolicyFingerprint,

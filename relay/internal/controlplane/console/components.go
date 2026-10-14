@@ -1,6 +1,6 @@
 package console
 
-// components.go holds the Console's shared components (#419): the pieces that
+// components.go holds the Console's shared components: the pieces that
 // appear on three or more screens each, built once, specified in
 // docs/design/console/00-foundations.md.
 //
@@ -496,7 +496,7 @@ type StepUp struct {
 
 // --- The Cancel control ------------------------------------------------------
 
-// JobCancel is the Cancel control's rendered data (#595): a form that posts
+// JobCancel is the Cancel control's rendered data: a form that posts
 // to one Job's cancel route, plus the CSRF token every Console POST needs.
 // Its type lives in cancel.go, beside cancelJobAction, which is the only
 // builder of Action; this doc lives here beside step-up because the two
@@ -510,8 +510,8 @@ type StepUp struct {
 // make the fleet do more than it was already doing.
 //
 // A third paragraph, beside the two above, so the package does not quietly
-// acquire two step-up idioms: the approval decision form (#453, decide.go
-// and approvals.go's approvalDecideControl) deliberately does NOT use
+// acquire two step-up idioms: the approval decision form (decide.go and
+// approvals.go's approvalDecideControl) deliberately does NOT use
 // [StepUp], even though deciding an approval is exactly the kind of mutate
 // release step-up exists for. StepUp models a STANDALONE confirmation — its
 // own FormAction, one "Authorise" button, and a WindowText that assumes the
@@ -526,7 +526,7 @@ type StepUp struct {
 // as this component (`password`, `type="password"`,
 // `autocomplete="current-password"`) so the two agree on the credential's
 // shape even though they are two different forms. [StepUp]'s expected
-// consumer remains the composer's standalone mutate apply (#438); it is not
+// consumer remains the composer's standalone mutate apply; it is not
 // dead by accident.
 // The decision form's HANDLER does run the shared requireStepUp ladder
 // (stepup.go) in its per-act mode, so the package still has ONE step-up idiom
@@ -579,9 +579,7 @@ func newRefresh(path string, q url.Values) Refresh {
 // events for a region a user is reading queue behind an explicit control.
 // Build it once").
 //
-// It is built once because day one built the transport half in its own script
-// file and #422 was going to inherit whatever shape that took. Two copies of a
-// reconnect loop is two backoff policies, and the second one is the one nobody
+// It is built once because two copies of a reconnect loop is two backoff policies, and the second one is the one nobody
 // looks at again.
 //
 // What the client is allowed to do to this region is exactly three things:

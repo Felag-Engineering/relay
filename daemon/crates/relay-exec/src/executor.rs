@@ -127,7 +127,7 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     let deadline = tokio::time::Instant::now() + req.timeout;
 
     // Guard: empty argv must never reach Command::new. Return immediately without
-    // touching a shell (ADR-0001 invariant #1).
+    // touching a shell (ADR-0001 invariant 1).
     if req.argv.is_empty() {
         return failure_result(&req.task_id, b"empty argv", started);
     }
@@ -378,7 +378,7 @@ async fn sweep_reaped_group(pgid: Pid) {
 /// receive the signal because pgid == child pid and `kill(-pgid, SIG)` targets the
 /// whole group (ADR-0013, ADR-0001).
 ///
-/// # No-orphan guarantee across leader exit (issue #342)
+/// # No-orphan guarantee across leader exit
 ///
 /// The SIGKILL sweep must run even when the group **leader** exits during the grace
 /// window, because a SIGTERM-ignoring **grandchild** can outlive it. The earlier
@@ -413,7 +413,7 @@ async fn kill_group_graceful(pgid: Pid, child: &mut tokio::process::Child) {
         let _ = child.wait().await;
     } else if group_is_nonempty(pgid) {
         // Leader gone but a survivor keeps the group (and thus pgid) alive: it is
-        // still ours, and it needs killing (issue #342). An empty group is skipped —
+        // still ours, and it needs killing. An empty group is skipped —
         // nothing to kill, and the one case where pgid could have been recycled.
         signal_group(pgid, Signal::KILL);
     }
@@ -535,7 +535,7 @@ fn signal_group(pgid: Pid, signal: Signal) {
 /// Builds the soft==hard `Rlimit` this daemon always applies: both the current
 /// (soft) and maximum (hard) limit set to `v`. `None` in either field would mean
 /// RLIM_INFINITY, which is never what we want here — constructing it in one place
-/// makes a soft/hard mix-up unrepresentable at the five call sites (#670).
+/// makes a soft/hard mix-up unrepresentable at the five call sites.
 #[inline]
 fn fixed_rlimit(v: u64) -> Rlimit {
     Rlimit {

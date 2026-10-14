@@ -94,7 +94,7 @@ type nodeView struct {
 	EnrollingToken  string
 	DaemonVersion   string
 
-	// The certificate provenance the Relay issued (#440). Rendered only when
+	// The certificate provenance the Relay issued. Rendered only when
 	// CertProvenanceKnown — a Node that enrolled before it was stored has a zero
 	// expiry, and printing that would report an identity overdue since 1970.
 	CertNotAfter  string
@@ -171,8 +171,8 @@ type nodeView struct {
 	// record says nothing", because the registry retains RevokedAt whether or
 	// not the trail was ever wired.
 	//
-	// RevocationReason is why, and is EMPTY FOR EVERY REVOCATION PREDATING
-	// #487, when the endpoint accepted no reason to record. That is a third
+	// RevocationReason is why, and is EMPTY FOR EVERY REVOCATION RECORDED
+	// while the endpoint accepted no reason to record. That is a third
 	// state, not a variant of the other two: the trail has a record, the
 	// record names an Account, and the reason field is blank because there was
 	// nowhere to put one. The template says so rather than rendering an empty
@@ -213,7 +213,7 @@ func handleNode(d Deps) http.HandlerFunc {
 		ctx := r.Context()
 		nodeID := r.PathValue("node_id")
 
-		// THIS READ IS AUDITED (#450, ADR-0025). Node detail is the widest
+		// THIS READ IS AUDITED (ADR-0025). Node detail is the widest
 		// single-Node disclosure the Console makes — every Label namespace,
 		// every Fact, the certificate provenance and the Node's own reported
 		// Policy — and ADR-0025 names describe_node explicitly. The
@@ -406,7 +406,7 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 	v.PolicyShared, v.TemplateShared = detail.PolicyPeers, detail.TemplatePeers
 
 	// The reported-Policy panel arrives with the describe_node result itself
-	// (#680): detail.Policy/detail.PolicyReported are the same lane call
+	// (QRY-28): detail.Policy/detail.PolicyReported are the same lane call
 	// already recorded above against this Node id, not a second door into
 	// the display-only policyview cache. ADR-0025 names a Node's Policy as
 	// part of exactly what describe_node discloses.
@@ -445,13 +445,11 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 			// survive in the Activity trail either way; what is protected here
 			// is which one this summary attributes.
 			//
-			// #605 narrows how often a second record exists at all: the
-			// Control API no longer writes one for a Node whose cascade
-			// revocation this Relay process already recorded, so that specific
-			// case is rarer now. A repeat operator revoke, and any revoke that
-			// follows a Relay restart, still produce a second record exactly as
-			// before — so first-match stays the defence this screen needs, not
-			// a formality. No behaviour change on this screen.
+			// The Control API writes no second record for a Node whose cascade
+			// revocation this Relay process already recorded, but a repeat
+			// operator revoke, and any revoke that follows a Relay restart,
+			// still produce one — so first-match stays the defence this screen
+			// needs, not a formality.
 			for i := range recs {
 				if recs[i].Kind == audit.KindNodeRevoke {
 					v.RevokedBy = principalText(factsOfRecord(recs[i]))
@@ -464,7 +462,7 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 			// Recent Tasks is Tasks dispatched to this Node, not reads ABOUT
 			// it: filter to KindDispatch BEFORE windowing, so forty page
 			// views of this very screen (each a describe_node read) cannot
-			// push every real Task out of the window (#640). Denies stay —
+			// push every real Task out of the window. Denies stay —
 			// they are KindDispatch rows with outcome denied_by_policy — and
 			// refusals stay excluded, as they always were: a refusal is
 			// Relay-side and never reached the Node (nodeTaskFrom's doc).
@@ -535,7 +533,7 @@ func factRows(n registry.Node) []nodeFact {
 // Recent Tasks is Tasks dispatched to this Node, denies included (spec 02).
 // Control-plane reads ABOUT the Node (describe_node, get_job) are still
 // written to the trail and still appear on Activity;
-// this panel just does not list them (#640). A refusal is Relay-side —
+// this panel just does not list them. A refusal is Relay-side —
 // nothing reached the machine — and belongs on Activity, where it is
 // attributed to the principal who was refused rather than to the Node that
 // never heard about it. buildNodeView's caller filters to KindDispatch before

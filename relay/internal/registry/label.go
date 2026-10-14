@@ -15,7 +15,7 @@ import "unicode/utf8"
 //     callers — Hello (cmd/relay/tunnel.go) and Enroll's self_labels
 //     (enroll/handler.go) — because both reach the same refusal.
 //   - node-space read-back: store/registry.go's getNode, via
-//     wellFormedLabels(nodeLabels) — closes rows a pre-#504 Relay wrote.
+//     wellFormedLabels(nodeLabels) — closes legacy rows the gate never saw.
 //   - relay-space mint: enroll.validateScope from Service.Create, refusing a
 //     fresh scope before a token carrying it can exist.
 //   - relay-space enrollment: enroll.validateScope from Service.Validate,
@@ -23,9 +23,9 @@ import "unicode/utf8"
 //     seam, not a second caller of the first one: it refuses a value Create
 //     never saw — see "Two write seams, one namespace" below.
 //   - relay-space read-back: store/registry.go's getNode, via
-//     wellFormedLabels(relayLabels) — closes rows a pre-#555 Relay wrote.
+//     wellFormedLabels(relayLabels) — closes legacy rows the gate never saw.
 //
-// #565 adds a sixth CALL SITE of this predicate — store/labelscan.go's
+// There is a sixth CALL SITE of this predicate — store/labelscan.go's
 // startup scan, plus the relay_labels_declined_total counter at the
 // read-back seams above — but not a sixth SEAM: both are READERS of this
 // predicate, reporting what it refuses or declines; neither one itself
@@ -42,7 +42,7 @@ import "unicode/utf8"
 //   - it must NOT live in protoconv.ParseNodeLabel's callers, enroll's
 //     validateScope callers, or the Console's renderer (console/fleet.go):
 //     any of those would fork validation into a second predicate, which is
-//     exactly the drift #488 exists to remove.
+//     exactly the drift one predicate exists to prevent.
 //   - it must NOT live in registry.Upsert or registry.SetRelayLabels: neither
 //     write method has a way to express "refuse the whole request", so
 //     moving validation there would force the enrollment path to silently
@@ -69,11 +69,11 @@ import "unicode/utf8"
 // # The four hazards this rules out, named
 //
 //   - `,` — capability.ParseSelector's term separator (strings.Split(s, ",")).
-//     This is #504's measured payload: a `node:role` value of
-//     "web, relay:quarantine=on" renders as two Selector terms, the second
-//     spelled in the relay: namespace. #555 mirrors it in the key: a scope
-//     entry `relay:env=prod,node:role=web` stores relay-space key "env" with
-//     value "prod,node:role=web" — same hazard, opposite namespace.
+//     A `node:role` value of "web, relay:quarantine=on" renders as two
+//     Selector terms, the second spelled in the relay: namespace. The key
+//     carries it too: a scope entry `relay:env=prod,node:role=web` stores
+//     relay-space key "env" with value "prod,node:role=web" — same hazard,
+//     opposite namespace.
 //   - whitespace, of any kind — a value with no comma of its own still reads
 //     as two terms once it sits beside a hand-typed comma (a Console facet
 //     href, a Selector string an AI-agent copy-pasted), and whitespace is
@@ -139,9 +139,9 @@ import "unicode/utf8"
 //
 // `state:` is Relay-derived from a closed vocabulary at Selector-resolution
 // time and is never stored (ADR-0034), so it never reaches this predicate.
-// `tag:` has no storage until #430; when it lands it must be validated by
-// THIS predicate, never a new one written to fit — that fork is exactly what
-// #488 exists to prevent.
+// `tag:` has no storage yet; when it is stored it must be validated by THIS
+// predicate, never a new one written to fit — that fork is exactly the drift
+// one predicate exists to prevent.
 func WellFormedLabel(key, value string) bool {
 	if key == "" {
 		return false
@@ -196,9 +196,7 @@ const MaxLoggedLabelKeyBytes = 128
 // It lives HERE, beside the predicate that decides a key is refused, because
 // there is one hazard and there must be one helper: both the Hello ingress
 // (cmd/relay/tunnel.go) and the read-back scan (internal/store) bound the same
-// attacker-influenced key for the same reason, and a second copy is the drift
-// #488 exists to remove. A security review caught exactly that fork — the
-// second copy had dropped the rune backoff.
+// attacker-influenced key for the same reason, and a second copy would drift.
 func BoundLogKey(k string) (bounded string, truncated bool) {
 	if len(k) <= MaxLoggedLabelKeyBytes {
 		return k, false

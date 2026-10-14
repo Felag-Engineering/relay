@@ -11,7 +11,7 @@ import (
 )
 
 // watchFreezeSignals is the local, host-side lever for the Relay-wide Freeze
-// this milestone (v0.0.5 [6/8]/#101): SIGUSR1 engages, SIGUSR2 releases. Both
+// (ADR-0013): SIGUSR1 engages, SIGUSR2 releases. Both
 // are otherwise-unused Unix signals (the Relay imports no os/signal
 // elsewhere) reserved for this purpose, chosen over a root-owned file so
 // engage/release require nothing more than an operator (or a monitoring
@@ -29,7 +29,7 @@ import (
 // — this is deliberately the local-only half.
 //
 // It calls the *Local methods, not the Principal-taking pair the Control API
-// uses (#397). Those are role-gated — a human `operator`+ to engage, `admin`
+// uses. Those are role-gated — a human `operator`+ to engage, `admin`
 // to release — and "local-host" is not an Account and holds no role, so it
 // would fail a ladder it is deliberately outside of. ADR-0013 names this as a
 // second root of authority on purpose: when the distrusted thing may be the

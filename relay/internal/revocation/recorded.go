@@ -5,7 +5,7 @@ import "sync"
 // recordedSet tracks the Node ids for which THIS PROCESS has already
 // written a node_revoke record through a RevocationRecorder that returned
 // nil — set only by revokeChunk, after its record call succeeds, and read
-// only by RevokeNodeRecorded (#605).
+// only by RevokeNodeRecorded.
 //
 // WHY NOT THE DENYLIST. Denylist membership does NOT mean "a record
 // exists" for a Node. Three production paths put a Node on the denylist
@@ -20,8 +20,7 @@ import "sync"
 // POST /api/v1/nodes/{id}/revoke with a reason is exactly what supplies the
 // missing attribution. Suppressing a record on "is it denylisted" would
 // answer that request 204 with no record at all, leaving the Node
-// permanently revoked with zero attribution — a regression against #487 on
-// the security surface. This set exists so that cannot happen: the
+// permanently revoked with zero attribution, on the security surface. This set exists so that cannot happen: the
 // suppression it drives is keyed on a record this process actually wrote,
 // never on denylist membership.
 //

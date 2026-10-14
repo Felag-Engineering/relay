@@ -1,4 +1,4 @@
-//! The daemon's Operation vocabulary (ADR-0001, ADR-0012, ADR-0021, #889): the
+//! The daemon's Operation vocabulary (ADR-0001, ADR-0012, ADR-0021): the
 //! registry, the argument schema, Template Operations and the Template loader,
 //! the four Native Operations, and Raw Exec.
 //!
@@ -13,7 +13,7 @@
 //! `tests/clippy_write_ban.rs` pins every construction site per file.
 
 // Crate-private aliases so the `crate::x::...` paths in the moved files resolve
-// unchanged (#889).
+// unchanged.
 pub(crate) use relay_exec::{executor, limits, not_executed};
 pub(crate) use relay_policy as policy;
 pub(crate) use relay_policy::hardened_open;

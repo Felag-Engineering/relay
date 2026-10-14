@@ -1,4 +1,4 @@
-// Package auditquery is the read-lane adapter (#441): it maps
+// Package auditquery is the read-lane adapter: it maps
 // capability.AuditFilter/AuditRow/... onto internal/audit.QueryRepository and
 // capability.JobFilter/JobSummary/... onto internal/jobs.QueryRepository.
 //

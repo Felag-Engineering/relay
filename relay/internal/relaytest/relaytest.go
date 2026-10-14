@@ -4,8 +4,7 @@
 // Everything here is appDeps-independent: pure crypto, wire-level MCP
 // client calls against an address/*http.Client, or bare os/testing
 // fixtures. Helpers that need Config/appDeps/newServer (unexported in
-// package main) cannot live here and stay in cmd/relay (see #164's scope
-// decision).
+// package main) cannot live here and stay in cmd/relay.
 //
 // relaytest links into no production binary: only _test.go files import it.
 package relaytest

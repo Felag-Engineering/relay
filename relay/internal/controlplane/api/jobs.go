@@ -13,13 +13,13 @@ import (
 )
 
 // jobs.go is the read + stop side of the Control API's execution surface
-// (#357, v0.4.0 [2/7]): re-read a Job's per-Node results later, and halt one in
+// (v0.4.0 [2/7]): re-read a Job's per-Node results later, and halt one in
 // flight. The REST twin of MCP's get_job/cancel_job, over the same capability
 // layer (invariant 10) and rendering through the same helpers execution.go's
 // dispatch path uses — so the same Job read through either door tells the same
 // story, byte for byte.
 
-// ReadAuditor records a read-access event (#288, ADR-0025).
+// ReadAuditor records a read-access event (ADR-0025).
 //
 // Reading a Job returns the captured stdout of a previously-dispatched Task, so
 // a caller can read back command output somebody else produced — ADR-0025 calls
@@ -72,7 +72,7 @@ type cancelJobResponse struct {
 // owner column (the jobs table is (job_id, created_at)), so there is no
 // per-Account scoping to enforce here and inventing one in this handler would
 // be a security boundary that only one surface honours. Per-Account visibility
-// is a schema question, noted on #357 — until it is settled, the honest
+// is an open schema question — until it is settled, the honest
 // posture is "authenticated callers may read Jobs, and every read is audited".
 func handleGetJob(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -122,10 +122,10 @@ func handleGetJob(d Deps) http.HandlerFunc {
 // their truthful outcome.
 //
 // The ROLE floor is `operator`, decided by the capability layer's
-// AuthorizeControl(ControlCancelJob), not here (#595, invariant 10). A
+// AuthorizeControl(ControlCancelJob), not here (invariant 10). A
 // refused caller gets writeJobError's authz.ErrUnauthorized branch below,
 // before any existence check runs. The SCOPE is also decided in the
-// capability layer (#614, owner decision 2026-09-17): a human Account may
+// capability layer (owner decision 2026-09-17): a human Account may
 // cancel any Job; a machine Account may cancel only a Job it requested
 // itself, refused via capability.ErrJobNotRequestedByCaller otherwise.
 //
@@ -162,8 +162,8 @@ func handleCancelJob(d Deps) http.HandlerFunc {
 }
 
 // writeJobError renders a Job-addressed error: an unknown Job id is a 404, a
-// role or human-kind refusal (#397, #595) unwraps to authz.ErrUnauthorized and
-// a machine-Account scoping refusal (#614) is capability.ErrJobNotRequestedByCaller
+// role or human-kind refusal unwraps to authz.ErrUnauthorized and
+// a machine-Account scoping refusal is capability.ErrJobNotRequestedByCaller
 // — both render 403 with the gate's own reason, the same recognize-don't-
 // re-decide pattern writeFreezeError and writeExecutionError use — and
 // anything else is a 500. The 404 text names the id the caller asked for,

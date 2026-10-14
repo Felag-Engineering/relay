@@ -10,8 +10,8 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask"
 )
 
-// mcptask.go is the capability layer's half of the MCP Tasks extension (#374,
-// ADR-0028): minting a task handle when a dispatch parks, resolving one, and
+// mcptask.go is the capability layer's half of the MCP Tasks extension
+// (ADR-0028): minting a task handle when a dispatch parks, resolving one, and
 // cancelling one.
 //
 // It lives HERE rather than in the MCP surface for the ordinary reason
@@ -37,9 +37,9 @@ import (
 // a control-plane one.
 //
 // Nil means Tasks are not wired: no handle is ever minted, ParkedError carries
-// no task id, and Resolve/Cancel report ErrTasksUnavailable. That is the
-// pre-#374 behaviour and it is fully functional — the universal
-// `pending_approval` result path (#371) does not involve handles at all, which
+// no task id, and Resolve/Cancel report ErrTasksUnavailable. That is fully
+// functional — the universal
+// `pending_approval` result path does not involve handles at all, which
 // is ADR-0028's requirement that the shim be deletable without loss.
 type MCPTaskStore interface {
 	Create(ctx context.Context, h mcptask.Handle) error
@@ -205,12 +205,12 @@ func (s *Execution) ResolveTask(ctx context.Context, p Principal, taskID string)
 //     through the ORDINARY CancelJob path, unchanged — same honest-cancel
 //     semantics (ADR-0013: a Task that already finished reports its real
 //     outcome, never a fabricated `cancelled`), same audit record, and it
-//     INHERITS CancelJob's operator floor (#595) and its machine-Account
-//     scoping (#614, owner decision 2026-09-17): p must satisfy
+//     INHERITS CancelJob's operator floor and its machine-Account
+//     scoping (owner decision 2026-09-17): p must satisfy
 //     AuthorizeControl(ControlCancelJob), and — if p is a machine Account —
 //     the Job's recorded requester must be p, or this returns that refusal
 //     before the handle itself is touched. The requester is recorded on the
-//     Job at creation (#616), so a machine Account's own still-running Task
+//     Job at creation, so a machine Account's own still-running Task
 //     can cancel itself through this path.
 //   - Still parked, so there is nothing running to stop and CancelJob is never
 //     called. Only the handle is marked, and that stays owner-scoped and

@@ -1,8 +1,10 @@
 package consoleauth_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"math"
 	"path/filepath"
 	"strconv"
@@ -172,6 +174,29 @@ func TestLogin_Succeeds(t *testing.T) {
 	}
 	if _, err := f.sessions.Lookup(id); err != nil {
 		t.Errorf("the issued session does not resolve: %v", err)
+	}
+}
+
+// failingTouch fails every last-seen update.
+type failingTouch struct{ accounts.Repository }
+
+func (failingTouch) TouchLastSeen(context.Context, string, time.Time) error {
+	return errors.New("disk full")
+}
+
+func TestLogin_LastSeenFailureIsLoggedNotFatal(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	f := buildFixture(t, func(r accounts.Repository) accounts.Repository {
+		return failingTouch{r}
+	}, consoleauth.WithLogger(logger))
+
+	if _, _, err := f.svc.Login(context.Background(), attempt("mike", testPassword)); err != nil {
+		t.Fatalf("Login: %v, want success despite the last-seen failure", err)
+	}
+	if out := logs.String(); !strings.Contains(out, "last-seen update failed") || !strings.Contains(out, "disk full") {
+		t.Errorf("last-seen failure not logged; got %q", out)
 	}
 }
 

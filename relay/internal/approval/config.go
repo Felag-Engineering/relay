@@ -24,7 +24,7 @@ import (
 // because the Relay has no general config file today — it is configured by
 // flags and environment variables, which cannot express a list of rules with
 // ten fields each. Whether the Relay should grow a general config file is a
-// separate, open question (#362); this file deliberately does not pre-empt it,
+// separate, open question; this file deliberately does not pre-empt it,
 // and it mirrors a pattern the product already trusts: the relay-daemon's
 // root-owned local Policy file with a fail-closed loader (ADR-0002).
 //
@@ -216,17 +216,17 @@ func (fr fileRule) toRule(index int) (Rule, error) {
 	}, nil
 }
 
+// parseRiskClass reads a rule's match criterion. An empty value means the rule
+// matches either class.
 func parseRiskClass(s string) (jobs.RiskClass, error) {
-	switch s {
-	case "":
+	if s == "" {
 		return jobs.RiskClassUnspecified, nil
-	case "read":
-		return jobs.RiskClassRead, nil
-	case "mutate":
-		return jobs.RiskClassMutate, nil
-	default:
+	}
+	risk, ok := jobs.ParseRiskClass(s)
+	if !ok {
 		return jobs.RiskClassUnspecified, fmt.Errorf("unknown risk_class %q (want read or mutate)", s)
 	}
+	return risk, nil
 }
 
 func parseChannel(s string) (Channel, error) {

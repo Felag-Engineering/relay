@@ -1,4 +1,4 @@
-// Action resolution (ADR-0012, ADR-0042, #626, #878): how every Action's risk
+// Action resolution (ADR-0012, ADR-0042): how every Action's risk
 // class and a Template Operation's fan-out and argument names are decided
 // before anything is dispatched.
 //
@@ -235,7 +235,7 @@ func slotNames(t nodevocab.Template) []string {
 // checkSlotAgreement refuses a call whose remaining Nodes disagree about the
 // Template's slot names: one call cannot be well-formed for both, and sending
 // it to whichever Nodes it happens to fit would turn a vocabulary
-// disagreement into per-Node failures (ADR-0042, #345).
+// disagreement into per-Node failures (ADR-0042).
 func checkSlotAgreement(name string, nodes []registry.Node, templates []nodevocab.Template) error {
 	want := slotNames(templates[0])
 	for i := 1; i < len(templates); i++ {
@@ -264,9 +264,10 @@ func equalStrings(a, b []string) bool {
 }
 
 // templateDescriptor presents a Template's slots in opvocab's ArgConstraints
-// convention, so ValidateArgNames — the one definition of #345's name check —
-// serves Templates too rather than a second copy drifting from it. Every slot
-// is required: the daemon's Template engine has no optional slots.
+// convention, so ValidateArgNames — the one definition of the argument-name
+// check (ADR-0042) — serves Templates too rather than a second copy drifting
+// from it. Every slot is required: the daemon's Template engine has no optional
+// slots.
 func templateDescriptor(t nodevocab.Template) opvocab.Descriptor {
 	constraints := make(map[string]string, len(t.Slots))
 	for _, sl := range t.Slots {
@@ -303,7 +304,7 @@ func (e *UnknownOperationError) Error() string {
 // MalformedCallError is the refusal for a Template call whose argument names
 // do not match the Template's slots, or whose matched Nodes disagree about
 // what those slots are (ADR-0042). Malformed, never a Policy verdict: the
-// call is refused before any Node is asked (#345).
+// call is refused before any Node is asked.
 type MalformedCallError struct {
 	Operation string
 	Reason    string

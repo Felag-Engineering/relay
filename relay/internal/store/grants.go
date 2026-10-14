@@ -65,7 +65,7 @@ func (g *sqliteGrants) CreateGrant(ctx context.Context, gr approval.Grant) error
 		gr.ID, gr.RequestID,
 		gr.Scope.Account, jobs.RiskClassName(gr.Scope.RiskClass), gr.Scope.MaxFanOut,
 		strings.Join(gr.Scope.Operations, ","), boolToInt(gr.Scope.RawExec),
-		// Always empty: no Grant created after #482 is pinned. Validate refuses
+		// Always empty: no Grant is pinned (AP-33). Validate refuses
 		// LegacyNamespacePin, and this literal means no field can reintroduce a
 		// pin.
 		"",
@@ -308,7 +308,7 @@ func scanGrant(scan func(dest ...any) error) (approval.Grant, error) {
 		return approval.Grant{}, err
 	}
 
-	gr.Scope.RiskClass = approval.ParseRiskClassName(riskClass)
+	gr.Scope.RiskClass = parseStoredRiskClass(riskClass)
 	gr.Scope.Operations = splitList(ops)
 	gr.Scope.RawExec = rawExec != 0
 

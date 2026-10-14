@@ -1,8 +1,8 @@
 // Package mcp is the Relay's MCP surface (ADR-0003): three READ meta-tools —
-// list_nodes, describe_node, list_operations — plus, since #118, the
+// list_nodes, describe_node, list_operations — plus the
 // execution meta-tools — run_operation, raw_exec, cancel_job, get_job — all
 // thin adapters over the same control-plane capability layer (invariant 10).
-// Since #680 the read tools adapt ONE audited seam, ReadLane, and hold no
+// The read tools adapt ONE audited seam, ReadLane, and hold no
 // registry or cache of their own — every registry, Policy-view and
 // Template-vocabulary read goes through the capability read lane, which
 // records it before returning content and fails closed (QRY-28). The
@@ -11,7 +11,7 @@
 // results).
 //
 // This file (mcp.go) — along with tools_nodes.go, tools_operations.go,
-// attribution.go, and toolevents.go (#416, the tool-call event publisher) —
+// attribution.go, and toolevents.go (the tool-call event publisher) —
 // is a strict READ file: its non-test source names no capability. identifier
 // outside capabilityReadAllowlist (e.g. capability.StateEval, needed for
 // NodeListing/NodeDescription's Eval field), and never
@@ -73,8 +73,7 @@ import (
 // NIL slice when the Selector matched nothing (capability.Selector.Resolve
 // returns nil) — the tool must build its response array with an explicit
 // zero-length, pre-sized make rather than range straight into a var-declared
-// slice, so a no-match result renders an empty JSON array, never null
-// (#207/#253).
+// slice, so a no-match result renders an empty JSON array, never null.
 type NodeListing struct {
 	Nodes []registry.Node
 	Eval  capability.StateEval
@@ -102,7 +101,7 @@ type NodeVocabulary struct {
 	Reported  bool
 }
 
-// ReadLane is the ONE audited seam the read tools call (#680, QRY-28): every
+// ReadLane is the ONE audited seam the read tools call (QRY-28): every
 // registry, Policy-view and Template-vocabulary read goes through it, which
 // records the read before returning content and fails closed. It is
 // deliberately Principal-free — capability.Principal is not on
@@ -202,16 +201,15 @@ const serverVersion = "0.1.0"
 //
 // exec is typically a *capability.Execution (which satisfies Executor
 // structurally); results is typically a tiny jobs.JobRepository+
-// TaskRepository adapter built by the composition root. See #118's DECISION
-// 1: an Execution always carries the real Job engine; whether production
-// dispatch is on is the composition root's ControlEnabled call, isolated to
-// #154.
+// TaskRepository adapter built by the composition root. An Execution always
+// carries the real Job engine; whether production dispatch is on is the
+// composition root's ControlEnabled call.
 //
 // A nil lane is legal only for a server whose read tools (list_nodes,
 // describe_node, list_operations) are never called — e.g. a golden-file
 // fixture exercising only the execution tools; a stray read-tool call
-// through a nil lane panics rather than failing legibly, mirroring the
-// pre-existing nil ReadAuditor.
+// through a nil lane panics rather than failing legibly, mirroring a nil
+// ReadAuditor.
 // Option configures a server built by New — WithClock overrides the Tasks
 // surface's clock, WithApprovalDecider wires the in-band approval tool,
 // WithApprovalElicitation turns on the in-band MRTR question path, and
@@ -238,7 +236,7 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // WithClock overrides the clock the Tasks surface renders timestamps from
-// (production default: time.Now().UTC()). Since #727 cfg.now is also the
+// (production default: time.Now().UTC()). cfg.now is also the
 // clock an answered retry opens its sealed request state against (seal
 // expiry) and passes to acceptElicitedAnswer for its PastDeadline judgement —
 // still a test seam, never configuration (invariant 11).
@@ -246,7 +244,7 @@ func WithClock(now func() time.Time) Option {
 	return func(o *serverOptions) { o.now = now }
 }
 
-// WithToolCallObserver attaches a ToolCallObserver (#416, toolevents.go)
+// WithToolCallObserver attaches a ToolCallObserver (toolevents.go)
 // that is called once per tools/call invocation, before the tool's handler
 // runs. A nil observer (the default) installs no middleware at all — see
 // New, where AddReceivingMiddleware has no nil-tolerant form, so the guard
@@ -273,7 +271,7 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 
 	srv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "relay", Version: serverVersion}, nil)
 
-	// The tool-call event publisher (#416, toolevents.go). Installed before
+	// The tool-call event publisher (toolevents.go). Installed before
 	// any tool is registered so it is in place for every one of them from
 	// the first request; AddReceivingMiddleware has no nil-tolerant form,
 	// so a nil observer installs no middleware at all rather than a
@@ -282,9 +280,8 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 		srv.AddReceivingMiddleware(toolCallMiddleware(cfg.toolCalls))
 	}
 
-	// ask is the in-band MRTR question path (elicit.go, S2b), and — since
-	// #727 — the same nil check that gates emission also gates the
-	// answered-retry path (isAnsweredRetry, tools_execution.go): a nil ask
+	// ask is the in-band MRTR question path (elicit.go), and the same nil
+	// check that gates emission also gates the answered-retry path (isAnsweredRetry, tools_execution.go): a nil ask
 	// means no question was ever asked, so no retry could ever be answering
 	// one either. It is wired only when the caller both turned the option on
 	// AND wired a decider — an unwired decider leaves ask nil, so the
@@ -303,27 +300,27 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 	registerOperationTools(srv, ops, lane)
 	registerExecutionTools(srv, exec, results, ops, ask, reads, cfg.approvals, cfg.now)
 	registerJobTools(srv, exec, results, reads)
-	// tasks/get and tasks/cancel (#374, SEP-2663). A nil resolver registers
+	// tasks/get and tasks/cancel (SEP-2663). A nil resolver registers
 	// nothing, which is a Relay without the Tasks extension: parked dispatches
-	// still return the universal pending_approval result (#371), so the
+	// still return the universal pending_approval result, so the
 	// extension's absence costs a client its poll handle and nothing else.
 	registerTaskMethods(srv, tasks, results, reads, cfg.now)
-	// approve_request (#391, ADR-0029). A nil decider registers nothing, so
+	// approve_request (ADR-0029). A nil decider registers nothing, so
 	// the in-band rung is opt-in at the composition root: without it, parked
 	// dispatches are answerable only on the authenticated /api/v1 endpoint,
 	// exactly as before.
 	registerApprovalTools(srv, cfg.approvals)
 
-	// Stateless + JSON responses (MCP spec 2026-07-28; #267): the SDK accepts
+	// Stateless + JSON responses (MCP spec 2026-07-28): the SDK accepts
 	// the 2026-07-28 protocol only in stateless mode, and every tool here is
 	// already stateless request/response over shared backing stores — a Job ID
 	// is the durable handle, never an Mcp-Session-Id. Also removes the
-	// per-instance session map that would break behind a round-robin LB (#139).
+	// per-instance session map that would break behind a round-robin LB.
 	var handler http.Handler = sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server {
 		return srv
 	}, &sdkmcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 
-	// The SEP-2663 task-result shim (#375, ADR-0028) wraps the SDK handler,
+	// The SEP-2663 task-result shim (ADR-0028) wraps the SDK handler,
 	// because the SDK cannot express a CreateTaskResult (its resultType is
 	// unexported and its Result interface is sealed). It is mounted ONLY when
 	// Tasks are wired, so a Relay without the extension has none of this code

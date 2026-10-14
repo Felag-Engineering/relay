@@ -20,10 +20,9 @@ package console
 // # Why the fix is here and not at each call site
 //
 // Three screens ask this question: the Activity trail lane, agent history, and
-// node detail's deny explanation. (Job detail and read egress used to be
-// callers too, but #490/#497 moved both onto the DECLARED class carried by
-// capability.TaskRow/JobFilter, so they no longer infer anything and are not
-// listed here; the read-egress screen has since been retired, 2026-10-01.)
+// node detail's deny explanation. (Job detail reads the DECLARED class carried
+// by capability.TaskRow/JobFilter, so it infers nothing and is not listed
+// here.)
 // Three answers is three chances to drift, and the drift would be invisible: each
 // screen would look right in isolation. So the inference lives in one function
 // with its limits written down, and the real fix — putting the declared class
@@ -45,8 +44,8 @@ import (
 // reads.
 //
 // It exists because the trail reaches this package as TWO types: audit.Record,
-// for what has not migrated onto the read lane — after #542, that is node
-// detail's Recent Tasks panel and its node_revoke lookup, and nothing else —
+// for what has not migrated onto the read lane — node detail's Recent Tasks
+// panel and its node_revoke lookup, and nothing else —
 // and capability.AuditRow, for every screen that has (Activity,
 // agent history). The copy functions below — what an Operation is called,
 // what it was asked to do, who asked — must not fork along that seam. A
@@ -88,9 +87,9 @@ type trailFacts struct {
 	GrantID       string
 
 	// ApprovalAnswer, DecisionChannel, and PlanHash are the structured
-	// counterpart to a decision's prose Reason (#545). Empty on every record
+	// counterpart to a decision's prose Reason. Empty on every record
 	// that is not a KindApprovalDecided decision, and empty on a decision
-	// written before #545 or on a grant revocation — see approvalStateChip
+	// recorded without a structured answer or on a grant revocation — see approvalStateChip
 	// for why empty is never read as "denied".
 	ApprovalAnswer  string
 	DecisionChannel string
@@ -239,7 +238,7 @@ func readTargetName(operationName, actionKind string, args map[string]string) st
 // A read record has no per-Node verdict to render: nothing was dispatched and
 // no daemon decided anything, so audit.Record.Outcome is the zero value and an
 // outcome chip built from it falls to "unspecified" — "we don't know" about the
-// one family of record whose disposition is completely known (#517).
+// one family of record whose disposition is completely known.
 //
 // The word is "audited", and the three alternatives were each rejected for a
 // reason worth keeping:
@@ -266,20 +265,19 @@ func readTargetName(operationName, actionKind string, args map[string]string) st
 const readOutcomeAudited = "audited"
 
 // approvalStateChip names the outcome of a KindApprovalDecided record in
-// #498's four-value `.chip.state` vocabulary ("approved"/"denied"), the ONE
+// the four-value `.chip.state` vocabulary ("approved"/"denied"), the ONE
 // naming function, so no screen can spell the answer two different ways.
 //
 // Three-way, in this order:
 //
-//   - f.GrantID != "" -> "" (a revocation, not a Decision — #538's own
+//   - f.GrantID != "" -> "" (a revocation, not a Decision — RevokeGrant's
 //     structural discriminator; the caller renders its own "revoked").
-//   - f.ApprovalAnswer set -> "approved" or "denied", verbatim (#545: the
+//   - f.ApprovalAnswer set -> "approved" or "denied", verbatim (the
 //     structured answer, byte-identical to audit.ApprovalAnswer*).
-//   - otherwise -> "" (a decision recorded before #545, with no structured
-//     answer). Empty is NEVER "denied" here: the #487 lesson is that
-//     conflating "no value" with "a value that means no" is the worst way
-//     an audit surface can be wrong. The caller keeps its own pre-#545
-//     "decided" fallback for this case.
+//   - otherwise -> "" (a decision recorded with no structured answer). Empty
+//     is NEVER "denied" here: conflating "no value" with "a value that means
+//     no" is the worst way an audit surface can be wrong. The caller keeps
+//     its own "decided" fallback for this case.
 func approvalStateChip(f trailFacts) string {
 	if f.GrantID != "" {
 		return ""
@@ -313,7 +311,7 @@ func callOutcome(f trailFacts) (outcome, state string) {
 	case audit.KindRead:
 		// A metadata-only read is the case this switch was written for and did
 		// not cover: no Node was asked anything, so the chip rendered
-		// "unspecified" over a record whose whole content is known (#517). The
+		// "unspecified" over a record whose whole content is known. The
 		// word is chosen and justified at readOutcomeAudited.
 		return readOutcomeAudited, ""
 	case audit.KindRefusal:
@@ -321,7 +319,7 @@ func callOutcome(f trailFacts) (outcome, state string) {
 	case audit.KindApprovalRequested:
 		return "parked", ""
 	case audit.KindApprovalGrantRequested:
-		// #546: not "parked". A park suspends one Plan; this asks for a
+		// Not "parked". A park suspends one Plan; this asks for a
 		// window that will release many, and the two chips must differ.
 		return "grant requested", ""
 	case audit.KindApprovalPendingObserved:
@@ -334,15 +332,15 @@ func callOutcome(f trailFacts) (outcome, state string) {
 		// parked Job — so "decided" over it is a category error the record
 		// itself disproves.
 		if f.GrantID != "" {
-			return "revoked", "" // #538, unchanged
+			return "revoked", ""
 		}
-		// The structured answer (#545), returned as state (the `.chip.state`
+		// The structured answer, returned as state (the `.chip.state`
 		// group) rather than outcome, so it is never mistaken for one of
 		// this switch's other outcome words.
 		if s := approvalStateChip(f); s != "" {
 			return "", s
 		}
-		return "decided", "" // pre-#545 rows only: no structured answer recorded
+		return "decided", "" // no structured answer recorded
 	case audit.KindJobCancel:
 		// A cancel has no per-Node verdict either: RecordCancel records who
 		// asked and which Job, and the per-Task truth is on the Job's own
@@ -367,9 +365,8 @@ func callOutcome(f trailFacts) (outcome, state string) {
 		// did is one click away.
 		return "requested", ""
 	case audit.KindPlan:
-		// Live since #537. Preflight records (audit kind `plan`) were filtered
-		// out of the agent stream by isAgentCall, which left this arm
-		// unreachable: the switch named the case and nothing could enter it.
+		// Preflight records (audit kind `plan`) are agent calls
+		// (isAgentCallKind) and reach this arm.
 		return "preflight", ""
 	}
 	return "", ""
@@ -408,7 +405,7 @@ func callOutcome(f trailFacts) (outcome, state string) {
 // different declared class is still misread by this inference in the
 // dangerous direction (a local mutate template named, say, `log.tail`, would
 // chip as read). The only real fix is carrying the declared class on the
-// record itself rather than inferring it here (Option 2, escalated, #475).
+// record itself rather than inferring it here (Option 2, escalated).
 var readOperations = func() map[string]bool {
 	set := make(map[string]bool, len(shippedReadCatalog))
 	for name := range shippedReadCatalog {

@@ -13,7 +13,7 @@
 //! 2. Class check — a Task dispatched as `read` whose action this Node
 //!    classifies `mutate` is refused without executing (ADR-0042). Like a
 //!    Policy deny, it consumes the dedup marker.
-//! 3. Policy gate — deny-before-execute (ADR-0002 invariant #3, deny-by-default).
+//! 3. Policy gate — deny-before-execute (ADR-0002 invariant 3, deny-by-default).
 //! 4. Execute — only if Policy allows.
 
 use std::future::Future;
@@ -113,7 +113,7 @@ pub async fn dispatch(
 /// `pkg.install`, Templates and Raw Exec all run through the runner;
 /// `system.facts` and `file.read` are data-only.
 ///
-/// **Dedup ordering** (ADR-0004, invariant #4): `dedup.run_once` records the
+/// **Dedup ordering** (ADR-0004, invariant 4): `dedup.run_once` records the
 /// task_id marker BEFORE invoking the pipeline (deny-or-execute). A denied
 /// Task also consumes a marker: a retry with the same task_id returns the
 /// benign already-processed result, even if the first run was denied by Policy.
@@ -495,7 +495,7 @@ where
 /// vocabulary is per-Node: `denied_by_policy` reads as "this Node refuses to do
 /// it", when the truth is "this Node has never heard of it — ask a Node that
 /// has, or install the template pack here". Nothing executes either way, so the
-/// deny-by-default guarantee (ADR-0002, invariant #3) is untouched: an entry
+/// deny-by-default guarantee (ADR-0002, invariant 3) is untouched: an entry
 /// must exist AND Policy must allow before any handler runs.
 async fn gate_and_invoke<R, Fut>(
     entry: Option<&dyn ResolvedOp>,
@@ -538,7 +538,7 @@ where
         policy_fingerprint: policy.fingerprint(),
     };
 
-    // Policy gate: deny-before-execute, deny-by-default (ADR-0002, invariant #3).
+    // Policy gate: deny-before-execute, deny-by-default (ADR-0002, invariant 3).
     // The ADR-0018 canonical-form precondition for path arguments (issue #293)
     // is `decide`'s first step, over the path positions the entry reports — the
     // very request the plan path builds (issue #339).

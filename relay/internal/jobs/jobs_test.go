@@ -139,3 +139,20 @@ func TestRiskClassName(t *testing.T) {
 		}
 	}
 }
+
+// TestParseRiskClass pins ParseRiskClass as RiskClassName's exact inverse: it
+// round-trips both classes and refuses everything else, including the empty
+// string, case variants and "unspecified".
+func TestParseRiskClass(t *testing.T) {
+	for _, class := range []RiskClass{RiskClassRead, RiskClassMutate} {
+		got, ok := ParseRiskClass(RiskClassName(class))
+		if !ok || got != class {
+			t.Errorf("ParseRiskClass(%q) = %d, %v; want %d, true", RiskClassName(class), got, ok, class)
+		}
+	}
+	for _, in := range []string{"", "unspecified", "Read", "MUTATE", " read", "any"} {
+		if got, ok := ParseRiskClass(in); ok || got != RiskClassUnspecified {
+			t.Errorf("ParseRiskClass(%q) = %d, %v; want RiskClassUnspecified, false", in, got, ok)
+		}
+	}
+}

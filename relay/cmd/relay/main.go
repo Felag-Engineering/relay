@@ -63,27 +63,24 @@ type Config struct {
 	// (ADR-0004, ADR-0012).
 	//
 	// Set at startup by flag or RELAY_* environment variable, and reachable
-	// from no API — which is invariant 11's actual requirement, settled in
-	// #362. An earlier reading of that invariant expected a config-file
-	// loader and these comments called flags+env an "interim" deviation
-	// pending one; the invariant now states the property rather than a file
-	// format, and the delivered mechanism is the root-owned systemd unit and
-	// EnvironmentFile in relay/packaging/.
+	// from no API — which is invariant 11's requirement. The delivery
+	// mechanism is the root-owned systemd unit and EnvironmentFile in
+	// relay/packaging/.
 	//
 	// What must stay true: no code path from a request to these values. A
 	// stolen API Token cannot raise its own blast cap, and an API that could
 	// would not be a cap. Secrets stay PATHS rather than values (the
-	// control-plane credential, the approval-webhook secret below), so
+	// approval-webhook secret below), so
 	// nothing sensitive reaches a process listing or a crash dump.
 	ReadBlastCap   int
 	MutateBlastCap int
 
-	// DispatchConcurrency is the per-Job bound on Tasks in flight at once
-	// (#886). It bounds reach, so invariant 11 allows it as runtime-shaped
+	// DispatchConcurrency is the per-Job bound on Tasks in flight at once.
+	// It bounds reach, so invariant 11 allows it as runtime-shaped
 	// configuration; it is not the blast cap (how many Nodes a Job may touch)
 	// and not a security-floor value. It is startup-only today and reachable
 	// from no API; it is planned to move to the store-backed settings object
-	// under #596, where invariant 11's "human with step-up, audited" rule
+	// (ADR-0010 amendment 2026-09-15), where invariant 11's "human with step-up, audited" rule
 	// applies. Zero or negative refuses startup.
 	DispatchConcurrency int
 
@@ -95,7 +92,7 @@ type Config struct {
 	MinDaemonVersion string
 
 	// CertExpiringFraction sets the state:cert-expiring warning window
-	// (ADR-0034, #414): a Node fires the marker once less than this fraction
+	// (ADR-0034): a Node fires the marker once less than this fraction
 	// of its identity certificate's lifetime remains. Same startup-only,
 	// never-API-settable mechanism as the fields above (invariant 11) — a
 	// fraction rather than an absolute duration, so it tracks any future
@@ -105,22 +102,21 @@ type Config struct {
 	// exists to catch.
 	CertExpiringFraction float64
 
-	// ApprovalGatePath is the root-owned approval-gate config (#269,
-	// ADR-0027): which dispatches must park for a human. Same startup-only
-	// mechanism as the blast caps and the control-plane credential — a path,
+	// ApprovalGatePath is the root-owned approval-gate config (ADR-0027):
+	// which dispatches must park for a human. Same startup-only
+	// mechanism as the blast caps — a path,
 	// never settable through any API, since
 	// a stolen credential that could edit its own approval requirements would
 	// make the mechanism decorative.
 	//
-	// EMPTY means no approval gates, which is the pre-#269 behaviour and is
-	// safe because a gate can only add a reason to stop. A NON-EMPTY path that
+	// EMPTY means no approval gates, which is safe because a gate can only add a reason to stop. A NON-EMPTY path that
 	// cannot be loaded refuses startup — a Relay that silently decided nothing
 	// needs approval because it could not read its own config is the exact
 	// failure this mechanism exists to prevent (approval.Load).
 	ApprovalGatePath string
 
-	// ApprovalWebhook* configure the out-of-band notification envelope (#270,
-	// ADR-0027): where to push a Relay-authored notice that a dispatch has
+	// ApprovalWebhook* configure the out-of-band notification envelope
+	// (ADR-0027): where to push a Relay-authored notice that a dispatch has
 	// parked. Empty URL disables it.
 	//
 	// Notification is DELIVERY, never the decision. The webhook is
@@ -130,8 +126,7 @@ type Config struct {
 	//
 	// ApprovalWebhookSecretPath names a root-owned file holding the shared
 	// secret used to sign the outbound body (HMAC-SHA256). It is a path rather
-	// than a value for the same reason the control-plane credential is: a
-	// secret passed as a flag or an environment variable is a secret in every
+	// than a value because a secret passed as a flag or an environment variable is a secret in every
 	// process listing and every crash dump.
 	ApprovalWebhookURL        string
 	ApprovalWebhookSecretPath string
@@ -142,7 +137,7 @@ type Config struct {
 	// listener (Addr above). Default disabled (ControlEnabled=false) for
 	// backward compatibility.
 	//
-	// There is deliberately no credential field: since #298 the control plane
+	// There is deliberately no credential field: the control plane
 	// authenticates per-Account API Tokens held in the store, not a shared
 	// secret configured here (ADR-0023). Bootstrap the first one with
 	// `relay bootstrap-token`.
@@ -167,7 +162,7 @@ type Config struct {
 	ConsoleStepUpWindow  time.Duration
 
 	// OAuth* configure the OAuth 2.1 protected-resource half of the control
-	// plane (#299, ADR-0024): humans authenticate through an external IdP and
+	// plane (ADR-0024): humans authenticate through an external IdP and
 	// resolve to Accounts. Empty OAuthIssuer disables it entirely, and the
 	// Relay then advertises no flow rather than one it cannot complete.
 	//
@@ -209,12 +204,12 @@ type appDeps struct {
 	// execution is the Relay's execution service (ADR-0009/0010), built over
 	// freezeControl, the read lane and the Approvals by capability.NewExecution
 	// with the real Job engine over the real mTLS tunnel and the real
-	// role-gated Authorizer (authz.NewRoleGate) — this is the "#154 flip": MCP/
-	// Control API dispatch actually runs on the fleet. Built only when
+	// role-gated Authorizer (authz.NewRoleGate), so MCP/Control API
+	// dispatch runs on the fleet. Built only when
 	// Config.ControlEnabled; nil otherwise (nothing is mounted to call it).
 	execution *capability.Execution
 	// tunnel is the registered tunnelServer. Its sink is set by newServer
-	// ONLY when Config.ControlEnabled (production execution, #154), by
+	// ONLY when Config.ControlEnabled (production execution), by
 	// installDevHarness in a devharness-tagged build, or injected directly by
 	// tests; nil when the control plane is disabled.
 	tunnel *tunnelServer
@@ -225,21 +220,20 @@ type appDeps struct {
 	control *controlplane.Server
 	// dispatch is the real dispatch.Router newServer builds when
 	// Config.ControlEnabled — the same Conduit execution's Job engine dispatches
-	// through — exposed so integration tests (and a later real-fleet e2e
-	// surface, #121) can block on a live Tunnel via Router.WaitForAny/
+	// through — exposed so integration tests can block on a live Tunnel via Router.WaitForAny/
 	// Connected before dispatching, rather than racing the offline
 	// fail-fast (ADR-0004). Nil when the control plane is disabled.
 	dispatch *dispatch.Router
-	// metrics is the real capability.MetricsSink/enroll.EnrollmentObserver
-	// (#182), exposed so tests can assert on its counters/gauges directly.
+	// metrics is the real capability.MetricsSink/enroll.EnrollmentObserver,
+	// exposed so tests can assert on its counters/gauges directly.
 	metrics *metrics.Metrics
-	// events is the Relay's one in-process event seam (#416): registry
+	// events is the Relay's one in-process event seam: registry
 	// transitions, Job transitions, MCP tool calls, and enrollment
-	// attempts. Exposed so integration tests can Subscribe without a route
-	// (the SSE route itself is #422).
+	// attempts. Exposed so integration tests can Subscribe without going
+	// through the Console's SSE route.
 	events *events.Bus
 	// hooks is what newServer threaded into the surfaces as serverHooks
-	// (#721) — recorded so a test can assert the production entry point
+	// — recorded so a test can assert the production entry point
 	// (newServer) leaves it empty, while a test calling newServerWithHooks
 	// directly can prove its own hooks reached surfaceDeps.
 	hooks serverHooks
@@ -253,7 +247,7 @@ type opvocabLister struct{}
 func (opvocabLister) Operations() []opvocab.Descriptor { return opvocab.Operations() }
 
 // jobResultReader adapts st.Jobs()/st.Tasks() to mcp.JobResultReader — the
-// tiny per-Job read surface the execution tools (#118) use to render
+// tiny per-Job read surface the execution tools use to render
 // per-Node results (exit code, output, duration) and get_job's polling
 // re-read.
 type jobResultReader struct {
@@ -385,7 +379,7 @@ func parseConfig() Config {
 }
 
 // serverCertObserver returns the callback that makes one listener's server
-// certificate rotation observable (#403): the log line an operator reads after
+// certificate rotation observable: the log line an operator reads after
 // the fact, and the counter they can alert on. internal/ca deliberately logs
 // nothing itself, so this — the composition root — is where a rotation becomes
 // visible.
@@ -427,7 +421,7 @@ const declinedScanBudget = 30 * time.Second
 // newServer is the one production entry point: it builds the composition
 // root with an empty serverHooks, so no test-only seam is ever populated on
 // the path main takes. See newServerWithHooks and serverHooks
-// (control_surfaces.go, #721).
+// (control_surfaces.go).
 func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	return newServerWithHooks(cfg, serverHooks{})
 }
@@ -467,7 +461,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	if cfg.CertExpiringFraction <= 0 || cfg.CertExpiringFraction > 1 {
 		return nil, nil, fmt.Errorf("invalid cert-expiring-fraction %v: must be in (0, 1]", cfg.CertExpiringFraction)
 	}
-	// The per-Job dispatch bound has no "off" value (#886): zero would
+	// The per-Job dispatch bound has no "off" value: zero would
 	// dispatch nothing, so it refuses startup.
 	if cfg.DispatchConcurrency < 1 {
 		return nil, nil, fmt.Errorf("invalid dispatch-concurrency %d: must be at least 1", cfg.DispatchConcurrency)
@@ -489,7 +483,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		return nil, nil, fmt.Errorf("open store: %w", err)
 	}
 
-	// The one-shot declined-Label startup scan (#565, threat model R13) runs
+	// The one-shot declined-Label startup scan (threat model R13) runs
 	// here: immediately after Open, before anything else touches the store,
 	// so the signal fires even if a later startup step fails. A failed scan
 	// is a diagnostic failure, never a startup refusal — logged and
@@ -519,7 +513,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// it), which now ALSO persists the revocation to the registry. The registry
 	// is the authority; the denylist is a derived cache, rehydrated from
 	// registry.RevokedNodeIDs() below so a revoked Node stays refused across a
-	// Relay restart (issue #133).
+	// Relay restart.
 	denylist := revocation.NewDenylist()
 	conns := revocation.NewConnections()
 
@@ -539,7 +533,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		MaxTrackedIPs:    cfg.EnrollMaxTrackedIPs,
 	})
 
-	// eventBus is the Relay's one in-process event seam (#416): registry
+	// eventBus is the Relay's one in-process event seam: registry
 	// transitions, Job transitions, MCP tool calls, and enrollment
 	// attempts. Built here — before reg, which wraps it below — because it
 	// depends on nothing and reg's ObserveRegistry decorator needs it.
@@ -552,8 +546,8 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// comment).
 	reg := eventsink.ObserveRegistry(st.Registry(), eventBus)
 
-	// appMetrics is the real capability.MetricsSink/enroll.EnrollmentObserver
-	// (#182): its counters are always live (wired into enrollSrv and base
+	// appMetrics is the real capability.MetricsSink/enroll.EnrollmentObserver:
+	// its counters are always live (wired into enrollSrv and base
 	// below), independent of Config.ControlEnabled; only the /metrics HTTP
 	// surface itself is gated on ControlEnabled (no control listener
 	// otherwise), mirroring every other control-plane surface.
@@ -561,7 +555,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		Connected: conns.Count,
 		Nodes:     reg.Count,
 		Frozen:    func() (bool, error) { return st.Freeze().Frozen(context.Background()) },
-		// This binary's own build stamp (#249) — the composition root is the
+		// This binary's own build stamp — the composition root is the
 		// only place that knows it; internal/metrics never imports
 		// internal/version.
 		Build: metrics.BuildInfo{
@@ -569,13 +563,13 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 			Commit:    version.Commit,
 			BuildDate: version.BuildDate,
 		},
-		// The read-back label filter's live counters (#565), read straight
+		// The read-back label filter's live counters, read straight
 		// off the Store rather than duplicated here — see
 		// Store.LabelsDeclined and metrics.GaugeSources.LabelsDeclined.
 		LabelsDeclined: st.LabelsDeclined,
 	})
 
-	// The node-plane listener's own TLS server certificate (#403, ADR-0031 §5).
+	// The node-plane listener's own TLS server certificate (ADR-0031 §5).
 	// Issued here, and RE-issued in-process before it expires: a certificate
 	// minted once and held static expires while the process is still running,
 	// and from that instant every daemon's chain verification fails and the
@@ -596,8 +590,8 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 
 	// Rehydrate the denylist from the persisted authority before the listener
 	// accepts any connection: the Denylist is a derived cache of
-	// registry.RevokedNodeIDs(); the store is the source of truth (issue #133,
-	// ADR-0006 "revocation is instant" must also hold across a restart).
+	// registry.RevokedNodeIDs(); the store is the source of truth (ADR-0006
+	// "revocation is instant" must also hold across a restart).
 	revokedIDs, err := reg.RevokedNodeIDs()
 	if err != nil {
 		return nil, nil, fmt.Errorf("load revoked node ids: %w", err)
@@ -615,8 +609,8 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		enroll.WithAttemptObserver(eventsink.Enrollment(eventBus)),
 		enroll.WithServerLogger(logger))
 
-	// policyCache is the display-only effective-Policy cache (#117, invariant
-	// 12 / ADR-0002): the tunnel handler records what a daemon reports in
+	// policyCache is the display-only effective-Policy cache (invariant 12 /
+	// ADR-0002): the tunnel handler records what a daemon reports in
 	// DaemonMessage.policy, and describe_node (mounted below when
 	// ControlEnabled) reads it. It always exists — independent of
 	// ControlEnabled — so a daemon's PolicySnapshot is captured whether or not
@@ -624,35 +618,34 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	policyCache := policyview.New()
 
 	// vocabCache is policyCache's sibling for the per-Node Template Operation
-	// vocabulary (#291, ADR-0021): the tunnel handler records what a daemon
+	// vocabulary (ADR-0021): the tunnel handler records what a daemon
 	// reports in DaemonMessage.templates, and describe_node/list_operations
 	// read it. Display-only, and likewise independent of ControlEnabled.
 	vocabCache := nodevocab.New()
 
 	ts := &tunnelServer{conns: conns, reg: reg, policy: policyCache, vocab: vocabCache}
-	// ts.sink is set below, ONLY inside the cfg.ControlEnabled branch — this
-	// is the "#154 flip": execution is on if and only if the control plane
-	// (its only consumer surface, MCP + /api/v1) is on. Disabled: ts.sink
-	// stays nil, exactly as before this issue. Integration tests, or
+	// ts.sink is set below, ONLY inside the cfg.ControlEnabled branch:
+	// execution is on if and only if the control plane (its only consumer
+	// surface, MCP + /api/v1) is on. Disabled: ts.sink stays nil. Integration tests, or
 	// installDevHarness in a devharness-tagged build, may also inject a
 	// taskSink directly.
 
-	// The real adapter to the SQLite-backed audit trail (#102) is the Recorder
-	// below, and the real persisted Relay-wide emergency stop (#101, ADR-0013 —
+	// The real adapter to the SQLite-backed audit trail is the Recorder
+	// below, and the real persisted Relay-wide emergency stop (ADR-0013 —
 	// see watchFreezeSignals in freeze_signal.go for the local engage/release
 	// lever) is the Control.
 	// One audit sink, shared by the capability layer and the MCP read surface
-	// (#288): read-access records land in the same trail as dispatches, via
+	// (ADR-0025): read-access records land in the same trail as dispatches, via
 	// the same writer.
 	auditSink := auditsink.New(st.Audit(), auditsink.WithLogger(logger))
 
-	// The read lane (#441): filtered, paginated queries over the audit trail
+	// The read lane: filtered, paginated queries over the audit trail
 	// and over Jobs/Tasks, adapted onto capability.AuditQuery/JobQuery by
 	// internal/auditquery — auditsink's twin, for the same import-boundary
 	// reason (capability's allowlist bars internal/audit).
 	queries := auditquery.New(st.AuditQueries(), st.JobQueries())
 
-	// The approval gate (#269, ADR-0027). Loaded BEFORE the capability layer is
+	// The approval gate (ADR-0027). Loaded BEFORE the capability layer is
 	// built, and a load failure aborts startup rather than degrading: an empty
 	// Gate must only ever mean "no rules configured", never "the rules could
 	// not be read". approval.Load draws that distinction — an empty path is the
@@ -666,7 +659,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	}
 
 	// ONE RoleGate for the whole process. It answers both "who may dispatch
-	// this Action" and "who may decide an approval for one" (#270), and those
+	// this Action" and "who may decide an approval for one", and those
 	// two must be the same ladder read from the same object: an approver who
 	// could release what they could not request would be a side door around
 	// ADR-0001's admin-only Raw Exec.
@@ -677,7 +670,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// below), but each is handed a narrow interface exposing only its half
 	// (controlplane.TokenVerifier / capability.APITokenStore), so neither
 	// surface holds the other's power. Constructed here, above the shared
-	// capability objects, because NewAccountAdmin needs it (#653) and both
+	// capability objects, because NewAccountAdmin needs it and both
 	// branches below share the AccountAdmin it builds.
 	apiTokenSvc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
 
@@ -686,27 +679,27 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// (capability.NewExecution refuses a read lane or an Approvals over a different one).
 	rec := capability.NewRecorder(auditSink, appMetrics, logger)
 
-	// The Freeze and its role floor (ADR-0013, #101) over the real RoleGate
-	// (#653): both branches below carry a real Authorizer, not just the
+	// The Freeze and its role floor (ADR-0013) over the real RoleGate:
+	// both branches below carry a real Authorizer, not just the
 	// ControlEnabled one, which is what makes NewAccountAdmin below
-	// satisfiable — its fail-open guard requires a real Authorizer. Tightening
-	// the disabled branch this way changes no caller's outcome there: nothing
+	// satisfiable — its fail-open guard requires a real Authorizer. On the
+	// disabled branch this changes no caller's outcome: nothing
 	// is mounted on that path (see the ControlEnabled==false branch's comment
 	// below).
 	freezeControl := capability.NewControl(rec, roleGate, st.Freeze())
 
-	// Account and API-Token administration (#653): the same Accounts store and
+	// Account and API-Token administration: the same Accounts store and
 	// TokenService the authenticator and bootstrap-token use, so identity
 	// administration inherits one floor (invariant 10) instead of the Control
 	// API deciding role itself per handler. Built over the Control, so it
 	// shares its Authorizer and trail.
 	accountAdmin := capability.NewAccountAdmin(freezeControl, st.Accounts(), apiTokenSvc)
 
-	// The read lane (#441): filtered, paginated queries over the audit trail
+	// The read lane: filtered, paginated queries over the audit trail
 	// and over Jobs/Tasks — one seam, shared by every surface (invariant 10).
-	// certExpiringWithin is state:cert-expiring's warning window (#414,
-	// ADR-0034), computed once above and shared by every surface below. The
-	// Policy-view and Template-vocabulary reads (#680, QRY-28) are the same
+	// certExpiringWithin is state:cert-expiring's warning window
+	// (ADR-0034), computed once above and shared by every surface below. The
+	// Policy-view and Template-vocabulary reads (QRY-28) are the same
 	// policyCache/vocabCache the Tunnel handler writes into below (ts),
 	// Get-only from this side. Wiring them here is what lets
 	// describe_node/list_operations disclose a Node's Policy and Template
@@ -717,7 +710,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// every Template dispatch is refused. A nil clock is the real one.
 	readLane := capability.NewReadLane(rec, reg, queries, queries, policyCache, vocabCache, certExpiringWithin, nil)
 
-	// The out-of-band notification envelope (#270, ADR-0027). Optional: with no
+	// The out-of-band notification envelope (ADR-0027). Optional: with no
 	// URL configured nothing is pushed and approvers poll the queue. Configured
 	// but unusable is a startup error, on the gate config's precedent — a
 	// notifier the operator asked for and did not get is a silent gap in how
@@ -738,11 +731,11 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	}
 
 	// The approval callout (ADR-0027), over the one Recorder and the same
-	// RoleGate as dispatch (#270). Batch/window grants (#378, ADR-0027 decision
+	// RoleGate as dispatch. Batch/window grants (ADR-0027 decision
 	// 12) are wired unconditionally alongside the gate: a Grant can only ever be
 	// created through an approval Request the gate itself required, so with no
 	// rules configured nothing is gated, nothing can be granted, and the store
-	// simply holds no rows. MCP task handles (#374, ADR-0028) are wired for the
+	// simply holds no rows. MCP task handles (ADR-0028) are wired for the
 	// same reason: a handle is only ever minted for a dispatch the gate parked,
 	// so with no rules configured nothing parks and the table stays empty. A nil
 	// clock is the real one.
@@ -757,14 +750,14 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		// separate certificates, even though both chain to the same Relay CA.
 		// They also rotate independently — each holder owns its own leaf, its
 		// own key, and its own jittered renewal instant, so neither listener
-		// can be affected by the other's re-issuance (#403, ADR-0031 §5).
+		// can be affected by the other's re-issuance (ADR-0031 §5).
 		controlCert, err := relayCA.NewServerCertificate([]string{cfg.Hostname}, nil,
 			ca.WithRotationObserver(serverCertObserver("control-plane", metrics.ListenerControlPlane, appMetrics)))
 		if err != nil {
 			return nil, nil, fmt.Errorf("issue control-plane server certificate: %w", err)
 		}
 
-		// This is THE production execution flip (#154): the Relay becomes
+		// This is THE production execution flip: the Relay becomes
 		// remote-code-execution-as-a-service over the control surfaces
 		// mounted below. newDispatchStack (dispatch_wiring.go) is the SAME
 		// tested assembly installDevHarness uses — no parallel production
@@ -777,7 +770,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		// the blast-radius cap (ADR-0004/0012) and the real, deny-by-default
 		// authz.NewRoleGate Authorizer (ADR-0010) both run before any
 		// dispatch; Freeze (ADR-0013) can stop all of it instantly; every
-		// dispatch and refusal is audited (#102). This flip adds no new
+		// dispatch and refusal is audited. This flip adds no new
 		// bypass — it only turns on the same pipeline every other surface
 		// already dispatches through.
 		router, reconciler, sink := newDispatchStack(st.Tasks(), violationRecorder{audit: auditSink, metrics: appMetrics}, logger)
@@ -794,17 +787,17 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 			// doc comment on Config for the file-vs-flag deviation flagged for
 			// human review).
 			capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap),
-			// Dispatch idempotency keys (#895): the MCP execution tools forward an
+			// Dispatch idempotency keys: the MCP execution tools forward an
 			// optional key so a call re-issued after a lost response re-attaches to
 			// its Job. Without this a keyed call is refused, never run unkeyed.
 			st.IdempotencyKeys(),
 			st.Jobs(), st.Tasks(), router,
 			cfg.DispatchConcurrency,
 			nil, // newID: the production default
-			// The event seam's Job-grained publisher (#416).
+			// The event seam's Job-grained publisher.
 			eventsink.Jobs(eventBus))
 
-		// Seed the founding admin Account (#295, ADR-0010). Idempotent and
+		// Seed the founding admin Account (ADR-0010). Idempotent and
 		// deterministic: it creates the row on first start and returns the
 		// existing one every time after, never repairing an operator's
 		// deliberate disable or demotion. Fail closed — if the identity
@@ -822,9 +815,9 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		)
 
 		// apiTokenSvc is constructed above, before the shared capability
-		// objects (#653: NewAccountAdmin needs it), and reused here.
+		// objects (NewAccountAdmin needs it), and reused here.
 
-		// OAuth 2.1 protected-resource support (#299, ADR-0024). Discovery
+		// OAuth 2.1 protected-resource support (ADR-0024). Discovery
 		// happens ONCE, here at startup, so a misconfigured issuer fails the
 		// Relay's boot loudly rather than every request quietly.
 		var authOpts []controlplane.AuthOption
@@ -857,7 +850,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 			)
 		}
 
-		// The Admin Console's human authentication lane (#418, ADR-0009).
+		// The Admin Console's human authentication lane (ADR-0009).
 		//
 		// Built BEFORE the authenticator because it is one of its credential
 		// lanes: browser sessions sit beside API Tokens and OAuth at the one
@@ -871,13 +864,13 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 			)
 			// auditSink, not a nil Auditor: consoleauth FAILS a sign-in it
 			// cannot record, and handing it nothing to record with would turn
-			// that fail-closed property into a silent no-op — the same shape
-			// as the #357 bug where a nil sink disabled every read record in
-			// production and nothing said so.
+			// that fail-closed property into a silent no-op, as a nil sink
+			// would for every read record.
 			consoleAuthSvc = consoleauth.NewService(
 				st.Accounts(), st.Passwords(), consoleSessions,
 				consoleauth.NewThrottle(), auditSink,
 				consoleauth.WithStepUpWindow(cfg.ConsoleStepUpWindow),
+				consoleauth.WithLogger(logger),
 			)
 			authOpts = append(authOpts, controlplane.WithConsoleSessions(
 				consoleAuthSvc,
@@ -888,7 +881,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 					// extent is asserted there.
 					Public: console.Unauthenticated,
 					// And the reach of the credential this lane resolves
-					// (#459): a Console session authenticates the Console,
+					// (ADR-0010): a Console session authenticates the Console,
 					// not /api/v1 and not /mcp. Owned by the same package for
 					// the same reason — it is a statement about which routes
 					// exist, and consoleSurface below mounts every one of
@@ -919,7 +912,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		// assembled exactly once (invariant 10: execution above is a single
 		// instance, delivered to every surface below — no surface constructs
 		// its own capability.Execution or dispatcher). See control_surfaces.go
-		// for the ControlSurface seam (#162) this replaces the two inline
+		// for the ControlSurface seam this replaces the two inline
 		// mount stanzas with.
 		sd := surfaceDeps{
 			logger:    logger,
@@ -939,16 +932,13 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 			tokens:        tokenSvc,
 			revocation:    revocationSvc,
 			audit:         st.Audit(),
-			// The read-access sink (#288, ADR-0025). This assignment was
-			// MISSING until #357: surfaceDeps.auditSink stayed nil, so
-			// readAuditor's defensive `sink == nil` skip silently disabled every
-			// read-access record in production — the trail ADR-0025 exists to
-			// keep was empty, and nothing failed to say so. Wiring it here
-			// revives it for the MCP read tools and supplies the Control API's
-			// Job-read route. TestSurfaceDeps_AuditSinkIsWired is the regression
+			// The read-access sink (ADR-0025), for the MCP read tools and the
+			// Control API's Job-read route. Left nil, readAuditor's defensive
+			// `sink == nil` skip would silently disable every read-access
+			// record. TestSurfaceDeps_AuditSinkIsWired is the regression
 			// guard, because a nil here fails silently by design.
 			auditSink: auditSink,
-			// The same RoleGate the capability layer authorizes with (#397):
+			// The same RoleGate the capability layer authorizes with:
 			// the Control API's administrative routes never reach the
 			// capability layer, so they read their floor from this object
 			// directly rather than from a second table.
@@ -966,7 +956,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 			// There is no separate liveness seam: connectedness comes off
 			// registry.Node.Connected, the same fact every other surface reads,
 			// fed by the same tunnel handler that registers the dispatch sink
-			// above — see nodestate.Input's doc comment (#414).
+			// above — see nodestate.Input's doc comment.
 			//
 			// freeze is the read half of the Relay-wide emergency stop, for the
 			// control-plane banner. The store's repository, not the capability
@@ -977,12 +967,12 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 
 			consoleAuth: consoleAuthSvc,
 
-			// The event seam (#416) — the Console's one live-read route
+			// The event seam — the Console's one live-read route
 			// mounts over this, narrowed to a reader with no Publish
 			// method on it (console/seams.go).
 			events: eventBus,
 
-			// The two fingerprints day one renders (#427). The CA's is
+			// The two fingerprints day one renders. The CA's is
 			// fixed for the life of the process; the server leaf's is read
 			// live because it is re-issued about daily.
 			//
@@ -995,10 +985,10 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 				caFingerprint: relayCA.Fingerprint(),
 				serverCert:    controlCert,
 			},
-			// state:cert-expiring's warning window (#414, ADR-0034), the same
+			// state:cert-expiring's warning window (ADR-0034), the same
 			// value every other surface below was handed.
 			certExpiringWithin: certExpiringWithin,
-			// Test-only (#721, serverHooks): empty on the production path,
+			// Test-only (serverHooks): empty on the production path,
 			// since newServer always calls newServerWithHooks with an empty
 			// serverHooks. See mcpSurface.Mount.
 			testMCPOptions: hooks.testMCPOptions,
@@ -1016,10 +1006,9 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		}
 	}
 	// With ControlEnabled off no consumer surface is mounted (MCP and API
-	// require it), so no Execution is built: before #899 a no-op-dispatcher
-	// Service was built here and never called. The Control (a real RoleGate,
-	// #653), AccountAdmin, read lane and Approvals above are still built, as
-	// before, and SIGUSR1/2 drives freezeControl.
+	// require it), so no Execution is built. The Control (a real RoleGate),
+	// AccountAdmin, read lane and Approvals above are still built, and
+	// SIGUSR1/2 drives freezeControl.
 
 	srv := grpc.NewServer(
 		grpc.Creds(creds),
@@ -1064,13 +1053,13 @@ func main() {
 		os.Exit(runBootstrapTokenCommand(os.Args[2:], os.Stdout, os.Stderr))
 	}
 	// `relay console-password` is the same shape of local, root-owned lever
-	// for the Console's first human credential (#418): reaching the Console
+	// for the Console's first human credential: reaching the Console
 	// requires a password, so the first one cannot be set through it.
 	if len(os.Args) > 1 && os.Args[1] == "console-password" {
 		os.Exit(runConsolePasswordCommand(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	}
 
-	// `relay --version` prints the build stamp and exits (#249). Checked here,
+	// `relay --version` prints the build stamp and exits. Checked here,
 	// alongside bootstrap-token and before flag.Parse/parseConfig, because the
 	// flag package would otherwise reject it as an unknown flag: an operator
 	// must be able to identify a binary without a valid startup config.
@@ -1100,7 +1089,7 @@ func main() {
 	}
 	defer stop()
 	// watchFreezeSignals is the local engage/release lever for the Relay-wide
-	// Freeze (#101, ADR-0013) — see freeze_signal.go for the asymmetric-
+	// Freeze (ADR-0013) — see freeze_signal.go for the asymmetric-
 	// activation rationale. It must start before Serve so a signal sent
 	// immediately after startup is never missed.
 	go watchFreezeSignals(context.Background(), deps.freezeControl)
@@ -1152,7 +1141,7 @@ func main() {
 		}()
 	}
 
-	// The approval expiry sweeper (#269, ADR-0027): retire parked Requests
+	// The approval expiry sweeper (ADR-0027): retire parked Requests
 	// whose TTL has passed, so the queue does not fill with zombies.
 	//
 	// The sweeper is HOUSEKEEPING, not the expiry guarantee. A lapsed Request
@@ -1175,7 +1164,7 @@ func main() {
 			slog.Error("approval sweep failed", "err", err)
 		})
 
-		// The audit chain checkpoint (#896): a metadata-only log line an
+		// The audit chain checkpoint: a metadata-only log line an
 		// operator keeps as an anchor for relay-audit-verify -expect.
 		go auditsink.NewCheckpointer(deps.store.AuditChain(), auditsink.DefaultCheckpointInterval, deps.logger).
 			Run(context.Background(), func(err error) {

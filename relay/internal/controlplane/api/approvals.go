@@ -12,7 +12,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// approvals.go is the OUT-OF-BAND DECISION CHANNEL (#270, ADR-0027) — the
+// approvals.go is the OUT-OF-BAND DECISION CHANNEL (ADR-0027) — the
 // universal path, and the only one that is a guarantee rather than a delivery
 // convenience.
 //

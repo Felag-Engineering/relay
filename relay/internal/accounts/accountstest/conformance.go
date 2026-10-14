@@ -1,5 +1,5 @@
 // Package accountstest holds the shared conformance suite for
-// accounts.Repository (#653), run against both the accounts package's own
+// accounts.Repository, run against both the accounts package's own
 // in-memory implementation and internal/store's sqliteAccounts.
 //
 // It exists because both implementations carry the last-enabled-admin rule

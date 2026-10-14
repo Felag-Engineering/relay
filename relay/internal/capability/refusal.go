@@ -20,7 +20,7 @@ import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 //     so both adapters emit byte-identical bytes (ADR-0009/0010 parity,
 //     invariant 10).
 //  3. It is render-only: never written to a Task row, an audit record, a log
-//     line or a wire field, so it cannot size an audit record (#255/#258).
+//     line or a wire field, so it cannot size an audit record.
 //  4. Every clause must stay true of the code. Invariant 2 / ADR-0002 backs
 //     the "no code path to write it" clause, proven by
 //     relay/cmd/relay/policy_immutability_test.go; the caller-identity
@@ -33,7 +33,7 @@ import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 //     the specific rule and never asserts why this particular deny happened.
 //     denied_by_policy is a wider category than "a Policy rule said no": it
 //     also covers ADR-0018 argument-form preconditions that deny before the
-//     engine runs (dispatch.rs:533-543), #589's whitespace-in-argv refusal,
+//     engine runs (dispatch.rs:533-543), the whitespace-in-argv refusal,
 //     the post-open path re-check's IO-error path
 //     (daemon/src/operations/file_read.rs:113-128), and the deny-all
 //     fallback a Node runs when its Policy file is absent or misowned
@@ -98,12 +98,12 @@ const PolicyDenyVerdictExplanation = "The Node reports that it would refuse this
 // outcome/stderr already are on that same row — not a new trust boundary —
 // whereas the shared boundary text's architecture clauses (no code path to
 // write Policy, no caller identity on the wire) hold unconditionally
-// regardless of what any Node reports. From #632 onward, unreachable and
-// version_refused are NOT self-reported on any path: the wire boundary
+// regardless of what any Node reports. Unreachable and version_refused are
+// NOT self-reported on any path: the wire boundary
 // (dispatch.result()) refuses a daemon that reports either, so by the time
 // o reaches this function it is always Relay-authored. A version_refused row
-// a pre-#632 Relay already persisted predates that boundary and is not
-// covered by this guarantee.
+// persisted by a Relay that predates that boundary is not covered by this
+// guarantee.
 func RefusalExplanation(o jobs.Outcome) string {
 	switch o {
 	case jobs.OutcomeDeniedByPolicy:

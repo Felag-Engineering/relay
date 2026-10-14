@@ -62,8 +62,8 @@ type waiter struct {
 	ch     chan *relayv1.TaskResult
 }
 
-// verdictWaiter is waiter's sibling for a Plan's PolicyQuery (#119,
-// ADR-0011): correlates one in-flight Query call with the PolicyVerdict that
+// verdictWaiter is waiter's sibling for a Plan's PolicyQuery
+// (ADR-0011): correlates one in-flight Query call with the PolicyVerdict that
 // will eventually arrive on the Node's Tunnel, keyed by query_id rather than
 // task_id — a wholly separate ID space, so a query_id can never collide
 // with, or be mistaken for, a real Task's dedup key. ch is buffered(1) for
@@ -84,7 +84,7 @@ type verdictWaiter struct {
 const violationAuditBudget = 5 * time.Second
 
 // ViolationRecorder records a relay-daemon's protocol violation as a
-// durable, queryable audit event (#638). Structural, like Conduit in the
+// durable, queryable audit event. Structural, like Conduit in the
 // other direction: *auditsink.Sink satisfies it, and this package imports
 // neither internal/audit nor internal/capability to say so — the
 // composition root wires them (cmd/relay/dispatch_wiring.go).
@@ -130,7 +130,7 @@ type sendSlot struct {
 // intact.
 //
 // Router still never touches the store and decides nothing: it only evaluates
-// a send guard its caller supplied in the ctx (jobs.WithSendGuard, #943). The
+// a send guard its caller supplied in the ctx (jobs.WithSendGuard). The
 // guard is a ctx value so that Conduit's domain-typed signature, and callers
 // that set none, stay unchanged.
 //
@@ -147,7 +147,7 @@ type Router struct {
 	verdictWaiters map[string]*verdictWaiter
 
 	// sendSlots serialises, per task ID, the send guard's decision against
-	// "this Task was handed to a Tunnel by some caller" (#943). Guarded by mu.
+	// "this Task was handed to a Tunnel by some caller". Guarded by mu.
 	sendSlots map[string]*sendSlot
 
 	// onConnect, if non-nil, is invoked (in its own goroutine, so it never
@@ -156,7 +156,7 @@ type Router struct {
 	// the composition root wires it to Reconciler.ReconcileNode.
 	onConnect func(nodeID string)
 
-	// violations records a relay-daemon's protocol violation (#638). See
+	// violations records a relay-daemon's protocol violation. See
 	// ViolationRecorder and NewRouter's doc comment.
 	violations ViolationRecorder
 
@@ -227,8 +227,8 @@ func (r *Router) logger() *slog.Logger { return logctx.Or(r.log) }
 // unregister is also the disconnect-mid-dispatch correctness point: under mu,
 // it deletes the conn (if still current) AND fails every waiter it owns
 // (waiter.owner == this *conn) by deleting it from waiters and closing its
-// channel — and, identically, every verdictWaiter it owns (a blocked Query,
-// #119). Scoping by owner rather than nodeID means a stale unregister can
+// channel — and, identically, every verdictWaiter it owns (a blocked Query).
+// Scoping by owner rather than nodeID means a stale unregister can
 // never close a FRESH waiter that a newer registration created after reusing
 // the same nodeID (and potentially the same task_id/query_id). This
 // guarantees any Dispatch or Query call blocked in its select on a waiter it
@@ -276,7 +276,7 @@ func (r *Router) Connected(nodeID string) bool {
 
 // ConnectedNodes returns a snapshot of every Node currently registered with a
 // live Tunnel. It is transport-only (mirrors Connected's locking) and exists
-// for callers that need to enumerate the live fleet (e.g. the #103 devharness
+// for callers that need to enumerate the live fleet (e.g. the devharness
 // list_connected op) rather than test one Node at a time.
 func (r *Router) ConnectedNodes() []string {
 	r.mu.Lock()
@@ -303,7 +303,7 @@ func (r *Router) ConnectedNodes() []string {
 // task_id), so the Task resolves truthfully. On a withheld send nothing is
 // written, only this call's own waiter is removed, and jobs.ErrSendWithheld is
 // returned. A send already inside c.send is past the guard: that is the
-// residual pre-send window under ADR-0013 (#943).
+// residual pre-send window under ADR-0013.
 //
 // Neither mu nor the slot's lock is held while the other is taken, and the
 // slot's lock is never held across c.send.
@@ -401,7 +401,7 @@ func (r *Router) removeWaiterIfOwn(taskID string, w *waiter) {
 	r.mu.Unlock()
 }
 
-// recordViolation writes v as a durable, queryable audit event (#638),
+// recordViolation writes v as a durable, queryable audit event,
 // before the caller sees the Relay-authored failure Dispatch resolves the
 // Task with — so there is no window in which a surface shows the failure
 // and the trail cannot explain it. It is a no-op when r.violations is nil
@@ -480,7 +480,7 @@ func newQueryID() (string, error) {
 }
 
 // Query sends a PolicyQuery for act down nodeID's Tunnel and blocks for the
-// daemon's PolicyVerdict (#119, ADR-0011) — capability.Conduit.Query's real
+// daemon's PolicyVerdict (ADR-0011) — capability.Conduit.Query's real
 // implementation, mirroring Dispatch's shape exactly except for the
 // query_id/task_id ID space and the waiter map it correlates through.
 func (r *Router) Query(ctx context.Context, nodeID string, act jobs.Action) (jobs.Verdict, error) {

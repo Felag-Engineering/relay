@@ -26,13 +26,12 @@ import (
 // Everything in this file is therefore a security control. Weakening one is an
 // ADR-level decision, not a convenience.
 //
-// # THE SCHEME (#460)
+// # THE SCHEME
 //
 // This is the durable record of the decision this file enforces — written
 // here, at the point of enforcement, so it is readable by the next person who
-// touches this file and liftable verbatim into #475's shell-decisions ADR
-// when a human writes it. (#475 is open and loop:needs-human; this file does
-// not resolve it, it records the reasoning that ADR will need.)
+// touches this file and liftable verbatim into a shell-decisions ADR when a
+// human writes one.
 //
 // The Console's CSRF control is TWO LANES, chosen by the request's ROUTE and
 // never tried in turn:
@@ -68,7 +67,7 @@ import (
 // resolved.** That is the same predicate the authentication boundary takes as
 // ConsoleSessionOptions.Public, so the CSRF lane and the auth lane cannot
 // disagree about what is public, and it follows consolesession.go's existing
-// rule (ADR-0023, #299): a presented credential is routed to exactly one
+// rule (ADR-0023): a presented credential is routed to exactly one
 // verifier, never offered to each until one accepts. sessionCSRFValid refuses
 // outright — never falls back to a cookie — when no ConsoleSession is in
 // context; that is the one branch that could ever become a downgrade, and it
@@ -95,9 +94,9 @@ import (
 // # `__Host-` forces Path=/; accepted
 //
 // Precedent is direct: consoleauth.SessionCookieName is already
-// `__Host-relay_console_session` with Path=/, and #459 built
-// console.SessionScope precisely because the prefix's forced path cannot be
-// bounded — the AUTHORITY is bounded instead. The sign-in CSRF cookie carries
+// `__Host-relay_console_session` with Path=/, and console.SessionScope exists
+// precisely because the prefix's forced path cannot be bounded — the
+// AUTHORITY is bounded instead (ADR-0010). The sign-in CSRF cookie carries
 // no authority at all: possessing it authenticates nothing, it is one half of
 // an equality check only the Console performs, it is HttpOnly, it holds a
 // value the login page already rendered into HTML for this same browser, it
@@ -159,7 +158,7 @@ var wellFormedSignInCSRFToken = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 // 'none' and form-action 'self' close the clickjacking and form-retarget paths
 // that a fleet-execution surface cannot afford to leave open.
 //
-// # CSP reporting is a recorded deferral, not an omission (#460, D15)
+// # CSP reporting is a recorded deferral, not an omission (D15)
 //
 // Spec 11 calls a CSP violation a security event, so shipping a `report-to`
 // naming a group with no endpoint behind it would be worse than shipping
@@ -198,12 +197,11 @@ const contentSecurityPolicy = "default-src 'self'; " +
 // on an unauthenticated request is meaningless — and outside the route table,
 // so a route added later cannot forget it.
 //
-// Secure mints nothing and can no longer fail with a 500: the session lane
+// Secure mints nothing and cannot fail with a 500: the session lane
 // reads a value Middleware already put on the context, and the sign-in lane's
 // mint (signInCSRFToken) only ever fails on a broken entropy source. Every
-// OTHER minting call in this process treats that as a panic; this one still
-// returns an error, unchanged from the ensureCSRFCookie it replaces, because
-// login.go's callers need it request-scoped — they have a page to re-render.
+// OTHER minting call in this process treats that as a panic; this one
+// returns an error because login.go's callers need it request-scoped — they have a page to re-render.
 func Secure(h http.Handler, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
@@ -219,7 +217,7 @@ func Secure(h http.Handler, log *slog.Logger) http.Handler {
 
 		// The lane is chosen by the ROUTE (Unauthenticated), never by
 		// whether a session happened to resolve — see THE SCHEME above and
-		// ADR-0023/#299's rule that a credential is routed to exactly one
+		// ADR-0023's rule that a credential is routed to exactly one
 		// verifier, never offered to each until one accepts.
 		// if/else, not assign-then-override: the two lanes are mutually
 		// exclusive and the code should say so syntactically rather than
@@ -328,12 +326,10 @@ func sessionCSRFValid(r *http.Request) bool {
 // signInCSRFValid is the sign-in lane: POST /console/login only.
 //
 // It reads the cookie named signInCSRFCookieName and no other name — in
-// particular, never the legacy `relay_console_csrf` name the issue's finding
-// describes, and never anything a request supplies that merely LOOKS like a
+// particular, never the legacy `relay_console_csrf` name, and never anything a request supplies that merely LOOKS like a
 // CSRF cookie. The cookie must be well-formed (see wellFormedSignInCSRFToken)
 // before it is compared at all: accepting anything of a plausible length —
-// `len(v) >= 32`, this scheme's predecessor — is the defect #460 was filed
-// against, because it let an attacker plant their OWN chosen value as the
+// `len(v) >= 32` — is a defect, because it lets an attacker plant their OWN chosen value as the
 // cookie and echo that same value in the form field, defeating the double
 // submit entirely.
 func signInCSRFValid(r *http.Request) bool {

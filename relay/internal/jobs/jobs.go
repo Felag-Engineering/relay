@@ -102,7 +102,7 @@ const VersionRefusedMessage = "capability: dispatch refused: this Node's relay-d
 	"through your config-management / IaC pipeline — the Relay never pushes binaries."
 
 // ViolationRule names the specific way a relay-daemon's TaskResult broke the
-// wire contract (#632): what dispatch.result() refuses at the wire boundary,
+// wire contract: what dispatch.result() refuses at the wire boundary,
 // before a Result is ever persisted or a Task resolved with what the daemon
 // actually sent.
 type ViolationRule int
@@ -162,7 +162,7 @@ func (v ProtocolViolation) Violated() bool { return v.Rule != ViolationNone }
 //
 // Drafting rules, mirroring capability/refusal.go's five-rule idiom:
 //  1. Never say "never sent", "was not sent" or "nothing executed" — that is
-//     the exact lie #632 is about. The Task WAS dispatched and may have run.
+//     false: the Task WAS dispatched and may have run.
 //  2. Names no file path and no Account.
 //  3. Relay-authored, never daemon output — this is prose, never an echo of
 //     anything the Node actually sent.
@@ -191,17 +191,16 @@ func (v ProtocolViolation) Explanation() string {
 	}
 	// A ViolationRule Violated() reports true but with no case above: a future
 	// rule added to the const block without a matching case here. Returning ""
-	// would be indistinguishable from "no violation" — the exact failure mode
-	// #632 exists to prevent — so this stays non-empty even though it names no
-	// specific rule (code review, cycle 2; TestEveryWireOutcomeIsClassified's
+	// would be indistinguishable from "no violation", so this stays non-empty
+	// even though it names no specific rule (TestEveryWireOutcomeIsClassified's
 	// non-empty-Stderr assertion is what would catch this going forward).
 	return base
 }
 
 // ProtocolViolationEvent is one relay-daemon's protocol violation as
-// observed at the wire boundary (#632's refusal point), carried to the
+// observed at the wire boundary, carried to the
 // audit lane so the violation is a durable, queryable event and not only
-// a log line (#638).
+// a log line.
 //
 // It carries NO Stdout, Stderr or Truncated field and must never grow
 // one. Every field is Relay-authored or Relay-minted: the ids come from
@@ -240,6 +239,20 @@ func RiskClassName(r RiskClass) string {
 		return "mutate"
 	default:
 		return "unspecified"
+	}
+}
+
+// ParseRiskClass is RiskClassName's inverse: it accepts exactly "read" or
+// "mutate". Anything else, the empty string included, returns false, so a
+// caller decides for itself what an absent class means.
+func ParseRiskClass(s string) (RiskClass, bool) {
+	switch s {
+	case "read":
+		return RiskClassRead, true
+	case "mutate":
+		return RiskClassMutate, true
+	default:
+		return RiskClassUnspecified, false
 	}
 }
 
@@ -283,7 +296,7 @@ type Action struct {
 }
 
 // Requester is the verified Account that asked for a Job, recorded when the
-// Job is created (#616). The zero value means NO requester is recorded: a
+// Job is created. The zero value means NO requester is recorded: a
 // Job created before the Relay recorded one, or by a caller with no Account.
 // It must never be inferred from anything else (execution.md Cancellation:
 // fail closed).
@@ -343,7 +356,7 @@ type Task struct {
 // Result is the outcome of a resolved Task, as reported by the relay-daemon
 // (or synthesized by the Relay, e.g. OutcomeUnreachable). A Result may also
 // be wholly Relay-authored where the wire boundary refused the daemon's
-// report as a protocol violation (ProtocolViolation.Explanation, #632): in
+// report as a protocol violation (ProtocolViolation.Explanation): in
 // that case Stderr carries Relay text and no daemon bytes survive.
 type Result struct {
 	Outcome  Outcome
@@ -450,7 +463,7 @@ type TaskRepository interface {
 	// with OutcomeCancelled, clears DispatchedAt and records the resolve time —
 	// the row is identical to MarkCancelled's. The engine marked the Task
 	// Dispatched (persist-then-send), but its Job's cancel was seen before the
-	// send began, so the Task never left the Relay (#943). Only the engine that
+	// send began, so the Task never left the Relay. Only the engine that
 	// MarkDispatched the Task calls it, and only when nothing was sent. Returns
 	// ErrTaskNotFound if the Task does not exist, or ErrInvalidTaskState if the
 	// Task is not currently Dispatched.

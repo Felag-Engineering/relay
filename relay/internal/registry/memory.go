@@ -323,7 +323,7 @@ func (r *InMemory) ListChecked() ([]Node, error) {
 // It is the single read-back path behind Upsert, Get and List, as getNode is
 // for the SQLite store, and like getNode it serves both label namespaces
 // through wellFormedLabels: a stored pair WellFormedLabel refuses is declined
-// on read (#504/#555).
+// on read.
 func (r *InMemory) copyNode(n *Node) Node {
 	nl := wellFormedLabels(n.NodeLabels)
 	rl := wellFormedLabels(n.RelayLabels)
@@ -354,8 +354,8 @@ func (r *InMemory) copyNode(n *Node) Node {
 // wellFormedLabels returns a new, non-nil map holding only the pairs of
 // labels that WellFormedLabel accepts. It mirrors the SQLite store's
 // read-back filter of the same name pair for pair, so the fake declines
-// exactly what production declines: "decline to serve, never write"
-// (#504/#555). The stored map is never modified. Each namespace's own writer
+// exactly what production declines: "decline to serve, never write". The
+// stored map is never modified. Each namespace's own writer
 // owns its storage (invariant 7, ADR-0006): the Relay declining to serve a
 // value is not the same act as rewriting it. The store's filter also counts
 // what it declines for /metrics. The fake has no metrics, so it only filters.

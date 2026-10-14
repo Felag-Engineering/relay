@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-// The audit chain (#896). Every audit row carries a seq, the previous row's
+// The audit chain. Every audit row carries a seq, the previous row's
 // hash, and its own hash over (domain tag, seq, prev_hash, canonical row
 // bytes). Edits, middle deletions and out-of-chain inserts break the walk;
 // tail truncation and a re-chain are detectable only against an anchor — a
@@ -311,7 +311,7 @@ type ChainVerdict struct {
 func (v ChainVerdict) Intact() bool { return v.Break == nil && v.Unchained == 0 }
 
 // Tampered: the walk found a break. Unchained rows alone are not tampering —
-// a pre-#896 binary writes them — and are reported separately.
+// an older Relay binary writes them — and are reported separately.
 func (v ChainVerdict) Tampered() bool { return v.Break != nil }
 
 // ChainHeadReader reads the chain's current head.

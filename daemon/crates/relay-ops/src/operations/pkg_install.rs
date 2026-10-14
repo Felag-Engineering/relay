@@ -136,7 +136,7 @@ pub fn validate_pkg_version(version: &str) -> Result<(), super::OperationError> 
 /// `<mgr> install -y <pkgspec>`.
 ///
 /// This is the **primary test seam** — tested directly and never executes.
-/// Validation always runs BEFORE the pkgspec is built (ADR-0001 invariant #1):
+/// Validation always runs BEFORE the pkgspec is built (ADR-0001 invariant 1):
 /// an invalid name or version returns `Err` with no argv constructed.
 ///
 /// pkgspec shape: Apt uses `name` or `name=version`; Dnf/Yum use `name` or

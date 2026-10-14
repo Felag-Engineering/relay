@@ -1,9 +1,9 @@
-//! The one place a caller- or Relay-supplied string becomes a log field (#914).
+//! The one place a caller- or Relay-supplied string becomes a log field.
 //!
 //! Debug escaping turns `\n`, `\r`, ESC and other non-printables (U+2028
 //! included) into visible escapes, so one event is one journald line. The cap
 //! bounds how long that line is. Output for a value under the cap is
-//! byte-identical to the bare `?` formatting #913 used on the decision events.
+//! byte-identical to bare `?` formatting.
 //!
 //! `tests/log_fields_escaped.rs` fails `cargo test` (and so `make verify`) when
 //! a tracing field is neither wrapped here nor a reviewed local-only value.
@@ -76,7 +76,7 @@ pub fn untrusted_list(v: &[String]) -> tracing::field::DisplayValue<UntrustedLis
 /// The daemon's one log formatting layer, shared by production and the tests
 /// that prove what a journal line looks like.
 ///
-/// ANSI is off unconditionally because the log sink is journald (#888): escape
+/// ANSI is off unconditionally because the log sink is journald: escape
 /// codes split the target from its colon and break the documented `journalctl`
 /// pattern. `log_internal_errors(true)` keeps what `fmt()`'s builder set, so a
 /// failed write to stdout is still reported on stderr, not dropped silently.

@@ -2,7 +2,7 @@
 //! self-removing temp directories and files, and the `&[&str]` -> `Vec<String>`
 //! argv builder.
 //!
-//! A dev-only crate (#889): it is only ever a `[dev-dependencies]` entry, which
+//! A dev-only crate: it is only ever a `[dev-dependencies]` entry, which
 //! `tests/clippy_write_ban.rs` asserts, so its `OpenOptions::write` calls never
 //! reach a production binary. `tests/policy_never_opened_for_write.rs`
 //! allowlists this one file as a writer for that reason.

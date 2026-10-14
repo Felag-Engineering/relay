@@ -229,9 +229,8 @@ fn fsync_dir(dir: &Path) -> Result<()> {
 /// Do **not** add a umask-proof `set_permissions` call after it. That is the
 /// flat prohibition of ADR-0036: `chmod` is not umask-masked, so it overrides
 /// the operator on their own Node, and node code never does that — not even
-/// where the declared mode is tight enough that forcing it could only tighten
-/// (the narrower rule this file used to cite, superseded with the three sites
-/// that relied on it). Here the looser direction is immediate anyway: forcing
+/// where the declared mode is tight enough that forcing it could only tighten.
+/// Here the looser direction is immediate anyway: forcing
 /// `0644` would hand an operator running `umask 077` a world-readable
 /// `cert.pem`. The tests assert the direction (no bit beyond the declared mode,
 /// and the security-relevant bits clear), never exact equality; asserting
@@ -269,7 +268,7 @@ fn write_atomic(dir: &Path, name: &str, content: &[u8], mode: u32) -> Result<()>
 }
 
 /// Builds a CA-pinned gRPC channel to the Relay. `ca_pem` is the sole trust
-/// root (no system roots — tonic `tls-ring` feature only, ADR-0005 invariant #6).
+/// root (no system roots — tonic `tls-ring` feature only, ADR-0005 invariant 6).
 /// When `client_identity` is `Some`, the channel presents a client cert (mTLS
 /// Tunnel/renew path); when `None`, it is the certless enrollment bootstrap
 /// path (ADR-0006 §2). `connect()` is eager so a wrong-CA Relay is refused at
@@ -316,7 +315,7 @@ pub(crate) async fn build_channel(
 ///
 /// Callers pass the ceiling as a **literal, never the production constant**:
 /// derived from the constant it rises in lockstep with any edit to it, and the
-/// check can then never fail on a widened one (#509, ADR-0036).
+/// check can then never fail on a widened one (ADR-0036).
 #[cfg(any(test, feature = "test-util"))]
 pub mod mode_assert {
     use std::os::unix::fs::MetadataExt;
@@ -351,7 +350,7 @@ pub mod mode_assert {
 
 /// Signs test CSRs the way rcgen's old CSR-parsing dev path did, without
 /// pulling rcgen's `x509-parser` dev feature (and with it a second ASN.1
-/// stack, x509-parser 0.16) into Cargo.lock (#672). It signs a daemon CSR
+/// stack, x509-parser 0.16) into Cargo.lock. It signs a daemon CSR
 /// with the CSR's (empty) subject and no extensions, matching what
 /// `build_keypair_and_csr` produces.
 #[cfg(test)]

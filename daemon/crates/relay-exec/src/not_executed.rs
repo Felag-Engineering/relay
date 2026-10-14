@@ -6,7 +6,7 @@
 //! error — reports it the same way: the never-executed exit code `-1`, no
 //! stdout, nothing truncated, and the reason in stderr. Callers keep their own
 //! named wrappers (`denied_by_policy_result`, `timeout_result`, ...) so call
-//! sites stay readable; this is only the literal they all used to repeat.
+//! sites stay readable; this is only the literal they share.
 
 use std::time::Duration;
 
