@@ -1675,25 +1675,6 @@ func stampOrAbsent(t time.Time) string {
 	return utcStamp(t)
 }
 
-func decisionAgo(t time.Time, now time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-	return timeSince(t, now)
-}
-
-// renderSpan renders a window length for a human.
-func renderSpan(d time.Duration) string {
-	switch {
-	case d <= 0:
-		return "none"
-	case d < time.Hour:
-		return strconv.Itoa(int(d.Minutes())) + "m"
-	default:
-		return strconv.Itoa(int(d.Hours())) + "h"
-	}
-}
-
 // approvalOperation names what was parked, from the STRUCTURED fields.
 //
 // Never parsed out of Summary. The summary is Relay-authored prose a human
@@ -1733,19 +1714,6 @@ func countApprovals(req approval.Request) int {
 		}
 	}
 	return n
-}
-
-func renderTTL(d time.Duration) string {
-	if d <= 0 {
-		return "expired"
-	}
-	if d < time.Minute {
-		return strconv.Itoa(int(d.Seconds())) + "s left"
-	}
-	if d < time.Hour {
-		return strconv.Itoa(int(d.Minutes())) + "m left"
-	}
-	return strconv.Itoa(int(d.Hours())) + "h left"
 }
 
 var approvalsTmpl = newScreen("approvals", `
