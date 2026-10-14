@@ -10,9 +10,9 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Tool-call observability (#416, D9 in docs/design/console/99-open-decisions.md).
+// Tool-call observability (D9 in docs/design/console/99-open-decisions.md).
 //
-// The audit trail (readaudit.go, #288) and this seam answer different
+// The audit trail (readaudit.go) and this seam answer different
 // questions: readaudit is a durable, append-only record of the four
 // non-dispatching read tools; this is a best-effort, in-process feed for the
 // Admin Console's live view, covering EVERY tool call — read and execution

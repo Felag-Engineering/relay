@@ -1,5 +1,5 @@
 // Package protowalk holds the descriptor-reflection helpers behind
-// TestWireCarriesNoCallerIdentity (#454), the structural guard that the wire
+// TestWireCarriesNoCallerIdentity, the structural guard that the wire
 // contract carries no caller identity: the Node is never told which Account
 // or role asked, so the daemon's answer cannot depend on who asked
 // (ADR-0002).

@@ -50,7 +50,7 @@ const (
 
 	// KindProtocolViolation is a relay-daemon reporting something the wire
 	// contract (/proto) does not permit — the refusal #632 added at the wire
-	// boundary, made queryable (#638). Distinct from KindDispatch because it
+	// boundary, made queryable. Distinct from KindDispatch because it
 	// is not a Task's outcome: the Task still resolves, truthfully, as a
 	// Relay-authored failure and keeps its own dispatch row. Distinct from
 	// KindRefusal because nothing was denied — the Relay refused a REPORT,
@@ -83,7 +83,7 @@ const (
 	// counter exists.
 	KindProtocolViolation = "protocol_violation"
 
-	// KindApprovalRequested is a dispatch parked for a human (#269, ADR-0027).
+	// KindApprovalRequested is a dispatch parked for a human (ADR-0027).
 	// Distinct from KindDispatch because nothing ran, and distinct from
 	// KindRefusal because nothing was denied — a park is a suspension, and
 	// filing it under either neighbour would make the audit trail assert
@@ -140,20 +140,20 @@ const (
 	// Recorded for denials and for partial approvals too, not only for the
 	// decision that releases a Job.
 	//
-	// The answer itself (#545) is the ApprovalAnswer column, not prose in
+	// The answer itself is the ApprovalAnswer column, not prose in
 	// Reason: Reason remains the human sentence, but a query or a renderer
 	// must never parse it to learn which way the decision went.
 	KindApprovalDecided = "approval_decided"
 
 	// KindRead is a non-dispatching read-tool call — list_nodes,
-	// describe_node, list_operations, get_job (#288, ADR-0025). These never
+	// describe_node, list_operations, get_job (ADR-0025). These never
 	// reach a Node, so they produce no Job and no Task, but they do disclose
 	// the fleet's shape (and, via get_job, previously-captured command
 	// output). Recorded as metadata only: who, which tool, what it was aimed
 	// at, when. Never the result.
 	KindRead = "read"
 
-	// Identity-management kinds (#297, ADR-0010). Administering the control
+	// Identity-management kinds (ADR-0010). Administering the control
 	// plane's own identities is itself an audited, attributed act: "who
 	// created this Account", "who made it an admin", and "who minted it a
 	// credential" are the first questions asked after a compromise, and they
@@ -170,7 +170,7 @@ const (
 	KindAccountDisable = "account_disable"
 
 	// KindPasswordSet and KindPasswordClear record a Console password set or
-	// removed for a human Account (#782). Today they are written only by the
+	// removed for a human Account. Today they are written only by the
 	// host-side `relay console-password` lever, attributed to
 	// PrincipalLocalHost; the record names the Account and NEVER the password
 	// or its hash. Two kinds (set vs clear) for the same reason
@@ -240,7 +240,7 @@ const (
 )
 
 // ApprovalAnswer values name the structured answer a KindApprovalDecided
-// Record carries (#545, ADR-0027 decision 10). EMPTY means "this row records
+// Record carries (ADR-0027 decision 10). EMPTY means "this row records
 // no approve/deny answer" — a grant revocation, or a row written before
 // #545 — and NEVER "denied": conflating "no value" with "a value that means
 // no" is the #487 bug. Values are byte-identical to
@@ -407,7 +407,7 @@ type Record struct {
 	// against it, not against this string.
 	Principal string
 
-	// Attribution carries the verified and asserted identity lanes (#300).
+	// Attribution carries the verified and asserted identity lanes.
 	// The lanes are structurally distinct here and in the schema — see
 	// attribution.go for why that separation is load-bearing rather than
 	// cosmetic.
@@ -476,10 +476,10 @@ type Record struct {
 // Repository is the interface for the audit trail. Append-only: there is no
 // update or delete. The store enforces that with triggers that refuse UPDATE
 // and DELETE, and makes it tamper-evident with a hash chain over the rows
-// (chain.go, #896).
+// (chain.go).
 //
 // Every reader below returns Records ordered by Timestamp, ties broken by ID.
-// That pair is a TOTAL order (#656): ID is minted monotonically by NewID, so
+// That pair is a TOTAL order: ID is minted monotonically by NewID, so
 // two Records sharing a Timestamp — which a dispatch fan-out guarantees, since
 // every per-Node Record copies one clock reading — come back in the same
 // order on every read, rather than in one that changes with each write.
@@ -503,7 +503,7 @@ type Repository interface {
 	// AppendWithTasks persists every task as Pending, exactly as
 	// jobs.TaskRepository.CreateTask would, and appends r to the hash chain,
 	// in ONE transaction: nil means all of it landed, an error means none of
-	// it did (#887). It is how a Job's dispatch_intent row commits with its
+	// it did. It is how a Job's dispatch_intent row commits with its
 	// Tasks, so a crash cannot leave a Task that was never recorded.
 	AppendWithTasks(ctx context.Context, r Record, tasks []jobs.Task) error
 
@@ -532,12 +532,12 @@ type Repository interface {
 	// decision themselves, so
 	// one query answers "who asked, who approved, and what then ran". For a
 	// batch/window Grant's Request this is every dispatch the window released,
-	// and each released Job's dispatch_intent row (#887).
+	// and each released Job's dispatch_intent row.
 	ByApproval(ctx context.Context, approvalID string) ([]Record, error)
 
 	// ByGrant returns all Records released by a batch/window Grant, ordered by
 	// Timestamp, ties broken by ID. Narrower than ByApproval on the same Request: this is
-	// the dispatch outcome rows and each released Job's dispatch_intent row (#887).
+	// the dispatch outcome rows and each released Job's dispatch_intent row.
 	// Filter by kind for one or the other.
 	ByGrant(ctx context.Context, grantID string) ([]Record, error)
 

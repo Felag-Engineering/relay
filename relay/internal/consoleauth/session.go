@@ -31,7 +31,7 @@
 // clear: a heap dump or a core file is a real artefact that leaves a running
 // process, and hashing costs one SHA-256 per request.
 //
-// HA is out of scope (roadmap: the HA/routing spike, #139). When it arrives,
+// HA is out of scope (roadmap: the HA/routing spike). When it arrives,
 // shared session state is one of the things it has to answer; a durable store
 // added now would prejudge that answer for the wrong reason.
 package consoleauth

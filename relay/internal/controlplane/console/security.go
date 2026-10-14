@@ -26,7 +26,7 @@ import (
 // Everything in this file is therefore a security control. Weakening one is an
 // ADR-level decision, not a convenience.
 //
-// # THE SCHEME (#460)
+// # THE SCHEME
 //
 // This is the durable record of the decision this file enforces — written
 // here, at the point of enforcement, so it is readable by the next person who
@@ -68,7 +68,7 @@ import (
 // resolved.** That is the same predicate the authentication boundary takes as
 // ConsoleSessionOptions.Public, so the CSRF lane and the auth lane cannot
 // disagree about what is public, and it follows consolesession.go's existing
-// rule (ADR-0023, #299): a presented credential is routed to exactly one
+// rule (ADR-0023): a presented credential is routed to exactly one
 // verifier, never offered to each until one accepts. sessionCSRFValid refuses
 // outright — never falls back to a cookie — when no ConsoleSession is in
 // context; that is the one branch that could ever become a downgrade, and it
@@ -159,7 +159,7 @@ var wellFormedSignInCSRFToken = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 // 'none' and form-action 'self' close the clickjacking and form-retarget paths
 // that a fleet-execution surface cannot afford to leave open.
 //
-// # CSP reporting is a recorded deferral, not an omission (#460, D15)
+// # CSP reporting is a recorded deferral, not an omission (D15)
 //
 // Spec 11 calls a CSP violation a security event, so shipping a `report-to`
 // naming a group with no endpoint behind it would be worse than shipping

@@ -50,7 +50,7 @@ func Connect(t *testing.T, base string, client *http.Client) *sdkmcp.ClientSessi
 // ConnectWith is Connect with a hook to configure the underlying client
 // before it dials — the seam a test needs to register custom JSON-RPC methods
 // via sdkmcp.AddSendingCustomMethod, since the extension methods Relay serves
-// (tasks/get, tasks/cancel; #374, SEP-2663) are not on the SDK's standard
+// (tasks/get, tasks/cancel, SEP-2663) are not on the SDK's standard
 // dispatch table on either side.
 func ConnectWith(t *testing.T, base string, client *http.Client, setup func(*sdkmcp.Client)) *sdkmcp.ClientSession {
 	t.Helper()

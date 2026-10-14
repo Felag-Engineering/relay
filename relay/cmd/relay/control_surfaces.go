@@ -94,7 +94,7 @@ type surfaceDeps struct {
 	now      func() time.Time
 	metrics  *metrics.Metrics
 
-	// consoleAuth is the Console's sign-in service (#418). Nil when the
+	// consoleAuth is the Console's sign-in service. Nil when the
 	// Console is not enabled, in which case consoleSurface is not in the
 	// surface list at all — the routes are unmounted, not disabled.
 	consoleAuth *consoleauth.Service
@@ -104,14 +104,14 @@ type surfaceDeps struct {
 	// capability layer: this seam must not carry Engage or Release.
 	freeze console.FreezeReader
 
-	// events is the event seam (#416). consoleSurface mounts the Console's
+	// events is the event seam. consoleSurface mounts the Console's
 	// one live-read route over it, narrowed to console.EventReader — which
 	// has no Publish method on it at all. mcpSurface wires the SAME bus
 	// into the MCP server's tool-call observer below, on the writing side.
 	events *events.Bus
 
 	// trust is the CA and control-plane server-certificate fingerprints for
-	// day one (spec 10, #427): two strings, so the Console never holds a CA.
+	// day one (spec 10): two strings, so the Console never holds a CA.
 	// Nil leaves that block on the screen saying it is not wired.
 	trust console.TrustReader
 
@@ -132,7 +132,7 @@ type surfaceDeps struct {
 // serverHooks are seams into newServer that ONLY tests populate. The zero
 // value is production: the production entry point reaches
 // newServerWithHooks only through newServer, which passes an empty
-// serverHooks. Never a Config field, env var or flag (#721) — invariant 11
+// serverHooks. Never a Config field, env var or flag — invariant 11
 // keeps what bounds acceptance operator-set on the host.
 // TestControlSurfaces_TestOnlyMCPOptionHookIsEmptyInProduction pins that.
 type serverHooks struct {
@@ -154,12 +154,12 @@ type controlSurface interface {
 type mcpSurface struct{}
 
 func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
-	// The last argument is the MCP Tasks resolver (#374, ADR-0028) — the SAME
+	// The last argument is the MCP Tasks resolver (ADR-0028) — the SAME
 	// *capability.Execution once more. Resolving a task handle reads an approval
 	// Request and may cancel a Job, so it goes through the one capability layer
 	// like everything else (invariant 10) rather than reaching a store.
 	//
-	// mcp.WithCertExpiringWindow is gone (#680): the MCP read tools no longer
+	// mcp.WithCertExpiringWindow is gone: the MCP read tools no longer
 	// resolve or evaluate anything — state: Labels arrive already evaluated
 	// on the lane's StateEval, which d.readLane resolves against the same
 	// root-owned window every other surface uses (invariant 11).
@@ -170,7 +170,7 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	// override a production one (e.g. to observe or replace
 	// WithToolCallObserver), but the production list itself is unchanged.
 	opts := []mcp.Option{
-		// The in-band approval rung (#391, ADR-0029): the SAME
+		// The in-band approval rung (ADR-0029): the SAME
 		// *capability.Approvals the API's decision endpoint uses. One decision
 		// model, two delivery envelopes — a decision made through the tool is
 		// the same act, recorded by the same code, differing only in the
@@ -192,7 +192,7 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// for it comes from crypto/rand inside the call, never from
 		// configuration (invariant 11).
 		mcp.WithApprovalElicitation(),
-		// The tool-call event publisher (#416, D9) — every tools/call
+		// The tool-call event publisher (D9) — every tools/call
 		// invocation, read and execution alike, feeds the Console's live
 		// view via toolCallObserver below.
 		mcp.WithToolCallObserver(toolCallObserver{bus: d.events}),
@@ -205,7 +205,7 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		readAuditor{sink: d.auditSink}, d.execution, opts...))
 }
 
-// apiSurface mounts the /api/v1 Control API slice (#116) onto the same mux —
+// apiSurface mounts the /api/v1 Control API slice onto the same mux —
 // no new listener, no new auth (invariant 10). It never touches Relay Config
 // or a blast cap (invariant 11).
 type apiSurface struct{}
@@ -218,39 +218,39 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		Nodes:        d.revocation,
 		Freeze:       d.freezeControl,
 		Audit:        d.audit,
-		// The role floor for mint/revoke (#397). Same *authz.RoleGate the
+		// The role floor for mint/revoke. Same *authz.RoleGate the
 		// capability layer holds — one ladder, consulted from both places,
 		// never re-derived here.
 		Authz: d.roleGate,
-		// Account and API-Token administration (#653) — the SAME
+		// Account and API-Token administration — the SAME
 		// *capability.AccountAdmin instance every other surface here holds: the
 		// same floor, the same self-target/last-admin refusals, and the same
 		// audit row as every other administrative act, rather than this
 		// surface re-deriving any of them (invariant 10).
 		AccountAdmin: d.accountAdmin,
-		// The Node read route (#440, #680). The capability read lane — the
+		// The Node read route. The capability read lane — the
 		// same *capability.ReadLane every other surface holds — records the
 		// read before it answers and fails closed, rather than reading the
 		// registry directly.
 		NodeReader: d.readLane,
 		Now:        d.now,
-		// Execution (#356): the SAME *capability.Execution instance the MCP
+		// Execution: the SAME *capability.Execution instance the MCP
 		// surface dispatches through — one capability layer, two thin surfaces
 		// (invariant 10), so Freeze/authz/blast-cap/audit and at-most-once carry
 		// over identically rather than being re-proven per surface.
 		Exec: d.execution,
 		Jobs: jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
-		// The out-of-band approval decision channel (#270, ADR-0027) — the same
+		// The out-of-band approval decision channel (ADR-0027) — the same
 		// *capability.Approvals again. The decision is the same act however it
 		// arrives, so the API endpoint, the MCP elicitation envelope, and the
 		// Console's approval queue all reach it through this one object.
 		Approvals: d.approvals,
-		// Batch/window approval grants (#378, ADR-0027 decision 12) — the same
+		// Batch/window approval grants (ADR-0027 decision 12) — the same
 		// object once more. Requesting a grant creates an ordinary approval
 		// Request answered through the decision route above, so the two share
 		// one quorum implementation rather than each carrying its own.
 		ApprovalGrants: d.approvals,
-		// Read auditing for the Job read route (#357, ADR-0025). *auditsink.Sink
+		// Read auditing for the Job read route (ADR-0025). *auditsink.Sink
 		// satisfies api.ReadAuditor directly — no adapter needed here, unlike
 		// mcp's readAuditor below, because package api may name capability
 		// types on its own routes.
@@ -260,13 +260,13 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// interface) and turn every audited read into a nil-receiver panic
 		// instead of the documented skip.
 		Reads: readAuditorOrNil(d.auditSink),
-		// state:cert-expiring's warning window (#414, ADR-0034) — the same
+		// state:cert-expiring's warning window (ADR-0034) — the same
 		// value every other surface resolves `state:` against.
 		CertExpiringWithin: d.certExpiringWithin,
 	})
 }
 
-// metricsSurface mounts the Prometheus text /metrics endpoint (#182) onto the
+// metricsSurface mounts the Prometheus text /metrics endpoint onto the
 // same mux — no new listener, no new auth (invariant 10). It is
 // observability-only, reached solely through the Authenticator.Middleware
 // wrapping mux: it never calls capability.Execution.Run and has no execution
@@ -298,13 +298,13 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	console.Register(consoleMux, console.Deps{
 		Auth:   d.consoleAuth,
 		Logger: d.logger,
-		// Execution is v0.7.0 (spec 05, issue #438). Until it lands there is
+		// Execution is v0.7.0 (spec 05). Until it lands there is
 		// no execution route for console_execution to gate, and shipping the
 		// flag ahead of the surface would be a knob that turns nothing off.
 		Execution: false,
 		// Every registry and Policy-view read is Deps.Queries now (#680,
 		// QRY-28) — there is no separate Fleet/Policy seam any more. There is
-		// also no separate Liveness seam (#414): registry.Node.Connected is
+		// also no separate Liveness seam: registry.Node.Connected is
 		// itself derived from the same live-Tunnel set, so the fleet view
 		// and a state:offline Selector read one fact instead of two.
 		Audit:     d.audit,
@@ -326,24 +326,24 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// consoleEventsOrNil for Go's typed-nil trap and what it would cost
 		// here.
 		Events: consoleEventsOrNil(d.events),
-		// The read lane (#441). d.readLane (*capability.ReadLane) already
+		// The read lane. d.readLane (*capability.ReadLane) already
 		// implements console.QueryReader's six methods (#450 added the
 		// registry half; #539 added RecordEventSubscription). Job detail
-		// (#423) reads Jobs and Tasks through it and through nothing else,
+		// reads Jobs and Tasks through it and through nothing else,
 		// which is why the Console is handed no Job repository of its own.
 		Queries: d.readLane,
-		// The Accounts screen's read seam (#654). d.accountAdmin already
-		// carries Accounts and APITokens (#653), so no adapter is built for
+		// The Accounts screen's read seam. d.accountAdmin already
+		// carries Accounts and APITokens, so no adapter is built for
 		// it, and console.AccountReader declares none of the account lane's
 		// five write verbs (CreateAccount, SetAccountRole, SetAccountEnabled,
 		// MintAPIToken, RevokeAPIToken). The admin floor on both reads is the capability
 		// layer's (authz.go), as is the decision that a successful read
 		// records nothing — #659 tracks the latter, in front of a human.
 		Accounts: d.accountAdmin,
-		// state:cert-expiring's warning window (#414, ADR-0034) — the same
+		// state:cert-expiring's warning window (ADR-0034) — the same
 		// value every other surface resolves `state:` against.
 		CertExpiringWithin: d.certExpiringWithin,
-		// Cancel (#595): one of the Console's two write seams. d.execution
+		// Cancel: one of the Console's two write seams. d.execution
 		// already implements CancelJob — the same method the Control API and
 		// MCP call — so no adapter is built for it; the role floor is
 		// operator, the scope beyond it differs by Account kind (human: any
@@ -352,7 +352,7 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// stays false, unchanged: Cancel cannot run anything, only ask
 		// something already running to stop.
 		Cancel: d.execution,
-		// Decide (#453): the Console's other write seam, and the same
+		// Decide: the Console's other write seam, and the same
 		// *capability.Approvals the Control API's out-of-band decision
 		// endpoint (POST /api/v1/approvals/{id}/decision) and MCP's
 		// approve_request call — so quorum, audience, requester exclusion,
@@ -362,8 +362,8 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// d.consoleAuth is already wired above as Auth, so step-up needs no
 		// new wiring.
 		Decide: d.approvals,
-		// AccountAdmin (#655): the Console's third write seam. d.accountAdmin
-		// already carries all five verbs (#653) — CreateAccount,
+		// AccountAdmin: the Console's third write seam. d.accountAdmin
+		// already carries all five verbs — CreateAccount,
 		// SetAccountRole, SetAccountEnabled, MintAPIToken and RevokeAPIToken
 		// — so no adapter is built for it. The admin floor on every one, the
 		// self-target refusal, the last-enabled-admin refusal and all six
@@ -389,7 +389,7 @@ func defaultControlSurfaces() []controlSurface {
 	return []controlSurface{mcpSurface{}, apiSurface{}, metricsSurface{}}
 }
 
-// mcpReadLane adapts *capability.ReadLane to mcp.ReadLane (#680, QRY-28): the
+// mcpReadLane adapts *capability.ReadLane to mcp.ReadLane (QRY-28): the
 // ONE audited seam the MCP read tools call for every registry, Policy-view
 // and Template-vocabulary read.
 //
@@ -453,7 +453,7 @@ func (l mcpReadLane) ListOperations(ctx context.Context, nodeID string) (mcp.Nod
 	return mcp.NodeVocabulary{Templates: vocab.Templates, Reported: vocab.Reported}, nil
 }
 
-// readAuditor adapts the audit sink to mcp.ReadAuditor (#288, ADR-0025).
+// readAuditor adapts the audit sink to mcp.ReadAuditor (ADR-0025).
 //
 // It lives here, in the composition root, for the same reason every other
 // surface adapter does: the mcp package must not name a capability type on its
@@ -482,7 +482,7 @@ func (a readAuditor) RecordRead(ctx context.Context, e mcp.ReadEvent) error {
 	return a.sink.RecordRead(ctx, p, e.Tool, "", "", e.JobID)
 }
 
-// toolCallObserver adapts the event bus to mcp.ToolCallObserver (#416, D9).
+// toolCallObserver adapts the event bus to mcp.ToolCallObserver (D9).
 //
 // It lives here, beside readAuditor, for the same reason: the mcp package
 // must not name a capability type on its read path (no_dispatch_test.go),

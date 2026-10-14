@@ -32,19 +32,19 @@ package console
 // configuration — Execution — is a mirror the composition root sets, not a value
 // this package can read from anywhere.
 //
-// There are now THREE write seams on Deps — JobCanceller (cancel.go, #595),
-// ApprovalDecider (decide.go, #453) and AccountAdministrator
-// (accounts_write.go, #655) — and none lives in this file, on purpose: each
+// There are now THREE write seams on Deps — JobCanceller (cancel.go),
+// ApprovalDecider (decide.go) and AccountAdministrator
+// (accounts_write.go) — and none lives in this file, on purpose: each
 // gets its own file so this file's "every seam here is read-only" claim stays
 // true of seams.go without qualification.
 //
 // The filtered, paginated, per-principal audit/Job query lane landed in the
 // capability layer as issue #441 — see QueryReader below. Job detail was the
-// first screen to migrate onto it (#423) and reads nothing else: its counts
+// first screen to migrate onto it and reads nothing else: its counts
 // are one aggregate row and its Task rows are small per-outcome pages, so
 // the screen is bounded by construction at 10,000 Nodes rather than capped
-// after the fact. Read egress (#425) migrated next and reads nothing else
-// either (the screen was retired on 2026-10-01). Activity (#422) followed,
+// after the fact. Read egress migrated next and reads nothing else
+// either (the screen was retired on 2026-10-01). Activity followed,
 // reading BOTH halves of the lane: its dispatch rows come from QueryJobs one
 // row per Job at any fan-out, and
 // everything else from QueryAudit. #450 then added the lane's REGISTRY half
@@ -112,7 +112,7 @@ type AuditReader interface {
 // audience, requester-exclusion and channel strength stay one implementation.
 //
 // The three reads beyond the queue are what the approval object renders:
-// LastApprovedOfSameShape is the anti-fatigue diff's lookup (#415, D10),
+// LastApprovedOfSameShape is the anti-fatigue diff's lookup (D10),
 // ActiveGrants tells the queue which pending Requests are Grants, and
 // GrantForApproval resolves one Request's Grant IN EVERY STATE — the prior
 // Grant a diff compares against is usually the expired or exhausted one
@@ -127,7 +127,7 @@ type ApprovalReader interface {
 
 // AccountReader is the Account registry and its API Tokens, read-only (#654,
 // spec 15). *capability.AccountAdmin satisfies both methods, which landed in
-// #653 (PR #657), so no adapter is built for this seam.
+// #653, so no adapter is built for this seam.
 //
 // EVERY WRITE VERB ON THE ACCOUNT LANE IS STILL ABSENT FROM THIS INTERFACE:
 // CreateAccount, SetAccountRole, SetAccountEnabled, MintAPIToken and
@@ -176,15 +176,15 @@ type AccountReader interface {
 	APITokens(ctx context.Context, p capability.Principal, accountID string) ([]accounts.APIToken, error)
 }
 
-// QueryReader is the capability layer's read lane (#441): filtered,
+// QueryReader is the capability layer's read lane: filtered,
 // paginated, aggregating queries over the audit trail and over Jobs/Tasks.
 // *capability.ReadLane satisfies it, as *capability.Approvals satisfies
 // ApprovalReader above — nothing here dispatches or decides, and the narrowed
 // method set is what keeps this package's grip on the capability layer to
 // reads only.
 //
-// Job detail (#423) was its first consumer, read egress (#425, retired
-// 2026-10-01) its second, Activity (#422) its third, and agent history (#542)
+// Job detail was its first consumer, read egress (#425, retired
+// 2026-10-01) its second, Activity its third, and agent history
 // its fourth. Landing the seam ahead of any screen using it is what let all
 // four be built against one settled contract instead of four
 // independently-guessed ones.
@@ -197,7 +197,7 @@ type AccountReader interface {
 // and PolicyReader are gone, and the Compare screen and the Node-detail
 // Policy panel ask here too, through DescribeNode.
 type QueryReader interface {
-	// The registry half (#450, reshaped by #680). ListNodes resolves and
+	// The registry half (reshaped by #680). ListNodes resolves and
 	// records selector (the empty string means the whole fleet — the
 	// Console's fleet filter is a facet over the page it already read, not a
 	// Selector; Selector-scoped enumeration is MCP's, QRY-3). DescribeNode is
@@ -211,7 +211,7 @@ type QueryReader interface {
 	QueryJobs(ctx context.Context, p capability.Principal, f capability.JobFilter, page capability.PageRequest) (capability.JobPage, error)
 	QueryTasks(ctx context.Context, p capability.Principal, f capability.TaskFilter, page capability.PageRequest) (capability.TaskPage, error)
 
-	// RecordEventSubscription is the odd one out (#539): the only method here
+	// RecordEventSubscription is the odd one out: the only method here
 	// that records a read and returns the canonical form of what it recorded
 	// rather than a page of rows. What it covers is read through EventReader
 	// below, not through this interface — a subscription to the live event
@@ -256,7 +256,7 @@ type TrustReader interface {
 	ServerFingerprint() string
 }
 
-// EventReader is the in-process event seam (#416), read-only. *events.Bus
+// EventReader is the in-process event seam, read-only. *events.Bus
 // satisfies it.
 //
 // The absence is the load-bearing part, exactly as with AuditReader above: no
@@ -300,7 +300,7 @@ type EventReader interface {
 //
 // Engage and Release are absent. Freeze is the top rung of the incident ladder
 // and reaches the fleet; it arrives in v0.7.0 through the capability layer,
-// which is where its human-principal-only rule already lives (#397).
+// which is where its human-principal-only rule already lives.
 type FreezeReader interface {
 	Frozen(ctx context.Context) (bool, error)
 }

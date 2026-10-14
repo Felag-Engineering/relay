@@ -1,4 +1,4 @@
-//! The daemon's connection to the Relay (ADR-0005, ADR-0006, #889): the mTLS
+//! The daemon's connection to the Relay (ADR-0005, ADR-0006): the mTLS
 //! identity and its sanctioned on-disk writer, enrollment, certificate renewal,
 //! and the Tunnel's channel and reconnect backoff.
 //!
@@ -7,7 +7,7 @@
 //! (`tests/policy_never_opened_for_write.rs` allowlists that one file).
 
 // Crate-private aliases so the `crate::x::...` paths in the moved files resolve
-// unchanged (#889).
+// unchanged.
 pub(crate) use relay_log as log_field;
 pub(crate) use relay_proto as gen;
 #[cfg(test)]

@@ -5,7 +5,7 @@ import "sync"
 // recordedSet tracks the Node ids for which THIS PROCESS has already
 // written a node_revoke record through a RevocationRecorder that returned
 // nil — set only by revokeChunk, after its record call succeeds, and read
-// only by RevokeNodeRecorded (#605).
+// only by RevokeNodeRecorded.
 //
 // WHY NOT THE DENYLIST. Denylist membership does NOT mean "a record
 // exists" for a Node. Three production paths put a Node on the denylist

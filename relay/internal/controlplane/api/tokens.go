@@ -47,7 +47,7 @@ type mintTokenResponse struct {
 // Enrollment Token via TokenMinter.Create, audit the mint (KindTokenMint),
 // and return the plaintext credential exactly once (201).
 //
-// **Requires `admin`** (ADR-0032 §5, #397), checked before the body is even
+// **Requires `admin`** (ADR-0032 §5), checked before the body is even
 // decoded. A token's scope becomes the enrolling Node's relay: labels, and
 // relay: is the namespace the security-sensitive lane targets (invariant 7,
 // ADR-0020) — so minting manufactures Nodes that quarantine, remediation, and
@@ -116,11 +116,11 @@ const cascadeAuditBudget = 2 * time.Minute
 // handleRevokeToken implements DELETE /api/v1/enrollment-tokens/{id}:
 // revoke the token (and, via TokenRevoker.RevokeToken, cascade-revoke every
 // Node it enrolled), audit the revoke (KindTokenRevoke) plus one
-// KindNodeRevoke per cascaded Node (#557), and return 204. Idempotent:
+// KindNodeRevoke per cascaded Node, and return 204. Idempotent:
 // revoking an unknown or already-revoked id still returns 204
 // (revocation.Service.RevokeToken swallows enroll.ErrNotFound).
 //
-// **Requires `admin`** (#397). #397's table named the mint and the Node
+// **Requires `admin`**. #397's table named the mint and the Node
 // revoke; this route was the same hole, found by the structural guard that
 // issue asked for. It cascades to every Node the token enrolled, tearing down
 // live Tunnels — the same availability blast radius as revoking those Nodes
@@ -182,7 +182,7 @@ func handleRevokeToken(d Deps) http.HandlerFunc {
 		// capping the cascade would leave Nodes either unrevoked (an
 		// authentication hole) or unrecorded (the bug this closes).
 		//
-		// The registry writes are now chunked the same way (#607): on the
+		// The registry writes are now chunked the same way: on the
 		// happy path the cascade marks each chunk's Nodes revoked in ONE
 		// transaction per revocation.cascadeRecordChunk, not one autocommit
 		// UPDATE per Node; a batch failure falls back to exactly that
@@ -202,13 +202,13 @@ func handleRevokeToken(d Deps) http.HandlerFunc {
 		// The registry half is deliberately NOT bound by this budget. A
 		// budget expiry that stopped persisting revocations would leave
 		// Nodes denylisted in memory only, and a restart rehydrates the
-		// denylist from the registry (#133, ADR-0006) — it would silently
+		// denylist from the registry (ADR-0006) — it would silently
 		// un-revoke them. That is under-denying, which this cascade's stated
 		// posture forbids; the chunk SIZE, not a deadline, is what bounds
 		// the registry write.
 		//
 		// The budget starts here, BEFORE RevokeToken — so if a second
-		// concurrent revoke of this same token (#605) is already waiting on
+		// concurrent revoke of this same token is already waiting on
 		// tokenLocks, this cascade's cascadeAuditBudget clock is already
 		// running for the whole of that wait too. Bounded harm: the wait
 		// itself is bounded by the first cascade's own run, and a budget that

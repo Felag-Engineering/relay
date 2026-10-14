@@ -76,7 +76,7 @@ var ErrRevokeReasonMalformed = errors.New("capability: a Node-revocation reason 
 // Enrollment Token enrolled, reached by DELETE /api/v1/enrollment-tokens/{id};
 // the cascade now records one KindNodeRevoke per cascaded Node, attributed to
 // the same Principal as the KindTokenRevoke row for the token itself, with a
-// reason from CascadeRevokeReason (#557). revocation.Service still has no
+// reason from CascadeRevokeReason. revocation.Service still has no
 // audit sink of its own — it imports neither internal/audit nor
 // internal/capability (see revocation.RevocationRecorder) — so each record is
 // written by a CALLER-supplied recorder, and its content is authored at the
@@ -142,7 +142,7 @@ func ValidateRevokeReason(raw string) (string, error) {
 }
 
 // CascadeRevokeReason renders the DERIVED reason for a Node revoked by an
-// Enrollment Token cascade (#557): the operator authored no per-Node reason
+// Enrollment Token cascade: the operator authored no per-Node reason
 // for a Node they never named and must not be asked for one after the fact,
 // so this names the CAUSE instead — the token whose revocation swept the Node
 // up.

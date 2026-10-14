@@ -57,7 +57,7 @@ type Config struct {
 	//
 	// A callback rather than a tls.Certificate value: a certificate handed
 	// over once expires while the process still runs, which is how a Relay up
-	// longer than its leaf's lifetime came to serve a dead certificate (#403).
+	// longer than its leaf's lifetime came to serve a dead certificate.
 	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
 	// readHeaderTimeout and idleTimeout override the Default* bounds above; zero means
@@ -80,9 +80,9 @@ type Server struct {
 // New constructs a Server. It mounts one authenticated placeholder route so
 // that the auth wiring is provable ahead of #116 landing the real Control
 // API routes:
-//   - GET /api/v1/ping  => 200 {"status":"ok"}  (Control API stand-in, #116)
+//   - GET /api/v1/ping  => 200 {"status":"ok"}  (Control API stand-in)
 //
-// The real MCP server (#117) is mounted on Mux() by the composition root
+// The real MCP server is mounted on Mux() by the composition root
 // (relay/cmd/relay/main.go) at "/mcp", so this package keeps no MCP
 // dependency; it is reached only through the Authenticator.Middleware
 // wrapping installed below, exactly like every other route on Mux().
@@ -91,7 +91,7 @@ func New(cfg Config, authn *Authenticator) *Server {
 	mux.HandleFunc("GET /api/v1/ping", handlePing)
 
 	// The ONE unauthenticated route on this listener: RFC 9728
-	// protected-resource metadata (#299, ADR-0024).
+	// protected-resource metadata (ADR-0024).
 	//
 	// It has to be reachable without a credential, because it is what tells a
 	// harness *how to get one* — a metadata document behind the auth it
@@ -173,7 +173,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.http.Shutdown(ctx)
 }
 
-// handlePing is the Control API placeholder (#116): proves a REST route is
+// handlePing is the Control API placeholder: proves a REST route is
 // reachable only through Authenticator.Middleware.
 func handlePing(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

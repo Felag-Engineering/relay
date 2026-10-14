@@ -6,7 +6,7 @@ import "fmt"
 // form: who is asking the layer to act, threaded through the pipeline to the
 // Authorizer and recorded on every audit entry.
 //
-// Since v0.3.0 (#295) this is no longer a pre-Account placeholder — it is a
+// Since v0.3.0 this is no longer a pre-Account placeholder — it is a
 // projection of a stored Account (internal/accounts). The projection is built
 // at the authentication boundary (internal/controlplane), NOT here: the
 // capability package's import allowlist is deliberately narrow (jobs +
@@ -42,7 +42,7 @@ type Principal struct {
 	// admin's powers — but Kind IS an authorization input for the specific
 	// decisions Role alone cannot answer:
 	//
-	//   - EngageFreeze requires a HUMAN Account (#397, ADR-0013 amendment): a
+	//   - EngageFreeze requires a HUMAN Account (ADR-0013 amendment): a
 	//     machine Account at operator halting the fleet is an AI-agent
 	//     switching off its own overseers.
 	//   - CancelJob's machine-Account scoping (#614, owner decision
@@ -61,7 +61,7 @@ type Principal struct {
 	Kind string
 
 	// AuthMethod is HOW this identity was established: a static API Token or
-	// an OAuth session (#299). It is a verified fact — the Relay knows which
+	// an OAuth session. It is a verified fact — the Relay knows which
 	// of its own paths accepted the credential — and it is what makes the two
 	// session kinds distinguishable in audit, which #299 requires.
 	//
@@ -100,14 +100,14 @@ const (
 	// authentication boundary (a local signal on the Relay host, a fixture).
 	AuthMethodUnspecified AuthMethod = ""
 
-	// AuthMethodAPIToken is a static per-Account API Token (#296).
+	// AuthMethodAPIToken is a static per-Account API Token.
 	AuthMethodAPIToken AuthMethod = "api_token"
 
-	// AuthMethodOAuth is a session authorized through the external IdP (#299).
+	// AuthMethodOAuth is a session authorized through the external IdP.
 	AuthMethodOAuth AuthMethod = "oauth"
 
 	// AuthMethodConsoleSession is a human's browser session in the Admin
-	// Console (#418, ADR-0009).
+	// Console (ADR-0009).
 	//
 	// Distinguishable from the other two in audit on purpose: the three call
 	// for different incident responses. A compromised API Token is revoked

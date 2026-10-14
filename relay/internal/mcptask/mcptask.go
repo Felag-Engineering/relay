@@ -312,7 +312,7 @@ func TTLMillis(expiresAt, now time.Time) int64 {
 // Repository persists handles.
 //
 // Durable storage makes a handle resolvable by ANY Relay instance, which the
-// stateless MCP handler (#267) needs and HA (#139) will.
+// stateless MCP handler needs and HA will.
 type Repository interface {
 	// Create persists a validated handle. Implementations must reject one
 	// whose Validate fails rather than trusting the caller.

@@ -276,7 +276,7 @@ func (g Grant) Active(now time.Time) bool {
 // a conjunction, and the fan-out check is the ceiling that stops a grant
 // written for a handful of Nodes covering the fleet after the registry grows.
 //
-// A Scope has no namespace term (#482), so no dispatch is covered or refused
+// A Scope has no namespace term, so no dispatch is covered or refused
 // because of the label namespaces its Selector used. That is why
 // RequirementForScope prices every Grant over all of them.
 func (g Grant) Covers(d Dispatch, now time.Time) bool {
@@ -367,7 +367,7 @@ func HashScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string {
 	writeField(h, "risk", jobs.RiskClassName(s.RiskClass))
 	// Retained as an always-empty field so the digest of every unpinned Scope
 	// (the only kind that can now exist) is byte-identical to what
-	// approval_requests.plan_hash already stores (#482).
+	// approval_requests.plan_hash already stores.
 	writeField(h, "namespace", "")
 	writeCount(h, "max_fan_out", s.MaxFanOut)
 	// raw_exec is a bool, not an int; writeCount takes an int and there is no
@@ -397,7 +397,7 @@ func HashScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string {
 // against the Scope it describes — which is why migration 0022 adds a shape_key
 // column to approval_requests and deliberately none here.
 //
-// A legacy pinned Grant (LegacyNamespacePin, #482) keeps the key it was stored
+// A legacy pinned Grant (LegacyNamespacePin) keeps the key it was stored
 // under, so the shape-key backfill still recomputes it exactly and the diff
 // callout never shows a dead pinned Grant as "same shape" as a live unpinned
 // one.
@@ -405,7 +405,7 @@ func (g Grant) ShapeKey() string { return hashGrantShape(g.Scope, g.LegacyNamesp
 
 // knownNamespaces are the label namespaces a Selector may use (ADR-0006,
 // ADR-0020, ADR-0034). RequirementForScope ALWAYS walks every one. A Scope has
-// no namespace term (#482), so a Grant can cover a dispatch whose Selector
+// no namespace term, so a Grant can cover a dispatch whose Selector
 // uses any of them, and in any combination. Probing each namespace on its own
 // is exactly that worst case, because a gate Match names at most one namespace
 // and a multi-namespace dispatch matches the union of what its single-namespace

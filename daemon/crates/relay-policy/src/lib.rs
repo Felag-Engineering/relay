@@ -42,7 +42,7 @@ use crate::model::{compile_allow_args, compile_deny_args, CompiledAllow, Compile
 use crate::natives as operations;
 
 // Crate-private aliases so the `crate::x::...` paths in the moved files resolve
-// unchanged (#889).
+// unchanged.
 use crate as policy;
 pub(crate) use relay_log as log_field;
 pub(crate) use relay_proto as gen;

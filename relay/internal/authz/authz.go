@@ -4,8 +4,8 @@
 //
 // The v0.0.5 predecessor (`Staged`) authorized exactly one thing: an Account
 // whose role was admin. That was correct while the seeded credential
-// authenticated as the one and only Principal. With real Accounts (#295),
-// real credentials (#296), and both on the wire (#297), the gate is now the
+// authenticated as the one and only Principal. With real Accounts,
+// real credentials, and both on the wire, the gate is now the
 // role ladder ADR-0010 describes:
 //
 //	viewer    — may read. May never dispatch anything.
@@ -24,7 +24,7 @@
 // inherit the same answer. A surface that gated Raw Exec itself would be a
 // second control path, and the first one to be forgotten.
 //
-// # The administrative half (#397)
+// # The administrative half
 //
 // The ladder above answers "who may dispatch". It could not answer "who may
 // mint an Enrollment Token, revoke a Node, or engage the Freeze", because
@@ -228,12 +228,12 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 // action this gate does not recognize.
 //
 // The floors are not new policy — each was already written down and simply
-// never enforced (#397):
+// never enforced:
 //
 //	mint an Enrollment Token     admin      ADR-0032 §5
 //	revoke an Enrollment Token   admin      ADR-0020's incident ladder
 //	revoke a Node                admin      ADR-0020's incident ladder
-//	engage the Freeze            operator   ADR-0013 (+ human-only, #397)
+//	engage the Freeze            operator   ADR-0013 (+ human-only)
 //	release the Freeze           admin      ADR-0013
 //	cancel a Job                 operator   execution.md §Cancellation (owner decision 2026-09-14), #346
 //	read Accounts                admin      accounts-and-access.md: "Administer Accounts and API Tokens — admin"
@@ -245,7 +245,7 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 //	mint an API Token            admin      accounts-and-access.md
 //	revoke an API Token          admin      accounts-and-access.md
 //
-// The eight Account/API-Token rows (#653) are humanOnly: false — STATUS-QUO
+// The eight Account/API-Token rows are humanOnly: false — STATUS-QUO
 // PRESERVATION, not a claim that admin is already the strongest role (that
 // conflates authority breadth with PERSISTENCE: a machine admin minting a
 // Token converts a transient session compromise into durable access that
@@ -268,7 +268,7 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 // separate question this gate does not decide — it needs the Job's recorded
 // requester, which is capability-layer data this package does not hold.
 // capability.Execution.CancelJob layers that machine-Account scoping on top of
-// this floor (owner decision 2026-09-17, execution.md §Cancellation, #614):
+// this floor (owner decision 2026-09-17, execution.md §Cancellation):
 // a human Account may still cancel any Job, but a machine Account may cancel
 // only a Job whose recorded requester is itself.
 func requiredControlRole(act capability.ControlAction) (role accounts.Role, label string, humanOnly, known bool) {
@@ -306,7 +306,7 @@ func requiredControlRole(act capability.ControlAction) (role accounts.Role, labe
 	}
 }
 
-// AuthorizeControl implements capability.ControlAuthorizer (#397): may p
+// AuthorizeControl implements capability.ControlAuthorizer: may p
 // perform this administrative act on the control plane itself?
 //
 // Deny-by-default in both directions, exactly as Authorize is: an action this

@@ -35,7 +35,7 @@ func RenderFacts(n registry.Node) RenderedFacts {
 	}
 }
 
-// RenderedCertificate is a Node's identity provenance (#440), before a
+// RenderedCertificate is a Node's identity provenance, before a
 // surface tags it.
 type RenderedCertificate struct {
 	Recorded      bool
@@ -46,7 +46,7 @@ type RenderedCertificate struct {
 	LastRenewedAt string
 }
 
-// RenderCertificate renders n's identity provenance (#440).
+// RenderCertificate renders n's identity provenance.
 //
 // Recorded gates every timestamp. A Node that enrolled before provenance was
 // stored has a zero NotAfter, and emitting that as an RFC3339 timestamp would

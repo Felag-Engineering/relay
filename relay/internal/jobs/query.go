@@ -11,7 +11,7 @@ import (
 // reasoning audit.ErrInvalidCursor states.
 var ErrInvalidCursor = errors.New("jobs: invalid pagination cursor")
 
-// query.go is the Job/Task read lane (#441): filtered, paginated summaries
+// query.go is the Job/Task read lane: filtered, paginated summaries
 // over Jobs and Tasks, distinct from JobRepository/TaskRepository's
 // create/transition/by-key surface. Kept SQL-free like the rest of this
 // package (nosql_test.go); the SQLite implementation is
@@ -145,7 +145,7 @@ type JobSummary struct {
 	Counts     map[Outcome]int
 	Unresolved int
 
-	// Recording is how much of the Job's dispatch audit record exists (#887),
+	// Recording is how much of the Job's dispatch audit record exists,
 	// worked out from counts: the Job's dispatch_intent and dispatch rows
 	// against Total. The comparison is exact because run returns one result
 	// per persisted Task and Execution.Run appends one dispatch row per result.

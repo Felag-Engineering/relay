@@ -1,25 +1,25 @@
 package console
 
 // events.go is the Console's ONE live-read path: GET /console/events, a
-// server-sent-event stream over the in-process event seam (#416).
+// server-sent-event stream over the in-process event seam.
 //
 // # One route, extended per screen — never one route per screen
 //
 // Spec 11: "One connection per Console session, multiplexing all event kinds;
-// screens subscribe to the kinds they render." Day one (#427) implements the
-// `enrollment` kind and nothing else. Activity (#422) EXTENDS this route with
+// screens subscribe to the kinds they render." Day one implements the
+// `enrollment` kind and nothing else. Activity EXTENDS this route with
 // its own projection; a second streaming route would be a second live path and
 // would have to be unbuilt (invariant 10).
 //
 // # Every kind names the role that may see it
 //
-// This route's own Route.MinRole is RoleViewer (#464), so Register's
+// This route's own Route.MinRole is RoleViewer, so Register's
 // mount-time gate places a floor at "any valid role" and refuses nothing an
 // authenticated principal can be — it is not double-gating, and the per-kind
 // table below stays the only control that discriminates between kinds. Day
-// one (#427) recorded the earlier, ungated state as a deliberate absence and
+// one recorded the earlier, ungated state as a deliberate absence and
 // said the absence stops being right the moment a second kind is added.
-// Activity (#422) adds one, so the gate is here: consoleEventKinds carries a
+// Activity adds one, so the gate is here: consoleEventKinds carries a
 // MinRole per kind and handleEvents checks it against the acting Principal
 // before a stream is opened. Today every admitted kind sits AT the route's
 // RoleViewer floor (consoleEventKinds below), not above it; the per-kind
@@ -62,7 +62,7 @@ package console
 // same edit. TestConsoleEvents_EveryKindNamesTheRoleThatMaySeeIt is the
 // tripwire, and it asserts the allowlist's exact SIZE for that reason.
 //
-// # THE SUBSCRIPTION IS A RECORDED READ (#539)
+// # THE SUBSCRIPTION IS A RECORDED READ
 //
 // A subscription to this route is a read of the fleet's live activity, and
 // ADR-0025 audits it exactly as it audits QueryJobs or ListNodes: one
@@ -393,7 +393,7 @@ func newEventsHandler(d Deps, limiter *streamLimiter) http.HandlerFunc {
 		// role at zero and returns false for every valid want, so an empty,
 		// corrupted or future role is REFUSED here rather than admitted.
 		//
-		// POSITION (1 of 4, #539): the read record below must come AFTER
+		// POSITION (1 of 4): the read record below must come AFTER
 		// this check, never before it. A refused caller disclosed nothing,
 		// and recording a 403 as a read would put non-accesses into read
 		// egress's enumeration count — the same reasoning DescribeNode's
@@ -412,7 +412,7 @@ func newEventsHandler(d Deps, limiter *streamLimiter) http.HandlerFunc {
 		if key == "" {
 			key = p.Account
 		}
-		// POSITION (2 of 4, #539): the read record below must come AFTER
+		// POSITION (2 of 4): the read record below must come AFTER
 		// this acquire, not before it. The 429 is the cheap refusal this
 		// code already orders first; an audit-store write in front of it
 		// would let any viewer already at their cap make this Relay perform
@@ -441,7 +441,7 @@ func newEventsHandler(d Deps, limiter *streamLimiter) http.HandlerFunc {
 			unavailable(w, queryLaneName)
 			return
 		}
-		// POSITION (3 of 4, #539): the read record MUST be written before
+		// POSITION (3 of 4): the read record MUST be written before
 		// Subscribe, non-negotiable. Subscribe registers this request with
 		// the bus, and a resume replays the retained backlog immediately —
 		// a record written after Subscribe could not honestly claim that
@@ -777,7 +777,7 @@ func enrollmentReasonText(r events.EnrollmentReason) string {
 	case events.ReasonInvalidScope:
 		// Deliberately not framed as a daemon-side problem: this names a fault
 		// in the TOKEN's stored scope, minted before this well-formedness gate
-		// existed (#555) — the same "wrong side" concern ReasonMalformed's
+		// existed — the same "wrong side" concern ReasonMalformed's
 		// comment raises, mirrored for relay-space.
 		return "the token's stored scope is not a valid set of relay: labels — mint a replacement token"
 	default:

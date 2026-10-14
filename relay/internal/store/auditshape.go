@@ -60,7 +60,7 @@ type auditShapeAlert struct {
 // pre-0024 timestamps — the binary-rollback case.
 //
 // WHY IT EXISTS: migrate deliberately tolerates a database newer than the
-// binary (#492), so an operator can roll a Relay back onto a converted table,
+// binary, so an operator can roll a Relay back onto a converted table,
 // and that older Relay writes trimmed ts values into it. Those rows sort to
 // the end of their second instead of their right place, a pagination cursor
 // landing on one mis-seeks, and a paged read over the mixed table silently
@@ -181,7 +181,7 @@ func windowHoldsLegacyTimestamps(ctx context.Context, db *sql.DB) (legacyTSObser
 	// bytes, and CAST(ts AS TEXT) is an expression rather than a column
 	// reference, so it carries no decltype for the driver to act on — which
 	// is how the sample in the log line is the operator's actual bytes. Same
-	// driver behaviour that broke the pagination cursor (#656).
+	// driver behaviour that broke the pagination cursor.
 	//
 	// ORDER BY rowid DESC is INSERTION order, which is exactly "what was
 	// written most recently" — the rows a rolled-back binary just wrote — and
@@ -195,7 +195,7 @@ func windowHoldsLegacyTimestamps(ctx context.Context, db *sql.DB) (legacyTSObser
 	// convention. Nothing in this repo VACUUMs it or names a rowid on insert,
 	// so rowids are assigned in ascending order and never reused. SQLite reuses
 	// the highest rowid after the highest row is deleted, which would put a
-	// NEWER row below older ones and hide it from this window. Retention (#677)
+	// NEWER row below older ones and hide it from this window. Retention
 	// is the obvious future violator, and must seal and archive whole prefixes
 	// of the chain: deleting oldest-first stays safe, deleting newest or
 	// emptying the table does not. Anything that starts removing audit rows

@@ -1,4 +1,4 @@
-// Command relay-audit-verify walks the Relay's audit hash chain (#896) and
+// Command relay-audit-verify walks the Relay's audit hash chain and
 // reports the first break.
 //
 // It is read-only and never migrates: it opens the database read-only, refuses

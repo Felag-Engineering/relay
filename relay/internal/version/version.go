@@ -1,5 +1,5 @@
 // Package version carries the Relay binary's build identity: which build this
-// is (issue #249, ADR-0014).
+// is (ADR-0014).
 //
 // The three variables below are the ONLY mutable state here, and they are
 // mutable solely so the linker can set them: `make build` passes

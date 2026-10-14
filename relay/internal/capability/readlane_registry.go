@@ -11,7 +11,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
-// readlane_registry.go is the read lane's REGISTRY half (#450), beside
+// readlane_registry.go is the read lane's REGISTRY half, beside
 // readlane.go's audit/Job half.
 //
 // readlane.go answers "what is on the trail"; this file answers "what is in
@@ -67,14 +67,14 @@ const (
 	toolListOperations = "list_operations"
 )
 
-// ReadLane is the capability layer's read side (#441, #450): the registry
+// ReadLane is the capability layer's read side: the registry
 // reads, the audit-trail and Job queries, and Selector resolution, each audited
 // before it is served. Construct it with NewReadLane.
 type ReadLane struct {
 	rec *Recorder
 	reg registry.Repository
 
-	// auditQ and jobQ are the read lane (#441): filtered, paginated queries
+	// auditQ and jobQ are the read lane: filtered, paginated queries
 	// over the audit trail and over Jobs/Tasks. Nil means the read lane is
 	// not wired — readlane.go's methods return ErrQueriesUnavailable rather
 	// than an empty page, since an empty page is a claim ("there is nothing
@@ -84,7 +84,7 @@ type ReadLane struct {
 	jobQ   JobQuery
 
 	// policyView and nodeVocab are the Policy-view and Template-vocabulary
-	// reads (#680, seams.go). policyView is display-only. nodeVocab is also
+	// reads (seams.go). policyView is display-only. nodeVocab is also
 	// read by template.go to decide a Template dispatch's fan-out and class
 	// (ADR-0042), and by nothing else outside the read lane. Both nil by
 	// default: DescribeNode and ListOperations report *Reported=false for a
@@ -197,7 +197,7 @@ type NodeDetail struct {
 
 	// Eval is the StateEval this read was resolved at — the same instant/
 	// window a surface must render `state:` Labels against, rather than
-	// re-deriving one from a window it keeps its own copy of (#680).
+	// re-deriving one from a window it keeps its own copy of.
 	Eval StateEval
 
 	// PolicyPeers is how many Nodes in the registry report the same
@@ -209,7 +209,7 @@ type NodeDetail struct {
 	// TemplatePeers is the same count for the template-set fingerprint.
 	TemplatePeers int
 
-	// Policy and PolicyReported are the DISPLAY-ONLY Policy view (#680).
+	// Policy and PolicyReported are the DISPLAY-ONLY Policy view.
 	// PolicyReported=false is the ONLY "nothing captured yet" signal — a
 	// caller must never render it as an empty Policy — and is what a nil
 	// PolicyViewSource, or one that has not yet seen this Node (re)connect,
@@ -218,13 +218,13 @@ type NodeDetail struct {
 	PolicyReported bool
 
 	// Templates and TemplatesReported are the DISPLAY-ONLY Template
-	// vocabulary view (#680), following the same reported=false discipline.
+	// vocabulary view, following the same reported=false discipline.
 	Templates         nodevocab.Snapshot
 	TemplatesReported bool
 }
 
 // NodeListing is ListNodes' result: the matched Nodes plus the context a
-// surface needs to render them (#680).
+// surface needs to render them.
 type NodeListing struct {
 	// Nodes may be a NIL slice when the Selector matched nothing
 	// (Selector.Resolve returns nil, never an empty non-nil slice) — every
@@ -419,7 +419,7 @@ func (l *ReadLane) ListOperations(ctx context.Context, p Principal, nodeID strin
 // registryReadable refuses the registry read lane on a ReadLane that cannot
 // actually audit — the read-lane analogue of NewExecution's fail-open guards.
 //
-// NewReadLane already refuses the no-op sink (F5, #441), because a lane that
+// NewReadLane already refuses the no-op sink (F5), because a lane that
 // answers every query while recording none of them is the "unauditable read
 // succeeded" state ADR-0025 forbids. This check stays at the call as defence
 // in depth for a lane built by the in-package assembler (newReadLane), and as
@@ -435,7 +435,7 @@ func (l *ReadLane) registryReadable() error {
 	return l.auditSinkPresent()
 }
 
-// auditSinkPresent is registryReadable's sink guard, extracted (#539) so a
+// auditSinkPresent is registryReadable's sink guard, extracted so a
 // read-lane method with no registry coupling of its own — RecordEventSubscription,
 // readlane.go — can still refuse a lane built on the no-op sink.
 // registryReadable keeps its own l.reg == nil check and then calls this.

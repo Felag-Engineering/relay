@@ -1,6 +1,6 @@
 package console
 
-// components.go holds the Console's shared components (#419): the pieces that
+// components.go holds the Console's shared components: the pieces that
 // appear on three or more screens each, built once, specified in
 // docs/design/console/00-foundations.md.
 //
@@ -496,7 +496,7 @@ type StepUp struct {
 
 // --- The Cancel control ------------------------------------------------------
 
-// JobCancel is the Cancel control's rendered data (#595): a form that posts
+// JobCancel is the Cancel control's rendered data: a form that posts
 // to one Job's cancel route, plus the CSRF token every Console POST needs.
 // Its type lives in cancel.go, beside cancelJobAction, which is the only
 // builder of Action; this doc lives here beside step-up because the two
@@ -526,7 +526,7 @@ type StepUp struct {
 // as this component (`password`, `type="password"`,
 // `autocomplete="current-password"`) so the two agree on the credential's
 // shape even though they are two different forms. [StepUp]'s expected
-// consumer remains the composer's standalone mutate apply (#438); it is not
+// consumer remains the composer's standalone mutate apply; it is not
 // dead by accident.
 // The decision form's HANDLER does run the shared requireStepUp ladder
 // (stepup.go) in its per-act mode, so the package still has ONE step-up idiom

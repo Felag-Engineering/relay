@@ -1,6 +1,6 @@
 // Package auditsink is the real capability.AuditSink: an adapter that maps
 // capability.AuditEntry/capability.FreezeEvent onto the append-only
-// audit.Repository (internal/store's SQLite implementation, #97).
+// audit.Repository (internal/store's SQLite implementation).
 //
 // It lives in its own package, not package capability or package audit,
 // because it must reference both: capability's non-test files are locked to
@@ -15,7 +15,7 @@
 // posture) each NodeResult's captured Stdout/Stderr and the daemon-side
 // Truncated flag, copied verbatim — the sink never scrubs or redacts them
 // (Policy, ADR-0002, is where secret-emitting commands are prevented, not
-// here). Also copied verbatim (#545, ADR-0027 decision 10): PlanHash (every
+// here). Also copied verbatim (ADR-0027 decision 10): PlanHash (every
 // Kind that carries one) and, on AuditKindApprovalDecided only,
 // ApprovalAnswer and DecisionChannel — the structured answer a decision
 // carries alongside its prose Reason. Nothing else is added: no enrichment
@@ -25,7 +25,7 @@
 // Node IDs (intentReason); it never carries output. RecordProtocolViolation copies only Relay-authored fields and never any
 // Node-produced bytes, on any risk class.
 //
-// Logging (#181): Record additionally emits exactly one structured slog Info
+// Logging: Record additionally emits exactly one structured slog Info
 // "audit decision" line per call, for each of the three Kinds it persists
 // (dispatch, refusal, plan) — the store and the log are written from the
 // same call so they cannot drift. That line carries ONLY the kind,
@@ -36,7 +36,7 @@
 // never its content. It never logs an Action's OperationArgs or
 // RawExecArgv, any NodeResult's Stdout/Stderr/Truncated, or any token/key
 // material; the log is supplementary and never influences a decision.
-// RecordIntent (#887) logs the same way for dispatch_intent: the job_id and
+// RecordIntent logs the same way for dispatch_intent: the job_id and
 // the Node count, never the Node IDs or args. RecordFreeze and RecordCancel
 // are unchanged and remain unlogged. Errors
 // from Record/RecordFreeze/RecordCancel propagate up to Execution.Run, which
@@ -136,7 +136,7 @@ func New(repo audit.Repository, opts ...Option) *Sink {
 // Reason, jobs.OutcomeUnspecified, no NodeID, and JobID copied verbatim from
 // e.JobID — empty for a role-floor refusal that
 // precedes any existence check (refuseControl), and set only when
-// Execution.CancelJob's machine-Account scoping (#614) refused after
+// Execution.CancelJob's machine-Account scoping refused after
 // resolving jobID to a real Job (refuseCancel/authorizeMachineCancel); never
 // caller-supplied text the Relay never validated. A Plan entry (#119,
 // ADR-0011: a no-execution PolicyQuery probe)
@@ -157,7 +157,7 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 	}
 	base := s.baseRecord(e.Principal, e.Asserted, e.Selector, e.Action)
 
-	// The approval link (#378, ADR-0027), copied onto every Kind that can carry
+	// The approval link (ADR-0027), copied onto every Kind that can carry
 	// one: the park, the decision, and the dispatch the approval released.
 	//
 	// Set here rather than per-branch precisely because it must not be
@@ -186,7 +186,7 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 		return err
 	}
 
-	// A parked dispatch (#269, ADR-0027). It must be handled BEFORE the
+	// A parked dispatch (ADR-0027). It must be handled BEFORE the
 	// dispatch fall-through below: an entry with no Results looks exactly like
 	// a Dispatch with no Results, so without this branch a park would be
 	// recorded as something that ran. Reason carries the Relay-authored
@@ -200,7 +200,7 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 		return err
 	}
 
-	// A request for a batch/window Grant (#546). Same no-Results shape as a
+	// A request for a batch/window Grant. Same no-Results shape as a
 	// park and handled before the same fall-through, for the same reason: it
 	// would otherwise be recorded as a Dispatch with no Results. Its own kind
 	// because a Grant is an ask for standing authority over many dispatches,
@@ -213,7 +213,7 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 		return err
 	}
 
-	// A re-drive of an already-parked dispatch (#379): same shape as a park,
+	// A re-drive of an already-parked dispatch: same shape as a park,
 	// but nothing was created — the caller bounced off the existing pending
 	// Request. Recorded under its own kind so approval_requested keeps meaning
 	// "a request was created", and handled before the fall-through for the same
@@ -226,7 +226,7 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 		return err
 	}
 
-	// A decision on a parked dispatch (#270, ADR-0027). Like a park it must be
+	// A decision on a parked dispatch (ADR-0027). Like a park it must be
 	// handled before the dispatch fall-through, and for the same reason: it
 	// carries no Results, so the fall-through would record it as a Dispatch
 	// with no Results — an answer to a question rendered as something that ran.
@@ -249,7 +249,7 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 	}
 
 	// read-class Operations record WHAT was read, never what came back
-	// (#288, ADR-0025). The Task row still carries the output for the caller
+	// (ADR-0025). The Task row still carries the output for the caller
 	// to fetch; the audit trail — which outlives the Job — keeps only the
 	// access record.
 	//
@@ -286,7 +286,7 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 
 // RecordIntent implements capability.IntentRecorder: it persists tasks as
 // Pending and appends the Job's one dispatch_intent record in a single
-// transaction (#887), so the intent exists before any Task can be dispatched.
+// transaction, so the intent exists before any Task can be dispatched.
 // The per-Node outcome rows that Record appends later reference it through the
 // shared job_id.
 //
@@ -341,7 +341,7 @@ func intentReason(e capability.AuditEntry, tasks []jobs.Task) string {
 		jobs.RiskClassName(e.Action.RiskClass), e.CapCleared, len(tasks)-e.CapCleared, len(tasks), strings.Join(ids, ","))
 }
 
-// RecordRead appends one metadata-only read-access record (#288, ADR-0025):
+// RecordRead appends one metadata-only read-access record (ADR-0025):
 // who read, which tool, what they aimed it at, and when.
 //
 // It takes the Principal explicitly rather than reading a context, because the
@@ -417,7 +417,7 @@ func protocolViolationReason(ev jobs.ProtocolViolationEvent) string {
 }
 
 // RecordProtocolViolation records a relay-daemon's wire-contract violation
-// (#638) as a KindProtocolViolation row: no Principal (no Account acted —
+// as a KindProtocolViolation row: no Principal (no Account acted —
 // see the Kind's doc comment), no Outcome, no Stdout/Stderr/Truncated
 // (nothing to put in them — see the Kind's doc comment and this package's
 // Redaction paragraph).
@@ -483,7 +483,7 @@ func accountAdminAuditKind(k capability.AccountAdminKind) string {
 	}
 }
 
-// RecordAccountAdmin implements capability.AuditSink (#653): one Record per
+// RecordAccountAdmin implements capability.AuditSink: one Record per
 // Account/API-Token administration act, Principal-attributed exactly like
 // RecordCancel, with Reason carrying the same field-per-kind strings
 // recordLifecycle wrote directly before this surface moved into the
@@ -643,7 +643,7 @@ func outcomeCounts(results []capability.NodeResult) string {
 }
 
 // attribution maps the capability layer's verified Principal and
-// caller-asserted metadata onto the audit record's two lanes (#300).
+// caller-asserted metadata onto the audit record's two lanes.
 //
 // This mapping is the only place the two representations meet, and it is
 // deliberately total: the verified fields come exclusively from the Principal

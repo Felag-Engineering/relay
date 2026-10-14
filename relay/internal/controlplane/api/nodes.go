@@ -26,7 +26,7 @@ type revokeNodeRequest struct {
 // revoking an already-revoked or unknown node_id still returns 204
 // (revocation.Service.RevokeNode is a no-op-safe denylist add).
 //
-// **Requires `admin`** (#397): revocation is the middle rung of ADR-0020's
+// **Requires `admin`**: revocation is the middle rung of ADR-0020's
 // incident ladder (quarantine < revoke < Freeze), and unlike quarantine it is
 // not reversible short of re-enrolling the Node. Until #397 a viewer could
 // walk the fleet off the Relay one Node at a time.
@@ -35,7 +35,7 @@ type revokeNodeRequest struct {
 // NOT implemented here — there is no step-up mechanism on the Control API
 // yet. This closes the role hole; the step-up half remains owed.
 //
-// **A non-empty `reason` is REQUIRED** (#487) and is a deliberate breaking
+// **A non-empty `reason` is REQUIRED** and is a deliberate breaking
 // change: this route took no body at all before, so a caller that sends none
 // now gets 400. The trail could already say who revoked and when; an
 // irreversible rung that cannot say WHY is the half of attribution that
@@ -49,7 +49,7 @@ type revokeNodeRequest struct {
 // caller was told it did not happen, and no audit record explaining it.
 //
 // RECORD BEFORE THE ACT lives inside revocation.Service.RevokeNodeRecorded
-// now, under the Node's lock (#605) — the only place that ordering can be
+// now, under the Node's lock — the only place that ordering can be
 // atomic against a concurrent token cascade revoking the same Node. This
 // mirrors the read lane's posture (ADR-0025: record before the seam, fail
 // closed) and handleGetNode's, which already 500s when its read audit cannot
@@ -135,7 +135,7 @@ func handleRevokeNode(d Deps) http.HandlerFunc {
 }
 
 // NodeReader is the capability read lane's DescribeNode call, narrowed to
-// the one method this route needs (#680). capability.ReadLane satisfies it
+// the one method this route needs. capability.ReadLane satisfies it
 // with no adapter, exactly as Exec/Approvals/AccountAdmin already do.
 //
 // The narrowing here is no longer "a read route has no business holding
@@ -171,7 +171,7 @@ type nodeResponse struct {
 
 	Certificate nodeCertificate `json:"certificate"`
 
-	// StateLabels are the `state:` namespace (ADR-0034, #414): Relay-derived,
+	// StateLabels are the `state:` namespace (ADR-0034): Relay-derived,
 	// evaluated at read time, set by nobody. Rendered in Selector syntax with
 	// the state: prefix — targetable verbatim in RunOperationRequest.selector
 	// and RawExecRequest.selector. Always [], never null, when a Node carries
@@ -187,7 +187,7 @@ type nodeFacts struct {
 	IPAddresses []string `json:"ip_addresses,omitempty"`
 }
 
-// nodeCertificate is the identity provenance the Relay issued (#440).
+// nodeCertificate is the identity provenance the Relay issued.
 //
 // Recorded gates the rest. A Node that enrolled before provenance was stored
 // has a zero expiry, and rendering that as a timestamp would report an identity
@@ -206,7 +206,7 @@ type nodeCertificate struct {
 // (an empty id is refused with nothing recorded) is not retired by QRY-27 —
 // only the MCP sentence is.
 //
-// DELIBERATE BEHAVIOUR CHANGE (#680): an OVERSIZED node id (over 256 bytes)
+// DELIBERATE BEHAVIOUR CHANGE: an OVERSIZED node id (over 256 bytes)
 // used to record the probe and return 404; the lane's own bound
 // (validateNodeID) now refuses it FIRST, as ErrInvalidFilter, and returns
 // 400 "invalid node id" with nothing recorded. This makes neither QRY-21

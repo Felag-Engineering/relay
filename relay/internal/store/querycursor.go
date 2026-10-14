@@ -7,7 +7,7 @@ import (
 )
 
 // querycursor.go is the opaque keyset-pagination cursor shared by
-// auditquery.go and jobquery.go (#441, D7): caller-controlled input on a path
+// auditquery.go and jobquery.go (D7): caller-controlled input on a path
 // to SQL, so it is base64 -> split -> bound as parameters, and a malformed
 // cursor is always a typed error, never a silent reset to page one (which
 // would loop a paging client forever).

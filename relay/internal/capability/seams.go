@@ -13,7 +13,7 @@ import (
 
 // ControlAction names one administrative act on the control plane ITSELF —
 // the acts that are not dispatches and so carry no jobs.Action and no
-// Selector, but still have a role floor (#397).
+// Selector, but still have a role floor.
 //
 // It exists because "who may ask" was previously answered only for things
 // that reach a Node. Minting an Enrollment Token, revoking one, revoking a
@@ -50,7 +50,7 @@ const (
 	ControlFreezeRelease ControlAction = "freeze_release"
 
 	// ControlCancelJob is POST /api/v1/jobs/{id}/cancel, MCP's cancel_job and
-	// tasks/cancel, and the Console's Cancel control (#595). The ROLE floor
+	// tasks/cancel, and the Console's Cancel control. The ROLE floor
 	// is operator and not human-only: an AI-agent must be able to cancel its
 	// own dispatch (#346, execution.md §Cancellation, owner decision
 	// 2026-09-14). The SCOPE differs by Kind (#614, owner decision
@@ -59,7 +59,7 @@ const (
 	// Execution.CancelJob/authorizeMachineCancel.
 	ControlCancelJob ControlAction = "cancel_job"
 
-	// Account and API-Token administration (#653): GET/POST
+	// Account and API-Token administration: GET/POST
 	// /api/v1/accounts[...] and .../tokens. All eight sit at admin
 	// (authz.requiredControlRole) — identity management is admin-only in
 	// full, the same posture the Control API's now-deleted requireAdmin
@@ -109,7 +109,7 @@ type AccountStore interface {
 	SetEnabled(ctx context.Context, id string, enabled bool) error
 }
 
-// APITokenStore is the API-Token half (#653), narrowed exactly as
+// APITokenStore is the API-Token half, narrowed exactly as
 // api.APITokenService was: Verify is deliberately absent — this surface
 // ISSUES credentials, the authenticator CHECKS them, and neither needs the
 // other's power.
@@ -216,7 +216,7 @@ type AuditSink interface {
 	RecordRead(ctx context.Context, p Principal, tool, selector, nodeID, jobID string) error
 
 	// RecordAccountAdmin records one Account or API-Token administration act
-	// (#653) — creating an Account, changing its role, enabling/disabling
+	// — creating an Account, changing its role, enabling/disabling
 	// it, or minting/revoking an API Token. It joins this interface rather
 	// than getting its own seam for the same reason RecordRead does: a
 	// separately-wired administration auditor is how a deployment ends up
@@ -277,7 +277,7 @@ type AccountAdminEvent struct {
 	// Never the token's secret — see this type's doc comment above.
 	TokenID string
 
-	// Asserted is the caller-claimed attribution lane (#300), read off the
+	// Asserted is the caller-claimed attribution lane, read off the
 	// request context. Recorded, never consulted.
 	Asserted Assertions
 }
@@ -289,7 +289,7 @@ const (
 	AuditKindDispatch AuditKind = iota
 	AuditKindRefusal
 
-	// AuditKindPlan is a no-execution Plan (#119, ADR-0011): Principal,
+	// AuditKindPlan is a no-execution Plan (ADR-0011): Principal,
 	// Selector, and Action are set exactly as for AuditKindDispatch, but
 	// JobID/Results/Reason are always empty — a Plan creates no Job/Task, so
 	// there is nothing to reference by ID and no per-Node NodeResult set,
@@ -309,7 +309,7 @@ const (
 	AuditKindApprovalRequested
 
 	// AuditKindApprovalGrantRequested is a request for a batch/window Grant
-	// (#546, ADR-0027 decision 12) — an ask for STANDING authority over many
+	// (ADR-0027 decision 12) — an ask for STANDING authority over many
 	// future dispatches, written by RequestGrant. Distinct from
 	// AuditKindApprovalRequested so that kind keeps meaning "one Plan is
 	// parked": a Grant and a park have blast radii that are not comparable,
@@ -318,7 +318,7 @@ const (
 	AuditKindApprovalGrantRequested
 
 	// AuditKindApprovalPendingObserved is a re-drive of a dispatch that is
-	// ALREADY parked (#379): checkApproval found an existing pending Request
+	// ALREADY parked: checkApproval found an existing pending Request
 	// rather than creating one. Fields are set exactly as for
 	// AuditKindApprovalRequested — ApprovalID and PlanHash name the request the
 	// caller bounced off.
@@ -333,7 +333,7 @@ const (
 	AuditKindApprovalPendingObserved
 
 	// AuditKindApprovalDecided is one recorded answer to a parked dispatch
-	// (#270, ADR-0027): Principal is the decider, ApprovalID and PlanHash name
+	// (ADR-0027): Principal is the decider, ApprovalID and PlanHash name
 	// what they answered, and Reason states the answer, the resulting request
 	// state, the quorum progress, and the decider's own note.
 	//
@@ -348,13 +348,13 @@ const (
 	// approval that leaves no trace is how an audit trail loses the interesting
 	// half of the story.
 	//
-	// ApprovalAnswer and DecisionChannel (#545) are set by DecideApproval on
+	// ApprovalAnswer and DecisionChannel are set by DecideApproval on
 	// this kind only, and are deliberately empty on the grant-revocation entry
 	// RevokeGrant writes — a revocation is not a Decision, so nobody answered
 	// a parked Job.
 	AuditKindApprovalDecided
 
-	// AuditKindDispatchIntent is a Job's dispatch intent (#887): Principal,
+	// AuditKindDispatchIntent is a Job's dispatch intent: Principal,
 	// Selector, Action, JobID, ApprovalID, GrantID and Asserted are set, plus
 	// CapCleared. It is recorded with the Job's Tasks in one transaction, by
 	// IntentRecorder.RecordIntent and never by AuditSink.Record, so it exists
@@ -363,7 +363,7 @@ const (
 	AuditKindDispatchIntent
 )
 
-// ApprovalAnswer is the structured answer a Decision carries (#545). package
+// ApprovalAnswer is the structured answer a Decision carries. package
 // capability may not import internal/audit (TestCapabilityImportsOnlyRegistryAndJobs),
 // so this mirrors — rather than shares — audit.ApprovalAnswer*; auditsink,
 // the one package that imports capability, audit, AND approval, pins the two
@@ -388,14 +388,14 @@ const (
 //
 // For AuditKindDispatch, JobID and Results are set and Reason is empty. For
 // AuditKindRefusal (authz-deny, cap-reject, a zero-match dispatch
-// (no_nodes_matched, #571), or CancelJob's machine-Account scoping, #614),
+// (no_nodes_matched), or CancelJob's machine-Account scoping, #614),
 // Reason is set and Results is empty — the dispatcher was never reached —
 // but JobID is NOT always empty: refuseControl's role-floor refusal leaves
 // it empty (it precedes any existence check, so the id is unvalidated caller
 // text), while refuseCancel's machine-scoping refusal sets it to the store's
 // own echo of the Job authorizeMachineCancel's lookup actually found — never
 // a caller-supplied id the Relay never validated.
-// For AuditKindPlan (#119), only Principal/Selector/Action are set — JobID,
+// For AuditKindPlan, only Principal/Selector/Action are set — JobID,
 // Results, and Reason are all empty, since a Plan never dispatches (no
 // Job/Task exists to reference) even when it reports a would-be-rejected
 // cap/Freeze/no-Nodes-matched condition.
@@ -421,13 +421,13 @@ type AuditEntry struct {
 	// window — is one query rather than a reconstruction from timestamps.
 	GrantID string
 
-	// Asserted is the caller-claimed attribution lane (#300), read off the
+	// Asserted is the caller-claimed attribution lane, read off the
 	// request context by Execution.Run/Plan. Recorded, never consulted — see
 	// assertions.go.
 	Asserted Assertions
 
 	// ApprovalAnswer and DecisionChannel are the structured counterpart to a
-	// KindApprovalDecided entry's prose Reason (#545, ADR-0027 decision 10).
+	// KindApprovalDecided entry's prose Reason (ADR-0027 decision 10).
 	// Set by DecideApproval, and deliberately EMPTY on the grant-revocation
 	// entry RevokeGrant writes — a revocation is not a Decision; nobody
 	// answered a parked Job.
@@ -443,7 +443,7 @@ type AuditEntry struct {
 }
 
 // IntentRecorder persists a Job's Pending Tasks and its dispatch-intent audit
-// record in one transaction (#887): nil = both landed, error = neither.
+// record in one transaction: nil = both landed, error = neither.
 // Kept off AuditSink deliberately: a sink that cannot persist Tasks must not
 // be able to claim it can.
 type IntentRecorder interface {
@@ -544,7 +544,7 @@ const (
 	RefusalPendingApproval
 
 	// RefusalNoNodesMatched counts a dispatch refused because its Selector
-	// resolved to zero Nodes (#571). This is a real refusal, not a park:
+	// resolved to zero Nodes. This is a real refusal, not a park:
 	// nothing was dispatched and no Job was created.
 	RefusalNoNodesMatched
 
@@ -555,8 +555,8 @@ const (
 
 	// RefusalMalformed counts a dispatch refused for malformed input: a
 	// Template's argument names not matching its slots or its matched Nodes
-	// disagreeing about them (ADR-0042, #345), or an invalid idempotency key, or
-	// a key reused with different arguments (#895). Never a Policy verdict.
+	// disagreeing about them (ADR-0042), or an invalid idempotency key, or
+	// a key reused with different arguments. Never a Policy verdict.
 	RefusalMalformed
 )
 
@@ -578,7 +578,7 @@ func (noopMetricsSink) IncDispatch(jobs.Outcome) {}
 
 func (noopMetricsSink) IncRefusal(RefusalKind) {}
 
-// JobTransition is one Job-grained lifecycle fact the event seam (#416)
+// JobTransition is one Job-grained lifecycle fact the event seam
 // publishes for the Admin Console's live view.
 type JobTransition int
 
@@ -599,7 +599,7 @@ const (
 // Stdout/Stderr (dispatch.go), and the audit path already proves how easily
 // output rides along on a "Job-grained" record (AuditEntry.Results,
 // auditsink copies Stdout/Stderr verbatim). Counts are the Job-grained
-// fact; the internal/eventsink adapter that maps this onto the bus (#416)
+// fact; the internal/eventsink adapter that maps this onto the bus
 // never holds output at all.
 type JobEvent struct {
 	Transition JobTransition
@@ -624,7 +624,7 @@ type noopJobEventSink struct{}
 func (noopJobEventSink) RecordJob(JobEvent) {}
 
 // PolicyViewSource is the DISPLAY-ONLY read of a Node's daemon-reported
-// effective Policy (policyview.Cache, #680). Get only — Set is deliberately
+// effective Policy (policyview.Cache). Get only — Set is deliberately
 // absent, so the lane structurally cannot write a Node's reported Policy
 // (invariant 2, ADR-0002): the Tunnel handler is the only writer and it
 // holds the concrete *policyview.Cache pointer, which never crosses into
@@ -636,7 +636,7 @@ type PolicyViewSource interface {
 }
 
 // TemplateVocabularySource is the read of a Node's daemon-reported Template
-// Operation vocabulary (nodevocab.Cache, #680): displayed by the read lane,
+// Operation vocabulary (nodevocab.Cache): displayed by the read lane,
 // and read by template.go to decide a Template dispatch's fan-out and risk
 // class (ADR-0042) — never to decide an allow or a deny (invariant 12).
 // Get only, for the same reason PolicyViewSource's is: the concrete

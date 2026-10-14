@@ -62,7 +62,7 @@ var (
 	ErrReservedName = errors.New("accounts: reserved account name")
 
 	// ErrLastAdmin is returned by SetRole and SetEnabled when the change
-	// would leave zero enabled admin rows (#653): demoting the last enabled
+	// would leave zero enabled admin rows: demoting the last enabled
 	// admin, or disabling it. A disabled admin does not count toward "last
 	// admin" — see SetRole/SetEnabled below for why an implementation MUST
 	// refuse this in one statement rather than a check-then-write.
@@ -85,7 +85,7 @@ type Kind string
 
 const (
 	// KindHuman is a person: an operator who will log into the Console
-	// (v0.6.0) or authenticate through OAuth (#299).
+	// (v0.6.0) or authenticate through OAuth.
 	KindHuman Kind = "human"
 
 	// KindMachine is a headless driver: the AI-agent, CI, a script. Machine
@@ -157,7 +157,7 @@ func (r Role) AtLeast(want Role) bool {
 //
 // Enabled is the durable off-switch, distinct from revoking a credential: a
 // disabled Account authenticates nowhere, immediately, regardless of how many
-// valid tokens exist for it (#296). Disabling the identity and revoking a
+// valid tokens exist for it. Disabling the identity and revoking a
 // token are deliberately different acts.
 type Account struct {
 	// ID is the Relay-assigned stable identifier. It never changes, so audit
@@ -170,7 +170,7 @@ type Account struct {
 	Kind Kind
 	Role Role
 
-	// Enabled is the durable off-switch (#296). A disabled Account
+	// Enabled is the durable off-switch. A disabled Account
 	// authenticates nowhere and authorizes nothing.
 	Enabled bool
 
@@ -252,7 +252,7 @@ type Repository interface {
 	// List returns every Account, ordered by name.
 	List(ctx context.Context) ([]Account, error)
 
-	// SetRole is a compare-and-set (#912): it changes an Account's role to
+	// SetRole is a compare-and-set: it changes an Account's role to
 	// `to` only if the stored role is `from`. Returns:
 	//
 	//   - ErrNotFound if the Account does not exist;

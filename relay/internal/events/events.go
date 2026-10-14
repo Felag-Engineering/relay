@@ -1,4 +1,4 @@
-// Package events is the Relay's in-process event seam (#416): one bounded,
+// Package events is the Relay's in-process event seam: one bounded,
 // in-memory pub/sub with exactly four publishers — registry transitions, Job
 // transitions, MCP tool calls, and enrollment attempts — feeding the Admin
 // Console's live views. This issue builds and wires the seam only; the SSE

@@ -52,7 +52,7 @@
 //!
 //! A compiled [`TemplateOp`] implements [`super::registry::ResolvedOp`], the
 //! same `name → (handler, arg-shape, risk class)` contract Native Operations
-//! resolve through (issue #310). Its [`ResolvedOp::positional_args`] uses the
+//! resolve through. Its [`ResolvedOp::positional_args`] uses the
 //! identical named-args → positional mapping, so `policy.evaluate(name,
 //! positional)` governs a template **byte-for-byte** like a Native Operation:
 //! deny-by-default, deny-beats-allow, argument-level constraints. The Policy
@@ -61,10 +61,10 @@
 //!
 //! # Scope
 //!
-//! This module is the engine (issue #290): definitions, compilation, typed
+//! This module is the engine: definitions, compilation, typed
 //! validation, quoting, and rendering. Loading those definitions from
 //! root-owned local files, the template-set fingerprint, the `unsupported`
-//! per-Node outcome, and live discovery are [`crate::templates`] (issue #291);
+//! per-Node outcome, and live discovery are [`crate::templates`];
 //! the shipped read catalog is #293.
 
 use std::collections::HashSet;
@@ -287,7 +287,7 @@ pub struct TemplateOp {
 impl TemplateOp {
     /// The positions of `path`-typed slots, in positional (Policy) order.
     ///
-    /// Consumed by the dispatch gate (issue #293) to apply ADR-0018's
+    /// Consumed by the dispatch gate to apply ADR-0018's
     /// canonical-form precondition to a template's path arguments BEFORE Policy
     /// evaluates them — so an exact-path `[[deny]]` on a template cannot be
     /// evaded by a non-canonical spelling like `/etc/../etc/shadow`, exactly as
@@ -303,7 +303,7 @@ impl TemplateOp {
 
     /// The declared parameter slots as `(name, type)`, in declaration order —
     /// which is also the positional order Policy evaluates args in. The
-    /// discovery surface (#291) renders these into `TemplateDescriptor.slots`
+    /// discovery surface renders these into `TemplateDescriptor.slots`
     /// so `list_operations`/`describe_node` can show a Node's live vocabulary
     /// with its argument constraints.
     pub fn slot_specs(&self) -> Vec<(&str, &SlotType)> {
@@ -677,7 +677,7 @@ fn parse_body(body: &str, slots: &[Slot]) -> Result<(Vec<Segment>, HashSet<usize
 
 impl SlotType {
     /// A stable label for error messages / audit (never the value), and the
-    /// wire `TemplateSlot.type` string a surface renders for discovery (#291).
+    /// wire `TemplateSlot.type` string a surface renders for discovery.
     pub fn type_name(&self) -> &'static str {
         match self {
             SlotType::Identifier => "identifier",
@@ -688,7 +688,7 @@ impl SlotType {
     }
 
     /// The author-supplied allow-list for an `Enum` slot; empty for every other
-    /// type. Part of the discovery surface (#291): an `enum` slot's finite
+    /// type. Part of the discovery surface: an `enum` slot's finite
     /// value set is exactly what a caller needs to build valid args without
     /// trial-and-error (ADR-0001 legibility).
     pub fn enum_values(&self) -> &[String] {

@@ -12,7 +12,7 @@ import (
 
 const (
 	// defaultMaxEvents and defaultMaxAge are the retention bounds every
-	// production Bus uses (#416): a per-publisher ring holds at most 1,000
+	// production Bus uses: a per-publisher ring holds at most 1,000
 	// events or 10 minutes of them, whichever comes first. WithRetention
 	// overrides both, for tests only — per invariant 11 there is deliberately
 	// no flag, RELAY_* env var or route for either bound.

@@ -20,7 +20,7 @@ import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 //     so both adapters emit byte-identical bytes (ADR-0009/0010 parity,
 //     invariant 10).
 //  3. It is render-only: never written to a Task row, an audit record, a log
-//     line or a wire field, so it cannot size an audit record (#255/#258).
+//     line or a wire field, so it cannot size an audit record.
 //  4. Every clause must stay true of the code. Invariant 2 / ADR-0002 backs
 //     the "no code path to write it" clause, proven by
 //     relay/cmd/relay/policy_immutability_test.go; the caller-identity

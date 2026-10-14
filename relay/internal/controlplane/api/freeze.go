@@ -27,7 +27,7 @@ type freezeResponse struct {
 // handler deliberately does NOT call recordLifecycle — doing so would
 // double-audit the same event.
 //
-// **The floor — a human `operator`+ (#397) — is NOT checked here.** It lives
+// **The floor — a human `operator`+ — is NOT checked here.** It lives
 // in capability.Control.EngageFreeze, which consults the same authz.RoleGate
 // every other authorization answer comes from, and audits the refusal in the
 // same trail. This handler renders that refusal as 403; re-deriving the rule
@@ -56,7 +56,7 @@ func handleFreezeEngage(d Deps) http.HandlerFunc {
 // trail (KindFreezeRelease) is written intrinsically by capability.Control —
 // this handler does NOT call recordLifecycle (would double-audit).
 //
-// **Requires `admin` (#397), checked in the capability layer**, exactly as
+// **Requires `admin`, checked in the capability layer**, exactly as
 // engage's floor is — see handleFreezeEngage. The reason check below is kept
 // as an early, well-worded 400 for API callers; capability.ReleaseFreeze
 // enforces the same rule for every other surface.
@@ -91,7 +91,7 @@ func handleFreezeRelease(d Deps) http.HandlerFunc {
 // writeFreezeError maps an error from the capability layer's Freeze methods
 // onto an HTTP problem response.
 //
-// A role or human-kind refusal (#397) unwraps to authz.ErrUnauthorized and
+// A role or human-kind refusal unwraps to authz.ErrUnauthorized and
 // renders 403 with the gate's own reason — the same recognize-don't-re-decide
 // pattern execution.go uses, and the reason is safe to disclose because it
 // states only the public rule. capability.ErrFreezeReasonRequired renders 400

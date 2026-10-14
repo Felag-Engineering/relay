@@ -19,7 +19,7 @@ var _ jobs.JobRepository = (*sqliteJobs)(nil)
 
 // CreateJob persists a new Job, including its Requester, in one write.
 //
-// The requester is validated BEFORE the INSERT (#616): an AccountID-less
+// The requester is validated BEFORE the INSERT: an AccountID-less
 // name or kind, or a kind outside human/machine, is rejected here rather
 // than silently dropped or left to the schema's CHECK constraint, which is
 // only the backstop.

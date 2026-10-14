@@ -58,7 +58,7 @@ package console
 // this page then declines to render it a second time, so a wrong guess about
 // an Operation's class cannot turn into retained output on screen.
 //
-// # The page's one control (v0.7.0, #595)
+// # The page's one control (v0.7.0)
 //
 // Cancel is offered to operator and above while any Task is unresolved, and
 // it is the capability layer's decision, not this page's — cancelOffered
@@ -71,7 +71,7 @@ package console
 // before this issue (TestJob_TenThousandNodesRendersNoList's
 // auditCalls == 1 guard).
 //
-// # Attribution (#455)
+// # Attribution
 //
 // The approval half of the header is rendered from the ONE d.Approvals.Approval
 // read buildJobView already made for the plan hash — no new read, no new audit
@@ -203,7 +203,7 @@ type taskRow struct {
 	// that this Relay never observed.
 	RuleKnown bool
 
-	// Sent is true when this Task's DispatchedAt is non-zero (#595). It is
+	// Sent is true when this Task's DispatchedAt is non-zero. It is
 	// what the cancelled group clusters on: MarkCancelled (store/tasks.go)
 	// only transitions a still-Pending Task and never sets DispatchedAt, so
 	// a zero value on a cancelled Task means it never left the Relay at
@@ -274,7 +274,7 @@ type outputCluster struct {
 	RuleKnown bool
 
 	// NeverSent mirrors taskRow.Sent (inverted) for the cluster's rows, set
-	// only in the cancelled group (#595): it is what lets the label say
+	// only in the cancelled group: it is what lets the label say
 	// "N never sent" for one cluster and "N sent and then stopped" for the
 	// other, so the two kinds never read as one "identical" thing.
 	NeverSent bool
@@ -296,7 +296,7 @@ type jobView struct {
 	State   string
 
 	// OutcomeUnrecorded and OutcomePartial render
-	// capability.JobSummary.OutcomeUnrecorded (#887): the Job's dispatch
+	// capability.JobSummary.OutcomeUnrecorded: the Job's dispatch
 	// intent is on the trail with none, or only some, of its outcome rows.
 	OutcomeUnrecorded bool
 	OutcomePartial    bool
@@ -372,7 +372,7 @@ type jobView struct {
 	// what is missing from it.
 	TrailError bool
 
-	// Cancel is the rendered control (#595), set only when v.InFlight is
+	// Cancel is the rendered control, set only when v.InFlight is
 	// above zero AND cancelOffered(d, caller's role) is true. Nil omits the
 	// control entirely rather than rendering a disabled one — the same
 	// mount-time-absence posture every gated route in this package takes.
@@ -616,7 +616,7 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 	if sum.Unresolved > 0 && cancelOffered(d, role) {
 		v.Cancel = &JobCancel{Action: cancelJobAction(sum.JobID), CSRFToken: csrfToken}
 	}
-	// Conditional on purpose (#595): the read exists to explain a cancel, and
+	// Conditional on purpose: the read exists to explain a cancel, and
 	// a Job with nothing cancelled and nothing in flight has nothing a
 	// cancel could explain. This is what keeps
 	// TestJob_TenThousandNodesRendersNoList's auditCalls==1 guard true —
@@ -830,7 +830,7 @@ func jobGroups(ctx context.Context, d Deps, caller capability.Principal, sum cap
 				g.SharedRule = g.Clusters[0].Key
 			}
 		case jobs.OutcomeCancelled:
-			// Never sent and sent-then-stopped are two different facts (#595)
+			// Never sent and sent-then-stopped are two different facts
 			// and must never merge into one "identical" row: the deny
 			// branch's rule (above) clusters on the thing that AGREES; here
 			// the two clusters are the two things that CANNOT agree with each
@@ -868,7 +868,7 @@ func denyRuleKey(r taskRow) string {
 }
 
 // cancelKey clusters the cancelled group first by whether the Task ever left
-// the Relay (#595) — "which of two facts about this cancel is true of this
+// the Relay — "which of two facts about this cancel is true of this
 // Task", which must never merge into one cluster no matter how many rows
 // share either one — and, within the "sent" side, by Output too: a
 // sent-then-stopped Task can carry different captured output from another

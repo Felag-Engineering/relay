@@ -53,13 +53,13 @@ import (
 // invariant 10). *capability.Execution satisfies Executor structurally (Go
 // structural typing) — the composition root passes it in directly.
 type Executor interface {
-	// Start is Execution.Start (#895): the same pipeline as Run, returning once
+	// Start is Execution.Start: the same pipeline as Run, returning once
 	// the Job's Tasks are persisted. This adapter chooses how long to wait for
 	// the Job afterwards (wait_seconds); it decides nothing about the dispatch.
 	Start(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action, o capability.StartOptions) (capability.StartedJob, error)
 	CancelJob(ctx context.Context, p capability.Principal, jobID string) error
 
-	// Plan is Execution.Plan's exact shape (#119, ADR-0011): resolves sel,
+	// Plan is Execution.Plan's exact shape (ADR-0011): resolves sel,
 	// authorizes p against act, and reports per-Node PolicyVerdicts instead
 	// of dispatching — no Job/Task/dedup entry is ever created.
 	Plan(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) (capability.PlanResult, error)
@@ -194,7 +194,7 @@ func renderRunError(err error) error {
 	if errors.As(err, &unknownErr) || errors.As(err, &malformedErr) {
 		return err
 	}
-	// Idempotency outcomes (#895) each say precisely what the caller may do
+	// Idempotency outcomes each say precisely what the caller may do
 	// next, and whether a new key is safe; wrapping them would bury that.
 	var conflictErr *capability.IdempotencyConflictError
 	var keyErr *capability.IdempotencyKeyError
@@ -218,7 +218,7 @@ func renderRunError(err error) error {
 // never a second Policy decision (ADR-0002/0011, invariant 12): the daemon's
 // live Policy engine and its validate_* functions remain the real gate on
 // argument VALUES. What this catches is the failure mode where a malformed call
-// is indistinguishable from a forbidden one (#345):
+// is indistinguishable from a forbidden one:
 //
 //   - an unknown ARGUMENT name (e.g. a misspelled "unitt") — otherwise silently
 //     dropped, leaving the required arg empty so the daemon reports
@@ -265,7 +265,7 @@ func buildOperationAction(ops OperationLister, name string, args map[string]stri
 	}, nil
 }
 
-// runOperationInput is run_operation's argument. Plan is additive (#119):
+// runOperationInput is run_operation's argument. Plan is additive:
 // omitted or false keeps today's real-dispatch behavior byte-identical to
 // #118; plan=true resolves/authorizes/checks exactly as a real run would but
 // executes nothing, returning per-Node Policy verdicts instead.
@@ -480,7 +480,7 @@ const (
 )
 
 // isAnsweredRetry reports whether req is a retried tool call carrying an
-// answer to a parked approval (#727) — the one condition under which
+// answer to a parked approval — the one condition under which
 // run_operation/raw_exec call answerThenDispatch instead of dispatching
 // directly. True only when ALL of:
 //
@@ -507,7 +507,7 @@ func isAnsweredRetry(ask *questioner, req *sdkmcp.CallToolRequest, p capability.
 }
 
 // answerThenDispatch is the ONE function run_operation and raw_exec both call
-// for an answered retry (#727), so the branch cannot drift between them: it
+// for an answered retry, so the branch cannot drift between them: it
 // decides the answer FIRST, then re-enters the whole dispatch pipeline at
 // most once. See the issue's decision table for the outcome-by-outcome
 // contract; every branch here returns a tool RESULT carrying a decision or a
@@ -549,7 +549,7 @@ func answerThenDispatch(
 	case elicitedApproved, elicitedLapsed, elicitedStillPending:
 		// A concurrent approving retry, or a plain re-drive carrying no
 		// request state at all, is now resolved in the capability layer
-		// (#713, AP-77): Execution.Run claims a single-Plan approval's release
+		// (AP-77): Execution.Run claims a single-Plan approval's release
 		// exactly once, inside a store transaction, before it dispatches, and
 		// a loser re-attaches to the winner's Job instead of dispatching a
 		// second one. This branch therefore cannot mint a second Job.
@@ -617,14 +617,14 @@ func answerThenDispatch(
 // audit, at-most-once, plan mode) carries through unchanged.
 //
 // Their Descriptions are the ADR-0001 typed-path-by-default safety
-// assumption engineered into words (#120): run_operation presents itself as
+// assumption engineered into words: run_operation presents itself as
 // the DEFAULT and raw_exec as the ESCAPE HATCH, both cross-reference plan
 // mode via the identical planModeClause, and run_operation's steers a
 // denied_by_policy result toward describe_node rather than blind retries.
 //
 // ask (elicit.go, S2b) is nil-receiver safe: a nil *questioner never asks, so
 // a park always renders pending_approval exactly as before it existed.
-// isAnsweredRetry gates the same nil-receiver-safe path (#727): an answered
+// isAnsweredRetry gates the same nil-receiver-safe path: an answered
 // retry can only exist where a question could have been asked in the first
 // place.
 //
@@ -680,7 +680,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		}
 		o := dispatchOpts{wait: wait, key: in.IdempotencyKey}
 
-		// An answered retry (#727) decides before anything dispatches, then
+		// An answered retry decides before anything dispatches, then
 		// re-enters the pipeline below at most once itself — it never falls
 		// through to the plain dispatch() call that follows. A plan=true
 		// call never reaches here (it returned above), so a retry carrying

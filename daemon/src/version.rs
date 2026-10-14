@@ -1,4 +1,4 @@
-//! Build identity for the relay-daemon binary (issue #249, ADR-0014).
+//! Build identity for the relay-daemon binary (ADR-0014).
 //!
 //! # Why this module exists
 //!
@@ -35,7 +35,7 @@
 //! to it (fail-closed direction). Any further identifiers must stay *after*
 //! `0.dev` so the leading numeric identifier keeps deciding the order.
 //!
-//! The original scheme (issue #249) appended `-dev` to the full target and
+//! The original scheme appended `-dev` to the full target and
 //! was fail-**open** for prerelease targets: `0.1.0-beta-dev` is a single
 //! identifier lexically *greater* than `beta`, so an unreleased dev build
 //! reported as newer than `0.1.0-beta` and passed a `min-daemon-version =

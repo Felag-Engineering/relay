@@ -1,5 +1,5 @@
 /// Build-stamp variables re-exported from the ambient environment into the
-/// crate's compile-time environment (issue #249).
+/// crate's compile-time environment.
 ///
 /// The values themselves are derived by `scripts/build-version.sh` and passed
 /// in by the `Makefile`; this build script only forwards them. Forwarding is

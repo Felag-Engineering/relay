@@ -95,7 +95,7 @@ type Node struct {
 	// it.
 	RevokedAt time.Time
 
-	// The certificate provenance the RELAY issued (#440). Every field here is
+	// The certificate provenance the RELAY issued. Every field here is
 	// Relay-knowledge, not Node-report: the Relay minted the certificate, so it
 	// alone knows when it expires. Report has no field for any of them, exactly
 	// as it has none for RelayLabels or RevokedAt.
@@ -146,7 +146,7 @@ type Node struct {
 }
 
 // The quarantine label, pinned as constants because the Console READS it today
-// and the label-management surface will WRITE it in v0.7.0 (#430, ADR-0020) —
+// and the label-management surface will WRITE it in v0.7.0 (ADR-0020) —
 // and those two must agree exactly.
 //
 // # Why the value is pinned and not just the key
@@ -212,7 +212,7 @@ type Certificate struct {
 // this is the structural half of the node-side immutability boundary. A relay-daemon
 // can never supply relay-space labels through this type, regardless of what it sends.
 //
-// nodeLabels is unexported on purpose (#504): the ONLY way to populate it is
+// nodeLabels is unexported on purpose: the ONLY way to populate it is
 // WithNodeLabels, so `rep.NodeLabels = someMap` — the bare field assignment
 // that would silently create a third write path alongside cmd/relay/tunnel.go
 // and internal/enroll/handler.go — is a compile error from any package

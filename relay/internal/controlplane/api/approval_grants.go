@@ -63,7 +63,7 @@ type ApprovalGrantService interface {
 // quietly widens the grant, and the domain refuses any that is missing rather
 // than filling in a default.
 //
-// There is deliberately no selector_namespace (#482). decodeJSON refuses
+// There is deliberately no selector_namespace. decodeJSON refuses
 // unknown fields, so a body still carrying one gets a 400 naming the field,
 // never a Grant priced as if the field were honoured.
 type grantScopeRequest struct {

@@ -17,14 +17,14 @@ package console
 // # What it deliberately does not do
 //
 // It does not mint an Enrollment Token. Minting is `admin` + audited and lives
-// on Add Nodes (spec 09, v0.7.0, #434); a one-click token on the empty state
+// on Add Nodes (spec 09, v0.7.0); a one-click token on the empty state
 // would put the fleet's join credential behind the least deliberate click in
 // the product. Day one points at the door — it is not a second door.
 //
 // It does not embed the quickstart, and it does not render a checklist of steps
 // the Console cannot verify — spec 10's "what this screen is not", in both
 // cases. The three-step tutorial this screen used to carry was exactly that
-// checklist, and it is gone (#474).
+// checklist, and it is gone.
 //
 // # The live watch, and what it cannot see
 //
@@ -42,7 +42,7 @@ package console
 // configured trust root does not match this Relay aborts the TLS handshake
 // before it sends anything (the daemon verifies the chain against the CA bundle
 // it was installed with — daemon/src/tunnel.rs), so it is not a rejection this
-// screen can show. Surfacing those needs a listener hook (#444). Until then the
+// screen can show. Surfacing those needs a listener hook. Until then the
 // fingerprint below is how an operator checks they handed out the right trust
 // root, and the screen must not imply it is watching for a failure it cannot
 // see.

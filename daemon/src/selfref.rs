@@ -1,5 +1,5 @@
 //! Self-reference lint — "does this Policy let the wire rewrite the wire's own
-//! gate?" (issue #287, landed with #292's `policy check` tooling pass).
+//! gate?" (landed with #292's `policy check` tooling pass).
 //!
 //! # The gap this closes
 //!

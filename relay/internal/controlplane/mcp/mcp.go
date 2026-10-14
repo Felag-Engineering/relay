@@ -11,7 +11,7 @@
 // results).
 //
 // This file (mcp.go) — along with tools_nodes.go, tools_operations.go,
-// attribution.go, and toolevents.go (#416, the tool-call event publisher) —
+// attribution.go, and toolevents.go (the tool-call event publisher) —
 // is a strict READ file: its non-test source names no capability. identifier
 // outside capabilityReadAllowlist (e.g. capability.StateEval, needed for
 // NodeListing/NodeDescription's Eval field), and never
@@ -102,7 +102,7 @@ type NodeVocabulary struct {
 	Reported  bool
 }
 
-// ReadLane is the ONE audited seam the read tools call (#680, QRY-28): every
+// ReadLane is the ONE audited seam the read tools call (QRY-28): every
 // registry, Policy-view and Template-vocabulary read goes through it, which
 // records the read before returning content and fails closed. It is
 // deliberately Principal-free — capability.Principal is not on
@@ -246,7 +246,7 @@ func WithClock(now func() time.Time) Option {
 	return func(o *serverOptions) { o.now = now }
 }
 
-// WithToolCallObserver attaches a ToolCallObserver (#416, toolevents.go)
+// WithToolCallObserver attaches a ToolCallObserver (toolevents.go)
 // that is called once per tools/call invocation, before the tool's handler
 // runs. A nil observer (the default) installs no middleware at all — see
 // New, where AddReceivingMiddleware has no nil-tolerant form, so the guard
@@ -273,7 +273,7 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 
 	srv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "relay", Version: serverVersion}, nil)
 
-	// The tool-call event publisher (#416, toolevents.go). Installed before
+	// The tool-call event publisher (toolevents.go). Installed before
 	// any tool is registered so it is in place for every one of them from
 	// the first request; AddReceivingMiddleware has no nil-tolerant form,
 	// so a nil observer installs no middleware at all rather than a
@@ -303,27 +303,27 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 	registerOperationTools(srv, ops, lane)
 	registerExecutionTools(srv, exec, results, ops, ask, reads, cfg.approvals, cfg.now)
 	registerJobTools(srv, exec, results, reads)
-	// tasks/get and tasks/cancel (#374, SEP-2663). A nil resolver registers
+	// tasks/get and tasks/cancel (SEP-2663). A nil resolver registers
 	// nothing, which is a Relay without the Tasks extension: parked dispatches
-	// still return the universal pending_approval result (#371), so the
+	// still return the universal pending_approval result, so the
 	// extension's absence costs a client its poll handle and nothing else.
 	registerTaskMethods(srv, tasks, results, reads, cfg.now)
-	// approve_request (#391, ADR-0029). A nil decider registers nothing, so
+	// approve_request (ADR-0029). A nil decider registers nothing, so
 	// the in-band rung is opt-in at the composition root: without it, parked
 	// dispatches are answerable only on the authenticated /api/v1 endpoint,
 	// exactly as before.
 	registerApprovalTools(srv, cfg.approvals)
 
-	// Stateless + JSON responses (MCP spec 2026-07-28; #267): the SDK accepts
+	// Stateless + JSON responses (MCP spec 2026-07-28): the SDK accepts
 	// the 2026-07-28 protocol only in stateless mode, and every tool here is
 	// already stateless request/response over shared backing stores — a Job ID
 	// is the durable handle, never an Mcp-Session-Id. Also removes the
-	// per-instance session map that would break behind a round-robin LB (#139).
+	// per-instance session map that would break behind a round-robin LB.
 	var handler http.Handler = sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server {
 		return srv
 	}, &sdkmcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 
-	// The SEP-2663 task-result shim (#375, ADR-0028) wraps the SDK handler,
+	// The SEP-2663 task-result shim (ADR-0028) wraps the SDK handler,
 	// because the SDK cannot express a CreateTaskResult (its resultType is
 	// unexported and its Result interface is sealed). It is mounted ONLY when
 	// Tasks are wired, so a Relay without the extension has none of this code

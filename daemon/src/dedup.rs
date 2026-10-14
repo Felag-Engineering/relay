@@ -46,7 +46,7 @@
 //! Secondary capacity cap: 100,000 entries, oldest-first eviction, to bound memory and
 //! disk growth in a long-lived daemon. Eviction runs at `open` and after each `record`.
 //!
-//! **Age floor on capacity eviction (issue #340):** the capacity pass never evicts a
+//! **Age floor on capacity eviction:** the capacity pass never evicts a
 //! marker younger than a 1-hour floor (`MIN_RETENTION`), even when the store is over the
 //! cap. Without it, a flood of >100k fresh Task IDs inside the retry window could evict a
 //! still-live marker oldest-first, and the retried Task would then execute twice — an
@@ -99,7 +99,7 @@ const SEEN_SUBDIR: &str = "seen-tasks";
 /// margin that prevents spurious eviction of entries still within a live retry window.
 const RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Capacity-eviction age floor (issue #340): capacity pressure may NEVER evict a
+/// Capacity-eviction age floor: capacity pressure may NEVER evict a
 /// marker younger than this, even when the store is over [`MAX_ENTRIES`]. It is the
 /// guaranteed-live window — below it, a marker might still be needed to dedup a
 /// redelivered Task, and evicting it would let that retry execute twice, violating
@@ -147,7 +147,7 @@ pub struct DedupStore {
     /// Retention window in milliseconds. Defaults to [`RETENTION`]; overridable via
     /// [`DedupStore::open_with`] in tests.
     retention_millis: i64,
-    /// Capacity-eviction age floor in milliseconds (issue #340). Defaults to
+    /// Capacity-eviction age floor in milliseconds. Defaults to
     /// [`MIN_RETENTION`]; overridable via `open_with` in tests. Capacity eviction never
     /// removes a marker younger than this.
     min_retention_millis: i64,
@@ -261,7 +261,7 @@ impl DedupStore {
     /// this module should use [`DedupStore::open`] with the production defaults.
     /// Tests access this via `super::` from the descendant `tests` module.
     ///
-    /// `min_retention_millis`: capacity-eviction age floor (issue #340); capacity
+    /// `min_retention_millis`: capacity-eviction age floor; capacity
     /// eviction never removes a marker younger than this.
     fn open_with(
         state_dir: &Path,
@@ -448,7 +448,7 @@ fn record_marker(
 }
 
 /// Evicts expired (age > `retention_millis`) and excess (count > `max_entries`) entries,
-/// subject to the capacity-eviction age floor (`min_retention_millis`, issue #340).
+/// subject to the capacity-eviction age floor (`min_retention_millis`).
 ///
 /// Age eviction runs first (removes all entries older than the retention window).
 /// Capacity eviction runs second (removes the oldest remaining entries until within the
@@ -483,7 +483,7 @@ fn evict_locked(
     // Capacity-based eviction: oldest-first until within the cap, but only among
     // entries at or beyond the age floor. Entries younger than the floor are
     // guaranteed-live and must not be evicted, even if that leaves the store over the
-    // cap (issue #340).
+    // cap.
     if map.len() <= max_entries {
         return;
     }

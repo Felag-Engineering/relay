@@ -10,10 +10,10 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// readlane.go is the TRAIL AND JOB half of the read lane on *ReadLane (#441):
+// readlane.go is the TRAIL AND JOB half of the read lane on *ReadLane:
 // the capability layer's seam over the audit trail's and Jobs/Tasks'
 // filtered, paginated queries. Its registry half — the fleet enumeration and
-// the single-Node read — is readlane_registry.go (#450); both obey the order
+// the single-Node read — is readlane_registry.go; both obey the order
 // below without exception.
 //
 // Every method follows the same order: validate the filter -> record the
@@ -34,7 +34,7 @@ const (
 	toolAuditCounts = "audit_counts"
 	toolAuditReach  = "audit_reach"
 
-	// toolWatchEvents names the read RecordEventSubscription records (#539).
+	// toolWatchEvents names the read RecordEventSubscription records.
 	// "watch" rather than "stream_events": GLOSSARY.md lists "event stream"
 	// among the Event seam's rejected synonyms, and this name lands in the
 	// append-only trail forever — verb_noun, in this const block's own
@@ -217,7 +217,7 @@ func (l *ReadLane) recordQueryRead(ctx context.Context, p Principal, tool, selec
 }
 
 // RecordEventSubscription writes the read record for one subscription to the
-// Console's live event stream (#539, ADR-0025): who opened it, over which
+// Console's live event stream (ADR-0025): who opened it, over which
 // kinds, and whether it asked to resume — never the rows that later cross it.
 //
 // It returns the CANONICALISED names it just recorded, and this is not a

@@ -1,7 +1,7 @@
 package controlplane
 
 // consolesession.go adds the BROWSER credential lane to the one authentication
-// boundary (#418).
+// boundary.
 //
 // # Why here and not in package console
 //
@@ -44,7 +44,7 @@ import (
 type ConsoleSessionResolver interface {
 	Resolve(ctx context.Context, id consoleauth.SessionID) (consoleauth.Session, accounts.Account, error)
 
-	// CSRFToken derives id's CSRF token (#460). It is fetched here, at
+	// CSRFToken derives id's CSRF token. It is fetched here, at
 	// resolution time, rather than carried on consoleauth.Session: the CSRF
 	// token is not a session fact to snapshot, it is a value RECOMPUTED per
 	// request from an identifier the boundary just resolved, and this
@@ -72,7 +72,7 @@ type consoleLane struct {
 	public func(*http.Request) bool
 
 	// scope reports whether a request targets the Console at all — the
-	// surface this credential is FOR (#459).
+	// surface this credential is FOR.
 	//
 	// Without it the lane is chosen by request shape alone, and the shape of
 	// a Console request ("no Authorization header, and a Console is
@@ -100,7 +100,7 @@ type ConsoleSessionOptions struct {
 	Public func(*http.Request) bool
 
 	// Scope reports whether a request targets the Console, and so whether a
-	// session cookie is a credential for it at all (#459).
+	// session cookie is a credential for it at all.
 	//
 	// Required, and deliberately not defaulted to "everything": a nil
 	// predicate would silently restore the control-plane-wide cookie this
@@ -213,7 +213,7 @@ type ConsoleSession struct {
 	// is current as of this request, unlike the identity snapshot below.
 	AuthenticatedAt time.Time
 
-	// CSRFToken is this request's derived Console CSRF token (#460) — NOT a
+	// CSRFToken is this request's derived Console CSRF token — NOT a
 	// stored secret. It is recomputed by ConsoleSessionResolver.CSRFToken on
 	// every resolution from an identifier the boundary just resolved, so
 	// there is no table of these anywhere and its lifetime is this request's,

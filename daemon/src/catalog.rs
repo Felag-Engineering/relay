@@ -1,5 +1,5 @@
 //! Binding tests for the **shipped read catalog** — the first-party template
-//! pack installed with the daemon package (issue #293, ADR-0021).
+//! pack installed with the daemon package (ADR-0021).
 //!
 //! The catalog itself is data, not code: `packaging/templates.d/relay-read/`.
 //! This module is where that data is held to the same bar as the code around

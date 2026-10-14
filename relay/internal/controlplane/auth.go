@@ -1,10 +1,10 @@
-// Package controlplane is the Relay's control-plane HTTP surface: MCP (#117)
-// and the Control API (#116) mount onto the one *Server this package exposes,
+// Package controlplane is the Relay's control-plane HTTP surface: MCP
+// and the Control API mount onto the one *Server this package exposes,
 // behind a single shared bearer-auth Middleware. This is the only control path
 // — never build a parallel one (ADR-0009/0010, AGENTS.md invariant 10).
 //
 // Every request on this listener authenticates as an **Account**, presenting a
-// per-Account API Token (#296). The Relay stores only each token's SHA-256
+// per-Account API Token. The Relay stores only each token's SHA-256
 // hash; a presented credential is never logged, echoed in an error, or
 // otherwise persisted (ADR-0023).
 package controlplane
@@ -96,12 +96,12 @@ func PrincipalFromContext(ctx context.Context) (capability.Principal, bool) {
 type Authenticator struct {
 	tokens TokenVerifier
 
-	// oauth is the OAuth 2.1 resource-server half (#299, ADR-0024). Nil when
+	// oauth is the OAuth 2.1 resource-server half (ADR-0024). Nil when
 	// no IdP is configured, in which case a non-token credential is simply
 	// refused — the Relay advertises no flow it cannot complete.
 	oauth *oauthResolver
 
-	// console is the human browser lane (#418, ADR-0009). Nil when the Admin
+	// console is the human browser lane (ADR-0009). Nil when the Admin
 	// Console is not mounted, in which case a session cookie is simply
 	// ignored: no Console, no session to resolve it against, and no
 	// unauthenticated surface punched in this wrapper. See consolesession.go.
@@ -236,7 +236,7 @@ func (a *Authenticator) contextWith(ctx context.Context, res authResult) context
 // session alongside a header, and a script cannot fall back to one.
 //
 // Shape picks the lane; it does not decide the lane's REACH. The cookie lane
-// is additionally bounded by where the Console is (#459): a credential binds
+// is additionally bounded by where the Console is: a credential binds
 // to the surface that issued it, and a session cookie the browser attaches to
 // every path — the `__Host-` prefix forces Path=/ — is a credential for the
 // Console and for nothing else on this listener. The token lanes carry no such
@@ -253,7 +253,7 @@ func (a *Authenticator) authenticateRequest(r *http.Request) (authResult, bool) 
 		return authResult{principal: p}, true
 	}
 
-	// The cookie is only a credential ON THE CONSOLE (#459). The `__Host-`
+	// The cookie is only a credential ON THE CONSOLE. The `__Host-`
 	// prefix forces it to Path=/, so the browser presents it on /api/v1 and
 	// /mcp as well; the lane is the Console's, and it ends where the Console
 	// does. Off-scope the cookie is not resolved and not even read, so a
@@ -285,7 +285,7 @@ func SourceAddress(r *http.Request) string {
 // a request for a Console page that presents no bearer header is sent to the
 // sign-in page; everything else gets the generic 401 challenge.
 //
-// Both conditions are needed. Scope (#459) is where the request was going:
+// Both conditions are needed. Scope is where the request was going:
 // `/mcp` and `/api/v1` answer with the challenge whether or not a Console is
 // mounted, because its `resource_metadata` pointer is how an MCP harness
 // discovers the OAuth flow (ADR-0024), and a harness sent to an HTML sign-in
@@ -336,7 +336,7 @@ func (a *Authenticator) authenticate(ctx context.Context, credential string) (ca
 		p.AuthMethod = capability.AuthMethodAPIToken
 		// The token ID travels with the identity into the verified audit lane:
 		// "which of this Account's credentials acted" is what makes revoking
-		// the compromised one a targeted act (#300).
+		// the compromised one a targeted act.
 		p.TokenID = tok.ID
 		return p, true
 	}

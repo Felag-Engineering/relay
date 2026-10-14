@@ -228,7 +228,7 @@ func kindsOfFamily(f rowKind) []string {
 //
 //   - dispatch — served Job-grained by QueryJobs. A dispatch record is
 //     per-Node, and four thousand of them are one row.
-//   - dispatch_intent — the Job-level intent record (#887), also served by
+//   - dispatch_intent — the Job-level intent record, also served by
 //     QueryJobs: it is the Job row's Recording state, not a row of its own.
 //   - read — the trail's OWN read records, including the two this screen
 //     writes on every page view (capability's read lane records every query).
@@ -368,7 +368,7 @@ type activityRow struct {
 	// (job.go), which is what "offered exactly as Job detail's is" means.
 	Running bool
 	// OutcomeUnrecorded is a finished Job-lane row whose dispatch intent is on
-	// the trail with none, or only some, of its outcome rows (#887). The
+	// the trail with none, or only some, of its outcome rows. The
 	// predicate is capability.JobSummary.OutcomeUnrecorded; this only renders
 	// it. OutcomePartial picks the wording: some outcome rows exist.
 	OutcomeUnrecorded bool
@@ -415,7 +415,7 @@ type activityRow struct {
 	GrantID string
 
 	// ApprovalAnswer, DecisionChannel, and PlanHash are the export-only
-	// counterpart to State (#545): plain strings, fed from trailFacts,
+	// counterpart to State: plain strings, fed from trailFacts,
 	// carried so the CSV export can name a decision's structured answer even
 	// though the page itself only ever renders State's chip form.
 	ApprovalAnswer  string
@@ -1492,8 +1492,8 @@ func summarize(f trailFacts) string {
 		return "re-drove a dispatch that is already parked"
 	case audit.KindApprovalDecided:
 		// Same discriminators as agents.go's agentCallFrom, no new vocabulary:
-		// GrantID is RevokeGrant's structural marker (#538); the structured
-		// answer (#545) otherwise names which way the decision went; a
+		// GrantID is RevokeGrant's structural marker; the structured
+		// answer otherwise names which way the decision went; a
 		// pre-#545 decision with neither falls back to the original sentence.
 		switch {
 		case f.GrantID != "":

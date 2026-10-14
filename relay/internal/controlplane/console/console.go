@@ -74,7 +74,7 @@ type Deps struct {
 	// preserve. ADR-0009's insight was that absent beats forbidden.
 	Execution bool
 
-	// Auth is the Console's sign-in service (#418). It can start a session,
+	// Auth is the Console's sign-in service. It can start a session,
 	// end one, and re-prove human presence for step-up; it cannot RESOLVE
 	// one, because resolving a credential belongs to the authentication
 	// boundary (controlplane.Authenticator) and not to a screen.
@@ -92,7 +92,7 @@ type Deps struct {
 	// fleet ("you have no Nodes"), and a Console that makes it because nobody
 	// wired the registry has lied about something an operator will act on.
 	//
-	// Every registry and Policy-view read is Deps.Queries now (#680, QRY-28):
+	// Every registry and Policy-view read is Deps.Queries now (QRY-28):
 	// the Compare screen and the Node-detail Policy panel ask through
 	// DescribeNode, the same audited door the fleet listing and node detail
 	// have used since #450. There is no unaudited registry door left.
@@ -110,7 +110,7 @@ type Deps struct {
 	// before you trust the Relay" is worse than an admission.
 	Trust TrustReader
 
-	// Events is the in-process event seam (#416) behind the Console's ONE
+	// Events is the in-process event seam behind the Console's ONE
 	// live-read path, GET /console/events. Nil leaves day one on its honest
 	// "rejected attempts are not shown yet" paragraph and mounts no script.
 	Events EventReader
@@ -118,18 +118,18 @@ type Deps struct {
 	// Now timestamps rendered pages. Defaults to time.Now().UTC() when nil.
 	Now func() time.Time
 
-	// Queries is the capability layer's read lane (#441/#450): filtered,
+	// Queries is the capability layer's read lane: filtered,
 	// paginated queries over the audit trail and over Jobs/Tasks, plus the
 	// registry reads the fleet listing and node detail make (seams.go).
 	//
 	// It is THE audited door. Every method on it writes the read's own access
 	// record before it answers and fails closed when it cannot (ADR-0025),
 	// which is why a screen that reads fleet, Policy or trail data asks here
-	// and nowhere else (#680).
+	// and nowhere else.
 	Queries QueryReader
 
 	// Accounts is the Account registry and its API Tokens, read-only
-	// (#654, seams.go). It is satisfied by *capability.AccountAdmin, not the
+	// (seams.go). It is satisfied by *capability.AccountAdmin, not the
 	// *capability.ReadLane behind Queries above, and it is deliberately NOT
 	// the same field: that comment is about the registry/Policy-view door and
 	// says a new screen asks there, and this seam must not read as having
@@ -152,12 +152,12 @@ type Deps struct {
 	Accounts AccountReader
 
 	// CertExpiringWithin is the state:cert-expiring warning window
-	// (ADR-0034, #414): a mirror of a root-owned startup value (invariant
+	// (ADR-0034): a mirror of a root-owned startup value (invariant
 	// 11), same "told, never settable" posture as Execution above. Zero (the
 	// default) means the marker never fires.
 	CertExpiringWithin time.Duration
 
-	// Cancel is one of the Console's two write seams (#595, cancel.go): the
+	// Cancel is one of the Console's two write seams (cancel.go): the
 	// same capability.Execution.CancelJob the Control API and MCP call. The role
 	// floor is operator; the scope beyond that floor differs by Account kind
 	// (human: any Job, machine: only a Job it requested — #614). Both the
@@ -167,7 +167,7 @@ type Deps struct {
 	// posture every other seam on this Deps takes.
 	Cancel JobCanceller
 
-	// Decide is the Console's other write seam (#453, decide.go): the same
+	// Decide is the Console's other write seam (decide.go): the same
 	// capability.Approvals.DecideApproval the Control API's out-of-band
 	// endpoint and MCP call. Quorum, audience, requester exclusion, the
 	// machine-self-decision rule, channel strength and the audit row are all
@@ -302,7 +302,7 @@ func Routes(d Deps) []Route {
 		{"GET", "/console/compare", NavEntry{}, accounts.RoleViewer, handleCompare},
 
 		// Policy Author (spec 06), Add Nodes (spec 09) and Incident (spec 16)
-		// are v0.7.0 screens, not built yet (#464). They do
+		// are v0.7.0 screens, not built yet. They do
 		// not get a placeholder row: a v0.6.0 nav must not advertise a route
 		// that answers "not built yet", and Register no longer needs a
 		// mounted-but-refusing row to keep a session from reaching one — the
@@ -332,7 +332,7 @@ func Routes(d Deps) []Route {
 		{"GET", "/console/approvals", NavEntry{NavAct, "Approvals", 30}, accounts.RoleViewer, handleApprovals},
 		{"GET", "/console/approvals/{approval_id}", NavEntry{}, accounts.RoleViewer, handleApproval},
 
-		// Accounts, read half (#654, spec 15). The first route in the
+		// Accounts, read half (spec 15). The first route in the
 		// Administer group, which has drawn nothing since #464 removed the
 		// four placeholders.
 		//
@@ -346,7 +346,7 @@ func Routes(d Deps) []Route {
 		// what comes next rather than an observation. Because this route
 		// constrainsReach(), Register mounts [methodMismatch] on the BARE
 		// "/console/accounts" as well, which collides with nothing in this
-		// table today. It did mean the write half (#655) could not add a
+		// table today. It did mean the write half could not add a
 		// constrained "POST /console/accounts": Register would register the
 		// bare path a second time and net/http panics at registration. The
 		// write half used the distinct literals this comment predicted —
@@ -377,7 +377,7 @@ func Routes(d Deps) []Route {
 		// it up).
 		{"GET", "/console/access", NavEntry{NavAdminister, "Access", 30}, accounts.RoleAdmin, handleAccess},
 
-		// Accounts, write half (#655, accounts_write.go): the Console's
+		// Accounts, write half (accounts_write.go): the Console's
 		// third, fourth, fifth, sixth and seventh write routes. All five at
 		// accounts.RoleAdmin, which is exactly the floor
 		// authz.requiredControlRole returns for all eight account
@@ -434,7 +434,7 @@ func Routes(d Deps) []Route {
 		// what must move when a kind needing more than Viewer is added.
 		{"GET", "/console/events", NavEntry{}, accounts.RoleViewer, handleEvents},
 
-		// The sign-in surface (#418). GET renders the form and POST accepts
+		// The sign-in surface. GET renders the form and POST accepts
 		// it; both are reachable without a credential, which is what
 		// Unauthenticated names for the authentication boundary. Sign-out is
 		// POST-only and authenticated like every other mutating route.
@@ -447,7 +447,7 @@ func Routes(d Deps) []Route {
 		{"POST", LoginPath, NavEntry{}, accounts.RoleViewer, handleLoginSubmit},
 		{"POST", LogoutPath, NavEntry{}, accounts.RoleViewer, handleLogout},
 
-		// Cancel (#595): the first of the Console's two write routes. NOT
+		// Cancel: the first of the Console's two write routes. NOT
 		// gated behind d.Execution — ADR-0026 decision 5 scopes that flag to
 		// the composer and to dispatch, and Cancel cannot run anything, only
 		// ask something already running to stop. MinRole here is mount-time
@@ -456,7 +456,7 @@ func Routes(d Deps) []Route {
 		// reached inside handleCancelJob, is the authority.
 		{"POST", "/console/jobs/{job_id}/cancel", NavEntry{}, accounts.RoleOperator, handleCancelJob},
 
-		// Decide (#453): the second write route, and the one that RELEASES
+		// Decide: the second write route, and the one that RELEASES
 		// execution rather than only ever reducing it — decide.go's header
 		// states that asymmetry rather than eliding it. Also NOT gated
 		// behind d.Execution, for the same reason: this route composes
@@ -500,7 +500,7 @@ func Routes(d Deps) []Route {
 
 // SessionScope reports whether r targets the Console — the surface a Console
 // session cookie is a credential FOR, and the only surface the authentication
-// boundary will resolve one on (#459).
+// boundary will resolve one on.
 //
 // # Why this predicate has to exist
 //

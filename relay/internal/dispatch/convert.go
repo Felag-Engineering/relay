@@ -52,7 +52,7 @@ func taskRequest(t jobs.Task) *relayv1.TaskRequest {
 }
 
 // policyQuery converts act into the wire PolicyQuery sent down the Node's
-// Tunnel for a Plan (#119, ADR-0011): the same argv-verbatim/no-shell oneof
+// Tunnel for a Plan (ADR-0011): the same argv-verbatim/no-shell oneof
 // as taskRequest, but deliberately carrying no task_id — a PolicyQuery can
 // never be mistaken for (or deduped alongside) a real Task. queryID is
 // correlation-only (Router.Query mints it via crypto/rand, unrelated to any
@@ -95,7 +95,7 @@ func verdict(pv *relayv1.PolicyVerdict) jobs.Verdict {
 // enum Outcome). A TaskResult carrying one is a protocol violation, never a
 // result: an enrolled but compromised Node could otherwise report
 // version_refused for a Task it received and executed, and every surface
-// would then state the Task was never sent (#632). This map is a MIRROR, not
+// would then state the Task was never sent. This map is a MIRROR, not
 // the source: /proto is (invariant 8), and wire_outcome_contract_test.go's G1
 // fails if the two disagree in either direction, G2 if any enum value is
 // unclassified.
@@ -106,7 +106,7 @@ var relayOnlyOutcomes = map[relayv1.Outcome]bool{
 
 // result converts a wire TaskResult into the domain jobs.Result that
 // TaskRepository.Resolve persists, refusing at this single wire boundary
-// every Outcome a relay-daemon is not permitted to report (#632):
+// every Outcome a relay-daemon is not permitted to report:
 // relayOnlyOutcomes (the two /proto marks Relay-synthesized) and
 // OUTCOME_UNSPECIFIED (the enum's own "not yet resolved" zero value — a
 // finished Task's result may never carry it; see
@@ -156,7 +156,7 @@ func result(tr *relayv1.TaskResult) (jobs.Result, jobs.ProtocolViolation) {
 // outcome converts a wire Outcome into its domain mirror. Called only for a
 // value result() has already let through, so OUTCOME_UNSPECIFIED never
 // reaches it from the wire path — result() refuses that value before this
-// function runs (#632, see the dispatch package doc). An unrecognized value
+// function runs (see the dispatch package doc). An unrecognized value
 // (>= 9, e.g. a newer daemon under invariant 14: the Relay never pushes
 // binaries, so version skew is the normal state) still maps to
 // jobs.OutcomeUnspecified rather than panicking or guessing, preserving

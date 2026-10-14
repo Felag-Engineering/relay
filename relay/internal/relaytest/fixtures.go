@@ -35,7 +35,7 @@ deny  = ["--force", "\\brm\\b"]
 `
 
 // FixtureTemplatePack is the Template Operation pack a daemon subprocess loads
-// in the e2e suites that exercise the template tier (ADR-0021, #291). One
+// in the e2e suites that exercise the template tier (ADR-0021). One
 // zero-parameter read template, so the e2e can prove the whole local-loading
 // path — file on disk -> compiled -> fingerprinted -> reported -> dispatchable
 // -> Policy-governed — without depending on any host binary beyond `echo`.

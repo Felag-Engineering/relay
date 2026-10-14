@@ -1,6 +1,6 @@
 // Package metrics is the real capability.MetricsSink and enroll.
 // EnrollmentObserver: a minimal, hand-rolled Prometheus text exposition for
-// the Relay's control plane (v0.0.7, #182).
+// the Relay's control plane (v0.0.7).
 //
 // It lives in its own package, not package capability, because capability's
 // non-test files are locked to a small import allowlist
@@ -16,7 +16,7 @@
 // (AGENTS.md). This package has no execution capability: it only reads
 // gauge-source closures and formats counters (invariant #10).
 //
-// relay_build_info (#249) is the one metric with free-form label values. It is
+// relay_build_info is the one metric with free-form label values. It is
 // still bounded: its labels are this process's own build stamp, fixed for the
 // process's lifetime, so the series cardinality is exactly one per running
 // Relay — the standard Prometheus build-info idiom. The values are injected by
@@ -42,7 +42,7 @@ import (
 // growing unbounded. Every value in range has a series in outcomeOrder below —
 // a counted outcome that nothing renders would be silently dropped at scrape
 // time, which is how OutcomeVersionRefused was previously invisible here
-// (added to the order alongside OutcomeUnsupported, #291).
+// (added to the order alongside OutcomeUnsupported).
 const nOutcomes = 9
 
 // nRefusalKinds sizes the refusals counter array to cover every
@@ -98,13 +98,13 @@ type GaugeSources struct {
 	// root's closure supplies its own (main.go), keeping this seam as simple
 	// as Connected/Nodes.
 	Frozen func() (bool, error)
-	// Build is this Relay's build stamp (#249), rendered as the constant
+	// Build is this Relay's build stamp, rendered as the constant
 	// relay_build_info gauge. A value, not a closure: unlike the gauges above
 	// it never changes while the process runs. A zero Build (empty Version)
 	// omits the metric entirely, matching the nil-closure behaviour above.
 	Build BuildInfo
 	// LabelsDeclined returns the SQLite read-back label filter's live
-	// counters (internal/store's Store.LabelsDeclined, #565): how many stored
+	// counters (internal/store's Store.LabelsDeclined): how many stored
 	// pairs have been declined so far this process, by namespace. A closure
 	// rather than an IncX method on Metrics, because the atomics it reads
 	// live in internal/store at the filter itself, not here — and plain
@@ -278,7 +278,7 @@ func (m *Metrics) IncEnrollment() {
 }
 
 // IncServerCertRotation records one in-process re-issuance of a listener's own
-// TLS server certificate (#403, ADR-0031 §5). A counter that stops advancing
+// TLS server certificate (ADR-0031 §5). A counter that stops advancing
 // is how an operator sees rotation stop; the certificate's remaining lifetime
 // after that is their warning window.
 func (m *Metrics) IncServerCertRotation(l ServerCertListener) {
@@ -290,7 +290,7 @@ func (m *Metrics) IncServerCertRotation(l ServerCertListener) {
 }
 
 // IncProtocolViolation records one relay-daemon report refused at the wire
-// boundary as a protocol violation (#638), by rule. It is not on
+// boundary as a protocol violation, by rule. It is not on
 // capability.MetricsSink — the increment happens at the composition root
 // (cmd/relay's violationRecorder), the same place enroll.EnrollmentObserver's
 // methods live on this type without being on the capability port.

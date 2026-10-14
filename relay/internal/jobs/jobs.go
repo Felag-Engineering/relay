@@ -102,7 +102,7 @@ const VersionRefusedMessage = "capability: dispatch refused: this Node's relay-d
 	"through your config-management / IaC pipeline — the Relay never pushes binaries."
 
 // ViolationRule names the specific way a relay-daemon's TaskResult broke the
-// wire contract (#632): what dispatch.result() refuses at the wire boundary,
+// wire contract: what dispatch.result() refuses at the wire boundary,
 // before a Result is ever persisted or a Task resolved with what the daemon
 // actually sent.
 type ViolationRule int
@@ -201,7 +201,7 @@ func (v ProtocolViolation) Explanation() string {
 // ProtocolViolationEvent is one relay-daemon's protocol violation as
 // observed at the wire boundary (#632's refusal point), carried to the
 // audit lane so the violation is a durable, queryable event and not only
-// a log line (#638).
+// a log line.
 //
 // It carries NO Stdout, Stderr or Truncated field and must never grow
 // one. Every field is Relay-authored or Relay-minted: the ids come from
@@ -297,7 +297,7 @@ type Action struct {
 }
 
 // Requester is the verified Account that asked for a Job, recorded when the
-// Job is created (#616). The zero value means NO requester is recorded: a
+// Job is created. The zero value means NO requester is recorded: a
 // Job created before the Relay recorded one, or by a caller with no Account.
 // It must never be inferred from anything else (execution.md Cancellation:
 // fail closed).
@@ -357,7 +357,7 @@ type Task struct {
 // Result is the outcome of a resolved Task, as reported by the relay-daemon
 // (or synthesized by the Relay, e.g. OutcomeUnreachable). A Result may also
 // be wholly Relay-authored where the wire boundary refused the daemon's
-// report as a protocol violation (ProtocolViolation.Explanation, #632): in
+// report as a protocol violation (ProtocolViolation.Explanation): in
 // that case Stderr carries Relay text and no daemon bytes survive.
 type Result struct {
 	Outcome  Outcome
@@ -464,7 +464,7 @@ type TaskRepository interface {
 	// with OutcomeCancelled, clears DispatchedAt and records the resolve time —
 	// the row is identical to MarkCancelled's. The engine marked the Task
 	// Dispatched (persist-then-send), but its Job's cancel was seen before the
-	// send began, so the Task never left the Relay (#943). Only the engine that
+	// send began, so the Task never left the Relay. Only the engine that
 	// MarkDispatched the Task calls it, and only when nothing was sent. Returns
 	// ErrTaskNotFound if the Task does not exist, or ErrInvalidTaskState if the
 	// Task is not currently Dispatched.

@@ -13,7 +13,7 @@ import (
 const PrincipalLocalHost = "local-host"
 
 // Attribution is the identity carried on every audit record, in **two
-// structurally distinct lanes** (ADR-0027 decision 10, #300; docs/specs/approval.md).
+// structurally distinct lanes** (ADR-0027 decision 10, docs/specs/approval.md).
 //
 // The distinction is the whole point, not a nicety:
 //

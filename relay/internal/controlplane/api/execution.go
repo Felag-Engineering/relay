@@ -13,7 +13,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 )
 
-// execution.go is the Control API's execution slice (#356, ADR-0010): the REST
+// execution.go is the Control API's execution slice (ADR-0010): the REST
 // twin of the MCP execution tools, over the SAME capability layer.
 //
 // Every route here is a thin adapter — decode → parse Selector → build the
@@ -40,7 +40,7 @@ import (
 // mcp.Executor, and TokenMinter/Freezer's style here). *capability.Execution
 // satisfies it structurally; the composition root passes it in.
 //
-// CancelJob arrived with the Job routes (#357, jobs.go) and completes the
+// CancelJob arrived with the Job routes (jobs.go) and completes the
 // mirror of capability.Execution's execution methods. It stays on this one
 // interface rather than a separate JobCanceller because the composition root
 // passes the one *capability.Execution for all three — one capability layer,
@@ -93,7 +93,7 @@ type rawExecRequest struct {
 // perNodeResult is one Node's Task outcome.
 //
 // ExitCode is a pointer so it is OMITTED whenever no real process exit status
-// exists (#207/#253): the daemon's -1 "no exit status" sentinel
+// exists: the daemon's -1 "no exit status" sentinel
 // (denied-before-spawn, spawn failure, signal-kill, timeout/cancel kill), the
 // Relay's synthesized zero value (unreachable, version_refused), and — since
 // #632 — the Relay's own -1 on a Task whose daemon report the wire boundary
@@ -153,7 +153,7 @@ type planResponse struct {
 	Advisory        string           `json:"advisory"`
 }
 
-// pendingApprovalResponse is what a PARKED dispatch returns (#270, ADR-0027).
+// pendingApprovalResponse is what a PARKED dispatch returns (ADR-0027).
 //
 // It is a 202, not an error, and the distinction is deliberate. Nothing was
 // denied and nothing ran: the dispatch is suspended awaiting a decision it may
@@ -187,7 +187,7 @@ const statusPendingApproval = "pending_approval"
 
 // executionResponse is a real (plan=false) dispatch response.
 //
-// JobID carries omitempty deliberately (#207/#253): it is present only when a
+// JobID carries omitempty deliberately: it is present only when a
 // Job was actually created, so an ABSENT job_id always means nothing was
 // dispatched, never a failed-but-created Job. A zero-match dispatch is a 422
 // no_nodes_matched refusal, so every 200 dispatch carries a job_id. Results
@@ -232,7 +232,7 @@ func handleRunOperation(d Deps) http.HandlerFunc {
 			// out-of-range timeout: all malformed input, never a Policy verdict.
 			// Rendering these as 400 rather than letting them reach dispatch is
 			// what keeps a misspelled argument from coming back as
-			// denied_by_policy (#345).
+			// denied_by_policy.
 			writeProblem(w, http.StatusBadRequest, "invalid operation request", err.Error())
 			return
 		}
@@ -457,7 +457,7 @@ func writeExecError(w http.ResponseWriter, err error) {
 	// A Template no matched Node reports, or a Template call whose argument
 	// names do not fit its slots (ADR-0042): malformed input, refused by the
 	// capability layer after authorization, never a Policy verdict — the same
-	// 400 an unknown Native argument gets at this adapter (#345).
+	// 400 an unknown Native argument gets at this adapter.
 	var unknownErr *capability.UnknownOperationError
 	var malformedErr *capability.MalformedCallError
 	if errors.As(err, &unknownErr) || errors.As(err, &malformedErr) {

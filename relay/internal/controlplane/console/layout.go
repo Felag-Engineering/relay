@@ -38,7 +38,7 @@ const (
 	BannerRelayCertExpiring BannerKind = "relay-cert-expiring"
 
 	// BannerCAExpiring: the trust root every Node pins is running out, and
-	// there is no rotation path today (issue #412).
+	// there is no rotation path today.
 	BannerCAExpiring BannerKind = "ca-expiring"
 )
 
@@ -83,7 +83,7 @@ type Page struct {
 	// script and the content security policy does not touch it — which is the
 	// entire reason the conventions ban hx-on:, which is.
 	//
-	// This is the SESSION's derived secret (#460), not a cookie value: it is
+	// This is the SESSION's derived secret, not a cookie value: it is
 	// sessionCSRFToken's read of the ConsoleSession the authentication
 	// boundary already resolved, so a page and the request it later submits
 	// are checked against the same per-session-per-request derivation rather

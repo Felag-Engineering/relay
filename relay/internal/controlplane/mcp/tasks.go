@@ -76,7 +76,7 @@ type TaskResolver interface {
 // after the approval lands, which is the moment an operator is watching. Five
 // seconds costs twelve requests a minute per outstanding dispatch, which is
 // nothing next to what re-driving cost: every one of those was a full
-// dispatch attempt through the gate (#379).
+// dispatch attempt through the gate.
 const defaultPollIntervalMs = 5000
 
 // taskGetParams is `tasks/get`'s request shape. ParamsBase supplies the SDK's

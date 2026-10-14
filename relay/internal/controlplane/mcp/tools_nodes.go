@@ -113,7 +113,7 @@ func templateVocabularyOutput(snap nodevocab.Snapshot, reported bool) TemplateVo
 // Selector-consuming surface shares. Fail-closed: a term with no
 // node:/relay:/state: prefix is a parse error, not a guess.
 //
-// tag: parses as an error too, and the schema below says so (#560). It used
+// tag: parses as an error too, and the schema below says so. It used
 // to be advertised without a caveat while resolving to nothing, which handed
 // an AI-agent HTTP 200 and an empty list for a namespace that is simply not
 // implemented — a false negative given to the caller least able to notice it.
@@ -127,7 +127,7 @@ type describeNodeInput struct {
 }
 
 // registerNodeTools registers list_nodes and describe_node on srv, both
-// backed by lane — the capability read lane (#680, QRY-28): the record and
+// backed by lane — the capability read lane (QRY-28): the record and
 // the read are the same call, so neither tool can reach the registry without
 // it.
 func registerNodeTools(srv *sdkmcp.Server, lane ReadLane) {
@@ -158,7 +158,7 @@ func registerNodeTools(srv *sdkmcp.Server, lane ReadLane) {
 		// listing.Nodes may be a NIL slice when the Selector matched nothing
 		// (capability.Selector.Resolve never returns an empty non-nil slice) —
 		// an explicit zero-length, pre-sized make keeps the response an empty
-		// JSON array rather than null (#207/#253).
+		// JSON array rather than null.
 		items := make([]NodeItem, 0, len(listing.Nodes))
 		for _, n := range listing.Nodes {
 			items = append(items, nodeItemFromNode(n, listing.Eval))
@@ -227,7 +227,7 @@ func registerNodeTools(srv *sdkmcp.Server, lane ReadLane) {
 			// fingerprint (the Hello-reported drift signal) but mark
 			// reported=false so a caller never mistakes "nothing captured
 			// yet" for "no restrictions". OperationRules/DenyRules stay
-			// empty arrays, never null (#207/#253) — reported=false is the
+			// empty arrays, never null — reported=false is the
 			// only "no data yet" signal.
 			out.EffectivePolicy = EffectivePolicyOutput{
 				PolicyFingerprint: desc.Node.PolicyFingerprint,

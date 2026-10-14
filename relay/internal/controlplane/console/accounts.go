@@ -1,6 +1,6 @@
 package console
 
-// accounts.go is the Accounts screen, read half (#654, spec 15): who holds an
+// accounts.go is the Accounts screen, read half (spec 15): who holds an
 // identity on this control plane, with what authority, and what credentials
 // authenticate as them.
 //
@@ -59,7 +59,7 @@ package console
 //
 // The write half landed in #655 (accounts_write.go), so this file now renders
 // forms as well as rows. The forms for an existing Account render only in the
-// SELECTED Account's panel; the list is read-only (#830). What stays absent is
+// SELECTED Account's panel; the list is read-only. What stays absent is
 // a role or PERMISSION editor of any kind — the three roles are ADR-0010's
 // closed set and a custom-permission builder is a second authorization model —
 // and any Relay configuration whatsoever. The one place a minted credential appears is
@@ -86,7 +86,7 @@ const accountsCallPage = 200
 // policyCeilingNote is the sentence the screen must not lose: a role is a
 // ceiling on what the RELAY will ask for, and every Node's own Policy is the
 // ceiling on what actually runs (ADR-0002, invariant 2). What each role may do
-// is ADR-0010's and GLOSSARY.md's, not this screen's (#849).
+// is ADR-0010's and GLOSSARY.md's, not this screen's.
 const policyCeilingNote = "A role bounds what this Relay will ask of a Node; each Node's own Policy is the real ceiling."
 
 // selfPanelNote is why the signed-in Account's own panel carries no control.
@@ -108,11 +108,11 @@ type accountsView struct {
 	Tokens           []tokenRow
 	TokensUnreadable bool
 
-	// Change is the selected Account's role and state controls (#830). Nil
+	// Change is the selected Account's role and state controls. Nil
 	// when nothing is selected or the write half is not wired.
 	Change *accountChange
 
-	// SelectedMintAction is the selected Account's mint form action (#655),
+	// SelectedMintAction is the selected Account's mint form action,
 	// empty when nothing is selected or the write half is not wired. The
 	// mint form lives in the token panel because minting is about ONE
 	// Account, and the panel is the only part of this screen that is.
@@ -121,7 +121,7 @@ type accountsView struct {
 	CallPage int
 	Ceiling  string
 
-	// Write is nil when the write half is not wired (#655, accounts_write.go):
+	// Write is nil when the write half is not wired (accounts_write.go):
 	// no form of any kind renders, which is the honest-absence posture every
 	// other seam on this Deps takes. accountsOffered decides it.
 	Write *accountsWriteControls
@@ -182,7 +182,7 @@ type accountRow struct {
 	Current bool
 }
 
-// accountChange is the selected Account's role and state controls (#830). Built
+// accountChange is the selected Account's role and state controls. Built
 // only for the SELECTED Account when the write half is wired; the list carries
 // none.
 //
@@ -236,7 +236,7 @@ type tokenRow struct {
 
 	Revoked bool
 
-	// RevokeAction is this token's revoke form action (#655). Empty when the
+	// RevokeAction is this token's revoke form action. Empty when the
 	// write half is not wired. A NAME, an id and a path — still no field a
 	// secret could occupy.
 	RevokeAction string
@@ -362,7 +362,7 @@ func handleAccounts(d Deps) http.HandlerFunc {
 				Current:    a.Name == v.Selected,
 				// url.Values, never concatenation: an Account name is not
 				// constrained by this package, and "bob&co" concatenated
-				// links to the wrong Account (#467).
+				// links to the wrong Account.
 				Href:         "/console/accounts?" + url.Values{"account": {a.Name}}.Encode(),
 				LastCallHref: "/console/activity?" + url.Values{"account": {a.ID}}.Encode(),
 			}
@@ -682,7 +682,7 @@ var accountsTmpl = newScreen("accounts", `
 //
 // `cancel_job` and the Preflight once matched neither arm and rendered NOWHERE,
 // against the retired Agents screen's first acceptance criterion — every one
-// of the eight tools renders with a request line and a result line (#537). Both are calls in
+// of the eight tools renders with a request line and a result line. Both are calls in
 // exactly the sense this function means: an Account asked a control surface for
 // something and the Relay recorded the ask. They are now families of their own
 // (rowCancel, rowPlan; spec 04, Row kinds), so they are admitted by family like
@@ -694,7 +694,7 @@ func isAgentCallKind(kind string) bool {
 	switch kindOf(kind) {
 	case rowDispatch, rowRead, rowRefusal, rowApproval, rowPlan, rowCancel:
 		// The intent record is not a call: the last-tool-call read keeps
-		// reading the outcome row (#887).
+		// reading the outcome row.
 		return kind != audit.KindApprovalExpired && kind != audit.KindDispatchIntent
 	default:
 		return false

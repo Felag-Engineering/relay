@@ -78,7 +78,7 @@ var screenFuncs = template.FuncMap{
 	// join renders a string slice for display.
 	"join": func(sep string, xs []string) string { return strings.Join(xs, sep) },
 
-	// cancelControl builds a JobCancel for a per-row template (#595): a
+	// cancelControl builds a JobCancel for a per-row template: a
 	// screen that draws a row per Job — Activity — cannot
 	// pre-build one JobCancel per row in the handler without duplicating
 	// cancelJobAction's escaping there too, so the template does it here
@@ -93,7 +93,7 @@ var screenFuncs = template.FuncMap{
 	//
 	// Its Go-side counterpart is countOf (fleet.go), which returns the number
 	// AND the word. See countOf's comment for what the two of them sharing a
-	// name once cost (#550).
+	// name once cost.
 	"plural": func(n int, one, many string) string {
 		if n == 1 {
 			return one

@@ -27,7 +27,7 @@ use shutdown::{Inflight, Shutdown, ShutdownContext};
 use tunnel::{Backoff, RECONNECT_BACKOFF_BASE, RECONNECT_BACKOFF_CAP};
 
 // Crate-private aliases so `crate::x::...` paths in the remaining modules resolve
-// unchanged after the workspace split (#889).
+// unchanged after the workspace split.
 pub(crate) use relay_exec::{cancel, executor, not_executed};
 pub(crate) use relay_log as log_field;
 pub(crate) use relay_ops::{operations, templates};

@@ -1,5 +1,5 @@
 //! The single Operation-vocabulary registry: `name → (handler, arg-shape,
-//! risk class)` (issue #289; ADR-0001, ADR-0012, ADR-0015).
+//! risk class)` (ADR-0001, ADR-0012, ADR-0015).
 //!
 //! [`REGISTRY`] is the one table every consumer of the vocabulary reads:
 //!
@@ -130,7 +130,7 @@ pub struct OpRegistration {
 // ---------------------------------------------------------------------------
 // The uniform resolution contract — `name → (handler, arg-shape, risk class)`
 // as a trait, so the vocabulary can hold BOTH the static Native Operations and
-// the runtime-loaded Template Operations behind one lookup (issue #290, ADR-0021).
+// the runtime-loaded Template Operations behind one lookup (ADR-0021).
 // ---------------------------------------------------------------------------
 
 /// The behavior dispatch needs from a resolved vocabulary entry, independent of
@@ -158,14 +158,14 @@ pub struct OpRegistration {
 /// `tokio::spawn` (the tunnel loop).
 pub trait ResolvedOp: Send + Sync {
     /// The wire/Policy name. Part of the resolved contract; consumed by the
-    /// per-Node vocabulary discovery and classification (issue #291).
+    /// per-Node vocabulary discovery and classification.
     fn name(&self) -> &str;
     /// ADR-0012 risk class — the third element of `name → (handler, arg-shape,
     /// risk class)`. Consumed by the per-Node scheduler classification
     /// (`scheduler::Scheduler::classify`) and by discovery; native dispatch
     /// reads the concrete `OpRegistration::risk` field directly.
     fn risk(&self) -> RiskClass;
-    /// The execution tier, named in the Node's Policy decision log (#888).
+    /// The execution tier, named in the Node's Policy decision log.
     fn tier(&self) -> crate::policy::decision_log::Tier;
     /// Named-args → positional vector, in the entry's declared order. MUST be
     /// the exact vector Policy evaluates (ADR-0011: no drift between "would

@@ -24,7 +24,7 @@ import (
 // because the Relay has no general config file today — it is configured by
 // flags and environment variables, which cannot express a list of rules with
 // ten fields each. Whether the Relay should grow a general config file is a
-// separate, open question (#362); this file deliberately does not pre-empt it,
+// separate, open question; this file deliberately does not pre-empt it,
 // and it mirrors a pattern the product already trusts: the relay-daemon's
 // root-owned local Policy file with a fail-closed loader (ADR-0002).
 //

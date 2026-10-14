@@ -13,7 +13,7 @@ import (
 )
 
 // taskshim.go is the ONE place Relay touches raw MCP wire JSON, and the
-// highest-risk file in the v0.5.1 milestone (#375, ADR-0028). Read this header
+// highest-risk file in the v0.5.1 milestone (ADR-0028). Read this header
 // before changing anything in it.
 //
 // # Why it exists
@@ -36,7 +36,7 @@ import (
 // whose violation voids this design:
 //
 //   - The SDK rejects JSON-RPC batching for protocol >= 2025-06-18, and
-//   - Relay runs the handler with Stateless: true, JSONResponse: true (#267).
+//   - Relay runs the handler with Stateless: true, JSONResponse: true.
 //
 // So every request is exactly one JSON-RPC message and every reply exactly one
 // JSON object. The shim is a single-message response transformer, not a
@@ -54,7 +54,7 @@ import (
 // a confident, fully-identified parked result falls back to the byte-identical
 // response the SDK produced. A half-rewritten response is worse than an
 // un-rewritten one: the un-rewritten one is the universal `pending_approval`
-// path (#371), which works, and which ADR-0027 decision 2 requires never to be
+// path, which works, and which ADR-0027 decision 2 requires never to be
 // hard-depended upon anyway.
 //
 // # What this file structurally cannot do
@@ -123,7 +123,7 @@ func withTaskShim(next http.Handler, now func() time.Time, log *slog.Logger) htt
 			return
 		}
 
-		// The shim's usage signal (#376). This is the deployment's answer to
+		// The shim's usage signal. This is the deployment's answer to
 		// "is anyone actually using Tasks?", which is the question that decides
 		// when the shim can be DELETED — a temporary shim nobody can tell is
 		// unused becomes a permanent one. It logs only on a real rewrite, so

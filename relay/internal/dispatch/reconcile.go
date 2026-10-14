@@ -31,13 +31,13 @@ const reconcileDispatchTimeout = 35 * time.Second
 // again."
 //
 // A resend and a live worker's send of the same Task are serialised per task
-// ID by Router.Dispatch's send slot (#943): the worker's cancel guard commits
+// ID by Router.Dispatch's send slot: the worker's cancel guard commits
 // its withhold inside that critical section and the Reconciler's guard re-reads
 // the store inside it, so a Reconciler send either comes after the withhold
 // (and reads Resolved, sending nothing) or before it (and the worker then
 // sends too, never recording a Task that was sent as never sent).
 //
-// Residual (#943): the slot lives only while a Dispatch call for the Task is
+// Residual: the slot lives only while a Dispatch call for the Task is
 // in progress. If a Reconciler resend has fully returned (with a Result, or
 // with a timeout or disconnect error) before the live worker reaches its guard,
 // the slot is gone and the worker's guard can still record the Task cancelled,
@@ -118,7 +118,7 @@ func (r *Reconciler) ReconcileNode(ctx context.Context, nodeID string) error {
 // contract promises (once Resolved, a Task no longer appears in InFlight()).
 //
 // Before each resend the Task's state is re-read immediately before the wire
-// write (#943). A Task no longer Dispatched is never sent from a stale
+// write. A Task no longer Dispatched is never sent from a stale
 // snapshot: this matters because reconcileTask runs serially under a 35s
 // per-Task bound, so a snapshot can be minutes old by its last Task. A failed
 // re-read withholds the send and returns an error; the Task stays Dispatched

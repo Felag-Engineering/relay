@@ -45,7 +45,7 @@ package console
 // # The queue stays structurally read-only; the object does not
 //
 // The Console's approval seam (seams.go) has five reads on it and STILL no
-// decision method, no RequestGrant and no RevokeGrant — deciding (#453) is
+// decision method, no RequestGrant and no RevokeGrant — deciding is
 // reached through ApprovalDecider, its OWN seam in decide.go, for the same
 // reason JobCanceller lives in cancel.go rather than here. The queue below
 // remains read-only exactly as before: NO FORM, NO BUTTON and NO INPUT, every
@@ -138,7 +138,7 @@ type approvalRow struct {
 	// noticing they are alike is precisely the fatigue failure the grouping
 	// exists to catch.
 	//
-	// It is the stored shape key (#415): the Action, its risk class, its shape
+	// It is the stored shape key: the Action, its risk class, its shape
 	// arguments and the normalised Selector, WITHOUT the resolved fan-out. A
 	// record with no comparable shape — pre-#415 rows carry a legacy key —
 	// groups with NOTHING rather than with every other such record.
@@ -456,7 +456,7 @@ func grantRowLine(g approval.Grant) string {
 			what += ", and raw exec"
 		}
 	}
-	// A Scope has no namespace term (#482), so this row never carries one. This
+	// A Scope has no namespace term, so this row never carries one. This
 	// caller is fed only by ActiveGrants (buildApprovalRows), and Grant.Active
 	// refuses a pre-#482 legacy-pinned Grant, so a dead pin can never reach
 	// here to render as if it still covered anything.
@@ -870,7 +870,7 @@ type decisionRow struct {
 
 	// Kind is "human" or "machine", from the Decision's OWN record
 	// (Decision.DeciderHuman) — never from the Account registry, which would
-	// report the decider's kind today rather than when it decided (#540).
+	// report the decider's kind today rather than when it decided.
 	// Both values render; a human decider is labelled as plainly as a machine
 	// one. See deciderKind.
 	Kind string
@@ -905,7 +905,7 @@ type approvalAction struct {
 
 	// Known gates the Selector line on the record carrying a real ActionKind.
 	//
-	// This is the SelectorShape.Known distinction (#415) applied at render
+	// This is the SelectorShape.Known distinction applied at render
 	// time, and it is the highest-consequence thing on this card. An empty
 	// stored Selector is AMBIGUOUS: Selector.String() returns "" both for "no
 	// Selector was recorded" and for a Selector with no predicates — and a
@@ -1072,7 +1072,7 @@ type approvalView struct {
 	// the Scope nor the Plan action block, and says which question is open.
 	GrantUnreadable bool
 
-	// Decide carries the decision form's data (#453). Nil means no control —
+	// Decide carries the decision form's data. Nil means no control —
 	// for every reason: the seams are unwired, the caller's role is below the
 	// floor, this Request is not pending, the caller is the excluded
 	// requester, the caller already signed, this Request authorizes a Grant,
@@ -1103,7 +1103,7 @@ type approvalView struct {
 	Decide *approvalDecideControl
 }
 
-// approvalDecideControl is the decision form's rendered data (#453).
+// approvalDecideControl is the decision form's rendered data.
 //
 // Authorising is the step-up prompt's object (spec 11: "a step-up prompt must
 // state what it is authorising"), built from the stored Relay-authored
@@ -1440,7 +1440,7 @@ func releasedJobs(ctx context.Context, d Deps, caller capability.Principal, gran
 // parkRecord reads the record that CREATED one Request: an INDEXED point read
 // on approval_id (idx_audit_approval), not a scan.
 //
-// BOTH creating kinds are named (#546). A Request is created either by a
+// BOTH creating kinds are named. A Request is created either by a
 // dispatch parking (approval_requested) or by a batch/window Grant being asked
 // for (approval_grant_requested), and this read is how the approvals screen
 // finds the ask behind a pending Request. Naming only the first would have made
@@ -1505,7 +1505,7 @@ const (
 // the fan-out ceiling, the window and the use limit — so two Grants sharing a
 // shape key can differ only in those three, and all three are columns on
 // approval_grants. That is exactly the spec's headline sentence. The
-// namespace field it hashes is only ever a legacy pin (#482): a Scope has no
+// namespace field it hashes is only ever a legacy pin: a Scope has no
 // namespace term, so it is empty for every Grant this Console can create and
 // carries meaning only for a pre-#482 Grant.
 //
@@ -1692,7 +1692,7 @@ func approvalOperation(req approval.Request) string {
 	}
 }
 
-// identicalKey groups pending requests of the same shape (#415, D10).
+// identicalKey groups pending requests of the same shape (D10).
 //
 // "" means NOT GROUPABLE, and buildApprovalRows counts such a row alone. A
 // record whose shape key is empty or legacy has a shape nobody can recompute,

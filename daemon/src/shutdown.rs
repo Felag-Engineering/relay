@@ -1,4 +1,4 @@
-//! Graceful shutdown primitives (issue #177): SIGTERM/SIGINT drain with a
+//! Graceful shutdown primitives: SIGTERM/SIGINT drain with a
 //! bounded grace period.
 //!
 //! Mirrors the focused-module pattern of `cancel.rs`/`scheduler.rs`. This
@@ -258,7 +258,7 @@ pub struct ShutdownContext {
     pub inflight: Inflight,
     pub grace: Duration,
     /// The in-flight Task cancel registry, shared by `Arc` across every
-    /// reconnect for the process's lifetime (issue #337). Living here — rather
+    /// reconnect for the process's lifetime. Living here — rather
     /// than being recreated inside each `run_tunnel` — is what lets a
     /// `TaskCancel`, or the shutdown drain's grace-expiry kill, reach a Task
     /// that outlived the connection which started it.

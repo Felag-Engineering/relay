@@ -1,5 +1,5 @@
 //! Cert renewal: schedules and performs mTLS-authenticated certificate rotation
-//! over the daemon's existing Relay connection (issue #31, ADR-0006 Amendment 3).
+//! over the daemon's existing Relay connection (ADR-0006 Amendment 3).
 //!
 //! The daemon renews its short-lived identity certificate before expiry by
 //! generating a new keypair + CSR and calling `Enrollment.Renew` over its

@@ -88,7 +88,7 @@ type trailFacts struct {
 	GrantID       string
 
 	// ApprovalAnswer, DecisionChannel, and PlanHash are the structured
-	// counterpart to a decision's prose Reason (#545). Empty on every record
+	// counterpart to a decision's prose Reason. Empty on every record
 	// that is not a KindApprovalDecided decision, and empty on a decision
 	// written before #545 or on a grant revocation — see approvalStateChip
 	// for why empty is never read as "denied".
@@ -239,7 +239,7 @@ func readTargetName(operationName, actionKind string, args map[string]string) st
 // A read record has no per-Node verdict to render: nothing was dispatched and
 // no daemon decided anything, so audit.Record.Outcome is the zero value and an
 // outcome chip built from it falls to "unspecified" — "we don't know" about the
-// one family of record whose disposition is completely known (#517).
+// one family of record whose disposition is completely known.
 //
 // The word is "audited", and the three alternatives were each rejected for a
 // reason worth keeping:
@@ -313,7 +313,7 @@ func callOutcome(f trailFacts) (outcome, state string) {
 	case audit.KindRead:
 		// A metadata-only read is the case this switch was written for and did
 		// not cover: no Node was asked anything, so the chip rendered
-		// "unspecified" over a record whose whole content is known (#517). The
+		// "unspecified" over a record whose whole content is known. The
 		// word is chosen and justified at readOutcomeAudited.
 		return readOutcomeAudited, ""
 	case audit.KindRefusal:
@@ -336,7 +336,7 @@ func callOutcome(f trailFacts) (outcome, state string) {
 		if f.GrantID != "" {
 			return "revoked", "" // #538, unchanged
 		}
-		// The structured answer (#545), returned as state (the `.chip.state`
+		// The structured answer, returned as state (the `.chip.state`
 		// group) rather than outcome, so it is never mistaken for one of
 		// this switch's other outcome words.
 		if s := approvalStateChip(f); s != "" {
@@ -408,7 +408,7 @@ func callOutcome(f trailFacts) (outcome, state string) {
 // different declared class is still misread by this inference in the
 // dangerous direction (a local mutate template named, say, `log.tail`, would
 // chip as read). The only real fix is carrying the declared class on the
-// record itself rather than inferring it here (Option 2, escalated, #475).
+// record itself rather than inferring it here (Option 2, escalated).
 var readOperations = func() map[string]bool {
 	set := make(map[string]bool, len(shippedReadCatalog))
 	for name := range shippedReadCatalog {

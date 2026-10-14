@@ -13,7 +13,7 @@ import (
 // surface (invariant 11).
 const DefaultCheckpointInterval = 5 * time.Minute
 
-// Checkpointer periodically logs the audit chain's head (#896). The line is
+// Checkpointer periodically logs the audit chain's head. The line is
 // the ADR-0025 metadata stream's anchor: it carries the chain format, a seq and
 // a hash and nothing about any record's content. An operator who keeps these
 // lines in their log pipeline can later pass any of them to

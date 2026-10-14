@@ -24,7 +24,7 @@ func (t *sqliteTasks) CreateTask(ctx context.Context, task jobs.Task) error {
 }
 
 // createTaskExec is CreateTask's body over an execer, so AppendWithTasks can
-// insert a Job's Tasks inside its own transaction (#887).
+// insert a Job's Tasks inside its own transaction.
 func createTaskExec(ctx context.Context, ex execer, task jobs.Task) error {
 	kindStr, err := actionKindToString(task.Action.Kind)
 	if err != nil {
@@ -144,7 +144,7 @@ func (t *sqliteTasks) MarkCancelled(ctx context.Context, taskID string, at time.
 // MarkCancelledBeforeSend transitions a Task from Dispatched to Resolved with
 // jobs.OutcomeCancelled and sets dispatched_at back to NULL — the engine marked
 // the Task Dispatched but its Job's cancel was seen before the send began, so
-// the Task never left the Relay (#943). The row is identical to MarkCancelled's,
+// the Task never left the Relay. The row is identical to MarkCancelled's,
 // so the Console reads it as never sent and InFlight never returns it. Returns
 // jobs.ErrTaskNotFound if the Task does not exist, or jobs.ErrInvalidTaskState
 // if it is not currently Dispatched.

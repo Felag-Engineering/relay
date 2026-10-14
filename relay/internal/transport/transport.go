@@ -48,7 +48,7 @@ type RevocationChecker interface {
 // The seam is a function rather than a tls.Certificate value on purpose. A
 // certificate handed over once is a certificate that expires while the process
 // still runs, and an expired Relay leaf takes the whole fleet fail-closed off
-// (#403, ADR-0031 §5). Asking per handshake is what makes that impossible.
+// (ADR-0031 §5). Asking per handshake is what makes that impossible.
 type GetCertificateFunc func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
 // ServerCredentials builds TLS transport credentials for the Relay's gRPC

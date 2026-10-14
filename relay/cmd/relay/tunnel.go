@@ -116,7 +116,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		cctx = stream.Context()
 	}
 
-	// Mark the Node connected for as long as this stream lives (#440).
+	// Mark the Node connected for as long as this stream lives.
 	//
 	// This is the seam that makes "connected now?" a fact the registry holds
 	// rather than a guess from LastSeen. The defer is what makes it true in the
@@ -158,7 +158,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		// attacker-controlled TokenID and fixed it with looksLikeTokenID,
 		// exact shape validation, rather than with quoting.
 		//
-		// The VALUE is never logged (#504): it is exactly the self-reported
+		// The VALUE is never logged: it is exactly the self-reported
 		// string this check just decided not to trust.
 		if len(refused) > 0 {
 			slog.Warn("refused malformed node labels", "node_id", nodeID,
@@ -192,7 +192,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 
 	// Register the outbound send function with the sink (if set). Nil, and
 	// this block a zero-cost no-op, when the control plane is disabled
-	// (execution off); the real production sink when it's enabled (#154).
+	// (execution off); the real production sink when it's enabled.
 	if s.sink != nil {
 		unregister := s.sink.register(nodeID, stream.Send)
 		defer unregister()
@@ -243,7 +243,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 				}
 			}
 			// Deliver TaskResult to the sink (if set) — the real production
-			// sink (#154) is how a dispatched Task's result reaches the
+			// sink is how a dispatched Task's result reaches the
 			// waiting Router.Dispatch call. Nil, and this block a zero-cost
 			// no-op, when the control plane is disabled.
 			if s.sink != nil {
@@ -259,7 +259,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 				}
 			}
 			// Capture a reported PolicySnapshot into the display-only
-			// policyview.Cache (#117). This RECORDS a report-only daemon
+			// policyview.Cache. This RECORDS a report-only daemon
 			// value for describe_node to display — it never sets or
 			// modifies Node Policy (ADR-0002), exactly like the
 			// PolicyFingerprint the registry already records on Hello.
@@ -288,7 +288,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 // a map with bare keys (the "node:" prefix is stripped) and the RAW WIRE KEYS
 // of every label that ParseNodeLabel refused. Only keys with a "node:"
 // prefix, a non-empty bare key, and a well-formed (bare key, value) pair
-// (registry.WellFormedLabel, #504) are accepted; everything else is
+// (registry.WellFormedLabel) are accepted; everything else is
 // omitted from the map, never sanitised into it.
 //
 // WHY relay: labels are dropped: per ADR-0006 and the two-namespace label model,
@@ -297,7 +297,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 // than rejecting with an error) keeps the tunnel resilient — a stray relay: label
 // never tears down a long-lived connection.
 //
-// WHY a malformed node: label is dropped rather than sanitised (#504, ADR-0017):
+// WHY a malformed node: label is dropped rather than sanitised (ADR-0017):
 // sanitising "role=web x" to "role=webx" would make the Node match a Selector
 // NOBODY WROTE — the Relay itself manufacturing the attracting value, ADR-0017's
 // forge-to-attract cell — while omission can only produce forge-to-evade, which

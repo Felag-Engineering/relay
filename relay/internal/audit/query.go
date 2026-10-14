@@ -8,7 +8,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// query.go is the trail's READ LANE (#441): a filtered, paginated,
+// query.go is the trail's READ LANE: a filtered, paginated,
 // aggregating query over the append-only table, distinct from Repository's
 // append+by-key surface. It exists as its own interface — QueryRepository,
 // not an extension of Repository — because a reader that also holds Append

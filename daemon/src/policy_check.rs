@@ -1,5 +1,5 @@
 //! `relay-daemon policy check <file>` — offline Policy lint + `--would-allow`
-//! for IaC pipelines (issue #93).
+//! for IaC pipelines.
 //!
 //! Reads the Policy file directly with `std::fs::read_to_string` — **not**
 //! `policy::load_policy` — because this subcommand runs pre-deployment on a
@@ -166,7 +166,7 @@ pub fn run(argv: &[String]) -> i32 {
         }
     };
 
-    // Template linting (issue #292): only when the caller named a template
+    // Template linting: only when the caller named a template
     // root. Its findings are printed with the Policy's and share the same
     // exit-code contract; its accepted names complete the vocabulary the
     // unknown-name check resolves against (ADR-0021: vocabulary is per-Node,
@@ -188,7 +188,7 @@ pub fn run(argv: &[String]) -> i32 {
         print_findings(&tr.findings);
     }
 
-    // Self-reference lint (#287): does this Policy's reach include the
+    // Self-reference lint: does this Policy's reach include the
     // daemon's own trust root? Answered by probing the LIVE engine, never by a
     // second matcher (ADR-0011) — so it can only run once the file compiles.
     let compiled = if report.parse_error.is_none() {
@@ -420,7 +420,7 @@ struct ParsedArgs {
     file: String,
     strict: bool,
     /// `--templates <dir>`: the template root to lint alongside the Policy and
-    /// to resolve Operation names against (issue #292).
+    /// to resolve Operation names against.
     templates: Option<String>,
     would_allow: Option<WouldAllow>,
 }

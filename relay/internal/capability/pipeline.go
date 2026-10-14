@@ -35,7 +35,7 @@ type Execution struct {
 	// the same sink.
 	jobEvents JobEventSink
 
-	// idem persists dispatch idempotency keys (#895, start.go). Nil means a call
+	// idem persists dispatch idempotency keys (start.go). Nil means a call
 	// carrying a key is refused (ErrIdempotencyUnavailable), never run unkeyed.
 	idem jobs.IdempotencyRepository
 
@@ -73,7 +73,7 @@ type Execution struct {
 // Safe absences: a nil idem means a call carrying an idempotency key is
 // refused (ErrIdempotencyUnavailable), never run unkeyed; a nil newID means
 // the production Job-ID generator; a nil jobEvents means the no-op sink,
-// which is purely observational (#416) and never security-relevant.
+// which is purely observational and never security-relevant.
 //
 // There is deliberately no exported dispatcher seam: dispatcher is unexported
 // (see dispatch.go), so only files inside this package can supply one.
@@ -88,7 +88,7 @@ type Execution struct {
 // would be permitted, and nothing would be recorded. A real dispatcher paired
 // with a noopFreezeStore is the same class of bug: an un-stoppable executor,
 // since "never frozen" means the emergency stop (ADR-0013) can never actually
-// halt it. The AuditSink must also implement IntentRecorder (#887): the Job's
+// halt it. The AuditSink must also implement IntentRecorder: the Job's
 // Tasks are persisted through it, in one transaction with its
 // dispatch-intent record. See dispatcher's doc comment in dispatch.go.
 func NewExecution(control *Control, read *ReadLane, approvals *Approvals, capc CapChecker, idem jobs.IdempotencyRepository, jr jobs.JobRepository, tr jobs.TaskRepository, conduit Conduit, concurrency int, newID func() (string, error), jobEvents JobEventSink) *Execution {
@@ -146,7 +146,7 @@ func newExecution(control *Control, read *ReadLane, approvals *Approvals, capc C
 	if e, ok := x.disp.(*jobEngine); ok {
 		e.events = x.jobEvents
 		e.log = control.rec.log
-		// Likewise the dispatch-intent recorder (#887): the AuditSink that
+		// Likewise the dispatch-intent recorder: the AuditSink that
 		// records the Job's outcome is the one that can record its intent in
 		// the Tasks' transaction.
 		if e.intents == nil {
@@ -304,7 +304,7 @@ func (s *Execution) prepareDispatch(ctx context.Context, p Principal, sel Select
 		return prep{}, s.recordRefusal(ctx, p, sel, act, RefusalUnauthorized, err)
 	}
 
-	// An idempotency key (#895) is handled after Freeze and authorization, so a
+	// An idempotency key is handled after Freeze and authorization, so a
 	// caller who may not dispatch learns nothing about keys, and before the
 	// zero-match, cap and approval stages, so a re-issue is neither refused
 	// because the fleet changed since the original call nor spends a Grant use.
@@ -381,7 +381,7 @@ func (s *Execution) prepareDispatch(ctx context.Context, p Principal, sel Select
 	}
 	if ap.parked != nil {
 		s.recorder().metrics.IncRefusal(RefusalPendingApproval)
-		// approval_requested means A REQUEST WAS CREATED (#379). A re-drive
+		// approval_requested means A REQUEST WAS CREATED. A re-drive
 		// that bounced off an already-pending Request — which is how a caller
 		// polls while waiting — is recorded under its own kind, so the trail's
 		// count of asks stays truthful while the polling stays visible.
@@ -452,7 +452,7 @@ func (s *Execution) prepareDispatch(ctx context.Context, p Principal, sel Select
 	// approval's deadline passes, Satisfied goes false, the released Request no
 	// longer shadows the Grant, and the Grant releases the dispatch normally.
 	//
-	// A keyed dispatch (#895) reserves its Job ID the same way and claims the
+	// A keyed dispatch reserves its Job ID the same way and claims the
 	// key against it BEFORE the approval's BindJob, so neither join can be lost
 	// to a dropped stream. A keyed dispatch released by a Grant still never
 	// binds the Request: BindJob runs only under the condition above.
@@ -673,7 +673,7 @@ const reservedPostDispatchAccountingTimeout = 30 * time.Second
 // One message covers two different facts on purpose — "this Job was
 // requested by a different Account" and "this Job's requester is not
 // recorded at all" — and the caller must not be able to tell which. The
-// requester is recorded on the Job at creation (#616), and a Job with no
+// requester is recorded on the Job at creation, and a Job with no
 // recorded requester (one created before that) is refused exactly like
 // another Account's Job: distinguishing "not recorded" from "somebody
 // else's" would let a machine Account learn that a Job it cannot cancel
@@ -683,7 +683,7 @@ const reservedPostDispatchAccountingTimeout = 30 * time.Second
 var ErrJobNotRequestedByCaller = errors.New(
 	"capability: cancel refused: this Job was not requested by the caller, or its requester is not recorded")
 
-// CancelJob stops jobID's Tasks (#101, ADR-0013): undispatched Tasks are
+// CancelJob stops jobID's Tasks (ADR-0013): undispatched Tasks are
 // marked cancelled without ever being sent, in-flight Tasks are asked to
 // cancel over their Tunnels, and already-resolved Tasks keep their truthful
 // outcome. It delegates to the sealed dispatcher (see dispatch.go) so
@@ -749,7 +749,7 @@ func (s *Execution) CancelJob(ctx context.Context, p Principal, jobID string) er
 		return err
 	}
 	// Published after the cancel succeeded, and never in a way that changes
-	// the returned error (#416, JobEventSink) — observational only, exactly
+	// the returned error (JobEventSink) — observational only, exactly
 	// like the MetricsSink calls elsewhere in this file. Nil-checked because
 	// this package's own white-box tests construct &Execution{} literals
 	// (buildRaw), bypassing newExecution's noopJobEventSink default.

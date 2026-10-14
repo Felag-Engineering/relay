@@ -19,7 +19,7 @@ var _ audit.Repository = (*sqliteAudit)(nil)
 
 // insertAuditSQL is the one INSERT text shared by every audit writer, so their
 // column list cannot drift apart. The last three placeholders are the chain
-// position (#896). Only insertChained may reference it: a raw insert would
+// position. Only insertChained may reference it: a raw insert would
 // write a row with no chain position, and
 // TestInsertAuditSQL_OnlyReferencedByInsertChained fails the build if one
 // appears.
@@ -35,7 +35,7 @@ const insertAuditSQL = `
 //
 // ts is written through formatAuditTime, not the store-wide formatTime: the
 // audit table's ts is fixed-width so that ORDER BY on it is chronological
-// (#656, migration 0024). Record.Timestamp is unaffected by that choice — the
+// (migration 0024). Record.Timestamp is unaffected by that choice — the
 // driver re-renders the column on read and parseTime accepts either width —
 // so nothing above the store sees a representation change. The roundTripTime
 // call this replaced was doing nothing: an RFC3339Nano format/parse round

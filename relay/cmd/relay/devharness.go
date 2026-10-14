@@ -23,7 +23,7 @@
 // to/from relayv1/jobs/capability, keeping the harness client trivial and
 // this file self-auditing.
 //
-// Capability-layer wiring (#103): unlike the composition root (main.go),
+// Capability-layer wiring: unlike the composition root (main.go),
 // which builds its Execution only under Config.ControlEnabled over the real
 // RoleGate, this file supplies its own allow-all devHarnessAuthorizer — a
 // type distinct from capability's own allowAllAuthorizer, so NewExecution's
@@ -118,7 +118,7 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	}
 
 	// Mutual exclusion (RB2, plan review): the production execution flip
-	// (#154) makes newServer itself set deps.tunnel.sink when
+	// makes newServer itself set deps.tunnel.sink when
 	// Config.ControlEnabled, wiring its own capability.Execution around the
 	// SAME dispatch.Router assembly this function builds below. Installing
 	// the dev harness on top of that would silently orphan newServer's
@@ -131,7 +131,7 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 			"the control plane (Config.ControlEnabled) and the dev harness must never be enabled together")
 	}
 
-	// One sink, one trail (#638): the same *auditsink.Sink records both the
+	// One sink, one trail: the same *auditsink.Sink records both the
 	// harness's protocol violations (via newDispatchStack's ViolationRecorder)
 	// and its normal capability-layer audit entries, as main.go does.
 	harnessAudit := auditsink.New(deps.audit)
@@ -512,13 +512,13 @@ func harnessRunJobAction(req harnessRequest) (jobs.Action, error) {
 	return jobs.Action{Kind: jobs.ActionOperation, OperationName: req.Operation, OperationArgs: req.Args}, nil
 }
 
-// harnessCancelJob stops job_id's Tasks (#101, ADR-0013) via the capability
+// harnessCancelJob stops job_id's Tasks (ADR-0013) via the capability
 // pipeline's CancelJob: undispatched Tasks are marked cancelled without ever
 // being sent, in-flight Tasks are asked to cancel over their Tunnels. Uses
 // the same devharness Principal as its sibling harnessRunJob (v0.0.6 [5/8],
 // owner DECISION 2: CancelJob now records who asked), but — unlike
 // harnessRunJob — Kind matters here: CancelJob's machine-Account scoping
-// (#614, owner decision 2026-09-17) would otherwise treat an unset Kind as a
+// (owner decision 2026-09-17) would otherwise treat an unset Kind as a
 // machine Account with no recorded requester and refuse every cancel. The
 // harness Principal stands in for an on-call operator driving the fleet by
 // hand, not an AI-agent, so it is Kind: PrincipalKindHuman — this is a

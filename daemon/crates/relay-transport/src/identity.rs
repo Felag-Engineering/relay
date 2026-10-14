@@ -316,7 +316,7 @@ pub(crate) async fn build_channel(
 ///
 /// Callers pass the ceiling as a **literal, never the production constant**:
 /// derived from the constant it rises in lockstep with any edit to it, and the
-/// check can then never fail on a widened one (#509, ADR-0036).
+/// check can then never fail on a widened one (ADR-0036).
 #[cfg(any(test, feature = "test-util"))]
 pub mod mode_assert {
     use std::os::unix::fs::MetadataExt;
@@ -351,7 +351,7 @@ pub mod mode_assert {
 
 /// Signs test CSRs the way rcgen's old CSR-parsing dev path did, without
 /// pulling rcgen's `x509-parser` dev feature (and with it a second ASN.1
-/// stack, x509-parser 0.16) into Cargo.lock (#672). It signs a daemon CSR
+/// stack, x509-parser 0.16) into Cargo.lock. It signs a daemon CSR
 /// with the CSR's (empty) subject and no extensions, matching what
 /// `build_keypair_and_csr` produces.
 #[cfg(test)]

@@ -435,7 +435,7 @@ func (s *Service) Resolve(ctx context.Context, id SessionID) (Session, accounts.
 		return Session{}, accounts.Account{}, ErrNoSession
 	}
 	if !acct.Enabled {
-		// Disabling an Account is the durable off-switch (#296). It has to
+		// Disabling an Account is the durable off-switch. It has to
 		// reach sessions already in flight, or a disabled human keeps their
 		// Console until the session lapses on its own.
 		s.sessions.EndAllFor(acct.ID)

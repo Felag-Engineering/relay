@@ -9,7 +9,7 @@ import (
 )
 
 // This file is the one-shot boot answer to "which Nodes carry a stored Label
-// this Relay will no longer serve" (threat model R13, #565). getNode's
+// this Relay will no longer serve" (threat model R13). getNode's
 // read-back filter (registry.go's wellFormedLabels) silently drops a pair
 // registry.WellFormedLabel refuses, and does so on every read — Get, List,
 // and Upsert's own read-back — which is exactly why a per-read log line is
@@ -27,7 +27,7 @@ import (
 // unaudited third path a scan could miss.
 //
 // It READS ONLY. Nothing here repairs, deletes, or rewrites a row: "decline
-// to serve, never write" is settled (#504, #555), and a scan that "fixed"
+// to serve, never write" is settled, and a scan that "fixed"
 // what it found would violate the same standing obligation wellFormedLabels'
 // own doc records. It reads the RAW tables directly, not the filtered view
 // getNode returns, so it cannot become the read-modify-write path that

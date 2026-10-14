@@ -1,4 +1,4 @@
-// Plan mode (#119, ADR-0011): plan=true's Relay-side half. A Plan resolves
+// Plan mode (ADR-0011): plan=true's Relay-side half. A Plan resolves
 // the same Selector, runs the same authz/cap checks as Run, but never
 // dispatches a Task — it asks each matched, connected daemon a read-only
 // PolicyQuery and reports the per-Node PolicyVerdict instead of executing.

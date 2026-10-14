@@ -29,7 +29,7 @@ type jobEventSink struct {
 }
 
 // Jobs returns the real capability.JobEventSink, publishing capability's
-// Job-grained transitions (#416) onto b.
+// Job-grained transitions onto b.
 func Jobs(b *events.Bus) capability.JobEventSink {
 	return jobEventSink{bus: b}
 }
@@ -95,7 +95,7 @@ type enrollmentObserver struct {
 }
 
 // Enrollment returns the real enroll.AttemptObserver, publishing every
-// Enroll attempt (#416) onto b.
+// Enroll attempt onto b.
 func Enrollment(b *events.Bus) enroll.AttemptObserver {
 	return enrollmentObserver{bus: b}
 }

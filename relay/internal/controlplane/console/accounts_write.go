@@ -1,8 +1,8 @@
 package console
 
-// accounts_write.go is the Accounts screen's write half (#655, spec 15): the
-// Console's THIRD write seam, after Cancel (#595, cancel.go) and Decide
-// (#453, decide.go). It lives in its own file, exactly as those two do, so
+// accounts_write.go is the Accounts screen's write half (spec 15): the
+// Console's THIRD write seam, after Cancel (cancel.go) and Decide
+// (decide.go). It lives in its own file, exactly as those two do, so
 // seams.go's "every seam here is read-only" claim stays true unqualified.
 //
 // # What this file decides: nothing
@@ -15,10 +15,10 @@ package console
 // route's MinRole is mount-time absence at exactly that layer's own admin
 // floor: it subtracts reach and can never widen it.
 //
-// # Step-up: one password per window (#879)
+// # Step-up: one password per window
 //
 // Every granting act goes through the shared requireStepUp (stepup.go) in
-// stepUpWindowed mode. Owner decision 2026-10-05 (#879): a successful step-up
+// stepUpWindowed mode. Owner decision 2026-10-05: a successful step-up
 // stamps the session, and a later granting act inside the configured window
 // proceeds without a password; outside it, or with no stamp, the prompt
 // returns. The window is consoleauth's to decide, never this file's. A
@@ -37,7 +37,7 @@ package console
 // REDUCE does not (disable, LOWER a role, revoke a Token), because an
 // emergency brake that costs a password is one people route around.
 //
-// # The role route's read-then-write, closed by a compare-and-set (#912)
+// # The role route's read-then-write, closed by a compare-and-set
 //
 // handleSetAccountRole reads the target's current role, decides raise vs
 // lower, then writes. The write is a compare-and-set on exactly the role that
@@ -271,7 +271,7 @@ const accountsScreenPath = "/console/accounts"
 
 // accountsHrefFor builds the Accounts screen's link with one Account
 // selected, through url.Values rather than concatenation — an Account name is
-// not constrained by this package (#467).
+// not constrained by this package.
 func accountsHrefFor(name string) string {
 	if name == "" {
 		return accountsScreenPath
@@ -476,7 +476,7 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 //
 // Step-up ONLY when the change could raise the role. The target's current role
 // comes from d.Accounts.Account, and the write is a compare-and-set against
-// that same role (see this file's header, #912); roleChangeCouldGrant says why
+// that same role (see this file's header); roleChangeCouldGrant says why
 // an unknown role on either side is treated as a raise.
 //
 // A submission of the role the target already holds is refused here, writing
@@ -527,7 +527,7 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 			// The step-up decision above was made from target.Role. The write
 			// is a compare-and-set on exactly that role, so a concurrent change
 			// between the read and here is refused rather than turning an
-			// unstepped lower into a raise (#912).
+			// unstepped lower into a raise.
 			err = d.AccountAdmin.SetAccountRoleFrom(r.Context(), caller, id, target.Role, role)
 		} else {
 			// The read failed, so couldGrant was true and step-up was taken

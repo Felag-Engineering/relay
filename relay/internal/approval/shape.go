@@ -11,7 +11,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 )
 
-// shape.go is the SHAPE KEY (#415, D10): the content address of WHAT an
+// shape.go is the SHAPE KEY (D10): the content address of WHAT an
 // approval is for, as opposed to how much of it. It exists so the approval
 // object can answer "what did I approve last time that looked like this?" as a
 // lookup rather than a scan, which is what the anti-fatigue diff on the
@@ -253,7 +253,7 @@ func canonicalTerms(sel []SelectorTerm) []SelectorTerm {
 func HashGrantShape(s Scope) string { return hashGrantShape(s, "") }
 
 // hashGrantShape is HashGrantShape's body, taking the legacy namespace pin
-// separately since it is a Grant-level fact (#482) and not part of Scope.
+// separately since it is a Grant-level fact and not part of Scope.
 func hashGrantShape(s Scope, legacyNamespacePin string) string {
 	h := sha256.New()
 

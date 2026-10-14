@@ -35,7 +35,7 @@ type Registrar interface {
 	SetRelayLabels(nodeID string, labels map[string]string) error
 
 	// RecordEnrollment and RecordRenewal persist the certificate provenance the
-	// Relay itself knows (#440): what it just signed, and when.
+	// Relay itself knows: what it just signed, and when.
 	//
 	// Two methods rather than one with a flag. This server is the only caller of
 	// either, and it calls one from Enroll and the other from Renew — so
@@ -72,7 +72,7 @@ type EnrollmentObserver interface {
 }
 
 // AttemptReason is the closed vocabulary of Relay-side outcomes for one
-// Enroll attempt (#416, feeding #427's day-one watch). It is distinct from
+// Enroll attempt (feeding #427's day-one watch). It is distinct from
 // EnrollmentObserver: that counter is success-only; this covers every
 // terminal point of Enroll, success and rejection alike.
 type AttemptReason string
@@ -139,7 +139,7 @@ func WithAttemptObserver(o AttemptObserver) ServerOption {
 type ServerOption func(*Server)
 
 // WithPostEnrollRevocationCheck enables the post-Upsert recheck that closes the
-// in-flight-enroll vs token-cascade-revocation race (issue #57). When set, after a
+// in-flight-enroll vs token-cascade-revocation race. When set, after a
 // Node is recorded the handler re-reads the enrolling token's revocation state and,
 // if it was revoked mid-enrollment, self-denylists the freshly minted node_id and
 // rejects the enrollment (fail-closed).
@@ -325,7 +325,7 @@ func looksLikeTokenID(s string) bool {
 // before publish. This is lossless for every real token and bounds both
 // the bytes this pre-auth endpoint can push into the bus and the
 // control-character/newline injection surface a future SSE renderer
-// (#422) would otherwise inherit.
+// would otherwise inherit.
 //
 // A nil s.attempts (the default) is a no-op, matching s.observer.
 func (s *Server) attempt(ctx context.Context, e AttemptEvent) {
@@ -367,7 +367,7 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 
 	// c. Parse self_labels (no side effects). Require a "node:" prefix, a
 	//    non-empty bare key, AND a well-formed (bare key, value) pair
-	//    (registry.WellFormedLabel, #504) to enforce the structural
+	//    (registry.WellFormedLabel) to enforce the structural
 	//    boundary: a daemon can never inject relay-space labels (ADR-0006
 	//    two-namespace invariant), and it can never enroll a label that
 	//    would render as more than one Selector term. The relay-space
@@ -515,7 +515,7 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 	}
 
 	// k. Parse the token scope into bare relay-space keys and stamp them on the Node.
-	//    The scope is well-formed BY CONSTRUCTION here — Service.Validate (#555)
+	//    The scope is well-formed BY CONSTRUCTION here — Service.Validate
 	//    already refused otherwise, before any certificate was signed or any row
 	//    written — so nothing this stamps can render as more than one Selector term.
 	relayBare := make(map[string]string, len(scope))
@@ -528,7 +528,7 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 		return nil, status.Error(codes.Internal, "enrollment failed")
 	}
 
-	// Post-Upsert recheck (issue #57): the Validate→Upsert sequence is not atomic,
+	// Post-Upsert recheck: the Validate→Upsert sequence is not atomic,
 	// so a concurrent RevokeToken cascade can complete its bounded re-scan in the
 	// window between our Validate and this Upsert, missing this Node. Re-read the
 	// enrolling token's state now that the Node is durably recorded; if it was
@@ -627,7 +627,7 @@ func (s *Server) Renew(ctx context.Context, req *relayv1.RenewRequest) (*relayv1
 	}
 
 	// d. Record the reissue: new expiry, renewal count, renewal time. Never the
-	//    join date — RecordRenewal has no path to it (#440).
+	//    join date — RecordRenewal has no path to it.
 	//
 	//    Non-fatal for the same reason as at enrollment: the Node now holds a
 	//    valid certificate, and failing the RPC over a bookkeeping write would

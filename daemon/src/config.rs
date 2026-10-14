@@ -6,7 +6,7 @@
 //! compile-time constants, not env-derived — kept here as the daemon's single
 //! neutral config-adjacent home rather than scattered per call site.
 //! The spawned-child `setrlimit` bounds (`ResourceLimits`) live in relay-exec's
-//! `limits` module (#889).
+//! `limits` module.
 
 use std::path::PathBuf;
 
@@ -33,7 +33,7 @@ pub struct Config {
     /// unreadable file → warn and fall back to deny-all (fail-closed for dispatch).
     pub policy_path: PathBuf,
     /// `RELAY_TEMPLATE_DIR` — the root of this Node's Template Operation files
-    /// (ADR-0021, issue #291).
+    /// (ADR-0021).
     ///
     /// Defaults to `/etc/relay-daemon/templates.d` — beside `policy.toml`, the
     /// same root-owned local trust root (ADR-0002); the Relay can read the

@@ -2,7 +2,7 @@ package main
 
 // console_password.go implements `relay console-password`: the local,
 // root-owned lever that sets a human Account's Admin Console sign-in password
-// (#418, docs/design/console/12-login.md).
+// (docs/design/console/12-login.md).
 //
 // # Why a local subcommand and not an API
 //
@@ -25,7 +25,7 @@ package main
 //
 // Every set or clear writes one audit record (password_set / password_clear),
 // attributed to the principal local-host rather than to any Account, in the
-// SAME transaction as the change (#782). If the record cannot be written the
+// SAME transaction as the change. If the record cannot be written the
 // password is left unchanged: a credential change the trail cannot show is not
 // made. The record names the Account and never the password or its hash.
 //

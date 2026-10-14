@@ -1,5 +1,5 @@
 //! Local Template Operation loading — the distribution-less half of the
-//! template tier (issue #291; ADR-0021, ADR-0002 trust root).
+//! template tier (ADR-0021, ADR-0002 trust root).
 //!
 //! Templates load from **root-owned local files beside `policy.toml`**, never
 //! over the wire: the Relay may *read* a Node's template set (that is what the
@@ -40,7 +40,7 @@
 //! # File hardening
 //!
 //! Each template file is opened and validated exactly like the Policy file
-//! (`policy::load_policy`, issue #216), through the one shared open both
+//! (`policy::load_policy`), through the one shared open both
 //! loaders use (`hardened_open`): a single descriptor, `O_NOFOLLOW`
 //! (symlinks refused), `O_NONBLOCK` (a FIFO cannot stall the daemon at boot),
 //! `fstat` on that descriptor for regular-file/mode/owner checks, and the bytes
@@ -377,7 +377,7 @@ impl TemplateSet {
 
 // ---------------------------------------------------------------------------
 // Lint API — collect-all diagnostics for `relay-daemon policy check
-// --templates <dir>` (issue #292), mirroring `policy::lint`'s contract
+// --templates <dir>`, mirroring `policy::lint`'s contract
 // ---------------------------------------------------------------------------
 
 /// The result of linting a template root: every finding, plus the names that

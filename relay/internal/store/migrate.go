@@ -108,7 +108,7 @@ func migrate(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 	// Timed because 0024 is the first migration whose cost is proportional to
 	// the size of a table rather than to the schema — it rewrites every audit
 	// row, at roughly 16 seconds per GB — so a boot that used to be instant can
-	// now take minutes, and the operator is owed the reason. 0028 (#896) is the
+	// now take minutes, and the operator is owed the reason. 0028 is the
 	// second: it chains every existing audit row.
 	//
 	// Info only past migrationSlowThreshold, Debug otherwise. A fresh database

@@ -11,7 +11,7 @@ import (
 )
 
 // IdempotencyRecord binds a caller-supplied idempotency key to the Job the
-// first call carrying it created (#895). It is scoped to the verified Account:
+// first call carrying it created. It is scoped to the verified Account:
 // the same key from two Accounts names two unrelated records.
 type IdempotencyRecord struct {
 	AccountID     string

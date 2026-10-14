@@ -213,7 +213,7 @@ func Open(path string, opts ...Option) (*Store, error) {
 	// deliberately no re-chaining here on every Open: it would vouch for any row
 	// inserted outside the chain since the last boot.
 
-	// The approval shape-key backfill (#415) is Go rather than migration SQL
+	// The approval shape-key backfill is Go rather than migration SQL
 	// because it must call the same approval.HashGrantShape the write path
 	// calls: two implementations of one hash is exactly the failure the
 	// property "recomputing a key yields the same key" exists to exclude. It is
@@ -269,7 +269,7 @@ func (s *Store) Registry() registry.Repository {
 	return s.reg
 }
 
-// LabelsDeclined returns the read-back label filter's live counters (#565):
+// LabelsDeclined returns the read-back label filter's live counters:
 // the number of stored pairs getNode's wellFormedLabels has declined to
 // serve so far this process, by namespace. This is the read side of
 // relay_labels_declined_total.
@@ -303,14 +303,14 @@ func (s *Store) Audit() audit.Repository {
 	return &sqliteAudit{db: s.db}
 }
 
-// AuditChain returns the reader of the audit chain's head (#896), for the
+// AuditChain returns the reader of the audit chain's head, for the
 // checkpoint that gives an operator an anchor to verify against.
 func (s *Store) AuditChain() audit.ChainHeadReader {
 	return &sqliteAudit{db: s.db}
 }
 
 // AuditQueries returns the SQLite-backed audit.QueryRepository — the trail's
-// filtered/paginated/aggregating read lane (#441), the capability layer's
+// filtered/paginated/aggregating read lane, the capability layer's
 // seam for it. Backed by the SAME *sqliteAudit type as Audit(): the two are
 // deliberately separate interfaces (append+by-key vs. query-only), not
 // separate implementations, so there is exactly one place the audit table's
@@ -320,7 +320,7 @@ func (s *Store) AuditQueries() audit.QueryRepository {
 }
 
 // JobQueries returns the SQLite-backed jobs.QueryRepository — the Job/Task
-// read lane (#441), the capability layer's seam for it.
+// read lane, the capability layer's seam for it.
 func (s *Store) JobQueries() jobs.QueryRepository {
 	return &sqliteJobQueries{db: s.db}
 }
@@ -351,18 +351,18 @@ func (s *Store) Grants() approval.GrantRepository {
 }
 
 // MCPTasks returns the SQLite-backed mcptask.Repository — MCP task handles
-// (#373, ADR-0028, SEP-2663).
+// (ADR-0028, SEP-2663).
 //
 // Durable rather than an in-process map because the MCP handler runs stateless
 // (#267): a handle minted by one Relay instance must be resolvable by whichever
 // instance the client's next poll happens to reach. An in-memory map would work
 // perfectly on one process and fail silently on two, which is the failure mode
-// HA (#139) would inherit.
+// HA would inherit.
 func (s *Store) MCPTasks() mcptask.Repository {
 	return &sqliteMCPTasks{db: s.db}
 }
 
-// IdempotencyKeys returns the SQLite-backed jobs.IdempotencyRepository (#895):
+// IdempotencyKeys returns the SQLite-backed jobs.IdempotencyRepository:
 // the dispatch idempotency keys that let a re-issued MCP call re-attach to the
 // Job it already created instead of dispatching again.
 func (s *Store) IdempotencyKeys() jobs.IdempotencyRepository {
@@ -379,7 +379,7 @@ func (s *Store) Accounts() accounts.Repository {
 }
 
 // Passwords returns the SQLite-backed accounts.PasswordRepository — local
-// Console sign-in credentials for human Accounts (#418).
+// Console sign-in credentials for human Accounts.
 //
 // A distinct accessor from Accounts() rather than a wider Repository, so that
 // the set of components able to read a password hash is exactly the set that

@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// Read auditing (#288).
+// Read auditing.
 //
 // The audit trail was dispatch-only: it recorded Job/Task actions, so the four
 // tools that never reach a Node — list_nodes, describe_node, list_operations,

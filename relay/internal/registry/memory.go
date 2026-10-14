@@ -323,7 +323,7 @@ func (r *InMemory) ListChecked() ([]Node, error) {
 // It is the single read-back path behind Upsert, Get and List, as getNode is
 // for the SQLite store, and like getNode it serves both label namespaces
 // through wellFormedLabels: a stored pair WellFormedLabel refuses is declined
-// on read (#504/#555).
+// on read.
 func (r *InMemory) copyNode(n *Node) Node {
 	nl := wellFormedLabels(n.NodeLabels)
 	rl := wellFormedLabels(n.RelayLabels)

@@ -82,11 +82,11 @@ import (
 // isAnsweredRetry also applies.
 //
 // tools_execution.go's run_operation and raw_exec are the only callers of
-// acceptElicitedAnswer (#727, S4a-2): a retry carrying requestState/
+// acceptElicitedAnswer (S4a-2): a retry carrying requestState/
 // inputResponses is decided here first, and tools_execution.go's
 // answerThenDispatch then re-enters the whole dispatch pipeline once. The
 // composition root passes WithApprovalElicitation, so this path is reachable
-// from main (#730).
+// from main.
 
 // ApprovalDecider records a decision against a parked approval Request.
 //
@@ -190,7 +190,7 @@ func withAssertedApprover(ctx context.Context, approver string) context.Context 
 
 // ApprovalDecisionOutput is what the tool returns. It is also reused,
 // unchanged, as the decision block an answered retry's response carries
-// (RunOrPlanOutput.Decision, #727) — the Channel and State descriptions below
+// (RunOrPlanOutput.Decision) — the Channel and State descriptions below
 // are written to be true of both.
 type ApprovalDecisionOutput struct {
 	RequestID  string `json:"request_id" jsonschema:"The request that was answered."`
@@ -508,7 +508,7 @@ type elicitedAnswer struct {
 	// requeststate.DigestArgs(json.Marshal(the handler's TYPED input value —
 	// runOperationInput or rawExecInput)), the same computation elicit.go's
 	// callArgsDigest performs when the tool handler parks the dispatch and
-	// seals the state (#725). NEVER over the raw wire bytes of
+	// seals the state. NEVER over the raw wire bytes of
 	// params.arguments: a retry's arguments can reorder keys, add
 	// whitespace, or otherwise differ byte-for-byte from what was
 	// originally sent while still decoding to an identical typed value, and
@@ -800,7 +800,7 @@ var (
 )
 
 // -----------------------------------------------------------------------
-// Rendering an answered retry's outcome (#727). tools_execution.go calls
+// Rendering an answered retry's outcome. tools_execution.go calls
 // only these methods and answerStateRefusedOutput — it never builds a
 // decision or a refusal message of its own. See the file header, "The
 // second envelope", for why the rendering lives here.

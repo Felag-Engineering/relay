@@ -73,7 +73,7 @@ type NodeResult struct {
 	// always empty for noopDispatcher, which performs no execution. A
 	// failure row may also carry Relay-authored Stderr where the wire
 	// boundary refused the daemon's report as a protocol violation
-	// (jobs.ProtocolViolation.Explanation, #632) — again no daemon bytes.
+	// (jobs.ProtocolViolation.Explanation) — again no daemon bytes.
 	Stdout    []byte
 	Stderr    []byte
 	Truncated bool
@@ -102,7 +102,7 @@ type dispatchResult struct {
 // run method are unexported, and run's parameter type (dispatch) is itself
 // unexported — a foreign package can neither implement dispatcher nor call
 // run, and even if it could, it has no way to fabricate a dispatch value to
-// pass. The real Job engine (#99) must therefore be added as new files
+// pass. The real Job engine must therefore be added as new files
 // inside package capability (not internal/jobs), injecting its external
 // collaborators (revocation.Connections, jobs.TaskRepository) through their
 // own exported constructor, NewExecution, which builds the in-package Job
@@ -119,7 +119,7 @@ type dispatchResult struct {
 type dispatcher interface {
 	run(ctx context.Context, d dispatch) (dispatchResult, error)
 
-	// cancel stops a Job's Tasks (#101, ADR-0013): undispatched Tasks are
+	// cancel stops a Job's Tasks (ADR-0013): undispatched Tasks are
 	// marked cancelled without ever being sent, in-flight Tasks are asked to
 	// cancel over their Tunnels, and already-resolved Tasks are left
 	// untouched. It takes no dispatch value — cancel targets a previously
@@ -127,7 +127,7 @@ type dispatcher interface {
 	// the dispatch/newDispatch seal.
 	cancel(ctx context.Context, jobID string) error
 
-	// query answers a Plan (#119, ADR-0011): for each of d's matched Nodes it
+	// query answers a Plan (ADR-0011): for each of d's matched Nodes it
 	// asks the daemon a read-only PolicyQuery and collects a per-Node
 	// verdict — allow/deny(rule) from the daemon's live engine, or
 	// unknown(offline) for a matched-but-disconnected Node (invariant 12).
@@ -145,7 +145,7 @@ type dispatcher interface {
 }
 
 // starter is the optional half of a dispatcher that can return once a Job is
-// persisted (Execution.Start, #895). Only the real Job engine implements it;
+// persisted (Execution.Start). Only the real Job engine implements it;
 // it is deliberately not part of dispatcher, so a dispatcher that cannot
 // persist ahead of its fan-out (noopDispatcher, a test spy) is simply run
 // synchronously.

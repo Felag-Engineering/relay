@@ -60,7 +60,7 @@ type sqliteRegistry struct {
 
 	// declined counts read-back EVENTS, by labelNamespace: one increment per
 	// stored pair wellFormedLabels declines to serve, once per Get, once per
-	// Node per List, once per Hello via Upsert's internal read-back (#565).
+	// Node per List, once per Hello via Upsert's internal read-back.
 	// NOT behind connMu: the read path must not take a lock just to count,
 	// and atomic.Int64 is already internal/metrics' pattern for exactly this
 	// shape of counter. Read out through Store.LabelsDeclined.
@@ -292,7 +292,7 @@ func (r *sqliteRegistry) SetRevoked(nodeID string, at time.Time) error {
 // replaces released it between every UPDATE. A concurrent store call
 // arriving mid-batch therefore waits for the batch, not for one statement.
 // Deliberate, and the same trade AppendAll already makes for the cascade's
-// audit records (#601). Keep the batch bounded by
+// audit records. Keep the batch bounded by
 // revocation.cascadeRecordChunk.
 //
 // On a non-nil error the transaction rolled back and nothing was written;
@@ -615,9 +615,9 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 // wellFormedLabels returns a copy of labels containing only the pairs
 // registry.WellFormedLabel accepts. It governs BOTH stored namespaces:
 //
-//   - node_labels (#504): rows written BEFORE the ingress gate existed
+//   - node_labels: rows written BEFORE the ingress gate existed
 //     (protoconv.ParseNodeLabel) can carry a value that was never validated.
-//   - relay_labels (#555): rows stamped by an enrollment that ran BEFORE the
+//   - relay_labels: rows stamped by an enrollment that ran BEFORE the
 //     ingress gate existed (enroll.validateScope) can carry a value that was
 //     never validated either. The ingress fix alone leaves these rows serving
 //     forever — the Console renders every relay_labels entry as a `relay:`

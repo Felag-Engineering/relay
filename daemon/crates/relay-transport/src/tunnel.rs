@@ -1,4 +1,4 @@
-//! mTLS Tunnel connection. Isolated so subsequent milestones (#29, #31) can build on it.
+//! mTLS Tunnel connection. Isolated so subsequent milestones can build on it.
 
 use std::time::Duration;
 
@@ -35,7 +35,7 @@ pub async fn connect_mtls(
 }
 
 // ---------------------------------------------------------------------------
-// Reconnect backoff (issue #176)
+// Reconnect backoff
 // ---------------------------------------------------------------------------
 
 /// Base delay for the first reconnect attempt.
@@ -102,7 +102,7 @@ fn jitter(base: Duration, sample: f64) -> Duration {
 }
 
 // ---------------------------------------------------------------------------
-// Failure classification (issue #176)
+// Failure classification
 // ---------------------------------------------------------------------------
 
 /// Best-effort classification of a connect failure. Never load-bearing for

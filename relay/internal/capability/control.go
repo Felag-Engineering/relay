@@ -66,7 +66,7 @@ func localHostPrincipal() Principal { return Principal{Account: "local-host"} }
 // persistence fails, the audit call is skipped — there is nothing true to
 // record — and the persistence error is returned.
 //
-// The floor is `operator`, AND the Principal must be a human Account (#397).
+// The floor is `operator`, AND the Principal must be a human Account.
 // The role half is ADR-0013's "engage cheap": anyone who may run anything may
 // also pull the cord. The human half is the amendment #397 records, and it is
 // not a role question at all — a machine Account at `operator` freezing the
@@ -109,7 +109,7 @@ func (c *Control) engageFreeze(ctx context.Context, p Principal) error {
 // reason recorded for why: authorized first, then persisted, then recorded
 // via AuditSink.RecordFreeze, mirroring EngageFreeze.
 //
-// The floor is `admin` and the reason is mandatory (#397, ADR-0013): the
+// The floor is `admin` and the reason is mandatory (ADR-0013): the
 // fire-alarm asymmetry is that anyone may pull the handle and the chief
 // clears re-entry. Both refusals are audited with the Principal.
 func (c *Control) ReleaseFreeze(ctx context.Context, p Principal, reason string) error {

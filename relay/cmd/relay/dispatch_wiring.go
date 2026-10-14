@@ -15,7 +15,7 @@ import (
 // dispatch_wiring.go is the v0.0.5 dispatch transport's composition-root
 // wiring: it is production-ready code, built by every build (no build tag).
 // newServer (main.go) calls newDispatchStack and sets tunnel.sink whenever
-// Config.ControlEnabled — the production execution flip (#154) — over the
+// Config.ControlEnabled — the production execution flip — over the
 // real mTLS Tunnel, paired with the real staged Authorizer
 // (internal/authz.NewStaged, ADR-0010) capability.NewExecution's fail-open guard
 // requires alongside a real dispatcher (pipeline.go). The dev harness
@@ -28,7 +28,7 @@ var _ dispatch.ViolationRecorder = (*auditsink.Sink)(nil)
 
 // violationRecorder composes the one place a protocol violation's records
 // are written: the durable audit row, the aggregate by-rule counter, and the
-// counter that says the row is missing (#638). It lives here rather than on
+// counter that says the row is missing. It lives here rather than on
 // *auditsink.Sink so the audit adapter gains no dependency on the transport
 // package, and rather than on *metrics.Metrics for the symmetric reason.
 //

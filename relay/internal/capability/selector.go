@@ -66,7 +66,7 @@ type Selector struct {
 // prefix-stripping style, extended here to every namespace).
 //
 // node: and relay: keep the same "key=value, value required" grammar. tag: is
-// REFUSED outright (ErrSelectorTagUnsupported, #560): the namespace exists in
+// REFUSED outright (ErrSelectorTagUnsupported): the namespace exists in
 // the model (invariant 7) but has no storage until #430, so parsing one would
 // hand the caller a Selector that matches nothing for a reason it cannot see.
 // state: is different because it is closed-vocabulary and typed (ADR-0034):
@@ -122,7 +122,7 @@ func ParseSelector(s string) (Selector, error) {
 			rest = strings.TrimPrefix(term, "relay:")
 		case strings.HasPrefix(term, "tag:"):
 			// REFUSED, not parsed. tag-space has no storage on registry.Node
-			// until label management lands (#430), so a tag: predicate would
+			// until label management lands, so a tag: predicate would
 			// resolve to false for every Node and the caller would read
 			// "matched nothing" where the truth is "not implemented".
 			//
@@ -339,7 +339,7 @@ func (n Namespace) Name() string {
 }
 
 // Shape projects sel into the normalised form the approval shape key is
-// computed over (#415, approval.HashPlanShape).
+// computed over (approval.HashPlanShape).
 //
 // It is built from the TYPED Predicate, never from Selector text: the namespace
 // travels as its own length-prefixed field, so no key or value — however it is

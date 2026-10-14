@@ -15,7 +15,7 @@
 //! closure, after the task_id marker is durably recorded. A cancelled id stays in the
 //! dedup store; a re-send is deduplicated (at-most-once).
 //!
-//! # Lifetime across reconnects (issue #337)
+//! # Lifetime across reconnects
 //!
 //! A single registry is shared by `Arc` across every reconnect for the process's
 //! lifetime (it lives in the bin's `shutdown::ShutdownContext`), so a
@@ -54,7 +54,7 @@ impl CancelRegistry {
     /// Registers `task_id` as in-flight and returns the cancel receiver, or
     /// `None` if the id is already registered by a still-live lifecycle.
     ///
-    /// **First-writer-wins (issue #337).** With a process-lifetime registry shared
+    /// **First-writer-wins.** With a process-lifetime registry shared
     /// across reconnects, the Relay's at-most-once redelivery of a still-in-flight
     /// `task_id` reaches `register` while the original entry is still present. The
     /// original owns the live cancel handle, so it must not be clobbered: on a
@@ -108,7 +108,7 @@ impl CancelRegistry {
 
     /// Sends the cancel signal to every currently-registered Task and empties
     /// the registry. Used at graceful-shutdown grace expiry to force-terminate
-    /// whatever is still in flight (issue #177).
+    /// whatever is still in flight.
     ///
     /// Returns the number of entries the registry held at the time of the
     /// call — i.e. the number of cancels ATTEMPTED, not a count of children

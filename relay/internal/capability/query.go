@@ -10,7 +10,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// query.go is the capability layer's read-lane vocabulary (#441): the
+// query.go is the capability layer's read-lane vocabulary: the
 // filtered, paginated, aggregating query surface over the audit trail and
 // over Jobs/Tasks, so the Console's Activity, Job detail, and AI-agent history
 // screens — and any future /api/v1 audit route — share ONE
@@ -76,7 +76,7 @@ type AuditRow struct {
 	Kind      string
 	Principal string
 
-	// Verified and Asserted are the two attribution lanes (#300). Verified is
+	// Verified and Asserted are the two attribution lanes. Verified is
 	// this file's own VerifiedIdentity; Asserted reuses the existing
 	// capability.Assertions type, since that is already this package's
 	// vocabulary for the caller-claimed lane.
@@ -97,7 +97,7 @@ type AuditRow struct {
 	GrantID    string
 
 	// ApprovalAnswer, DecisionChannel, and PlanHash are the structured
-	// counterpart to a decision's prose Reason (#545). This does NOT widen
+	// counterpart to a decision's prose Reason. This does NOT widen
 	// the seam toward output: #441's criterion is Stdout/Stderr/Truncated,
 	// and these are the same class of field as ApprovalID/GrantID above,
 	// which #441 shipped with. DecisionChannel is a plain string here — a

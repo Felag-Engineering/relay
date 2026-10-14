@@ -15,7 +15,7 @@ import (
 // before #656.
 //
 // Four properties, stated precisely because the trail's total order rests on
-// them (#656):
+// them:
 //
 //  1. SORTABLE. The time component is the zero-padded, fixed-width hex of a
 //     NON-NEGATIVE int64, so lexicographic order over ids is numeric order

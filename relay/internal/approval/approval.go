@@ -384,7 +384,7 @@ type Request struct {
 	PlanHash string
 
 	// ShapeKey groups records by WHAT is being done rather than by how much of
-	// it (#415, D10): the Action, its risk class, its SHAPE arguments, and the
+	// it (D10): the Action, its risk class, its SHAPE arguments, and the
 	// normalised Selector, WITHOUT the resolved fan-out (see HashPlanShape).
 	//
 	// It is a rendering and grouping key and NEVER a release lookup — only

@@ -13,7 +13,7 @@ import (
 )
 
 // auditquery.go is *sqliteAudit's other interface: audit.QueryRepository, the
-// trail's filtered/paginated/aggregating read lane (#441). audit.go's
+// trail's filtered/paginated/aggregating read lane. audit.go's
 // Repository (Append + the by-key readers) is unchanged; this file adds
 // nothing to it and nothing here can Append.
 
@@ -31,7 +31,7 @@ const auditQueryColumns = `audit_id, ts, kind, principal, selector, job_id, node
 	approval_id, grant_id, approval_answer, decision_channel, plan_hash`
 
 // auditOrderDesc is the read lane's newest-first order, and the exact mirror
-// of audit.go's auditOrderAsc (#656).
+// of audit.go's auditOrderAsc.
 //
 // The ", audit_id DESC" half is not decoration: Query's keyset predicate
 // below is "ts < ? OR (ts = ? AND audit_id < ?)", which presumes the rows
@@ -424,7 +424,7 @@ func encodeAuditCursor(ts, id string) string {
 // or whose ts part is not RFC3339, is audit.ErrInvalidCursor — never a silent
 // reset to page one, which would loop a paging client forever.
 //
-// The ts part is NORMALISED to the stored rendering (#656). A cursor issued
+// The ts part is NORMALISED to the stored rendering. A cursor issued
 // before migration 0024 and one issued after are byte-identical — both are
 // the driver's trimmed RFC3339Nano re-rendering of the column — so "reject
 // stale cursors" is not implementable: there is nothing to detect. Normalising
@@ -447,7 +447,7 @@ func decodeAuditCursor(cursor string) (ts, id string, err error) {
 // It no longer hands back a "raw stored ts text" for the cursor: there is no
 // such thing on this path. The driver parses the TIMESTAMP-declared column
 // into a time.Time and database/sql re-renders it as trimmed RFC3339Nano, so
-// the scanned string is not the stored bytes and never was (#656). Query
+// the scanned string is not the stored bytes and never was. Query
 // builds the cursor from Timestamp instead.
 func scanAuditQueryRow(row rowScanner) (audit.Row, error) {
 	var (

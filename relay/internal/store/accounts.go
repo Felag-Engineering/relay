@@ -176,11 +176,11 @@ func (r *sqliteAccounts) List(ctx context.Context) ([]accounts.Account, error) {
 	return out, nil
 }
 
-// setRoleGuardSQL is SetRole's single UPDATE (#653, #912): it changes role IFF
+// setRoleGuardSQL is SetRole's single UPDATE: it changes role IFF
 // the stored role is still :from AND doing so does not leave zero enabled
 // admin rows. The WHERE clause is a conjunction of
 //
-//   - role = :from                        — the compare of the compare-and-set (#912): a
+//   - role = :from                        — the compare of the compare-and-set: a
 //     caller that decided something from the role it read (the Console's step-up
 //     classification) writes only if that role is still the stored one.
 //
@@ -219,7 +219,7 @@ const setRoleGuardSQL = `UPDATE accounts SET role = :role
 	       OR EXISTS (SELECT 1 FROM accounts o
 	                   WHERE o.role = 'admin' AND o.enabled = 1 AND o.id <> :id))`
 
-// setDisabledGuardSQL is SetEnabled(false)'s single UPDATE (#653): the same
+// setDisabledGuardSQL is SetEnabled(false)'s single UPDATE: the same
 // shape as setRoleGuardSQL, minus the ":role = 'admin'" promotion disjunct,
 // since disabling is never a promotion. Enabling is never guarded at all —
 // see SetEnabled below.
@@ -317,7 +317,7 @@ func (r *sqliteAccounts) updateGuarded(ctx context.Context, query string, id str
 func lastAdminRefusal(accounts.Account) error { return accounts.ErrLastAdmin }
 
 // roleRefusal names why a zero-row SetRole was refused: a stored role that is
-// no longer `from` is ErrRoleChanged (#912), otherwise the last-admin guard.
+// no longer `from` is ErrRoleChanged, otherwise the last-admin guard.
 func roleRefusal(from accounts.Role) func(accounts.Account) error {
 	return func(cur accounts.Account) error {
 		if cur.Role != from {

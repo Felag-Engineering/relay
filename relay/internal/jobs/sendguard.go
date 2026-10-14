@@ -6,7 +6,7 @@ import (
 )
 
 // A send guard lets whoever owns a Task's dispatch state withhold the wire
-// send at the last moment, from inside a domain-typed Conduit (#943). The
+// send at the last moment, from inside a domain-typed Conduit. The
 // owner is capability's jobEngine for a live Job, or the dispatch Reconciler
 // for a resend.
 //

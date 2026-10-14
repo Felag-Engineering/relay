@@ -25,14 +25,14 @@ package console
 // # It renders only the Nodes it was named, and never enumerates the fleet
 //
 // Every id comes from the URL and is resolved one at a time through
-// Queries.DescribeNode (#680) — one audited record per pinned Node, at most
+// Queries.DescribeNode — one audited record per pinned Node, at most
 // maxPins (3). There is no ListNodes call here and there must not be one: an
 // enumerating comparison screen is a fleet surface, and the rule above is only
 // true while this screen cannot become one.
 // TestCompare_ResolvesOnlyThePinnedNodesAndNeverEnumeratesTheFleet is the
 // guard.
 //
-// # Every column it reads is recorded (#680)
+// # Every column it reads is recorded
 //
 // This screen used to read FleetReader/PolicyReader directly and record
 // nothing — the last gap invariant 10 named against this package. It now
@@ -347,7 +347,7 @@ type pinnedResolution struct {
 }
 
 // buildCompareView is the whole screen as a function of the ids named in the
-// URL, each resolved through the audited read lane (#680): one
+// URL, each resolved through the audited read lane: one
 // describe_node record per pinned id, at most maxPins (3) — the same honest
 // accounting pinsKnown (node.go) already documents. An unknown or malformed
 // id resolves to the Unknown list, a dead chip on the pin bar; any OTHER

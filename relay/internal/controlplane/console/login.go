@@ -469,7 +469,7 @@ func handleLoginSubmit(d Deps) http.HandlerFunc {
 // credential. Production-identical to the old read; the difference is that
 // there is now exactly one place that turns the cookie into a SessionID.
 //
-// This is also "clear the CSRF token on logout" (#460, spec 11), and there is
+// This is also "clear the CSRF token on logout" (spec 11), and there is
 // no line of code here that does it: d.Auth.Logout ends the session through
 // Store.End, so the very next request carrying the old session cookie fails
 // to resolve a Session at all — Resolve returns ErrNoSession, so no
@@ -602,7 +602,7 @@ func setSessionCookie(w http.ResponseWriter, id consoleauth.SessionID) {
 // clearSessionCookie expires the session cookie. The attributes must match
 // setSessionCookie's or the browser keeps the original.
 //
-// There is no CSRF cookie to clear alongside it (#460): the session lane's
+// There is no CSRF cookie to clear alongside it: the session lane's
 // token is derived from the session identifier, not carried in a cookie, so
 // there is nothing here to clear — once d.Auth.Logout ends the session this
 // cookie named, no later request resolves a ConsoleSession to derive or

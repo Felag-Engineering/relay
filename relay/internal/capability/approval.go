@@ -42,7 +42,7 @@ func (noopApprovalGate) Evaluate(approval.Dispatch) (approval.Requirement, []str
 
 // ApprovalStore is the subset of approval.Repository the capability layer
 // needs: the dispatch path's create/lookup/claim, plus the queue reads and the
-// decision write the surfaces adapt ([3/6], #270).
+// decision write the surfaces adapt ([3/6]).
 //
 // Decisions land HERE rather than in the Control API handler for the same
 // reason dispatch does (invariant 10): the decision endpoint, the MCP
@@ -165,12 +165,12 @@ type Approvals struct {
 	// direction.
 	grants ApprovalGrantStore
 
-	// tasks persists MCP task handles (#374, ADR-0028). Nil disables the
+	// tasks persists MCP task handles (ADR-0028). Nil disables the
 	// Tasks extension entirely, which is the pre-#374 behaviour and loses
 	// nothing: the universal pending_approval result path does not use handles.
 	tasks MCPTaskStore
 
-	// authz is the role floor on a DECISION (#270): deciding a Request
+	// authz is the role floor on a DECISION: deciding a Request
 	// requires the role that Action would have needed to be requested. Nil only
 	// on an Approvals assembled by newApprovals, where there is nothing to
 	// decide.
@@ -188,7 +188,7 @@ type Approvals struct {
 
 // NewApprovals wires the approval callout (ADR-0027): gate decides which
 // dispatches must wait for a human, store persists the parked Requests, and
-// authz is the role floor on answering one (#270).
+// authz is the role floor on answering one.
 //
 // rec, gate, store and authz are required together. A gate with no store could
 // decide a dispatch needs approval and then have nowhere to record it — which
@@ -204,10 +204,10 @@ type Approvals struct {
 // RELEASE a dispatch the gate already gated, so its absence can never let
 // something through.
 //
-// tasks is the MCP task-handle store (#374, ADR-0028), enabling the Tasks
+// tasks is the MCP task-handle store (ADR-0028), enabling the Tasks
 // extension's server side. Optional, and its absence is not a degraded mode but
 // the prior one: with no store, dispatches park and return the universal
-// `pending_approval` result (#371) exactly as before. ADR-0028 requires that
+// `pending_approval` result exactly as before. ADR-0028 requires that
 // path to keep working with the shim deleted, so nothing below it may come to
 // depend on a handle existing.
 //
@@ -298,7 +298,7 @@ type ParkedError struct {
 	// ExpiresAt is when the parked request lapses.
 	ExpiresAt time.Time
 
-	// TaskID is the MCP task handle attached to this park (#374, ADR-0028), or
+	// TaskID is the MCP task handle attached to this park (ADR-0028), or
 	// empty when Tasks are not wired or the handle could not be minted.
 	//
 	// Empty is a fully supported answer, not a failure: a surface renders the
@@ -447,7 +447,7 @@ func (a *Approvals) checkApproval(ctx context.Context, p Principal, sel Selector
 	// An already-satisfied approval for exactly this Plan releases the
 	// dispatch. Anything else — pending, denied, expired, or absent — does not.
 	//
-	// The lookup is by PLAN HASH and nothing else. The shape key (#415) is
+	// The lookup is by PLAN HASH and nothing else. The shape key is
 	// never consulted here and must never be: it deliberately excludes the
 	// resolved fan-out, so releasing on it would release a dispatch over a Node
 	// set nobody approved.

@@ -12,7 +12,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 )
 
-// The audit chain's store half (#896). internal/audit defines the encoding and
+// The audit chain's store half. internal/audit defines the encoding and
 // the verifier's state machine; this file is every piece that touches SQL:
 // the migration 28 back-fill, the single chained insert, the head read, and
 // the read-only walk relay-audit-verify runs.
@@ -215,7 +215,7 @@ func readChainHead(ctx context.Context, q interface {
 // BEGIN IMMEDIATE), so the head is read under the cross-process write lock and
 // two appenders cannot chain onto the same head. idx_audit_seq is the backstop.
 // It is the seam for a caller that needs the audit row committed in its own
-// transaction (#887): pass that transaction.
+// transaction: pass that transaction.
 func insertChained(ctx context.Context, q auditChainExecer, ps []preparedAudit) error {
 	head, err := readChainHead(ctx, q)
 	if err != nil {

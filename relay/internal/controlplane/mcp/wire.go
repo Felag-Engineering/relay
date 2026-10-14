@@ -1,7 +1,7 @@
 package mcp
 
 // This file is the single source of truth for every MCP tool's JSON output
-// shape (#161): the 13 structs below were previously unexported, forcing
+// shape: the 13 structs below were previously unexported, forcing
 // every test package that needed to unmarshal a tool's response — the
 // external mcp_test package (can't see unexported types across a package
 // boundary) and cmd/relay's own e2e suite (can't import _test.go-only types
@@ -53,7 +53,7 @@ type NodeItem struct {
 	RevokedAt string `json:"revoked_at,omitempty"`
 	Outdated  bool   `json:"outdated"`
 
-	// Connected is whether the Node holds a live Tunnel right now (#440).
+	// Connected is whether the Node holds a live Tunnel right now.
 	//
 	// Distinct from LastSeen, and the distinction is the point: a Node that
 	// reported four seconds ago and then dropped its stream is unreachable for
@@ -62,7 +62,7 @@ type NodeItem struct {
 	// disagree with the dispatcher about what its own fleet can do.
 	Connected bool `json:"connected" jsonschema:"Whether the Node holds a live Tunnel right now. A Task dispatched to a Node that is not connected resolves 'unreachable' without being sent — this is NOT inferable from last_seen."`
 
-	// StateLabels are the `state:` namespace (ADR-0034, #414): Relay-DERIVED
+	// StateLabels are the `state:` namespace (ADR-0034): Relay-DERIVED
 	// labels, evaluated at read time and set by nobody — not the Node, not an
 	// operator, not an admin. Rendered in Selector syntax with the `state:`
 	// prefix (e.g. "state:offline", "state:daemon-version=1.4.2") and
@@ -81,7 +81,7 @@ type ListNodesOutput struct {
 // from the daemon's loaded Policy (policyview.OperationRule; ADR-0002).
 // AllowedArgs[i] is the permitted-value set at argv position i, with "*" as
 // the explicit per-position wildcard. AllowedArgs is ALWAYS a JSON array,
-// never null (#207/#253): an empty array means the Operation is allowed with
+// never null: an empty array means the Operation is allowed with
 // zero arguments — an empty set of argv positions, not an absent constraint
 // ("any value" is only ever spelled as the explicit "*"). A policyview rule
 // whose AllowedArgs arrived as nil (proto empty repeated) means exactly the
@@ -96,7 +96,7 @@ type OperationRuleOutput struct {
 // DenyRuleOutput is one [[deny]] rule, mirrored verbatim from the daemon's
 // loaded Policy (policyview.DenyRule; ADR-0002). Args[i] is the denied-value
 // set at argv position i. Args is ALWAYS a JSON array, never null
-// (#207/#253, same normalization as OperationRuleOutput.AllowedArgs): an
+// (same normalization as OperationRuleOutput.AllowedArgs): an
 // empty array denies the whole Operation regardless of arguments.
 // Display-only: the Relay never evaluates these (ADR-0011).
 type DenyRuleOutput struct {
@@ -121,7 +121,7 @@ type EffectivePolicyOutput struct {
 	// OperationRules and DenyRules are raw mirrors of the daemon's loaded
 	// Policy file (every [[operation]]/[[deny]] block, in file order; no
 	// dedup, no evaluation) — see the OperationRuleOutput/DenyRuleOutput
-	// doc comments. Both are ALWAYS JSON arrays, never null (#207/#253):
+	// doc comments. Both are ALWAYS JSON arrays, never null:
 	// empty when the reported Policy has no operation/deny blocks, and also
 	// when Reported is false — Reported is the only "no data yet" signal,
 	// never a null here.
@@ -172,7 +172,7 @@ type DescribeNodeOutput struct {
 	EffectivePolicy    EffectivePolicyOutput    `json:"effective_policy"`
 	TemplateVocabulary TemplateVocabularyOutput `json:"template_vocabulary"`
 
-	// Certificate is the Node's identity provenance (#440). Present only on
+	// Certificate is the Node's identity provenance. Present only on
 	// describe_node: it is per-Node detail, and list_nodes is deliberately a
 	// fleet-shaped view.
 	Certificate CertificateOutput `json:"certificate"`
@@ -210,14 +210,14 @@ type CertificateOutput struct {
 }
 
 // OperationItem is one Operation's vocabulary entry, rendered by
-// list_operations: name, risk class, and (#120) the model-facing legibility
+// list_operations: name, risk class, and the model-facing legibility
 // prose — Purpose, ArgConstraints, and a concrete Example — that lives
 // Relay-side in opvocab.Descriptor, never on the wire (invariant 8, central
 // decision in #120's plan). This is what makes list_operations legible
 // enough that a model chooses the right Operation, and builds valid args for
 // it, without trial-and-error. Raw Exec is deliberately absent from this
 // list: it is not an Operation (ADR-0003, GLOSSARY.md) and has no
-// OperationDescriptor on the wire; it surfaces through its own tool (#118)
+// OperationDescriptor on the wire; it surfaces through its own tool
 // and is always risk class mutate.
 type OperationItem struct {
 	Name           string            `json:"name"`
@@ -253,7 +253,7 @@ type ListOperationsOutput struct {
 // Policy itself (invariant 12).
 //
 // ExitCode is a pointer so a Task with no real process exit status renders
-// with NO exit_code key at all (#207/#253): the daemon's -1 "no exit status"
+// with NO exit_code key at all: the daemon's -1 "no exit status"
 // sentinel (spawn failure, timeout/cancel kill, signal-kill,
 // denied_by_policy), the Relay's synthesized zero value (unreachable,
 // version_refused), and — since #632 — the Relay's own -1 on a Task whose
@@ -291,7 +291,7 @@ type ExecutionOutput struct {
 	Results   []PerNodeResult `json:"results"`
 }
 
-// PerNodeVerdict is one matched Node's Plan-mode result (#119, ADR-0011):
+// PerNodeVerdict is one matched Node's Plan-mode result (ADR-0011):
 // "allow"/"deny"/"unknown", with DecidingRule set only on deny and Reason
 // (e.g. "offline") set only on unknown — mirrors PerNodeResult's per-Node
 // shape but for a verdict, never an executed outcome.
@@ -337,7 +337,7 @@ type PlanOutput struct {
 	Advisory        string           `json:"advisory"`
 }
 
-// RunOrPlanOutput is run_operation/raw_exec's shared result shape (#119):
+// RunOrPlanOutput is run_operation/raw_exec's shared result shape:
 // additive over ExecutionOutput. JobID carries omitempty (#207/#253,
 // superseding #119's byte-identical-to-#118 freeze): it is present exactly
 // when a Job was created, and absent on a plan=true response (a Plan
@@ -353,7 +353,7 @@ type RunOrPlanOutput struct {
 	Results []PerNodeResult `json:"results" jsonschema:"Always an array, never null: one entry per matched Node on a real dispatch, empty when nothing was dispatched (plan=true or a parked dispatch)."`
 	Plan    *PlanOutput     `json:"plan,omitempty"`
 
-	// JobStatus and Reattached describe a Job returned at persist (#895).
+	// JobStatus and Reattached describe a Job returned at persist.
 	JobStatus  string `json:"job_status,omitempty" jsonschema:"running while any Task is unresolved (its outcome reads unspecified); complete once every Task has a terminal outcome; absent when no Job was created. Poll get_job with job_id until complete."`
 	Reattached bool   `json:"reattached,omitempty" jsonschema:"true when this call dispatched nothing and returned the Job an earlier call created (same idempotency_key, or an approval already released)."`
 
@@ -384,7 +384,7 @@ type RunOrPlanOutput struct {
 	AnswerRefused *AnswerRefusalOutput `json:"answer_refused,omitempty"`
 }
 
-// AnswerRefusalOutput is what an answered retry (#727) renders when its
+// AnswerRefusalOutput is what an answered retry renders when its
 // answer was refused before or instead of reaching a decision: a tampered or
 // unbound requestState, a malformed responder assertion, a machine
 // self-decision, or a request the domain refuses for a reason
@@ -447,7 +447,7 @@ type PendingApprovalOutput struct {
 	// NextStep is plain-language guidance for the AI-agent holding this result.
 	NextStep string `json:"next_step" jsonschema:"What to do next."`
 
-	// TaskID is the MCP task handle attached to this park (#374, SEP-2663), or
+	// TaskID is the MCP task handle attached to this park (SEP-2663), or
 	// absent when the Relay has no handle store wired.
 	//
 	// It is carried in the ORDINARY result — not only in a Tasks-shaped one —

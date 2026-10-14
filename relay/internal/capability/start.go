@@ -10,7 +10,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// Start is Run's non-blocking sibling (#895): the same pipeline, returning as
+// Start is Run's non-blocking sibling: the same pipeline, returning as
 // soon as the Job's Tasks and its dispatch intent are committed. The fan-out and
 // the post-dispatch accounting (metrics, the KindDispatch audit record) finish
 // in a background goroutine the Execution tracks (Drain). A surface that wants the

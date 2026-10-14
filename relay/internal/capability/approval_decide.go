@@ -304,7 +304,7 @@ func requestOnRefusal(r approval.Request, err error) approval.Request {
 }
 
 // approvalAnswerOf maps a Decision's boolean Approve onto the structured
-// ApprovalAnswer vocabulary (#545). There is no third case: DecideApproval
+// ApprovalAnswer vocabulary. There is no third case: DecideApproval
 // only ever calls this with a real decider's answer, so
 // ApprovalAnswerUnrecorded is reserved for entries that never went through
 // here at all (RevokeGrant's revocation).

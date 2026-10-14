@@ -198,7 +198,7 @@ type facetValue struct {
 	// irreversible thing a person did.
 	Fenced string
 	// Targetable is false for a value the Selector parser cannot express yet
-	// (a `state:` or `tag:` term — #414, #430). Rendered as text rather than a
+	// (a `state:` or `tag:` term — #414). Rendered as text rather than a
 	// link, because a filter link that produced a parse error would teach an
 	// operator that the filter box is unreliable.
 	Targetable bool
@@ -374,11 +374,11 @@ type fleetView struct {
 	GroupsElided int
 
 	// CertExpiryKnown reports whether the registry holds certificate validity
-	// for EVERY matched Node (#440), and CertExpiryUnknown counts the ones it
+	// for EVERY matched Node, and CertExpiryUnknown counts the ones it
 	// does not — Nodes that enrolled before the Relay began recording validity
 	// and have not renewed since.
 	//
-	// The threshold now exists (#414, ADR-0034): a Node with under 25% of its
+	// The threshold now exists (ADR-0034): a Node with under 25% of its
 	// certificate's remaining lifetime shows state:cert-expiring like any
 	// other marker, counted in Expiring above and chipped on its row. What
 	// these two fields still gate is narrower — whether the judgement can be
@@ -490,7 +490,7 @@ func handleFleet(d Deps) http.HandlerFunc {
 		// end rather than a branch per read (screen.go).
 		d, lane := latched(d)
 
-		// THE FLEET ENUMERATION IS AN AUDITED READ (#450, ADR-0025). This
+		// THE FLEET ENUMERATION IS AN AUDITED READ (ADR-0025). This
 		// screen discloses every Node's name, Labels, Facts and certificate
 		// provenance in one page, which is the disclosure ADR-0025 names
 		// first — so it asks the capability layer, which writes the
@@ -510,7 +510,7 @@ func handleFleet(d Deps) http.HandlerFunc {
 		// listing.Nodes may be a NIL slice when the whole fleet is empty —
 		// buildFleetView and knownIn both range over it, so both already
 		// tolerate that; stated here so the next reader does not have to
-		// re-derive it (#680).
+		// re-derive it.
 		nodes := listing.Nodes
 
 		// An empty registry is not an empty table. Spec 10: a Console with zero
@@ -868,13 +868,13 @@ func declaredChips(n registry.Node) []Label {
 //
 // `tag:` is in the model (invariant 7, ADR-0020) and not resolvable: it has no
 // storage on registry.Node until #430 gives it one. The REFUSAL now lives in
-// capability.ParseSelector (#560), not here. This screen used to guard it
+// capability.ParseSelector, not here. This screen used to guard it
 // itself, which meant MCP's list_nodes answered the same term with 200 and an
 // empty list while this box refused it — the surface-local guard was how the
 // two drifted. What is left here is rendering: recognise the sentinel and say
 // it in this screen's register, never re-decide it.
 //
-// `state:` is NOT special-cased at all (#414, ADR-0034): it resolves through
+// `state:` is NOT special-cased at all (ADR-0034): it resolves through
 // capability.ParseSelector/Matches exactly like node: and relay:, so a
 // `state:offline` filter narrows the table the same way a facet click does
 // — one resolver, no surface-local evaluation.
@@ -944,7 +944,7 @@ func groupKeys(nodes []registry.Node) []string {
 // taxonomy keys, and otherwise groups by nothing.
 //
 // "env" then "role" is a guess about the customer's taxonomy and is only a
-// DEFAULT — the per-Account saved view (#442) is what makes an operator land on
+// DEFAULT — the per-Account saved view is what makes an operator land on
 // their own slice. Until that lands, guessing well beats landing on an
 // undifferentiated wall.
 func chooseGroupBy(requested string, available []string) string {
@@ -1144,7 +1144,7 @@ func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext)
 // took (int, string, string) and returned string, so nothing at either
 // definition revealed that a sibling with the opposite contract existed, and
 // which one you got depended purely on whether you were inside a template or
-// inside Go. That cost three wrong conclusions in a single session (#550): a
+// inside Go. That cost three wrong conclusions in a single session: a
 // double-prefixed "1 1 Account" written in Go from the template's contract, a
 // correct template line reported as a double-render bug from this contract,
 // and a reviewer who believed the report and nearly filed ~25 phantom bugs.
@@ -1237,7 +1237,7 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 // "what is wrong here" wants derived conditions and declared fences in one
 // list — so each row renders as its own CHIP and the namespace stays
 // visible. Both `relay:` fences and `state:` markers resolve as a Selector
-// term (#414); `revoked` alone does not, because it is not a label at all.
+// term; `revoked` alone does not, because it is not a label at all.
 func stateFacet(nodes []fleetNode, link linkContext) (facet, bool) {
 	stateRows := facet{Title: "State"}
 	stateCounts := map[string]int{}

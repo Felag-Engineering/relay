@@ -9,7 +9,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 )
 
-// accountadmin.go is Account and API-Token administration (#653): the eight
+// accountadmin.go is Account and API-Token administration: the eight
 // ControlActions floored at admin (authz.RoleGate's requiredControlRole),
 // each authorized, acted on, and — for a write — audited through the same
 // capability pipeline as every other administrative act (EngageFreeze,
@@ -33,7 +33,7 @@ import (
 // ErrNameTaken (see its insert, and SetRole/SetEnabled's doc comments in
 // internal/accounts/accounts.go). It is enforced in one guarded UPDATE, in
 // the store, and surfaces here only as accounts.ErrLastAdmin bubbling up
-// from SetAccountRole/SetAccountEnabled. The role compare-and-set (#912) is
+// from SetAccountRole/SetAccountEnabled. The role compare-and-set is
 // the same kind of thing: a clause of the store's one UPDATE, not a check in
 // this layer.
 //
@@ -45,7 +45,7 @@ import (
 // tests, which expect a create/mint to be the only rows a read-only session
 // produces.
 
-// AccountAdmin is Account and API-Token administration (#653): the eight
+// AccountAdmin is Account and API-Token administration: the eight
 // ControlActions above, authorized by the Control's Authorizer and recorded on
 // its Recorder's trail. Construct it with NewAccountAdmin.
 type AccountAdmin struct {
@@ -61,7 +61,7 @@ type AccountAdmin struct {
 // revoking; passing an incomplete set is a composition-root bug, so it panics
 // rather than degrading.
 //
-// It also requires a real Authorizer AND a real AuditSink (#653), read through
+// It also requires a real Authorizer AND a real AuditSink, read through
 // control: an un-floored Account-administration surface is a fail-open no less
 // serious than an un-floored dispatch — every role would pass
 // account_role/account_disable/api_token_mint — and an unaudited one means
@@ -120,7 +120,7 @@ func SelfTargeted(p Principal, accountID string) bool {
 	return p.AccountID != "" && p.AccountID == accountID
 }
 
-// Accounts lists every Account (#653). Authorized at ControlAccountRead;
+// Accounts lists every Account. Authorized at ControlAccountRead;
 // records nothing on success (see this file's header).
 func (a *AccountAdmin) Accounts(ctx context.Context, p Principal) ([]accounts.Account, error) {
 	if a.accountStore == nil {
@@ -132,7 +132,7 @@ func (a *AccountAdmin) Accounts(ctx context.Context, p Principal) ([]accounts.Ac
 	return a.accountStore.List(ctx)
 }
 
-// Account reads one Account by id (#653). Authorized at ControlAccountRead;
+// Account reads one Account by id. Authorized at ControlAccountRead;
 // records nothing on success.
 func (a *AccountAdmin) Account(ctx context.Context, p Principal, id string) (accounts.Account, error) {
 	if a.accountStore == nil {
@@ -144,7 +144,7 @@ func (a *AccountAdmin) Account(ctx context.Context, p Principal, id string) (acc
 	return a.accountStore.Get(ctx, id)
 }
 
-// CreateAccount creates a new Account (#653). Authorized at
+// CreateAccount creates a new Account. Authorized at
 // ControlAccountCreate; the create is audited (AccountAdminCreate) with the
 // Account's assigned id, name, kind, and initial role.
 func (a *AccountAdmin) CreateAccount(ctx context.Context, p Principal, acct accounts.Account) (accounts.Account, error) {
@@ -173,7 +173,7 @@ func (a *AccountAdmin) CreateAccount(ctx context.Context, p Principal, acct acco
 	return created, nil
 }
 
-// SetAccountRole changes id's role (#653). Authorized at ControlAccountRole;
+// SetAccountRole changes id's role. Authorized at ControlAccountRole;
 // refused with ErrSelfTargeted if the acting Principal names itself
 // (invariant: an Account cannot elevate itself); refused with
 // accounts.ErrLastAdmin if it would demote the last enabled admin (enforced
@@ -210,7 +210,7 @@ func (a *AccountAdmin) SetAccountRole(ctx context.Context, p Principal, id strin
 }
 
 // SetAccountRoleFrom changes id's role from `from` to `to`, refusing with
-// accounts.ErrRoleChanged if the stored role is no longer `from` (#912). For
+// accounts.ErrRoleChanged if the stored role is no longer `from`. For
 // a surface whose own decision depended on the role it read (the Console's
 // step-up classification): the decision and the write become one
 // compare-and-set in the store. Authorized at ControlAccountRole and
@@ -248,7 +248,7 @@ func (a *AccountAdmin) setAccountRole(ctx context.Context, p Principal, id strin
 	return nil
 }
 
-// SetAccountEnabled enables or disables id (#653). Authorized at
+// SetAccountEnabled enables or disables id. Authorized at
 // ControlAccountEnable/ControlAccountDisable depending on enabled; a disable
 // is refused with ErrSelfTargeted if the acting Principal names itself, and
 // with accounts.ErrLastAdmin if it would disable the last enabled admin
@@ -287,7 +287,7 @@ func (a *AccountAdmin) SetAccountEnabled(ctx context.Context, p Principal, id st
 	return nil
 }
 
-// APITokens lists accountID's API Tokens, redacted (#653). Authorized at
+// APITokens lists accountID's API Tokens, redacted. Authorized at
 // ControlAPITokenRead; records nothing on success.
 func (a *AccountAdmin) APITokens(ctx context.Context, p Principal, accountID string) ([]accounts.APIToken, error) {
 	if a.tokens == nil {
@@ -299,7 +299,7 @@ func (a *AccountAdmin) APITokens(ctx context.Context, p Principal, accountID str
 	return a.tokens.List(ctx, accountID)
 }
 
-// MintAPIToken issues a new credential for accountID (#653). Authorized at
+// MintAPIToken issues a new credential for accountID. Authorized at
 // ControlAPITokenMint. The audit event carries TokenID only — never the
 // returned Plaintext, which this method passes back to its caller untouched:
 // no log line, no audit field, no error-string interpolation (#653's
@@ -329,7 +329,7 @@ func (a *AccountAdmin) MintAPIToken(ctx context.Context, p Principal, accountID,
 	return tok, plaintext, nil
 }
 
-// RevokeAPIToken revokes id (#653). Authorized at ControlAPITokenRevoke.
+// RevokeAPIToken revokes id. Authorized at ControlAPITokenRevoke.
 // Idempotent, mirroring accounts.TokenService.Revoke: revoking an
 // already-revoked token is a success, not an error, and is still recorded —
 // an operator racing themselves mid-incident should not see a failure.
