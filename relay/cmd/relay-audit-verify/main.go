@@ -27,8 +27,8 @@
 //	1  tampered: a row, a sequence gap, a link or an anchor does not match
 //	2  usage, open, schema or user error: nothing was verified
 //	3  no break, but some rows have no chain position. A Relay that was rolled
-//	   back to a pre-#896 binary writes such rows. On a Relay that never was,
-//	   treat exit 3 as tampering.
+//	   back to a binary that predates audit chaining writes such rows. On a Relay
+//	   that never was, treat exit 3 as tampering.
 package main
 
 import (

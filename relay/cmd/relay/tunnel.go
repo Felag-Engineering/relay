@@ -21,12 +21,12 @@ import (
 )
 
 // taskSink is the seam for capturing Task dispatch and results: hermetic
-// unit tests, the #112 cross-binary CI harness (installDevHarness,
-// devharness-tagged build only), and — since #154 — newServer itself, which
+// unit tests, the cross-binary CI harness (installDevHarness,
+// devharness-tagged build only), and newServer itself, which
 // sets it to the real dispatch.Router (via routerSink, dispatch_wiring.go)
 // whenever Config.ControlEnabled, so Tasks dispatched through the capability
 // pipeline actually reach connected daemons over this mTLS Tunnel. Nil when
-// the control plane is disabled (execution off, exactly as before #154).
+// the control plane is disabled (execution off).
 //
 // register is called after the Ping handshake completes; it records the
 // outbound send function for the node and returns a cleanup func. deliver is
@@ -44,21 +44,20 @@ type tunnelServer struct {
 	relayv1.UnimplementedTunnelServer
 	conns *revocation.Connections
 	reg   registry.Repository
-	// policy is the display-only effective-Policy cache (#117, invariant 12 /
+	// policy is the display-only effective-Policy cache (invariant 12 /
 	// ADR-0002): the Relay records what a daemon reports in
 	// DaemonMessage.policy and never evaluates or sets Policy itself. Nil-guarded
 	// like reg/conns so existing tests that construct &tunnelServer{} directly
 	// keep compiling; nil in any test that doesn't need the capture.
 	policy *policyview.Cache
-	// vocab is the per-Node Template Operation vocabulary cache (#291,
-	// ADR-0021): the Relay records what a daemon reports in
+	// vocab is the per-Node Template Operation vocabulary cache (ADR-0021): the Relay records what a daemon reports in
 	// DaemonMessage.templates so describe_node/list_operations can show a
 	// Node's live vocabulary, and so a Template dispatch can resolve its
 	// fan-out and class (ADR-0042). It never sets a Node's templates, exactly as it
 	// never sets Policy (ADR-0002). Nil-guarded like policy/reg/conns.
 	vocab *nodevocab.Cache
 	// sink is set by newServer when Config.ControlEnabled (production
-	// execution, #154), by installDevHarness in a devharness-tagged build, or
+	// execution), by installDevHarness in a devharness-tagged build, or
 	// injected directly by tests; nil when the control plane is disabled.
 	sink taskSink
 }
@@ -270,8 +269,8 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 			if ps := m.GetPolicy(); ps != nil && s.policy != nil {
 				s.policy.Set(nodeID, snapshotFromProto(ps))
 			}
-			// Capture a reported TemplateSnapshot into the nodevocab.Cache
-			// (#291). Same posture as the PolicySnapshot capture above: it
+			// Capture a reported TemplateSnapshot into the nodevocab.Cache.
+			// Same posture as the PolicySnapshot capture above: it
 			// RECORDS a report-only daemon value — for discovery, and since
 			// ADR-0042 as the input to a Template dispatch's fan-out and
 			// class — and can never set or modify the Node's templates
@@ -403,8 +402,7 @@ func argMatchersToArgSets(matchers []*relayv1.ArgMatcher) [][]string {
 
 // boundedRefusedKey bounds a refused wire key for logging. It delegates to
 // registry.BoundLogKey, which owns the one rune-safe truncation for this one
-// hazard — see that function for why a second copy is not allowed (a security
-// review found exactly that fork in #565, with the rune backoff dropped).
+// hazard — see that function for why a second copy is not allowed.
 func boundedRefusedKey(k string) string {
 	bounded, _ := registry.BoundLogKey(k)
 	return bounded

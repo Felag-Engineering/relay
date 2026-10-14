@@ -1,7 +1,7 @@
 package main
 
-// control_surfaces.go defines the ControlSurface self-registration seam
-// (#162): each control surface (MCP, the Control API) knows how to mount its
+// control_surfaces.go defines the ControlSurface self-registration seam:
+// each control surface (MCP, the Control API) knows how to mount its
 // own routes onto the shared, already-auth-wrapped mux, so newServer holds a
 // list of surfaces instead of two inline mount stanzas. This must live in
 // package main rather than beside mcp/api themselves: mcp/no_dispatch_test.go
@@ -48,8 +48,7 @@ import (
 // single surface (e.g. apiSurface never touches ops), which is expected: the
 // struct is a shared dependency bag, not a per-surface signature.
 //
-// After #680 no surface is handed the registry or a display-only cache
-// directly: every registry, Policy-view and Template-vocabulary read goes
+// No surface is handed the registry or a display-only cache directly: every registry, Policy-view and Template-vocabulary read goes
 // through d.readLane, the capability read lane, which records the read
 // before it answers and fails closed (invariant 10, QRY-28). The registry,
 // the Policy-view cache and the Template-vocabulary cache are wired only
@@ -87,8 +86,8 @@ type surfaceDeps struct {
 	// roleGate is the ONE authz.RoleGate the process holds — the same object
 	// the capability layer authorizes dispatches and Freeze with. The Control
 	// API needs it directly for the administrative routes that never reach the
-	// capability layer at all (enrollment-token mint/revoke, Node revoke —
-	// #397), so that their floor is read from the same table rather than a
+	// capability layer at all (enrollment-token mint/revoke, Node revoke),
+	// so that their floor is read from the same table rather than a
 	// second one kept per surface (invariant 10).
 	roleGate *authz.RoleGate
 	now      func() time.Time
@@ -115,8 +114,8 @@ type surfaceDeps struct {
 	// Nil leaves that block on the screen saying it is not wired.
 	trust console.TrustReader
 
-	// certExpiringWithin is the state:cert-expiring warning window (#414,
-	// ADR-0034), computed once in newServer from ca.LeafValidity and handed
+	// certExpiringWithin is the state:cert-expiring warning window
+	// (ADR-0034), computed once in newServer from ca.LeafValidity and handed
 	// to every surface below — MCP, the Control API, and the Console all
 	// resolve `state:` against the SAME window (invariant 11).
 	certExpiringWithin time.Duration
@@ -148,8 +147,7 @@ type controlSurface interface {
 	Mount(mux *http.ServeMux, d surfaceDeps)
 }
 
-// mcpSurface mounts the MCP server (#117's read tools, #118's execution
-// tools) at "/mcp" — reached only through the Authenticator.Middleware that
+// mcpSurface mounts the MCP server (its read and execution tools) at "/mcp" — reached only through the Authenticator.Middleware that
 // already wraps mux (invariant 10: one control path).
 type mcpSurface struct{}
 
@@ -159,8 +157,8 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	// Request and may cancel a Job, so it goes through the one capability layer
 	// like everything else (invariant 10) rather than reaching a store.
 	//
-	// mcp.WithCertExpiringWindow is gone: the MCP read tools no longer
-	// resolve or evaluate anything — state: Labels arrive already evaluated
+	// There is no certificate-expiry window option: the MCP read tools
+	// resolve and evaluate nothing — state: Labels arrive already evaluated
 	// on the lane's StateEval, which d.readLane resolves against the same
 	// root-owned window every other surface uses (invariant 11).
 	// opts holds exactly the three production options, in this order, with
@@ -182,7 +180,7 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// changes nothing in code: leave its gate rules `out-of-band` and
 		// ErrWeakChannel refuses every tool-delivered answer.
 		mcp.WithApprovalDecider(d.approvals),
-		// The MRTR envelope over the same decision seam (#730, ADR-0029
+		// The MRTR envelope over the same decision seam (ADR-0029
 		// decision 6; ADR-0028 as amended 2026-09-24): an askable in-band
 		// park from a client that can be asked is answered with an approval
 		// question instead of today's pending_approval result; a client
@@ -302,8 +300,8 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// no execution route for console_execution to gate, and shipping the
 		// flag ahead of the surface would be a knob that turns nothing off.
 		Execution: false,
-		// Every registry and Policy-view read is Deps.Queries now (#680,
-		// QRY-28) — there is no separate Fleet/Policy seam any more. There is
+		// Every registry and Policy-view read is Deps.Queries (QRY-28) —
+		// there is no separate Fleet/Policy seam. There is
 		// also no separate Liveness seam: registry.Node.Connected is
 		// itself derived from the same live-Tunnel set, so the fleet view
 		// and a state:offline Selector read one fact instead of two.
@@ -327,8 +325,7 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// here.
 		Events: consoleEventsOrNil(d.events),
 		// The read lane. d.readLane (*capability.ReadLane) already
-		// implements console.QueryReader's six methods (#450 added the
-		// registry half; #539 added RecordEventSubscription). Job detail
+		// implements console.QueryReader's six methods. Job detail
 		// reads Jobs and Tasks through it and through nothing else,
 		// which is why the Console is handed no Job repository of its own.
 		Queries: d.readLane,
@@ -338,7 +335,7 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// five write verbs (CreateAccount, SetAccountRole, SetAccountEnabled,
 		// MintAPIToken, RevokeAPIToken). The admin floor on both reads is the capability
 		// layer's (authz.go), as is the decision that a successful read
-		// records nothing — #659 tracks the latter, in front of a human.
+		// records nothing — the latter an open question, in front of a human.
 		Accounts: d.accountAdmin,
 		// state:cert-expiring's warning window (ADR-0034) — the same
 		// value every other surface resolves `state:` against.
@@ -347,7 +344,7 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// already implements CancelJob — the same method the Control API and
 		// MCP call — so no adapter is built for it; the role floor is
 		// operator, the scope beyond it differs by Account kind (human: any
-		// Job, machine: only a Job it requested — #614), and both that and
+		// Job, machine: only a Job it requested), and both that and
 		// the audit row live in the capability layer, not here. Execution
 		// stays false, unchanged: Cancel cannot run anything, only ask
 		// something already running to stop.
@@ -474,9 +471,9 @@ func (a readAuditor) RecordRead(ctx context.Context, e mcp.ReadEvent) error {
 	if !ok {
 		return errors.New("read audit: no authenticated principal in context; refusing to record an unattributed read")
 	}
-	// mcp.ReadEvent carries no Selector/NodeID (#680 moved list_nodes/
-	// describe_node/list_operations onto the capability read lane, which
-	// records those itself) — this seam now only ever reads back a Job's
+	// mcp.ReadEvent carries no Selector/NodeID (list_nodes/describe_node/
+	// list_operations are on the capability read lane, which records those
+	// itself) — this seam only ever reads back a Job's
 	// own Task rows, so the sink's selector/nodeID columns are always empty
 	// here.
 	return a.sink.RecordRead(ctx, p, e.Tool, "", "", e.JobID)

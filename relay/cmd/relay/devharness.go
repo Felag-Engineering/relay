@@ -1,7 +1,7 @@
 //go:build devharness
 
 // Package main: devharness.go is the ENTIRE dev-harness dispatch/control
-// surface for #112's cross-binary CI test, extended by #103 to drive the
+// surface for the cross-binary CI tests, driving both raw dispatch and the
 // full capability pipeline (Selector -> authz -> blast-cap -> Job engine ->
 // dispatch -> audit, ADR-0009/0010) for the v0.0.5 fleet-semantics e2e suite.
 // It is a deliberate dev backdoor on an RCE control plane (it lets a local
@@ -27,9 +27,8 @@
 // which builds its Execution only under Config.ControlEnabled over the real
 // RoleGate, this file supplies its own allow-all devHarnessAuthorizer — a
 // type distinct from capability's own allowAllAuthorizer, so NewExecution's
-// fail-open guard is satisfied — precisely what dispatch_wiring.go's doc
-// comment reserves for "the #103 integration harness." Every op below is
-// driven through execution (invariant 10): this is what makes the audit
+// fail-open guard is satisfied. Every op below is driven through execution
+// (invariant 10): this is what makes the audit
 // trail, blast-cap, and Freeze acceptance criteria real rather than faked at
 // the harness. The daemon's live Policy engine remains
 // the sole source of Policy verdicts (ADR-0002/0011) — nothing here
@@ -69,7 +68,7 @@ type harnessState struct {
 	execution *capability.Execution
 }
 
-// devHarnessAuthorizer is the #103 integration harness's allow-all
+// devHarnessAuthorizer is the integration harness's allow-all
 // Authorizer. It is a DISTINCT type from capability's own unexported
 // allowAllAuthorizer so capability.NewExecution's fail-open guard — "a real dispatcher
 // must never ride the package's own allow-all default" — is satisfied by
@@ -83,8 +82,8 @@ func (devHarnessAuthorizer) Authorize(context.Context, capability.Principal, job
 	return nil
 }
 
-// AuthorizeControl completes capability.Authorizer's administrative half
-// (#397). Allow-all like its sibling, for the same reason and under the same
+// AuthorizeControl completes capability.Authorizer's administrative half.
+// Allow-all like its sibling, for the same reason and under the same
 // build tag: the harness's whole purpose is to drive the pipeline from a
 // local socket with no Account model behind it.
 func (devHarnessAuthorizer) AuthorizeControl(context.Context, capability.Principal, capability.ControlAction) error {
@@ -136,7 +135,7 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	// and its normal capability-layer audit entries, as main.go does.
 	harnessAudit := auditsink.New(deps.audit)
 
-	// Empty rules: nothing parks, as before #899; NewApprovals requires a gate.
+	// Empty rules: nothing parks; NewApprovals requires a gate.
 	// Built before newDispatchStack so a failure leaves deps untouched.
 	gate, err := approval.NewGate(nil)
 	if err != nil {
@@ -396,9 +395,8 @@ func harnessWaitNode(st *harnessState, req harnessRequest) harnessResponse {
 
 // harnessDispatch builds and sends a single-Operation Task to node_id and
 // blocks (up to timeout_seconds, default 15s) for its Result, via
-// st.router.Dispatch directly — the #112 raw-dispatch contract (explicit
-// task_id, single Node, raw result), unchanged by #103's capability-layer
-// rewiring. It never evaluates Policy itself — the outcome (including
+// st.router.Dispatch directly — the raw-dispatch contract (explicit
+// task_id, single Node, raw result), bypassing the capability layer. It never evaluates Policy itself — the outcome (including
 // OUTCOME_DENIED_BY_POLICY) comes from the daemon's live engine over the real
 // wire (ADR-0011).
 func harnessDispatch(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
@@ -608,8 +606,7 @@ func harnessListInFlight(ctx context.Context, st *harnessState) harnessResponse 
 }
 
 // harnessQueryAudit returns every audit.Record for job_id, or every Record if
-// job_id is empty — used to assert every dispatch/refusal is queryable
-// (acceptance criterion for #102).
+// job_id is empty — used to assert every dispatch/refusal is queryable.
 func harnessQueryAudit(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
 	var records []audit.Record
 	var err error
@@ -636,7 +633,7 @@ func harnessQueryAudit(ctx context.Context, st *harnessState, req harnessRequest
 }
 
 // outcomeString renders a domain jobs.Outcome as the proto-style
-// "OUTCOME_..." string the harness client (and the #112 test) asserts on.
+// "OUTCOME_..." string the harness client (and the raw-dispatch test) asserts on.
 func outcomeString(o jobs.Outcome) string {
 	switch o {
 	case jobs.OutcomeSuccess:

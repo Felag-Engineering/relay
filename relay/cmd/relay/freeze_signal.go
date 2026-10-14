@@ -11,7 +11,7 @@ import (
 )
 
 // watchFreezeSignals is the local, host-side lever for the Relay-wide Freeze
-// this milestone (v0.0.5 [6/8]/#101): SIGUSR1 engages, SIGUSR2 releases. Both
+// (ADR-0013): SIGUSR1 engages, SIGUSR2 releases. Both
 // are otherwise-unused Unix signals (the Relay imports no os/signal
 // elsewhere) reserved for this purpose, chosen over a root-owned file so
 // engage/release require nothing more than an operator (or a monitoring

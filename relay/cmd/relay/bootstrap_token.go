@@ -13,8 +13,8 @@ package main
 // it only makes the intended path an obvious one-liner instead of a SQL edit.
 //
 // Minting writes one api_token_mint audit record, attributed to the principal
-// local-host rather than to any Account, in the SAME transaction as the token
-// (#782). If the record cannot be written no token is issued: a credential the
+// local-host rather than to any Account, in the SAME transaction as the token.
+// If the record cannot be written no token is issued: a credential the
 // trail cannot show is not issued. The record names the token's public ID and
 // never its value.
 //
