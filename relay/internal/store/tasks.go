@@ -71,8 +71,9 @@ func (t *sqliteTasks) MarkDispatched(ctx context.Context, taskID string, at time
 //
 // Stdout/Stderr are persisted exactly as delivered, size-capped upstream by
 // the daemon per /proto. This is where Task output lives for the Task store;
-// the audit trail ALSO retains full per-Task output (#122 full-output-always,
-// internal/audit, internal/store/audit.go) since v0.0.7 — a deliberate
+// the audit trail ALSO retains full per-Task output for a mutate-class Task
+// (full-output-always as ADR-0025 amends it, internal/audit,
+// internal/store/audit.go) — a deliberate
 // retention posture, not a desired-state spec, documented in
 // docs/operations/audit-output-retention.md.
 func (t *sqliteTasks) Resolve(ctx context.Context, taskID string, r jobs.Result) error {

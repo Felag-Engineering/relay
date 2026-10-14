@@ -18,7 +18,7 @@ import (
 // the read-only walk relay-audit-verify runs.
 
 // The two triggers migration 28 installs. They block UPDATE and DELETE only,
-// never INSERT: a Relay binary older than #896 keeps writing rows with no
+// never INSERT: a Relay binary older than the chain keeps writing rows with no
 // chain position, and blocking its INSERT would stop it dispatching — the
 // reasoning auditshape.go records for rejecting an aborting trigger. The
 // verifier reports such rows instead (exit 3).
@@ -31,7 +31,7 @@ const (
 )
 
 // auditTSCanonicaliseSQL is migration 0024's conversion UPDATE, verbatim. It
-// is no longer advice to an operator — audit refuses UPDATE since #896 — but
+// is not advice to an operator — audit refuses UPDATE — but
 // the first step of migration 28, the last moment the table can be rewritten.
 // TestAuditTSCanonicalise_MatchesMigration0024 pins it against the migration
 // so the two cannot drift.
@@ -309,7 +309,7 @@ func VerifyAuditChain(ctx context.Context, path string, anchors []audit.ChainAnc
 		brk = verifier.Finish()
 	}
 
-	// Rows with no chain position. A pre-#896 binary writes them with all
+	// Rows with no chain position. A binary older than the chain writes them with all
 	// three chain columns NULL; a row with NULL seq but a hash column set cannot
 	// come from any legitimate path, so it is a break, not a rollback artefact.
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit WHERE seq IS NULL`).Scan(&verdict.Unchained); err != nil {

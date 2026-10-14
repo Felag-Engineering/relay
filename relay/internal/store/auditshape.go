@@ -70,8 +70,8 @@ type auditShapeAlert struct {
 // schema_migrations and migrate selects by PRESENCE, so upgrading again
 // re-runs nothing. Without this the symptom is entirely silent: no error, no
 // failed query, just an audit trail that is quietly in two formats. This
-// function is what turns it into a log line. Since #896 the line carries no
-// repair statement: the table refuses UPDATE.
+// function is what turns it into a log line. The line carries no repair
+// statement: the table refuses UPDATE.
 //
 // THREE STEPS, AND THE MIDDLE ONE IS WHY THERE IS A TABLE FOR IT (0025):
 //
@@ -104,11 +104,11 @@ type auditShapeAlert struct {
 //
 // NEVER A STARTUP GATE. It returns nothing. Every failure — the read, the
 // scan, the alert write, the alert clear — is logged at Warn and Open carries
-// on. Refusing to start over a DIAGNOSTIC would invert #492's
+// on. Refusing to start over a DIAGNOSTIC would invert migrate's
 // tolerate-a-newer-database posture, and is the same reasoning that rejected
 // a CHECK constraint or an aborting trigger on INSERT here: a Relay that cannot
 // write an audit record cannot dispatch, so bricking the control plane on
-// rollback would be worse than the ordering defect. (The #896 triggers block
+// rollback would be worse than the ordering defect. (The append-only triggers block
 // only UPDATE and DELETE, never INSERT, for the same reason.) Unlike
 // backfillShapeKeys, this repairs no audit row and asserts nothing; the only
 // thing it writes is its own alert.
@@ -190,7 +190,7 @@ func windowHoldsLegacyTimestamps(ctx context.Context, db *sql.DB) (legacyTSObser
 	// each, never the retained output blobs.
 	//
 	// THE PREMISE, stated because it is not a property of rowid in general:
-	// this holds because `audit` is append-only, and since #896 that is
+	// this holds because `audit` is append-only, and that is
 	// enforced by trigger (UPDATE and DELETE are refused) rather than by
 	// convention. Nothing in this repo VACUUMs it or names a rowid on insert,
 	// so rowids are assigned in ascending order and never reused. SQLite reuses

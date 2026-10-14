@@ -18,8 +18,7 @@ const DefaultCheckpointInterval = 5 * time.Minute
 // a hash and nothing about any record's content. An operator who keeps these
 // lines in their log pipeline can later pass any of them to
 // relay-audit-verify -expect SEQ:HASH, which detects tail truncation and
-// re-chaining that the chain alone cannot. External anchoring is #284's
-// follow-up.
+// re-chaining that the chain alone cannot.
 //
 // It is a log line and not an audit row on purpose: a checkpoint inside the
 // chain it anchors cannot anchor that chain.

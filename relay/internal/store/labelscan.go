@@ -182,7 +182,7 @@ func (s *Store) ScanDeclinedLabels(ctx context.Context) (DeclinedLabelReport, er
 // read-back counters getNode's readers advance (Store.LabelsDeclined),
 // inflating that live, traffic-driven signal with a boot-time event it was
 // never meant to count and destroying the distinction between the two
-// signals #565 deliberately keeps separate.
+// signals (threat model R13).
 //
 // The query is ORDER BY node_id, key — the same fmt.Sprintf +
 // //nolint:gosec table-literal idiom fetchLabels uses, since table is always
@@ -237,7 +237,7 @@ func scanDeclinedNamespace(ctx context.Context, q queryer, ns labelNamespace) (D
 // refused, using the ONE existing predicate rather than a second copy of its
 // rule — label.go documents exactly five seams for this predicate, and a
 // second predicate written just to answer "which half" would be the drift
-// #488 exists to prevent.
+// that one predicate exists to prevent.
 //
 // WellFormedLabel(key, value) decomposes to
 // (key != "" && wellFormedLabelBytes(key)) && wellFormedLabelBytes(value).

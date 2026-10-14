@@ -8,8 +8,8 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 )
 
-// backfillShapeKeys fills approval_requests.shape_key for rows written before
-// #415, which migration 0022 leaves empty.
+// backfillShapeKeys fills approval_requests.shape_key for the rows migration
+// 0022 leaves empty.
 //
 // It is idempotent by construction — it only ever touches rows whose
 // shape_key is still empty — and

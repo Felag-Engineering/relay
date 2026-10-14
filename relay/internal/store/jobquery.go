@@ -93,10 +93,10 @@ func jobOrderBy(order jobs.JobOrder) (string, error) {
 // another page exists. It returns the arguments in text order, all bound
 // inside the page. A bad order or cursor is refused here, the order first.
 //
-// All three joins are LEFT, deliberately: a zero-Task Job (a historical row from
-// before #571, when a zero-match dispatch still created one) has no row in
-// the tasks aggregate, and an IN-FLIGHT Job has only its dispatch_intent row
-// (#887), which the dispatch-only aggregate `a` deliberately ignores; its
+// All three joins are LEFT, deliberately: a zero-Task Job (a historical row, from
+// when a zero-match dispatch still created one) has no row in
+// the tasks aggregate, and an IN-FLIGHT Job has only its dispatch_intent row,
+// which the dispatch-only aggregate `a` deliberately ignores; its
 // outcome rows are written after disp.run returns. An INNER JOIN would make either kind of Job disappear
 // from a query the instant it was created, which is exactly the race a Job
 // list must not have: Job state and risk class come from the tasks table,
@@ -240,8 +240,8 @@ func jobQueryCount(filter jobs.JobQuery) (stmt string, args []any) {
 
 // jobOutcomeColumnRefs renders "COALESCE(t.o0, 0), COALESCE(t.o1, 0), ..."
 // for the outer SELECT — the inner aggregate's SUM is NULL only when a Job
-// has no matching tasks row at all (the zero-Task case, a historical row
-// from before #571), which COALESCE turns into a truthful zero rather than a
+// has no matching tasks row at all (the zero-Task case, a historical row),
+// which COALESCE turns into a truthful zero rather than a
 // NULL Outcome count.
 func jobOutcomeColumnRefs() []string {
 	refs := make([]string, len(jobOutcomeOrder))
@@ -284,7 +284,7 @@ const jobCreatedAtFixedWidth = `(substr(j.created_at, 1, 19) || '.' || ` +
 //
 // With filter.CountMatching the page and the count of matching Jobs are read
 // in one transaction, so they describe one snapshot; otherwise no
-// transaction is opened and the path is the one every caller had before #795.
+// transaction is opened.
 func (q *sqliteJobQueries) QueryJobs(ctx context.Context, filter jobs.JobQuery, limit int, cursor string) (jobs.JobPage, error) {
 	limit = clampPageSize(limit)
 

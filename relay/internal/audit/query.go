@@ -38,8 +38,7 @@ type Query struct {
 	// Operations restricts to these operation_name values. Read-class
 	// dispatch selection (e.g. a screen's own catalog) is a caller-
 	// supplied list rather than a stored risk class — the audit table has no
-	// risk_class column (D5, issue #441 plan); adding one is a separate,
-	// worthwhile issue.
+	// risk_class column.
 	Operations []string
 
 	NodeID     string
@@ -73,7 +72,7 @@ type Query struct {
 // Row is the projection QueryRepository.Query returns: audit.Record,
 // field-for-field, MINUS Stdout, Stderr, and Truncated.
 //
-// That absence is the acceptance criterion for issue #441, not an oversight:
+// That absence is deliberate, not an oversight:
 // "a read-class query never returns read output — the seam has no field for
 // it." The SELECT in internal/store/auditquery.go does not name those columns
 // either, so the read lane never pulls a BLOB off disk — which is what makes
@@ -131,8 +130,7 @@ type Reach struct {
 
 // TargetArgKeys is the precedence order that names WHAT a read touched: the
 // first of these Args keys present on a Record is the read's target.
-// This is the one definition: issue #425 repointed the Console at it, so
-// console/vocab.go's readTargetName iterates this slice, and
+// This is the one definition: console/vocab.go's readTargetName iterates this slice, and
 // internal/store/auditquery.go's reachTargetExpr builds its COALESCE from
 // it. A divergence would make the Console name a read target differently
 // from how the reach aggregate counts it.
@@ -155,7 +153,7 @@ const MaxPageSize = 500
 
 // MaxCountBuckets bounds how many (account, bucket) groups
 // QueryRepository.CountsByPrincipal may materialise into Go structs in one
-// call (F1, #441 cycle-2 security review). Independent of any caller-side
+// call. Independent of any caller-side
 // window/bucket bound: this is the store's own defense-in-depth, the same
 // "trust no caller, including one inside the same binary" reasoning
 // internal/store/auditquery.go states for re-validating ArgKey. Exceeding it

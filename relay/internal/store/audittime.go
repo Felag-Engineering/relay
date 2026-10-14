@@ -5,7 +5,7 @@ import "time"
 // auditTimeLayout is the audit table's ts rendering: RFC3339 in UTC with
 // exactly nine fractional digits, always 30 characters.
 //
-// The property it buys is the whole point of #656: ts is a TEXT column, so
+// The property it buys: ts is a TEXT column, so
 // ORDER BY on it is a byte comparison, and a byte comparison over a
 // FIXED-WIDTH rendering is chronological order. time.RFC3339Nano trims
 // trailing zeros in the fraction, so under it "…:01Z" sorts AFTER "…:01.5Z"

@@ -311,7 +311,7 @@ type ChainVerdict struct {
 func (v ChainVerdict) Intact() bool { return v.Break == nil && v.Unchained == 0 }
 
 // Tampered: the walk found a break. Unchained rows alone are not tampering —
-// a pre-#896 binary writes them — and are reported separately.
+// an older Relay binary writes them — and are reported separately.
 func (v ChainVerdict) Tampered() bool { return v.Break != nil }
 
 // ChainHeadReader reads the chain's current head.

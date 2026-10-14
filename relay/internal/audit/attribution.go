@@ -8,8 +8,8 @@ import (
 
 // PrincipalLocalHost is the Principal (and Verified.AccountName, with an empty
 // AccountID) of an act performed by root on the Relay host itself: the freeze
-// signal (capability.localHostPrincipal) and the host credential levers
-// (#782). It is not an Account and holds no role.
+// signal (capability.localHostPrincipal) and the host credential levers.
+// It is not an Account and holds no role.
 const PrincipalLocalHost = "local-host"
 
 // Attribution is the identity carried on every audit record, in **two
@@ -79,7 +79,7 @@ type Verified struct {
 	Source string
 
 	// Method is HOW the identity was established: "api_token" or "oauth"
-	// (#299). Empty for a record written outside an authentication boundary.
+	// (ADR-0024). Empty for a record written outside an authentication boundary.
 	//
 	// Recorded because the two call for different incident responses: a
 	// compromised static credential is revoked here, while a compromised IdP
@@ -124,7 +124,7 @@ func (a Asserted) IsZero() bool {
 
 // MaxAssertedFieldBytes bounds every asserted field.
 //
-// Callers must not be able to size an audit record (the #255/#258
+// Callers must not be able to size an audit record (the
 // unbounded-deny-reason lesson): an unbounded field on a write-amplified,
 // append-only table is a storage-exhaustion primitive handed to the least
 // trusted input in the system. 256 bytes is far above any legitimate team

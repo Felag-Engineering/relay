@@ -11,8 +11,8 @@ import (
 
 // NewID mints a Record.ID: "audit-" followed by 16 lowercase hex digits of
 // the mint time in Unix nanoseconds and 16 lowercase hex digits of 8
-// crypto/rand bytes. 38 characters, the same shape as every id written
-// before #656.
+// crypto/rand bytes. 38 characters, the same shape as the older random
+// ids.
 //
 // Four properties, stated precisely because the trail's total order rests on
 // them:
@@ -35,7 +35,7 @@ import (
 //     here rather than a compromise.
 //
 //  4. SHAPED LIKE ITS PREDECESSORS: "audit-" plus exactly 32 lowercase hex
-//     digits, so every row ever written — before this change and after it —
+//     digits, so every row ever written, random id or monotonic,
 //     is one shape to a reader, a length assumption, or a query.
 //
 // The time component is the generator's own clock at MINT time, not the
@@ -44,7 +44,7 @@ import (
 // Timestamp onto every per-Node Record, so an id derived from the record's
 // own ts would give every row in the fan-out an identical time component and
 // hand the tie-break straight back to the random suffix — the exact defect
-// #656 is fixing.
+// a monotonic id exists to prevent.
 func NewID() (string, error) {
 	return defaultGen()
 }

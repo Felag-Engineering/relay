@@ -74,8 +74,8 @@ func WithMinDaemonVersion(v string) Option {
 
 // WithLogger overrides the Store's logger seam (production default:
 // slog.Default()), used to warn once per Open when schema_migrations holds
-// a version newer than this binary ships (#492's tolerate-don't-refuse
-// decision). A nil l falls back to slog.Default(), mirroring
+// a version newer than this binary ships (migrate's tolerate-don't-refuse
+// posture). A nil l falls back to slog.Default(), mirroring
 // auditsink.WithLogger. Exists so a test can assert the warning actually
 // fires, with its attributes, rather than only that Open/migrate returns
 // nil.
@@ -120,8 +120,8 @@ const busyTimeoutMillis = 5000
 // "BEGIN IMMEDIATE", taking the write lock at BEGIN. busy_timeout does not
 // cover a deferred transaction's read-to-write upgrade: SQLite returns
 // SQLITE_BUSY at once (SQLITE_BUSY_SNAPSHOT in WAL mode) instead of invoking
-// the busy handler, so a Hello upsert racing another process failed fast
-// (#833). A read-only transaction must opt out with sql.TxOptions{ReadOnly:
+// the busy handler, so a Hello upsert racing another process would fail
+// fast. A read-only transaction must opt out with sql.TxOptions{ReadOnly:
 // true}. SetMaxOpenConns(1) serialises only this process; "relay
 // bootstrap-token" and "relay console-password" open the same file from
 // another process, so cross-process safety is busy_timeout plus IMMEDIATE.
@@ -209,7 +209,7 @@ func Open(path string, opts ...Option) (*Store, error) {
 		db.Close() //nolint:errcheck
 		return nil, fmt.Errorf("migrate %q: %w", path, err)
 	}
-	// Migration 28 chained every pre-existing audit row, exactly once. There is
+	// Migration 28 chains every audit row present when it runs, exactly once. There is
 	// deliberately no re-chaining here on every Open: it would vouch for any row
 	// inserted outside the chain since the last boot.
 
@@ -225,7 +225,7 @@ func Open(path string, opts ...Option) (*Store, error) {
 	}
 
 	// Diagnostic only, and deliberately after everything that can fail: it
-	// returns nothing and never gates startup (#656, and #492's
+	// returns nothing and never gates startup (migrate's
 	// tolerate-don't-refuse posture). It shares s.logger, set above before
 	// migrate, so a caller's WithLogger sees it exactly as it sees the
 	// schema-newer-than-binary warning.
@@ -247,7 +247,7 @@ func (s *Store) Close() error {
 // Registry returns the SQLite-backed registry.Repository.
 //
 // MEMOISED, unlike the other repositories on this Store, and deliberately so:
-// since #440 the registry holds one piece of state that is not in SQLite — the
+// the registry holds one piece of state that is not in SQLite — the
 // live Tunnel set behind SetConnected/Node.Connected. Handing out a fresh
 // instance per call would give each caller its own empty connection set, so the
 // transport would mark a Node connected on one object while a screen read
@@ -353,8 +353,8 @@ func (s *Store) Grants() approval.GrantRepository {
 // MCPTasks returns the SQLite-backed mcptask.Repository — MCP task handles
 // (ADR-0028, SEP-2663).
 //
-// Durable rather than an in-process map because the MCP handler runs stateless
-// (#267): a handle minted by one Relay instance must be resolvable by whichever
+// Durable rather than an in-process map because the MCP handler runs stateless:
+// a handle minted by one Relay instance must be resolvable by whichever
 // instance the client's next poll happens to reach. An in-memory map would work
 // perfectly on one process and fail silently on two, which is the failure mode
 // HA would inherit.
@@ -399,8 +399,7 @@ func (s *Store) APITokens() accounts.TokenRepository {
 
 // Tokens returns the SQLite-backed enroll.Repository — the persisted
 // Enrollment Token store (ADR-0006), authoritative across a Relay restart so a
-// revoked token can never mint a new identity after the process restarts
-// (issue #133).
+// revoked token can never mint a new identity after the process restarts.
 func (s *Store) Tokens() enroll.Repository {
 	return &sqliteTokens{db: s.db}
 }

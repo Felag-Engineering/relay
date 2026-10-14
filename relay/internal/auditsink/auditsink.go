@@ -11,12 +11,13 @@
 //
 // Redaction: Record/RecordFreeze copy ONLY the domain fields named below —
 // Principal's attribution string, the Selector as written, the Action's
-// kind/name/args/argv, per-Node Outcome, and (since #122's full-output-always
-// posture) each NodeResult's captured Stdout/Stderr and the daemon-side
-// Truncated flag, copied verbatim — the sink never scrubs or redacts them
-// (Policy, ADR-0002, is where secret-emitting commands are prevented, not
-// here). Also copied verbatim (ADR-0027 decision 10): PlanHash (every
-// Kind that carries one) and, on AuditKindApprovalDecided only,
+// kind/name/args/argv, per-Node Outcome, and (for a mutate-class Task, under
+// the full-output-always posture ADR-0025 amends) each NodeResult's captured
+// Stdout/Stderr and the daemon-side Truncated flag, copied verbatim — the
+// sink never scrubs or redacts them (Policy, ADR-0002, is where
+// secret-emitting commands are prevented, not here). Also copied verbatim
+// (ADR-0027 decision 10): PlanHash (every Kind that carries one) and, on
+// AuditKindApprovalDecided only,
 // ApprovalAnswer and DecisionChannel — the structured answer a decision
 // carries alongside its prose Reason. Nothing else is added: no enrichment
 // from tokens, keys, or other in-memory secrets the sink never even sees.
@@ -106,7 +107,7 @@ func WithLogger(l *slog.Logger) Option {
 func New(repo audit.Repository, opts ...Option) *Sink {
 	// newID defaults to audit.NewID: "audit-" plus 16 hex digits of the mint
 	// time in Unix nanoseconds and 16 hex digits of crypto/rand — the same
-	// 38-character shape as the random ids written before #656, but MONOTONIC,
+	// 38-character shape as the older random ids, but MONOTONIC,
 	// so the trail's (ts, audit_id) tie-break orders rows by when they were
 	// appended. That matters most here: Record's dispatch fan-out copies one
 	// clock reading onto every per-Node Record, so a whole fan-out shares a ts
@@ -138,8 +139,8 @@ func New(repo audit.Repository, opts ...Option) *Sink {
 // precedes any existence check (refuseControl), and set only when
 // Execution.CancelJob's machine-Account scoping refused after
 // resolving jobID to a real Job (refuseCancel/authorizeMachineCancel); never
-// caller-supplied text the Relay never validated. A Plan entry (#119,
-// ADR-0011: a no-execution PolicyQuery probe)
+// caller-supplied text the Relay never validated. A Plan entry (ADR-0011:
+// a no-execution PolicyQuery probe)
 // gets exactly one Record, Principal+Selector+Action only — no JobID/NodeID/
 // Outcome, since a Plan never creates a Job or Task. Per-Record Append
 // failures are joined, not short-circuited, so one failing write does not
@@ -432,9 +433,8 @@ func (s *Sink) RecordProtocolViolation(ctx context.Context, ev jobs.ProtocolViol
 	})
 }
 
-// accountAdminReason renders e's Reason string, carrying the SAME field
-// names recordLifecycle wrote directly into api/accounts.go before #653
-// moved this surface into the capability layer, so existing trail queries
+// accountAdminReason renders e's Reason string, carrying the field names
+// the trail has always used for these actions, so existing trail queries
 // and dashboards built against those strings keep working:
 //
 //	account_create   account_id=… name=… kind=… role=…
@@ -538,7 +538,7 @@ func actionKindString(k jobs.ActionKind) string {
 // approvalAnswer renders a capability.ApprovalAnswer as the string
 // audit.Record stores. The empty capability.ApprovalAnswerUnrecorded maps
 // to audit's own empty — both mean the same third state, "no answer was
-// recorded" (#487: never collapsed into "denied").
+// recorded" (never collapsed into "denied").
 //
 // It WHITELISTS rather than casting, and the difference is not theoretical
 // even though no caller can trip it today. The column has no CHECK
@@ -546,9 +546,10 @@ func actionKindString(k jobs.ActionKind) string {
 // Console's approvalStateChip whitelists and renders no chip, while the
 // Activity CSV export writes the stored string verbatim. A cast would let a
 // future producer put a value on the evidence export that the screen denies
-// exists — one record named two ways, which is the family of bug #545 set out
-// to end. Whitelisting here fails closed onto the well-tested third state, so
-// the two surfaces agree by construction rather than by both remembering.
+// exists — one record named two ways, which is the family of bug the structured
+// answer exists to end. Whitelisting here fails closed onto the well-tested
+// third state, so the two surfaces agree by construction rather than by both
+// remembering.
 func approvalAnswer(a capability.ApprovalAnswer) string {
 	switch a {
 	case capability.ApprovalAnswerApproved:
@@ -682,7 +683,7 @@ func (s *Sink) append(ctx context.Context, rec audit.Record) error {
 }
 
 // RecordLogin implements consoleauth.Auditor: one audit.Record per
-// authentication event on the Console's human lane (#418, spec
+// authentication event on the Console's human lane (spec
 // docs/design/console/12-login.md).
 //
 // # Which lane each field lands in
@@ -714,7 +715,7 @@ func (s *Sink) RecordLogin(ctx context.Context, e consoleauth.LoginEvent) error 
 			Asserted: audit.Asserted{
 				// Bounded like every other asserted field: a successful
 				// sign-in still records exactly what was typed, and the sink
-				// must not trust its caller to have bounded it (the #255/#258
+				// must not trust its caller to have bounded it (the
 				// unbounded-field lesson).
 				OnBehalfOf: truncate(e.SubmittedName, audit.MaxAssertedFieldBytes),
 			},

@@ -31,10 +31,10 @@ const (
 // nLabelNamespaces is the number of labelNamespace values.
 const nLabelNamespaces = 2
 
-// table returns the SQLite table ns is stored in, so the two string literals
-// fetchLabels/replaceLabels used to take as bare arguments stop being
-// free-floating and a namespace/table mismatch becomes a compile error at
-// every new call site instead of a typo a reviewer has to catch by eye.
+// table returns the SQLite table ns is stored in, so fetchLabels and
+// replaceLabels take no free-floating table-name literals and a
+// namespace/table mismatch becomes a compile error at every new call site
+// instead of a typo a reviewer has to catch by eye.
 func (ns labelNamespace) table() string {
 	if ns == nsRelay {
 		return "relay_labels"
@@ -641,7 +641,7 @@ func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNam
 // (threat model R13), not a claim that nothing was lost, and it is why
 // docs/operations/enrollment.md tells operators to re-mint before upgrading.
 //
-// #565 adds a bounded signal at this seam, for BOTH namespaces, as two
+// A bounded signal sits at this seam, for BOTH namespaces, as two
 // separate things: declined below counts read-back EVENTS, not distinct
 // Labels — one increment per declined pair, per Get, per Node per List, per
 // Hello via Upsert's own read-back — so it is live but says nothing about
