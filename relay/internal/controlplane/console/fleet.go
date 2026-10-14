@@ -33,7 +33,6 @@ import (
 	"net/url"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -1151,30 +1150,6 @@ func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext)
 // and a reviewer who believed the report and nearly filed ~25 phantom bugs.
 // No code was ever wrong; only readers were. Hence a name that states the
 // contract instead of a comment asking people to remember it.
-func countOf(n int, one, many string) string {
-	if n == 1 {
-		return "1 " + one
-	}
-	return strconv.Itoa(n) + " " + many
-}
-
-func timeSince(t, now time.Time) string {
-	if t.IsZero() {
-		return "never"
-	}
-	d := now.Sub(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return strconv.Itoa(int(d.Minutes())) + "m ago"
-	case d < 24*time.Hour:
-		return strconv.Itoa(int(d.Hours())) + "h ago"
-	default:
-		return strconv.Itoa(int(d.Hours()/24)) + "d ago"
-	}
-}
-
 // modalValue returns the most common non-empty value of f across nodes, or ""
 // when nothing is reported.
 //
