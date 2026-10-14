@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 )
 
 // The audit vocabulary this package writes, named once so the Kind strings
@@ -164,6 +166,7 @@ type Service struct {
 
 	stepUpWindow time.Duration
 	sleep        func(ctx context.Context, d time.Duration) error
+	log          *slog.Logger
 }
 
 // ThrottledFloor is the least time a throttled sign-in refusal takes,
@@ -201,6 +204,14 @@ func WithThrottledSleep(sleep func(ctx context.Context, d time.Duration) error) 
 		}
 	}
 }
+
+// WithLogger sets the logger the Service reports advisory failures to.
+// Without it the Service logs through slog.Default().
+func WithLogger(l *slog.Logger) ServiceOption {
+	return func(s *Service) { s.log = l }
+}
+
+func (s *Service) logger() *slog.Logger { return logctx.Or(s.log) }
 
 // sleepFor waits d or until ctx is done, whichever is first.
 func sleepFor(ctx context.Context, d time.Duration) error {
@@ -354,10 +365,10 @@ func (s *Service) Login(ctx context.Context, a Attempt) (SessionID, Session, err
 
 	s.throttle.Succeed(a.Source, name)
 	if err := s.accounts.TouchLastSeen(ctx, acct.ID, s.now()); err != nil {
-		// Advisory bookkeeping ("is this Account still in use?"). It must not
-		// fail a sign-in, but it must not vanish either — the audit record
-		// below is the authoritative trail and it is still written.
-		_ = err
+		// Advisory bookkeeping ("is this Account still in use?"): it must not
+		// fail a sign-in. The audit record below is the authoritative trail.
+		s.logger().WarnContext(ctx, "console sign-in: last-seen update failed",
+			"account_id", acct.ID, "err", err)
 	}
 	if err := s.recordLogin(ctx, LoginEvent{
 		Kind:          auditKindLoginSucceeded,

@@ -180,14 +180,7 @@ func renderGrant(g approval.Grant, now time.Time) grantResponse {
 // and a grant written for a read sweep must never silently cover a mutate. An
 // absent or unknown value is an error, not a fallback.
 func parseRiskClass(s string) (jobs.RiskClass, bool) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "read":
-		return jobs.RiskClassRead, true
-	case "mutate":
-		return jobs.RiskClassMutate, true
-	default:
-		return jobs.RiskClassUnspecified, false
-	}
+	return jobs.ParseRiskClass(strings.ToLower(strings.TrimSpace(s)))
 }
 
 // -----------------------------------------------------------------------

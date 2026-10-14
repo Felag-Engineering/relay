@@ -7,6 +7,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 )
@@ -98,12 +99,7 @@ func newDispatchStack(tasks jobs.TaskRepository, violations dispatch.ViolationRe
 	var reconciler *dispatch.Reconciler
 	router := dispatch.NewRouter(func(nodeID string) {
 		if err := reconciler.ReconcileNode(context.Background(), nodeID); err != nil {
-			// Reconciliation errors are per-Task-joined and already surfaced
-			// to the caller of ReconcileNode in tests; a bare drop here
-			// matches the existing "best-effort background hook" idiom
-			// (freeze_signal.go) rather than introducing a new logging
-			// dependency to this file.
-			_ = err
+			logctx.Or(logger).Error("reconcile on connect failed", "node_id", nodeID, "err", err)
 		}
 	}, violations, dispatch.WithLogger(logger))
 	reconciler = dispatch.NewReconciler(tasks, router)

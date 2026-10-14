@@ -216,17 +216,17 @@ func (fr fileRule) toRule(index int) (Rule, error) {
 	}, nil
 }
 
+// parseRiskClass reads a rule's match criterion. An empty value means the rule
+// matches either class.
 func parseRiskClass(s string) (jobs.RiskClass, error) {
-	switch s {
-	case "":
+	if s == "" {
 		return jobs.RiskClassUnspecified, nil
-	case "read":
-		return jobs.RiskClassRead, nil
-	case "mutate":
-		return jobs.RiskClassMutate, nil
-	default:
+	}
+	risk, ok := jobs.ParseRiskClass(s)
+	if !ok {
 		return jobs.RiskClassUnspecified, fmt.Errorf("unknown risk_class %q (want read or mutate)", s)
 	}
+	return risk, nil
 }
 
 func parseChannel(s string) (Channel, error) {

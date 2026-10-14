@@ -590,11 +590,7 @@ import . ` + capImport + `
 // file and function, each with its reason; an entry that no longer names a
 // class constant fails the test so the list cannot quietly widen.
 func TestNoAdapterSetsARiskClass(t *testing.T) {
-	allowed := map[string]map[string]string{
-		"approval_grants.go": {
-			"parseRiskClass": "maps an operator's grant-scope risk_class wire name onto approval.GrantScope's match criterion (ADR-0027); it builds no Action, and the capability layer validates the scope",
-		},
-	}
+	allowed := map[string]map[string]string{}
 
 	entries, err := os.ReadDir(".")
 	if err != nil {

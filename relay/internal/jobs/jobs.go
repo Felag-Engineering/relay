@@ -243,6 +243,20 @@ func RiskClassName(r RiskClass) string {
 	}
 }
 
+// ParseRiskClass is RiskClassName's inverse: it accepts exactly "read" or
+// "mutate". Anything else, the empty string included, returns false, so a
+// caller decides for itself what an absent class means.
+func ParseRiskClass(s string) (RiskClass, bool) {
+	switch s {
+	case "read":
+		return RiskClassRead, true
+	case "mutate":
+		return RiskClassMutate, true
+	default:
+		return RiskClassUnspecified, false
+	}
+}
+
 // DispatchState is a Task's position in the at-most-once execution lifecycle:
 // Pending (created, not yet sent) -> Dispatched (sent to the daemon, no
 // result yet) -> Resolved (result recorded). In-flight dispatch state —

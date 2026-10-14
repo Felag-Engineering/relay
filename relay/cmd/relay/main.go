@@ -878,6 +878,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 				st.Accounts(), st.Passwords(), consoleSessions,
 				consoleauth.NewThrottle(), auditSink,
 				consoleauth.WithStepUpWindow(cfg.ConsoleStepUpWindow),
+				consoleauth.WithLogger(logger),
 			)
 			authOpts = append(authOpts, controlplane.WithConsoleSessions(
 				consoleAuthSvc,

@@ -142,21 +142,6 @@ func ParseActionKind(s string) jobs.ActionKind {
 	}
 }
 
-// ParseRiskClassName is RiskClassName's inverse. Unlike ParseActionKind it is
-// not a security boundary — risk class picks the blast cap at dispatch, and
-// that decision is made from the live Action, never from this stored copy,
-// which exists for rendering and filtering the queue.
-func ParseRiskClassName(s string) jobs.RiskClass {
-	switch s {
-	case "read":
-		return jobs.RiskClassRead
-	case "mutate":
-		return jobs.RiskClassMutate
-	default:
-		return jobs.RiskClassUnspecified
-	}
-}
-
 // PlanSummary is the Relay-authored description of a parked dispatch — the text
 // a human actually reads before deciding.
 //

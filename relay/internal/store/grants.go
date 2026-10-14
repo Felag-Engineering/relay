@@ -308,7 +308,7 @@ func scanGrant(scan func(dest ...any) error) (approval.Grant, error) {
 		return approval.Grant{}, err
 	}
 
-	gr.Scope.RiskClass = approval.ParseRiskClassName(riskClass)
+	gr.Scope.RiskClass = parseStoredRiskClass(riskClass)
 	gr.Scope.Operations = splitList(ops)
 	gr.Scope.RawExec = rawExec != 0
 
