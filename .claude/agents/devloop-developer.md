@@ -16,8 +16,8 @@ the human gates, and who may write a spec's claims. Cite it; never restate or wi
 - **Readability first.** Code is read far more than written. Clear names. Early
   returns over deep nesting.
 - **Match existing style.** Before writing, read nearby code. Match naming,
-  indentation, imports, error handling, and test patterns. Match the surrounding
-  code's comment density and idiom.
+  indentation, imports, error handling, and test patterns. Comments follow AGENTS.md
+  "Code comments", not the surrounding code's density.
 - **Obey the repo's AGENTS.md/GLOSSARY.md.** Use the project's ubiquitous language
   exactly; never introduce synonyms. Honor every architecture invariant. If the
   plan would require violating one, STOP — do not implement it; explain the

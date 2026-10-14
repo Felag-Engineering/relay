@@ -50,7 +50,7 @@ tool_bin = GOWORK=off go -C "$(CURDIR)/tools/$(1)" tool -n $(1)
 .PHONY: build test lint proto proto-tools proto-check proto-breaking \
         build-relay build-daemon \
         test-relay test-relay-race test-daemon test-strict-umask test-strict-umask-relay \
-        test-strict-umask-daemon lint-relay lint-daemon check-daemon-bans tools \
+        test-strict-umask-daemon lint-relay lint-daemon lint-comments check-daemon-bans tools \
         clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release print-release-daemon-bin \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
@@ -91,7 +91,7 @@ tool_bin = GOWORK=off go -C "$(CURDIR)/tools/$(1)" tool -n $(1)
 # look like a check that passed. Every such skip is collected, and verify's last line
 # says how many there were rather than claiming a full pass (the skip ledger, below).
 # Under verify a missing one is a recorded skip; run on its own, it is a failure.
-verify: fmt lint-relay lint-daemon check-daemon-bans lint-devharness devharness-absent-check \
+verify: fmt lint-relay lint-daemon lint-comments check-daemon-bans lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
         apiclient-check verify-proto docs-check test-security-surface \
         test-codex-review test-ci-changed-paths \
@@ -218,7 +218,11 @@ build: build-relay build-daemon
 
 test: test-relay test-daemon
 
-lint: fmt-relay lint-relay lint-daemon
+lint: fmt-relay lint-relay lint-daemon lint-comments
+
+# No issue or PR numbers in shipped Go and Rust comments (AGENTS.md "Code comments").
+lint-comments:
+	@./scripts/comment-hygiene.sh
 
 ## --- proto codegen ---
 # Go types are generated (via buf) into relay/internal/relay/v1/ and committed. CI runs
