@@ -93,9 +93,15 @@ Two authoring rules the loader enforces, both refusals at load time:
   the value, as it printed literal `'` quotes before; the value itself is never
   expanded.
 - **"One slot, one word" holds at the slot's own level.** A slot inside an
-  unquoted `$( )` or backquote is one word there, but the outer substitution's
-  result is split and globbed again by the shell; quote the substitution
-  (`"$( … )"`) when its output must stay one word.
+  unquoted `$( )` is one word there, but the outer substitution's result is
+  split and globbed again by the shell; quote the substitution (`"$( … )"`)
+  when its output must stay one word.
+- **Some constructs are refused when the body holds a slot**, because the
+  daemon cannot read them the way every shell does: backquote substitutions
+  (write `$( )`), a slot inside `$(( ))`, `(( ))` or `$[ ]`, a `case` inside a
+  `$( )` or `( )`, an unterminated construct, and a backslash-newline inside a
+  nested construct or in the middle of a word. A backslash-newline between
+  words, after a blank, stays allowed. Bodies without a slot are not affected.
 - **`risk_class` is mandatory**, and a template may not shadow a Native
   Operation (`system.facts`, `file.read`, `service.restart`, `pkg.install`) or
   `raw_exec`. The native vocabulary is frozen (ADR-0021) and always wins.

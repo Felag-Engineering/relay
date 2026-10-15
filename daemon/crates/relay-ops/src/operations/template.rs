@@ -1459,9 +1459,9 @@ mod proptests {
                 golden: "cat <<EOF\n\"$1\"\nEOF".into(),
             },
             Fixture {
-                body: "echo `echo {{p}}`".into(),
+                body: "echo $(echo {{p}})".into(),
                 slots: names(&["p"]),
-                golden: "echo `echo \"$1\"`".into(),
+                golden: "echo $(echo \"$1\")".into(),
             },
             Fixture {
                 body: format!("f {many_body}"),

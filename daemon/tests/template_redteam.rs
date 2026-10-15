@@ -36,6 +36,13 @@ fn refusal(body: &str) -> TemplateError {
     }
 }
 
+fn assert_not_analysable(body: &str) {
+    assert!(
+        matches!(refusal(body), TemplateError::BodyNotAnalysable { .. }),
+        "{body:?}"
+    );
+}
+
 fn assert_clean(label: &str, value: &str, r: &relay_proto::TaskResult) {
     let (out, err) = (stdout(r), stderr(r));
     assert!(
@@ -53,11 +60,6 @@ async fn every_canary_is_inert(body: &str, expect: Option<fn(&str) -> String>) {
             let r = invoke(&path_template(body), &[("p", value)], &runner).await;
             assert_clean(shell.label, value, &r);
             if let Some(expected) = expect {
-                // An unquoted outer substitution globs `/tmp/*`; skip the
-                // exact comparison for it only.
-                if value == "/tmp/*" && body.contains('`') {
-                    continue;
-                }
                 assert_eq!(stdout(&r), expected(value), "[{}] {value:?}", shell.label);
             }
         }
@@ -72,8 +74,45 @@ async fn here_document() {
 }
 
 #[tokio::test]
-async fn backquote() {
-    every_canary_is_inert("echo `echo {{p}}`", Some(|v| format!("{v}\n"))).await;
+async fn backquotes_are_refused_at_load() {
+    // Backquote substitutions strip backslashes before `$`, `` ` ``, `\` (and
+    // `"` inside double quotes or here-documents) before the text is re-read,
+    // so the lexer cannot tell where a placeholder ends up. Authors use `$( )`.
+    for body in [
+        "echo `echo {{p}}`",
+        "printf '<%s>' \"`printf '[%s]' \\\" {{p}} \\\"`\"",
+        "printf '<%s>' `printf '[%s]' \\\\\\\" {{p}} \\\\\\\"`",
+        "cat <<EOF\n`printf '[%s]' \\\" {{p}} \\\"`\nEOF",
+        "printf '<%s>' \"${x:-`printf '[%s]' \\\" {{p}} \\\"`}\"",
+    ] {
+        assert_not_analysable(body);
+    }
+}
+
+#[tokio::test]
+async fn legacy_arithmetic_brackets_are_refused_at_load() {
+    // Bash evaluates `$[ … ]` as arithmetic, so a value such as `/x[$(id)]`
+    // would run a command.
+    for body in ["echo $[ 1 {{p}} ]", "echo \"$[ 1 + {{p}} ]\""] {
+        assert!(
+            matches!(refusal(body), TemplateError::PlaceholderInArithmetic { .. }),
+            "{body:?}"
+        );
+    }
+    assert_not_analysable("echo {{p}} $[ 1 + 2");
+}
+
+#[tokio::test]
+async fn continuations_that_split_keywords_are_refused_at_load() {
+    // The shell joins `\`+newline before it reads `case`, so the lexer would
+    // miss the keyword and the pattern `)` that ends the `$(` early.
+    for body in [
+        "printf '<%s>' \"$(ca\\\nse x in x) printf '[%s]' \" {{p}} \" ;; esac)\"",
+        "printf '<%s>' \"$(case\\\n x in x) printf '[%s]' \" {{p}} \" ;; esac)\"",
+        "echo $\\\n(echo) {{p}}",
+    ] {
+        assert_not_analysable(body);
+    }
 }
 
 #[tokio::test]
@@ -134,11 +173,9 @@ async fn line_continuation_joins_lines_without_a_boundary() {
             assert_eq!(stdout(&r), format!("a {value}\n"), "[{}]", shell.label);
         }
     }
-    // Glued to a word, the continuation removes the line break and the blank.
-    assert!(matches!(
-        refusal("echo a\\\n{{p}}"),
-        TemplateError::PlaceholderNotStandalone { .. }
-    ));
+    // Glued to a word, the continuation removes the line break and the blank;
+    // a join in the middle of a word is refused.
+    assert_not_analysable("echo a\\\n{{p}}");
 }
 
 #[tokio::test]
@@ -271,25 +308,13 @@ async fn retired_splicing_reproduces_each_row_that_was_real() {
     }
 
     // Backquote: the value's backquote ended the outer substitution, so the
-    // output is not the value (a syntax error under dash).
+    // output is not the value (a syntax error under dash). The new path refuses
+    // the body at load.
     let body = "echo `echo {{p}}`";
     let value = CANARIES[1];
     let expected = format!("{value}\n");
     assert!(reproduces(body, value, |r| stdout(r) != expected || r.exit_code != 0).await);
-    for shell in shells() {
-        let r = invoke(
-            &path_template(body),
-            &[("p", value)],
-            &ShellRunner::new(&shell),
-        )
-        .await;
-        assert_eq!(
-            (stdout(&r), r.exit_code),
-            (expected.clone(), 0),
-            "{}",
-            shell.label
-        );
-    }
+    assert_not_analysable(body);
 
     // Escaped space and form feed: the author's word and the value fused into
     // one argument. The new compile refuses both bodies.

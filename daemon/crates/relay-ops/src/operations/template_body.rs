@@ -15,15 +15,17 @@
 //! blank before or after a placeholder.
 //!
 //! Known limits: the lexer models POSIX `sh` plus the bash forms that change
-//! where quotes end (`$'…'`, `$(( ))`, `${ }`). It does not model `case`
-//! patterns, `[[ ]]`, `$[ ]`, `&>`, aliases or functions. Where it cannot tell
-//! how a shell would read a body that holds a placeholder, it refuses the body
-//! rather than guess: an unterminated construct, a `case` inside a `$( )`, `( )`
-//! or backquote (its pattern `)` would end the frame early), and a `$((` that is
-//! not arithmetic. A placeholder inside arithmetic is refused outright. A
-//! comment inside backquotes ends at the closing backquote, as in the shell.
-//! A slot inside an unquoted `$( )` or backquote is one word at its own level;
-//! the outer substitution's result is split again by the shell.
+//! where quotes end (`$'…'`, `$(( ))`, `$[ ]`, `${ }`). It does not model `case`
+//! patterns, `[[ ]]`, `&>`, aliases or functions. Where it cannot tell how a
+//! shell would read a body that holds a placeholder, it refuses the body rather
+//! than guess: an unterminated construct, a backquote substitution (its own
+//! backslash removal is not modelled; use `$( )`), a `case` inside a `$( )` or
+//! `( )` (its pattern `)` would end the frame early), a `$((` that is not
+//! arithmetic, and a backslash-newline inside a nested construct or a word
+//! (the shell joins it before reading keywords and operators). A placeholder
+//! inside arithmetic is refused outright. A slot inside an unquoted `$( )` is
+//! one word at its own level; the outer substitution's result is split again by
+//! the shell.
 
 use std::collections::HashSet;
 
@@ -76,8 +78,14 @@ enum Frame {
     DoubleQuote,
     SingleQuote,
     AnsiC,
-    ParamExp { in_double: bool },
-    Arith { depth: u32 },
+    ParamExp {
+        in_double: bool,
+    },
+    /// `$((`, `((` (closed by `))`) or the legacy `$[` (closed by `]`).
+    Arith {
+        depth: u32,
+        bracket: bool,
+    },
     Heredoc(Heredoc),
 }
 
@@ -181,9 +189,44 @@ impl<'a> Lexer<'a> {
         self.prev = Prev::Other;
     }
 
+    // -- fail-closed refusals -------------------------------------------------
+
+    /// The shell joins `\`+newline before it reads keywords and operators, so
+    /// inside any nested frame a continuation can split `case`, `$(` or `<<`
+    /// where this lexer sees two tokens. A body with a placeholder may not hold
+    /// one there. Single quotes, ANSI-C strings and quoted here-documents take
+    /// the backslash literally and are exempt.
+    fn refuse_nested_continuation(&self) -> Result<(), TemplateError> {
+        if !self.has_placeholder
+            || self.stack.len() == 1
+            || self.at(0) != Some('\\')
+            || self.at(1) != Some('\n')
+        {
+            return Ok(());
+        }
+        match self.stack.last() {
+            Some(Frame::SingleQuote | Frame::AnsiC) => Ok(()),
+            Some(Frame::Heredoc(h)) if h.quoted => Ok(()),
+            _ => Err(self.not_analysable("a line continuation inside a nested construct")),
+        }
+    }
+
+    /// Backquote substitutions apply their own backslash removal before the
+    /// shell re-reads the text, which this lexer does not model: authors use
+    /// `$( )` in a body that holds a placeholder.
+    fn open_backquote(&mut self) -> Result<(), TemplateError> {
+        if self.has_placeholder {
+            return Err(self.not_analysable("a backquote command substitution; use $( )"));
+        }
+        self.copy(1);
+        self.push(Frame::Backquote, Prev::Open);
+        Ok(())
+    }
+
     // -- dispatch -------------------------------------------------------------
 
     fn step(&mut self) -> Result<(), TemplateError> {
+        self.refuse_nested_continuation()?;
         match self.stack.last() {
             Some(Frame::SingleQuote) => self.single_quote(),
             Some(Frame::DoubleQuote) => self.double_quote(),
@@ -223,8 +266,7 @@ impl<'a> Lexer<'a> {
                 self.pop();
             }
             Some('`') => {
-                self.copy(1);
-                self.push(Frame::Backquote, Prev::Open);
+                self.open_backquote()?;
             }
             Some('$') => self.dollar(true)?,
             _ => self.copy(1),
@@ -267,8 +309,7 @@ impl<'a> Lexer<'a> {
                 self.push(Frame::DoubleQuote, Prev::Other);
             }
             Some('`') => {
-                self.copy(1);
-                self.push(Frame::Backquote, Prev::Open);
+                self.open_backquote()?;
             }
             Some('$') => self.dollar(in_double)?,
             _ => self.copy(1),
@@ -289,11 +330,27 @@ impl<'a> Lexer<'a> {
         match (self.at(1), self.at(2)) {
             (Some('('), Some('(')) => {
                 self.copy(3);
-                self.push(Frame::Arith { depth: 0 }, Prev::Operator);
+                self.push(
+                    Frame::Arith {
+                        depth: 0,
+                        bracket: false,
+                    },
+                    Prev::Operator,
+                );
             }
             (Some('('), _) => {
                 self.copy(2);
                 self.push(Frame::CmdSubst, Prev::Open);
+            }
+            (Some('['), _) => {
+                self.copy(2);
+                self.push(
+                    Frame::Arith {
+                        depth: 0,
+                        bracket: true,
+                    },
+                    Prev::Operator,
+                );
             }
             (Some('{'), Some('{')) => return Err(self.not_expanded("a parameter expansion")),
             (Some('{'), _) => {
@@ -309,25 +366,33 @@ impl<'a> Lexer<'a> {
         Ok(())
     }
 
+    fn set_arith_depth(&mut self, new: u32) {
+        if let Some(Frame::Arith { depth, .. }) = self.stack.last_mut() {
+            *depth = new;
+        }
+    }
+
     fn arith(&mut self) -> Result<(), TemplateError> {
         if self.at_placeholder() {
             return Err(TemplateError::PlaceholderInArithmetic { at: self.here() });
         }
+        let Some(&Frame::Arith { depth, bracket }) = self.stack.last() else {
+            unreachable!("arith() runs only with an Arith frame on top");
+        };
+        let open = if bracket { '[' } else { '(' };
+        let close = if bracket { ']' } else { ')' };
         match self.at(0) {
-            Some('(') => {
-                if let Some(Frame::Arith { depth }) = self.stack.last_mut() {
-                    *depth += 1;
-                }
+            Some(c) if c == open => {
+                self.set_arith_depth(depth + 1);
                 self.copy_as(Prev::Operator);
             }
-            Some(')') => {
-                let nested =
-                    matches!(self.stack.last(), Some(Frame::Arith { depth }) if *depth > 0);
-                if nested {
-                    if let Some(Frame::Arith { depth }) = self.stack.last_mut() {
-                        *depth -= 1;
-                    }
+            Some(c) if c == close => {
+                if depth > 0 {
+                    self.set_arith_depth(depth - 1);
                     self.copy_as(Prev::Operator);
+                } else if bracket {
+                    self.copy(1);
+                    self.pop();
                 } else {
                     // A lone `)` means bash read `$((` as a command substitution
                     // wrapping a subshell, not as arithmetic.
@@ -351,8 +416,7 @@ impl<'a> Lexer<'a> {
                 self.push(Frame::DoubleQuote, Prev::Other);
             }
             Some('`') => {
-                self.copy(1);
-                self.push(Frame::Backquote, Prev::Open);
+                self.open_backquote()?;
             }
             Some('$') => self.dollar(false)?,
             Some(' ' | '\t' | '\n') => self.copy_as(Prev::Blank),
@@ -372,7 +436,14 @@ impl<'a> Lexer<'a> {
             '\\' => match self.at(1) {
                 None => return Err(TemplateError::UnbalancedQuotes),
                 // A line continuation joins the lines without creating a boundary.
-                Some('\n') => self.copy(2),
+                Some('\n') => {
+                    // Mid-word or after an operator the join can fuse tokens
+                    // (`$\⏎(`, `<\⏎<`); only a join after a blank is inert.
+                    if self.has_placeholder && self.prev != Prev::Blank {
+                        return Err(self.not_analysable("a line continuation inside a word"));
+                    }
+                    self.copy(2);
+                }
                 Some(_) => {
                     self.copy(2);
                     self.prev = Prev::Other;
@@ -387,18 +458,24 @@ impl<'a> Lexer<'a> {
                 self.push(Frame::DoubleQuote, Prev::Other);
             }
             '`' => {
-                self.copy(1);
                 if matches!(self.stack.last(), Some(Frame::Backquote)) {
+                    self.copy(1);
                     self.pop();
                 } else {
-                    self.push(Frame::Backquote, Prev::Open);
+                    self.open_backquote()?;
                 }
             }
             '$' => self.dollar(false)?,
             '(' => {
                 if self.at(1) == Some('(') {
                     self.copy(2);
-                    self.push(Frame::Arith { depth: 0 }, Prev::Operator);
+                    self.push(
+                        Frame::Arith {
+                            depth: 0,
+                            bracket: false,
+                        },
+                        Prev::Operator,
+                    );
                 } else {
                     self.copy(1);
                     self.push(Frame::Subshell, Prev::Open);
@@ -583,8 +660,7 @@ impl<'a> Lexer<'a> {
                 }
             }
             Some('`') => {
-                self.copy(1);
-                self.push(Frame::Backquote, Prev::Open);
+                self.open_backquote()?;
             }
             Some('$') => self.dollar(true)?,
             Some('\n') => {
@@ -682,7 +758,6 @@ impl<'a> Lexer<'a> {
         let right_ok = match self.chars.get(j + 2) {
             None | Some(' ' | '\t' | '\n') => true,
             Some(')') => matches!(self.stack.last(), Some(Frame::CmdSubst | Frame::Subshell)),
-            Some('`') => matches!(self.stack.last(), Some(Frame::Backquote)),
             Some(_) => false,
         };
         if !right_ok {
@@ -756,7 +831,6 @@ mod tests {
             ("a\n{{p}}\nb", "a\n\"$1\"\nb"),
             ("echo $(echo {{p}})", "echo $(echo \"$1\")"),
             ("echo $({{p}} x)", "echo $(\"$1\" x)"),
-            ("echo `echo {{p}}`", "echo `echo \"$1\"`"),
             ("(echo {{p}})", "(echo \"$1\")"),
             ("echo \"a $(echo {{p}}) b\"", "echo \"a $(echo \"$1\") b\""),
             ("echo a \\\n{{p}}", "echo a \\\n\"$1\""),
@@ -785,7 +859,6 @@ mod tests {
             "echo -n={{p}}",
             "echo a\\ {{p}}",
             "echo {{p}}\\ x",
-            "echo a\\\n{{p}}",
             // Form feed, carriage return and vertical tab are word characters.
             "echo a\u{c}{{p}}",
             "echo {{p}}\u{c}",
@@ -1002,10 +1075,79 @@ mod tests {
 
     #[test]
     fn a_comment_inside_backquotes_ends_at_the_closing_backquote() {
+        // Backquotes are only lexed in a body without a placeholder.
+        assert!(analyse("echo `true # note` x", &slots(&[])).is_ok());
+    }
+
+    #[test]
+    fn a_legacy_arithmetic_bracket_is_arithmetic() {
+        for body in [
+            "echo $[ 1 {{p}} ]",
+            "echo \"$[ 1 + {{p}} ]\"",
+            "echo $[ a[1] + {{p}} ]",
+        ] {
+            assert!(
+                matches!(error(body), TemplateError::PlaceholderInArithmetic { .. }),
+                "{body:?}"
+            );
+        }
+        // Unterminated, with a placeholder elsewhere.
+        not_analysable("echo {{p}} $[ 1 + 2");
+        // A closed one elsewhere in the body is fine.
         assert_eq!(
-            script("echo `true # note` {{p}}"),
-            "echo `true # note` \"$1\""
+            script("echo $[ a[1] + 2 ] {{p}}"),
+            "echo $[ a[1] + 2 ] \"$1\""
         );
+        assert!(analyse("echo $[ 1", &slots(&[])).is_ok());
+    }
+
+    #[test]
+    fn backquotes_are_refused_when_the_body_has_a_placeholder() {
+        for body in [
+            "printf '<%s>' \"`printf '[%s]' \\\" {{p}} \\\"`\"",
+            "printf '<%s>' `printf '[%s]' \\\\\\\" {{p}} \\\\\\\"`",
+            "printf '<%s>' \"${x:-`printf '[%s]' \\\" {{p}} \\\"`}\"",
+            "cat <<EOF\n`printf '[%s]' \\\" {{p}} \\\"`\nEOF",
+            "echo `echo {{p}}`",
+            "echo {{p}} `true`",
+        ] {
+            not_analysable(body);
+        }
+        // Escaped, single-quoted or commented backquotes are not substitutions.
+        assert_eq!(script("echo \\` '`' {{p}}"), "echo \\` '`' \"$1\"");
+        assert_eq!(script("true # `x`\necho {{p}}"), "true # `x`\necho \"$1\"");
+        assert!(analyse("echo `true` x", &slots(&[])).is_ok());
+    }
+
+    #[test]
+    fn a_line_continuation_that_can_split_a_keyword_is_refused() {
+        for body in [
+            "printf '<%s>' \"$(ca\\\nse x in x) printf '[%s]' \" {{p}} \" ;; esac)\"",
+            "printf '<%s>' \"$(case\\\n x in x) printf '[%s]' \" {{p}} \" ;; esac)\"",
+            "echo $(echo \\\n) {{p}}",
+            "echo (echo \\\n) {{p}}",
+            "echo \"a\\\nb\" {{p}}",
+            "echo ${x:-a\\\nb} {{p}}",
+            "echo $(( 1 +\\\n 2 )) {{p}}",
+            "cat <<EOF\na\\\nb\nEOF\necho {{p}}",
+            // Mid-word or after an operator at the top level: the join can fuse
+            // `$` + `(` or `<` + `<` that the lexer reads as separate tokens.
+            "echo $\\\n(echo) {{p}}",
+            "cat <\\\n<EOF\nx\nEOF\necho {{p}}",
+            "echo a\\\n{{p}}",
+            "echo x;\\\n{{p}}",
+        ] {
+            not_analysable(body);
+        }
+        // Between words, after a blank, a continuation is inert; single quotes
+        // and quoted here-documents take the backslash literally.
+        assert_eq!(script("echo a \\\n{{p}}"), "echo a \\\n\"$1\"");
+        assert_eq!(script("echo 'a\\\nb' {{p}}"), "echo 'a\\\nb' \"$1\"");
+        assert_eq!(
+            script("cat <<'E'\na\\\nb\nE\necho {{p}}"),
+            "cat <<'E'\na\\\nb\nE\necho \"$1\""
+        );
+        assert!(analyse("echo $(echo \\\n) x", &slots(&[])).is_ok());
     }
 
     #[test]
@@ -1022,9 +1164,9 @@ mod tests {
 
         fn token() -> impl Strategy<Value = &'static str> {
             proptest::sample::select(vec![
-                "{{p}}", "{{", "}}", "$(", ")", "`", "'", "\"", "\\", "<<EOF\n", "<<-X\n", "EOF\n",
-                "X\n", "#", "$((", "))", "((", "${", "}", " ", "\t", "\n", "\r", "x", ";", "|",
-                "&", "<", "<<<", ">", "case ", "(", "$'", "$", "\u{c}", "é",
+                "{{p}}", "{{", "}}", "$(", ")", "`", "$[", "]", "\\\n", "'", "\"", "\\", "<<EOF\n",
+                "<<-X\n", "EOF\n", "X\n", "#", "$((", "))", "((", "${", "}", " ", "\t", "\n", "\r",
+                "x", ";", "|", "&", "<", "<<<", ">", "case ", "(", "$'", "$", "\u{c}", "é",
             ])
         }
 
