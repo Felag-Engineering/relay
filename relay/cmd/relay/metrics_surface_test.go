@@ -16,7 +16,7 @@ import (
 // through the same bearer auth as every other control-plane route (invariant
 // 10, DoD: "unauthenticated /metrics request is refused (401)").
 func TestMetricsSurface_RequiresCredential(t *testing.T) {
-	const token = accounts.TokenPrefix + "0f1e2d3c4b5a6978.metrics-test" //nolint:gosec // test fixture, not a real credential
+	const token = accounts.TokenPrefix + "0f1e2d3c4b5a6978.metrics-test" // test fixture, not a real credential
 	authn := controlplane.NewAuthenticator(staticVerifier{credential: token})
 
 	mux := http.NewServeMux()
@@ -29,11 +29,11 @@ func TestMetricsSurface_RequiresCredential(t *testing.T) {
 	defer srv.Close()
 
 	t.Run("no credential", func(t *testing.T) {
-		resp, err := http.Get(srv.URL + "/metrics") //nolint:noctx // test
+		resp, err := http.Get(srv.URL + "/metrics")
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		defer resp.Body.Close() //nolint:errcheck
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusUnauthorized {
 			t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
 		}
@@ -46,7 +46,7 @@ func TestMetricsSurface_RequiresCredential(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Do: %v", err)
 		}
-		defer resp.Body.Close() //nolint:errcheck
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusUnauthorized {
 			t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
 		}
@@ -59,7 +59,7 @@ func TestMetricsSurface_RequiresCredential(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Do: %v", err)
 		}
-		defer resp.Body.Close() //nolint:errcheck
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
 		}

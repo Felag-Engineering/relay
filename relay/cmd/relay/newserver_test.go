@@ -97,7 +97,7 @@ func TestNewServer_Smoke(t *testing.T) {
 	if deps.control != nil {
 		t.Fatal("deps.control should be nil when Config.ControlEnabled is false (default)")
 	}
-	t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+	t.Cleanup(func() { deps.store.Close() })
 
 	// Not started, so Stop is a safe no-op cleanup.
 	t.Cleanup(srv.Stop)
@@ -149,7 +149,7 @@ func TestNewServer_ControlEnabled_SeedsIdentityAndAuthenticates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
-	t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+	t.Cleanup(func() { deps.store.Close() })
 	t.Cleanup(srv.Stop)
 
 	if deps.control == nil {
@@ -190,7 +190,7 @@ func TestNewServer_MinDaemonVersion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newServer: %v", err)
 		}
-		t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+		t.Cleanup(func() { deps.store.Close() })
 		t.Cleanup(srv.Stop)
 	})
 
@@ -202,7 +202,7 @@ func TestNewServer_MinDaemonVersion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newServer: %v", err)
 		}
-		t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+		t.Cleanup(func() { deps.store.Close() })
 		t.Cleanup(srv.Stop)
 	})
 }
@@ -310,7 +310,7 @@ func TestCertExpiringWindow_IsOneValueAcrossSurfaces(t *testing.T) {
 	// Selector resolution through (the ReadLane's, readlane_registry.go).
 	resp := controlAPIRequest(t, f.Client(), http.MethodPost, f.ControlBase+"/api/v1/operations",
 		f.Credential, map[string]any{"operation": "system.facts", "selector": "state:cert-expiring", "plan": true})
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("plan status = %d, want 200", resp.StatusCode)
 	}
@@ -358,7 +358,7 @@ func TestListeners_Independent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
-	t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+	t.Cleanup(func() { deps.store.Close() })
 	t.Cleanup(srv.Stop)
 
 	nodeLis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -381,7 +381,7 @@ func TestListeners_Independent(t *testing.T) {
 	}
 
 	// The control-plane listener is now closed: new connections fail.
-	if _, err := http.Get("https://" + controlLis.Addr().String() + "/api/v1/ping"); err == nil { //nolint:noctx
+	if _, err := http.Get("https://" + controlLis.Addr().String() + "/api/v1/ping"); err == nil {
 		t.Fatal("expected control-plane request to fail after Shutdown")
 	}
 
@@ -390,7 +390,7 @@ func TestListeners_Independent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("node-plane listener did not survive control-plane Shutdown: %v", err)
 	}
-	conn.Close() //nolint:errcheck
+	conn.Close()
 }
 
 func TestClampedStepUpWindow(t *testing.T) {

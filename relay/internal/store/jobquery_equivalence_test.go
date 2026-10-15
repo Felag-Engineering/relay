@@ -161,7 +161,7 @@ func (q *sqliteJobQueries) legacyQueryJobs(ctx context.Context, filter jobs.JobQ
 		if err != nil {
 			return jobs.JobPage{}, fmt.Errorf("query jobs: begin: %w", err)
 		}
-		defer tx.Rollback() //nolint:errcheck
+		defer tx.Rollback()
 		db = tx
 		if err := db.QueryRowContext(ctx, countStmt, countArgs...).Scan(&matching); err != nil {
 			return jobs.JobPage{}, fmt.Errorf("count jobs: %w", err)

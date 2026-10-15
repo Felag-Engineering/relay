@@ -32,7 +32,7 @@ func TestConsole_TrickledSignInBodyIsCut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer conn.Close() //nolint:errcheck
+	defer conn.Close()
 
 	// Promise a body, send a few bytes of it, then stall.
 	if _, err := fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: relay\r\n"+
@@ -51,7 +51,7 @@ func TestConsole_TrickledSignInBodyIsCut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadResponse: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	// The form never arrived, so its CSRF token cannot verify: Secure refuses.
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d (the form could not be read)", resp.StatusCode, http.StatusForbidden)

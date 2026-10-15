@@ -4,7 +4,7 @@
 //
 // It lives in its own package, not package capability or package audit,
 // because it must reference both: capability's non-test files are locked to
-// a small import allowlist (TestCapabilityImportsOnlyRegistryAndJobs) that
+// a small import allowlist (.golangci.yml's capability-imports rule) that
 // bars database/sql and internal/audit, and audit is deliberately a thin,
 // SQL-free domain package that must not depend on capability. auditsink is
 // the only place both meet.

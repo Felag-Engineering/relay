@@ -17,7 +17,7 @@ import (
 // fixture the per-role gate tests sweep over.
 var sessionRoles = []accounts.Role{accounts.RoleViewer, accounts.RoleOperator, accounts.RoleAdmin}
 
-const testCredential = accounts.TokenPrefix + "1234567890abcdef.test-secret" //nolint:gosec // test fixture, not a real credential
+const testCredential = accounts.TokenPrefix + "1234567890abcdef.test-secret" // test fixture, not a real credential
 
 // roleVerifier accepts one credential as an Account with the given role, so a
 // test can ask "what does a viewer see?" through the REAL authentication path

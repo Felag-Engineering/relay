@@ -527,9 +527,10 @@ is blended.
 
 Gate configuration is loaded once at startup from an optional root-owned file (store-backed rules
 are designed, not built — #590). The approval domain holds the gate, the grant, the plan hash and
-the shape key, and its imports are pinned narrow by test (`TestApprovalImportsStayNarrow`). The
-capability layer owns parking, deciding and claiming; the surfaces hold neither. `make verify`
-covers every row below; the end-to-end rows additionally need `make test-integration`.
+the shape key, and its imports are pinned narrow by lint (`.golangci.yml` depguard rule
+`approval-imports`). The capability layer owns parking, deciding and claiming; the surfaces hold
+neither. `make verify` covers every row below; the end-to-end rows additionally need
+`make test-integration`.
 
 ### What proves each claim
 

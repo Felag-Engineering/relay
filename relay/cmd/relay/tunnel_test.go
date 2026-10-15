@@ -45,7 +45,7 @@ func injectNodeIDInterceptor(nodeID string) grpc.StreamServerInterceptor {
 func newBufconnConn(t *testing.T, srv *grpc.Server) *grpc.ClientConn {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
-	go srv.Serve(lis) //nolint:errcheck
+	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
 
 	conn, err := grpc.NewClient(

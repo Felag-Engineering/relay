@@ -206,7 +206,7 @@ func windowHoldsLegacyTimestamps(ctx context.Context, db *sql.DB) (legacyTSObser
 	if err != nil {
 		return obs, err
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	for rows.Next() {
 		var id, ts string

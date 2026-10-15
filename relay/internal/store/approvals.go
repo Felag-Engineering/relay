@@ -203,7 +203,7 @@ func (a *sqliteApprovals) decisionsFor(ctx context.Context, q querier, requestID
 	if err != nil {
 		return nil, fmt.Errorf("select approval decisions: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	var out []approval.Decision
 	for rows.Next() {
@@ -245,7 +245,7 @@ func (a *sqliteApprovals) listWith(ctx context.Context, q querier, query string,
 	if err != nil {
 		return nil, fmt.Errorf("select approval requests: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	var out []approval.Request
 	for rows.Next() {

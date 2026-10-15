@@ -110,7 +110,7 @@ func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 			"scope":       []string{"relay:env=prod"},
 			"ttl_seconds": 3600,
 		})
-	defer mintResp.Body.Close() //nolint:errcheck
+	defer mintResp.Body.Close()
 	if mintResp.StatusCode != http.StatusCreated {
 		t.Fatalf("mint status = %d, want %d", mintResp.StatusCode, http.StatusCreated)
 	}
@@ -140,7 +140,7 @@ func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 
 	revokeResp := controlAPIRequest(t, client, http.MethodDelete,
 		base+"/api/v1/enrollment-tokens/"+minted.ID, credential, nil)
-	defer revokeResp.Body.Close() //nolint:errcheck
+	defer revokeResp.Body.Close()
 	if revokeResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
 	}
@@ -207,7 +207,7 @@ func TestControlAPI_NodeRevoke(t *testing.T) {
 	revokeResp := controlAPIRequest(t, client, http.MethodPost,
 		base+"/api/v1/nodes/"+nodeID+"/revoke", credential,
 		map[string]string{"reason": "e2e: revoking a live Node to prove the Tunnel tears down"})
-	defer revokeResp.Body.Close() //nolint:errcheck
+	defer revokeResp.Body.Close()
 	if revokeResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("node revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
 	}
@@ -261,7 +261,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	}
 
 	engageResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/freeze/engage", credential, nil)
-	defer engageResp.Body.Close() //nolint:errcheck
+	defer engageResp.Body.Close()
 	if engageResp.StatusCode != http.StatusOK {
 		t.Fatalf("freeze engage status = %d, want %d", engageResp.StatusCode, http.StatusOK)
 	}
@@ -290,7 +290,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	// activation) and the Freeze must remain engaged.
 	noReasonResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/freeze/release",
 		credential, map[string]string{"reason": ""})
-	defer noReasonResp.Body.Close() //nolint:errcheck
+	defer noReasonResp.Body.Close()
 	if noReasonResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("freeze release without reason status = %d, want %d", noReasonResp.StatusCode, http.StatusBadRequest)
 	}
@@ -300,7 +300,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 
 	releaseResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/freeze/release",
 		credential, map[string]string{"reason": "incident resolved"})
-	defer releaseResp.Body.Close() //nolint:errcheck
+	defer releaseResp.Body.Close()
 	if releaseResp.StatusCode != http.StatusOK {
 		t.Fatalf("freeze release status = %d, want %d", releaseResp.StatusCode, http.StatusOK)
 	}
@@ -391,7 +391,7 @@ func TestControlAPI_RequiresCredential(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			resp := controlAPIRequest(t, client, tc.method, base+tc.path, "", tc.body)
-			defer resp.Body.Close() //nolint:errcheck
+			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusUnauthorized {
 				t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
 			}
@@ -422,7 +422,7 @@ func TestControlAPI_ExecutionRoutesAreWired(t *testing.T) {
 	t.Run("run_operation plan is served", func(t *testing.T) {
 		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/operations",
 			credential, map[string]any{"operation": "system.facts", "plan": true})
-		defer resp.Body.Close() //nolint:errcheck
+		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want 200 (route must be wired through apiSurface.Mount)", resp.StatusCode)
@@ -446,7 +446,7 @@ func TestControlAPI_ExecutionRoutesAreWired(t *testing.T) {
 	t.Run("raw_exec plan is served", func(t *testing.T) {
 		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/raw-exec",
 			credential, map[string]any{"argv": []string{"/bin/echo", "hi"}, "plan": true})
-		defer resp.Body.Close() //nolint:errcheck
+		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want 200; the founding admin may plan a Raw Exec", resp.StatusCode)
@@ -462,7 +462,7 @@ func TestControlAPI_ExecutionRoutesAreWired(t *testing.T) {
 				"operation": "service.restart",
 				"args":      map[string]string{"unitt": "nginx"},
 			})
-		defer resp.Body.Close() //nolint:errcheck
+		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400 for a misspelled argument name", resp.StatusCode)
@@ -472,7 +472,7 @@ func TestControlAPI_ExecutionRoutesAreWired(t *testing.T) {
 	t.Run("unauthenticated is refused", func(t *testing.T) {
 		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/operations",
 			"", map[string]any{"operation": "system.facts", "plan": true})
-		defer resp.Body.Close() //nolint:errcheck
+		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("status = %d, want 401 — the execution routes sit behind the same Authenticator as every other /api/v1 route", resp.StatusCode)
@@ -509,7 +509,7 @@ func TestControlAPI_ZeroMatchPreflightReportsWhatDispatchRefuses(t *testing.T) {
 		planBody["plan"] = true
 
 		planResp := controlAPIRequest(t, client, http.MethodPost, base+rt.path, credential, planBody)
-		defer planResp.Body.Close() //nolint:errcheck
+		defer planResp.Body.Close()
 		if planResp.StatusCode != http.StatusOK {
 			t.Fatalf("%s plan:true status = %d, want 200", rt.path, planResp.StatusCode)
 		}
@@ -526,7 +526,7 @@ func TestControlAPI_ZeroMatchPreflightReportsWhatDispatchRefuses(t *testing.T) {
 		}
 
 		realResp := controlAPIRequest(t, client, http.MethodPost, base+rt.path, credential, rt.body)
-		defer realResp.Body.Close() //nolint:errcheck
+		defer realResp.Body.Close()
 		if realResp.StatusCode != http.StatusUnprocessableEntity {
 			t.Fatalf("%s status = %d, want 422", rt.path, realResp.StatusCode)
 		}
@@ -698,7 +698,7 @@ func TestControlAPI_JobRoutes(t *testing.T) {
 
 	t.Run("a dispatched Job is re-readable by id", func(t *testing.T) {
 		resp := controlAPIRequest(t, client, http.MethodGet, base+"/api/v1/jobs/"+jobID, credential, nil)
-		defer resp.Body.Close() //nolint:errcheck
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want 200", resp.StatusCode)
 		}
@@ -730,7 +730,7 @@ func TestControlAPI_JobRoutes(t *testing.T) {
 
 	t.Run("an unknown Job id is a 404", func(t *testing.T) {
 		resp := controlAPIRequest(t, client, http.MethodGet, base+"/api/v1/jobs/job-does-not-exist", credential, nil)
-		defer resp.Body.Close() //nolint:errcheck
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("status = %d, want 404", resp.StatusCode)
 		}
@@ -756,7 +756,7 @@ func TestControlAPI_JobRoutes(t *testing.T) {
 
 	t.Run("cancelling a finished Job is a clean no-op", func(t *testing.T) {
 		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/jobs/"+jobID+"/cancel", credential, nil)
-		defer resp.Body.Close() //nolint:errcheck
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want 200 (every Task is terminal; none is touched)", resp.StatusCode)
 		}
@@ -764,7 +764,7 @@ func TestControlAPI_JobRoutes(t *testing.T) {
 
 	t.Run("cancelling an unknown Job is a 404", func(t *testing.T) {
 		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/jobs/nope/cancel", credential, nil)
-		defer resp.Body.Close() //nolint:errcheck
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("status = %d, want 404", resp.StatusCode)
 		}
@@ -787,7 +787,7 @@ func TestControlAPI_JobResultsMatchMCP(t *testing.T) {
 	// API side.
 	resp := controlAPIRequest(t, f.ClientFor(""), http.MethodGet,
 		f.ControlBase+"/api/v1/jobs/"+jobID, f.Credential, nil)
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("API status = %d, want 200", resp.StatusCode)
 	}
@@ -846,7 +846,7 @@ func TestControlAPI_RefusalRendersIdenticallyOnBothSurfaces(t *testing.T) {
 
 	resp := controlAPIRequest(t, f.ClientFor(""), http.MethodGet,
 		f.ControlBase+"/api/v1/jobs/"+jobID, f.Credential, nil)
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("API status = %d, want 200", resp.StatusCode)
 	}

@@ -698,7 +698,7 @@ func wellFormedLabels(ns labelNamespace, labels map[string]string, declined *[nL
 }
 
 func fetchLabels(ctx context.Context, q queryer, table, nodeID string) (map[string]string, error) {
-	rows, err := q.QueryContext(ctx, fmt.Sprintf(`SELECT key, value FROM %s WHERE node_id = ?`, table), nodeID) //nolint:gosec // table is one of two fixed literals, never user input
+	rows, err := q.QueryContext(ctx, fmt.Sprintf(`SELECT key, value FROM %s WHERE node_id = ?`, table), nodeID) // table is one of two fixed literals, never user input
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", table, err)
 	}
@@ -716,11 +716,11 @@ func fetchLabels(ctx context.Context, q queryer, table, nodeID string) (map[stri
 }
 
 func replaceLabels(ctx context.Context, tx *sql.Tx, table, nodeID string, labels map[string]string) error {
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE node_id = ?`, table), nodeID); err != nil { //nolint:gosec // table is one of two fixed literals, never user input
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE node_id = ?`, table), nodeID); err != nil { // table is one of two fixed literals, never user input
 		return fmt.Errorf("clear %s: %w", table, err)
 	}
 	for k, v := range labels {
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s (node_id, key, value) VALUES (?, ?, ?)`, table), //nolint:gosec // table is one of two fixed literals, never user input
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s (node_id, key, value) VALUES (?, ?, ?)`, table), // table is one of two fixed literals, never user input
 			nodeID, k, v); err != nil {
 			return fmt.Errorf("insert %s row: %w", table, err)
 		}

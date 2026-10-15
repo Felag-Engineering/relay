@@ -412,7 +412,7 @@ func TestAccountAdmin_LastAdminRefusalSurvivesTheRealStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 	ctx := context.Background()
 
 	admin, err := st.Accounts().Create(ctx, accounts.Account{
@@ -531,7 +531,7 @@ func TestAccountAdmin_SetAccountRoleFromRefusesAStaleRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 	ctx := context.Background()
 
 	var x accounts.Account

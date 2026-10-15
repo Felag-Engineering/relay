@@ -45,7 +45,7 @@ const (
 	answerRequestID  = "apr-1"
 	answerPlanHash   = "hash-1"
 	answerAccountID  = "acct-caller"
-	answerCallerCred = accounts.TokenPrefix + "0123456789abcdef.tools-approval-test" //nolint:gosec // test fixture, not a real credential
+	answerCallerCred = accounts.TokenPrefix + "0123456789abcdef.tools-approval-test" // test fixture, not a real credential
 )
 
 // answerArgsJSON is the canonical arguments the answer-path fixtures seal
@@ -2003,7 +2003,7 @@ func TestElicitedAnswer_ARefusedDecisionExposesOnlyStateJobAndDeadline(t *testin
 				t.Errorf("elicitedAnswerResult can reach %v — it must never carry the raw Request or a Decision (#735 review)", typ)
 				return
 			}
-			switch typ.Kind() { //nolint:exhaustive // only the recursive shapes need walking
+			switch typ.Kind() { // only the recursive shapes need walking
 			case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Chan:
 				walk(typ.Elem())
 			case reflect.Map:

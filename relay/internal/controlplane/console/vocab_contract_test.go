@@ -109,7 +109,7 @@ func TestVocab_ShippedReadCatalogMatchesThePackagedCatalog(t *testing.T) {
 	templates := parsePackagedReadCatalog(t)
 
 	// A guard that silently checks nothing is worse than no guard (see
-	// imports_test.go's TestConsole_NeverImportsStore): fail loudly if the
+	// TestConsole_NoDispatchOutsideCapabilityLayer): fail loudly if the
 	// parser found nothing, or lost a name every reader of this file expects
 	// to be there, rather than pass by accident against a reformatted or
 	// emptied file.

@@ -71,7 +71,7 @@ func newIdentityFixtureWith(t *testing.T, wrap func(capability.AccountStore) cap
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	ctx := context.Background()
 	founder, err := st.Accounts().EnsureFoundingAdmin(ctx)

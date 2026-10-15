@@ -22,7 +22,7 @@ func openQueryStore(t *testing.T) *store.Store {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 	return st
 }
 

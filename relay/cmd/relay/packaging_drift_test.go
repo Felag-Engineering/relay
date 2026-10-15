@@ -132,7 +132,7 @@ func TestRelayEnvExemptionsAreReal(t *testing.T) {
 	var all strings.Builder
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") {
-			return nil //nolint:nilerr // an unreadable entry is not this test's subject
+			return nil // an unreadable entry is not this test's subject
 		}
 		b, readErr := os.ReadFile(path)
 		if readErr != nil {

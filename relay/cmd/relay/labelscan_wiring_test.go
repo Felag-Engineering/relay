@@ -68,7 +68,7 @@ func TestNewServer_RunsDeclinedLabelScanAtStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
-	t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+	t.Cleanup(func() { deps.store.Close() })
 	t.Cleanup(srv.Stop)
 
 	var sawFinding bool
@@ -101,7 +101,7 @@ func TestNewServer_WiresLabelsDeclinedMetric(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
-	t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+	t.Cleanup(func() { deps.store.Close() })
 	t.Cleanup(srv.Stop)
 
 	if deps.metrics == nil {

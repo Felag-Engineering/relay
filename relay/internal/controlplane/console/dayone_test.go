@@ -880,14 +880,14 @@ func TestConsoleEvents_ConcurrentStreamsAreBounded(t *testing.T) {
 		}
 		if res.StatusCode == http.StatusTooManyRequests {
 			refused++
-			res.Body.Close() //nolint:errcheck
+			res.Body.Close()
 			continue
 		}
 		held = append(held, res)
 	}
 	defer func() {
 		for _, res := range held {
-			res.Body.Close() //nolint:errcheck
+			res.Body.Close()
 		}
 	}()
 
@@ -910,7 +910,7 @@ func TestConsoleEvents_ConcurrentStreamsAreBounded(t *testing.T) {
 	// capacity loss — the cap stops being a bound on concurrency and becomes
 	// a lifetime budget, and the operator's live view goes dark for good
 	// after four page loads. Close one and the next open must be admitted.
-	held[0].Body.Close() //nolint:errcheck
+	held[0].Body.Close()
 	held = held[1:]
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -923,7 +923,7 @@ func TestConsoleEvents_ConcurrentStreamsAreBounded(t *testing.T) {
 			held = append(held, res)
 			break
 		}
-		res.Body.Close() //nolint:errcheck
+		res.Body.Close()
 		if time.Now().After(deadline) {
 			t.Fatal("a closed stream never released its slot — the cap is a lifetime budget, not a " +
 				"bound on concurrency, and the live view goes dark permanently")
@@ -1025,7 +1025,7 @@ func TestConsoleEvents_SurvivesOverHTTP2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}
-	defer res.Body.Close() //nolint:errcheck
+	defer res.Body.Close()
 	if res.ProtoMajor != 2 {
 		t.Fatalf("stream negotiated %s, want HTTP/2 — this test is worthless on 1.1", res.Proto)
 	}
@@ -1105,7 +1105,7 @@ func TestConsoleEvents_WriteDeadlinesSurviveTheMiddleware(t *testing.T) {
 			if err != nil {
 				t.Fatalf("probe: %v", err)
 			}
-			res.Body.Close() //nolint:errcheck
+			res.Body.Close()
 
 			select {
 			case err := <-probe:

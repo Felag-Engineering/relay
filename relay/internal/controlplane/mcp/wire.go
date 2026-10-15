@@ -8,8 +8,8 @@ package mcp
 //
 // Render funcs (renderJob, renderPlan, perNodeResultFromTask, …) stay in
 // tools_execution.go/tools_nodes.go/tools_operations.go — this file is pure
-// data, no methods, no capability.*/newDispatch references (no_dispatch_test.go
-// classifies it as a strict readFile). Input types (runOperationInput,
+// data, no methods, no capability.*/newDispatch references (a strict file
+// under no_dispatch_test.go). Input types (runOperationInput,
 // rawExecInput, describeNodeInput, …) stay unexported: tests never unmarshal
 // INTO them, only out of these output types.
 

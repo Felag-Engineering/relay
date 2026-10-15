@@ -15,7 +15,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 )
 
-const testToken = accounts.TokenPrefix + "fedcba9876543210.control-plane-test" //nolint:gosec // test fixture, not a real credential
+const testToken = accounts.TokenPrefix + "fedcba9876543210.control-plane-test" // test fixture, not a real credential
 
 // testAuthenticator accepts testToken as the founding admin's credential.
 // Since #298 there is only one credential kind, so every test in this file
@@ -44,11 +44,11 @@ func TestMiddleware_NoHeader(t *testing.T) {
 	srv := httptest.NewServer(authn.Middleware(okHandler()))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL) //nolint:noctx // test
+	resp, err := http.Get(srv.URL)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
@@ -70,7 +70,7 @@ func TestMiddleware_MalformedHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
@@ -89,7 +89,7 @@ func TestMiddleware_WrongToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
@@ -108,7 +108,7 @@ func TestMiddleware_CorrectToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -136,7 +136,7 @@ func TestMiddleware_TokenNeverInResponseBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 
 	body := readAll(t, resp.Body)
 	if strings.Contains(body, presented) || strings.Contains(body, testToken) {
@@ -174,7 +174,7 @@ func TestMiddleware_TokenNeverLogged(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Do: %v", err)
 		}
-		resp.Body.Close() //nolint:errcheck
+		resp.Body.Close()
 	}
 
 	logOutput := buf.String()

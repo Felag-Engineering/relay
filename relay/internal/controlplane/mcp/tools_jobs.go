@@ -7,7 +7,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// This is an EXEC file (no_dispatch_test.go's relaxed partition — see
+// This is an EXEC file (listed in no_dispatch_test.go's execFiles — see
 // tools_execution.go's doc comment for the full rationale).
 
 // cancelJobInput is cancel_job's argument.

@@ -36,8 +36,8 @@ func TestForeignPackageCannotConstructDispatch(t *testing.T) {
 	}
 }
 
-// TestDispatchSymbolsUnexported is a defense-in-depth AST guard (mirrors
-// jobs.TestNoDatabaseSQLImport's parse-and-inspect style): even if the
+// TestDispatchSymbolsUnexported is a defense-in-depth AST guard (a
+// parse-and-inspect check): even if the
 // testdata build above were ever skipped, this catches an accidental future
 // export of the dispatch type or its constructor by name.
 func TestDispatchSymbolsUnexported(t *testing.T) {

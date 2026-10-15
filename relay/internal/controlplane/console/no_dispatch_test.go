@@ -23,8 +23,15 @@ import (
 // never dropped — a new execution surface is exactly when the temptation to
 // shortcut appears."
 //
-// Since #899 the execution service is capability.Execution; Service and New
-// no longer exist and stay banned by name, permanently, beside it.
+// The concrete capability services and their constructors (the retired
+// Service and New included), the display-only caches and registry.Repository
+// are refused by .golangci.yml's "adapter boundary" forbidigo patterns,
+// matched on the resolved package path, so an alias or a dot-import cannot
+// dodge them; the store, database/sql, the wire protocol and the dispatcher
+// by its adapters-narrow-only depguard rule. This guard keeps what neither
+// can express: which single authz symbol may be named, which file may name a
+// write's argument type, a write seam recovered by assertion, alias or
+// anonymous interface, and the shape of a seam this package declares.
 //
 // The guard exists at package creation rather than arriving with the composer
 // (issue #438). Adding it later would mean the window in which the shortcut is
@@ -52,27 +59,6 @@ func writeSeamName(name string) bool {
 	default:
 		return false
 	}
-}
-
-// bannedCapabilityServices maps every capability service type, and its
-// constructor, to the narrowed seam a Console file must use instead. They are
-// banned by EXACT name beside the retired capability.Service and
-// capability.New, which stay banned permanently: a prefix match would falsely
-// flag unrelated identifiers such as capability.ControlAction and
-// capability.AccountAdminEvent, which the Console legitimately uses.
-var bannedCapabilityServices = map[string]string{
-	"Execution":       "use JobCanceller (cancel.go)",
-	"NewExecution":    "use JobCanceller (cancel.go)",
-	"Recorder":        "the Recorder belongs to the composition root alone",
-	"NewRecorder":     "the Recorder belongs to the composition root alone",
-	"Control":         "the Console holds only the store's FreezeReader, never the Control",
-	"NewControl":      "the Console holds only the store's FreezeReader, never the Control",
-	"AccountAdmin":    "use AccountReader / AccountAdministrator",
-	"NewAccountAdmin": "use AccountReader / AccountAdministrator",
-	"ReadLane":        "use QueryReader",
-	"NewReadLane":     "use QueryReader",
-	"Approvals":       "use ApprovalReader / ApprovalDecider",
-	"NewApprovals":    "use ApprovalReader / ApprovalDecider",
 }
 
 const (
@@ -113,8 +99,8 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 
 	capAlias, capImported := astguard.LocalImportAlias(file, capabilityImportPath)
 	regAlias, regImported := astguard.LocalImportAlias(file, registryImportPath)
-	pvAlias, pvImported := astguard.LocalImportAlias(file, policyviewImportPath)
-	nvAlias, nvImported := astguard.LocalImportAlias(file, nodevocabImportPath)
+	pvAlias, _ := astguard.LocalImportAlias(file, policyviewImportPath)
+	nvAlias, _ := astguard.LocalImportAlias(file, nodevocabImportPath)
 	evAlias, evImported := astguard.LocalImportAlias(file, eventsImportPath)
 	authzAlias, authzImported := astguard.LocalImportAlias(file, authzImportPath)
 
@@ -395,14 +381,6 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 			if capImported {
 				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == capAlias {
 					switch v.Sel.Name {
-					case "Service":
-						violations = append(violations, fmt.Sprintf(
-							"%s references capability.Service — Console handlers must never hold a capability.Service directly, only an injected interface (no-dispatch structural guarantee, ADR-0026 decision 1)",
-							fileName))
-					case "New":
-						violations = append(violations, fmt.Sprintf(
-							"%s references capability.New — the exported dispatch constructor must never be called from a Console file (no-dispatch structural guarantee, ADR-0026 decision 1)",
-							fileName))
 					case "ApprovalDecision":
 						// The argument type of DecideApproval. Naming it is
 						// what BUILDING the call requires, so it is allowed
@@ -442,44 +420,6 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 						violations = append(violations, fmt.Sprintf(
 							"%s references capability.GrantRequest — the Console never asks for a Grant; naming the argument type of a write is the first half of undoing that",
 							fileName))
-					default:
-						if advice := bannedCapabilityServices[v.Sel.Name]; advice != "" {
-							violations = append(violations, fmt.Sprintf(
-								"%s references capability.%s — a concrete capability service or its constructor; %s (no-dispatch structural guarantee, ADR-0026 decision 1)",
-								fileName, v.Sel.Name, advice))
-						}
-					}
-				}
-			}
-			// policyview.Cache and nodevocab.Cache (#680) are the types that
-			// carry Set. The Console is handed QueryReader (seams.go), whose
-			// DescribeNode is Get-only for both, and this rule stops any file
-			// in the package recovering either writer by naming the concrete
-			// type — a type assertion, a type switch case, or a second
-			// construction of the cache.
-			//
-			// What this buys is narrower than "no type can be recovered". An
-			// anonymous interface recovers Set without ever naming Cache, and
-			// this guard would not see it (the registry.Repository rule above
-			// has the identical hole). It closes the obvious door, not every
-			// door; the seam's type and review close the rest.
-			if pvImported {
-				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == pvAlias {
-					switch v.Sel.Name {
-					case "Cache", "New":
-						violations = append(violations, fmt.Sprintf(
-							"%s references policyview.%s — the Console must never hold a *policyview.Cache: Cache carries Set, and the effective-Policy panel is read-only STRUCTURALLY rather than by permission (ADR-0002, invariant 2; ADR-0011, invariant 12)",
-							fileName, v.Sel.Name))
-					}
-				}
-			}
-			if nvImported {
-				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == nvAlias {
-					switch v.Sel.Name {
-					case "Cache", "New":
-						violations = append(violations, fmt.Sprintf(
-							"%s references nodevocab.%s — the Console must never hold a *nodevocab.Cache: Cache carries Set (ADR-0002, invariant 2; ADR-0011, invariant 12)",
-							fileName, v.Sel.Name))
 					}
 				}
 			}
@@ -552,34 +492,6 @@ func TestDispatchViolations_Fixtures(t *testing.T) {
 		file       string
 		wantSubstr string // "" = expect NO violations
 	}{
-		{
-			name: "type assertion recovering the policyview cache",
-			src: `package console
-import ` + pvImport + `
-func f(p any) { _ = p.(*policyview.Cache) }
-`,
-			wantSubstr: "policyview.Cache",
-		},
-		{
-			name: "type-switch case recovering the policyview cache",
-			src: `package console
-import ` + pvImport + `
-func f(p any) {
-	switch p.(type) {
-	case *policyview.Cache:
-	}
-}
-`,
-			wantSubstr: "policyview.Cache",
-		},
-		{
-			name: "constructing a policyview cache, through an alias",
-			src: `package console
-import pv ` + pvImport + `
-var _ = pv.New()
-`,
-			wantSubstr: "policyview.New",
-		},
 		{
 			// The false-positive guard: this is exactly what seams.go and
 			// node.go do, and must keep doing.
@@ -668,52 +580,12 @@ import . ` + nvImport + `
 			wantSubstr: "dot-imports nodevocab",
 		},
 		{
-			name: "constructing a nodevocab cache",
-			src: `package console
-import ` + nvImport + `
-var _ = nodevocab.New()
-`,
-			wantSubstr: "nodevocab.New",
-		},
-		{
-			name: "type assertion recovering the nodevocab cache",
-			src: `package console
-import ` + nvImport + `
-func f(v any) { _ = v.(*nodevocab.Cache) }
-`,
-			wantSubstr: "nodevocab.Cache",
-		},
-		{
 			name: "type assertion recovering registry.Repository",
 			src: `package console
 import ` + regImport + `
 func f(nodes any) { _ = nodes.(registry.Repository) }
 `,
 			wantSubstr: "registry.Repository",
-		},
-		{
-			name: "aliased capability import dodging the literal package name",
-			src: `package console
-import c2 ` + capImport + `
-var _ = c2.Service{}
-`,
-			wantSubstr: "capability.Service",
-		},
-		{
-			name: "exported capability.New via an alias",
-			src: `package console
-import c2 ` + capImport + `
-func f() { c2.New(nil) }
-`,
-			wantSubstr: "capability.New",
-		},
-		{
-			name: "capability.New named without a call, default import",
-			src: `package console
-import ` + capImport + `
-var _ = capability.New
-`,
-			wantSubstr: "capability.New",
 		},
 		{
 			// The evasion that actually compiles against today's wiring:
@@ -1119,149 +991,6 @@ func f(err error) bool { return errors.Is(err, authz.ErrUnauthorized) }
 			t.Fatalf("dispatchViolations() = %v, want a violation containing %q", violations, tc.wantSubstr)
 		})
 	}
-}
-
-// TestDispatchViolations_BansConcreteCapabilityServices proves every capability
-// service type and constructor is refused by exact name — named directly, or
-// through an alias — and that similarly named identifiers the Console
-// legitimately uses are not. The list is spelled out here rather than read from
-// the map, so deleting a name from the map cannot delete its row.
-func TestDispatchViolations_BansConcreteCapabilityServices(t *testing.T) {
-	const capImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"`
-	check := func(t *testing.T, src string) []string {
-		t.Helper()
-		file, err := parser.ParseFile(token.NewFileSet(), "fixture.go", src, 0)
-		if err != nil {
-			t.Fatalf("parser.ParseFile: %v", err)
-		}
-		return dispatchViolations("fixture.go", file)
-	}
-	mustContain := func(t *testing.T, violations []string, want string) {
-		t.Helper()
-		for _, v := range violations {
-			if strings.Contains(v, want) {
-				return
-			}
-		}
-		t.Fatalf("dispatchViolations() = %v, want one containing %q", violations, want)
-	}
-
-	for _, name := range []string{
-		"Recorder", "NewRecorder", "Control", "NewControl",
-		"AccountAdmin", "NewAccountAdmin", "ReadLane", "NewReadLane",
-		"Approvals", "NewApprovals", "Execution", "NewExecution",
-	} {
-		t.Run(name, func(t *testing.T) {
-			src := "package console\nimport " + capImport + "\nvar _ = capability." + name + "\n"
-			mustContain(t, check(t, src), "capability."+name+" — a concrete capability service")
-		})
-	}
-
-	t.Run("an aliased import cannot dodge the ban", func(t *testing.T) {
-		src := "package console\nimport c2 " + capImport + "\nvar _ *c2.ReadLane\n"
-		mustContain(t, check(t, src), "capability.ReadLane — a concrete capability service")
-	})
-
-	t.Run("a type alias of a service is refused where it names it", func(t *testing.T) {
-		src := "package console\nimport " + capImport + "\ntype q = capability.ReadLane\n"
-		mustContain(t, check(t, src), "capability.ReadLane — a concrete capability service")
-	})
-
-	t.Run("exact match leaves similarly-named identifiers alone", func(t *testing.T) {
-		src := "package console\nimport " + capImport + `
-var _ capability.ControlAction
-var _ capability.AccountAdminEvent
-var _ capability.IntentRecorder
-`
-		if violations := check(t, src); len(violations) != 0 {
-			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
-		}
-	})
-
-	t.Run("an aliased import cannot dodge the approvals ban", func(t *testing.T) {
-		src := "package console\nimport c2 " + capImport + "\nvar _ *c2.Approvals\nvar _ = c2.NewApprovals\n"
-		violations := check(t, src)
-		mustContain(t, violations, "capability.Approvals — a concrete capability service")
-		mustContain(t, violations, "capability.NewApprovals — a concrete capability service")
-	})
-
-	t.Run("an aliased import cannot dodge the execution ban", func(t *testing.T) {
-		src := "package console\nimport c2 " + capImport + "\nvar _ *c2.Execution\nvar _ = c2.NewExecution\n"
-		violations := check(t, src)
-		mustContain(t, violations, "capability.Execution — a concrete capability service")
-		mustContain(t, violations, "capability.NewExecution — a concrete capability service")
-	})
-
-	t.Run("exact match leaves the execution-path identifiers alone", func(t *testing.T) {
-		src := "package console\nimport " + capImport + `
-var _ capability.StartOptions
-var _ capability.StartedJob
-var _ capability.NodeResult
-var _ capability.PlanResult
-var _ capability.TaskView
-var _ capability.ParkedError
-var _ capability.FrozenError
-var _ capability.CapExceededError
-var _ capability.NoNodesMatchedError
-var _ = capability.ErrDraining
-var _ = capability.ErrIdempotencyUnavailable
-var _ = capability.ErrJobNotRequestedByCaller
-var _ = capability.DefaultDispatchConcurrency
-var _ capability.JobEventSink
-`
-		if violations := check(t, src); len(violations) != 0 {
-			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
-		}
-	})
-
-	t.Run("exact match leaves the approval seam identifiers alone", func(t *testing.T) {
-		// ApprovalDecision and GrantRequest are left out on purpose: this guard
-		// bans them from every file but decide.go (and bans GrantRequest there too).
-		src := "package console\nimport " + capImport + `
-var _ capability.ApprovalGate
-var _ capability.ApprovalStore
-var _ capability.ApprovalAuthorizer
-var _ capability.ApprovalNotifier
-var _ capability.ApprovalNotice
-var _ capability.ApprovalGrantStore
-var _ = capability.ErrApprovalUnavailable
-`
-		if violations := check(t, src); len(violations) != 0 {
-			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
-		}
-	})
-
-	t.Run("decide.go's ApprovalDecision allowance does not admit Approvals", func(t *testing.T) {
-		src := "package console\nimport " + capImport + `
-var _ capability.ApprovalDecision
-var _ *capability.Approvals
-`
-		file, err := parser.ParseFile(token.NewFileSet(), "decide.go", src, 0)
-		if err != nil {
-			t.Fatalf("parser.ParseFile: %v", err)
-		}
-		violations := dispatchViolations("decide.go", file)
-		if len(violations) != 1 {
-			t.Fatalf("dispatchViolations() = %v, want exactly one violation (Approvals)", violations)
-		}
-		mustContain(t, violations, "capability.Approvals — a concrete capability service")
-	})
-
-	t.Run("decide.go's ApprovalDecision allowance does not admit Execution", func(t *testing.T) {
-		src := "package console\nimport " + capImport + `
-var _ capability.ApprovalDecision
-var _ *capability.Execution
-`
-		file, err := parser.ParseFile(token.NewFileSet(), "decide.go", src, 0)
-		if err != nil {
-			t.Fatalf("parser.ParseFile: %v", err)
-		}
-		violations := dispatchViolations("decide.go", file)
-		if len(violations) != 1 {
-			t.Fatalf("dispatchViolations() = %v, want exactly one violation (Execution)", violations)
-		}
-		mustContain(t, violations, "capability.Execution — a concrete capability service")
-	})
 }
 
 // TestNoAdapterSetsARiskClass is the structural half of invariant 13 for this

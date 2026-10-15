@@ -76,7 +76,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 // dropping any parameters (`; charset=utf-8`).
 //
 // Hand-rolled rather than mime.ParseMediaType because package api's imports
-// are allowlisted (api_imports_test.go) and an equality check on the
+// are allowlisted (.golangci.yml's api-imports rule) and an equality check on the
 // type/subtype needs neither parameter parsing nor its error taxonomy: a
 // header this cannot reduce to exactly "application/json" is refused, which is
 // the direction a stricter parser would also take.

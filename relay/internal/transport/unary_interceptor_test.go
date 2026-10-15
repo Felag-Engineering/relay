@@ -84,7 +84,7 @@ func startEnrollmentServer(t *testing.T, rec *recordingEnrollmentServer, creds c
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, checker)),
 	)
 	relayv1.RegisterEnrollmentServer(srv, rec)
-	go srv.Serve(lis) //nolint:errcheck
+	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
 	return lis
 }

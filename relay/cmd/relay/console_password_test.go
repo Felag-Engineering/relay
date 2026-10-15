@@ -20,7 +20,7 @@ func trailOf(t *testing.T, path string) []audit.Record {
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	defer st.Close() //nolint:errcheck
+	defer st.Close()
 	recs, err := st.Audit().List(context.Background())
 	if err != nil {
 		t.Fatalf("List audit: %v", err)
@@ -48,7 +48,7 @@ func collideAuditID(t *testing.T, path string) {
 	err = st.Audit().Append(context.Background(), audit.Record{
 		ID: "collide", Timestamp: time.Now().UTC(), Kind: audit.KindPasswordSet, Principal: audit.PrincipalLocalHost,
 	})
-	st.Close() //nolint:errcheck
+	st.Close()
 	if err != nil {
 		t.Fatalf("seed colliding record: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestConsolePassword_SetsAPasswordThatVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	defer st.Close() //nolint:errcheck
+	defer st.Close()
 	ctx := context.Background()
 	admin, err := st.Accounts().GetByName(ctx, accounts.FoundingAdminName)
 	if err != nil {
@@ -275,7 +275,7 @@ func TestConsolePassword_ClearRemovesTheCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	defer st.Close() //nolint:errcheck
+	defer st.Close()
 	ctx := context.Background()
 	admin, err := st.Accounts().GetByName(ctx, accounts.FoundingAdminName)
 	if err != nil {
@@ -315,7 +315,7 @@ func TestConsolePassword_RecordsThePasswordSetAttributedToLocalHost(t *testing.T
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	defer st.Close() //nolint:errcheck
+	defer st.Close()
 	ctx := context.Background()
 	admin, _ := st.Accounts().GetByName(ctx, accounts.FoundingAdminName)
 	hash, err := st.Passwords().GetPassword(ctx, admin.ID)
@@ -393,7 +393,7 @@ func TestConsolePassword_AnUnrecordableChangeLeavesThePasswordUnchanged(t *testi
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	defer st.Close() //nolint:errcheck
+	defer st.Close()
 	ctx := context.Background()
 	admin, _ := st.Accounts().GetByName(ctx, accounts.FoundingAdminName)
 	hash, err := st.Passwords().GetPassword(ctx, admin.ID)

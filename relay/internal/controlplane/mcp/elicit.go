@@ -18,8 +18,8 @@ import (
 // opaque `pending_approval` result (ADR-0029 decision 6; ADR-0028 as amended
 // 2026-09-24).
 //
-// It is an EXEC file (no_dispatch_test.go's relaxed partition, tools_execution.go's
-// header): it spells capability.Principal and capability.ParkedError, needed
+// It is an EXEC file (listed in no_dispatch_test.go's execFiles,
+// tools_execution.go's header): it spells capability.Principal and capability.ParkedError, needed
 // to read what the capability layer already decided, and nothing more.
 //
 // # What this file is not

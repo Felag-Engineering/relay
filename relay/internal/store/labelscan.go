@@ -193,7 +193,7 @@ func (s *Store) ScanDeclinedLabels(ctx context.Context) (DeclinedLabelReport, er
 func scanDeclinedNamespace(ctx context.Context, q queryer, ns labelNamespace) (DeclinedLabelSet, error) {
 	table := ns.table()
 	rows, err := q.QueryContext(ctx,
-		fmt.Sprintf(`SELECT node_id, key, value FROM %s ORDER BY node_id, key`, table)) //nolint:gosec // table is one of two fixed literals, never user input
+		fmt.Sprintf(`SELECT node_id, key, value FROM %s ORDER BY node_id, key`, table)) // table is one of two fixed literals, never user input
 	if err != nil {
 		return DeclinedLabelSet{}, fmt.Errorf("query %s: %w", table, err)
 	}

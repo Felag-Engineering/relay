@@ -32,8 +32,8 @@ func runBootstrap(t *testing.T, args ...string) (code int, stdout, stderr string
 	}
 
 	code = runBootstrapTokenCommand(args, outF, errF)
-	outF.Close() //nolint:errcheck
-	errF.Close() //nolint:errcheck
+	outF.Close()
+	errF.Close()
 
 	o, _ := os.ReadFile(filepath.Join(dir, "stdout"))
 	e, _ := os.ReadFile(filepath.Join(dir, "stderr"))
@@ -68,7 +68,7 @@ func TestBootstrapToken_MintsAWorkingFoundingAdminCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	svc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
 	authn := controlplane.NewAuthenticator(svc)
@@ -111,7 +111,7 @@ func TestBootstrapToken_IsRepeatableAndAdditive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	ctx := context.Background()
 	admin, err := st.Accounts().GetByName(ctx, accounts.FoundingAdminName)
@@ -163,7 +163,7 @@ func TestBootstrapToken_RefusesADisabledFoundingAdmin(t *testing.T) {
 	if err := st.Accounts().SetEnabled(ctx, admin.ID, false); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	st.Close() //nolint:errcheck
+	st.Close()
 
 	code, stdout, stderr := runBootstrap(t, "-store-path", storePath)
 	if code == 0 {
@@ -182,7 +182,7 @@ func TestBootstrapToken_RefusesADisabledFoundingAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	t.Cleanup(func() { st2.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st2.Close() })
 	after, err := st2.Accounts().Get(ctx, admin.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
@@ -218,7 +218,7 @@ func TestBootstrapToken_TTLAndUsageErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 	ctx := context.Background()
 	admin, _ := st.Accounts().GetByName(ctx, accounts.FoundingAdminName)
 	svc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
@@ -255,7 +255,7 @@ func TestBootstrapToken_RecordsTheMintAttributedToLocalHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer st.Close() //nolint:errcheck
+	defer st.Close()
 	ctx := context.Background()
 	admin, _ := st.Accounts().GetByName(ctx, accounts.FoundingAdminName)
 	toks, err := st.APITokens().TokensByAccount(ctx, admin.ID)
@@ -292,7 +292,7 @@ func TestBootstrapToken_AnUnrecordableMintIssuesNoToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer st.Close() //nolint:errcheck
+	defer st.Close()
 	ctx := context.Background()
 	admin, _ := st.Accounts().GetByName(ctx, accounts.FoundingAdminName)
 	if toks, err := st.APITokens().TokensByAccount(ctx, admin.ID); err != nil || len(toks) != 0 {

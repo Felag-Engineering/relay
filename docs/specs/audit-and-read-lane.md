@@ -176,7 +176,7 @@ starts in `/proto` and requires the contract gates.
 | MCP records a read target and fails the call if that record cannot be written | `TestAuditRead_RecordsToolAndTarget`, `TestAuditRead_FailsTheCallWhenTheTrailCannotBeWritten` | MCP |
 | Every Console route is classified for read auditing and audited routes write through the real lane | `TestConsole_EveryRouteIsClassifiedForReadAuditing`, `TestConsole_AuditedRoutesRecordTheirReadThroughTheRealLane` | Console |
 | A Console event subscription records one metadata-only read and refuses an unwritable trail | `TestConsoleEvents_B1_RecordsExactlyOneWatchRead`, `TestConsoleEvents_B5_FailsClosedBeforeSubscribing` | Console |
-| The event package cannot import result-bearing internal packages or add result-shaped event fields | `TestEventsPackageImportsStdlibOnly`, `TestToolCallEventFieldsAreExactlyAllowed` | structural |
+| The event package cannot import result-bearing internal packages or add result-shaped event fields | `.golangci.yml` depguard rule `events-imports`, `TestToolCallEventFieldsAreExactlyAllowed` | lint, structural |
 
 Claims above with **no row**, and so nothing checking them:
 

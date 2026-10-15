@@ -29,8 +29,8 @@ import (
 // capability from importing internal/policyview or internal/nodevocab — is
 // no longer possible: #702/#680 routed the display-only Policy-view and
 // Template-vocabulary reads through the capability read lane
-// (readlane_registry.go), and execution_test.go's
-// TestCapabilityImportsOnlyRegistryAndJobs already admits both packages by
+// (readlane_registry.go), and .golangci.yml's capability-imports rule
+// already admits both packages by
 // name. PF-7's claim is still true today; it just needs proving at a finer
 // grain than "this package may not import X". These two tests replace the
 // stale guard:
@@ -250,8 +250,7 @@ const (
 
 // TestCachedPolicyAndVocabularyReachOnlyTheDisplayReadLane proves PF-7's
 // structural half with four allowlists over this package's own non-test
-// source, mirroring execution_test.go's TestCapabilityImportsOnlyRegistryAndJobs
-// and mcp/no_dispatch_test.go's parse-and-inspect style:
+// source, in mcp/no_dispatch_test.go's parse-and-inspect style:
 //
 //   - the FIELDS: an *ast.Ident named policyView or nodeVocab may appear
 //     only in readlane_registry.go (the ReadLane declaration and

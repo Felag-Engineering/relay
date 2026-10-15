@@ -33,8 +33,7 @@ import (
 // exactly the way it would through the production sink (internal/auditsink),
 // which this package cannot import directly — auditsink imports capability,
 // so doing so from a non-test file would be a cycle; this file is a _test.go
-// file, exempt from TestCapabilityImportsOnlyRegistryAndJobs's scan
-// (execution_test.go), so importing audit/store here is not that cycle.
+// file, exempt from .golangci.yml's capability-imports rule, so importing audit/store here is not that cycle.
 type ctxSensitiveAuditSink struct {
 	repo  audit.Repository
 	newID idGen

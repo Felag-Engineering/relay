@@ -57,7 +57,7 @@ func (r *sqliteAPITokens) TokensByAccount(ctx context.Context, accountID string)
 	if err != nil {
 		return nil, fmt.Errorf("list api tokens: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	var out []accounts.APIToken
 	for rows.Next() {

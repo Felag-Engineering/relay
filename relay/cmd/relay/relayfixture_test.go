@@ -145,7 +145,7 @@ func startRelay(t *testing.T, opts ...FixtureOption) *relayFixture {
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
-	t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+	t.Cleanup(func() { deps.store.Close() })
 	// A background Job (Execution.Start, #895) must finish before the store
 	// closes. Registered right after the store's cleanup, so (last-in-first-out)
 	// it runs after the node plane and the control plane have stopped serving
@@ -171,12 +171,12 @@ func startRelay(t *testing.T, opts ...FixtureOption) *relayFixture {
 			t.Fatalf("Listen (node plane): %v", err)
 		}
 		f.NodeAddr = lis.Addr().String()
-		go srv.Serve(lis) //nolint:errcheck
+		go srv.Serve(lis)
 		t.Cleanup(srv.GracefulStop)
 	default:
 		lis := bufconn.Listen(1 << 20)
 		f.Bufconn = lis
-		go srv.Serve(lis) //nolint:errcheck
+		go srv.Serve(lis)
 		t.Cleanup(srv.Stop)
 	}
 

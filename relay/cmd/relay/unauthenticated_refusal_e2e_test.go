@@ -45,7 +45,7 @@ func TestE2E_UnauthenticatedRefusalShapeWithConsoleAndOAuth(t *testing.T) {
 		} else {
 			body = strings.NewReader("")
 		}
-		req, err := http.NewRequest(method, f.ControlBase+path, body) //nolint:noctx // test
+		req, err := http.NewRequest(method, f.ControlBase+path, body)
 		if err != nil {
 			t.Fatalf("NewRequest: %v", err)
 		}
@@ -57,7 +57,7 @@ func TestE2E_UnauthenticatedRefusalShapeWithConsoleAndOAuth(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s %s: %v", method, path, err)
 		}
-		t.Cleanup(func() { resp.Body.Close() }) //nolint:errcheck
+		t.Cleanup(func() { resp.Body.Close() })
 		return resp
 	}
 
@@ -104,7 +104,7 @@ func TestE2E_UnauthenticatedRefusalShapeWithConsoleAndOAuth(t *testing.T) {
 	// places ON the Console is redirected with no crafted destination.
 	escaped := func(t *testing.T, rawPath string) *http.Response {
 		t.Helper()
-		req, err := http.NewRequest(http.MethodGet, f.ControlBase+rawPath, nil) //nolint:noctx // test
+		req, err := http.NewRequest(http.MethodGet, f.ControlBase+rawPath, nil)
 		if err != nil {
 			t.Fatalf("NewRequest: %v", err)
 		}
@@ -117,7 +117,7 @@ func TestE2E_UnauthenticatedRefusalShapeWithConsoleAndOAuth(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET %s: %v", rawPath, err)
 		}
-		t.Cleanup(func() { resp.Body.Close() }) //nolint:errcheck
+		t.Cleanup(func() { resp.Body.Close() })
 		return resp
 	}
 

@@ -15,13 +15,19 @@ import (
 )
 
 // no_dispatch_test.go is the Control API's structural half of invariant 10,
-// added with the execution routes (#356) and mirroring
-// mcp/no_dispatch_test.go: the ONLY path from a route to a dispatch is the
-// injected Executor interface (execution.go). A file here that held a
+// mirroring mcp/no_dispatch_test.go: the ONLY path from a route to a dispatch
+// is the injected Executor interface (execution.go). A file here that held a
 // *capability.Execution (or any concrete capability service), called a
-// capability constructor, or reached capability's internal newDispatch would be a second control path —
-// the thing ADR-0009/0010 exist to prevent — so it fails this guard with an
-// explicit message rather than passing review unnoticed.
+// capability constructor, or reached capability's internal newDispatch would
+// be a second control path — the thing ADR-0009/0010 exist to prevent.
+//
+// The concrete capability services and their constructors, the display-only
+// caches and registry.Repository are refused by .golangci.yml's "adapter
+// boundary" forbidigo patterns, matched on the resolved package path; the
+// store, database/sql, the wire protocol and the dispatcher by its
+// adapters-narrow-only and api-imports depguard rules. This guard keeps what
+// neither can express: newDispatch, the shape of a seam this package declares,
+// and the dot-import that would hide that shape.
 //
 // Unlike mcp's guard there is no read/exec partition. mcp needs one because
 // its read tools must never name a capability identifier at all; every file in
@@ -38,78 +44,37 @@ const (
 	nodevocabImportPath  = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 )
 
-// bannedCapabilityServices maps every capability service type, and its
-// constructor, to the narrowed seam an api file must use instead. They are
-// banned by EXACT name beside the retired capability.Service and
-// capability.New, which stay banned permanently: a prefix match would falsely
-// flag unrelated identifiers such as capability.ControlAction and
-// capability.AccountAdminEvent, which routes legitimately use.
-var bannedCapabilityServices = map[string]string{
-	"Execution":       "use the Executor interface (execution.go)",
-	"NewExecution":    "use the Executor interface (execution.go)",
-	"Recorder":        "the Recorder belongs to the composition root alone",
-	"NewRecorder":     "the Recorder belongs to the composition root alone",
-	"Control":         "use the Freezer interface",
-	"NewControl":      "use the Freezer interface",
-	"AccountAdmin":    "use the AccountAdmin interface",
-	"NewAccountAdmin": "use the AccountAdmin interface",
-	"ReadLane":        "use the NodeReader interface",
-	"NewReadLane":     "use the NodeReader interface",
-	"Approvals":       "use the ApprovalService / ApprovalGrantService interfaces",
-	"NewApprovals":    "use the ApprovalService / ApprovalGrantService interfaces",
-}
-
 // dispatchViolations AST-inspects file (fileName is used only in messages) and
 // returns one message per rule it catches:
 //
-//   - capability.Service and capability.New (or an alias's .Service/.New): the
-//     retired monolith's names, banned permanently. The execution layer's entry
-//     point is capability.Execution, banned with the other services below: no
-//     api file may hold one directly — routes reach dispatch only through the
-//     injected Executor.
-//   - the concrete capability services and their constructors
-//     (bannedCapabilityServices): Execution, Control, AccountAdmin, ReadLane,
-//     Approvals and Recorder, by exact name. Each route holds the narrow interface it uses,
-//     never the concrete service.
 //   - the unexported newDispatch identifier: capability's internal constructor,
 //     sealed to package capability. A reference here would not compile, but the
 //     guard gives an explicit message instead of an opaque compiler error.
-//   - a type assertion (or type-switch case) to registry.Repository: the
-//     runtime path from a narrowed reader back to the full registry write
-//     surface (Upsert/SetRelayLabels/Delete/...).
-//   - G1 (#680): naming policyview.Cache, policyview.New, nodevocab.Cache or
-//     nodevocab.New. Package api does not import either package today and
-//     must not start — those are the types that carry Set (invariant 2,
-//     ADR-0002).
-//   - G2 (#680), same formulation as mcp's and the Console's: an interface
-//     method declared in a non-test file whose RESULTS name registry.Node,
+//   - G2, same formulation as mcp's and the Console's: an interface method
+//     declared in a non-test file whose RESULTS name registry.Node,
 //     policyview.Snapshot or nodevocab.Snapshot and whose PARAMETERS contain
-//     no context.Context — a read no lane could have recorded or
-//     attributed (invariant 10, ADR-0025).
-//   - a dot-import of capability, registry, policyview or nodevocab
-//     (security review, cycle 2): it erases the package qualifier every
-//     rule above matches on, so it is refused outright.
+//     no context.Context — a read no lane could have recorded or attributed
+//     (invariant 10, ADR-0025).
+//   - a dot-import of capability, registry, policyview or nodevocab: it
+//     erases the package qualifier G2 matches on, so it is refused outright.
 //
 // This guard is flat by design — no read/exec partition, because every file
 // in package api legitimately handles capability.Principal (see the file
-// header) — so both new rules are unconditional, alongside the
-// capability.Execution/capability.Service/capability.New/newDispatch ones, and a new source file
-// is covered automatically.
+// header) — so every rule is unconditional and a new source file is covered
+// automatically.
 func dispatchViolations(fileName string, file *ast.File) []string {
 	var violations []string
 
-	capAlias, capImported := astguard.LocalImportAlias(file, capabilityImportPath)
-	regAlias, regImported := astguard.LocalImportAlias(file, registryImportPath)
-	pvAlias, pvImported := astguard.LocalImportAlias(file, policyviewImportPath)
-	nvAlias, nvImported := astguard.LocalImportAlias(file, nodevocabImportPath)
+	capAlias, _ := astguard.LocalImportAlias(file, capabilityImportPath)
+	regAlias, _ := astguard.LocalImportAlias(file, registryImportPath)
+	pvAlias, _ := astguard.LocalImportAlias(file, policyviewImportPath)
+	nvAlias, _ := astguard.LocalImportAlias(file, nodevocabImportPath)
 
-	// A dot-import of any of these four erases the package qualifier every
-	// check in this function matches on: `import . ".../registry"` turns
-	// `registry.Repository` into a bare `Repository` this guard cannot see,
-	// and the same holds for capability/policyview/nodevocab. There is no
-	// legitimate reason for one here, so it is a violation on its own.
-	// Mirrors console/no_dispatch_test.go's identical rule (security review,
-	// cycle 2).
+	// A dot-import of any of these four erases the package qualifier G2
+	// matches on: `import . ".../registry"` turns `[]registry.Node` into a
+	// bare `[]Node` this guard cannot see. There is no legitimate reason for
+	// one here, so it is a violation on its own. Mirrors the Console's and
+	// the MCP surface's identical rule.
 	for _, banned := range []struct{ alias, pkg string }{
 		{capAlias, "capability"}, {regAlias, "registry"}, {pvAlias, "policyview"}, {nvAlias, "nodevocab"},
 	} {
@@ -120,71 +85,16 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 		}
 	}
 
-	checkRepositoryAssertion := func(expr ast.Expr) {
-		sel, ok := expr.(*ast.SelectorExpr)
-		if !ok {
-			return
-		}
-		pkg, ok := sel.X.(*ast.Ident)
-		if !ok || !regImported || pkg.Name != regAlias || sel.Sel.Name != "Repository" {
-			return
-		}
-		violations = append(violations, fmt.Sprintf(
-			"%s: type-asserts to registry.Repository — the Control API must never recover the full registry write surface from a narrowed reader (no-dispatch structural guarantee)",
-			fileName))
-	}
-
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch v := n.(type) {
-		case *ast.SelectorExpr:
-			if capImported {
-				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == capAlias {
-					switch v.Sel.Name {
-					case "Service":
-						violations = append(violations, fmt.Sprintf(
-							"%s references capability.Service — Control API routes must never hold a capability.Service directly, only the injected Executor interface (no-dispatch structural guarantee)",
-							fileName))
-					case "New":
-						violations = append(violations, fmt.Sprintf(
-							"%s references capability.New — the exported dispatch constructor must never be called from a Control API route file (no-dispatch structural guarantee)",
-							fileName))
-					default:
-						if advice := bannedCapabilityServices[v.Sel.Name]; advice != "" {
-							violations = append(violations, fmt.Sprintf(
-								"%s references capability.%s — a concrete capability service or its constructor; %s (no-dispatch structural guarantee)",
-								fileName, v.Sel.Name, advice))
-						}
-					}
-				}
-			}
-			if pvImported {
-				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == pvAlias && (v.Sel.Name == "Cache" || v.Sel.Name == "New") {
-					violations = append(violations, fmt.Sprintf(
-						"%s references policyview.%s — the Control API must never hold or construct a *policyview.Cache: Cache carries Set (ADR-0002, invariant 2; ADR-0011, invariant 12)",
-						fileName, v.Sel.Name))
-				}
-			}
-			if nvImported {
-				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == nvAlias && (v.Sel.Name == "Cache" || v.Sel.Name == "New") {
-					violations = append(violations, fmt.Sprintf(
-						"%s references nodevocab.%s — the Control API must never hold or construct a *nodevocab.Cache: Cache carries Set (ADR-0002, invariant 2; ADR-0011, invariant 12)",
-						fileName, v.Sel.Name))
-				}
-			}
 		case *ast.Ident:
 			if v.Name == "newDispatch" {
 				violations = append(violations, fmt.Sprintf(
 					"%s references newDispatch — Control API routes must never construct a dispatch (no-dispatch structural guarantee)",
 					fileName))
 			}
-		case *ast.TypeAssertExpr:
-			checkRepositoryAssertion(v.Type)
 		case *ast.InterfaceType:
 			violations = append(violations, astguard.SeamHandsBackUnauditedRead(fileName, v, file)...)
-		case *ast.CaseClause:
-			for _, expr := range v.List {
-				checkRepositoryAssertion(expr)
-			}
 		}
 		return true
 	})
@@ -235,114 +145,6 @@ func TestNoDispatchConstruction(t *testing.T) {
 	}
 }
 
-// TestDispatchViolations_BansConcreteCapabilityServices proves every capability
-// service type and constructor is refused by exact name, and that similarly
-// named identifiers routes legitimately use are not. The list is spelled out
-// here rather than read from the map, so deleting a name from the map cannot
-// delete its row.
-func TestDispatchViolations_BansConcreteCapabilityServices(t *testing.T) {
-	const capImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"`
-	check := func(t *testing.T, src string) []string {
-		t.Helper()
-		file, err := parser.ParseFile(token.NewFileSet(), "fixture.go", src, 0)
-		if err != nil {
-			t.Fatalf("parser.ParseFile: %v", err)
-		}
-		return dispatchViolations("fixture.go", file)
-	}
-	mustContain := func(t *testing.T, violations []string, want string) {
-		t.Helper()
-		for _, v := range violations {
-			if strings.Contains(v, want) {
-				return
-			}
-		}
-		t.Fatalf("dispatchViolations() = %v, want one containing %q", violations, want)
-	}
-
-	for _, name := range []string{
-		"Recorder", "NewRecorder", "Control", "NewControl",
-		"AccountAdmin", "NewAccountAdmin", "ReadLane", "NewReadLane",
-		"Approvals", "NewApprovals", "Execution", "NewExecution",
-	} {
-		t.Run(name, func(t *testing.T) {
-			src := "package api\nimport " + capImport + "\nvar _ = capability." + name + "\n"
-			mustContain(t, check(t, src), "capability."+name+" — a concrete capability service")
-		})
-	}
-
-	t.Run("an aliased import cannot dodge the ban", func(t *testing.T) {
-		src := "package api\nimport c2 " + capImport + "\nvar _ *c2.ReadLane\n"
-		mustContain(t, check(t, src), "capability.ReadLane — a concrete capability service")
-	})
-
-	t.Run("exact match leaves similarly-named identifiers alone", func(t *testing.T) {
-		src := "package api\nimport " + capImport + `
-var _ capability.ControlAction
-var _ = capability.ControlFreezeEngage
-var _ capability.AccountAdminEvent
-var _ capability.IntentRecorder
-`
-		if violations := check(t, src); len(violations) != 0 {
-			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
-		}
-	})
-
-	t.Run("an aliased import cannot dodge the approvals ban", func(t *testing.T) {
-		src := "package api\nimport c2 " + capImport + "\nvar _ *c2.Approvals\nvar _ = c2.NewApprovals\n"
-		violations := check(t, src)
-		mustContain(t, violations, "capability.Approvals — a concrete capability service")
-		mustContain(t, violations, "capability.NewApprovals — a concrete capability service")
-	})
-
-	t.Run("an aliased import cannot dodge the execution ban", func(t *testing.T) {
-		src := "package api\nimport c2 " + capImport + "\nvar _ *c2.Execution\nvar _ = c2.NewExecution\n"
-		violations := check(t, src)
-		mustContain(t, violations, "capability.Execution — a concrete capability service")
-		mustContain(t, violations, "capability.NewExecution — a concrete capability service")
-	})
-
-	t.Run("exact match leaves the execution-path identifiers alone", func(t *testing.T) {
-		src := "package api\nimport " + capImport + `
-var _ capability.StartOptions
-var _ capability.StartedJob
-var _ capability.NodeResult
-var _ capability.PlanResult
-var _ capability.TaskView
-var _ capability.ParkedError
-var _ capability.FrozenError
-var _ capability.CapExceededError
-var _ capability.NoNodesMatchedError
-var _ = capability.ErrDraining
-var _ = capability.ErrIdempotencyUnavailable
-var _ = capability.ErrJobNotRequestedByCaller
-var _ = capability.DefaultDispatchConcurrency
-var _ capability.JobEventSink
-`
-		if violations := check(t, src); len(violations) != 0 {
-			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
-		}
-	})
-
-	t.Run("exact match leaves the approval seam identifiers alone", func(t *testing.T) {
-		src := "package api\nimport " + capImport + `
-var _ capability.ApprovalDecision
-var _ = capability.ErrApprovalUnavailable
-var _ capability.ApprovalGate
-var _ capability.ApprovalStore
-var _ capability.ApprovalAuthorizer
-var _ capability.ApprovalNotifier
-var _ capability.ApprovalNotice
-var _ capability.ApprovalGrantStore
-var _ capability.GrantRequest
-var _ = capability.ErrGrantCoversNothingGated
-`
-		if violations := check(t, src); len(violations) != 0 {
-			t.Fatalf("dispatchViolations() = %v, want none — the ban is by exact name, not prefix", violations)
-		}
-	})
-}
-
 // TestDispatchViolations_Fixtures runs dispatchViolations against synthetic
 // snippets rather than this package's real files, proving each rule actually
 // fires — and that the legitimate capability usage these routes depend on does
@@ -359,71 +161,11 @@ func TestDispatchViolations_Fixtures(t *testing.T) {
 		wantSubstr string // "" = expect NO violations
 	}{
 		{
-			name: "capability.Service held directly",
-			src: `package api
-import capability ` + capImport + `
-var _ = capability.Service{}
-`,
-			wantSubstr: "capability.Service",
-		},
-		{
-			name: "aliased capability import dodging the literal package name",
-			src: `package api
-import c2 ` + capImport + `
-var _ = c2.Service{}
-`,
-			wantSubstr: "capability.Service",
-		},
-		{
-			name: "exported capability.New dispatch constructor",
-			src: `package api
-import c2 ` + capImport + `
-func f() { c2.New(nil) }
-`,
-			wantSubstr: "capability.New",
-		},
-		{
-			name: "capability.New named without a call, default import",
-			src: `package api
-import ` + capImport + `
-var _ = capability.New
-`,
-			wantSubstr: "capability.New",
-		},
-		{
-			name: "exported capability.New via an alias",
-			src: `package api
-import cap ` + capImport + `
-func f() { cap.New(nil) }
-`,
-			wantSubstr: "capability.New",
-		},
-		{
 			name: "unexported newDispatch identifier",
 			src: `package api
 func f() { newDispatch() }
 `,
 			wantSubstr: "newDispatch",
-		},
-		{
-			name: "type assertion recovering registry.Repository",
-			src: `package api
-import ` + regImport + `
-func f(nodes any) { _ = nodes.(registry.Repository) }
-`,
-			wantSubstr: "registry.Repository",
-		},
-		{
-			name: "type-switch case recovering registry.Repository",
-			src: `package api
-import ` + regImport + `
-func f(nodes any) {
-	switch nodes.(type) {
-	case registry.Repository:
-	}
-}
-`,
-			wantSubstr: "registry.Repository",
 		},
 		{
 			// The false-positive guard: this is exactly what execution.go does.
@@ -440,38 +182,6 @@ func f(p capability.Principal, s string) (capability.PlanResult, []capability.No
 }
 `,
 			wantSubstr: "",
-		},
-		{
-			name: "constructing a policyview cache",
-			src: `package api
-import ` + pvImport + `
-var _ = policyview.New()
-`,
-			wantSubstr: "policyview.New",
-		},
-		{
-			name: "type assertion recovering the policyview cache",
-			src: `package api
-import ` + pvImport + `
-func f(p any) { _ = p.(*policyview.Cache) }
-`,
-			wantSubstr: "policyview.Cache",
-		},
-		{
-			name: "constructing a nodevocab cache",
-			src: `package api
-import ` + nvImport + `
-var _ = nodevocab.New()
-`,
-			wantSubstr: "nodevocab.New",
-		},
-		{
-			name: "type assertion recovering the nodevocab cache",
-			src: `package api
-import ` + nvImport + `
-func f(v any) { _ = v.(*nodevocab.Cache) }
-`,
-			wantSubstr: "nodevocab.Cache",
 		},
 		{
 			name: "the deleted Get-by-id NodeReader shape hands back a Node with no context",
@@ -545,7 +255,7 @@ import . ` + nvImport + `
 			wantSubstr: "dot-imports nodevocab",
 		},
 		{
-			name: "dot-importing capability erases the qualifier this guard matches on",
+			name: "dot-importing capability is refused outright",
 			src: `package api
 import . ` + capImport + `
 `,

@@ -310,7 +310,7 @@ func TestMigration0028_BackfillsExistingRowsFromRowOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	rows, err := st.db.QueryContext(ctx, `SELECT audit_id, seq, prev_hash, hash FROM audit ORDER BY rowid`)
 	if err != nil {
@@ -331,7 +331,7 @@ func TestMigration0028_BackfillsExistingRowsFromRowOne(t *testing.T) {
 		}
 		wantPrev, prev = h, h
 	}
-	rows.Close() //nolint:errcheck
+	rows.Close()
 	if n != 3 || prev == "" {
 		t.Fatalf("chained %d rows, want 3", n)
 	}
@@ -388,7 +388,7 @@ func TestMigration0028_FailedBackfillRollsBackAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open after the fix: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 	if v := verify(t, path); !v.Intact() || v.Head.Seq != 2 {
 		t.Errorf("verdict = %+v", v)
 	}
@@ -442,7 +442,7 @@ func TestAuditChain_ConcurrentAppendsStayContiguous(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { other.Close() }) //nolint:errcheck
+	t.Cleanup(func() { other.Close() })
 
 	const workers, each = 6, 8
 	var wg sync.WaitGroup
@@ -518,7 +518,7 @@ func TestVerifyAuditChain_NeverWritesOrCreates(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 28`).Scan(&n); err != nil || n != 0 {
 		t.Errorf("migration 28 recorded=%d, %v; the verifier must never migrate", n, err)
 	}
-	db.Close() //nolint:errcheck
+	db.Close()
 }
 
 func TestMigrationGoSteps_EveryVersionIsEmbedded(t *testing.T) {

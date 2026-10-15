@@ -37,7 +37,7 @@ func testTaskRepositoryWithStore(t *testing.T) (jobs.TaskRepository, *store.Stor
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 	return st.Tasks(), st
 }
 

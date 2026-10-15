@@ -284,7 +284,7 @@ func postRawToolCall(t *testing.T, f *relayFixture, token, header string, meta m
 	if err != nil {
 		t.Fatalf("POST /mcp: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	respBody, err = io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
@@ -508,7 +508,7 @@ func TestMCPElicitation_WrongCallStateIsRefused(t *testing.T) {
 	// request was ever parked, so the queue still holds exactly the one
 	// original request.
 	listResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals", f.Credential, nil)
-	defer listResp.Body.Close() //nolint:errcheck
+	defer listResp.Body.Close()
 	var list approvalListBody
 	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
 		t.Fatalf("decode approvals: %v", err)
@@ -873,7 +873,7 @@ func TestMCPElicitation_LegacyHeaderWithModernMetaDoesNotAsk(t *testing.T) {
 				}
 
 				list := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals", f.Credential, nil)
-				defer list.Body.Close() //nolint:errcheck
+				defer list.Body.Close()
 				var got approvalListBody
 				if err := json.NewDecoder(list.Body).Decode(&got); err != nil {
 					t.Fatalf("decode approvals: %v", err)
@@ -1290,7 +1290,7 @@ func TestApprovalCallout_ConsoleDecidesAnMCPParkedRequest(t *testing.T) {
 				t.Errorf("approval state = %q, want approved", got.State)
 			}
 			getResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+rid, f.Credential, nil)
-			defer getResp.Body.Close() //nolint:errcheck
+			defer getResp.Body.Close()
 			var view elicitDecisionView
 			if err := json.NewDecoder(getResp.Body).Decode(&view); err != nil {
 				t.Fatalf("decode approval: %v", err)
@@ -1385,7 +1385,7 @@ func TestMCPElicitation_StrandedAnswerIsRescuedOnTheConsoleAndControlAPI(t *test
 					t.Errorf("decision records = %+v, want %s's out-of-band decision", view, rescuer)
 				}
 				getResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+rid, f.Credential, nil)
-				defer getResp.Body.Close() //nolint:errcheck
+				defer getResp.Body.Close()
 				var dview elicitDecisionView
 				if err := json.NewDecoder(getResp.Body).Decode(&dview); err != nil {
 					t.Fatalf("decode approval: %v", err)
@@ -1408,7 +1408,7 @@ func TestMCPElicitation_StrandedAnswerIsRescuedOnTheConsoleAndControlAPI(t *test
 				decideResp := controlAPIRequest(t, f.ClientFor(bianca), http.MethodPost,
 					f.ControlBase+"/api/v1/approvals/"+rid+"/decision", bianca,
 					map[string]any{"approve": true, "plan_hash": ph})
-				defer decideResp.Body.Close() //nolint:errcheck
+				defer decideResp.Body.Close()
 				if decideResp.StatusCode != http.StatusOK {
 					body, _ := io.ReadAll(decideResp.Body)
 					t.Fatalf("decision status = %d, want 200; body = %s", decideResp.StatusCode, body)

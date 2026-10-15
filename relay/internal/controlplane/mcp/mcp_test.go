@@ -34,7 +34,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
 
-const testToken = accounts.TokenPrefix + "abcdef0123456789.mcp-integration-test" //nolint:gosec // test fixture, not a real credential
+const testToken = accounts.TokenPrefix + "abcdef0123456789.mcp-integration-test" // test fixture, not a real credential
 
 // opsLister adapts opvocab.Operations (a package-level func) to
 // mcp.OperationLister, exactly like relay/cmd/relay/main.go's opvocabLister.
@@ -274,7 +274,7 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	conduit := newFakeConduit()
 	q := auditquery.New(st.AuditQueries(), st.JobQueries())
@@ -382,7 +382,7 @@ func newTestServerWithFailingReadSink(t *testing.T) testServer {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	conduit := newFakeConduit()
 	q := auditquery.New(st.AuditQueries(), st.JobQueries())
@@ -1362,19 +1362,19 @@ func TestMCP_RequiresCredential(t *testing.T) {
 	}
 
 	resp := post(ts.plain, "")
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("no credential: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
 	}
 
 	respWrong := post(ts.plain, "wrong-"+testToken)
-	defer respWrong.Body.Close() //nolint:errcheck
+	defer respWrong.Body.Close()
 	if respWrong.StatusCode != http.StatusUnauthorized {
 		t.Errorf("wrong credential: status = %d, want %d", respWrong.StatusCode, http.StatusUnauthorized)
 	}
 
 	respOK := post(ts.plain, testToken)
-	defer respOK.Body.Close() //nolint:errcheck
+	defer respOK.Body.Close()
 	if respOK.StatusCode != http.StatusOK {
 		t.Errorf("valid credential: status = %d, want %d", respOK.StatusCode, http.StatusOK)
 	}

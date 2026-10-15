@@ -261,7 +261,7 @@ func TestMigration0024_IndexesCarryTheTieBreak(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read index definitions: %v", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	defs := map[string]string{}
 	for rows.Next() {

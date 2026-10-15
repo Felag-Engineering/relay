@@ -246,6 +246,6 @@ func reopenStore(t *testing.T, st *Store, path string) *Store {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	t.Cleanup(func() { re.Close() }) //nolint:errcheck
+	t.Cleanup(func() { re.Close() })
 	return re
 }

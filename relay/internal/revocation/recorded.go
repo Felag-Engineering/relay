@@ -28,8 +28,8 @@ import "sync"
 // deliberately: it is a race-window dedup for the single Relay process that
 // is running right now, not a durable "has this Node ever been recorded"
 // oracle. The trail is the only thing that can answer that question, and
-// this package cannot read it (imports_test.go forbids importing
-// internal/audit).
+// this package cannot read it (.golangci.yml's revocation-imports
+// rule forbids importing internal/audit).
 //
 // MEMORY. It grows monotonically for the lifetime of the process, bounded
 // by the number of distinct Node ids this process has cascade-revoked — the

@@ -128,7 +128,7 @@ func TestTokens_RestartRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	t.Cleanup(func() { reopened.Close() }) //nolint:errcheck
+	t.Cleanup(func() { reopened.Close() })
 
 	got, err := reopened.Tokens().ByID(ctx, "survivor")
 	if err != nil {
