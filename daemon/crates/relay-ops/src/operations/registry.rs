@@ -183,7 +183,8 @@ pub trait ResolvedOp: Send + Sync {
     }
     /// Execute, AFTER the Policy gate has allowed the action. For a Native
     /// Operation this is its `fn`-pointer handler; for a Template Operation it
-    /// validates + quotes the parameters and runs the rendered `/bin/sh -c`.
+    /// validates the values and runs the Template's fixed script with them as
+    /// positional parameters.
     fn invoke<'a>(&'a self, ctx: OpCtx<'a>) -> OpFuture<'a>;
 }
 

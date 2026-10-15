@@ -22,6 +22,7 @@ pub mod schema;
 pub mod service_restart;
 pub mod system_facts;
 pub mod template;
+mod template_body;
 
 use crate::gen::RiskClass;
 

@@ -12,10 +12,12 @@ annotated example).
 
 An operator-authored shell template with named, typed-validated **parameter
 slots** (ADR-0021, realizing ADR-0001's tier 2). The trusted author fixes the
-command structure; a caller supplies only parameter *values*, and substitution
-can never alter that structure — each value is validated against its slot's
-declared type and then POSIX single-quoted before it is placed in the exact
-lexical position the author wrote.
+command structure; a caller supplies only parameter *values*, and a value can
+never alter that structure — each value is validated against its slot's
+declared type and then passed to the shell as a positional parameter. Each
+`{{slot}}` in the body becomes a quoted reference (`"$1"`, `"$2"`, … in slot
+declaration order), and the script `/bin/sh -c` parses is the same text for
+every call: a value is data beside the script, never part of it.
 
 Templates exist so the typed path can grow at *your* cadence instead of the
 daemon's release cadence, keeping fleet-specific work off Raw Exec — the most
@@ -69,18 +71,50 @@ type = "integer"            # ^[0-9]+$, unsigned, ≤19 digits
 
 [[template.slots]]
 name = "path"
-type = "path"               # absolute + canonical, ≤4096 bytes, no control chars
+type = "path"               # absolute + canonical, ≤4096 bytes, plain filenames only
 ```
 
 Slot types: `identifier`, `integer`, `path`, `enum` (with `values`). Prefer
 `enum` whenever the value space is genuinely finite — it is the only type whose
 accept-set you control completely.
 
-Two authoring rules the loader enforces, both refusals at load time:
+Authoring rules the loader enforces, all refusals at load time:
 
-- **Every `{{slot}}` must be a standalone, whitespace-delimited token in an
-  unquoted context.** `--file={{path}}` and `'{{path}}'` fail to load. That rule
-  is what makes "one slot fills exactly one word" true by construction.
+- **A slot is a plain word of the top-level command list, and nowhere else.**
+  It may stand as an argument of a simple command, in a pipeline, in a
+  `;`/`&&`/`||`/newline list, or inside a `{ …; }` group or function body. It
+  is refused inside `$( )`, `( )`, backquotes, `${ }`, any arithmetic (`$(( ))`,
+  `(( ))`, `$[ ]`, `for ((`), a here-document or here-string, quotes, `$'…'`,
+  `[[ ]]`, a process substitution or array literal, a comment, and beside a
+  `case` command. This is what makes "one slot fills exactly one word" true by
+  construction, and it keeps a value away from every place a shell evaluates
+  text. Move the slot out to a plain argument, or compute the rest in the body
+  and pass the value as an argument of the command that needs it.
+- **A slot must be a whole word.** `--file={{path}}` and `'{{path}}'` fail to
+  load. Only space, tab and newline are blanks: a slot glued to an operator
+  (`>{{path}}`, `;{{path}}`), after an escaped space (`a\ {{path}}`), or next to
+  a form feed or carriage return is refused. Keep bodies on LF line endings — a
+  CRLF-saved file puts a carriage return after the slot.
+- **Some constructs are refused when the body holds a slot**, because the
+  daemon cannot read them the way every shell does: backquote substitutions
+  (write `$( )`), a `$((` that is not arithmetic, an unterminated construct,
+  `case`, and a backslash-newline inside a nested construct or in the middle of
+  a word. A backslash-newline between words, after a blank, stays allowed.
+  Bodies without a slot are not affected.
+- **A `path` slot admits plain filenames only.** The value must be an absolute
+  canonical path with no whitespace (ASCII or Unicode), no control character,
+  and none of `` $ ` \ " ' ; | & < > ( ) { } [ ] * ? ! # ~ = ``. Letters of any
+  script, digits and `- _ . , + @ % : ^` are fine (`/home/josé/notes`,
+  `/srv/app-1.2_x/data@2026,v2+final.txt`). A caller's value with a space or a
+  quote is refused with a validation failure, not run. This is narrower than the
+  Native `file.read` path check, which is unchanged. If you need a path the type
+  refuses, list the allowed values in an `enum` slot instead.
+- **Migration.** A Template written for the earlier quoting rules can now fail
+  to load, which makes the whole set `unloadable`: run `policy check
+  --templates` before deploying. Typical fixes are a slot inside `$( )` or a
+  here-document (pass it as an argument instead), backquotes (use `$( )`), and
+  a `path` slot used for names with spaces or quotes (use an `enum` or a
+  narrower convention).
 - **`risk_class` is mandatory**, and a template may not shadow a Native
   Operation (`system.facts`, `file.read`, `service.restart`, `pkg.install`) or
   `raw_exec`. The native vocabulary is frozen (ADR-0021) and always wins.
@@ -93,13 +127,13 @@ the template root together, in one pass, before anything is deployed:
 ```console
 $ relay-daemon policy check policy.toml --templates templates.d/ --strict
 error: relay-read/catalog.toml: [[template]] #2 (name="log.tail") — a placeholder near byte 12 \
-       is not a standalone whitespace-delimited token …
+       is not a standalone whitespace-delimited word …
 ```
 
 What it reports:
 
 - **Per template**: a malformed body (a placeholder that is not a standalone
-  token, unbalanced quoting), an invalid or missing `risk_class`, bad slot
+  word, unbalanced quoting), an invalid or missing `risk_class`, bad slot
   names/types, an empty `enum`, a name that shadows a Native Operation, and a
   duplicate name across the set — every one of them an error, because every one
   of them makes the whole set fail to load on the Node.
@@ -248,6 +282,6 @@ edit you can make to it.
 - A template — or a Policy rule — that can rewrite the daemon's config, binary,
   unit, or these template files is self-modifying Policy. Do not write one.
 - The shell boundary is treated as hostile by design, and the daemon's
-  validation and quoting are its mitigation. That is not a licence to pass
+  validation and positional-parameter passing are its mitigation. That is not a licence to pass
   attacker-controlled values into a `path` slot and assume they are harmless:
   constrain values in Policy too, where you can see them in review.
