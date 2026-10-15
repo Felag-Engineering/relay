@@ -321,6 +321,10 @@ Wanted, deliberately not in the first pass.
 
 ## Open questions
 
-None open. Who may take the actions that write `relay:` labels is settled in `enrollment.md` and
+- **Where do a Node's declared Labels live?** This spec puts them in a root-owned declared-labels
+  file; `daemon-installation.md` currently puts them in the daemon's environment file beside the
+  join string. One home is chosen in both specs (raised 2026-10-15).
+
+No other question is open. Who may take the actions that write `relay:` labels is settled in `enrollment.md` and
 `quarantine-node.md`; a re-enrolled Node is a new record whose tags do not follow it
 (`enrollment.md`).

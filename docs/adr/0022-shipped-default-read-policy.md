@@ -1,6 +1,6 @@
 # The shipped default Policy pre-allows the read class, with a confidentiality deny-list
 
-**Status:** Accepted.
+**Status:** Accepted; amended by ADR-0033.
 
 A freshly enrolled Node should be fully interrogable with zero Policy authoring: the
 AI-agent's dominant workload is observation (ADR-0012), and a default that denies
@@ -112,3 +112,13 @@ in place, the AI-agent can read a Node's template files (disclosing its vocabula
 never change them, ADR-0002/0021). `policy check --strict` reports this truthfully rather
 than the file being tuned to silence its own linter, and the remedy is the one this ADR
 already names: replace `file.read`'s wildcard with an explicit path allow-list.
+
+## Amendment (2026-10-15): amended by ADR-0033 — the self-reference denies follow the packaged paths
+
+Owner decision, 2026-10-15, recorded in ADR-0033's amendment of that date. The relay-daemon now
+installs from an OS package, and packaged and hand-built installs share one binary path, the
+one distribution packaging policy allows: `/usr/bin/relay-daemon`, not `/usr/local/bin`. On
+Alpine its unit is an OpenRC init file rather than a systemd unit. The shipped default's
+self-reference denies name the binary and unit at the paths the packages install, on every
+supported platform; the 2026-08-10 amendment's `/usr/local/bin/relay-daemon` entry is replaced
+accordingly. The reason for denying them, and everything else this ADR decides, is unchanged.

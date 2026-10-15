@@ -22,7 +22,7 @@ they already run, from artifacts they can verify before executing.
 
 | Surface | What it does |
 |---|---|
-| **Release artifacts** | The `relay-daemon` packages (`.deb`, `.rpm`, `.apk`) and the optional shipped read catalog package for each architecture, and the bare binary for a hand-built install — all under the release `SHA256SUMS`. The Policy Catalog is published beside them; `policy-catalog.md` owns it |
+| **Release artifacts** | *(Packages designed for v0.6.5.)* The `relay-daemon` packages (`.deb`, `.rpm`, `.apk`) and the optional shipped read catalog package for each architecture, and the bare binary for a hand-built install — all under the release `SHA256SUMS`. The Policy Catalog is published beside them; `policy-catalog.md` owns it |
 | **The customer's config management** | The only installer, configurer and upgrader. Ansible and shell are rendered as bundles; other tools are documented, not rendered |
 | **relay-daemon subcommands** | Offline only: `--version`, `policy check`, `dump-operation-schema` |
 | **Enrollment bundles** | A rendered artifact carrying the join string, minted with its Enrollment Token (`enrollment.md` owns minting) |
@@ -52,7 +52,8 @@ self-reference denies (ADR-0022) name the binary and unit at the paths the packa
 a packaged Node is covered by them.
 
 The `EnvironmentFile` follows the same rule: placed when absent, `0600` and root-owned, for the
-join string and Labels, and never rewritten by the package.
+join string and Labels (where declared Labels live is an open question), and never rewritten by
+the package.
 
 Shipping the default Policy is what keeps a fresh Node from the worst first impression:
 enrolled, healthy, and refusing everything. A missing Policy still means deny-all at runtime —
@@ -87,7 +88,8 @@ not delivered as a container.
 ### A fresh Node's configuration
 
 Two lines: the **join string** — Relay address, CA fingerprint and Enrollment Token in one
-pasteable value (ADR-0031) — and the Node's `node:` Labels. The daemon pins the CA from the
+pasteable value (ADR-0031) — and the Node's `node:` Labels (where those live is an open
+question, shared with `selectors-and-labels.md`). The daemon pins the CA from the
 fingerprint and writes its bundle into the state directory, so no CA path is configured by hand.
 
 The Enrollment Token is used only when no identity is persisted and is inert on every later
@@ -157,7 +159,7 @@ the catalog package with it, because the catalog depends on it.
 | Format | Remove | Purge |
 |---|---|---|
 | `.deb` | Binary, unit and catalog Templates go; Policy, Policy directory and its fragments, environment file and state directory stay | `apt purge` removes all of it, the Node's identity included |
-| `.apk` | As `.deb` | `apk del --purge` removes all of it |
+| `.apk` | Binary and unit go; Policy, Policy directory and its fragments, environment file and state directory stay (no catalog package exists for Alpine) | `apk del --purge` removes all of it |
 | `.rpm` | As `.deb`. The Policy and environment file were never package-owned, so rpm leaves them exactly as they were | No purge exists. Removal never deletes state; it prints the exact paths to delete by hand |
 
 A purged Node has no identity and must enroll again. Left behind by a plain remove, the Policy
@@ -169,7 +171,7 @@ the transport and visible in the audit trail; the Relay never reaches back to st
 
 Every release attachment ships under the release `SHA256SUMS`, and no documented install path
 executes an artifact before verifying its digest. A hand-built install takes the unit and
-example `EnvironmentFile` from the source at the signed release tag, never from a branch. The component that distrusts the operator is
+example `EnvironmentFile` from the source at the release tag, never from a branch. The component that distrusts the operator is
 not delivered by `curl | sh` (ADR-0033).
 
 A package wraps the binary the release already built, reproduced and guarded, byte for byte —
