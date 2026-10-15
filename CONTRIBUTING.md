@@ -42,4 +42,4 @@ make a spec claim untrue, the spec is updated first: name the claim in the PR.
 One issue per PR. Fill in the template. Titles follow `<type>(<area>): ...` or `<type>: ...`, as in
 the commit history.
 
-Licensing is not yet settled; see the Status section of [README.md](README.md) and #123.
+Relay is licensed under the Business Source License 1.1 ([LICENSE](LICENSE)); contributions are accepted under the same terms.
