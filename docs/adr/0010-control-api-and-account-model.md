@@ -1,6 +1,6 @@
 # Control API: a REST control-plane surface with a unified Account model
 
-**Status:** Accepted; amended by ADR-0033.
+**Status:** Accepted; amended by ADR-0033 and ADR-0043.
 
 The Relay exposes **three user-facing surfaces**, all thin adapters over the single
 control-plane capability layer (ADR-0009): the **MCP surface** (ADR-0003 — the AI-agent's
@@ -186,3 +186,12 @@ key the Relay writes, and no shipped deployment met it (known-gap row 11).
 CI system or an AI-agent's token pushing to a deploy branch — is the operator's infrastructure:
 Relay documents what is safe and does not police it. The invariant binds what Relay's software
 does, and that is what makes it enforceable.
+
+## Amendment (2026-10-15): amended by ADR-0043 — the floor is a file, not the environment
+
+The 2026-09-15 amendment delivered the security floor as `RELAY_*` environment variables from a
+root-owned `EnvironmentFile`. ADR-0043 replaces that mechanism: the floor and its secrets live in
+one configuration file the Relay reads itself, and the Relay refuses to run if it could write
+that file or anyone else could read it. The property this ADR defends — no credential, and not
+the Relay itself, can change the terms on which credentials are accepted — is unchanged; the
+mechanism is now one the Relay can check.

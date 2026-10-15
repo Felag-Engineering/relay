@@ -89,7 +89,8 @@ Tokens, every operator setting — happens in the Console. See `docs/specs/relay
 ## Amendment (2026-10-15): amended by ADR-0033 — the package writes the first configuration
 
 Owner decision, 2026-10-15, recorded in ADR-0033's amendment of that date. The Relay now
-installs from an OS package, and the package — not `relay init` — writes `/etc/relay/relay.env`,
+installs from an OS package, and the package — not `relay init` — writes the Relay's configuration
+file (`/etc/relay/relay.toml`, ADR-0043),
 once, at first install: the host's fully qualified name as the certificate hostname, the CA
 directory and store path, the control plane and the Admin Console enabled, and the
 control-plane listener bound to loopback until the operator widens it. The reason

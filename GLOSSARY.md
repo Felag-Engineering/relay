@@ -445,8 +445,8 @@ OAuth and CSP sense elsewhere and is not reserved here)
 The configuration that bounds *who may authenticate and how recently they proved it*:
 listeners, CA/TLS, auth bootstrap, the identity provider, session and step-up windows,
 `console_execution`, the approval notification path. Set by whoever administers the Relay's
-host, outside Relay; nothing Relay runs or accepts can write it — no API, no request, and not
-the Relay process (invariant 11). Contrast
+host, outside Relay, in one configuration file the Relay reads itself (ADR-0043); nothing Relay
+runs or accepts can write it — no API, no request, and not the Relay process (invariant 11). Contrast
 **operator settings**, which merely bound reach and may live in the store.
 _Avoid_: hard limits, static config (both also describe operator settings)
 
