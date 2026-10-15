@@ -193,7 +193,7 @@ func newStartFx(t *testing.T, mods ...func(*seams)) *startFx {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	reg := registry.NewInMemory()
 	for _, id := range startNode {

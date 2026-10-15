@@ -8,35 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 )
-
-// stdlibImportAllowlist is the exhaustive set of imports this package's
-// non-test .go files may use. Anything else — and in particular ANY
-// github.com/Felag-Engineering/gleipnir-relay/... import — fails the build:
-// package events must never be able to NAME a result type.
-// capability.NodeResult, jobs.Task/jobs.Result, and the mcp wire structs all
-// carry captured Stdout/Stderr, and an event bus that can spell one is one
-// refactor away from shipping it (ADR-0025; D9 in
-// docs/design/console/99-open-decisions.md). This mirrors
-// mcp/no_dispatch_test.go's structural guard and
-// capability.TestCapabilityImportsOnlyRegistryAndJobs /
-// jobs.TestNoDatabaseSQLImport's parse-and-inspect style — it is a stronger
-// version of the same idea: those guards police WHICH identifiers a file
-// may reference on an allowed import; this one forbids the import itself.
-var stdlibImportAllowlist = map[string]bool{
-	"crypto/rand":  true,
-	"encoding/hex": true,
-	"sort":         true,
-	"strconv":      true,
-	"strings":      true,
-	"sync":         true,
-	"time":         true,
-}
-
-const internalImportPrefix = "github.com/Felag-Engineering/gleipnir-relay/"
 
 // toolCallEventAllowedFields is the exact, closed field set
 // ToolCallEvent may carry. An unlisted field fails the build — the same
@@ -89,50 +63,6 @@ func nonTestGoFiles(t *testing.T, dir string) []string {
 		t.Fatal("nonTestGoFiles found zero non-test .go files — the guard would silently inspect nothing")
 	}
 	return names
-}
-
-// TestEventsPackageImportsStdlibOnly is the primary structural guard: no
-// non-test file in this package may import anything but the small stdlib
-// set above, and never an internal/... package (which is where every
-// result-shaped type lives).
-func TestEventsPackageImportsStdlibOnly(t *testing.T) {
-	dir := thisDir(t)
-	fset := token.NewFileSet()
-	for _, name := range nonTestGoFiles(t, dir) {
-		path := filepath.Join(dir, name)
-		file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
-		if err != nil {
-			t.Fatalf("parser.ParseFile(%s): %v", path, err)
-		}
-		for _, msg := range importViolations(name, file) {
-			t.Error(msg)
-		}
-	}
-}
-
-func importViolations(fileName string, file *ast.File) []string {
-	var violations []string
-	for _, imp := range file.Imports {
-		importPath, err := strconv.Unquote(imp.Path.Value)
-		if err != nil {
-			violations = append(violations, fmt.Sprintf("%s: unquote import %s: %v", fileName, imp.Path.Value, err))
-			continue
-		}
-		if strings.HasPrefix(importPath, internalImportPrefix) {
-			violations = append(violations, fmt.Sprintf(
-				"%s imports %q — package events must never be able to NAME a result type — capability.NodeResult, "+
-					"jobs.Task/jobs.Result and the mcp wire structs all carry captured Stdout/Stderr, and an event bus "+
-					"that can spell one is one refactor away from shipping it (ADR-0025; D9 in "+
-					"docs/design/console/99-open-decisions.md)", fileName, importPath))
-			continue
-		}
-		if !stdlibImportAllowlist[importPath] {
-			violations = append(violations, fmt.Sprintf(
-				"%s imports %q, which is not on this package's stdlib import allowlist (%v)",
-				fileName, importPath, stdlibImportAllowlist))
-		}
-	}
-	return violations
 }
 
 // structFields AST-locates a top-level `type name struct { ... }`
@@ -354,43 +284,6 @@ func receiverIsBus(expr ast.Expr) bool {
 // synthetic sources rather than this package's real files, proving each
 // rule actually fires (and that a legitimate declaration does not).
 func TestGuards_Fixtures(t *testing.T) {
-	t.Run("import violations", func(t *testing.T) {
-		fset := token.NewFileSet()
-
-		bad, err := parser.ParseFile(fset, "bad.go", `package events
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-`, parser.ImportsOnly)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if msgs := importViolations("bad.go", bad); len(msgs) == 0 {
-			t.Error("expected an internal-import violation, got none")
-		}
-
-		good, err := parser.ParseFile(fset, "good.go", `package events
-import (
-	"crypto/rand"
-	"time"
-)
-`, parser.ImportsOnly)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if msgs := importViolations("good.go", good); len(msgs) != 0 {
-			t.Errorf("legitimate stdlib imports flagged: %v", msgs)
-		}
-
-		badStdlib, err := parser.ParseFile(fset, "bad_stdlib.go", `package events
-import "net/http"
-`, parser.ImportsOnly)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if msgs := importViolations("bad_stdlib.go", badStdlib); len(msgs) == 0 {
-			t.Error("expected a not-on-allowlist violation for net/http, got none")
-		}
-	})
-
 	t.Run("ToolCallEvent field allowlist", func(t *testing.T) {
 		fset := token.NewFileSet()
 

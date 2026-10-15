@@ -134,7 +134,7 @@ func TestElicit_AskableParkFromMRTRClientGetsAQuestion(t *testing.T) {
 	// for this approval — read back independently, rather than trusting the
 	// MCP result alone.
 	getResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+requestID, f.Credential, nil)
-	defer getResp.Body.Close() //nolint:errcheck
+	defer getResp.Body.Close()
 	if getResp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(getResp.Body)
 		t.Fatalf("GET approval status = %d; body = %s", getResp.StatusCode, respBody)
@@ -288,7 +288,7 @@ func TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST /mcp: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
@@ -503,7 +503,7 @@ func TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
 	decideResp := controlAPIRequest(t, f.ClientFor(bianca), http.MethodPost,
 		f.ControlBase+"/api/v1/approvals/"+requestIDB+"/decision", bianca,
 		map[string]any{"approve": true, "plan_hash": planHashB})
-	defer decideResp.Body.Close() //nolint:errcheck
+	defer decideResp.Body.Close()
 	if decideResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(decideResp.Body)
 		t.Fatalf("B's decision status = %d, want 200; body = %s", decideResp.StatusCode, body)

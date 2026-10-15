@@ -101,7 +101,7 @@ func TestSurfaceDeps_AuditSinkIsWired(t *testing.T) {
 	jobID := seedJob(t, f.Deps)
 	resp := controlAPIRequest(t, f.ClientFor(""), http.MethodGet,
 		f.ControlBase+"/api/v1/jobs/"+jobID, f.Credential, nil)
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("read status = %d, want 200", resp.StatusCode)
 	}
@@ -183,7 +183,7 @@ func TestConsoleSurface_UnwiredSeamsCrossTheBoundaryAsNil(t *testing.T) {
 // Account store.
 type stubVerifier struct{}
 
-const stubCredential = accounts.TokenPrefix + "0123456789abcdef.stub" //nolint:gosec // test fixture
+const stubCredential = accounts.TokenPrefix + "0123456789abcdef.stub" // test fixture
 
 func (stubVerifier) Verify(_ context.Context, credential string) (accounts.Account, accounts.APIToken, error) {
 	if credential != stubCredential {
@@ -298,7 +298,7 @@ func TestControlSurfaces_TestOnlyMCPOptionHookIsEmptyInProduction(t *testing.T) 
 		if err != nil {
 			t.Fatalf("newServer: %v", err)
 		}
-		t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+		t.Cleanup(func() { deps.store.Close() })
 
 		if got := len(deps.hooks.testMCPOptions); got != 0 {
 			t.Errorf("newServer's appDeps.hooks.testMCPOptions has length %d, want 0 — the production "+

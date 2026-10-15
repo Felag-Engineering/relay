@@ -138,7 +138,7 @@ type sendSlot struct {
 // Router satisfies capability.Conduit structurally (Connected/Dispatch/
 // Cancel/Query on jobs.Task/jobs.Result/jobs.Verdict) without importing
 // package capability, so there is no import cycle and capability's
-// proto-free import lock (TestCapabilityImportsOnlyRegistryAndJobs) stays
+// proto-free import lock (.golangci.yml's capability-imports rule) stays
 // intact.
 //
 // Router still never touches the store and decides nothing: it only evaluates

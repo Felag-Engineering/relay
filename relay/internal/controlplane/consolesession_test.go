@@ -362,11 +362,11 @@ func TestConsoleSession_MetadataIsReachableWithoutACredential(t *testing.T) {
 	ts := httptest.NewServer(srv.http.Handler)
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + ProtectedResourceMetadataPath) //nolint:noctx // test
+	resp, err := http.Get(ts.URL + ProtectedResourceMetadataPath)
 	if err != nil {
 		t.Fatalf("Get metadata: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("metadata status = %d, want 200 without a credential", resp.StatusCode)
 	}

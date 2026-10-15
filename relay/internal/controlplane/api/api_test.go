@@ -252,7 +252,7 @@ func (f *fakeAuditor) all() []audit.Record {
 // what production wiring produces (invariant 10 — one auth path).
 // -----------------------------------------------------------------------
 
-const testCredential = accounts.TokenPrefix + "1234567890abcdef.test-secret" //nolint:gosec // test fixture, not a real credential
+const testCredential = accounts.TokenPrefix + "1234567890abcdef.test-secret" // test fixture, not a real credential
 
 // staticVerifier is a controlplane.TokenVerifier that accepts exactly one
 // credential, as the founding admin Account. The identity-management tests in
@@ -786,7 +786,7 @@ func TestRevokeTokenCascade_PersistsOneRowPerNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	cascade := []string{"node-1", "node-2", "node-3", "node-4", "node-5"}
 	tr := &fakeTokenRevoker{cascade: cascade}
@@ -1246,7 +1246,7 @@ func TestMintThenRevokeToken_BothProduceAuditRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
 	tr := &fakeTokenRevoker{}

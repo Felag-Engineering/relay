@@ -278,7 +278,7 @@ func planOf(t *testing.T, st *Store, stmt string, args []any) string {
 	if err != nil {
 		t.Fatalf("EXPLAIN QUERY PLAN: %v", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 	var plan strings.Builder
 	for rows.Next() {
 		var id, parent, notused int

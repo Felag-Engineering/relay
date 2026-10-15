@@ -650,7 +650,7 @@ type revokeTokenCall struct {
 // of the Console by accident.
 const (
 	sweepMintedTokenID   = "tok-minted-1"
-	sweepMintedPlaintext = accounts.TokenPrefix + "minted-plaintext-must-appear-once-4a1d" //nolint:gosec // test fixture, not a real credential
+	sweepMintedPlaintext = accounts.TokenPrefix + "minted-plaintext-must-appear-once-4a1d" // test fixture, not a real credential
 )
 
 // fakeAccountAdmin is the AccountAdministrator write seam (#655). It records

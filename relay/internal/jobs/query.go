@@ -14,7 +14,7 @@ var ErrInvalidCursor = errors.New("jobs: invalid pagination cursor")
 // query.go is the Job/Task read lane: filtered, paginated summaries
 // over Jobs and Tasks, distinct from JobRepository/TaskRepository's
 // create/transition/by-key surface. Kept SQL-free like the rest of this
-// package (nosql_test.go); the SQLite implementation is
+// package (.golangci.yml's domain-no-sql rule); the SQLite implementation is
 // internal/store/jobquery.go.
 
 // JobState is a Job's derived lifecycle state, distinct from a single Task's

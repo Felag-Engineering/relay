@@ -60,7 +60,7 @@ type TokenRevoker interface {
 // the authentication hole R12 exists to prevent.
 //
 // WHY A CALLBACK AND NOT A SINK FIELD: package revocation imports neither
-// internal/audit nor internal/capability (imports_test.go enforces this), so
+// internal/audit nor internal/capability (.golangci.yml's revocation-imports rule), so
 // the record's CONTENT — the acting Principal, its asserted lane, and the
 // derived reason naming the token — must be authored by the surface that
 // authenticated the operator, while the SET of Nodes to record is decided

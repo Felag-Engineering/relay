@@ -392,7 +392,7 @@ also need `make test-integration`; changes to the daemon-facing contract need th
 | Cancel stops Pending, asks Dispatched, leaves Resolved alone | `TestCancelJobStopsPendingSendsCancelToDispatchedLeavesResolved` | capability |
 | A Task that wins the cancel race keeps its true outcome | `TestEngineDispatchOneTreatsConcurrentCancelAsTerminal` | capability |
 | No surface can dispatch outside this layer | `TestNoDispatchConstruction`, `TestDispatchSymbolsUnexported` | compile-time |
-| The layer imports nothing but registry and jobs | `TestCapabilityImportsOnlyRegistryAndJobs` | compile-time |
+| The layer imports nothing but registry and jobs | `.golangci.yml` depguard rule `capability-imports` | lint |
 | Plan and apply agree on an unchanged fleet | `TestMCP_Plan_PlanVsRealRunParity` | MCP |
 | A fan-out returns one result per Node | `TestMCP_RunOperation_PerNodeResults` | MCP |
 | A park is a result, not an error | `TestDispatch_ParkIsAResultNotAnError` | MCP |

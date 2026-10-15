@@ -14,7 +14,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask"
 )
 
-// This is an EXEC file (no_dispatch_test.go's relaxed partition — see
+// This is an EXEC file (listed in no_dispatch_test.go's execFiles — see
 // tools_execution.go's doc comment for the full rationale).
 
 // tasks.go serves the MCP Tasks extension's read side (SEP-2663,

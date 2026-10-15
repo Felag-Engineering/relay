@@ -21,9 +21,10 @@ import (
 // evaluates no Policy, checks no blast cap, and makes no authorization
 // decision of its own; each of those is the capability layer's, so both
 // surfaces inherit one answer (invariant 10). The structural half of that
-// promise is no_dispatch_test.go in this package: a route that reached around
-// the Executor to a capability.Execution, capability.NewExecution, or newDispatch fails
-// the guard.
+// promise is .golangci.yml's "adapter boundary" patterns and
+// no_dispatch_test.go in this package: a route that reached around the
+// Executor to a capability.Execution, capability.NewExecution, or newDispatch
+// fails one of them.
 //
 // **Raw Exec's admin gate is deliberately NOT re-implemented here.**
 // authz.RoleGate already maps jobs.ActionRawExec → RoleAdmin for every

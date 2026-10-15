@@ -159,7 +159,7 @@ executor is the same class of wiring bug as an unauthorized one.
 | The local lever bypasses the role gate deliberately | `TestFreezeLocalLever_BypassesTheRoleGate` | capability |
 | Preflights answer while frozen, while real runs refuse | `TestPlanFrozenReportsAdvisoryWhileRunRefuses` | capability |
 | Freeze engage/release works end to end over the API | `TestControlAPI_FreezeEngageRelease` | e2e |
-| Freeze state carries no database import into the state package | `TestNoDatabaseSQLImport` | compile-time |
+| Freeze state carries no database import into the state package | `.golangci.yml` depguard rule `domain-no-sql` | lint |
 
 Claims above with **no row**, and so nothing checking them:
 

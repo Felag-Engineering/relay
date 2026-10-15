@@ -35,8 +35,16 @@ linters:
     # Mechanical guards for the invariants; patterns below.
     - forbidigo
     - depguard
+    # A `//nolint:<linter>` that suppresses nothing — the linter is not enabled, its
+    # findings are excluded for that file, or the code no longer trips it — is a
+    # stale claim that a reviewer reads as a live exception. Every directive must
+    # name its linter and must be needed.
+    - nolintlint
 
   settings:
+    nolintlint:
+      require-specific: true
+
     errcheck:
       exclude-functions:
         # Formatted writes to a terminal or an in-memory buffer; nothing to recover.
@@ -71,6 +79,35 @@ linters:
         - pattern: ^exec\.Cmd$
           msg: "the Relay never spawns processes; execution happens only in relay-daemon (AGENTS.md invariants 1 and 10)"
 
+        # Invariant 10: an adapter narrows only. The patterns below are matched on the
+        # resolved package path (analyze-types), so an aliased or dot-import cannot
+        # dodge them, and they apply only inside the three adapter packages
+        # (internal/controlplane/{api,mcp,console}) through the exclusion rule keyed
+        # on "adapter boundary" at the end of this file. The composition root and the
+        # capability layer itself use these names legitimately.
+        #
+        # The concrete capability services and their constructors belong to the
+        # composition root. An adapter holds the narrowed interface its own package
+        # declares, never the service behind it. Matched by exact name, so the inert
+        # values that share a prefix (ControlAction, AccountAdminEvent,
+        # IntentRecorder, ...) stay usable. Service and New are the retired monolith's
+        # names and stay banned so that neither can come back.
+        - pattern: ^capability\.(Service|New|Execution|NewExecution|Recorder|NewRecorder|Control|NewControl|AccountAdmin|NewAccountAdmin|ReadLane|NewReadLane|Approvals|NewApprovals)$
+          pkg: ^github\.com/Felag-Engineering/gleipnir-relay/relay/internal/capability$
+          msg: "adapter boundary (invariant 10): a concrete capability service or its constructor belongs to the composition root; hold the narrowed seam this package declares"
+        # The display-only caches carry Set. An adapter reads a Policy view or a
+        # Template vocabulary through its read lane and never holds or builds the
+        # cache (invariant 2, ADR-0002; invariant 12, ADR-0011).
+        - pattern: ^(policyview|nodevocab)\.(Cache|New)$
+          pkg: ^github\.com/Felag-Engineering/gleipnir-relay/relay/internal/(policyview|nodevocab)$
+          msg: "adapter boundary (invariant 2, invariant 12): the display-only cache carries Set; read it through the read lane"
+        # registry.Repository is the full registry write surface (Upsert,
+        # SetRelayLabels, SetRevoked, ...). Naming it at all, in a type assertion, a
+        # type switch or an alias, is the way back from a narrowed reader to it.
+        - pattern: ^registry\.Repository$
+          pkg: ^github\.com/Felag-Engineering/gleipnir-relay/relay/internal/registry$
+          msg: "adapter boundary (invariant 10): never name the registry's write surface; read Nodes through the read lane"
+
     depguard:
       rules:
         # relaytest launches a real relay-daemon binary for tests, so it is exempt from
@@ -84,6 +121,307 @@ linters:
             - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest
               desc: "test-only harness (it spawns processes); never import it from production code"
 
+        # The import boundaries below are what an import path can express, so they live
+        # here rather than in per-package AST tests. A `$` suffix makes an entry an
+        # exact match; without it an entry is a prefix. In list-mode strict, anything
+        # not allowed is refused, and a deny entry only adds the reason to the message.
+        # What an import path cannot express — which identifiers a file may use from a
+        # package it is allowed to import — stays in the no_dispatch tests and in the
+        # "adapter boundary" forbidigo patterns above.
+
+        # Invariant 10: an adapter reaches nothing but the capability layer's seams.
+        # The store, raw SQL, the wire protocol and the dispatcher are each a second
+        # control path around that layer, from any file of any adapter package.
+        adapters-narrow-only:
+          files:
+            - "**/internal/controlplane/api/**"
+            - "**/internal/controlplane/mcp/**"
+            - "**/internal/controlplane/console/**"
+            - "!$test"
+          deny:
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/store
+              desc: "an adapter never reaches the store; it reads and writes through the seams its package declares (invariant 10)"
+            - pkg: database/sql
+              desc: "an adapter never reaches the store; it reads and writes through the seams its package declares (invariant 10)"
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1
+              desc: "an adapter never builds or reads a wire message; only the transport speaks the protocol (invariants 8 and 10)"
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch
+              desc: "an adapter reaches a Node only through the capability layer's execution seam (invariant 10)"
+
+        # The Control API is a thin adapter that manages runtime objects, never Relay
+        # configuration: it never reaches the CA key, a listener, a rate limiter or the
+        # store (invariant 11). Every other entry is domain vocabulary its routes render.
+        # authz is admitted for its ErrUnauthorized sentinel only, to render a refusal
+        # the capability layer made; the authorization decision is never taken here.
+        api-imports:
+          list-mode: strict
+          files:
+            - "**/internal/controlplane/api/*.go"
+            - "!$test"
+          allow:
+            - context$
+            - crypto/rand$
+            - encoding/hex$
+            - encoding/json$
+            - errors$
+            - fmt$
+            - io$
+            - log/slog$
+            - net/http$
+            - sort$
+            - strings$
+            - time$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation$
+          deny:
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca
+              desc: "the Control API never reaches the CA key (invariant 11)"
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport
+              desc: "the Control API never reaches a listener (invariant 11)"
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/ratelimit
+              desc: "rate limits are Relay configuration; the Control API never reaches them (invariant 11)"
+
+        # The capability layer stays free of the wire protocol and raw SQL (ADR-0009,
+        # ADR-0010). Each internal package admitted here is itself held proto-free and
+        # SQL-free by its own rule below (or by domain-no-sql), so admitting it opens no
+        # transitive door. policyview and nodevocab are display-only caches with no
+        # evaluation surface, so admitting them cannot become a Relay-side Policy
+        # decision (invariant 12).
+        capability-imports:
+          list-mode: strict
+          files:
+            - "**/internal/capability/*.go"
+            - "!$test"
+          allow:
+            - context$
+            - crypto/rand$
+            - encoding/hex$
+            - errors$
+            - fmt$
+            - log/slog$
+            - runtime/debug$
+            - sort$
+            - strings$
+            - sync$
+            - time$
+            - golang.org/x/sync/errgroup$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry$
+          deny:
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1
+              desc: "the capability layer stays free of the wire protocol (ADR-0009, ADR-0010)"
+            - pkg: database/sql
+              desc: "the capability layer stays free of raw SQL; internal/store owns it"
+
+        # The domain packages stay SQL-free, test files included, so the SQLite
+        # implementation in internal/store (and any later swap) stays a single-package
+        # change.
+        domain-no-sql:
+          files:
+            - "**/internal/audit/*.go"
+            - "**/internal/freeze/*.go"
+            - "**/internal/jobs/*.go"
+            - "**/internal/nodestate/*.go"
+            - "**/internal/registry/*.go"
+          deny:
+            - pkg: database/sql
+              desc: "this package stays SQL-free; internal/store owns all SQL"
+
+        # Domain packages the capability layer admits: each stays proto-free and
+        # SQL-free, or capability-imports would be enforcing a boundary that no longer
+        # exists. capability imports them, so importing it back is named as a rule
+        # rather than left to the compiler's cycle check.
+        accounts-imports:
+          list-mode: strict
+          files:
+            - "**/internal/accounts/*.go"
+            - "!$test"
+          allow:
+            - context$
+            - crypto/rand$
+            - crypto/sha256$
+            - crypto/subtle$
+            - encoding/base64$
+            - encoding/hex$
+            - encoding/json$
+            - errors$
+            - fmt$
+            - log/slog$
+            - strings$
+            - sync$
+            - time$
+            - golang.org/x/crypto/argon2$
+          deny: &domain-deny
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1
+              desc: "a domain package stays free of the wire protocol"
+            - pkg: database/sql
+              desc: "a domain package stays SQL-free; internal/store owns all SQL"
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability
+              desc: "capability imports this package; the dependency runs one way"
+        approval-imports:
+          list-mode: strict
+          files:
+            - "**/internal/approval/*.go"
+            - "!$test"
+          allow:
+            - bytes$
+            - context$
+            - crypto/sha256$
+            - encoding/hex$
+            - encoding/json$
+            - errors$
+            - fmt$
+            - io$
+            - io/fs$
+            - os$
+            - sort$
+            - strings$
+            - syscall$
+            - time$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab$
+          deny: *domain-deny
+        # mcptask additionally never sees the MCP SDK (ADR-0028): the SEP-2663 shim
+        # stays a bounded, deletable piece above this package.
+        mcptask-imports:
+          list-mode: strict
+          files:
+            - "**/internal/mcptask/*.go"
+            - "!$test"
+          allow:
+            - context$
+            - errors$
+            - fmt$
+            - strings$
+            - time$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval$
+            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs$
+          deny:
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1
+              desc: "a task handle is not a wire type"
+            - pkg: database/sql
+              desc: "the SQLite implementation belongs in internal/store"
+            - pkg: github.com/modelcontextprotocol/go-sdk
+              desc: "ADR-0028: the SDK stays above this package, or the shim stops being deletable"
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability
+              desc: "capability imports this package; the dependency runs one way"
+        policyview-imports:
+          list-mode: strict
+          files:
+            - "**/internal/policyview/*.go"
+            - "!$test"
+          allow:
+            - sync$
+            - time$
+          deny: *domain-deny
+        nodevocab-imports:
+          list-mode: strict
+          files:
+            - "**/internal/nodevocab/*.go"
+            - "!$test"
+          allow:
+            - sync$
+          deny: *domain-deny
+        logctx-imports:
+          list-mode: strict
+          files:
+            - "**/internal/logctx/*.go"
+            - "!$test"
+          allow:
+            - context$
+            - log/slog$
+
+        # The event bus must never be able to name a result type: capability.NodeResult,
+        # jobs.Task and the mcp wire structs carry captured output, and a bus that can
+        # spell one is one refactor away from shipping it (ADR-0025).
+        events-imports:
+          list-mode: strict
+          files:
+            - "**/internal/events/*.go"
+            - "!$test"
+          allow:
+            - crypto/rand$
+            - encoding/hex$
+            - sort$
+            - strconv$
+            - strings$
+            - sync$
+            - time$
+          deny:
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/
+              desc: "package events never imports a Relay package, where every result-shaped type lives (ADR-0025)"
+
+        # revocation never learns what a Principal or an audit record is. RevokeNode is
+        # also the Relay's own cleanup after a failed enrollment, with no caller to
+        # attribute; the cascade's per-Node record is authored by a caller-supplied
+        # recorder, so the Relay's cleanup is never filed as an operator act.
+        revocation-imports:
+          files:
+            - "**/internal/revocation/*.go"
+            - "!$test"
+          deny:
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit
+              desc: "revocation never authors an audit record; a caller-supplied recorder does"
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability
+              desc: "revocation never learns what a Principal is"
+
+        # requeststate is a crypto primitive that decides nothing (ADR-0029 decision 5
+        # keeps every decision in one file) and never persists its key. MAC comparison
+        # goes through hmac.Equal only, so crypto/subtle is refused.
+        requeststate-imports:
+          list-mode: strict
+          files:
+            - "**/internal/controlplane/mcp/requeststate/*.go"
+            - "!$test"
+          allow:
+            - bytes$
+            - crypto/hmac$
+            - crypto/rand$
+            - crypto/sha256$
+            - encoding/base64$
+            - encoding/hex$
+            - encoding/json$
+            - errors$
+            - fmt$
+            - io$
+            - log/slog$
+            - strings$
+            - time$
+            - unicode/utf8$
+          deny:
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp
+              desc: "its own parent package consumes it, never the reverse"
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval
+              desc: "a crypto primitive decides nothing (ADR-0029 decision 5)"
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability
+              desc: "a crypto primitive decides nothing (ADR-0029 decision 5)"
+            - pkg: github.com/modelcontextprotocol/go-sdk
+              desc: "no SDK types in the primitive"
+            - pkg: database/sql
+              desc: "the key is never persisted"
+            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/store
+              desc: "the key is never persisted"
+            - pkg: crypto/subtle
+              desc: "MAC comparison goes through hmac.Equal only"
+
     gosec:
       excludes:
         # G101 matches identifier names like `passwordFile`; every hit here was a name,
@@ -96,7 +434,20 @@ linters:
         # new read built from anything request-derived surfaces in review.
 
   exclusions:
+    # A `Code generated` header would otherwise exempt a file from every linter, the
+    # boundary guards included. The real codegen output is excluded by path below, and
+    # scripts/lint-guard-escapes.sh refuses the header anywhere else.
+    generated: disable
+    paths:
+      - internal/relay/v1/
     rules:
+      # Scopes the "adapter boundary" forbidigo patterns above to the three adapter
+      # packages. Everywhere else — the composition root, the capability layer, the
+      # registry — those names are the legitimate implementation.
+      - path-except: internal/controlplane/(api|mcp|console)/.+\.go$
+        linters:
+          - forbidigo
+        text: "adapter boundary"
       # Test code and the test-only relaytest harness (which launches a real relay-daemon
       # binary on purpose) are held to the baseline linters, not the hardening set: their
       # fixtures write files, open listeners without contexts and drop errors on cleanup

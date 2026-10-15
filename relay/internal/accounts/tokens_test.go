@@ -14,7 +14,7 @@ import (
 // mintLikeSelectors are the method names known to return a Plaintext as
 // their second value: TokenService.Mint (tokenservice.go, this package) and
 // capability.AccountAdmin.MintAPIToken (its capability-layer counterpart, #653,
-// which this package must not import — see imports_test.go — so it is named
+// which this package must not import — see .golangci.yml's accounts-imports rule — so it is named
 // here rather than referenced).
 var mintLikeSelectors = map[string]bool{"Mint": true, "MintAPIToken": true}
 

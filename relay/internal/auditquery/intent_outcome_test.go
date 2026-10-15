@@ -57,7 +57,7 @@ func runWithRepo(t *testing.T, wrap func(audit.Repository) audit.Repository) (st
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	defer st.Close() //nolint:errcheck
+	defer st.Close()
 
 	reg := registry.NewInMemory()
 	for _, id := range []string{"node-1", "node-2"} {
@@ -92,7 +92,7 @@ func afterRestart(t *testing.T, path string) (*capLayer, *store.Store) {
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 	q := New(st.AuditQueries(), st.JobQueries())
 	svc := newCapService(t, capSeams{
 		reg:    registry.NewInMemory(),
@@ -162,7 +162,7 @@ func TestIntentSurvivesACrashBeforeTheOutcomeAppend(t *testing.T) {
 		t.Errorf("%d dispatch outcome rows, want none", len(got))
 	}
 
-	st.Close() //nolint:errcheck
+	st.Close()
 	v, err := store.VerifyAuditChain(context.Background(), path, nil)
 	if err != nil || !v.Intact() {
 		t.Errorf("chain verdict = %+v, err %v; want intact", v, err)
@@ -215,12 +215,12 @@ func TestOutcomeRowsShareTheIntentRowsJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close() //nolint:errcheck
+	defer db.Close()
 	rows, err := db.QueryContext(context.Background(), `SELECT kind FROM audit WHERE job_id = ? ORDER BY seq`, "job-id-1")
 	if err != nil {
 		t.Fatalf("query by seq: %v", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 	seenIntent := false
 	for rows.Next() {
 		var kind string

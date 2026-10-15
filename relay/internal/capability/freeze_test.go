@@ -280,7 +280,7 @@ func TestFreezeSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen store.Open: %v", err)
 	}
-	t.Cleanup(func() { st2.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st2.Close() })
 
 	svcB := build(t, seams{reg: reg, freeze: st2.Freeze()})
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}

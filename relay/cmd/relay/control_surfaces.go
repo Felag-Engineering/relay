@@ -5,10 +5,11 @@ package main
 // own routes onto the shared, already-auth-wrapped mux, so newServer holds a
 // list of surfaces instead of two inline mount stanzas. This must live in
 // package main rather than beside mcp/api themselves: mcp/no_dispatch_test.go
-// requires every non-test file in the mcp package to be classified as
-// read-only or exec-strict, and api/api_imports_test.go forbids the api
-// package from importing mcp — package main is the only seam both surfaces
-// can be mounted from without tripping either guard.
+// holds every non-test file in the mcp package to a strict capability
+// allowlist unless it is listed as an execution file, and .golangci.yml's
+// api-imports rule forbids the api package from importing mcp — package main
+// is the only seam both surfaces can be mounted from without tripping either
+// guard.
 //
 // surfaceDeps is assembled exactly once per newServer call (invariant 10:
 // the capability services are single instances, delivered to every surface

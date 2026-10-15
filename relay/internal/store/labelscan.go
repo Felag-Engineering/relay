@@ -184,16 +184,16 @@ func (s *Store) ScanDeclinedLabels(ctx context.Context) (DeclinedLabelReport, er
 // never meant to count and destroying the distinction between the two
 // signals (threat model R13).
 //
-// The query is ORDER BY node_id, key — the same fmt.Sprintf +
-// //nolint:gosec table-literal idiom fetchLabels uses, since table is always
-// one of the two fixed literals labelNamespace.table() returns. The ordering
+// The query is ORDER BY node_id, key, built with the same fmt.Sprintf
+// table-literal idiom fetchLabels uses, since table is always one of the
+// two fixed literals labelNamespace.table() returns. The ordering
 // is not cosmetic: it is what lets distinct-Node counting stay O(1) memory
 // (compare only against the previous row's node_id) rather than building a
 // set the size of the affected fleet.
 func scanDeclinedNamespace(ctx context.Context, q queryer, ns labelNamespace) (DeclinedLabelSet, error) {
 	table := ns.table()
 	rows, err := q.QueryContext(ctx,
-		fmt.Sprintf(`SELECT node_id, key, value FROM %s ORDER BY node_id, key`, table)) //nolint:gosec // table is one of two fixed literals, never user input
+		fmt.Sprintf(`SELECT node_id, key, value FROM %s ORDER BY node_id, key`, table)) // table is one of two fixed literals, never user input
 	if err != nil {
 		return DeclinedLabelSet{}, fmt.Errorf("query %s: %w", table, err)
 	}

@@ -88,7 +88,7 @@ func TestFreezeSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen Open(%s): %v", path, err)
 	}
-	t.Cleanup(func() { reopened.Close() }) //nolint:errcheck
+	t.Cleanup(func() { reopened.Close() })
 
 	frozen, err := reopened.Freeze().Frozen(ctx)
 	if err != nil {

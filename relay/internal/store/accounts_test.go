@@ -249,13 +249,13 @@ func TestAccounts_PersistAcrossReopen(t *testing.T) {
 	if err := st.Accounts().SetEnabled(ctx, created.ID, false); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	st.Close() //nolint:errcheck
+	st.Close()
 
 	reopened, err := Open(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	t.Cleanup(func() { reopened.Close() }) //nolint:errcheck
+	t.Cleanup(func() { reopened.Close() })
 
 	again, err := reopened.Accounts().EnsureFoundingAdmin(ctx)
 	if err != nil {

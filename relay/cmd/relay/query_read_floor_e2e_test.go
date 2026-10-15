@@ -116,7 +116,7 @@ func TestQueryReadFloor_IsViewerOnMCPTheControlAPIAndTheConsole(t *testing.T) {
 	t.Run("Control API", func(t *testing.T) {
 		resp := controlAPIRequest(t, f.ClientFor(token), http.MethodGet,
 			f.ControlBase+"/api/v1/nodes/node-query-a", token, nil)
-		defer resp.Body.Close() //nolint:errcheck
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("GET /api/v1/nodes/node-query-a as viewer = %d, want 200", resp.StatusCode)
 		}
@@ -161,7 +161,7 @@ func TestQueryReadFloor_IsViewerOnMCPTheControlAPIAndTheConsole(t *testing.T) {
 	t.Run("the same credential is still refused above the read floor", func(t *testing.T) {
 		resp := controlAPIRequest(t, f.ClientFor(token), http.MethodGet,
 			f.ControlBase+"/api/v1/accounts", token, nil)
-		defer resp.Body.Close() //nolint:errcheck
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusForbidden {
 			t.Errorf("GET /api/v1/accounts as viewer = %d, want 403", resp.StatusCode)
 		}

@@ -400,7 +400,7 @@ func TestConsoleEvents_B7_LimiterRefusalRecordsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open first stream: %v", err)
 	}
-	defer res.Body.Close() //nolint:errcheck
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("first stream = %d, want 200 — it must open before the second request can be "+
 			"refused by the cap", res.StatusCode)

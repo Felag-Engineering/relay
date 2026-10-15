@@ -44,7 +44,7 @@ var goldenNow = time.Date(2026, 8, 17, 9, 0, 0, 0, time.UTC)
 const (
 	// The authenticator only reaches its verifier for something shaped like an
 	// API Token, so the fixture has to carry the real prefix.
-	goldenCredential = accounts.TokenPrefix + "0123456789abcdef.golden-secret" //nolint:gosec // test fixture, not a real credential
+	goldenCredential = accounts.TokenPrefix + "0123456789abcdef.golden-secret" // test fixture, not a real credential
 	goldenTaskID     = "task-golden-1"
 	goldenRequestID  = "req-golden-1"
 )
@@ -177,7 +177,7 @@ func postJSONRPC(t *testing.T, srv *httptest.Server, method, name, body string) 
 	if err != nil {
 		t.Fatalf("POST /mcp: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	var buf bytes.Buffer
 	if _, err := buf.ReadFrom(resp.Body); err != nil {
 		t.Fatalf("read body: %v", err)

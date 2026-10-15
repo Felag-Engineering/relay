@@ -90,7 +90,7 @@ func TestApprovalGrant_RequestApproveReleaseExhaust(t *testing.T) {
 
 	// 1. Asking for the window creates a PENDING request, not a usable grant.
 	createResp := requestGrant(t, f, requester, requesterName, 2)
-	defer createResp.Body.Close() //nolint:errcheck
+	defer createResp.Body.Close()
 	if createResp.StatusCode != http.StatusCreated {
 		t.Fatalf("create status = %d, want 201", createResp.StatusCode)
 	}
@@ -105,7 +105,7 @@ func TestApprovalGrant_RequestApproveReleaseExhaust(t *testing.T) {
 	// 2. Before it is approved, the gate still parks. This is the property that
 	//    matters most: a grant row exists, and it authorizes nothing.
 	preResp := restartMutate(t, f, requester)
-	defer preResp.Body.Close() //nolint:errcheck
+	defer preResp.Body.Close()
 	if preResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202 — an unapproved grant must release nothing", preResp.StatusCode)
 	}
@@ -117,7 +117,7 @@ func TestApprovalGrant_RequestApproveReleaseExhaust(t *testing.T) {
 		f.ControlBase+created.DecisionPath, approver,
 		map[string]any{"approve": true, "plan_hash": created.Approval.PlanHash,
 			"reason": "batch restart window, change OPS-104"})
-	defer decideResp.Body.Close() //nolint:errcheck
+	defer decideResp.Body.Close()
 	if decideResp.StatusCode != http.StatusOK {
 		t.Fatalf("decision status = %d, want 200", decideResp.StatusCode)
 	}
@@ -131,13 +131,13 @@ func TestApprovalGrant_RequestApproveReleaseExhaust(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		resp := restartMutate(t, f, requester)
 		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close() //nolint:errcheck
+			resp.Body.Close()
 			t.Fatalf("dispatch %d status = %d, want 200 under an approved grant", i+1, resp.StatusCode)
 		}
 		ran := decodeJSONBody[struct {
 			JobID string `json:"job_id"`
 		}](t, resp)
-		resp.Body.Close() //nolint:errcheck
+		resp.Body.Close()
 		if ran.JobID == "" {
 			t.Fatalf("dispatch %d produced no Job", i+1)
 		}
@@ -150,7 +150,7 @@ func TestApprovalGrant_RequestApproveReleaseExhaust(t *testing.T) {
 	// 5. The third parks again. The window is spent, and a spent window is
 	//    indistinguishable from no window at all.
 	exhaustedResp := restartMutate(t, f, requester)
-	defer exhaustedResp.Body.Close() //nolint:errcheck
+	defer exhaustedResp.Body.Close()
 	if exhaustedResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202 once the grant is exhausted", exhaustedResp.StatusCode)
 	}
@@ -158,14 +158,14 @@ func TestApprovalGrant_RequestApproveReleaseExhaust(t *testing.T) {
 	// 6. It has left the live list, and its own view says so.
 	listResp := controlAPIRequest(t, f.Client(), http.MethodGet,
 		f.ControlBase+"/api/v1/approval-grants", requester, nil)
-	defer listResp.Body.Close() //nolint:errcheck
+	defer listResp.Body.Close()
 	if live := decodeJSONBody[grantListBody](t, listResp); len(live.Grants) != 0 {
 		t.Errorf("live grants = %+v, want none once exhausted", live.Grants)
 	}
 
 	getResp := controlAPIRequest(t, f.Client(), http.MethodGet,
 		f.ControlBase+"/api/v1/approval-grants/"+created.Grant.GrantID, requester, nil)
-	defer getResp.Body.Close() //nolint:errcheck
+	defer getResp.Body.Close()
 	spent := decodeJSONBody[grantBody](t, getResp)
 	if spent.Active || spent.Uses != 2 || spent.Remaining != 0 {
 		t.Errorf("spent grant = %+v, want inactive with 2 of 2 used", spent)
@@ -215,20 +215,20 @@ func TestApprovalGrant_RevokeClosesTheWindowImmediately(t *testing.T) {
 	approver := mintAccount(t, f, "ana", accounts.KindHuman, accounts.RoleOperator)
 
 	createResp := requestGrant(t, f, requester, requesterName, 50)
-	defer createResp.Body.Close() //nolint:errcheck
+	defer createResp.Body.Close()
 	created := decodeJSONBody[createGrantBody](t, createResp)
 
 	decideResp := controlAPIRequest(t, f.ClientFor(approver), http.MethodPost,
 		f.ControlBase+created.DecisionPath, approver,
 		map[string]any{"approve": true, "plan_hash": created.Approval.PlanHash})
-	defer decideResp.Body.Close() //nolint:errcheck
+	defer decideResp.Body.Close()
 	if decideResp.StatusCode != http.StatusOK {
 		t.Fatalf("decision status = %d, want 200", decideResp.StatusCode)
 	}
 
 	// It is live: one dispatch runs.
 	runResp := restartMutate(t, f, requester)
-	defer runResp.Body.Close() //nolint:errcheck
+	defer runResp.Body.Close()
 	if runResp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200 under an approved grant", runResp.StatusCode)
 	}
@@ -236,7 +236,7 @@ func TestApprovalGrant_RevokeClosesTheWindowImmediately(t *testing.T) {
 	revokeResp := controlAPIRequest(t, f.ClientFor(approver), http.MethodPost,
 		f.ControlBase+"/api/v1/approval-grants/"+created.Grant.GrantID+"/revoke", approver,
 		map[string]any{"reason": "requester credential rotated"})
-	defer revokeResp.Body.Close() //nolint:errcheck
+	defer revokeResp.Body.Close()
 	if revokeResp.StatusCode != http.StatusOK {
 		t.Fatalf("revoke status = %d, want 200", revokeResp.StatusCode)
 	}
@@ -246,7 +246,7 @@ func TestApprovalGrant_RevokeClosesTheWindowImmediately(t *testing.T) {
 
 	// The very next dispatch parks again, with 49 uses nominally left.
 	afterResp := restartMutate(t, f, requester)
-	defer afterResp.Body.Close() //nolint:errcheck
+	defer afterResp.Body.Close()
 	if afterResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202 immediately after revocation", afterResp.StatusCode)
 	}
@@ -255,7 +255,7 @@ func TestApprovalGrant_RevokeClosesTheWindowImmediately(t *testing.T) {
 	againResp := controlAPIRequest(t, f.ClientFor(approver), http.MethodPost,
 		f.ControlBase+"/api/v1/approval-grants/"+created.Grant.GrantID+"/revoke", approver,
 		map[string]any{"reason": "again"})
-	defer againResp.Body.Close() //nolint:errcheck
+	defer againResp.Body.Close()
 	if againResp.StatusCode != http.StatusConflict {
 		t.Errorf("second revoke status = %d, want 409", againResp.StatusCode)
 	}
@@ -274,20 +274,20 @@ func TestApprovalGrant_RequesterCannotApproveTheirOwnWindow(t *testing.T) {
 	requesterName := accounts.FoundingAdminName
 
 	createResp := requestGrant(t, f, requester, requesterName, 10)
-	defer createResp.Body.Close() //nolint:errcheck
+	defer createResp.Body.Close()
 	created := decodeJSONBody[createGrantBody](t, createResp)
 
 	selfResp := controlAPIRequest(t, f.Client(), http.MethodPost,
 		f.ControlBase+created.DecisionPath, requester,
 		map[string]any{"approve": true, "plan_hash": created.Approval.PlanHash})
-	defer selfResp.Body.Close() //nolint:errcheck
+	defer selfResp.Body.Close()
 	if selfResp.StatusCode != http.StatusConflict {
 		t.Fatalf("self-approval status = %d, want 409 — requester_allowed: false applies to a window too", selfResp.StatusCode)
 	}
 
 	// And nothing was released: the dispatch still parks.
 	runResp := restartMutate(t, f, requester)
-	defer runResp.Body.Close() //nolint:errcheck
+	defer runResp.Body.Close()
 	if runResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", runResp.StatusCode)
 	}
@@ -311,7 +311,7 @@ func TestApprovalGrant_RefusesAWindowOverUngatedWork(t *testing.T) {
 	f := startGatedRelay(t, rawExecOnly)
 
 	resp := requestGrant(t, f, f.Credential, accounts.FoundingAdminName, 10)
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422 for a grant over work nothing gates", resp.StatusCode)
 	}

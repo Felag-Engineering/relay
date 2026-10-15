@@ -167,7 +167,7 @@ func TestAnsweredRetry_ApproveRunsTheJobOnce(t *testing.T) {
 	}
 
 	getResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+requestID, f.Credential, nil)
-	defer getResp.Body.Close() //nolint:errcheck
+	defer getResp.Body.Close()
 	var approved approvalBody
 	if err := json.NewDecoder(getResp.Body).Decode(&approved); err != nil {
 		t.Fatalf("decode approval: %v", err)
@@ -213,7 +213,7 @@ func TestAnsweredRetry_FleetChangedReParksAndAsksAfresh(t *testing.T) {
 	}
 
 	getResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+requestID, f.Credential, nil)
-	defer getResp.Body.Close() //nolint:errcheck
+	defer getResp.Body.Close()
 	var first approvalBody
 	if err := json.NewDecoder(getResp.Body).Decode(&first); err != nil {
 		t.Fatalf("decode approval: %v", err)
@@ -315,7 +315,7 @@ func TestAnsweredRetry_DeclineIsTerminalAndDispatchesNothing(t *testing.T) {
 	}
 
 	getResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+requestID, f.Credential, nil)
-	defer getResp.Body.Close() //nolint:errcheck
+	defer getResp.Body.Close()
 	var decided approvalBody
 	if err := json.NewDecoder(getResp.Body).Decode(&decided); err != nil {
 		t.Fatalf("decode approval: %v", err)
@@ -381,7 +381,7 @@ func TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue(t *testing.T) {
 	}
 
 	getResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+requestID, f.Credential, nil)
-	defer getResp.Body.Close() //nolint:errcheck
+	defer getResp.Body.Close()
 	var stillPending approvalBody
 	if err := json.NewDecoder(getResp.Body).Decode(&stillPending); err != nil {
 		t.Fatalf("decode approval: %v", err)
@@ -411,7 +411,7 @@ func TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue(t *testing.T) {
 	decideResp := controlAPIRequest(t, f.ClientFor(second), http.MethodPost,
 		f.ControlBase+"/api/v1/approvals/"+requestID+"/decision", second,
 		map[string]any{"approve": true, "plan_hash": planHash})
-	defer decideResp.Body.Close() //nolint:errcheck
+	defer decideResp.Body.Close()
 	if decideResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(decideResp.Body)
 		t.Fatalf("second decision status = %d; body = %s", decideResp.StatusCode, body)
@@ -425,7 +425,7 @@ func TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue(t *testing.T) {
 	}
 
 	getFinal := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+requestID, f.Credential, nil)
-	defer getFinal.Body.Close() //nolint:errcheck
+	defer getFinal.Body.Close()
 	var final approvalBody
 	if err := json.NewDecoder(getFinal.Body).Decode(&final); err != nil {
 		t.Fatalf("decode final approval: %v", err)

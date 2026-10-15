@@ -267,10 +267,10 @@ func TestService_RevokeToken_RecordsEveryCascadedNode(t *testing.T) {
 
 	// Two Nodes enrolled by tokenID; one enrolled by a different token; one
 	// enrolled by tokenID but already revoked before the cascade runs.
-	reg.Upsert(registry.Report{NodeID: "node-a", EnrollingTokenID: tokenID})     //nolint:errcheck
-	reg.Upsert(registry.Report{NodeID: "node-b", EnrollingTokenID: tokenID})     //nolint:errcheck
-	reg.Upsert(registry.Report{NodeID: "node-c", EnrollingTokenID: "other-tok"}) //nolint:errcheck
-	reg.Upsert(registry.Report{NodeID: "node-d", EnrollingTokenID: tokenID})     //nolint:errcheck
+	reg.Upsert(registry.Report{NodeID: "node-a", EnrollingTokenID: tokenID})
+	reg.Upsert(registry.Report{NodeID: "node-b", EnrollingTokenID: tokenID})
+	reg.Upsert(registry.Report{NodeID: "node-c", EnrollingTokenID: "other-tok"})
+	reg.Upsert(registry.Report{NodeID: "node-d", EnrollingTokenID: tokenID})
 	svc.RevokeNode("node-d")
 
 	// Track a live stream for node-a.
@@ -332,7 +332,7 @@ func TestService_RevokeToken_ToleratesUnknownToken(t *testing.T) {
 	svc, d, _, reg, _ := newServiceFixture(t)
 	ctx := context.Background()
 
-	reg.Upsert(registry.Report{NodeID: "node-x", EnrollingTokenID: "ghost-token"}) //nolint:errcheck
+	reg.Upsert(registry.Report{NodeID: "node-x", EnrollingTokenID: "ghost-token"})
 
 	rec := &recorder{}
 	if err := svc.RevokeToken(ctx, "ghost-token", rec.record); err != nil {
@@ -652,7 +652,7 @@ func TestService_RevokeToken_NilRecorderRevokesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create token: %v", err)
 	}
-	reg.Upsert(registry.Report{NodeID: "node-a", EnrollingTokenID: tok.ID}) //nolint:errcheck
+	reg.Upsert(registry.Report{NodeID: "node-a", EnrollingTokenID: tok.ID})
 
 	err = svc.RevokeToken(ctx, tok.ID, nil)
 	if !errors.Is(err, revocation.ErrRecorderRequired) {

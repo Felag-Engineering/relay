@@ -71,7 +71,7 @@ func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolC
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	conduit := newFakeConduit()
 	q := auditquery.New(st.AuditQueries(), st.JobQueries())
@@ -231,7 +231,7 @@ func postTasksGet(t *testing.T, ts testServer) {
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 }
 
 // TestToolCallMiddleware_LeakTest_ListNodes is the behavioural complement to

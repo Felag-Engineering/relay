@@ -110,7 +110,7 @@ func readBackfillBatch(ctx context.Context, tx *sql.Tx, after int64) ([]backfill
 	if err != nil {
 		return nil, fmt.Errorf("read audit rows to chain: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	var batch []backfillRow
 	for rows.Next() {
@@ -349,7 +349,7 @@ func walkAuditChain(ctx context.Context, tx *sql.Tx, verifier *audit.ChainVerifi
 	if err != nil {
 		return nil, fmt.Errorf("read audit chain: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	for rows.Next() {
 		var seq int64

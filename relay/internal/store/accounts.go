@@ -151,7 +151,7 @@ func (r *sqliteAccounts) List(ctx context.Context) ([]accounts.Account, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list accounts: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	var ids []string
 	for rows.Next() {

@@ -189,7 +189,7 @@ func appliedVersions(ctx context.Context, db *sql.DB) (map[int]struct{}, error) 
 	if err != nil {
 		return nil, fmt.Errorf("read schema_migrations versions: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	applied := map[int]struct{}{}
 	for rows.Next() {

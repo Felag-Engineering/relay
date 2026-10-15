@@ -91,6 +91,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - run: make lint-comments
+      - run: make lint-guard-escapes
 
       # The dev-loop's security-surface gate, proved against a fixture repo (#634). Shell + git
       # only, and self-contained, so the shallow checkout above is irrelevant to it.

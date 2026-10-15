@@ -124,7 +124,7 @@ func TestOpen_ReplacedConnectionKeepsPragmas(t *testing.T) {
 			if !errors.Is(err, driver.ErrBadConn) {
 				t.Fatalf("Raw error = %v, want driver.ErrBadConn", err)
 			}
-			c.Close() //nolint:errcheck // sql.ErrConnDone after ErrBadConn; nothing to act on
+			c.Close() // sql.ErrConnDone after ErrBadConn; nothing to act on
 		},
 	}
 
@@ -170,7 +170,7 @@ func TestOpen_PathWithURIMetacharacters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(%q): %v", path, err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("os.Stat(%q): %v", path, err)
@@ -211,7 +211,7 @@ func TestOpen_RelativePathResolvesAgainstWorkingDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	if _, err := os.Stat(filepath.Join(dir, "relay-data", "relay.db")); err != nil {
 		t.Errorf("os.Stat: %v", err)

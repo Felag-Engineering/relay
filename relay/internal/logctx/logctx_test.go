@@ -4,12 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"go/parser"
-	"go/token"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -147,34 +142,5 @@ func TestOr_NilFollowsLaterSetDefault(t *testing.T) {
 	Or(nil).Info("after set default")
 	if !strings.Contains(buf.String(), "after set default") {
 		t.Errorf("Or(nil) did not follow slog.SetDefault: %q", buf.String())
-	}
-}
-
-// TestLogctxImportsStayNarrow holds logctx to the context and log/slog
-// imports capability's import allowlist (execution_test.go) admits it on.
-func TestLogctxImportsStayNarrow(t *testing.T) {
-	allowed := map[string]bool{"context": true, "log/slog": true}
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		src, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f, err := parser.ParseFile(token.NewFileSet(), name, src, parser.ImportsOnly)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, imp := range f.Imports {
-			path, _ := strconv.Unquote(imp.Path.Value)
-			if !allowed[path] {
-				t.Errorf("%s imports %q; logctx may import only context and log/slog", name, path)
-			}
-		}
 	}
 }

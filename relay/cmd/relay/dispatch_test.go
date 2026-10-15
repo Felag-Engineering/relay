@@ -258,7 +258,7 @@ func TestTunnelSink_GatedByControlEnabled(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newServer: %v", err)
 		}
-		t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+		t.Cleanup(func() { deps.store.Close() })
 		t.Cleanup(srv.Stop)
 
 		if deps.tunnel.sink != nil {
@@ -278,7 +278,7 @@ func TestTunnelSink_GatedByControlEnabled(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newServer: %v", err)
 		}
-		t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+		t.Cleanup(func() { deps.store.Close() })
 		t.Cleanup(srv.Stop)
 
 		if deps.tunnel.sink == nil {
