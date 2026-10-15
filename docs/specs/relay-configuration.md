@@ -14,8 +14,8 @@ for a human, and whether the Console exists at all.
 
 It is **two tiers, split by what an attacker gains from changing the setting.**
 
-- The **security floor** is set on the host, in a root-owned file, and is unreachable from every
-  surface. It is the small set that decides *who may authenticate at all* and *whether the gate
+- The **security floor** is set on the host, in a root-owned file — or, for a container, at the
+  source its deployment takes it from — and is unreachable from every surface. It is the small set that decides *who may authenticate at all* and *whether the gate
   exists*: listeners and TLS material, the identity provider Relay believes, the authentication
   windows, the approval notification path, and whether the Console may execute.
 - **Operator settings** are runtime objects in the Relay's store, changed by a human `admin` in
@@ -31,7 +31,7 @@ to authenticate as somebody else.
 
 | Surface | Access to the capability |
 |---|---|
-| **The host** | The security floor, as `RELAY_*` environment variables in a root-owned `EnvironmentFile` — placed by the Relay package beside its unit, or supplied to the Relay container by the host that runs it. Read at startup and on a reload signal |
+| **The host** | The security floor, as `RELAY_*` environment variables: on a packaged host, in a root-owned `EnvironmentFile` placed beside the unit, read at startup and on a reload signal; in a container, injected by the deployment (invariant 11's container clause), read at startup only |
 | **Admin Console** | Every operator setting: read, and changed by a human `admin` with step-up. The only surface that writes configuration. Also renders the non-secret security floor, read-only |
 | **Control API** | Reads the non-secret operator settings. **No write route exists, and none may be added** |
 | **MCP** | Reads the non-secret operator settings, so an AI-agent can explain a refusal against the value that caused it. No write tool |
@@ -57,7 +57,7 @@ Set on the host only. No code path exists from any request to any of these value
 | Approval webhook URL, secret file, timeout | Repointing it sends every approval request somewhere else and leaves the humans seeing nothing |
 | Every secret file path | Secrets are named by path, never supplied as values |
 
-A bare binary with no configuration **comes up closed**: the gRPC listener only, no control
+A bare binary with only its required values set **comes up closed**: the gRPC listener only, no control
 plane, no Console, no OAuth, no approval notification. The CA directory, store path and
 certificate hostname have **no defaults** — unset is a refusal naming the variable, because a
 development-shaped default is a production deployment inheriting it silently.
@@ -119,8 +119,8 @@ field on a screen.
 ### Validation
 
 Every value is validated at startup and at reload, and an invalid one is a refusal naming the
-setting — never a warning and a fallback to a default. A missing or unreadable floor file is a
-refusal, and so is a floor file not owned by root or readable by anyone but root and the
+setting — never a warning and a fallback to a default. Where the floor is a file — every packaged
+deployment — a missing or unreadable one is a refusal, and so is a floor file not owned by root or readable by anyone but root and the
 Relay's group: the floor is not a secret, but invariant 11 keeps it root-owned and only readable
 by the Relay.
 
@@ -163,8 +163,9 @@ human has reviewed its documented deployment.
   carries no secret, also installed as documentation. It never runs the first-boot command,
   because package-manager output lands in logs and that command prints credentials.
 - **The Relay container image**, pinned by digest: unprivileged, no capabilities, read-only root
-  filesystem, the CA and store on one durable volume, the security floor and secret files
-  supplied by the deployment. What a container deployment gives up against a packaged host — floor
+  filesystem, the CA and store on one durable volume, nothing in the image carrying
+  configuration, the security floor supplied by the deployment, and secret files mounted
+  read-only. What a container deployment gives up against a packaged host — floor
   values visible to anyone who can inspect the container, and a floor writable by whoever can
   push to a git-driven deploy's branch — is an accepted residual risk (R35) that the hardening
   review closes or confirms.
@@ -221,7 +222,9 @@ a read-only filesystem outside its state directory.
   2026-09-15 from *"configuration is unreachable from any API"* to *"no credential can change the
   terms on which credentials are accepted"*. Recorded in ADR-0010's amendment of that date. Its
   secret-file clause was reworded on 2026-10-15 (ADR-0033; ADR-0010's amendment of that date):
-  secret files are owned by the Relay's uid and `0600`, and the floor file stays root-owned.
+  secret files are owned by the Relay's uid and `0600`, and the floor file stays root-owned; and,
+  where the Relay runs as a container, "the host" is the source its deployment takes the floor
+  from (R35).
 - **Invariant 10 / ADR-0009, ADR-0026** — Console-only settings are an adapter offering less, not
   a parallel control path. `console_execution` stays root-owned.
 - **Invariant 5 / ADR-0004, ADR-0012** — the blast caps remain enforced on the Relay before
@@ -257,8 +260,9 @@ that seam; no other adapter holds a writer.
 Everything else in this spec is **unbuilt**. Today's binary takes flags and environment
 variables with the environment winning, silently falls back to a default on most invalid values,
 defaults the CA directory and store path to development-shaped relative paths, has no reload, no
-store-backed settings, no Console settings screen, and checks the mode but never the owner of a
-secret file. The gap is the backlog, not a defect to escalate.
+store-backed settings, no Console settings screen, checks the mode but never the owner of a
+secret file, reads the CA private key back with no mode or owner check, and never checks that the
+floor file is root-owned (known-gap row 11). The gap is the backlog, not a defect to escalate.
 
 ## Out of scope
 

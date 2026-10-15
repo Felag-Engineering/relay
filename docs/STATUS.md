@@ -71,7 +71,7 @@ is unfilled, so everything here is proven by the automated suites and the Docker
 
 ## Known deviations
 
-Mirrors AGENTS.md's gap table as read on 2026-10-06.
+Mirrors AGENTS.md's gap table as read on 2026-10-15.
 
 | Invariant | Clause | Issue |
 |---|---|---|

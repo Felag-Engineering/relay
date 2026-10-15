@@ -136,7 +136,9 @@ issuance, renewal and revocation. Every later connection of an enrolled Node is
 - **ADR-0017** — `node:` Labels support routine targeting only; security-lane targeting uses the
   Relay-written `relay:` Labels.
 - **ADR-0031** — the fingerprint-pinned join string. In the first pass.
-- **ADR-0032** (rendered bundles) and **ADR-0030** (`relay init`) — approved, deferred to Future work.
+- **ADR-0032** (rendered bundles) and **ADR-0030** (`relay init`) — approved, deferred to Future work
+  here. `relay-configuration.md` schedules `relay init` itself for v0.6.5 (owner decision,
+  2026-10-15); its trust-bootstrap contract below remains this spec's to settle.
   ADR-0032's `admin` minting floor stands.
 
 ## Seams and proof
