@@ -91,25 +91,18 @@ it needs an ADR, not a quiet workaround.
     step-up re-authentication on a mutate apply, role-gated by the capability layer, and behind
     the root-owned `console_execution` flag. (ADR-0009, ADR-0010, ADR-0026; wording amended
     2026-09-20 for ADR-0038)
-11. **No credential can change the terms on which credentials are accepted.** Whatever
-    bounds *who may authenticate, and how recently they proved it* — listeners, CA/TLS,
-    auth bootstrap, the identity provider Relay believes, session and step-up windows,
-    `console_execution`, and the approval notification path — is the **security floor**:
-    operator-set on the host and unreachable from every API, with no code path from a
-    request to any of those values. Configuration that merely *bounds reach* — blast
-    caps, approval-gate rules, the minimum daemon version, rate and capacity limits —
-    may be a runtime object, and where it is, it is changed only by a human Account with
-    step-up re-authentication and is audited. Secrets are supplied as *file paths*, never
-    as values, so nothing sensitive lands in a process listing or a crash dump; a file
-    holding one is readable by no principal but the Relay and writable by none but root —
-    and, for material the Relay generates, the Relay — and the Relay refuses to start
-    otherwise. Wherever the security floor is sourced — a file on the host, or whatever a
-    deployment injects into a container — it is writable only by a human holding
-    root-equivalent authority over the Relay's host, and never by a credential Relay
-    issues or accepts or by an automated principal. Delivered on a host by a root-owned unit
-    file and `EnvironmentFile` (`relay/packaging/`) — the mechanism may change, the property
-    may not. (ADR-0010, amended 2026-09-15; ADR-0004, ADR-0012, ADR-0027; host delivery
-    settled in #362; secret files and the floor's source reworded 2026-10-15, ADR-0033)
+11. **Neither a credential nor the Relay itself can change the terms on which credentials
+    are accepted.** Whatever bounds *who may authenticate, and how recently they proved it* —
+    listeners, CA/TLS, the identity provider Relay believes, session and step-up windows,
+    `console_execution`, and the approval notification path — is the **security floor**. It
+    is set by whoever administers the Relay's host, outside Relay, and nothing Relay runs or
+    accepts can write it: no API, no request, and not the Relay process. Configuration that
+    only bounds *reach* — blast caps, approval-gate rules, the minimum daemon version, rate
+    and capacity limits — may be a runtime object, changed only by a human Account with
+    step-up re-authentication, and audited. Secrets are supplied as file paths, never
+    values; the Relay can read them and cannot rewrite them, except key material it
+    generates itself. (ADR-0010, amended 2026-09-15; ADR-0004, ADR-0012, ADR-0027; reworded
+    2026-10-15, ADR-0033)
 12. **Policy is evaluated only by the daemon's live engine** — including hypotheticals
     (`PolicyQuery`, the Policy preflight). Never reimplement Policy evaluation on the Relay side.
     (ADR-0011; wording amended 2026-09-20 for ADR-0038)
@@ -151,8 +144,7 @@ and that rule is the only thing keeping it honest.
 |---|---|---|---|
 | 7 | `tag:`'s writer, and `relay:`'s | `tag:` has **no storage on the Node record and no write path**, so nothing can be written to the namespace the invariant says an operator writes. Since #561 a `tag:` term is **refused at parse** with a recognisable sentinel rather than silently matching nothing, identically on every surface — so the gap is now an honest refusal instead of a false negative. `relay:` labels are stamped at enrollment today; the Relay actions that write them afterwards (quarantine engage and lift, `quarantine-node.md`) are unbuilt, so quarantine by either `relay:` or `tag:` does not exist yet. Behaviour detail in `docs/specs/selectors-and-labels.md`. | #430 |
 | 10 | Console execution | The Console does **not** execute yet. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today. | #438 |
-| 11 | Secret files readable only by the Relay, writable only by root (or the Relay, for what it generates) | Reworded on 2026-10-15 (ADR-0033); the code does not enforce it. Nothing checks a secret file's **owner**, only the webhook secret's mode, and the Relay's own help and error text still say "root-owned"; the CA private key is read back with no mode or owner check at all. Detail in `docs/operations/relay-install.md`. | #864 |
-| 11 | The floor's source is writable only by a root-equivalent human, never a credential or automated principal | The documented compose stack can be deployed from a git branch (a GitOps tool following it), and then whoever can push to that branch — a CI system, an AI-agent's repository token — can change the floor, repoint the identity provider, and authenticate as an `admin`. Nothing in the stack prevents it. The image is not called production until a human hardening review of its documented deployment closes this row (ADR-0033, amended 2026-10-15). | hardening review (issue to file) |
+| 11 | Secrets: the Relay can read them and cannot rewrite them, except key material it generates | Reworded on 2026-10-15 (ADR-0033); the code does not enforce it. Nothing checks a secret file's **owner**; the webhook secret's mode check refuses any group or other bit, so it also refuses the packaged layout (root-owned, readable by the Relay's group) and must be relaxed; the Relay's own help and error text still say "root-owned"; the CA private key is read back with no mode or owner check at all. Detail in `docs/operations/relay-install.md`. | #864 |
 
 ### Writing or amending an invariant
 

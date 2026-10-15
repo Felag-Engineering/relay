@@ -168,25 +168,21 @@ accepted the residual risk explicitly on 2026-09-15; it is **R15** in
 - `docs/specs/relay-configuration.md` is the behaviour; every other spec citing invariant 11 for
   a floor-tier value is unaffected.
 
-## Amendment (2026-10-15): amended by ADR-0033 — secret files, and where the floor may come from
+## Amendment (2026-10-15): amended by ADR-0033 — neither a credential nor the Relay itself
 
-Owner decision, 2026-10-15, recorded in ADR-0033's amendment of that date and revised the same
-day after adversarial review. Invariant 11 is reworded in `AGENTS.md`, keeping its number.
+Owner decision, 2026-10-15, recorded in ADR-0033's amendment of that date. Invariant 11 is
+reworded in `AGENTS.md`, keeping its number.
 
-**Secret files.** The invariant said a secret file must be root-owned and not world-readable. The
-Relay writes its CA private key itself, so it could not meet that for what it generates, and no
-shipped deployment did (known-gap row 11). It now states the property: a secret file is readable
-by no principal but the Relay, and writable by none but root — and, for material the Relay
-generates, the Relay. An operator-placed secret stays out of the Relay's reach to rewrite; a
-key the Relay generates is the Relay's.
+**What changed.** The headline names the second adversary this ADR's 2026-09-15 amendment
+implied but never stated: **neither a credential nor the Relay itself can change the terms on
+which credentials are accepted.** The floor is set by whoever administers the Relay's host,
+outside Relay, and nothing Relay runs or accepts can write it — no API, no request, and not the
+Relay process. Secrets are file paths the Relay can read and cannot rewrite, except key material
+it generates itself; the old "root-owned and not world-readable" rule could not be met for the CA
+key the Relay writes, and no shipped deployment met it (known-gap row 11).
 
-**Where the floor may come from.** The image became a production path the same day, and a
-container's floor is not a root-owned file on a host but whatever its deployment injects — a
-compose file, an environment, a git branch a deploy tool follows. The invariant now states the
-property rather than the file: wherever the floor is sourced, it is writable only by a human
-holding root-equivalent authority over the Relay's host, and never by a credential Relay issues
-or accepts or by an automated principal. A deploy branch an AI-agent's token or a CI system can
-push to fails that, and is a known gap until the image's hardening review closes it — not a
-residual, because a credential that can repoint the identity provider has changed the terms on
-which credentials are accepted. That is this ADR's 2026-09-15 property, and the rewording keeps
-it whole. Reading the floor's values from a running container is accepted as **R35**.
+**What moved out.** File modes, and how a floor reaches a container, are mechanism; they live in
+`docs/specs/relay-configuration.md`. Who an operator lets write their own deployment source — a
+CI system or an AI-agent's token pushing to a deploy branch — is the operator's infrastructure:
+Relay documents what is safe and does not police it. The invariant binds what Relay's software
+does, and that is what makes it enforceable.
