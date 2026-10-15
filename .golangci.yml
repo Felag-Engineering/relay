@@ -434,11 +434,17 @@ linters:
         # new read built from anything request-derived surfaces in review.
 
   exclusions:
+    # A `Code generated` header would otherwise exempt a file from every linter, the
+    # boundary guards included. The real codegen output is excluded by path below, and
+    # scripts/lint-guard-escapes.sh refuses the header anywhere else.
+    generated: disable
+    paths:
+      - internal/relay/v1/
     rules:
       # Scopes the "adapter boundary" forbidigo patterns above to the three adapter
       # packages. Everywhere else — the composition root, the capability layer, the
       # registry — those names are the legitimate implementation.
-      - path-except: internal/controlplane/(api|mcp|console)/[^/]+\.go$
+      - path-except: internal/controlplane/(api|mcp|console)/.+\.go$
         linters:
           - forbidigo
         text: "adapter boundary"
