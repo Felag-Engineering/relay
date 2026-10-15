@@ -649,7 +649,7 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
      including the empty string of a record with no kind, renders nothing
      rather than a guess. Callers pass what the RECORD says (the Job row's
      requester_kind, a Decision's DeciderHuman) and never the Account
-     registry's current kind (#540) — except the Accounts screen, whose
+     registry's current kind — except the Accounts screen, whose
      subject is the Account as it is now. */}}
 {{define "kind-label"}}{{if or (eq . "human") (eq . "machine")}} <span class="kind" data-kind="{{.}}">{{.}}</span>{{end}}{{end}}
 

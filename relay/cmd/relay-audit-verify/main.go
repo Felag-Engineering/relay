@@ -116,7 +116,7 @@ func run(args []string, stdout, stderr io.Writer, env osEnv) int {
 		}
 		return exitTampered
 	case v.Unchained > 0:
-		fmt.Fprintf(stdout, "audit chain intact through head_seq=%d, but %d audit rows carry no chain position (first audit_id=%q) — written by a pre-#896 binary or inserted outside the chain\n",
+		fmt.Fprintf(stdout, "audit chain intact through head_seq=%d, but %d audit rows carry no chain position (first audit_id=%q) — written by a Relay binary that predates migration 28 or inserted outside the chain\n",
 			v.Head.Seq, v.Unchained, v.FirstUnchainedID)
 		return exitUnchained
 	default:

@@ -87,7 +87,7 @@ type Selector struct {
 // says something else; neither gets to disagree about whether the term is
 // allowed.
 var ErrSelectorTagUnsupported = errors.New(
-	"capability: tag: selectors are not resolvable yet — operator-set grouping lands with label management (#430)")
+	"capability: tag: selectors are not resolvable yet — operator-set grouping lands with label management")
 
 // ParseSelector parses a comma-separated Selector such as
 // "node:role=web,state:online" into its Predicates. Every surface parses

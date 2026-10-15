@@ -532,8 +532,10 @@ func decodeResult(t *testing.T, res *sdkmcp.CallToolResult, out any) {
 // the defect was that the surface turned a false predicate into a 200.
 //
 // So this asserts the tool ERRORS, and that the message names the namespace
-// and the issue that will make it resolvable — an AI-agent that cannot tell
-// "unimplemented" from "matched nothing" is the whole complaint.
+// and says it is not resolvable yet — an AI-agent that cannot tell
+// "unimplemented" from "matched nothing" is the whole complaint. The message
+// carries no tracker number: an issue number means nothing to the AI-agent
+// reading it, and rots.
 func TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty(t *testing.T) {
 	ts := newTestServer(t)
 	session := ts.connect(t)
@@ -546,7 +548,7 @@ func TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty(t *testing.T) {
 			"\"no Node carries that tag\", not \"tag: is not implemented\"", len(out.Nodes))
 	}
 	msg := toolErrorText(t, res)
-	for _, want := range []string{"tag:", "#430"} {
+	for _, want := range []string{"tag:", "not resolvable yet"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the refusal does not mention %q, so the caller cannot tell why: %s", want, msg)
 		}
