@@ -34,12 +34,14 @@
 use std::collections::HashSet;
 
 use super::template::{is_valid_slot_name, positional_ref, Slot, TemplateError};
+use super::template_code::{classify, BodyWarning, Tok, WarningKind, Word};
 
-/// The result of lexing a body: the script to hand to `/bin/sh -c` and the slots
-/// it references.
+/// The result of lexing a body: the script to hand to `/bin/sh -c`, the slots
+/// it references and the `policy check` warnings.
 pub(super) struct BodyAnalysis {
     pub script: String,
     pub referenced: HashSet<usize>,
+    pub warnings: Vec<BodyWarning>,
 }
 
 pub(super) fn analyse(body: &str, slots: &[Slot]) -> Result<BodyAnalysis, TemplateError> {
@@ -109,6 +111,12 @@ struct Lexer<'a> {
     /// Here-documents whose operator was read; their bodies start after the
     /// next newline.
     pending: Vec<Heredoc>,
+    /// The top-level word stream, kept only for a body with a placeholder; the
+    /// code-position classifier reads it.
+    toks: Vec<Tok>,
+    /// The top-level word being read.
+    word: Option<Word>,
+    warnings: Vec<BodyWarning>,
 }
 
 impl<'a> Lexer<'a> {
@@ -132,10 +140,13 @@ impl<'a> Lexer<'a> {
             prev: Prev::Blank,
             has_placeholder: body.contains("{{"),
             pending: Vec::new(),
+            toks: Vec::new(),
+            word: None,
+            warnings: Vec::new(),
         }
     }
 
-    fn finish(self) -> Result<BodyAnalysis, TemplateError> {
+    fn finish(mut self) -> Result<BodyAnalysis, TemplateError> {
         let open_quote = self
             .stack
             .iter()
@@ -149,10 +160,128 @@ impl<'a> Lexer<'a> {
                 reason: "an unterminated construct",
             });
         }
+        let mut warnings = std::mem::take(&mut self.warnings);
+        if self.has_placeholder {
+            self.end_word();
+            let found = classify(&self.toks);
+            if let Some((at, kind)) = found.error {
+                return Err(TemplateError::PlaceholderInCodePosition { at, kind });
+            }
+            warnings.extend(found.warnings);
+            warnings.sort_by_key(|w| w.at);
+            warnings.dedup();
+        }
         Ok(BodyAnalysis {
             script: self.out,
             referenced: self.referenced,
+            warnings,
         })
+    }
+
+    // -- top-level word stream --------------------------------------------------
+
+    /// The cursor is in the top-level list, or in quotes directly inside it, so
+    /// what it reads belongs to the current top-level word.
+    fn in_word_frame(&self) -> bool {
+        self.has_placeholder
+            && (self.stack.len() == 1
+                || (self.stack.len() == 2
+                    && matches!(self.stack[1], Frame::SingleQuote | Frame::DoubleQuote)))
+    }
+
+    fn at_top(&self) -> bool {
+        self.has_placeholder && self.stack.len() == 1
+    }
+
+    fn word_mut(&mut self) -> &mut Word {
+        let at = self.here();
+        self.word.get_or_insert_with(|| Word {
+            at,
+            lit: String::new(),
+            dynamic: false,
+            quoted: false,
+            plain: usize::MAX,
+            slot: false,
+        })
+    }
+
+    /// A literal char of the current word; `quoted` if a quote or backslash made it so.
+    fn word_char(&mut self, c: char, quoted: bool) {
+        let w = self.word_mut();
+        if quoted {
+            w.plain = w.plain.min(w.lit.len());
+        }
+        w.lit.push(c);
+        w.quoted |= quoted;
+    }
+
+    fn word_quote(&mut self) {
+        let w = self.word_mut();
+        w.quoted = true;
+        w.plain = w.plain.min(w.lit.len());
+    }
+
+    fn word_dynamic(&mut self) {
+        let w = self.word_mut();
+        w.dynamic = true;
+        w.plain = w.plain.min(w.lit.len());
+    }
+
+    fn end_word(&mut self) {
+        if let Some(w) = self.word.take() {
+            self.toks.push(Tok::Word(w));
+        }
+    }
+
+    /// A redirection operator ends the word before it; a word of only digits,
+    /// or bash's `{NAME}`, is the descriptor and not a word of the command.
+    fn end_word_before_redirect(&mut self) {
+        if let Some(w) = self.word.take() {
+            let fd_name = w
+                .lit
+                .strip_prefix('{')
+                .and_then(|l| l.strip_suffix('}'))
+                .is_some_and(|name| {
+                    name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                });
+            let io_number = !w.dynamic
+                && !w.quoted
+                && !w.lit.is_empty()
+                && (fd_name || w.lit.chars().all(|c| c.is_ascii_digit()));
+            if !io_number {
+                self.toks.push(Tok::Word(w));
+            }
+        }
+    }
+
+    /// `&` or `|` right after `>` or `<` belongs to the redirection (`>&2`, `>|`).
+    fn glued_to_redirect(&self) -> bool {
+        matches!(self.toks.last(), Some(Tok::Redir))
+            && self.i > 0
+            && matches!(self.chars[self.i - 1], '<' | '>')
+    }
+
+    /// A `$` that expands makes the current word dynamic, and `$1`.. `$@` `$*`
+    /// are the body's own reference to the slot values.
+    fn note_dollar(&mut self) {
+        if !self.has_placeholder {
+            return;
+        }
+        if self.in_word_frame() {
+            self.word_dynamic();
+        }
+        let positional = matches!(
+            (self.at(1), self.at(2)),
+            (Some('1'..='9' | '@' | '*'), _) | (Some('{'), Some('1'..='9' | '@' | '*'))
+        );
+        if positional {
+            let at = self.here();
+            self.warnings.push(BodyWarning {
+                at,
+                kind: WarningKind::OwnPositional,
+            });
+        }
     }
 
     // -- cursor helpers -------------------------------------------------------
@@ -252,6 +381,9 @@ impl<'a> Lexer<'a> {
             return Err(TemplateError::PlaceholderInQuotedContext { at: self.here() });
         }
         let closes = self.at(0) == Some('\'');
+        if !closes && self.in_word_frame() {
+            self.word_char(self.chars[self.i], true);
+        }
         self.copy(1);
         if closes {
             self.pop();
@@ -264,7 +396,15 @@ impl<'a> Lexer<'a> {
             return Err(TemplateError::PlaceholderInQuotedContext { at: self.here() });
         }
         match self.at(0) {
-            Some('\\') => self.copy(if self.at(1).is_some() { 2 } else { 1 }),
+            Some('\\') => {
+                if self.in_word_frame() {
+                    // Approximation: the escaped char is literal.
+                    if let Some(c) = self.at(1).filter(|c| *c != '\n') {
+                        self.word_char(c, true);
+                    }
+                }
+                self.copy(if self.at(1).is_some() { 2 } else { 1 })
+            }
             Some('"') => {
                 self.copy(1);
                 self.pop();
@@ -273,7 +413,13 @@ impl<'a> Lexer<'a> {
                 self.open_backquote()?;
             }
             Some('$') => self.dollar(true)?,
-            _ => self.copy(1),
+            Some(c) => {
+                if self.in_word_frame() {
+                    self.word_char(c, true);
+                }
+                self.copy(1);
+            }
+            None => self.copy(1),
         }
         Ok(())
     }
@@ -331,6 +477,7 @@ impl<'a> Lexer<'a> {
     /// A `$` in any context that expands: opens `$(`, `$((`, `${` or (outside
     /// double quotes) `$'`.
     fn dollar(&mut self, quoted: bool) -> Result<(), TemplateError> {
+        self.note_dollar();
         match (self.at(1), self.at(2)) {
             (Some('('), Some('(')) => {
                 self.copy(3);
@@ -436,6 +583,7 @@ impl<'a> Lexer<'a> {
             return self.placeholder();
         }
         let c = self.chars[self.i];
+        let top = self.at_top();
         match c {
             '\\' => match self.at(1) {
                 None => return Err(TemplateError::UnbalancedQuotes),
@@ -448,18 +596,25 @@ impl<'a> Lexer<'a> {
                     }
                     self.copy(2);
                 }
-                Some(_) => {
+                Some(escaped) => {
+                    if top {
+                        self.word_char(escaped, true);
+                    }
                     self.copy(2);
                     self.prev = Prev::Other;
                 }
             },
-            '\'' => {
+            '\'' | '"' => {
+                if top {
+                    self.word_quote();
+                }
                 self.copy(1);
-                self.push(Frame::SingleQuote, Prev::Other);
-            }
-            '"' => {
-                self.copy(1);
-                self.push(Frame::DoubleQuote, Prev::Other);
+                let frame = if c == '"' {
+                    Frame::DoubleQuote
+                } else {
+                    Frame::SingleQuote
+                };
+                self.push(frame, Prev::Other);
             }
             '`' => {
                 if matches!(self.stack.last(), Some(Frame::Backquote)) {
@@ -471,6 +626,14 @@ impl<'a> Lexer<'a> {
             }
             '$' => self.dollar(false)?,
             '(' => {
+                if top {
+                    self.end_word();
+                    self.toks.push(if self.at(1) == Some('(') {
+                        Tok::Sep
+                    } else {
+                        Tok::Open
+                    });
+                }
                 if self.at(1) == Some('(') {
                     self.copy(2);
                     self.push(
@@ -487,6 +650,15 @@ impl<'a> Lexer<'a> {
             }
             ')' => {
                 let closes = matches!(self.stack.last(), Some(Frame::CmdSubst | Frame::Subshell));
+                if top {
+                    self.end_word();
+                    self.toks.push(Tok::Sep);
+                } else if self.has_placeholder
+                    && self.stack.len() == 2
+                    && matches!(self.stack.last(), Some(Frame::Subshell))
+                {
+                    self.toks.push(Tok::Close);
+                }
                 self.copy(1);
                 if closes {
                     self.pop();
@@ -496,6 +668,10 @@ impl<'a> Lexer<'a> {
             }
             '#' if self.prev != Prev::Other => self.comment()?,
             '\n' => {
+                if top {
+                    self.end_word();
+                    self.toks.push(Tok::Sep);
+                }
                 self.copy_as(Prev::Blank);
                 if !self.pending.is_empty() {
                     let docs: Vec<Heredoc> = std::mem::take(&mut self.pending);
@@ -505,8 +681,24 @@ impl<'a> Lexer<'a> {
                     }
                 }
             }
-            ' ' | '\t' => self.copy_as(Prev::Blank),
-            ';' | '&' | '|' | '>' => self.copy_as(Prev::Operator),
+            ' ' | '\t' => {
+                if top {
+                    self.end_word();
+                }
+                self.copy_as(Prev::Blank);
+            }
+            ';' | '&' | '|' | '>' => {
+                if top {
+                    if c == '>' {
+                        self.end_word_before_redirect();
+                        self.toks.push(Tok::Redir);
+                    } else if !(c != ';' && self.glued_to_redirect()) {
+                        self.end_word();
+                        self.toks.push(Tok::Sep);
+                    }
+                }
+                self.copy_as(Prev::Operator);
+            }
             '<' => self.less_than()?,
             'c' if self.prev != Prev::Other && self.at_word("case") => {
                 // A pattern `)` ends a `$(` or `(` frame early, and a pattern is
@@ -522,7 +714,12 @@ impl<'a> Lexer<'a> {
                 }
                 self.copy_as(Prev::Other);
             }
-            _ => self.copy_as(Prev::Other),
+            _ => {
+                if top {
+                    self.word_char(c, false);
+                }
+                self.copy_as(Prev::Other);
+            }
         }
         Ok(())
     }
@@ -556,6 +753,14 @@ impl<'a> Lexer<'a> {
     }
 
     fn less_than(&mut self) -> Result<(), TemplateError> {
+        if self.at_top() {
+            self.end_word_before_redirect();
+            // A here-document delimiter is read by this lexer, so only the
+            // other forms leave a target word.
+            if self.at(1) != Some('<') {
+                self.toks.push(Tok::Redir);
+            }
+        }
         if self.at(1) != Some('<') {
             self.copy_as(Prev::Operator);
             return Ok(());
@@ -801,6 +1006,7 @@ impl<'a> Lexer<'a> {
             });
         };
 
+        self.toks.push(Tok::Word(Word::slot(at)));
         self.out.push_str(&positional_ref(idx));
         self.referenced.insert(idx);
         self.i = j + 2;
@@ -848,10 +1054,10 @@ mod tests {
     fn standalone_placeholders_become_quoted_parameters() {
         for (body, want) in [
             ("echo {{p}}", "echo \"$1\""),
-            ("{{p}} x", "\"$1\" x"),
+            ("echo x {{p}}", "echo x \"$1\""),
             ("echo {{ p }}", "echo \"$1\""),
             ("echo\t{{p}}\ttail", "echo\t\"$1\"\ttail"),
-            ("a\n{{p}}\nb", "a\n\"$1\"\nb"),
+            ("a\necho {{p}}\nb", "a\necho \"$1\"\nb"),
             ("echo a \\\n{{p}}", "echo a \\\n\"$1\""),
             ("echo {{p}} | cat -n {{p}}", "echo \"$1\" | cat -n \"$1\""),
             (

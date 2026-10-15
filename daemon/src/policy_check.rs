@@ -727,6 +727,58 @@ body = "cat /etc/hostname"
         );
     }
 
+    fn path_template(body: &str) -> String {
+        format!(
+            "[[template]]\nname = \"code.position\"\nrisk_class = \"read\"\nbody = '{body}'\n\n\
+             [[template.slots]]\nname = \"path\"\ntype = \"path\"\n"
+        )
+    }
+
+    fn check_template_body(tag: &str, body: &str, extra: &[&str]) -> i32 {
+        let policy = TempFile::new(&format!("{tag}-policy"), "");
+        let root = TempDir::created(tag);
+        root.write("x.toml", &path_template(body));
+        let dir = root.path_str();
+        let mut args = vec!["--templates", dir.as_str()];
+        args.extend_from_slice(extra);
+        run(&argv(&policy.path_str(), &args))
+    }
+
+    /// A slot where its value would run as code makes the template set
+    /// unloadable, so the check exits 1 with or without `--strict`
+    /// (ADR-0021, 2026-10-15 decision 3).
+    #[test]
+    fn templates_a_slot_in_a_code_position_is_invalid() {
+        for body in ["{{path}} --version", "eval {{path}}", "sh -c {{path}}"] {
+            assert_eq!(
+                check_template_body("tmpl-code-err", body, &[]),
+                EXIT_INVALID
+            );
+        }
+    }
+
+    /// An undecidable code position loads and passes a plain check; `--strict`
+    /// fails it.
+    #[test]
+    fn templates_an_undecidable_code_position_fails_only_under_strict() {
+        let body = "find / -maxdepth 1 -exec {{path}} \\;";
+        assert_eq!(check_template_body("tmpl-code-warn", body, &[]), EXIT_VALID);
+        assert_eq!(
+            check_template_body("tmpl-code-warn", body, &["--strict"]),
+            EXIT_INVALID
+        );
+    }
+
+    /// A slot that is only an argument of an ordinary command is clean under
+    /// `--strict`.
+    #[test]
+    fn templates_a_slot_as_an_argument_is_clean_under_strict() {
+        assert_eq!(
+            check_template_body("tmpl-code-ok", "sha256sum -- {{path}}", &["--strict"]),
+            EXIT_VALID
+        );
+    }
+
     /// A good pack plus a Policy that allows it lints clean, and --would-allow
     /// over the template answers from the live engine (ADR-0011) rather than
     /// reporting `unsupported` as it would with no template root.

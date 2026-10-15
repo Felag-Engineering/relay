@@ -255,18 +255,42 @@ async fn crlf_line_ending_data_row() {
     }
 }
 
-#[tokio::test]
-async fn command_name_position_is_inert_for_non_executables() {
-    // A slot in command-name position is ADR-0021 decision 2's concern;
-    // positional rendering alone must already keep a non-executable value from
-    // becoming shell text.
-    for shell in shells() {
-        let runner = ShellRunner::new(&shell);
-        for value in CANARIES {
-            let r = invoke(&hostile("echo a\\\r\n{{p}} RAN"), &[("p", value)], &runner).await;
-            assert_clean(shell.label, value, &r);
-        }
+/// A slot where its value would be executed is refused at load (ADR-0021
+/// amendment of 2026-10-15, decision 3), not left to positional rendering.
+#[test]
+fn code_positions_are_refused_at_load() {
+    for body in [
+        // command-name position, including a position reached by an escaped CR
+        "echo a\\\r\n{{p}} RAN",
+        "{{p}} RAN",
+        "echo a ; {{p}} RAN",
+        "A=1 {{p}}",
+        "exec {{p}}",
+        "command {{p}}",
+        "eval {{p}}",
+        ". {{p}}",
+        "source {{p}}",
+        "let {{p}}",
+        "sh -c {{p}}",
+        "bash -lc {{p}}",
+        "python3 -c {{p}}",
+        "perl -e {{p}}",
+    ] {
+        assert!(
+            matches!(
+                refusal(body),
+                TemplateError::PlaceholderInCodePosition { .. }
+            ),
+            "{body:?}"
+        );
     }
+}
+
+/// Where a slot's value is data, an ordinary command keeps running it inert.
+#[tokio::test]
+async fn lookups_and_redirections_are_not_code_positions() {
+    every_canary_is_inert("command -v {{p}} || true", None).await;
+    every_canary_is_inert("exec 3< /dev/null; echo {{p}}", None).await;
 }
 
 #[tokio::test]
