@@ -498,7 +498,7 @@ impl<'a> Lexer<'a> {
             '\n' => {
                 self.copy_as(Prev::Blank);
                 if !self.pending.is_empty() {
-                    let docs: Vec<Heredoc> = self.pending.drain(..).collect();
+                    let docs: Vec<Heredoc> = std::mem::take(&mut self.pending);
                     // The first operator's body comes first, so it goes on top.
                     for doc in docs.into_iter().rev() {
                         self.stack.push(Frame::Heredoc(doc));
