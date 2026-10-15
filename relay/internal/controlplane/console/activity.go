@@ -446,13 +446,8 @@ type activityFilter struct {
 	Op         string
 	Outcome    string // a jobs.OutcomeName, or ""
 
-	// Window is a relative range ("15m", "1h", "24h", "7d"); Since and Until
-	// are the resolved absolute bounds, whether they came from Window or from
-	// explicit RFC3339 parameters.
-	Window       string
-	SinceParam   string
-	UntilParam   string
-	Since, Until time.Time
+	// The relative window or explicit range, shared with Access.
+	timeRange
 
 	// Q refines the FETCHED PAGE by substring, and nothing else. It is
 	// labelled as such on the screen: inventing a second query grammar here
@@ -527,16 +522,31 @@ type timeRange struct {
 	Since, Until time.Time
 }
 
+// setParams writes the range's raw parameters into v, omitting empty ones —
+// the inverse of parseTimeRange, shared so both screens round-trip a range
+// identically.
+func (t timeRange) setParams(v url.Values) {
+	for name, value := range map[string]string{"window": t.Window, "since": t.SinceParam, "until": t.UntilParam} {
+		if value != "" {
+			v.Set(name, value)
+		}
+	}
+}
+
 // parseTimeRange reads a relative window or an explicit range out of the
-// three raw query values, returning a note for anything it could not read.
+// window, since and until query values, returning a note for anything it could not read.
 //
 // A value it does not understand is DROPPED AND NAMED, never silently
 // applied as something else: a time range that quietly became "everything"
 // is how an auditor concludes an event did not happen. The note strings are
 // load-bearing beyond this file — activity_test.go and standing_notes_test.go
 // match on them byte-identically, and access_test.go will too.
-func parseTimeRange(window, since, until string, now time.Time) (timeRange, []string) {
-	t := timeRange{Window: window, SinceParam: since, UntilParam: until}
+func parseTimeRange(q url.Values, now time.Time) (timeRange, []string) {
+	t := timeRange{
+		Window:     strings.TrimSpace(q.Get("window")),
+		SinceParam: strings.TrimSpace(q.Get("since")),
+		UntilParam: strings.TrimSpace(q.Get("until")),
+	}
 	var notes []string
 
 	// An explicit range beats a relative one, and asking for both is a
@@ -622,9 +632,8 @@ func parseActivityFilter(r *http.Request, now time.Time) (activityFilter, string
 		f.Outcome = ""
 	}
 
-	tr, trNotes := parseTimeRange(
-		strings.TrimSpace(q.Get("window")), strings.TrimSpace(q.Get("since")), strings.TrimSpace(q.Get("until")), now)
-	f.Window, f.SinceParam, f.UntilParam, f.Since, f.Until = tr.Window, tr.SinceParam, tr.UntilParam, tr.Since, tr.Until
+	tr, trNotes := parseTimeRange(q, now)
+	f.timeRange = tr
 	notes = append(notes, trNotes...)
 
 	return f, strings.Join(notes, "; ")
@@ -685,9 +694,7 @@ func (f activityFilter) query(job, audit lanePos) url.Values {
 	set("on_behalf_of", f.OnBehalfOf)
 	set("op", f.Op)
 	set("outcome", f.Outcome)
-	set("window", f.Window)
-	set("since", f.SinceParam)
-	set("until", f.UntilParam)
+	f.setParams(v)
 	set("q", f.Q)
 	if f.ShowConsole {
 		set(consoleParam, consoleShow)

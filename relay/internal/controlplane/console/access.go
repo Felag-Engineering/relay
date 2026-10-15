@@ -337,8 +337,7 @@ func parseAccessFilter(r *http.Request, now time.Time) (accessFilter, string) {
 		Cursor:   q.Get("cursor"),
 	}
 
-	tr, notes := parseTimeRange(
-		strings.TrimSpace(q.Get("window")), strings.TrimSpace(q.Get("since")), strings.TrimSpace(q.Get("until")), now)
+	tr, notes := parseTimeRange(q, now)
 	f.timeRange = tr
 
 	return f, strings.Join(notes, "; ")
@@ -357,15 +356,7 @@ func (f accessFilter) values() url.Values {
 	if f.Failures {
 		v.Set("failures", "1")
 	}
-	if f.Window != "" {
-		v.Set("window", f.Window)
-	}
-	if f.SinceParam != "" {
-		v.Set("since", f.SinceParam)
-	}
-	if f.UntilParam != "" {
-		v.Set("until", f.UntilParam)
-	}
+	f.setParams(v)
 	return v
 }
 
