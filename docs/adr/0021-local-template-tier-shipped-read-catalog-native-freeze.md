@@ -1,7 +1,7 @@
 # A local Template tier, a shipped read catalog, and a frozen native vocabulary
 
 **Status:** Accepted; amended by ADR-0042; amended 2026-10-14 (slot values as positional
-parameters, #974).
+parameters, #974); amended 2026-10-15 (slots only at the top level; a narrower `path`, #977).
 
 Template **execution** is separable from template **distribution** (owner decision
 2026-08-03, issue #266). ADR-0001 defined tier 2 — **Template Operations**, operator-authored
@@ -281,3 +281,59 @@ what a value can do once the call is allowed.
 - **Residual risk**, accepted: an author who passes a slot to a code-running position that
   decision 2 cannot detect; a program's own parsing of a well-formed argument (as ever, out of
   scope); and Node output steering the AI-agent until decision 6's track lands.
+
+## Amendment (2026-10-15, #977): slots stand only at the top level, and `path` is narrower
+
+Owner decisions, 2026-10-15, taken while implementing the 2026-10-14 amendment. They narrow two
+of its decisions; decision 1's mechanism — positional parameters — is unchanged.
+
+**What was found.** Three adversarial review passes on the implementing change each reproduced
+bodies the load-time lexer accepted while the shell read them differently: a `case` pattern
+closing a substitution early, `$((` that is a command substitution, bash's `$[ ]`, backquote
+backslash rules, keyword-splitting line continuations, and a placeholder one substitution deep
+inside arithmetic or a parameter expansion. Positional parameters kept every value out of the
+text the shell parses, as decided. But a value that lands in a nested context can still be
+re-split by an unquoted outer substitution or re-evaluated by bash's arithmetic, and a `path`
+value carrying spaces, `$`, `[` and `(` was the payload in each case. Modelling more of each
+shell's grammar is the denylist this amendment's predecessor rejected, in a new place.
+
+### Decisions
+
+1. **A slot stands only at the top level** (narrows the 2026-10-14 decision 1's "authors keep
+   the full shell around a slot"). A placeholder is accepted only as a standalone word of a
+   command in the body's top-level list — a simple command, a pipeline, or an `&&` / `||` / `;`
+   list. A placeholder inside a command or process substitution, a parameter expansion, any
+   arithmetic context, a here-document or here-string, quotes, `[[ ]]` or a `case` pattern is a
+   Template compile error. Authors keep the full shell everywhere else in the body; only where a
+   slot may stand is restricted. The load-time refusals that keep the lexer's frame tracking
+   honest — backquote substitutions, joining line continuations, unterminated constructs, and
+   constructs it cannot analyse — stay, and apply when the body carries a placeholder.
+2. **`path` refuses whitespace and shell metacharacters** (reverses the 2026-10-14 decision 4's
+   "not narrowed further"). Beyond starting with `/` and refusing C0 controls and DEL, a `path`
+   value refuses any whitespace and each of these characters: `$`, `` ` ``, `\`, `"`, `'`,
+   `;`, `|`, `&`, `<`, `>`, `(`, `)`, `{`, `}`, `[`, `]`, `*`, `?`, `!`, `#`, `~`, `=`. A path
+   a Template cannot address is reached by a Native Operation or Raw Exec, where Policy
+   governs it as before. Decision 4's rendering obligation for invisible and bidirectional
+   characters (#979) is unchanged.
+3. **How decision 2's refusals and warnings land** (completes the 2026-10-14 decision 2):
+   - A placeholder in a decidable code-running position is a Template compile error like every
+     other: the Node's template set becomes `unloadable`, Native Operations keep running, and
+     `policy check` exits 1. It does not invalidate the Policy or deny every Task.
+   - The operand of `exec`, `command` or `builtin` is a command-name position.
+   - A body whose own text routes slot values into code — the author's `$1`… `$@` `shift`
+     `set --`, a placeholder inside a function body, alias definitions, a placeholder among
+     `trap`'s operands, or `.`/`source` passing positional parameters on — is a `policy check`
+     **warning**, which `--strict` fails. An operator who deliberately writes a script that turns
+     an argument back into code is exercising their own authority over the Node; the product
+     does not try to prevent every such script.
+
+### Consequences
+
+- Two layers now hold the one-word property independently: where a slot may stand, and what a
+  `path` value may contain. A lexer miss leaves a value that carries no metacharacters, and a
+  metacharacter-free value cannot split, become an option, or carry a subscript.
+- Templates that placed a slot in a nested context, or relied on paths containing spaces or the
+  refused characters, stop loading or refuse those values after upgrade. The implementing PR
+  lists both for operators.
+- Invariant 1 is unchanged: these decisions strengthen how it holds, not what it states.
+
