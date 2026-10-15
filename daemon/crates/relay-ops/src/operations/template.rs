@@ -76,6 +76,7 @@ use crate::not_executed::not_executed;
 
 use super::registry::{OpCtx, OpFuture, ResolvedOp};
 use super::template_body::{self, BodyAnalysis};
+pub use super::template_code::{BodyWarning, CodePosition, WarningKind};
 
 // ---------------------------------------------------------------------------
 // Bounds — every caller-controlled dimension is capped (oversized inputs are a
@@ -245,6 +246,9 @@ pub enum TemplateError {
     #[error("a placeholder near byte {at} sits in {context}; a slot may only stand as a plain word of the top-level command list")]
     PlaceholderNotTopLevel { at: usize, context: &'static str },
 
+    #[error("a placeholder near byte {at} stands in {kind}")]
+    PlaceholderInCodePosition { at: usize, kind: CodePosition },
+
     #[error("a placeholder near byte {at} sits inside arithmetic, where the shell evaluates expanded values as expressions")]
     PlaceholderInArithmetic { at: usize },
 
@@ -313,9 +317,16 @@ pub struct TemplateOp {
     risk: RiskClass,
     slots: Vec<Slot>,
     script: String,
+    warnings: Vec<BodyWarning>,
 }
 
 impl TemplateOp {
+    /// What `policy check` reports about the body: it loads, and `--strict`
+    /// fails it.
+    pub fn warnings(&self) -> &[BodyWarning] {
+        &self.warnings
+    }
+
     /// The script `/bin/sh -c` runs: the body with each placeholder replaced by
     /// its quoted positional parameter. Built once at compile time, so it is the
     /// same text for every call whatever the values are.
@@ -487,6 +498,7 @@ impl ResolvedOp for TemplateOp {
 /// - the body's quoting is balanced;
 /// - every `{{slot}}` is a **standalone, whitespace-delimited word in an
 ///   unquoted context** and resolves to a declared slot;
+/// - no placeholder stands where its value would be executed (`template_code`);
 /// - every declared slot is referenced.
 pub fn compile(def: &TemplateDef) -> Result<TemplateOp, TemplateError> {
     // --- name ---
@@ -541,7 +553,11 @@ pub fn compile(def: &TemplateDef) -> Result<TemplateOp, TemplateError> {
     }
 
     // --- lex the body, replacing placeholders with positional parameters ---
-    let BodyAnalysis { script, referenced } = template_body::analyse(&def.body, &slots)?;
+    let BodyAnalysis {
+        script,
+        referenced,
+        warnings,
+    } = template_body::analyse(&def.body, &slots)?;
 
     // --- every declared slot must actually be used ---
     for (idx, slot) in slots.iter().enumerate() {
@@ -557,6 +573,7 @@ pub fn compile(def: &TemplateDef) -> Result<TemplateOp, TemplateError> {
         risk: def.risk_class.into(),
         slots,
         script,
+        warnings,
     })
 }
 

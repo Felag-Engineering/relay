@@ -498,6 +498,13 @@ pub fn lint_dir(root: &Path) -> TemplateLintReport {
                     continue;
                 }
             };
+            for warning in op.warnings() {
+                report.findings.push(LintFinding {
+                    severity: LintSeverity::Warning,
+                    location: location.clone(),
+                    message: warning.to_string(),
+                });
+            }
             if REGISTRY.iter().any(|entry| entry.name == op.name()) {
                 report.findings.push(LintFinding {
                     severity: LintSeverity::Error,

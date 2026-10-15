@@ -218,3 +218,28 @@ fn catalog_policy_rules_do_not_create_vocabulary() {
     // native Operation by that name exists.
     assert!(crate::operations::risk_class("proc.list").is_none());
 }
+
+/// The shipped pack is the example of a clean Template set: no body draws a
+/// load error or a `policy check` warning.
+#[test]
+fn catalog_has_no_code_position_errors_or_warnings() {
+    let report = crate::templates::lint_dir(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/packaging/templates.d"
+    )));
+    assert!(
+        report.findings.is_empty(),
+        "findings: {:?}",
+        report.findings
+    );
+    assert_eq!(report.names.len(), EXPECTED.len());
+    for def in catalog() {
+        let op = compile(&def).unwrap_or_else(|e| panic!("{}: {e}", def.name));
+        assert!(
+            op.warnings().is_empty(),
+            "{}: {:?}",
+            def.name,
+            op.warnings()
+        );
+    }
+}

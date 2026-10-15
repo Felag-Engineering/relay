@@ -72,12 +72,14 @@ from those validators, so what a caller is told and what the daemon enforces can
   call, so no value can add a word, an operator, a redirection or an expansion, in any POSIX shell. This
   is the single point invariant 1 rests on for the Template tier.
 - **A slot fills only a data position.** A placeholder standing where its value would be executed,
-  where that is decidable from the body, is a Policy error: the command-name position, the operand
-  of `eval`/`.`/`source`, the argument after a shell's or interpreter's `-c`/`-e`, and arithmetic
-  contexts (`(( ))`, `$(( ))`, `let`). Code positions not reliably decidable (an `awk` or `sed` expression, `find -exec`,
+  where that is decidable from the body, is a Template compile error (the Node's template set is
+  `unloadable`; Native Operations keep running): the command-name position, including the operand
+  of `exec`/`command`/`builtin`; the operand of `eval`/`.`/`source`; the argument after a shell's or
+  interpreter's `-c`/`-e`; and `let` (ADR-0021, amended 2026-10-15). Arithmetic contexts
+  (`(( ))`, `$(( ))`, `$[ ]`) cannot hold a slot at all, since a slot stands only at the top level. Code positions not reliably decidable (an `awk` or `sed` expression, `find -exec`,
   `xargs` into a shell, an option that takes a command to run) are a `policy check` warning that
   `--strict` fails. These two lists are the start of the Safe-Template hazard list (Future work)
-  and grow with it. *Not yet built; tracked in #977.*
+  and grow with it.
 - **No well-formed value is an option.** No daemon-owned slot type admits a value beginning with
   `-`; an `enum` value is a literal the author chose.
 - **Slot types are a closed set owned by the daemon:**
@@ -142,7 +144,9 @@ from those validators, so what a caller is told and what the daemon enforces can
 - **Class mismatch.** A daemon refuses a Task dispatched under a lower risk class than its own
   Policy declares.
 - **Policy errors in a Template definition** — a missing description, a slot not standing alone,
-  a slot in a decidable code-running position (not yet built; #977), an unknown slot type, a name shadowing a Native — make the whole Policy `invalid` (`policy.md`).
+  an unknown slot type, a name shadowing a Native — make the whole Policy `invalid` (`policy.md`).
+  A slot in a decidable code-running position is a Template compile error: the Node's template set
+  is `unloadable` and Native Operations keep running (ADR-0021, amended 2026-10-15).
 - **From the wire.** Nothing adds, changes or removes an Operation on a Node. The Relay never
   renders or substitutes a Template body.
 

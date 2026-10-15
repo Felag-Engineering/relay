@@ -114,7 +114,52 @@ Authoring rules the loader enforces, all refusals at load time:
   --templates` before deploying. Typical fixes are a slot inside `$( )` or a
   here-document (pass it as an argument instead), backquotes (use `$( )`), and
   a `path` slot used for names with spaces or quotes (use an `enum` or a
-  narrower convention).
+  narrower convention). Bodies that put a slot in a command-name position, as
+  the operand of `exec`/`eval`/`.`/`source`/`let`, or as the program of a
+  shell's or interpreter's `-c`/`-e` now fail to load too; restructure so the
+  slot is an ordinary argument.
+- **A slot never stands where its value would be executed.** Positional
+  parameters keep a value out of the parsed text, but a command you wrote can
+  still turn its argument back into code. Where that is decidable from the
+  body, the template fails to load (and `policy check` exits 1):
+  - the command-name position of a simple command: the start of the body, after
+    a newline, `;`, `&&`, `||`, `|`, `&`, `{`, `!`, a `then`/`do`/`else`/`elif`/
+    `if`/`while`/`until`/`time`, and after leading `NAME=value` assignments;
+  - the operand of `exec`, `command` or `builtin` (`exec > {{path}}` with no
+    command, and `command -v {{name}}` / `command -V`, which only look a name
+    up, are not command positions);
+  - an operand of `eval`, the file operand of `.` or `source`, an operand of `let`;
+  - the argument right after `-c` of `sh`, `bash`, `dash`, `zsh`, `ksh`, `mksh`
+    or `ash` (also `-ec`, `-lc`, …), and after `python -c`, `perl -e`/`-E`,
+    `ruby -e`, `node -e`/`-p`/`--eval`/`--print`, `php -r`, `lua -e`.
+
+  Passing a slot as a *data* argument of those same programs is fine
+  (`sh -c 'script "$1"' relay {{path}}`, `python3 -c '…' {{path}}`).
+- **Warnings** do not stop a template from loading. `policy check` reports
+  each with the template, the byte offset in the body and the reason, and
+  `--strict` fails the pipeline on them. They are the positions the daemon
+  cannot decide, and bodies that route slot values into code themselves:
+  - a slot as the program of `awk`/`sed`, after `find -exec`/`-execdir`/`-ok`,
+    anywhere after `xargs`, or as an argument of a wrapper that runs a command
+    (`env`, `sudo`, `doas`, `nice`, `ionice`, `timeout`, `nohup`, `setsid`,
+    `stdbuf`, `chroot`, `unshare`, `nsenter`, `flock`, `watch`, `strace`,
+    `taskset`, `chrt`, `runuser`, `systemd-run`);
+  - a slot as the value of an option that runs a command (`tar -I`, `rsync -e`,
+    `git -c`, `su -c`, `script -c`) or part of an `ssh` remote command;
+  - a slot as the script operand of a shell or interpreter without `-c`
+    (`sh {{path}}`, `python3 {{path}}`) or an argument of a command whose name
+    is computed (`$cmd {{path}}`);
+  - the body's own `$1`…`$9`, `${N}`, `$@`, `$*`, `shift`, `set --` or
+    `getopts` (the positional parameters carry the slot values), a slot inside
+    a function body, an `alias`, a slot among `trap`'s operands, any `.` or
+    `source` (the sourced file receives the slot values), and a slot in a
+    `compgen`/`complete -W` word list.
+
+  The two lists are not a complete hazard list; a program that interprets its
+  own argument as code is the author's responsibility. The wrapper and option
+  tables are conservative: a placeholder that is only an argument of the
+  wrapped command (`timeout 5 du {{path}}`) is also reported, because the
+  daemon does not model each wrapper's options.
 - **`risk_class` is mandatory**, and a template may not shadow a Native
   Operation (`system.facts`, `file.read`, `service.restart`, `pkg.install`) or
   `raw_exec`. The native vocabulary is frozen (ADR-0021) and always wins.
@@ -133,10 +178,13 @@ error: relay-read/catalog.toml: [[template]] #2 (name="log.tail") — a placehol
 What it reports:
 
 - **Per template**: a malformed body (a placeholder that is not a standalone
-  word, unbalanced quoting), an invalid or missing `risk_class`, bad slot
+  word, unbalanced quoting, a slot in a code-running position), an invalid or missing `risk_class`, bad slot
   names/types, an empty `enum`, a name that shadows a Native Operation, and a
   duplicate name across the set — every one of them an error, because every one
   of them makes the whole set fail to load on the Node.
+- **Warnings per template**: the undecidable code positions and author
+  hazards listed under Author, each worded with the template, byte offset and
+  reason. They never block loading; `--strict` makes them fail the check.
 - **Across Policy and templates**: an Operation name in a Policy rule that is
   neither native nor in the supplied template root is an **error**. Without
   `--templates` the linter cannot know the target Node's vocabulary, so the same
