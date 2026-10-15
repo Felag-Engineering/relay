@@ -143,12 +143,12 @@ args = [["/etc/shadow"]]
 # nohup, setsid, ...) and script interpreters (sh -c, bash -c, python -c,
 # perl -e, ...): first, promote interpreter-shaped work to a Template
 # Operation (ADR-0021), whose structure is fixed by its author and whose
-# slot values are passed as positional parameters — the same rule holds inside a Template: its
-# interpreted text (the -c/-e script, the program to run) must be written
-# literally in the template body, never filled by a slot; a slot may fill
-# only a data position, never the script or the program to run. Only where
-# Raw Exec is unavoidable, write the WHOLE command as a literal, so the
-# script text is fixed by you and not by the caller. Never put a trailing
+# slot values are passed as positional parameters — the same rule holds
+# inside a Template: its interpreted text (the -c/-e script, the program to
+# run) must be written literally in the template body, never filled by a
+# slot; a slot may fill only a data position, never the script or the program
+# to run. Only where Raw Exec is unavoidable, write the WHOLE command as a
+# literal, so the script text is fixed by you and not by the caller. Never put a trailing
 # .* or an open character class on an argument the program interprets as
 # code or as a path to run, and never a class that lets a caller-supplied
 # argument begin with "-" (option injection: tar --to-command=, rsync -e,

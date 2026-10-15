@@ -16,7 +16,14 @@
 //!
 //! Known limits: the lexer models POSIX `sh` plus the bash forms that change
 //! where quotes end (`$'…'`, `$(( ))`, `${ }`). It does not model `case`
-//! patterns, `[[ ]]`, `$[ ]`, `&>`, aliases or functions.
+//! patterns, `[[ ]]`, `$[ ]`, `&>`, aliases or functions. Where it cannot tell
+//! how a shell would read a body that holds a placeholder, it refuses the body
+//! rather than guess: an unterminated construct, a `case` inside a `$( )`, `( )`
+//! or backquote (its pattern `)` would end the frame early), and a `$((` that is
+//! not arithmetic. A placeholder inside arithmetic is refused outright. A
+//! comment inside backquotes ends at the closing backquote, as in the shell.
+//! A slot inside an unquoted `$( )` or backquote is one word at its own level;
+//! the outer substitution's result is split again by the shell.
 
 use std::collections::HashSet;
 
@@ -57,6 +64,8 @@ struct Heredoc {
     delim: Vec<char>,
     strip_tabs: bool,
     quoted: bool,
+    /// The next char starts a body line, where the delimiter may appear.
+    bol: bool,
 }
 
 enum Frame {
@@ -82,8 +91,9 @@ struct Lexer<'a> {
     referenced: HashSet<usize>,
     stack: Vec<Frame>,
     prev: Prev,
-    /// The next char starts a here-document line (only read by a `Heredoc` frame).
-    bol: bool,
+    /// The body holds at least one `{{`: constructs the lexer cannot read are
+    /// refused only then, so slot-free bodies keep loading.
+    has_placeholder: bool,
     /// Here-documents whose operator was read; their bodies start after the
     /// next newline.
     pending: Vec<Heredoc>,
@@ -108,7 +118,7 @@ impl<'a> Lexer<'a> {
             referenced: HashSet::new(),
             stack: vec![Frame::Top],
             prev: Prev::Blank,
-            bol: false,
+            has_placeholder: body.contains("{{"),
             pending: Vec::new(),
         }
     }
@@ -120,6 +130,12 @@ impl<'a> Lexer<'a> {
             .any(|f| matches!(f, Frame::SingleQuote | Frame::DoubleQuote | Frame::AnsiC));
         if open_quote {
             return Err(TemplateError::UnbalancedQuotes);
+        }
+        if self.has_placeholder && (self.stack.len() > 1 || !self.pending.is_empty()) {
+            return Err(TemplateError::BodyNotAnalysable {
+                at: self.off[self.chars.len()],
+                reason: "an unterminated construct",
+            });
         }
         Ok(BodyAnalysis {
             script: self.out,
@@ -254,10 +270,17 @@ impl<'a> Lexer<'a> {
                 self.copy(1);
                 self.push(Frame::Backquote, Prev::Open);
             }
-            Some('$') => self.dollar(true)?,
+            Some('$') => self.dollar(in_double)?,
             _ => self.copy(1),
         }
         Ok(())
+    }
+
+    fn not_analysable(&self, reason: &'static str) -> TemplateError {
+        TemplateError::BodyNotAnalysable {
+            at: self.here(),
+            reason,
+        }
     }
 
     /// A `$` in any context that expands: opens `$(`, `$((`, `${` or (outside
@@ -288,7 +311,7 @@ impl<'a> Lexer<'a> {
 
     fn arith(&mut self) -> Result<(), TemplateError> {
         if self.at_placeholder() {
-            return self.placeholder();
+            return Err(TemplateError::PlaceholderInArithmetic { at: self.here() });
         }
         match self.at(0) {
             Some('(') => {
@@ -306,6 +329,11 @@ impl<'a> Lexer<'a> {
                     }
                     self.copy_as(Prev::Operator);
                 } else {
+                    // A lone `)` means bash read `$((` as a command substitution
+                    // wrapping a subshell, not as arithmetic.
+                    if self.at(1) != Some(')') && self.has_placeholder {
+                        return Err(self.not_analysable("a `$((` that is not arithmetic"));
+                    }
                     self.copy(if self.at(1) == Some(')') { 2 } else { 1 });
                     self.pop();
                 }
@@ -339,9 +367,7 @@ impl<'a> Lexer<'a> {
         if self.at_placeholder() {
             return self.placeholder();
         }
-        let Some(c) = self.at(0) else {
-            return Ok(());
-        };
+        let c = self.chars[self.i];
         match c {
             '\\' => match self.at(1) {
                 None => return Err(TemplateError::UnbalancedQuotes),
@@ -396,21 +422,39 @@ impl<'a> Lexer<'a> {
                     for doc in docs.into_iter().rev() {
                         self.stack.push(Frame::Heredoc(doc));
                     }
-                    self.bol = true;
                 }
             }
             ' ' | '\t' => self.copy_as(Prev::Blank),
             ';' | '&' | '|' | '>' => self.copy_as(Prev::Operator),
             '<' => self.less_than()?,
+            'c' if self.prev != Prev::Other && self.at_case_keyword() => {
+                let nested = self
+                    .stack
+                    .iter()
+                    .any(|f| matches!(f, Frame::CmdSubst | Frame::Subshell | Frame::Backquote));
+                if nested && self.has_placeholder {
+                    return Err(self.not_analysable(
+                        "a `case` inside a substitution, whose pattern `)` ends the frame early",
+                    ));
+                }
+                self.copy_as(Prev::Other);
+            }
             _ => self.copy_as(Prev::Other),
         }
         Ok(())
     }
 
+    /// The cursor is on the word `case`.
+    fn at_case_keyword(&self) -> bool {
+        let word = ['c', 'a', 's', 'e'];
+        (0..4).all(|k| self.at(k) == Some(word[k]))
+            && matches!(self.at(4), None | Some(' ' | '\t' | '\n'))
+    }
+
     /// A comment runs to the end of the line; the newline is left to the caller.
     fn comment(&mut self) -> Result<(), TemplateError> {
         while let Some(c) = self.at(0) {
-            if c == '\n' {
+            if c == '\n' || (c == '`' && matches!(self.stack.last(), Some(Frame::Backquote))) {
                 break;
             }
             if self.at_placeholder() {
@@ -446,6 +490,7 @@ impl<'a> Lexer<'a> {
                 delim,
                 strip_tabs,
                 quoted,
+                bol: true,
             });
         }
         self.prev = Prev::Other;
@@ -504,8 +549,8 @@ impl<'a> Lexer<'a> {
     // -- here-document bodies -------------------------------------------------
 
     fn heredoc(&mut self) -> Result<(), TemplateError> {
-        if self.bol {
-            self.bol = false;
+        if self.heredoc_mut().bol {
+            self.heredoc_mut().bol = false;
             if let Some(end) = self.delimiter_line_end() {
                 let upto = if self.chars.get(end) == Some(&'\n') {
                     end + 1
@@ -515,16 +560,14 @@ impl<'a> Lexer<'a> {
                 self.copy(upto - self.i);
                 self.stack.pop();
                 self.prev = Prev::Blank;
-                self.bol = true;
                 return Ok(());
             }
         }
-        let quoted = matches!(self.stack.last(), Some(Frame::Heredoc(h)) if h.quoted);
-        if quoted {
+        if self.heredoc_mut().quoted {
             if self.at_placeholder() {
                 return Err(self.not_expanded("a quoted here-document"));
             }
-            self.bol = self.at(0) == Some('\n');
+            self.heredoc_mut().bol = self.at(0) == Some('\n');
             self.copy(1);
             return Ok(());
         }
@@ -546,12 +589,20 @@ impl<'a> Lexer<'a> {
             Some('$') => self.dollar(true)?,
             Some('\n') => {
                 self.copy_as(Prev::Blank);
-                self.bol = true;
+                self.heredoc_mut().bol = true;
             }
             Some(' ' | '\t') => self.copy_as(Prev::Blank),
             _ => self.copy_as(Prev::Other),
         }
         Ok(())
+    }
+
+    /// The here-document frame on top of the stack; only called from `heredoc`.
+    fn heredoc_mut(&mut self) -> &mut Heredoc {
+        match self.stack.last_mut() {
+            Some(Frame::Heredoc(h)) => h,
+            _ => unreachable!("heredoc() runs only with a Heredoc frame on top"),
+        }
     }
 
     /// If the line starting at the cursor is the current here-document's
@@ -595,7 +646,10 @@ impl<'a> Lexer<'a> {
             Some(Frame::ParamExp { .. }) => {
                 return Err(self.not_expanded("a parameter expansion"));
             }
-            Some(Frame::Arith { .. } | Frame::Heredoc(_)) => self.prev == Prev::Blank,
+            Some(Frame::Arith { .. }) => {
+                return Err(TemplateError::PlaceholderInArithmetic { at });
+            }
+            Some(Frame::Heredoc(_)) => self.prev == Prev::Blank,
             _ => matches!(self.prev, Prev::Blank | Prev::Open),
         };
         if !left_ok {
@@ -710,7 +764,6 @@ mod tests {
                 "echo \"$(echo \")\" {{p}} \")\")\"",
                 "echo \"$(echo \")\" \"$1\" \")\")\"",
             ),
-            ("echo $(( {{p}} + 1 ))", "echo $(( \"$1\" + 1 ))"),
         ] {
             assert_eq!(script(body), want, "{body:?}");
         }
@@ -860,5 +913,137 @@ mod tests {
             error("echo {{P}}"),
             TemplateError::MalformedPlaceholder { .. }
         ));
+    }
+
+    #[test]
+    fn a_placeholder_in_arithmetic_is_refused() {
+        for body in [
+            "echo $(( {{p}} + 1 ))",
+            "(( {{p}} ))",
+            "for (( i = {{p}} ; ; )) ; do :; done",
+            "echo \"$(( {{p}} ))\"",
+        ] {
+            assert!(
+                matches!(error(body), TemplateError::PlaceholderInArithmetic { .. }),
+                "{body:?}"
+            );
+        }
+        // A command substitution inside arithmetic is a command list again.
+        assert_eq!(
+            script("echo $(( $(echo {{p}}) + 1 ))"),
+            "echo $(( $(echo \"$1\") + 1 ))"
+        );
+    }
+
+    fn not_analysable(body: &str) {
+        assert!(
+            matches!(error(body), TemplateError::BodyNotAnalysable { .. }),
+            "{body:?}"
+        );
+    }
+
+    #[test]
+    fn unterminated_constructs_are_refused_only_with_a_placeholder() {
+        for open in [
+            "echo $(echo {{p}}",
+            "echo `echo {{p}}",
+            "echo {{p}} ${x:-a",
+            "echo {{p}} $((1",
+            "cat <<EOF\n{{p}}\n",
+            "cat <<EOF {{p}}",
+        ] {
+            not_analysable(open);
+        }
+        for open in [
+            "echo $(echo",
+            "echo `echo",
+            "echo ${x",
+            "cat <<EOF\nx",
+            "cat <<EOF",
+        ] {
+            assert!(analyse(open, &slots(&[])).is_ok(), "{open:?}");
+        }
+    }
+
+    #[test]
+    fn a_case_inside_a_substitution_is_refused() {
+        // The pattern's `)` would close the `$(` early and leave the placeholder
+        // in a context the lexer reads differently from the shell.
+        not_analysable("echo \"$(case x in x) printf '<%s>' \" {{p}} \" ;; esac)\"");
+        not_analysable("echo $(case x in x) echo hi ;; esac) {{p}}");
+        not_analysable("(case x in x) :;; esac; echo {{p}})");
+        not_analysable("echo `case x in x) :;; esac` {{p}}");
+        // Outside a substitution a pattern `)` is harmless, and `case` as an
+        // argument or inside a word is not the keyword.
+        assert_eq!(
+            script("case x in x) echo {{p}} ;; esac"),
+            "case x in x) echo \"$1\" ;; esac"
+        );
+        assert_eq!(
+            script("echo $(echo case) {{p}}"),
+            "echo $(echo case) \"$1\""
+        );
+        assert_eq!(
+            script("echo $(echo incase) {{p}}"),
+            "echo $(echo incase) \"$1\""
+        );
+        assert!(analyse("echo $(case x in x) :;; esac)", &slots(&[])).is_ok());
+    }
+
+    #[test]
+    fn a_double_paren_that_is_not_arithmetic_is_refused() {
+        not_analysable("echo \"$((echo a) ; printf '<%s>' \" {{p}} \")\"");
+        assert!(analyse("echo $((echo a) ; echo b)", &slots(&[])).is_ok());
+        assert_eq!(
+            script("echo $((1 + (2))) {{p}}"),
+            "echo $((1 + (2))) \"$1\""
+        );
+    }
+
+    #[test]
+    fn a_comment_inside_backquotes_ends_at_the_closing_backquote() {
+        assert_eq!(
+            script("echo `true # note` {{p}}"),
+            "echo `true # note` \"$1\""
+        );
+    }
+
+    #[test]
+    fn stacked_here_documents_each_check_their_own_delimiter() {
+        assert_eq!(
+            script("cat <<A <<B\nA-ish\nA\nB-ish {{p}}\nB\necho {{p}}"),
+            "cat <<A <<B\nA-ish\nA\nB-ish \"$1\"\nB\necho \"$1\""
+        );
+    }
+
+    mod never_panics {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn token() -> impl Strategy<Value = &'static str> {
+            proptest::sample::select(vec![
+                "{{p}}", "{{", "}}", "$(", ")", "`", "'", "\"", "\\", "<<EOF\n", "<<-X\n", "EOF\n",
+                "X\n", "#", "$((", "))", "((", "${", "}", " ", "\t", "\n", "\r", "x", ";", "|",
+                "&", "<", "<<<", ">", "case ", "(", "$'", "$", "\u{c}", "é",
+            ])
+        }
+
+        proptest! {
+            // Arbitrary token soup, with and without placeholders, never panics.
+            #[test]
+            fn analyse_never_panics(tokens in proptest::collection::vec(token(), 0..40)) {
+                let body: String = tokens.concat();
+                let _ = analyse(&body, &slots(&["p"]));
+                let _ = analyse(&body, &slots(&[]));
+            }
+
+            #[test]
+            fn analyse_never_panics_on_arbitrary_text(body in ".{0,80}", at in 0usize..80) {
+                let mut chars: Vec<char> = body.chars().collect();
+                let at = at.min(chars.len());
+                chars.splice(at..at, "{{p}}".chars());
+                let _ = analyse(&chars.iter().collect::<String>(), &slots(&["p"]));
+            }
+        }
     }
 }

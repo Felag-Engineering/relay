@@ -198,8 +198,34 @@ async fn comment_text_is_not_a_quote() {
 }
 
 #[tokio::test]
-async fn arithmetic_double_paren_is_inert() {
-    every_canary_is_inert("(( {{p}} ))", None).await;
+async fn arithmetic_is_refused_at_load() {
+    // Bash re-evaluates an expanded value inside arithmetic as an expression.
+    for body in [
+        "(( {{p}} ))",
+        "echo $(( {{p}} + 1 ))",
+        "echo \"$(( {{p}} ))\"",
+    ] {
+        assert!(
+            matches!(refusal(body), TemplateError::PlaceholderInArithmetic { .. }),
+            "{body:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn bodies_the_lexer_cannot_read_are_refused_at_load() {
+    // A `case` pattern's `)` ends the `$(` early, so the value would be split.
+    // A `$((` that is not arithmetic is a command substitution to bash.
+    for body in [
+        "echo \"$(case x in x) printf '<%s>' \" {{p}} \" ;; esac)\"",
+        "echo \"$((echo a) ; printf '<%s>' \" {{p}} \")\"",
+        "echo $(echo {{p}}",
+    ] {
+        assert!(
+            matches!(refusal(body), TemplateError::BodyNotAnalysable { .. }),
+            "{body:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -209,7 +235,7 @@ async fn array_subscript_is_inert() {
 
 /// The retired rendering — single-quote the value and splice it into the shell
 /// text — is reproduced here on the rows that were real, so the suite is shown
-/// not to be vacuous. It models a mechanism that no longer exists in the daemon.
+/// not to be vacuous. It models the retired mechanism.
 #[tokio::test]
 async fn retired_splicing_reproduces_each_row_that_was_real() {
     /// Run the retired rendering of `body` with `value` under every shell and

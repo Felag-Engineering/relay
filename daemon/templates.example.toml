@@ -58,8 +58,9 @@ name = "path"
 # path: absolute and canonical (starts "/", no "." / ".." / empty / trailing
 # segment), max 4096 bytes, no control characters. Deliberately permissive
 # otherwise — real filenames contain spaces, "$", and quotes — and passed to
-# the shell as data, never as shell text. WHICH paths are readable is decided by this Node's Policy, not by
-# this slot: constrain it there (allowed_args / [[deny]]).
+# the shell as data, never as shell text. WHICH paths are readable is decided
+# by this Node's Policy, not by this slot: constrain it there (allowed_args /
+# [[deny]]).
 type = "path"
 
 # ---------------------------------------------------------------------------

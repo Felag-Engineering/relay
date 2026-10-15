@@ -237,6 +237,14 @@ pub enum TemplateError {
     #[error("a placeholder near byte {at} sits in {context}, where the shell never expands it")]
     PlaceholderNotExpanded { at: usize, context: &'static str },
 
+    #[error("a placeholder near byte {at} sits inside arithmetic, where the shell evaluates expanded values as expressions")]
+    PlaceholderInArithmetic { at: usize },
+
+    #[error(
+        "template body near byte {at} cannot be analysed ({reason}), and it holds a placeholder"
+    )]
+    BodyNotAnalysable { at: usize, reason: &'static str },
+
     #[error("a placeholder near byte {at} is malformed: {detail}")]
     MalformedPlaceholder { at: usize, detail: &'static str },
 

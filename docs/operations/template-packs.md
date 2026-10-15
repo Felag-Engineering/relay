@@ -92,6 +92,10 @@ Two authoring rules the loader enforces, both refusals at load time:
 - **A slot in an unquoted here-document prints with literal `"` quotes** around
   the value, as it printed literal `'` quotes before; the value itself is never
   expanded.
+- **"One slot, one word" holds at the slot's own level.** A slot inside an
+  unquoted `$( )` or backquote is one word there, but the outer substitution's
+  result is split and globbed again by the shell; quote the substitution
+  (`"$( … )"`) when its output must stay one word.
 - **`risk_class` is mandatory**, and a template may not shadow a Native
   Operation (`system.facts`, `file.read`, `service.restart`, `pkg.install`) or
   `raw_exec`. The native vocabulary is frozen (ADR-0021) and always wins.
