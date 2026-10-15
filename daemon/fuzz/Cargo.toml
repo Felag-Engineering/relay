@@ -21,7 +21,7 @@ version = "0.0.0"
 publish = false
 edition = "2021"
 description = "cargo-fuzz targets over the relay-daemon's prost wire-decode surface, the Raw Exec argv gate and the canonical-path precondition."
-license = "Proprietary"
+license = "BUSL-1.1"
 
 [package.metadata]
 cargo-fuzz = true

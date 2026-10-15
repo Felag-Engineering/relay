@@ -47,7 +47,7 @@ crate = "foldhash"
 allow = ["Zlib"]
 
 [licenses.private]
-# relay-daemon itself is `publish = false` and `Proprietary`.
+# relay-daemon itself is `publish = false` and BUSL-1.1 (LICENSE); the allowlist governs dependencies.
 ignore = true
 
 [bans]
