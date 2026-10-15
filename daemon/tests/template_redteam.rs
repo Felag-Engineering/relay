@@ -1,26 +1,31 @@
 //! Red-team suite for the Template tier's value boundary (ADR-0021 amendment of
 //! 2026-10-14, invariant 1).
 //!
-//! Every row is a reproduction from the #974 and #975 reviews that the
-//! positional-parameter rendering must keep inert. A row compiles its body,
-//! invokes it through the production `ResolvedOp::invoke`, and runs the rendered
-//! argv through the production executor under dash, bash and `bash --posix`. A
-//! body the lexer refuses is asserted to be refused at compile time. A missing
-//! shell fails the test (`shell_runner`).
+//! Two independent layers, each tested apart from the other:
 //!
-//! The canary values spell the token the injected command prints as `PW""NED`,
-//! so `PWNED` appears in an output only if a command actually ran.
+//! - **Placement.** A slot is accepted only as a plain word of the top-level
+//!   command list. Every reproduction that put a slot anywhere else is asserted
+//!   to be refused at load.
+//! - **Value.** A `Path` slot refuses whitespace and shell-significant
+//!   characters. The shell-level rows use an `Enum` slot (which admits whatever
+//!   its author lists) so a hostile value reaches the shell and the render
+//!   boundary is shown inert on its own.
+//!
+//! Rows that load run through the production `ResolvedOp::invoke` and executor
+//! under dash, bash and `bash --posix`; a missing shell fails the test
+//! (`shell_runner`). The canary values spell the token the injected command
+//! prints as `PW""NED`, so `PWNED` appears in an output only if a command ran.
 
 #[path = "common/shell_runner.rs"]
 mod shell_runner;
 
 use relay_ops::operations::template::{compile, TemplateError};
 use shell_runner::{
-    invoke, path_template, retired_splice, run_sh_argv, shells, stderr, stdout, ShellRunner,
+    enum_template, invoke, path_template, retired_splice, run_sh_argv, shells, stderr, stdout,
+    ShellRunner,
 };
 
-/// Values a `Path` slot accepts and that a shell would act on if it ever saw
-/// them as text.
+/// Values a shell would act on if it ever saw them as text.
 const CANARIES: [&str; 5] = [
     "/tmp/$(echo PW\"\"NED >&2)",
     "/tmp/`echo PW\"\"NED`",
@@ -28,6 +33,10 @@ const CANARIES: [&str; 5] = [
     "/tmp/a b",
     "/tmp/*",
 ];
+
+fn hostile(body: &str) -> relay_ops::operations::template::TemplateDef {
+    enum_template(body, &CANARIES)
+}
 
 fn refusal(body: &str) -> TemplateError {
     match compile(&path_template(body)) {
@@ -43,6 +52,13 @@ fn assert_not_analysable(body: &str) {
     );
 }
 
+fn assert_not_top_level(body: &str) {
+    assert!(
+        matches!(refusal(body), TemplateError::PlaceholderNotTopLevel { .. }),
+        "{body:?}"
+    );
+}
+
 fn assert_clean(label: &str, value: &str, r: &relay_proto::TaskResult) {
     let (out, err) = (stdout(r), stderr(r));
     assert!(
@@ -52,12 +68,12 @@ fn assert_clean(label: &str, value: &str, r: &relay_proto::TaskResult) {
 }
 
 /// Run `body` with every canary under every shell. With `expect`, also assert
-/// the exact stdout (for values the context prints verbatim).
+/// the exact stdout.
 async fn every_canary_is_inert(body: &str, expect: Option<fn(&str) -> String>) {
     for shell in shells() {
         let runner = ShellRunner::new(&shell);
         for value in CANARIES {
-            let r = invoke(&path_template(body), &[("p", value)], &runner).await;
+            let r = invoke(&hostile(body), &[("p", value)], &runner).await;
             assert_clean(shell.label, value, &r);
             if let Some(expected) = expect {
                 assert_eq!(stdout(&r), expected(value), "[{}] {value:?}", shell.label);
@@ -66,18 +82,62 @@ async fn every_canary_is_inert(body: &str, expect: Option<fn(&str) -> String>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Placement: refused at load
+// ---------------------------------------------------------------------------
+
 #[tokio::test]
-async fn here_document() {
-    // An unquoted here-document expands `$(…)`; the value must arrive as data,
-    // printed between the literal double quotes of the parameter reference.
-    every_canary_is_inert("cat <<EOF\n{{p}}\nEOF", Some(|v| format!("\"{v}\"\n"))).await;
+async fn nested_placements_are_refused_at_load() {
+    for body in [
+        // here-documents and here-strings
+        "cat <<EOF\n{{p}}\nEOF",
+        "sh <<EOF\necho {{p}}\nEOF",
+        "cat <<EOF\n$(( 1 $(echo {{p}}) ))\nEOF",
+        "cat <<< {{p}}",
+        // substitutions
+        "echo $(echo {{p}})",
+        "echo \"$(echo {{p}})\"",
+        "echo $({{p}} x)",
+        "(echo {{p}})",
+        "echo \"$(echo \")\" {{p}} \")\")\"",
+        "find $(dirname {{p}}) -maxdepth 0 -print",
+        "ls -ld $(dirname {{p}})",
+        // arithmetic, in every spelling
+        "(( {{p}} ))",
+        "echo $(( {{p}} + 1 ))",
+        "echo $(( 1 $(echo {{p}}) ))",
+        "echo $[ 1 {{p}} ]",
+        "echo $[ 1 $(echo {{p}}) ]",
+        "(( 1 $(echo {{p}}) ))",
+        "for (( i=1$(echo {{p}}); i<0; )); do :; done",
+        "echo $(( $(echo 1 {{p}}) ))",
+        // parameter expansion
+        "x=abc; echo ${x:1$(echo {{p}})}",
+        "x=(a b); echo ${x[1$(echo {{p}})]}",
+        // tests and arrays
+        "[[ 1 -eq {{p}} ]]",
+        "x=( {{p}} )",
+    ] {
+        assert!(refusal(body) != TemplateError::EmptyBody, "{body:?}");
+    }
+    for body in [
+        "cat <<EOF\n{{p}}\nEOF",
+        "sh <<EOF\necho {{p}}\nEOF",
+        "cat <<< {{p}}",
+        "echo $(echo {{p}})",
+        "(echo {{p}})",
+        "find $(dirname {{p}}) -maxdepth 0 -print",
+        "ls -ld $(dirname {{p}})",
+        "[[ 1 -eq {{p}} ]]",
+    ] {
+        assert_not_top_level(body);
+    }
 }
 
 #[tokio::test]
 async fn backquotes_are_refused_at_load() {
-    // Backquote substitutions strip backslashes before `$`, `` ` ``, `\` (and
-    // `"` inside double quotes or here-documents) before the text is re-read,
-    // so the lexer cannot tell where a placeholder ends up. Authors use `$( )`.
+    // Backquote substitutions strip backslashes before the text is re-read, so
+    // the lexer cannot tell where a placeholder ends up. Authors use `$( )`.
     for body in [
         "echo `echo {{p}}`",
         "printf '<%s>' \"`printf '[%s]' \\\" {{p}} \\\"`\"",
@@ -90,16 +150,19 @@ async fn backquotes_are_refused_at_load() {
 }
 
 #[tokio::test]
-async fn legacy_arithmetic_brackets_are_refused_at_load() {
-    // Bash evaluates `$[ … ]` as arithmetic, so a value such as `/x[$(id)]`
-    // would run a command.
-    for body in ["echo $[ 1 {{p}} ]", "echo \"$[ 1 + {{p}} ]\""] {
+async fn arithmetic_brackets_and_case_are_refused_at_load() {
+    for body in ["(( {{p}} ))", "echo $[ 1 {{p}} ]", "echo \"$(( {{p}} ))\""] {
         assert!(
             matches!(refusal(body), TemplateError::PlaceholderInArithmetic { .. }),
             "{body:?}"
         );
     }
     assert_not_analysable("echo {{p}} $[ 1 + 2");
+    // A `case` pattern's `)` ends the `$(` early, so the value would be split.
+    assert_not_analysable("echo \"$(case x in x) printf '<%s>' \" {{p}} \" ;; esac)\"");
+    // A `$((` that is not arithmetic is a command substitution to bash.
+    assert_not_analysable("echo \"$((echo a) ; printf '<%s>' \" {{p}} \")\"");
+    assert_not_analysable("echo {{p}} $(echo");
 }
 
 #[tokio::test]
@@ -116,32 +179,16 @@ async fn continuations_that_split_keywords_are_refused_at_load() {
 }
 
 #[tokio::test]
-async fn command_substitution_with_a_quoted_close_paren() {
-    // The `)` inside the inner double quotes does not end the `$(`: the
-    // placeholder after it is still inside the substitution, and the lexer
-    // agrees with the shell about where it ends.
-    every_canary_is_inert(
-        "echo \"$(echo \")\" {{p}} \")\")\"",
-        Some(|v| format!(") {v} )\n")),
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn dollar_paren() {
-    every_canary_is_inert("echo $(echo {{p}})", None).await;
-}
-
-#[tokio::test]
 async fn escaped_space_is_not_a_boundary() {
-    assert!(matches!(
-        refusal("printf '[%s]\\n' a\\ {{p}}"),
-        TemplateError::PlaceholderNotStandalone { .. }
-    ));
-    assert!(matches!(
-        refusal("printf '[%s]\\n' {{p}}\\ a"),
-        TemplateError::PlaceholderNotStandalone { .. }
-    ));
+    for body in ["printf '[%s]\\n' a\\ {{p}}", "printf '[%s]\\n' {{p}}\\ a"] {
+        assert!(
+            matches!(
+                refusal(body),
+                TemplateError::PlaceholderNotStandalone { .. }
+            ),
+            "{body:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -163,18 +210,35 @@ async fn form_feed_and_carriage_return_are_not_boundaries() {
 }
 
 #[tokio::test]
-async fn line_continuation_joins_lines_without_a_boundary() {
-    // After a blank, the continuation leaves the placeholder an argument.
+async fn ansi_c_quoting_hides_the_placeholder_from_the_shell() {
+    assert!(matches!(
+        refusal("echo $'\\' {{p}} \\''"),
+        TemplateError::PlaceholderNotExpanded { .. }
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Placement: top-level rows that load stay inert for every value
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn plain_word_at_the_top_level() {
+    every_canary_is_inert("echo {{p}}", Some(|v| format!("{v}\n"))).await;
+    every_canary_is_inert("echo x | cat -n {{p}} | wc -c", None).await;
+    every_canary_is_inert("{ echo {{p}} ; }", Some(|v| format!("{v}\n"))).await;
+}
+
+#[tokio::test]
+async fn line_continuation_after_a_blank_keeps_the_slot_an_argument() {
     for shell in shells() {
         let runner = ShellRunner::new(&shell);
         for value in CANARIES {
-            let r = invoke(&path_template("echo a \\\n{{p}}"), &[("p", value)], &runner).await;
+            let r = invoke(&hostile("echo a \\\n{{p}}"), &[("p", value)], &runner).await;
             assert_clean(shell.label, value, &r);
             assert_eq!(stdout(&r), format!("a {value}\n"), "[{}]", shell.label);
         }
     }
-    // Glued to a word, the continuation removes the line break and the blank;
-    // a join in the middle of a word is refused.
+    // Glued to a word, a join in the middle of a word is refused.
     assert_not_analysable("echo a\\\n{{p}}");
 }
 
@@ -184,12 +248,7 @@ async fn crlf_line_ending_data_row() {
     for shell in shells() {
         let runner = ShellRunner::new(&shell);
         for value in CANARIES {
-            let r = invoke(
-                &path_template("echo a\\\r\necho {{p}}"),
-                &[("p", value)],
-                &runner,
-            )
-            .await;
+            let r = invoke(&hostile("echo a\\\r\necho {{p}}"), &[("p", value)], &runner).await;
             assert_clean(shell.label, value, &r);
             assert_eq!(stdout(&r), format!("a\r\n{value}\n"), "[{}]", shell.label);
         }
@@ -197,32 +256,17 @@ async fn crlf_line_ending_data_row() {
 }
 
 #[tokio::test]
-async fn crlf_command_name_row_is_inert_for_non_executables() {
-    // The slot lands in command-name position, which ADR-0021 decision 2
-    // refuses; positional rendering alone must already keep a non-executable
-    // value from becoming shell text.
+async fn command_name_position_is_inert_for_non_executables() {
+    // A slot in command-name position is ADR-0021 decision 2's concern;
+    // positional rendering alone must already keep a non-executable value from
+    // becoming shell text.
     for shell in shells() {
         let runner = ShellRunner::new(&shell);
         for value in CANARIES {
-            let r = invoke(
-                &path_template("echo a\\\r\n{{p}} RAN"),
-                &[("p", value)],
-                &runner,
-            )
-            .await;
+            let r = invoke(&hostile("echo a\\\r\n{{p}} RAN"), &[("p", value)], &runner).await;
             assert_clean(shell.label, value, &r);
         }
     }
-}
-
-#[tokio::test]
-async fn ansi_c_quoting_hides_the_placeholder_from_the_shell() {
-    assert!(matches!(
-        refusal("echo $'\\' {{p}} \\''"),
-        TemplateError::PlaceholderNotExpanded { .. }
-    ));
-    // A closed ANSI-C string before the placeholder leaves it an argument.
-    every_canary_is_inert("echo $'a' {{p}}", None).await;
 }
 
 #[tokio::test]
@@ -235,39 +279,59 @@ async fn comment_text_is_not_a_quote() {
 }
 
 #[tokio::test]
-async fn arithmetic_is_refused_at_load() {
-    // Bash re-evaluates an expanded value inside arithmetic as an expression.
-    for body in [
-        "(( {{p}} ))",
-        "echo $(( {{p}} + 1 ))",
-        "echo \"$(( {{p}} ))\"",
-    ] {
-        assert!(
-            matches!(refusal(body), TemplateError::PlaceholderInArithmetic { .. }),
-            "{body:?}"
-        );
-    }
+async fn ansi_c_string_before_the_slot_is_inert() {
+    every_canary_is_inert("echo $'a' {{p}}", None).await;
 }
 
 #[tokio::test]
-async fn bodies_the_lexer_cannot_read_are_refused_at_load() {
-    // A `case` pattern's `)` ends the `$(` early, so the value would be split.
-    // A `$((` that is not arithmetic is a command substitution to bash.
-    for body in [
-        "echo \"$(case x in x) printf '<%s>' \" {{p}} \" ;; esac)\"",
-        "echo \"$((echo a) ; printf '<%s>' \" {{p}} \")\"",
-        "echo $(echo {{p}}",
-    ] {
-        assert!(
-            matches!(refusal(body), TemplateError::BodyNotAnalysable { .. }),
-            "{body:?}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn array_subscript_is_inert() {
+async fn array_subscript_assignment_is_inert() {
     every_canary_is_inert("a[ {{p}} ]=1", None).await;
+}
+
+// ---------------------------------------------------------------------------
+// Value: the Path gate, tested through an accepted top-level body
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_path_slot_refuses_hostile_values_before_any_spawn() {
+    for value in [
+        "/x[$(echo PW\"\"NED>&2)]",
+        "/tmp -maxdepth 0 -exec echo PWNED-find ; -quit/x",
+        "/tmp/$(echo PW\"\"NED >&2)",
+        "/tmp/`echo PW\"\"NED`",
+        "/tmp/a b",
+        "/tmp/a\u{a0}b",
+        "/tmp/a\\b",
+    ] {
+        for shell in shells() {
+            let runner = ShellRunner::new(&shell);
+            let r = invoke(
+                &path_template("find {{p}} -maxdepth 0 -print"),
+                &[("p", value)],
+                &runner,
+            )
+            .await;
+            assert_ne!(r.exit_code, 0, "[{}] {value:?}", shell.label);
+            assert!(stdout(&r).is_empty(), "[{}] {value:?}", shell.label);
+            assert!(
+                stderr(&r).contains("failed path validation"),
+                "[{}] {value:?}: {}",
+                shell.label,
+                stderr(&r)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_path_slot_passes_an_ordinary_path_verbatim() {
+    for shell in shells() {
+        let runner = ShellRunner::new(&shell);
+        for value in ["/var/log/syslog", "/home/josé/notes"] {
+            let r = invoke(&path_template("echo {{p}}"), &[("p", value)], &runner).await;
+            assert_eq!(stdout(&r), format!("{value}\n"), "[{}]", shell.label);
+        }
+    }
 }
 
 /// The retired rendering — single-quote the value and splice it into the shell
@@ -293,31 +357,24 @@ async fn retired_splicing_reproduces_each_row_that_was_real() {
         false
     }
 
-    // Here-document: the substitution in the value ran.
+    // Here-document: the substitution in the value ran. The body is refused now.
     let body = "cat <<EOF\n{{p}}\nEOF";
-    let value = CANARIES[0];
-    assert!(reproduces(body, value, |r| stderr(r).contains("PWNED")).await);
-    for shell in shells() {
-        let r = invoke(
-            &path_template(body),
-            &[("p", value)],
-            &ShellRunner::new(&shell),
-        )
-        .await;
-        assert_clean(shell.label, value, &r);
-    }
+    assert!(reproduces(body, CANARIES[0], |r| stderr(r).contains("PWNED")).await);
+    assert_not_top_level(body);
 
     // Backquote: the value's backquote ended the outer substitution, so the
-    // output is not the value (a syntax error under dash). The new path refuses
-    // the body at load.
+    // output is not the value (a syntax error under dash). Refused at load.
     let body = "echo `echo {{p}}`";
-    let value = CANARIES[1];
-    let expected = format!("{value}\n");
-    assert!(reproduces(body, value, |r| stdout(r) != expected || r.exit_code != 0).await);
+    let expected = format!("{}\n", CANARIES[1]);
+    assert!(
+        reproduces(body, CANARIES[1], |r| stdout(r) != expected
+            || r.exit_code != 0)
+        .await
+    );
     assert_not_analysable(body);
 
     // Escaped space and form feed: the author's word and the value fused into
-    // one argument. The new compile refuses both bodies.
+    // one argument. The compile refuses both bodies.
     for (body, fused) in [
         ("printf '[%s]\\n' a\\ {{p}}", "[a /tmp/a b]\n"),
         ("printf '[%s]\\n' a\u{c}{{p}}", "[a\u{c}/tmp/a b]\n"),

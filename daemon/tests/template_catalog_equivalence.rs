@@ -25,7 +25,12 @@ struct CatalogFile {
 }
 
 const UNITS: [&str; 3] = ["nginx", "ssh.service", "user@1000.service"];
-const PATHS: [&str; 4] = ["/etc/hostname", "/tmp/a b", "/tmp/a'b", "/tmp/$x"];
+const PATHS: [&str; 4] = [
+    "/etc/hostname",
+    "/var/log/syslog",
+    "/srv/app-1.2_x/data@2026,v2+final.txt",
+    "/home/josé/notes",
+];
 
 /// Stubs that print their own name and arguments, NUL-terminated. They use only
 /// shell builtins, since the `PATH` holds nothing else.
@@ -103,6 +108,6 @@ async fn catalog_output_is_unchanged_by_the_new_rendering() {
     let shell = &shells()[0];
     let runner = ShellRunner::with_path(shell, &stubs);
     let def = defs.iter().find(|d| d.name == "file.checksum").unwrap();
-    let r = invoke(def, &[("path", "/tmp/a b")], &runner).await;
-    assert_eq!(stdout(&r), "sha256sum\0--\0/tmp/a b\0");
+    let r = invoke(def, &[("path", "/home/josé/notes")], &runner).await;
+    assert_eq!(stdout(&r), "sha256sum\0--\0/home/josé/notes\0");
 }

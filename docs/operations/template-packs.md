@@ -71,37 +71,50 @@ type = "integer"            # ^[0-9]+$, unsigned, ≤19 digits
 
 [[template.slots]]
 name = "path"
-type = "path"               # absolute + canonical, ≤4096 bytes, no control chars
+type = "path"               # absolute + canonical, ≤4096 bytes, plain filenames only
 ```
 
 Slot types: `identifier`, `integer`, `path`, `enum` (with `values`). Prefer
 `enum` whenever the value space is genuinely finite — it is the only type whose
 accept-set you control completely.
 
-Two authoring rules the loader enforces, both refusals at load time:
+Authoring rules the loader enforces, all refusals at load time:
 
-- **Every `{{slot}}` must be a standalone word in an unquoted context.**
-  `--file={{path}}` and `'{{path}}'` fail to load. That rule is what makes "one
-  slot fills exactly one word" true by construction. Only space, tab and newline
-  are blanks: a slot glued to an operator (`>{{path}}`, `;{{path}}`), after an
-  escaped space (`a\ {{path}}`), or next to a form feed or carriage return is
-  refused. Keep bodies on LF line endings — a CRLF-saved file puts a carriage
-  return after the slot. A slot in a place the shell never expands (a comment,
-  `$'…'`, `${…}`, a quoted here-document, or a here-document delimiter) is
-  refused too.
-- **A slot in an unquoted here-document prints with literal `"` quotes** around
-  the value, as it printed literal `'` quotes before; the value itself is never
-  expanded.
-- **"One slot, one word" holds at the slot's own level.** A slot inside an
-  unquoted `$( )` is one word there, but the outer substitution's result is
-  split and globbed again by the shell; quote the substitution (`"$( … )"`)
-  when its output must stay one word.
+- **A slot is a plain word of the top-level command list, and nowhere else.**
+  It may stand as an argument of a simple command, in a pipeline, in a
+  `;`/`&&`/`||`/newline list, or inside a `{ …; }` group or function body. It
+  is refused inside `$( )`, `( )`, backquotes, `${ }`, any arithmetic (`$(( ))`,
+  `(( ))`, `$[ ]`, `for ((`), a here-document or here-string, quotes, `$'…'`,
+  `[[ ]]`, a process substitution or array literal, a comment, and beside a
+  `case` command. This is what makes "one slot fills exactly one word" true by
+  construction, and it keeps a value away from every place a shell evaluates
+  text. Move the slot out to a plain argument, or compute the rest in the body
+  and pass the value as an argument of the command that needs it.
+- **A slot must be a whole word.** `--file={{path}}` and `'{{path}}'` fail to
+  load. Only space, tab and newline are blanks: a slot glued to an operator
+  (`>{{path}}`, `;{{path}}`), after an escaped space (`a\ {{path}}`), or next to
+  a form feed or carriage return is refused. Keep bodies on LF line endings — a
+  CRLF-saved file puts a carriage return after the slot.
 - **Some constructs are refused when the body holds a slot**, because the
   daemon cannot read them the way every shell does: backquote substitutions
-  (write `$( )`), a slot inside `$(( ))`, `(( ))` or `$[ ]`, a `case` inside a
-  `$( )` or `( )`, an unterminated construct, and a backslash-newline inside a
-  nested construct or in the middle of a word. A backslash-newline between
-  words, after a blank, stays allowed. Bodies without a slot are not affected.
+  (write `$( )`), a `$((` that is not arithmetic, an unterminated construct,
+  `case`, and a backslash-newline inside a nested construct or in the middle of
+  a word. A backslash-newline between words, after a blank, stays allowed.
+  Bodies without a slot are not affected.
+- **A `path` slot admits plain filenames only.** The value must be an absolute
+  canonical path with no whitespace (ASCII or Unicode), no control character,
+  and none of `` $ ` \ " ' ; | & < > ( ) { } [ ] * ? ! # ~ = ``. Letters of any
+  script, digits and `- _ . , + @ % : ^` are fine (`/home/josé/notes`,
+  `/srv/app-1.2_x/data@2026,v2+final.txt`). A caller's value with a space or a
+  quote is refused with a validation failure, not run. This is narrower than the
+  Native `file.read` path check, which is unchanged. If you need a path the type
+  refuses, list the allowed values in an `enum` slot instead.
+- **Migration.** A Template written for the earlier quoting rules can now fail
+  to load, which makes the whole set `unloadable`: run `policy check
+  --templates` before deploying. Typical fixes are a slot inside `$( )` or a
+  here-document (pass it as an argument instead), backquotes (use `$( )`), and
+  a `path` slot used for names with spaces or quotes (use an `enum` or a
+  narrower convention).
 - **`risk_class` is mandatory**, and a template may not shadow a Native
   Operation (`system.facts`, `file.read`, `service.restart`, `pkg.install`) or
   `raw_exec`. The native vocabulary is frozen (ADR-0021) and always wins.

@@ -31,8 +31,8 @@
 //! 1. **Typed validation** ([`SlotType::validate`]): each value is checked
 //!    against its slot's declared type. `Identifier`, `Integer`, and `Enum`
 //!    reject every shell metacharacter, whitespace (ASCII and non-ASCII such as
-//!    NBSP), and control character outright. `Path` is the deliberately-permissive
-//!    type (real filenames contain `$`, `;`, spaces, quotes) and leans on layer 2.
+//!    NBSP), and control character outright. `Path` admits plain filenames only:
+//!    no whitespace and none of ``$ ` \ " ' ; | & < > ( ) { } [ ] * ? ! # ~ =``.
 //! 2. **Positional parameters** (ADR-0021, amended 2026-10-14; invariant 1): no
 //!    value is ever part of the text the shell parses. Each placeholder compiles
 //!    to a quoted reference (`"$1"`, `"$2"`, …) and the values travel as the
@@ -95,6 +95,9 @@ const MAX_IDENTIFIER_BYTES: usize = 256;
 /// Largest accepted value for a `Path` slot (PATH_MAX-class bound).
 const MAX_PATH_BYTES: usize = 4096;
 
+/// Characters a `Path` slot refuses (besides whitespace and control characters).
+const PATH_REFUSED_CHARS: &str = "$`\\\"';|&<>(){}[]*?!#~=";
+
 /// Largest accepted value for an `Integer` slot (fits i64/u64 decimal digits).
 const MAX_INTEGER_DIGITS: usize = 19;
 
@@ -125,10 +128,11 @@ impl From<RiskClassDef> for RiskClass {
 /// The declared type of a parameter slot — the typed-validation contract.
 ///
 /// `Identifier`, `Integer`, and `Enum` are *closed* accept-sets that exclude
-/// every shell metacharacter by construction. `Path` is the deliberately
-/// permissive type (canonical absolute paths, but real filenames legitimately
-/// contain shell metacharacters) and relies on values being passed as
-/// positional parameters; it is the primary red-team target.
+/// every shell metacharacter by construction. `Path` is the widest type
+/// (canonical absolute paths of plain filenames: letters of any script, digits
+/// and a few punctuation marks, no whitespace and no shell-significant
+/// character); it is the primary red-team target. Values are passed as
+/// positional parameters whatever the type.
 ///
 /// No daemon-owned type admits a value that begins with `-` (ADR-0021 decision
 /// 3), so a slot value can never be read as an option. A new variant must keep
@@ -147,8 +151,9 @@ pub enum SlotType {
     Integer,
     /// An absolute, canonical path (ADR-0018 lexical rule: starts `/`, no `.`,
     /// `..`, empty, or trailing-slash segment), ≤4096 bytes, no ASCII control
-    /// characters. Other bytes — spaces, `$`, `;`, quotes, non-ASCII — are
-    /// permitted: the value reaches the command as a positional parameter.
+    /// characters, no Unicode whitespace, and none of ``$ ` \\ " ' ; | & < > ( ) { }
+    /// [ ] * ? ! # ~ =``. Letters of any script, digits and `- _ . , + @ % : ^`
+    /// are permitted. This is narrower than Native `file.read`'s path check.
     Path,
     /// The value must be exactly one of a fixed author-supplied allow-list. The
     /// safest slot type: the value space is finite and author-controlled.
@@ -236,6 +241,9 @@ pub enum TemplateError {
 
     #[error("a placeholder near byte {at} sits in {context}, where the shell never expands it")]
     PlaceholderNotExpanded { at: usize, context: &'static str },
+
+    #[error("a placeholder near byte {at} sits in {context}; a slot may only stand as a plain word of the top-level command list")]
+    PlaceholderNotTopLevel { at: usize, context: &'static str },
 
     #[error("a placeholder near byte {at} sits inside arithmetic, where the shell evaluates expanded values as expressions")]
     PlaceholderInArithmetic { at: usize },
@@ -628,6 +636,15 @@ impl SlotType {
                 if value.chars().any(|c| (c as u32) < 0x20 || c == '\u{7f}') {
                     return Err("contains an ASCII control character");
                 }
+                // A Template path is a plain filename: no Unicode whitespace and
+                // no character a shell, a glob or an argument parser gives
+                // meaning to, so a path stays inert wherever a command reads it.
+                if value
+                    .chars()
+                    .any(|c| c.is_whitespace() || PATH_REFUSED_CHARS.contains(c))
+                {
+                    return Err("contains whitespace or a shell-significant character");
+                }
                 // ADR-0018 lexical canonical-absolute form.
                 let canonical = value == "/"
                     || (value.starts_with('/')
@@ -833,12 +850,39 @@ mod tests {
     }
 
     #[test]
-    fn path_permits_metachars_relying_on_positional_parameters() {
-        // Deliberately-permissive: real filenames contain these; passing them
-        // as positional parameters (not the type) neutralizes them. Proven inert
-        // below in render_passes_hostile_path_value_as_data.
-        for tricky in ["/tmp/$(reboot)", "/tmp/a;b", "/tmp/a b", "/tmp/a'b"] {
-            assert!(SlotType::Path.validate(tricky).is_ok(), "{tricky:?}");
+    fn path_refuses_whitespace_and_shell_significant_characters() {
+        for c in "$`\\\"';|&<>(){}[]*?!#~=".chars() {
+            let value = format!("/tmp/a{c}b");
+            assert!(
+                SlotType::Path.validate(&value).is_err(),
+                "path must refuse {c:?}"
+            );
+        }
+        for ws in [' ', '\u{a0}', '\u{2003}', '\u{3000}', '\u{85}', '\u{2028}'] {
+            let value = format!("/tmp/a{ws}b");
+            assert!(SlotType::Path.validate(&value).is_err(), "{ws:?}");
+        }
+        for value in [
+            "/x[$(echo PWNED>&2)]",
+            "/tmp -maxdepth 0 -exec echo PWNED-find ; -quit/x",
+            "/tmp/$(reboot)",
+            "/tmp/`reboot`",
+        ] {
+            assert!(SlotType::Path.validate(value).is_err(), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn path_accepts_ordinary_filenames() {
+        for good in [
+            "/var/log/syslog",
+            "/etc/nginx/sites-enabled/default.conf",
+            "/srv/app-1.2_x/data@2026,v2+final.txt",
+            "/home/josé/notes",
+            "/home/用户/文档.txt",
+            "/var/lib/a%b/c:d^e",
+        ] {
+            assert!(SlotType::Path.validate(good).is_ok(), "{good:?}");
         }
     }
 
@@ -1029,13 +1073,13 @@ mod tests {
     }
 
     #[test]
-    fn render_passes_hostile_path_value_as_data() {
-        // Path permits metacharacters; the value never enters the script, so
-        // it cannot be substituted, split or expanded.
+    fn render_passes_hostile_value_as_data() {
+        // An Enum value is whatever its author listed; the value never enters
+        // the script, so it cannot be substituted, split or expanded.
         let t = compile(&def(
             "file.cksum",
             "sha256sum {{path}}",
-            vec![slot("path", SlotType::Path)],
+            vec![slot("path", SlotType::Enum(vec!["/tmp/$(reboot)".into()]))],
         ))
         .unwrap();
         let argv = render_argv(&t, &[("path", "/tmp/$(reboot)")]).unwrap();
@@ -1186,7 +1230,7 @@ values = ["ActiveState", "LoadState"]
             // --- quoting escapes ------------------------------------------
             RedTeam {
                 name: "single_quote_breakout",
-                slot_type: SlotType::Path,
+                slot_type: SlotType::Enum(vec!["/tmp/'; reboot; '".into()]),
                 value: "/tmp/'; reboot; '",
                 must_refuse: false,
                 note: "the classic ' breakout is inert: the value is data, never shell text",
@@ -1222,7 +1266,7 @@ values = ["ActiveState", "LoadState"]
             },
             RedTeam {
                 name: "space_in_path_quoted",
-                slot_type: SlotType::Path,
+                slot_type: SlotType::Enum(vec!["/tmp/a b".into()]),
                 value: "/tmp/a b",
                 must_refuse: false,
                 note: "a real path with a space: accepted, passed as one argument",
@@ -1230,45 +1274,59 @@ values = ["ActiveState", "LoadState"]
             // --- metacharacters -------------------------------------------
             RedTeam {
                 name: "semicolon_chain",
-                slot_type: SlotType::Path,
+                slot_type: SlotType::Enum(vec!["/tmp/x;reboot".into()]),
                 value: "/tmp/x;reboot",
                 must_refuse: false,
                 note: "`;` is inert: the value is never parsed as shell",
             },
             RedTeam {
                 name: "command_substitution_dollar",
-                slot_type: SlotType::Path,
+                slot_type: SlotType::Enum(vec!["/tmp/$(reboot)".into()]),
                 value: "/tmp/$(reboot)",
                 must_refuse: false,
                 note: "$() substitution is inert: the value is never parsed as shell",
             },
             RedTeam {
                 name: "command_substitution_backtick",
-                slot_type: SlotType::Path,
+                slot_type: SlotType::Enum(vec!["/tmp/`reboot`".into()]),
                 value: "/tmp/`reboot`",
                 must_refuse: false,
                 note: "backtick substitution is inert: the value is never parsed as shell",
             },
             RedTeam {
                 name: "pipe_and_redirect",
-                slot_type: SlotType::Path,
+                slot_type: SlotType::Enum(vec!["/tmp/x|tee>/etc/passwd".into()]),
                 value: "/tmp/x|tee>/etc/passwd",
                 must_refuse: false,
                 note: "pipe/redirect metacharacters are inert: the value is never parsed as shell",
             },
             RedTeam {
                 name: "glob_and_brace",
-                slot_type: SlotType::Path,
+                slot_type: SlotType::Enum(vec!["/tmp/*".into()]),
                 value: "/tmp/*",
                 must_refuse: false,
                 note: "no glob expansion: the parameter reference is double-quoted",
             },
             RedTeam {
                 name: "var_expansion",
-                slot_type: SlotType::Path,
+                slot_type: SlotType::Enum(vec!["/tmp/$HOME".into()]),
                 value: "/tmp/$HOME",
                 must_refuse: false,
                 note: "no second-level expansion: the value is never re-parsed",
+            },
+            RedTeam {
+                name: "path_refuses_command_substitution",
+                slot_type: SlotType::Path,
+                value: "/tmp/$(reboot)",
+                must_refuse: true,
+                note: "a Path slot refuses shell-significant characters outright",
+            },
+            RedTeam {
+                name: "path_refuses_embedded_option_text",
+                slot_type: SlotType::Path,
+                value: "/tmp -maxdepth 0 -exec echo PWNED ; -quit/x",
+                must_refuse: true,
+                note: "a Path slot refuses whitespace and ';'",
             },
             // --- argument splitting / -- prefix injection -----------------
             RedTeam {
@@ -1325,7 +1383,7 @@ values = ["ActiveState", "LoadState"]
             },
             RedTeam {
                 name: "rtl_override_path_quoted",
-                slot_type: SlotType::Path,
+                slot_type: SlotType::Enum(vec!["/tmp/a\u{202e}b".into()]),
                 value: "/tmp/a\u{202e}b",
                 must_refuse: false,
                 note: "path permits non-ASCII display trickery; it is passed as one argument (a display concern, not an injection)",
@@ -1454,14 +1512,14 @@ mod proptests {
                 golden: "cat \"$1\" \"$2\" \"$1\"".into(),
             },
             Fixture {
-                body: "cat <<EOF\n{{p}}\nEOF".into(),
+                body: "echo {{p}} | cat -n {{p}}".into(),
                 slots: names(&["p"]),
-                golden: "cat <<EOF\n\"$1\"\nEOF".into(),
+                golden: "echo \"$1\" | cat -n \"$1\"".into(),
             },
             Fixture {
-                body: "echo $(echo {{p}})".into(),
+                body: "{ echo {{p}} ; }".into(),
                 slots: names(&["p"]),
-                golden: "echo $(echo \"$1\")".into(),
+                golden: "{ echo \"$1\" ; }".into(),
             },
             Fixture {
                 body: format!("f {many_body}"),
@@ -1491,7 +1549,7 @@ mod proptests {
     /// A valid `Path` value: one segment of shell-hostile characters, with a
     /// per-value sentinel that must never appear outside `argv[4..]`.
     fn path_value() -> impl Strategy<Value = String> {
-        ("[a-f0-9]{8}", "[a-zA-Z0-9$;'\"`*(){}<>|&#~ \\\\-]{0,16}")
+        ("[a-f0-9]{8}", "[a-zA-Z0-9_.,+@%:^-]{0,16}")
             .prop_map(|(sentinel, tail)| format!("/SENT{sentinel}{tail}"))
     }
 
@@ -1567,6 +1625,18 @@ mod proptests {
             if let Ok(argv) = t.render(std::slice::from_ref(&value)) {
                 prop_assert_eq!(argv.len(), 5);
                 prop_assert_eq!(&argv[4], &value);
+            }
+        }
+
+        // Independent oracle for the Path allow-set: whatever is accepted is an
+        // absolute path with no whitespace and no shell-significant character.
+        #[test]
+        fn accepted_path_is_plain(value in ".{0,40}") {
+            if SlotType::Path.validate(&value).is_ok() {
+                prop_assert!(value.starts_with('/'));
+                prop_assert!(!value.chars().any(|c| c.is_whitespace() || c.is_control()));
+                let refused = "$`\\\"';|&<>(){}[]*?!#~=";
+                prop_assert!(!value.chars().any(|c| refused.contains(c)));
             }
         }
 

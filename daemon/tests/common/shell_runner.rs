@@ -92,6 +92,21 @@ impl Runner for ShellRunner {
     }
 }
 
+/// A one-slot `read` Template named `t.probe` whose slot `p` is an `Enum` of
+/// `values`. An `Enum` admits whatever its author lists, so a hostile value can
+/// reach the shell and the render boundary is tested apart from the `Path` gate.
+pub fn enum_template(body: &str, values: &[&str]) -> TemplateDef {
+    TemplateDef {
+        name: "t.probe".to_string(),
+        risk_class: RiskClassDef::Read,
+        body: body.to_string(),
+        slots: vec![SlotDef {
+            name: "p".to_string(),
+            ty: SlotType::Enum(values.iter().map(|v| v.to_string()).collect()),
+        }],
+    }
+}
+
 /// A one-slot `read` Template named `t.probe` whose slot `p` is a `Path`.
 pub fn path_template(body: &str) -> TemplateDef {
     TemplateDef {

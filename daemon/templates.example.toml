@@ -41,10 +41,12 @@ body = "df -P -T"
 [[template]]
 name = "log.tail"
 risk_class = "read"
-# Every {{slot}} must be a STANDALONE, whitespace-delimited token in an
-# UNQUOTED context — the daemon refuses to compile anything else, because that
-# rule is what makes "one slot fills exactly one word" true by construction.
-# Do NOT write "--file={{path}}" or "'{{path}}'"; both fail to load.
+# Every {{slot}} must be a STANDALONE, whitespace-delimited word of the
+# top-level command list, in an UNQUOTED context — the daemon refuses to compile
+# anything else, because that rule is what makes "one slot fills exactly one
+# word" true by construction. Do NOT write "--file={{path}}", "'{{path}}'",
+# "$(cmd {{path}})" or a slot inside a here-document or arithmetic; all fail to
+# load.
 body = "tail -n {{lines}} -- {{path}}"
 
 [[template.slots]]
@@ -56,11 +58,11 @@ type = "integer"
 [[template.slots]]
 name = "path"
 # path: absolute and canonical (starts "/", no "." / ".." / empty / trailing
-# segment), max 4096 bytes, no control characters. Deliberately permissive
-# otherwise — real filenames contain spaces, "$", and quotes — and passed to
-# the shell as data, never as shell text. WHICH paths are readable is decided
-# by this Node's Policy, not by this slot: constrain it there (allowed_args /
-# [[deny]]).
+# segment), max 4096 bytes, plain filenames only: no control characters, no
+# whitespace, and none of $ ` \ " ' ; | & < > ( ) { } [ ] * ? ! # ~ = (use an
+# enum slot for a value the type refuses). Passed to the shell as data, never
+# as shell text. WHICH paths are readable is decided by this Node's Policy,
+# not by this slot: constrain it there (allowed_args / [[deny]]).
 type = "path"
 
 # ---------------------------------------------------------------------------

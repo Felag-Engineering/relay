@@ -23,9 +23,13 @@
 //! `( )` (its pattern `)` would end the frame early), a `$((` that is not
 //! arithmetic, and a backslash-newline inside a nested construct or a word
 //! (the shell joins it before reading keywords and operators). A placeholder
-//! inside arithmetic is refused outright. A slot inside an unquoted `$( )` is
-//! one word at its own level; the outer substitution's result is split again by
-//! the shell.
+//! inside arithmetic is refused outright.
+//!
+//! A slot is accepted only as a plain word of the top-level command list (a
+//! simple command, pipeline or `;`/`&&`/`||`/newline list, including a `{ …; }`
+//! group or a function body). Every other place a shell reads text is refused:
+//! `$( )`, `( )`, quotes, `${ }`, arithmetic, here-documents, here-strings,
+//! `[[ ]]` and `case`.
 
 use std::collections::HashSet;
 
@@ -504,15 +508,17 @@ impl<'a> Lexer<'a> {
             ' ' | '\t' => self.copy_as(Prev::Blank),
             ';' | '&' | '|' | '>' => self.copy_as(Prev::Operator),
             '<' => self.less_than()?,
-            'c' if self.prev != Prev::Other && self.at_case_keyword() => {
-                let nested = self
-                    .stack
-                    .iter()
-                    .any(|f| matches!(f, Frame::CmdSubst | Frame::Subshell | Frame::Backquote));
-                if nested && self.has_placeholder {
-                    return Err(self.not_analysable(
-                        "a `case` inside a substitution, whose pattern `)` ends the frame early",
-                    ));
+            'c' if self.prev != Prev::Other && self.at_word("case") => {
+                // A pattern `)` ends a `$(` or `(` frame early, and a pattern is
+                // not a plain word: no `case` beside a placeholder.
+                if self.has_placeholder {
+                    return Err(self.not_analysable("a `case` command"));
+                }
+                self.copy_as(Prev::Other);
+            }
+            '[' if self.prev != Prev::Other && self.at_word("[[") => {
+                if self.has_placeholder {
+                    return Err(self.not_top_level_here("a `[[ ]]` test"));
                 }
                 self.copy_as(Prev::Other);
             }
@@ -521,11 +527,18 @@ impl<'a> Lexer<'a> {
         Ok(())
     }
 
-    /// The cursor is on the word `case`.
-    fn at_case_keyword(&self) -> bool {
-        let word = ['c', 'a', 's', 'e'];
-        (0..4).all(|k| self.at(k) == Some(word[k]))
-            && matches!(self.at(4), None | Some(' ' | '\t' | '\n'))
+    /// The cursor is on the whole blank-delimited word `word`.
+    fn at_word(&self, word: &str) -> bool {
+        let n = word.chars().count();
+        word.chars().enumerate().all(|(k, c)| self.at(k) == Some(c))
+            && matches!(self.at(n), None | Some(' ' | '\t' | '\n'))
+    }
+
+    fn not_top_level_here(&self, context: &'static str) -> TemplateError {
+        TemplateError::PlaceholderNotTopLevel {
+            at: self.here(),
+            context,
+        }
     }
 
     /// A comment runs to the end of the line; the newline is left to the caller.
@@ -549,6 +562,9 @@ impl<'a> Lexer<'a> {
         }
         // `<<<` is a here-string, not a here-document.
         if self.at(2) == Some('<') {
+            if self.has_placeholder {
+                return Err(self.not_top_level_here("a here-string"));
+            }
             self.copy(3);
             self.prev = Prev::Operator;
             return Ok(());
@@ -714,7 +730,8 @@ impl<'a> Lexer<'a> {
     fn placeholder(&mut self) -> Result<(), TemplateError> {
         let at = self.here();
 
-        let left_ok = match self.stack.last() {
+        // A slot is a plain word of the top-level command list and nowhere else.
+        match self.stack.last() {
             Some(Frame::SingleQuote | Frame::DoubleQuote) => {
                 return Err(TemplateError::PlaceholderInQuotedContext { at });
             }
@@ -725,10 +742,17 @@ impl<'a> Lexer<'a> {
             Some(Frame::Arith { .. }) => {
                 return Err(TemplateError::PlaceholderInArithmetic { at });
             }
-            Some(Frame::Heredoc(_)) => self.prev == Prev::Blank,
-            _ => matches!(self.prev, Prev::Blank | Prev::Open),
-        };
-        if !left_ok {
+            Some(Frame::Heredoc(_)) => return Err(self.not_top_level_here("a here-document")),
+            Some(Frame::CmdSubst) => {
+                return Err(self.not_top_level_here("a command substitution"));
+            }
+            Some(Frame::Subshell) => return Err(self.not_top_level_here("a subshell")),
+            Some(Frame::Backquote) => {
+                return Err(self.not_top_level_here("a backquote substitution"));
+            }
+            Some(Frame::Top) | None => {}
+        }
+        if self.prev != Prev::Blank {
             return Err(TemplateError::PlaceholderNotStandalone { at });
         }
 
@@ -757,7 +781,6 @@ impl<'a> Lexer<'a> {
 
         let right_ok = match self.chars.get(j + 2) {
             None | Some(' ' | '\t' | '\n') => true,
-            Some(')') => matches!(self.stack.last(), Some(Frame::CmdSubst | Frame::Subshell)),
             Some(_) => false,
         };
         if !right_ok {
@@ -829,14 +852,17 @@ mod tests {
             ("echo {{ p }}", "echo \"$1\""),
             ("echo\t{{p}}\ttail", "echo\t\"$1\"\ttail"),
             ("a\n{{p}}\nb", "a\n\"$1\"\nb"),
-            ("echo $(echo {{p}})", "echo $(echo \"$1\")"),
-            ("echo $({{p}} x)", "echo $(\"$1\" x)"),
-            ("(echo {{p}})", "(echo \"$1\")"),
-            ("echo \"a $(echo {{p}}) b\"", "echo \"a $(echo \"$1\") b\""),
             ("echo a \\\n{{p}}", "echo a \\\n\"$1\""),
+            ("echo {{p}} | cat -n {{p}}", "echo \"$1\" | cat -n \"$1\""),
             (
-                "echo \"$(echo \")\" {{p}} \")\")\"",
-                "echo \"$(echo \")\" \"$1\" \")\")\"",
+                "true && echo {{p}} || echo {{p}} ; echo",
+                "true && echo \"$1\" || echo \"$1\" ; echo",
+            ),
+            ("{ echo {{p}} ; }", "{ echo \"$1\" ; }"),
+            ("f() { echo {{p}} ; }", "f() { echo \"$1\" ; }"),
+            (
+                "echo $(echo x) {{p}} \"$(echo y)\"",
+                "echo $(echo x) \"$1\" \"$(echo y)\"",
             ),
         ] {
             assert_eq!(script(body), want, "{body:?}");
@@ -929,26 +955,64 @@ mod tests {
     }
 
     #[test]
-    fn here_documents_expand_placeholders_in_unquoted_bodies_only() {
-        assert_eq!(script("cat <<EOF\n{{p}}\nEOF"), "cat <<EOF\n\"$1\"\nEOF");
+    fn here_documents_hold_no_placeholder() {
+        for body in [
+            "cat <<EOF\n{{p}}\nEOF",
+            "cat <<-EOF\n\t{{p}}\n\tEOF",
+            "cat <<A <<B\n{{p}}\nA\n{{p}}\nB",
+            "cat <<EOF\n$(echo {{p}})\nEOF",
+            "sh <<EOF\necho {{p}}\nEOF",
+            "cat <<EOF\n$(( 1 $(echo {{p}}) ))\nEOF",
+            "cat <<< {{p}}",
+        ] {
+            assert!(
+                matches!(error(body), TemplateError::PlaceholderNotTopLevel { .. }),
+                "{body:?}"
+            );
+        }
+        // After the delimiter line the body is over; the top level is back.
         assert_eq!(
-            script("cat <<-EOF\n\t{{p}}\n\tEOF\necho {{p}}"),
-            "cat <<-EOF\n\t\"$1\"\n\tEOF\necho \"$1\""
+            script("cat <<A <<B\nx\nA\ny\nB\necho {{p}}"),
+            "cat <<A <<B\nx\nA\ny\nB\necho \"$1\""
         );
-        // Two here-documents on one line; the second body follows the first.
-        assert_eq!(
-            script("cat <<A <<B\n{{p}}\nA\n{{p}}\nB\necho {{p}}"),
-            "cat <<A <<B\n\"$1\"\nA\n\"$1\"\nB\necho \"$1\""
-        );
-        // After the delimiter line the body is over: glue is refused again.
         not_standalone("cat <<EOF\nx\nEOF\necho x{{p}}");
-        // A command substitution inside the body is lexed as code.
-        assert_eq!(
-            script("cat <<EOF\n$(echo {{p}})\nEOF"),
-            "cat <<EOF\n$(echo \"$1\")\nEOF"
-        );
-        // A here-string is not a here-document.
-        assert_eq!(script("cat <<< {{p}}"), "cat <<< \"$1\"");
+        // Slot-free here-documents and here-strings still load.
+        assert!(analyse("cat <<EOF\nhi\nEOF\ncat <<< x", &slots(&[])).is_ok());
+    }
+
+    #[test]
+    fn a_placeholder_is_accepted_only_at_the_top_level() {
+        for body in [
+            "echo $(echo {{p}})",
+            "echo $({{p}} x)",
+            "(echo {{p}})",
+            "echo ( {{p}} )",
+            "echo \"a $(echo {{p}}) b\"",
+            "echo \"$(echo \")\" {{p}} \")\")\"",
+            "echo $(( 1 $(echo {{p}}) ))",
+            "echo $[ 1 $(echo {{p}}) ]",
+            "(( 1 $(echo {{p}}) ))",
+            "for (( i=1$(echo {{p}}); i<0; )); do :; done",
+            "echo $(( $(echo 1 {{p}}) ))",
+            "x=abc; echo ${x:1$(echo {{p}})}",
+            "x=(a b); echo ${x[1$(echo {{p}})]}",
+            "find $(dirname {{p}}) -maxdepth 0 -print",
+            "ls -ld $(dirname {{p}})",
+            "cat <( echo {{p}} )",
+            "x=( {{p}} )",
+            "[[ 1 -eq {{p}} ]]",
+            "cat <<< {{p}}",
+        ] {
+            error(body);
+        }
+        assert!(matches!(
+            error("echo $(echo {{p}})"),
+            TemplateError::PlaceholderNotTopLevel { .. }
+        ));
+        assert!(matches!(
+            error("(echo {{p}})"),
+            TemplateError::PlaceholderNotTopLevel { .. }
+        ));
     }
 
     #[test]
@@ -1001,11 +1065,11 @@ mod tests {
                 "{body:?}"
             );
         }
-        // A command substitution inside arithmetic is a command list again.
-        assert_eq!(
-            script("echo $(( $(echo {{p}}) + 1 ))"),
-            "echo $(( $(echo \"$1\") + 1 ))"
-        );
+        // So is a command substitution inside arithmetic.
+        assert!(matches!(
+            error("echo $(( $(echo {{p}}) + 1 ))"),
+            TemplateError::PlaceholderNotTopLevel { .. }
+        ));
     }
 
     fn not_analysable(body: &str) {
@@ -1018,11 +1082,11 @@ mod tests {
     #[test]
     fn unterminated_constructs_are_refused_only_with_a_placeholder() {
         for open in [
-            "echo $(echo {{p}}",
-            "echo `echo {{p}}",
+            "echo {{p}} $(echo",
+            "echo {{p}} `echo",
             "echo {{p}} ${x:-a",
             "echo {{p}} $((1",
-            "cat <<EOF\n{{p}}\n",
+            "echo {{p}} ; cat <<EOF\nx\n",
             "cat <<EOF {{p}}",
         ] {
             not_analysable(open);
@@ -1039,19 +1103,16 @@ mod tests {
     }
 
     #[test]
-    fn a_case_inside_a_substitution_is_refused() {
-        // The pattern's `)` would close the `$(` early and leave the placeholder
-        // in a context the lexer reads differently from the shell.
+    fn a_case_command_is_refused_beside_a_placeholder() {
+        // The pattern's `)` would close a `$(` early, and a pattern is not a
+        // plain word.
         not_analysable("echo \"$(case x in x) printf '<%s>' \" {{p}} \" ;; esac)\"");
         not_analysable("echo $(case x in x) echo hi ;; esac) {{p}}");
         not_analysable("(case x in x) :;; esac; echo {{p}})");
         not_analysable("echo `case x in x) :;; esac` {{p}}");
-        // Outside a substitution a pattern `)` is harmless, and `case` as an
-        // argument or inside a word is not the keyword.
-        assert_eq!(
-            script("case x in x) echo {{p}} ;; esac"),
-            "case x in x) echo \"$1\" ;; esac"
-        );
+        not_analysable("case x in x) echo {{p}} ;; esac");
+        not_analysable("case {{p}} in x) :;; esac");
+        // `case` as part of a word is not the keyword; slot-free bodies load.
         assert_eq!(
             script("echo $(echo case) {{p}}"),
             "echo $(echo case) \"$1\""
@@ -1061,6 +1122,7 @@ mod tests {
             "echo $(echo incase) \"$1\""
         );
         assert!(analyse("echo $(case x in x) :;; esac)", &slots(&[])).is_ok());
+        assert!(analyse("case x in x) :;; esac", &slots(&[])).is_ok());
     }
 
     #[test]
@@ -1153,8 +1215,8 @@ mod tests {
     #[test]
     fn stacked_here_documents_each_check_their_own_delimiter() {
         assert_eq!(
-            script("cat <<A <<B\nA-ish\nA\nB-ish {{p}}\nB\necho {{p}}"),
-            "cat <<A <<B\nA-ish\nA\nB-ish \"$1\"\nB\necho \"$1\""
+            script("cat <<A <<B\nA-ish\nA\nB-ish\nB\necho {{p}}"),
+            "cat <<A <<B\nA-ish\nA\nB-ish\nB\necho \"$1\""
         );
     }
 
