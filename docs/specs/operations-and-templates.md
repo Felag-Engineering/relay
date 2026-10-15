@@ -70,8 +70,7 @@ from those validators, so what a caller is told and what the daemon enforces can
   to the author's text) and becomes a quoted positional parameter (`"$1"`);
   the values are passed to the shell as separate arguments. The parsed text is identical for every
   call, so no value can add a word, an operator, a redirection or an expansion, in any POSIX shell. This
-  is the single point invariant 1 rests on for the Template tier. *Built today as single-quoted
-  splicing, which does not hold in every context (`AGENTS.md` gap table, #974; fixed by #977).*
+  is the single point invariant 1 rests on for the Template tier.
 - **A slot fills only a data position.** A placeholder standing where its value would be executed,
   where that is decidable from the body, is a Policy error: the command-name position, the operand
   of `eval`/`.`/`source`, the argument after a shell's or interpreter's `-c`/`-e`, and arithmetic

@@ -12,10 +12,12 @@ annotated example).
 
 An operator-authored shell template with named, typed-validated **parameter
 slots** (ADR-0021, realizing ADR-0001's tier 2). The trusted author fixes the
-command structure; a caller supplies only parameter *values*, and substitution
-can never alter that structure — each value is validated against its slot's
-declared type and then POSIX single-quoted before it is placed in the exact
-lexical position the author wrote.
+command structure; a caller supplies only parameter *values*, and a value can
+never alter that structure — each value is validated against its slot's
+declared type and then passed to the shell as a positional parameter. Each
+`{{slot}}` in the body becomes a quoted reference (`"$1"`, `"$2"`, … in slot
+declaration order), and the script `/bin/sh -c` parses is the same text for
+every call: a value is data beside the script, never part of it.
 
 Templates exist so the typed path can grow at *your* cadence instead of the
 daemon's release cadence, keeping fleet-specific work off Raw Exec — the most
@@ -78,9 +80,18 @@ accept-set you control completely.
 
 Two authoring rules the loader enforces, both refusals at load time:
 
-- **Every `{{slot}}` must be a standalone, whitespace-delimited token in an
-  unquoted context.** `--file={{path}}` and `'{{path}}'` fail to load. That rule
-  is what makes "one slot fills exactly one word" true by construction.
+- **Every `{{slot}}` must be a standalone word in an unquoted context.**
+  `--file={{path}}` and `'{{path}}'` fail to load. That rule is what makes "one
+  slot fills exactly one word" true by construction. Only space, tab and newline
+  are blanks: a slot glued to an operator (`>{{path}}`, `;{{path}}`), after an
+  escaped space (`a\ {{path}}`), or next to a form feed or carriage return is
+  refused. Keep bodies on LF line endings — a CRLF-saved file puts a carriage
+  return after the slot. A slot in a place the shell never expands (a comment,
+  `$'…'`, `${…}`, a quoted here-document, or a here-document delimiter) is
+  refused too.
+- **A slot in an unquoted here-document prints with literal `"` quotes** around
+  the value, as it printed literal `'` quotes before; the value itself is never
+  expanded.
 - **`risk_class` is mandatory**, and a template may not shadow a Native
   Operation (`system.facts`, `file.read`, `service.restart`, `pkg.install`) or
   `raw_exec`. The native vocabulary is frozen (ADR-0021) and always wins.
@@ -93,13 +104,13 @@ the template root together, in one pass, before anything is deployed:
 ```console
 $ relay-daemon policy check policy.toml --templates templates.d/ --strict
 error: relay-read/catalog.toml: [[template]] #2 (name="log.tail") — a placeholder near byte 12 \
-       is not a standalone whitespace-delimited token …
+       is not a standalone whitespace-delimited word …
 ```
 
 What it reports:
 
 - **Per template**: a malformed body (a placeholder that is not a standalone
-  token, unbalanced quoting), an invalid or missing `risk_class`, bad slot
+  word, unbalanced quoting), an invalid or missing `risk_class`, bad slot
   names/types, an empty `enum`, a name that shadows a Native Operation, and a
   duplicate name across the set — every one of them an error, because every one
   of them makes the whole set fail to load on the Node.
@@ -248,6 +259,6 @@ edit you can make to it.
 - A template — or a Policy rule — that can rewrite the daemon's config, binary,
   unit, or these template files is self-modifying Policy. Do not write one.
 - The shell boundary is treated as hostile by design, and the daemon's
-  validation and quoting are its mitigation. That is not a licence to pass
+  validation and positional-parameter passing are its mitigation. That is not a licence to pass
   attacker-controlled values into a `path` slot and assume they are harmless:
   constrain values in Policy too, where you can see them in review.

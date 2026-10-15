@@ -103,8 +103,8 @@ architecture invariants in [AGENTS.md](AGENTS.md) encode, and what
 - **Typed Operations, not shell strings.** A fixed vocabulary of structured Operations is the
   primary execution primitive; a regex-gated **Raw Exec** escape hatch covers the long tail.
   Between them sit **Template Operations**: operator-authored, with the command structure
-  fixed in a root-owned local file and every parameter slot single-quoted, so an argument can
-  never change which command runs — new vocabulary is Templates, never new Natives.
+  fixed in a root-owned local file and every parameter value passed to the shell as data,
+  never as shell text, so an argument can never change which command runs — new vocabulary is Templates, never new Natives.
   ([ADR-0001](docs/adr/0001-structured-operations-with-regex-gated-raw-exec.md),
   [ADR-0021](docs/adr/0021-local-template-tier-shipped-read-catalog-native-freeze.md))
 - **The Node distrusts the Relay.** Policy is locally-rooted and remotely-immutable, so a

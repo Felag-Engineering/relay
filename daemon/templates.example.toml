@@ -4,8 +4,9 @@
 # typed-validated parameter slots. YOU fix the command structure; the caller
 # (an AI-agent, the API, the Console) supplies only parameter VALUES. A value
 # can never add a word, an operator, a redirection, or an expansion: the daemon
-# validates each value against its slot's declared type and then POSIX
-# single-quotes it before substitution.
+# validates each value against its slot's declared type and then passes it to
+# the shell as a positional parameter: each {{slot}} becomes a quoted "$1",
+# "$2", ... and the value is never part of the text the shell parses.
 #
 # Where this file goes: any *.toml file directly under the template root
 # (default /etc/relay-daemon/templates.d, RELAY_TEMPLATE_DIR to override), or
@@ -56,8 +57,8 @@ type = "integer"
 name = "path"
 # path: absolute and canonical (starts "/", no "." / ".." / empty / trailing
 # segment), max 4096 bytes, no control characters. Deliberately permissive
-# otherwise — real filenames contain spaces, "$", and quotes — and neutralized
-# by quoting. WHICH paths are readable is decided by this Node's Policy, not by
+# otherwise — real filenames contain spaces, "$", and quotes — and passed to
+# the shell as data, never as shell text. WHICH paths are readable is decided by this Node's Policy, not by
 # this slot: constrain it there (allowed_args / [[deny]]).
 type = "path"
 

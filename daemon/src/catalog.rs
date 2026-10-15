@@ -112,6 +112,29 @@ fn catalog_slots_are_constrained_and_the_log_tail_bound_is_fixed() {
     }
 }
 
+/// The scripts the shipped catalog runs, pinned: a slot is a quoted positional
+/// parameter and a slot-free body is run byte for byte (ADR-0021 amendment).
+#[test]
+fn catalog_scripts_are_fixed() {
+    for def in catalog() {
+        let op = compile(&def).expect("compiles");
+        let want = match def.name.as_str() {
+            "service.status" => {
+                "systemctl show --no-pager --property=Id,LoadState,ActiveState,SubState,UnitFileState,MainPID,NRestarts,ExecMainStartTimestamp -- \"$1\""
+            }
+            "log.tail" => "journalctl --no-pager --quiet --lines=200 --unit \"$1\"",
+            "file.checksum" => "sha256sum -- \"$1\"",
+            _ => def.body.as_str(),
+        };
+        assert_eq!(
+            op.script(),
+            want,
+            "script of shipped template {:?}",
+            def.name
+        );
+    }
+}
+
 /// The acceptance line: a Node with the shipped catalog and the shipped default
 /// Policy answers all seven with zero local authoring.
 #[test]
