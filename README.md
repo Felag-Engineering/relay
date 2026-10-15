@@ -141,8 +141,10 @@ The annotated layout lives in one place: [AGENTS.md § Repository layout](AGENTS
 
 ## Status
 
-Pre-release, and **not yet licensed for use** — publishing a `LICENSE` (source-available under
-the BSL) is still open (#123) and its parameters are undecided.
+Pre-release. Relay is source-available under the Business Source License 1.1 ([LICENSE](LICENSE)):
+free for personal, non-commercial use by individuals; use by or for an organization needs a
+commercial license. Each version converts to Apache-2.0 three years after its release (its
+Change Date).
 
 **The GitHub milestones are the authority on what is in progress**, and the GitHub releases on
 what has shipped; read them with `gh` rather than inferring either from any file. Milestones
