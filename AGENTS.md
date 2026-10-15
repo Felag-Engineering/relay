@@ -10,8 +10,8 @@ by nature: it is remote code execution as a service.** Treat every change to the
 Policy, transport, or auth paths as security-sensitive.
 
 The product is **Relay**. **Gleipnir** is the separate first-party AI-agent system that drives
-it — a consumer of Relay, never a component of it. The repo name is historical (GLOSSARY.md,
-ADR-0016).
+it — a consumer of Relay, never a component of it. The repo was formerly `gleipnir-relay`
+(GLOSSARY.md, ADR-0016).
 
 Orient in this order: the invariants below for what must always be true,
 [GLOSSARY.md](GLOSSARY.md) for the language, [docs/specs/](docs/specs/) for the capability
@@ -414,7 +414,7 @@ break. It is not a changelog and not a design document.
 Agent skills read their per-repo configuration from `docs/agents/`. Keep these current: they
 are what a fresh session — including an unattended cloud routine — uses instead of asking.
 
-- **Issue tracker** — GitHub Issues on `Felag-Engineering/gleipnir-relay` via the `gh` CLI,
+- **Issue tracker** — GitHub Issues on `Felag-Engineering/relay` via the `gh` CLI,
   with GitHub milestones as the human-owned spine above it. See `docs/agents/issue-tracker.md`.
 - **Triage labels** — the five canonical triage roles mapped onto this repo's `loop:*` lanes.
   `decision` and `idea` are human-owned and never loop work. See `docs/agents/triage-labels.md`.

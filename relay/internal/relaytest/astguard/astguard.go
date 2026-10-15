@@ -28,9 +28,9 @@ import (
 // PATH rather than an assumed local package name, so an aliased import
 // cannot dodge the check.
 const (
-	registryImportPath   = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
-	nodevocabImportPath  = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
+	registryImportPath   = "github.com/Felag-Engineering/relay/relay/internal/registry"
+	policyviewImportPath = "github.com/Felag-Engineering/relay/relay/internal/policyview"
+	nodevocabImportPath  = "github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 	contextImportPath    = "context"
 )
 

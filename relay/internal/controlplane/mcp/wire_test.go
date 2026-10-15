@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
+	"github.com/Felag-Engineering/relay/relay/internal/policyview"
 )
 
 // TestDescribeNodeOutput_JSONShapeIsFlattened is the golden-JSON assertion

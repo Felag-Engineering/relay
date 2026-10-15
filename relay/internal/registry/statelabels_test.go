@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // statelabels_test.go is the structural assertion that NO ACCOUNT OF ANY

@@ -3,8 +3,8 @@ package accounts_test
 import (
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts/accountstest"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts/accountstest"
 )
 
 // TestRepositoryConformance runs the shared last-enabled-admin conformance

@@ -195,7 +195,7 @@ relay_enrollment_token: "{{ vault_relay_enrollment_token }}"
 # roles/relay_daemon/tasks/main.yml
 - name: Fetch relay-daemon artifact (digest verified BEFORE install)
   ansible.builtin.get_url:
-    url: "https://github.com/Felag-Engineering/gleipnir-relay/releases/download/\
+    url: "https://github.com/Felag-Engineering/relay/releases/download/\
           v{{ relay_daemon_version }}/relay-daemon-{{ relay_daemon_version }}-x86_64-unknown-linux-musl"
     dest: /usr/local/bin/relay-daemon
     mode: "0755"

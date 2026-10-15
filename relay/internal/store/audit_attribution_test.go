@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
 )
 
 func attributedRecord(id, accountID, onBehalfOf string) audit.Record {

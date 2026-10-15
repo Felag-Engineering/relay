@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask"
+	"github.com/Felag-Engineering/relay/relay/internal/logctx"
+	"github.com/Felag-Engineering/relay/relay/internal/mcptask"
 )
 
 // taskshim.go is the ONE place Relay touches raw MCP wire JSON, and the

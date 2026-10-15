@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
+	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
 )
 
 func TestThrottle_ClearAtFirst(t *testing.T) {

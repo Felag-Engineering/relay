@@ -337,7 +337,7 @@ with the fleet's changes.
    was not taken.
 5. **Password changes are not on the trail**, because the host-side `relay console-password` (and
    `relay bootstrap-token`) write no audit record. Raised as
-   [#782](https://github.com/Felag-Engineering/gleipnir-relay/issues/782), independent of this
+   [#782](https://github.com/Felag-Engineering/relay/issues/782), independent of this
    redesign.
 
 The navigation stays at nine destinations: Agents leaves Observe, and Access joins Administer.
@@ -397,7 +397,7 @@ references keep using verified IDs.
 
 ## Prerequisites that already exist as issues
 
-### D8. [#397](https://github.com/Felag-Engineering/gleipnir-relay/issues/397) — three route families have no role gate — **RESOLVED: gates landed**
+### D8. [#397](https://github.com/Felag-Engineering/relay/issues/397) — three route families have no role gate — **RESOLVED: gates landed**
 
 **Broader than earlier drafts of this file recorded.** Three `/api/v1` route families authenticate
 the caller and then never check their role:
@@ -440,7 +440,7 @@ floor.
 on Node revoke, and there is no step-up mechanism on the Control API yet. Spec 16 may state
 the role requirement as enforced; it may not yet promise the step-up.
 
-### D13. [#403](https://github.com/Felag-Engineering/gleipnir-relay/issues/403) — the Relay's server certificate never rotates **(blocking, and not a UI bug)**
+### D13. [#403](https://github.com/Felag-Engineering/relay/issues/403) — the Relay's server certificate never rotates **(blocking, and not a UI bug)**
 
 `relay/cmd/relay/main.go:391` and `:575` each call `IssueServerCertificate` once at process start.
 There is **no `GetCertificate` callback anywhere**, and the leaf borrows `LeafValidity` (336h — the
@@ -448,9 +448,9 @@ constant meant for Node identity). A Relay running longer than fourteen days ser
 certificate and **the whole fleet fail-closes off it.** Unnoticed only because nothing has run for
 two continuous weeks.
 
-Tracked as [#403](https://github.com/Felag-Engineering/gleipnir-relay/issues/403), and as **E2a**
+Tracked as [#403](https://github.com/Felag-Engineering/relay/issues/403), and as **E2a**
 in `../self-serve-enrollment.md` ("lands first and alone"), with acceptance criteria already
-written there. Its sibling [#404](https://github.com/Felag-Engineering/gleipnir-relay/issues/404)
+written there. Its sibling [#404](https://github.com/Felag-Engineering/relay/issues/404)
 collapses the two listeners onto one multi-SAN certificate. **Neither needs a specification** — the
 fix is settled in ADR-0031 §5. Repeated here because **the Console's own TLS rides on the same certificate** (ADR-0031 puts both listeners on
 one): a Console shipped before E2a lands breaks for every user at the fourteen-day mark. No Console
@@ -463,7 +463,7 @@ replacement, in memory, with no operator involvement and no restart. Short valid
 here, because rotation is a function call; ADR-0031 §5 asks only that the server leaf get **its own
 constant** rather than borrowing the identity one.
 
-### D14. CA rotation has no story — **raised as [#412](https://github.com/Felag-Engineering/gleipnir-relay/issues/412)**
+### D14. CA rotation has no story — **raised as [#412](https://github.com/Felag-Engineering/relay/issues/412)**
 
 `caValidity = 10 * 365 * 24 * time.Hour`. Ten years is a long horizon, but it is not "never", and
 the more urgent case is unbounded: **if the CA key is ever compromised, there is no rotation path

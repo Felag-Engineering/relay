@@ -11,8 +11,8 @@ package capability
 import (
 	"fmt"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/opvocab"
 )
 
 // fixedRiskClass is the class of a Native Operation (from opvocab, by name) or

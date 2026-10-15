@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // TestMigration0026_LegacyJobsReadBackWithNoRequester (#616, AC3) drives the

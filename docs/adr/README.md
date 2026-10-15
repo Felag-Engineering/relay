@@ -27,7 +27,7 @@ back-link.
 | [ADR-0013](0013-cancellation-and-emergency-freeze.md) | Cancellation and the emergency Freeze | Accepted; amended by ADR-0038 | — | [ADR-0038](0038-plan-is-an-approved-route-of-execution.md) |
 | [ADR-0014](0014-daemon-lifecycle-iac-upgrades-version-gate.md) | Daemon lifecycle: IaC-owned upgrades, a dispatch-level version gate, additive proto discipline | Accepted | — | — |
 | [ADR-0015](0015-operation-vocabulary-golden-schema.md) | Operation vocabulary is guarded by a daemon-generated golden schema | Accepted | — | — |
-| [ADR-0016](0016-internal-naming-relay-not-gleipnir.md) | Internal naming: Relay, not Gleipnir | Accepted | — | — |
+| [ADR-0016](0016-internal-naming-relay-not-gleipnir.md) | Internal naming: Relay, not Gleipnir | Accepted; amended 2026-10-15 (the repo and the Go module path are `relay`, #885) | — | — |
 | [ADR-0017](0017-node-origin-label-trust.md) | Node-origin (`node:`) label trust is accepted for launch; the security lane stays `relay:`-only | Accepted | — | — |
 | [ADR-0018](0018-canonical-path-matching-for-file-read.md) | `file.read` path arguments are matched in canonical form, and the executor re-checks the resolved target | Accepted | — | — |
 | [ADR-0019](0019-canonical-argv-matching-for-raw-exec-deny.md) | Raw Exec deny patterns are matched against canonical argv elements, and `argv[0]` may not contain whitespace | Accepted | — | — |

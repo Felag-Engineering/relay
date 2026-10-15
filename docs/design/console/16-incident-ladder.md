@@ -7,7 +7,7 @@
 **Backend:** Freeze engage/release; `relay:` label writes; Node revocation —
 all through the capability layer.
 
-> **Blocked by [#397](https://github.com/Felag-Engineering/gleipnir-relay/issues/397).** Two of the
+> **Blocked by [#397](https://github.com/Felag-Engineering/relay/issues/397).** Two of the
 > three rungs on this screen have **no role gate on the API today**: `POST /api/v1/nodes/{id}/revoke`
 > and `POST /api/v1/freeze/engage|release` authenticate the caller and never check their role, so a
 > `viewer` can do both. Shipping a screen whose buttons state a role requirement the API does not

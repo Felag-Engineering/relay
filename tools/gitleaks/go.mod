@@ -1,4 +1,4 @@
-module github.com/Felag-Engineering/gleipnir-relay/tools/gitleaks
+module github.com/Felag-Engineering/relay/tools/gitleaks
 
 go 1.26.9
 

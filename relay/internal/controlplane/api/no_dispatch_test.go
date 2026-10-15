@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest/astguard"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest/astguard"
 )
 
 // no_dispatch_test.go is the Control API's structural half of invariant 10,
@@ -38,10 +38,10 @@ import (
 // covered automatically, with no classification map to forget to update.
 
 const (
-	capabilityImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	registryImportPath   = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
-	nodevocabImportPath  = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
+	capabilityImportPath = "github.com/Felag-Engineering/relay/relay/internal/capability"
+	registryImportPath   = "github.com/Felag-Engineering/relay/relay/internal/registry"
+	policyviewImportPath = "github.com/Felag-Engineering/relay/relay/internal/policyview"
+	nodevocabImportPath  = "github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 )
 
 // dispatchViolations AST-inspects file (fileName is used only in messages) and
@@ -150,10 +150,10 @@ func TestNoDispatchConstruction(t *testing.T) {
 // fires — and that the legitimate capability usage these routes depend on does
 // not.
 func TestDispatchViolations_Fixtures(t *testing.T) {
-	const capImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"`
-	const regImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"`
-	const pvImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"`
-	const nvImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"`
+	const capImport = `"github.com/Felag-Engineering/relay/relay/internal/capability"`
+	const regImport = `"github.com/Felag-Engineering/relay/relay/internal/registry"`
+	const pvImport = `"github.com/Felag-Engineering/relay/relay/internal/policyview"`
+	const nvImport = `"github.com/Felag-Engineering/relay/relay/internal/nodevocab"`
 
 	cases := []struct {
 		name       string

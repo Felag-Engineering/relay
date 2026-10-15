@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/opvocab"
 )
 
 // shape.go is the SHAPE KEY (D10): the content address of WHAT an

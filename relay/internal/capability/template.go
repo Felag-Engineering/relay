@@ -47,10 +47,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
+	"github.com/Felag-Engineering/relay/relay/internal/opvocab"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // TemplateNotInVocabularyReason is the Relay-authored stderr of a Task whose

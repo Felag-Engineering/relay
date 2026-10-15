@@ -2238,7 +2238,7 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x06Enroll\x12\x17.relay.v1.EnrollRequest\x1a\x18.relay.v1.EnrollResponse\x128\n" +
 	"\x05Renew\x12\x16.relay.v1.RenewRequest\x1a\x17.relay.v1.RenewResponse2E\n" +
 	"\x06Tunnel\x12;\n" +
-	"\x04Open\x12\x17.relay.v1.DaemonMessage\x1a\x16.relay.v1.RelayMessage(\x010\x01BMZKgithub.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1;relayv1b\x06proto3"
+	"\x04Open\x12\x17.relay.v1.DaemonMessage\x1a\x16.relay.v1.RelayMessage(\x010\x01BDZBgithub.com/Felag-Engineering/relay/relay/internal/relay/v1;relayv1b\x06proto3"
 
 var (
 	file_relay_v1_relay_proto_rawDescOnce sync.Once

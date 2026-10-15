@@ -1,4 +1,4 @@
-module github.com/Felag-Engineering/gleipnir-relay/tools/govulncheck
+module github.com/Felag-Engineering/relay/tools/govulncheck
 
 go 1.26.9
 

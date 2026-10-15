@@ -48,7 +48,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
 
 // Lifetime defaults. These are Relay configuration in the invariant-11 sense —

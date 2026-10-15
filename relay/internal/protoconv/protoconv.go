@@ -6,8 +6,8 @@ package protoconv
 import (
 	"strings"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 )
 
 // FactsFromProto converts a proto Facts message to registry.Facts.

@@ -15,7 +15,7 @@ import (
 const repoRoot = "../../.."
 
 // pkg is this package's import path — the -X symbol prefix the Makefile must use.
-const pkg = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/version"
+const pkg = "github.com/Felag-Engineering/relay/relay/internal/version"
 
 // makeVar returns the right-hand side of a simple `NAME := value` assignment
 // in makefile. Enough for the single-line, literal assignments this test

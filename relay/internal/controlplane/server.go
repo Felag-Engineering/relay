@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
+	"github.com/Felag-Engineering/relay/relay/internal/logctx"
 )
 
 // withRequestID gives every request a Relay-minted id for log correlation. It

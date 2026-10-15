@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
 
 // NavGroup is one of the navigation's three headings. The grouping is

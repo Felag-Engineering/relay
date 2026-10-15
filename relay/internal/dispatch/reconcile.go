@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // reconcileDispatchTimeout bounds each reconcile Dispatch call. It must

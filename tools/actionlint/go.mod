@@ -1,4 +1,4 @@
-module github.com/Felag-Engineering/gleipnir-relay/tools/actionlint
+module github.com/Felag-Engineering/relay/tools/actionlint
 
 go 1.26.9
 

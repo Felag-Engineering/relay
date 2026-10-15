@@ -29,7 +29,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // VerdictStatus is one Node's Plan-mode verdict. The zero value,

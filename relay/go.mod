@@ -1,4 +1,4 @@
-module github.com/Felag-Engineering/gleipnir-relay/relay
+module github.com/Felag-Engineering/relay/relay
 
 go 1.26.9
 

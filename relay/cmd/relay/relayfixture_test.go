@@ -11,8 +11,8 @@ import (
 
 	"google.golang.org/grpc/test/bufconn"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // relayfixture_test.go is the one way this package starts a Relay in-process.

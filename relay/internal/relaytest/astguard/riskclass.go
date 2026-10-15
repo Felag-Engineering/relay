@@ -7,7 +7,7 @@ import (
 	"sort"
 )
 
-const jobsImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+const jobsImportPath = "github.com/Felag-Engineering/relay/relay/internal/jobs"
 
 // riskClassConstants are the jobs.RiskClass values an adapter could use to
 // pick a class. The type itself (jobs.RiskClass) and the display function

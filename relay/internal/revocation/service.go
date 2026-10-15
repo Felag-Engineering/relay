@@ -7,15 +7,15 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
+	"github.com/Felag-Engineering/relay/relay/internal/logctx"
 
 	// registry is imported for the Registry return type (registry.Node) and its
 	// ErrNotFound sentinel.
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 
 	// enroll is imported for the ErrNotFound sentinel only. No import cycle:
 	// revocation → enroll → registry; revocation → registry.
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
+	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 )
 
 // Registry is the fleet Node registry as the revocation Service needs it: to

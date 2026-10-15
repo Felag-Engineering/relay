@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // The approval-gate file is Relay CONFIGURATION, not a runtime object

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // TestSqliteRegistry_UpsertInsertUpdate ports registry.TestUpsert_RegisterGetList

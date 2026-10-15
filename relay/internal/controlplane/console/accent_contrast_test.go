@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
 
 // TestConsole_AccentPairsClearAA holds the interactive accent to WCAG AA in

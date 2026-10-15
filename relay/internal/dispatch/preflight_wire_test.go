@@ -4,8 +4,8 @@ import (
 	"regexp"
 	"testing"
 
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest/protowalk"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest/protowalk"
 )
 
 // nestedPreviewFieldNameRegex is the sibling MCP/Control-API/proto files'

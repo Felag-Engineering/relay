@@ -1,4 +1,4 @@
-module github.com/Felag-Engineering/gleipnir-relay/tools/golangci-lint
+module github.com/Felag-Engineering/relay/tools/golangci-lint
 
 go 1.26.9
 

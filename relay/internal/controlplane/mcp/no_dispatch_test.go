@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest/astguard"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest/astguard"
 )
 
 // capabilityImportPath and registryImportPath are the fully-qualified import
@@ -20,10 +20,10 @@ import (
 // an aliased import (e.g. `import c2 "…/internal/capability"`) cannot dodge
 // the check.
 const (
-	capabilityImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	registryImportPath   = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
-	nodevocabImportPath  = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
+	capabilityImportPath = "github.com/Felag-Engineering/relay/relay/internal/capability"
+	registryImportPath   = "github.com/Felag-Engineering/relay/relay/internal/registry"
+	policyviewImportPath = "github.com/Felag-Engineering/relay/relay/internal/policyview"
+	nodevocabImportPath  = "github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 )
 
 // What an import path or a resolved identifier can express is enforced by
@@ -230,10 +230,10 @@ func TestExecFiles_NameRealFiles(t *testing.T) {
 // each rule actually fires (and that legitimate read-only usage doesn't) at
 // the strictness the case specifies.
 func TestDispatchViolations_Fixtures(t *testing.T) {
-	const capImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"`
-	const regImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"`
-	const pvImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"`
-	const nvImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"`
+	const capImport = `"github.com/Felag-Engineering/relay/relay/internal/capability"`
+	const regImport = `"github.com/Felag-Engineering/relay/relay/internal/registry"`
+	const pvImport = `"github.com/Felag-Engineering/relay/relay/internal/policyview"`
+	const nvImport = `"github.com/Felag-Engineering/relay/relay/internal/nodevocab"`
 
 	cases := []struct {
 		name       string
@@ -427,7 +427,7 @@ func TestDispatchViolations_AllowsReadHelpers(t *testing.T) {
 import (
 	"errors"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 )
 
 func f(s string, err error) {
@@ -453,7 +453,7 @@ func f(s string, err error) {
 // names that left the allow-list: each appears in strict files only in
 // comments, so a code reference must be audited first.
 func TestDispatchViolations_StrictRefusesWhatLeftTheAllowList(t *testing.T) {
-	const capImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"`
+	const capImport = `"github.com/Felag-Engineering/relay/relay/internal/capability"`
 	for _, name := range []string{"Predicate", "Selector", "ErrReadUnaudited"} {
 		t.Run(name, func(t *testing.T) {
 			src := "package mcp\nimport " + capImport + "\nvar _ = capability." + name + "\n"
@@ -477,7 +477,7 @@ func TestDispatchViolations_StrictRefusesWhatLeftTheAllowList(t *testing.T) {
 // same source would be rejected in a strict file).
 func TestDispatchViolations_ExecModeAllowsExecutionCapabilityIdents(t *testing.T) {
 	const src = `package mcp
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+import "github.com/Felag-Engineering/relay/relay/internal/capability"
 
 func f(p capability.Principal, sel capability.Selector) (capability.NodeResult, *capability.FrozenError, *capability.CapExceededError) {
 	return capability.NodeResult{}, nil, nil
