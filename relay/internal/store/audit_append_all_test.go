@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
 )
 
 // openBenchStore is openTestStore's benchmark-scoped twin: *testing.B has its

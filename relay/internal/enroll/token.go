@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // secretSep separates the public id from the secret part in the plaintext credential.

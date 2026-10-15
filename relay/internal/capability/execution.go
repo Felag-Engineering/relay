@@ -64,9 +64,9 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/logctx"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // Conduit sends one Task down a connected Node's Tunnel and blocks for its

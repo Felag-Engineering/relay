@@ -32,8 +32,8 @@ import (
 	"strconv"
 	"sync/atomic"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // nOutcomes is the number of jobs.Outcome values

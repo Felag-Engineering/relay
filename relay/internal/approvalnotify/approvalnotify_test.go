@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 )
 
 var notifyNow = time.Date(2026, 8, 14, 9, 0, 0, 0, time.UTC)

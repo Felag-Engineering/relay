@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest/protowalk"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest/protowalk"
 )
 
 // TestRelayMessage_BodyOneofIsExactlyAllowSet reflectively enumerates the

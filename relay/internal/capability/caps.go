@@ -3,7 +3,7 @@ package capability
 import (
 	"fmt"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // DefaultReadCap and DefaultMutateCap are the blast-radius caps used when the

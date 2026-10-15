@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
+	"github.com/Felag-Engineering/relay/relay/internal/policyview"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // fakePolicyView is a minimal PolicyViewSource test double: a map keyed by

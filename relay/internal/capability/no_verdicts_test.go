@@ -14,10 +14,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
+	"github.com/Felag-Engineering/relay/relay/internal/policyview"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // PF-7 (docs/specs/policy-preflight.md): "The Relay never computes a
@@ -244,8 +244,8 @@ func TestPreflightNeverConsultsCachedPolicyOrVocabulary(t *testing.T) {
 // treats as "the cached Policy view" and "the cached Template vocabulary",
 // resolved by import path rather than by an assumed local package name.
 const (
-	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
-	nodevocabImportPath  = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
+	policyviewImportPath = "github.com/Felag-Engineering/relay/relay/internal/policyview"
+	nodevocabImportPath  = "github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 )
 
 // TestCachedPolicyAndVocabularyReachOnlyTheDisplayReadLane proves PF-7's

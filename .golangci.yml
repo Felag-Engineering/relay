@@ -93,19 +93,19 @@ linters:
         # IntentRecorder, ...) stay usable. Service and New are the retired monolith's
         # names and stay banned so that neither can come back.
         - pattern: ^capability\.(Service|New|Execution|NewExecution|Recorder|NewRecorder|Control|NewControl|AccountAdmin|NewAccountAdmin|ReadLane|NewReadLane|Approvals|NewApprovals)$
-          pkg: ^github\.com/Felag-Engineering/gleipnir-relay/relay/internal/capability$
+          pkg: ^github\.com/Felag-Engineering/relay/relay/internal/capability$
           msg: "adapter boundary (invariant 10): a concrete capability service or its constructor belongs to the composition root; hold the narrowed seam this package declares"
         # The display-only caches carry Set. An adapter reads a Policy view or a
         # Template vocabulary through its read lane and never holds or builds the
         # cache (invariant 2, ADR-0002; invariant 12, ADR-0011).
         - pattern: ^(policyview|nodevocab)\.(Cache|New)$
-          pkg: ^github\.com/Felag-Engineering/gleipnir-relay/relay/internal/(policyview|nodevocab)$
+          pkg: ^github\.com/Felag-Engineering/relay/relay/internal/(policyview|nodevocab)$
           msg: "adapter boundary (invariant 2, invariant 12): the display-only cache carries Set; read it through the read lane"
         # registry.Repository is the full registry write surface (Upsert,
         # SetRelayLabels, SetRevoked, ...). Naming it at all, in a type assertion, a
         # type switch or an alias, is the way back from a narrowed reader to it.
         - pattern: ^registry\.Repository$
-          pkg: ^github\.com/Felag-Engineering/gleipnir-relay/relay/internal/registry$
+          pkg: ^github\.com/Felag-Engineering/relay/relay/internal/registry$
           msg: "adapter boundary (invariant 10): never name the registry's write surface; read Nodes through the read lane"
 
     depguard:
@@ -118,7 +118,7 @@ linters:
             - "!$test"
             - "!**/internal/relaytest/**"
           deny:
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/relaytest
               desc: "test-only harness (it spawns processes); never import it from production code"
 
         # The import boundaries below are what an import path can express, so they live
@@ -139,13 +139,13 @@ linters:
             - "**/internal/controlplane/console/**"
             - "!$test"
           deny:
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/store
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/store
               desc: "an adapter never reaches the store; it reads and writes through the seams its package declares (invariant 10)"
             - pkg: database/sql
               desc: "an adapter never reaches the store; it reads and writes through the seams its package declares (invariant 10)"
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/relay/v1
               desc: "an adapter never builds or reads a wire message; only the transport speaks the protocol (invariants 8 and 10)"
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/dispatch
               desc: "an adapter reaches a Node only through the capability layer's execution seam (invariant 10)"
 
         # The Control API is a thin adapter that manages runtime objects, never Relay
@@ -171,24 +171,24 @@ linters:
             - sort$
             - strings$
             - time$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation$
+            - github.com/Felag-Engineering/relay/relay/internal/accounts$
+            - github.com/Felag-Engineering/relay/relay/internal/approval$
+            - github.com/Felag-Engineering/relay/relay/internal/audit$
+            - github.com/Felag-Engineering/relay/relay/internal/authz$
+            - github.com/Felag-Engineering/relay/relay/internal/capability$
+            - github.com/Felag-Engineering/relay/relay/internal/controlplane$
+            - github.com/Felag-Engineering/relay/relay/internal/enroll$
+            - github.com/Felag-Engineering/relay/relay/internal/jobs$
+            - github.com/Felag-Engineering/relay/relay/internal/nodestate$
+            - github.com/Felag-Engineering/relay/relay/internal/opvocab$
+            - github.com/Felag-Engineering/relay/relay/internal/registry$
+            - github.com/Felag-Engineering/relay/relay/internal/revocation$
           deny:
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/ca
               desc: "the Control API never reaches the CA key (invariant 11)"
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/transport
               desc: "the Control API never reaches a listener (invariant 11)"
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/ratelimit
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/ratelimit
               desc: "rate limits are Relay configuration; the Control API never reaches them (invariant 11)"
 
         # The capability layer stays free of the wire protocol and raw SQL (ADR-0009,
@@ -215,18 +215,18 @@ linters:
             - sync$
             - time$
             - golang.org/x/sync/errgroup$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry$
+            - github.com/Felag-Engineering/relay/relay/internal/accounts$
+            - github.com/Felag-Engineering/relay/relay/internal/approval$
+            - github.com/Felag-Engineering/relay/relay/internal/jobs$
+            - github.com/Felag-Engineering/relay/relay/internal/logctx$
+            - github.com/Felag-Engineering/relay/relay/internal/mcptask$
+            - github.com/Felag-Engineering/relay/relay/internal/nodestate$
+            - github.com/Felag-Engineering/relay/relay/internal/nodevocab$
+            - github.com/Felag-Engineering/relay/relay/internal/opvocab$
+            - github.com/Felag-Engineering/relay/relay/internal/policyview$
+            - github.com/Felag-Engineering/relay/relay/internal/registry$
           deny:
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/relay/v1
               desc: "the capability layer stays free of the wire protocol (ADR-0009, ADR-0010)"
             - pkg: database/sql
               desc: "the capability layer stays free of raw SQL; internal/store owns it"
@@ -270,11 +270,11 @@ linters:
             - time$
             - golang.org/x/crypto/argon2$
           deny: &domain-deny
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/relay/v1
               desc: "a domain package stays free of the wire protocol"
             - pkg: database/sql
               desc: "a domain package stays SQL-free; internal/store owns all SQL"
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/capability
               desc: "capability imports this package; the dependency runs one way"
         approval-imports:
           list-mode: strict
@@ -296,8 +296,8 @@ linters:
             - strings$
             - syscall$
             - time$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab$
+            - github.com/Felag-Engineering/relay/relay/internal/jobs$
+            - github.com/Felag-Engineering/relay/relay/internal/opvocab$
           deny: *domain-deny
         # mcptask additionally never sees the MCP SDK (ADR-0028): the SEP-2663 shim
         # stays a bounded, deletable piece above this package.
@@ -312,16 +312,16 @@ linters:
             - fmt$
             - strings$
             - time$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval$
-            - github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs$
+            - github.com/Felag-Engineering/relay/relay/internal/approval$
+            - github.com/Felag-Engineering/relay/relay/internal/jobs$
           deny:
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/relay/v1
               desc: "a task handle is not a wire type"
             - pkg: database/sql
               desc: "the SQLite implementation belongs in internal/store"
             - pkg: github.com/modelcontextprotocol/go-sdk
               desc: "ADR-0028: the SDK stays above this package, or the shim stops being deletable"
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/capability
               desc: "capability imports this package; the dependency runs one way"
         policyview-imports:
           list-mode: strict
@@ -366,7 +366,7 @@ linters:
             - sync$
             - time$
           deny:
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/
+            - pkg: github.com/Felag-Engineering/relay/
               desc: "package events never imports a Relay package, where every result-shaped type lives (ADR-0025)"
 
         # revocation never learns what a Principal or an audit record is. RevokeNode is
@@ -378,9 +378,9 @@ linters:
             - "**/internal/revocation/*.go"
             - "!$test"
           deny:
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/audit
               desc: "revocation never authors an audit record; a caller-supplied recorder does"
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/capability
               desc: "revocation never learns what a Principal is"
 
         # requeststate is a crypto primitive that decides nothing (ADR-0029 decision 5
@@ -407,17 +407,17 @@ linters:
             - time$
             - unicode/utf8$
           deny:
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp
               desc: "its own parent package consumes it, never the reverse"
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/approval
               desc: "a crypto primitive decides nothing (ADR-0029 decision 5)"
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/capability
               desc: "a crypto primitive decides nothing (ADR-0029 decision 5)"
             - pkg: github.com/modelcontextprotocol/go-sdk
               desc: "no SDK types in the primitive"
             - pkg: database/sql
               desc: "the key is never persisted"
-            - pkg: github.com/Felag-Engineering/gleipnir-relay/relay/internal/store
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/store
               desc: "the key is never persisted"
             - pkg: crypto/subtle
               desc: "MAC comparison goes through hmac.Equal only"

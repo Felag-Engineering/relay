@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
+	"github.com/Felag-Engineering/relay/relay/internal/revocation"
 )
 
 func TestConnections_TrackReturnsLiveContext(t *testing.T) {

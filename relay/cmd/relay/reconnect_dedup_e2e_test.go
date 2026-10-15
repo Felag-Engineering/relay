@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // TestFleetE2E_RelayRestartDaemonReconnects_DedupHolds dispatches a slow,

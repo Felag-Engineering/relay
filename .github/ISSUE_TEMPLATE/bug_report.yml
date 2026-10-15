@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Security vulnerability? Do not file it here. Report it privately:
-        https://github.com/Felag-Engineering/gleipnir-relay/security/advisories/new
+        https://github.com/Felag-Engineering/relay/security/advisories/new
         (see SECURITY.md).
 
         Do not paste secrets: API Tokens, Enrollment Tokens, private keys, certificates.

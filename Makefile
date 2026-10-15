@@ -206,7 +206,7 @@ BUILD_VERSION  := $(or $(word 1,$(BUILD_STAMP)),0.0.0-unknown)
 BUILD_COMMIT   := $(or $(word 2,$(BUILD_STAMP)),unknown)
 BUILD_DATE     := $(or $(word 3,$(BUILD_STAMP)),unknown)
 
-VERSION_PKG := github.com/Felag-Engineering/gleipnir-relay/relay/internal/version
+VERSION_PKG := github.com/Felag-Engineering/relay/relay/internal/version
 GO_LDFLAGS  := -X $(VERSION_PKG).Version=$(BUILD_VERSION) \
                -X $(VERSION_PKG).Commit=$(BUILD_COMMIT) \
                -X $(VERSION_PKG).BuildDate=$(BUILD_DATE)

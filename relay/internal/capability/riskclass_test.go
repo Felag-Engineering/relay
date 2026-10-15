@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/opvocab"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // These tests are the proof of invariant 13 for Native and Raw Exec Actions

@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // Namespace is the label namespace a Predicate is scoped to (ADR-0006,

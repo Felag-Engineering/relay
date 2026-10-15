@@ -123,7 +123,7 @@ It does **not** withdraw, expire, or decide the underlying approval Request. Two
 
 **When go-sdk#626 ships Tasks natively, the shim is deleted** and `tasks/*` re-points at
 the SDK's implementation. **Tracked, and left open deliberately, as
-[#385](https://github.com/Felag-Engineering/gleipnir-relay/issues/385)**, which carries the
+[#385](https://github.com/Felag-Engineering/relay/issues/385)**, which carries the
 deletion checklist written while the context was fresh: what goes, what survives, what
 re-points, and the two things to re-check on the way out. The
 expected survivors: the handle store ([2/6]) and the capability-layer semantics; the

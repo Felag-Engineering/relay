@@ -108,7 +108,7 @@ needed=$(for s in docs/specs/*.md; do
     | awk -F'|' -v s="$s" '{gsub(/^ +| +$/,"",$4); if ($4!="") print s "\t" $4}'
 done | sort -u)
 if [ -n "$needed" ]; then
-  repo=${RELAY_GH_REPO:-Felag-Engineering/gleipnir-relay}
+  repo=${RELAY_GH_REPO:-Felag-Engineering/relay}
   if ! command -v gh >/dev/null 2>&1; then
     skip "milestone check: gh is not installed, so the milestones named by Designed claims were NOT verified against GitHub"
   elif ! titles=$(gh api "repos/$repo/milestones?state=all&per_page=100" --paginate -q '.[].title' 2>/dev/null) || [ -z "$titles" ]; then
@@ -183,10 +183,10 @@ for spec in docs/specs/*.md; do
   case "$spec" in */README.md|*/TEMPLATE.md) continue;; esac
   status=$(grep -m1 -E '^\*\*Status:\*\*' "$spec" | sed -E 's/^\*\*Status:\*\* *//')
   case "$status" in "current as of "*|"designed, not built, as of "*) ;; *) continue ;; esac
-  # 7a. path-shaped tokens; `gleipnir-relay/…` (the repo URL) is not a path into relay/.
+  # 7a. path-shaped tokens; `Felag-Engineering/relay/…` (the repo URL) is not a path into relay/.
   while IFS=: read -r line _; do
     warn "$spec:$line: names a file path or source file (relay/, daemon/, .go, .rs, .proto); specs name modules and contracts"
-  done < <(grep -nE '(^|[^A-Za-z0-9_-])(relay|daemon)/|\.(go|rs|proto)\b' "$spec")
+  done < <(grep -nE '(^|[^A-Za-z0-9_/-])(relay|daemon)/|\.(go|rs|proto)\b' "$spec")
   # 7b. code fences, unless introduced by "state machine" or "schema" within the three lines above.
   while read -r line; do
     warn "$spec:$line: code fence in a migrated spec (allowed only for a state machine or a schema, said on the line above)"

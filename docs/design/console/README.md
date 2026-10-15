@@ -40,11 +40,11 @@ Numbers are identifiers, not sequence. Build in this order:
 
 **Two defects gate all of it, and both are already tracked — neither needs a specification:**
 
-- **[#397](https://github.com/Felag-Engineering/gleipnir-relay/issues/397)** — enrollment-token
+- **[#397](https://github.com/Felag-Engineering/relay/issues/397)** — enrollment-token
   mint, Node revoke and Freeze engage/release have **no role gate**, so a `viewer` can do all
   three. Blocks specs [09](09-add-nodes.md) and [16](16-incident-ladder.md), whose controls state
   role requirements the API does not enforce.
-- **[#403](https://github.com/Felag-Engineering/gleipnir-relay/issues/403)** — the Relay's server
+- **[#403](https://github.com/Felag-Engineering/relay/issues/403)** — the Relay's server
   certificate never rotates. Both listeners share it (ADR-0031), so the Console's own TLS rides on
   the defect and breaks for every user fourteen days after the process starts.
 

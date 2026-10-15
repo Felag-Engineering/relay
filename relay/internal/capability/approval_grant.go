@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
 )
 
 // approval_grant.go is the management half of batch/window approvals

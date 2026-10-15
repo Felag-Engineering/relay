@@ -36,9 +36,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // wallBucket is one bucket of the pixel wall: four colours, plus one hollow

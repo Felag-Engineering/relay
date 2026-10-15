@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // Start is Run's non-blocking sibling: the same pipeline, returning as

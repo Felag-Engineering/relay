@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ratelimit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
+	"github.com/Felag-Engineering/relay/relay/internal/ca"
+	"github.com/Felag-Engineering/relay/relay/internal/ratelimit"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/transport"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

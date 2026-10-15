@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
 
 func human(name string, role accounts.Role) accounts.Account {

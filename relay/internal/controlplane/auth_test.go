@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
 
 const testToken = accounts.TokenPrefix + "fedcba9876543210.control-plane-test" // test fixture, not a real credential

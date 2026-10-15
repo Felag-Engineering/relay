@@ -60,7 +60,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 )
 
 // DefaultTimeout bounds one delivery attempt end to end.

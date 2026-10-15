@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // readlane.go is the TRAIL AND JOB half of the read lane on *ReadLane:

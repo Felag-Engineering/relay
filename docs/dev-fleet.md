@@ -23,6 +23,9 @@ single-Relay deployment stack, with no relay-daemons and no fixtures, is
 
 ## Prerequisites
 
+- A checkout of `Felag-Engineering/relay`. One cloned as `gleipnir-relay` works through
+  GitHub's redirect; `git remote set-url origin git@github.com:Felag-Engineering/relay.git`
+  points it at the new name.
 - Docker Engine with the Compose v2 plugin (`docker compose`, not the legacy
   `docker-compose`), version 2.18 or later for every `make dev-fleet-*` target: `down` and
   `logs` name the OAuth overlay, which uses `!reset`.
@@ -355,7 +358,7 @@ cannot complete on any Node, and `service.restart` cannot complete on any Node t
 run the demo service (the `role=db` and `role=bastion` Nodes): it terminates in
 `outcome=failure` with `stderr="spawn systemctl: No such file or directory"` and **no
 `exit_code` key** — the documented contract for a Task that never ran a process, not a
-defect (see [issue #389](https://github.com/Felag-Engineering/gleipnir-relay/issues/389)).
+defect (see [issue #389](https://github.com/Felag-Engineering/relay/issues/389)).
 
 On the `role=web` Nodes, `service.restart` **does** run, through a DEV-ONLY `systemctl`
 shim (`docker/fixtures/systemctl-shim`). The image bakes it off the `PATH`, and

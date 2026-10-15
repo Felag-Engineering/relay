@@ -32,15 +32,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/relay/relay/internal/authz"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/store"
 )
 
 // accountsWriteFile is the one file both guards below inspect. A base name, so
@@ -445,7 +445,7 @@ func TestAccountsWriteGuard_AtLeastFixtures(t *testing.T) {
 		{
 			name: "the real roleChangeCouldGrant is clean",
 			src: `package console
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+import "github.com/Felag-Engineering/relay/relay/internal/accounts"
 func roleChangeCouldGrant(from, to accounts.Role) bool {
 	if !from.Valid() || !to.Valid() {
 		return true
@@ -459,7 +459,7 @@ func roleChangeCouldGrant(from, to accounts.Role) bool {
 		{
 			name: "a second function calling AtLeast violates",
 			src: `package console
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+import "github.com/Felag-Engineering/relay/relay/internal/accounts"
 func roleChangeCouldGrant(from, to accounts.Role) bool { return to != from && to.AtLeast(from) }
 func callerOutranks(pg Page, want accounts.Role) bool { return pg.Role.AtLeast(want) }
 `,
@@ -472,7 +472,7 @@ func callerOutranks(pg Page, want accounts.Role) bool { return pg.Role.AtLeast(w
 			// f.Decls never saw it.
 			name: "a package-level func literal calling AtLeast violates",
 			src: `package console
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+import "github.com/Felag-Engineering/relay/relay/internal/accounts"
 func roleChangeCouldGrant(from, to accounts.Role) bool { return to != from && to.AtLeast(from) }
 var callerOutranks = func(a, b accounts.Role) bool { return a.AtLeast(b) }
 `,
@@ -524,7 +524,7 @@ func TestAccountsWriteGuard_CallerAuthorityFixtures(t *testing.T) {
 			// the CALLER's own role.
 			name: "pg.Role on a Page parameter is flagged",
 			src: `package console
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+import "github.com/Felag-Engineering/relay/relay/internal/accounts"
 func f(pg Page) bool {
 	if pg.Role != accounts.RoleAdmin {
 		return false
@@ -587,7 +587,7 @@ func f(ctx any) bool {
 			// Against a file-global set this fixture flags "target" and fails.
 			name: "a prelude local does not taint the same name in another function",
 			src: `package console
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+import "github.com/Felag-Engineering/relay/relay/internal/accounts"
 func handler(w any, r any) {
 	target, pg, ok := writePrelude(nil, w, r, "Accounts")
 	_, _, _ = target, pg, ok
@@ -601,7 +601,7 @@ func decide(target accounts.Account, to accounts.Role) bool {
 		{
 			name: "a capability.Principal parameter's Role is flagged",
 			src: `package console
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+import "github.com/Felag-Engineering/relay/relay/internal/capability"
 func f(anybody capability.Principal) string { return anybody.Role }
 `,
 			wantIDs: []string{"anybody"},
@@ -612,7 +612,7 @@ func f(anybody capability.Principal) string { return anybody.Role }
 			// mistaken for the caller's.
 			name: "a target Account's Role is not flagged",
 			src: `package console
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+import "github.com/Felag-Engineering/relay/relay/internal/accounts"
 func f(target accounts.Account, to accounts.Role) bool {
 	return roleChangeCouldGrant(target.Role, to)
 }

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
 )
 
 // backfillShapeKeys fills approval_requests.shape_key for the rows migration

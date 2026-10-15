@@ -12,7 +12,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // Kind distinguishes what kind of event a Record describes: a dispatch

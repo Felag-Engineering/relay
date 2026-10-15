@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
+	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
 )
 
 // security_test.go is the REAL seam for #460: every test here runs over

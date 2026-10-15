@@ -1,6 +1,6 @@
 package capability
 
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+import "github.com/Felag-Engineering/relay/relay/internal/jobs"
 
 // policyBoundaryExplanation is the one spelling of the Node-Policy boundary
 // sentence, shared by the apply-path and plan-path constants below (they

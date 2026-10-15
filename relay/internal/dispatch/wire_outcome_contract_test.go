@@ -15,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 )
 
 // This file locks #632's fix in place with three guards of decreasing
@@ -687,7 +687,7 @@ func TestParseOutcomeEnum_Fixtures(t *testing.T) {
 // why the #629 type-alias concession is DELETED, not reworded: an
 // import-path-keyed walk sees `type wireOutcome = relayv1.Outcome` as
 // ordinary selectors like any other.
-const relayV1ImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
+const relayV1ImportPath = "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 
 // findWireOutcomeSelectors returns one finding string per line in file for
 // every mechanism this walk can see:
@@ -863,7 +863,7 @@ func TestWireOutcomeSelectors_Fixture(t *testing.T) {
 			name: "renamed_import_getoutcome_numeric_literal",
 			src: `package fixture
 
-import pb "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
+import pb "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 
 func sneak(tr *pb.TaskResult) {
 	switch tr.GetOutcome() {
@@ -887,7 +887,7 @@ func noop() {}
 			name: "dot_import",
 			src: `package fixture
 
-import . "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
+import . "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 
 func noop() {}
 `,
@@ -897,7 +897,7 @@ func noop() {}
 			name: "type_alias_behind_renamed_import",
 			src: `package fixture
 
-import wire "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
+import wire "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 
 type wireOutcome = wire.Outcome
 
@@ -913,7 +913,7 @@ func use() wireOutcome { return wire.Outcome_OUTCOME_SUCCESS }
 			name: "plain_field_access_renamed_import",
 			src: `package fixture
 
-import pb "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
+import pb "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 
 func sneakyConvert2(tr *pb.TaskResult) int {
 	switch tr.Outcome {

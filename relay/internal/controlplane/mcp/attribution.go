@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 )
 
 // logPrincipal records the calling Principal for attribution, as read from

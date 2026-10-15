@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
+	"github.com/Felag-Engineering/relay/relay/internal/logctx"
 )
 
 // TestServer_RequestIDIsRelayMintedPerRequest pins the log-correlation id

@@ -10,8 +10,8 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 )
 
 // OAuth 2.1 protected-resource support for the MCP endpoint (ADR-0024).

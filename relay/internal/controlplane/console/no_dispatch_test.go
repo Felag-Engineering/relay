@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest/astguard"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest/astguard"
 )
 
 // no_dispatch_test.go is the Console's structural half of invariant 10,
@@ -62,11 +62,11 @@ func writeSeamName(name string) bool {
 }
 
 const (
-	capabilityImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	registryImportPath   = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
-	nodevocabImportPath  = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
-	eventsImportPath     = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
+	capabilityImportPath = "github.com/Felag-Engineering/relay/relay/internal/capability"
+	registryImportPath   = "github.com/Felag-Engineering/relay/relay/internal/registry"
+	policyviewImportPath = "github.com/Felag-Engineering/relay/relay/internal/policyview"
+	nodevocabImportPath  = "github.com/Felag-Engineering/relay/relay/internal/nodevocab"
+	eventsImportPath     = "github.com/Felag-Engineering/relay/relay/internal/events"
 
 	// authzImportPath is cancel.go's own import (#595); decide.go (#453),
 	// accounts.go (#654) and accounts_write.go (#655) are the other three
@@ -74,7 +74,7 @@ const (
 	// (ErrUnauthorized). The allowlist below is PACKAGE-WIDE rather than
 	// per-file, so a further importer needs no change here — see the
 	// allowlist's own doc.
-	authzImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
+	authzImportPath = "github.com/Felag-Engineering/relay/relay/internal/authz"
 
 	// approvalDecideFile is the one file allowed to name
 	// capability.ApprovalDecision (see the allowlist below): decide.go, the
@@ -477,11 +477,11 @@ func TestConsole_NoDispatchOutsideCapabilityLayer(t *testing.T) {
 // in this package, because a guard nobody has ever seen fail is a guard that
 // might not run. Mirrors api/no_dispatch_test.go's fixture table.
 func TestDispatchViolations_Fixtures(t *testing.T) {
-	const capImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"`
-	const regImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"`
-	const pvImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"`
-	const nvImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"`
-	const authzImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"`
+	const capImport = `"github.com/Felag-Engineering/relay/relay/internal/capability"`
+	const regImport = `"github.com/Felag-Engineering/relay/relay/internal/registry"`
+	const pvImport = `"github.com/Felag-Engineering/relay/relay/internal/policyview"`
+	const nvImport = `"github.com/Felag-Engineering/relay/relay/internal/nodevocab"`
+	const authzImport = `"github.com/Felag-Engineering/relay/relay/internal/authz"`
 
 	cases := []struct {
 		name string
@@ -597,7 +597,7 @@ func f(nodes any) { _ = nodes.(registry.Repository) }
 import (
 	"context"
 	` + capImport + `
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
 )
 func f(a any) {
 	_, _ = a.(interface {
@@ -654,7 +654,7 @@ var _ = capability.ApprovalDecision{}
 import (
 	"context"
 	` + capImport + `
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
 )
 func f(a any) {
 	_, _ = a.(interface {
@@ -674,7 +674,7 @@ func f(a any) {
 			src: `package console
 import (
 	"context"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	` + capImport + `
 )
 type ApprovalDecider interface {
@@ -718,7 +718,7 @@ func f(a any) { _, _ = a.(probeSeam) }
 			src: `package console
 import (
 	"context"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
 )
 type approvals interface {
 	PendingApprovals(ctx context.Context) ([]approval.Request, error)
@@ -742,7 +742,7 @@ func f(a approvals) { _, _ = a.PendingApprovals(context.Background()) }
 import (
 	"context"
 	` + capImport + `
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 func f(c any) {
 	_, _ = c.(interface {
@@ -759,7 +759,7 @@ func f(c any) {
 import (
 	"context"
 	` + capImport + `
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 func f(q any) {
 	_, _ = q.(interface {
@@ -838,7 +838,7 @@ import (
 	"context"
 	"time"
 	` + capImport + `
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
 func f(a any) {
 	_, _ = a.(interface {
@@ -860,7 +860,7 @@ func f(a any) {
 import (
 	"context"
 	` + capImport + `
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
 type AccountReader interface {
 	Accounts(ctx context.Context, p capability.Principal) ([]accounts.Account, error)
@@ -904,7 +904,7 @@ import (
 	"context"
 	"time"
 	` + capImport + `
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
 type AccountAdministrator interface {
 	CreateAccount(ctx context.Context, p capability.Principal, a accounts.Account) (accounts.Account, error)

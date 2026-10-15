@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest/astguard"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest/astguard"
 )
 
 // secret_logging_guard_test.go is a cross-package structural guard (#674)

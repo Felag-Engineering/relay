@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // staticCert presents a fixed certificate through Config.GetCertificate.

@@ -30,8 +30,8 @@ import (
 	"testing"
 	"time"
 
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // startTCPServer starts a real TCP listener on 127.0.0.1:0, runs the Relay

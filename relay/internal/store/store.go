@@ -24,14 +24,14 @@ import (
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver; pure Go, no CGO
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/freeze"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/enroll"
+	"github.com/Felag-Engineering/relay/relay/internal/freeze"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/mcptask"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // Store is the Relay's single SQLite-backed persistence handle.

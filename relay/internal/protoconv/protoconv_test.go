@@ -3,8 +3,8 @@ package protoconv_test
 import (
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/protoconv"
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/protoconv"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 )
 
 func TestFactsFromProto(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
+	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 )
 
 // sampleToken returns a fully-populated Token for round-trip assertions. Times

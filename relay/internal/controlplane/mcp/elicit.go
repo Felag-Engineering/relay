@@ -8,9 +8,9 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp/requeststate"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp/requeststate"
+	"github.com/Felag-Engineering/relay/relay/internal/logctx"
 )
 
 // elicit.go renders an askable park as an MRTR input-required
