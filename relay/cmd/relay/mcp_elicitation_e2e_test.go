@@ -32,11 +32,11 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // elicitRequesterName is the machine Account that plays Gleipnir in these
@@ -229,7 +229,7 @@ func answerAsResponder(t *testing.T, session *sdkmcp.ClientSession, args map[str
 func fetchApproval(t *testing.T, f *relayFixture, requestID string) approvalBody {
 	t.Helper()
 	resp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+requestID, f.Credential, nil)
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("fetchApproval(%s): status = %d; body = %s", requestID, resp.StatusCode, body)
@@ -458,7 +458,7 @@ func TestMCPElicitation_DecisionIsInBandVerifiedRequesterAssertedApprover(t *tes
 	}
 
 	getResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+requestID, f.Credential, nil)
-	defer getResp.Body.Close() //nolint:errcheck
+	defer getResp.Body.Close()
 	var view elicitDecisionView
 	if err := json.NewDecoder(getResp.Body).Decode(&view); err != nil {
 		t.Fatalf("decode approval: %v", err)
@@ -608,7 +608,7 @@ func TestMCPElicitation_DeclineIsTerminalAndAudited(t *testing.T) {
 	decideResp := controlAPIRequest(t, f.ClientFor(bianca), http.MethodPost,
 		f.ControlBase+"/api/v1/approvals/"+requestID+"/decision", bianca,
 		map[string]any{"approve": true, "plan_hash": planHash})
-	defer decideResp.Body.Close() //nolint:errcheck
+	defer decideResp.Body.Close()
 	if decideResp.StatusCode != http.StatusConflict {
 		body, _ := io.ReadAll(decideResp.Body)
 		t.Fatalf("second decision status = %d, want 409; body = %s", decideResp.StatusCode, body)
@@ -772,7 +772,7 @@ func TestMCPElicitation_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
 	decideResp := controlAPIRequest(t, f.ClientFor(bianca), http.MethodPost,
 		f.ControlBase+"/api/v1/approvals/"+requestIDB+"/decision", bianca,
 		map[string]any{"approve": true, "plan_hash": planHashB})
-	defer decideResp.Body.Close() //nolint:errcheck
+	defer decideResp.Body.Close()
 	if decideResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(decideResp.Body)
 		t.Fatalf("B's decision status = %d, want 200; body = %s", decideResp.StatusCode, body)

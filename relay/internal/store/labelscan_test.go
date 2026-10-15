@@ -10,7 +10,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // insertLabel forges a row straight into ns's table via raw SQL, bypassing
@@ -21,7 +21,7 @@ import (
 func insertLabel(t *testing.T, st *Store, ns labelNamespace, nodeID, key, value string) {
 	t.Helper()
 	if _, err := st.db.Exec(
-		fmt.Sprintf(`INSERT INTO %s (node_id, key, value) VALUES (?, ?, ?)`, ns.table()), //nolint:gosec // table is one of two fixed literals, never user input
+		fmt.Sprintf(`INSERT INTO %s (node_id, key, value) VALUES (?, ?, ?)`, ns.table()), // table is one of two fixed literals, never user input
 		nodeID, key, value,
 	); err != nil {
 		t.Fatalf("insert %s row (%s=%s) for %s: %v", ns.table(), key, value, nodeID, err)
@@ -127,7 +127,7 @@ func assertRowUnchanged(t *testing.T, st *Store, table, nodeID, key, want string
 	t.Helper()
 	var got string
 	if err := st.db.QueryRow(
-		fmt.Sprintf(`SELECT value FROM %s WHERE node_id = ? AND key = ?`, table), //nolint:gosec // table is a fixed test literal
+		fmt.Sprintf(`SELECT value FROM %s WHERE node_id = ? AND key = ?`, table), // table is a fixed test literal
 		nodeID, key,
 	).Scan(&got); err != nil {
 		t.Fatalf("row %s/%s/%s must still exist: %v", table, nodeID, key, err)
@@ -140,7 +140,7 @@ func assertRowUnchanged(t *testing.T, st *Store, table, nodeID, key, want string
 func assertRowCount(t *testing.T, st *Store, table string, want int) {
 	t.Helper()
 	var got int
-	if err := st.db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s`, table)).Scan(&got); err != nil { //nolint:gosec // table is a fixed test literal
+	if err := st.db.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s`, table)).Scan(&got); err != nil { // table is a fixed test literal
 		t.Fatalf("count %s: %v", table, err)
 	}
 	if got != want {

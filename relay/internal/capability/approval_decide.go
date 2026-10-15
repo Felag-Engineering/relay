@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
 )
 
 // approval_decide.go is the answering half of the approval callout

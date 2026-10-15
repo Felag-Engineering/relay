@@ -5,8 +5,8 @@ import (
 	"crypto/x509"
 	"testing"
 
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/transport"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

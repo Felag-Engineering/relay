@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // sqliteJobs implements jobs.JobRepository against the jobs/stages tables.

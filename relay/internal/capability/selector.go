@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // Namespace is the label namespace a Predicate is scoped to (ADR-0006,
@@ -87,7 +87,7 @@ type Selector struct {
 // says something else; neither gets to disagree about whether the term is
 // allowed.
 var ErrSelectorTagUnsupported = errors.New(
-	"capability: tag: selectors are not resolvable yet — operator-set grouping lands with label management (#430)")
+	"capability: tag: selectors are not resolvable yet — operator-set grouping lands with label management")
 
 // ParseSelector parses a comma-separated Selector such as
 // "node:role=web,state:online" into its Predicates. Every surface parses

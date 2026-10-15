@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask"
+	"github.com/Felag-Engineering/relay/relay/internal/mcptask"
 )
 
 // sqliteMCPTasks implements mcptask.Repository against the mcp_task_handles

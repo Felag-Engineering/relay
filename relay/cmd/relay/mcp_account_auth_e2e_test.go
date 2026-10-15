@@ -26,10 +26,10 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // accountFleet is the running Relay plus the collaborators this test drives.

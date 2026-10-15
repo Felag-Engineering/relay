@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/store"
 )
 
 type fakeEnv struct {
@@ -59,7 +59,7 @@ func rawExec(t *testing.T, path string, stmts ...string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close() //nolint:errcheck
+	defer db.Close()
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
 			t.Fatalf("%s: %v", s, err)

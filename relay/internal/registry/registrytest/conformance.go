@@ -35,7 +35,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // Config is what a Factory builds a fresh Repository with. Each field mirrors

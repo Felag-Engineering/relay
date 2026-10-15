@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 const testJobID = "3f2a91c4d5e6f708192a3b4c5d6e7f80"

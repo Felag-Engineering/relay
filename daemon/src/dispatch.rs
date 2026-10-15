@@ -523,8 +523,9 @@ where
 
     let (positional, path_positions) = operation_inputs(entry, op);
 
-    // The digest covers the vector Policy evaluates (name + positional), not a
-    // Template's rendered `/bin/sh -c` line, and never reaches a log as argv.
+    // The digest covers the vector Policy evaluates (name + positional). For a
+    // Template that is the name and exactly the values its shell receives as
+    // positional parameters, never the script; none of it reaches a log as argv.
     let mut digest_parts = Vec::with_capacity(1 + positional.len());
     digest_parts.push(op.name.as_str());
     digest_parts.extend(positional.iter().map(String::as_str));
@@ -2686,7 +2687,9 @@ allowed_args = [["/var"]]
             vec![
                 "/bin/sh".to_string(),
                 "-c".to_string(),
-                "df -PT '/var'".to_string()
+                "df -PT \"$1\"".to_string(),
+                "relay-template".to_string(),
+                "/var".to_string(),
             ],
         );
 
@@ -3282,8 +3285,8 @@ allowed_args = []
             }
         };
 
-        // (a) Policy ALLOWS unit=nginx → renders + runs; argv is the quoted
-        //     shell command with author-fixed structure.
+        // (a) Policy ALLOWS unit=nginx → renders + runs; argv is the fixed
+        //     script with the value passed beside it.
         let allow_policy = from_toml_str(
             r#"
 [[operation]]
@@ -3305,8 +3308,8 @@ allowed_args = [["nginx"]]
         assert_eq!(r.outcome, Outcome::Success as i32);
         assert_eq!(
             recorded.lock().unwrap().clone().expect("runner called"),
-            ["/bin/sh", "-c", "systemctl status 'nginx'"],
-            "template must render /bin/sh -c with the value quoted at the slot position"
+            ["/bin/sh", "-c", "systemctl status \"$1\"", "relay-template", "nginx"],
+            "template must render a fixed /bin/sh -c script with the value as a positional parameter"
         );
 
         // (b) Policy DENIES unit=sshd (not in allow list) → DENIED_BY_POLICY,
@@ -4004,6 +4007,53 @@ allowed_args = [["*"]]
         assert_eq!(events[0].fields["tier"], "template");
         assert_eq!(events[0].fields["risk_class"], "read");
         assert!(!all_values(&events[0]).contains("sentinel-dir"));
+    }
+
+    /// ADR-0021 amendment item 4: the decision digest covers exactly the values
+    /// the Template's shell receives as positional parameters, and the values
+    /// still never appear in the event.
+    #[tokio::test]
+    async fn template_decision_digest_covers_exactly_the_shell_arguments() {
+        let (captured, _guard) = capture();
+        let (_dir, dedup) = dedup_in("dl-template-digest");
+        let templates = disk_usage_templates();
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "disk.usage"
+allowed_args = [["*"]]
+"#,
+        )
+        .unwrap();
+        let argv_seen = Arc::new(std::sync::Mutex::new(None::<Vec<String>>));
+        let seen = argv_seen.clone();
+        let runner = move |req: ExecRequest| {
+            *seen.lock().unwrap() = Some(req.argv.clone());
+            std::future::ready(ok_result(&req))
+        };
+        let task = operation_task(
+            "t-dl-template-digest",
+            "disk.usage",
+            &[("path", "/var/sentinel-dir")],
+        );
+
+        dispatch_with_runner(&task, &policy, &templates, &dedup, runner, None).await;
+
+        let argv = argv_seen.lock().unwrap().clone().expect("runner must run");
+        let shell_args: Vec<&str> = argv[4..].iter().map(String::as_str).collect();
+        assert_eq!(shell_args, ["/var/sentinel-dir"]);
+
+        let events = captured.events_with_target(ALLOW_TARGET);
+        assert_eq!(events.len(), 1);
+        let digested: Vec<&str> = std::iter::once("disk.usage").chain(shell_args).collect();
+        assert_eq!(events[0].fields["argv_digest"], argv_digest(&digested));
+        assert_eq!(events[0].fields["argc"], "2");
+        let all = all_values(&events[0]);
+        assert!(!all.contains("sentinel-dir"));
+        assert!(
+            !all.contains(&argv[2]),
+            "the script never reaches the event"
+        );
     }
 
     #[tokio::test]

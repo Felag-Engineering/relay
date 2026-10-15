@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // queryRecord builds a minimal, valid audit.Record for the query-lane tests

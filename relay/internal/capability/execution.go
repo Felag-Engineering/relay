@@ -64,15 +64,15 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/logctx"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // Conduit sends one Task down a connected Node's Tunnel and blocks for its
 // Result. It is domain-typed (jobs.Task/jobs.Result), not relayv1, so
 // package capability keeps its narrow import set (registry + jobs only —
-// see TestCapabilityImportsOnlyRegistryAndJobs); the proto-speaking adapter
+// see .golangci.yml's capability-imports rule); the proto-speaking adapter
 // that sends over the real mTLS Tunnel lives outside this package
 // (dispatch.Router).
 type Conduit interface {

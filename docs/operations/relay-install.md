@@ -91,6 +91,16 @@ as an `EnvironmentFile`, with the reasoning behind each setting:
 | `-console-session-idle` | `RELAY_CONSOLE_SESSION_IDLE` | `30m` | Idle timeout of a Console session. |
 | `-console-step-up-window` | `RELAY_CONSOLE_STEP_UP_WINDOW` | `5m` | How recently a human must have re-entered their password for a privilege-granting Account act to proceed without being asked again. Approval decisions always ask. Maximum `15m`: a larger value is clamped, with a startup warning. Sign-in alone does not satisfy it. A successful step-up rotates the session identifier. Startup-only, like everything here: no Account of any role can extend it through any API. |
 
+**Blast caps and the minimum daemon version.** The two blast-radius caps are startup-only:
+`-read-blast-cap` / `RELAY_READ_BLAST_CAP` defaults to 10000, deliberately generous, and
+`-mutate-blast-cap` / `RELAY_MUTATE_BLAST_CAP` defaults to 100, deliberately small. Raw Exec
+always takes the mutate cap. The minimum-daemon-version gate has the same shape:
+`-min-daemon-version` / `RELAY_MIN_DAEMON_VERSION` (semver, empty means off) flags any
+connected Node whose reported daemon version is below it as `outdated` in the registry
+([ADR-0014](../adr/0014-daemon-lifecycle-iac-upgrades-version-gate.md)). Like the rest of the
+Relay's configuration today, these are resolved once from flags and environment at process
+start; nothing sets or raises them through an API.
+
 Subcommands (checked before flag parsing):
 
 - `relay --version` / `-version` / `-V` — print the build stamp and exit.

@@ -17,24 +17,24 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditquery"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/auditquery"
+	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
+	"github.com/Felag-Engineering/relay/relay/internal/opvocab"
+	"github.com/Felag-Engineering/relay/relay/internal/policyview"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/relay/relay/internal/store"
 )
 
-const testToken = accounts.TokenPrefix + "abcdef0123456789.mcp-integration-test" //nolint:gosec // test fixture, not a real credential
+const testToken = accounts.TokenPrefix + "abcdef0123456789.mcp-integration-test" // test fixture, not a real credential
 
 // opsLister adapts opvocab.Operations (a package-level func) to
 // mcp.OperationLister, exactly like relay/cmd/relay/main.go's opvocabLister.
@@ -274,7 +274,7 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	conduit := newFakeConduit()
 	q := auditquery.New(st.AuditQueries(), st.JobQueries())
@@ -382,7 +382,7 @@ func newTestServerWithFailingReadSink(t *testing.T) testServer {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	conduit := newFakeConduit()
 	q := auditquery.New(st.AuditQueries(), st.JobQueries())
@@ -532,8 +532,10 @@ func decodeResult(t *testing.T, res *sdkmcp.CallToolResult, out any) {
 // the defect was that the surface turned a false predicate into a 200.
 //
 // So this asserts the tool ERRORS, and that the message names the namespace
-// and the issue that will make it resolvable — an AI-agent that cannot tell
-// "unimplemented" from "matched nothing" is the whole complaint.
+// and says it is not resolvable yet — an AI-agent that cannot tell
+// "unimplemented" from "matched nothing" is the whole complaint. The message
+// carries no tracker number: an issue number means nothing to the AI-agent
+// reading it, and rots.
 func TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty(t *testing.T) {
 	ts := newTestServer(t)
 	session := ts.connect(t)
@@ -546,7 +548,7 @@ func TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty(t *testing.T) {
 			"\"no Node carries that tag\", not \"tag: is not implemented\"", len(out.Nodes))
 	}
 	msg := toolErrorText(t, res)
-	for _, want := range []string{"tag:", "#430"} {
+	for _, want := range []string{"tag:", "not resolvable yet"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the refusal does not mention %q, so the caller cannot tell why: %s", want, msg)
 		}
@@ -1362,19 +1364,19 @@ func TestMCP_RequiresCredential(t *testing.T) {
 	}
 
 	resp := post(ts.plain, "")
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("no credential: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
 	}
 
 	respWrong := post(ts.plain, "wrong-"+testToken)
-	defer respWrong.Body.Close() //nolint:errcheck
+	defer respWrong.Body.Close()
 	if respWrong.StatusCode != http.StatusUnauthorized {
 		t.Errorf("wrong credential: status = %d, want %d", respWrong.StatusCode, http.StatusUnauthorized)
 	}
 
 	respOK := post(ts.plain, testToken)
-	defer respOK.Body.Close() //nolint:errcheck
+	defer respOK.Body.Close()
 	if respOK.StatusCode != http.StatusOK {
 		t.Errorf("valid credential: status = %d, want %d", respOK.StatusCode, http.StatusOK)
 	}

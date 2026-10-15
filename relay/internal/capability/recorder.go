@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/logctx"
 )
 
 // Recorder is the capability layer's audit trail, metrics and operational log,

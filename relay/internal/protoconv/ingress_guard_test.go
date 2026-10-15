@@ -117,7 +117,7 @@ func TestWithNodeLabelsCallers_Fixtures(t *testing.T) {
 	// A composite-literal-only guard would catch this one...
 	write("a.go", `package a
 
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+import "github.com/Felag-Engineering/relay/relay/internal/registry"
 
 func f() {
 	_ = registry.Report{NodeID: "x"}.WithNodeLabels(map[string]string{"role": "web"})
@@ -131,7 +131,7 @@ func f() {
 	// spell, and it must be caught exactly like a.go.
 	write("b.go", `package b
 
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+import "github.com/Felag-Engineering/relay/relay/internal/registry"
 
 func g() {
 	rep := registry.Report{NodeID: "y"}
@@ -143,7 +143,7 @@ func g() {
 	// legitimately calls WithNodeLabels to seed a registry.
 	write("c_test.go", `package c
 
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+import "github.com/Felag-Engineering/relay/relay/internal/registry"
 
 func h() {
 	_ = registry.Report{NodeID: "z"}.WithNodeLabels(nil)

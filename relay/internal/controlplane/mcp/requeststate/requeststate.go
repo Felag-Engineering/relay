@@ -59,7 +59,7 @@
 // This package must never import its parent package (mcp), approval, or
 // capability: a crypto primitive that seals and opens bytes decides nothing,
 // and every decision stays in the one file ADR-0029 decision 5 names.
-// imports_test.go pins this.
+// .golangci.yml's requeststate-imports rule pins this.
 package requeststate
 
 import (

@@ -19,11 +19,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // elicit_test.go is S2b of #646's mcp-handler-seam proof (elicit.go): fixture
@@ -742,7 +742,7 @@ func TestElicit_ServerNeverSendsElicitation(t *testing.T) {
 // -----------------------------------------------------------------------
 
 // requeststateImportPath is the seal-key package's import path.
-const requeststateImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp/requeststate"
+const requeststateImportPath = "github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp/requeststate"
 
 // mcpPackageDir locates package mcp's own directory (this test file's
 // directory) via runtime.Caller, mirroring no_dispatch_test.go/

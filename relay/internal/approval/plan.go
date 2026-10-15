@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // HashPlan content-addresses what an approver is being asked to approve: the

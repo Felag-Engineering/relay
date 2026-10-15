@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // auditquery.go is *sqliteAudit's other interface: audit.QueryRepository, the

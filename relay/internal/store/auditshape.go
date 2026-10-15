@@ -33,7 +33,7 @@ const auditShapeCheckRows = 100
 // legacyTSWarnMsg is the one message both warning paths use, so an operator
 // grepping for it finds the first boot that saw the problem and every boot
 // since.
-const legacyTSWarnMsg = "audit trail holds pre-0024 timestamps — rows written by a Relay older than #656 sort out of order against migrated rows, and a pagination cursor landing on one can skip or repeat rows. Since #896 the audit trail is append-only and migration 28 canonicalised every row that existed when it ran, so a row reported now was written afterwards by a pre-#896 binary. It cannot be rewritten in place, it also has no chain position, and relay-audit-verify reports it. The remedy is inspection, or restoring from backup"
+const legacyTSWarnMsg = "audit trail holds pre-0024 timestamps — rows written by a Relay older than migration 0024 sort out of order against migrated rows, and a pagination cursor landing on one can skip or repeat rows. Since migration 28 the audit trail is append-only, and that migration canonicalised every row that existed when it ran, so a row reported now was written afterwards by a Relay binary that predates migration 28. It cannot be rewritten in place, it also has no chain position, and relay-audit-verify reports it. The remedy is inspection, or restoring from backup"
 
 // auditShapeCheckFailedMsg is logged when the detector itself cannot run. It
 // is never an error the caller sees: see warnOnLegacyAuditTimestamps.
@@ -206,7 +206,7 @@ func windowHoldsLegacyTimestamps(ctx context.Context, db *sql.DB) (legacyTSObser
 	if err != nil {
 		return obs, err
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	for rows.Next() {
 		var id, ts string

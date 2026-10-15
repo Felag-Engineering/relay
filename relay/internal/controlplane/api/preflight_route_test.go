@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/console"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane/console"
 )
 
 // preflightDetectorRegex is deliberately narrower than the obvious guess.

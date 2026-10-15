@@ -4,12 +4,12 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/relay/relay/internal/dispatch"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/logctx"
+	"github.com/Felag-Engineering/relay/relay/internal/metrics"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 )
 
 // dispatch_wiring.go is the v0.0.5 dispatch transport's composition-root

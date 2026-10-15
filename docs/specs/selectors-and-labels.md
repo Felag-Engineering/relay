@@ -254,7 +254,7 @@ than through a surface.
 | `cert-expiring` fires inside the window and is quiet outside it or when provenance is unknown | `TestMarkers_CertExpiringFiresUnderTheWindow`, `TestMarkers_CertExpiringQuietAboveTheWindow`, `TestMarkers_CertExpiringQuietWhenProvenanceUnknown` | nodestate |
 | A `relay:`-namespace Selector narrows as expected; `state:` too | `TestSelectorNamespaceNarrows`, `TestSelectorNamespaceState` | approval |
 | Labels are independent across Nodes, and reads return copies | `TestLabels_AreIndependentOfOtherNodes`, `TestGetReturnsCopy` | registry |
-| `state:` derivation imports no database | `TestNoDatabaseSQLImport` | compile-time |
+| `state:` derivation imports no database | `.golangci.yml` depguard rule `domain-no-sql` | lint |
 
 Claims above with **no row**, and so nothing checking them:
 

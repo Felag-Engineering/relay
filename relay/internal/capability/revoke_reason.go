@@ -36,7 +36,7 @@ const MaxRevokeReasonBytes = 512
 // Defined in the capability layer, next to ErrFreezeReasonRequired and for the
 // same stated reason: so a Console or a future CLI cannot revoke without one.
 // See ValidateRevokeReason's doc for the limit of that guarantee here.
-var ErrRevokeReasonRequired = errors.New("capability: revoking a Node requires a non-empty reason (ADR-0020, #487)")
+var ErrRevokeReasonRequired = errors.New("capability: revoking a Node requires a non-empty reason (ADR-0020)")
 
 // ErrRevokeReasonTooLong is returned by ValidateRevokeReason when the trimmed
 // reason exceeds MaxRevokeReasonBytes.

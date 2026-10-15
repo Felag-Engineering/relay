@@ -9,7 +9,7 @@ import "fmt"
 // It is a projection of a stored Account (internal/accounts). The projection is
 // built at the authentication boundary (internal/controlplane), NOT here: the
 // capability package's import allowlist is deliberately narrow (jobs +
-// registry; see TestCapabilityImportsOnlyRegistryAndJobs). Holding a narrow
+// registry; see .golangci.yml's capability-imports rule). Holding a narrow
 // value rather than the full Account also means an audit record captures who
 // acted with what authority **at that moment**, not a pointer to a mutable row
 // whose role may since have changed.

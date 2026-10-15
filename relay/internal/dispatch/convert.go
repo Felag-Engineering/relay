@@ -9,12 +9,12 @@
 // This package satisfies capability.Conduit structurally — Connected/
 // Dispatch/Cancel on jobs.Task/jobs.Result — without importing capability, so
 // there is no import cycle and the capability package's narrow allowlist
-// (TestCapabilityImportsOnlyRegistryAndJobs) stays intact.
+// (.golangci.yml's capability-imports rule) stays intact.
 package dispatch
 
 import (
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 )
 
 // taskRequest converts a persisted Task into the wire TaskRequest sent down

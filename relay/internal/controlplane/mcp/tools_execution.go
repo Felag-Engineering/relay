@@ -10,20 +10,20 @@ import (
 	schema "github.com/google/jsonschema-go/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/opvocab"
 )
 
-// This is an EXEC file (no_dispatch_test.go's relaxed partition, RB1 in the
-// plan review): unlike mcp.go/tools_nodes.go/tools_operations.go/
-// attribution.go, it is allowed to spell capability.Principal/Selector/
-// NodeResult/FrozenError/CapExceededError — needed for Executor's signature
-// and renderRunError's error rendering. It must never spell
-// capability.Execution, capability.NewExecution, or newDispatch — those
-// remain forbidden in every mcp file, exec or not, by no_dispatch_test.go's
-// unconditional rules; this file's only path to a real dispatch is the
+// This is an EXEC file (listed in no_dispatch_test.go's execFiles): unlike
+// mcp.go/tools_nodes.go/tools_operations.go/attribution.go, it is allowed to
+// spell capability.Principal/Selector/NodeResult/FrozenError/CapExceededError
+// — needed for Executor's signature and renderRunError's error rendering. It
+// must never spell capability.Execution, capability.NewExecution, or
+// newDispatch — those remain forbidden in every mcp file, exec or not, by
+// .golangci.yml's "adapter boundary" patterns and no_dispatch_test.go; this
+// file's only path to a real dispatch is the
 // Executor interface below, injected by the composition root
 // (cmd/relay/main.go), never constructed here.
 //
@@ -75,8 +75,8 @@ type Executor interface {
 // *capability.Control, which Execution does not expose.
 //
 // RB1 (plan review): defined HERE, an exec file, rather than mcp.go, so
-// mcp.go's source never spells a capability. token and stays a strict
-// readFile under no_dispatch_test.go's guard — mcp.go wires this with an
+// mcp.go's source never spells capability.Principal and stays a strict
+// file under no_dispatch_test.go's guard — mcp.go wires this with an
 // unqualified `execAdapter{r: exec}` composite literal.
 type execAdapter struct {
 	r Executor

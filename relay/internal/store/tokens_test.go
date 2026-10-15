@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
+	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 )
 
 // sampleToken returns a fully-populated Token for round-trip assertions. Times
@@ -128,7 +128,7 @@ func TestTokens_RestartRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	t.Cleanup(func() { reopened.Close() }) //nolint:errcheck
+	t.Cleanup(func() { reopened.Close() })
 
 	got, err := reopened.Tokens().ByID(ctx, "survivor")
 	if err != nil {

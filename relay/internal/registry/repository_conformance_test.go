@@ -3,8 +3,8 @@ package registry_test
 import (
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry/registrytest"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/registry/registrytest"
 )
 
 // TestRepositoryConformance runs the shared registry.Repository conformance

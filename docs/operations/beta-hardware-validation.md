@@ -54,7 +54,7 @@ same verify-then-install sequence [relay-install.md](relay-install.md) documents
 ```sh
 VERSION="0.1.0-beta"
 ARTIFACT="relay-${VERSION}-x86_64-unknown-linux-gnu"
-BASE="https://github.com/Felag-Engineering/gleipnir-relay/releases/download/v${VERSION}"
+BASE="https://github.com/Felag-Engineering/relay/releases/download/v${VERSION}"
 curl -fsSLO "${BASE}/${ARTIFACT}" && curl -fsSLO "${BASE}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
 sudo install -m 0755 "${ARTIFACT}" /usr/local/bin/relay

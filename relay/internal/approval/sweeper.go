@@ -25,7 +25,7 @@ type Sweeper struct {
 
 	// onExpired is called once per retired Request, for the audit record. It is
 	// a callback rather than an audit dependency because package approval must
-	// stay import-narrow (see imports_test.go) — the composition root supplies
+	// stay import-narrow (.golangci.yml's approval-imports rule) — the composition root supplies
 	// the sink.
 	onExpired func(ctx context.Context, r Request)
 }

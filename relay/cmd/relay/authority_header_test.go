@@ -30,8 +30,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // dialRawH2 opens a certless TLS connection offering ALPN h2, writes the HTTP/2
@@ -49,7 +49,7 @@ func dialRawH2(t *testing.T, addr string, roots *x509.CertPool) (*tls.Conn, *htt
 	if err != nil {
 		t.Fatalf("tls.Dial: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() }) //nolint:errcheck
+	t.Cleanup(func() { conn.Close() })
 
 	state := conn.ConnectionState()
 	if state.NegotiatedProtocol != "h2" {
@@ -220,7 +220,7 @@ func TestNodePlane_MissingAuthorityRejectedEarly_RelayStaysUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("grpc.NewClient: %v", err)
 	}
-	t.Cleanup(func() { cc.Close() }) //nolint:errcheck
+	t.Cleanup(func() { cc.Close() })
 
 	csrPEM, _ := relaytest.NewCSR(t, "ignored-cn")
 	resp, err := relayv1.NewEnrollmentClient(cc).Enroll(ctx, &relayv1.EnrollRequest{

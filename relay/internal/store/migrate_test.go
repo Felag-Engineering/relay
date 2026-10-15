@@ -227,7 +227,7 @@ func TestAppliedVersions_TableAbsentIsEmptyNotAnError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
 	}
-	defer db.Close() //nolint:errcheck
+	defer db.Close()
 
 	applied, err := appliedVersions(context.Background(), db)
 	if err != nil {
@@ -251,7 +251,7 @@ func TestAppliedVersions_ReadsEveryRowNotJustTheMax(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
 	}
-	defer db.Close() //nolint:errcheck
+	defer db.Close()
 	db.SetMaxOpenConns(1)
 
 	migrations, err := loadMigrations()
@@ -382,7 +382,7 @@ func TestMigrate_IsIdempotent(t *testing.T) {
 		t.Fatalf("sql.Open: %v", err)
 	}
 	db.SetMaxOpenConns(1)
-	defer db.Close() //nolint:errcheck
+	defer db.Close()
 	migrations, _ := seedMigrations(t, db, 21)
 
 	if err := migrate(ctx, db, slog.Default()); err != nil {

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry/registrytest"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/registry/registrytest"
 )
 
 // TestSQLiteRegistryConformance runs the shared registry.Repository
@@ -246,6 +246,6 @@ func reopenStore(t *testing.T, st *Store, path string) *Store {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	t.Cleanup(func() { re.Close() }) //nolint:errcheck
+	t.Cleanup(func() { re.Close() })
 	return re
 }

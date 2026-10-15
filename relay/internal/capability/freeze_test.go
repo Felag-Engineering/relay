@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/store"
 )
 
 // fakeFreezeStore is a configurable FreezeStore: frozen/err control what
@@ -280,7 +280,7 @@ func TestFreezeSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen store.Open: %v", err)
 	}
-	t.Cleanup(func() { st2.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st2.Close() })
 
 	svcB := build(t, seams{reg: reg, freeze: st2.Freeze()})
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}

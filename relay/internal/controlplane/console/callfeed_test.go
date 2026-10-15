@@ -8,8 +8,8 @@ package console
 import (
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 )
 
 // TestConsoleRead_ARowThatCannotTellIsNotARead: both halves come from the

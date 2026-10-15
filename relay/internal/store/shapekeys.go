@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
 )
 
 // backfillShapeKeys fills approval_requests.shape_key for the rows migration
@@ -75,7 +75,7 @@ func backfillShapeKeys(ctx context.Context, db *sql.DB) error {
 	for rows.Next() {
 		gr, err := scanGrant(rows.Scan)
 		if err != nil {
-			rows.Close() //nolint:errcheck
+			rows.Close()
 			return fmt.Errorf("scan grant for shape key backfill: %w", err)
 		}
 		if _, seen := keys[gr.RequestID]; seen {
@@ -84,7 +84,7 @@ func backfillShapeKeys(ctx context.Context, db *sql.DB) error {
 		keys[gr.RequestID] = gr.ShapeKey()
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close() //nolint:errcheck
+		rows.Close()
 		return fmt.Errorf("read grants for shape key backfill: %w", err)
 	}
 	if err := rows.Close(); err != nil {

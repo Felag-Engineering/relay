@@ -498,6 +498,13 @@ pub fn lint_dir(root: &Path) -> TemplateLintReport {
                     continue;
                 }
             };
+            for warning in op.warnings() {
+                report.findings.push(LintFinding {
+                    severity: LintSeverity::Warning,
+                    location: location.clone(),
+                    message: warning.to_string(),
+                });
+            }
             if REGISTRY.iter().any(|entry| entry.name == op.name()) {
                 report.findings.push(LintFinding {
                     severity: LintSeverity::Error,
@@ -1003,6 +1010,38 @@ body = "echo {{missing}}"
         let set = TemplateSet::load_or_fail_closed(&dir.path);
         assert_eq!(set.len(), 0, "a partial vocabulary is never served");
         assert_eq!(set.fingerprint(), UNLOADABLE_FINGERPRINT);
+    }
+
+    /// A file saved with CRLF line endings makes the carriage return part of
+    /// the word before it, so a slot that ends a line is not a standalone word.
+    /// The literal-string form keeps the CRLF bytes in the body.
+    #[test]
+    fn a_crlf_saved_body_with_a_slot_ending_a_line_is_refused() {
+        let toml = |eol: &str| {
+            format!(
+                "[[template]]{eol}name = \"crlf.probe\"{eol}risk_class = \"read\"{eol}\
+                 body = '''{eol}echo {{{{unit}}}}{eol}exit 0{eol}'''{eol}\
+                 [[template.slots]]{eol}name = \"unit\"{eol}type = \"identifier\"{eol}"
+            )
+        };
+
+        let dir = TempDir::new("crlf-lf");
+        dir.write("lf.toml", &toml("\n"));
+        TemplateSet::load(&dir.path).expect("LF line endings load");
+
+        let dir = TempDir::new("crlf-crlf");
+        dir.write("crlf.toml", &toml("\r\n"));
+        let err = TemplateSet::load(&dir.path).expect_err("CRLF must fail closed");
+        assert!(
+            matches!(
+                err,
+                TemplateLoadError::Invalid {
+                    source: TemplateError::PlaceholderNotStandalone { .. },
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
     }
 
     #[test]

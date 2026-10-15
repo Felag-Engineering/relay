@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 )
 
 // recordingSend is a fake send func that records every RelayMessage it is

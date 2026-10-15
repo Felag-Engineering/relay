@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
 
 // sqliteAccounts implements accounts.Repository against the accounts table
@@ -151,7 +151,7 @@ func (r *sqliteAccounts) List(ctx context.Context) ([]accounts.Account, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list accounts: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	var ids []string
 	for rows.Next() {

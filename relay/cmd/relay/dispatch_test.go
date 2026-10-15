@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 )
 
 // ---------------------------------------------------------------------------
@@ -258,7 +258,7 @@ func TestTunnelSink_GatedByControlEnabled(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newServer: %v", err)
 		}
-		t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+		t.Cleanup(func() { deps.store.Close() })
 		t.Cleanup(srv.Stop)
 
 		if deps.tunnel.sink != nil {
@@ -278,7 +278,7 @@ func TestTunnelSink_GatedByControlEnabled(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newServer: %v", err)
 		}
-		t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+		t.Cleanup(func() { deps.store.Close() })
 		t.Cleanup(srv.Stop)
 
 		if deps.tunnel.sink == nil {

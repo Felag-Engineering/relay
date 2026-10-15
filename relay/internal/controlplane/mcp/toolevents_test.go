@@ -15,15 +15,15 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditquery"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
+	"github.com/Felag-Engineering/relay/relay/internal/auditquery"
+	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/relay/relay/internal/store"
 )
 
 // capturingObserver is a mcp.ToolCallObserver test double: it appends every
@@ -71,7 +71,7 @@ func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolC
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	conduit := newFakeConduit()
 	q := auditquery.New(st.AuditQueries(), st.JobQueries())
@@ -231,7 +231,7 @@ func postTasksGet(t *testing.T, ts testServer) {
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 }
 
 // TestToolCallMiddleware_LeakTest_ListNodes is the behavioural complement to

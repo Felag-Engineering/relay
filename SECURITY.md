@@ -13,7 +13,7 @@ what a release is.
 ## Reporting a vulnerability
 
 Report privately through GitHub private vulnerability reporting:
-<https://github.com/Felag-Engineering/gleipnir-relay/security/advisories/new> (or the
+<https://github.com/Felag-Engineering/relay/security/advisories/new> (or the
 repository's Security tab, then "Report a vulnerability"). This is the only channel. Do not open
 a public issue, discussion or pull request for a suspected vulnerability.
 

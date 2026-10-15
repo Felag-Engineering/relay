@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
 )
@@ -60,7 +60,7 @@ func bootServer(t *testing.T, cfg Config) (*bufconn.Listener, *appDeps, *grpc.Se
 		t.Fatalf("newServer: %v", err)
 	}
 	lis := bufconn.Listen(1 << 20)
-	go srv.Serve(lis) //nolint:errcheck
+	go srv.Serve(lis)
 	return lis, deps, srv
 }
 
@@ -123,7 +123,7 @@ func TestRevokedNode_RefusedAfterRestart(t *testing.T) {
 
 	lis2, deps2, srv2 := bootServer(t, cfg)
 	t.Cleanup(srv2.Stop)
-	t.Cleanup(func() { deps2.store.Close() }) //nolint:errcheck
+	t.Cleanup(func() { deps2.store.Close() })
 
 	// Reconnect with the now-revoked cert: the rehydrated denylist must refuse it
 	// at (or immediately after) the TLS handshake.
@@ -185,7 +185,7 @@ func TestRevokedToken_EnrollRefusedAfterRestart(t *testing.T) {
 
 	lis2, deps2, srv2 := bootServer(t, cfg)
 	t.Cleanup(srv2.Stop)
-	t.Cleanup(func() { deps2.store.Close() }) //nolint:errcheck
+	t.Cleanup(func() { deps2.store.Close() })
 
 	// After restart the revoked token must STILL be refused — the store is the
 	// authority, not volatile memory.
@@ -253,7 +253,7 @@ func TestRevokedTokenCascade_NodeRevocationsPersistAcrossRestart(t *testing.T) {
 
 	_, deps2, srv2 := bootServer(t, cfg)
 	t.Cleanup(srv2.Stop)
-	t.Cleanup(func() { deps2.store.Close() }) //nolint:errcheck
+	t.Cleanup(func() { deps2.store.Close() })
 
 	for _, id := range nodeIDs {
 		if !deps2.denylist.IsRevoked(id) {

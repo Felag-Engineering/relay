@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // testAction returns a minimal valid Action for tests that don't care about
@@ -153,7 +153,7 @@ func TestInFlight_SurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-Open: %v", err)
 	}
-	t.Cleanup(func() { st2.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st2.Close() })
 
 	inFlight, err := st2.Tasks().InFlight(ctx)
 	if err != nil {
@@ -263,7 +263,7 @@ func TestMarkCancelledBeforeSend_FromDispatched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-Open: %v", err)
 	}
-	t.Cleanup(func() { st2.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st2.Close() })
 	check("after reopen", st2.Tasks())
 }
 

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
 )
 
 // openBenchStore is openTestStore's benchmark-scoped twin: *testing.B has its
@@ -22,7 +22,7 @@ func openBenchStore(b *testing.B) *Store {
 	if err != nil {
 		b.Fatalf("Open: %v", err)
 	}
-	b.Cleanup(func() { st.Close() }) //nolint:errcheck
+	b.Cleanup(func() { st.Close() })
 	return st
 }
 

@@ -39,9 +39,9 @@ var forbiddenShimImports = map[string]string{
 	"github.com/modelcontextprotocol/go-sdk/mcp": "the MCP SDK. The shim TRANSFORMS a response the SDK produced; " +
 		"it must never be able to originate one. Without this import it cannot register a tool, add a custom " +
 		"method, or construct a result — the property is structural rather than reviewed",
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability": "the capability layer. " +
+	"github.com/Felag-Engineering/relay/relay/internal/capability": "the capability layer. " +
 		"The shim rewrites JSON; it does not dispatch, decide, or resolve anything",
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry": "the Node registry. " +
+	"github.com/Felag-Engineering/relay/relay/internal/registry": "the Node registry. " +
 		"The shim has no business knowing a Node exists",
 	"database/sql": "the store. A response transformer that reached a database would be a second read path",
 	"os":           "the filesystem. Nothing on the request path needs it, and on this file it would be a finding",

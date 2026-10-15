@@ -10,9 +10,9 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 )
 
 // elicit_internal_test.go is S2b's SDK in-memory seam (package mcp, unlike
@@ -28,7 +28,7 @@ import (
 // elicitInternalCredential/elicitInternalVerifier are a minimal
 // TokenVerifier, exactly like taskgolden_test.go's goldenVerifier, so
 // authedContext below can inject a real Principal.
-const elicitInternalCredential = accounts.TokenPrefix + "0123456789abcdef.elicit-internal-secret" //nolint:gosec // test fixture, not a real credential
+const elicitInternalCredential = accounts.TokenPrefix + "0123456789abcdef.elicit-internal-secret" // test fixture, not a real credential
 
 type elicitInternalVerifier struct{}
 
@@ -124,13 +124,13 @@ func TestElicit_LegacyHeaderWithModernMetaDoesNotAsk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("server Connect: %v", err)
 	}
-	defer ss.Close() //nolint:errcheck
+	defer ss.Close()
 
 	cs, err := client.Connect(ctx, clientTransport, &sdkmcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"})
 	if err != nil {
 		t.Fatalf("client Connect: %v", err)
 	}
-	defer cs.Close() //nolint:errcheck
+	defer cs.Close()
 
 	// Precondition: the SESSION really did negotiate a legacy version — the
 	// scenario this test exists to exercise.
@@ -249,13 +249,13 @@ func TestElicit_PredicateMirrorsTheSDK(t *testing.T) {
 			if err != nil {
 				t.Fatalf("server Connect: %v", err)
 			}
-			defer ss.Close() //nolint:errcheck
+			defer ss.Close()
 
 			cs, err := client.Connect(ctx, clientTransport, &sdkmcp.ClientSessionOptions{ProtocolVersion: tc.protocolVersion})
 			if err != nil {
 				t.Fatalf("client Connect: %v", err)
 			}
-			defer cs.Close() //nolint:errcheck
+			defer cs.Close()
 
 			// Our own condition-2 judgment, computed from the SAME real
 			// session clientCanBeAsked would see — condition 3 is held
@@ -330,12 +330,12 @@ func TestElicit_WhoIsAskedByNameAndSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("server Connect: %v", err)
 	}
-	defer ss.Close() //nolint:errcheck
+	defer ss.Close()
 	cs, err := client.Connect(ctx, clientTransport, &sdkmcp.ClientSessionOptions{ProtocolVersion: mrtrProtocolVersion})
 	if err != nil {
 		t.Fatalf("client Connect: %v", err)
 	}
-	defer cs.Close() //nolint:errcheck
+	defer cs.Close()
 
 	// metaWith builds a `_meta` map that always satisfies conditions 2/3
 	// (protocolVersion and form elicitation present), varying only clientInfo

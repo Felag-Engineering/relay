@@ -6,6 +6,9 @@ Read [AGENTS.md](AGENTS.md) first (the architecture invariants and conventions) 
 
 ## Build and verify
 
+- A checkout cloned before the repository was renamed from `gleipnir-relay` still works
+  through GitHub's redirect; point it at the new name with
+  `git remote set-url origin git@github.com:Felag-Engineering/relay.git` (or the HTTPS URL).
 - Toolchains: Go at the version `relay/go.mod` names (the `Makefile` pins it), and stable Rust
   at or above `rust-version` in `daemon/Cargo.toml`.
 - `make tools` (optional) pre-builds the pinned Go tools; any target builds them on first use.
@@ -42,4 +45,4 @@ make a spec claim untrue, the spec is updated first: name the claim in the PR.
 One issue per PR. Fill in the template. Titles follow `<type>(<area>): ...` or `<type>: ...`, as in
 the commit history.
 
-Licensing is not yet settled; see the Status section of [README.md](README.md) and #123.
+Relay is licensed under the Business Source License 1.1 ([LICENSE](LICENSE)); contributions are accepted under the same terms.

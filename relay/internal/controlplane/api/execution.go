@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
+	"github.com/Felag-Engineering/relay/relay/internal/authz"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/opvocab"
 )
 
 // execution.go is the Control API's execution slice (ADR-0010): the REST
@@ -21,9 +21,10 @@ import (
 // evaluates no Policy, checks no blast cap, and makes no authorization
 // decision of its own; each of those is the capability layer's, so both
 // surfaces inherit one answer (invariant 10). The structural half of that
-// promise is no_dispatch_test.go in this package: a route that reached around
-// the Executor to a capability.Execution, capability.NewExecution, or newDispatch fails
-// the guard.
+// promise is .golangci.yml's "adapter boundary" patterns and
+// no_dispatch_test.go in this package: a route that reached around the
+// Executor to a capability.Execution, capability.NewExecution, or newDispatch
+// fails one of them.
 //
 // **Raw Exec's admin gate is deliberately NOT re-implemented here.**
 // authz.RoleGate already maps jobs.ActionRawExec → RoleAdmin for every

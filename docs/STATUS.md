@@ -75,9 +75,9 @@ Mirrors AGENTS.md's gap table as read on 2026-10-15.
 
 | Invariant | Clause | Issue |
 |---|---|---|
-| 7 | `tag:`'s writer, and `relay:`'s | [#430](https://github.com/Felag-Engineering/gleipnir-relay/issues/430) |
-| 10 | Console execution | [#438](https://github.com/Felag-Engineering/gleipnir-relay/issues/438) |
-| 11 | Secret files readable only by the Relay, writable only by root (or the Relay, for what it generates) | [#864](https://github.com/Felag-Engineering/gleipnir-relay/issues/864) |
+| 7 | `tag:`'s writer, and `relay:`'s | [#430](https://github.com/Felag-Engineering/relay/issues/430) |
+| 10 | Console execution | [#438](https://github.com/Felag-Engineering/relay/issues/438) |
+| 11 | Secret files readable only by the Relay, writable only by root (or the Relay, for what it generates) | [#864](https://github.com/Felag-Engineering/relay/issues/864) |
 | 11 | The floor's source is writable only by a root-equivalent human | hardening review (issue to file) |
 
 What each gap means is in

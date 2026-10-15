@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest/protowalk"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest/protowalk"
 )
 
 func TestTaskRequest_OperationRoundTrip(t *testing.T) {

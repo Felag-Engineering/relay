@@ -16,9 +16,9 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // -----------------------------------------------------------------------
@@ -445,30 +445,30 @@ func TestOAuth_MetadataIsReachableWithoutACredential(t *testing.T) {
 	defer ts.Close()
 
 	// Public: no Authorization header at all.
-	resp, err := http.Get(ts.URL + ProtectedResourceMetadataPath) //nolint:noctx // test
+	resp, err := http.Get(ts.URL + ProtectedResourceMetadataPath)
 	if err != nil {
 		t.Fatalf("Get metadata: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("metadata status = %d, want 200 without a credential", resp.StatusCode)
 	}
 
 	// ...and nothing else on the listener became public along with it.
-	protected, err := http.Get(ts.URL + "/api/v1/protected") //nolint:noctx // test
+	protected, err := http.Get(ts.URL + "/api/v1/protected")
 	if err != nil {
 		t.Fatalf("Get protected: %v", err)
 	}
-	defer protected.Body.Close() //nolint:errcheck
+	defer protected.Body.Close()
 	if protected.StatusCode != http.StatusUnauthorized {
 		t.Errorf("an ordinary route returned %d without a credential, want 401 — the public exemption must be exactly one path", protected.StatusCode)
 	}
 
-	ping, err := http.Get(ts.URL + "/api/v1/ping") //nolint:noctx // test
+	ping, err := http.Get(ts.URL + "/api/v1/ping")
 	if err != nil {
 		t.Fatalf("Get ping: %v", err)
 	}
-	defer ping.Body.Close() //nolint:errcheck
+	defer ping.Body.Close()
 	if ping.StatusCode != http.StatusUnauthorized {
 		t.Errorf("/api/v1/ping returned %d without a credential, want 401", ping.StatusCode)
 	}

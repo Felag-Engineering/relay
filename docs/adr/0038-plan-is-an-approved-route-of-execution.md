@@ -268,8 +268,8 @@ spending limit; a Plan is an itemised invoice.
   consequence below must be answered **before** the ceiling rises, not after.
 
 - **Four ADRs and the Console's UI language still carry the old spelling, and are tracked rather
-  than swept** — [#574](https://github.com/Felag-Engineering/gleipnir-relay/issues/574) and
-  [#575](https://github.com/Felag-Engineering/gleipnir-relay/issues/575) respectively.
+  than swept** — [#574](https://github.com/Felag-Engineering/relay/issues/574) and
+  [#575](https://github.com/Felag-Engineering/relay/issues/575) respectively.
   ADR-0009 (`:13`), ADR-0026 (`:63`, `:134`, `:170`) and ADR-0027 (`:234`)
   all say "plan-by-default" or "render the Plan", meaning the preview. None of them inverts the
   way ADR-0013 did — they read as stale rather than dangerous — but the ADR tier carries human

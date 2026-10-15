@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // newPlanTestService wires a real jobEngine (fakeConduit-backed) behind a

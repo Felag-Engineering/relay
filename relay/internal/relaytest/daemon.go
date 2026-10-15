@@ -100,8 +100,8 @@ func (h *DaemonHandle) Kill() {
 	if h.cmd == nil || h.cmd.Process == nil {
 		return
 	}
-	h.cmd.Process.Kill() //nolint:errcheck
-	h.cmd.Wait()         //nolint:errcheck
+	h.cmd.Process.Kill()
+	h.cmd.Wait()
 }
 
 // Relaunch kills the current daemon subprocess (if any) and starts a fresh

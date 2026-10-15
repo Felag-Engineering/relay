@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // grant.go is ADR-0027 decision 12: a batch or window approval — one human

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // staticCert presents a fixed certificate through Config.GetCertificate.
@@ -80,19 +80,19 @@ func TestServer_Ping_RequiresCredential(t *testing.T) {
 	_, base, client := newTestServer(t)
 
 	resp := doRequest(t, client, http.MethodGet, base+"/api/v1/ping", "")
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("without credential: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
 	}
 
 	respWrong := doRequest(t, client, http.MethodGet, base+"/api/v1/ping", "wrong-"+testToken)
-	defer respWrong.Body.Close() //nolint:errcheck
+	defer respWrong.Body.Close()
 	if respWrong.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("wrong credential: status = %d, want %d", respWrong.StatusCode, http.StatusUnauthorized)
 	}
 
 	respOK := doRequest(t, client, http.MethodGet, base+"/api/v1/ping", testToken)
-	defer respOK.Body.Close() //nolint:errcheck
+	defer respOK.Body.Close()
 	if respOK.StatusCode != http.StatusOK {
 		t.Fatalf("with credential: status = %d, want %d", respOK.StatusCode, http.StatusOK)
 	}
@@ -161,7 +161,7 @@ func TestServer_CertificateIsFetchedEveryHandshake(t *testing.T) {
 			t.Fatal("response carried no peer certificate")
 		}
 		served = append(served, resp.TLS.PeerCertificates[0].Raw)
-		resp.Body.Close() //nolint:errcheck
+		resp.Body.Close()
 	}
 
 	if n := calls.Load(); n != 2 {
@@ -197,7 +197,7 @@ func TestServer_IndependentShutdown(t *testing.T) {
 
 	// srvB is untouched by srvA's shutdown.
 	respB := doRequest(t, clientB, http.MethodGet, baseB+"/api/v1/ping", testToken)
-	defer respB.Body.Close() //nolint:errcheck
+	defer respB.Body.Close()
 	if respB.StatusCode != http.StatusOK {
 		t.Fatalf("server B after server A shutdown: status = %d, want %d", respB.StatusCode, http.StatusOK)
 	}

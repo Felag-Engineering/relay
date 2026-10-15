@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/freeze"
+	"github.com/Felag-Engineering/relay/relay/internal/freeze"
 )
 
 // sqliteFreeze implements freeze.Repository against the single-row freeze

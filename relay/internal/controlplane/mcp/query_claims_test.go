@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 )
 
 // fieldFlagger reports whether a struct field breaches the property under

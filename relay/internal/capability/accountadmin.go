@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
 
 // accountadmin.go is Account and API-Token administration: the eight

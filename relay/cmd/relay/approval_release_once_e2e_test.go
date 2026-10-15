@@ -18,10 +18,10 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // decodeRunOutput decodes an MCP run_operation CallToolResult's text content
@@ -76,7 +76,7 @@ func TestApprovalRelease_ReDriveOnAnySurfaceReAttaches(t *testing.T) {
 
 	// 1. Park via the Control API.
 	parkResp := restartMutate(t, f, requester)
-	defer parkResp.Body.Close() //nolint:errcheck
+	defer parkResp.Body.Close()
 	if parkResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("park status = %d, want 202", parkResp.StatusCode)
 	}
@@ -89,7 +89,7 @@ func TestApprovalRelease_ReDriveOnAnySurfaceReAttaches(t *testing.T) {
 	decideResp := controlAPIRequest(t, f.ClientFor(approver), http.MethodPost,
 		f.ControlBase+parked.DecisionPath, approver,
 		map[string]any{"approve": true, "plan_hash": parked.PlanHash})
-	defer decideResp.Body.Close() //nolint:errcheck
+	defer decideResp.Body.Close()
 	if decideResp.StatusCode != http.StatusOK {
 		t.Fatalf("decision status = %d, want 200", decideResp.StatusCode)
 	}
@@ -97,7 +97,7 @@ func TestApprovalRelease_ReDriveOnAnySurfaceReAttaches(t *testing.T) {
 	// 3. The requester re-drives via the Control API: this is the ACTUAL
 	//    dispatch, claiming the release and minting Job J.
 	firstRun := restartMutate(t, f, requester)
-	defer firstRun.Body.Close() //nolint:errcheck
+	defer firstRun.Body.Close()
 	if firstRun.StatusCode != http.StatusOK {
 		t.Fatalf("first re-drive status = %d, want 200", firstRun.StatusCode)
 	}
@@ -114,7 +114,7 @@ func TestApprovalRelease_ReDriveOnAnySurfaceReAttaches(t *testing.T) {
 
 	// 4a. A second re-drive via the Control API re-attaches to the SAME Job.
 	secondRun := restartMutate(t, f, requester)
-	defer secondRun.Body.Close() //nolint:errcheck
+	defer secondRun.Body.Close()
 	if secondRun.StatusCode != http.StatusOK {
 		t.Fatalf("second re-drive status = %d, want 200", secondRun.StatusCode)
 	}
@@ -177,7 +177,7 @@ func TestApprovalRelease_DifferentAccountReAttachesAndRunsNothing(t *testing.T) 
 	bystander := mintAccount(t, f, "bo", accounts.KindHuman, accounts.RoleOperator)
 
 	parkResp := restartMutate(t, f, requester)
-	defer parkResp.Body.Close() //nolint:errcheck
+	defer parkResp.Body.Close()
 	if parkResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("park status = %d, want 202", parkResp.StatusCode)
 	}
@@ -189,13 +189,13 @@ func TestApprovalRelease_DifferentAccountReAttachesAndRunsNothing(t *testing.T) 
 	decideResp := controlAPIRequest(t, f.ClientFor(approver), http.MethodPost,
 		f.ControlBase+parked.DecisionPath, approver,
 		map[string]any{"approve": true, "plan_hash": parked.PlanHash})
-	defer decideResp.Body.Close() //nolint:errcheck
+	defer decideResp.Body.Close()
 	if decideResp.StatusCode != http.StatusOK {
 		t.Fatalf("decision status = %d, want 200", decideResp.StatusCode)
 	}
 
 	firstRun := restartMutate(t, f, requester)
-	defer firstRun.Body.Close() //nolint:errcheck
+	defer firstRun.Body.Close()
 	if firstRun.StatusCode != http.StatusOK {
 		t.Fatalf("first re-drive status = %d, want 200", firstRun.StatusCode)
 	}
@@ -214,7 +214,7 @@ func TestApprovalRelease_DifferentAccountReAttachesAndRunsNothing(t *testing.T) 
 	// IDENTICAL plan and gets the released Job back rather than a fresh
 	// dispatch.
 	bystanderRun := restartMutate(t, f, bystander)
-	defer bystanderRun.Body.Close() //nolint:errcheck
+	defer bystanderRun.Body.Close()
 	if bystanderRun.StatusCode != http.StatusOK {
 		t.Fatalf("bystander re-drive status = %d, want 200", bystanderRun.StatusCode)
 	}

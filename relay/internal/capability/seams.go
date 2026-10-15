@@ -4,11 +4,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
+	"github.com/Felag-Engineering/relay/relay/internal/policyview"
 )
 
 // ControlAction names one administrative act on the control plane ITSELF —
@@ -225,8 +225,8 @@ type AuditSink interface {
 
 // AccountAdminKind distinguishes which Account/API-Token administration act
 // an AccountAdminEvent describes, mirroring audit.KindAccount*/KindAPIToken*
-// (capability may not import internal/audit — TestCapabilityImportsOnlyRegistryAndJobs
-// — so this mirrors rather than shares that vocabulary; auditsink, the one
+// (capability may not import internal/audit — .golangci.yml's capability-imports
+// rule — so this mirrors rather than shares that vocabulary; auditsink, the one
 // package that imports both, pins the two equal).
 type AccountAdminKind int
 
@@ -355,7 +355,7 @@ const (
 )
 
 // ApprovalAnswer is the structured answer a Decision carries. package
-// capability may not import internal/audit (TestCapabilityImportsOnlyRegistryAndJobs),
+// capability may not import internal/audit (.golangci.yml's capability-imports rule),
 // so this mirrors — rather than shares — audit.ApprovalAnswer*; auditsink,
 // the one package that imports capability, audit, AND approval, pins the two
 // vocabularies equal.
@@ -478,7 +478,7 @@ func (noopAuditSink) RecordAccountAdmin(context.Context, Principal, AccountAdmin
 // consults Frozen before every dispatch (both risk classes); EngageFreeze/
 // ReleaseFreeze call Engage/Release. This seam takes only a context, so it is
 // allowlist-safe for capability's import-boundary guard
-// (TestCapabilityImportsOnlyRegistryAndJobs); the SQLite-backed
+// (.golangci.yml's capability-imports rule); the SQLite-backed
 // implementation (internal/store, behind internal/freeze.Repository, whose
 // method set mirrors this one) is wired in via NewControl, kept out of
 // package capability for the same import-boundary reason as Conduit/
@@ -603,7 +603,7 @@ type JobEvent struct {
 
 // JobEventSink records a Job-grained transition. Mirrors MetricsSink's
 // shape exactly (no ctx, no error) so it stays inside capability's narrow
-// import allowlist (execution_test.go's TestCapabilityImportsOnlyRegistryAndJobs).
+// import allowlist (.golangci.yml's capability-imports rule).
 type JobEventSink interface {
 	RecordJob(e JobEvent)
 }

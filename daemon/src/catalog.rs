@@ -112,6 +112,29 @@ fn catalog_slots_are_constrained_and_the_log_tail_bound_is_fixed() {
     }
 }
 
+/// The scripts the shipped catalog runs, pinned: a slot is a quoted positional
+/// parameter and a slot-free body is run byte for byte (ADR-0021 amendment).
+#[test]
+fn catalog_scripts_are_fixed() {
+    for def in catalog() {
+        let op = compile(&def).expect("compiles");
+        let want = match def.name.as_str() {
+            "service.status" => {
+                "systemctl show --no-pager --property=Id,LoadState,ActiveState,SubState,UnitFileState,MainPID,NRestarts,ExecMainStartTimestamp -- \"$1\""
+            }
+            "log.tail" => "journalctl --no-pager --quiet --lines=200 --unit \"$1\"",
+            "file.checksum" => "sha256sum -- \"$1\"",
+            _ => def.body.as_str(),
+        };
+        assert_eq!(
+            op.script(),
+            want,
+            "script of shipped template {:?}",
+            def.name
+        );
+    }
+}
+
 /// The acceptance line: a Node with the shipped catalog and the shipped default
 /// Policy answers all seven with zero local authoring.
 #[test]
@@ -194,4 +217,29 @@ fn catalog_policy_rules_do_not_create_vocabulary() {
     // ...but the vocabulary lookup is what decides whether it exists, and no
     // native Operation by that name exists.
     assert!(crate::operations::risk_class("proc.list").is_none());
+}
+
+/// The shipped pack is the example of a clean Template set: no body draws a
+/// load error or a `policy check` warning.
+#[test]
+fn catalog_has_no_code_position_errors_or_warnings() {
+    let report = crate::templates::lint_dir(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/packaging/templates.d"
+    )));
+    assert!(
+        report.findings.is_empty(),
+        "findings: {:?}",
+        report.findings
+    );
+    assert_eq!(report.names.len(), EXPECTED.len());
+    for def in catalog() {
+        let op = compile(&def).unwrap_or_else(|e| panic!("{}: {e}", def.name));
+        assert!(
+            op.warnings().is_empty(),
+            "{}: {:?}",
+            def.name,
+            op.warnings()
+        );
+    }
 }

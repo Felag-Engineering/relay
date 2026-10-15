@@ -30,8 +30,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
 )
 
 // driveStreamHeader is driveStream (read_audit_test.go) with the ability to
@@ -400,7 +400,7 @@ func TestConsoleEvents_B7_LimiterRefusalRecordsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open first stream: %v", err)
 	}
-	defer res.Body.Close() //nolint:errcheck
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("first stream = %d, want 200 — it must open before the second request can be "+
 			"refused by the cap", res.StatusCode)

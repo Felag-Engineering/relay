@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 )
 
 // The execution surfaces — the Control API's routes and the MCP tools — adapt

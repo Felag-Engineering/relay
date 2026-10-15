@@ -36,7 +36,7 @@ assume a human can always regain control.
   — when the distrusted thing may be the API credential itself, root-on-the-box must
   suffice to pull the cord. Release: `admin` via the API, or the local path, with an
   audited reason. Fire-alarm asymmetry: anyone may pull; the chief clears re-entry.
-  **Amended by [#397](https://github.com/Felag-Engineering/gleipnir-relay/issues/397)
+  **Amended by [#397](https://github.com/Felag-Engineering/relay/issues/397)
   (2026-08-24): engaging over the Control API additionally requires a HUMAN Account.**
   A machine Account at `operator` — an AI-agent — halting the fleet is not the fire
   alarm this clause had in mind: it is a jailbroken driver switching off its own

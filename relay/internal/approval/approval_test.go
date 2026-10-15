@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 var t0 = time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)

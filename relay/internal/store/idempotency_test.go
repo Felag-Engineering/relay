@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 var idemNow = time.Date(2026, 10, 9, 9, 0, 0, 0, time.UTC)

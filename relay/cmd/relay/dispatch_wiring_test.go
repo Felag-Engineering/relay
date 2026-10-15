@@ -9,17 +9,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditquery"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/auditquery"
+	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/dispatch"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/metrics"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/store"
 )
 
 func testTaskRepository(t *testing.T) jobs.TaskRepository {
@@ -37,7 +37,7 @@ func testTaskRepositoryWithStore(t *testing.T) (jobs.TaskRepository, *store.Stor
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 	return st.Tasks(), st
 }
 

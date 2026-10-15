@@ -29,7 +29,7 @@ import (
 //
 // Mirrors readaudit.go's shape exactly: a data struct, a write-only
 // interface, and a helper — naming no capability identifier, so this file
-// classifies STRICT in no_dispatch_test.go's partition even though it sits
+// is STRICT under no_dispatch_test.go even though it sits
 // on the execution tools' call path too.
 
 // ToolCallEvent is one MCP tools/call invocation. toolCallMiddleware

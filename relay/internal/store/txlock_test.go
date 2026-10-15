@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // zeroWaitDB opens path the way the store does, but with busy_timeout(0), so
@@ -39,7 +39,7 @@ func zeroWaitDB(t *testing.T, path string) *sql.DB {
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
 	}
-	t.Cleanup(func() { db.Close() }) //nolint:errcheck
+	t.Cleanup(func() { db.Close() })
 	return db
 }
 
@@ -54,8 +54,8 @@ func holdWriteLock(t *testing.T, path string) *sql.Conn {
 		t.Fatalf("holder conn: %v", err)
 	}
 	t.Cleanup(func() {
-		conn.ExecContext(ctx, "ROLLBACK") //nolint:errcheck
-		conn.Close()                      //nolint:errcheck
+		conn.ExecContext(ctx, "ROLLBACK")
+		conn.Close()
 	})
 	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		t.Fatalf("holder BEGIN IMMEDIATE: %v", err)
@@ -75,10 +75,10 @@ func assertLockHeld(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("probe conn: %v", err)
 	}
-	defer conn.Close() //nolint:errcheck
+	defer conn.Close()
 	_, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE")
 	if err == nil {
-		conn.ExecContext(ctx, "ROLLBACK") //nolint:errcheck
+		conn.ExecContext(ctx, "ROLLBACK")
 		t.Fatal("probe BEGIN IMMEDIATE succeeded: the write lock is not held")
 	}
 	if !strings.Contains(err.Error(), "SQLITE_BUSY") && !strings.Contains(err.Error(), "database is locked") {
@@ -172,7 +172,7 @@ func TestUpsert_DeferredTxFailsFastUnderAnotherWriter(t *testing.T) {
 		t.Fatalf("sql.Open: %v", err)
 	}
 	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { db.Close() }) //nolint:errcheck
+	t.Cleanup(func() { db.Close() })
 	reg := &sqliteRegistry{db: db, connected: map[string]struct{}{}}
 
 	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {

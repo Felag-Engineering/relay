@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // migrationByVersion returns the shipped migration with that version, so
@@ -261,7 +261,7 @@ func TestMigration0024_IndexesCarryTheTieBreak(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read index definitions: %v", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	defs := map[string]string{}
 	for rows.Next() {

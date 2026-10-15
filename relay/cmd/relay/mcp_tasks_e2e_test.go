@@ -22,10 +22,10 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // taskParams is SEP-2663's request shape, declared HERE rather than imported
@@ -113,7 +113,7 @@ func TestMCPTasks_PollAParkedDispatchThroughToCompletion(t *testing.T) {
 	decideResp := controlAPIRequest(t, f.ClientFor(approver), http.MethodPost,
 		f.ControlBase+"/api/v1/approvals/"+parked.PendingApproval.RequestID+"/decision", approver,
 		map[string]any{"approve": true, "plan_hash": parked.PendingApproval.PlanHash})
-	defer decideResp.Body.Close() //nolint:errcheck
+	defer decideResp.Body.Close()
 	if decideResp.StatusCode != http.StatusOK {
 		t.Fatalf("decision status = %d, want 200", decideResp.StatusCode)
 	}
@@ -187,7 +187,7 @@ func TestMCPTasks_CancelAParkedTaskLeavesTheApprovalDecidable(t *testing.T) {
 	// The approval request is untouched: still pending, still in the queue any
 	// authenticated caller reads, still decidable.
 	listResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals", requester, nil)
-	defer listResp.Body.Close() //nolint:errcheck
+	defer listResp.Body.Close()
 	var list approvalListBody
 	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
 		t.Fatalf("decode queue: %v", err)
@@ -203,7 +203,7 @@ func TestMCPTasks_CancelAParkedTaskLeavesTheApprovalDecidable(t *testing.T) {
 	decideResp := controlAPIRequest(t, f.ClientFor(approver), http.MethodPost,
 		f.ControlBase+"/api/v1/approvals/"+parked.PendingApproval.RequestID+"/decision", approver,
 		map[string]any{"approve": true, "plan_hash": parked.PendingApproval.PlanHash})
-	defer decideResp.Body.Close() //nolint:errcheck
+	defer decideResp.Body.Close()
 	if decideResp.StatusCode != http.StatusOK {
 		t.Fatalf("decision status = %d after a task cancel, want 200 — cancelling a handle must not make a request undecidable", decideResp.StatusCode)
 	}
@@ -397,7 +397,7 @@ func rawToolCall(t *testing.T, f *relayFixture, credential string, capable bool,
 	if err != nil {
 		t.Fatalf("POST /mcp: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read response: %v", err)

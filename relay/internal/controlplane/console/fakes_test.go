@@ -15,15 +15,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
+	"github.com/Felag-Engineering/relay/relay/internal/events"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/policyview"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // reportedSnapshot stamps s with the receipt time policyview.Cache.Set would
@@ -650,7 +650,7 @@ type revokeTokenCall struct {
 // of the Console by accident.
 const (
 	sweepMintedTokenID   = "tok-minted-1"
-	sweepMintedPlaintext = accounts.TokenPrefix + "minted-plaintext-must-appear-once-4a1d" //nolint:gosec // test fixture, not a real credential
+	sweepMintedPlaintext = accounts.TokenPrefix + "minted-plaintext-must-appear-once-4a1d" // test fixture, not a real credential
 )
 
 // fakeAccountAdmin is the AccountAdministrator write seam (#655). It records

@@ -10,28 +10,22 @@
 // shape) and JobResultReader (per-Job Task read-back for rendering per-Node
 // results).
 //
-// This file (mcp.go) — along with tools_nodes.go, tools_operations.go,
-// attribution.go, and toolevents.go (the tool-call event publisher) —
-// is a strict READ file: its non-test source names no capability. identifier
-// outside capabilityReadAllowlist (e.g. capability.StateEval, needed for
-// NodeListing/NodeDescription's Eval field), and never
-// capability.Principal, a concrete capability service
-// (capability.Execution, ReadLane, Control, AccountAdmin, Approvals, Recorder) or their
-// constructors (bannedCapabilityServices). ReadLane below
-// is a read-only, Principal-free interface — the Principal is resolved on
-// the composition root's side of the seam (the ReadAuditor precedent,
-// readaudit.go) — so a read tool structurally cannot reach the execution
-// path. The execution tools (tools_execution.go, tools_jobs.go) are relaxed
-// EXEC files: they may reference capability.Principal/Selector/NodeResult/
-// FrozenError/CapExceededError (needed for Executor's signature and error
-// rendering) but, like every file in this package, may never spell
-// capability.Execution/capability.NewExecution/newDispatch or type-assert to
-// registry.Repository — those remain unconditionally forbidden.
-// no_dispatch_test.go AST-guards this whole partition: every non-test .go
-// file must be classified as a read file or an exec file (an unclassified
-// new file fails the build), the unconditional rules fire on every file, and
-// the relaxed non-allowlisted-capability-selector rule fires only on read
-// files.
+// Every file here except the execution tools (tools_execution.go,
+// tools_jobs.go, tasks.go, tools_approval.go, elicit.go) is a strict file: its
+// non-test source names no capability identifier outside
+// capabilityReadAllowlist (e.g. capability.StateEval, needed for
+// NodeListing/NodeDescription's Eval field), and never capability.Principal.
+// ReadLane below is a read-only, Principal-free interface — the Principal is
+// resolved on the composition root's side of the seam (the ReadAuditor
+// precedent, readaudit.go) — so a read tool structurally cannot reach the
+// execution path. The execution tools are relaxed: they may reference
+// capability.Principal/Selector/NodeResult/FrozenError/CapExceededError
+// (needed for Executor's signature and error rendering). no_dispatch_test.go
+// AST-guards that split, strict by default so a new file is guarded the
+// moment it exists. No file here, strict or relaxed, may name a concrete
+// capability service or its constructor, a display-only cache or
+// registry.Repository, nor import the store, the wire protocol or the
+// dispatcher: .golangci.yml enforces those by resolved package path.
 //
 // Wiring note (RB1, plan review): New's Executor/JobResultReader parameters
 // are narrowed via execAdapter/jobResultReaderAdapter below New, mirroring
@@ -61,12 +55,12 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
+	"github.com/Felag-Engineering/relay/relay/internal/opvocab"
+	"github.com/Felag-Engineering/relay/relay/internal/policyview"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // NodeListing is list_nodes' result, as ReadLane returns it. Nodes may be a

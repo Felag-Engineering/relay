@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
+	"github.com/Felag-Engineering/relay/relay/internal/policyview"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // readlane_registry.go is the read lane's REGISTRY half, beside

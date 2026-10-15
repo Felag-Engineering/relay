@@ -11,11 +11,12 @@
 // domain logic, and no route can reach Relay configuration, a blast cap, the
 // CA key, or a listener (invariant 11) — Deps below intentionally carries
 // none of those, and this package's import list is structurally capped by
-// TestAPIImportsAreAllowlisted (api_imports_test.go).
+// .golangci.yml's api-imports rule.
 //
 // The execution routes hold to the same rule structurally, not just by
-// convention: no_dispatch_test.go fails any file here that names
-// capability.Execution, capability.NewExecution, or newDispatch, so the only path to a
+// convention: .golangci.yml's "adapter boundary" patterns fail any file here
+// that names capability.Execution or capability.NewExecution, and
+// no_dispatch_test.go any that names newDispatch, so the only path to a
 // dispatch is the injected Executor interface (execution.go).
 package api
 
@@ -26,12 +27,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/enroll"
+	"github.com/Felag-Engineering/relay/relay/internal/revocation"
 )
 
 // TokenMinter mints a scoped, expiring Enrollment Token. *enroll.Service

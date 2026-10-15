@@ -7,7 +7,7 @@
 // structural test invokes `go build` on it explicitly.
 package main
 
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+import "github.com/Felag-Engineering/relay/relay/internal/capability"
 
 func main() {
 	_ = capability.dispatch{}

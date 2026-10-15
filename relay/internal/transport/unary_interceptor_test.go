@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/revocation"
+	"github.com/Felag-Engineering/relay/relay/internal/transport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -84,7 +84,7 @@ func startEnrollmentServer(t *testing.T, rec *recordingEnrollmentServer, creds c
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, checker)),
 	)
 	relayv1.RegisterEnrollmentServer(srv, rec)
-	go srv.Serve(lis) //nolint:errcheck
+	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
 	return lis
 }

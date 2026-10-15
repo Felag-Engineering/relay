@@ -3,8 +3,8 @@ package controlplane
 import (
 	"net/http"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 )
 
 // Asserted-attribution request headers (ADR-0027

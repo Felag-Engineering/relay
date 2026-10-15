@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/mcptask"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // mcptask_test.go covers the capability layer's half of the MCP Tasks

@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
 )
 
 // The audit chain's store half. internal/audit defines the encoding and
@@ -26,8 +26,8 @@ import (
 // A guardrail, not a security boundary: anyone holding the file can DROP
 // TRIGGER. The hash chain is what makes that visible.
 const (
-	auditNoUpdateTriggerSQL = `CREATE TRIGGER audit_append_only_no_update BEFORE UPDATE ON audit BEGIN SELECT RAISE(ABORT, 'audit is append-only: UPDATE refused (#896)'); END`
-	auditNoDeleteTriggerSQL = `CREATE TRIGGER audit_append_only_no_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT, 'audit is append-only: DELETE refused (#896)'); END`
+	auditNoUpdateTriggerSQL = `CREATE TRIGGER audit_append_only_no_update BEFORE UPDATE ON audit BEGIN SELECT RAISE(ABORT, 'audit is append-only: UPDATE refused'); END`
+	auditNoDeleteTriggerSQL = `CREATE TRIGGER audit_append_only_no_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT, 'audit is append-only: DELETE refused'); END`
 )
 
 // auditTSCanonicaliseSQL is migration 0024's conversion UPDATE, verbatim. It
@@ -110,7 +110,7 @@ func readBackfillBatch(ctx context.Context, tx *sql.Tx, after int64) ([]backfill
 	if err != nil {
 		return nil, fmt.Errorf("read audit rows to chain: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	var batch []backfillRow
 	for rows.Next() {
@@ -349,7 +349,7 @@ func walkAuditChain(ctx context.Context, tx *sql.Tx, verifier *audit.ChainVerifi
 	if err != nil {
 		return nil, fmt.Errorf("read audit chain: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	for rows.Next() {
 		var seq int64

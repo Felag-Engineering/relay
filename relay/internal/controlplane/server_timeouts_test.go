@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
 // newBoundedTestServer starts a Server whose connection bounds are shortened to
@@ -62,7 +62,7 @@ func TestServer_SilentConnectionIsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer conn.Close() //nolint:errcheck
+	defer conn.Close()
 
 	assertServerCloses(t, conn, 5*time.Second)
 }
@@ -75,11 +75,11 @@ func TestServer_StalledHeadersAreCut(t *testing.T) {
 	// runner.
 	addr := newBoundedTestServer(t, time.Second, time.Minute)
 
-	conn, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // a self-signed test leaf; the handshake is not what is under test
+	conn, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true}) // a self-signed test leaf; the handshake is not what is under test
 	if err != nil {
 		t.Fatalf("tls.Dial: %v", err)
 	}
-	defer conn.Close() //nolint:errcheck
+	defer conn.Close()
 
 	if _, err := conn.Write([]byte("GET /api/v1/ping HTTP/1.1\r\nHost: relay\r\n")); err != nil {
 		t.Fatalf("write partial headers: %v", err)

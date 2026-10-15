@@ -5,9 +5,11 @@
 // risk-class guard that keeps any adapter from setting an Action's class
 // (RiskClassViolations, invariant 13, ADR-0012).
 //
-// Only the pieces that were byte-identical across those guards live here.
-// Each guard's rule set (its dispatchViolations, allowlists and file
-// classification) differs by surface and stays in its own _test.go file, so
+// These guards hold only what an import path or a resolved identifier cannot
+// express; .golangci.yml's depguard rules and "adapter boundary" forbidigo
+// patterns hold the rest. Only the pieces that were byte-identical across the
+// guards live here. Each guard's rule set (its dispatchViolations, allowlists
+// and relaxed files) differs by surface and stays in its own _test.go file, so
 // what each surface forbids is still read in one place beside the code it
 // guards.
 //
@@ -26,9 +28,9 @@ import (
 // PATH rather than an assumed local package name, so an aliased import
 // cannot dodge the check.
 const (
-	registryImportPath   = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
-	nodevocabImportPath  = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
+	registryImportPath   = "github.com/Felag-Engineering/relay/relay/internal/registry"
+	policyviewImportPath = "github.com/Felag-Engineering/relay/relay/internal/policyview"
+	nodevocabImportPath  = "github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 	contextImportPath    = "context"
 )
 

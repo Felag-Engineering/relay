@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/store"
 )
 
 // openSinkStore opens a temp SQLite store and returns its audit.Repository
@@ -31,7 +31,7 @@ func openSinkStore(t *testing.T) (*store.Store, audit.Repository, string) {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 	return st, st.Audit(), path
 }
 
@@ -871,7 +871,7 @@ func TestRecordRestartDurability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-Open: %v", err)
 	}
-	t.Cleanup(func() { st2.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st2.Close() })
 
 	records, err := st2.Audit().ByJob(context.Background(), "job-restart")
 	if err != nil {

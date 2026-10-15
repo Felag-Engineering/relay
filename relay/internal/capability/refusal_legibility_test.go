@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 )
 
 // TestRefusalLegibility pins the TEXT of all four refusal walls the demo

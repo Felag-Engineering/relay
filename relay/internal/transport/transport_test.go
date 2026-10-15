@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
-	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
+	"github.com/Felag-Engineering/relay/relay/internal/ca"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/transport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -100,7 +100,7 @@ func startServer(t *testing.T, recvNodeID *string, opts ...grpc.ServerOption) *b
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer(opts...)
 	relayv1.RegisterTunnelServer(srv, &recordingTunnelServer{nodeID: recvNodeID})
-	go srv.Serve(lis) //nolint:errcheck
+	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
 	return lis
 }
@@ -124,7 +124,7 @@ func (s *recordingTunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.Dae
 	*s.nodeID = id
 
 	// Drain the Hello (if present) then send a Ping so the client knows we reached the handler.
-	stream.Recv() //nolint:errcheck
+	stream.Recv()
 	return stream.Send(&relayv1.RelayMessage{
 		Body: &relayv1.RelayMessage_Ping{
 			Ping: &relayv1.Ping{UnixMillis: time.Now().UnixMilli()},
@@ -505,8 +505,8 @@ func handshakePeerLeaf(t *testing.T, creds credentials.TransportCredentials, roo
 	t.Helper()
 	serverConn, clientConn := net.Pipe()
 	t.Cleanup(func() {
-		serverConn.Close() //nolint:errcheck
-		clientConn.Close() //nolint:errcheck
+		serverConn.Close()
+		clientConn.Close()
 	})
 
 	done := make(chan error, 1)

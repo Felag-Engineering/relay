@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
+	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 )
 
 // sqliteTokens implements enroll.Repository against the tokens table. Making the

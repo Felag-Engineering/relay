@@ -23,11 +23,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/console"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane/console"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // writeGateConfig writes a root-owned-shaped approval-gate file that parks
@@ -146,7 +146,7 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 
 	// 1. The dispatch parks. Nothing ran.
 	parkResp := restartMutate(t, f, requester)
-	defer parkResp.Body.Close() //nolint:errcheck
+	defer parkResp.Body.Close()
 	if parkResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202 — a park is not a failure and not a completion", parkResp.StatusCode)
 	}
@@ -166,7 +166,7 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 
 	// 2. It is in the queue any authenticated caller can read.
 	listResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals", requester, nil)
-	defer listResp.Body.Close() //nolint:errcheck
+	defer listResp.Body.Close()
 	var list approvalListBody
 	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
 		t.Fatalf("decode queue: %v", err)
@@ -180,7 +180,7 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 	selfResp := controlAPIRequest(t, f.Client(), http.MethodPost,
 		f.ControlBase+parked.DecisionPath, requester,
 		map[string]any{"approve": true, "plan_hash": parked.PlanHash})
-	defer selfResp.Body.Close() //nolint:errcheck
+	defer selfResp.Body.Close()
 	if selfResp.StatusCode != http.StatusConflict {
 		t.Fatalf("self-approval status = %d, want 409", selfResp.StatusCode)
 	}
@@ -189,7 +189,7 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 	staleResp := controlAPIRequest(t, f.ClientFor(approver), http.MethodPost,
 		f.ControlBase+parked.DecisionPath, approver,
 		map[string]any{"approve": true, "plan_hash": "not-the-plan-you-were-shown"})
-	defer staleResp.Body.Close() //nolint:errcheck
+	defer staleResp.Body.Close()
 	if staleResp.StatusCode != http.StatusConflict {
 		t.Fatalf("plan-hash mismatch status = %d, want 409", staleResp.StatusCode)
 	}
@@ -198,7 +198,7 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 	decideResp := controlAPIRequest(t, f.ClientFor(approver), http.MethodPost,
 		f.ControlBase+parked.DecisionPath, approver,
 		map[string]any{"approve": true, "plan_hash": parked.PlanHash, "reason": "change ticket OPS-91"})
-	defer decideResp.Body.Close() //nolint:errcheck
+	defer decideResp.Body.Close()
 	if decideResp.StatusCode != http.StatusOK {
 		t.Fatalf("decision status = %d, want 200", decideResp.StatusCode)
 	}
@@ -220,7 +220,7 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 	//    has no Tunnel, so `unreachable` is the truthful outcome — what matters
 	//    is that a Job exists, which it could not before the approval.
 	runResp := restartMutate(t, f, requester)
-	defer runResp.Body.Close() //nolint:errcheck
+	defer runResp.Body.Close()
 	if runResp.StatusCode != http.StatusOK {
 		t.Fatalf("re-drive status = %d, want 200 after approval", runResp.StatusCode)
 	}
@@ -302,7 +302,7 @@ func TestApprovalCallout_MachineCannotSatisfyItsOwnGate(t *testing.T) {
 	machine := mintAccount(t, f, "gleipnir-prod", accounts.KindMachine, accounts.RoleAdmin)
 
 	parkResp := restartMutate(t, f, machine)
-	defer parkResp.Body.Close() //nolint:errcheck
+	defer parkResp.Body.Close()
 	if parkResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", parkResp.StatusCode)
 	}
@@ -314,14 +314,14 @@ func TestApprovalCallout_MachineCannotSatisfyItsOwnGate(t *testing.T) {
 	selfResp := controlAPIRequest(t, f.ClientFor(machine), http.MethodPost,
 		f.ControlBase+parked.DecisionPath, machine,
 		map[string]any{"approve": true, "plan_hash": parked.PlanHash})
-	defer selfResp.Body.Close() //nolint:errcheck
+	defer selfResp.Body.Close()
 	if selfResp.StatusCode != http.StatusConflict {
 		t.Fatalf("machine self-approval status = %d, want 409 even under requester_allowed: true", selfResp.StatusCode)
 	}
 
 	// And it really did not run: the dispatch still parks.
 	retry := restartMutate(t, f, machine)
-	defer retry.Body.Close() //nolint:errcheck
+	defer retry.Body.Close()
 	if retry.StatusCode != http.StatusAccepted {
 		t.Fatalf("re-drive status = %d, want it still parked", retry.StatusCode)
 	}
@@ -331,7 +331,7 @@ func TestApprovalCallout_MachineCannotSatisfyItsOwnGate(t *testing.T) {
 	// runs before the mux, so this never reaches handleDecideApproval at all.
 	consoleResp := controlAPIRequest(t, f.ClientFor(machine), http.MethodPost,
 		f.ControlBase+"/console/approvals/"+parked.RequestID+"/decision", machine, nil)
-	defer consoleResp.Body.Close() //nolint:errcheck
+	defer consoleResp.Body.Close()
 	if consoleResp.StatusCode != http.StatusForbidden {
 		t.Fatalf("machine bearer-lane Console decide status = %d, want 403", consoleResp.StatusCode)
 	}
@@ -355,7 +355,7 @@ func TestApprovalCallout_MachineCannotSatisfyItsOwnGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST sign-in: %v", err)
 	}
-	defer signInResp.Body.Close() //nolint:errcheck
+	defer signInResp.Body.Close()
 	if signInResp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("machine sign-in status = %d, want 401 (no session obtained)", signInResp.StatusCode)
 	}
@@ -383,7 +383,7 @@ func TestApprovalCallout_OperatorCannotReleaseARawExec(t *testing.T) {
 	// The founding admin (admin role) parks a Raw Exec.
 	parkResp := controlAPIRequest(t, f.Client(), http.MethodPost, f.ControlBase+"/api/v1/raw-exec",
 		f.Credential, map[string]any{"argv": []string{"/bin/echo", "hi"}})
-	defer parkResp.Body.Close() //nolint:errcheck
+	defer parkResp.Body.Close()
 	if parkResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202; body decode follows", parkResp.StatusCode)
 	}
@@ -395,7 +395,7 @@ func TestApprovalCallout_OperatorCannotReleaseARawExec(t *testing.T) {
 	resp := controlAPIRequest(t, f.ClientFor(operator), http.MethodPost,
 		f.ControlBase+parked.DecisionPath, operator,
 		map[string]any{"approve": true, "plan_hash": parked.PlanHash})
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("operator deciding a Raw Exec: status = %d, want 403 — approving must not be a side door around the ladder", resp.StatusCode)
 	}
@@ -409,7 +409,7 @@ func TestApprovalCallout_ReadsAreNotGatedByAMutateRule(t *testing.T) {
 
 	resp := controlAPIRequest(t, f.Client(), http.MethodPost, f.ControlBase+"/api/v1/operations",
 		f.Credential, map[string]any{"operation": "system.facts"})
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("read-class dispatch status = %d, want 200 — a mutate rule must not park it", resp.StatusCode)
 	}
@@ -438,7 +438,7 @@ func TestApprovalWebhook_AParkNotifiesTheConfiguredEndpoint(t *testing.T) {
 	}))
 
 	parkResp := restartMutate(t, f, f.Credential)
-	defer parkResp.Body.Close() //nolint:errcheck
+	defer parkResp.Body.Close()
 	if parkResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", parkResp.StatusCode)
 	}

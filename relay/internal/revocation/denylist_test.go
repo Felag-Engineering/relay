@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
+	"github.com/Felag-Engineering/relay/relay/internal/revocation"
 )
 
 func TestDenylist_AddIsRevoked(t *testing.T) {

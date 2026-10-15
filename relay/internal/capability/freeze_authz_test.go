@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // freeze_authz_test.go covers #397's capability-layer half: the Freeze's role

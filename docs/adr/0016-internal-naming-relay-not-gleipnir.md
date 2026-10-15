@@ -1,6 +1,6 @@
 # Internal naming: Relay, not Gleipnir
 
-**Status:** Accepted.
+**Status:** Accepted; amended 2026-10-15 (the repo and the Go module path are `relay`, #885).
 
 The product built in this repo is **Relay** — the fleet-administration control plane.
 **Gleipnir** is a *different*, first-party project: the AI-agent system that drives Relay
@@ -59,3 +59,20 @@ security-critical control plane.
   node_id, never the CA subject string, and no code or test asserts the CA CommonName.
 - The `gleipnir-relay` repo/module segment remains a standing, intentional exception to
   "no `gleipnir` internally," documented here so future greps do not mistake it for drift.
+
+## Amendment (2026-10-15): the repo and the Go module path are `relay`
+
+The repository was renamed `Felag-Engineering/gleipnir-relay` → `Felag-Engineering/relay`,
+which is the out-of-band, human-signed-off decision the fourth decision above deferred.
+That decision kept the module path only because it derives from the repository URL, so the
+reason it gives now points the other way:
+
+- **The Go module path is `github.com/Felag-Engineering/relay/relay`.** Every import, the
+  proto `go_package` option (regenerated, never hand-edited, ADR-0007), and the tool modules
+  under `tools/` follow it.
+- **The `gleipnir-relay` exception in (b) and in Consequences is retired.** "Gleipnir" is
+  retained only for the separate AI-agent system that consumes Relay; `gleipnir-relay`
+  appears only where the rename is itself the subject: this ADR, GLOSSARY.md, and the
+  notes telling an old checkout where to point its remote.
+- Nothing on the wire changes: the gRPC method paths are `relay.v1`, set by the proto
+  package, not the Go module path.

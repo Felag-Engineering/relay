@@ -6,9 +6,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 var testNow = time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)

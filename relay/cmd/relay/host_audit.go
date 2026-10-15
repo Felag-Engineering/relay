@@ -1,6 +1,6 @@
 package main
 
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+import "github.com/Felag-Engineering/relay/relay/internal/audit"
 
 // hostAuditID mints the audit record ID for a host-side credential lever.
 // It is a var so a test can make the record unwritable (a colliding

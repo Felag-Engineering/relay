@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // sqliteGrants implements approval.GrantRepository against the approval_grants
@@ -127,7 +127,7 @@ func (g *sqliteGrants) ActiveGrants(ctx context.Context, now time.Time) ([]appro
 	if err != nil {
 		return nil, fmt.Errorf("select approval grants: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 
 	var out []approval.Grant
 	for rows.Next() {
@@ -197,19 +197,19 @@ func (g *sqliteGrants) ClaimGrant(ctx context.Context, d approval.Dispatch, now 
 	for rows.Next() {
 		gr, err := scanGrant(rows.Scan)
 		if err != nil {
-			rows.Close() //nolint:errcheck
+			rows.Close()
 			return approval.Grant{}, false, fmt.Errorf("scan candidate grant: %w", err)
 		}
 		candidates = append(candidates, gr)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close() //nolint:errcheck
+		rows.Close()
 		return approval.Grant{}, false, err
 	}
 	// Drained before any write: this driver allows one active statement per
 	// connection, so writing inside the loop would deadlock against the cursor
 	// (the same constraint approvals.go's listWith documents).
-	rows.Close() //nolint:errcheck
+	rows.Close()
 
 	// Soonest-expiring first, so a grant about to lapse is spent before one
 	// with room left — the operator's earlier, narrower window is used up

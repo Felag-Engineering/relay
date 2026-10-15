@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // approval_grant_test.go covers the MANAGEMENT half of batch/window approvals
@@ -584,7 +584,7 @@ func TestGrantForApprovalIsNotFoundForAPlainRequest(t *testing.T) {
 	s, _, _, _ := grantMgmtFixture(t, gateEverything(t, 1), &spyApprovalAuthorizer{})
 
 	_, err := s.GrantForApproval(context.Background(), "req-that-is-a-plan")
-	if err != approval.ErrGrantNotFound { //nolint:errorlint // the point is that it is UNWRAPPED
+	if err != approval.ErrGrantNotFound { // the point is that it is UNWRAPPED
 		t.Fatalf("err = %v, want the unwrapped approval.ErrGrantNotFound", err)
 	}
 }

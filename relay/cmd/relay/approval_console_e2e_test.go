@@ -24,10 +24,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/console"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane/console"
 )
 
 // consoleClient builds a browser-shaped http.Client for f: TLS trusting the
@@ -57,7 +57,7 @@ func consoleClient(t *testing.T, f *relayFixture) *http.Client {
 // readAll reads and closes resp.Body, failing the test on either error.
 func readAll(t *testing.T, resp *http.Response) string {
 	t.Helper()
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read response body: %v", err)
@@ -145,7 +145,7 @@ func consoleSignIn(t *testing.T, client *http.Client, f *relayFixture, username,
 	if err != nil {
 		t.Fatalf("POST sign-in: %v", err)
 	}
-	defer postResp.Body.Close() //nolint:errcheck
+	defer postResp.Body.Close()
 	if postResp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("sign-in status = %d, want 303 (redirect after sign-in)", postResp.StatusCode)
 	}
@@ -166,7 +166,7 @@ func TestApprovalCallout_ConsoleDecideRun(t *testing.T) {
 	// requester answering their own request.
 	requester := mintAccount(t, f, "gleipnir-prod", accounts.KindMachine, accounts.RoleAdmin)
 	parkResp := restartMutate(t, f, requester)
-	defer parkResp.Body.Close() //nolint:errcheck
+	defer parkResp.Body.Close()
 	if parkResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", parkResp.StatusCode)
 	}
@@ -218,7 +218,7 @@ func TestApprovalCallout_ConsoleDecideRun(t *testing.T) {
 	// would: approved, attributed to dana, out-of-band, human.
 	getApproval := controlAPIRequest(t, f.ClientFor(danaToken), http.MethodGet,
 		f.ControlBase+"/api/v1/approvals/"+parked.RequestID, danaToken, nil)
-	defer getApproval.Body.Close() //nolint:errcheck
+	defer getApproval.Body.Close()
 	var approved approvalBody
 	if err := json.NewDecoder(getApproval.Body).Decode(&approved); err != nil {
 		t.Fatalf("decode approval: %v", err)
@@ -260,7 +260,7 @@ func TestApprovalCallout_ConsoleDecideRun(t *testing.T) {
 	// Node is registered but never connects, so `unreachable` is the
 	// truthful per-Node outcome; what matters is that dispatch happened.
 	runResp := restartMutate(t, f, requester)
-	defer runResp.Body.Close() //nolint:errcheck
+	defer runResp.Body.Close()
 	if runResp.StatusCode != http.StatusOK {
 		t.Fatalf("re-drive status = %d, want 200 after the Console's approval", runResp.StatusCode)
 	}
@@ -295,7 +295,7 @@ func TestApprovalCallout_ConsoleDecideRunAsOperator(t *testing.T) {
 
 	requester := mintAccount(t, f, "gleipnir-prod", accounts.KindMachine, accounts.RoleAdmin)
 	parkResp := restartMutate(t, f, requester)
-	defer parkResp.Body.Close() //nolint:errcheck
+	defer parkResp.Body.Close()
 	if parkResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", parkResp.StatusCode)
 	}
@@ -336,7 +336,7 @@ func TestApprovalCallout_ConsoleDecideRunAsOperator(t *testing.T) {
 
 	getApproval := controlAPIRequest(t, f.ClientFor(patToken), http.MethodGet,
 		f.ControlBase+"/api/v1/approvals/"+parked.RequestID, patToken, nil)
-	defer getApproval.Body.Close() //nolint:errcheck
+	defer getApproval.Body.Close()
 	var approved approvalBody
 	if err := json.NewDecoder(getApproval.Body).Decode(&approved); err != nil {
 		t.Fatalf("decode approval: %v", err)
@@ -358,7 +358,7 @@ func TestApprovalCallout_ConsoleDenyIsTerminalAndTheRequesterSeesIt(t *testing.T
 
 	requester := f.Credential // the founding admin, over the API
 	parkResp := restartMutate(t, f, requester)
-	defer parkResp.Body.Close() //nolint:errcheck
+	defer parkResp.Body.Close()
 	if parkResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", parkResp.StatusCode)
 	}
@@ -399,7 +399,7 @@ func TestApprovalCallout_ConsoleDenyIsTerminalAndTheRequesterSeesIt(t *testing.T
 	// same channel they parked on, never the Console.
 	getApproval := controlAPIRequest(t, f.Client(), http.MethodGet,
 		f.ControlBase+"/api/v1/approvals/"+parked.RequestID, requester, nil)
-	defer getApproval.Body.Close() //nolint:errcheck
+	defer getApproval.Body.Close()
 	var denied approvalBody
 	if err := json.NewDecoder(getApproval.Body).Decode(&denied); err != nil {
 		t.Fatalf("decode approval: %v", err)
@@ -415,7 +415,7 @@ func TestApprovalCallout_ConsoleDenyIsTerminalAndTheRequesterSeesIt(t *testing.T
 	secondResp := controlAPIRequest(t, f.ClientFor(danaToken), http.MethodPost,
 		f.ControlBase+parked.DecisionPath, danaToken,
 		map[string]any{"approve": true, "plan_hash": parked.PlanHash})
-	defer secondResp.Body.Close() //nolint:errcheck
+	defer secondResp.Body.Close()
 	if secondResp.StatusCode != http.StatusConflict {
 		t.Fatalf("second decision status = %d, want 409 (a denial is terminal)", secondResp.StatusCode)
 	}
@@ -423,7 +423,7 @@ func TestApprovalCallout_ConsoleDenyIsTerminalAndTheRequesterSeesIt(t *testing.T
 	// The re-drive does not dispatch: it still parks (a fresh Request,
 	// matched by the same plan hash finding a terminal one, not a Job).
 	retry := restartMutate(t, f, requester)
-	defer retry.Body.Close() //nolint:errcheck
+	defer retry.Body.Close()
 	if retry.StatusCode != http.StatusAccepted {
 		t.Fatalf("re-drive after denial status = %d, want it still parked", retry.StatusCode)
 	}
@@ -447,7 +447,7 @@ func TestApprovalCallout_ConsoleSelfApprovalIsRefused(t *testing.T) {
 	_, requesterToken := mintConsoleHumanAccount(t, f, "dana", "dana's console password", accounts.RoleAdmin)
 
 	parkResp := restartMutate(t, f, requesterToken)
-	defer parkResp.Body.Close() //nolint:errcheck
+	defer parkResp.Body.Close()
 	if parkResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", parkResp.StatusCode)
 	}
@@ -496,7 +496,7 @@ func TestApprovalCallout_ConsoleSelfApprovalIsRefused(t *testing.T) {
 
 	// It really did not run: the dispatch still parks.
 	retry := restartMutate(t, f, requesterToken)
-	defer retry.Body.Close() //nolint:errcheck
+	defer retry.Body.Close()
 	if retry.StatusCode != http.StatusAccepted {
 		t.Fatalf("re-drive status = %d, want it still parked", retry.StatusCode)
 	}

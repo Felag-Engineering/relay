@@ -9,15 +9,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 )
 
 // sessionRoles are the three roles a real signed-in session can carry — the
 // fixture the per-role gate tests sweep over.
 var sessionRoles = []accounts.Role{accounts.RoleViewer, accounts.RoleOperator, accounts.RoleAdmin}
 
-const testCredential = accounts.TokenPrefix + "1234567890abcdef.test-secret" //nolint:gosec // test fixture, not a real credential
+const testCredential = accounts.TokenPrefix + "1234567890abcdef.test-secret" // test fixture, not a real credential
 
 // roleVerifier accepts one credential as an Account with the given role, so a
 // test can ask "what does a viewer see?" through the REAL authentication path

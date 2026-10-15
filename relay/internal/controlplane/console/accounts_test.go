@@ -29,10 +29,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/authz"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 )
 
 const accountsPath = "/console/accounts"
@@ -361,7 +361,7 @@ func TestAccounts_NoSecretHashReachesTheRenderedPage(t *testing.T) {
 // which bans the type everywhere BUT that one file; this one still bans
 // SecretHash everywhere without exception.
 //
-// An AST walk rather than a substring scan, in imports_test.go's shape,
+// An AST walk rather than a substring scan, in no_dispatch_test.go's shape,
 // because the property is about CODE. Parsed without comments, so a doc
 // comment that names the field in order to say it is absent — accounts.go's
 // own tokenRow comment does exactly that — is not itself the violation.

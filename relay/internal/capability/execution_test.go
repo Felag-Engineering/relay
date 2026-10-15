@@ -4,13 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go/parser"
-	"go/token"
 	"math/rand/v2"
-	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/logctx"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/store"
 )
 
 // fakeConduit is a configurable Conduit: connected reports which Nodes have
@@ -126,7 +122,7 @@ func testEngineStore(t *testing.T) (jobs.JobRepository, jobs.TaskRepository) {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 	return st.Jobs(), st.Tasks()
 }
 
@@ -794,7 +790,7 @@ func TestServiceRunDispatchPanicReachesAuditAndResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 	reg := st.Registry()
 	fc := newFakeConduit(nil)
 	for _, n := range []string{"node-a", "node-b"} {
@@ -954,7 +950,7 @@ func TestEngineMixedFleetVersionGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	reg := st.Registry()
 	if _, err := reg.Upsert(registry.Report{NodeID: "node-current", DaemonVersion: "1.2.0"}); err != nil {
@@ -1155,7 +1151,7 @@ func TestRun_RequesterIsOnTheJobWhileEveryTaskIsPending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 
 	inner := newFakeConduit(nil)
 	inner.connected["node-1"] = true
@@ -1415,148 +1411,6 @@ func TestExecution_ResolvesStateAgainstTheReadLanesWindow(t *testing.T) {
 	var nnm *NoNodesMatchedError
 	if !errors.As(err, &nnm) {
 		t.Fatalf("Run with a zero window = %v, want a *NoNodesMatchedError (the marker never fires)", err)
-	}
-}
-
-// TestCapabilityImportsOnlyRegistryAndJobs is an import-boundary AST guard
-// (mirrors jobs.TestNoDatabaseSQLImport and dispatch_construction_test.go's
-// parse-and-inspect style): package capability's non-test files may only
-// import a small stdlib allowlist plus internal/registry and internal/jobs
-// — never internal/relay/v1 (the wire proto) or database/sql. #99 is
-// exactly the issue that tempts a real-Conduit author to reach for
-// relayv1.TaskRequest/TaskResult inside capability; this fails the build
-// if they do (ADR-0009/0010, invariant 10).
-func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
-	allowed := map[string]bool{
-		"context":      true,
-		"crypto/rand":  true,
-		"encoding/hex": true,
-		"errors":       true,
-		"fmt":          true,
-		// log/slog joined with #614: authorizeMachineCancel logs a job-query
-		// failure it must not fold into the caller-facing refusal reason,
-		// the same operational-detail-stays-server-side posture auditsink's
-		// own logging already keeps. Stdlib, no proto, no database/sql — the
-		// same admission bar every other entry here clears.
-		"log/slog": true,
-		// runtime/debug joined with #942: a recovered dispatch-worker panic logs
-		// its stack. Stdlib, no proto, no database/sql.
-		"runtime/debug": true,
-		// sort joined with #539: RecordEventSubscription canonicalises its
-		// caller-supplied kind list (sort + dedup) before it is bounded and
-		// recorded, so a subscription's read record is grouped by shape
-		// rather than by the order a query string happened to list kinds
-		// in. Stdlib, no proto, no database/sql — the same admission bar
-		// every other entry here clears.
-		"sort":    true,
-		"strings": true,
-		// sync and golang.org/x/sync/errgroup joined with #886: bounded
-		// concurrent Job fan-out and the per-Job cancel gate. x/sync is the Go
-		// team's own extension module — no proto, no database/sql, no network.
-		"sync":                       true,
-		"golang.org/x/sync/errgroup": true,
-		"time":                       true,
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs":     true,
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry": true,
-		// internal/approval joined the allowlist with #269 (ADR-0027). It is
-		// admitted on exactly the terms jobs and registry are: a domain package
-		// with no proto dependency and no database/sql, guarded by its own
-		// import test (approval.TestApprovalImportsStayNarrow) so widening this
-		// list does not create a transitive back door into the wire types.
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval": true,
-		// logctx joined with #902: request-scoped log correlation (Job id).
-		// Stdlib-only (`context`, `log/slog`) — no proto, no database/sql, no
-		// HTTP, no Relay configuration — and held there by logctx's own
-		// TestLogctxImportsStayNarrow, the same admission bar every entry here
-		// clears.
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/logctx": true,
-		// internal/mcptask joined with #374 (ADR-0028), on exactly the same
-		// terms: a domain package with no proto, no database/sql, and — its own
-		// guard adds this one — no MCP SDK, so admitting it here cannot become
-		// a transitive route to either the wire types or the SDK.
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask": true,
-		// nodestate joined with #414 (ADR-0034): the `state:` label derivation
-		// over one registry.Node. Proto-free, SQL-free, and it imports only
-		// time and registry (see nodestate's own package doc for why it never
-		// imports internal/ca), so admitting it opens no transitive back door
-		// — and it is admitted precisely so `state:` has exactly one
-		// definition, shared by Selector.Matches and every rendering surface.
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate": true,
-		// internal/accounts joined with #653, on the same terms approval,
-		// mcptask, and nodestate were admitted: a domain package with no
-		// proto, no database/sql, no HTTP, guarded by its own import test
-		// (accounts.TestAccountsImportsStayNarrow). Admitted so the Account/
-		// role vocabulary (accounts.Account, Role, APIToken, Plaintext) has
-		// exactly ONE definition — accountadmin.go's AccountStore/
-		// APITokenStore would otherwise need to mirror it, the way this
-		// package already mirrors approval.Answer and audit.Kind* for
-		// packages it may not import — and a mirrored copy is a copy that can
-		// disagree with the vocabulary it describes. `go list` confirms
-		// accounts' direct imports are exactly its own import test's
-		// allowlist, with zero internal/* and no cycle — its transitive
-		// imports (crypto/*, encoding/*, golang.org/x/crypto/argon2, ...) are
-		// not this package's direct imports and so do not need entries here.
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts": true,
-		// internal/policyview and internal/nodevocab joined with #680, on
-		// exactly the terms approval, mcptask, nodestate and accounts were
-		// admitted: proto-free, SQL-free, stdlib-only domain mirrors, each
-		// guarded by its own import test (policyview.TestPolicyViewImportsStayNarrow,
-		// nodevocab.TestNodeVocabImportsStayNarrow). Admitted so the Policy
-		// view and the Template vocabulary have ONE definition rather than a
-		// mirrored copy here that can disagree with the cache it describes —
-		// the accounts rationale, applied again. Both are DISPLAY-ONLY
-		// caches with no evaluation surface (Get only; Set stays out of this
-		// package's reach), so admitting them cannot become a Relay-side
-		// Policy decision (invariant 12, ADR-0011).
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview": true,
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab":  true,
-		// internal/opvocab joined with #626 (ADR-0042): template.go asks it
-		// whether an Operation name is Native — a Template is every name that
-		// is not — and reuses its ValidateArgNames, the one definition of
-		// #345's argument-name check, for Template slots. Stdlib plus jobs
-		// only, no proto, no database/sql, and already a transitive import
-		// through internal/approval, so admitting it opens no new door.
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab": true,
-	}
-	forbidden := map[string]bool{
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1": true,
-		"database/sql": true,
-	}
-
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	dir := filepath.Dir(thisFile)
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("os.ReadDir(%s): %v", dir, err)
-	}
-
-	fset := token.NewFileSet()
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		path := filepath.Join(dir, name)
-		file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
-		if err != nil {
-			t.Fatalf("parser.ParseFile(%s): %v", path, err)
-		}
-		for _, imp := range file.Imports {
-			importPath, err := strconv.Unquote(imp.Path.Value)
-			if err != nil {
-				t.Fatalf("unquote import %s in %s: %v", imp.Path.Value, name, err)
-			}
-			if forbidden[importPath] {
-				t.Errorf("%s imports %q — package capability must stay free of the wire proto and raw SQL (ADR-0009/0010 boundary)", name, importPath)
-			}
-			if !allowed[importPath] {
-				t.Errorf("%s imports %q, which is not in the capability package's import allowlist", name, importPath)
-			}
-		}
 	}
 }
 

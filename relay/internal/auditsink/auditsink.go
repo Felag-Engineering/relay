@@ -4,7 +4,7 @@
 //
 // It lives in its own package, not package capability or package audit,
 // because it must reference both: capability's non-test files are locked to
-// a small import allowlist (TestCapabilityImportsOnlyRegistryAndJobs) that
+// a small import allowlist (.golangci.yml's capability-imports rule) that
 // bars database/sql and internal/audit, and audit is deliberately a thin,
 // SQL-free domain package that must not depend on capability. auditsink is
 // the only place both meet.
@@ -53,11 +53,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // idGen mints a new unique audit Record ID. A seam so tests can inject

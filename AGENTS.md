@@ -10,8 +10,8 @@ by nature: it is remote code execution as a service.** Treat every change to the
 Policy, transport, or auth paths as security-sensitive.
 
 The product is **Relay**. **Gleipnir** is the separate first-party AI-agent system that drives
-it — a consumer of Relay, never a component of it. The repo name is historical (GLOSSARY.md,
-ADR-0016).
+it — a consumer of Relay, never a component of it. The repo was formerly `gleipnir-relay`
+(GLOSSARY.md, ADR-0016).
 
 Orient in this order: the invariants below for what must always be true,
 [GLOSSARY.md](GLOSSARY.md) for the language, [docs/specs/](docs/specs/) for the capability
@@ -149,7 +149,6 @@ and that rule is the only thing keeping it honest.
 
 | # | The clause | What is actually true today | Tracked |
 |---|---|---|---|
-| 1 | The Template clause, and so the headline sentence for author-written Templates | Slot values are still validated, single-quoted and **spliced into the shell text**, which does not hold in every author-written context: inside a here-document, a backquoted or `$( … )` substitution, or after an escaped space a value can change the command's structure (reproduced against dash; bash-as-`/bin/sh` adds more). The shipped `relay-read` catalog's bodies use none of those contexts (checked 2026-10-14); a customer-authored Template can. The fix — values as positional parameters — is ADR-0021's 2026-10-14 amendment. | #974 |
 | 7 | `tag:`'s writer, and `relay:`'s | `tag:` has **no storage on the Node record and no write path**, so nothing can be written to the namespace the invariant says an operator writes. Since #561 a `tag:` term is **refused at parse** with a recognisable sentinel rather than silently matching nothing, identically on every surface — so the gap is now an honest refusal instead of a false negative. `relay:` labels are stamped at enrollment today; the Relay actions that write them afterwards (quarantine engage and lift, `quarantine-node.md`) are unbuilt, so quarantine by either `relay:` or `tag:` does not exist yet. Behaviour detail in `docs/specs/selectors-and-labels.md`. | #430 |
 | 10 | Console execution | The Console does **not** execute yet. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today. | #438 |
 | 11 | Secret files readable only by the Relay, writable only by root (or the Relay, for what it generates) | Reworded on 2026-10-15 (ADR-0033); the code does not enforce it. Nothing checks a secret file's **owner**, only the webhook secret's mode, and the Relay's own help and error text still say "root-owned"; the CA private key is read back with no mode or owner check at all. Detail in `docs/operations/relay-install.md`. | #864 |
@@ -421,7 +420,7 @@ break. It is not a changelog and not a design document.
 Agent skills read their per-repo configuration from `docs/agents/`. Keep these current: they
 are what a fresh session — including an unattended cloud routine — uses instead of asking.
 
-- **Issue tracker** — GitHub Issues on `Felag-Engineering/gleipnir-relay` via the `gh` CLI,
+- **Issue tracker** — GitHub Issues on `Felag-Engineering/relay` via the `gh` CLI,
   with GitHub milestones as the human-owned spine above it. See `docs/agents/issue-tracker.md`.
 - **Triage labels** — the five canonical triage roles mapped onto this repo's `loop:*` lanes.
   `decision` and `idea` are human-owned and never loop work. See `docs/agents/triage-labels.md`.

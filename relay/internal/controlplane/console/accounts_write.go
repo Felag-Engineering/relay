@@ -93,9 +93,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/authz"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 )
 
 // AccountAdministrator is the write seam this file holds. Every method

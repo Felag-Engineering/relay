@@ -18,3 +18,8 @@ lint:
 breaking:
   use:
     - FILE
+  except:
+    # go_package names where Go code is generated, not anything on the wire. The generated
+    # package is under relay/internal/, which no module outside this repository can import,
+    # so a change here breaks no consumer; it moves only with the module path (ADR-0016).
+    - FILE_SAME_GO_PACKAGE

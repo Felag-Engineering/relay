@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // query.go is the capability layer's read-lane vocabulary: the
@@ -19,7 +19,7 @@ import (
 // Every type here MIRRORS internal/audit's and internal/jobs' read-lane
 // types rather than reusing them directly. That is deliberate for the
 // audit half: capability's import allowlist bars internal/audit
-// (assertions.go's doc comment, and TestCapabilityImportsOnlyRegistryAndJobs)
+// (assertions.go's doc comment, and .golangci.yml's capability-imports rule)
 // specifically so a caller-controlled value never gets a path to the store
 // through this package, and internal/auditquery — auditsink's twin — owns
 // the total mapping in both directions. The Job/Task half is mirrored too,

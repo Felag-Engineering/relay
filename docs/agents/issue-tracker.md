@@ -1,7 +1,7 @@
 # Issue tracker: GitHub
 
 Issues for this repo live in GitHub Issues on
-[`Felag-Engineering/gleipnir-relay`](https://github.com/Felag-Engineering/gleipnir-relay),
+[`Felag-Engineering/relay`](https://github.com/Felag-Engineering/relay),
 driven through the `gh` CLI. Capability specifications are files in `docs/specs/`, not
 issues — an issue is disposable and a spec is durable (`docs/agents/workflow.md`).
 

@@ -4,7 +4,7 @@
 //
 // It lives in its own package, not package capability, because capability's
 // non-test files are locked to a small import allowlist
-// (TestCapabilityImportsOnlyRegistryAndJobs) that bars a metrics package
+// (.golangci.yml's capability-imports rule) that bars a metrics package
 // import — mirroring internal/auditsink's own rationale. capability never
 // imports metrics; metrics imports capability (for RefusalKind) and jobs
 // (for Outcome) only, one-directional.
@@ -32,8 +32,8 @@ import (
 	"strconv"
 	"sync/atomic"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // nOutcomes is the number of jobs.Outcome values

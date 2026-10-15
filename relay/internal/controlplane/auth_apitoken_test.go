@@ -7,14 +7,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
 
 // -----------------------------------------------------------------------
 // Harness
 // -----------------------------------------------------------------------
 
-const testCredential = accounts.TokenPrefix + "0123456789abcdef.a-secret" //nolint:gosec // test fixture, not a real credential
+const testCredential = accounts.TokenPrefix + "0123456789abcdef.a-secret" // test fixture, not a real credential
 
 // fakeVerifier stands in for *accounts.TokenService. It records every
 // credential it was asked about, so a test can assert not just the outcome but

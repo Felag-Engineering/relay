@@ -55,7 +55,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // Namespace is the label prefix every term here carries.

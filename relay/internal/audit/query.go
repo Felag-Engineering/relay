@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // query.go is the trail's READ LANE: a filtered, paginated,
@@ -16,7 +16,7 @@ import (
 // auditsink's) warns against: Query is read-only by construction, and a
 // caller that only imports this file cannot reach Append at all.
 //
-// Kept SQL-free like the rest of this package (nosql_test.go): the SQLite
+// Kept SQL-free like the rest of this package (.golangci.yml's domain-no-sql rule): the SQLite
 // implementation is internal/store/auditquery.go.
 
 // Query is the trail's read filter. Every non-zero field ANDs; the zero

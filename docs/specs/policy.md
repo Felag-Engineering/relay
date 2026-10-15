@@ -113,9 +113,10 @@ canonical path:
   atomically. Tasks already running finish under the Policy that admitted them; every later
   Task is evaluated against the new one.
 - **Any Policy error rejects the whole Policy** — a fragment that fails to parse, a duplicate
-  Template name, a fragment with unacceptable ownership or permissions, an invalid slot type, a
-  Template slot in a decidable code-running position (`operations-and-templates.md`), an
-  unsupported pattern. The Node then denies every Task, stays connected, and reports
+  Template name, a fragment with unacceptable ownership or permissions, an invalid slot type, an
+  unsupported pattern. A Template slot in a decidable code-running position makes the Template
+  set unloadable instead, and Native Operations keep running (ADR-0021, amended 2026-10-15;
+  `operations-and-templates.md`). The Node then denies every Task, stays connected, and reports
   `invalid` with the error and the fragment at fault. This holds identically at start and on
   reload: there is no last-known-good fallback, no partial load, and no built-in allowance.
 - A fragment that is a symlink, is not a regular file, or is group- or world-writable is a

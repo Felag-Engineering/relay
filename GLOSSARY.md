@@ -9,8 +9,8 @@ that constrain every change are in [AGENTS.md](AGENTS.md).
 
 **Gleipnir** is a different project: the first-party AI-agent system that will drive
 Relay. It is a *consumer* of Relay (over MCP and the Control API), never a component of
-it. The repo name `gleipnir-relay` is historical; the product here is Relay (see
-ADR-0016 for the internal-naming boundary).
+it. The repo was named `gleipnir-relay` until 2026-10; it and the Go module are now
+`relay` (ADR-0016, amended 2026-10-15, holds the internal-naming boundary).
 
 ## Language
 

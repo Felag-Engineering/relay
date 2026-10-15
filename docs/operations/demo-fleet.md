@@ -26,7 +26,7 @@ because the Node's refusal in the bypass beat below is produced by the same rela
 engine whether it runs in a container on a laptop or on a server in a datacenter — the posture
 paragraph costs nothing to state, and the refusal is real either way. One more number, stated
 once: the issue that commissioned this runbook planned for about 24 Nodes; the demo profile as
-built ([#452](https://github.com/Felag-Engineering/gleipnir-relay/issues/452)) is nine, and every
+built ([#452](https://github.com/Felag-Engineering/relay/issues/452)) is nine, and every
 count below is for nine.
 
 ### From cold to ready

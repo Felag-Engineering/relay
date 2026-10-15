@@ -90,7 +90,7 @@ second the extensibility path.
 | Tier | Who fixes the command | How composition is prevented |
 |---|---|---|
 | **1 — Native** | The daemon's own code | An argv array, never a shell. Arguments are values, so there is nothing to inject into. Frozen at four: `system.facts`, `file.read`, `service.restart`, `pkg.install`. |
-| **2 — Template** | A trusted author, in a Template definition inside the Node's root-owned Policy | The command *structure* comes from that definition and the caller cannot alter it. The body runs through a shell, and a slot value is never part of the text the shell parses: each placeholder becomes a quoted positional parameter and the values follow as separate arguments, so a `;` or `$( … )` in a value is only ever data; a slot in a code-running position decidable from the body makes the Policy invalid, and an undecidable one is a `policy check` warning (ADR-0021, amended 2026-10-14; built today as single-quoted splicing until #977 lands). This is the one deliberate shell path in the daemon (`operations-and-templates.md`). |
+| **2 — Template** | A trusted author, in a Template definition inside the Node's root-owned Policy | The command *structure* comes from that definition and the caller cannot alter it. The body runs through a shell, and a slot value is never part of the text the shell parses: each placeholder becomes a quoted positional parameter and the values follow as separate arguments, so a `;` or `$( … )` in a value is only ever data; a slot stands only as a word of a top-level command; one in a code-running position decidable from the body makes the template set `unloadable`, and an undecidable one is a `policy check` warning (ADR-0021, amended 2026-10-14 and 2026-10-15). This is the one deliberate shell path in the daemon (`operations-and-templates.md`). |
 | **3 — Raw Exec** | The caller | Still an argv array — there is no shell to compose in — so the caller chooses *which binary runs*, not what else runs after it. `admin`-only on the Relay, and gated on the Node by Policy: allow patterns must match the whole command line, and an argv element containing whitespace is denied (`policy.md`). The shipped default Policy does not enable it. |
 
 **New vocabulary is tier 2, never tier 1.** A fifth Native Operation is a change ADR-0021's
@@ -392,7 +392,7 @@ also need `make test-integration`; changes to the daemon-facing contract need th
 | Cancel stops Pending, asks Dispatched, leaves Resolved alone | `TestCancelJobStopsPendingSendsCancelToDispatchedLeavesResolved` | capability |
 | A Task that wins the cancel race keeps its true outcome | `TestEngineDispatchOneTreatsConcurrentCancelAsTerminal` | capability |
 | No surface can dispatch outside this layer | `TestNoDispatchConstruction`, `TestDispatchSymbolsUnexported` | compile-time |
-| The layer imports nothing but registry and jobs | `TestCapabilityImportsOnlyRegistryAndJobs` | compile-time |
+| The layer imports nothing but registry and jobs | `.golangci.yml` depguard rule `capability-imports` | lint |
 | Plan and apply agree on an unchanged fleet | `TestMCP_Plan_PlanVsRealRunParity` | MCP |
 | A fan-out returns one result per Node | `TestMCP_RunOperation_PerNodeResults` | MCP |
 | A park is a result, not an error | `TestDispatch_ParkIsAResultNotAnError` | MCP |

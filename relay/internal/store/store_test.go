@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // openTestStore opens a Store at a fresh path inside t.TempDir() and closes
@@ -22,7 +22,7 @@ func openTestStore(t *testing.T, opts ...Option) (*Store, string) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st.Close() })
 	return st, path
 }
 
@@ -180,7 +180,7 @@ func TestRestartRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-Open: %v", err)
 	}
-	t.Cleanup(func() { st2.Close() }) //nolint:errcheck
+	t.Cleanup(func() { st2.Close() })
 
 	reg2 := st2.Registry()
 	jobRepo2 := st2.Jobs()
