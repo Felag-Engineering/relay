@@ -117,7 +117,8 @@ every file it owns, and removes it again. `relay-install.sh` is withdrawn before
 Where the Relay package installs, it installs the Relay's Unix account, the binary, the
 hardened unit, the configuration file (`/etc/relay/relay.toml`, ADR-0043), and the state
 directory. `/etc/relay` is root-owned and not writable by the Relay, because write access to the
-directory would let it replace the configuration file inside. **It installs and enables the Relay and never starts it.** Starting at
+directory would let it replace the configuration file inside. **It installs the Relay, enables it where the distribution's presets allow, and never starts
+it.** Starting at
 install would mint the CA private key wherever the package happens to be installed — inside an
 image bake, so that every clone shares one CA key, or inside a container build with no running
 init. The Relay starts when the operator starts it, after checking its configuration. Enabling
@@ -133,8 +134,10 @@ documentation, because a package manager's scroll is not a place anyone reads tw
 says never to capture an image of a host after the Relay has first started: the CA key would
 travel with it.
 
-**The package writes the configuration file once, at first install, and never again.** It is
-generated rather than shipped as package-owned configuration, so an upgrade neither rewrites it
+**The package writes the configuration file once, at first install, only if none exists, and
+never again.** A host moving from a hand-built install keeps its own file; its migration removes
+the old unit under `/etc/systemd/system/`, which would otherwise shadow the packaged one. The file
+is generated rather than shipped as package-owned configuration, so an upgrade neither rewrites it
 nor treats the generated values as an operator's edit. It names the host's fully qualified name
 as the certificate hostname — never an implicit default — names the CA directory and store path
 inside the state directory, enables the control plane and the Admin Console, and **binds the
@@ -203,7 +206,8 @@ the shipped default would change Policy on every untouched Node — a fleet-wide
 nobody authored on any of them, which is the incident decision 4 exists to prevent. Instead the
 daemon package ships the default Policy as a reference copy it owns, and **places it as the live
 Policy on first install only, only when no Policy file exists, and only when no Policy directory
-exists.** Never on an upgrade or a reinstall: an operator who deleted the Policy to lock a Node
+exists.** Never on an upgrade or a reinstall (rpm cannot tell a reinstall after removal from a
+first install, so there the two absence checks are the whole guard): an operator who deleted the Policy to lock a Node
 down to deny-all, or who composes Policy only from fragments, must not find the default back
 after the next upgrade. The live Policy is never a package-owned file: no install, upgrade or
 remove rewrites it. A changed default in a later release reaches only Nodes installed after it,
@@ -220,7 +224,9 @@ the operator's to edit, and never installed as configuration the package manager
 accordingly). Because the shipped default allows the catalog's Templates by name, **a released
 catalog Template's name is bound to its behaviour and its risk class**: any change to either
 ships under a new name, enforced in CI, so a catalog upgrade can add Templates but never changes
-what an already-allowed name does. An operator who wants a variant defines a Template of their
+what an already-allowed name does. A released name may be **withdrawn** — it then answers
+`unsupported` on a Node, which only reduces what runs — so a Template found unsafe is fixed by
+shipping a corrected one under a new name and withdrawing the old. An operator who wants a variant defines a Template of their
 own under another name.
 
 **Remove keeps everything the operator cannot recreate; purge, where it exists, removes the

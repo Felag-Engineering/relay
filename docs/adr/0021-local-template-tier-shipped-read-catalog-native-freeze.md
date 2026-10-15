@@ -359,4 +359,5 @@ first customer are unchanged.
 replaced on upgrade could change what an already-allowed name does on every Node at once — the
 unauthored, fleet-wide change ADR-0033 decision 4 exists to prevent. So a released catalog
 Template's name is bound to its body and its risk class: any change to either ships under a new
-name, and CI refuses a release that changes a released one.
+name, and CI refuses a release that changes a released one. Withdrawing a released name is
+allowed, because it only reduces what may run: that is how an unsafe Template is retired.

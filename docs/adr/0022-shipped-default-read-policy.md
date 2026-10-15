@@ -120,8 +120,11 @@ installs from an OS package, and packaged and hand-built installs share one bina
 `/usr/bin/relay-daemon`, with the packaged unit under `/usr/lib/systemd/system/`. The shipped
 default's self-reference denies — and the self-reference lint that checks a Policy against them
 — cover the binary and unit at those paths, and keep covering
-`/etc/systemd/system/relay-daemon.service` and its drop-in directory: that is where an override
-of the packaged unit lives, and writing one removes the hardening as surely as editing the unit.
+`/etc/systemd/system/relay-daemon.service` and the drop-in `systemctl edit` writes,
+`/etc/systemd/system/relay-daemon.service.d/override.conf`, by exact path: that is where an
+override of the packaged unit lives, and writing one removes the hardening as surely as editing
+the unit. Policy has no subtree deny, so a drop-in under any other name in that directory is the
+same recorded residual as the Template directory's files.
 
 A Node moved from a hand-built install onto the package keeps its live Policy, which the package
 never rewrites, so its denies still name `/usr/local/bin`. The migration documented for that move

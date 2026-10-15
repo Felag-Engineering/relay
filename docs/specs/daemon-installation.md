@@ -46,7 +46,9 @@ Policy — reads allowed with the confidentiality deny-list, mutate and Raw Exec
 **The live Policy is placed on first install only, and no package operation ever rewrites it.**
 On a first install — never an upgrade or a reinstall — if no Policy file exists and no Policy
 directory existed before the install began, the package copies the shipped default into place.
-The test is made before the package creates the Policy directory itself. From then on the Policy
+The test is made before the package creates the Policy directory itself. rpm cannot tell a
+reinstall after removal from a first install, so on `.rpm` platforms those two absence checks are
+the whole guard. From then on the Policy
 file is the operator's: no install, upgrade or remove rewrites it, whether or not anyone edited
 it, and a later upgrade never puts it back once the operator has deleted it. That matters,
 because deleting the Policy is a legitimate way to lock a Node down to deny-all, and composing
@@ -57,8 +59,9 @@ change nobody authored on it (ADR-0033 decision 4, as amended 2026-10-15), and t
 customer's.
 
 The shipped default's self-reference denies (ADR-0022, amended 2026-10-15) name the binary and
-unit at the paths the package installs, and the override path where a drop-in for that unit
-would live. A Node moved from a hand-built install onto the package keeps its Policy, so its
+unit at the paths the package installs, the override unit path, and the drop-in `systemctl edit`
+writes, by exact path; other drop-in names are the same recorded residual as Template files,
+because Policy has no subtree deny. A Node moved from a hand-built install onto the package keeps its Policy, so its
 denies still name the old paths; the documented migration removes the old binary and unit — an
 old unit under the override path would otherwise shadow the packaged one — and says to update
 those denies by hand.
@@ -78,7 +81,9 @@ as configuration the package manager would preserve, and never the operator's to
 the catalog is first-party content trusted the way the binary is (ADR-0021, as amended
 2026-10-15). **A released catalog Template's name is bound to its body and risk class**: a change
 to either ships under a new name, and CI refuses a release that changes a released one — so a
-catalog upgrade never changes what an already-allowed name does. Because the live Policy is
+catalog upgrade never changes what an already-allowed name does. A released name may be
+withdrawn, which only reduces what runs; an unsafe Template is fixed under a new name and the old
+one withdrawn. Because the live Policy is
 never rewritten, a Template that a later catalog release adds is offered on an existing Node
 only once that Node's Policy allows it. An operator who wants a variant defines their own
 Template under another name.

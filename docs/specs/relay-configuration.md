@@ -164,8 +164,8 @@ gap; until then its documentation says so.
   that list's CI rule, where the edited configuration a Relay upgrade must preserve is its
   configuration file. It installs the Relay's Unix account, the binary, the hardened unit, the
   configuration file and the state directory, and prints a configuration
-  guide that carries no secret, also installed as documentation. **It enables the Relay and never
-  starts it**: starting at install would mint the CA private key wherever the package is
+  guide that carries no secret, also installed as documentation. **It enables the Relay where the
+  distribution's presets allow, and never starts it**: starting at install would mint the CA private key wherever the package is
   installed — inside an image bake, so every clone shares one key, or a container build with no
   running init. Enabling happens on first install only, only where systemd is running, and
   honours the distribution's presets. It never runs the first-boot command, because
@@ -183,7 +183,8 @@ The image is different: it is published to the registry rather than attached to 
 is not byte-reproducible, it is signed at its digest, and the `relay` binary inside it is the one
 `SHA256SUMS` covers.
 
-**The package writes the configuration file once, at first install**, and never again: the host's
+**The package writes the configuration file once, at first install, only if none exists**, and
+never again — a host moving from a hand-built install keeps its own: the host's
 fully qualified name as the certificate hostname — never an implicit default — the CA directory
 and store path inside the state directory, the control plane and Admin Console enabled, and the
 **control-plane listener bound to loopback**. Nothing is reachable off the host until the operator
