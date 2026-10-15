@@ -22,7 +22,7 @@ they already run, from artifacts they can verify before executing.
 
 | Surface | What it does |
 |---|---|
-| **Release artifacts** | The `relay-daemon` packages (`.deb`, `.rpm`, `.apk`) for each architecture, the optional read Template catalog package, and the bare binary with its hardened systemd unit and example `EnvironmentFile` for a hand-built install — all under the release `SHA256SUMS`. The Policy Catalog is published beside them; `policy-catalog.md` owns it |
+| **Release artifacts** | The `relay-daemon` packages (`.deb`, `.rpm`, `.apk`) and the optional shipped read catalog package for each architecture, and the bare binary for a hand-built install — all under the release `SHA256SUMS`. The Policy Catalog is published beside them; `policy-catalog.md` owns it |
 | **The customer's config management** | The only installer, configurer and upgrader. Ansible and shell are rendered as bundles; other tools are documented, not rendered |
 | **relay-daemon subcommands** | Offline only: `--version`, `policy check`, `dump-operation-schema` |
 | **Enrollment bundles** | A rendered artifact carrying the join string, minted with its Enrollment Token (`enrollment.md` owns minting) |
@@ -36,41 +36,45 @@ Config management installs the **daemon package** for the Node's platform, after
 against the release `SHA256SUMS`. There is no hosted repository before v1.0.0 (ADR-0033), so
 the package is a pinned file config management fetches and verifies, not an `apt install`.
 
-The daemon package places:
+The daemon package installs the binary, at the one path packaged and hand-built installs share,
+and the unit for the Node's init system: the hardened systemd unit, or on Alpine an OpenRC
+unit (see *Privilege*). It also carries the shipped default Policy — reads allowed with the
+confidentiality deny-list, mutate and Raw Exec opt-in (ADR-0022) — as a reference copy it owns.
 
-- the binary, at the one path both packaged and hand-built installs use;
-- the unit for the host's init system: the hardened systemd unit, or on Alpine an
-  OpenRC service (see *Privilege*);
-- the shipped default Policy — reads allowed with the confidentiality deny-list, mutate and Raw
-  Exec opt-in (ADR-0022) — as **configuration the package never overwrites**: a `dpkg` conffile,
-  an rpm `%config(noreplace)`, an `apk` protected file;
-- an `EnvironmentFile` template, also never overwritten, for the join string and Labels.
+**The live Policy is placed only when absent, and no package operation ever rewrites it.** On
+install, if no Policy file exists, the package copies the shipped default into place; from then
+on the Policy file is the operator's, and install, upgrade, remove and purge leave it alone
+whether or not anyone edited it. A changed default in a later release therefore reaches only
+Nodes installed after it. That is deliberate: an upgrade that changed the Policy of every
+untouched Node would be a fleet-wide permission change nobody authored on any of them (ADR-0033
+decision 4, as amended 2026-10-15), and the Policy is the customer's.
 
-An upgrade replaces the binary and init-system unit and **never touches a Policy or
-environment file the operator has edited.** An upgrade that restored the shipped default over
-an edited Policy would be a fleet-wide permission change nobody authored (ADR-0033 decision 4).
-A changed default in a later release therefore never reaches an existing Node; that is correct,
-because the Policy is the customer's.
+The `EnvironmentFile` follows the same rule: placed when absent, `0600` and root-owned, for the
+join string and Labels, and never rewritten by the package.
 
 Shipping the default Policy is what keeps a fresh Node from the worst first impression:
 enrolled, healthy, and refusing everything. A missing Policy still means deny-all at runtime —
 the safety net stays; installation simply avoids landing on it.
 
-**Templates are a separate, optional package.** The shipped read Template catalog
-(`relay-read`) is its own package, so placing a Template — which changes what may run on a
-Node — is a choice the operator makes, never a side effect of installing the daemon. It depends
-on the daemon package and carries its Templates as protected configuration like the Policy.
+**The shipped read catalog is its own optional package.** It depends on the daemon package, and
+a Node offers its Templates only where the operator chose to install it — a Template changes
+what may run on a Node, so placing one is never a side effect of installing the daemon. Its
+files are **package-owned**: replaced on upgrade and removed with the package, never the
+operator's to edit, because the catalog is first-party content trusted the way the binary is
+(ADR-0021, as amended 2026-10-15). An operator who wants a variant defines their own Template
+under another name.
 
-A hand-built install from the bare binary remains supported and documented, for platforms no
-package covers. It uses the same unit file and binary path as the package, and places the
-default Policy only when no Policy file exists.
+A hand-built install from the bare binary is **documented, not supported**: it is the path for a
+platform no package covers, and support means a CI row (*Supported platforms*). It uses the same
+unit and binary path as the package and places the default Policy only when no Policy file
+exists, so a hand-built Node and a packaged one behave alike.
 
 **The Policy directory** *(designed for v0.7.0, with `policy-catalog.md`; #648)*. Beside the Policy
 file sits a directory of Policy fragments. The install creates it empty and never writes into it
 again; config management populates it, typically with catalog fragments. The daemon composes the
 Policy file and every fragment into one Policy with one Policy fingerprint, deny beating allow
-across all of them. The Policy file keeps every rule above — place if absent, the operator's from
-then on — so an existing Node with no fragments behaves exactly as it does today.
+across all of them. The Policy file keeps the rule above — placed when absent, the operator's
+from then on — so an existing Node with no fragments behaves exactly as it does today.
 
 There is no daemon container image. A component whose job is to hold the host's own authority is
 not delivered as a container.
@@ -82,32 +86,33 @@ pasteable value (ADR-0031) — and the Node's `node:` Labels. The daemon pins th
 fingerprint and writes its bundle into the state directory, so no CA path is configured by hand.
 
 The Enrollment Token is used only when no identity is persisted and is inert on every later
-start. It lives in the `0600` environment file config management already writes; config
-management is expected to remove it after first start, and nothing enforces that. That is a
-known posture, not an oversight — see *Accepted residual risk*.
+start. It lives in the `0600` environment file, written by config management into the file the
+package placed; config management is expected to remove it after first start, and nothing
+enforces that. That is a known posture, not an oversight — see *Accepted residual risk*.
 
 After enrollment, config management stays authoritative for the Relay address.
 
 ### Privilege, and what a default Node can do
 
-The shipped unit runs the daemon as root, bounded to `CAP_DAC_READ_SEARCH`, with `/etc`
-read-only — so even a compromised daemon cannot rewrite its own Policy or Templates.
+**Under the systemd unit**, the daemon runs as root, bounded to `CAP_DAC_READ_SEARCH`, with
+`/etc` read-only — so even a compromised daemon cannot rewrite its own Policy or Templates — and
+**a default Node cannot install packages or mutate the filesystem outside its state
+directory.** Where a Node must, the customer places a documented drop-in relaxing the sandbox,
+and that decision is visible in a file on that Node. The relaxation is never the default.
 
-**On Alpine the unit is an OpenRC service, and it is weaker.** OpenRC can bound the daemon's
+**Under OpenRC on Alpine, the unit is weaker.** OpenRC can bound the daemon's
 capabilities and umask; it cannot express the systemd unit's read-only filesystem, private
-`/tmp`, syscall filter or managed state directory. The Alpine package documents each protection
-an Alpine Node does not get. The daemon's own guarantees — deny-by-default Policy, at-most-once,
-refusing a Policy file others can write — hold on every init system, because none of them is
-delivered by the unit. The Alpine package is for Alpine **hosts**; a container is still not a
-Node.
-
-**A default Node cannot install packages or mutate the filesystem outside its state directory.**
-Where a Node must, the customer places a documented drop-in relaxing the sandbox, and that
-decision is visible in a file on that Node. The relaxation is never the default.
+`/tmp`, syscall filter or managed state directory. So on an Alpine Node a Task the Policy allows,
+or a compromised daemon, can write outside the state directory — the Policy and Templates
+included. The Alpine package documents each protection an Alpine Node does not get, and the gap
+is an accepted residual risk (R33). The daemon's own guarantees — deny-by-default Policy,
+at-most-once, refusing a Policy file others can write — hold on every init system, because none
+of them is delivered by the unit. The Alpine package is for Alpine machines; a container is
+still not a Node.
 
 A Task refused by the sandbox must say so **as a sandbox refusal**, distinct from a command that
 ran and failed. An operator reading "failed" where the truth is "this Node's unit forbids it"
-files a bug; an AI-agent reading it retries.
+files a bug; an AI-agent reading it retries. An Alpine Node has no such sandbox to refuse.
 
 ### File modes
 
@@ -118,8 +123,8 @@ unrecorded, because at-most-once depends on that directory.
 
 ### Upgrades and restarts
 
-Config management installs the newer package (or swaps the bare binary) and restarts the
-service. The daemon never self-upgrades and the Relay never pushes a binary.
+Config management installs the newer package (or swaps the bare binary) and restarts the unit.
+The daemon never self-upgrades and the Relay never pushes a binary.
 
 On restart the daemon stops accepting new Tasks, lets in-flight work finish within the shutdown
 grace, then exits. Anything still running when the grace expires is killed and reported as an
@@ -133,25 +138,27 @@ the state directory carry at-most-once across the reconnect.
 
 Downgrades are permitted by installation; the Relay refuses to dispatch to a Node below the
 configured minimum version. A rendered bundle pins a version and digest, and a customer pinning
-their own version wins — the bundle's pin is a starting default, not a constraint.
+their own version wins — the bundle's pin is a starting default, not a constraint. Which
+artifact the bundle pins once packages exist is an open question.
 
 ### Decommissioning
 
-Revoke at the Relay **first**, then let config management remove the package. A removed daemon
-holding a live certificate is the worse of the two states.
+Revoke at the Relay **first**, then let config management remove the packages. A removed daemon
+holding a live certificate is the worse of the two states. Removing the daemon package removes
+the catalog package with it, because the catalog depends on it.
 
 **Remove and purge differ, and the package format decides which exist:**
 
 | Format | Remove | Purge |
 |---|---|---|
-| `.deb` | Binary and init-system unit go; Policy, environment file, Templates and state directory stay | `apt purge` removes all of it, the Node's identity included |
+| `.deb` | Binary, unit and catalog Templates go; Policy, environment file and state directory stay | `apt purge` removes all of it, the Node's identity included |
 | `.apk` | As `.deb` | `apk del --purge` removes all of it |
-| `.rpm` | Binary and init-system unit go; an edited Policy or environment file is kept as `.rpmsave`; the state directory stays | No purge exists. Removal never deletes state; it prints the exact paths to delete by hand |
+| `.rpm` | As `.deb`. The Policy and environment file were never package-owned, so rpm leaves them exactly as they were | No purge exists. Removal never deletes state; it prints the exact paths to delete by hand |
 
-A purged Node has no identity and must enroll again. Left behind by a plain remove, the
-Policy and Templates are the operator's files. A revoked Node that keeps
-dialling is refused at the transport and visible in the audit trail; the Relay never reaches back
-to stop it.
+A purged Node has no identity and must enroll again. Left behind by a plain remove, the Policy
+is the operator's file, and so is the environment file — with any join string config
+management did not clear (R36, widening R16). A revoked Node that keeps dialling is refused at
+the transport and visible in the audit trail; the Relay never reaches back to stop it.
 
 ### Release integrity
 
@@ -162,22 +169,25 @@ not delivered by `curl | sh` (ADR-0033).
 A package wraps the binary the release already built, reproduced and guarded, byte for byte —
 packaging compiles nothing — and the package is itself reproducible. Packages carry no
 signature of their own before v1.0.0; `SHA256SUMS` and its keyless signature are the whole
-integrity story.
+integrity story. The release attaches the packages and the bare binary; the standalone unit and
+example `EnvironmentFile` stay in the repository for a hand-built install to take.
 
 ### Supported platforms
 
-**Current releases only**, decided 2026-10-15; older releases are added later, one at a time.
-A platform is supported only where CI installs the package, upgrades it over an edited Policy
-and finds the edit intact, and removes it (ADR-0033).
+*(Designed for v0.6.5.)* **Current releases only**, decided 2026-10-15; older releases are
+added later, one at a time. A platform is supported only where CI installs the package, upgrades
+it over the operator's edited configuration and finds the edit intact, and removes it
+(ADR-0033). This list governs the daemon packages and, less Alpine, the Relay packages
+(`relay-configuration.md`); for the Relay, the edited configuration is its `EnvironmentFile`.
 
-| Family | Releases | Package |
+| Family | Releases | Daemon package |
 |---|---|---|
 | Debian | 13 | `.deb` |
 | Ubuntu | 26.04 LTS, 24.04 LTS | `.deb` |
 | RHEL, Rocky Linux, AlmaLinux | 10 | `.rpm` |
 | Fedora | current release | `.rpm` |
 | Amazon Linux | 2023 | `.rpm` |
-| Alpine | current stable | `.apk` (OpenRC) |
+| Alpine | current stable | `.apk`, OpenRC unit |
 
 Every row is `x86_64` and `aarch64`. The binary is static, so a package may install on an
 older release; that is not support.
@@ -188,7 +198,7 @@ older release; that is not support.
 |---|---|
 | Daemon refuses to start | Its identity or dedup store cannot be opened; a Policy or Template file, or once it exists a fragment in the Policy directory, is group- or world-writable (a fragment also when it is a symlink or not a regular file); the state directory is unusable under the operator's umask |
 | Deny-all | No Policy file, or one that cannot be read; once the Policy directory exists, also any fragment in it that cannot be read or parsed — one bad fragment invalidates the whole Policy |
-| Sandbox refusal | A Task needing privilege the unit does not grant — reported distinctly from a command that ran and failed |
+| Sandbox refusal | Under the systemd unit, a Task needing privilege the unit does not grant — reported distinctly from a command that ran and failed |
 | Refused at the transport | A revoked Node that keeps dialling |
 | Below minimum version | The Relay declines to dispatch; installation itself permits any version |
 | No route exists | Any attempt to install, configure or upgrade a daemon from the Relay. There is no such path to refuse |
@@ -201,9 +211,11 @@ older release; that is not support.
   Policy. Policy reaches a Node only through the customer's config management.
 - **Invariant 4** — the state directory's modes protect at-most-once, and the umask interaction
   fails closed.
-- **ADR-0033** — no `curl | sh`; the daemon ships as `.deb`, `.rpm` and `.apk`; Policy installs
-  as a conffile; Templates are an optional package; no hosted repository and no package
-  signing key before v1.0.0; no daemon image. Amended 2026-10-15.
+- **ADR-0033** — no `curl | sh`; the daemon ships as `.deb`, `.rpm` and `.apk`; the default Policy
+  is placed only when absent and never rewritten; no hosted repository and no package signing
+  key before v1.0.0; no daemon image. Amended 2026-10-15.
+- **ADR-0021** — the shipped read catalog. Amended 2026-10-15: its own optional package,
+  package-owned.
 - **ADR-0036** — a declared file mode is a ceiling; Node code never widens what the umask removed.
 - **ADR-0032** — the rendered bundle pins a daemon version and digest built into the Relay.
 - **ADR-0031** — the join string: address, CA fingerprint and Enrollment Token in one value.
@@ -230,20 +242,21 @@ and dedup stores own the state directory, and the unit owns privilege.
 
 Claims above with **no row**, and so nothing checking them:
 
-- That a package upgrade never overwrites an edited Policy or environment file, on every
-  supported platform. The rule is the whole reason a fresh Node is useful, and no install path
-  asserts it.
+- That the package places the default Policy and environment file only when absent, and that no
+  install, upgrade, remove or purge rewrites either, on every supported platform. The rule is the
+  whole reason a fresh Node is useful, and no install path asserts it.
 - That a package contains the guarded release binary byte for byte, and is itself reproducible.
 - That remove keeps state and purge (where it exists) removes it, per the table above.
-- That the Alpine package documents every protection its OpenRC service does not give.
+- That the Alpine package documents every protection its OpenRC unit does not give.
+- That the catalog package's files are replaced on upgrade and removed with the daemon package.
 - That an in-flight Task cut short by a restart is reported as interrupted and never retried.
   Shutdown grace exists; the terminal outcome and its legibility are unbuilt.
 - That a sandbox refusal is distinguishable from a command that ran and failed. This is the
   difference between "hardened by default" being a good default and being a support burden.
 - That no documented install path executes an unverified artifact. Stated by ADR-0033, asserted
   by nothing.
-- That the unit's syscall filter behaves on a real systemd host. Still a manual check, and the
-  unit ships as the default only once it is done.
+- That the unit's syscall filter behaves on a real systemd host. Still a manual check, and no
+  package carrying the unit ships until it is done.
 
 ## Out of scope
 
@@ -276,10 +289,31 @@ start. **Revoking the token is not the cleanup step**: revocation is the contain
 (`enrollment.md`) and disconnects every Node the token enrolled; reserve it for a token believed
 leaked (#584).
 
+**The join string can outlive the daemon.** Removing the daemon package leaves its environment
+file behind, by the same rule that leaves the Policy, so a join string config management never
+cleared survives decommissioning on disk; its token stays usable for other enrollments until it
+expires or is revoked. Accepted by the owner on 2026-10-15 and recorded as **R36**, widening R16.
+The compensating controls are R16's, plus purging rather than removing when a Node leaves for
+good.
+
+**An Alpine Node has no filesystem sandbox.** OpenRC cannot express the systemd unit's read-only
+filesystem, private `/tmp`, syscall filter or managed state directory, so on Alpine a Task the
+Policy allows — or a compromised daemon — can write outside the state directory, the Policy and
+Templates included. `policy.md`'s position that self-modification is a deployment concern rests
+on the systemd unit, and does not hold on Alpine. Accepted by the owner on 2026-10-15 and
+recorded as **R33** in `docs/security/threat-model.md`. The compensating controls: the daemon's
+own guarantees do not depend on the unit; the default Policy permits no `mutate` Operation and no
+Raw Exec; and the Alpine package documents each missing protection, so running Alpine Nodes is a
+choice made knowingly.
+
 ## Future work
 
 - **Older distribution releases**, one at a time, each with its own CI row.
-- **A hosted package repository and a package-signing key**, together, at v1.0.0 (ADR-0033).
+- **A hosted package repository and a package-signing key**, together, not before v1.0.0
+  (ADR-0033).
+- **OS packages carrying Policy Catalog fragments** (`policy-catalog.md`), alongside the Ansible
+  role below. The shipped read catalog's package is not one: it is a template pack, not a
+  catalog fragment.
 - **A first-party Ansible role** that installs the daemon and places catalog fragments named in a
   group's variables. Until one exists, `policy-catalog.md`'s exported install task stands alone.
   A thin role was closed as superseded once (#361); reviving it is a decision, not a chore.
@@ -293,6 +327,11 @@ leaked (#584).
   its own capability spec and its own ADR rather than a row in this one.
 
 ## Open questions
+
+- **Which artifact does a rendered bundle pin once packages exist?** ADR-0032 pins one daemon
+  version and digest and calls the package the end state, at which point the rendered bundle pins
+  nothing. With three package formats on two architectures, the bundle needs either a digest per
+  platform or a different pin.
 
 - **Does a restart-interrupted Task have a distinct outcome on the wire, or is it an existing
   one?** It is contract (`/proto`) either way, so it is decided before it is built.

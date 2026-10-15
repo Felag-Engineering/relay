@@ -1,6 +1,6 @@
 # Control API: a REST control-plane surface with a unified Account model
 
-**Status:** Accepted.
+**Status:** Accepted; amended by ADR-0033.
 
 The Relay exposes **three user-facing surfaces**, all thin adapters over the single
 control-plane capability layer (ADR-0009): the **MCP surface** (ADR-0003 — the AI-agent's
@@ -167,3 +167,21 @@ accepted the residual risk explicitly on 2026-09-15; it is **R15** in
 - `docs/security/threat-model.md` gains **R15** and restates invariant 11's row.
 - `docs/specs/relay-configuration.md` is the behaviour; every other spec citing invariant 11 for
   a floor-tier value is unaffected.
+
+## Amendment (2026-10-15): amended by ADR-0033 — who owns a secret file
+
+Owner decision, 2026-10-15, recorded in ADR-0033's amendment of that date. Invariant 11 is
+reworded in `AGENTS.md`, keeping its number.
+
+**What changed.** The invariant said a secret file must be root-owned and not world-readable.
+The Relay reads every secret as its own unprivileged user and writes its CA private key itself,
+so no shipped deployment could meet that, and none did (known-gap row 11). Every secret file
+the Relay reads — operator-placed or Relay-written, the CA private key included — is now owned
+by the uid the Relay runs as and is `0600`, and the Relay refuses to start otherwise.
+
+**What did not change, and why it is the part that matters.** The security floor's own
+configuration stays root-owned and only readable by the Relay (`0640 root:relay`). A
+compromised Relay process can read its secrets — it holds them in memory anyway — but it can
+never rewrite the listeners, the identity provider it believes, the authentication windows or
+`console_execution`. That is this ADR's 2026-09-15 property, *no credential can change the terms
+on which credentials are accepted*, and the rewording leaves it whole.

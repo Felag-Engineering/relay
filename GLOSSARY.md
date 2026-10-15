@@ -56,8 +56,8 @@ substitution can never alter it. Mandatory risk class; governed by Policy exactl
 Native Operation. Loaded from root-owned local files beside the Policy file (same trust
 root, ADR-0002); the daemon reports a **template-set fingerprint** beside the Policy
 fingerprint. A directory of templates installed and versioned as a unit is a **template
-pack**; the first-party **shipped read catalog** is one, installed with the daemon
-package. A Node without a given template reports the distinct `unsupported` outcome.
+pack**; the first-party **shipped read catalog** is one, shipped as its own optional
+package beside the daemon package, its files package-owned (ADR-0033, amended 2026-10-15). A Node without a given template reports the distinct `unsupported` outcome.
 _Avoid_: script, macro, custom command, snippet
 
 **Raw Exec**:

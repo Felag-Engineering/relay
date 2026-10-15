@@ -133,6 +133,9 @@ from those validators, so what a caller is told and what the daemon enforces can
   service status, disk usage, listening ports, package inventory, a bounded log tail, and file
   checksum. Bounds such as the log tail's line count are fixed by the body, not by a slot.
 - It grows through normal review. Every change is a Policy change and lands in front of a human.
+- It ships as its own optional package beside the daemon package, so a Node offers it only where
+  the operator chose to install it; its files are package-owned and replaced on upgrade
+  (ADR-0033, amended 2026-10-15; `daemon-installation.md`).
 
 ## Refusals
 

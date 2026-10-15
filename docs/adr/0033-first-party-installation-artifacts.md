@@ -99,9 +99,10 @@ milestones. Whatever the installer installs belongs under the same kind of gate.
 ## Amendment (2026-10-15): the Relay ships as OS packages, and the image is a production path
 
 Owner decision, 2026-10-15, taken while scheduling packaging into milestone v0.6.5. Decisions 2
-and 5 are replaced below. Decisions 1, 3, 4 and 6 stand unchanged: no `curl | sh`, the daemon's
-packages come first, the default Policy is a `noreplace` conffile, and there is no hosted
-repository before v1.0.0.
+and 5 are replaced below, and decision 4 keeps its property under a different mechanism.
+Decisions 1, 3 and 6 stand unchanged: no `curl | sh`, the daemon's packages come first, and
+there is no hosted repository before v1.0.0. This amendment also amends ADR-0010, ADR-0021 and
+ADR-0030, each recorded on its own page, and the wording of invariant 11.
 
 **Decision 2, replaced: the Relay host is installed by an OS package, not a script.**
 
@@ -111,22 +112,23 @@ it as root, and the operator this product is sold to will not trust one they hav
 package is declarative: the package manager the operator already trusts places it, records
 every file it owns, and removes it again. `relay-install.sh` is withdrawn before it was built.
 
-Where the Relay package installs, it installs the service account, the binary, the hardened
-unit, the `EnvironmentFile`, the state directory, and a root-owned directory for secret files
-that the service account may read and nobody else may. It enables and starts the service.
+Where the Relay package installs, it installs the Relay's Unix account, the binary, the
+hardened unit, the `EnvironmentFile`, the state directory, and a directory for secret files. It
+enables and starts the Relay.
 
 It **never runs the first-boot command** (ADR-0030). Package-manager output is written to logs
 the operator does not control and rarely reads, and the first-boot command prints the founding
 admin's credentials. The package instead prints a configuration guide that carries no secret:
-set the hostname, restart, then run the first-boot command in a terminal. The same guide is
-installed as documentation, because a package manager's scroll is not a place anyone reads
-twice.
+check the hostname, restart if it changed, then run the first-boot command in a terminal. The
+same guide is installed as documentation, because a package manager's scroll is not a place
+anyone reads twice.
 
-The hostname the Relay starts with is written in the `EnvironmentFile`, never an implicit
-default. The package writes the host's fully qualified name there **once, at first install,
-and never again**: the file is generated rather than shipped as package-owned configuration, so
-an upgrade neither rewrites it nor treats the generated value as an operator edit. The guide
-prints the name it chose, because a wrong one fails only from the Node side. Changing it is an
+**The package writes the `EnvironmentFile` once, at first install, and never again.** It is
+generated rather than shipped as package-owned configuration, so an upgrade neither rewrites
+it nor treats the generated values as an operator's edit. It names the host's fully qualified
+name as the certificate hostname — never an implicit default — and enables the control plane,
+which `relay init` did until now (ADR-0030 is amended accordingly). The guide prints the
+hostname it chose, because a wrong one fails only from the Node side. Changing any value is an
 edit on the host and a restart: it is security floor (invariant 11), and no command or surface
 is added to set it.
 
@@ -146,20 +148,29 @@ these are constraints on every documented deployment of it:
 - The documented deployment gets a human hardening review before it is called production. A
   description of what it mirrors is not a review.
 
+What a container deployment gives up against a packaged host is recorded rather than hidden:
+the floor's values are readable to anyone who can inspect the container, and a deployment
+driven from a git branch makes the floor writable by whoever can push to it. Both are **R35**
+in `docs/security/threat-model.md`; the hardening review either closes them or accepts them.
+
 **There is still no daemon image, ever.** A containerised daemon has no host to administer.
 
 **The daemon also ships as an Alpine package.** Decision 3 named `.deb` and `.rpm`; `.apk` joins
-them. Each package carries a unit for its host's init system. Where that init
-system cannot express a protection the systemd unit gives, the package ships anyway and its
-documentation names each protection the Node does not get. The daemon's own guarantees —
-deny-by-default Policy, at-most-once, refusing a Policy file others can write — do not depend
-on the init system, and that is why a weaker init-system unit is acceptable rather than
-disqualifying. Containers as Nodes stay unsupported; the Alpine package is for Alpine hosts.
+them. Each package carries a unit for its host's init system. Where that init system cannot
+express a protection the systemd unit gives, the package ships anyway and its documentation
+names each protection the Node does not get. The daemon's own guarantees — deny-by-default
+Policy, at-most-once, refusing a Policy file others can write — do not depend on the init
+system, and that is why a weaker unit is acceptable rather than disqualifying. What is lost is
+recorded as **R33**: without the systemd unit's read-only filesystem, a compromised daemon on
+Alpine can rewrite its own Policy and Templates. Containers as Nodes stay unsupported; the
+Alpine package is for Alpine hosts. **The Relay is not packaged for Alpine**: an Alpine host
+runs the Relay container.
 
 **A platform is supported only where CI proves it.** Every platform a package claims is one
-where CI installs the package, upgrades it over an edited Policy and finds the edit intact, and
-removes it. The list of platforms lives in the capability specification, not here, because it
-moves with distribution releases.
+where CI installs the package, upgrades it over the operator's edited configuration and finds
+the edit intact, and removes it. The list of platforms lives in the capability specifications,
+not here, because it moves with distribution releases. A hand-built install from the bare
+binary on any other platform is documented, not supported.
 
 **Packaging builds nothing.** A package wraps the binaries the release already built, reproduced
 and guarded, byte for byte, and is itself reproducible. Every package is listed in the release
@@ -167,45 +178,67 @@ and guarded, byte for byte, and is itself reproducible. Every package is listed 
 signature of their own before v1.0.0: a package-signing key is a long-lived secret with custody
 and rotation obligations, and it belongs with the hosted repository decision 6 defers.
 
-**One init-system unit per binary.** Packaged and hand-installed deployments run the same unit
-from the same binary path, the one distribution packaging policy allows (`/usr/bin`). A second
-unit for packages would be a second thing to drift.
+**One unit per binary.** Packaged and hand-installed deployments run the same unit from the same
+binary path, the one distribution packaging policy allows (`/usr/bin`). A second unit for
+packages would be a second thing to drift.
 
-**Remove keeps everything the operator cannot recreate; purge removes everything but the
-Relay's CA.** Removing a package removes the files it installed and leaves configuration and
-state. Purging, where the package format has a purge, removes configuration and state as well.
-Where a format has no purge, removal never deletes state, and prints what to delete by hand.
+**Decision 4 keeps its property; the conffile mechanism is withdrawn.** Decision 4 chose a
+`dpkg` conffile / rpm `%config(noreplace)` so an upgrade never overwrites an edited Policy. A
+conffile is replaced on upgrade when the operator has *not* edited it, so a release that changed
+the shipped default would change Policy on every untouched Node — a fleet-wide permission change
+nobody authored on any of them, which is the incident decision 4 exists to prevent. Instead the
+daemon package ships the default Policy as a reference copy it owns, and **places it as the live
+Policy only when no Policy file exists**. The live Policy is never a package-owned file: no
+install, upgrade, remove or purge rewrites it. A changed default in a later release reaches only
+Nodes installed after it, and that is correct, because the Policy is the customer's (ADR-0002).
+The daemon's `EnvironmentFile` follows the same rule, placed `0600` and root-owned when absent.
+
+**The shipped read catalog is its own optional package.** A Template changes what may run on a
+Node, so placing the catalog is a choice the operator makes, never a side effect of installing
+the daemon. Its files stay **package-owned** — replaced on upgrade, removed with the package, and
+never the operator's to edit — because the catalog is first-party content trusted the way the
+binary is (ADR-0021, amended accordingly). An operator who wants a variant defines a Template of
+their own under another name.
+
+**Remove keeps everything the operator cannot recreate; purge removes everything but the Relay's
+CA.** Removing a package removes the binary and unit it installed and leaves configuration and
+state. Purging, where the format has a purge, removes configuration and state as well. Where a
+format has no purge (rpm), removal never deletes state, and prints what to delete by hand. A
+daemon left behind by a plain remove leaves its `EnvironmentFile` behind too, and with it any
+join string config management did not clear: **R36** widens R16 to cover it.
 
 **No package operation destroys the Relay's CA.** Losing it invalidates every Node identity it
-ever issued and re-enrolls the fleet, and one mistyped `purge` must not be able to do that.
-Purging the Relay moves the CA directory aside, preserved with the same ownership and modes,
-and prints where it went; deleting it is a separate, deliberate act by hand. This is the one
-exception to "purge removes everything", and it is taken knowingly. A daemon purge has no such
-exception: one Node re-enrolling is recoverable.
+ever issued and forces the fleet to enroll again, and one mistyped `purge` must not be able to do that.
+Purging the Relay moves the CA directory aside, preserved with the same ownership and modes, and
+prints where it went; deleting it is a separate, deliberate act by hand. This is the one
+exception to "purge removes everything", taken knowingly and recorded as **R34**: a purged host
+keeps a live CA private key until someone deletes it. A daemon purge has no such exception: one
+Node enrolling again is recoverable.
 
-**The shipped read Template catalog is its own optional package.** A Template changes what may
-run on a Node, so placing one is a choice the operator makes, never a side effect of installing
-the daemon. The daemon package carries the binary, its init-system unit, the default Policy,
-and an `EnvironmentFile` template, all configuration as conffiles.
-
-**The Relay is not packaged for Alpine.** An Alpine host runs the Relay container.
+**Secret files are owned by the Relay's own uid; the floor stays root-owned.** Invariant 11 said
+a secret file must be root-owned and not world-readable, and the Relay could not meet that: it
+reads every secret as its own unprivileged user, and it writes its CA private key itself. The
+invariant is reworded, keeping its number: **every secret file the Relay reads — operator-placed
+or Relay-written, the CA private key included — is owned by the uid the Relay runs as and is
+`0600`, and the Relay refuses to start otherwise.** The security-floor file is not a secret and
+keeps the stricter rule: owned by root and readable by the Relay's group (`0640 root:relay`), so
+the Relay can read its floor and can never change it. That split is the point of invariant 11 —
+a compromised Relay process holds its own secrets, which it needs anyway, but cannot rewrite the
+terms on which credentials are accepted. The packaged layout meets it, and shipping the package
+closes known-gap row 11 in `AGENTS.md` (ADR-0010 records the rewording).
 
 ### Consequences of the amendment
 
 The artifact set becomes: both binaries; Relay packages (`.deb`, `.rpm`); daemon packages
-(`.deb`, `.rpm`, `.apk`); the read Template catalog package; the Relay image; all under one
-`SHA256SUMS`. There is no installer script.
+(`.deb`, `.rpm`, `.apk`); the shipped read catalog package; the Relay image; all under one
+`SHA256SUMS`. There is no installer script, and the standalone unit and example
+`EnvironmentFile` stay in the repository's packaging directories rather than becoming release
+attachments.
 
-The secret-file rule in invariant 11 — root-owned and not world-readable — is unchanged, and
-the packaged layout meets it: secret files root-owned, readable by the service account's group
-and no one else. Today the Relay checks a secret file's mode and never its owner, and requires a
-mode the packaged layout cannot meet (known-gap row 11 in `AGENTS.md`). Shipping the package
-closes that gap rather than inheriting it. The other half of that row — the CA private key,
-read back with no check at all — closes with it: the Relay writes the key itself, so it is
-owned by the service account rather than root, and the Relay refuses to start if anyone else
-can read it.
-
-Consumers to update with this amendment: `docs/specs/daemon-installation.md`,
-`docs/specs/relay-configuration.md`, `docs/operations/release-artifacts.md`,
-`docs/operations/relay-install.md` (section 7's "evaluation artifact"), and
-`docs/design/self-serve-enrollment.md` (E7, E8, E9).
+Consumers to update with this amendment, each on its own page: `AGENTS.md` (invariant 11 and
+known-gap row 11), ADR-0010, ADR-0021, ADR-0030, `GLOSSARY.md`, `docs/specs/daemon-installation.md`,
+`docs/specs/relay-configuration.md`, `docs/specs/policy.md`,
+`docs/specs/operations-and-templates.md`, `docs/specs/policy-catalog.md`,
+`docs/security/threat-model.md` (invariant 11's row, R16, and R33–R36),
+`docs/operations/release-artifacts.md`, `docs/operations/relay-install.md` (section 7's
+"evaluation artifact"), and `docs/design/self-serve-enrollment.md` (E7, E8, E9).

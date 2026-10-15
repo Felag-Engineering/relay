@@ -101,10 +101,14 @@ it needs an ADR, not a quiet workaround.
     may be a runtime object, and where it is, it is changed only by a human Account with
     step-up re-authentication and is audited. Secrets are supplied as *file paths*, never
     as values, so nothing sensitive lands in a process listing or a crash dump; a file
-    holding one must be root-owned and not world-readable, and the Relay refuses to
-    start otherwise. Delivered on a host by a root-owned unit file and `EnvironmentFile`
+    holding one — operator-placed or Relay-written, the CA private key included — is owned
+    by the uid the Relay runs as and readable by nobody else, and the Relay refuses to
+    start otherwise. The security floor's own configuration is root-owned and only readable
+    by the Relay, so a compromised Relay process holds its secrets but can never rewrite its
+    floor. Delivered on a host by a root-owned unit file and `EnvironmentFile`
     (`relay/packaging/`) — the mechanism may change, the property may not.
-    (ADR-0010, amended 2026-09-15; ADR-0004, ADR-0012, ADR-0027; host delivery settled in #362)
+    (ADR-0010, amended 2026-09-15; ADR-0004, ADR-0012, ADR-0027; host delivery settled in #362;
+    secret-file ownership reworded 2026-10-15, ADR-0033)
 12. **Policy is evaluated only by the daemon's live engine** — including hypotheticals
     (`PolicyQuery`, the Policy preflight). Never reimplement Policy evaluation on the Relay side.
     (ADR-0011; wording amended 2026-09-20 for ADR-0038)
@@ -147,7 +151,7 @@ and that rule is the only thing keeping it honest.
 | 1 | The Template clause, and so the headline sentence for author-written Templates | Slot values are still validated, single-quoted and **spliced into the shell text**, which does not hold in every author-written context: inside a here-document, a backquoted or `$( … )` substitution, or after an escaped space a value can change the command's structure (reproduced against dash; bash-as-`/bin/sh` adds more). The shipped `relay-read` catalog's bodies use none of those contexts (checked 2026-10-14); a customer-authored Template can. The fix — values as positional parameters — is ADR-0021's 2026-10-14 amendment. | #974 |
 | 7 | `tag:`'s writer, and `relay:`'s | `tag:` has **no storage on the Node record and no write path**, so nothing can be written to the namespace the invariant says an operator writes. Since #561 a `tag:` term is **refused at parse** with a recognisable sentinel rather than silently matching nothing, identically on every surface — so the gap is now an honest refusal instead of a false negative. `relay:` labels are stamped at enrollment today; the Relay actions that write them afterwards (quarantine engage and lift, `quarantine-node.md`) are unbuilt, so quarantine by either `relay:` or `tag:` does not exist yet. Behaviour detail in `docs/specs/selectors-and-labels.md`. | #430 |
 | 10 | Console execution | The Console does **not** execute yet. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today. | #438 |
-| 11 | Secret files are root-owned | Nothing checks a secret file's **owner**. The webhook secret must be `0600`, so under both shipped deployments it is owned by the Relay's own UID, not root: the clause cannot be met as packaged. The CA private key is read back with no mode or owner check at all. Whether to amend the clause or change how secrets are read is an open owner decision; detail in `docs/operations/relay-install.md`. | #864 |
+| 11 | Secret files are owned by the Relay's uid, `0600`; the floor file is root-owned | The clause was reworded on 2026-10-15 (ADR-0033) to match how the Relay reads secrets; the code does not enforce it yet. Nothing checks a secret file's **owner**, only the webhook secret's mode; the CA private key is read back with no mode or owner check at all; and nothing checks that the floor file is root-owned. Detail in `docs/operations/relay-install.md`. | #864 |
 
 ### Writing or amending an invariant
 

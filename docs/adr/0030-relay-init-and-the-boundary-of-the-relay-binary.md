@@ -1,6 +1,6 @@
 # `relay init` and the boundary of the `relay` binary
 
-**Status:** Accepted.
+**Status:** Accepted; amended by ADR-0033.
 
 Standing up a Relay and joining five Nodes takes roughly fifty discrete acts today, and
 the Relay-side share of that is choreography rather than decisions: edit the env file,
@@ -85,3 +85,15 @@ by accident, one convenient verb at a time, is the failure it exists to prevent.
 
 Until then first boot is those two commands, and everything else — Accounts, Nodes, Enrollment
 Tokens, every operator setting — happens in the Console. See `docs/specs/relay-configuration.md`.
+
+## Amendment (2026-10-15): amended by ADR-0033 — the package writes the first configuration
+
+Owner decision, 2026-10-15, recorded in ADR-0033's amendment of that date. The Relay now
+installs from an OS package, and the package — not `relay init` — writes `/etc/relay/relay.env`,
+once, at first install: the host's fully qualified name as the certificate hostname, and the
+control plane enabled. The reason *Consequences* gives for enabling it stands; only the writer
+changes. `init`, when it lands, mints the founding credentials and does not write the
+environment file. The package never runs `init`, because package-manager output lands in logs
+and `init` prints credentials; the operator runs it in a terminal. The binary's own default for
+the control plane stays `false`, and the boundary this ADR draws around the `relay` binary is
+unchanged: no verb is added.

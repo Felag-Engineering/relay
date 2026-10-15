@@ -1,7 +1,7 @@
 # A local Template tier, a shipped read catalog, and a frozen native vocabulary
 
 **Status:** Accepted; amended by ADR-0042; amended 2026-10-14 (slot values as positional
-parameters, #974).
+parameters, #974); amended by ADR-0033.
 
 Template **execution** is separable from template **distribution** (owner decision
 2026-08-03, issue #266). ADR-0001 defined tier 2 — **Template Operations**, operator-authored
@@ -281,3 +281,19 @@ what a value can do once the call is allowed.
 - **Residual risk**, accepted: an author who passes a slot to a code-running position that
   decision 2 cannot detect; a program's own parsing of a well-formed argument (as ever, out of
   scope); and Node output steering the AI-agent until decision 6's track lands.
+
+## Amendment (2026-10-15): amended by ADR-0033 — the shipped read catalog is its own package
+
+Owner decision, 2026-10-15, recorded in ADR-0033's amendment of that date. The **Shipped read
+catalog** decision said the catalog is "installed with the daemon package". It now ships as its
+own optional package, which depends on the daemon package.
+
+**Why.** A Template changes what may run on a Node. Installing the daemon should give a Node
+its engine and its default Policy; offering the catalog's Templates is a choice the operator
+makes, not a side effect.
+
+**What is kept.** The catalog's trust argument stands unchanged: it is first-party content
+trusted the way the binary is, so its files are **package-owned** — replaced on upgrade, removed
+with the package, never the operator's to edit. An operator who wants a variant defines their
+own Template under another name. Its contents, its `read` class and its role as the tier's
+first customer are unchanged.

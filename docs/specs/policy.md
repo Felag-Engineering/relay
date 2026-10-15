@@ -131,7 +131,10 @@ canonical path:
 ### The shipped default
 
 > **Not yet reconciled** — see *Composition*. Until then the shipped default stays one
-> operator-owned Policy file (ADR-0022, ADR-0033 §4) and is not a catalog fragment.
+> operator-owned Policy file (ADR-0022, ADR-0033 §4) and is not a catalog fragment. ADR-0033's
+> 2026-10-15 amendment keeps it that way under packaging: the daemon package places the default
+> only when no Policy file exists and never rewrites it, and the shipped read catalog arrives in
+> its own optional package rather than with the daemon (`daemon-installation.md`).
 
 - The package ships a read fragment: every first-party `read`-class Template (the shipped read
   catalog), `system.facts`, and `file.read` of any path outside a curated confidentiality
