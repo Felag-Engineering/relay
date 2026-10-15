@@ -92,11 +92,13 @@ it needs an ADR, not a quiet workaround.
     the root-owned `console_execution` flag. (ADR-0009, ADR-0010, ADR-0026; wording amended
     2026-09-20 for ADR-0038)
 11. **Neither a credential nor the Relay itself can change the terms on which credentials
-    are accepted.** Whatever bounds *who may authenticate, and how recently they proved it* —
-    listeners, CA/TLS, the identity provider Relay believes, session and step-up windows,
-    `console_execution`, and the approval notification path — is the **security floor**. It
-    is set by whoever administers the Relay's host, outside Relay, and nothing Relay runs or
-    accepts can write it: no API, no request, and not the Relay process. Configuration that
+    are accepted.** The configuration that bounds *who may authenticate, and how recently they
+    proved it* — listeners, which CA and TLS material are used, auth bootstrap, the identity
+    provider Relay believes, session and step-up windows, `console_execution`, and the approval
+    notification path — is the **security floor**. It is set by whoever administers the
+    Relay's host, outside Relay, and nothing Relay runs or accepts can write it: no API, no
+    request, and not the Relay process. Key material the Relay generates — its CA key, the
+    certificates it issues — is the Relay's own, not floor. Configuration that
     only bounds *reach* — blast caps, approval-gate rules, the minimum daemon version, rate
     and capacity limits — may be a runtime object, changed only by a human Account with
     step-up re-authentication, and audited. Secrets never pass through the environment or

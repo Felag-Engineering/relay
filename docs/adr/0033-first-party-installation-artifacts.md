@@ -294,6 +294,9 @@ Relay's own help and error text that still says "root-owned" (with #864).
 The Relay's floor and its secrets now live in one TOML configuration file the Relay reads itself,
 checked at start for one property: the Relay could not write it, and nobody else could read it.
 Where this amendment's text above described the Relay package's `EnvironmentFile`, a separate
-secrets directory, or the ownership of individual secret files, ADR-0043 replaces it: the package
+secrets directory, the ownership of individual secret files, or a container's floor values being
+readable by anyone who can inspect the container, ADR-0043 replaces it — the rule that an
+operator-placed secret is never owned by the Relay's uid survives there, as part of what "could
+write" means: the package
 installs `relay.toml` under the same first-install rule, and a container mounts it read-only
 instead of injecting environment. The daemon's own `EnvironmentFile` is unchanged.

@@ -206,7 +206,7 @@ added later, one at a time. Ubuntu 24.04 LTS is the one deliberate exception, ke
 still the most widely deployed LTS. A platform is supported only where CI installs the package,
 upgrades it over the operator's edited configuration and finds the edit intact, and removes it
 (ADR-0033). This list governs the daemon packages and the Relay packages
-(`relay-configuration.md`); for the Relay, the edited configuration is its `EnvironmentFile`.
+(`relay-configuration.md`); for the Relay, the edited configuration is its `relay.toml`.
 
 | Family | Releases | Package |
 |---|---|---|

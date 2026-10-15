@@ -23,8 +23,9 @@ are exposed. The rules were each correct and together obscured the property they
 ## Decisions
 
 **1. One configuration file, which the Relay reads itself.** Every security-floor setting lives
-in one TOML file — `/etc/relay/relay.toml` on a packaged host, a read-only mount in a container —
-whose path is the only thing the Relay is told at start. No floor setting is read from the
+in one TOML file — `/etc/relay/relay.toml` on a packaged host, a read-only mount in a container.
+That path is the default, and one command-line flag, `--config`, may name another; the path is
+the only configuration the Relay accepts from outside the file. No floor setting is read from the
 environment or the command line. TOML because it is what the daemon's Policy already uses, and
 because it holds structure (listeners, the identity provider, the approval path) that a flat
 `KEY=value` file flattens into naming conventions.
@@ -37,16 +38,42 @@ never passes through the environment or the command line, which is the property 
 does.
 
 **3. One check, the same everywhere.** At start, and on every reload, **the Relay refuses to run
-if it could write its configuration file, or if anyone but it could read it** — and the same
-for every file the configuration names as holding a secret. This is the property itself, tested
-directly, rather than a proxy for it such as "owned by root, mode `0640`". It holds whether the
-file is `root:relay 0640` on a packaged host or a read-only mount in a container, and it fails
-for the case that matters: a configuration the Relay process could rewrite.
+if it could write its configuration file, or if anyone but it could read it.** The not-writable
+half applies to every file the configuration names — a TLS chain or trust bundle decides whom
+the Relay trusts as surely as a setting does — and the not-readable half to every file that holds
+a secret. Material the Relay generates in its own state directory is exempt (decision 4). This is
+the property itself, tested directly, rather than a proxy for it such as "owned by root, mode
+`0640`".
+
+"Could write" is not a mode test, because a mode test passes files the Relay can make writable.
+The Relay **could write** a file when any of these holds:
+
+- the file is owned by the Relay's uid, on a filesystem mounted writable — an owner can always
+  restore its own write bit;
+- its mode or an access-control list grants write to the Relay's uid or any of its groups;
+- any directory on its resolved path is owned by, or writable by, the Relay — a writable
+  directory lets the Relay replace the file between checks;
+- the Relay runs as uid 0, or holds any capability.
+
+"Anyone but it could read" means any account other than the Relay and root. The packaged layout,
+`root:relay 0640` with the Relay's group holding only the Relay, passes; an account an operator
+adds to that group is one they have chosen to give the Relay's secrets to. A file another tool
+manages passes the same way: owned by root, readable by the Relay's group.
+
+The check and the read use the same open descriptor: the Relay opens each file without following
+a symlink, checks the descriptor, and reads from it, so nothing can change between the check and
+the read. A path that is a symlink is refused; an operator whose tool writes symlinked layouts
+points the configuration at the real file.
 
 **4. One state directory, which is the Relay's.** Everything the Relay generates — its CA private
 key, its store — lives in its state directory, owned by the Relay's uid and readable by nobody
 else. The Relay refuses to start if that directory, or the key in it, is readable by anyone
 else.
+
+**Secret values never appear.** No inline secret value, and no approval webhook URL — which may
+itself be a credential — appears on any surface, in any log or audit record, or in any refusal
+message. A reload's audit record names a changed secret setting, never its value; a parse or
+validation error names the key and the line, never the value.
 
 **5. Reload re-reads the one file.** `SIGHUP` re-reads the configuration from the path given at
 start and applies the same check before anything else. A container reloads by restarting.

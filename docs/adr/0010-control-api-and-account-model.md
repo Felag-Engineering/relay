@@ -177,8 +177,8 @@ reworded in `AGENTS.md`, keeping its number.
 implied but never stated: **neither a credential nor the Relay itself can change the terms on
 which credentials are accepted.** The floor is set by whoever administers the Relay's host,
 outside Relay, and nothing Relay runs or accepts can write it — no API, no request, and not the
-Relay process. Secrets are file paths the Relay can read and cannot rewrite, except key material
-it generates itself; the old "root-owned and not world-readable" rule could not be met for the CA
+Relay process. Secrets never pass through the environment or the command line; the Relay can read
+them and cannot rewrite them, except key material it generates itself; the old "root-owned and not world-readable" rule could not be met for the CA
 key the Relay writes, and no shipped deployment met it (known-gap row 11).
 
 **What moved out.** File modes, and how a floor reaches a container, are mechanism; they live in

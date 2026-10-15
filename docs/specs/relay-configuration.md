@@ -38,7 +38,8 @@ to authenticate as somebody else.
 | **MCP** | Reads the non-secret operator settings, so an AI-agent can explain a refusal against the value that caused it. No write tool |
 | **The `relay` binary's local subcommands** | `bootstrap-token` and `console-password` — first-boot acts that exist only because no credential can yet exist to perform them over the wire (ADR-0030) |
 
-There are **no configuration command-line flags.** The binary accepts `--version`, `--help` and
+There are **no configuration command-line flags** but one: `--config`, naming the configuration
+file when it is not at its default path. The binary otherwise accepts `--version`, `--help` and
 its subcommands. One way to set a value means there is no precedence rule to reason about, and
 nothing sensitive in a process listing.
 
@@ -93,8 +94,10 @@ AI-agent may do; a machine Account cannot hold a Console session at all.
 
 Non-secret operator settings are readable by any authenticated Account on every surface, so an
 AI-agent that hits the mutate cap can name the cap it hit. The security floor is rendered in the
-Console only, non-secret values only: file paths, the CA directory and the contents of any
-secret file appear on no surface.
+Console only, non-secret values only: file paths, the CA directory, any secret — inline or in a
+file — and the approval webhook URL, which may itself be a credential, appear on no surface, in
+no log or audit record, and in no refusal message. A reload's audit record names a changed secret
+setting, never its value; a parse or validation error names the key and line, never the value.
 
 ### Changing the floor: reload, and what a reload will not do
 
@@ -138,12 +141,17 @@ certificate a certificate manager renews. Either way **it never passes through t
 or the command line** (invariant 11).
 
 **One check, the same on a host and in a container.** At start and on every reload, the Relay
-refuses to run **if it could write its configuration file, or if anyone but it could read it** —
-and the same for every file the configuration names as holding a secret. This tests the
-property directly: a `root:relay 0640` file on a packaged host passes, a read-only mount in a
-container passes, and a file the Relay process could rewrite fails wherever it is. `/etc/relay`
-is root-owned for the same reason: write access to the directory would let the Relay replace
-the file.
+refuses to run **if it could write its configuration file, or if anyone but it could read it.**
+The not-writable half applies to every file the configuration names — a TLS chain or trust
+bundle decides whom the Relay trusts as surely as a setting does — and the not-readable half to
+every file holding a secret. The Relay **could write** a file when it owns the file on a writable
+filesystem, when a mode bit or access-control list grants it write, when any directory on the
+file's resolved path is owned by or writable by it, or when it runs as root or holds any
+capability. "Anyone but it" means any account other than the Relay and root; the Relay's group
+holds only the Relay. A `root:relay 0640` file on a packaged host passes, a read-only mount in a
+container passes, and a file the Relay process could make writable fails wherever it is. Each
+file is opened without following a symlink, checked on that descriptor, and read from it, so
+nothing can change between the check and the read (ADR-0043).
 
 **The state directory is the Relay's.** Everything the Relay generates — its CA private key, its
 store — lives there, owned by the Relay's uid and readable by nobody else; the Relay refuses to
@@ -234,8 +242,9 @@ a read-only filesystem outside its state directory.
   terms on which credentials are accepted"*. Recorded in ADR-0010's amendment of that date. Its
   secret-file clause was reworded on 2026-10-15 (ADR-0033; ADR-0010's amendment of that date):
   its headline now names the Relay process alongside credentials — *neither a credential nor the
-  Relay itself* can change the terms — and secrets are files the Relay can read and cannot
-  rewrite, except key material it generates.
+  Relay itself* can change the terms — and secrets never pass through the environment or the
+  command line; the Relay can read them and cannot rewrite them, except key material it
+  generates.
 - **Invariant 10 / ADR-0009, ADR-0026** — Console-only settings are an adapter offering less, not
   a parallel control path. `console_execution` stays root-owned.
 - **Invariant 5 / ADR-0004, ADR-0012** — the blast caps remain enforced on the Relay before
@@ -247,7 +256,7 @@ a read-only filesystem outside its state directory.
   bootstrapped locally.
 - **ADR-0030** — bounds the local subcommands. Amended 2026-09-15: when `relay init` lands it
   **replaces** `bootstrap-token` and `console-password` rather than joining them. Amended
-  2026-10-15: the package, not `init`, writes the environment file.
+  2026-10-15: the package, not `init`, writes the configuration file.
 - **Invariant 14 / ADR-0014** — the minimum daemon version stays the Relay's only lever over
   daemon versions; it becomes an operator setting.
 - **ADR-0033** — amended 2026-10-15: the Relay installs from an OS package rather than `relay-install.sh`, and

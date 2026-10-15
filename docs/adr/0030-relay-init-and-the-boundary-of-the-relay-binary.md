@@ -95,7 +95,7 @@ once, at first install, only if none exists: the host's fully qualified name as 
 directory and store path, the control plane and the Admin Console enabled, and the
 control-plane listener bound to loopback until the operator widens it. The reason
 *Consequences* gives for enabling the control plane stands; only the writer changes. `init`,
-when it lands, mints the founding credentials and does not write the environment file. The
+when it lands, mints the founding credentials and does not write the configuration file. The
 package installs the Relay and enables it where presets allow, but never starts it, and never runs `init`, because
 package-manager output lands in logs and `init` prints credentials; the operator starts the
 Relay and runs `init` in a terminal. The binary's own default for the control plane stays
