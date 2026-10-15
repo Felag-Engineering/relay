@@ -3,7 +3,8 @@
 **Status:** aspirational — worked through with the owner on `2026-09-15`, awaiting their review of
 this draft. Describes intended behaviour, not the code (see the establishing phase in
 `README.md`). Invariant 11 was rewritten and ADR-0010, ADR-0004, ADR-0012, ADR-0027 and
-ADR-0030 amended on 2026-09-15 to match.
+ADR-0030 amended on 2026-09-15 to match. Installation and secret-file intent revised with the
+owner on 2026-10-15 to match ADR-0033's amendment of that date (milestone v0.6.5).
 
 ## Purpose
 
@@ -30,7 +31,7 @@ to authenticate as somebody else.
 
 | Surface | Access to the capability |
 |---|---|
-| **The host** | The security floor, as `RELAY_*` environment variables delivered by a root-owned systemd unit and its `EnvironmentFile`. Read at startup and on a reload signal |
+| **The host** | The security floor, as `RELAY_*` environment variables in a root-owned `EnvironmentFile` — placed by the Relay package beside its unit, or supplied to the Relay container by the host that runs it. Read at startup and on a reload signal |
 | **Admin Console** | Every operator setting: read, and changed by a human `admin` with step-up. The only surface that writes configuration. Also renders the non-secret security floor, read-only |
 | **Control API** | Reads the non-secret operator settings. **No write route exists, and none may be added** |
 | **MCP** | Reads the non-secret operator settings, so an AI-agent can explain a refusal against the value that caused it. No write tool |
@@ -125,15 +126,52 @@ their fleet more.
 
 ### Secret files
 
-Every secret is named by a path. The file must be **owned by root and not group- or
-world-readable**, or the Relay refuses to start naming the file. The shipped `EnvironmentFile` is
-`0640 root:relay`.
+Every secret is named by a path. The file must be **owned by root, readable by the Relay's
+service group, and readable by nobody else** — `0640 root:relay` or tighter — or the Relay
+refuses to start naming the file. The Relay checks the owner as well as the mode. The Relay
+package creates a secrets directory with the same ownership for operators to place secret files
+in, and the shipped `EnvironmentFile` is `0640 root:relay`. In the container, the same rule
+applies to the mounted files as the container sees them.
+
+The Relay's own CA private key is not an operator-supplied secret: the Relay writes it into its
+state directory, owned by the service account and readable by nobody else, and refuses to start
+if it finds it otherwise.
+
+### Installation
+
+Two production paths, documented as equals (ADR-0033, amended 2026-10-15):
+
+- **The Relay package** (`.deb`, `.rpm`) on the platforms `daemon-installation.md` lists, less
+  Alpine, where the container is the path. It installs the service account, the binary, the
+  hardened unit, the `EnvironmentFile`, the state directory and the secrets directory; enables
+  and starts the service;
+  and prints a configuration guide that carries no secret, also installed as documentation.
+  It never runs the first-boot command, because package-manager output lands in logs and that
+  command prints credentials.
+- **The Relay container image**, pinned by digest: unprivileged, no capabilities, read-only root
+  filesystem, the CA and store on one durable volume, the security floor and secret files
+  supplied by the host. It is a production path only once its documented deployment has had a
+  human hardening review.
+
+The hostname the Relay first starts with is written in the `EnvironmentFile`, never an implicit
+default: the package writes the host's fully qualified name there once, at first install, and
+the guide prints it so the operator can check it. The file is generated, not package-owned
+configuration, so no upgrade rewrites it. Changing the hostname is an edit and a restart; it is
+bind-time security floor, so a reload refuses it.
+
+Remove keeps configuration, the CA and the store. `apt purge` removes configuration and the
+store, and **never the CA**: it moves the CA directory aside with its ownership and modes intact
+and prints where, because losing the CA invalidates every Node identity it issued and the whole
+fleet must enroll again. Deleting it is a separate act by hand. `rpm` has no purge; removal
+never deletes state and prints the paths to delete by hand.
 
 ### First boot
 
-Start the service, then `relay bootstrap-token` for the founding admin's first API Token and
-`relay console-password` for their first Console credential. Everything else — Accounts, Nodes,
-Enrollment Tokens, every operator setting — happens in the Console.
+Install the package (or start the container), set the hostname, restart, then run the
+first-boot command in a terminal: today `relay bootstrap-token` for the founding admin's first
+API Token and `relay console-password` for their first Console credential, replaced by
+`relay init` when it lands (ADR-0030). Everything else — Accounts, Nodes, Enrollment Tokens,
+every operator setting — happens in the Console.
 
 The Relay itself needs no privilege: an unprivileged service account, an empty capability set,
 and a read-only filesystem outside its state directory.
@@ -144,7 +182,7 @@ and a read-only filesystem outside its state directory.
 |---|---|
 | No route exists | A configuration write attempted over MCP or the Control API. There is no endpoint to refuse it |
 | Not authorized | An operator-setting change by a non-`admin`, a machine Account, or without fresh step-up |
-| Startup refused, setting named | An invalid value, a missing required value (CA directory, store path, certificate hostname), an unreadable floor file, a secret file that is not root-owned or is group- or world-readable, or an incoherent combination |
+| Startup refused, setting named | An invalid value, a missing required value (CA directory, store path, certificate hostname), an unreadable floor file, a secret file that is not root-owned or is readable beyond the Relay's service group, a CA private key readable by anyone but the service account, or an incoherent combination |
 | Startup refused, stale variable named | A `RELAY_*` variable for a setting that now lives in the store |
 | Reload refused | An invalid value, or a bind-time setting changed. The running configuration is unchanged and a restart is required |
 
@@ -166,7 +204,8 @@ and a read-only filesystem outside its state directory.
   **replaces** `bootstrap-token` and `console-password` rather than joining them.
 - **Invariant 14 / ADR-0014** — the minimum daemon version stays the Relay's only lever over
   daemon versions; it becomes an operator setting.
-- **ADR-0033** — the installer, unbuilt.
+- **ADR-0033** — amended 2026-10-15: the Relay installs from an OS package rather than `relay-install.sh`, and
+  the container image is a production path. Unbuilt.
 
 ## Seams and proof
 
@@ -218,7 +257,7 @@ can never raise its own limits" becomes "the API cannot, and a human in the Cons
 
 - **`relay init`** — one idempotent first-boot command that **replaces** `bootstrap-token` and
   `console-password` rather than joining them, so the binary loses two verbs as it gains one
-  (ADR-0030). The installer (ADR-0033) follows it.
+  (ADR-0030). The Relay package's configuration guide names it once it exists.
 - **A root-set ceiling above the operator settings**, if the residual risk above proves real in
   practice.
 - **Live reload of TLS material**, beyond the server certificate re-issue that already happens.
