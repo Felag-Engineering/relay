@@ -200,6 +200,7 @@ impl<'a> Lexer<'a> {
             lit: String::new(),
             dynamic: false,
             quoted: false,
+            plain: usize::MAX,
             slot: false,
         })
     }
@@ -207,16 +208,23 @@ impl<'a> Lexer<'a> {
     /// A literal char of the current word; `quoted` if a quote or backslash made it so.
     fn word_char(&mut self, c: char, quoted: bool) {
         let w = self.word_mut();
+        if quoted {
+            w.plain = w.plain.min(w.lit.len());
+        }
         w.lit.push(c);
         w.quoted |= quoted;
     }
 
     fn word_quote(&mut self) {
-        self.word_mut().quoted = true;
+        let w = self.word_mut();
+        w.quoted = true;
+        w.plain = w.plain.min(w.lit.len());
     }
 
     fn word_dynamic(&mut self) {
-        self.word_mut().dynamic = true;
+        let w = self.word_mut();
+        w.dynamic = true;
+        w.plain = w.plain.min(w.lit.len());
     }
 
     fn end_word(&mut self) {
@@ -225,14 +233,22 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// A redirection operator ends the word before it; a word of only digits is
-    /// the descriptor number and not a word of the command.
+    /// A redirection operator ends the word before it; a word of only digits,
+    /// or bash's `{NAME}`, is the descriptor and not a word of the command.
     fn end_word_before_redirect(&mut self) {
         if let Some(w) = self.word.take() {
+            let fd_name = w
+                .lit
+                .strip_prefix('{')
+                .and_then(|l| l.strip_suffix('}'))
+                .is_some_and(|name| {
+                    name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                });
             let io_number = !w.dynamic
                 && !w.quoted
                 && !w.lit.is_empty()
-                && w.lit.chars().all(|c| c.is_ascii_digit());
+                && (fd_name || w.lit.chars().all(|c| c.is_ascii_digit()));
             if !io_number {
                 self.toks.push(Tok::Word(w));
             }

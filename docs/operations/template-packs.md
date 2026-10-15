@@ -124,38 +124,49 @@ Authoring rules the loader enforces, all refusals at load time:
   body, the template fails to load (and `policy check` exits 1):
   - the command-name position of a simple command: the start of the body, after
     a newline, `;`, `&&`, `||`, `|`, `&`, `{`, `!`, a `then`/`do`/`else`/`elif`/
-    `if`/`while`/`until`/`time`, and after leading `NAME=value` assignments;
+    `if`/`while`/`until`/`time` (also `time -p`)/`coproc`, and after leading
+    `NAME=value` assignments and redirections (`2>&1`, `{fd}>file`);
   - the operand of `exec`, `command` or `builtin` (`exec > {{path}}` with no
     command, and `command -v {{name}}` / `command -V`, which only look a name
-    up, are not command positions);
+    up, are not command positions), and the applet of `busybox`;
   - an operand of `eval`, the file operand of `.` or `source`, an operand of `let`;
-  - the argument right after `-c` of `sh`, `bash`, `dash`, `zsh`, `ksh`, `mksh`
-    or `ash` (also `-ec`, `-lc`, …), and after `python -c`, `perl -e`/`-E`,
-    `ruby -e`, `node -e`/`-p`/`--eval`/`--print`, `php -r`, `lua -e`.
+  - the program of a shell run with `-c` (`sh`, `bash`, `dash`, `zsh`, `ksh`,
+    `mksh`, `ash`, `rbash`, `fish`, `csh`, `tcsh`): its first operand after all
+    options, so `sh -c -e {{path}}` and `sh -c -- {{path}}` count too;
+  - the argument after `python -c` (also `python3`, `pypy3`, versioned names
+    such as `python3.11`), `perl -e`/`-E`, `ruby -e`, `node -e`/`-p`/`--eval`/
+    `--print`, `php -r`, `lua -e`, when the flag comes before the script
+    operand;
+  - any of the above behind a wrapper (`env sh -c {{path}}`).
 
   Passing a slot as a *data* argument of those same programs is fine
-  (`sh -c 'script "$1"' relay {{path}}`, `python3 -c '…' {{path}}`).
+  (`python3 -c '…' {{path}}`); `sh -c 'script "$1"' relay {{path}}` loads, with
+  the warning below for a program that reads its positional parameters.
 - **Warnings** do not stop a template from loading. `policy check` reports
   each with the template, the byte offset in the body and the reason, and
   `--strict` fails the pipeline on them. They are the positions the daemon
   cannot decide, and bodies that route slot values into code themselves:
   - a slot as the program of `awk`/`sed`, after `find -exec`/`-execdir`/`-ok`,
     anywhere after `xargs`, or as an argument of a wrapper that runs a command
-    (`env`, `sudo`, `doas`, `nice`, `ionice`, `timeout`, `nohup`, `setsid`,
-    `stdbuf`, `chroot`, `unshare`, `nsenter`, `flock`, `watch`, `strace`,
-    `taskset`, `chrt`, `runuser`, `systemd-run`);
-  - a slot as the value of an option that runs a command (`tar -I`, `rsync -e`,
-    `git -c`, `su -c`, `script -c`) or part of an `ssh` remote command;
+    (such as `env`, `sudo`, `timeout`, `nohup`, `nice`, `chroot`, `nsenter`,
+    `strace`, `systemd-run`, `/usr/bin/time`);
+  - a slot as the value of an option that runs a command (such as `tar -I`,
+    `rsync -e`, `git -c`, `su -c`, `script -c`, `mapfile -C`, `complete -C`,
+    `enable -f`) or part of an `ssh` remote command;
   - a slot as the script operand of a shell or interpreter without `-c`
     (`sh {{path}}`, `python3 {{path}}`) or an argument of a command whose name
     is computed (`$cmd {{path}}`);
+  - a shell program that reads its own positional parameters with a slot
+    after it (`sh -c 'echo "$1"' relay {{path}}`): where the value lands is
+    then that program's choice;
   - the body's own `$1`…`$9`, `${N}`, `$@`, `$*`, `shift`, `set --` or
     `getopts` (the positional parameters carry the slot values), a slot inside
     a function body, an `alias`, a slot among `trap`'s operands, any `.` or
     `source` (the sourced file receives the slot values), and a slot in a
     `compgen`/`complete -W` word list.
 
-  The two lists are not a complete hazard list; a program that interprets its
+  These lists name the main members; the daemon's tables are the full set.
+  Neither is a complete hazard list: a program that interprets its
   own argument as code is the author's responsibility. The wrapper and option
   tables are conservative: a placeholder that is only an argument of the
   wrapped command (`timeout 5 du {{path}}`) is also reported, because the

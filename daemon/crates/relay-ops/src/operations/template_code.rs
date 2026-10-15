@@ -30,6 +30,8 @@ pub(super) struct Word {
     pub dynamic: bool,
     /// Any part of the word was quoted or escaped.
     pub quoted: bool,
+    /// Bytes of `lit` before the first quoted, escaped or expanded part.
+    pub plain: usize,
     /// The word is a `{{slot}}` placeholder.
     pub slot: bool,
 }
@@ -41,6 +43,7 @@ impl Word {
             lit: String::new(),
             dynamic: false,
             quoted: false,
+            plain: 0,
             slot: true,
         }
     }
@@ -200,7 +203,7 @@ impl fmt::Display for BodyWarning {
 
 /// Reserved words after which a command name follows.
 const COMMAND_STARTERS: &[&str] = &[
-    "!", "if", "then", "else", "elif", "while", "until", "do", "time", "{",
+    "!", "if", "then", "else", "elif", "while", "until", "do", "time", "coproc", "{",
 ];
 
 /// Commands that run another command, whose options are not modelled: a
@@ -226,6 +229,17 @@ const WRAPPERS: &[&str] = &[
     "chrt",
     "runuser",
     "systemd-run",
+    "time",
+    "setpriv",
+    "pkexec",
+    "prlimit",
+    "numactl",
+    "cgexec",
+    "capsh",
+    "firejail",
+    "bwrap",
+    "setarch",
+    "parallel",
 ];
 
 /// Commands with an option whose value is a command to run.
@@ -243,6 +257,9 @@ const OPTION_COMMANDS: &[(&str, &[&str])] = &[
     ("git", &["-c"]),
     ("su", &["-c", "--command"]),
     ("script", &["-c", "--command"]),
+    ("mapfile", &["-C"]),
+    ("readarray", &["-C"]),
+    ("enable", &["-f"]),
 ];
 
 /// ssh options that take a value, so the value is not mistaken for the host.
@@ -260,31 +277,38 @@ struct Interpreter {
     bundle: &'static str,
     /// Long flags whose next argument is the program.
     long: &'static [&'static str],
+    /// Single-letter options that take the next argument as their value.
+    value: &'static str,
 }
 
 const SHELL_BUNDLE: &str = "abefhilmnuvxCHP";
 
 const INTERPRETERS: &[Interpreter] = &[
     Interpreter {
-        names: &["sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "rbash"],
+        names: &[
+            "sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "rbash", "fish", "csh", "tcsh",
+        ],
         shell: true,
         program: "c",
         bundle: SHELL_BUNDLE,
         long: &[],
+        value: "",
     },
     Interpreter {
-        names: &["python", "python2", "python3"],
+        names: &["python", "python2", "python3", "pypy", "pypy3"],
         shell: false,
         program: "c",
         bundle: "bBdEiIOqsSuvx",
         long: &[],
+        value: "WX",
     },
     Interpreter {
         names: &["perl"],
         shell: false,
         program: "eE",
-        bundle: "lnpawsSTtuUWxc",
+        bundle: "lnpawsSTtuUWxc0123456789",
         long: &[],
+        value: "",
     },
     Interpreter {
         names: &["ruby"],
@@ -292,6 +316,7 @@ const INTERPRETERS: &[Interpreter] = &[
         program: "e",
         bundle: "lnpasdvwxc",
         long: &[],
+        value: "",
     },
     Interpreter {
         names: &["node", "nodejs"],
@@ -299,6 +324,7 @@ const INTERPRETERS: &[Interpreter] = &[
         program: "ep",
         bundle: "",
         long: &["--eval", "--print"],
+        value: "r",
     },
     Interpreter {
         names: &["php"],
@@ -306,6 +332,7 @@ const INTERPRETERS: &[Interpreter] = &[
         program: "r",
         bundle: "",
         long: &[],
+        value: "",
     },
     Interpreter {
         names: &["lua", "luajit"],
@@ -313,6 +340,7 @@ const INTERPRETERS: &[Interpreter] = &[
         program: "e",
         bundle: "",
         long: &[],
+        value: "",
     },
 ];
 
@@ -377,20 +405,37 @@ impl Classifier {
     fn run(&mut self, toks: &[Tok]) {
         let mut words: Vec<&Word> = Vec::new();
         let mut redirect_target = false;
+        // One entry per open `(`: the words of the command a process
+        // substitution (`<( … )`, `>( … )`) sits inside, resumed at its `)`.
+        let mut opens: Vec<Option<Vec<&Word>>> = Vec::new();
         for (k, tok) in toks.iter().enumerate() {
             match tok {
-                Tok::Word(w) if redirect_target => {
-                    let _ = w;
-                    redirect_target = false;
-                }
+                Tok::Word(_) if redirect_target => redirect_target = false,
                 Tok::Word(w) => words.push(w),
                 Tok::Redir => redirect_target = true,
+                Tok::Open if redirect_target => {
+                    redirect_target = false;
+                    opens.push(Some(std::mem::take(&mut words)));
+                }
                 Tok::Open if words.len() == 1 && matches!(toks.get(k + 1), Some(Tok::Close)) => {
                     // `name ( )` defines a function.
                     words.clear();
                     self.pending_function = true;
+                    opens.push(None);
                 }
-                Tok::Sep | Tok::Open | Tok::Close => {
+                Tok::Open => {
+                    redirect_target = false;
+                    self.command(&std::mem::take(&mut words));
+                    opens.push(None);
+                }
+                Tok::Close => {
+                    redirect_target = false;
+                    self.command(&std::mem::take(&mut words));
+                    if let Some(Some(outer)) = opens.pop() {
+                        words = outer;
+                    }
+                }
+                Tok::Sep => {
                     redirect_target = false;
                     self.command(&std::mem::take(&mut words));
                 }
@@ -418,7 +463,13 @@ impl Classifier {
                     self.groups.push(function);
                 }
                 k += 1;
-            } else if is_assignment(&w.lit) && !w.slot {
+                // `time -p cmd`: the reserved word takes options of its own.
+                if w.is("time") {
+                    while words.get(k).is_some_and(|o| o.is("-p") || o.is("--")) {
+                        k += 1;
+                    }
+                }
+            } else if is_assignment(w) {
                 if w.lit.starts_with("BASH_ALIASES") {
                     self.warn(w.at, WarningKind::Alias);
                 }
@@ -508,6 +559,11 @@ impl Classifier {
                 if let (true, Some(s)) = (word_list, first_slot) {
                     self.warn(s.at, WarningKind::WordList);
                 }
+                for pair in args.windows(2) {
+                    if pair[0].is("-C") && pair[1].slot {
+                        self.warn(pair[1].at, WarningKind::OptionCommand);
+                    }
+                }
             }
             "xargs" => {
                 if let Some(s) = first_slot {
@@ -519,9 +575,9 @@ impl Classifier {
             "busybox" => {
                 if let Some((applet, rest)) = args.split_first() {
                     if applet.slot {
-                        self.warn(applet.at, WarningKind::Wrapper);
+                        self.error(applet.at, CodePosition::CommandName);
                     } else {
-                        self.command_word_unchecked(applet, rest);
+                        self.busybox_applet(applet, rest);
                     }
                 }
             }
@@ -531,7 +587,7 @@ impl Classifier {
 
     /// A word that follows a command-name-like word but is itself only
     /// dispatched by name (a `busybox` applet): a dynamic word is not run.
-    fn command_word_unchecked(&mut self, word: &Word, rest: &[&Word]) {
+    fn busybox_applet(&mut self, word: &Word, rest: &[&Word]) {
         if !word.dynamic {
             let base = word.lit.rsplit('/').next().unwrap_or("");
             self.known_command(word, base, rest);
@@ -539,11 +595,7 @@ impl Classifier {
     }
 
     fn table_command(&mut self, base: &str, args: &[&Word]) {
-        let stem = base.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
-        if let Some(i) = INTERPRETERS
-            .iter()
-            .find(|i| i.names.contains(&base) || i.names.contains(&stem))
-        {
+        if let Some(i) = interpreter_named(base) {
             return self.interpreter(i, args);
         }
         if let Some(t) = PROGRAM_TOOLS.iter().find(|t| t.names.contains(&base)) {
@@ -560,6 +612,18 @@ impl Classifier {
         if WRAPPERS.contains(&base) {
             if let Some(s) = Self::first_slot(args) {
                 self.warn(s.at, WarningKind::Wrapper);
+            }
+            // The wrapped command is not found exactly, but a word naming an
+            // interpreter is one: `env sh -c PROGRAM` runs PROGRAM.
+            for (j, w) in args.iter().enumerate() {
+                if w.slot || w.dynamic || w.is_option() {
+                    continue;
+                }
+                let base = w.lit.rsplit('/').next().unwrap_or("");
+                if let Some(i) = interpreter_named(base) {
+                    self.interpreter(i, &args[j + 1..]);
+                    break;
+                }
             }
         }
     }
@@ -580,8 +644,12 @@ impl Classifier {
             if base == "command" && w.lit[1..].chars().any(|c| c == 'v' || c == 'V') {
                 return;
             }
-            // `exec -a NAME` takes a value.
-            let skip = if base == "exec" && w.is("-a") { 2 } else { 1 };
+            // `exec -a NAME` takes a value, also inside a cluster (`-ca NAME`).
+            let skip = if base == "exec" && w.lit[1..].contains('a') {
+                2
+            } else {
+                1
+            };
             rest = &rest[skip.min(rest.len())..];
         }
         let Some((operand, tail)) = rest.split_first() else {
@@ -594,42 +662,87 @@ impl Classifier {
         self.command_word(operand, tail);
     }
 
+    /// An interpreter reads options up to its first operand: a program flag's
+    /// value is the program, otherwise the operand is the script it runs. Words
+    /// after the operand are the script's own arguments.
     fn interpreter(&mut self, i: &Interpreter, args: &[&Word]) {
-        let kind = if i.shell {
-            CodePosition::ShellProgram
-        } else {
-            CodePosition::InterpreterProgram
-        };
-        let mut has_program = false;
-        for (k, w) in args.iter().enumerate() {
-            if !is_program_flag(w, i) {
-                continue;
-            }
-            has_program = true;
-            if let Some(next) = args.get(k + 1).filter(|n| n.slot) {
-                self.error(next.at, kind);
-            }
+        if i.shell {
+            return self.shell(i, args);
         }
-        if has_program {
-            return;
+        let mut rest = args;
+        while let Some(w) = rest.first() {
+            if w.is("--") {
+                rest = &rest[1..];
+                break;
+            }
+            if !w.is_option() {
+                break;
+            }
+            if is_program_flag(w, i) {
+                if let Some(program) = rest.get(1).filter(|n| n.slot) {
+                    self.error(program.at, CodePosition::InterpreterProgram);
+                }
+                return;
+            }
+            // `python -m MODULE`: the module is the operand.
+            if w.is("-m") && i.names.contains(&"python") {
+                rest = &rest[1..];
+                break;
+            }
+            let takes_value = w.lit.len() == 2 && i.value.contains(&w.lit[1..]);
+            rest = &rest[(if takes_value { 2 } else { 1 }).min(rest.len())..];
         }
-        // No program flag: the first operand is the script file it runs.
-        if let Some(script) = args.iter().find(|w| !w.is_option()).filter(|w| w.slot) {
+        if let Some(script) = rest.first().filter(|w| w.slot) {
             self.warn(script.at, WarningKind::InterpreterScript);
         }
     }
 
+    /// A shell runs its first operand after all options: the program when a
+    /// `-c` was among the options, otherwise the script file. Options may
+    /// follow `-c` (`sh -c -e PROGRAM`), so the operand is found by skipping
+    /// every option, not by taking the word after `-c`.
+    fn shell(&mut self, i: &Interpreter, args: &[&Word]) {
+        let mut has_program = false;
+        let mut rest = args;
+        while let Some(w) = rest.first() {
+            if w.is("--") {
+                rest = &rest[1..];
+                break;
+            }
+            let plus = !w.slot && !w.dynamic && w.lit.len() > 1 && w.lit.starts_with('+');
+            if !w.is_option() && !plus {
+                break;
+            }
+            has_program |= is_program_flag(w, i);
+            // `-o NAME`, `+o NAME`, bash's `-O NAME`, and the file-taking long options.
+            let takes_value = w.is_any(&["--rcfile", "--init-file"])
+                || (!w.lit.starts_with("--") && w.lit[1..].contains(['o', 'O']));
+            rest = &rest[(if takes_value { 2 } else { 1 }).min(rest.len())..];
+        }
+        let Some((operand, tail)) = rest.split_first() else {
+            return;
+        };
+        if operand.slot {
+            if has_program {
+                self.error(operand.at, CodePosition::ShellProgram);
+            } else {
+                self.warn(operand.at, WarningKind::InterpreterScript);
+            }
+        } else if has_program && Self::first_slot(tail).is_some() && reads_positional(&operand.lit)
+        {
+            // `sh -c '… "$1" …' NAME VALUE`: the program the author wrote
+            // places the value, so where it lands is the program's choice.
+            self.warn(operand.at, WarningKind::OwnPositional);
+        }
+    }
+
     fn program_tool(&mut self, t: &ProgramTool, args: &[&Word]) {
-        let mut has_flag = false;
-        for pair in args.windows(2) {
-            if pair[0].is_any(t.flags) {
-                has_flag = true;
-                if pair[1].slot {
+        if args.iter().any(|w| w.is_any(t.flags)) {
+            for pair in args.windows(2) {
+                if pair[0].is_any(t.flags) && pair[1].slot {
                     self.warn(pair[1].at, WarningKind::UndecidableProgram);
                 }
             }
-        }
-        if has_flag || args.iter().any(|w| w.is_any(t.flags)) {
             return;
         }
         let mut skip = false;
@@ -700,22 +813,46 @@ fn is_program_flag(w: &Word, i: &Interpreter) -> bool {
         && cluster.chars().any(|c| i.program.contains(c))
 }
 
-/// `NAME=`, `NAME+=` or `NAME[…]=`: a prefix assignment, not a command name.
-fn is_assignment(lit: &str) -> bool {
-    let Some((lhs, _)) = lit.split_once('=') else {
+/// The interpreter a command name runs, matched with a version suffix
+/// stripped (`python3.11`).
+fn interpreter_named(base: &str) -> Option<&'static Interpreter> {
+    let stem = base.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    INTERPRETERS
+        .iter()
+        .find(|i| i.names.contains(&base) || i.names.contains(&stem))
+}
+
+/// Program text that reads a positional parameter: `$0`-`$9`, `${N}`, `$@`, `$*`.
+fn reads_positional(program: &str) -> bool {
+    program.match_indices('$').any(|(k, _)| {
+        let next = program[k + 1..].chars().next();
+        next.is_some_and(|c| c.is_ascii_digit() || c == '@' || c == '*')
+            || (next == Some('{')
+                && program[k + 2..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit() || c == '@' || c == '*'))
+    })
+}
+
+/// `NAME=`, `NAME+=` or `NAME[…]=` with the name and the operator unquoted
+/// and unexpanded: a prefix assignment, not a command name.
+fn is_assignment(w: &Word) -> bool {
+    if w.slot {
+        return false;
+    }
+    let lit = w.lit.as_str();
+    let n = lit
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(lit.len());
+    if n == 0 || n >= w.plain.min(lit.len()) || lit.as_bytes()[0].is_ascii_digit() {
+        return false;
+    }
+    let Some((lhs, _)) = lit[n..].split_once('=') else {
         return false;
     };
     let lhs = lhs.strip_suffix('+').unwrap_or(lhs);
-    let name = match lhs.find('[') {
-        Some(open) if lhs.ends_with(']') => &lhs[..open],
-        Some(_) => return false,
-        None => lhs,
-    };
-    let mut chars = name.chars();
-    chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    lhs.is_empty() || (lhs.starts_with('[') && lhs.ends_with(']'))
 }
 
 #[cfg(test)]
@@ -782,6 +919,9 @@ mod tests {
                 "until {{p}} ; do :; done",
                 "while true; do {{p}} ; done",
                 "time {{p}}",
+                "time -p {{p}}",
+                "time -p -- {{p}}",
+                "coproc {{p}}",
                 "A=1 {{p}}",
                 "A=1 B+=2 C[1]=3 {{p}}",
                 "> /dev/null {{p}}",
@@ -798,6 +938,8 @@ mod tests {
                 "exec {{p}}",
                 "exec -c {{p}}",
                 "exec -a name {{p}}",
+                "exec -ca name {{p}}",
+                "exec -la name {{p}}",
                 "exec -- {{p}}",
                 "command {{p}}",
                 "command -p {{p}}",
@@ -863,6 +1005,11 @@ mod tests {
                 "command bash -c {{p}}",
                 "busybox sh -c {{p}}",
                 "echo a | sh -c {{p}}",
+                "sh -c -- {{p}}",
+                "sh -c -e {{p}}",
+                "bash -c -o errexit {{p}}",
+                "sh -c +x {{p}}",
+                "sh -e -o errexit -c {{p}}",
             ],
         );
     }
@@ -893,7 +1040,6 @@ mod tests {
     #[test]
     fn a_value_beside_a_program_the_author_wrote_is_data() {
         assert_clean(&[
-            "sh -c 'echo \"$1\"' x {{p}}",
             "bash -c 'cat' x {{p}}",
             "python3 -c 'import sys' {{p}}",
             "perl -Mstrict -e 1 {{p}}",
@@ -950,11 +1096,116 @@ mod tests {
 
     #[test]
     fn wrappers_warn() {
-        for wrapper in WRAPPERS {
+        // Bare `time` is the reserved word, a command-name position.
+        for wrapper in WRAPPERS.iter().filter(|w| **w != "time") {
             assert_warning(WarningKind::Wrapper, &[&format!("{wrapper} {{{{p}}}}")]);
         }
-        assert_warning(WarningKind::Wrapper, &["busybox {{p}}"]);
+        assert_warning(
+            WarningKind::Wrapper,
+            &[
+                "/usr/bin/time {{p}}",
+                "'time' -p {{p}}",
+                "command time {{p}}",
+            ],
+        );
         assert_clean(&["nice -n 5 ls", "timeout 5 true > {{p}}"]);
+    }
+
+    #[test]
+    fn an_interpreter_behind_a_wrapper_is_still_found() {
+        assert_error(
+            CodePosition::ShellProgram,
+            &[
+                "env sh -c {{p}}",
+                "nohup sh -c {{p}}",
+                "sudo -u x bash -c {{p}}",
+            ],
+        );
+        assert_error(
+            CodePosition::InterpreterProgram,
+            &["timeout 5 python3 -c {{p}}"],
+        );
+    }
+
+    #[test]
+    fn a_busybox_applet_placeholder_is_an_error() {
+        assert_error(
+            CodePosition::CommandName,
+            &["busybox {{p}}", "busybox {{p}} x"],
+        );
+    }
+
+    #[test]
+    fn a_named_descriptor_redirection_is_not_a_command_name() {
+        assert_error(CodePosition::CommandName, &["{fd}>/dev/null {{p}}"]);
+        assert_error(CodePosition::CommandOperand, &["exec {fd}>/dev/null {{p}}"]);
+    }
+
+    #[test]
+    fn a_process_substitution_is_an_argument_not_a_command_boundary() {
+        assert_clean(&["diff <(sort /etc/hosts) {{p}}", "tee >(cat) {{p}}"]);
+        assert_error(CodePosition::EvalOperand, &["diff <(sort x) y; eval {{p}}"]);
+    }
+
+    #[test]
+    fn only_an_unquoted_unexpanded_name_makes_an_assignment() {
+        assert_clean(&["'A=1' {{p}}", "A\"=1\" {{p}}", "\\A=1 {{p}}"]);
+        assert_error(
+            CodePosition::CommandName,
+            &["A=\"x y\" {{p}}", "A[1]='x' {{p}}", "A+=x {{p}}"],
+        );
+        assert_warning(WarningKind::ComputedCommand, &["$(echo)A=1 echo {{p}}"]);
+    }
+
+    #[test]
+    fn an_interpreter_stops_reading_options_at_its_operand() {
+        assert_clean(&[
+            "python3 /opt/tool.py -c {{p}}",
+            "python3 -m json.tool -c {{p}}",
+            "node server.js -p {{p}}",
+            "perl script.pl -e {{p}}",
+            "sh /usr/local/bin/check.sh -c {{p}}",
+        ]);
+        assert_error(
+            CodePosition::InterpreterProgram,
+            &[
+                "python3 -W ignore -c {{p}}",
+                "perl -0ne {{p}}",
+                "pypy3 -c {{p}}",
+            ],
+        );
+        assert_error(
+            CodePosition::ShellProgram,
+            &["tcsh -c {{p}}", "fish -c {{p}}"],
+        );
+    }
+
+    #[test]
+    fn a_shell_program_that_reads_its_positionals_warns() {
+        assert_warning(
+            WarningKind::OwnPositional,
+            &[
+                "sh -c 'echo \"$1\"' x {{p}}",
+                "sh -c 'exec \"$@\"' x {{p}}",
+                "sh -c '\"$0\"' {{p}}",
+                "sh -c 'echo \"${1}\"' x {{p}}",
+                "sh -c 'echo \"$0\"' relay -c {{p}}",
+            ],
+        );
+    }
+
+    #[test]
+    fn options_of_builtins_that_run_a_command_warn() {
+        assert_warning(
+            WarningKind::OptionCommand,
+            &[
+                "mapfile -C {{p}} arr",
+                "readarray -C {{p}} arr",
+                "enable -f {{p}} x",
+                "compgen -C {{p}}",
+                "complete -C {{p}} x",
+            ],
+        );
     }
 
     #[test]
@@ -995,6 +1246,8 @@ mod tests {
                 "python3 {{p}}",
                 "bash -x {{p}}",
                 "python3 -m {{p}}",
+                "bash -o pipefail {{p}}",
+                "sh +x {{p}}",
             ],
         );
         assert_clean(&["python3 script.py {{p}}", "sh script.sh {{p}}"]);
