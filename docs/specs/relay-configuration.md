@@ -14,9 +14,9 @@ for a human, and whether the Console exists at all.
 
 It is **two tiers, split by what an attacker gains from changing the setting.**
 
-- The **security floor** is set on the host, in a root-owned file — or, for a container, in
-  whatever its deployment injects — writable only by a root-equivalent human, and unreachable
-  from every surface. It is the small set that decides *who may authenticate at all* and *whether the gate
+- The **security floor** is set by whoever administers the Relay's host, outside Relay — a
+  root-owned file on a packaged host, or whatever a container's deployment injects — and
+  nothing Relay runs or accepts can write it. It is the small set that decides *who may authenticate at all* and *whether the gate
   exists*: listeners and TLS material, the identity provider Relay believes, the authentication
   windows, the approval notification path, and whether the Console may execute.
 - **Operator settings** are runtime objects in the Relay's store, changed by a human `admin` in
@@ -32,7 +32,7 @@ to authenticate as somebody else.
 
 | Surface | Access to the capability |
 |---|---|
-| **The host** | The security floor, as `RELAY_*` environment variables: on a packaged host, in a root-owned `EnvironmentFile` placed beside the unit, read at startup and on a reload signal; in a container, injected by the deployment from a source only a root-equivalent human can write (invariant 11), read at startup only |
+| **The host** | The security floor, as `RELAY_*` environment variables: on a packaged host, in a root-owned `EnvironmentFile` placed beside the unit, read at startup and on a reload signal; in a container, injected by the deployment, read at startup only |
 | **Admin Console** | Every operator setting: read, and changed by a human `admin` with step-up. The only surface that writes configuration. Also renders the non-secret security floor, read-only |
 | **Control API** | Reads the non-secret operator settings. **No write route exists, and none may be added** |
 | **MCP** | Reads the non-secret operator settings, so an AI-agent can explain a refusal against the value that caused it. No write tool |
@@ -134,9 +134,9 @@ their fleet more.
 
 ### Secret files
 
-Every secret is named by a path. **A secret file is readable by no principal but the Relay, and
-writable by none but root — and, for material the Relay generates, the Relay** (invariant 11,
-reworded 2026-10-15; not yet enforced, known-gap row 11, #864). In practice:
+Every secret is named by a path. **The Relay can read its secrets and cannot rewrite them,
+except key material it generates itself** (invariant 11, reworded 2026-10-15; not yet enforced,
+known-gap row 11, #864). In practice:
 
 - an **operator-placed** secret — the webhook secret, OAuth and TLS key files — is owned by root
   and readable only by the Relay's group, with no write bit for the group, so the Relay can read
@@ -155,11 +155,11 @@ would let it replace the root-owned files inside it.
 wherever it is sourced. A compromised Relay process holds its secrets, which it needs anyway, but
 cannot rewrite the operator's floor configuration or an operator-placed secret.
 
-In the container, the secret-file rule applies to each mounted secret as the container sees it,
-and the floor's source is held to the same property: writable only by a root-equivalent human,
-never by a credential Relay issues or accepts or by an automated principal. A deployment driven
-from a git branch that a CI system or an AI-agent's token can push to does not meet that today;
-it is a known gap until the image's hardening review closes it (`AGENTS.md`, row 11).
+In the container, the secret-file rule applies to each mounted secret as the container sees it.
+Where the deployment takes its floor from is the operator's own infrastructure. Its
+documentation says that no automated credential — a CI system's, an AI-agent's repository token
+— should be able to write a deploy source the floor comes from; Relay documents that and does
+not police it (ADR-0033: Relay prevents, it does not police).
 
 ### Installation
 
@@ -241,10 +241,9 @@ a read-only filesystem outside its state directory.
   2026-09-15 from *"configuration is unreachable from any API"* to *"no credential can change the
   terms on which credentials are accepted"*. Recorded in ADR-0010's amendment of that date. Its
   secret-file clause was reworded on 2026-10-15 (ADR-0033; ADR-0010's amendment of that date):
-  a secret file is readable only by the Relay and writable only by root (or the Relay, for what it
-  generates); and wherever the floor is sourced, a container deployment's injected environment
-  included, it is writable only by a root-equivalent human, never by a credential or automated
-  principal.
+  its headline now names the Relay process alongside credentials — *neither a credential nor the
+  Relay itself* can change the terms — and secrets are files the Relay can read and cannot
+  rewrite, except key material it generates.
 - **Invariant 10 / ADR-0009, ADR-0026** — Console-only settings are an adapter offering less, not
   a parallel control path. `console_execution` stays root-owned.
 - **Invariant 5 / ADR-0004, ADR-0012** — the blast caps remain enforced on the Relay before
@@ -322,8 +321,8 @@ for good.
 settings, not secrets — every secret is a file path — except an approval webhook URL that is
 itself a capability URL. Accepted by the owner on 2026-10-15 and recorded as **R35**, to be
 narrowed by the image's hardening review before it is called production; the docker group is
-root-equivalent on the host anyway. Who can *write* the floor is not a residual risk: a source a
-credential or automated principal can write breaks invariant 11, and is a known gap.
+root-equivalent on the host anyway. Who can *write* a deployment's floor source is the operator's
+own infrastructure, documented rather than policed.
 
 ## Future work
 

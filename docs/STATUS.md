@@ -77,8 +77,7 @@ Mirrors AGENTS.md's gap table as read on 2026-10-15.
 |---|---|---|
 | 7 | `tag:`'s writer, and `relay:`'s | [#430](https://github.com/Felag-Engineering/relay/issues/430) |
 | 10 | Console execution | [#438](https://github.com/Felag-Engineering/relay/issues/438) |
-| 11 | Secret files readable only by the Relay, writable only by root (or the Relay, for what it generates) | [#864](https://github.com/Felag-Engineering/relay/issues/864) |
-| 11 | The floor's source is writable only by a root-equivalent human | hardening review (issue to file) |
+| 11 | Secrets: the Relay can read them and cannot rewrite them, except key material it generates | [#864](https://github.com/Felag-Engineering/relay/issues/864) |
 
 What each gap means is in
 [AGENTS.md — Known gaps between these invariants and the code](../AGENTS.md#known-gaps-between-these-invariants-and-the-code);

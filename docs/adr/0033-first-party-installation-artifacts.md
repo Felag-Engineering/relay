@@ -148,8 +148,7 @@ command or surface is added to set it.
 
 It is the path most operators are expected to take, and the documentation stops calling it the
 evaluation artifact. It is documented as a supported deployment path now and called production
-once a human hardening review of its documented deployment has closed the invariant 11 gap
-below. It holds either standing only on the same terms as the hardened unit, and these are
+once a human hardening review of its documented deployment is done. It holds either standing only on the same terms as the hardened unit, and these are
 constraints on every documented deployment of it:
 
 - The container runs as an unprivileged user with no capabilities and a read-only root
@@ -158,17 +157,13 @@ constraints on every documented deployment of it:
   are mounted read-only and meet the same rule as on a packaged host, as the container sees
   them.
 - A deployment pins the image by digest.
-- Wherever the deployment sources its floor from, that source is writable only as invariant 11
-  allows: by a human holding root-equivalent authority over the Relay's host, and never by a
-  credential Relay issues or accepts or by an automated principal.
 
-The last constraint is not met by a deployment driven from a git branch that a CI system or an
-AI-agent's token can push to: such a credential could repoint the identity provider and
-authenticate as an `admin`. Today's documented compose stack can be deployed exactly that way,
-so this is a known gap in `AGENTS.md` until the hardening review closes it, not an accepted
-residual. The floor's values are also readable to anyone who can inspect the container — values,
-not secrets, with one exception the review must close: an approval webhook URL that is itself a
-capability URL. That exposure is **R35**.
+The floor's values are readable to anyone who can inspect the container — values, not secrets,
+with one exception the review must close: an approval webhook URL that is itself a capability
+URL. That exposure is **R35**. Where the deployment takes its floor from — a compose file, a git
+branch a deploy tool follows — is the operator's infrastructure, and its documentation says
+plainly that no automated credential, such as a CI system's or an AI-agent's repository token,
+should be able to write it.
 
 **There is still no daemon image, ever.** A containerised daemon has no host to administer.
 
@@ -245,16 +240,27 @@ account can inherit its uid. This is the one exception to "purge removes everyth
 knowingly and recorded as **R34**: a purged host keeps a live CA private key until someone
 deletes it. A daemon purge has no such exception: one Node enrolling again is recoverable.
 
-**Secret files are readable only by the Relay; the floor's configuration is the operator's.**
-Invariant 11 said a secret file must be root-owned and not world-readable, and the Relay could
-not meet that for the secrets it generates: it writes its CA private key itself. The invariant
-is reworded as a property, keeping its number: **a secret file is readable by no principal but
-the Relay, and writable by none but root — and, for material the Relay generates, the Relay.**
-An operator-placed secret is therefore owned by root and readable, not writable, by the Relay's
-group — never owned by the Relay's uid, whose owner could make it writable again; a
-Relay-generated one is owned by the Relay's uid, readable by nobody else. The floor's configuration is root-owned and writable by root alone. The packaged
-layout meets it; known-gap row 11 in `AGENTS.md` closes when the Relay enforces it (#864), not
-when the package ships (ADR-0010 records the rewording).
+**Invariant 11 is restated around one adversary: a credential, or the Relay itself.** Its old
+wording said a secret file must be root-owned, which the Relay could not meet for the key it
+generates, and the first draft of this amendment grew to cover every way a floor might be
+delivered. It now says only what Relay must guarantee: **neither a credential nor the Relay
+itself can change the terms on which credentials are accepted.** The floor is set by whoever
+administers the Relay's host, outside Relay, and nothing Relay runs or accepts can write it; the
+Relay can read its secrets and cannot rewrite them, except key material it generates itself.
+
+**Relay prevents; it does not police.** Relay's own software must make it impossible for a
+credential, or a compromised Relay process, to raise its own power — that is the invariant, and
+it is enforced in code. What an operator deliberately does on their own infrastructure — who
+they let push to a deploy branch, which tool writes a host's configuration — is outside Relay.
+The documentation says what a safe deployment looks like; Relay does not try to detect or
+forbid an operator's own choices, and a deliberate circumvention is not an invariant violation.
+
+The mechanics live in the capability specification, not the invariant: an operator-placed secret
+is owned by root and readable, not writable, by the Relay's group — never owned by the Relay's
+uid, whose owner could make it writable again; a Relay-generated key is owned by the Relay's uid
+and readable by nobody else; the floor's configuration is root-owned. The packaged layout meets
+this; known-gap row 11 in `AGENTS.md` closes when the Relay enforces it (#864), not when the
+package ships (ADR-0010 records the rewording).
 
 ### Consequences of the amendment
 
