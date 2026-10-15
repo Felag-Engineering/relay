@@ -32,7 +32,7 @@ they already run, from artifacts they can verify before executing.
 
 ### What gets installed
 
-Config management installs the **daemon package** for the Node's platform, after verifying it
+*(Packaging designed for v0.6.5, as is everything below that names a package.)* Config management installs the **daemon package** for the Node's platform, after verifying it
 against the release `SHA256SUMS`. There is no hosted repository before v1.0.0 (ADR-0033), so
 the package is a pinned file config management fetches and verifies, not an `apt install`.
 
@@ -43,11 +43,13 @@ confidentiality deny-list, mutate and Raw Exec opt-in (ADR-0022) — as a refere
 
 **The live Policy is placed only when absent, and no package operation ever rewrites it.** On
 install, if no Policy file exists, the package copies the shipped default into place; from then
-on the Policy file is the operator's, and install, upgrade, remove and purge leave it alone
-whether or not anyone edited it. A changed default in a later release therefore reaches only
+on the Policy file is the operator's: no install, upgrade or remove rewrites it, whether or not
+anyone edited it, and only a purge deletes it. A changed default in a later release therefore reaches only
 Nodes installed after it. That is deliberate: an upgrade that changed the Policy of every
 untouched Node would be a fleet-wide permission change nobody authored on any of them (ADR-0033
-decision 4, as amended 2026-10-15), and the Policy is the customer's.
+decision 4, as amended 2026-10-15), and the Policy is the customer's. The shipped default's
+self-reference denies (ADR-0022) name the binary and unit at the paths the packages install, so
+a packaged Node is covered by them.
 
 The `EnvironmentFile` follows the same rule: placed when absent, `0600` and root-owned, for the
 join string and Labels, and never rewritten by the package.
@@ -62,7 +64,10 @@ what may run on a Node, so placing one is never a side effect of installing the 
 files are **package-owned**: replaced on upgrade and removed with the package, never the
 operator's to edit, because the catalog is first-party content trusted the way the binary is
 (ADR-0021, as amended 2026-10-15). An operator who wants a variant defines their own Template
-under another name.
+under another name. It ships as `.deb` and `.rpm` only: its Templates read systemd's service
+state and journal, which a Node running Alpine does not have. Because the live Policy is never
+rewritten, a Template that a later catalog release adds is offered on an existing Node only once
+that Node's Policy allows it.
 
 A hand-built install from the bare binary is **documented, not supported**: it is the path for a
 platform no package covers, and support means a CI row (*Supported platforms*). It uses the same
@@ -104,10 +109,10 @@ and that decision is visible in a file on that Node. The relaxation is never the
 capabilities and umask; it cannot express the systemd unit's read-only filesystem, private
 `/tmp`, syscall filter or managed state directory. So on an Alpine Node a Task the Policy allows,
 or a compromised daemon, can write outside the state directory — the Policy and Templates
-included. The Alpine package documents each protection an Alpine Node does not get, and the gap
-is an accepted residual risk (R33). The daemon's own guarantees — deny-by-default Policy,
+included. The Alpine package documents each protection a Node running Alpine does not get, and
+the gap is an accepted residual risk (R33). The daemon's own guarantees — deny-by-default Policy,
 at-most-once, refusing a Policy file others can write — hold on every init system, because none
-of them is delivered by the unit. The Alpine package is for Alpine machines; a container is
+of them is delivered by the unit. The Alpine package is for Nodes running Alpine; a container is
 still not a Node.
 
 A Task refused by the sandbox must say so **as a sandbox refusal**, distinct from a command that
@@ -151,7 +156,7 @@ the catalog package with it, because the catalog depends on it.
 
 | Format | Remove | Purge |
 |---|---|---|
-| `.deb` | Binary, unit and catalog Templates go; Policy, environment file and state directory stay | `apt purge` removes all of it, the Node's identity included |
+| `.deb` | Binary, unit and catalog Templates go; Policy, Policy directory and its fragments, environment file and state directory stay | `apt purge` removes all of it, the Node's identity included |
 | `.apk` | As `.deb` | `apk del --purge` removes all of it |
 | `.rpm` | As `.deb`. The Policy and environment file were never package-owned, so rpm leaves them exactly as they were | No purge exists. Removal never deletes state; it prints the exact paths to delete by hand |
 
@@ -162,8 +167,9 @@ the transport and visible in the audit trail; the Relay never reaches back to st
 
 ### Release integrity
 
-Every installable artifact ships under the release `SHA256SUMS`, and no documented install path
-executes an artifact before verifying its digest. The component that distrusts the operator is
+Every release attachment ships under the release `SHA256SUMS`, and no documented install path
+executes an artifact before verifying its digest. A hand-built install takes the unit and
+example `EnvironmentFile` from the source at the signed release tag, never from a branch. The component that distrusts the operator is
 not delivered by `curl | sh` (ADR-0033).
 
 A package wraps the binary the release already built, reproduced and guarded, byte for byte —
@@ -175,7 +181,8 @@ example `EnvironmentFile` stay in the repository for a hand-built install to tak
 ### Supported platforms
 
 *(Designed for v0.6.5.)* **Current releases only**, decided 2026-10-15; older releases are
-added later, one at a time. A platform is supported only where CI installs the package, upgrades
+added later, one at a time. Ubuntu 24.04 LTS is the one deliberate exception, kept because it is
+still the most widely deployed LTS. A platform is supported only where CI installs the package, upgrades
 it over the operator's edited configuration and finds the edit intact, and removes it
 (ADR-0033). This list governs the daemon packages and, less Alpine, the Relay packages
 (`relay-configuration.md`); for the Relay, the edited configuration is its `EnvironmentFile`.
@@ -266,7 +273,8 @@ Claims above with **no row**, and so nothing checking them:
   `node-connection.md`.
 - What Policy may say and how it is evaluated — `policy.md`; what a Template may define —
   `operations-and-templates.md`.
-- The Relay host's own installation and configuration — `relay-configuration.md`.
+- The Relay host's own installation and configuration — `relay-configuration.md`, except the
+  shared platform list in *Supported platforms*.
 - Authoring Policy for a customer. Policy authoring stops at the clipboard (invariant 2); the
   first-party catalog fragments this capability installs are defined in `policy-catalog.md`.
 - A hosted package repository, ruled out before v1.0.0 (ADR-0033).
@@ -327,6 +335,11 @@ choice made knowingly.
   its own capability spec and its own ADR rather than a row in this one.
 
 ## Open questions
+
+- **Where do a Node's declared Labels live?** This spec puts them in the environment file beside
+  the join string; `selectors-and-labels.md` puts them in a separate root-owned declared-labels
+  file read at start and on reload, and sends getting that file onto a Node here. One home has to
+  be chosen in both specs, with what remove and purge do to it.
 
 - **Which artifact does a rendered bundle pin once packages exist?** ADR-0032 pins one daemon
   version and digest and calls the package the end state, at which point the rendered bundle pins

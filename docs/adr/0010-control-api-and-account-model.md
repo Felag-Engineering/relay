@@ -185,3 +185,11 @@ compromised Relay process can read its secrets — it holds them in memory anywa
 never rewrite the listeners, the identity provider it believes, the authentication windows or
 `console_execution`. That is this ADR's 2026-09-15 property, *no credential can change the terms
 on which credentials are accepted*, and the rewording leaves it whole.
+
+**Where the Relay runs as a container.** The image became a production path the same day.
+There the floor is not a root-owned file on a host but whatever the deployment sources it from
+— a compose file, the environment it injects, a git branch a deploy tool follows. Invariant 11
+now says so: that source is "the host", and it is protected like the host. The property still
+holds against every API; what widens is who counts as the host — whoever can inspect the
+container, and whoever can push to the deploy's source. That widening is accepted as **R35** in
+`docs/security/threat-model.md`. A secret is never a value in any deployment.

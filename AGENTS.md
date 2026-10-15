@@ -106,9 +106,11 @@ it needs an ADR, not a quiet workaround.
     start otherwise. The security floor's own configuration is root-owned and only readable
     by the Relay, so a compromised Relay process holds its secrets but can never rewrite its
     floor. Delivered on a host by a root-owned unit file and `EnvironmentFile`
-    (`relay/packaging/`) — the mechanism may change, the property may not.
+    (`relay/packaging/`) — the mechanism may change, the property may not. Where the Relay
+    runs as a container, "the host" is the source its deployment takes the floor from, and that
+    source is protected like the host; a secret still never passes as a value.
     (ADR-0010, amended 2026-09-15; ADR-0004, ADR-0012, ADR-0027; host delivery settled in #362;
-    secret-file ownership reworded 2026-10-15, ADR-0033)
+    secret-file ownership and the container clause added 2026-10-15, ADR-0033)
 12. **Policy is evaluated only by the daemon's live engine** — including hypotheticals
     (`PolicyQuery`, the Policy preflight). Never reimplement Policy evaluation on the Relay side.
     (ADR-0011; wording amended 2026-09-20 for ADR-0038)

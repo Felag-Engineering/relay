@@ -103,6 +103,10 @@ whole file is validated, and if any value is invalid, or if any *bind-time* sett
 refused, the log names the setting and says a restart is required, and the running configuration
 is untouched. Nothing is ever half-applied, and a failed reload never exits the process.
 
+**A container has no reload.** Its floor arrives as the environment its deployment injects, which
+a running process cannot re-read; every floor change is a redeploy, and the floor-file checks
+below apply only where a floor file exists.
+
 Every reload is audited as a host-lever act, in the same lane as the Freeze signal's
 `local-host`, listing what changed. Root on the box is a different root of authority from any
 credential, and that is why the lever exists there and nowhere else.
@@ -116,7 +120,9 @@ field on a screen.
 
 Every value is validated at startup and at reload, and an invalid one is a refusal naming the
 setting — never a warning and a fallback to a default. A missing or unreadable floor file is a
-refusal.
+refusal, and so is a floor file not owned by root or readable by anyone but root and the
+Relay's group: the floor is not a secret, but invariant 11 keeps it root-owned and only readable
+by the Relay.
 
 A configuration that **cannot work** is refused: the Console enabled without the control plane,
 OAuth configured without an issuer. A configuration that is coherent but **probably a mistake** —
@@ -138,13 +144,16 @@ can never change it. A compromised Relay process holds its secrets, which it nee
 cannot rewrite the terms on which credentials are accepted — the property invariant 11 exists
 for.
 
-In the container, both rules apply to the mounted files as the container sees them.
+In the container, the secret-file rule applies to each mounted secret as the container sees it.
+The floor itself reaches a container as injected environment rather than a file, so the
+floor-file rule has nothing to check there; invariant 11 instead treats the source the
+deployment takes the floor from as the host (R35).
 
 ### Installation
 
-*(Designed for v0.6.5.)* Two deployment paths (ADR-0033, amended 2026-10-15). The package is
-production from its first release; the image becomes production once its documented deployment
-has had a human hardening review, and is documented as the evaluation path until then.
+*(Designed for v0.6.5.)* Two production deployment paths (ADR-0033, amended 2026-10-15). The
+image's documentation carries a visible notice that its hardening review is pending until a
+human has reviewed its documented deployment.
 
 - **The Relay package** (`.deb`, `.rpm`) on the platforms `daemon-installation.md` lists, less
   Alpine — an Alpine host runs the container — under that list's CI rule, where the edited
@@ -155,19 +164,24 @@ has had a human hardening review, and is documented as the evaluation path until
   because package-manager output lands in logs and that command prints credentials.
 - **The Relay container image**, pinned by digest: unprivileged, no capabilities, read-only root
   filesystem, the CA and store on one durable volume, the security floor and secret files
-  supplied by the host. What a container deployment gives up against a packaged host — floor
+  supplied by the deployment. What a container deployment gives up against a packaged host — floor
   values visible to anyone who can inspect the container, and a floor writable by whoever can
   push to a git-driven deploy's branch — is an accepted residual risk (R35) that the hardening
   review closes or confirms.
 
-Both are built the way the daemon's packages are: they wrap the release's guarded binary and
-image bytes and compile nothing, they are reproducible, they are listed in the release
-`SHA256SUMS`, and they carry no signature of their own before v1.0.0 (`daemon-installation.md`,
-*Release integrity*).
+The Relay packages are built the way the daemon's are: they wrap the release's guarded binary
+and compile nothing, they are reproducible, they are listed in the release `SHA256SUMS`, and they
+carry no signature of their own before v1.0.0 (`daemon-installation.md`, *Release integrity*).
+The image is different: it is published to the registry rather than attached to the release, it
+is not byte-reproducible, it is signed at its digest, and the `relay` binary inside it is the one
+`SHA256SUMS` covers.
 
 **The package writes the `EnvironmentFile` once, at first install**, and never again: the host's
-fully qualified name as the certificate hostname — never an implicit default — and the control
-plane enabled, which `relay init` did until now (ADR-0030, amended 2026-10-15). The guide prints
+fully qualified name as the certificate hostname — never an implicit default — the CA directory
+and store path inside the state directory, and the control plane and Admin Console enabled.
+Enabling the control plane was assigned to `relay init` (ADR-0030, amended 2026-10-15);
+enabling both at install is safe because no credential exists until the first-boot command
+runs. The guide prints
 the hostname so the operator can check it. The file is generated, not package-owned
 configuration, so no upgrade rewrites it. Changing the hostname is an edit and a restart; it is
 bind-time security floor, so a reload refuses it.
@@ -183,8 +197,9 @@ the paths to delete by hand.
 
 Install the package (or start the container), check the hostname and restart if it changed,
 then run the first-boot command in a terminal: today `relay bootstrap-token` for the founding
-admin's first API Token and `relay console-password` for their first Console credential,
-replaced by `relay init` when it lands (ADR-0030). Everything else — Accounts, Nodes, Enrollment
+admin's first API Token and `relay console-password` for their first Console credential;
+*(designed for v0.6.5)* `relay init`, which replaces both (ADR-0030) and is what the package's
+guide names. Everything else — Accounts, Nodes, Enrollment
 Tokens, every operator setting — happens in the Console.
 
 The Relay itself needs no privilege: an unprivileged Unix account, an empty capability set, and
@@ -196,7 +211,7 @@ a read-only filesystem outside its state directory.
 |---|---|
 | No route exists | A configuration write attempted over MCP or the Control API. There is no endpoint to refuse it |
 | Not authorized | An operator-setting change by a non-`admin`, a machine Account, or without fresh step-up |
-| Startup refused, setting named | An invalid value, a missing required value (CA directory, store path, certificate hostname), an unreadable floor file, a floor file not owned by root or writable by anyone but root, a secret file (the CA private key included) not owned by the Relay's uid or readable by anyone else, or an incoherent combination |
+| Startup refused, setting named | An invalid value, a missing required value (CA directory, store path, certificate hostname), an unreadable floor file, a floor file not owned by root or readable beyond root and the Relay's group, a secret file (the CA private key included) not owned by the Relay's uid or readable by anyone else, or an incoherent combination |
 | Startup refused, stale variable named | A `RELAY_*` variable for a setting that now lives in the store |
 | Reload refused | An invalid value, or a bind-time setting changed. The running configuration is unchanged and a restart is required |
 
@@ -217,7 +232,8 @@ a read-only filesystem outside its state directory.
 - **ADR-0023** — no shared control-plane secret exists in configuration; the first credential is
   bootstrapped locally.
 - **ADR-0030** — bounds the local subcommands. Amended 2026-09-15: when `relay init` lands it
-  **replaces** `bootstrap-token` and `console-password` rather than joining them.
+  **replaces** `bootstrap-token` and `console-password` rather than joining them. Amended
+  2026-10-15: the package, not `init`, writes the environment file.
 - **Invariant 14 / ADR-0014** — the minimum daemon version stays the Relay's only lever over
   daemon versions; it becomes an operator setting.
 - **ADR-0033** — amended 2026-10-15: the Relay installs from an OS package rather than `relay-install.sh`, and
@@ -279,18 +295,15 @@ destroy the host, when the Relay is gone for good.
 
 **A container deployment exposes its floor more widely than a packaged host.** The floor's
 values are readable by anyone who can inspect the running container, and under a deployment
-driven from a git branch, whoever can push to that branch can change the floor — invariant 11's
-"set on the host" becomes "set wherever the deploy is sourced". Accepted by the owner on
-2026-10-15 and recorded as **R35**, to be closed or confirmed by the image's hardening review
-before it is called production. The compensating controls: no secret is ever a value, so
+driven from a git branch, whoever can push to that branch can change the floor. Invariant 11
+names that source as the host for a container deployment, so the property holds against every
+API and what widens is who counts as the host. Accepted by the owner on 2026-10-15 and recorded
+as **R35**, to be closed or confirmed by the image's pending hardening review. The compensating controls: no secret is ever a value, so
 inspecting the container reveals settings and paths but no credential; and the deploy branch is
 the operator's to protect like the host.
 
 ## Future work
 
-- **`relay init`** — one idempotent first-boot command that **replaces** `bootstrap-token` and
-  `console-password` rather than joining them, so the binary loses two verbs as it gains one
-  (ADR-0030). The Relay package's configuration guide names it once it exists.
 - **A root-set ceiling above the operator settings**, if the residual risk above proves real in
   practice.
 - **Live reload of TLS material**, beyond the server certificate re-issue that already happens.

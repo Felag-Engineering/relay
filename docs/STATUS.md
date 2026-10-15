@@ -77,7 +77,7 @@ Mirrors AGENTS.md's gap table as read on 2026-10-06.
 |---|---|---|
 | 7 | `tag:`'s writer, and `relay:`'s | [#430](https://github.com/Felag-Engineering/gleipnir-relay/issues/430) |
 | 10 | Console execution | [#438](https://github.com/Felag-Engineering/gleipnir-relay/issues/438) |
-| 11 | Secret files are root-owned | [#864](https://github.com/Felag-Engineering/gleipnir-relay/issues/864) |
+| 11 | Secret files are owned by the Relay's uid, `0600`; the floor file is root-owned | [#864](https://github.com/Felag-Engineering/gleipnir-relay/issues/864) |
 
 What each gap means is in
 [AGENTS.md — Known gaps between these invariants and the code](../AGENTS.md#known-gaps-between-these-invariants-and-the-code);

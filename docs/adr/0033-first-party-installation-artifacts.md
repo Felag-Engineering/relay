@@ -126,8 +126,11 @@ anyone reads twice.
 **The package writes the `EnvironmentFile` once, at first install, and never again.** It is
 generated rather than shipped as package-owned configuration, so an upgrade neither rewrites
 it nor treats the generated values as an operator's edit. It names the host's fully qualified
-name as the certificate hostname — never an implicit default — and enables the control plane,
-which `relay init` did until now (ADR-0030 is amended accordingly). The guide prints the
+name as the certificate hostname — never an implicit default — names the CA directory and store
+path inside the state directory, and enables the control plane and the Admin Console. Enabling
+the control plane was assigned to `relay init` (ADR-0030 is amended accordingly);
+enabling them at install is safe because no credential exists until the operator runs the
+first-boot command. The guide prints the
 hostname it chose, because a wrong one fails only from the Node side. Changing any value is an
 edit on the host and a restart: it is security floor (invariant 11), and no command or surface
 is added to set it.
@@ -135,8 +138,10 @@ is added to set it.
 **Decision 5, replaced: the Relay container image is a production deployment path.**
 
 It is the path most operators are expected to take, and the documentation stops calling it the
-evaluation artifact. It earns that standing only on the same terms as the hardened unit, and
-these are constraints on every documented deployment of it:
+evaluation artifact: from this amendment it is documented as a supported production path, with
+a visible notice that its hardening review is pending until that review is done. It holds that
+standing only on the same terms as the hardened unit, and these are constraints on every
+documented deployment of it:
 
 - The container runs as an unprivileged user with no capabilities and a read-only root
   filesystem; the CA and the store live on one durable volume, and nothing else is writable.
@@ -145,8 +150,9 @@ these are constraints on every documented deployment of it:
   read-only and meet the same ownership and mode rule as on a packaged host, as the container
   sees them.
 - A deployment pins the image by digest.
-- The documented deployment gets a human hardening review before it is called production. A
-  description of what it mirrors is not a review.
+- The documented deployment gets a human hardening review, and until it has one its
+  documentation says so where it calls the image production. A description of what it mirrors
+  is not a review.
 
 What a container deployment gives up against a packaged host is recorded rather than hidden:
 the floor's values are readable to anyone who can inspect the container, and a deployment
@@ -224,21 +230,27 @@ or Relay-written, the CA private key included — is owned by the uid the Relay 
 keeps the stricter rule: owned by root and readable by the Relay's group (`0640 root:relay`), so
 the Relay can read its floor and can never change it. That split is the point of invariant 11 —
 a compromised Relay process holds its own secrets, which it needs anyway, but cannot rewrite the
-terms on which credentials are accepted. The packaged layout meets it, and shipping the package
-closes known-gap row 11 in `AGENTS.md` (ADR-0010 records the rewording).
+terms on which credentials are accepted. The packaged layout meets it; known-gap row 11 in
+`AGENTS.md` closes when the Relay enforces it (#864), not when the package ships (ADR-0010
+records the rewording). Where the Relay runs as a container, invariant 11 now names the source
+the deployment takes its floor from as "the host" (R35).
 
 ### Consequences of the amendment
 
 The artifact set becomes: both binaries; Relay packages (`.deb`, `.rpm`); daemon packages
-(`.deb`, `.rpm`, `.apk`); the shipped read catalog package; the Relay image; all under one
-`SHA256SUMS`. There is no installer script, and the standalone unit and example
+(`.deb`, `.rpm`, `.apk`); the shipped read catalog package; all under one `SHA256SUMS`; and the
+Relay image, published to the registry, signed at its digest, and carrying a `relay` binary that
+`SHA256SUMS` covers. There is no installer script, and the standalone unit and example
 `EnvironmentFile` stay in the repository's packaging directories rather than becoming release
 attachments.
 
 Consumers to update with this amendment, each on its own page: `AGENTS.md` (invariant 11 and
-known-gap row 11), ADR-0010, ADR-0021, ADR-0030, `GLOSSARY.md`, `docs/specs/daemon-installation.md`,
+known-gap row 11), `docs/STATUS.md` (its known-deviations mirror), ADR-0010, ADR-0021, ADR-0022
+(the shipped default's self-reference denies follow the packaged paths), ADR-0030, `GLOSSARY.md`, `docs/specs/daemon-installation.md`,
 `docs/specs/relay-configuration.md`, `docs/specs/policy.md`,
 `docs/specs/operations-and-templates.md`, `docs/specs/policy-catalog.md`,
 `docs/security/threat-model.md` (invariant 11's row, R16, and R33–R36),
 `docs/operations/release-artifacts.md`, `docs/operations/relay-install.md` (section 7's
-"evaluation artifact"), and `docs/design/self-serve-enrollment.md` (E7, E8, E9).
+"evaluation artifact" and its secret-file modes), `docs/operations/relay-daemon-install.md` (the
+binary path), `docs/operations/template-packs.md` (the catalog package),
+`docs/operations/daemon-privilege-posture.md` (Alpine), and `docs/design/self-serve-enrollment.md` (E7, E8, E9).

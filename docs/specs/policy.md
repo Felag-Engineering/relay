@@ -209,7 +209,8 @@ _Not yet written._ This spec's claims are the backlog of its testing issue.
 
 - **Self-modification is a deployment concern.** That nothing a Task runs can write the Policy
   directory or trigger a reload rests on the shipped unit's filesystem sandbox, documented as a
-  deployment requirement. The self-reference lint is a warning, not an error. Named so they are
+  deployment requirement. It does not hold on Alpine, whose OpenRC unit has no such sandbox — an
+  accepted residual risk (R33, `daemon-installation.md`). The self-reference lint is a warning, not an error. Named so they are
   not forgotten: the `pkg.install` profile relaxes that sandbox; the daemon-uid ownership
   exception stands; an agentless tier (ADR-0037) would have no unit; and explicit reload makes
   a writable Policy directory a live escalation rather than one that waits for a restart.
