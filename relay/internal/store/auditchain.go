@@ -26,8 +26,8 @@ import (
 // A guardrail, not a security boundary: anyone holding the file can DROP
 // TRIGGER. The hash chain is what makes that visible.
 const (
-	auditNoUpdateTriggerSQL = `CREATE TRIGGER audit_append_only_no_update BEFORE UPDATE ON audit BEGIN SELECT RAISE(ABORT, 'audit is append-only: UPDATE refused (#896)'); END`
-	auditNoDeleteTriggerSQL = `CREATE TRIGGER audit_append_only_no_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT, 'audit is append-only: DELETE refused (#896)'); END`
+	auditNoUpdateTriggerSQL = `CREATE TRIGGER audit_append_only_no_update BEFORE UPDATE ON audit BEGIN SELECT RAISE(ABORT, 'audit is append-only: UPDATE refused'); END`
+	auditNoDeleteTriggerSQL = `CREATE TRIGGER audit_append_only_no_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT, 'audit is append-only: DELETE refused'); END`
 )
 
 // auditTSCanonicaliseSQL is migration 0024's conversion UPDATE, verbatim. It

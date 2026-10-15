@@ -60,7 +60,7 @@ rules that are fully shadowed by a deny rule and can therefore never fire,
 deny rules with a \"*\" or empty argument clause that (deny args being
 exact-match) can never fire either, and a Raw Exec allow pattern not anchored
 ^...$ (its meaning changed: allow patterns now match the whole command).
-Always runs the self-reference lint (#287): a warning when the Policy's
+Always runs the self-reference lint (ADR-0021): a warning when the Policy's
 own reach includes this daemon's config, templates, state dir, binary, or
 unit — decided by probing the real Policy engine, not a second matcher.
 

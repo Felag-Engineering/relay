@@ -589,7 +589,7 @@ var nodeMissingTmpl = newScreen("nodemissing", `
 var nodeTmpl = newScreen("node", `
 <div class="nodehead">
   {{/* When Connected, .seen below also renders "connected" — the wording is doubled on
-       purpose (#473): the dot's own name is what carries "not connected" when offline, since
+       purpose: the dot's own name is what carries "not connected" when offline, since
        .seen says "last seen X ago" there instead, so the dot cannot be decorative in one state
        and named in the other. */}}
   <span class="dot" data-live="{{if .Connected}}on{{else}}off{{end}}" role="img" aria-label="{{if .Connected}}connected{{else}}not connected{{end}}"></span>
