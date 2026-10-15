@@ -33,8 +33,20 @@ var ErrNodeDisconnected = errors.New("dispatch: node disconnected while waiting 
 // *conn values, letting the OLD registration's unregister recognize (and
 // refuse to clobber) a NEWER registration that has since taken nodeID's slot
 // in conns. See Register's doc comment.
+//
+// A gRPC stream allows one SendMsg at a time, and Dispatch, Query and Cancel
+// can all send to the same Node at once. Every send goes through conn.send,
+// which holds sendMu for the call. sendMu is per Node and is never held with
+// Router.mu, so a slow write to one Node stalls only that Node's senders.
 type conn struct {
-	send func(*relayv1.RelayMessage) error
+	sendMu  sync.Mutex
+	rawSend func(*relayv1.RelayMessage) error
+}
+
+func (c *conn) send(msg *relayv1.RelayMessage) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	return c.rawSend(msg)
 }
 
 // waiter correlates one in-flight Dispatch call with the Result that will
@@ -235,7 +247,7 @@ func (r *Router) logger() *slog.Logger { return logctx.Or(r.log) }
 // truly owns unblocks (via the closed-channel case) rather than hanging
 // until ctx expiry or forever on a deadline-less ctx.
 func (r *Router) Register(nodeID string, send func(*relayv1.RelayMessage) error) (unregister func()) {
-	c := &conn{send: send}
+	c := &conn{rawSend: send}
 
 	r.mu.Lock()
 	r.conns[nodeID] = c
