@@ -151,7 +151,8 @@ type sendSlot struct {
 // send or the blocking wait for a Result — a slow or stalled write to one
 // Node's stream must never
 // stall Connected()/Register()/Deliver() for every other Node (an
-// availability hazard at fleet scale).
+// availability hazard at fleet scale). Each conn's sendMu serialises writes
+// to one Node's stream and is never held with mu or a send slot's lock.
 type Router struct {
 	mu             sync.Mutex
 	conns          map[string]*conn
