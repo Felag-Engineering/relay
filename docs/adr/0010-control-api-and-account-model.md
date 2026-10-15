@@ -1,6 +1,6 @@
 # Control API: a REST control-plane surface with a unified Account model
 
-**Status:** Accepted.
+**Status:** Accepted; amended by ADR-0033 and ADR-0043.
 
 The Relay exposes **three user-facing surfaces**, all thin adapters over the single
 control-plane capability layer (ADR-0009): the **MCP surface** (ADR-0003 — the AI-agent's
@@ -167,3 +167,31 @@ accepted the residual risk explicitly on 2026-09-15; it is **R15** in
 - `docs/security/threat-model.md` gains **R15** and restates invariant 11's row.
 - `docs/specs/relay-configuration.md` is the behaviour; every other spec citing invariant 11 for
   a floor-tier value is unaffected.
+
+## Amendment (2026-10-15): amended by ADR-0033 — neither a credential nor the Relay itself
+
+Owner decision, 2026-10-15, recorded in ADR-0033's amendment of that date. Invariant 11 is
+reworded in `AGENTS.md`, keeping its number.
+
+**What changed.** The headline names the second adversary this ADR's 2026-09-15 amendment
+implied but never stated: **neither a credential nor the Relay itself can change the terms on
+which credentials are accepted.** The floor is set by whoever administers the Relay's host,
+outside Relay, and nothing Relay runs or accepts can write it — no API, no request, and not the
+Relay process. Secrets never pass through the environment or the command line; the Relay can read
+them and cannot rewrite them, except key material it generates itself; the old "root-owned and not world-readable" rule could not be met for the CA
+key the Relay writes, and no shipped deployment met it (known-gap row 11).
+
+**What moved out.** File modes, and how a floor reaches a container, are mechanism; they live in
+`docs/specs/relay-configuration.md`. Who an operator lets write their own deployment source — a
+CI system or an AI-agent's token pushing to a deploy branch — is the operator's infrastructure:
+Relay documents what is safe and does not police it. The invariant binds what Relay's software
+does, and that is what makes it enforceable.
+
+## Amendment (2026-10-15): amended by ADR-0043 — the floor is a file, not the environment
+
+The 2026-09-15 amendment delivered the security floor as `RELAY_*` environment variables from a
+root-owned `EnvironmentFile`. ADR-0043 replaces that mechanism: the floor and its secrets live in
+one configuration file the Relay reads itself, and the Relay refuses to run if it could write
+that file or anyone else could read it. The property this ADR defends — no credential, and not
+the Relay itself, can change the terms on which credentials are accepted — is unchanged; the
+mechanism is now one the Relay can check.

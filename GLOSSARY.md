@@ -56,8 +56,8 @@ substitution can never alter it. Mandatory risk class; governed by Policy exactl
 Native Operation. Loaded from root-owned local files beside the Policy file (same trust
 root, ADR-0002); the daemon reports a **template-set fingerprint** beside the Policy
 fingerprint. A directory of templates installed and versioned as a unit is a **template
-pack**; the first-party **shipped read catalog** is one, installed with the daemon
-package. A Node without a given template reports the distinct `unsupported` outcome.
+pack**; the first-party **shipped read catalog** is one, shipped as its own optional
+package beside the daemon package, its files package-owned (ADR-0033, amended 2026-10-15). A Node without a given template reports the distinct `unsupported` outcome.
 _Avoid_: script, macro, custom command, snippet
 
 **Raw Exec**:
@@ -444,8 +444,9 @@ OAuth and CSP sense elsewhere and is not reserved here)
 **Security floor**:
 The configuration that bounds *who may authenticate and how recently they proved it*:
 listeners, CA/TLS, auth bootstrap, the identity provider, session and step-up windows,
-`console_execution`, the approval notification path. Operator-set on the host, unreachable
-from every API, with no code path from a request to any of it (invariant 11). Contrast
+`console_execution`, the approval notification path. Set by whoever administers the Relay's
+host, outside Relay, in one configuration file the Relay reads itself (ADR-0043); nothing Relay
+runs or accepts can write it — no API, no request, and not the Relay process (invariant 11). Contrast
 **operator settings**, which merely bound reach and may live in the store.
 _Avoid_: hard limits, static config (both also describe operator settings)
 
@@ -645,8 +646,8 @@ The REST/JSON surface (`/api/v1`, OpenAPI-described) through which humans' tooli
 machines drive the control plane — both administration and execution. One of the three
 user-facing surfaces (with the MCP surface and the Admin Console), all thin adapters
 over the same capability layer; the Control API is the programmable superset
-(ADR-0010). It never reaches the Relay's own configuration, which is a root-owned
-local file.
+(ADR-0010). It never writes the Relay's configuration: it reads the non-secret operator
+settings, and never reaches the security floor at all (invariant 11).
 _Avoid_: REST API (unqualified), admin API, "the API" (in docs; fine in speech)
 
 **System Model**:

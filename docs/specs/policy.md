@@ -132,7 +132,10 @@ canonical path:
 ### The shipped default
 
 > **Not yet reconciled** — see *Composition*. Until then the shipped default stays one
-> operator-owned Policy file (ADR-0022, ADR-0033 §4) and is not a catalog fragment.
+> operator-owned Policy file (ADR-0022, ADR-0033 §4) and is not a catalog fragment. ADR-0033's
+> 2026-10-15 amendment keeps it that way under packaging: the daemon package places the default
+> only when no Policy file exists and never rewrites it, and the shipped read catalog arrives in
+> its own optional package rather than with the daemon (`daemon-installation.md`).
 
 - The package ships a read fragment: every first-party `read`-class Template (the shipped read
   catalog), `system.facts`, and `file.read` of any path outside a curated confidentiality
@@ -207,7 +210,9 @@ _Not yet written._ This spec's claims are the backlog of its testing issue.
 
 - **Self-modification is a deployment concern.** That nothing a Task runs can write the Policy
   directory or trigger a reload rests on the shipped unit's filesystem sandbox, documented as a
-  deployment requirement. The self-reference lint is a warning, not an error. Named so they are
+  deployment requirement. That is why no
+  Alpine package ships yet (`daemon-installation.md`): without systemd there is no such sandbox.
+  The self-reference lint is a warning, not an error. Named so they are
   not forgotten: the `pkg.install` profile relaxes that sandbox; the daemon-uid ownership
   exception stands; an agentless tier (ADR-0037) would have no unit; and explicit reload makes
   a writable Policy directory a live escalation rather than one that waits for a restart.

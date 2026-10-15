@@ -1,7 +1,8 @@
 # A local Template tier, a shipped read catalog, and a frozen native vocabulary
 
 **Status:** Accepted; amended by ADR-0042; amended 2026-10-14 (slot values as positional
-parameters, #974); amended 2026-10-15 (slots only at the top level; a narrower `path`, #977).
+parameters, #974); amended 2026-10-15 (slots only at the top level; a narrower `path`, #977);
+amended by ADR-0033.
 
 Template **execution** is separable from template **distribution** (owner decision
 2026-08-03, issue #266). ADR-0001 defined tier 2 — **Template Operations**, operator-authored
@@ -337,3 +338,26 @@ shell's grammar is the denylist this amendment's predecessor rejected, in a new 
   lists both for operators.
 - Invariant 1 is unchanged: these decisions strengthen how it holds, not what it states.
 
+
+## Amendment (2026-10-15): amended by ADR-0033 — the shipped read catalog is its own package
+
+Owner decision, 2026-10-15, recorded in ADR-0033's amendment of that date. The **Shipped read
+catalog** decision said the catalog is "installed with the daemon package". It now ships as its
+own optional package, which depends on the daemon package.
+
+**Why.** A Template changes what may run on a Node. Installing the daemon should give a Node
+its engine and its default Policy; offering the catalog's Templates is a choice the operator
+makes, not a side effect.
+
+**What is kept.** The catalog's trust argument stands unchanged: it is first-party content
+trusted the way the binary is, so its files are **package-owned** — replaced on upgrade, removed
+with the package, never the operator's to edit. An operator who wants a variant defines their
+own Template under another name. Its contents, its `read` class and its role as the tier's
+first customer are unchanged.
+
+**What is added.** Because the shipped default allows the catalog by name, a package-owned file
+replaced on upgrade could change what an already-allowed name does on every Node at once — the
+unauthored, fleet-wide change ADR-0033 decision 4 exists to prevent. So a released catalog
+Template's name is bound to its body and its risk class: any change to either ships under a new
+name, and CI refuses a release that changes a released one. Withdrawing a released name is
+allowed, because it only reduces what may run: that is how an unsafe Template is retired.

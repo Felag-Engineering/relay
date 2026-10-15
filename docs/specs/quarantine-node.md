@@ -208,7 +208,8 @@ No claim here is proven yet. Claims with **no row**, and so nothing checking the
 
 - **Secret distribution** — delivering a replacement credential to affected Nodes during an
   incident. Begins with research into whether it is in realm at all: it sits close to
-  configuration management and to invariant 11's rule that secrets are file paths, never values.
+  configuration management and to invariant 11's rule that secrets never pass through the
+  environment or the command line.
 - **An Admin Console incident screen** that brings quarantine, revocation and Freeze together
   (#431).
 

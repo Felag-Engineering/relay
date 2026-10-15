@@ -1,6 +1,6 @@
 # The shipped default Policy pre-allows the read class, with a confidentiality deny-list
 
-**Status:** Accepted.
+**Status:** Accepted; amended by ADR-0033.
 
 A freshly enrolled Node should be fully interrogable with zero Policy authoring: the
 AI-agent's dominant workload is observation (ADR-0012), and a default that denies
@@ -112,3 +112,22 @@ in place, the AI-agent can read a Node's template files (disclosing its vocabula
 never change them, ADR-0002/0021). `policy check --strict` reports this truthfully rather
 than the file being tuned to silence its own linter, and the remedy is the one this ADR
 already names: replace `file.read`'s wildcard with an explicit path allow-list.
+
+## Amendment (2026-10-15): amended by ADR-0033 — the self-reference denies follow the packaged paths
+
+Owner decision, 2026-10-15, recorded in ADR-0033's amendment of that date. The relay-daemon now
+installs from an OS package, and packaged and hand-built installs share one binary path,
+`/usr/bin/relay-daemon`, with the packaged unit under `/usr/lib/systemd/system/`. The shipped
+default's self-reference denies — and the self-reference lint that checks a Policy against them
+— cover the binary and unit at those paths, and keep covering
+`/etc/systemd/system/relay-daemon.service` and the drop-in `systemctl edit` writes,
+`/etc/systemd/system/relay-daemon.service.d/override.conf`, by exact path: that is where an
+override of the packaged unit lives, and writing one removes the hardening as surely as editing
+the unit. Policy has no subtree deny, so a drop-in under any other name in that directory is the
+same recorded residual as the Template directory's files.
+
+A Node moved from a hand-built install onto the package keeps its live Policy, which the package
+never rewrites, so its denies still name `/usr/local/bin`. The migration documented for that move
+removes the old binary and the old unit under `/etc/systemd/system/` — which would otherwise
+shadow the packaged one — and says to update the Policy's self-reference denies by hand. The
+reason for denying these paths, and everything else this ADR decides, is unchanged.
