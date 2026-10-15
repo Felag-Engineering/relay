@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -482,6 +484,67 @@ func TestRouter_CancelSendsTaskCancel(t *testing.T) {
 	tc := msg.GetTaskCancel()
 	if tc == nil || tc.GetTaskId() != "task-1" {
 		t.Errorf("sent message = %+v, want a TaskCancel for task-1", msg)
+	}
+}
+
+// unsyncedStream stands in for a gRPC stream: like grpc.ServerStream.SendMsg,
+// it is not safe for concurrent use, so it takes no lock of its own. It
+// counts sends that overlap another send on the same stream, holding each one
+// open briefly so an unserialised caller would overlap reliably.
+type unsyncedStream struct {
+	inFlight atomic.Int32
+	overlaps atomic.Int32
+	sent     int // written only inside send; the race detector checks it
+}
+
+func (s *unsyncedStream) send(*relayv1.RelayMessage) error {
+	if s.inFlight.Add(1) > 1 {
+		s.overlaps.Add(1)
+	}
+	s.sent++
+	time.Sleep(time.Millisecond)
+	s.inFlight.Add(-1)
+	return nil
+}
+
+// TestRouter_SendsOnOneStreamAreSerialised drives Dispatch, Cancel and Query
+// at one Node concurrently. A gRPC stream allows one SendMsg at a time, so the
+// Router must never call a Node's send function from two goroutines at once.
+func TestRouter_SendsOnOneStreamAreSerialised(t *testing.T) {
+	r := NewRouter(nil, nil)
+	stream := &unsyncedStream{}
+	unregister := r.Register("node-1", stream.send)
+	defer unregister()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+
+	const perKind = 20
+	var wg sync.WaitGroup
+	for i := 0; i < perKind; i++ {
+		id := "task-" + strconv.Itoa(i)
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			_, _ = r.Dispatch(ctx, "node-1", jobs.Task{ID: id, NodeID: "node-1"})
+		}()
+		go func() {
+			defer wg.Done()
+			_ = r.Cancel(ctx, "node-1", id)
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = r.Query(ctx, "node-1", act)
+		}()
+	}
+	wg.Wait()
+
+	if n := stream.overlaps.Load(); n != 0 {
+		t.Errorf("%d sends overlapped another send on the same stream; want 0", n)
+	}
+	if stream.sent != 3*perKind {
+		t.Errorf("stream saw %d sends, want %d", stream.sent, 3*perKind)
 	}
 }
 
