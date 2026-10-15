@@ -116,9 +116,15 @@ already names: replace `file.read`'s wildcard with an explicit path allow-list.
 ## Amendment (2026-10-15): amended by ADR-0033 — the self-reference denies follow the packaged paths
 
 Owner decision, 2026-10-15, recorded in ADR-0033's amendment of that date. The relay-daemon now
-installs from an OS package, and packaged and hand-built installs share one binary path, the
-one distribution packaging policy allows: `/usr/bin/relay-daemon`, not `/usr/local/bin`. On
-Alpine its unit is an OpenRC init file rather than a systemd unit. The shipped default's
-self-reference denies name the binary and unit at the paths the packages install, on every
-supported platform; the 2026-08-10 amendment's `/usr/local/bin/relay-daemon` entry is replaced
-accordingly. The reason for denying them, and everything else this ADR decides, is unchanged.
+installs from an OS package, and packaged and hand-built installs share one binary path,
+`/usr/bin/relay-daemon`, with the packaged unit under `/usr/lib/systemd/system/`. The shipped
+default's self-reference denies — and the self-reference lint that checks a Policy against them
+— cover the binary and unit at those paths, and keep covering
+`/etc/systemd/system/relay-daemon.service` and its drop-in directory: that is where an override
+of the packaged unit lives, and writing one removes the hardening as surely as editing the unit.
+
+A Node moved from a hand-built install onto the package keeps its live Policy, which the package
+never rewrites, so its denies still name `/usr/local/bin`. The migration documented for that move
+removes the old binary and the old unit under `/etc/systemd/system/` — which would otherwise
+shadow the packaged one — and says to update the Policy's self-reference denies by hand. The
+reason for denying these paths, and everything else this ADR decides, is unchanged.

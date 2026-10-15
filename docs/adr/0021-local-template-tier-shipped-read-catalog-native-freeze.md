@@ -297,3 +297,9 @@ trusted the way the binary is, so its files are **package-owned** — replaced o
 with the package, never the operator's to edit. An operator who wants a variant defines their
 own Template under another name. Its contents, its `read` class and its role as the tier's
 first customer are unchanged.
+
+**What is added.** Because the shipped default allows the catalog by name, a package-owned file
+replaced on upgrade could change what an already-allowed name does on every Node at once — the
+unauthored, fleet-wide change ADR-0033 decision 4 exists to prevent. So a released catalog
+Template's name is bound to its body and its risk class: any change to either ships under a new
+name, and CI refuses a release that changes a released one.

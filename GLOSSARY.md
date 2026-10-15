@@ -444,9 +444,10 @@ OAuth and CSP sense elsewhere and is not reserved here)
 **Security floor**:
 The configuration that bounds *who may authenticate and how recently they proved it*:
 listeners, CA/TLS, auth bootstrap, the identity provider, session and step-up windows,
-`console_execution`, the approval notification path. Operator-set on the host — for a
-container deployment, the source the deployment takes it from — unreachable from every API,
-with no code path from a request to any of it (invariant 11). Contrast
+`console_execution`, the approval notification path. Operator-set on the host — or, for a
+container, in whatever the deployment injects — writable only by a root-equivalent human and
+never by a credential or automated principal, unreachable from every API, with no code path
+from a request to any of it (invariant 11). Contrast
 **operator settings**, which merely bound reach and may live in the store.
 _Avoid_: hard limits, static config (both also describe operator settings)
 

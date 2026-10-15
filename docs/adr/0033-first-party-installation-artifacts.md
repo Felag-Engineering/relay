@@ -1,7 +1,7 @@
 # First-party installation artifacts
 
 **Status:** Accepted; amended 2026-10-15 (the Relay ships as OS packages; the image is a
-production path; Alpine; remove and purge).
+production path; place-if-absent Policy; remove and purge; no Alpine package yet).
 
 "As automated as possible" pulls hard toward `curl -sfL https://get.relay.sh | sh`. It is
 what k3s does, what Docker does, what almost everything does, and it is the single
@@ -98,11 +98,12 @@ milestones. Whatever the installer installs belongs under the same kind of gate.
 
 ## Amendment (2026-10-15): the Relay ships as OS packages, and the image is a production path
 
-Owner decision, 2026-10-15, taken while scheduling packaging into milestone v0.6.5. Decisions 2
-and 5 are replaced below, and decision 4 keeps its property under a different mechanism.
-Decisions 1, 3 and 6 stand unchanged: no `curl | sh`, the daemon's packages come first, and
-there is no hosted repository before v1.0.0. This amendment also amends ADR-0010, ADR-0021 and
-ADR-0030, each recorded on its own page, and the wording of invariant 11.
+Owner decision, 2026-10-15, taken while scheduling packaging into milestone v0.6.5, and revised
+the same day after two adversarial reviews of the first draft. Decisions 2 and 5 are replaced
+below, and decision 4 keeps its property under a different mechanism. Decisions 1, 3 and 6
+stand unchanged: no `curl | sh`, the daemon's packages come first, and there is no hosted
+repository before v1.0.0. This amendment also amends ADR-0010, ADR-0021, ADR-0022 and ADR-0030,
+each recorded on its own page, and the wording of invariant 11.
 
 **Decision 2, replaced: the Relay host is installed by an OS package, not a script.**
 
@@ -113,64 +114,72 @@ package is declarative: the package manager the operator already trusts places i
 every file it owns, and removes it again. `relay-install.sh` is withdrawn before it was built.
 
 Where the Relay package installs, it installs the Relay's Unix account, the binary, the
-hardened unit, the `EnvironmentFile`, the state directory, and a directory for secret files. It
-enables and starts the Relay.
+hardened unit, the `EnvironmentFile`, the state directory, and a secrets directory beneath
+`/etc/relay` — never `/etc/relay` itself, which stays root-owned so the Relay cannot replace the
+file that holds its floor. **It installs and enables the Relay and never starts it.** Starting at
+install would mint the CA private key wherever the package happens to be installed — inside an
+image bake, so that every clone shares one CA key, or inside a container build with no running
+init. The Relay starts when the operator starts it, after checking its configuration. Enabling
+happens on first install only, only where systemd is running, and honours the distribution's
+presets where it has them; an upgrade never changes whether the Relay is enabled.
 
 It **never runs the first-boot command** (ADR-0030). Package-manager output is written to logs
 the operator does not control and rarely reads, and the first-boot command prints the founding
 admin's credentials. The package instead prints a configuration guide that carries no secret:
-check the hostname, restart if it changed, then run the first-boot command in a terminal. The
-same guide is installed as documentation, because a package manager's scroll is not a place
-anyone reads twice.
+check `relay.env`, start the Relay, run the first-boot command in a terminal, then widen the
+control-plane listener if it is to be reached off the host. The same guide is installed as
+documentation, because a package manager's scroll is not a place anyone reads twice. It also
+says never to capture an image of a host after the Relay has first started: the CA key would
+travel with it.
 
 **The package writes the `EnvironmentFile` once, at first install, and never again.** It is
-generated rather than shipped as package-owned configuration, so an upgrade neither rewrites
-it nor treats the generated values as an operator's edit. It names the host's fully qualified
-name as the certificate hostname — never an implicit default — names the CA directory and store
-path inside the state directory, and enables the control plane and the Admin Console. Enabling
-the control plane was assigned to `relay init` (ADR-0030 is amended accordingly);
-enabling them at install is safe because no credential exists until the operator runs the
-first-boot command. The guide prints the
-hostname it chose, because a wrong one fails only from the Node side. Changing any value is an
-edit on the host and a restart: it is security floor (invariant 11), and no command or surface
-is added to set it.
+generated rather than shipped as package-owned configuration, so an upgrade neither rewrites it
+nor treats the generated values as an operator's edit. It names the host's fully qualified name
+as the certificate hostname — never an implicit default — names the CA directory and store path
+inside the state directory, enables the control plane and the Admin Console, and **binds the
+control-plane listener to loopback**. Nothing is reachable off the host until the operator
+widens that listener, and the guide says to do so only after the first-boot command has run.
+Enabling the control plane was assigned to `relay init` (ADR-0030 is amended accordingly). The
+guide prints the hostname it chose, because a wrong one fails only from the Node side. Changing
+any value is an edit on the host and a restart: it is security floor (invariant 11), and no
+command or surface is added to set it.
 
-**Decision 5, replaced: the Relay container image is a production deployment path.**
+**Decision 5, replaced: the Relay container image becomes a production deployment path.**
 
 It is the path most operators are expected to take, and the documentation stops calling it the
-evaluation artifact: from this amendment it is documented as a supported production path, with
-a visible notice that its hardening review is pending until that review is done. It holds that
-standing only on the same terms as the hardened unit, and these are constraints on every
-documented deployment of it:
+evaluation artifact. It is documented as a supported deployment path now and called production
+once a human hardening review of its documented deployment has closed the invariant 11 gap
+below. It holds either standing only on the same terms as the hardened unit, and these are
+constraints on every documented deployment of it:
 
 - The container runs as an unprivileged user with no capabilities and a read-only root
   filesystem; the CA and the store live on one durable volume, and nothing else is writable.
-- The security floor reaches the container only from the host that runs it. Nothing in the
-  image carries configuration, and no secret is passed as a value: secret files are mounted
-  read-only and meet the same ownership and mode rule as on a packaged host, as the container
-  sees them.
+- Nothing in the image carries configuration, and no secret is passed as a value: secret files
+  are mounted read-only and meet the same rule as on a packaged host, as the container sees
+  them.
 - A deployment pins the image by digest.
-- The documented deployment gets a human hardening review, and until it has one its
-  documentation says so where it calls the image production. A description of what it mirrors
-  is not a review.
+- Wherever the deployment sources its floor from, that source is writable only as invariant 11
+  allows: by a human holding root-equivalent authority over the Relay's host, and never by a
+  credential Relay issues or accepts or by an automated principal.
 
-What a container deployment gives up against a packaged host is recorded rather than hidden:
-the floor's values are readable to anyone who can inspect the container, and a deployment
-driven from a git branch makes the floor writable by whoever can push to it. Both are **R35**
-in `docs/security/threat-model.md`; the hardening review either closes them or accepts them.
+The last constraint is not met by a deployment driven from a git branch that a CI system or an
+AI-agent's token can push to: such a credential could repoint the identity provider and
+authenticate as an `admin`. Today's documented compose stack can be deployed exactly that way,
+so this is a known gap in `AGENTS.md` until the hardening review closes it, not an accepted
+residual. The floor's values are also readable to anyone who can inspect the container — values,
+not secrets, with one exception the review must close: an approval webhook URL that is itself a
+capability URL. That exposure is **R35**.
 
 **There is still no daemon image, ever.** A containerised daemon has no host to administer.
 
-**The daemon also ships as an Alpine package.** Decision 3 named `.deb` and `.rpm`; `.apk` joins
-them. Each package carries a unit for its host's init system. Where that init system cannot
-express a protection the systemd unit gives, the package ships anyway and its documentation
-names each protection the Node does not get. The daemon's own guarantees — deny-by-default
-Policy, at-most-once, refusing a Policy file others can write — do not depend on the init
-system, and that is why a weaker unit is acceptable rather than disqualifying. What is lost is
-recorded as **R33**: without the systemd unit's read-only filesystem, a compromised daemon on
-Alpine can rewrite its own Policy and Templates. Containers as Nodes stay unsupported; the
-Alpine package is for Alpine hosts. **The Relay is not packaged for Alpine**: an Alpine host
-runs the Relay container.
+**No Alpine package, for now.** An Alpine Node would run under OpenRC, without the systemd
+unit's read-only filesystem; with nothing else confining it, any Task the Policy allows that can
+write would let a malicious Relay rewrite the Policy itself, and invariant 2 would hold only as
+far as the operator's Policy authoring. `apk` also refuses an unsigned package without
+`--allow-untrusted`, which would put "skip verification" into the documented install, and two of
+the four Native Operations assume systemd and apt, dnf or yum. An Alpine package waits on two
+things: a confinement of the Policy and Templates that the daemon applies itself, independent of
+the init system, and a decision on signing `apk` packages.
 
 **A platform is supported only where CI proves it.** Every platform a package claims is one
 where CI installs the package, upgrades it over the operator's edited configuration and finds
@@ -179,10 +188,13 @@ not here, because it moves with distribution releases. A hand-built install from
 binary on any other platform is documented, not supported.
 
 **Packaging builds nothing.** A package wraps the binaries the release already built, reproduced
-and guarded, byte for byte, and is itself reproducible. Every package is listed in the release
-`SHA256SUMS` and covered by its signature; that is the whole integrity story. Packages carry no
-signature of their own before v1.0.0: a package-signing key is a long-lived secret with custody
-and rotation obligations, and it belongs with the hosted repository decision 6 defers.
+and guarded, byte for byte — the packaging step must not strip or rewrite them — and is itself
+reproducible, built twice and compared like the binaries. Every package, and the standalone unit
+and example `EnvironmentFile` a hand-built install takes, is listed in the release `SHA256SUMS`
+and covered by its signature; that is the whole integrity story. Packages carry no signature of
+their own before v1.0.0: a package-signing key is a long-lived secret with custody and rotation
+obligations, and it belongs with the hosted repository decision 6 defers. A platform whose
+package manager refuses unsigned packages by default is not supported until that changes.
 
 **One unit per binary.** Packaged and hand-installed deployments run the same unit from the same
 binary path, the one distribution packaging policy allows (`/usr/bin`). A second unit for
@@ -194,63 +206,72 @@ conffile is replaced on upgrade when the operator has *not* edited it, so a rele
 the shipped default would change Policy on every untouched Node — a fleet-wide permission change
 nobody authored on any of them, which is the incident decision 4 exists to prevent. Instead the
 daemon package ships the default Policy as a reference copy it owns, and **places it as the live
-Policy only when no Policy file exists**. The live Policy is never a package-owned file: no
-install, upgrade, remove or purge rewrites it. A changed default in a later release reaches only
-Nodes installed after it, and that is correct, because the Policy is the customer's (ADR-0002).
-The daemon's `EnvironmentFile` follows the same rule, placed `0600` and root-owned when absent.
+Policy on first install only, only when no Policy file exists, and only when no Policy directory
+exists.** Never on an upgrade or a reinstall: an operator who deleted the Policy to lock a Node
+down to deny-all, or who composes Policy only from fragments, must not find the default back
+after the next upgrade. The live Policy is never a package-owned file: no install, upgrade or
+remove rewrites it. A changed default in a later release reaches only Nodes installed after it,
+and that is correct, because the Policy is the customer's (ADR-0002). The daemon's
+`EnvironmentFile` follows the same first-install rule, placed `0600` and root-owned. The daemon
+package installs the daemon and does not start it; config management starts it once it has
+written the join string.
 
 **The shipped read catalog is its own optional package.** A Template changes what may run on a
 Node, so placing the catalog is a choice the operator makes, never a side effect of installing
-the daemon. Its files stay **package-owned** — replaced on upgrade, removed with the package, and
-never the operator's to edit — because the catalog is first-party content trusted the way the
-binary is (ADR-0021, amended accordingly). An operator who wants a variant defines a Template of
-their own under another name.
+the daemon. Its files are **package-owned** — replaced on upgrade, removed with the package, never
+the operator's to edit, and never installed as configuration the package manager would preserve
+— because the catalog is first-party content trusted the way the binary is (ADR-0021, amended
+accordingly). Because the shipped default allows the catalog's Templates by name, **a released
+catalog Template's name is bound to its behaviour and its risk class**: any change to either
+ships under a new name, enforced in CI, so a catalog upgrade can add Templates but never changes
+what an already-allowed name does. An operator who wants a variant defines a Template of their
+own under another name.
 
-**Remove keeps everything the operator cannot recreate; purge removes everything but the Relay's
-CA.** Removing a package removes the binary and unit it installed and leaves configuration and
-state. Purging, where the format has a purge, removes configuration and state as well. Where a
-format has no purge (rpm), removal never deletes state, and prints what to delete by hand. A
-daemon left behind by a plain remove leaves its `EnvironmentFile` behind too, and with it any
-join string config management did not clear: **R36** widens R16 to cover it.
+**Remove keeps everything the operator cannot recreate; purge, where it exists, removes the
+rest.** Removing a package removes the binary and unit it installed and leaves configuration and
+state. `apt purge` removes configuration and state as well. rpm has no purge: removal never
+deletes state, and prints what to delete by hand. A daemon left behind by a plain remove leaves
+its `EnvironmentFile` behind too, and with it any join string config management did not clear:
+**R36** widens R16 to cover it. Purge deletes only paths the package itself created, never a path
+read from an operator-edited file.
 
-**No package operation destroys the Relay's CA.** Losing it invalidates every Node identity it
-ever issued and forces the fleet to enroll again, and one mistyped `purge` must not be able to do that.
-Purging the Relay moves the CA directory aside, preserved with the same ownership and modes, and
-prints where it went; deleting it is a separate, deliberate act by hand. This is the one
-exception to "purge removes everything", taken knowingly and recorded as **R34**: a purged host
-keeps a live CA private key until someone deletes it. A daemon purge has no such exception: one
-Node enrolling again is recoverable.
+**Purging the Relay never destroys its CA, and never separates it from its store.** Losing the CA
+invalidates every Node identity it ever issued; keeping it without the store is worse, because
+the store holds the revocation list, and a CA restored without it would let every revoked Node
+back in. So purging the Relay moves the whole state directory — CA and store together — aside,
+re-owned by root and readable by nobody else, and prints where it went; deleting it is a
+separate, deliberate act by hand. Purge never deletes the Relay's Unix account, so no later
+account can inherit its uid. This is the one exception to "purge removes everything", taken
+knowingly and recorded as **R34**: a purged host keeps a live CA private key until someone
+deletes it. A daemon purge has no such exception: one Node enrolling again is recoverable.
 
-**Secret files are owned by the Relay's own uid; the floor stays root-owned.** Invariant 11 said
-a secret file must be root-owned and not world-readable, and the Relay could not meet that: it
-reads every secret as its own unprivileged user, and it writes its CA private key itself. The
-invariant is reworded, keeping its number: **every secret file the Relay reads — operator-placed
-or Relay-written, the CA private key included — is owned by the uid the Relay runs as and is
-`0600`, and the Relay refuses to start otherwise.** The security-floor file is not a secret and
-keeps the stricter rule: owned by root and readable by the Relay's group (`0640 root:relay`), so
-the Relay can read its floor and can never change it. That split is the point of invariant 11 —
-a compromised Relay process holds its own secrets, which it needs anyway, but cannot rewrite the
-terms on which credentials are accepted. The packaged layout meets it; known-gap row 11 in
-`AGENTS.md` closes when the Relay enforces it (#864), not when the package ships (ADR-0010
-records the rewording). Where the Relay runs as a container, invariant 11 now names the source
-the deployment takes its floor from as "the host" (R35).
+**Secret files are readable only by the Relay; the floor's configuration is the operator's.**
+Invariant 11 said a secret file must be root-owned and not world-readable, and the Relay could
+not meet that for the secrets it generates: it writes its CA private key itself. The invariant
+is reworded as a property, keeping its number: **a secret file is readable by no principal but
+the Relay, and writable by none but root — and, for material the Relay generates, the Relay.**
+An operator-placed secret is therefore owned by root and readable only by the Relay's group, or
+owned by the Relay's uid read-only; a Relay-generated one is owned by the Relay's uid, readable
+by nobody else. The floor's configuration is root-owned and writable by root alone. The packaged
+layout meets it; known-gap row 11 in `AGENTS.md` closes when the Relay enforces it (#864), not
+when the package ships (ADR-0010 records the rewording).
 
 ### Consequences of the amendment
 
 The artifact set becomes: both binaries; Relay packages (`.deb`, `.rpm`); daemon packages
-(`.deb`, `.rpm`, `.apk`); the shipped read catalog package; all under one `SHA256SUMS`; and the
-Relay image, published to the registry, signed at its digest, and carrying a `relay` binary that
-`SHA256SUMS` covers. There is no installer script, and the standalone unit and example
-`EnvironmentFile` stay in the repository's packaging directories rather than becoming release
-attachments.
+(`.deb`, `.rpm`); the shipped read catalog package; the standalone units and example
+`EnvironmentFile`s; all under one `SHA256SUMS`; and the Relay image, published to the registry,
+signed at its digest, and carrying a `relay` binary that `SHA256SUMS` covers. There is no
+installer script.
 
 Consumers to update with this amendment, each on its own page: `AGENTS.md` (invariant 11 and
-known-gap row 11), `docs/STATUS.md` (its known-deviations mirror), ADR-0010, ADR-0021, ADR-0022
-(the shipped default's self-reference denies follow the packaged paths), ADR-0030, `GLOSSARY.md`, `docs/specs/daemon-installation.md`,
-`docs/specs/relay-configuration.md`, `docs/specs/policy.md`,
-`docs/specs/operations-and-templates.md`, `docs/specs/policy-catalog.md`,
-`docs/security/threat-model.md` (invariant 11's row, R16, and R33–R36),
+known-gap row 11), `docs/STATUS.md` (its known-deviations mirror), ADR-0010, ADR-0021, ADR-0022,
+ADR-0030, `GLOSSARY.md`, `docs/specs/daemon-installation.md`, `docs/specs/relay-configuration.md`,
+`docs/specs/policy.md`, `docs/specs/operations-and-templates.md`, `docs/specs/policy-catalog.md`,
+`docs/security/threat-model.md` (invariant 11's row, R16, R34–R36),
 `docs/operations/release-artifacts.md`, `docs/operations/relay-install.md` (section 7's
 "evaluation artifact" and its secret-file modes), `docs/operations/relay-daemon-install.md` (the
-binary path), `docs/operations/template-packs.md` (the catalog package),
-`docs/operations/daemon-privilege-posture.md` (Alpine), and `docs/design/self-serve-enrollment.md` (E7, E8, E9).
+binary path, and migrating a hand-built Node onto the package), `docs/operations/template-packs.md`
+(the catalog package), `docs/operations/approval-gates.md` (the webhook secret's ownership),
+`docs/design/self-serve-enrollment.md` (E7, E8, E9), the deploy/compose stack's comments, and the
+Relay's own help and error text that still says "root-owned" (with #864).
