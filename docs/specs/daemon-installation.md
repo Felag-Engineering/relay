@@ -45,7 +45,8 @@ Policy — reads allowed with the confidentiality deny-list, mutate and Raw Exec
 
 **The live Policy is placed on first install only, and no package operation ever rewrites it.**
 On a first install — never an upgrade or a reinstall — if no Policy file exists and no Policy
-directory exists, the package copies the shipped default into place. From then on the Policy
+directory existed before the install began, the package copies the shipped default into place.
+The test is made before the package creates the Policy directory itself. From then on the Policy
 file is the operator's: no install, upgrade or remove rewrites it, whether or not anyone edited
 it, and a later upgrade never puts it back once the operator has deleted it. That matters,
 because deleting the Policy is a legitimate way to lock a Node down to deny-all, and composing

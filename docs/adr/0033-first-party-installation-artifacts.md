@@ -115,8 +115,8 @@ every file it owns, and removes it again. `relay-install.sh` is withdrawn before
 
 Where the Relay package installs, it installs the Relay's Unix account, the binary, the
 hardened unit, the `EnvironmentFile`, the state directory, and a secrets directory beneath
-`/etc/relay` — never `/etc/relay` itself, which stays root-owned so the Relay cannot replace the
-file that holds its floor. **It installs and enables the Relay and never starts it.** Starting at
+`/etc/relay`. Both `/etc/relay` and the secrets directory are root-owned and not writable by the
+Relay, because write access to a directory would let it replace the root-owned files inside. **It installs and enables the Relay and never starts it.** Starting at
 install would mint the CA private key wherever the package happens to be installed — inside an
 image bake, so that every clone shares one CA key, or inside a container build with no running
 init. The Relay starts when the operator starts it, after checking its configuration. Enabling
@@ -250,9 +250,9 @@ Invariant 11 said a secret file must be root-owned and not world-readable, and t
 not meet that for the secrets it generates: it writes its CA private key itself. The invariant
 is reworded as a property, keeping its number: **a secret file is readable by no principal but
 the Relay, and writable by none but root — and, for material the Relay generates, the Relay.**
-An operator-placed secret is therefore owned by root and readable only by the Relay's group, or
-owned by the Relay's uid read-only; a Relay-generated one is owned by the Relay's uid, readable
-by nobody else. The floor's configuration is root-owned and writable by root alone. The packaged
+An operator-placed secret is therefore owned by root and readable, not writable, by the Relay's
+group — never owned by the Relay's uid, whose owner could make it writable again; a
+Relay-generated one is owned by the Relay's uid, readable by nobody else. The floor's configuration is root-owned and writable by root alone. The packaged
 layout meets it; known-gap row 11 in `AGENTS.md` closes when the Relay enforces it (#864), not
 when the package ships (ADR-0010 records the rewording).
 

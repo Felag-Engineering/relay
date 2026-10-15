@@ -139,14 +139,17 @@ writable by none but root — and, for material the Relay generates, the Relay**
 reworded 2026-10-15; not yet enforced, known-gap row 11, #864). In practice:
 
 - an **operator-placed** secret — the webhook secret, OAuth and TLS key files — is owned by root
-  and readable only by the Relay's group, or owned by the Relay's uid with no write bit, so the
-  Relay can read it and never rewrite it;
+  and readable only by the Relay's group, with no write bit for the group, so the Relay can read
+  it and never rewrite it (a file the Relay owned could be made writable again by the Relay
+  itself; a read-only mount in a container is the one exception, since nothing can change it);
 - a **Relay-generated** secret — its CA private key — is owned by the Relay's uid and readable by
   nobody else.
 
 The Relay refuses to start on a secret file that breaks either rule, naming the file and checking
-the owner as well as the mode. The package creates a secrets directory beneath `/etc/relay`;
-`/etc/relay` itself stays root-owned, so the Relay cannot replace the file that holds its floor.
+the owner as well as the mode. The package creates a secrets directory beneath `/etc/relay`,
+owned by root and readable but not writable by the Relay's group; `/etc/relay` itself stays
+root-owned too. Neither directory is writable by the Relay, because write access to a directory
+would let it replace the root-owned files inside it.
 
 **The floor's configuration is the operator's.** It is root-owned and writable by root alone,
 wherever it is sourced. A compromised Relay process holds its secrets, which it needs anyway, but
