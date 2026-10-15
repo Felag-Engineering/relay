@@ -1,7 +1,8 @@
 # First-party installation artifacts
 
 **Status:** Accepted; amended 2026-10-15 (the Relay ships as OS packages; the image is a
-production path; place-if-absent Policy; remove and purge; no Alpine package yet).
+production path; place-if-absent Policy; remove and purge; no Alpine package yet); amended by
+ADR-0043.
 
 "As automated as possible" pulls hard toward `curl -sfL https://get.relay.sh | sh`. It is
 what k3s does, what Docker does, what almost everything does, and it is the single
@@ -114,9 +115,9 @@ package is declarative: the package manager the operator already trusts places i
 every file it owns, and removes it again. `relay-install.sh` is withdrawn before it was built.
 
 Where the Relay package installs, it installs the Relay's Unix account, the binary, the
-hardened unit, the `EnvironmentFile`, the state directory, and a secrets directory beneath
-`/etc/relay`. Both `/etc/relay` and the secrets directory are root-owned and not writable by the
-Relay, because write access to a directory would let it replace the root-owned files inside. **It installs and enables the Relay and never starts it.** Starting at
+hardened unit, the configuration file (`/etc/relay/relay.toml`, ADR-0043), and the state
+directory. `/etc/relay` is root-owned and not writable by the Relay, because write access to the
+directory would let it replace the configuration file inside. **It installs and enables the Relay and never starts it.** Starting at
 install would mint the CA private key wherever the package happens to be installed — inside an
 image bake, so that every clone shares one CA key, or inside a container build with no running
 init. The Relay starts when the operator starts it, after checking its configuration. Enabling
@@ -126,13 +127,13 @@ presets where it has them; an upgrade never changes whether the Relay is enabled
 It **never runs the first-boot command** (ADR-0030). Package-manager output is written to logs
 the operator does not control and rarely reads, and the first-boot command prints the founding
 admin's credentials. The package instead prints a configuration guide that carries no secret:
-check `relay.env`, start the Relay, run the first-boot command in a terminal, then widen the
+check `relay.toml`, start the Relay, run the first-boot command in a terminal, then widen the
 control-plane listener if it is to be reached off the host. The same guide is installed as
 documentation, because a package manager's scroll is not a place anyone reads twice. It also
 says never to capture an image of a host after the Relay has first started: the CA key would
 travel with it.
 
-**The package writes the `EnvironmentFile` once, at first install, and never again.** It is
+**The package writes the configuration file once, at first install, and never again.** It is
 generated rather than shipped as package-owned configuration, so an upgrade neither rewrites it
 nor treats the generated values as an operator's edit. It names the host's fully qualified name
 as the certificate hostname — never an implicit default — names the CA directory and store path
@@ -185,7 +186,7 @@ binary on any other platform is documented, not supported.
 **Packaging builds nothing.** A package wraps the binaries the release already built, reproduced
 and guarded, byte for byte — the packaging step must not strip or rewrite them — and is itself
 reproducible, built twice and compared like the binaries. Every package, and the standalone unit
-and example `EnvironmentFile` a hand-built install takes, is listed in the release `SHA256SUMS`
+and example configuration a hand-built install takes, is listed in the release `SHA256SUMS`
 and covered by its signature; that is the whole integrity story. Packages carry no signature of
 their own before v1.0.0: a package-signing key is a long-lived secret with custody and rotation
 obligations, and it belongs with the hosted repository decision 6 defers. A platform whose
@@ -266,7 +267,7 @@ package ships (ADR-0010 records the rewording).
 
 The artifact set becomes: both binaries; Relay packages (`.deb`, `.rpm`); daemon packages
 (`.deb`, `.rpm`); the shipped read catalog package; the standalone units and example
-`EnvironmentFile`s; all under one `SHA256SUMS`; and the Relay image, published to the registry,
+configuration files; all under one `SHA256SUMS`; and the Relay image, published to the registry,
 signed at its digest, and carrying a `relay` binary that `SHA256SUMS` covers. There is no
 installer script.
 
@@ -281,3 +282,12 @@ binary path, and migrating a hand-built Node onto the package), `docs/operations
 (the catalog package), `docs/operations/approval-gates.md` (the webhook secret's ownership),
 `docs/design/self-serve-enrollment.md` (E7, E8, E9), the deploy/compose stack's comments, and the
 Relay's own help and error text that still says "root-owned" (with #864).
+
+## Amendment (2026-10-15): amended by ADR-0043 — one configuration file
+
+The Relay's floor and its secrets now live in one TOML configuration file the Relay reads itself,
+checked at start for one property: the Relay could not write it, and nobody else could read it.
+Where this amendment's text above described the Relay package's `EnvironmentFile`, a separate
+secrets directory, or the ownership of individual secret files, ADR-0043 replaces it: the package
+installs `relay.toml` under the same first-install rule, and a container mounts it read-only
+instead of injecting environment. The daemon's own `EnvironmentFile` is unchanged.

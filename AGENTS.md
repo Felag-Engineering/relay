@@ -99,10 +99,10 @@ it needs an ADR, not a quiet workaround.
     accepts can write it: no API, no request, and not the Relay process. Configuration that
     only bounds *reach* — blast caps, approval-gate rules, the minimum daemon version, rate
     and capacity limits — may be a runtime object, changed only by a human Account with
-    step-up re-authentication, and audited. Secrets are supplied as file paths, never
-    values; the Relay can read them and cannot rewrite them, except key material it
-    generates itself. (ADR-0010, amended 2026-09-15; ADR-0004, ADR-0012, ADR-0027; reworded
-    2026-10-15, ADR-0033)
+    step-up re-authentication, and audited. Secrets never pass through the environment or
+    the command line; the Relay can read them and cannot rewrite them, except key material
+    it generates itself. (ADR-0010, amended 2026-09-15; ADR-0004, ADR-0012, ADR-0027;
+    reworded 2026-10-15, ADR-0033, ADR-0043)
 12. **Policy is evaluated only by the daemon's live engine** — including hypotheticals
     (`PolicyQuery`, the Policy preflight). Never reimplement Policy evaluation on the Relay side.
     (ADR-0011; wording amended 2026-09-20 for ADR-0038)
@@ -144,7 +144,7 @@ and that rule is the only thing keeping it honest.
 |---|---|---|---|
 | 7 | `tag:`'s writer, and `relay:`'s | `tag:` has **no storage on the Node record and no write path**, so nothing can be written to the namespace the invariant says an operator writes. Since #561 a `tag:` term is **refused at parse** with a recognisable sentinel rather than silently matching nothing, identically on every surface — so the gap is now an honest refusal instead of a false negative. `relay:` labels are stamped at enrollment today; the Relay actions that write them afterwards (quarantine engage and lift, `quarantine-node.md`) are unbuilt, so quarantine by either `relay:` or `tag:` does not exist yet. Behaviour detail in `docs/specs/selectors-and-labels.md`. | #430 |
 | 10 | Console execution | The Console does **not** execute yet. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today. | #438 |
-| 11 | Secrets: the Relay can read them and cannot rewrite them, except key material it generates | Reworded on 2026-10-15 (ADR-0033); the code does not enforce it. Nothing checks a secret file's **owner**; the webhook secret's mode check refuses any group or other bit, so it also refuses the packaged layout (root-owned, readable by the Relay's group) and must be relaxed; the Relay's own help and error text still say "root-owned"; the CA private key is read back with no mode or owner check at all. Detail in `docs/operations/relay-install.md`. | #864 |
+| 11 | Secrets: the Relay can read them and cannot rewrite them, except key material it generates | Decided 2026-10-15 (ADR-0043): one configuration file the Relay reads itself, refusing to run if it could write that file or anyone else could read it. Not built: the floor still arrives as `RELAY_*` environment variables placed by systemd, secrets are separate files whose owner nothing checks, the webhook secret's mode check refuses the packaged layout, the Relay's help and error text still say "root-owned", and the CA private key is read back with no mode or owner check at all. | #864 |
 
 ### Writing or amending an invariant
 

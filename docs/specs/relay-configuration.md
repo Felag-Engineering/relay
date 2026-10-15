@@ -14,9 +14,9 @@ for a human, and whether the Console exists at all.
 
 It is **two tiers, split by what an attacker gains from changing the setting.**
 
-- The **security floor** is set by whoever administers the Relay's host, outside Relay — a
-  root-owned file on a packaged host, or whatever a container's deployment injects — and
-  nothing Relay runs or accepts can write it. It is the small set that decides *who may authenticate at all* and *whether the gate
+- The **security floor** is set by whoever administers the Relay's host, outside Relay, in
+  **one configuration file** the Relay reads itself (ADR-0043), and nothing Relay runs or
+  accepts can write it. It is the small set that decides *who may authenticate at all* and *whether the gate
   exists*: listeners and TLS material, the identity provider Relay believes, the authentication
   windows, the approval notification path, and whether the Console may execute.
 - **Operator settings** are runtime objects in the Relay's store, changed by a human `admin` in
@@ -32,7 +32,7 @@ to authenticate as somebody else.
 
 | Surface | Access to the capability |
 |---|---|
-| **The host** | The security floor, as `RELAY_*` environment variables: on a packaged host, in a root-owned `EnvironmentFile` placed beside the unit, read at startup and on a reload signal; in a container, injected by the deployment, read at startup only |
+| **The host** | The security floor, in one TOML configuration file whose path is the only thing the Relay is told at start: `/etc/relay/relay.toml` on a packaged host, a read-only mount in a container. Read at startup and on a reload signal |
 | **Admin Console** | Every operator setting: read, and changed by a human `admin` with step-up. The only surface that writes configuration. Also renders the non-secret security floor, read-only |
 | **Control API** | Reads the non-secret operator settings. **No write route exists, and none may be added** |
 | **MCP** | Reads the non-secret operator settings, so an AI-agent can explain a refusal against the value that caused it. No write tool |
@@ -55,12 +55,12 @@ Set on the host only. No code path exists from any request to any of these value
 | OAuth issuer, audience, account claim, required scope, public URL | Whoever names the issuer decides who can authenticate |
 | Console session maximum age and idle timeout, step-up freshness window | Authentication bounds. An `admin` who could widen their own step-up window has removed it |
 | `console_execution` | Invariant 10 requires it root-owned |
-| Approval webhook URL, secret file, timeout | Repointing it sends every approval request somewhere else and leaves the humans seeing nothing |
-| Every secret file path | Secrets are named by path, never supplied as values |
+| Approval webhook URL, secret, timeout | Repointing it sends every approval request somewhere else and leaves the humans seeing nothing |
+| Every secret | Inline in the file, or a path to a file another tool manages; never in the environment or on the command line |
 
 A bare binary with only its required values set **comes up closed**: the gRPC listener only, no control
 plane, no Console, no OAuth, no approval notification. The CA directory, store path and
-certificate hostname have **no defaults** — unset is a refusal naming the variable, because a
+certificate hostname have **no defaults** — unset is a refusal naming the setting, because a
 development-shaped default is a production deployment inheriting it silently.
 
 ### Operator settings
@@ -68,8 +68,8 @@ development-shaped default is a production deployment inheriting it silently.
 Runtime objects in the store, with built-in defaults, changed in the Console by a human `admin`
 with step-up on every change, and audited with the setting, its old value, its new value, and
 who changed it. A change applies to the next request; nothing already past its check is
-revisited. Their `RELAY_*` variables are **not read** — a stale one left in the environment file
-refuses startup rather than being silently ignored.
+revisited. They have no place in the configuration file — one found there refuses startup rather
+than being silently ignored.
 
 | Setting | Notes |
 |---|---|
@@ -98,14 +98,15 @@ secret file appear on no surface.
 
 ### Changing the floor: reload, and what a reload will not do
 
-`SIGHUP` re-reads the floor from the environment file. The reload is **all-or-nothing**: the
+`SIGHUP` re-reads the configuration file from the path given at start, and applies the check in
+*Secrets and the configuration file* before anything else. The reload is **all-or-nothing**: the
 whole file is validated, and if any value is invalid, or if any *bind-time* setting has changed
 — listen addresses, CA directory, store path, certificate hostname — the entire reload is
 refused, the log names the setting and says a restart is required, and the running configuration
 is untouched. Nothing is ever half-applied, and a failed reload never exits the process.
 
-**A container has no reload.** Its floor arrives as the environment its deployment injects, which
-a running process cannot re-read; every floor change is a redeploy.
+**A container reloads by restarting.** Its configuration file is a read-only mount; a change is a
+redeploy.
 
 Every reload is audited as a host-lever act, in the same lane as the Freeze signal's
 `local-host`, listing what changed. Root on the box is a different root of authority from any
@@ -119,12 +120,9 @@ field on a screen.
 ### Validation
 
 Every value is validated at startup and at reload, and an invalid one is a refusal naming the
-setting — never a warning and a fallback to a default. On a packaged host the floor file is
-root-owned and writable by root alone; today systemd reads it and hands the Relay only its
-values, so the Relay cannot check the file. Once the Relay reads the file itself — the reload
-above names its path — a missing or unreadable floor file is a refusal, and so is one that
-anyone but root can write. The deployment mode decides whether that check applies, never
-whether a file happens to exist.
+setting — never a warning and a fallback to a default. A missing or unreadable configuration
+file is a refusal. A `RELAY_*` variable for a floor setting found in the environment is a refusal
+naming that setting's place in the file: there is one way to set the floor.
 
 A configuration that **cannot work** is refused: the Console enabled without the control plane,
 OAuth configured without an issuer. A configuration that is coherent but **probably a mistake** —
@@ -132,34 +130,28 @@ a mutate cap above the read cap — starts, with a prominent warning. The line i
 refusing the second class would make the Relay argue with an operator who has decided to trust
 their fleet more.
 
-### Secret files
+### Secrets and the configuration file
 
-Every secret is named by a path. **The Relay can read its secrets and cannot rewrite them,
-except key material it generates itself** (invariant 11, reworded 2026-10-15; not yet enforced,
-known-gap row 11, #864). In practice:
+*(Designed for v0.6.5; ADR-0043.)* A secret is a value in the configuration file, or a path to a
+file holding it — the second for material another tool manages and rotates, such as a TLS
+certificate a certificate manager renews. Either way **it never passes through the environment
+or the command line** (invariant 11).
 
-- an **operator-placed** secret — the webhook secret, OAuth and TLS key files — is owned by root
-  and readable only by the Relay's group, with no write bit for the group, so the Relay can read
-  it and never rewrite it (a file the Relay owned could be made writable again by the Relay
-  itself; a read-only mount in a container is the one exception, since nothing can change it);
-- a **Relay-generated** secret — its CA private key — is owned by the Relay's uid and readable by
-  nobody else.
+**One check, the same on a host and in a container.** At start and on every reload, the Relay
+refuses to run **if it could write its configuration file, or if anyone but it could read it** —
+and the same for every file the configuration names as holding a secret. This tests the
+property directly: a `root:relay 0640` file on a packaged host passes, a read-only mount in a
+container passes, and a file the Relay process could rewrite fails wherever it is. `/etc/relay`
+is root-owned for the same reason: write access to the directory would let the Relay replace
+the file.
 
-The Relay refuses to start on a secret file that breaks either rule, naming the file and checking
-the owner as well as the mode. The package creates a secrets directory beneath `/etc/relay`,
-owned by root and readable but not writable by the Relay's group; `/etc/relay` itself stays
-root-owned too. Neither directory is writable by the Relay, because write access to a directory
-would let it replace the root-owned files inside it.
+**The state directory is the Relay's.** Everything the Relay generates — its CA private key, its
+store — lives there, owned by the Relay's uid and readable by nobody else; the Relay refuses to
+start if the directory or the key is readable by anyone else.
 
-**The floor's configuration is the operator's.** It is root-owned and writable by root alone,
-wherever it is sourced. A compromised Relay process holds its secrets, which it needs anyway, but
-cannot rewrite the operator's floor configuration or an operator-placed secret.
-
-In the container, the secret-file rule applies to each mounted secret as the container sees it.
-Where the deployment takes its floor from is the operator's own infrastructure. Its
-documentation says that no automated credential — a CI system's, an AI-agent's repository token
-— should be able to write a deploy source the floor comes from; Relay documents that and does
-not police it (ADR-0033: Relay prevents, it does not police).
+Not yet built (known-gap row 11, #864): today the floor arrives as `RELAY_*` environment
+variables placed by systemd, secrets are separate files whose owner nothing checks, and the CA
+key is read back unchecked.
 
 ### Installation
 
@@ -170,8 +162,8 @@ gap; until then its documentation says so.
 
 - **The Relay package** (`.deb`, `.rpm`) on the platforms `daemon-installation.md` lists, under
   that list's CI rule, where the edited configuration a Relay upgrade must preserve is its
-  `EnvironmentFile`. It installs the Relay's Unix account, the binary, the hardened unit, the
-  `EnvironmentFile`, the state directory and the secrets directory, and prints a configuration
+  configuration file. It installs the Relay's Unix account, the binary, the hardened unit, the
+  configuration file and the state directory, and prints a configuration
   guide that carries no secret, also installed as documentation. **It enables the Relay and never
   starts it**: starting at install would mint the CA private key wherever the package is
   installed — inside an image bake, so every clone shares one key, or a container build with no
@@ -180,10 +172,9 @@ gap; until then its documentation says so.
   package-manager output lands in logs and that command prints credentials.
 - **The Relay container image**, pinned by digest: unprivileged, no capabilities, read-only root
   filesystem, the CA and store on one durable volume, nothing in the image carrying
-  configuration, the security floor injected by the deployment, and secret files mounted
-  read-only. Anyone who can inspect the container can read the floor's values — settings, not
-  secrets, except an approval webhook URL that is itself a capability URL — which is an accepted
-  residual risk (R35) the hardening review must narrow.
+  configuration, and the configuration file — with any secret files it names — mounted
+  read-only. Nothing about the floor is in the container's environment, so inspecting the
+  container shows a mount path, not settings or secrets.
 
 The Relay packages are built the way the daemon's are: they wrap the release's guarded binary
 and compile nothing, they are reproducible, they are listed in the release `SHA256SUMS`, and they
@@ -192,7 +183,7 @@ The image is different: it is published to the registry rather than attached to 
 is not byte-reproducible, it is signed at its digest, and the `relay` binary inside it is the one
 `SHA256SUMS` covers.
 
-**The package writes the `EnvironmentFile` once, at first install**, and never again: the host's
+**The package writes the configuration file once, at first install**, and never again: the host's
 fully qualified name as the certificate hostname — never an implicit default — the CA directory
 and store path inside the state directory, the control plane and Admin Console enabled, and the
 **control-plane listener bound to loopback**. Nothing is reachable off the host until the operator
@@ -213,7 +204,7 @@ paths to delete by hand.
 
 ### First boot
 
-Install the package, check `relay.env` (the hostname above all), start the Relay, then run the
+Install the package, check `relay.toml` (the hostname above all), start the Relay, then run the
 first-boot command in a terminal: today `relay bootstrap-token` for the founding admin's first
 API Token and `relay console-password` for their first Console credential; *(designed for
 v0.6.5)* `relay init`, which replaces both (ADR-0030) and is what the package's guide names. Then
@@ -231,8 +222,8 @@ a read-only filesystem outside its state directory.
 |---|---|
 | No route exists | A configuration write attempted over MCP or the Control API. There is no endpoint to refuse it |
 | Not authorized | An operator-setting change by a non-`admin`, a machine Account, or without fresh step-up |
-| Startup refused, setting named | An invalid value, a missing required value (CA directory, store path, certificate hostname), an unreadable floor file, or once the Relay reads it itself one that anyone but root can write, a secret file readable by anyone but the Relay or writable by anyone but root (or, for the CA private key, the Relay), or an incoherent combination |
-| Startup refused, stale variable named | A `RELAY_*` variable for a setting that now lives in the store |
+| Startup refused, setting named | An invalid value, a missing required value (CA directory, store path, certificate hostname), an unreadable configuration file, a configuration or secret file the Relay could write or anyone else could read, a state directory or CA key readable by anyone but the Relay, or an incoherent combination |
+| Startup refused, stray setting named | A `RELAY_*` environment variable for any setting, or an operator setting written in the configuration file |
 | Reload refused | An invalid value, or a bind-time setting changed. The running configuration is unchanged and a restart is required |
 
 ## Governing ADRs and invariants
@@ -317,12 +308,10 @@ root-owned and unreadable to every other account; purge prints where it went; an
 documentation that describes purge says to delete it, or destroy the host, when the Relay is gone
 for good.
 
-**A container deployment's floor values are readable by whoever can inspect it.** They are
-settings, not secrets — every secret is a file path — except an approval webhook URL that is
-itself a capability URL. Accepted by the owner on 2026-10-15 and recorded as **R35**, to be
-narrowed by the image's hardening review before it is called production; the docker group is
-root-equivalent on the host anyway. Who can *write* a deployment's floor source is the operator's
-own infrastructure, documented rather than policed.
+**R35 is closed by design** (ADR-0043): a container's floor is a read-only mounted file, not
+injected environment, so inspecting the container no longer reveals it. It stays open until
+#864 builds that. Who can *write* a deployment's configuration source is the operator's own
+infrastructure, documented rather than policed.
 
 ## Future work
 
