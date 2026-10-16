@@ -1,0 +1,4 @@
+  [[template]]
+name = "alpha.one"
+risk_class = "read"
+body = "true"

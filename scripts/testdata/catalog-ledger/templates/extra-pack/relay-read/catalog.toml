@@ -1,0 +1,14 @@
+# fixture pack
+[[template]]
+name = "alpha.one"
+risk_class = "read"
+body = "true"
+
+[[template]]  # second
+name = "beta.two"
+risk_class = "read"
+body = "ls -- {{unit}}"
+
+[[template.slots]]
+name = "unit"
+type = "identifier"

@@ -58,7 +58,8 @@ tool_bin = GOWORK=off go -C "$(CURDIR)/tools/$(1)" tool -n $(1)
         test-check-docs test-smoke-test test-maintainer-check \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
         demo-build demo-reset demo-reset-oauth demo-fault demo-up demo-up-oauth demo-down demo-creds \
-        relay-demo-owner test-release-image-guard test-license-change-date test-dev-fleet-make \
+        relay-demo-owner test-release-image-guard test-license-change-date test-catalog-ledger catalog-ledger-check \
+        test-dev-fleet-make \
         fuzz-relay fuzz-daemon \
         verify verify-proto proto-lint opschema-check openapi-check gen-apiclient apiclient-check \
         lint-ci lint-shell lint-actions lint-zizmor zizmor-tool secrets-scan secrets-scan-history \
@@ -72,8 +73,8 @@ tool_bin = GOWORK=off go -C "$(CURDIR)/tools/$(1)" tool -n $(1)
 # self-test, the changed-paths classifier
 # self-test, the docs-check, smoke-test, maintainer-check and dev-fleet Makefile
 # guard self-tests, the strict-umask test lane, both cross-binary suites, the
-# shell/workflow linters (lint-ci), the secrets scan and the daemon's cargo-deny
-# policy. Work can pass the inner loop and fail CI on a class of problem the
+# shell/workflow linters (lint-ci), the catalog-ledger gate, the secrets scan and the daemon's
+# cargo-deny policy. Work can pass the inner loop and fail CI on a class of problem the
 # author never looked at.
 #
 # `make verify` closes that gap: one target, mirroring .github/workflows/ci.yml
@@ -96,7 +97,8 @@ verify: fmt lint-relay lint-daemon lint-comments lint-guard-escapes check-daemon
         apiclient-check verify-proto docs-check test-security-surface \
         test-codex-review test-ci-changed-paths \
         test-check-docs test-smoke-test test-maintainer-check test-release-image-guard \
-        test-license-change-date test-dev-fleet-make test-integration test-crossbinary \
+        test-license-change-date test-catalog-ledger catalog-ledger-check \
+        test-dev-fleet-make test-integration test-crossbinary \
         lint-ci secrets-scan deny-daemon test-vuln-gate
 	@echo
 	@test -n "$(RELAY_VERIFY_SKIPS)" || { echo "verify: no skip ledger, so skipped gates cannot be ruled out" >&2; exit 1; }
@@ -292,6 +294,24 @@ test-release-image-guard:
 # three to four years after the release passes, anything else fails. Hermetic: bash and date.
 test-license-change-date:
 	bash scripts/license-change-date-test.sh
+
+# Proves scripts/catalog-ledger.sh, the gate that binds a released catalog Template name to its
+# body and risk class (DI-30): append-only against every release tag, withdrawal allowed,
+# re-adding refused, and a catalog layout it does not read refused. Hermetic: bash, awk and a
+# throwaway repository.
+test-catalog-ledger:
+	bash scripts/catalog-ledger-test.sh
+
+# DI-30 against the real ledger. No visible v* tag is a recorded skip under verify and a failure
+# anywhere else (CI fetches tags), the same convention as a missing tool.
+catalog-ledger-check:
+	@bash scripts/catalog-ledger.sh check; rc=$$?; \
+	if [ "$$rc" -eq 3 ] && [ -n "$(RELAY_VERIFY_SKIPS)" ]; then \
+		echo "verify: SKIPPING catalog-ledger-check - no release tag visible (CI runs it)"; \
+		echo "catalog-ledger-check (no release tag visible)" >> "$(RELAY_VERIFY_SKIPS)"; \
+		exit 0; \
+	fi; \
+	exit $$rc
 
 # Proves scripts/codex-review.sh exits 0 only on a parsed result.verdict, 3 on anything else
 # — including the recorded real quota capture (#673) — a refusal with 2, and a killed run
