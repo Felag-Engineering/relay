@@ -191,8 +191,8 @@ for good.
 
 **R35 is closed by design** (ADR-0043): a container's floor is a read-only mounted file, not
 injected environment, so inspecting the container no longer reveals it. It stays open until
-#864 builds that. Who can *write* a deployment's configuration source is the operator's own
-infrastructure, documented rather than policed.
+that is built (#1002). Who can *write* a deployment's configuration source is the operator's
+own infrastructure, documented rather than policed.
 
 ## Future work
 

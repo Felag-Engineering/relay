@@ -62,6 +62,8 @@ what Policy allows. A Task can be allowed by Policy and refused by the Relay; ne
 > fragments, package-owned fragments and a reported `invalid` state remain this spec's intent,
 > to be reconciled when it is migrated.
 
+- The Policy directory is `/etc/relay-daemon/policy.d`, beside the Policy file
+  `/etc/relay-daemon/policy.toml` (owner decision, 2026-10-16; `daemon-installation.md` DI-36).
 - The daemon reads every fragment in the Policy directory and evaluates them as **one Policy
   with one fingerprint**. Which fragment a rule came from affects only error messages.
 - A Template name defined in more than one fragment is a Policy error. There is no override and
