@@ -306,7 +306,9 @@ instead of injecting environment. The daemon's own `EnvironmentFile` is unchange
 Owner decision, recorded so the spec is not its only record. The daemon package still never
 starts the daemon, but it now **enables** its unit on first install where the distribution's
 presets allow, as the Relay package does. The unit is guarded so that, on a Node holding neither
-a persisted identity nor a join string, it stays inactive at boot without failing or retrying;
+a persisted identity nor a join string, it stays inactive at boot without failing or retrying —
+the daemon exits cleanly when nothing is configured, and non-zero on a malformed join string or a
+partial identity;
 an upgrade never changes enablement. A new local subcommand, `relay-daemon join`, configures a
 fresh Node in one step: it reads the join string from a prompt or standard input, never from its
 arguments, writes it root-owned and readable by nobody else, and enables and starts the unit. It

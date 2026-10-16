@@ -1,6 +1,6 @@
 # `relay init` and the boundary of the `relay` binary
 
-**Status:** Accepted; amended by ADR-0033.
+**Status:** Accepted; amended by ADR-0033 and on 2026-10-16.
 
 Standing up a Relay and joining five Nodes takes roughly fifty discrete acts today, and
 the Relay-side share of that is choreography rather than decisions: edit the env file,
@@ -101,3 +101,16 @@ package-manager output lands in logs and `init` prints credentials; the operator
 Relay and runs `init` in a terminal. The binary's own default for the control plane stays
 `false`, and the boundary this ADR draws around the `relay` binary is unchanged: no verb is
 added.
+
+## Amendment (2026-10-16): `init` adopts the running Relay's CA and store
+
+Owner decision, 2026-10-16, taken with the v0.6.5 design. *Decision* says `init` creates the CA
+and the store; with the package model it does not. The Relay creates its CA and store at its
+own first start, in its own state directory (ADR-0043), and `init` runs afterwards, as the
+Relay's own Unix account, against that existing store: it refuses to run as root, so nothing it
+writes is left owned by an account the Relay cannot use. Its acts are minting the founding
+admin's first API Token and first Console credential, and taking over `bootstrap-token`'s
+recovery role by an explicit request; it stays idempotent and never silently re-emits a secret.
+Specified as RC-28 in `docs/specs/relay-configuration.md`. The boundary this ADR draws around
+the `relay` binary is unchanged.
+
