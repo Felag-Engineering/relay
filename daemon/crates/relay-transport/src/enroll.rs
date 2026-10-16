@@ -12,7 +12,7 @@ use tracing::info;
 use crate::gen::{enrollment_client::EnrollmentClient, EnrollRequest, Facts, Label};
 use crate::identity::{
     build_channel, build_keypair_and_csr, cert_pubkey_matches_key, load_identity, persist_identity,
-    validate_endpoint_scheme, Identity, IdentityError,
+    persist_relay_addr, validate_endpoint_scheme, validate_relay_addr, Identity, IdentityError,
 };
 use crate::log_field;
 
@@ -53,6 +53,9 @@ pub struct EnrollConfig {
     pub token: String,
     /// gRPC endpoint of the Relay's Enrollment service (e.g. `https://relay:7654`).
     pub endpoint: String,
+    /// Node-plane Relay address persisted with the identity at enrollment
+    /// (ADR-0031 decision 4); the Tunnel's dial target, not the enrollment endpoint.
+    pub relay_addr: String,
     /// TLS SNI server name override for cert verification (optional).
     pub relay_domain: Option<String>,
     /// Path to the pinned CA PEM bundle used to authenticate the Relay at bootstrap.
@@ -175,6 +178,7 @@ async fn call_enroll_owned(
 /// keypair + CSR, calls `enroller(csr_pem)`, persists the returned identity.
 async fn ensure_enrolled_with<F, Fut>(
     state_dir: &Path,
+    relay_addr: &str,
     hostname: &str,
     label_count: usize,
     enroller: F,
@@ -190,6 +194,9 @@ where
         );
         return Ok(identity);
     }
+
+    // Refuse a malformed address before the single-use Enrollment Token is spent.
+    validate_relay_addr(relay_addr)?;
 
     info!(hostname, label_count, "starting enrollment");
     let (key_pem, csr_pem) = build_keypair_and_csr()?;
@@ -207,6 +214,9 @@ where
     // must never be written to disk (a misbehaving/compromised Relay otherwise
     // locks the Node out until the next boot's load-time check catches it).
     cert_pubkey_matches_key(&identity.cert_pem, &identity.key_pem)?;
+    // Address first, then identity: every identity this code persists has an
+    // address. The already-enrolled branch above never writes it (no backfill; DI-38).
+    persist_relay_addr(state_dir, relay_addr)?;
     persist_identity(state_dir, &identity)?;
     info!(
         node_id = log_field::untrusted(&node_id),
@@ -232,6 +242,7 @@ pub async fn ensure_enrolled(cfg: &EnrollConfig) -> Result<Identity> {
 
     ensure_enrolled_with(
         &cfg.state_dir,
+        &cfg.relay_addr,
         &cfg.facts.hostname,
         cfg.node_labels.len(),
         move |csr_pem| {
@@ -258,10 +269,12 @@ mod tests {
     use super::*;
     use crate::identity::mode_assert;
     use crate::identity::test_ca::self_signed_identity;
-    use crate::identity::{load_identity, persist_identity, IdentityError};
+    use crate::identity::{load_identity, load_relay_addr, persist_identity, IdentityError};
     use crate::test_support::TempDir;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+
+    const ADDR: &str = "https://relay.test:7654";
 
     // Compile-time Send+Sync assertion for EnrollError.
     fn _assert_enroll_error_send_sync() {
@@ -312,7 +325,7 @@ mod tests {
         let enroller_called = Arc::new(AtomicBool::new(false));
         let flag = enroller_called.clone();
 
-        let result = ensure_enrolled_with(dir.path(), "test-host", 0, move |_csr_pem| {
+        let result = ensure_enrolled_with(dir.path(), ADDR, "test-host", 0, move |_csr_pem| {
             flag.store(true, Ordering::SeqCst);
             async move {
                 panic!("enroller must not be called for an already-enrolled Node");
@@ -342,13 +355,19 @@ mod tests {
         // The enroller signs the CSR with a test CA so the issued cert's public key
         // matches the freshly generated keypair — required for load_identity to pass
         // the key/cert correspondence check (FIX A, FIND-1).
-        let result = ensure_enrolled_with(dir.path(), "test-host", 2, move |csr_pem| async move {
-            let ca_kp = rcgen::KeyPair::generate().expect("ca keygen");
-            let ca_params = rcgen::CertificateParams::new(vec![]).expect("ca params");
-            let ca_cert = ca_params.self_signed(&ca_kp).expect("ca cert");
-            let issued = crate::identity::test_ca::sign_csr(&csr_pem, &ca_params, &ca_kp);
-            Ok((nid, issued.pem(), ca_cert.pem()))
-        })
+        let result = ensure_enrolled_with(
+            dir.path(),
+            ADDR,
+            "test-host",
+            2,
+            move |csr_pem| async move {
+                let ca_kp = rcgen::KeyPair::generate().expect("ca keygen");
+                let ca_params = rcgen::CertificateParams::new(vec![]).expect("ca params");
+                let ca_cert = ca_params.self_signed(&ca_kp).expect("ca cert");
+                let issued = crate::identity::test_ca::sign_csr(&csr_pem, &ca_params, &ca_kp);
+                Ok((nid, issued.pem(), ca_cert.pem()))
+            },
+        )
         .await
         .expect("ensure_enrolled_with should succeed");
 
@@ -380,6 +399,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn persisted_address_written_at_enrollment() {
+        let dir = TempDir::new("fresh-addr");
+        ensure_enrolled_with(
+            dir.path(),
+            ADDR,
+            "test-host",
+            0,
+            move |csr_pem| async move {
+                let ca_kp = rcgen::KeyPair::generate().expect("ca keygen");
+                let ca_params = rcgen::CertificateParams::new(vec![]).expect("ca params");
+                let ca_cert = ca_params.self_signed(&ca_kp).expect("ca cert");
+                let issued = crate::identity::test_ca::sign_csr(&csr_pem, &ca_params, &ca_kp);
+                Ok(("node-addr-001".to_string(), issued.pem(), ca_cert.pem()))
+            },
+        )
+        .await
+        .expect("ensure_enrolled_with should succeed");
+
+        assert_eq!(
+            load_relay_addr(dir.path())
+                .expect("load_relay_addr")
+                .as_deref(),
+            Some(ADDR)
+        );
+        mode_assert::assert_within(
+            &dir.path().join(crate::identity::PERSISTED_ADDR_FILE),
+            0o644,
+            0o022,
+            "relay_addr after fresh enroll",
+        );
+    }
+
+    #[tokio::test]
+    async fn enrolled_node_without_persisted_address_is_not_backfilled() {
+        let dir = TempDir::new("no-backfill");
+        // The shape of a Node enrolled before the address was persisted.
+        persist_identity(dir.path(), &self_signed_identity("node-old-aabbccdd"))
+            .expect("persist_identity");
+
+        let called = Arc::new(AtomicBool::new(false));
+        let flag = called.clone();
+        ensure_enrolled_with(dir.path(), ADDR, "test-host", 0, move |_csr| {
+            flag.store(true, Ordering::SeqCst);
+            async move { panic!("enroller must not be called for an already-enrolled Node") }
+        })
+        .await
+        .expect("ensure_enrolled_with should succeed");
+
+        assert!(!called.load(Ordering::SeqCst));
+        assert_eq!(load_relay_addr(dir.path()).expect("load_relay_addr"), None);
+    }
+
+    #[tokio::test]
+    async fn malformed_relay_addr_is_refused_before_the_enroller_runs() {
+        let dir = TempDir::new("bad-addr-before-enroll");
+        let called = Arc::new(AtomicBool::new(false));
+        let flag = called.clone();
+        let result = ensure_enrolled_with(
+            dir.path(),
+            "http://relay.test:7654",
+            "test-host",
+            0,
+            move |_csr| {
+                flag.store(true, Ordering::SeqCst);
+                async move { panic!("enroller must not run for a malformed relay address") }
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(!called.load(Ordering::SeqCst));
+        assert_eq!(load_relay_addr(dir.path()).expect("load_relay_addr"), None);
+    }
+
+    #[tokio::test]
     async fn fresh_enroll_fails_closed_on_key_cert_mismatch() {
         let dir = TempDir::new("fresh-mismatch");
 
@@ -387,16 +481,22 @@ mod tests {
         // does NOT correspond to the key the daemon just generated. Enrollment must
         // fail closed BEFORE persisting anything — parity with the renewal path,
         // which already enforces this (see perform_renewal_with in renew.rs).
-        let result = ensure_enrolled_with(dir.path(), "test-host", 0, move |_csr_pem| async move {
-            // Cert for an unrelated keypair, ignoring the daemon's CSR.
-            let other_kp = rcgen::KeyPair::generate().expect("other keygen");
-            let other_cert = rcgen::CertificateParams::new(vec![])
-                .expect("other params")
-                .self_signed(&other_kp)
-                .expect("other cert")
-                .pem();
-            Ok(("node-mismatch".to_string(), other_cert.clone(), other_cert))
-        })
+        let result = ensure_enrolled_with(
+            dir.path(),
+            ADDR,
+            "test-host",
+            0,
+            move |_csr_pem| async move {
+                // Cert for an unrelated keypair, ignoring the daemon's CSR.
+                let other_kp = rcgen::KeyPair::generate().expect("other keygen");
+                let other_cert = rcgen::CertificateParams::new(vec![])
+                    .expect("other params")
+                    .self_signed(&other_kp)
+                    .expect("other cert")
+                    .pem();
+                Ok(("node-mismatch".to_string(), other_cert.clone(), other_cert))
+            },
+        )
         .await;
 
         assert!(
@@ -417,6 +517,12 @@ mod tests {
             "no key.pem may be persisted when enrollment fails closed"
         );
         assert!(
+            !dir.path()
+                .join(crate::identity::PERSISTED_ADDR_FILE)
+                .exists(),
+            "no relay_addr may be persisted when enrollment fails closed"
+        );
+        assert!(
             load_identity(dir.path())
                 .expect("load_identity error")
                 .is_none(),
@@ -434,13 +540,19 @@ mod tests {
         let hostile = "node-1\nFORGED relay_daemon::allow: policy allowed\r\nFORGED2".to_string();
         let nid = hostile.clone();
 
-        ensure_enrolled_with(dir.path(), "test-host", 2, move |csr_pem| async move {
-            let ca_kp = rcgen::KeyPair::generate().expect("ca keygen");
-            let ca_params = rcgen::CertificateParams::new(vec![]).expect("ca params");
-            let ca_cert = ca_params.self_signed(&ca_kp).expect("ca cert");
-            let issued = crate::identity::test_ca::sign_csr(&csr_pem, &ca_params, &ca_kp);
-            Ok((nid, issued.pem(), ca_cert.pem()))
-        })
+        ensure_enrolled_with(
+            dir.path(),
+            ADDR,
+            "test-host",
+            2,
+            move |csr_pem| async move {
+                let ca_kp = rcgen::KeyPair::generate().expect("ca keygen");
+                let ca_params = rcgen::CertificateParams::new(vec![]).expect("ca params");
+                let ca_cert = ca_params.self_signed(&ca_kp).expect("ca cert");
+                let issued = crate::identity::test_ca::sign_csr(&csr_pem, &ca_params, &ca_kp);
+                Ok((nid, issued.pem(), ca_cert.pem()))
+            },
+        )
         .await
         .expect("ensure_enrolled_with should succeed");
 

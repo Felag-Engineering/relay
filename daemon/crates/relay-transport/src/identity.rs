@@ -44,7 +44,13 @@ pub enum IdentityError {
     PreEpoch { ts: i64 },
     #[error(transparent)]
     Channel(#[from] tonic::transport::Error),
+    #[error("persisted Relay address in state dir is malformed: {reason}")]
+    PersistedAddr { reason: &'static str },
 }
+
+/// File in the state directory holding the Node-plane Relay address persisted
+/// at enrollment (ADR-0031 decision 4).
+pub const PERSISTED_ADDR_FILE: &str = "relay_addr";
 
 /// The persisted Node identity produced by a successful enrollment.
 #[derive(Clone)]
@@ -77,6 +83,53 @@ pub fn validate_endpoint_scheme(endpoint: &str) -> Result<()> {
     Err(IdentityError::EndpointScheme {
         scheme: scheme.to_string(),
     })
+}
+
+/// Validates a Relay address both before it is persisted and after it is
+/// loaded: https only, and no whitespace or control characters, so a tampered
+/// file can neither downgrade the transport nor inject a log line through the
+/// logged address. The error never echoes the value.
+pub(crate) fn validate_relay_addr(addr: &str) -> Result<()> {
+    if addr.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(IdentityError::PersistedAddr {
+            reason: "contains whitespace or a control character",
+        });
+    }
+    validate_endpoint_scheme(addr)
+}
+
+/// Persists the Node-plane Relay address to `dir/relay_addr`.
+///
+/// Written once, at enrollment, never on certificate renewal. Refuses a
+/// non-https or malformed address so one is never persisted. The mode is a
+/// ceiling and stays umask-masked (see `write_atomic`, ADR-0036).
+pub(crate) fn persist_relay_addr(dir: &Path, addr: &str) -> Result<()> {
+    validate_relay_addr(addr)?;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
+    write_atomic(dir, PERSISTED_ADDR_FILE, addr.as_bytes(), 0o644)?;
+    fsync_dir(dir)?;
+    Ok(())
+}
+
+/// Loads the persisted Relay address from `dir`.
+///
+/// `Ok(None)` when the file (or directory) is absent or empty. Any other read
+/// error, or a value that fails validation, is an `Err`: fail closed.
+pub fn load_relay_addr(dir: &Path) -> Result<Option<String>> {
+    let raw = match fs::read_to_string(dir.join(PERSISTED_ADDR_FILE)) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let value = raw.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    validate_relay_addr(value)?;
+    Ok(Some(value.to_string()))
 }
 
 /// Generates an ECDSA P-256 keypair and a PEM CSR for it.
@@ -529,6 +582,61 @@ mod tests {
     // -----------------------------------------------------------------------
     // build_keypair_and_csr
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn persisted_relay_addr_round_trips() {
+        let dir = TempDir::new("relay-addr-rt");
+        persist_relay_addr(dir.path(), "https://relay.test:7654").expect("persist");
+        assert_eq!(
+            load_relay_addr(dir.path()).expect("load").as_deref(),
+            Some("https://relay.test:7654")
+        );
+        mode_assert::assert_within(
+            &dir.path().join(PERSISTED_ADDR_FILE),
+            0o644,
+            0o022,
+            "relay_addr",
+        );
+    }
+
+    #[test]
+    fn load_relay_addr_absent_is_none() {
+        let dir = TempDir::created("relay-addr-absent");
+        assert_eq!(load_relay_addr(dir.path()).expect("empty dir"), None);
+        assert_eq!(
+            load_relay_addr(&dir.path().join("nonexistent")).expect("missing dir"),
+            None
+        );
+    }
+
+    #[test]
+    fn persist_relay_addr_refuses_non_https() {
+        let dir = TempDir::new("relay-addr-http");
+        let err = persist_relay_addr(dir.path(), "http://relay.test:7654")
+            .expect_err("http must be refused");
+        assert!(
+            matches!(err, IdentityError::EndpointScheme { .. }),
+            "{err:?}"
+        );
+        assert!(!dir.path().join(PERSISTED_ADDR_FILE).exists());
+    }
+
+    #[test]
+    fn load_relay_addr_refuses_malformed() {
+        let dir = TempDir::created("relay-addr-bad");
+        let path = dir.path().join(PERSISTED_ADDR_FILE);
+
+        fs::write(&path, "http://relay.test:7654\n").unwrap();
+        assert!(load_relay_addr(dir.path()).is_err(), "http must be refused");
+
+        fs::write(&path, "https://relay.test:7654\nFORGED log line").unwrap();
+        let err = load_relay_addr(dir.path()).expect_err("embedded newline");
+        assert!(
+            matches!(err, IdentityError::PersistedAddr { .. }),
+            "{err:?}"
+        );
+        assert!(!err.to_string().contains("FORGED"));
+    }
 
     #[test]
     fn build_keypair_and_csr_shape() {
