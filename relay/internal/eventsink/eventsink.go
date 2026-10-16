@@ -41,32 +41,48 @@ func Jobs(b *events.Bus) capability.JobEventSink {
 // never touching anything output-shaped, because capability.JobEvent itself
 // never holds any (seams.go's doc comment).
 func (s jobEventSink) RecordJob(e capability.JobEvent) {
-	operation := e.Action.OperationName
-	if e.Action.Kind == jobs.ActionRawExec {
-		operation = "raw_exec"
-	}
-
-	transition := events.JobTransition("")
-	switch e.Transition {
-	case capability.JobCreated:
-		transition = events.JobCreated
-	case capability.JobCompleted:
-		transition = events.JobCompleted
-	case capability.JobCancelled:
-		transition = events.JobCancelled
-	}
-
 	ev := events.JobEvent{
-		Transition: transition,
+		Transition: jobTransition(e.Transition),
 		JobID:      e.JobID,
 		Account:    e.Principal.Account,
 		AccountID:  e.Principal.AccountID,
 		Selector:   e.Selector.String(),
-		Operation:  operation,
+		Operation:  operationName(e.Action),
 		RiskClass:  jobs.RiskClassName(e.Action.RiskClass),
 		Nodes:      e.Nodes,
 	}
-	for outcome, count := range e.Outcomes {
+	applyOutcomes(&ev, e.Outcomes)
+	s.bus.PublishJob(ev)
+}
+
+// operationName is the Operation a published event names: the Action's own
+// name, or "raw_exec" for Raw Exec, which has none.
+func operationName(act jobs.Action) string {
+	if act.Kind == jobs.ActionRawExec {
+		return "raw_exec"
+	}
+	return act.OperationName
+}
+
+// jobTransition maps capability's Job transition onto the event vocabulary.
+// An unrecognized transition maps to the empty value rather than a guess.
+func jobTransition(t capability.JobTransition) events.JobTransition {
+	switch t {
+	case capability.JobCreated:
+		return events.JobCreated
+	case capability.JobCompleted:
+		return events.JobCompleted
+	case capability.JobCancelled:
+		return events.JobCancelled
+	default:
+		return ""
+	}
+}
+
+// applyOutcomes copies per-outcome Node counts onto ev, field for field.
+// An outcome with no event field is dropped.
+func applyOutcomes(ev *events.JobEvent, outcomes map[jobs.Outcome]int) {
+	for outcome, count := range outcomes {
 		switch outcome {
 		case jobs.OutcomeSuccess:
 			ev.Succeeded = count
@@ -86,7 +102,6 @@ func (s jobEventSink) RecordJob(e capability.JobEvent) {
 			ev.Unsupported = count
 		}
 	}
-	s.bus.PublishJob(ev)
 }
 
 // enrollmentObserver adapts enroll.AttemptObserver onto events.Bus.
@@ -100,46 +115,17 @@ func Enrollment(b *events.Bus) enroll.AttemptObserver {
 	return enrollmentObserver{bus: b}
 }
 
-// Attempt maps e onto events.EnrollmentEvent and publishes it. The reason
-// mapping is an explicit, exhaustive switch — a default that maps to
-// ReasonInternal, never a passthrough of an unknown string, so a future
-// AttemptReason this package hasn't been taught about degrades to the safe,
-// generic reason rather than silently forwarding an unrecognized value.
+// Attempt maps e onto events.EnrollmentEvent and publishes it; see
+// enrollmentReason for how the reason is mapped.
 func (o enrollmentObserver) Attempt(_ context.Context, e enroll.AttemptEvent) {
 	outcome := events.EnrollmentRejected
 	if e.Accepted {
 		outcome = events.EnrollmentAccepted
 	}
 
-	var reason events.EnrollmentReason
-	switch e.Reason {
-	case enroll.AttemptExpired:
-		reason = events.ReasonExpired
-	case enroll.AttemptRevoked:
-		reason = events.ReasonRevoked
-	case enroll.AttemptUnknown:
-		reason = events.ReasonUnknown
-	case enroll.AttemptExhausted:
-		reason = events.ReasonExhausted
-	case enroll.AttemptMalformed:
-		reason = events.ReasonMalformed
-	case enroll.AttemptRateLimited:
-		reason = events.ReasonRateLimited
-	case enroll.AttemptAtCapacity:
-		reason = events.ReasonAtCapacity
-	case enroll.AttemptRevokedMidEnrollment:
-		reason = events.ReasonRevokedMidEnrollment
-	case enroll.AttemptInternal:
-		reason = events.ReasonInternal
-	case enroll.AttemptInvalidScope:
-		reason = events.ReasonInvalidScope
-	default:
-		reason = events.ReasonInternal
-	}
-
 	o.bus.PublishEnrollment(events.EnrollmentEvent{
 		Outcome: outcome,
-		Reason:  reason,
+		Reason:  enrollmentReason(e.Reason),
 		TokenID: e.TokenID,
 		NodeID:  e.NodeID,
 		Source:  e.Source,
@@ -257,6 +243,35 @@ func (o registryObserver) RevokedNodeIDs() ([]string, error) {
 
 func (o registryObserver) Count() (total int, revoked int, err error) {
 	return o.r.Count()
+}
+
+// enrollmentReason maps an enroll.AttemptReason onto the event vocabulary. The
+// mapping is an explicit switch whose default is ReasonInternal, never a
+// passthrough of an unknown string, so a future AttemptReason this package
+// hasn't been taught about degrades to the safe, generic reason.
+func enrollmentReason(r enroll.AttemptReason) events.EnrollmentReason {
+	switch r {
+	case enroll.AttemptExpired:
+		return events.ReasonExpired
+	case enroll.AttemptRevoked:
+		return events.ReasonRevoked
+	case enroll.AttemptUnknown:
+		return events.ReasonUnknown
+	case enroll.AttemptExhausted:
+		return events.ReasonExhausted
+	case enroll.AttemptMalformed:
+		return events.ReasonMalformed
+	case enroll.AttemptRateLimited:
+		return events.ReasonRateLimited
+	case enroll.AttemptAtCapacity:
+		return events.ReasonAtCapacity
+	case enroll.AttemptRevokedMidEnrollment:
+		return events.ReasonRevokedMidEnrollment
+	case enroll.AttemptInvalidScope:
+		return events.ReasonInvalidScope
+	default:
+		return events.ReasonInternal
+	}
 }
 
 // copyLabels returns a shallow copy of labels, so the published event never

@@ -298,3 +298,40 @@ func TestToolCall_Publishes(t *testing.T) {
 		t.Errorf("Arguments[argv] = %q, want the argv text copied through", tc.Arguments["argv"])
 	}
 }
+
+func TestJobs_MapsEveryOutcomeAndTransition(t *testing.T) {
+	cases := []struct {
+		name string
+		in   capability.JobTransition
+		want events.JobTransition
+	}{
+		{"created", capability.JobCreated, events.JobCreated},
+		{"completed", capability.JobCompleted, events.JobCompleted},
+		{"cancelled", capability.JobCancelled, events.JobCancelled},
+		{"unknown", capability.JobTransition(99), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := jobTransition(tc.in); got != tc.want {
+				t.Errorf("jobTransition(%v) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+
+	var ev events.JobEvent
+	applyOutcomes(&ev, map[jobs.Outcome]int{
+		jobs.OutcomeSuccess:        1,
+		jobs.OutcomeFailure:        2,
+		jobs.OutcomeTimeout:        3,
+		jobs.OutcomeDeniedByPolicy: 4,
+		jobs.OutcomeCancelled:      5,
+		jobs.OutcomeUnreachable:    6,
+		jobs.OutcomeVersionRefused: 7,
+		jobs.OutcomeUnsupported:    8,
+	})
+	want := events.JobEvent{Succeeded: 1, Failed: 2, Timeout: 3, Denied: 4,
+		Cancelled: 5, Unreachable: 6, VersionRefused: 7, Unsupported: 8}
+	if ev != want {
+		t.Errorf("applyOutcomes = %+v, want %+v", ev, want)
+	}
+}
