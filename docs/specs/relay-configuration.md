@@ -17,9 +17,10 @@ It is **two tiers, split by what an attacker gains from changing the setting.**
   *whether the gate exists*: listeners and TLS material, the identity provider Relay believes,
   the authentication windows, the approval notification path, and whether the Console may
   execute.
-- **Operator settings** are runtime objects in the Relay's store, changed by a human `admin` in
-  the Console with step-up re-authentication, audited, taking effect on the next request. They
-  are the dials an operator genuinely turns as a fleet grows and confidence grows with it —
+- **Operator settings**, where the store holds them (RC-29), are runtime objects changed by a
+  human `admin` in the Console with step-up re-authentication, audited, taking effect on the
+  next request; until then they are values in the configuration file (RC-22). They are the
+  dials an operator genuinely turns as a fleet grows and confidence grows with it —
   including the blast caps and the approval-gate rules.
 
 The tiering is the whole point: administering a Relay should not mean editing a file and
@@ -32,7 +33,7 @@ to authenticate as somebody else.
 |---|---|
 | **The host** | The security floor: today `RELAY_*` environment variables and flags (RC-2); designed, one configuration file (RC-12) |
 | **Admin Console** | Today nothing. Designed: every operator setting, read and changed by a human `admin` with step-up (RC-29), and the non-secret floor, read-only (RC-33) |
-| **Control API** | No configuration write route exists, and none may be added (RC-11). Designed: reads the non-secret operator settings (RC-31) |
+| **Control API** | No configuration write route exists (RC-11), and none may be added (RC-32). Designed: reads the non-secret operator settings (RC-31) |
 | **MCP** | No configuration write tool (RC-11). Designed: reads the non-secret operator settings (RC-31) |
 | **The `relay` binary's local subcommands** | `bootstrap-token` and `console-password` (RC-1); designed, `relay init` replacing both (RC-28). First-boot acts that exist only because no credential can yet exist to perform them over the wire (ADR-0030) |
 
@@ -64,6 +65,8 @@ to authenticate as somebody else.
   start.
 - **RC-11** No MCP tool and no Control API route writes any configuration. There is no endpoint
   to refuse it.
+- **RC-35** A configured approval-gate rules file that cannot be loaded refuses start; the
+  Relay never runs ungated because a file is unreadable or malformed (`approval.md`).
 
 ## Governing ADRs and invariants
 
@@ -78,9 +81,11 @@ to authenticate as somebody else.
 - **Invariant 10 / ADR-0009, ADR-0026** — Console-only settings are an adapter offering less, not
   a parallel control path. `console_execution` stays root-owned.
 - **Invariant 5 / ADR-0004, ADR-0012** — the blast caps remain enforced on the Relay before
-  dispatch; only where they are set changed. Both ADRs carry a 2026-09-15 amendment saying so.
+  dispatch; only where they are set changes — the configuration file until RC-29 (RC-22), then
+  the store. Both ADRs carry a 2026-09-15 amendment saying so.
 - **ADR-0027** — the approval gate. Amended 2026-09-15: its rules are store-backed and
-  Console-edited; the webhook path stays root-owned.
+  Console-edited; the webhook path stays root-owned. Amended 2026-09-16: the shipped default gate
+  is seeded into the store once, on first boot (`approval.md`).
 - **ADR-0024** — OAuth issuer, audience, claim, scope and public URL are security floor.
 - **ADR-0023** — no shared control-plane secret exists in configuration; the first credential is
   bootstrapped locally.
@@ -90,16 +95,17 @@ to authenticate as somebody else.
 - **Invariant 14 / ADR-0014** — the minimum daemon version stays the Relay's only lever over
   daemon versions; it becomes an operator setting.
 - **ADR-0033** — amended 2026-10-15: the Relay installs from an OS package rather than
-  `relay-install.sh`, and the container image is a production path (RC-19 to RC-23).
+  `relay-install.sh`, and the container image is a production path (RC-23 to RC-27).
 - **ADR-0043** — one configuration file the Relay reads itself, one check, one state directory,
   and a clean break from `RELAY_*` floor variables (RC-12 to RC-18, RC-21).
 
 ## Seams and proof
 
-Configuration is read into one value at startup — and, once RC-21 lands, replaced wholesale on a
-successful reload. Operator settings will be read through a store-backed settings seam the
-capability layer consults (RC-29), never a package-level variable a surface can reach; the
-Console's settings screens will call that seam, and no other adapter will hold a writer.
+Configuration is read into one value at startup and, where reload exists (RC-21), replaced
+wholesale on a successful reload. Where operator settings exist (RC-29), they are read through a
+store-backed settings seam the capability layer consults, never a package-level variable a
+surface can reach; the Console's settings screens call that seam, and no other adapter holds a
+writer.
 
 ### What proves each claim
 
@@ -110,7 +116,7 @@ Console's settings screens will call that seam, and no other adapter will hold a
 | RC-9 | `TestSecretFilePermissionsAreEnforced` | approval notify |
 
 Claims with **no row**, and so nothing checking them: RC-1, RC-2, RC-4, RC-6, RC-7 (asserted by
-the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absence).
+the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absence), RC-35 (`TestLoadFailsClosed` proves the loader, not the startup refusal).
 
 ### Performance
 
@@ -130,26 +136,21 @@ the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absenc
 | RC-17 | Everything the Relay generates — its CA private key and its store — lives in its state directory, owned by the Relay's uid. The Relay refuses to start if that directory or the key is readable by any other account. | v0.6.5 — Install Path: relay init, join string, packages |
 | RC-18 | No secret value, inline or in a file, and no approval webhook URL, appears on any surface, in any log or audit record, or in any refusal message. A parse or validation error names the key and the line, never the value; a reload's audit record names a changed secret setting, never its value. | v0.6.5 — Install Path: relay init, join string, packages |
 | RC-19 | The CA directory, store path and certificate hostname have no defaults: unset is a refusal naming the setting. Every value is validated at start and at reload, and an invalid one is a refusal naming the setting, never a warning and a fallback to a default. A missing or unreadable configuration file is a refusal. | v0.6.5 — Install Path: relay init, join string, packages |
-| RC-20 | A configuration that cannot work is refused at start — the Console enabled without the control plane, OAuth settings without an issuer. One that is coherent but probably a mistake, such as a mutate cap above the read cap, starts with a prominent warning. | v0.6.5 — Install Path: relay init, join string, packages |
-| RC-21 | `SIGHUP` re-reads the configuration file from the path given at start and applies RC-15 before anything else. The reload is all-or-nothing: an invalid value, or a changed bind-time setting — listen addresses, CA directory, store path, certificate hostname — refuses the whole reload, logs the setting and that a restart is required, and leaves the running configuration untouched. A failed reload never exits the process. Every reload is audited as a host-lever act listing what changed. | v0.6.5 — Install Path: relay init, join string, packages |
-| RC-22 | Until store-backed operator settings exist (RC-29), the read and mutate blast caps, the minimum daemon version, the `state:cert-expiring` fraction, the enrollment rate limits, burst and tracked-IP ceiling, the Node cap and the approval-gate rules file's path are values in the configuration file, validated like every other value, with built-in defaults where absent. | v0.6.5 — Install Path: relay init, join string, packages |
+| RC-20 | A configuration that cannot work is refused at start — the Console enabled without the control plane, OAuth settings without an issuer. One that is coherent but probably a mistake, such as a mutate cap above the read cap, starts with a prominent warning; when the caps move to the store (RC-29), that warning moves with them. | v0.6.5 — Install Path: relay init, join string, packages |
+| RC-21 | `SIGHUP` re-reads the configuration file from the path given at start and applies RC-15 before anything else. The reload is all-or-nothing: an invalid value, or a changed bind-time setting — listen addresses, CA directory, store path, certificate hostname — refuses the whole reload, logs the setting and that a restart is required, and leaves the running configuration untouched. A failed reload never exits the process. Every reload is audited, attributed to the Relay's host rather than to any Account, the way the Freeze signal's host lever is, listing what changed. | v0.6.5 — Install Path: relay init, join string, packages |
+| RC-22 | Until store-backed operator settings exist (RC-29), the read and mutate blast caps, the minimum daemon version, the `state:cert-expiring` fraction, the enrollment rate limits, burst and tracked-IP ceiling, the Node cap, and the log level and format are values in the configuration file, validated like every other value, with built-in defaults where absent. The approval-gate rules file's path is one too, with no default: leaving it out means no gate (`approval.md`). | v0.6.5 — Install Path: relay init, join string, packages |
 | RC-23 | The release publishes the Relay as `.deb` and `.rpm` packages for each architecture, on the platforms and under the CI rule `daemon-installation.md` sets for its packages, where the edited configuration an upgrade must preserve is the configuration file. A package wraps the release's guarded binary byte for byte, is reproducible, built twice and compared, is listed in the release `SHA256SUMS`, and carries no signature of its own before v1.0.0. | v0.6.5 — Install Path: relay init, join string, packages |
-| RC-24 | The Relay package installs the Relay's Unix account, the binary, the hardened unit, the configuration file and the state directory, and prints a configuration guide that carries no secret, also installed as documentation. It enables the Relay on a first install only, only where systemd is running, honouring the distribution's presets, and an upgrade never changes enablement. It never starts the Relay and never runs the first-boot command. | v0.6.5 — Install Path: relay init, join string, packages |
+| RC-24 | The Relay package installs the Relay's Unix account, the binary, the hardened unit, the configuration file and the state directory, and prints a configuration guide that carries no secret, also installed as documentation. It enables the Relay on a first install only, only where systemd is running, honouring the distribution's presets, and an upgrade never changes enablement. It never starts the Relay and never runs the first-boot command. The guide says never to capture an image of the host after the Relay has first started, since the CA private key would travel with it. | v0.6.5 — Install Path: relay init, join string, packages |
 | RC-25 | The Relay package writes the configuration file once, at first install, only if none exists, and never again: the host's fully qualified name as the certificate hostname, the CA directory and store path inside the state directory, the control plane and Admin Console enabled, and the control-plane listener bound to loopback. The file is generated, not package-owned configuration, so no upgrade rewrites it. | v0.6.5 — Install Path: relay init, join string, packages |
 | RC-26 | Removing the Relay package keeps configuration and state. `apt purge` removes configuration and moves the CA and the store aside together, re-owned by root and readable by nobody else, and prints where; it never deletes them, never splits them, and never deletes the Relay's Unix account. Purge deletes only paths the package itself created. `.rpm` removal never deletes state and prints the paths to delete by hand. | v0.6.5 — Install Path: relay init, join string, packages |
-| RC-27 | The Relay container image takes its configuration file, and any secret files it names, as a read-only mount: nothing about the floor is in the container's environment, so inspecting the container shows a mount path, not settings or secrets. The deployment stack runs it unprivileged, with no capabilities, a read-only root filesystem, and the CA and store on one durable volume. | v0.6.5 — Install Path: relay init, join string, packages |
-| RC-28 | `relay init`, run in a terminal on the Relay's host, performs the first-boot acts — the founding admin's first API Token and first Console credential — and replaces `relay bootstrap-token` and `relay console-password` (ADR-0030). The package's guide names it. | v0.6.5 — Install Path: relay init, join string, packages |
-| RC-29 | Operator settings — the blast caps, approval-gate rules, minimum daemon version, `state:cert-expiring` fraction, enrollment rate limits, Node cap, audit and Job retention and page-size limits — are runtime objects in the store with built-in defaults, changed in the Console by a human `admin` with step-up on every change, audited with the setting, its old value, its new value and who changed it, and applied to the next request. | v0.7.0 — Admin Console: Administration & Execution |
+| RC-27 | The Relay container image takes its configuration file, and any secret files it names, as a read-only mount: nothing about the floor is in the container's environment, so inspecting the container shows a mount path, not settings or secrets. The deployment stack runs it unprivileged, with no capabilities, a read-only root filesystem, and the CA and store on one durable volume. Its documentation calls it production only once a human hardening review of that deployment has closed (ADR-0033). | v0.6.5 — Install Path: relay init, join string, packages |
+| RC-28 | `relay init`, run in a terminal on the Relay's host, creates the founding admin's first API Token and first Console credential, replaces `relay bootstrap-token` and `relay console-password` (ADR-0030), and is the recovery path `accounts-and-access.md` names when no enabled admin can act. The package's guide names it. Its other first-boot acts in ADR-0030 — a first Enrollment Token and its rendered enrollment bundle — are `enrollment.md`'s. | v0.6.5 — Install Path: relay init, join string, packages |
+| RC-29 | Operator settings — the blast caps, approval-gate rules, minimum daemon version, `state:cert-expiring` fraction, enrollment rate limits, Node cap, log level and format, audit and Job retention and page-size limits — are runtime objects in the store with built-in defaults (the approval-gate rules seeded once as `approval.md` describes), changed in the Console by a human `admin` with step-up on every change, audited with the setting, its old value, its new value and who changed it, and applied to the next request. | v0.7.0 — Admin Console: Administration & Execution |
 | RC-30 | Once RC-29 holds, an operator setting found in the configuration file refuses start rather than being silently ignored. | v0.7.0 — Admin Console: Administration & Execution |
 | RC-31 | Non-secret operator settings are readable by any authenticated Account on MCP, the Control API and the Console, so an AI-agent can name the cap it hit. | v0.7.0 — Admin Console: Administration & Execution |
 | RC-32 | The blast caps and approval-gate rules are written only from the Console: no MCP tool and no Control API route writes them, and none may be added (invariant 10). | v0.7.0 — Admin Console: Administration & Execution |
 | RC-33 | The Console renders the non-secret security floor, read-only; file paths, the CA directory and every value RC-18 covers are not rendered. | v0.7.0 — Admin Console: Administration & Execution |
 | RC-34 | Per-Account Console preferences are stored per Account, not fleet-wide. | v0.7.0 — Admin Console: Administration & Execution |
-
-The image is a supported deployment path now, and is called production once a human hardening
-review of its documented deployment has closed; until then its documentation says so (ADR-0033).
-Never capture an image of a host after the Relay has first started: the CA private key would
-travel with it.
 
 ## Out of scope
 
@@ -169,7 +170,8 @@ travel with it.
 approval-gate rules in the store and no root-set bound above them, an attacker holding a human
 `admin` session and that Account's password can raise the mutate cap to the whole fleet and
 remove every approval gate, then dispatch within the limits they just set. Step-up and the audit
-trail are the controls; neither prevents it.
+trail are the controls; neither prevents it. It applies to the caps once RC-29 lands; until then
+they are values in the configuration file, out of the Console's reach.
 
 This was decided deliberately: a root-set ceiling above the Console value was offered and
 declined in favour of one source of truth per setting. It is **R15** in
