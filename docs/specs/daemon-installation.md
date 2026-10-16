@@ -48,6 +48,8 @@ they already run, from artifacts they can verify before executing.
   cover the daemon's own Policy, environment file and identity, the binary at
   `/usr/local/bin/relay-daemon` and the unit at `/etc/systemd/system/relay-daemon.service`.
 - **DI-7** The shipped example environment file covers every setting the daemon reads.
+- **DI-30** A released catalog Template's name is bound to its body and risk class: CI refuses a
+  release that changes either for a released name. Withdrawing a released name is allowed.
 
 ### A fresh Node's configuration
 
@@ -132,6 +134,7 @@ proven by CI install jobs, once they exist; `make verify` alone cannot prove the
 | DI-13 | `umask_tightened_dedup_directory_never_executes_unrecorded`, `marker_permissions_are_restrictive` | daemon |
 | DI-14 | `drain_grace_expiry_kills_remaining` | daemon |
 | DI-16 | `dedup_survives_reconnect_reload` | daemon |
+| DI-30 | `catalog_names_match_ledger`, `ledger_check_refuses_a_changed_body`, `ledger_check_refuses_a_changed_risk_class`, `ledger_check_accepts_a_withdrawn_name_absent_from_the_catalog`, `ledger_check_refuses_a_withdrawn_name_back_in_the_catalog`, `scripts/catalog-ledger-test.sh` | daemon, packaging |
 | DI-17 | `TestMCP_RunOperation_OutdatedNodeVersionRefused` | MCP |
 | DI-21 | `TestRevokedNode_RefusedAfterRestart` | e2e |
 
@@ -159,7 +162,6 @@ it is done.
 | DI-27 | The daemon package places the environment file on a first install only, if none exists, owned by root and mode `0600`, and never rewrites it. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-28 | The shipped default Policy's self-reference denies name the binary and unit at the packaged paths, the override unit under `/etc/systemd/system/`, and the drop-in `systemctl edit` writes, by exact path (ADR-0022, amended 2026-10-15). | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-29 | The shipped read catalog ships as its own optional `.deb` and `.rpm` package, depending on the daemon package. Its files are package-owned: replaced on upgrade, removed with the package, and never installed as configuration the package manager would preserve. | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-30 | A released catalog Template's name is bound to its body and risk class: CI refuses a release that changes either for a released name. Withdrawing a released name is allowed. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-31 | Removing the daemon package removes the binary, the unit and the catalog package, and leaves the Policy, the Policy directory, the environment file and the state directory. `apt purge` removes everything the package created, the Node's identity included; `.rpm` removal never deletes state and prints the paths to delete by hand. Purge deletes only paths the package itself created, never a path read from an operator-edited file. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-32 | The release attaches the standalone unit and example environment file under `SHA256SUMS`, so a hand-built install — documented, not supported — verifies its unit like everything else. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-33 | A platform is supported only where CI installs the package, upgrades it over the operator's edited configuration and finds the edit intact, and removes it: Debian 13; Ubuntu 26.04 LTS and 24.04 LTS; RHEL, Rocky Linux and AlmaLinux 10; Fedora's current release; Amazon Linux 2023 — each on `x86_64` and `aarch64`. A platform whose package manager refuses an unsigned local package by default is not supported. This list also governs the Relay packages (`relay-configuration.md`). | v0.6.5 — Install Path: relay init, join string, packages |

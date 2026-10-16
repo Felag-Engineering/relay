@@ -78,7 +78,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 2 # the PR merge commit and its base parent
+          # Full history, so every v* tag is present: the catalog ledger gate compares the
+          # ledger with its copy at every release tag. The repository is private and the
+          # credentials are not persisted, so a later fetch could not authenticate.
+          # scripts/ci-changed-paths.sh needs only the merge commit and its first parent.
+          fetch-depth: 0
 
       - name: Classify changed paths
         id: paths
@@ -115,6 +119,16 @@ jobs:
       - name: Licence Change Date gate self-test
         if: ${{ !cancelled() }}
         run: make test-license-change-date
+
+      # The catalog ledger gate (DI-30), proved against fixture ledgers and a throwaway repo,
+      # then run against the real ledger and the tags fetched above. Without tags it fails.
+      - name: Catalog ledger gate self-test
+        if: ${{ !cancelled() }}
+        run: make test-catalog-ledger
+
+      - name: Catalog ledger (DI-30)
+        if: ${{ !cancelled() }}
+        run: make catalog-ledger-check
 
       # scripts/codex-review.sh's structural verdict classifier, proved against a stubbed
       # companion (#694). Shell, git and node — the stub companion is a Node program and the

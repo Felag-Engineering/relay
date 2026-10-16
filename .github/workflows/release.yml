@@ -64,6 +64,7 @@ on:
       - scripts/build-version.sh
       - scripts/release-image-guard.sh
       - scripts/license-change-date.sh
+      - scripts/catalog-ledger.sh
       - LICENSE
       - daemon/Cargo.toml
       - daemon/Cargo.lock
@@ -191,6 +192,26 @@ jobs:
           else
             scripts/license-change-date.sh --warn "$(date -u +%F)" LICENSE
           fi
+
+      # The release refuses a catalog Template name without an active ledger entry, and a
+      # ledger changed other than by append or withdrawal since any release (DI-30, ADR-0021
+      # amendment 2026-10-15). A refusal fails dry runs and tag pushes alike.
+      - name: Check the catalog ledger
+        run: |
+          set -euo pipefail
+          cd "$SRC"
+          bash scripts/catalog-ledger.sh check
+
+      # The script above compares the ledger across releases; these tests compare the shipped
+      # catalog's bodies and risk classes with the ledger, so a tag pushed on a commit that
+      # skipped CI cannot ship a changed Template under a released name. Once, on the primary
+      # pass: the rebuild pass builds the same commit.
+      - name: Check the catalog against the ledger
+        if: matrix.pass == 'primary'
+        run: |
+          set -euo pipefail
+          cd "$SRC"
+          cargo test --locked --manifest-path daemon/Cargo.toml catalog::
 
       # What the build ran on, written next to the artifacts and echoed. Not a release
       # asset: it is what `reproducible` prints beside a mismatch, so a runner-image or
