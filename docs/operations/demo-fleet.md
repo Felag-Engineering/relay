@@ -100,14 +100,14 @@ recognises (AP-78): `gleipnir` on any session, `claude-code` only on an OAuth se
 Account; anything else gets `pending_approval` and asks nobody. And on an API Token session —
 which this is — the answered retry must carry the responder assertion `io.gleipnir/responder`,
 with `gate` `permission` and a `username` (AP-64); without it the answer is refused. The
-approver the demo names there is `mrapp`. That username is **asserted**, recorded beside the
+approver the demo names there is `test_user`. That username is **asserted**, recorded beside the
 verified `auto-incident-response`, never verified (see `kind: "machine"` below).
 
 Observed on 2026-09-29, with the block below run as written: a client declaring `gleipnir` on
 the `auto-incident-response` token was asked in-band for `service.restart` of `nginx` on
-`node:role=web`, and its retry naming responder `mrapp` ran the Job, 6 × `success`. Read back:
+`node:role=web`, and its retry naming responder `test_user` ran the Job, 6 × `success`. Read back:
 the request's `requested_by` is `auto-incident-response`; its one decision is by
-`auto-incident-response`, `human: false`, channel `in-band`; and the store records `mrapp` only
+`auto-incident-response`, `human: false`, channel `in-band`; and the store records `test_user` only
 as the decision's asserted `on_behalf_of` (the audit row's `asserted_on_behalf_of`), beside the
 verified `auto-incident-response` with method `api_token`.
 
@@ -202,7 +202,7 @@ The role choice, stated plainly:
   beat (c) below exercises (`demo-raw-exec-always-needs-a-human`, which is Raw Exec-specific,
   not fan-out-specific). Because that rule is in-band, Relay sends the approval question to
   Gleipnir — a client declaring the name `gleipnir`, on the `auto-incident-response` Account's
-  token — and its retry carrying an answer with a responder named (`mrapp`) runs the Job. That Gleipnir puts the question to a human in its own UI,
+  token — and its retry carrying an answer with a responder named (`test_user`) runs the Job. That Gleipnir puts the question to a human in its own UI,
   and that the named responder is that human, is Gleipnir's behaviour, which Relay does not
   verify (see `kind: "machine"` above). On the web Nodes `service.restart`
   reaches the dev-fleet demo service through the DEV-ONLY `systemctl` shim
@@ -234,7 +234,7 @@ The role choice, stated plainly:
 the MCP URL `https://relay:9443/mcp`; the CA file (the absolute path of
 `.dev-fleet/ca-cert.pem`); and the API Token in `.dev-fleet/auto-incident-response-credential`,
 sent in an `Authorization: Bearer` header — plus the two things the block cannot set: declare
-the client name `gleipnir`, and name the responder (`mrapp`) on an answered approval. Gleipnir's own config keys are Gleipnir's to document
+the client name `gleipnir`, and name the responder (`test_user`) on an answered approval. Gleipnir's own config keys are Gleipnir's to document
 — they are not invented here.
 
 Optional, needs `openssl`:
@@ -671,7 +671,7 @@ Console's own sign-in, where `admin` signs in as on the plain fleet. The foundin
 challenge above, `GET /console/` a `303` to `/console/login`, `admin` signed in; a
 `demo-user` authorization-code + PKCE sign-in was accepted for `list_nodes`; Claude Code (isolated
 config) went from needing authentication to `connected` through the sign-in above; and both
-approval stories — the AI-agent's with responder `mrapp`, and `demo-user`'s on the OAuth session —
+approval stories — the AI-agent's with responder `test_user`, and `demo-user`'s on the OAuth session —
 ran their Jobs and read back as described in this section.
 
 #### Between takes
