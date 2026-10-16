@@ -300,3 +300,15 @@ operator-placed secret is never owned by the Relay's uid survives there, as part
 write" means: the package
 installs `relay.toml` under the same first-install rule, and a container mounts it read-only
 instead of injecting environment. The daemon's own `EnvironmentFile` is unchanged.
+
+## Amendment (2026-10-16): the daemon package enables its unit, and `relay-daemon join`
+
+Owner decision, recorded so the spec is not its only record. The daemon package still never
+starts the daemon, but it now **enables** its unit on first install where the distribution's
+presets allow, as the Relay package does. The unit is guarded so that, on a Node holding neither
+a persisted identity nor a join string, it stays inactive at boot without failing or retrying;
+an upgrade never changes enablement. A new local subcommand, `relay-daemon join`, configures a
+fresh Node in one step: it reads the join string from a prompt or standard input, never from its
+arguments, writes it root-owned and readable by nobody else, and enables and starts the unit. It
+contacts no Relay; enrollment happens when the daemon starts. Config management may run it or
+write the same file itself. Specified as DI-25 and DI-37 in `docs/specs/daemon-installation.md`.
