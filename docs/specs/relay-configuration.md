@@ -186,7 +186,7 @@ gap; until then its documentation says so.
 
 The Relay packages are built the way the daemon's are: they wrap the release's guarded binary
 and compile nothing, they are reproducible, they are listed in the release `SHA256SUMS`, and they
-carry no signature of their own before v1.0.0 (`daemon-installation.md`, *Release integrity*).
+carry no signature of their own before v1.0.0 (`daemon-installation.md`, DI-1 and DI-24).
 The image is different: it is published to the registry rather than attached to the release, it
 is not byte-reproducible, it is signed at its digest, and the `relay` binary inside it is the one
 `SHA256SUMS` covers.
