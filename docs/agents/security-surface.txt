@@ -124,3 +124,14 @@ daemon/tests/clippy_write_ban.rs
 # Added 2026-10-08 (#891; the owner confirms at review): the pinned tool modules. Each
 # decides which buf, linter or scanner binary a gate runs, so a bump is a gate change.
 tools/**
+
+# Added 2026-10-16 (owner decision, v0.6.5 install-path design plan): the one file-safety
+# check and the configuration loader that bound the security floor (invariant 11,
+# ADR-0043), the first-boot and reload entry points, and relay-daemon join with its
+# sanctioned spawn module. daemon/clippy.toml is already listed above.
+relay/internal/hostfile/**
+relay/internal/relayconfig/**
+relay/cmd/relay/init*.go
+relay/cmd/relay/reload*.go
+daemon/src/join*.rs
+daemon/src/join/**
