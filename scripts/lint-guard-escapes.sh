@@ -15,7 +15,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 generated_ok='^relay/internal/relay/v1/'
 # Each entry is reviewed: it is not an adapter, capability or domain package.
-build_tag_ok='^relay/internal/apiclient/deps\.go$'
+build_tag_ok='^relay/internal/(apiclient/deps|hostfile/hostfile_other)\.go$'
 
 findings=$(
   git ls-files --cached --others --exclude-standard -- 'relay/*.go' | while IFS= read -r f; do
