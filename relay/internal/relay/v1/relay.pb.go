@@ -394,6 +394,79 @@ func (x *RenewResponse) GetCaBundle() []byte {
 	return nil
 }
 
+// JoinString is the one pasteable artifact that enrolls a Node (ADR-0031). Its text
+// form is "glp_join_" followed by the unpadded base64url of this message's
+// serialization. It carries a live Enrollment Token and is handled as a secret. No RPC
+// carries it. format_version 1 is the only version: a decoder refuses any other, and
+// refuses a version 1 message carrying any field beyond these four.
+type JoinString struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	FormatVersion       uint32                 `protobuf:"varint,1,opt,name=format_version,json=formatVersion,proto3" json:"format_version,omitempty"`                    // 1; a decoder refuses any other value, 0 included
+	RelayAddress        string                 `protobuf:"bytes,2,opt,name=relay_address,json=relayAddress,proto3" json:"relay_address,omitempty"`                        // host:port the daemon dials to enroll
+	CaFingerprintSha256 []byte                 `protobuf:"bytes,3,opt,name=ca_fingerprint_sha256,json=caFingerprintSha256,proto3" json:"ca_fingerprint_sha256,omitempty"` // SHA-256 over the Relay CA certificate's DER; 32 bytes
+	EnrollmentToken     string                 `protobuf:"bytes,4,opt,name=enrollment_token,json=enrollmentToken,proto3" json:"enrollment_token,omitempty"`               // the Enrollment Token plaintext
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *JoinString) Reset() {
+	*x = JoinString{}
+	mi := &file_relay_v1_relay_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JoinString) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JoinString) ProtoMessage() {}
+
+func (x *JoinString) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JoinString.ProtoReflect.Descriptor instead.
+func (*JoinString) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *JoinString) GetFormatVersion() uint32 {
+	if x != nil {
+		return x.FormatVersion
+	}
+	return 0
+}
+
+func (x *JoinString) GetRelayAddress() string {
+	if x != nil {
+		return x.RelayAddress
+	}
+	return ""
+}
+
+func (x *JoinString) GetCaFingerprintSha256() []byte {
+	if x != nil {
+		return x.CaFingerprintSha256
+	}
+	return nil
+}
+
+func (x *JoinString) GetEnrollmentToken() string {
+	if x != nil {
+		return x.EnrollmentToken
+	}
+	return ""
+}
+
 type DaemonMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Body:
@@ -412,7 +485,7 @@ type DaemonMessage struct {
 
 func (x *DaemonMessage) Reset() {
 	*x = DaemonMessage{}
-	mi := &file_relay_v1_relay_proto_msgTypes[4]
+	mi := &file_relay_v1_relay_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -424,7 +497,7 @@ func (x *DaemonMessage) String() string {
 func (*DaemonMessage) ProtoMessage() {}
 
 func (x *DaemonMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[4]
+	mi := &file_relay_v1_relay_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -437,7 +510,7 @@ func (x *DaemonMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DaemonMessage.ProtoReflect.Descriptor instead.
 func (*DaemonMessage) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{4}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *DaemonMessage) GetBody() isDaemonMessage_Body {
@@ -571,7 +644,7 @@ type RelayMessage struct {
 
 func (x *RelayMessage) Reset() {
 	*x = RelayMessage{}
-	mi := &file_relay_v1_relay_proto_msgTypes[5]
+	mi := &file_relay_v1_relay_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -583,7 +656,7 @@ func (x *RelayMessage) String() string {
 func (*RelayMessage) ProtoMessage() {}
 
 func (x *RelayMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[5]
+	mi := &file_relay_v1_relay_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -596,7 +669,7 @@ func (x *RelayMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelayMessage.ProtoReflect.Descriptor instead.
 func (*RelayMessage) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{5}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RelayMessage) GetBody() isRelayMessage_Body {
@@ -684,7 +757,7 @@ type Hello struct {
 
 func (x *Hello) Reset() {
 	*x = Hello{}
-	mi := &file_relay_v1_relay_proto_msgTypes[6]
+	mi := &file_relay_v1_relay_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -696,7 +769,7 @@ func (x *Hello) String() string {
 func (*Hello) ProtoMessage() {}
 
 func (x *Hello) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[6]
+	mi := &file_relay_v1_relay_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -709,7 +782,7 @@ func (x *Hello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Hello.ProtoReflect.Descriptor instead.
 func (*Hello) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{6}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Hello) GetNodeId() string {
@@ -763,7 +836,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_relay_v1_relay_proto_msgTypes[7]
+	mi := &file_relay_v1_relay_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -775,7 +848,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[7]
+	mi := &file_relay_v1_relay_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -788,7 +861,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{7}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Heartbeat) GetUnixMillis() int64 {
@@ -807,7 +880,7 @@ type Ping struct {
 
 func (x *Ping) Reset() {
 	*x = Ping{}
-	mi := &file_relay_v1_relay_proto_msgTypes[8]
+	mi := &file_relay_v1_relay_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -819,7 +892,7 @@ func (x *Ping) String() string {
 func (*Ping) ProtoMessage() {}
 
 func (x *Ping) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[8]
+	mi := &file_relay_v1_relay_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -832,7 +905,7 @@ func (x *Ping) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ping.ProtoReflect.Descriptor instead.
 func (*Ping) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{8}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Ping) GetUnixMillis() int64 {
@@ -871,7 +944,7 @@ type TaskRequest struct {
 
 func (x *TaskRequest) Reset() {
 	*x = TaskRequest{}
-	mi := &file_relay_v1_relay_proto_msgTypes[9]
+	mi := &file_relay_v1_relay_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -883,7 +956,7 @@ func (x *TaskRequest) String() string {
 func (*TaskRequest) ProtoMessage() {}
 
 func (x *TaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[9]
+	mi := &file_relay_v1_relay_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -896,7 +969,7 @@ func (x *TaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskRequest.ProtoReflect.Descriptor instead.
 func (*TaskRequest) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{9}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *TaskRequest) GetTaskId() string {
@@ -974,7 +1047,7 @@ type TaskCancel struct {
 
 func (x *TaskCancel) Reset() {
 	*x = TaskCancel{}
-	mi := &file_relay_v1_relay_proto_msgTypes[10]
+	mi := &file_relay_v1_relay_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -986,7 +1059,7 @@ func (x *TaskCancel) String() string {
 func (*TaskCancel) ProtoMessage() {}
 
 func (x *TaskCancel) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[10]
+	mi := &file_relay_v1_relay_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -999,7 +1072,7 @@ func (x *TaskCancel) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskCancel.ProtoReflect.Descriptor instead.
 func (*TaskCancel) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{10}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *TaskCancel) GetTaskId() string {
@@ -1019,7 +1092,7 @@ type Operation struct {
 
 func (x *Operation) Reset() {
 	*x = Operation{}
-	mi := &file_relay_v1_relay_proto_msgTypes[11]
+	mi := &file_relay_v1_relay_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1031,7 +1104,7 @@ func (x *Operation) String() string {
 func (*Operation) ProtoMessage() {}
 
 func (x *Operation) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[11]
+	mi := &file_relay_v1_relay_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1044,7 +1117,7 @@ func (x *Operation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Operation.ProtoReflect.Descriptor instead.
 func (*Operation) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{11}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Operation) GetName() string {
@@ -1089,7 +1162,7 @@ type OperationDescriptor struct {
 
 func (x *OperationDescriptor) Reset() {
 	*x = OperationDescriptor{}
-	mi := &file_relay_v1_relay_proto_msgTypes[12]
+	mi := &file_relay_v1_relay_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1101,7 +1174,7 @@ func (x *OperationDescriptor) String() string {
 func (*OperationDescriptor) ProtoMessage() {}
 
 func (x *OperationDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[12]
+	mi := &file_relay_v1_relay_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1114,7 +1187,7 @@ func (x *OperationDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationDescriptor.ProtoReflect.Descriptor instead.
 func (*OperationDescriptor) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{12}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *OperationDescriptor) GetName() string {
@@ -1140,7 +1213,7 @@ type RawExec struct {
 
 func (x *RawExec) Reset() {
 	*x = RawExec{}
-	mi := &file_relay_v1_relay_proto_msgTypes[13]
+	mi := &file_relay_v1_relay_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1152,7 +1225,7 @@ func (x *RawExec) String() string {
 func (*RawExec) ProtoMessage() {}
 
 func (x *RawExec) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[13]
+	mi := &file_relay_v1_relay_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1165,7 +1238,7 @@ func (x *RawExec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RawExec.ProtoReflect.Descriptor instead.
 func (*RawExec) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{13}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RawExec) GetArgv() []string {
@@ -1190,7 +1263,7 @@ type TaskResult struct {
 
 func (x *TaskResult) Reset() {
 	*x = TaskResult{}
-	mi := &file_relay_v1_relay_proto_msgTypes[14]
+	mi := &file_relay_v1_relay_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1202,7 +1275,7 @@ func (x *TaskResult) String() string {
 func (*TaskResult) ProtoMessage() {}
 
 func (x *TaskResult) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[14]
+	mi := &file_relay_v1_relay_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1215,7 +1288,7 @@ func (x *TaskResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskResult.ProtoReflect.Descriptor instead.
 func (*TaskResult) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{14}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *TaskResult) GetTaskId() string {
@@ -1278,7 +1351,7 @@ type StreamChunk struct {
 
 func (x *StreamChunk) Reset() {
 	*x = StreamChunk{}
-	mi := &file_relay_v1_relay_proto_msgTypes[15]
+	mi := &file_relay_v1_relay_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1290,7 +1363,7 @@ func (x *StreamChunk) String() string {
 func (*StreamChunk) ProtoMessage() {}
 
 func (x *StreamChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[15]
+	mi := &file_relay_v1_relay_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1303,7 +1376,7 @@ func (x *StreamChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamChunk.ProtoReflect.Descriptor instead.
 func (*StreamChunk) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{15}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *StreamChunk) GetTaskId() string {
@@ -1340,7 +1413,7 @@ type Label struct {
 
 func (x *Label) Reset() {
 	*x = Label{}
-	mi := &file_relay_v1_relay_proto_msgTypes[16]
+	mi := &file_relay_v1_relay_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1352,7 +1425,7 @@ func (x *Label) String() string {
 func (*Label) ProtoMessage() {}
 
 func (x *Label) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[16]
+	mi := &file_relay_v1_relay_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1365,7 +1438,7 @@ func (x *Label) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Label.ProtoReflect.Descriptor instead.
 func (*Label) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{16}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Label) GetKey() string {
@@ -1395,7 +1468,7 @@ type Facts struct {
 
 func (x *Facts) Reset() {
 	*x = Facts{}
-	mi := &file_relay_v1_relay_proto_msgTypes[17]
+	mi := &file_relay_v1_relay_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1407,7 +1480,7 @@ func (x *Facts) String() string {
 func (*Facts) ProtoMessage() {}
 
 func (x *Facts) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[17]
+	mi := &file_relay_v1_relay_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1420,7 +1493,7 @@ func (x *Facts) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Facts.ProtoReflect.Descriptor instead.
 func (*Facts) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{17}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *Facts) GetHostname() string {
@@ -1481,7 +1554,7 @@ type PolicySnapshot struct {
 
 func (x *PolicySnapshot) Reset() {
 	*x = PolicySnapshot{}
-	mi := &file_relay_v1_relay_proto_msgTypes[18]
+	mi := &file_relay_v1_relay_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1493,7 +1566,7 @@ func (x *PolicySnapshot) String() string {
 func (*PolicySnapshot) ProtoMessage() {}
 
 func (x *PolicySnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[18]
+	mi := &file_relay_v1_relay_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1506,7 +1579,7 @@ func (x *PolicySnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicySnapshot.ProtoReflect.Descriptor instead.
 func (*PolicySnapshot) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{18}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *PolicySnapshot) GetRawExecEnabled() bool {
@@ -1571,7 +1644,7 @@ type OperationRule struct {
 
 func (x *OperationRule) Reset() {
 	*x = OperationRule{}
-	mi := &file_relay_v1_relay_proto_msgTypes[19]
+	mi := &file_relay_v1_relay_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1583,7 +1656,7 @@ func (x *OperationRule) String() string {
 func (*OperationRule) ProtoMessage() {}
 
 func (x *OperationRule) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[19]
+	mi := &file_relay_v1_relay_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1596,7 +1669,7 @@ func (x *OperationRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationRule.ProtoReflect.Descriptor instead.
 func (*OperationRule) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{19}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *OperationRule) GetName() string {
@@ -1626,7 +1699,7 @@ type DenyRule struct {
 
 func (x *DenyRule) Reset() {
 	*x = DenyRule{}
-	mi := &file_relay_v1_relay_proto_msgTypes[20]
+	mi := &file_relay_v1_relay_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1638,7 +1711,7 @@ func (x *DenyRule) String() string {
 func (*DenyRule) ProtoMessage() {}
 
 func (x *DenyRule) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[20]
+	mi := &file_relay_v1_relay_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1651,7 +1724,7 @@ func (x *DenyRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DenyRule.ProtoReflect.Descriptor instead.
 func (*DenyRule) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{20}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *DenyRule) GetName() string {
@@ -1687,7 +1760,7 @@ type TemplateSnapshot struct {
 
 func (x *TemplateSnapshot) Reset() {
 	*x = TemplateSnapshot{}
-	mi := &file_relay_v1_relay_proto_msgTypes[21]
+	mi := &file_relay_v1_relay_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1699,7 +1772,7 @@ func (x *TemplateSnapshot) String() string {
 func (*TemplateSnapshot) ProtoMessage() {}
 
 func (x *TemplateSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[21]
+	mi := &file_relay_v1_relay_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1712,7 +1785,7 @@ func (x *TemplateSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TemplateSnapshot.ProtoReflect.Descriptor instead.
 func (*TemplateSnapshot) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{21}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *TemplateSnapshot) GetTemplateSetFingerprint() string {
@@ -1745,7 +1818,7 @@ type TemplateDescriptor struct {
 
 func (x *TemplateDescriptor) Reset() {
 	*x = TemplateDescriptor{}
-	mi := &file_relay_v1_relay_proto_msgTypes[22]
+	mi := &file_relay_v1_relay_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1757,7 +1830,7 @@ func (x *TemplateDescriptor) String() string {
 func (*TemplateDescriptor) ProtoMessage() {}
 
 func (x *TemplateDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[22]
+	mi := &file_relay_v1_relay_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1770,7 +1843,7 @@ func (x *TemplateDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TemplateDescriptor.ProtoReflect.Descriptor instead.
 func (*TemplateDescriptor) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{22}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *TemplateDescriptor) GetName() string {
@@ -1810,7 +1883,7 @@ type TemplateSlot struct {
 
 func (x *TemplateSlot) Reset() {
 	*x = TemplateSlot{}
-	mi := &file_relay_v1_relay_proto_msgTypes[23]
+	mi := &file_relay_v1_relay_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1822,7 +1895,7 @@ func (x *TemplateSlot) String() string {
 func (*TemplateSlot) ProtoMessage() {}
 
 func (x *TemplateSlot) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[23]
+	mi := &file_relay_v1_relay_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1835,7 +1908,7 @@ func (x *TemplateSlot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TemplateSlot.ProtoReflect.Descriptor instead.
 func (*TemplateSlot) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{23}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *TemplateSlot) GetName() string {
@@ -1872,7 +1945,7 @@ type ArgMatcher struct {
 
 func (x *ArgMatcher) Reset() {
 	*x = ArgMatcher{}
-	mi := &file_relay_v1_relay_proto_msgTypes[24]
+	mi := &file_relay_v1_relay_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1884,7 +1957,7 @@ func (x *ArgMatcher) String() string {
 func (*ArgMatcher) ProtoMessage() {}
 
 func (x *ArgMatcher) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[24]
+	mi := &file_relay_v1_relay_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1897,7 +1970,7 @@ func (x *ArgMatcher) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArgMatcher.ProtoReflect.Descriptor instead.
 func (*ArgMatcher) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{24}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ArgMatcher) GetValues() []string {
@@ -1926,7 +1999,7 @@ type PolicyQuery struct {
 
 func (x *PolicyQuery) Reset() {
 	*x = PolicyQuery{}
-	mi := &file_relay_v1_relay_proto_msgTypes[25]
+	mi := &file_relay_v1_relay_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1938,7 +2011,7 @@ func (x *PolicyQuery) String() string {
 func (*PolicyQuery) ProtoMessage() {}
 
 func (x *PolicyQuery) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[25]
+	mi := &file_relay_v1_relay_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1951,7 +2024,7 @@ func (x *PolicyQuery) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyQuery.ProtoReflect.Descriptor instead.
 func (*PolicyQuery) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{25}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *PolicyQuery) GetQueryId() string {
@@ -2025,7 +2098,7 @@ type PolicyVerdict struct {
 
 func (x *PolicyVerdict) Reset() {
 	*x = PolicyVerdict{}
-	mi := &file_relay_v1_relay_proto_msgTypes[26]
+	mi := &file_relay_v1_relay_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2037,7 +2110,7 @@ func (x *PolicyVerdict) String() string {
 func (*PolicyVerdict) ProtoMessage() {}
 
 func (x *PolicyVerdict) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[26]
+	mi := &file_relay_v1_relay_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2050,7 +2123,7 @@ func (x *PolicyVerdict) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyVerdict.ProtoReflect.Descriptor instead.
 func (*PolicyVerdict) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{26}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *PolicyVerdict) GetQueryId() string {
@@ -2102,7 +2175,13 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\rRenewResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12 \n" +
 	"\vcertificate\x18\x02 \x01(\fR\vcertificate\x12\x1b\n" +
-	"\tca_bundle\x18\x03 \x01(\fR\bcaBundle\"\x9c\x03\n" +
+	"\tca_bundle\x18\x03 \x01(\fR\bcaBundle\"\xb7\x01\n" +
+	"\n" +
+	"JoinString\x12%\n" +
+	"\x0eformat_version\x18\x01 \x01(\rR\rformatVersion\x12#\n" +
+	"\rrelay_address\x18\x02 \x01(\tR\frelayAddress\x122\n" +
+	"\x15ca_fingerprint_sha256\x18\x03 \x01(\fR\x13caFingerprintSha256\x12)\n" +
+	"\x10enrollment_token\x18\x04 \x01(\tR\x0fenrollmentToken\"\x9c\x03\n" +
 	"\rDaemonMessage\x12'\n" +
 	"\x05hello\x18\x01 \x01(\v2\x0f.relay.v1.HelloH\x00R\x05hello\x123\n" +
 	"\theartbeat\x18\x02 \x01(\v2\x13.relay.v1.HeartbeatH\x00R\theartbeat\x127\n" +
@@ -2253,7 +2332,7 @@ func file_relay_v1_relay_proto_rawDescGZIP() []byte {
 }
 
 var file_relay_v1_relay_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_relay_v1_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_relay_v1_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_relay_v1_relay_proto_goTypes = []any{
 	(RiskClass)(0),              // 0: relay.v1.RiskClass
 	(Outcome)(0),                // 1: relay.v1.Outcome
@@ -2261,69 +2340,70 @@ var file_relay_v1_relay_proto_goTypes = []any{
 	(*EnrollResponse)(nil),      // 3: relay.v1.EnrollResponse
 	(*RenewRequest)(nil),        // 4: relay.v1.RenewRequest
 	(*RenewResponse)(nil),       // 5: relay.v1.RenewResponse
-	(*DaemonMessage)(nil),       // 6: relay.v1.DaemonMessage
-	(*RelayMessage)(nil),        // 7: relay.v1.RelayMessage
-	(*Hello)(nil),               // 8: relay.v1.Hello
-	(*Heartbeat)(nil),           // 9: relay.v1.Heartbeat
-	(*Ping)(nil),                // 10: relay.v1.Ping
-	(*TaskRequest)(nil),         // 11: relay.v1.TaskRequest
-	(*TaskCancel)(nil),          // 12: relay.v1.TaskCancel
-	(*Operation)(nil),           // 13: relay.v1.Operation
-	(*OperationDescriptor)(nil), // 14: relay.v1.OperationDescriptor
-	(*RawExec)(nil),             // 15: relay.v1.RawExec
-	(*TaskResult)(nil),          // 16: relay.v1.TaskResult
-	(*StreamChunk)(nil),         // 17: relay.v1.StreamChunk
-	(*Label)(nil),               // 18: relay.v1.Label
-	(*Facts)(nil),               // 19: relay.v1.Facts
-	(*PolicySnapshot)(nil),      // 20: relay.v1.PolicySnapshot
-	(*OperationRule)(nil),       // 21: relay.v1.OperationRule
-	(*DenyRule)(nil),            // 22: relay.v1.DenyRule
-	(*TemplateSnapshot)(nil),    // 23: relay.v1.TemplateSnapshot
-	(*TemplateDescriptor)(nil),  // 24: relay.v1.TemplateDescriptor
-	(*TemplateSlot)(nil),        // 25: relay.v1.TemplateSlot
-	(*ArgMatcher)(nil),          // 26: relay.v1.ArgMatcher
-	(*PolicyQuery)(nil),         // 27: relay.v1.PolicyQuery
-	(*PolicyVerdict)(nil),       // 28: relay.v1.PolicyVerdict
-	nil,                         // 29: relay.v1.Operation.ArgsEntry
+	(*JoinString)(nil),          // 6: relay.v1.JoinString
+	(*DaemonMessage)(nil),       // 7: relay.v1.DaemonMessage
+	(*RelayMessage)(nil),        // 8: relay.v1.RelayMessage
+	(*Hello)(nil),               // 9: relay.v1.Hello
+	(*Heartbeat)(nil),           // 10: relay.v1.Heartbeat
+	(*Ping)(nil),                // 11: relay.v1.Ping
+	(*TaskRequest)(nil),         // 12: relay.v1.TaskRequest
+	(*TaskCancel)(nil),          // 13: relay.v1.TaskCancel
+	(*Operation)(nil),           // 14: relay.v1.Operation
+	(*OperationDescriptor)(nil), // 15: relay.v1.OperationDescriptor
+	(*RawExec)(nil),             // 16: relay.v1.RawExec
+	(*TaskResult)(nil),          // 17: relay.v1.TaskResult
+	(*StreamChunk)(nil),         // 18: relay.v1.StreamChunk
+	(*Label)(nil),               // 19: relay.v1.Label
+	(*Facts)(nil),               // 20: relay.v1.Facts
+	(*PolicySnapshot)(nil),      // 21: relay.v1.PolicySnapshot
+	(*OperationRule)(nil),       // 22: relay.v1.OperationRule
+	(*DenyRule)(nil),            // 23: relay.v1.DenyRule
+	(*TemplateSnapshot)(nil),    // 24: relay.v1.TemplateSnapshot
+	(*TemplateDescriptor)(nil),  // 25: relay.v1.TemplateDescriptor
+	(*TemplateSlot)(nil),        // 26: relay.v1.TemplateSlot
+	(*ArgMatcher)(nil),          // 27: relay.v1.ArgMatcher
+	(*PolicyQuery)(nil),         // 28: relay.v1.PolicyQuery
+	(*PolicyVerdict)(nil),       // 29: relay.v1.PolicyVerdict
+	nil,                         // 30: relay.v1.Operation.ArgsEntry
 }
 var file_relay_v1_relay_proto_depIdxs = []int32{
-	18, // 0: relay.v1.EnrollRequest.self_labels:type_name -> relay.v1.Label
-	19, // 1: relay.v1.EnrollRequest.facts:type_name -> relay.v1.Facts
-	18, // 2: relay.v1.EnrollResponse.assigned_labels:type_name -> relay.v1.Label
-	8,  // 3: relay.v1.DaemonMessage.hello:type_name -> relay.v1.Hello
-	9,  // 4: relay.v1.DaemonMessage.heartbeat:type_name -> relay.v1.Heartbeat
-	16, // 5: relay.v1.DaemonMessage.task_result:type_name -> relay.v1.TaskResult
-	17, // 6: relay.v1.DaemonMessage.stream_chunk:type_name -> relay.v1.StreamChunk
-	20, // 7: relay.v1.DaemonMessage.policy:type_name -> relay.v1.PolicySnapshot
-	28, // 8: relay.v1.DaemonMessage.policy_verdict:type_name -> relay.v1.PolicyVerdict
-	23, // 9: relay.v1.DaemonMessage.templates:type_name -> relay.v1.TemplateSnapshot
-	10, // 10: relay.v1.RelayMessage.ping:type_name -> relay.v1.Ping
-	11, // 11: relay.v1.RelayMessage.task:type_name -> relay.v1.TaskRequest
-	12, // 12: relay.v1.RelayMessage.task_cancel:type_name -> relay.v1.TaskCancel
-	27, // 13: relay.v1.RelayMessage.policy_query:type_name -> relay.v1.PolicyQuery
-	19, // 14: relay.v1.Hello.facts:type_name -> relay.v1.Facts
-	18, // 15: relay.v1.Hello.labels:type_name -> relay.v1.Label
-	13, // 16: relay.v1.TaskRequest.operation:type_name -> relay.v1.Operation
-	15, // 17: relay.v1.TaskRequest.raw_exec:type_name -> relay.v1.RawExec
+	19, // 0: relay.v1.EnrollRequest.self_labels:type_name -> relay.v1.Label
+	20, // 1: relay.v1.EnrollRequest.facts:type_name -> relay.v1.Facts
+	19, // 2: relay.v1.EnrollResponse.assigned_labels:type_name -> relay.v1.Label
+	9,  // 3: relay.v1.DaemonMessage.hello:type_name -> relay.v1.Hello
+	10, // 4: relay.v1.DaemonMessage.heartbeat:type_name -> relay.v1.Heartbeat
+	17, // 5: relay.v1.DaemonMessage.task_result:type_name -> relay.v1.TaskResult
+	18, // 6: relay.v1.DaemonMessage.stream_chunk:type_name -> relay.v1.StreamChunk
+	21, // 7: relay.v1.DaemonMessage.policy:type_name -> relay.v1.PolicySnapshot
+	29, // 8: relay.v1.DaemonMessage.policy_verdict:type_name -> relay.v1.PolicyVerdict
+	24, // 9: relay.v1.DaemonMessage.templates:type_name -> relay.v1.TemplateSnapshot
+	11, // 10: relay.v1.RelayMessage.ping:type_name -> relay.v1.Ping
+	12, // 11: relay.v1.RelayMessage.task:type_name -> relay.v1.TaskRequest
+	13, // 12: relay.v1.RelayMessage.task_cancel:type_name -> relay.v1.TaskCancel
+	28, // 13: relay.v1.RelayMessage.policy_query:type_name -> relay.v1.PolicyQuery
+	20, // 14: relay.v1.Hello.facts:type_name -> relay.v1.Facts
+	19, // 15: relay.v1.Hello.labels:type_name -> relay.v1.Label
+	14, // 16: relay.v1.TaskRequest.operation:type_name -> relay.v1.Operation
+	16, // 17: relay.v1.TaskRequest.raw_exec:type_name -> relay.v1.RawExec
 	0,  // 18: relay.v1.TaskRequest.risk_class:type_name -> relay.v1.RiskClass
-	29, // 19: relay.v1.Operation.args:type_name -> relay.v1.Operation.ArgsEntry
+	30, // 19: relay.v1.Operation.args:type_name -> relay.v1.Operation.ArgsEntry
 	0,  // 20: relay.v1.OperationDescriptor.risk_class:type_name -> relay.v1.RiskClass
 	1,  // 21: relay.v1.TaskResult.outcome:type_name -> relay.v1.Outcome
-	21, // 22: relay.v1.PolicySnapshot.operation_rules:type_name -> relay.v1.OperationRule
-	22, // 23: relay.v1.PolicySnapshot.deny_rules:type_name -> relay.v1.DenyRule
-	26, // 24: relay.v1.OperationRule.allowed_args:type_name -> relay.v1.ArgMatcher
-	26, // 25: relay.v1.DenyRule.args:type_name -> relay.v1.ArgMatcher
-	24, // 26: relay.v1.TemplateSnapshot.templates:type_name -> relay.v1.TemplateDescriptor
+	22, // 22: relay.v1.PolicySnapshot.operation_rules:type_name -> relay.v1.OperationRule
+	23, // 23: relay.v1.PolicySnapshot.deny_rules:type_name -> relay.v1.DenyRule
+	27, // 24: relay.v1.OperationRule.allowed_args:type_name -> relay.v1.ArgMatcher
+	27, // 25: relay.v1.DenyRule.args:type_name -> relay.v1.ArgMatcher
+	25, // 26: relay.v1.TemplateSnapshot.templates:type_name -> relay.v1.TemplateDescriptor
 	0,  // 27: relay.v1.TemplateDescriptor.risk_class:type_name -> relay.v1.RiskClass
-	25, // 28: relay.v1.TemplateDescriptor.slots:type_name -> relay.v1.TemplateSlot
-	13, // 29: relay.v1.PolicyQuery.operation:type_name -> relay.v1.Operation
-	15, // 30: relay.v1.PolicyQuery.raw_exec:type_name -> relay.v1.RawExec
+	26, // 28: relay.v1.TemplateDescriptor.slots:type_name -> relay.v1.TemplateSlot
+	14, // 29: relay.v1.PolicyQuery.operation:type_name -> relay.v1.Operation
+	16, // 30: relay.v1.PolicyQuery.raw_exec:type_name -> relay.v1.RawExec
 	2,  // 31: relay.v1.Enrollment.Enroll:input_type -> relay.v1.EnrollRequest
 	4,  // 32: relay.v1.Enrollment.Renew:input_type -> relay.v1.RenewRequest
-	6,  // 33: relay.v1.Tunnel.Open:input_type -> relay.v1.DaemonMessage
+	7,  // 33: relay.v1.Tunnel.Open:input_type -> relay.v1.DaemonMessage
 	3,  // 34: relay.v1.Enrollment.Enroll:output_type -> relay.v1.EnrollResponse
 	5,  // 35: relay.v1.Enrollment.Renew:output_type -> relay.v1.RenewResponse
-	7,  // 36: relay.v1.Tunnel.Open:output_type -> relay.v1.RelayMessage
+	8,  // 36: relay.v1.Tunnel.Open:output_type -> relay.v1.RelayMessage
 	34, // [34:37] is the sub-list for method output_type
 	31, // [31:34] is the sub-list for method input_type
 	31, // [31:31] is the sub-list for extension type_name
@@ -2336,7 +2416,7 @@ func file_relay_v1_relay_proto_init() {
 	if File_relay_v1_relay_proto != nil {
 		return
 	}
-	file_relay_v1_relay_proto_msgTypes[4].OneofWrappers = []any{
+	file_relay_v1_relay_proto_msgTypes[5].OneofWrappers = []any{
 		(*DaemonMessage_Hello)(nil),
 		(*DaemonMessage_Heartbeat)(nil),
 		(*DaemonMessage_TaskResult)(nil),
@@ -2345,17 +2425,17 @@ func file_relay_v1_relay_proto_init() {
 		(*DaemonMessage_PolicyVerdict)(nil),
 		(*DaemonMessage_Templates)(nil),
 	}
-	file_relay_v1_relay_proto_msgTypes[5].OneofWrappers = []any{
+	file_relay_v1_relay_proto_msgTypes[6].OneofWrappers = []any{
 		(*RelayMessage_Ping)(nil),
 		(*RelayMessage_Task)(nil),
 		(*RelayMessage_TaskCancel)(nil),
 		(*RelayMessage_PolicyQuery)(nil),
 	}
-	file_relay_v1_relay_proto_msgTypes[9].OneofWrappers = []any{
+	file_relay_v1_relay_proto_msgTypes[10].OneofWrappers = []any{
 		(*TaskRequest_Operation)(nil),
 		(*TaskRequest_RawExec)(nil),
 	}
-	file_relay_v1_relay_proto_msgTypes[25].OneofWrappers = []any{
+	file_relay_v1_relay_proto_msgTypes[26].OneofWrappers = []any{
 		(*PolicyQuery_Operation)(nil),
 		(*PolicyQuery_RawExec)(nil),
 	}
@@ -2365,7 +2445,7 @@ func file_relay_v1_relay_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_relay_v1_relay_proto_rawDesc), len(file_relay_v1_relay_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   28,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

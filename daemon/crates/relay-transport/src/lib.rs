@@ -1,6 +1,6 @@
 //! The daemon's connection to the Relay (ADR-0005, ADR-0006): the mTLS
-//! identity and its sanctioned on-disk writer, enrollment, certificate renewal,
-//! and the Tunnel's channel and reconnect backoff.
+//! identity and its sanctioned on-disk writer, enrollment, the join string codec,
+//! certificate renewal, and the Tunnel's channel and reconnect backoff.
 //!
 //! Not read-only: `identity` persists the Node's key and certificate, which is why
 //! this crate inherits the workspace's exec ban but not the filesystem-write ban
@@ -17,6 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod enroll;
 pub mod identity;
+pub mod join_string;
 pub mod renew;
 pub mod tunnel;
 

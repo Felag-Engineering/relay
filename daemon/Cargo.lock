@@ -1082,6 +1082,8 @@ dependencies = [
 name = "relay-transport"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
+ "prost",
  "rcgen",
  "relay-log",
  "relay-proto",

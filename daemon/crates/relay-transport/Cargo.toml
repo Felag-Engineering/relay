@@ -23,6 +23,8 @@ rcgen = { workspace = true }
 x509-parser = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
+prost = { workspace = true }
+base64 = { workspace = true }
 
 [dev-dependencies]
 relay-test-support = { workspace = true }
