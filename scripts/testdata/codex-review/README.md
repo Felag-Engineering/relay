@@ -10,15 +10,14 @@ node <plugin>/scripts/codex-companion.mjs adversarial-review --scope working-tre
 
 stdout: 806 bytes. stderr: 0 bytes. Exit status: 1.
 
-This file is **unedited** — a byte-for-byte copy of `.dev-loop/real-capture-quota-dirty-stdout.json`
-(`.dev-loop/` is gitignored, so this copy is the only durable record of it). It still carries
-the recording host's absolute `context.repoRoot`
-(`/home/mrapp/felag/gleipnir-relay/.claude/worktrees/agent-a06660ce3b68775be`) and Codex's
-`threadId` (`01a0ce4c-b9dd-7ca0-ab49-6842b9b20873`). Neither is a secret: `threadId` is a LOCAL
-Codex thread identifier indexing state under `$CLAUDE_PLUGIN_DATA`/`os.tmpdir()`
-(`lib/state.mjs:29-43`), nothing to rotate; the `repoRoot` leaks only a username already present
-in every git author line. Both are left in deliberately — editing either would change the file's
-806-byte length and would look like a test bug rather than the redaction someone intended.
+This file is a copy of `.dev-loop/real-capture-quota-dirty-stdout.json` (`.dev-loop/` is
+gitignored, so this copy is the only durable record of it) with **one edit**: the recording
+host's home-directory prefix in `context.repoRoot` is redacted to `/home/dev/relay`, which
+takes the file from 806 to 789 bytes. Every other byte is as recorded, including Codex's
+`threadId` (`01a0ce4c-b9dd-7ca0-ab49-6842b9b20873`), a LOCAL Codex thread identifier indexing
+state under `$CLAUDE_PLUGIN_DATA`/`os.tmpdir()` (`lib/state.mjs:29-43`), nothing to rotate. The
+script reads neither field. `codex-review-test.sh` asserts the 789-byte length, so any further
+edit fails loudly.
 
 Its point is to be a *recording*, not a fixture someone hand-tuned: `payload.result` is `null`
 and `payload.parseError` carries the ChatGPT-plan usage-limit message verbatim

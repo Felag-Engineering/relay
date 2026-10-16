@@ -452,8 +452,8 @@ assert_no_cause_line "case-verdict-needs-attention"
 # backwards (exit 1, not 3). Fixture size is asserted so a silent edit fails loudly.
 QUOTA_CAPTURE="$REPO_ROOT/scripts/testdata/codex-review/quota-capture.json"
 qc_bytes=$(wc -c <"$QUOTA_CAPTURE")
-if [ "$qc_bytes" -ne 806 ]; then
-  echo "FAIL: case-real-quota-capture: fixture is $qc_bytes bytes, want exactly 806 — it has been edited" >&2
+if [ "$qc_bytes" -ne 789 ]; then
+  echo "FAIL: case-real-quota-capture: fixture is $qc_bytes bytes, want exactly 789 — it has been edited" >&2
   fail=$((fail + 1))
 fi
 run STUB_CASE=emit STUB_EXIT=1 STUB_OUT_FILE="$QUOTA_CAPTURE" -- diff main
