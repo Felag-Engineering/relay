@@ -86,5 +86,7 @@ misread its instructions.
 
 ## PRs as a request surface
 
-**Off.** External pull requests are not part of the triage queue. Flip this section on if
-that changes.
+**Off.** Code contributions from outside Felag Engineering are not accepted
+(`CONTRIBUTING.md`), so an external pull request is never triage work and never loop work:
+no agent reviews, labels, fixes or merges one. Flip this section on only if that policy
+changes.
