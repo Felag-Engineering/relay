@@ -188,7 +188,7 @@ it is done.
 
 **The Enrollment Token sits in plaintext on a fresh Node.** It is in a `0600` root-owned
 environment file until config management removes it, so it is readable by root-equivalent access
-and lands in backups and host images taken before first start. It is short-lived, scoped, and
+and lands in backups and images of the Node taken before first start. It is short-lived, scoped, and
 inert once the Node holds its certificate — but nothing enforces its removal, and a golden image
 built from an enrolled Node would carry a live token.
 
@@ -206,11 +206,6 @@ cleared survives decommissioning on disk; its token stays usable for other enrol
 expires or is revoked. Accepted by the owner on 2026-10-15 and recorded as **R36**, widening R16.
 The compensating controls are R16's, plus purging (`.deb`) or deleting the printed path (`.rpm`)
 when a Node leaves for good.
-
-**A drop-in under another name can relax the unit unseen by Policy.** The default Policy denies
-the override unit and the `override.conf` drop-in `systemctl edit` writes by exact path (DI-28),
-but Policy has no subtree deny, so a drop-in under any other name in that directory is the same
-recorded residual as the Template directory's files (ADR-0022, amended 2026-10-15).
 
 ## Future work
 
@@ -243,6 +238,11 @@ recorded residual as the Template directory's files (ADR-0022, amended 2026-10-1
 
 ## Open questions
 
+- **Is a drop-in under another name an accepted residual?** The default Policy denies the
+  override unit and the `override.conf` drop-in by exact path (DI-28), but Policy has no subtree
+  deny, so a drop-in under any other name in that directory relaxes the unit unseen. ADR-0022's
+  2026-10-15 amendment calls it the same residual as the Template directory's files; neither has
+  a row in the threat model yet.
 - **Does the daemon package enable its unit?** ADR-0033 says only that it does not start it.
   The Relay package enables where presets allow (`relay-configuration.md`); a daemon enabled
   before config management writes the join string would fail at the next boot until it does.
@@ -253,7 +253,7 @@ recorded residual as the Template directory's files (ADR-0022, amended 2026-10-1
 - **Which artifact does a rendered bundle pin once packages exist?** ADR-0032 pins one daemon
   version and digest and calls the package the end state. With two package formats on two
   architectures, the bundle needs either a digest per platform or a different pin (DI-35).
-- **Does a Task killed at the end of the shutdown grace get a distinct outcome?** Today it is
+- **Does a Task stopped at the end of the shutdown grace get a distinct outcome?** Today it is
   reported as cancelled (DI-14). A distinct interrupted outcome is a `/proto` contract, decided
   before it is built.
 
