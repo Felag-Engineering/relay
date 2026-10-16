@@ -56,6 +56,18 @@ message RenewResponse {
   bytes  ca_bundle   = 3;   // PEM CA bundle (unchanged, but included for completeness)
 }
 
+// JoinString is the one pasteable artifact that enrolls a Node (ADR-0031). Its text
+// form is "glp_join_" followed by the unpadded base64url of this message's
+// serialization. It carries a live Enrollment Token and is handled as a secret. No RPC
+// carries it. format_version 1 is the only version: a decoder refuses any other, and
+// refuses a version 1 message carrying any field beyond these four.
+message JoinString {
+  uint32 format_version        = 1;  // 1; a decoder refuses any other value, 0 included
+  string relay_address         = 2;  // host:port the daemon dials to enroll
+  bytes  ca_fingerprint_sha256 = 3;  // SHA-256 over the Relay CA certificate's DER; 32 bytes
+  string enrollment_token      = 4;  // the Enrollment Token plaintext
+}
+
 // ---------------------------------------------------------------------------
 // The persistent bidirectional stream (ADR-0005). The daemon opens it after
 // mTLS; the Relay pushes RelayMessages down, the daemon sends DaemonMessages up.

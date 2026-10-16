@@ -68,6 +68,9 @@ tokio = "1"
 # pinned Relay CA stays the only trust root (ADR-0005, invariant 6).
 tonic = { version = "0.14", default-features = false }
 prost = "0.14"
+# Unpadded base64url for the join string (ADR-0031). Already in the tree through tonic
+# (Cargo.lock has 0.22.1), so the musl build gains no new crate.
+base64 = "0.22"
 # The prost codec the generated client stubs name (`tonic_prost::ProstCodec`), split
 # out of tonic in 0.14 (#938).
 tonic-prost = "0.14"
