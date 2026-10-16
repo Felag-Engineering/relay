@@ -1,5 +1,19 @@
 # Contributing
 
+**Relay is source-available, not open source, and does not accept code contributions from
+outside Felag Engineering.** A pull request from outside is closed unmerged, however good
+the change. The code is published under the Business Source License 1.1 ([LICENSE](LICENSE))
+so it can be read, audited and run under that licence's terms; selling commercial licences
+depends on Felag holding the rights to every line, which an outside contribution would not
+give it.
+
+From outside, these are welcome:
+
+- **Bug reports and feature requests** as GitHub issues.
+- **Security reports** through [SECURITY.md](SECURITY.md), never an issue.
+
+The rest of this file is for Felag Engineering's own contributors.
+
 Read [AGENTS.md](AGENTS.md) first (the architecture invariants and conventions) and
 [GLOSSARY.md](GLOSSARY.md), whose language is enforced in review. Security issues go to
 [SECURITY.md](SECURITY.md), never to an issue.
@@ -45,4 +59,3 @@ make a spec claim untrue, the spec is updated first: name the claim in the PR.
 One issue per PR. Fill in the template. Titles follow `<type>(<area>): ...` or `<type>: ...`, as in
 the commit history.
 
-Relay is licensed under the Business Source License 1.1 ([LICENSE](LICENSE)); contributions are accepted under the same terms.

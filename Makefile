@@ -58,7 +58,7 @@ tool_bin = GOWORK=off go -C "$(CURDIR)/tools/$(1)" tool -n $(1)
         test-check-docs test-smoke-test test-maintainer-check \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
         demo-build demo-reset demo-reset-oauth demo-fault demo-up demo-up-oauth demo-down demo-creds \
-        relay-demo-owner test-release-image-guard test-dev-fleet-make \
+        relay-demo-owner test-release-image-guard test-license-change-date test-dev-fleet-make \
         fuzz-relay fuzz-daemon \
         verify verify-proto proto-lint opschema-check openapi-check gen-apiclient apiclient-check \
         lint-ci lint-shell lint-actions lint-zizmor zizmor-tool secrets-scan secrets-scan-history \
@@ -96,7 +96,7 @@ verify: fmt lint-relay lint-daemon lint-comments lint-guard-escapes check-daemon
         apiclient-check verify-proto docs-check test-security-surface \
         test-codex-review test-ci-changed-paths \
         test-check-docs test-smoke-test test-maintainer-check test-release-image-guard \
-        test-dev-fleet-make test-integration test-crossbinary \
+        test-license-change-date test-dev-fleet-make test-integration test-crossbinary \
         lint-ci secrets-scan deny-daemon test-vuln-gate
 	@echo
 	@test -n "$(RELAY_VERIFY_SKIPS)" || { echo "verify: no skip ledger, so skipped gates cannot be ruled out" >&2; exit 1; }
@@ -287,6 +287,11 @@ test-security-surface:
 # Hermetic: tiny archives built from tar, jq and sha256sum; no Docker.
 test-release-image-guard:
 	bash scripts/release-image-guard-test.sh
+
+# Proves scripts/license-change-date.sh, the release workflow's BSL Change Date gate: a date
+# three to four years after the release passes, anything else fails. Hermetic: bash and date.
+test-license-change-date:
+	bash scripts/license-change-date-test.sh
 
 # Proves scripts/codex-review.sh exits 0 only on a parsed result.verdict, 3 on anything else
 # — including the recorded real quota capture (#673) — a refusal with 2, and a killed run

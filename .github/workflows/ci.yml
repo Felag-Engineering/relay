@@ -111,6 +111,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-release-image-guard
 
+      # The release workflow's BSL Change Date gate, proved against throwaway LICENSE files.
+      - name: Licence Change Date gate self-test
+        if: ${{ !cancelled() }}
+        run: make test-license-change-date
+
       # scripts/codex-review.sh's structural verdict classifier, proved against a stubbed
       # companion (#694). Shell, git and node — the stub companion is a Node program and the
       # gate's classifier parses JSON with node. No Codex CLI, no network.

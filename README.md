@@ -239,7 +239,10 @@ hostile AI-agent is what makes the ordinary case safe.
 Pre-release. Relay is source-available under the [Business Source License 1.1](LICENSE). It
 is free for personal, non-commercial use by individuals. Use by or for an organization needs a
 commercial license. Each version converts to Apache-2.0 three years after its release, its
-Change Date. The repository was renamed from `gleipnir-relay`; GitHub redirects the old URL.
+Change Date. Relay is source-available, not open source: issues are welcome, code
+contributions from outside Felag Engineering are not accepted (see
+[CONTRIBUTING.md](CONTRIBUTING.md)). The repository was renamed from `gleipnir-relay`; GitHub
+redirects the old URL.
 
 **The GitHub milestones are the authority on what is in progress**, and the GitHub releases on
 what has shipped; read them with `gh` rather than inferring either from any file. Milestones
