@@ -63,6 +63,8 @@ on:
       - Makefile
       - scripts/build-version.sh
       - scripts/release-image-guard.sh
+      - scripts/license-change-date.sh
+      - LICENSE
       - daemon/Cargo.toml
       - daemon/Cargo.lock
       - relay/go.mod
@@ -175,6 +177,20 @@ jobs:
         run: |
           cd "$SRC"
           echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)" >> "$GITHUB_ENV"
+
+      # The BSL Change Date in LICENSE must be three years after this release ships, never
+      # one left over from an earlier release (scripts/license-change-date.sh). The release
+      # date is the day the tag push runs. A dry run measures from today and only warns, so a
+      # stale date is visible on a pull request without blocking it; a tag push fails.
+      - name: Check the licence Change Date
+        run: |
+          set -euo pipefail
+          cd "$SRC"
+          if [ "$IS_RELEASE" = "true" ]; then
+            scripts/license-change-date.sh "$(date -u +%F)" LICENSE
+          else
+            scripts/license-change-date.sh --warn "$(date -u +%F)" LICENSE
+          fi
 
       # What the build ran on, written next to the artifacts and echoed. Not a release
       # asset: it is what `reproducible` prints beside a mismatch, so a runner-image or

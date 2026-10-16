@@ -131,6 +131,12 @@ though the repository is private.
 
 ## Release-cutting discipline
 
+**Set the licence Change Date first.** Each release converts to Apache-2.0 on the
+`Change Date` in [LICENSE](../../LICENSE), so the commit you tag must carry a date three
+years after the day you cut it. The release workflow checks this before it builds anything
+and fails the release otherwise; on a pull request or a dispatch it only warns. Update
+`LICENSE` in the same PR that bumps `daemon/Cargo.toml`.
+
 **Cut a release by pushing a tag, not from the GitHub UI:**
 
 ```sh
