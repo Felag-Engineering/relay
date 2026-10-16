@@ -49,9 +49,9 @@ The daemon is configured entirely by environment variables (read once at startup
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RELAY_ADDR` | `http://127.0.0.1:7654` | The Relay's Node-plane gRPC address. `http://` is normalized to `https://`; the connection is always mTLS (invariant #6). Also settable as the `--relay <addr>` CLI argument. |
+| `RELAY_ADDR` | *(none — required to enroll; afterwards the address persisted at enrollment)* | The Relay's Node-plane gRPC address. `http://` is normalized to `https://`; the connection is always mTLS (invariant #6). Overrides the persisted address on every start when set. Also settable as the `--relay <addr>` CLI argument. |
 | `RELAY_DOMAIN` | *(unset)* | Optional TLS SNI / server-name override when the Relay cert's SAN differs from the dialed host. |
-| `RELAY_STATE_DIR` | `/var/lib/relay-daemon` | Where the enrolled identity (`key.pem`, `cert.pem`, `ca_bundle.pem`, `node_id`) and the at-most-once dedup marker store (`seen-tasks/`) persist. |
+| `RELAY_STATE_DIR` | `/var/lib/relay-daemon` | Where the enrolled identity (`key.pem`, `cert.pem`, `ca_bundle.pem`, `node_id`, `relay_addr`) and the at-most-once dedup marker store (`seen-tasks/`) persist. |
 | `RELAY_POLICY_PATH` | `/etc/relay-daemon/policy.toml` | Path to this Node's Policy file (ADR-0002). See [policy-as-code.md](policy-as-code.md). |
 | `RELAY_TEMPLATE_DIR` | `/etc/relay-daemon/templates.d` | Root of this Node's Template Operation files, beside `policy.toml` and under the same root-owned trust root (ADR-0021). Absent = no templates installed. The shipped read catalog installs to `templates.d/relay-read/`. See [template-packs.md](template-packs.md). |
 | `RELAY_NODE_LABELS` | *(unset)* | Comma-separated bare `key=value` pairs reported as node-space Labels (the daemon adds the `node:` prefix; it can never emit `relay:` labels — ADR-0006). Example: `env=prod,role=web`. Each key and value must match `[A-Za-z0-9._-]+` (the empty value is accepted); anything else is well-formedness-gated at ingress (#504), never sanitised. A malformed pair is REFUSED at enrollment — the Node does not join — and DROPPED at reconnect — the Node stays connected without that one label. |
@@ -67,6 +67,11 @@ Fail-closed behaviors to know about (all deliberate):
 - **No identity, no token → refuse to run.** Without a persisted identity or a
   configured Enrollment Token the daemon exits rather than fall back to a
   plaintext dial (ADR-0005).
+- **No Relay address → refuse to run.** With neither `RELAY_ADDR` nor an
+  address persisted at enrollment the daemon exits non-zero, naming
+  `RELAY_ADDR`; there is no localhost default. A Node enrolled before the
+  address was persisted keeps working only while `RELAY_ADDR` is set; nothing
+  backfills it.
 - **Policy missing or unreadable → deny-all.** The daemon starts, connects, and
   denies every Task rather than refusing to start or running open
   (ADR-0002). A group- or world-writable Policy file is likewise refused.

@@ -746,7 +746,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .install_default()
         .expect("rustls CryptoProvider installation must succeed at startup");
 
-    let config = Config::from_env();
+    let config = Config::from_env().map_err(|e| e.to_string())?;
 
     // Acquire the enrolled identity before proceeding. Fail closed: if no
     // token is configured and no persisted identity exists, refuse to connect

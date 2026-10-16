@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -81,8 +82,13 @@ func StartDaemon(t *testing.T, cfg DaemonConfig) *DaemonHandle {
 // two (e.g. waiting for the dispatcher to deregister the old connection).
 func (h *DaemonHandle) Launch() {
 	h.t.Helper()
-	cmd := exec.Command(h.cfg.Bin, "--relay", "https://"+h.cfg.NodeAddr)
-	cmd.Env = h.env
+	h.launch([]string{"--relay", "https://" + h.cfg.NodeAddr}, h.env)
+}
+
+func (h *DaemonHandle) launch(args, env []string) {
+	h.t.Helper()
+	cmd := exec.Command(h.cfg.Bin, args...)
+	cmd.Env = env
 	if h.cfg.LogWriter != nil {
 		cmd.Stdout = h.cfg.LogWriter
 		cmd.Stderr = h.cfg.LogWriter
@@ -110,6 +116,34 @@ func (h *DaemonHandle) Kill() {
 func (h *DaemonHandle) Relaunch() {
 	h.Kill()
 	h.Launch()
+}
+
+// RelaunchWithoutAddress kills the current daemon subprocess and starts a fresh
+// one against the SAME StateDir with no Relay address in its argv or
+// environment, and none of the enrollment settings either: a steady-state env
+// file, so the daemon must dial the address persisted at enrollment (ADR-0031
+// decision 4). It models a config-management restart of an enrolled Node whose
+// environment no longer carries the address.
+func (h *DaemonHandle) RelaunchWithoutAddress() {
+	h.Kill()
+	strip := []string{
+		"RELAY_ADDR=", "RELAY_ENROLL_ENDPOINT=",
+		"RELAY_ENROLLMENT_TOKEN=", "RELAY_CA_BUNDLE_PATH=",
+	}
+	var env []string
+	for _, kv := range h.env {
+		drop := false
+		for _, p := range strip {
+			if strings.HasPrefix(kv, p) {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			env = append(env, kv)
+		}
+	}
+	h.launch(nil, env)
 }
 
 // Cmd returns the *exec.Cmd of the most recent Launch, for callers that need
