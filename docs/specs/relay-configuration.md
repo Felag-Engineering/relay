@@ -116,7 +116,8 @@ writer.
 | RC-9 | `TestSecretFilePermissionsAreEnforced` | approval notify |
 
 Claims with **no row**, and so nothing checking them: RC-1, RC-2, RC-4, RC-6, RC-7 (asserted by
-the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absence), RC-35 (`TestLoadFailsClosed` proves the loader, not the startup refusal).
+the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absence), RC-35
+(`TestLoadFailsClosed` proves the loader, not the startup refusal).
 
 ### Performance
 
