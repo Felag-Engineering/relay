@@ -646,8 +646,9 @@ The REST/JSON surface (`/api/v1`, OpenAPI-described) through which humans' tooli
 machines drive the control plane — both administration and execution. One of the three
 user-facing surfaces (with the MCP surface and the Admin Console), all thin adapters
 over the same capability layer; the Control API is the programmable superset
-(ADR-0010). It never writes the Relay's configuration: it reads the non-secret operator
-settings, and never reaches the security floor at all (invariant 11).
+(ADR-0010). It never writes the Relay's configuration and never reaches the security floor
+at all (invariant 11); where operator settings are store-backed it reads their non-secret
+values (`docs/specs/relay-configuration.md`, designed for v0.7.0).
 _Avoid_: REST API (unqualified), admin API, "the API" (in docs; fine in speech)
 
 **System Model**:
