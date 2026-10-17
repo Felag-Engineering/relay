@@ -185,6 +185,64 @@ func TestValidate_OAuthWithoutControlPlaneRefused(t *testing.T) {
 	}
 }
 
+func TestValidate_OAuthIssuerRequiresHTTPSUnlessLoopback(t *testing.T) {
+	const reason = "must be an https URL; http is accepted only for a loopback host"
+	const tail = "audience = \"relay\"\npublic_url = \"https://r.example\"\n"
+	cfgFor := func(issuer string) string {
+		return minimal + controlOn + "[oauth]\nissuer = \"" + issuer + "\"\n" + tail
+	}
+	ok := []string{
+		"https://idp.example.com",
+		"https://idp.example.com:8443/realms/x",
+		"https://10.0.0.1/realm",
+		"http://127.0.0.1",
+		"http://127.0.0.1:8180/realms/x",
+		"http://127.5.6.7",
+		"http://[::1]",
+		"http://[::1]:8080",
+		"http://localhost",
+		"http://localhost:8180",
+	}
+	for _, issuer := range ok {
+		t.Run("ok "+issuer, func(t *testing.T) {
+			if cfg := mustLoad(t, cfgFor(issuer)); cfg.OAuth.Issuer != issuer {
+				t.Fatalf("Issuer = %q", cfg.OAuth.Issuer)
+			}
+		})
+	}
+
+	const sentinel = "zq9sentinel"
+	refused := []struct {
+		name, issuer string
+		wantReason   bool
+	}{
+		{"http example.com", "http://" + sentinel + ".example.com", true},
+		{"http 10.0.0.1", "http://10.0.0.1:8180/" + sentinel, true},
+		{"http 128.0.0.1", "http://128.0.0.1/" + sentinel, true},
+		{"localhost suffix", "http://localhost." + sentinel + ".example.com", true},
+		{"127.0.0.1 suffix", "http://127.0.0.1." + sentinel + ".example.com", true},
+		{"ftp", "ftp://" + sentinel + ".example.com", false},
+		{"ws", "ws://" + sentinel + ".example.com", false},
+		{"scheme-less", sentinel + ".example.com/realm", false},
+	}
+	for _, tc := range refused {
+		t.Run("refused "+tc.name, func(t *testing.T) {
+			got := loadErr(t, cfgFor(tc.issuer))
+			if !strings.Contains(got, "oauth.issuer (line 10)") {
+				t.Errorf("error does not name oauth.issuer and its line: %q", got)
+			}
+			for _, leak := range []string{sentinel, "10.0.0.1", "128.0.0.1", "127.0.0.1"} {
+				if strings.Contains(got, leak) {
+					t.Errorf("error carries part of the value (%s): %q", leak, got)
+				}
+			}
+			if tc.wantReason && !strings.Contains(got, reason) {
+				t.Errorf("error lacks %q: %q", reason, got)
+			}
+		})
+	}
+}
+
 func TestValidate_WebhookSettingsWithoutURLRefused(t *testing.T) {
 	for _, key := range []string{"webhook_secret = \"v\"", "webhook_secret_file = \"/etc/relay/s\"", "webhook_timeout = \"3s\""} {
 		t.Run(key, func(t *testing.T) {

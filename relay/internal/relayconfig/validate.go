@@ -212,7 +212,7 @@ func (v *validator) buildOAuth(c *Config, d oauthDoc) {
 	}
 
 	if issuer, ok := v.text(keyOAuthIssuer, d.Issuer); ok {
-		c.OAuth.Issuer = v.httpURL(keyOAuthIssuer, issuer)
+		c.OAuth.Issuer = v.issuerURL(issuer)
 	}
 	if d.Issuer == nil {
 		for _, f := range present {
@@ -255,6 +255,32 @@ func (v *validator) httpURL(key, s string) string {
 		return ""
 	}
 	return s
+}
+
+// issuerURL requires https unless the host is loopback: the issuer's discovery
+// document names the signing keys, so over plaintext a network attacker can
+// substitute them. The reason never carries any part of the value.
+func (v *validator) issuerURL(s string) string {
+	if reason := httpURLProblem(s); reason != "" {
+		v.fail(keyOAuthIssuer, "must be "+reason)
+		return ""
+	}
+	u, _ := url.Parse(s) // httpURLProblem parsed it
+	if u.Scheme == "http" && !loopbackHost(u.Hostname()) {
+		v.fail(keyOAuthIssuer, "must be an https URL; http is accepted only for a loopback host")
+		return ""
+	}
+	return s
+}
+
+// loopbackHost reports whether host is the name localhost or a loopback IP
+// literal. It never resolves names.
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 const absoluteHTTPURL = "an absolute http or https URL"
