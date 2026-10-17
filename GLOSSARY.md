@@ -204,6 +204,13 @@ Node's Policy (ADR-0002). Lets an operator confirm a Policy rollout landed every
 comparison against the registry (ADR-0002, ADR-0006).
 _Avoid_: policy hash, checksum, policy version
 
+**Template root**:
+The directory on a Node from which the relay-daemon loads its Template Operations,
+`/etc/relay-daemon/templates.d/`, root-owned and never written by the daemon or the Relay
+(ADR-0021). The shipped read catalog installs into it as a package; an operator's own Templates
+sit beside them.
+_Avoid_: templates dir, template directory, the templates.d (as a noun)
+
 **Template-set fingerprint**:
 The Policy fingerprint's sibling for Template Operations (ADR-0021): a hash of the Node's
 loaded template set, reported in `Hello` and every `TemplateSnapshot` and recorded in the

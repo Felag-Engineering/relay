@@ -1,6 +1,7 @@
 # The shipped default Policy pre-allows the read class, with a confidentiality deny-list
 
-**Status:** Accepted; amended by ADR-0033.
+**Status:** Accepted; amended by ADR-0033; amended 2026-10-16 (of its own files the default hides
+only secrets; the lint's read probes stop at secrets).
 
 A freshly enrolled Node should be fully interrogable with zero Policy authoring: the
 AI-agent's dominant workload is observation (ADR-0012), and a default that denies
@@ -131,3 +132,76 @@ never rewrites, so its denies still name `/usr/local/bin`. The migration documen
 removes the old binary and the old unit under `/etc/systemd/system/` — which would otherwise
 shadow the packaged one — and says to update the Policy's self-reference denies by hand. The
 reason for denying these paths, and everything else this ADR decides, is unchanged.
+
+## Amendment (2026-10-16): the default hides secrets; the lint's read probes stop at secrets
+
+Owner decision, 2026-10-16. Recorded on ADR-0021's page the same day, since ADR-0021 owns the
+self-reference lint's probe set. This amendment supersedes four things above: the Decision's
+deny of the daemon's own Policy file and CA bundle "consistent with the self-reference lint";
+the 2026-08-10 amendment's denies of the identity certificate, the binary at `/usr/local/bin` and
+the unit under `/etc/systemd/system/`; the 2026-08-10 stance that
+`policy check --strict` must keep reporting the template root as a residual; and the
+2026-10-15 amendment's rule that the shipped default denies reading the binary, the unit and
+the unit's override files. The Decision's posture — read pre-allowed, a confidentiality
+deny-list authoritative over it, `mutate` and Raw Exec opt-in — is unchanged, and so is the
+deny of every non-daemon secret the Decision lists.
+
+**What changed in the reasoning.** The deny-list's purpose is confidentiality: a read result
+flows to the model provider, so reading is exfiltration by construction (ADR-0021). That
+argument carries no weight for a file whose reader already holds it, and little for one that
+holds no secret. The daemon's binary and unit are public release artifacts, reproducible and
+listed in `SHA256SUMS`; its Policy is reported whole to the Relay in the Policy view
+(`query.md`); its CA bundle is the Relay's own CA certificate and its identity certificate is
+presented on every connection; the shipped catalog's Template files are a public package. The
+override unit and a drop-in are operator-authored and not reported, but they hold a privilege
+posture, not a secret. Denying these reads hid nothing of value, and the one path the default
+could never deny exactly — the template root — left the shipped file permanently failing its
+own strict check.
+
+**Decisions.**
+
+- **Of the daemon's own files, the shipped default denies reading only those that carry a
+  secret:** the Node's identity private key and the environment file (the Enrollment Token or
+  join string), with the daemon's environment oracle (`/proc/self/environ`) beside them. Every
+  path so denied for `file.read` is denied for `file.checksum` (the 2026-08-10 rule stands).
+  The daemon's Policy, CA bundle, identity certificate, binary, unit, override unit, drop-ins
+  and the shipped catalog's Template files are not denied.
+- **The self-reference lint separates reading from writing, and reads stop at secrets** —
+  the ADR-0021 amendment of this date holds the probe set. Reading a file that holds no secret
+  is never a finding.
+- **`policy check --strict` passes on the shipped default**, with the shipped catalog loaded.
+  The 2026-08-10 stance was that the file must not be tuned to silence its linter; that stance
+  stands, and nothing is tuned: the template root stopped being a finding because reading a
+  Template is not something the lint objects to, not because the file or a probe was bent
+  around it. A shipped default that fails its own strict check trains operators to ignore the
+  check. With no template root supplied (`--templates`), the default's allows for the catalog's
+  names are unknown-name findings that `--strict` fails (ADR-0021, 2026-08-10, *Also decided*);
+  that rule is unchanged here, so the check is run with the catalog's template root.
+- **Operator-authored Template bodies are a recorded residual, not a secret.** They never
+  travel as Template metadata: no RPC carries a body, and drift visibility stays
+  fingerprint-only (ADR-0021). Whether a `file.read` Task may return one is a Policy question
+  the operator answers, and the shipped default's wildcard answers yes. That is
+  `docs/security/threat-model.md` **R37**; the remedy is the one this ADR has always named,
+  an explicit `file.read` allow-list in place of the wildcard.
+
+**Residuals.** The lint's write probes are concrete actions against named paths, and the absence
+of a finding is not proof of unreachability (ADR-0021). A drop-in under any name but
+`override.conf`, a Policy fragment under any name in the Policy directory, a Template file under
+a name the probes do not try, or a file in the state directory under a name the probes do not
+try, is reachable by a Raw Exec allow the lint does not flag: **R38**; the operator's control is
+a Raw Exec deny pattern over those directories (ADR-0019). The hardened unit's mount namespace
+refuses the writes under `/etc` and `/usr` unless an operator drop-in relaxes it (`daemon-
+installation.md`, DI-3, DI-5); it does not refuse writes to the state directory, which the
+daemon owns, so the state-directory files the probes do name — the identity key and certificate,
+the CA bundle, the persisted address — are named precisely because a Raw Exec allow is the only
+thing between them and an overwrite that changes the Node's identity or trust root. The lint is
+defense-in-depth under that boundary, as it always was. The 2026-10-15 migration paragraph above
+now reads with one change: the hand update to a migrated Node's Policy is to remove the denies
+for the old binary and unit paths, which the shipped default no longer carries, not to re-point
+them.
+
+**Consumers.** `daemon-installation.md` (DI-28, DI-39, DI-40; DI-4 and DI-41 retire when the
+change lands); `query.md` QRY-10; `docs/security/threat-model.md` R37 and R38; the design plan
+for v0.6.5, step S12; `policy-as-code.md` and `template-packs.md` where they describe what the
+lint probes; the shipped `daemon/policy.default.toml` and its comments, in the implementing
+change.

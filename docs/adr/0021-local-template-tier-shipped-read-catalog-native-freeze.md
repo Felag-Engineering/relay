@@ -2,7 +2,7 @@
 
 **Status:** Accepted; amended by ADR-0042; amended 2026-10-14 (slot values as positional
 parameters, #974); amended 2026-10-15 (slots only at the top level; a narrower `path`, #977);
-amended by ADR-0033.
+amended by ADR-0033; amended 2026-10-16 (the self-reference lint's read probes stop at secrets).
 
 Template **execution** is separable from template **distribution** (owner decision
 2026-08-03, issue #266). ADR-0001 defined tier 2 — **Template Operations**, operator-authored
@@ -361,3 +361,41 @@ unauthored, fleet-wide change ADR-0033 decision 4 exists to prevent. So a releas
 Template's name is bound to its body and its risk class: any change to either ships under a new
 name, and CI refuses a release that changes a released one. Withdrawing a released name is
 allowed, because it only reduces what may run: that is how an unsafe Template is retired.
+
+## Amendment (2026-10-16): the self-reference lint's read probes stop at secrets
+
+Owner decision, 2026-10-16, taken with ADR-0022's amendment of the same date, which records
+why. This amends the 2026-08-10 amendment's probe set. Everything else there stands: the lint
+probes the real engine and never a second matcher, a finding is proof, absence of findings is
+not, findings are warnings that `--strict` fails, and there is no daemon-side deny floor.
+
+**The probe set is split by what a finding would mean.**
+
+- **Read probes** — `file.read`, `file.checksum`, and any supplied path-taking Template
+  Operation — target only the daemon's secret-bearing files: the identity private key and the
+  environment file. A read of the Policy file, the template root, the identity certificate,
+  the CA bundle, the binary or the unit is not probed and is never a finding: those files hold
+  no secret, and most are already in the Relay's hands or public. The probe of the running
+  binary at the path the check runs from is a write probe only, so the check gives the same
+  answer from a CI checkout as from `/usr/bin`.
+- **Write probes** — the Raw Exec shapes: edit-in-place, overwrite, copy or move over, delete,
+  redirect, chmod, symlink — target the daemon's whole trust root at the packaged paths, each
+  by exact path: the Policy file and the Policy directory; the environment file; the state
+  directory's identity key and certificate, CA bundle and persisted address; the template
+  root; the binary at `/usr/bin/relay-daemon`; the unit at
+  `/usr/lib/systemd/system/relay-daemon.service`; the override unit at
+  `/etc/systemd/system/relay-daemon.service` and the `override.conf` drop-in `systemctl edit`
+  writes. That is the case the lint exists for: a rule that lets the wire rewrite the wire's
+  own gate.
+
+**Template bodies and the wire.** The Decision's "drift visibility without the templates
+traveling" is unchanged: no RPC carries a Template body, and the Relay learns names, risk
+classes and a fingerprint. A `file.read` Task that returns a Template file is a read result
+like any other, governed by Policy; with the shipped default's wildcard it is permitted, and
+that is recorded as `docs/security/threat-model.md` **R37** rather than reported by the lint
+as a finding the shipped file can never clear. The remedy is ADR-0022's: narrow the wildcard.
+
+**Residual.** The write probes are concrete actions against named paths, and absence of a
+finding is not proof of unreachability, as the 2026-08-10 amendment says; names the probes do
+not try are **R38** (ADR-0022, this date), and a Raw Exec deny pattern over a directory is the
+operator's control (ADR-0019).
