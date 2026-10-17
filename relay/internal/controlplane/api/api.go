@@ -35,10 +35,11 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/revocation"
 )
 
-// TokenMinter mints a scoped, expiring Enrollment Token. *enroll.Service
-// satisfies this interface.
+// TokenMinter mints a scoped, expiring Enrollment Token together with its join
+// string. *enroll.Minter satisfies this interface. The handler passes the result
+// through and never assembles enrollment material (invariant 10).
 type TokenMinter interface {
-	Create(ctx context.Context, scope []string, ttl time.Duration, opts ...enroll.Option) (*enroll.Token, string, error)
+	Mint(ctx context.Context, scope []string, ttl time.Duration, opts ...enroll.Option) (enroll.Minted, error)
 }
 
 // TokenRevoker revokes an Enrollment Token by id. *revocation.Service

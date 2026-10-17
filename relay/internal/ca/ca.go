@@ -229,6 +229,10 @@ func (c *CA) SignCSR(csrPEM []byte, nodeID string) ([]byte, error) {
 // every daemon then fail-closes off the Relay. Serve through
 // ServerCertificate.GetCertificate instead, which re-issues before expiry.
 // This entry point remains for tests and one-shot issuance.
+//
+// The chain is the leaf followed by the CA certificate. A daemon that pins the
+// CA by SHA-256 over its DER (ADR-0031) can check the pin only if the root
+// comes over the wire; a verifier that already holds the CA ignores it.
 func (c *CA) IssueServerCertificate(dnsNames []string, ipAddresses []net.IP) (tls.Certificate, error) {
 	return c.issueServerCertificate(dnsNames, ipAddresses, time.Now(), ServerLeafValidity)
 }
@@ -271,7 +275,7 @@ func (c *CA) issueServerCertificate(dnsNames []string, ipAddresses []net.IP, now
 	}
 
 	return tls.Certificate{
-		Certificate: [][]byte{der},
+		Certificate: [][]byte{der, c.cert.Raw},
 		PrivateKey:  key,
 		Leaf:        leafCert,
 	}, nil

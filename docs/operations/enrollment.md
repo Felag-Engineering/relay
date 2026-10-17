@@ -37,6 +37,7 @@ $ curl --cacert ca-cert.pem \
 {
   "id": "3f8a…",
   "token": "3f8a….K7m2…",
+  "join_string": "glp_join_…",
   "scope": ["relay:env=prod", "relay:cohort=web"],
   "expires_at": "2026-08-10T12:00:00Z",
   "max_uses": 200
@@ -128,6 +129,10 @@ $ curl --cacert ca-cert.pem \
 - **`token`** — the plaintext credential (`<id>.<secret>`), returned exactly
   once, never persisted or logged by the Relay (it stores only the secret's
   hash). Put it straight into your secret store (e.g. Ansible Vault).
+- **`join_string`** — the same token wrapped with the Relay's advertised
+  node-plane address and the SHA-256 fingerprint of its CA certificate. It is a
+  secret, returned once, here only. The daemon consumes a join string once its
+  half lands; until then enroll with `token` as below.
 
 Revoke a token at any time — this also cascade-revokes every Node it enrolled:
 

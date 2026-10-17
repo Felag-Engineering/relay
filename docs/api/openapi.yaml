@@ -530,9 +530,9 @@ paths:
         Node-immutable and are the only namespace valid for security-lane
         targeting (ADR-0020).
 
-        The plaintext credential is returned **once, here** — it is never
-        persisted, logged, or audited. Store it in a vault at this moment or
-        mint a new one.
+        The plaintext credential is returned **once, here**, in `token` and
+        inside `join_string` — it is never persisted, logged, or audited. Store
+        it in a vault at this moment or mint a new one.
 
         **Requires the `admin` role** (ADR-0032 §5). Minting stamps `relay:`
         labels, so it is an act the control plane vouches for; a refusal is
@@ -544,7 +544,7 @@ paths:
             schema: { $ref: '#/components/schemas/MintEnrollmentTokenRequest' }
       responses:
         "201":
-          description: The token was minted. This is the only response carrying the plaintext.
+          description: The token was minted. This is the only response carrying the plaintext, in `token` and inside `join_string`.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MintedEnrollmentToken' }
@@ -1542,7 +1542,7 @@ components:
 
     MintedEnrollmentToken:
       type: object
-      required: [id, token, scope, expires_at, max_uses]
+      required: [id, token, join_string, scope, expires_at, max_uses]
       properties:
         id:
           type: string
@@ -1550,6 +1550,13 @@ components:
         token:
           type: string
           description: The plaintext credential — returned once, here, and never again.
+        join_string:
+          type: string
+          description: |
+            A `glp_join_`-prefixed join string carrying the advertised
+            node-plane address, the CA fingerprint (SHA-256 over the CA
+            certificate DER) and this token (ADR-0031). It is a secret,
+            returned once, here, and never again.
         scope:
           type: array
           items: { type: string }

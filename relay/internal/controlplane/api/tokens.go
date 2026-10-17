@@ -32,19 +32,22 @@ type mintTokenRequest struct {
 }
 
 // mintTokenResponse is the POST /api/v1/enrollment-tokens response body.
-// Token carries the plaintext Enrollment Token credential — this is the only
-// response in which it ever appears; it is never persisted, logged, or
-// audited (recordLifecycle below records only the token's non-secret id).
+// Token carries the plaintext Enrollment Token credential and JoinString the
+// join string that embeds it — this is the only response in which the plaintext
+// ever appears, once in "token" and once inside "join_string"; it is never
+// persisted, logged, or audited (recordLifecycle below records only the
+// token's non-secret id).
 type mintTokenResponse struct {
-	ID        string   `json:"id"`
-	Token     string   `json:"token"`
-	Scope     []string `json:"scope"`
-	ExpiresAt string   `json:"expires_at"`
-	MaxUses   int      `json:"max_uses"`
+	ID         string   `json:"id"`
+	Token      string   `json:"token"`
+	JoinString string   `json:"join_string"`
+	Scope      []string `json:"scope"`
+	ExpiresAt  string   `json:"expires_at"`
+	MaxUses    int      `json:"max_uses"`
 }
 
 // handleMintToken implements POST /api/v1/enrollment-tokens: mint a scoped
-// Enrollment Token via TokenMinter.Create, audit the mint (KindTokenMint),
+// Enrollment Token via TokenMinter.Mint, audit the mint (KindTokenMint),
 // and return the plaintext credential exactly once (201).
 //
 // **Requires `admin`** (ADR-0032 §5), checked before the body is even
@@ -80,7 +83,7 @@ func handleMintToken(d Deps) http.HandlerFunc {
 			opts = append(opts, enroll.WithMaxUses(req.MaxUses))
 		}
 
-		tok, plaintext, err := d.Tokens.Create(r.Context(), req.Scope, time.Duration(req.TTLSeconds)*time.Second, opts...)
+		minted, err := d.Tokens.Mint(r.Context(), req.Scope, time.Duration(req.TTLSeconds)*time.Second, opts...)
 		if err != nil {
 			if errors.Is(err, enroll.ErrInvalidScope) || errors.Is(err, enroll.ErrInvalidTTL) {
 				writeProblem(w, http.StatusBadRequest, "invalid enrollment token request", err.Error())
@@ -90,14 +93,16 @@ func handleMintToken(d Deps) http.HandlerFunc {
 			return
 		}
 
+		tok := minted.Token()
 		recordLifecycle(r.Context(), d, p, audit.KindTokenMint, "", "token_id="+tok.ID)
 
 		writeJSON(w, http.StatusCreated, mintTokenResponse{
-			ID:        tok.ID,
-			Token:     plaintext,
-			Scope:     tok.Scope,
-			ExpiresAt: tok.ExpiresAt.UTC().Format(time.RFC3339),
-			MaxUses:   tok.MaxUses,
+			ID:         tok.ID,
+			Token:      minted.Plaintext(),
+			JoinString: minted.JoinString(),
+			Scope:      tok.Scope,
+			ExpiresAt:  tok.ExpiresAt.UTC().Format(time.RFC3339),
+			MaxUses:    tok.MaxUses,
 		})
 	}
 }

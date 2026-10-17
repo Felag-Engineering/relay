@@ -1,13 +1,16 @@
 package transport_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"net"
 	"sync/atomic"
@@ -503,6 +506,13 @@ func TestTransport_CertificateIsFetchedEveryHandshake(t *testing.T) {
 // certificate the SERVER presents.
 func handshakePeerLeaf(t *testing.T, creds credentials.TransportCredentials, roots *x509.CertPool) *x509.Certificate {
 	t.Helper()
+	return handshakePeerChain(t, creds, roots)[0]
+}
+
+// handshakePeerChain is handshakePeerLeaf returning the whole chain the server
+// presented, leaf first.
+func handshakePeerChain(t *testing.T, creds credentials.TransportCredentials, roots *x509.CertPool) []*x509.Certificate {
+	t.Helper()
 	serverConn, clientConn := net.Pipe()
 	t.Cleanup(func() {
 		serverConn.Close()
@@ -536,5 +546,45 @@ func handshakePeerLeaf(t *testing.T, creds credentials.TransportCredentials, roo
 	if len(certs) == 0 {
 		t.Fatal("server presented no certificate")
 	}
-	return certs[0]
+	return certs
+}
+
+// TestNodePlane_PresentsCAAfterLeaf: the node-plane chain is the leaf followed
+// by the CA certificate, so a daemon pinning the CA by SHA-256 over its DER can
+// check the pin from the wire (ADR-0031). The handshake is certless and
+// succeeds, which is the evidence client authentication is unchanged.
+func TestNodePlane_PresentsCAAfterLeaf(t *testing.T) {
+	ts := newTestSetup(t)
+
+	sc, err := ts.relayCA.NewServerCertificate([]string{"localhost"}, nil)
+	if err != nil {
+		t.Fatalf("NewServerCertificate: %v", err)
+	}
+	creds := transport.ServerCredentials(sc.GetCertificate, ts.clientCAs, nil)
+
+	chain := handshakePeerChain(t, creds, ts.clientCAs)
+	if len(chain) != 2 {
+		t.Fatalf("presented chain has %d certificates, want 2 (leaf, CA)", len(chain))
+	}
+	block, _ := pem.Decode(ts.relayCA.Bundle())
+	if block == nil {
+		t.Fatal("CA bundle is not PEM")
+	}
+	if !bytes.Equal(chain[1].Raw, block.Bytes) {
+		t.Error("second certificate is not the CA certificate")
+	}
+	if got := hex.EncodeToString(sha256Sum(chain[1].Raw)); got != ts.relayCA.Fingerprint() {
+		t.Errorf("SHA-256 over the presented CA = %s, want the CA fingerprint %s", got, ts.relayCA.Fingerprint())
+	}
+	if err := chain[0].CheckSignatureFrom(chain[1]); err != nil {
+		t.Errorf("leaf is not signed by the presented CA: %v", err)
+	}
+	if chain[0].IsCA {
+		t.Error("first certificate is a CA, want the leaf")
+	}
+}
+
+func sha256Sum(b []byte) []byte {
+	sum := sha256.Sum256(b)
+	return sum[:]
 }
