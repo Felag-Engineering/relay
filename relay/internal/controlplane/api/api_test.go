@@ -356,11 +356,26 @@ func fixedNow() time.Time { return time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 // Enrollment Token mint
 // -----------------------------------------------------------------------
 
+// fakeFingerprint is an enroll.FingerprintSource with a fixed digest.
+type fakeFingerprint struct{}
+
+func (fakeFingerprint) Fingerprint() string { return strings.Repeat("ab", 32) }
+
+// newTestMinter wraps svc in the enroll.Minter the mint route requires.
+func newTestMinter(t *testing.T, svc *enroll.Service) *enroll.Minter {
+	t.Helper()
+	m, err := enroll.NewMinter(svc, fakeFingerprint{}, "relay.test:7654")
+	if err != nil {
+		t.Fatalf("enroll.NewMinter: %v", err)
+	}
+	return m
+}
+
 func TestHandleMintToken_Success(t *testing.T) {
 	repo := enroll.NewMemoryRepository()
 	tokenSvc := enroll.NewService(repo)
 	auditor := &fakeAuditor{}
-	d := Deps{Tokens: tokenSvc, Audit: auditor, Now: fixedNow}
+	d := Deps{Tokens: newTestMinter(t, tokenSvc), Audit: auditor, Now: fixedNow}
 	h := newTestHandler(d)
 
 	rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", mintTokenRequest{
@@ -380,6 +395,16 @@ func TestHandleMintToken_Success(t *testing.T) {
 	}
 	if resp.Token == "" || resp.Token == resp.ID {
 		t.Errorf("response token is empty or equals id: %q", resp.Token)
+	}
+	js, err := enroll.DecodeJoinString(resp.JoinString)
+	if err != nil {
+		t.Fatalf("join_string does not decode: %v", err)
+	}
+	if js.EnrollmentToken() != resp.Token {
+		t.Error("join_string carries a different token than the token field")
+	}
+	if js.RelayAddress() != "relay.test:7654" {
+		t.Errorf("join_string address = %q, want relay.test:7654", js.RelayAddress())
 	}
 	if len(resp.Scope) != 2 || resp.Scope[0] != "relay:env=prod" || resp.Scope[1] != "relay:role=web" {
 		t.Errorf("response scope = %v, want the requested scope", resp.Scope)
@@ -446,7 +471,7 @@ func TestHandleMintToken_InvalidScopeOrTTL(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
 			auditor := &fakeAuditor{}
-			d := Deps{Tokens: tokenSvc, Audit: auditor, Now: fixedNow}
+			d := Deps{Tokens: newTestMinter(t, tokenSvc), Audit: auditor, Now: fixedNow}
 			h := newTestHandler(d)
 
 			rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", tc.req)
@@ -462,7 +487,7 @@ func TestHandleMintToken_InvalidScopeOrTTL(t *testing.T) {
 
 func TestHandleMintToken_MalformedOrUnknownField(t *testing.T) {
 	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
-	d := Deps{Tokens: tokenSvc, Audit: &fakeAuditor{}, Now: fixedNow}
+	d := Deps{Tokens: newTestMinter(t, tokenSvc), Audit: &fakeAuditor{}, Now: fixedNow}
 	h := newTestHandler(d)
 
 	t.Run("malformed JSON", func(t *testing.T) {
@@ -1250,7 +1275,7 @@ func TestMintThenRevokeToken_BothProduceAuditRows(t *testing.T) {
 
 	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
 	tr := &fakeTokenRevoker{}
-	d := Deps{Tokens: tokenSvc, TokenRevoker: tr, Audit: st.Audit(), Now: fixedNow}
+	d := Deps{Tokens: newTestMinter(t, tokenSvc), TokenRevoker: tr, Audit: st.Audit(), Now: fixedNow}
 	h := newTestHandler(d)
 
 	mintRec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", mintTokenRequest{

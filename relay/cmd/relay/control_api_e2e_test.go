@@ -15,9 +15,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -27,6 +30,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/events"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
@@ -89,11 +93,99 @@ func controlAPIRequest(t *testing.T, client *http.Client, method, url, token str
 // as an outside HTTP caller would, over the wire, not via package api's
 // internal types).
 type mintTokenAPIResponse struct {
-	ID        string   `json:"id"`
-	Token     string   `json:"token"`
-	Scope     []string `json:"scope"`
-	ExpiresAt string   `json:"expires_at"`
-	MaxUses   int      `json:"max_uses"`
+	ID         string   `json:"id"`
+	Token      string   `json:"token"`
+	JoinString string   `json:"join_string"`
+	Scope      []string `json:"scope"`
+	ExpiresAt  string   `json:"expires_at"`
+	MaxUses    int      `json:"max_uses"`
+}
+
+// TestControlAPI_MintEnrollmentToken_ReturnsJoinString: the mint response
+// carries a join string that pins this Relay's CA, names the advertised
+// node-plane address and enrolls a daemon; the plaintext appears in no log
+// line and no audit record. Not parallel: it swaps the default logger.
+func TestControlAPI_MintEnrollmentToken_ReturnsJoinString(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var logBuf bytes.Buffer
+	prevDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+
+	f := startRelay(t, WithControlPlane(), WithConfig(func(c *Config) { c.Addr = ":7654" }))
+
+	resp := controlAPIRequest(t, f.ClientFor(""), http.MethodPost, f.ControlBase+"/api/v1/enrollment-tokens",
+		f.Credential, map[string]any{"scope": []string{"relay:env=prod"}, "ttl_seconds": 3600})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("mint status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read mint response: %v", err)
+	}
+	var minted mintTokenAPIResponse
+	if err := json.Unmarshal(body, &minted); err != nil {
+		t.Fatalf("decode mint response: %v", err)
+	}
+
+	js, err := enroll.DecodeJoinString(minted.JoinString)
+	if err != nil {
+		t.Fatalf("join_string does not decode: %v", err)
+	}
+	if got := js.RelayAddress(); got != "localhost:7654" {
+		t.Errorf("join string address = %q, want localhost:7654", got)
+	}
+	fp := js.CAFingerprint()
+	if got := hex.EncodeToString(fp[:]); got != f.Deps.ca.Fingerprint() {
+		t.Errorf("join string fingerprint = %s, want %s", got, f.Deps.ca.Fingerprint())
+	}
+	if js.EnrollmentToken() != minted.Token {
+		t.Error("join string carries a different token than the token field")
+	}
+
+	// The plaintext is in the response as the "token" field; inside the join
+	// string it is base64url-encoded, so it appears once as text.
+	if n := strings.Count(string(body), minted.Token); n != 1 {
+		t.Errorf("plaintext appears %d times in the response body, want 1", n)
+	}
+
+	enrollConn := dialTLS(t, f.Bufconn, &tls.Config{RootCAs: relaytest.CertPool(t, f.Deps.ca.Bundle())})
+	csrPEM, _ := relaytest.NewCSR(t, "ignored-cn")
+	enrollResp, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
+		EnrollmentToken: js.EnrollmentToken(),
+		Csr:             csrPEM,
+		Facts:           &relayv1.Facts{Hostname: "host-join-string", Os: "linux"},
+	})
+	if err != nil {
+		t.Fatalf("Enroll with the join string's token: %v", err)
+	}
+	if enrollResp.GetNodeId() == "" {
+		t.Fatal("Enroll: node_id is empty")
+	}
+
+	records, err := f.Deps.audit.List(ctx)
+	if err != nil {
+		t.Fatalf("audit List: %v", err)
+	}
+	secret := minted.Token[strings.Index(minted.Token, ".")+1:]
+	haystacks := map[string]string{"log": logBuf.String()}
+	for i, r := range records {
+		b, err := json.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal audit record: %v", err)
+		}
+		haystacks[fmt.Sprintf("audit record %d", i)] = string(b)
+	}
+	for name, h := range haystacks {
+		for what, needle := range map[string]string{"token": minted.Token, "token secret": secret, "join string": minted.JoinString} {
+			if needle != "" && strings.Contains(h, needle) {
+				t.Errorf("%s contains the %s", name, what)
+			}
+		}
+	}
 }
 
 // TestControlAPI_EnrollmentTokenLifecycle drives the v0.0.6 acceptance

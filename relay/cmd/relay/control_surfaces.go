@@ -77,13 +77,13 @@ type surfaceDeps struct {
 	readLane *capability.ReadLane
 	// accountAdmin backs api.AccountAdmin, console.Accounts and
 	// console.AccountAdmin.
-	accountAdmin *capability.AccountAdmin
-	jobs         jobs.JobRepository
-	tasks        jobs.TaskRepository
-	tokens       *enroll.Service
-	revocation   *revocation.Service
-	audit        audit.Repository
-	auditSink    *auditsink.Sink
+	accountAdmin     *capability.AccountAdmin
+	jobs             jobs.JobRepository
+	tasks            jobs.TaskRepository
+	enrollmentMinter *enroll.Minter
+	revocation       *revocation.Service
+	audit            audit.Repository
+	auditSink        *auditsink.Sink
 	// roleGate is the ONE authz.RoleGate the process holds — the same object
 	// the capability layer authorizes dispatches and Freeze with. The Control
 	// API needs it directly for the administrative routes that never reach the
@@ -211,7 +211,7 @@ type apiSurface struct{}
 
 func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	api.Register(mux, api.Deps{
-		Tokens:       d.tokens,
+		Tokens:       d.enrollmentMinter,
 		Logger:       d.logger,
 		TokenRevoker: d.revocation,
 		Nodes:        d.revocation,

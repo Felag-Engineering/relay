@@ -49,10 +49,15 @@ import (
 
 // Config holds all Relay startup parameters resolved from flags and environment.
 type Config struct {
-	Addr                string
-	CADir               string
-	StorePath           string
-	Hostname            string
+	Addr      string
+	CADir     string
+	StorePath string
+	Hostname  string
+	// AdvertisedAddress is the node-plane address a join string tells Nodes to
+	// dial (RC-36). Unset, it is the certificate hostname plus the gRPC listen
+	// port. It is startup configuration that no API reaches (invariant 11); no
+	// flag or environment variable sets it.
+	AdvertisedAddress   string
 	EnrollIPRate        int
 	EnrollIPBurst       int
 	EnrollGlobalRate    int
@@ -601,6 +606,14 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	}
 
 	tokenSvc := enroll.NewService(st.Tokens())
+	advertisedAddress, err := enroll.AdvertisedAddress(cfg.AdvertisedAddress, cfg.Hostname, cfg.Addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("advertised node-plane address: %w", err)
+	}
+	enrollmentMinter, err := enroll.NewMinter(tokenSvc, relayCA, advertisedAddress)
+	if err != nil {
+		return nil, nil, fmt.Errorf("enrollment minter: %w", err)
+	}
 	revocationSvc := revocation.NewService(denylist, conns, reg, tokenSvc, revocation.WithLogger(logger))
 	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg,
 		enroll.WithPostEnrollRevocationCheck(tokenSvc, revocationSvc),
@@ -923,15 +936,15 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 			// surfaceDeps. A field forgotten here is a nil pointer behind a
 			// non-nil interface, so the Console's account routes and the
 			// read-lane routes are exercised end to end by the e2e tests.
-			freezeControl: freezeControl,
-			readLane:      readLane,
-			accountAdmin:  accountAdmin,
-			approvals:     approvals,
-			jobs:          st.Jobs(),
-			tasks:         st.Tasks(),
-			tokens:        tokenSvc,
-			revocation:    revocationSvc,
-			audit:         st.Audit(),
+			freezeControl:    freezeControl,
+			readLane:         readLane,
+			accountAdmin:     accountAdmin,
+			approvals:        approvals,
+			jobs:             st.Jobs(),
+			tasks:            st.Tasks(),
+			enrollmentMinter: enrollmentMinter,
+			revocation:       revocationSvc,
+			audit:            st.Audit(),
 			// The read-access sink (ADR-0025), for the MCP read tools and the
 			// Control API's Job-read route. Left nil, readAuditor's defensive
 			// `sink == nil` skip would silently disable every read-access
