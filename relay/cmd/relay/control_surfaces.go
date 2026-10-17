@@ -134,12 +134,18 @@ type surfaceDeps struct {
 // newServerWithHooks only through newServer, which passes an empty
 // serverHooks. Never a Config field, env var or flag — invariant 11
 // keeps what bounds acceptance operator-set on the host.
-// TestControlSurfaces_TestOnlyMCPOptionHookIsEmptyInProduction pins that.
+// TestControlSurfaces_TestOnlyMCPOptionHookIsEmptyInProduction and
+// TestControlSurfaces_TestOnlyRevokedDialClockIsNilInProduction pin that.
 type serverHooks struct {
 	// testMCPOptions are appended AFTER the production mcp.New options of
 	// mcpSurface, so a test can construct the real MCP surface with an
 	// option the composition root does not itself pass.
 	testMCPOptions []mcp.Option
+
+	// testRevokedDialClock replaces the revoked-dial recorder's clock so a
+	// test can cross the hourly throttle window. Nil in production: the real
+	// clock.
+	testRevokedDialClock func() time.Time
 }
 
 // controlSurface is a self-mounting control-plane surface: it knows how to

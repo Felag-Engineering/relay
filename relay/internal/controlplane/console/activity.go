@@ -134,7 +134,7 @@ const (
 
 	// rowNotACall is NOT an Activity family either: it marks a trail record
 	// that is not a tool call — Freeze transitions, Node revokes, Enrollment
-	// Token events, protocol_violation, and any kind nobody has classified
+	// Token events, protocol_violation, revoked Node dials, and any kind nobody has classified
 	// (spec 04, Grain; owner decision 2026-10-01). Like rowAccess it is never
 	// in rowKindOrder, so it is never a chip, never in the default Kinds and
 	// never reachable by ?kind=, which falls to the unknown-kind case.
@@ -155,7 +155,7 @@ var rowKindOrder = []rowKind{
 var activityNonCallKinds = []string{
 	audit.KindFreezeEngage, audit.KindFreezeRelease,
 	audit.KindNodeRevoke, audit.KindTokenMint, audit.KindTokenRevoke,
-	audit.KindProtocolViolation,
+	audit.KindProtocolViolation, audit.KindRevokedNodeDial,
 }
 
 // kindOf maps a trail record onto a row family.

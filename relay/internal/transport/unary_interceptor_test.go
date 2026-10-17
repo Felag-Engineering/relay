@@ -116,7 +116,7 @@ func TestUnaryInterceptor_RenewWithValidCert_InjectsCertCN(t *testing.T) {
 	ts := newTestSetup(t)
 	rec := &recordingEnrollmentServer{}
 	lis := startEnrollmentServer(t, rec,
-		transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil), productionCertless(), nil)
+		transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil, nil), productionCertless(), nil)
 
 	conn := dial(t, lis, &tls.Config{
 		Certificates: []tls.Certificate{mintClientCert(t, ts, "node-renewing")},
@@ -144,7 +144,7 @@ func TestUnaryInterceptor_RenewWithoutPeerCert_Refused(t *testing.T) {
 	rec := &recordingEnrollmentServer{}
 	denylist := revocation.NewDenylist()
 	lis := startEnrollmentServer(t, rec,
-		transport.ServerCredentials(ts.certificate(), ts.clientCAs, denylist), productionCertless(), denylist)
+		transport.ServerCredentials(ts.certificate(), ts.clientCAs, denylist, nil), productionCertless(), denylist)
 
 	conn := dial(t, lis, &tls.Config{RootCAs: ts.clientCAs})
 
@@ -164,7 +164,7 @@ func TestUnaryInterceptor_CertlessEnroll_PassesWithoutIdentity(t *testing.T) {
 	ts := newTestSetup(t)
 	rec := &recordingEnrollmentServer{}
 	lis := startEnrollmentServer(t, rec,
-		transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil), productionCertless(), nil)
+		transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil, nil), productionCertless(), nil)
 
 	conn := dial(t, lis, &tls.Config{RootCAs: ts.clientCAs})
 
@@ -203,7 +203,7 @@ func TestUnaryInterceptor_RevokedAfterConnect_RenewRefused(t *testing.T) {
 		return &ts.serverCert, nil
 	}
 	lis := startEnrollmentServer(t, rec,
-		transport.ServerCredentials(getCert, ts.clientCAs, denylist), productionCertless(), denylist)
+		transport.ServerCredentials(getCert, ts.clientCAs, denylist, nil), productionCertless(), denylist)
 
 	conn := dial(t, lis, &tls.Config{
 		Certificates: []tls.Certificate{mintClientCert(t, ts, "node-later-revoked")},

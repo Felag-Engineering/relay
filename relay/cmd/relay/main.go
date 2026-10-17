@@ -588,10 +588,26 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		return nil, nil, fmt.Errorf("issue node-plane server certificate: %w", err)
 	}
 
+	// The real adapter to the SQLite-backed audit trail is the Recorder
+	// below, and the real persisted Relay-wide emergency stop (ADR-0013 —
+	// see watchFreezeSignals in freeze_signal.go for the local engage/release
+	// lever) is the Control.
+	// One audit sink, shared by the capability layer and the MCP read surface
+	// (ADR-0025): read-access records land in the same trail as dispatches, via
+	// the same writer.
+	auditSink := auditsink.New(st.Audit(), auditsink.WithLogger(logger))
+
+	// A revoked Node's refused dial is recorded, throttled per Node (DI-23). The
+	// record says a revoked Node's chain-verified certificate was presented; key
+	// possession is not yet proven at the refusal point. The recorder writes the
+	// audit trail and holds no handle on the Node, so the Relay never reaches
+	// back to it (DI-21).
+	revokedDials := auditsink.NewRevokedDialRecorder(auditSink, hooks.testRevokedDialClock)
+
 	// Every handshake asks nodePlaneCert for the certificate to present, which
 	// is what makes the guarantee unconditional: rotation is driven by
 	// connections, not by a timer that a sleeping process could miss.
-	creds := transport.ServerCredentials(nodePlaneCert.GetCertificate, clientCAs, denylist)
+	creds := transport.ServerCredentials(nodePlaneCert.GetCertificate, clientCAs, denylist, revokedDials)
 
 	// Rehydrate the denylist from the persisted authority before the listener
 	// accepts any connection: the Denylist is a derived cache of
@@ -642,15 +658,6 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// surface, MCP + /api/v1) is on. Disabled: ts.sink stays nil. Integration tests, or
 	// installDevHarness in a devharness-tagged build, may also inject a
 	// taskSink directly.
-
-	// The real adapter to the SQLite-backed audit trail is the Recorder
-	// below, and the real persisted Relay-wide emergency stop (ADR-0013 —
-	// see watchFreezeSignals in freeze_signal.go for the local engage/release
-	// lever) is the Control.
-	// One audit sink, shared by the capability layer and the MCP read surface
-	// (ADR-0025): read-access records land in the same trail as dispatches, via
-	// the same writer.
-	auditSink := auditsink.New(st.Audit(), auditsink.WithLogger(logger))
 
 	// The read lane: filtered, paginated queries over the audit trail
 	// and over Jobs/Tasks, adapted onto capability.AuditQuery/JobQuery by

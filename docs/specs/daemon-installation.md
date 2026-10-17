@@ -1,6 +1,6 @@
 # Daemon installation
 
-**Status:** designed, not built, as of `2026-10-16`.
+**Status:** designed, not built, as of `2026-10-17`.
 **Claim prefix:** `DI`
 
 ## Purpose
@@ -95,6 +95,9 @@ Relay never pushes a binary (invariant 14).
   every Task is denied rather than the daemon refusing to start.
 - **DI-21** A revoked Node that keeps dialling is refused at the transport; the Relay never
   reaches back to stop it.
+- **DI-23** A revoked Node's dial attempt is recorded in the audit trail, not only refused: the
+  first refused dial is recorded, then at most one record per Node per hour, so a revoked Node
+  that keeps dialling cannot flood the trail.
 
 ## Governing ADRs and invariants
 
@@ -142,6 +145,7 @@ proven by CI install jobs, once they exist; `make verify` alone cannot prove the
 | DI-30 | `catalog_names_match_ledger`, `ledger_check_refuses_a_changed_body`, `ledger_check_refuses_a_changed_risk_class`, `ledger_check_accepts_a_withdrawn_name_absent_from_the_catalog`, `ledger_check_refuses_a_withdrawn_name_back_in_the_catalog`, `scripts/catalog-ledger-test.sh` | daemon, packaging |
 | DI-17 | `TestMCP_RunOperation_OutdatedNodeVersionRefused` | MCP |
 | DI-21 | `TestRevokedNode_RefusedAfterRestart` | e2e |
+| DI-23 | `TestRevokedNode_DialAuditedThenThrottled`, `TestServerCredentials_ReportsRevokedBeforeRefusing` | e2e, transport |
 
 Claims with **no row**, and so nothing checking them: DI-1 (asserted by the release workflow,
 not a test), DI-2, DI-3, DI-4, DI-5, DI-6, DI-11 (held by the write-ban lint rather than a
@@ -160,7 +164,6 @@ until it is done.
 | Claim | Statement | Milestone |
 |---|---|---|
 | DI-22 | The daemon is configured by a join string — Relay address, CA fingerprint and Enrollment Token in one value (ADR-0031). It pins the Relay's CA from the fingerprint and writes the CA bundle into its state directory, so no CA path is configured by hand. | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-23 | A revoked Node's dial attempt is recorded in the audit trail, not only refused: the first refused dial is recorded, then at most one record per Node per hour, so a revoked Node that keeps dialling cannot flood the trail. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-24 | The release publishes the daemon as `.deb` and `.rpm` packages for each architecture. A package wraps the release's guarded binary byte for byte — packaging compiles, strips and rewrites nothing — is itself reproducible, built twice and compared, and is listed in the release `SHA256SUMS`. Packages carry no signature of their own before v1.0.0. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-25 | The daemon package installs the binary at `/usr/bin/relay-daemon` and the hardened unit as a system unit, the same binary path a hand-built install uses, and never starts the daemon. It enables the unit on a first install only, only where systemd is running, honouring the distribution's presets; an upgrade never changes whether it is enabled. An enabled unit on a Node that holds neither a persisted identity nor a join string stays inactive at boot without failing or retrying; it starts at the next boot after one is present, or when `relay-daemon join` (DI-37) or config management starts it. Nothing watches for the join string to appear. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-26 | The daemon package places the shipped default Policy as the live Policy only on a first install, only if no Policy file exists and no Policy directory existed before the install began; never on an upgrade or a reinstall. On `.rpm` platforms, where a reinstall after removal is indistinguishable from a first install, those absence checks are the whole guard. No install, upgrade or remove rewrites or re-creates the live Policy. | v0.6.5 — Install Path: relay init, join string, packages |
