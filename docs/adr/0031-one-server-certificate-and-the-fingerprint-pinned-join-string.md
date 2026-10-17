@@ -1,6 +1,6 @@
 # One server certificate, multi-SAN, and the fingerprint-pinned join string
 
-**Status:** Accepted.
+**Status:** Accepted; amended 2026-10-16 (the wire form is a `/proto` message; `RELAY_JOIN` lives in the daemon's environment file).
 
 Three facts about the Relay's TLS surface, each defensible alone, which together make
 enrollment harder than it needs to be:
@@ -169,3 +169,28 @@ the Relay still generates `node_id` itself.
 synonym for Enrollment Token — GLOSSARY.md already lists "join key" as a term to avoid for
 exactly that reason. The join string is the transport bundle; the token is one of its
 three fields.
+
+## Amendment (2026-10-16): the wire form, and where the join string lives on a Node
+
+Two refinements. Neither changes a decision above.
+
+**The wire form is a `/proto` message.** Decision 3 wrote the format informally as
+`glp_join_<base64(host:port · ca-fingerprint · enrollment-token)>`. The contract is the
+`JoinString` message in `/proto` (invariant 8), carrying a format version, the Relay address
+Nodes dial, the CA fingerprint and the Enrollment Token; the text after `glp_join_` is the
+unpadded base64url of that message serialized, and a codec on each side decodes it. Neither
+codec echoes its input or the token in an error.
+
+**`RELAY_JOIN` lives in the daemon's environment file, and invariant 11 does not forbid it.**
+Invariant 11 says secrets never pass through the environment or the command line. It binds the
+Relay: it is the rule about the Relay's security floor (`relay-configuration.md`, RC-14) and it
+reads "the Relay can read them". The daemon's enrollment secret is a different object with a
+different life. It is consumed once, when no identity exists, and is inert on every later start
+(decision 4; `daemon-installation.md`, DI-38). It lives in the daemon's root-owned `0600`
+environment file, where `RELAY_ENROLLMENT_TOKEN` has always lived; the daemon's default Policy
+hides that file and the process environment from the wire (ADR-0022, amended 2026-10-16); and
+`relay-daemon join` writes the line without echo and never takes the string in argv. The
+residual is R16, widened by R36, and this amendment changes neither. Delivering the string
+through systemd `LoadCredential=` or a fetch from the customer's secret store stays the named
+fix in that spec's Future work; choosing it later changes the mechanism, not this decision.
+Owner decision of 2026-10-16.

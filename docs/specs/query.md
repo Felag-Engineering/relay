@@ -67,7 +67,9 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   view neither grants permission nor predicts whether a Task will run.
 - **QRY-10** The view shows the whole reported Policy — raw patterns, allowed Operations,
   operation and deny rules, the fingerprint, and (on MCP) whether Raw Exec is enabled — and
-  never a Template command body: bodies do not cross the wire (ADR-0021; see *Future work*).
+  never a Template command body: no RPC carries one as Template metadata (ADR-0021, amended
+  2026-10-16; see *Future work*). A `file.read` result may return a Template file where Policy
+  allows it (`daemon-installation.md`, R37).
 
 ### Operation-vocabulary discovery
 
