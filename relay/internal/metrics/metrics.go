@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync/atomic"
 
@@ -261,10 +262,7 @@ func (m *Metrics) IncDispatch(o jobs.Outcome) {
 // giving parks their own series is out of scope here.
 func (m *Metrics) IncRefusal(k capability.RefusalKind) {
 	idx := int(capability.RefusalInternal)
-	switch k {
-	case capability.RefusalFrozen, capability.RefusalUnauthorized, capability.RefusalBlastCap,
-		capability.RefusalInternal, capability.RefusalNoNodesMatched,
-		capability.RefusalUnknownOperation, capability.RefusalMalformed:
+	if slices.Contains(refusalOrder, k) {
 		idx = int(k)
 	}
 	m.refusals[idx].Add(1)
@@ -375,41 +373,39 @@ func (m *Metrics) appendGauges(buf []byte) []byte {
 }
 
 func appendDispatches(buf []byte, dispatches *[nOutcomes]atomic.Int64) []byte {
-	const name = "relay_dispatches_total"
-	buf = appendFamilyHeader(buf, name, "Total Task dispatch outcomes, by outcome.", "counter")
+	samples := make([]labelledValue, 0, len(outcomeOrder))
 	for _, o := range outcomeOrder {
-		buf = appendLabelledSample(buf, name, "outcome", jobs.OutcomeName(o), dispatches[int(o)].Load())
+		samples = append(samples, labelledValue{jobs.OutcomeName(o), dispatches[int(o)].Load()})
 	}
-	return buf
+	return appendLabelledCounter(buf, "relay_dispatches_total",
+		"Total Task dispatch outcomes, by outcome.", "outcome", samples)
 }
 
 func appendRefusals(buf []byte, refusals *[nRefusalKinds]atomic.Int64) []byte {
-	const name = "relay_refusals_total"
-	buf = appendFamilyHeader(buf, name, "Total dispatch refusals before any Task was sent, by reason.", "counter")
+	samples := make([]labelledValue, 0, len(refusalOrder))
 	for _, k := range refusalOrder {
-		buf = appendLabelledSample(buf, name, "reason", refusalLabel(k), refusals[int(k)].Load())
+		samples = append(samples, labelledValue{refusalLabel(k), refusals[int(k)].Load()})
 	}
-	return buf
+	return appendLabelledCounter(buf, "relay_refusals_total",
+		"Total dispatch refusals before any Task was sent, by reason.", "reason", samples)
 }
 
 func appendCertRotations(buf []byte, rotations *[nServerCertListeners]atomic.Int64) []byte {
-	const name = "relay_server_cert_rotations_total"
-	buf = appendFamilyHeader(buf, name,
-		"Total in-process re-issuances of the Relay's own TLS server certificate, by listener.", "counter")
+	samples := make([]labelledValue, 0, len(listenerOrder))
 	for _, l := range listenerOrder {
-		buf = appendLabelledSample(buf, name, "listener", listenerLabel(l), rotations[int(l)].Load())
+		samples = append(samples, labelledValue{listenerLabel(l), rotations[int(l)].Load()})
 	}
-	return buf
+	return appendLabelledCounter(buf, "relay_server_cert_rotations_total",
+		"Total in-process re-issuances of the Relay's own TLS server certificate, by listener.", "listener", samples)
 }
 
 func appendProtocolViolations(buf []byte, violations *[nViolationRules]atomic.Int64) []byte {
-	const name = "relay_protocol_violations_total"
-	buf = appendFamilyHeader(buf, name,
-		"Total relay-daemon reports refused at the wire boundary as protocol violations, by rule.", "counter")
+	samples := make([]labelledValue, 0, len(violationSlotOrder))
 	for _, slot := range violationSlotOrder {
-		buf = appendLabelledSample(buf, name, "rule", violationSlotLabel(slot), violations[slot].Load())
+		samples = append(samples, labelledValue{violationSlotLabel(slot), violations[slot].Load()})
 	}
-	return buf
+	return appendLabelledCounter(buf, "relay_protocol_violations_total",
+		"Total relay-daemon reports refused at the wire boundary as protocol violations, by rule.", "rule", samples)
 }
 
 // appendLabelsDeclined renders relay_labels_declined_total, one series per
@@ -429,12 +425,9 @@ func appendProtocolViolations(buf []byte, violations *[nViolationRules]atomic.In
 // monotonic despite being sourced from a closure rather than an internal
 // atomic.Int64: the underlying counters are add-only.
 func appendLabelsDeclined(buf []byte, node, relay int64) []byte {
-	const name = "relay_labels_declined_total"
-	buf = appendFamilyHeader(buf, name,
+	return appendLabelledCounter(buf, "relay_labels_declined_total",
 		"Total stored Label pairs declined at read-back as not well-formed (threat model R13), by namespace. Counts read-back events, not distinct Labels.",
-		"counter")
-	buf = appendLabelledSample(buf, name, "namespace", "node", node)
-	return appendLabelledSample(buf, name, "namespace", "relay", relay)
+		"namespace", []labelledValue{{"node", node}, {"relay", relay}})
 }
 
 // appendBuildInfo renders the constant relay_build_info series: always the
@@ -470,10 +463,21 @@ func appendSample(buf []byte, name string, value int64) []byte {
 	return append(buf, '\n')
 }
 
-// appendLabelledSample appends one sample line with a single label. The value
-// goes through %q, the escaping every labelled series here uses.
-func appendLabelledSample(buf []byte, name, label, labelValue string, value int64) []byte {
-	return fmt.Appendf(buf, "%s{%s=%q} %d\n", name, label, labelValue, value)
+// labelledValue is one sample of a single-label counter family.
+type labelledValue struct {
+	label string
+	value int64
+}
+
+// appendLabelledCounter appends a counter family with one label: the header,
+// then one sample per entry in samples, in order. Label values go through %q,
+// the escaping every labelled series here uses.
+func appendLabelledCounter(buf []byte, name, help, label string, samples []labelledValue) []byte {
+	buf = appendFamilyHeader(buf, name, help, "counter")
+	for _, s := range samples {
+		buf = fmt.Appendf(buf, "%s{%s=%q} %d\n", name, label, s.label, s.value)
+	}
+	return buf
 }
 
 func boolToInt64(b bool) int64 {
