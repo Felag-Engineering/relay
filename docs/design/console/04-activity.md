@@ -233,7 +233,7 @@ Kind chips, one per row kind above, a mutate-only toggle, a hide-polling toggle,
 Operation, arguments, Selector, outcome, Node and plan hash. The same filters apply to the live
 tail and to history. Time controls: live tail, a relative window, an explicit range. Export for an
 auditor. The export carries the same tool-call rows as the screen, so Freeze transitions, Node revokes,
-Enrollment Token mints and revokes and `protocol_violation` are not in it; they remain on the audit trail
+Enrollment Token mints and revokes, `protocol_violation` and revoked Node dials are not in it; they remain on the audit trail
 (owner decision, 2026-10-01, #829), and a home for them is follow-up work.
 
 `?account=` scopes the stream and Running now to one Account. It names the **verified Account

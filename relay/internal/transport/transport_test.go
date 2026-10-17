@@ -189,7 +189,7 @@ func TestTransport_AcceptValidClientCert(t *testing.T) {
 
 	certless := map[string]struct{}{}
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil)),
+		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil, nil)),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, nil)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, nil)),
 	)
@@ -239,7 +239,7 @@ func TestTransport_RejectNoCert(t *testing.T) {
 
 	certless := map[string]struct{}{}
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil)),
+		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil, nil)),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, nil)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, nil)),
 	)
@@ -272,7 +272,7 @@ func TestTransport_RejectUntrustedCert(t *testing.T) {
 
 	certless := map[string]struct{}{}
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil)),
+		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil, nil)),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, nil)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, nil)),
 	)
@@ -337,7 +337,7 @@ func TestTransport_CertlessSeam(t *testing.T) {
 	certless := map[string]struct{}{tunnelOpenMethod: {}}
 
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil)),
+		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil, nil)),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, nil)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, nil)),
 	)
@@ -379,7 +379,7 @@ func TestTransport_RejectRevokedCert_Handshake(t *testing.T) {
 	checker := &fakeChecker{revoked: map[string]bool{"node-revoked": true}}
 	certless := map[string]struct{}{}
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, checker)),
+		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, checker, nil)),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, checker)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, checker)),
 	)
@@ -425,7 +425,7 @@ func TestTransport_RejectRevoked_Interceptor(t *testing.T) {
 	// Nil checker in ServerCredentials: TLS layer admits the cert.
 	// Revoking checker in interceptors: per-RPC layer rejects.
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil)),
+		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil, nil)),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, checker)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, checker)),
 	)
@@ -481,7 +481,7 @@ func TestTransport_CertificateIsFetchedEveryHandshake(t *testing.T) {
 			return &ts.serverCert, nil
 		}
 		return &rotated, nil
-	}, ts.clientCAs, nil)
+	}, ts.clientCAs, nil, nil)
 
 	first := handshakePeerLeaf(t, creds, ts.clientCAs)
 	second := handshakePeerLeaf(t, creds, ts.clientCAs)
@@ -537,4 +537,171 @@ func handshakePeerLeaf(t *testing.T, creds credentials.TransportCredentials, roo
 		t.Fatal("server presented no certificate")
 	}
 	return certs[0]
+}
+
+// revokedDialObserver records the Node IDs it is told of, then blocks on gate
+// so a test can observe the handshake while the observer is still running.
+type revokedDialObserver struct {
+	told chan string
+	gate chan struct{}
+}
+
+func (o *revokedDialObserver) RevokedDial(nodeID string) {
+	o.told <- nodeID
+	<-o.gate
+}
+
+// rawHandshake runs one TLS handshake between creds and a client presenting
+// clientCert (none when nil) over a bufconn connection. srvErr and cliErr each
+// report what that side saw: the client's covers the handshake and one Read,
+// since under TLS 1.3 a server-side refusal reaches the client as an alert on
+// its first read.
+func rawHandshake(t *testing.T, ts *testSetup, creds credentials.TransportCredentials, clientCert *tls.Certificate) (srvErr, cliErr chan error) {
+	t.Helper()
+	lis := bufconn.Listen(1 << 16)
+	t.Cleanup(func() { lis.Close() })
+
+	srvErr = make(chan error, 1)
+	cliErr = make(chan error, 1)
+	deadline := time.Now().Add(10 * time.Second)
+
+	go func() {
+		conn, err := lis.Accept()
+		if err != nil {
+			srvErr <- err
+			return
+		}
+		defer conn.Close()
+		conn.SetDeadline(deadline)
+		_, _, err = creds.ServerHandshake(conn)
+		srvErr <- err
+	}()
+
+	raw, err := lis.Dial()
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { raw.Close() })
+	raw.SetDeadline(deadline)
+
+	cfg := &tls.Config{
+		RootCAs:    ts.clientCAs,
+		ServerName: "localhost",
+		MinVersion: tls.VersionTLS13,
+		NextProtos: []string{"h2"},
+	}
+	if clientCert != nil {
+		cfg.Certificates = []tls.Certificate{*clientCert}
+	}
+	client := tls.Client(raw, cfg)
+	go func() {
+		if err := client.Handshake(); err != nil {
+			cliErr <- err
+			return
+		}
+		_, err := client.Read(make([]byte, 1))
+		cliErr <- err
+	}()
+	return srvErr, cliErr
+}
+
+func signedClientCert(t *testing.T, ts *testSetup, cn string) *tls.Certificate {
+	t.Helper()
+	csrPEM, key := newInlineCSR(t, cn)
+	certPEM, err := ts.relayCA.SignCSR(csrPEM, cn)
+	if err != nil {
+		t.Fatalf("SignCSR: %v", err)
+	}
+	c := assembleClientCert(t, certPEM, key)
+	return &c
+}
+
+func TestServerCredentials_ReportsRevokedBeforeRefusing(t *testing.T) {
+	ts := newTestSetup(t)
+	obs := &revokedDialObserver{told: make(chan string, 1), gate: make(chan struct{})}
+	checker := &fakeChecker{revoked: map[string]bool{"node-revoked": true}}
+	creds := transport.ServerCredentials(ts.certificate(), ts.clientCAs, checker, obs)
+
+	srvErr, cliErr := rawHandshake(t, ts, creds, signedClientCert(t, ts, "node-revoked"))
+
+	select {
+	case got := <-obs.told:
+		if got != "node-revoked" {
+			t.Fatalf("observer told %q, want node-revoked", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("observer was never told of the revoked dial")
+	}
+
+	// The observer is still running: the refusal must not have been returned.
+	select {
+	case err := <-srvErr:
+		t.Fatalf("server handshake returned (%v) before the observer finished", err)
+	case err := <-cliErr:
+		t.Fatalf("client saw a result (%v) before the observer finished", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(obs.gate)
+
+	for name, ch := range map[string]chan error{"server": srvErr, "client": cliErr} {
+		select {
+		case err := <-ch:
+			if err == nil {
+				t.Errorf("%s side saw no error for a revoked certificate", name)
+			}
+		case <-time.After(5 * time.Second):
+			t.Errorf("%s side never finished after the observer returned", name)
+		}
+	}
+}
+
+func TestServerCredentials_DoesNotReportAnUnrevokedCert(t *testing.T) {
+	ts := newTestSetup(t)
+	obs := &revokedDialObserver{told: make(chan string, 1), gate: make(chan struct{})}
+	close(obs.gate) // a wrongly called observer returns, so the test fails rather than hangs
+	checker := &fakeChecker{revoked: map[string]bool{"node-revoked": true}}
+	creds := transport.ServerCredentials(ts.certificate(), ts.clientCAs, checker, obs)
+
+	srvErr, _ := rawHandshake(t, ts, creds, signedClientCert(t, ts, "node-fine"))
+
+	if err := <-srvErr; err != nil {
+		t.Fatalf("server handshake: %v", err)
+	}
+	select {
+	case got := <-obs.told:
+		t.Fatalf("observer told %q of an unrevoked certificate", got)
+	default:
+	}
+}
+
+func TestServerCredentials_DoesNotReportACertlessHandshake(t *testing.T) {
+	ts := newTestSetup(t)
+	obs := &revokedDialObserver{told: make(chan string, 1), gate: make(chan struct{})}
+	close(obs.gate) // a wrongly called observer returns, so the test fails rather than hangs
+	checker := &fakeChecker{revoked: map[string]bool{"node-revoked": true}}
+	creds := transport.ServerCredentials(ts.certificate(), ts.clientCAs, checker, obs)
+
+	srvErr, _ := rawHandshake(t, ts, creds, nil)
+
+	if err := <-srvErr; err != nil {
+		t.Fatalf("server handshake: %v", err)
+	}
+	select {
+	case got := <-obs.told:
+		t.Fatalf("observer told %q of a certless handshake", got)
+	default:
+	}
+}
+
+func TestServerCredentials_NilObserverStillRefusesARevokedCert(t *testing.T) {
+	ts := newTestSetup(t)
+	checker := &fakeChecker{revoked: map[string]bool{"node-revoked": true}}
+	creds := transport.ServerCredentials(ts.certificate(), ts.clientCAs, checker, nil)
+
+	srvErr, _ := rawHandshake(t, ts, creds, signedClientCert(t, ts, "node-revoked"))
+
+	if err := <-srvErr; err == nil {
+		t.Fatal("a revoked certificate was admitted with a nil observer")
+	}
 }

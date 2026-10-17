@@ -51,6 +51,17 @@ type RevocationChecker interface {
 // (ADR-0031 §5). Asking per handshake is what makes that impossible.
 type GetCertificateFunc func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
+// RevokedDialObserver is told the Node ID of every handshake refused because
+// the client certificate's Node is revoked, before the refusal is returned.
+// The handshake presented a chain-verified certificate; key possession is not
+// yet proven when the observer runs. It runs on the handshake: it may block
+// only for a bounded write (the auditsink recorder's budget, once per Node per
+// throttle window) and must never panic. Like RevocationChecker it lives here
+// so transport depends on neither audit nor auditsink.
+type RevokedDialObserver interface {
+	RevokedDial(nodeID string)
+}
+
 // ServerCredentials builds TLS transport credentials for the Relay's gRPC
 // server. The server certificate is fetched from getCertificate on every
 // handshake, so a rotation is picked up by the next connection without a
@@ -67,8 +78,10 @@ type GetCertificateFunc func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 // When checker is non-nil, VerifyConnection is set to reject any client whose
 // verified cert CN appears in the denylist. Certless connections (no verified
 // chain) skip the check so the Enrollment seam is unaffected. This is the
-// handshake-level rejection mandated by ADR-0006.
-func ServerCredentials(getCertificate GetCertificateFunc, clientCAs *x509.CertPool, checker RevocationChecker) credentials.TransportCredentials {
+// handshake-level rejection mandated by ADR-0006. A revoked certificate is
+// reported to observer (when non-nil) before it is refused; the refusal never
+// depends on the observer.
+func ServerCredentials(getCertificate GetCertificateFunc, clientCAs *x509.CertPool, checker RevocationChecker, observer RevokedDialObserver) credentials.TransportCredentials {
 	cfg := &tls.Config{
 		GetCertificate: getCertificate,
 		ClientCAs:      clientCAs,
@@ -83,6 +96,9 @@ func ServerCredentials(getCertificate GetCertificateFunc, clientCAs *x509.CertPo
 			}
 			cn := cs.VerifiedChains[0][0].Subject.CommonName
 			if cn != "" && checker.IsRevoked(cn) {
+				if observer != nil {
+					observer.RevokedDial(cn)
+				}
 				return errors.New("client certificate revoked")
 			}
 			return nil

@@ -83,6 +83,25 @@ const (
 	// counter exists.
 	KindProtocolViolation = "protocol_violation"
 
+	// KindRevokedNodeDial is a TLS handshake refused because the client
+	// certificate's Node is revoked: DI-21 refuses, this records. It is a
+	// handshake presenting a revoked Node's chain-verified certificate; key
+	// possession is not yet proven when it is recorded, because the refusal
+	// point precedes the client's proof of the private key.
+	//
+	// NodeID is the SUBJECT: the certificate's CN, which the Relay minted and
+	// chain-verified. Principal and Attribution are empty: no Account acted
+	// (the reasoning of KindProtocolViolation). Reason is Relay-authored
+	// "suppressed=<n>" only, n being the refused dials by that Node since its
+	// previous record that were not recorded (0 on the first). The writer
+	// throttles per Node to at most one record per hour; its state is
+	// in-process, so after a Relay restart the next refused dial is recorded
+	// at once. It never carries Stdout/Stderr/Truncated, Selector or Args.
+	//
+	// RESIDUAL: the writer is FAIL-OPEN. If the store cannot be written the
+	// refusal still happens and the row is missing; a log line is the trace.
+	KindRevokedNodeDial = "revoked_node_dial"
+
 	// KindApprovalRequested is a dispatch parked for a human (ADR-0027).
 	// Distinct from KindDispatch because nothing ran, and distinct from
 	// KindRefusal because nothing was denied — a park is a suspension, and
@@ -266,6 +285,7 @@ var allKinds = []string{
 	KindNodeRevoke,
 	KindPlan,
 	KindProtocolViolation,
+	KindRevokedNodeDial,
 	KindApprovalRequested,
 	KindApprovalGrantRequested,
 	KindApprovalPendingObserved,
@@ -348,6 +368,7 @@ var notAnAuthFailureKinds = []string{
 	KindNodeRevoke,
 	KindPlan,
 	KindProtocolViolation,
+	KindRevokedNodeDial,
 	KindApprovalRequested,
 	KindApprovalGrantRequested,
 	KindApprovalPendingObserved,

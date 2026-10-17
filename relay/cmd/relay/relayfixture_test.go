@@ -52,6 +52,8 @@ type fixtureSpec struct {
 	controlPlane bool
 	configure    []func(*Config)
 	mcpOptions   []mcp.Option
+
+	revokedDialClock func() time.Time
 }
 
 // FixtureOption customizes a relay fixture.
@@ -95,6 +97,14 @@ func WithConfig(f func(*Config)) FixtureOption {
 // so, since it is exercising a different option list than production ships.
 func WithMCPServerOptions(opts ...mcp.Option) FixtureOption {
 	return func(s *fixtureSpec) { s.mcpOptions = append(s.mcpOptions, opts...) }
+}
+
+// WithRevokedDialClock replaces the clock of the revoked-dial recorder via
+// serverHooks, so a test can cross the hourly throttle window. Test-only:
+// production never populates the hook (see
+// TestControlSurfaces_TestOnlyRevokedDialClockIsNilInProduction).
+func WithRevokedDialClock(now func() time.Time) FixtureOption {
+	return func(s *fixtureSpec) { s.revokedDialClock = now }
 }
 
 // relayFixture is a running Relay plus the handles tests reach for.
@@ -141,7 +151,7 @@ func startRelay(t *testing.T, opts ...FixtureOption) *relayFixture {
 		f(&cfg)
 	}
 
-	srv, deps, err := newServerWithHooks(cfg, serverHooks{testMCPOptions: spec.mcpOptions})
+	srv, deps, err := newServerWithHooks(cfg, serverHooks{testMCPOptions: spec.mcpOptions, testRevokedDialClock: spec.revokedDialClock})
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}

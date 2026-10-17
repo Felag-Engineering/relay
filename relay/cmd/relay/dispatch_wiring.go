@@ -10,6 +10,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/logctx"
 	"github.com/Felag-Engineering/relay/relay/internal/metrics"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/transport"
 )
 
 // dispatch_wiring.go is the v0.0.5 dispatch transport's composition-root
@@ -25,6 +26,8 @@ import (
 // disabled-vs-enabled assertion this file's callers must keep true.
 
 var _ dispatch.ViolationRecorder = (*auditsink.Sink)(nil)
+
+var _ transport.RevokedDialObserver = (*auditsink.RevokedDialRecorder)(nil)
 
 // violationRecorder composes the one place a protocol violation's records
 // are written: the durable audit row, the aggregate by-rule counter, and the
