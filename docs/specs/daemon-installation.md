@@ -50,15 +50,16 @@ they already run, from artifacts they can verify before executing.
   unit at `/etc/systemd/system/relay-daemon.service`.
 - **DI-7** The shipped example environment file covers every setting the daemon reads.
 - **DI-30** A released catalog Template's name is bound to its body and risk class: CI refuses a
-  release that changes either for a released name. Withdrawing a released name is allowed.
+  release that changes either for a released name. The body is the Template's parsed
+  definition, its command text and its ordered slot declarations as the daemon's own parser
+  reads them, and not the text rendered for its shell or the engine that renders it. Withdrawing a
+  released name is allowed.
 
 ### A fresh Node's configuration
 
 - **DI-8** The daemon enrolls with an Enrollment Token and a CA bundle file named by path; the
   token is used only when no identity is persisted, and is inert on every later start.
 - **DI-9** The daemon reads its declared `node:` Labels from its environment.
-- **DI-10** The daemon reads the Relay address on every start and its persisted identity stores
-  none, so config management stays authoritative for the address after enrollment.
 
 ### File modes
 
@@ -143,7 +144,7 @@ proven by CI install jobs, once they exist; `make verify` alone cannot prove the
 | DI-21 | `TestRevokedNode_RefusedAfterRestart` | e2e |
 
 Claims with **no row**, and so nothing checking them: DI-1 (asserted by the release workflow,
-not a test), DI-2, DI-3, DI-4, DI-5, DI-6, DI-10, DI-11 (held by the write-ban lint rather than a
+not a test), DI-2, DI-3, DI-4, DI-5, DI-6, DI-11 (held by the write-ban lint rather than a
 claim-named test), DI-15, DI-18 (an absence), DI-19, DI-20, DI-41. DI-3 also needs a real systemd
 host: the unit's syscall filter is still a manual check, and no package carrying the unit ships
 until it is done.
@@ -280,4 +281,9 @@ beside any broad allow (ADR-0019).
 
 ## Retired
 
-None.
+- **DI-10** (retired 2026-10-16) *The daemon reads the Relay address on every start and its
+  persisted identity stores none, so config management stays authoritative for the address after
+  enrollment.* Untrue once the daemon persists the address it dialled at enrollment (ADR-0031,
+  decision 4). DI-38 carries the address rule: the persisted address is used on every later
+  start, and an address set in the environment overrides it, so config management stays
+  authoritative for steady state by the override rather than by the absence of a persisted value.
