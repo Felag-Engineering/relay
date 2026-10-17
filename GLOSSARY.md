@@ -582,8 +582,10 @@ The unit of Relay-side
 authorization and of audit attribution across all three surfaces (ADR-0010). An Account
 is a *durable identity*; a token is a *revocable credential for one* — disabling the
 Account and revoking one of its tokens are different acts with different blast radii.
-The **founding admin** is the Account the config-seeded control-plane credential
-resolves to: a real, stored, listable Account, not a special case. In code, the
+The **founding admin** is the first human `admin`: today the Account the Relay seeds under a
+reserved name, which the config-seeded control-plane credential resolves to; once `relay init`
+lands, the Account the operator names at `init` on an empty store, with no name reserved
+(ADR-0030, amended 2026-10-16). Either way a real, stored, listable Account, not a special case. In code, the
 capability layer's `Principal` **is** the acting Account (its ID, name, and role at the
 time it authenticated); the identifier lags the glossary, the meaning does not.
 _Avoid_: user, principal, service account (say "machine Account")

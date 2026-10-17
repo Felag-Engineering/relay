@@ -1,6 +1,6 @@
 # `relay init` and the boundary of the `relay` binary
 
-**Status:** Accepted; amended by ADR-0033 and on 2026-10-16.
+**Status:** Accepted; amended by ADR-0033 and twice on 2026-10-16 (`init` adopts the running Relay's CA and store; the first admin is named at `init` and no Account name is reserved).
 
 Standing up a Relay and joining five Nodes takes roughly fifty discrete acts today, and
 the Relay-side share of that is choreography rather than decisions: edit the env file,
@@ -114,3 +114,27 @@ recovery role by an explicit request; it stays idempotent and never silently re-
 Specified as RC-28 in `docs/specs/relay-configuration.md`. The boundary this ADR draws around
 the `relay` binary is unchanged.
 
+## Amendment (2026-10-16): the first admin is named at `init`, and no Account name is reserved
+
+Owner decision, 2026-10-16, closing the open decision on how the first admin is created.
+*Decision* says `init` ensures the founding admin Account: a fixed, reserved name the Relay seeds
+at its own start (ADR-0023). The reservation exists only because the name is fixed, since a later
+Account taking it would inherit the founding identity's audit history. Naming the admin removes
+the reason for the reservation along with the reservation.
+
+Where `init` creates the first admin, it does so only on a store that holds no human Account:
+one human `admin` Account with the name the operator gives it, its Console password taken from
+a prompt with no echo, its first API Token minted once. The Relay seeds no Account at start.
+With any human Account present, `init` creates nothing and emits no secret, and a re-run reports
+state; managing Accounts stays outside the binary, where *Decision* put it. Recovery is an
+explicit request that names an enabled human `admin` and re-mints that Account's API Token,
+audited; it refuses a disabled or non-admin Account. No Account is privileged by name, at `init`
+or afterwards, so nothing is reserved against any creation path.
+
+Rejected: a one-time setup code redeemed by the first Console visit. It makes a request create
+the first credential, which invariant 11 places in the security floor, and ADR-0023's objection
+stands: "only until first use" is a race, not a boundary.
+
+Specified as RC-28 in `docs/specs/relay-configuration.md`. `accounts-and-access.md`'s
+reserved-name clause and the Relay's start-time seeding end when `init` lands. The boundary this
+ADR draws around the `relay` binary is unchanged.
