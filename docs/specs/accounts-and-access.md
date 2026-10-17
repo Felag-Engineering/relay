@@ -27,7 +27,7 @@ Policy, approval, or the blast-radius cap.
 | **Control API** | Admin-only Account lifecycle endpoints under `/api/v1/accounts`, API Token mint/list under `/api/v1/accounts/{id}/tokens`, and API Token revocation under `/api/v1/api-tokens/{token_id}`. Bearer API Tokens authenticate this surface. |
 | **MCP** | A per-Account API Token authenticates a headless caller. When configured, the endpoint is also an OAuth 2.1 protected resource: it publishes protected-resource metadata and accepts a verified external-IdP token that resolves to an existing Account. MCP does not expose Account or API Token administration. |
 | **Admin Console** | Human Accounts sign in with a local password, establish a Console-only session, and sign out. Console routes receive that session and its Account role. The Accounts and API Tokens administration screen is built: the read half in #660, the write routes with step-up and the reveal-once token mint in #662; its step-up matrix is settled below and the migration session maps each row to its test. That screen is `admin`-only: a `viewer` is not shown it and cannot reach it. |
-| **Local operator** | `relay bootstrap-token` creates an API Token for the stored founding admin using local access to the Relay store. It is the bootstrap escape from the authentication cycle, and the recovery path when no enabled `admin` can act. It is not a network surface. Designed for v0.6.5: `relay init` replaces it, recovery role included, as an explicit request (`relay-configuration.md`, RC-28). |
+| **Local operator** | `relay bootstrap-token` creates an API Token for the stored founding admin using local access to the Relay store. It is the bootstrap escape from the authentication cycle, and the recovery path when no enabled `admin` can act. It is not a network surface. Designed for v0.6.5: `relay init` replaces it, recovery role included, as an explicit request naming an enabled human `admin`; the first admin is then the Account the operator names at `init` on an empty store, and no name is reserved (`relay-configuration.md`, RC-28; ADR-0030, amended 2026-10-16). |
 
 ## Behaviour
 
@@ -77,7 +77,9 @@ Those acts require an authenticated `admin`; their successful writes record the 
 principal in the audit trail. An Account may not change its own role or disable itself.
 That refusal is decided in the capability layer, because deciding it needs the acting principal's
 identity, which the Accounts repository never sees.
-The founding-admin name is reserved and cannot be created through any surface.
+The founding-admin name is reserved and cannot be created through any surface. The reservation
+ends when `relay init` lands: the first admin is then named by the operator and nothing is
+reserved against any creation path (ADR-0030, amended 2026-10-16; `relay-configuration.md`, RC-28).
 
 **The last enabled `admin` cannot be disabled or demoted,** by itself or by another Account.
 The Relay always keeps at least one enabled `admin`; if none can act, recovery is
