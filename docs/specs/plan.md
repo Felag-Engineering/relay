@@ -49,10 +49,11 @@ table should not come away believing the whole cut is a config change.**
 |---|---|---|
 | **MCP** | `propose_plan`, `get_plan`, `advance_plan`, `abandon_plan`. Approval is **not** a Plan surface — a gated Plan parks and is answered through `approve_request` like any other Approval. | Not built |
 | **Control API** | `GET /api/v1/plans`, `GET /api/v1/plans/{id}`, `POST /api/v1/plans/{id}/abandon`. Decisions land on the existing `/api/v1/approvals` routes. | Not built |
-| **Admin Console** | Renders a Plan in the approval queue and on a detail screen. **Composes nothing** — proposing a route is an agent act. | Not built |
+| **Admin Console** | Renders a Plan on a detail screen. **Composes nothing** — proposing a route is an agent act — and **decides nothing**: the Console has no approval surface (ADR-0044). | Not built |
 
-Proposing is deliberately MCP-only in this cut; the Console and Control API view a Plan, decide on
-it through approvals, and abandon it. That is an adapter offering **less** than the
+Proposing is deliberately MCP-only in this cut; the Console and Control API view a Plan and abandon
+it, and the Control API decides on it through approvals (the Console decides no approval,
+ADR-0044). That is an adapter offering **less** than the
 capability layer allows, which invariant 10 permits; it is never the layer deciding differently
 per surface.
 

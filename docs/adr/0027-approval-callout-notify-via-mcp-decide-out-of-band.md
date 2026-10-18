@@ -1,6 +1,6 @@
 # Approval callout: notify via MCP, decide out-of-band
 
-**Status:** Accepted; amended by ADR-0010, ADR-0029, ADR-0038 and ADR-0040.
+**Status:** Accepted; amended by ADR-0010, ADR-0029, ADR-0038, ADR-0040 and ADR-0044.
 
 Some dispatches should not run on an AI-agent's say-so. This ADR decides how a human is
 asked, how their answer gets back, and — the part that matters — why the answer is
@@ -83,7 +83,9 @@ Two properties fall out, and they are the whole point:
      *(Amended 2026-09-24 by ADR-0040: still true of the authenticated decision endpoint's
      **availability**, and no longer a description of where an agent-originated approval is
      expected to arrive — that is the requesting MCP client. As amended 2026-09-25: the
-     endpoint still decides any request, including an agent's, and is not relied on.)*
+     endpoint still decides any request, including an agent's, and is not relied on. As amended
+     2026-10-18 by ADR-0044: that endpoint is the Control API's, and it is the only out-of-band
+     path — the Console decides no approval.)*
 
    The Tasks extension is still stabilizing (retry and expiry lifecycle gaps), so it is an
    optimization we adopt, never a dependency we assume. **A deployment with no
@@ -253,6 +255,9 @@ stands alone — but the premium path's security claim is Gleipnir's to keep.
   composer, the approval object). They share one rendering contract, or they will drift —
   and a Plan that renders differently in the approval queue than at execution *is* the
   approval-view fidelity gap, reintroduced by us.
+  *(Amended 2026-10-18 by ADR-0044: the Console has no approval queue or approval object. The
+  renderings that must agree are the composer's Preflight, the Relay-authored rendering a
+  decider is given — in the client's question, or on the Control API — and Job detail.)*
 
 - **Testing the universal path needs no MCP client at all**: park a Job, POST a decision,
   watch it run. The elicitation envelopes need an elicitation-capable harness, which is a
@@ -492,7 +497,8 @@ changes rather than left to be inferred.
   through. Pricing is not the control here. A grant hands the AI-agent its *choice* of covered work
   within the Scope (ADR-0029's client-integrity assumption compounds this), and Raw Exec's Scope is
   "an arbitrary command" — there is no allow-list to enumerate and therefore nothing for an
-  approver to have seen. Every Raw Exec needs its own decision, alone or inside one bulk act. This
+  approver to have seen. Every Raw Exec needs its own decision, alone or inside one bulk act *(amended 2026-10-18 by
+ADR-0044: there is no bulk act — AP-59 is retired — so every Raw Exec needs its own decision)*. This
   is ADR-0001's conspicuous-exception rule holding for *granting* as well as for asking, the same
   shape as the 2026-08-14 amendment's decision 2 on the role floor.
 
@@ -586,3 +592,13 @@ whether Relay asks. Decision 5 is untouched: every MCP *request* stays agent-gra
 selection. The accepted caveats are the same — a hook can answer with no human present, and
 anything holding the human's OAuth token answers as that human — and OAuth has never run live
 against a real identity provider (#351).
+
+## Amendment (2026-10-18): amended by ADR-0044 — the Console does not decide approvals
+
+[ADR-0044](0044-the-console-does-not-decide-approvals.md) removes the Admin Console's approval
+surface — the queue, the approval object, the decide action under step-up, and the designed bulk
+decisions — and keeps the Control API decision endpoint. For this ADR that means decision 2's
+out-of-band path, "required, always available", is the Control API's authenticated decision
+endpoint and nothing else; an `out-of-band` rule is satisfied there only. Decision 5's note that
+the Console's step-up apply *is* the self-confirmation rung is unchanged — that is execution, not
+approval. Signposted in place above, dated. Every other decision here stands.

@@ -17,14 +17,14 @@ enough to hand the same keys to an AI-agent. Every rule below serves that.
 2. **The UI computes what is interesting; the human reads only exceptions.** Fleets run
    100–10,000 Nodes. A list is a bug. Render the *mode* as one compressed line and spend the
    pixels on deviations.
-3. **One decision per screen.** Decision surfaces (approval, apply) carry exactly one primary
-   action with nothing competing.
+3. **One decision per screen.** Decision surfaces (apply, and every privilege-granting act) carry
+   exactly one primary action with nothing competing.
 4. **Preflight before apply, everywhere.** Compose → see the truth → confirm identity → run.
    The mutating path is deliberately slower than the reading path.
 5. **The customer's taxonomy is the organising axis.** Their label values (`prod`, `payments`,
    `web`) are the headline structure. Relay's own bookkeeping is "group by nothing".
 6. **Live but stable.** Counters and lists may update live. Anything a human is reading in order
-   to decide — an open approval card, a rendered Preflight — is pinned and never reflows. New
+   to decide — a rendered Preflight, a confirm step — is pinned and never reflows. New
    events queue behind an explicit click rather than pushing in.
 7. **No settings pages, ever.** Relay configuration (blast caps, listeners, gate rules,
    `console_execution`) appears only as *effects in context* — a cap inside a preflight line —
@@ -83,8 +83,8 @@ the Node itself reports.
 
 ## Two chip grammars that must not collide
 
-The Console carries two independent chip systems and they appear within 200px of each other on the
-approval card. They must occupy **different visual channels**:
+The Console carries two independent chip systems and they appear within 200px of each other on Job
+detail and in Activity. They must occupy **different visual channels**:
 
 - **Trust lane owns fill versus outline.** A solid chip is an identity the Relay authenticated. A
   dashed chip is caller-asserted and nothing checked it. These must never read as equally
@@ -233,7 +233,7 @@ because that is its subject, and draws it in the same treatment because it is th
 
 **Label chips** (everywhere). Four namespaces, per the table above.
 
-**Step-up modal** (approval, apply, every privilege-granting act). A session proves a human
+**Step-up modal** (apply, every privilege-granting act). A session proves a human
 authorised the *session*; step-up proves a human intended *this action*. It carries a credential
 no agent session holds, and it is the reason ADR-0026 could give a browser an execution surface at
 all.
@@ -302,18 +302,17 @@ about this request, this caller or this record that the operator must stop and r
 
 ## Refreshing a screen
 
-A screen that lists things which arrive on their own — calls, approval requests, Jobs — may offer
+A screen that lists things which arrive on their own — calls, Jobs — may offer
 a **Refresh** control, so that what is new is one click away without the browser's reload button.
 
 - **Where a screen offers a Refresh control, it reloads the page with the current query
   preserved.** It is a plain link to the same screen; it never splices rows into the page someone
   is reading (rule 6).
-- **A Refresh makes exactly the reads a page load makes.** Of the screens that offer a Refresh
-  control, every one's reads are audited except the Approvals queue's, which write no read record:
-  a known gap, tracked in #779, and not a rule for any other screen to follow. The queue says so
-  in one plain sentence beside its Refresh control; every screen that offers the control says in
-  its "About this screen" disclosure whether a Refresh is recorded, and none claims a record the
-  trail does not hold.
+- **A Refresh makes exactly the reads a page load makes**, and those reads are audited. Every
+  screen that offers the control says in its "About this screen" disclosure whether a Refresh is
+  recorded, and none claims a record the trail does not hold. (The built Approvals queue is the
+  one exception, writing no read record, #779; it is retired with the Console's approval surface,
+  ADR-0044.)
 - **A Refresh is a deliberate act by the operator.** The Console never reloads a screen on a
   timer: [README](README.md) records the owner decision "No scheduled or repeated reads. Every read
   is a deliberate, audited act."
@@ -348,8 +347,7 @@ one people hesitate over, and one that outweighs the act beside it teaches the w
 that can both grant and reduce — setting a role, which raises or lowers (the Accounts screen
 splits it into Raise and Lower instead, spec 15) — takes the granting
 weight, because it carries the password field and may spend it. Where two answers to one question
-must not be weighted (Approve and Deny, spec 08), both take one neutral treatment and this table
-does not apply.
+must not be weighted, both take one neutral treatment and this table does not apply.
 
 ## The incident ladder
 
@@ -371,14 +369,17 @@ is **human-principal only** — a machine Account, whatever its role, cannot pul
 
 ## Navigation
 
-Nine destinations in three groups. The grouping is load-bearing: it makes the model legible and
+Eight destinations in three groups. The grouping is load-bearing: it makes the model legible and
 makes the absence of a settings section visible.
 
 ```
 Observe      Fleet · Activity
-Act          Run · Policy · Approvals
+Act          Run · Policy
 Administer   Add Nodes · Accounts · Access · Incident
 ```
+
+There is no `Approvals` destination: the Console has no approval surface (ADR-0044, D21). A
+parked request is answered in-band through the requesting client, or on the Control API.
 
 There is no `Jobs` destination (D6): Activity renders Job rows and filters to them. **Job detail is
 still its own page**, reached from any dispatch row in Activity and from a Node's recent Tasks. The

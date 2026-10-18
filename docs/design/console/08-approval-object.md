@@ -1,4 +1,15 @@
-# 08 — Approval object
+# 08 — Approval object (retired)
+
+> **Retired 2026-10-18 (owner decision, [ADR-0044](../../adr/0044-the-console-does-not-decide-approvals.md)).**
+> The Console renders no approval request and decides none — no approve, no deny, no step-up for
+> one. A parked request is answered in-band through the requesting client, or out-of-band on the
+> Control API (`GET /api/v1/approvals/{id}`, `POST /api/v1/approvals/{id}/decision`). The screen
+> below **is still in the code** until its removal lands (`docs/specs/approval.md` AP-80), so this
+> text still describes what ships — and binds nothing new: build no further work on it. When the
+> screen is removed, this file becomes a stub like [03](03-agent-sessions.md) and
+> [17](17-read-egress.md), keeping its name so links hold. The rendering rules here that other
+> screens share — the trust-lane chips, the Plan renderer, the deny block — live in
+> [00-foundations.md](00-foundations.md) and are unaffected.
 
 **Artboard 6.** One pending action awaiting human sign-off. The highest-stakes rendering in the
 system. **Milestone v0.6.0** shipped it read-only; **#453** (pulled forward from v0.7.0) added

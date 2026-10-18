@@ -255,6 +255,9 @@ Act          Run · Policy · Approvals
 Administer   Add Nodes · Accounts · Access · Incident
 ```
 
+*(2026-10-18: eight destinations — Approvals is removed (D21). `00-foundations.md` carries the
+current list.)*
+
 ### D15. CSP violation reporting — **DEFERRED (#460)**
 
 Spec 11's CSP section says to "report violations rather than silently dropping them, because a
@@ -388,6 +391,27 @@ message and time (spec 12). Any future surface that reads the audit trail must n
 sign-in records below `admin` ([20](20-access.md)). This reverses the "no which-half indication"
 rule spec 20 carried and `audit.go` states; it does not touch spec 12.
 
+### D21. Approval leaves the Console — **RESOLVED 2026-10-18 (owner), [ADR-0044](../../adr/0044-the-console-does-not-decide-approvals.md)**
+
+The owner: *"Approvals should be cut out of the UI completely."* The Console has no approval
+surface — no Approvals destination or nav count, no queue (14), no approval object (08), no
+approve or deny, no step-up for one, and no bulk decision. Approvals are answered in-band through
+the requesting client, or out-of-band on the Control API, which the owner chose to keep as the
+manual rescue. The Console still renders what an approval left behind on another record: approver
+chips on Job detail (13) and the `approval` row in Activity (04), which no longer links to a
+decision.
+
+Made moot by this: D10's Console half (the card's diff placement, the queue's fan-out tiebreak);
+the queue's unaudited read (#779) once the screen is removed. Specs 08 and 14 stay in place,
+marked retired, while the screens are still in the code (`docs/specs/approval.md` AP-80).
+
+**Not settled by it — needs the owner:** whether "cut out of the UI completely" also reaches
+[19 — Approval rules](19-approval-rules.md), the page where an `admin` edits the gate rules
+(`approval.md` AP-72). ADR-0044 removed the *decision* surface only. If the rules page goes too,
+AP-72's "edited only in the Admin Console" leaves the rules with no writer at all, which is an
+invariant 11 question (reach-bounding settings change only by a human Account with step-up),
+not a screen change.
+
 ### D20. Hostname is the visual primary — **RESOLVED 2026-10-01 (owner)**
 
 **Ruling (owner, 2026-10-01, #835):** the hostname is the visual primary on Fleet rows and the Node
@@ -503,6 +527,11 @@ Assert this structurally, the way `no_dispatch` is asserted.
 `console-backend-coverage.md`'s SSE row says four publishers.
 
 ### D10. The approval record needs a shape key — **RESOLVED 2026-08-24, and it is a v0.5.0 decision**
+
+*(Console half moot 2026-10-18 (D21, ADR-0044): spec 08's card and spec 14's queue are retired,
+so the diff placement and the fan-out tiebreak below no longer have a screen. The shape key
+itself stands in the approval domain; what renders its diff now is an open question in
+`docs/specs/approval.md`.)*
 
 Spec 08's anti-fatigue diff — "same as what you approved Tuesday, except the fan-out grew
 1,180 → 2,214" — is the highest-value element on the highest-stakes screen. It has to find *the
@@ -622,8 +651,8 @@ pursued.
 ## Known gaps with no spec yet
 
 **None.** Every screen named in earlier drafts now has one: the Console shell (11), login (12), Job
-detail (13), the approval queue (14), Accounts and API tokens (15), the incident ladder (16) and
-read egress (17).
+detail (13), the approval queue (14, retired 2026-10-18), Accounts and API tokens (15), the
+incident ladder (16) and read egress (17, retired 2026-10-01).
 
 Two dimensions that cut across every screen and are not drawn anywhere: a `viewer` sees a
 **structurally smaller** Console rather than a greyed-out one, and `console_execution = off`

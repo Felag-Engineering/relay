@@ -28,7 +28,6 @@ One template, three regions.
 │ ACT          │                                                            │
 │  Run         │                                                            │
 │  Policy      │                                                            │
-│  Approvals   │                                                            │
 │ ADMINISTER   │                                                            │
 │  Add Nodes   │                                                            │
 │  Accounts    │                                                            │
@@ -67,8 +66,9 @@ composer has given the property away, and the acceptance criterion in spec 05 ex
 - **Fragment boundaries are named regions**, not ad-hoc selectors. Every swappable region has a
   stable `id`; every `hx-target` names one.
 - **`hx-swap` is explicit** on every request. Never rely on the default.
-- **Out-of-band swaps** carry cross-cutting updates — the banner slot, the Approvals count in the
-  nav — so a screen-level request does not have to know about them.
+- **Out-of-band swaps** carry cross-cutting updates — the banner slot — so a screen-level request
+  does not have to know about them. The nav carries no Approvals destination and no pending count:
+  the Console has no approval surface (ADR-0044).
 - **`hx-on:` is banned.** It is inline script and the CSP will block it. Behaviour that needs
   JavaScript lives in an external file served from the Console's own origin.
 - **Every mutating request is POST/PUT/DELETE**, never GET. A GET that mutates is a CSRF hole

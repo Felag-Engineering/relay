@@ -52,8 +52,8 @@ authorization check.
   reasoning as any in-flight Task below. **Advancing** that Plan does not — see *Stops*.
 - **In-flight Tasks.** They keep running unless separately cancelled. Indiscriminately killing
   half-finished package installs creates the second incident.
-- **Reads of the control plane.** The registry, the audit trail and the approval queue stay
-  readable; an incident is when you most need to look.
+- **Reads of the control plane.** The registry, the audit trail and the pending approval requests
+  stay readable; an incident is when you most need to look.
 
 A Freeze is not a Policy change, not a revocation, and not a cancellation. It is a valve on
 dispatch, and it converts no state.

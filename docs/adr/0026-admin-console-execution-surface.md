@@ -1,6 +1,6 @@
 # The Admin Console gains an execution surface
 
-**Status:** Accepted (2026-08-03).
+**Status:** Accepted (2026-08-03); amended by ADR-0044.
 
 Decision on issue #264, taken by the owner 2026-08-03, recorded here. It **supersedes the
 no-execution clause of [ADR-0009](0009-admin-console-web-ui.md)** and amends AGENTS.md
@@ -99,6 +99,8 @@ click would counterfeit the strongest credential in the model. See "Consequences
    (root-owned, narrows-only) can match Console-originated mutates and set
    `requester_allowed: false`, so the requester cannot self-confirm. Step-up apply is the
    self-confirmation rung; it does not remove the rung above it.
+   *(Amended 2026-10-18 by ADR-0044: the second person decides on the Control API. The Console
+   has no approval surface, so a Console-originated request that parks is answered there.)*
 
 ## Alternatives considered
 
@@ -194,3 +196,13 @@ ADR-0038 gave **Plan** to the approved route of execution and renamed the no-exe
 were reworded in place to *preflight*; nothing in the decision changed. Invariant 10's clause
 now reads "preflight-by-default" (amended 2026-09-20). The Console's user-facing word is
 **Preflight** (#575, owner decision 2026-09-20).
+
+## Amendment (2026-10-18): amended by ADR-0044 — the Console decides no approval
+
+[ADR-0044](0044-the-console-does-not-decide-approvals.md) removes the Console's approval surface
+and keeps the Control API decision endpoint. This ADR's execution surface is unchanged; what moves
+is decision 7. A rule that demands a second person for a Console-originated mutate still works
+exactly as before, and that second person now decides on the Control API rather than in the
+Console. The Console's step-up is taken for a mutate apply and the privilege-granting Account
+acts; it is no longer taken for an approval decision. The Consequences' build-order line naming
+"Approval Callout" as a dependency of the composer refers to the approval *backend*, which stays.

@@ -61,7 +61,9 @@ require step-up — it is bounded by the read cap and audited metadata-only, and
 make the preflight-first habit expensive enough to route around.
 
 If the deployment's approval gate matches this action, applying **parks** the Job for sign-off
-rather than dispatching. Say so before the click, not after.
+rather than dispatching. Say so before the click, not after — and say where it is answered: the
+Console decides no approval (ADR-0044), so a parked Console request is decided on the Control
+API.
 
 ## Editing after a Preflight
 

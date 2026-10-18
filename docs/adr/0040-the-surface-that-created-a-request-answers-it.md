@@ -1,13 +1,19 @@
 # The surface that created a request is the surface that answers it
 
 **Status:** Accepted (2026-09-24); amended 2026-09-25 — **strict separation withdrawn before any
-of it was built**. **Explicitly interim** — see *What is interim, and what reopens it*.
+of it was built**; amended by ADR-0044 (2026-10-18) — **the Console no longer decides approvals**.
+**Explicitly interim** — see *What is interim, and what reopens it*.
 
 > **Read the amendment of 2026-09-25 first.** The title and the decision below describe strict
 > separation, which the owner withdrew one day later. What stands is narrower: MCP is the
 > approved pathway for agent-originated approval, the Console and the Control API keep deciding
 > any parked request exactly as today and are not relied on, and out-of-band as a rule
 > requirement stays shelved. Every passage the amendment changes is signposted in place.
+>
+> **Then read the amendment of 2026-10-18.** [ADR-0044](0044-the-console-does-not-decide-approvals.md)
+> takes the 2026-09-25 intent for the Console half: the Console has no approval surface, and the
+> Control API decision endpoint is the one out-of-band path. Wherever this ADR says "the Console
+> and the Control API" decide a request, read "the Control API".
 
 Approval today has two answer paths reaching two different sets of people, and `approval.md`
 says so: in-band through the requesting MCP client, and out-of-band on Relay itself — the
@@ -325,6 +331,9 @@ operator writes to be stricter than the default.
 
 ### Where the interim posture is heading — an intent, not a decision
 
+*(Taken for the Console half on 2026-10-18 by [ADR-0044](0044-the-console-does-not-decide-approvals.md);
+see the amendment of that date below. The Control API decision endpoint stays.)*
+
 The owner, the same day: *"I eventually want to potentially remove the entire console approve
 thing."* So the approved-pathway posture is **a step toward MCP being the only approval path**, and
 the Console's decide action is a **candidate for removal**. It is recorded here so the direction is
@@ -393,3 +402,31 @@ changes: strict separation stays withdrawn (§Amendment 2026-09-25), MCP is the 
 and the Console and the Control API still decide any parked request and are not relied on. Where
 the answer arrives on a human Account's OAuth session it is a verified decision (ADR-0029
 §Amendment 2026-09-29).
+
+## Amendment (2026-10-18): amended by ADR-0044 — the Console does not decide approvals
+
+Owner decision of **2026-10-18**, recorded in full in
+[ADR-0044](0044-the-console-does-not-decide-approvals.md). The intent this ADR's amendment of
+2026-09-25 recorded — *"I eventually want to potentially remove the entire console approve
+thing"* — is taken for the Console: the Approvals queue, the approval request screen, the
+Console decide action and its step-up, and the designed bulk decisions (`approval.md` AP-59) are
+all removed. The question that amendment left open is decided: **the Control API decision
+endpoint stays**, as the out-of-band path and the manual rescue.
+
+What that does to this ADR's text, without rewriting it:
+
+- **"The Console and the Control API keep deciding any parked request"** now reads **"the
+  Control API keeps deciding any parked request"**, everywhere it appears. It is still not the
+  relied-on path; MCP is the approved pathway, unchanged.
+- **The two preconditions this ADR set are answered on the record, not dropped.** *#646 proven in
+  use*: built and tested, not yet proven in real traffic, and the owner chose not to wait.
+  *R27 closed first*: not closed. It stays tolerable because the rescue it depends on — an
+  out-of-band decision — survives on the Control API; the sentence above that "the Console is the
+  only thing that makes that risk tolerable" was too narrow, since the Control API decided a
+  stranded request equally. Threat model R27 now rests on the Control API alone, and becomes
+  intolerable if that endpoint is ever removed.
+- **The cost is stated in ADR-0044 and accepted by the owner**: the rescue has no UI. A human
+  needs an API Token and the request's ID to decide a stranded request.
+
+Everything else here stands: interim, pending the permissions rework (#716); out-of-band as a rule
+requirement shelved; strict separation withdrawn.
