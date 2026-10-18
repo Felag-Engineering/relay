@@ -175,7 +175,9 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	if err != nil {
 		return nil, fmt.Errorf("devharness: listen on %q: %w", sockPath, err)
 	}
-	if err := os.Chmod(sockPath, 0600); err != nil {
+	// Owner and group: the cross-binary suite runs this Relay as a separate uid and reaches the
+	// socket through the group of the 2770 directory it lives in, which is the access boundary.
+	if err := os.Chmod(sockPath, 0660); err != nil {
 		lis.Close()
 		return nil, fmt.Errorf("devharness: chmod socket: %w", err)
 	}

@@ -532,10 +532,17 @@ test-strict-umask-daemon:
 #    detector instruments it directly.
 # The cross-binary tests need RELAY_BIN too and run in test-crossbinary, so they are skipped
 # here by the same pattern that target selects; without that, the requirement switch would fail them.
+#
+# The smoke test, TestHarness_RelayRunsAsSeparateUid (on the shippable binary,
+# RELAY_SHIPPABLE_BIN) and test-crossbinary start the real Relay as the separate uid
+# `relaytest` (relay/internal/relaytest/separateuid.go; scripts/relaytest-user.sh creates the
+# accounts). Where sudo, setpriv or the accounts are missing, each records a skip in the skip
+# ledger; RELAY_E2E_SUDO_REQUIRED=1, set only by CI, makes that a failure.
 CROSSBINARY_TESTS := TestCrossBinary|TestFleetE2E
 test-integration: build
 	bash scripts/smoke-test.sh
 	cd relay && RELAY_E2E_REQUIRED=1 RELAY_DAEMON_BIN=$(DAEMON_DEBUG_BIN) \
+		RELAY_SHIPPABLE_BIN=$(CURDIR)/relay/bin/relay \
 		go test -race -tags integration -skip '$(CROSSBINARY_TESTS)' ./cmd/relay/...
 
 # Depends on fmt-daemon rather than repeating it, so `verify` (which also pulls in

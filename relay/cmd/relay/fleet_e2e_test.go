@@ -23,7 +23,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -34,18 +33,15 @@ import (
 )
 
 // fleetRelay is one scenario's Relay subprocess plus the devharness
-// connection to it. restart kills and relaunches the Relay against the SAME
-// store/address/CA dir (Jobs/Tasks/audit survival, crash-mid-Job).
+// connection to it. restart kills and relaunches the Relay through the SAME
+// layout — store, CA dir and address (Jobs/Tasks/audit survival, crash-mid-Job).
 type fleetRelay struct {
 	relayBin   string
 	harness    *harnessClient
-	cmd        *exec.Cmd
-	exited     chan error
-	log        *syncBuffer
+	layout     *relaytest.RelayLayout
+	proc       *relaytest.RelayProcess
 	addr       string
-	caDir      string
 	caCertPath string
-	storePath  string
 	sockPath   string
 }
 
@@ -54,57 +50,43 @@ type fleetRelay struct {
 // dials its devharness control socket.
 func startFleetRelay(t *testing.T, relayBin, extraTOML string) *fleetRelay {
 	t.Helper()
-	caDir := t.TempDir()
-	sockPath := filepath.Join(t.TempDir(), "devharness.sock")
-	storePath := filepath.Join(t.TempDir(), "relay.db")
+	layout := relaytest.NewRelayLayout(t, crossbinaryGate)
+	sockPath := harnessSocketPath(layout)
 
-	cmd, log, addr, exited := startRelaySubprocess(t, relayBin, caDir, storePath, sockPath, "", extraTOML)
+	proc, addr := startRelaySubprocess(t, layout, relayBin, "", extraTOML)
 	fr := &fleetRelay{
-		relayBin:  relayBin,
-		cmd:       cmd,
-		exited:    exited,
-		log:       log,
-		addr:      addr,
-		caDir:     caDir,
-		storePath: storePath,
-		sockPath:  sockPath,
+		relayBin: relayBin,
+		layout:   layout,
+		proc:     proc,
+		addr:     addr,
+		sockPath: sockPath,
 	}
 	t.Cleanup(func() {
-		if fr.cmd.Process != nil {
-			fr.cmd.Process.Kill() //nolint:errcheck
-		}
-		<-fr.exited
-		os.Remove(sockPath)
+		fr.proc.Kill() //nolint:errcheck
+		<-fr.proc.Done()
 	})
 
 	waitForSocket(t, sockPath, 5*time.Second)
 
-	caCertPath := filepath.Join(caDir, "ca-cert.pem")
-	if _, err := os.Stat(caCertPath); err != nil {
-		t.Fatalf("CA bundle %q missing: %v", caCertPath, err)
-	}
-
-	fr.caCertPath = caCertPath
+	// The CA directory is the Relay's alone; the public certificate is copied out.
+	fr.caCertPath = layout.CopyOut(t, filepath.Join(relayCADir(layout), "ca-cert.pem"))
 	fr.harness = dialHarness(t, sockPath)
 	return fr
 }
 
 // restart kills the current Relay subprocess (SIGKILL — a real crash, not a
-// graceful shutdown) and relaunches it against the SAME store path, address,
-// and CA dir, then redials the devharness socket. Jobs/Tasks/audit persist in
-// storePath across this; only the in-memory Router/Execution are rebuilt.
+// graceful shutdown) and relaunches it through the SAME layout and address,
+// then redials the devharness socket. Jobs/Tasks/audit persist in the store
+// across this; only the in-memory Router/Execution are rebuilt.
 func (r *fleetRelay) restart(t *testing.T, extraTOML string) {
 	t.Helper()
-	if r.cmd.Process != nil {
-		r.cmd.Process.Kill() //nolint:errcheck
-	}
-	<-r.exited
+	r.proc.Kill() //nolint:errcheck
+	<-r.proc.Done()
+	// The killed Relay left its socket behind; waitForSocket must see the new one.
 	os.Remove(r.sockPath)
 
-	cmd, log, addr, exited := startRelaySubprocess(t, r.relayBin, r.caDir, r.storePath, r.sockPath, r.addr, extraTOML)
-	r.cmd = cmd
-	r.exited = exited
-	r.log = log
+	proc, addr := startRelaySubprocess(t, r.layout, r.relayBin, r.addr, extraTOML)
+	r.proc = proc
 	r.addr = addr
 
 	waitForSocket(t, r.sockPath, 5*time.Second)
@@ -464,7 +446,7 @@ func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *
 	// -------------------------------------------------------------------
 	// (a) Freeze stops dispatch before any Task is sent.
 	// -------------------------------------------------------------------
-	if err := fr.cmd.Process.Signal(syscall.SIGUSR1); err != nil {
+	if err := fr.proc.Signal(syscall.SIGUSR1); err != nil {
 		t.Fatalf("send SIGUSR1 (engage Freeze) to relay: %v", err)
 	}
 	waitForFrozen(t, fr.harness, true)
@@ -491,7 +473,7 @@ func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *
 		t.Errorf("query_audit: no refusal record found among %v", auditResp["audit"])
 	}
 
-	if err := fr.cmd.Process.Signal(syscall.SIGUSR2); err != nil {
+	if err := fr.proc.Signal(syscall.SIGUSR2); err != nil {
 		t.Fatalf("send SIGUSR2 (release Freeze) to relay: %v", err)
 	}
 	waitForFrozen(t, fr.harness, false)
@@ -700,12 +682,9 @@ func TestFleetE2E_CrashMidJobNeverDoubleRuns(t *testing.T) {
 	// stop() runs, mirroring an actual power-loss/OOM-kill). The daemon's
 	// stream drops when the Relay dies; it has no reconnect loop
 	// (daemon/src/main.rs) so it exits on its own, but kill it explicitly too
-	// so the test never depends on that timing. Reaping (the corresponding
-	// receive on fr.exited) is left to restart() below: fr.exited only ever
-	// delivers once, so it must have exactly one reader.
-	if fr.cmd.Process != nil {
-		fr.cmd.Process.Kill() //nolint:errcheck
-	}
+	// so the test never depends on that timing. Reaping is left to restart()
+	// below.
+	fr.proc.Kill() //nolint:errcheck
 	daemon.Kill()
 
 	// Restart the Relay on the SAME store/addr/CA dir: its persisted store

@@ -5,14 +5,18 @@
 # both), when a refusal carries the right code but not the interceptor's message, when the
 # listener refuses everything, when the answer is not gRPC at all, when the Relay never comes
 # up, and when curl cannot speak HTTP/2. It also proves the dial is certless by construction:
-# curl is invoked with -q (no ~/.curlrc) and never with a client certificate or key.
+# curl is invoked with -q (no ~/.curlrc) and never with a client certificate or key. And it
+# proves the separate-uid harness's absence is never a silent pass: without a usable sudo the
+# script records a skip in make verify's skip ledger, and under RELAY_E2E_SUDO_REQUIRED=1 it
+# fails instead.
 #
 # Hermetic: the REAL smoke-test.sh runs against a stub Relay (bash; binds nothing) and a stub
 # curl that replays responses. The response SHAPE is a recorded real capture — real curl 8.5
 # against the real Relay on 2026-10-02, CRLFs included (the codex-review-test.sh "recorded real
 # capture" idiom); only the status and message vary per case. No Go, no Rust, no network, no
-# writes outside its own `mktemp -d`. The real Relay half of the proof is `make
-# test-integration`, which runs smoke-test.sh against the built binary.
+# writes outside its own `mktemp -d`. A stub sudo that refuses keeps every case off the
+# separate uid, whatever the host allows. The real Relay half of the proof, separate uid
+# included, is `make test-integration`, which runs smoke-test.sh against the built binary.
 #
 # NOT `set -e`: every case must run and be reported, not stop at the first failure
 # (security-surface-test.sh:13).
@@ -89,6 +93,15 @@ exit 0
 STUB
 chmod +x "$WORKDIR/stub/curl"
 
+# --- Stub sudo. Refuses as a sudo that wants a password does, so every case runs the Relay as
+# this user and the separate uid is unavailable whatever the host has.
+cat > "$WORKDIR/stub/sudo" <<'STUB'
+#!/usr/bin/env bash
+echo "sudo: a password is required" >&2
+exit 1
+STUB
+chmod +x "$WORKDIR/stub/sudo"
+
 # --- Response writers. grpc_resp writes the recorded real shape with a chosen status and
 # message; http_resp writes a non-gRPC HTTP answer; down_resp writes curl's recorded
 # connection-refused failure.
@@ -124,10 +137,13 @@ RC=0
 ARGV_LOG=""
 
 # run_smoke [VAR=value ...] — the real smoke-test.sh against the stubs, responses from CASE_DIR.
+# The caller's skip ledger and sudo switch never reach it: a stub case's skip is not one of
+# make verify's, and only the cases that set them on purpose see them.
 run_smoke() {
   ARGV_LOG="$CASE_DIR/argv"
   : > "$ARGV_LOG"
-  OUT="$(env PATH="$WORKDIR/stub:/usr/bin:/bin" RELAY_SMOKE_PORT=65000 \
+  OUT="$(env -u RELAY_VERIFY_SKIPS -u RELAY_E2E_SUDO_REQUIRED \
+         PATH="$WORKDIR/stub:/usr/bin:/bin" RELAY_SMOKE_PORT=65000 \
          RELAY_SMOKE_RELAY_BIN="$WORKDIR/stub/relay" STUB_RESPONSES="$CASE_DIR" \
          STUB_ARGV_LOG="$ARGV_LOG" "$@" bash "$SCRIPT" 2>&1)"
   RC=$?
@@ -276,9 +292,36 @@ good_responses "$CASE_DIR"
 run_smoke STUB_NO_HTTP2=1
 assert_refused "case10-no-http2" "no HTTP/2 support"
 
+# 11: no usable sudo, under make verify -> the run passes on its mTLS verdict, and the missing
+# separate uid is a line in the skip ledger, never a silent pass.
+new_case no-sudo-ledger
+good_responses "$CASE_DIR"
+LEDGER="$CASE_DIR/skips"
+: > "$LEDGER"
+run_smoke RELAY_VERIFY_SKIPS="$LEDGER"
+assert_rc "case11-no-sudo-skip-recorded" 0
+assert_contains "case11-no-sudo-skip-recorded" "SKIPPING the Relay as a separate uid (sudo -n is not passwordless here)"
+if [ "$(cat "$LEDGER")" != "test-integration: smoke test, the Relay as a separate uid (sudo -n is not passwordless here)" ]; then
+  echo "FAIL: case11-no-sudo-skip-recorded: skip ledger holds [$(cat "$LEDGER")]" >&2
+  fail=$((fail + 1))
+fi
+
+# 12: no usable sudo with RELAY_E2E_SUDO_REQUIRED=1 (CI) -> a failure before the Relay starts:
+# no PASS, no dial, and nothing recorded as a skip.
+new_case no-sudo-required
+good_responses "$CASE_DIR"
+LEDGER="$CASE_DIR/skips"
+: > "$LEDGER"
+run_smoke RELAY_VERIFY_SKIPS="$LEDGER" RELAY_E2E_SUDO_REQUIRED=1
+assert_refused "case12-no-sudo-required-fails" "RELAY_E2E_SUDO_REQUIRED=1, so this is a failure, not a skip"
+if [ -s "$ARGV_LOG" ] || [ -s "$LEDGER" ]; then
+  echo "FAIL: case12-no-sudo-required-fails: curl was called or a skip was recorded" >&2
+  fail=$((fail + 1))
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "FAIL: $fail assertion(s) failed" >&2
   exit 1
 fi
 
-echo "PASS: smoke-test.sh passes only on a reached certless Enroll plus interceptor refusals of certless Renew and Tunnel/Open, and fails when nothing listens, when either interceptor is off, on the right code with the wrong message, when everything is refused, on a non-gRPC answer, when the Relay never starts, and without HTTP/2; every dial is certless by construction."
+echo "PASS: smoke-test.sh passes only on a reached certless Enroll plus interceptor refusals of certless Renew and Tunnel/Open, and fails when nothing listens, when either interceptor is off, on the right code with the wrong message, when everything is refused, on a non-gRPC answer, when the Relay never starts, and without HTTP/2; every dial is certless by construction; a missing separate uid is a recorded skip, or a failure under RELAY_E2E_SUDO_REQUIRED=1."

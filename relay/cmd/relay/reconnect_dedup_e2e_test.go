@@ -82,9 +82,7 @@ func TestFleetE2E_RelayRestartDaemonReconnects_DedupHolds(t *testing.T) {
 	// durably committed, so there is nothing further to wait for before a
 	// truthful crash, and the no-sleeps-as-synchronization DoD is satisfied
 	// without it.
-	if fr.cmd.Process != nil {
-		fr.cmd.Process.Kill() //nolint:errcheck
-	}
+	fr.proc.Kill() //nolint:errcheck
 
 	// Restart the Relay on the SAME store/addr/CA dir — its persisted store
 	// still has the Task Dispatched with no Result. The daemon is never
