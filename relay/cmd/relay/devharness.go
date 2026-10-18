@@ -264,7 +264,10 @@ type harnessAuditInfo struct {
 // harnessResponse is one line of the newline-delimited JSON control protocol
 // reply. Only the fields relevant to the request's op are populated.
 type harnessResponse struct {
-	Token             string `json:"token,omitempty"`
+	Token string `json:"token,omitempty"`
+	// JoinString is create_token's join string, minted with the token. Like
+	// Token it is a secret and is never logged.
+	JoinString        string `json:"join_string,omitempty"`
 	NodeID            string `json:"node_id,omitempty"`
 	TaskID            string `json:"task_id,omitempty"`
 	Outcome           string `json:"outcome,omitempty"`
@@ -360,22 +363,23 @@ func dispatchHarnessRequest(ctx context.Context, st *harnessState, req harnessRe
 	}
 }
 
-// harnessCreateToken mints an Enrollment Token via the real enroll.Service
-// (enroll/token.go:174) and returns its plaintext credential.
+// harnessCreateToken mints an Enrollment Token through the composition root's
+// one enroll.Minter and returns its plaintext credential and the join string
+// carrying it, exactly as the Control API's mint response does.
 //
-// SECURITY: the plaintext token is returned to the socket client but MUST
-// NEVER be logged (AGENTS.md: never log secrets).
+// SECURITY: the plaintext token and the join string are returned to the socket
+// client but MUST NEVER be logged (AGENTS.md: never log secrets).
 func harnessCreateToken(ctx context.Context, deps *appDeps, req harnessRequest) harnessResponse {
 	ttl := time.Duration(req.TTLSeconds) * time.Second
 	if ttl <= 0 {
 		ttl = time.Hour
 	}
-	_, plaintext, err := deps.tokens.Create(ctx, req.Labels, ttl)
+	minted, err := deps.minter.Mint(ctx, req.Labels, ttl)
 	if err != nil {
 		slog.Warn("devharness: create_token failed", "err", err)
 		return harnessResponse{Error: err.Error()}
 	}
-	return harnessResponse{Token: plaintext}
+	return harnessResponse{Token: minted.Plaintext(), JoinString: minted.JoinString()}
 }
 
 // harnessWaitNode blocks (up to timeout_seconds, default 30s) until a Node

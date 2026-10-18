@@ -1,5 +1,6 @@
 //! The daemon's connection to the Relay (ADR-0005, ADR-0006): the mTLS
-//! identity and its sanctioned on-disk writer, enrollment, the join string codec,
+//! identity and its sanctioned on-disk writer, enrollment, the join string codec
+//! and the CA pin it carries,
 //! certificate renewal, and the Tunnel's channel and reconnect backoff.
 //!
 //! Not read-only: `identity` persists the Node's key and certificate, which is why
@@ -18,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub mod enroll;
 pub mod identity;
 pub mod join_string;
+pub mod pin;
 pub mod renew;
 pub mod tunnel;
 

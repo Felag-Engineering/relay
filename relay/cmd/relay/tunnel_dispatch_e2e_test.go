@@ -10,7 +10,7 @@
 //
 // The test stands up a real TCP listener (not bufconn) so the daemon subprocess
 // can dial it. It uses the live enrollment flow: the daemon self-enrolls on first
-// connect using RELAY_ENROLLMENT_TOKEN + RELAY_CA_BUNDLE_PATH.
+// connect with only a RELAY_JOIN join string minted for it.
 //
 // startDaemonNode below is the shared harness for this file and
 // tunnel_control_e2e_test.go's v0.0.4 acceptance tests: it boots the Relay,
@@ -61,7 +61,6 @@ type e2eNode struct {
 	deps       *appDeps
 	stateDir   string
 	policyPath string
-	caPath     string
 	addr       string
 
 	// daemonBin is the relay-daemon binary path — kept (unlike env/cmd) since
@@ -92,11 +91,27 @@ func (n *e2eNode) verdictCh() chan *relayv1.PolicyVerdict {
 	return n.disp.verdicts[n.nodeID]
 }
 
+// mintJoinString mints an Enrollment Token scoped to scope through deps' one
+// Minter and returns the join string carrying it — the value the Control API's
+// mint response hands an operator, and the only thing a test daemon is given.
+func mintJoinString(t *testing.T, deps *appDeps, scope ...string) string {
+	t.Helper()
+	minted, err := deps.minter.Mint(context.Background(), scope, time.Hour)
+	if err != nil {
+		t.Fatalf("mint Enrollment Token: %v", err)
+	}
+	if minted.JoinString() == "" {
+		t.Fatal("mint returned an empty join string")
+	}
+	return minted.JoinString()
+}
+
 // startDaemonNode boots the Relay on a real TCP listener, attaches the
-// dispatcher sink, seeds an Enrollment Token, writes the CA bundle and the
-// given Policy TOML to disk, launches a real relay-daemon subprocess against
-// them, and blocks until the Hello→Ping handshake completes (the dispatcher
-// registration is the sync point). Skips the test if RELAY_DAEMON_BIN is unset.
+// dispatcher sink, mints an Enrollment Token and its join string, writes the
+// given Policy TOML to disk, launches a real relay-daemon subprocess with only
+// that join string, and blocks until the Hello→Ping handshake completes (the
+// dispatcher registration is the sync point). Skips the test if
+// RELAY_DAEMON_BIN is unset.
 func startDaemonNode(t *testing.T, policyTOML string) *e2eNode {
 	t.Helper()
 	daemonBin := os.Getenv("RELAY_DAEMON_BIN")
@@ -110,32 +125,12 @@ func startDaemonNode(t *testing.T, policyTOML string) *e2eNode {
 	disp := newDispatcher()
 	deps.tunnel.sink = disp
 
-	_, plaintext, err := deps.tokens.Create(ctx, []string{"relay:env=test"}, time.Hour)
-	if err != nil {
-		t.Fatalf("seed Enrollment Token: %v", err)
-	}
-
-	caBundle := deps.ca.Bundle()
-	caFile, err := os.CreateTemp(t.TempDir(), "ca-bundle-*.pem")
-	if err != nil {
-		t.Fatalf("create CA bundle temp file: %v", err)
-	}
-	if _, err := caFile.Write(caBundle); err != nil {
-		t.Fatalf("write CA bundle: %v", err)
-	}
-	caFile.Close()
-	if err := os.Chmod(caFile.Name(), 0600); err != nil {
-		t.Fatalf("chmod CA bundle: %v", err)
-	}
-
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", policyTOML)
 	stateDir := t.TempDir()
 
 	handle := relaytest.StartDaemon(t, relaytest.DaemonConfig{
 		Bin:        daemonBin,
-		NodeAddr:   addr,
-		CAPath:     caFile.Name(),
-		Token:      plaintext,
+		JoinString: mintJoinString(t, deps, "relay:env=test"),
 		StateDir:   stateDir,
 		PolicyPath: policyPath,
 		Hostname:   "e2e-test-node",
@@ -169,7 +164,6 @@ func startDaemonNode(t *testing.T, policyTOML string) *e2eNode {
 		deps:       deps,
 		stateDir:   stateDir,
 		policyPath: policyPath,
-		caPath:     caFile.Name(),
 		addr:       addr,
 		daemonBin:  daemonBin,
 		handle:     handle,

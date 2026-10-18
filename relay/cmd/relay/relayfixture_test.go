@@ -144,8 +144,19 @@ func startRelay(t *testing.T, opts ...FixtureOption) *relayFixture {
 		cfg.ControlEnabled = true
 		cfg.ControlAddr = "127.0.0.1:0"
 	}
+	// The TCP node plane is bound before newServer so the join strings the
+	// Minter issues name a port a daemon can actually dial: the advertised
+	// address defaults to the certificate hostname plus this listener's port.
+	var tcpLis net.Listener
 	if spec.plane == nodePlaneTCP {
 		cfg.Addr = "127.0.0.1:0"
+		var err error
+		tcpLis, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("Listen (node plane): %v", err)
+		}
+		_, port, _ := net.SplitHostPort(tcpLis.Addr().String())
+		cfg.AdvertisedAddress = net.JoinHostPort(cfg.Hostname, port)
 	}
 	for _, f := range spec.configure {
 		f(&cfg)
@@ -176,12 +187,8 @@ func startRelay(t *testing.T, opts ...FixtureOption) *relayFixture {
 
 	switch spec.plane {
 	case nodePlaneTCP:
-		lis, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("Listen (node plane): %v", err)
-		}
-		f.NodeAddr = lis.Addr().String()
-		go srv.Serve(lis)
+		f.NodeAddr = tcpLis.Addr().String()
+		go srv.Serve(tcpLis)
 		t.Cleanup(srv.GracefulStop)
 	default:
 		lis := bufconn.Listen(1 << 20)

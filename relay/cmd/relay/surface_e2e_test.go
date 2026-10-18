@@ -18,9 +18,9 @@
 // #113 (compose dev-fleet) note: #113 is still OPEN as of this issue. A
 // future compose-based dev-fleet harness can reuse, wholesale: the
 // token-scope -> distinct relay: label pattern used here to stand up
-// alpha/beta/fresh Nodes; the launchDaemon env recipe (RELAY_ADDR/
-// RELAY_ENROLLMENT_TOKEN/RELAY_CA_BUNDLE_PATH/RELAY_STATE_DIR/
-// RELAY_POLICY_PATH, one HOSTNAME + one RELAY_STATE_DIR per Node); the
+// alpha/beta/fresh Nodes; the launchDaemon env recipe (RELAY_JOIN/
+// RELAY_STATE_DIR/RELAY_POLICY_PATH, one HOSTNAME + one RELAY_STATE_DIR per
+// Node); the
 // waitForConnectedNodes(deps.dispatch.ConnectedNodes()) readiness poll; the
 // pollDescribeReported poll for the daemon's post-connect PolicySnapshot
 // (#151); and the public-surface (MCP + HTTPS) assertion shapes throughout.
@@ -126,17 +126,15 @@ func startSurfaceHarness(t *testing.T) (deps *appDeps, nodeAddr, controlBase str
 	return f.Deps, f.NodeAddr, f.ControlBase, f.Client(), f.ClientFor(""), f.Credential
 }
 
-// launchDaemon starts a real relay-daemon subprocess against nodeAddr,
-// enrolling with token, with its own fresh RELAY_STATE_DIR and HOSTNAME (so
-// distinct calls model distinct fleet Nodes, never reusing on-disk identity).
-// The subprocess is killed and reaped via t.Cleanup.
-func launchDaemon(t *testing.T, nodeAddr, caFile, policyPath, token, hostname string) *exec.Cmd {
+// launchDaemon starts a real relay-daemon subprocess enrolling with joinString
+// alone, with its own fresh RELAY_STATE_DIR and HOSTNAME (so distinct calls
+// model distinct fleet Nodes, never reusing on-disk identity). The subprocess
+// is killed and reaped via t.Cleanup.
+func launchDaemon(t *testing.T, policyPath, joinString, hostname string) *exec.Cmd {
 	t.Helper()
 	handle := relaytest.StartDaemon(t, relaytest.DaemonConfig{
 		Bin:        os.Getenv("RELAY_DAEMON_BIN"),
-		NodeAddr:   nodeAddr,
-		CAPath:     caFile,
-		Token:      token,
+		JoinString: joinString,
 		StateDir:   t.TempDir(),
 		PolicyPath: policyPath,
 		Hostname:   hostname,
@@ -244,20 +242,10 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	deps, nodeAddr, controlBase, authed, plain, credential := startSurfaceHarness(t)
 	ctx := context.Background()
 
-	caFile := relaytest.WriteTempFile(t, "ca-bundle-*.pem", string(deps.ca.Bundle()))
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 
-	_, tokenAlpha, err := deps.tokens.Create(ctx, []string{"relay:env=test", "relay:node=alpha"}, time.Hour)
-	if err != nil {
-		t.Fatalf("seed alpha Enrollment Token: %v", err)
-	}
-	_, tokenBeta, err := deps.tokens.Create(ctx, []string{"relay:env=test", "relay:node=beta"}, time.Hour)
-	if err != nil {
-		t.Fatalf("seed beta Enrollment Token: %v", err)
-	}
-
-	launchDaemon(t, nodeAddr, caFile, policyPath, tokenAlpha, "surface-e2e-alpha")
-	launchDaemon(t, nodeAddr, caFile, policyPath, tokenBeta, "surface-e2e-beta")
+	launchDaemon(t, policyPath, mintJoinString(t, deps, "relay:env=test", "relay:node=alpha"), "surface-e2e-alpha")
+	launchDaemon(t, policyPath, mintJoinString(t, deps, "relay:env=test", "relay:node=beta"), "surface-e2e-beta")
 
 	connected := waitForConnectedNodes(t, deps, 2, 45*time.Second)
 	if len(connected) != 2 {
@@ -588,11 +576,12 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		if err := json.NewDecoder(mintResp.Body).Decode(&minted); err != nil {
 			t.Fatalf("decode mint response: %v", err)
 		}
-		if minted.ID == "" || minted.Token == "" {
-			t.Fatalf("mint response missing id/token: %+v", minted)
+		if minted.ID == "" || minted.Token == "" || minted.JoinString == "" {
+			t.Fatalf("mint response missing id/token/join_string (id %q)", minted.ID)
 		}
 
-		launchDaemon(t, nodeAddr, caFile, policyPath, minted.Token, "surface-e2e-fresh")
+		// The daemon gets the mint response's join string and nothing else.
+		launchDaemon(t, policyPath, minted.JoinString, "surface-e2e-fresh")
 		freshConnected := waitForConnectedNodes(t, deps, 3, 45*time.Second)
 		if len(freshConnected) != 3 {
 			t.Fatalf("waitForConnectedNodes: got %d Nodes, want exactly 3 (bounded fleet): %v", len(freshConnected), freshConnected)

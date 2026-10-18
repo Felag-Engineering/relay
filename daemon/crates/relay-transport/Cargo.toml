@@ -25,6 +25,9 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 prost = { workspace = true }
 base64 = { workspace = true }
+# SHA-256 over the presented CA's DER, matched against the join string's pin
+# (ADR-0031). Already a workspace dependency of the bin.
+ring = { workspace = true }
 
 [dev-dependencies]
 relay-test-support = { workspace = true }
@@ -41,6 +44,11 @@ time = { workspace = true }
 # already in the tree. It is dev-only (resolver 2) and does not reach the
 # production binary.
 x509-parser = { workspace = true, features = ["verify"] }
+# The enroll tests' fake Enrollment server: tonic's server half and the prost
+# codec its hand-written service names. Dev-only; the daemon stays a gRPC client.
+tonic = { workspace = true, features = ["codegen", "transport", "tls-ring"] }
+tonic-prost = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
 
 [lints]
 workspace = true

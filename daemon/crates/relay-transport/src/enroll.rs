@@ -1,9 +1,8 @@
-//! Bootstrap enrollment: generates an ECDSA P-256 keypair + CSR, calls the Relay's
-//! `Enrollment.Enroll` RPC over CA-pinned server-authenticated TLS, and persists
-//! the returned identity. Idempotent: a re-run on an already-enrolled Node is a
-//! no-op (ADR-0006).
+//! Bootstrap enrollment: generates an ECDSA P-256 keypair + CSR, pins the Relay's
+//! CA from the join string's fingerprint, calls the Relay's `Enrollment.Enroll` RPC
+//! over TLS trusting only that CA, and persists the returned identity. Idempotent:
+//! a re-run on an already-enrolled Node is a no-op (ADR-0006, ADR-0031).
 
-use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
@@ -14,7 +13,9 @@ use crate::identity::{
     build_channel, build_keypair_and_csr, cert_pubkey_matches_key, load_identity, persist_identity,
     persist_relay_addr, validate_endpoint_scheme, validate_relay_addr, Identity, IdentityError,
 };
+use crate::join_string::JoinString;
 use crate::log_field;
+use crate::pin::{fetch_pinned_ca, pem_encode_cert, PinError};
 
 type Result<T, E = EnrollError> = std::result::Result<T, E>;
 
@@ -35,6 +36,10 @@ pub enum EnrollError {
     Utf8(#[from] std::string::FromUtf8Error),
     #[error("node_id mismatch: expected {expected}, got {received}")]
     NodeIdMismatch { expected: String, received: String },
+    #[error(transparent)]
+    Pin(#[from] PinError),
+    #[error("the Relay returned a CA bundle that is not the pinned CA; nothing was persisted")]
+    CaBundleMismatch,
 }
 
 // Manual From impl because #[from] on Box<tonic::Status> would generate
@@ -45,12 +50,12 @@ impl From<tonic::Status> for EnrollError {
     }
 }
 
-/// Configuration for the enrollment bootstrap step. Constructed by the bin's
-/// `config::enroll_config`; that returns `None` when enrollment is not
-/// configured, leaving the existing Tunnel path intact.
+/// Configuration for the enrollment bootstrap step, constructed by the bin's
+/// `config::enroll_config` only when no identity exists and a join string is set.
 pub struct EnrollConfig {
-    /// Enrollment Token — never logged.
-    pub token: String,
+    /// The decoded join string: the CA fingerprint pinned before anything is sent,
+    /// and the Enrollment Token, never logged. Only the redacting type is held.
+    pub join: JoinString,
     /// gRPC endpoint of the Relay's Enrollment service (e.g. `https://relay:7654`).
     pub endpoint: String,
     /// Node-plane Relay address persisted with the identity at enrollment
@@ -58,8 +63,6 @@ pub struct EnrollConfig {
     pub relay_addr: String,
     /// TLS SNI server name override for cert verification (optional).
     pub relay_domain: Option<String>,
-    /// Path to the pinned CA PEM bundle used to authenticate the Relay at bootstrap.
-    pub ca_bundle_path: PathBuf,
     /// Directory where key.pem, cert.pem, ca_bundle.pem, and node_id are persisted.
     pub state_dir: PathBuf,
     /// Node-space labels (bare `key=value`; `node:` prefix is added at send time).
@@ -127,18 +130,18 @@ pub(crate) fn parse_node_labels(raw: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Calls the Relay's `Enrollment.Enroll` RPC over CA-pinned server-authenticated
-/// TLS. No client certificate is used — this is the certless bootstrap path
-/// (ADR-0006 §2). Bootstrap trust is pinned to `ca_bundle_path`; there is no
-/// trust-on-first-use.
+/// Calls the Relay's `Enrollment.Enroll` RPC. No client certificate is used — this
+/// is the certless bootstrap path (ADR-0006 §2). The CA is pinned first, from the
+/// join string's fingerprint, and the token is sent only on a connection whose
+/// sole trust root is that CA; there is no trust-on-first-use (ADR-0031).
 ///
 /// Takes all config as owned values so callers can move-capture from `EnrollConfig`
 /// without lifetime issues.
 async fn call_enroll_owned(
     endpoint: String,
+    pin: [u8; 32],
     token: String,
     relay_domain: Option<String>,
-    ca_bundle_path: PathBuf,
     node_labels: Vec<(String, String)>,
     facts: Facts,
     csr_pem: String,
@@ -146,8 +149,9 @@ async fn call_enroll_owned(
     // Defense-in-depth: re-validate even if the caller bypassed from_env.
     validate_endpoint_scheme(&endpoint)?;
 
-    let ca_bytes = fs::read(&ca_bundle_path)?;
-    let channel = build_channel(endpoint, relay_domain, &ca_bytes, None).await?;
+    let ca_der = fetch_pinned_ca(&endpoint, relay_domain.as_deref(), &pin).await?;
+    let ca_pem = pem_encode_cert(&ca_der);
+    let channel = build_channel(endpoint, relay_domain, ca_pem.as_bytes(), None).await?;
 
     let self_labels = node_labels_to_proto(&node_labels);
 
@@ -167,8 +171,25 @@ async fn call_enroll_owned(
     // Both should be UTF-8 PEM; propagate an error if they aren't.
     let cert_pem = String::from_utf8(resp.certificate)?;
     let ca_bundle_pem = String::from_utf8(resp.ca_bundle)?;
+    check_ca_bundle(&ca_bundle_pem, &ca_der)?;
 
     Ok((resp.node_id, cert_pem, ca_bundle_pem))
+}
+
+/// Refuses a returned CA bundle unless it is exactly the pinned CA: one
+/// certificate, byte-identical DER. What is persisted as `ca_bundle.pem` then
+/// trusts nothing the join string did not pin.
+fn check_ca_bundle(ca_bundle_pem: &str, pinned: &[u8]) -> Result<()> {
+    use rustls_pki_types::pem::PemObject;
+    use rustls_pki_types::CertificateDer;
+    let certs: Vec<CertificateDer<'static>> =
+        CertificateDer::pem_slice_iter(ca_bundle_pem.as_bytes())
+            .collect::<std::result::Result<_, _>>()
+            .map_err(|_| EnrollError::CaBundleMismatch)?;
+    match certs.as_slice() {
+        [only] if only.as_ref() == pinned => Ok(()),
+        _ => Err(EnrollError::CaBundleMismatch),
+    }
 }
 
 /// Orchestrates enrollment, separated from the RPC for testability.
@@ -234,9 +255,9 @@ pub async fn ensure_enrolled(cfg: &EnrollConfig) -> Result<Identity> {
     // Clone the fields call_enroll_owned needs so the async closure captures
     // owned data and avoids a lifetime tangle with &EnrollConfig.
     let endpoint = cfg.endpoint.clone();
-    let token = cfg.token.clone();
+    let pin = *cfg.join.ca_fingerprint();
+    let token = cfg.join.enrollment_token().to_string();
     let relay_domain = cfg.relay_domain.clone();
-    let ca_bundle_path = cfg.ca_bundle_path.clone();
     let node_labels = cfg.node_labels.clone();
     let facts = cfg.facts.clone();
 
@@ -248,9 +269,9 @@ pub async fn ensure_enrolled(cfg: &EnrollConfig) -> Result<Identity> {
         move |csr_pem| {
             call_enroll_owned(
                 endpoint,
+                pin,
                 token,
                 relay_domain,
-                ca_bundle_path,
                 node_labels,
                 facts,
                 csr_pem,
@@ -588,5 +609,278 @@ mod no_debug_guard {
     #[test]
     fn enroll_config_does_not_derive_debug() {
         assert_no_debug::<EnrollConfig>();
+    }
+}
+
+/// The join-string enrollment path against a fake Relay over real TLS: the
+/// server presents `[leaf, CA]` the way the Relay's node plane does and counts
+/// the `Enroll` calls it receives (DI-22).
+#[cfg(test)]
+mod join_enroll {
+    use super::*;
+    use crate::gen::EnrollResponse;
+    use crate::identity::{load_identity, load_relay_addr};
+    use crate::pin::sha256;
+    use crate::test_support::TempDir;
+    use rustls_pki_types::pem::PemObject;
+    use rustls_pki_types::CertificateDer;
+    use std::convert::Infallible;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use tonic::codegen::{http, BoxFuture, Context, Poll, Service};
+    use tonic::transport::server::{ServerTlsConfig, TcpIncoming};
+    use tonic::transport::{Identity as TlsIdentity, Server};
+
+    struct Pki {
+        ca_pem: String,
+        ca_der: Vec<u8>,
+        ca_params: rcgen::CertificateParams,
+        ca_key: rcgen::KeyPair,
+        leaf_pem: String,
+        leaf_key_pem: String,
+    }
+
+    fn pki(leaf_name: &str) -> Pki {
+        let ca_key = rcgen::KeyPair::generate().expect("ca key");
+        let mut ca_params = rcgen::CertificateParams::new(vec![]).expect("ca params");
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = ca_params.self_signed(&ca_key).expect("ca cert");
+        let leaf_key = rcgen::KeyPair::generate().expect("leaf key");
+        let leaf = rcgen::CertificateParams::new(vec![leaf_name.to_string()])
+            .expect("leaf params")
+            .signed_by(&leaf_key, &rcgen::Issuer::from_params(&ca_params, &ca_key))
+            .expect("leaf cert");
+        Pki {
+            ca_pem: ca.pem(),
+            ca_der: ca.der().to_vec(),
+            ca_params,
+            ca_key,
+            leaf_pem: leaf.pem(),
+            leaf_key_pem: leaf_key.serialize_pem(),
+        }
+    }
+
+    /// What the fake Relay saw.
+    #[derive(Default)]
+    struct Seen {
+        enroll_calls: AtomicUsize,
+        tokens: Mutex<Vec<String>>,
+    }
+
+    #[derive(Clone)]
+    struct FakeEnrollment {
+        seen: Arc<Seen>,
+        ca_params: Arc<rcgen::CertificateParams>,
+        ca_key: Arc<rcgen::KeyPair>,
+        ca_bundle_pem: Arc<String>,
+    }
+
+    impl tonic::server::UnaryService<EnrollRequest> for FakeEnrollment {
+        type Response = EnrollResponse;
+        type Future = BoxFuture<tonic::Response<EnrollResponse>, tonic::Status>;
+
+        fn call(&mut self, req: tonic::Request<EnrollRequest>) -> Self::Future {
+            let this = self.clone();
+            Box::pin(async move {
+                let req = req.into_inner();
+                this.seen.enroll_calls.fetch_add(1, Ordering::SeqCst);
+                this.seen
+                    .tokens
+                    .lock()
+                    .unwrap()
+                    .push(req.enrollment_token.clone());
+                let csr = String::from_utf8(req.csr).expect("csr utf8");
+                let cert = crate::identity::test_ca::sign_csr(&csr, &this.ca_params, &this.ca_key);
+                Ok(tonic::Response::new(EnrollResponse {
+                    node_id: "node-join-test".to_string(),
+                    certificate: cert.pem().into_bytes(),
+                    ca_bundle: this.ca_bundle_pem.as_bytes().to_vec(),
+                    ..Default::default()
+                }))
+            })
+        }
+    }
+
+    impl Service<http::Request<tonic::body::Body>> for FakeEnrollment {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = Infallible;
+        type Future = BoxFuture<Self::Response, Infallible>;
+
+        fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Infallible>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, req: http::Request<tonic::body::Body>) -> Self::Future {
+            let svc = self.clone();
+            Box::pin(async move {
+                if req.uri().path() != "/relay.v1.Enrollment/Enroll" {
+                    return Ok(tonic::Status::unimplemented("not Enroll").into_http());
+                }
+                let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
+                Ok(grpc.unary(svc, req).await)
+            })
+        }
+    }
+
+    /// Starts the fake Relay presenting `server`'s leaf and CA, answering Enroll
+    /// with `ca_bundle_pem` as the CA bundle. Returns its port and what it saw.
+    async fn start_fake_relay(server: &Pki, ca_bundle_pem: String) -> (u16, Arc<Seen>) {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let incoming = TcpIncoming::bind("127.0.0.1:0".parse().unwrap()).expect("bind");
+        let port = incoming.local_addr().expect("local_addr").port();
+        let seen = Arc::new(Seen::default());
+        let svc = FakeEnrollment {
+            seen: Arc::clone(&seen),
+            ca_params: Arc::new(server.ca_params.clone()),
+            ca_key: Arc::new(
+                rcgen::KeyPair::from_pem(&server.ca_key.serialize_pem()).expect("ca key"),
+            ),
+            ca_bundle_pem: Arc::new(ca_bundle_pem),
+        };
+        let chain = format!("{}{}", server.leaf_pem, server.ca_pem);
+        let tls =
+            ServerTlsConfig::new().identity(TlsIdentity::from_pem(chain, &server.leaf_key_pem));
+        let builder = Server::builder().tls_config(tls).expect("server tls");
+        tokio::spawn(async move {
+            let _ = builder.serve_with_incoming(svc, incoming).await;
+        });
+        (port, seen)
+    }
+
+    fn enroll_cfg(port: u16, pin: [u8; 32], state_dir: &Path) -> EnrollConfig {
+        let endpoint = format!("https://127.0.0.1:{port}");
+        EnrollConfig {
+            join: JoinString::new(
+                format!("127.0.0.1:{port}"),
+                pin,
+                "tok-join-secret".to_string(),
+            ),
+            endpoint: endpoint.clone(),
+            relay_addr: endpoint,
+            relay_domain: Some("localhost".to_string()),
+            state_dir: state_dir.to_path_buf(),
+            node_labels: vec![],
+            facts: Facts {
+                hostname: "join-test".to_string(),
+                ..Default::default()
+            },
+        }
+    }
+
+    async fn enroll(cfg: &EnrollConfig) -> Result<Identity> {
+        tokio::time::timeout(Duration::from_secs(20), ensure_enrolled(cfg))
+            .await
+            .expect("enrollment did not finish within the timeout")
+    }
+
+    #[tokio::test]
+    async fn pin_match_enrolls() {
+        let server = pki("localhost");
+        let (port, seen) = start_fake_relay(&server, server.ca_pem.clone()).await;
+        let dir = TempDir::new("join-pin-match");
+
+        let cfg = enroll_cfg(port, sha256(&server.ca_der), dir.path());
+        let id = enroll(&cfg).await.expect("a matching pin enrolls");
+
+        assert_eq!(id.node_id, "node-join-test");
+        assert_eq!(seen.enroll_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *seen.tokens.lock().unwrap(),
+            vec!["tok-join-secret".to_string()]
+        );
+        // The CA bundle lands in the state directory: no CA path is configured.
+        let persisted = std::fs::read_to_string(dir.path().join("ca_bundle.pem")).unwrap();
+        let der = CertificateDer::from_pem_slice(persisted.as_bytes()).expect("ca pem");
+        assert_eq!(der.as_ref(), server.ca_der.as_slice());
+        assert!(load_identity(dir.path()).unwrap().is_some());
+        assert_eq!(
+            load_relay_addr(dir.path()).unwrap().as_deref(),
+            Some(cfg.relay_addr.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn pin_mismatch_sends_no_token() {
+        let server = pki("localhost");
+        let (port, seen) = start_fake_relay(&server, server.ca_pem.clone()).await;
+        let dir = TempDir::new("join-pin-mismatch");
+
+        // The pin names some other CA.
+        let other = pki("localhost");
+        let cfg = enroll_cfg(port, sha256(&other.ca_der), dir.path());
+        let err = enroll(&cfg)
+            .await
+            .err()
+            .expect("a pin mismatch must refuse");
+
+        assert!(
+            matches!(err, EnrollError::Pin(PinError::Mismatch)),
+            "want Pin(Mismatch), got {err:?}"
+        );
+        assert!(!format!("{err} {err:?}").contains("tok-join-secret"));
+        assert_eq!(
+            seen.enroll_calls.load(Ordering::SeqCst),
+            0,
+            "nothing may reach Enroll before the pin matches"
+        );
+        assert!(seen.tokens.lock().unwrap().is_empty());
+        assert!(load_identity(dir.path()).unwrap().is_none());
+        assert_eq!(load_relay_addr(dir.path()).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn pin_match_with_wrong_server_name_sends_no_token() {
+        let server = pki("some-other-host");
+        let (port, seen) = start_fake_relay(&server, server.ca_pem.clone()).await;
+        let dir = TempDir::new("join-pin-wrong-name");
+
+        let cfg = enroll_cfg(port, sha256(&server.ca_der), dir.path());
+        assert!(enroll(&cfg).await.is_err());
+        assert_eq!(seen.enroll_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn ca_bundle_mismatch_refused() {
+        let server = pki("localhost");
+        let other = pki("localhost");
+        // The Relay answers with a bundle that is not the CA it presented.
+        let (port, seen) = start_fake_relay(&server, other.ca_pem.clone()).await;
+        let dir = TempDir::new("join-bundle-mismatch");
+
+        let cfg = enroll_cfg(port, sha256(&server.ca_der), dir.path());
+        let err = enroll(&cfg)
+            .await
+            .err()
+            .expect("a mismatched bundle must refuse");
+
+        assert!(
+            matches!(err, EnrollError::CaBundleMismatch),
+            "want CaBundleMismatch, got {err:?}"
+        );
+        assert_eq!(seen.enroll_calls.load(Ordering::SeqCst), 1);
+        assert!(load_identity(dir.path()).unwrap().is_none());
+        for name in ["key.pem", "cert.pem", "ca_bundle.pem", "node_id"] {
+            assert!(
+                !dir.path().join(name).exists(),
+                "{name} must not be persisted"
+            );
+        }
+    }
+
+    #[test]
+    fn ca_bundle_with_the_pinned_ca_and_another_is_refused() {
+        let a = pki("localhost");
+        let b = pki("localhost");
+        let both = format!("{}{}", a.ca_pem, b.ca_pem);
+        assert!(check_ca_bundle(&a.ca_pem, &a.ca_der).is_ok());
+        assert!(matches!(
+            check_ca_bundle(&both, &a.ca_der),
+            Err(EnrollError::CaBundleMismatch)
+        ));
+        assert!(matches!(
+            check_ca_bundle("", &a.ca_der),
+            Err(EnrollError::CaBundleMismatch)
+        ));
     }
 }
