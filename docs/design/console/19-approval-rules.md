@@ -8,16 +8,19 @@ Behaviour: `docs/specs/approval.md`, `docs/specs/relay-configuration.md`.
 **Backend:** store-backed gate rules, seeded on first boot (#590); step-up (#428); audit.
 
 Decided with the owner, 2026-09-16: its own page beside Approvals; the confirm step shows old →
-new and nothing more; no change history.
+new and nothing more; no change history. *(2026-10-18: the Approvals page is gone — ADR-0044
+removed the Console's approval surface — so this page sits in **Act** on its own. Whether the
+owner's "cut approvals out of the UI completely" reaches this page too is not settled; see D21.)*
 
 ## What this screen is for
 
-Deciding where human attention is spent. Approvals (spec 14) is where a parked dispatch waits;
-this is where the rule that parked it lives.
+Deciding where human attention is spent. This is where the rule that parks a dispatch lives; the
+parked request itself waits on the Control API or in the requesting client, never in the Console
+(ADR-0044).
 
 ## Navigation
 
-**Act › Approval rules**, after Approvals. `admin` sees and edits. Other roles: absent — the rules
+**Act › Approval rules**, after Policy. `admin` sees and edits. Other roles: absent — the rules
 decide what an AI-agent may do unattended, and reading them is a map of what does not park.
 
 ## The list
@@ -48,7 +51,7 @@ residual accepted as R15.
 
 - The approval webhook URL, secret or timeout as editable — they are security floor (spec 18
   renders them read-only).
-- Any control from which an approval is *decided* — that is spec 08/14.
+- Any control from which an approval is *decided* — the Console decides none (ADR-0044).
 - A history of past rule sets.
 - The page, for any role but `admin`.
 

@@ -25,7 +25,7 @@ enumerated route a single approval releases — is meant to, once `plan.md` is b
 |---|---|
 | **MCP** | **`approve_request`** — an ordinary tool call carrying the request ID, the plan hash being answered, the verdict, an asserted approver identity, and an optional reason. It is the in-band decision path today, and the one every MCP client has been able to make since 2024-11-05 (AP-15, ADR-0029). **MRTR elicitation** — a second envelope over the *same* single guarded decision seam (ADR-0029 decisions 5 and 6): the gated `tools/call` answers with an input-required result carrying a Relay-authored approval question, and the client retries the call carrying the answer (AP-60 … AP-71, #646). Which response a gated call receives when a client supports both MRTR and the MCP task handle is settled here by AP-71: a park that emitted a question emits no task envelope. |
 | **Control API** | `GET /api/v1/approvals`, `GET /api/v1/approvals/{id}`, `POST /api/v1/approvals/{id}/decision` — the out-of-band decision endpoint; grant management under `/api/v1/approval-grants`. |
-| **Admin Console** | The approval queue — triage, the request detail, the anti-fatigue diff against the last approval of the same shape, and deciding from the Console under step-up (#435, #629). Bulk decisions are AP-59, designed and not built. The approval UI is where a human records a Decision and nothing else (AP-19); the Console's execution surface is `execution.md` (ADR-0026). |
+| **Admin Console** | **Today:** the approval queue, the request detail with its anti-fatigue diff, and deciding under step-up (AP-16's Console half, AP-19). **Designed: none** — ADR-0044 (owner decision `2026-10-18`) removes the Console's approval surface, leaving the Control API as the one out-of-band path (AP-80); nothing new is built on the current screens. Bulk decisions (AP-59) were retired unbuilt. The Console still shows what an approval left behind on another record — approver chips on a Job, an `approval` row in Activity — and its execution surface is `execution.md` (ADR-0026). |
 
 Server-initiated elicitation (`elicitation/create` pushed over a stream) is **not** a surface: the
 2026-07-28 protocol removed it, and emitting it would cost the MCP surface its stateless property
@@ -175,14 +175,14 @@ different people.
 
 **MCP is the approved pathway** for agent-originated approval (ADR-0040, as amended
 `2026-09-25`): the tool text, the runbook and operator guidance name it, and Gleipnir is where the
-human is expected to answer. The out-of-band path — the Console and the Control API decision
-endpoint — works, decides any parked request whichever surface created it, and is **not relied
-on**. It is the rescue, not the route: nothing Relay ships should direct a human there for
-agent-originated work, and nothing refuses a human who arrives there anyway. **Today the product
-does not yet say so**: the MCP park result's decision path, its schema text and the webhook
-payload all still name the Relay decision endpoint. Bringing them in line is open work — see *Open
-questions* — and until it lands, the approved pathway is the owner's posture and ADR-0040's, not
-yet the product's own text.
+human is expected to answer. The out-of-band path — the Control API decision endpoint, and
+until AP-80 lands the Console too — works, decides any parked request whichever surface created
+it, and is **not relied on**. It is the rescue, not the route: nothing Relay ships should direct
+a human there for agent-originated work, and nothing refuses a human who arrives there anyway.
+**Today the product does not yet say so**: the MCP park result's decision path, its schema text
+and the webhook payload all still name the Relay decision endpoint. Bringing them in line is
+open work — see *Open questions* — and until it lands, the approved pathway is the owner's
+posture and ADR-0040's, not yet the product's own text.
 
 - **AP-15** **In-band, through the requesting client.** Relay authors the question; the client puts
   it in front of a human and returns the answer over its own session. `approve_request` is that
@@ -221,6 +221,12 @@ whose approver Relay verifies.
   a request before deciding it — the approver decides exactly what was asked or nothing — and
   nothing is dispatched from it:
   a release proceeds as any other release does (*Deciding*).
+
+**AP-16's Console half and AP-19 are to be retired by AP-80** (ADR-0044, owner decision
+`2026-10-18`): the Console is to have no approval surface, and the out-of-band path is the
+Control API alone. Both claims are still true of the code and stay here as current until AP-80,
+Designed, removes the Console path and retires them. The Control API half of AP-16 carries on
+unchanged in AP-80.
 
 - **AP-60** A gated dispatch that parks under an in-band rule, from a client that can be asked, is
   answered with an approval **question** carrying the Relay-authored summary, the request ID and
@@ -473,12 +479,18 @@ is blended.
 
 ## Governing ADRs and invariants
 
+- **ADR-0044** — the Console does not decide approvals; the Control API decision endpoint is the
+  one out-of-band path, kept as the manual rescue and as the only place a rule needing a
+  Relay-verified approver can be satisfied. Retires AP-59 now, and AP-16 and AP-19 when AP-80
+  lands. Takes the `2026-09-25` intent recorded in ADR-0040 for the Console half only, and
+  accepts that rescue then has no UI.
 - **ADR-0040, as amended `2026-09-25`** — MCP is the approved pathway for agent-originated
   approval, and out-of-band as a rule *requirement* is shelved. **Explicitly interim**,
   pending the permissions rework (#716). Its original strict separation — the surface that
   created a request is the surface that answers it — was **withdrawn before any of it was
   built**, for the availability cost it had not named, and its three claims are retired. The
-  Console and the Control API keep deciding any parked request and are not relied on. What the
+  Control API keeps deciding any parked request and is not relied on — and so does the Console
+  until AP-80 lands (ADR-0044). What the
   relied-on path gives up — a Relay-verified approver for agent-originated work — is stated in
   *Accepted residual risk* and in threat model R21 and R26; what is shelved is
   `approval-assurance.md`.
@@ -517,7 +529,8 @@ is blended.
 - **Invariant 7** — the plan hash binds the resolved set by identity, which is what stops a Node
   forging its own `node:` labels from electing itself into approved work (AP-22).
 - **Invariant 10** — the decision path is the capability layer's; a surface records a channel
-  and renders a queue, and decides nothing (AP-12, AP-19).
+  and renders what is pending, and decides nothing (AP-12, AP-19). An adapter may offer less than
+  the layer allows, which is what AP-80 has the Console do: it offers no approval at all.
 - **Invariant 11** — gate configuration is *reach-bounding*, not security floor: unreachable from
   any API, and it **narrows only** (AP-5, AP-6). Root-owned on the host today (AP-4); a runtime
   object a human `admin` edits in the Console with step-up and audit under AP-72. The webhook's
@@ -617,7 +630,7 @@ Claims with **no row**, and so nothing checking them:
 - **AP-19**, grant half — `TestApprovalCallout_ConsoleDecideRun` proves the decide-and-run path,
   not the carve-out. That a grant-shaped request renders no decision control at all, and is
   answered only on the Control API, is an unchecked box on the Console screen's own specification
-  and nothing asserts it here.
+  (now retired, ADR-0044) and nothing asserts it here; AP-80 makes the gap moot when it lands.
 - **AP-31** — a window past the hard cap is refused (AP-53's row), but no test names the cap's
   value: nothing asserts that it is 24 hours rather than any other duration.
 - **AP-32** — that a one-approval in-band grant is representable is the *absence* of a floor.
@@ -652,9 +665,9 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 | Claim | Statement | Milestone |
 |---|---|---|
 | AP-55 | A Relay whose store holds no gate rules at first start **seeds the shipped default** — `read` ungated, `mutate` and Raw Exec at self-confirmation in-band, with second-person and out-of-band available to raise any rule to — as one audited act attributed to the system and not to an Account. After that the store is the only source: no file is read, and the Relay does not re-seed on a later start. Retires AP-7; depends on AP-72. (ADR-0027 §Amendment 2026-09-16, which declined a root-owned file seeding the store as two sources for one setting; #590.) | v0.7.0 — Admin Console: Administration & Execution |
-| AP-56 | An approval grant never covers Raw Exec: every Raw Exec needs its own decision, alone or within a bulk act, and a Scope naming Raw Exec is refused. Retires AP-30. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
+| AP-56 | An approval grant never covers Raw Exec: every Raw Exec needs its own decision, and a Scope naming Raw Exec is refused. Retires AP-30. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
 | AP-57 | An approval grant's window is capped at 4 hours, and a longer one is refused. Retires AP-31 and narrows AP-53. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
-| AP-59 | The Console may approve or deny several pending requests in one act, Raw Exec included. A bulk decision is a set of individual Decisions made together, never a new kind and never an approval grant: each request is answered against its own plan hash, checked against every rule in *Deciding*, and audited as its own Decision, and one refused request does not carry the others with it. One step-up re-authentication covers the whole act, entered immediately before it is submitted, and approval grant requests are excluded. | v0.7.0 — Admin Console: Administration & Execution |
+| AP-80 | Out-of-band decisions are made on the **Control API decision endpoint only**, under a per-person Account. The Admin Console has **no approval surface**: no list of pending requests, no approval request screen, no decision on any request — singly or several at once — and no step-up taken for one, and its navigation carries no Approvals destination and no pending count. It may still render what an approval left on another record — an `approval` row in Activity, approver chips on a Job, a Plan's state on its own detail screen — with no control that decides. A request's partial quorum (AP-73) is read from the Control API's read of that request. Retires AP-16 and AP-19, and narrows AP-73's queue to the Control API. (ADR-0044, owner decision 2026-10-18.) | v0.7.0 — Admin Console: Administration & Execution |
 | AP-72 | Gate rules are runtime objects in the Relay's store, edited only by a human `admin` in the Admin Console with step-up re-authentication, audited per rule with old and new values, and taking effect on the next dispatch; no MCP tool and no Control API route writes them, and none may be added. Retires AP-4, AP-8 and AP-54 — the store is the only source, no file is read, and there is nothing left to fail to load. (ADR-0027 §Amendment 2026-09-15; #590, #596.) | v0.7.0 — Admin Console: Administration & Execution |
 
 ## Out of scope
@@ -720,7 +733,10 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
   answered; and one permission model is a prerequisite for a good one. Bounded by everything
   an approval never was: Relay-side authorization on who may request, the blast cap, the
   plan-hash binding, drift re-parking, and Node Policy, which no approval has ever been able
-  to lower. Threat model **R21** and **R26**; what is shelved, and what would bring it back,
+  to lower. *(Narrowed `2026-10-18` by ADR-0044: once AP-80 lands the verified approver is
+  reachable on the Control API only — the Console stops deciding — and rescue then needs an API
+  Token and the request's ID rather than a browser. Accepted by the owner that day.)* Threat
+  model **R21** and **R26**; what is shelved, and what would bring it back,
   is `approval-assurance.md`. *(Qualified `2026-09-28`, and again `2026-09-29`: AP-79, now
   built, makes any answer on a human Account's OAuth session, whatever the client calls itself,
   that human's verified decision, so a signed-in human session produces a verified approver over
@@ -780,14 +796,6 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
   audited read with the same reach as `get_job`. Scoping release to the requester is tracked for
   the permissions rework (#716). Accepted by the owner on `2026-09-24`; the fix landed in #713.
   Threat model **R24**.
-- **Bulk approve can rubber-stamp (AP-59).** Approving many requests in one act, Raw Exec
-  included, is the approval-fatigue pattern this capability's Purpose names, and one step-up
-  covers the whole act: a hijacked human Console session plus that Account's password could
-  release every pending request it is eligible to decide, Raw Exec included, at once. Bounded by
-  each request still binding to its own plan hash and passing every decision check individually,
-  by the audience and role floor, by approval grant requests being excluded, and by the audit
-  recording each Decision separately. Accepted by the owner on `2026-09-18` (threat model R22),
-  with bounding by shape key, excluding Raw Exec, or a step-up per request left as Future work.
 - **An approval grant hands the AI-agent choice within its Scope.** Inside a grant, the AI-agent
   picks which covered Operations to run on which Nodes, so a steered session can use a legitimate
   grant for actions nobody intended. Bounded by the Scope, the window, the blast cap and Node
@@ -801,17 +809,16 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 Wanted, deliberately not in the first pass. Named so each is neither re-litigated nor lost;
 none is a commitment to an order.
 
-- **Removing Console approval, so that MCP is the only approval path.** The owner's stated
-  intent on `2026-09-25` — *"I eventually want to potentially remove the entire console
-  approve thing"* — recorded in ADR-0040's amendment of that date as where the
-  approved-pathway posture is heading. **An intent, not a decision**: nothing is removed, and
-  no claim below is retired or reworded for it. If taken, it would retire **AP-16**'s Console
-  half and **AP-19**, both built, and **AP-59** (bulk decisions), which is Designed at v0.7.0
-  and would then never be built or would be retired soon after. The intent names the Console;
-  whether the Control API decision endpoint — AP-16's other half — goes with it is not stated
-  and would have to be decided. It **waits on #646 being proven in use**, and on the restart
-  risk (`approval-assurance.md`; threat model R27) being closed first, because the Console is
-  today the only thing that makes a stranded request decidable. Taking it is its own ADR.
+- **Removing Console approval — taken for the Console half on `2026-10-18` (ADR-0044).** The
+  owner's intent of `2026-09-25` — *"I eventually want to potentially remove the entire console
+  approve thing"* — is now a decision for the Console: AP-59 is retired unbuilt, and AP-80,
+  Designed, removes the built Console path and retires AP-16 and AP-19. The question this entry
+  left open is decided: **the Control API decision endpoint stays**, as the out-of-band path and
+  the manual rescue. Its two preconditions were answered rather than met: #646 is built and not
+  yet proven in real traffic, and the restart risk (threat model R27) is not closed and stays
+  tolerable on the Control API's rescue alone. Removing the Control API endpoint too — MCP as the
+  *only* approval path — is not future work here; ADR-0044 rejected it while R27 is open and no
+  verified approver exists over MCP in the shipped posture.
 
 - **Multi-step Plan routes, and everything that follows from them** — `plan.md`, which states that
   none of it exists in code. A Plan whose hash covers an ordered route rather than a single
@@ -846,8 +853,6 @@ none is a commitment to an order.
   elicitation is usable from the clients Relay is driven by, which first requires those clients to
   negotiate the 2026-07-28 protocol. Not decided here: it needs an ADR-0029 amendment first
   (decisions 1 and 5, and Consequences).
-- **Bounding bulk approve** — by shape key, by excluding Raw Exec, or by a step-up per request —
-  if unbounded bulk (AP-59) proves to invite rubber-stamping.
 - **Namespace-pinned approval grants**, if ever re-added — only with pricing that cannot release
   work needing a stronger approval than the grant was issued under (the #482 defect class).
 
@@ -874,10 +879,18 @@ none is a commitment to an order.
   decision endpoint. Whether each should name the client instead, name both with the client
   first, or be left as the rescue's address is not decided, and none of it has an issue. What would
   force it: the demo's approval beat, which is expected to happen in Gleipnir's UI while the
-  webhook sends the human to the Console.
+  webhook sends the human to the Relay decision endpoint.
+- **What the shape key is for once the Console has no queue.** AP-23 says the shape key
+  powers the anti-fatigue diff (*"same as Tuesday, except the fan-out grew"*), and the only
+  surface that renders that diff is the Console's approval object, which AP-80 removes. The key
+  stays correct and stays a non-release address (AP-24); what is undecided is whether the diff
+  moves to the Relay-authored question a client puts in front of the human, to the Control API's
+  read of a request, or nowhere. What would force it: AP-80 landing, after which AP-23's second
+  sentence describes a rendering no surface makes.
 
-Deciding from the Console (#435) is in scope, not open. ADR-0028's stale `tasks/update` premise is
-no longer open either: ADR-0028's amendment of `2026-09-24` replaced it.
+Whether to keep deciding from the Console is decided (ADR-0044, AP-80), not open.
+ADR-0028's stale `tasks/update` premise is no longer open either: ADR-0028's amendment of
+`2026-09-24` replaced it.
 
 ## Retired
 
@@ -885,3 +898,6 @@ no longer open either: ADR-0028's amendment of `2026-09-24` replaced it.
   second-person grant issuance.
 - **AP-74**, **AP-75**, **AP-76** — `2026-09-25` — retired unbuilt when ADR-0040's strict
   separation by origin was withdrawn (ADR-0040 amendment).
+- **AP-59** — `2026-10-18` — retired unbuilt: bulk decisions were a Console act, and ADR-0044
+  removes the Console's approval surface. Its accepted residual (threat model R22) and its
+  *Bounding bulk approve* future-work entry go with it.

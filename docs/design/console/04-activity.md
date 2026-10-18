@@ -58,7 +58,7 @@ revokes are **not** on this screen. They are on [20 — Access](20-access.md).
 |---|---|
 | `dispatch` | Operation + args, risk badge, requester chips, Selector with resolved fan-out, plan hash, approver if it was parked, live outcome counts, Job link; while running, a running marker linking to its entry in [Running now](#running-now), which holds Cancel |
 | `plan` | a Preflight: the arguments, the grouped verdicts and `would_be_rejected`, and a line saying nothing executed and each Node's own engine answered. Its badge is distinct, because it is the trust-critical case |
-| `approval` | what is parked, quorum state, TTL, a link to decide; an in-band elicitation (ADR-0029) with the deciding identity as a verified chip once decided |
+| `approval` | what is parked, quorum state, TTL — and no link to decide, because the Console decides no approval (ADR-0044); an in-band elicitation (ADR-0029) with the deciding identity as a verified chip once decided |
 | `refusal` | the capability layer's refusal, rendered slate and informative, never as an error — the role gate refusing `raw_exec` to a non-`admin`, for one |
 | `read` | the arguments and a metadata-only result line that explicitly says the output is not retained |
 | `cancel` | which Job, by whom |
@@ -164,7 +164,8 @@ promises to show it later.
 ### Reads made from this Console
 
 Most screens this Console renders read through the capability layer's audited read lane (the
-Approvals queue does not; that is a known gap, #779). So most pages an operator opens are
+built Approvals queue does not, #779; it is retired with the Console's approval surface,
+ADR-0044). So most pages an operator opens are
 themselves calls on the trail, attributed to their own Account, and every reload of this screen is
 one. Where read records are shown, they would bury everything else within minutes of use.
 

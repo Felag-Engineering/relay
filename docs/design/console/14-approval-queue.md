@@ -1,4 +1,13 @@
-# 14 — Approval queue
+# 14 — Approval queue (retired)
+
+> **Retired 2026-10-18 (owner decision, [ADR-0044](../../adr/0044-the-console-does-not-decide-approvals.md)).**
+> The Console has no approval surface: no Approvals destination, no queue, no pending count in
+> the nav. A parked request is answered in-band through the requesting client, or out-of-band on
+> the Control API (`GET /api/v1/approvals`, `POST /api/v1/approvals/{id}/decision`). The screen
+> below **is still in the code** until its removal lands (`docs/specs/approval.md` AP-80), so this
+> text still describes what ships — and binds nothing new: build no further work on it. When the
+> screen is removed, this file becomes a stub like [03](03-agent-sessions.md) and
+> [17](17-read-egress.md), keeping its name so links hold.
 
 **No artboard** (the single card is artboard 6). The list of what is waiting. **Milestone v0.6.0**
 shipped it read-only; **#453** (pulled forward from v0.7.0) added deciding on the object — this

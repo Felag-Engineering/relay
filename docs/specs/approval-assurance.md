@@ -13,7 +13,9 @@ separation — the surface which created a request answers it — and was amende
 what stands: **MCP is the approved pathway, and the Console and the Control API keep deciding any
 request without being relied on.** The shelved properties below survived the amendment unchanged;
 two more, which the amendment's review surfaced and the owner chose to record rather than solve,
-were added on `2026-09-25`.
+were added on `2026-09-25`. On `2026-10-18` ADR-0044 removed the Console's half of that: the
+Console is to have no approval surface (`approval.md` AP-80), and the **Control API decision
+endpoint is the one out-of-band path**, kept as the rescue.
 
 It exists because the alternative was losing the argument. Each property below was reasoned
 through with the owner, some of them twice; three of them had reached a Designed claim with a
@@ -63,13 +65,14 @@ the **verified** Account whose credential made the call — the machine relaying
 the human only as an **assertion** beside it (`approval.md`, *Attribution*). An auditor can
 separate the two, which is the whole point of keeping the lanes structurally apart, but on that
 path the verified lane will never name the human. (A human who decides the same request on the
-Console *is* verified — the rescue path still works — but nothing directs anyone there, so it is
-not the posture this document is about.)
+Control API *is* verified — the rescue path still works — but nothing directs anyone there, so it
+is not the posture this document is about. The Console was the other such path until ADR-0044
+removed it.)
 
 What is shelved is the posture in which it does: a decision whose approver is an Account Relay
-itself authenticated, with a role, an audience membership and — on the Console — a step-up
-re-authentication taken at the moment of deciding. That is what makes an audit trail able to
-answer *"a human authenticated to Relay and approved this"* rather than *"a client told us a
+itself authenticated, with a role, an audience membership and — on the Console, until ADR-0044
+removed its approval surface — a step-up re-authentication taken at the moment of deciding.
+That is what makes an audit trail able to answer *"a human authenticated to Relay and approved this"* rather than *"a client told us a
 human approved this."*
 
 The reason this is worth keeping distinct from the channel: a future design could plausibly
@@ -137,10 +140,19 @@ human — but it means that after a restart the client is never asked again. The
 answerable by nobody on the approved pathway, until its TTL expires.
 
 Under strict separation this would have been a hard outage. It is tolerable now for **one reason
-only**: the Console and the Control API still decide any request, so a human who notices can
+only**: the Control API decision endpoint still decides any request, so a human who notices can
 rescue it by hand. That rescue is manual, it depends on someone knowing to look, and it is
 precisely the path the shipped posture tells people not to use — so the risk is real, and it is
 accepted rather than closed (threat model **R27**).
+
+*(Re-premised `2026-10-18`, ADR-0044.)* This paragraph first named "the Console and the Control
+API". The Console is to have no approval surface (`approval.md` AP-80), so the rescue rests on
+the Control API alone, and it has **no UI**: a human needs an API Token for a human Account, a
+way to make an authenticated request, and the request's ID — from the webhook payload, the MCP
+park result, or the Control API's list of pending requests. That makes the rescue harder and
+less likely to happen, and the owner accepted that on `2026-10-18`. **If the Control API decision
+endpoint is ever removed, this risk stops being tolerable and must be closed first** — the
+condition ADR-0040's amendment attached to the Console, carried over to what is left.
 
 Two candidate fixes, identified by the review of the v0.7.0 design plan and **not chosen**:
 
@@ -192,12 +204,13 @@ whole document; the first is the one that is actually expected.
   the rework amends.
 - **A deployment where the approver can reach Relay directly.** The firewall argument is the load
   bearing one, and it is an argument about *where the Relay sits*, not about approvals. Remove
-  the firewall — an operator's own network, a co-located Console, a customer whose on-call people
+  the firewall — an operator's own network, a co-located Relay, a customer whose on-call people
   already hold Relay Accounts — and out-of-band becomes cheap rather than unreachable, and most of
   the trade ADR-0040 makes stops being worth making.
 - **For the restart risk specifically: a first real outage.** A request stranded by a restart in
-  a deployment with nobody watching the Console is the event that makes this worth solving; either
-  candidate fix above is a bounded piece of work once someone needs it.
+  a deployment where nobody reaches for the Control API is the event that makes this worth
+  solving; either candidate fix above is a bounded piece of work once someone needs it. Removing
+  the Control API decision endpoint would force it outright (ADR-0044).
 - **For surface versus client identity: any authentication design at all.** It is not a question
   this document can answer, and it should not be answered here first.
 - **A customer who needs evidence rather than an assertion.** An audit or compliance posture that

@@ -28,13 +28,12 @@ Numbers are identifiers, not sequence. Build in this order:
    mounts into the shell, and the shell's CSP/CSRF/session work is security-critical per ADR-0026.
 2. The v0.6.0 read surfaces: [01](01-fleet-view.md), [02](02-node-detail.md),
    [04](04-activity.md), [13](13-job-detail.md),
-   [14](14-approval-queue.md) (read only), [08](08-approval-object.md) (read only),
    [10](10-day-one.md), [20](20-access.md) (admin only).
 3. The v0.7.0 mutating surfaces, once step-up exists:
    [15](15-accounts-and-tokens.md), [09](09-add-nodes.md), [16](16-incident-ladder.md),
    [06](06-policy-author.md), [07](07-policy-fix-from-deny.md), then
-   [05](05-composer-and-preflight.md) — the composer last, behind the step-up and approval machinery it
-   depends on.
+   [05](05-composer-and-preflight.md) — the composer last, behind the step-up and the approval
+   gate it depends on.
    [18](18-settings.md) and [19](19-approval-rules.md) follow step-up and store-backed settings
    (#590); neither mounts until its backend exists.
 
@@ -64,8 +63,6 @@ landed by hand, ahead of the loop.
 | 13 | [Job detail](13-job-detail.md) | v0.6.0 record / v0.7.0 Cancel | Cancel only (v0.7.0) |
 | 20 | [Access](20-access.md) | v0.6.0 | no — `admin` only |
 | 10 | [Day one](10-day-one.md) | v0.6.0 | no |
-| 14 | [Approval queue](14-approval-queue.md) | v0.6.0 read / v0.7.0 decide | mixed |
-| 8 | [Approval object](08-approval-object.md) | v0.6.0 read / v0.7.0 decide | mixed |
 | 15 | [Accounts and API tokens](15-accounts-and-tokens.md) | v0.7.0 | yes |
 | 9 | [Add Nodes](09-add-nodes.md) | v0.7.0 | yes |
 | 16 | [Incident](16-incident-ladder.md) | v0.7.0 | yes |
@@ -74,6 +71,9 @@ landed by hand, ahead of the loop.
 | 5 | [Composer and Preflight](05-composer-and-preflight.md) | v0.7.0 | yes |
 
 [03](03-agent-sessions.md) is retired: it was folded into 04 on 2026-09-29 (D17).
+[14](14-approval-queue.md) and [08](08-approval-object.md) are retired: on 2026-10-18 the owner
+removed approval from the Console entirely (ADR-0044, D21). Both screens are still in the code
+until `docs/specs/approval.md` AP-80 removes them; build nothing further on either.
 [17](17-read-egress.md) is retired: dropped on 2026-10-01 (owner decision, D11); Activity (04)
 carries read-class calls. Specs 11–20 have
 no artboard; the wireframes cover 1–10 plus the shared-grammar sheet.
@@ -102,7 +102,7 @@ are ADRs yet; several need to be — see [`99-open-decisions.md`](99-open-decisi
 | ~~Agent activity is a separate, call-grained, per-Account surface~~ — folded into Activity (D17); there are still no sessions (ADR-0028) | 04 |
 | Sign-ins, step-up, Account changes and API Tokens are **Access**, `admin` only in the Console (D17) | 20 |
 | **No hold-before-dispatch timer.** Interruption is cancellation (ADR-0013) | 03 |
-| **Plan editing resets quorum**; approvers do not amend | 05, 08 |
+| **Plan editing resets quorum**; approvers do not amend | 05 |
 | Policy authoring is **generate-and-copy**; the Relay never transmits Policy. Since 2026-09-18, 06 arranges first-party catalog fragments (`docs/specs/policy-catalog.md`) and emits no allow rule | 06, 07 |
 | `state:` labels are **Node-local and objective**; drift is an observation, not a label | 01, 02, 00 |
 | **`outdated`** matches the MCP wire field; `version-gated` was a synonym and is retired | all |
@@ -110,6 +110,7 @@ are ADRs yet; several need to be — see [`99-open-decisions.md`](99-open-decisi
 | The Freeze slot generalises to **control-plane conditions** | 00, all |
 | **No `Jobs` nav destination** — Activity filtered to dispatch | 00, 04 |
 | The SSE seam has **four publishers** (registry, Jobs, MCP tool calls, enrollment attempts), resumable from a bounded buffer, and never carries read output | 00, 03, 10, 11 |
-| The approval record carries a **shape key** (retrofit, #415); a batch is a **Grant** over a Scope | 08, 14 |
+| The approval record carries a **shape key** (retrofit, #415); a batch is a **Grant** over a Scope | — (08 and 14 retired) |
+| **The Console has no approval surface** — approvals are answered in-band or on the Control API (ADR-0044, 2026-10-18) | 00, 04, 05, 11, 19 |
 | v0.6.0 **mutating** means reaching the capability layer's write or dispatch path; **Cancel is v0.7.0** | 03, 13 |
 | `console_execution` lands with the composer (v0.7.0), not the shell | 05, 11 |

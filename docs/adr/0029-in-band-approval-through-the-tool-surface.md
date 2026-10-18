@@ -1,6 +1,6 @@
 # In-band approval through the tool surface
 
-**Status:** Accepted.
+**Status:** Accepted; amended by ADR-0044.
 
 ADR-0027 decided *notify via MCP, decide out-of-band*, and named channel strength as
 per-rule configuration: `in-band` ("the elicitation answer *is* the decision") and
@@ -117,6 +117,8 @@ same channel semantics. One decision model, two delivery envelopes — not two m
   separation. The client-integrity assumption is the **relied-on** posture for agent-originated
   work — MCP is the approved pathway — but not the only one reachable: the Console and the
   Control API still decide any request, not relied on.)*
+  *(Amended 2026-10-18 by ADR-0044: the Console no longer decides approvals. The Control API
+  decision endpoint is the one out-of-band path still reachable, and still not relied on.)*
 - Gleipnir's HIL router becomes load-bearing for in-band rules: ADR-0027's requirement that
   it be *"a deterministic path to the assigned human"* is no longer advice.
 - The audit trail gains a class of record whose approver is asserted. Queries that need
@@ -193,3 +195,10 @@ weakens nothing. The
 caveats are unchanged: a Claude Code hook can answer with no human present, anything holding the
 human's OAuth token answers as that human, and OAuth has never run live against a real identity
 provider (#351). See ADR-0027's note of the same date.
+
+## Amendment (2026-10-18): amended by ADR-0044 — one out-of-band path, the Control API
+
+A note, not a change to any decision here. [ADR-0044](0044-the-console-does-not-decide-approvals.md)
+removes the Admin Console's approval surface and keeps the Control API decision endpoint. Every
+decision in this ADR stands; the correction of 2026-09-25 in *Consequences*, which named "the
+Console and the Control API" as reachable out-of-band paths, now names the Control API only.

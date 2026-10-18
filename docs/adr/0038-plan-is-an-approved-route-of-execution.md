@@ -1,6 +1,6 @@
 # Plan is an approved route of execution; Policy preflight is its own capability
 
-**Status:** Accepted.
+**Status:** Accepted; amended by ADR-0044.
 
 "Plan" has meant two things since ADR-0011, and the collision is visible in that ADR's own
 opening: it describes the capability as "`terraform plan` / Ansible check-mode for the fleet".
@@ -313,6 +313,9 @@ spending limit; a Plan is an itemised invoice.
 - **The Console renders Plans but does not compose them in v1.** Console execution remains behind
   the `console_execution` flag and is unbuilt (invariant 10's gap row, #438). Proposing a route is
   an agent act; approving one is a human act, and the approval queue is where a Plan meets a person.
+  *(Amended 2026-10-18 by ADR-0044: the Console has no approval queue. A gated Plan meets a person
+  through the requesting client in-band, or on the Control API out-of-band; the Console renders a
+  Plan and decides none.)*
 
 ## Amendment (2026-09-20): dated, and its consumers recorded
 
@@ -322,3 +325,11 @@ Consumers updated on 2026-09-20: invariants 10 and 12 in `AGENTS.md` now say
 ADR-0026 and ADR-0027 are reworded and record the amendment; ADR-0004, 0009, 0018 and 0019 lose
 their incidental "plan mode"; the Console's user-facing word is **Preflight** (#575). Left as
 written: the `plan` wire option, until the code follows.
+
+## Amendment (2026-10-18): amended by ADR-0044 — no approval queue in the Console
+
+A note on one consequence, not a change to any decision here.
+[ADR-0044](0044-the-console-does-not-decide-approvals.md) removes the Console's approval surface,
+so *Consequences*' "the approval queue is where a Plan meets a person" no longer names a Console
+screen: a gated Plan is approved in-band by the requesting client or out-of-band on the Control
+API, and the Console renders it without deciding it. Signposted in place, dated.
