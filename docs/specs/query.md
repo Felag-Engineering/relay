@@ -11,6 +11,10 @@ daemon-reported Policy view, and the Operation vocabulary. It answers what Relay
 a Node last reported; it does not make a Policy decision, change a Node, or infer a desired
 state.
 
+It also holds one write, which only names what it reads: a **Policy alias**, a human-readable
+name a human `admin` gives a Policy fingerprint so that people can say which Policy they mean
+(*Designed, not built*). An alias changes how a fingerprint is displayed and nothing else.
+
 Read means that the call cannot change Node state, not that its contents are harmless to
 disclose. Registry data includes fleet shape, Labels, Facts, identity provenance, and Policy
 information, so access is attributable and auditable.
@@ -22,6 +26,9 @@ information, so access is attributable and auditable.
 | **MCP** | `list_nodes` lists registry Nodes, optionally resolved against a Selector. `describe_node` returns one Node's registry data, certificate provenance, the Policy view, and the reported Template Operation vocabulary. `list_operations` returns the frozen Native vocabulary and, given a Node ID, that Node's last-reported Template Operations. |
 | **Control API** | `GET /api/v1/nodes/{node_id}` returns one Node's registry data and certificate provenance. No fleet enumeration, Policy-view or vocabulary route (QRY-1). |
 | **Admin Console** | The Fleet view and Node detail read the registry through the capability read lane. Node detail renders the Policy view — read from the display-only cache directly — with its receipt time, and the template-set fingerprint; it does not render the Template vocabulary (QRY-14). The Compare screen reads through the lane and is recorded like every other read (QRY-28). |
+
+Policy aliases are *Designed, not built* (QRY-29 … QRY-39): the Console reads and writes them;
+the Control API and MCP carry none (QRY-36, *Future work*).
 
 No surface exposes a general registry search, a way to refresh a daemon snapshot, or any way
 to query, author or alter Policy over the wire; a live hypothetical is `policy-preflight.md`.
@@ -127,6 +134,8 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
 
 - **Invariant 2 and ADR-0002** — Policy is locally rooted and remotely immutable. Query may show
   a daemon report, but no surface can write Policy or Template Operations over the wire (QRY-24).
+  A Policy alias is a name the Relay holds for a fingerprint and never sends to a Node: setting
+  one writes no Policy (QRY-31).
 - **Invariant 7, ADR-0006, ADR-0020 and ADR-0034** — Label namespaces stay separate: `node:` and
   `relay:` are returned as separate maps, `state:` is derived, `tag:` is refused until it exists
   (QRY-2, QRY-20). A query has no Label-write authority.
@@ -136,7 +145,12 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
 - **Invariant 10 and ADR-0009** — MCP, the Control API and the Console are adapters over the
   capability layer and may narrow only. Every registry, Policy-view and vocabulary read on all
   three goes through the capability read lane; no adapter holds a reader of its own (QRY-28,
-  #680).
+  #680). An alias write is decided in the capability layer, and the Console only exposes it
+  (QRY-29, QRY-35).
+- **Invariant 9 and ADR-0008** — an alias names a fingerprint and never records which Nodes
+  should carry it (QRY-32). That is the line against `policy-catalog.md`'s rule that the Relay
+  stores no cohort arrangement: an alias attaches to a fingerprint only, never to a Node, Label,
+  Selector or group, so it describes no desired state.
 - **Invariant 12 and ADR-0011** — only the relay-daemon's live engine evaluates Policy. Displaying
   a snapshot never becomes a Relay-side verdict (QRY-9); a hypothetical is `policy-preflight.md`.
 - **ADR-0014** — `outdated` is a registry observation and a dispatch gate; a query neither
@@ -209,6 +223,17 @@ Claims with **no row**, and so nothing checking them:
 | Claim | Statement | Milestone |
 |---|---|---|
 | QRY-25 | `list_operations` takes a Selector and reports each Operation reachable across the matched Nodes — description, typed slots and allowed values, risk class, and which Nodes report it; a single Node ID is the one-Node case. Retires the Node-ID-only half of QRY-12 and the vocabulary row in *Performance*. | v0.8.1 — Read and Preflight Wire Contract |
+| QRY-29 | A human Account with the `admin` role can set, rename or clear the **Policy alias** of a well-formed Policy fingerprint through the capability layer. | v0.6.0 — Admin Console: Monitoring |
+| QRY-30 | Every alias change is recorded on the audit trail with the actor, the fingerprint, and the old and new value, and is not made if the record cannot be written. | v0.6.0 — Admin Console: Monitoring |
+| QRY-31 | A Policy alias is a display name the Relay holds for a fingerprint. It is not Policy, is never sent to a Node, and takes no part in Selector resolution, `state:policy-fingerprint=` matching, Policy evaluation, the blast-radius cap, approval or any other decision; a Selector or filter names a Policy only by its fingerprint. | v0.6.0 — Admin Console: Monitoring |
+| QRY-32 | An alias attaches to a fingerprint only — never to a Node, Label, Selector or group — and records nothing about which Nodes should carry that fingerprint. | v0.6.0 — Admin Console: Monitoring |
+| QRY-33 | Wherever an alias is rendered, the full fingerprint it names is rendered beside it; an alias is never shown in place of the fingerprint. | v0.6.0 — Admin Console: Monitoring |
+| QRY-34 | One fingerprint has at most one alias, and one alias names at most one fingerprint. An alias is held in the Relay's store, survives a restart, and stays attached to its fingerprint whether or not any Node currently reports it. | v0.6.0 — Admin Console: Monitoring |
+| QRY-35 | The Console's Fleet view, Node detail and Compare screen read aliases through the capability read lane, and the Console offers the write to a human `admin` only, from the Fleet view's fingerprint facet and Node detail's Fingerprints panel. | v0.6.0 — Admin Console: Monitoring |
+| QRY-36 | The Control API and MCP carry no alias, on any read, and expose no alias write. | v0.6.0 — Admin Console: Monitoring |
+| QRY-37 | Setting, renaming or clearing an alias takes no step-up: an alias gates nothing. | v0.6.0 — Admin Console: Monitoring |
+| QRY-38 | An alias write is refused, with a reason naming the rule, to an unauthenticated caller, to a machine Account of any role and to a human Account below `admin`; and for a fingerprint that is not well-formed, an alias that after trimming is empty or longer than 64 characters or contains a control or format character (Unicode categories Cc and Cf, which covers bidirectional overrides), or an alias another fingerprint already carries. Clearing an alias that is not set is not an error. | v0.6.0 — Admin Console: Monitoring |
+| QRY-39 | No query surface can set Labels, modify Policy, load Templates, refresh a daemon snapshot, issue a Policy verdict or dispatch an Operation: each adapter's structural guard forbids every write seam but the alias write (QRY-29), and every dispatch seam. Replaces QRY-24 when promoted. | v0.6.0 — Admin Console: Monitoring |
 
 ## Out of scope
 
@@ -216,8 +241,8 @@ Claims with **no row**, and so nothing checking them:
   disclosure — `audit-and-read-lane.md`.
 - Live hypothetical Policy evaluation and preflight/apply parity — `policy-preflight.md`; this
   capability only displays what a Node already reported.
-- Policy authoring, Template loading or distribution, Label writes, Node enrollment and
-  revocation, Account administration, and dispatch.
+- Any write but a Policy alias. Policy authoring, Template loading or distribution, Label
+  writes, Node enrollment and revocation, Account administration, and dispatch.
 - Fleet health monitoring, metrics, desired-state reconciliation, configuration management,
   daemon upgrades, and an unbounded remote shell.
 
@@ -245,17 +270,32 @@ its consumers. The rest is ordinary Future work.
 - **Peer counts on MCP `describe_node`** — the lane computes them; the tool does not surface them.
 - **Template vocabulary on the Console Node detail**, distinguishing "never reported" from "none
   installed".
+- **Policy aliases beyond the Console.** The alias on Control API and MCP reads, and a Control API
+  write. Both are held back for one reason: either would hand an AI-agent — a machine Account on
+  both surfaces (ADR-0010) — an `admin`'s prose name for a Policy, an assertion it could reason
+  from in place of the fingerprint it targets by. Exposing one is a decision about that, not an
+  adapter's to make alone.
 - **Roles tighter than `viewer`** for sensitive fleet data, if a tenant, delegated-access or
   data-classification need appears.
+
+## Accepted residual risk
+
+- **A hijacked human `admin` session can rename aliases to mislead.** Without the Account's
+  password, it can name an unhardened fingerprint "web-hardened" and steer the humans who judge a
+  rollout by name. Accepted by the owner on `2026-10-18` (Console D22) in taking no step-up for an
+  alias; the compensating controls are QRY-33 (the fingerprint is always beside the name) and
+  QRY-30 (every change is audited with its old and new value). Threat model **R39**.
 
 ## Open questions
 
 None of this capability's own. Neighbours that state one of today's decisions the other way and
 adopt this spec at their migration: `operations-and-templates.md` (states Selector-scoped
-`list_operations` as current; it is QRY-25), `policy.md` (states template bodies in the Policy
-view as current; see *Future work*), `audit-and-read-lane.md` (says MCP `describe_node` returns
-peer counts; QRY-5). `selectors-and-labels.md` and `audit-and-read-lane.md` no longer disagree
-about Selector resolution or MCP read records: #680 made both statements true (QRY-28).
+`list_operations` as current; it is QRY-25), `policy.md` (states template bodies in the Policy view
+as current; see *Future work*), `audit-and-read-lane.md` (says MCP `describe_node` returns peer
+counts; QRY-5). `audit-and-read-lane.md` lists the audit kinds and does not yet name the
+alias-change record (QRY-30); it adopts it at its migration. `selectors-and-labels.md` and
+`audit-and-read-lane.md` no longer disagree about Selector resolution or MCP read records: #680 made
+both statements true (QRY-28).
 
 ## Retired
 

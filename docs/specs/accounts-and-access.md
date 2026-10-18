@@ -68,6 +68,7 @@ role's reach can be read in one place.
 | Decide an approval | the role floor the Action required | `approval.md` |
 | Issue an approval grant | second-person, out-of-band approval | `approval.md` |
 | Mint an Enrollment Token | `admin` | `enrollment.md` |
+| Set, rename or clear a Policy alias (designed, not built) | `admin`, **human Account only** | `query.md` |
 | Administer Accounts and API Tokens | `admin` | this spec |
 
 ### Account administration

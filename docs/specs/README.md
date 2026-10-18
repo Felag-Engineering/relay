@@ -170,7 +170,7 @@ interrogation.
 | `approval.md` | Gate rules, callout, decisions and channels, approval Grants and scope |
 | `approval-assurance.md` *(stub)* | The approval assurance properties shelved by ADR-0040 pending the permissions rework: out-of-band as a rule requirement, a Relay-verified approver, the grant-issuance floor, second-person rules whose second person Relay authenticated |
 | `freeze.md` | Emergency Freeze — engage, release, and its survival across a restart |
-| `query.md` | Node, registry, Policy and vocabulary reads; `describe_node` |
+| `query.md` | Node, registry, Policy and vocabulary reads; `describe_node`; Policy aliases |
 | `audit-and-read-lane.md` | The audited read lane, audit records, the retention posture |
 | `enrollment.md` | Enrollment Tokens, join strings, bundles, identity issuance and revocation |
 | `accounts-and-access.md` | Accounts, roles, Grants, API tokens, OAuth sessions, attribution |
