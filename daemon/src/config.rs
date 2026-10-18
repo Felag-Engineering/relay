@@ -143,13 +143,19 @@ pub fn plan_startup(
 /// Decodes a `RELAY_JOIN` value: unset or empty is `None`; anything else must be
 /// at most [`MAX_JOIN_STRING_LEN`] bytes, decode, and carry a dialable address.
 pub fn decode_join(raw: Option<String>) -> Result<Option<JoinString>, ConfigError> {
-    let Some(raw) = raw.filter(|v| !v.is_empty()) else {
+    decode_join_str(raw.as_deref().unwrap_or_default())
+}
+
+/// [`decode_join`] over a borrowed value, so a caller that wipes its own copy of
+/// the text (`relay-daemon join`) never hands an owned one away.
+pub fn decode_join_str(raw: &str) -> Result<Option<JoinString>, ConfigError> {
+    if raw.is_empty() {
         return Ok(None);
-    };
+    }
     if raw.len() > MAX_JOIN_STRING_LEN {
         return Err(ConfigError::JoinTooLong);
     }
-    let join = JoinString::decode(&raw).map_err(ConfigError::MalformedJoin)?;
+    let join = JoinString::decode(raw).map_err(ConfigError::MalformedJoin)?;
     validate_join_address(join.relay_address())?;
     Ok(Some(join))
 }

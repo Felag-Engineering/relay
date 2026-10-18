@@ -9,7 +9,7 @@
 //! FIRES; this proves the configuration around it cannot be removed or bypassed
 //! without a test failing. Two sites spawn a process (invariant 1), each reviewed:
 //! `relay-exec`'s one `Command::new`, under a statement-level allow, and the bin's
-//! `join` spawn module, whose literal `systemctl` argv sits in one allowed function.
+//! `join` spawn module, whose whole spawn is one allowed, pinned function.
 //!
 //! # It proves
 //!
@@ -32,7 +32,7 @@
 //!   (`relay-policy` on `{relay-proto, relay-log}`; `relay-exec` on
 //!   `{relay-proto}`; `relay-ops` on `{relay-proto, relay-policy, relay-exec,
 //!   relay-log}`; `relay-log` and `relay-proto` on none);
-//! * (f) `rustix` keeps EXACTLY `features = ["process"]` workspace-wide: Cargo
+//! * (f) `rustix` keeps EXACTLY `features = ["process", "termios"]` workspace-wide: Cargo
 //!   unifies features, so one member enabling `fs` or `use-libc` would break the
 //!   property `policy_never_opened_for_write.rs` and the executor rely on;
 //! * (g) the set of lint suppressions that could hide a write or exec ban is
@@ -53,9 +53,9 @@
 //!   module alias such as `use libc as l; l::syscall`; clippy's resolved-path ban
 //!   (which resolves `l::syscall` to `libc::syscall`) and the `unsafe` census (i),
 //!   since any libc call needs `unsafe`, back that case;
-//! * (i) the `unsafe` census: every `unsafe` in the daemon (`relay-transport` pinned to
-//!   none, the bin to `join`'s two terminal-echo calls) is pinned, since an `unsafe`
-//!   block can call a libc function the clippy.toml does not name;
+//! * (i) the `unsafe` census: every `unsafe` in the daemon (the bin and
+//!   `relay-transport` pinned to none) is pinned, since an `unsafe` block can call a
+//!   libc function the clippy.toml does not name;
 //! * (j) `file.read`'s one open in `relay-ops` is exactly the pinned statement, and the
 //!   allow covers that statement only;
 //! * (k) the probe script's crate list is exactly `READ_ONLY`;
@@ -1354,7 +1354,7 @@ fn rustix_resolves_without_fs_or_use_libc_in_the_shipped_build() {
 }
 
 #[test]
-fn rustix_keeps_exactly_the_process_feature_workspace_wide() {
+fn rustix_keeps_exactly_the_process_and_termios_features_workspace_wide() {
     let root = parse(&daemon().join("Cargo.toml"));
     let rustix = root
         .get("workspace")
@@ -1363,9 +1363,9 @@ fn rustix_keeps_exactly_the_process_feature_workspace_wide() {
         .expect("[workspace.dependencies] rustix");
     assert_eq!(
         features_of(rustix),
-        vec!["process".to_string()],
-        "[workspace.dependencies] rustix must keep EXACTLY features = [\"process\"] (no `fs`, no \
-         `use-libc`): see the comment beside it in Cargo.toml"
+        vec!["process".to_string(), "termios".to_string()],
+        "[workspace.dependencies] rustix must keep EXACTLY features = [\"process\", \"termios\"] \
+         (no `fs`, no `use-libc`): see the comment beside it in Cargo.toml"
     );
     assert_ne!(
         rustix.get("default-features").and_then(Value::as_bool),
@@ -1494,8 +1494,9 @@ fn lint_suppressions_are_exactly_the_pinned_map() {
 /// statement.
 const FILE_READ_OPEN: &str = "letopened=std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK|libc::O_NOCTTY).open(path);";
 
-/// The whole function the `join` spawn's allow covers, whitespace removed.
-const JOIN_SPAWN: &str = "fncommand()->Command{letmutcmd=Command::new(SYSTEMCTL);cmd.args(SYSTEMCTL_ARGS).env_clear().stdin(Stdio::null());cmd}";
+/// The whole function the `join` spawn's allow covers, whitespace removed: it
+/// builds the command and runs it, so nothing outside the pin can add to it.
+const JOIN_SPAWN: &str = "pubfnenable_and_start()->io::Result<ExitStatus>{Command::new(SYSTEMCTL).args(SYSTEMCTL_ARGS).env_clear().stdin(Stdio::null()).status()}";
 
 /// Production suppressions, by file: each pinned to its attribute and to the squeezed
 /// text of the statement or item it covers, so one cannot be moved, widened or
@@ -1533,9 +1534,10 @@ fn pinned_production_suppressions() -> BTreeMap<&'static str, Vec<(&'static str,
             )],
         ),
         // Invariant 1: the second sanctioned spawn, `join` starting the unit. The
-        // whole function is covered and pinned, so the argv constants, the cleared
-        // environment and the null stdin cannot change unreviewed; the constants'
-        // values are pinned by `join_spawn_argv_is_the_literal_constant`.
+        // one function that builds and runs the command is covered and pinned, so
+        // the argv constants, the cleared environment and the null stdin cannot
+        // change unreviewed; the constants' values are pinned by
+        // `join_spawn_argv_is_the_literal_constant`.
         (
             "src/join/systemctl.rs",
             vec![(
@@ -2206,8 +2208,8 @@ fn spawn_family_appears_only_at_the_sanctioned_sites() {
     let want = BTreeMap::from([
         // The `use tokio::process::Command;` import, `Command::new`, and `cmd.pre_exec`.
         ("crates/relay-exec/src/executor.rs".to_string(), 3usize),
-        // `join`'s import, the `-> Command` return type, and `Command::new`.
-        ("src/join/systemctl.rs".to_string(), 3usize),
+        // `join`'s import and its one `Command::new`.
+        ("src/join/systemctl.rs".to_string(), 2usize),
     ]);
     assert_eq!(
         seen, want,
@@ -2275,9 +2277,6 @@ fn pinned_unsafe() -> BTreeMap<&'static str, usize> {
         ("crates/relay-policy/src/lib.rs", 1),
         // Test `mkfifo`.
         ("crates/relay-policy/src/hardened_open.rs", 1),
-        // `join`'s tcgetattr and tcsetattr, which turn terminal echo off while the
-        // join string is typed and back on after (DI-37).
-        ("src/join.rs", 2),
     ])
 }
 

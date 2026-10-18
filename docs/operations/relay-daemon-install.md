@@ -101,12 +101,17 @@ One subcommand changes the Node, and it too contacts no Relay:
   the join string from a prompt with echo off, or from standard input
   (`relay-daemon join < join.txt`), and refuses one given as an argument. It
   validates the string offline, refuses if the state directory holds any identity
-  file, then replaces only the `RELAY_JOIN` line of
+  file (the default `/var/lib/relay-daemon`, and any `RELAY_STATE_DIR` the
+  environment file sets; the caller's own environment is ignored), removes any
+  temporary file an interrupted run left beside the environment file, then
+  replaces only the `RELAY_JOIN` line of
   `/etc/relay-daemon/relay-daemon.env` (adding it, or creating the file, if
   absent) through a `0600` root-owned temporary file renamed into place, and runs
   `/usr/bin/systemctl enable --now relay-daemon.service`. Enrollment happens when
   the daemon starts. Every refusal leaves the file untouched. Exit codes `0`
-  configured and started / `1` refused or failed / `2` given arguments. Config
+  configured and started / `1` refused or failed / `2` given arguments; `130`
+  when Ctrl-C at the prompt cancels it, which restores echo and changes nothing.
+  If a terminal is ever left without echo, `stty echo` restores it. Config
   management may write the same line itself instead.
 
 ## 4. Install on the Node

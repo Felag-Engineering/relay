@@ -122,15 +122,17 @@ regex = "1"
 # to the libc backend whenever `use-libc` is on, which would turn that `setrlimit`
 # back into a libc wrapper (on musl, `__synccall` — not async-signal-safe after
 # fork). Features unify across every workspace member, so no member may enable
-# either one: the workspace must keep EXACTLY `features = ["process"]`, and members
+# either one: the workspace must keep EXACTLY `features = ["process", "termios"]`, and members
 # write `rustix = { workspace = true }` with no `features` key. Besides
 # `use-libc`, the `fs` feature must never be enabled either — it is the only
 # thing that keeps `daemon/tests/policy_never_opened_for_write.rs`'s rustix
 # blind spot honest (see its header, ~:43-47: rustix exposes no filesystem-write
 # API here only because `fs` is off), a guard on invariant 2. Already transitive
-# (rustix 1.1.4); only the `process` feature is added here. Using rustix instead
-# of libc keeps the code safe (no `unsafe` block needed).
-rustix = { version = "1", features = ["process"] }
+# (rustix 1.1.4); the `process` feature is added here. Using rustix instead
+# of libc keeps the code safe (no `unsafe` block needed). `termios` (no further
+# crate, neither `fs` nor `use-libc`) is the safe tcgetattr/tcsetattr that turns
+# echo off while `relay-daemon join` reads the join string (DI-37).
+rustix = { version = "1", features = ["process", "termios"] }
 # Custom open(2) flags (O_NOFOLLOW/O_NONBLOCK on Policy/Template; O_NONBLOCK/
 # O_NOCTTY, deliberately NOT O_NOFOLLOW, on file_read — ADR-0018) and ELOOP
 # matching on the Policy/Template paths, getifaddrs for system facts (no
@@ -139,6 +141,10 @@ rustix = { version = "1", features = ["process"] }
 # fixture strings. Already present transitively via tokio ->
 # signal-hook-registry, so this adds zero new crates to the musl build.
 libc = "0.2"
+# Wipes the buffers that held the typed join string (DI-37). Already resolved
+# through rustls and rustls-pki-types with its default `alloc` feature, so this
+# adds no crate and no feature to the build.
+zeroize = "1"
 # Test-only deps (see the dev-dependencies of the members that use them).
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 time = "0.3"
@@ -175,6 +181,7 @@ toml = { workspace = true }
 regex = { workspace = true }
 rustix = { workspace = true }
 libc = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 relay-test-support = { workspace = true }

@@ -1,39 +1,45 @@
 //! `relay-daemon join`: configures a fresh Node in one step (DI-37). It reads a join
 //! string from a prompt with echo off, or from standard input, and never from its
 //! arguments; validates it offline; writes it as the environment file's `RELAY_JOIN`
-//! line, root-owned and readable by nobody else; then enables and starts the unit
-//! through `systemctl` (the spawn lives in [`systemctl`]). It refuses on a Node that
-//! holds any identity file, changing nothing, and it contacts no Relay: enrollment
-//! happens when the daemon starts.
+//! line, root-owned and readable by nobody else (the write is in [`env_file`]); then
+//! enables and starts the unit through `systemctl` (the spawn is in [`systemctl`]).
+//! It refuses on a Node that holds any identity file, changing nothing, and it
+//! contacts no Relay: enrollment happens when the daemon starts.
 //!
-//! The join string is held as the redacting `JoinString` once decoded; no message
-//! this module prints carries it or any part of it.
+//! The join string is held as the redacting `JoinString` once decoded, and every
+//! buffer that held its text is wiped when dropped; no message this module prints
+//! carries it or any part of it.
 
+mod env_file;
 mod systemctl;
 
-use std::ffi::{OsStr, OsString};
-use std::fs::{self, File, OpenOptions};
+use std::ffi::OsStr;
+use std::fs;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{fchown, OpenOptionsExt};
-use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 
+use rustix::termios::{tcgetattr, tcsetattr, LocalModes, OptionalActions, Termios};
+use zeroize::Zeroizing;
+
 use crate::config::{self, ConfigError, IdentityState, MAX_JOIN_STRING_LEN};
-use crate::enroll::state_dir_from_env;
+use env_file::WriteError;
 
 /// The environment file the packaged unit reads (`EnvironmentFile=` in
 /// `relay-daemon.service`), and so the one `join` writes.
 pub const ENV_FILE: &str = "/etc/relay-daemon/relay-daemon.env";
 
-/// The mode requested for the environment file. A request, never forced: the umask
-/// may tighten it and nothing here widens it back (ADR-0036).
-const ENV_FILE_MODE: u32 = 0o600;
+/// The unit's state directory (`StateDirectory=relay-daemon`), where the daemon
+/// keeps its identity unless the environment file names another.
+pub const DEFAULT_STATE_DIR: &str = "/var/lib/relay-daemon";
 
 /// The uid and gid the environment file is given.
 type Owner = (u32, u32);
 
 const ROOT: Owner = (0, 0);
+
+/// The text of a join string as read, wiped when dropped.
+type Secret = Zeroizing<String>;
 
 /// Why `join` refused or failed. No variant holds the join string or input text.
 #[derive(Debug, thiserror::Error)]
@@ -63,8 +69,8 @@ pub enum JoinError {
     Empty,
     #[error("refused, nothing was changed: {0}")]
     Invalid(ConfigError),
-    #[error("cannot write {}: {source}; it is unchanged", path.display())]
-    Write { path: PathBuf, source: io::Error },
+    #[error("{0}; relay-daemon.service was not started")]
+    Write(WriteError),
     #[error(
         "the join string is written, but running systemctl failed: {0}; start the daemon \
          with `systemctl enable --now relay-daemon.service`"
@@ -91,16 +97,17 @@ impl JoinError {
 /// point it into a temporary directory.
 struct JoinPaths {
     env_file: PathBuf,
-    /// The state directory named by the process environment (or the default).
-    /// The one the environment file names, if any, is checked as well.
-    state_dir: PathBuf,
+    /// Always checked for an identity. The process environment plays no part: the
+    /// daemon reads the unit's environment, not the caller's, so a caller's
+    /// `RELAY_STATE_DIR` could only point the check somewhere empty.
+    default_state_dir: PathBuf,
 }
 
 impl JoinPaths {
     fn production() -> Self {
         JoinPaths {
             env_file: PathBuf::from(ENV_FILE),
-            state_dir: state_dir_from_env(),
+            default_state_dir: PathBuf::from(DEFAULT_STATE_DIR),
         }
     }
 }
@@ -145,12 +152,13 @@ fn run_checked(args: &[String]) -> Result<(), JoinError> {
 fn configure(
     paths: &JoinPaths,
     owner: Owner,
-    read_input: impl FnOnce() -> Result<String, JoinError>,
+    read_input: impl FnOnce() -> Result<Secret, JoinError>,
 ) -> Result<(), JoinError> {
     let existing = read_env_file(&paths.env_file)?;
+    let existing_bytes = existing.as_ref().map(|v| v.as_slice());
 
-    let mut state_dirs = vec![paths.state_dir.clone()];
-    if let Some(named) = existing.as_deref().and_then(env_file_state_dir) {
+    let mut state_dirs = vec![paths.default_state_dir.clone()];
+    if let Some(named) = existing_bytes.and_then(env_file_state_dir) {
         if !state_dirs.contains(&named) {
             state_dirs.push(named);
         }
@@ -166,27 +174,27 @@ fn configure(
 
     // Surrounding whitespace, the newline included, is never part of a join string.
     let raw = read_input()?;
-    let join = config::decode_join(Some(raw.trim().to_string()))
+    let join = config::decode_join_str(raw.trim())
         .map_err(JoinError::Invalid)?
         .ok_or(JoinError::Empty)?;
+    drop(raw);
 
-    let mut line = b"RELAY_JOIN=".to_vec();
-    line.extend_from_slice(
+    let encoded = Zeroizing::new(
         join.encode()
-            .map_err(|e| JoinError::Invalid(ConfigError::MalformedJoin(e)))?
-            .as_bytes(),
+            .map_err(|e| JoinError::Invalid(ConfigError::MalformedJoin(e)))?,
     );
-    let content = with_join_line(existing.as_deref(), &line);
-    write_atomically(&paths.env_file, &content, owner).map_err(|source| JoinError::Write {
-        path: paths.env_file.clone(),
-        source,
-    })
+    let mut line = Zeroizing::new(b"RELAY_JOIN=".to_vec());
+    line.extend_from_slice(encoded.as_bytes());
+    let content = Zeroizing::new(with_join_line(existing_bytes, &line));
+
+    env_file::remove_stale_temps(&paths.env_file).map_err(JoinError::Write)?;
+    env_file::write_atomically(&paths.env_file, &content, owner).map_err(JoinError::Write)
 }
 
 /// The environment file's bytes, or `None` when there is none. A symlink or any
 /// other non-regular file is refused: the rename would replace the link, not what
 /// it points at.
-fn read_env_file(path: &Path) -> Result<Option<Vec<u8>>, JoinError> {
+fn read_env_file(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>, JoinError> {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_file() => {}
         Ok(_) => {
@@ -203,7 +211,7 @@ fn read_env_file(path: &Path) -> Result<Option<Vec<u8>>, JoinError> {
         }
     }
     fs::read(path)
-        .map(Some)
+        .map(|v| Some(Zeroizing::new(v)))
         .map_err(|source| JoinError::EnvFileUnreadable {
             path: path.to_path_buf(),
             source,
@@ -258,115 +266,95 @@ fn with_join_line(existing: Option<&[u8]>, line: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Replaces `path` with `content` atomically: a new temporary file in the same
-/// directory, mode [`ENV_FILE_MODE`] requested, given to `owner`, written and
-/// synced, then renamed over `path`. On any failure the temporary file is removed
-/// and `path` is untouched.
-fn write_atomically(path: &Path, content: &[u8], owner: Owner) -> io::Result<()> {
-    let dir = match path.parent() {
-        Some(d) if !d.as_os_str().is_empty() => d,
-        _ => Path::new("."),
-    };
-    let name = path
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
-    let mut tmp_name = OsString::from(".");
-    tmp_name.push(name);
-    tmp_name.push(format!(".join-{}.tmp", std::process::id()));
-    let tmp = dir.join(tmp_name);
-
-    // create_new is O_CREAT|O_EXCL: it never opens an existing file or follows a
-    // symlink planted at the temporary name, and a file it did not create is never
-    // removed below.
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(ENV_FILE_MODE)
-        .open(&tmp)?;
-    let result = (|| {
-        fchown(&file, Some(owner.0), Some(owner.1))?;
-        file.write_all(content)?;
-        file.sync_all()?;
-        fs::rename(&tmp, path)
-    })();
-    drop(file);
-    if let Err(e) = result {
-        let _ = fs::remove_file(&tmp);
-        return Err(e);
-    }
-    File::open(dir)?.sync_all()
-}
-
 /// Reads one line from standard input: behind a prompt with echo off when it is a
 /// terminal, as piped text otherwise. At most a little over the longest join string
 /// is read, so an oversized input is refused by the decoder rather than buffered.
-fn read_join_input() -> Result<String, JoinError> {
+fn read_join_input() -> Result<Secret, JoinError> {
     let stdin = io::stdin();
     let interactive = stdin.is_terminal();
-    let mut buf = Vec::new();
+    // Room for the longest value read, so the buffer never reallocates and leaves
+    // an unwiped copy behind.
+    let limit = MAX_JOIN_STRING_LEN + 2;
+    let mut buf = Zeroizing::new(Vec::with_capacity(limit));
     {
         let _echo = if interactive {
             eprint!("Paste the join string (input is hidden): ");
             let _ = io::stderr().flush();
-            Some(EchoOff::new(stdin.as_raw_fd()).map_err(JoinError::Read)?)
+            Some(EchoOff::new().map_err(JoinError::Read)?)
         } else {
             None
         };
         stdin
             .lock()
-            .take(MAX_JOIN_STRING_LEN as u64 + 2)
+            .take(limit as u64)
             .read_until(b'\n', &mut buf)
             .map_err(JoinError::Read)?;
     }
     if interactive {
         eprintln!();
     }
-    String::from_utf8(buf).map_err(|_| JoinError::Invalid(ConfigError::JoinNotUnicode))
+    match String::from_utf8(std::mem::take(&mut *buf)) {
+        Ok(text) => Ok(Zeroizing::new(text)),
+        Err(e) => {
+            drop(Zeroizing::new(e.into_bytes()));
+            Err(JoinError::Invalid(ConfigError::JoinNotUnicode))
+        }
+    }
 }
 
-/// Turns terminal echo off for its lifetime and restores the saved settings on drop.
+/// Turns terminal echo off for its lifetime and restores the saved settings on
+/// drop, and on an interrupt: a Ctrl-C while the prompt is up restores echo before
+/// the process exits, so the operator's terminal is never left silent.
 struct EchoOff {
-    fd: RawFd,
-    saved: libc::termios,
+    saved: Termios,
+    on_interrupt: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl EchoOff {
-    fn new(fd: RawFd) -> io::Result<Self> {
-        let saved = tc_get(fd)?;
-        let mut quiet = saved;
-        quiet.c_lflag &= !libc::ECHO;
-        tc_set(fd, &quiet)?;
-        Ok(EchoOff { fd, saved })
+    fn new() -> io::Result<Self> {
+        let saved = tcgetattr(io::stdin())?;
+        // Registered before echo goes off, so no interrupt can land in between.
+        let on_interrupt = restore_on_interrupt(saved.clone());
+        let mut quiet = saved.clone();
+        quiet.local_modes.remove(LocalModes::ECHO);
+        if let Err(e) = tcsetattr(io::stdin(), OptionalActions::Now, &quiet) {
+            if let Some(task) = on_interrupt {
+                task.abort();
+            }
+            return Err(e.into());
+        }
+        Ok(EchoOff {
+            saved,
+            on_interrupt,
+        })
     }
 }
 
 impl Drop for EchoOff {
     fn drop(&mut self) {
-        let _ = tc_set(self.fd, &self.saved);
-    }
-}
-
-fn tc_get(fd: RawFd) -> io::Result<libc::termios> {
-    let mut t = std::mem::MaybeUninit::<libc::termios>::uninit();
-    // SAFETY: tcgetattr writes a whole termios through a pointer valid for one, and
-    // the value is read only when it reports success, so it is initialised then. It
-    // reads terminal settings and can neither write a file nor spawn.
-    unsafe {
-        if libc::tcgetattr(fd, t.as_mut_ptr()) != 0 {
-            return Err(io::Error::last_os_error());
+        let _ = tcsetattr(io::stdin(), OptionalActions::Now, &self.saved);
+        if let Some(task) = self.on_interrupt.take() {
+            task.abort();
         }
-        Ok(t.assume_init())
     }
 }
 
-fn tc_set(fd: RawFd, t: &libc::termios) -> io::Result<()> {
-    // SAFETY: `t` is a valid, initialised termios borrowed for the call, which only
-    // reads it; tcsetattr changes terminal settings and can neither write a file nor
-    // spawn.
-    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, t) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
+/// Listens for SIGINT on the runtime `main` runs in; on one, restores `saved` and
+/// exits 130 with nothing written. `None` outside a runtime, which leaves the
+/// default action (and `stty echo` as the recovery the install guide documents).
+fn restore_on_interrupt(saved: Termios) -> Option<tokio::task::JoinHandle<()>> {
+    use tokio::signal::unix::{signal, SignalKind};
+    let handle = tokio::runtime::Handle::try_current().ok()?;
+    let _entered = handle.enter();
+    let mut interrupt = signal(SignalKind::interrupt()).ok()?;
+    Some(handle.spawn(async move {
+        if interrupt.recv().await.is_some() {
+            let _ = tcsetattr(io::stdin(), OptionalActions::Now, &saved);
+            eprintln!();
+            eprintln!("relay-daemon join: interrupted; nothing was changed");
+            std::process::exit(130);
+        }
+    }))
 }
 
 #[cfg(test)]
@@ -389,6 +377,11 @@ mod tests {
             .expect("encode")
     }
 
+    fn input(text: impl Into<String>) -> impl FnOnce() -> Result<Secret, JoinError> {
+        let text = text.into();
+        move || Ok(Zeroizing::new(text))
+    }
+
     const ENV: &str = "# comment\n#RELAY_JOIN=old-commented\nRELAY_POLICY_PATH=/etc/relay-daemon/policy.toml\nRELAY_JOIN=replace-me\n#RELAY_ADDR=https://x:1\nRELAY_TEMPLATE_DIR=/etc/relay-daemon/templates.d\n";
 
     struct Fixture {
@@ -402,18 +395,18 @@ mod tests {
         if let Some(content) = env {
             fs::write(&env_file, content).expect("write env file");
         }
-        let state_dir = dir.path().join("state");
-        fs::create_dir(&state_dir).expect("state dir");
+        let default_state_dir = dir.path().join("state");
+        fs::create_dir(&default_state_dir).expect("state dir");
         Fixture {
             paths: JoinPaths {
                 env_file,
-                state_dir,
+                default_state_dir,
             },
             _dir: dir,
         }
     }
 
-    fn no_read() -> Result<String, JoinError> {
+    fn no_read() -> Result<Secret, JoinError> {
         panic!("the join string must not be read once join has refused")
     }
 
@@ -443,7 +436,7 @@ mod tests {
     fn join_refuses_existing_identity_env_file_unchanged() {
         for name in config::IDENTITY_FILES {
             let f = fixture("join-identity", Some(ENV.as_bytes()));
-            fs::write(f.paths.state_dir.join(name), b"x").unwrap();
+            fs::write(f.paths.default_state_dir.join(name), b"x").unwrap();
             let before = fs::metadata(&f.paths.env_file).unwrap();
             let err = configure(&f.paths, me(), no_read).expect_err("must refuse");
             assert!(
@@ -474,14 +467,39 @@ mod tests {
         assert_eq!(fs::read(&f.paths.env_file).unwrap(), env.as_bytes());
     }
 
+    /// The default state directory is checked even when the environment file names
+    /// an empty one, and the caller's own environment is never consulted, so
+    /// `sudo -E RELAY_STATE_DIR=/tmp/empty relay-daemon join` on an enrolled Node
+    /// still refuses.
+    #[test]
+    fn join_always_checks_the_default_state_dir() {
+        let dir = TempDir::created("join-default-state");
+        let empty = dir.path().join("empty");
+        fs::create_dir(&empty).unwrap();
+        let env = format!("{ENV}RELAY_STATE_DIR={}\n", empty.display());
+        let f = fixture("join-default", Some(env.as_bytes()));
+        fs::write(f.paths.default_state_dir.join("node_id"), b"n").unwrap();
+        let err = configure(&f.paths, me(), no_read).expect_err("must refuse");
+        assert!(
+            matches!(err, JoinError::AlreadyEnrolled { ref state_dir } if *state_dir == f.paths.default_state_dir)
+        );
+        assert_eq!(fs::read(&f.paths.env_file).unwrap(), env.as_bytes());
+
+        let prod = JoinPaths::production();
+        assert_eq!(
+            prod.default_state_dir,
+            PathBuf::from("/var/lib/relay-daemon")
+        );
+        assert_eq!(prod.env_file, PathBuf::from(ENV_FILE));
+    }
+
     #[test]
     fn join_writes_env_file_root_0600_atomically() {
         let f = fixture("join-write", Some(ENV.as_bytes()));
         fs::set_permissions(&f.paths.env_file, fs::Permissions::from_mode(0o644)).unwrap();
         let before = fs::metadata(&f.paths.env_file).unwrap().ino();
         let text = join_text("relay.example:7654");
-        let input = text.clone();
-        configure(&f.paths, me(), move || Ok(format!("  {input}\r\n"))).expect("join configures");
+        configure(&f.paths, me(), input(format!("  {text}\r\n"))).expect("join configures");
 
         let want = ENV.replace("RELAY_JOIN=replace-me", &format!("RELAY_JOIN={text}"));
         assert_eq!(
@@ -505,20 +523,33 @@ mod tests {
         assert!(leftovers(f.paths.env_file.parent().unwrap()).is_empty());
     }
 
+    /// A temporary file an interrupted run left behind holds a join string; the
+    /// next run removes it before writing.
+    #[test]
+    fn join_removes_a_stale_temporary_file() {
+        let f = fixture("join-stale-run", Some(ENV.as_bytes()));
+        let dir = f.paths.env_file.parent().unwrap().to_path_buf();
+        fs::write(
+            dir.join(".relay-daemon.env.join-99999.tmp"),
+            b"RELAY_JOIN=glp_join_old\n",
+        )
+        .unwrap();
+        configure(&f.paths, me(), input(join_text("relay:7654"))).expect("join");
+        assert!(leftovers(&dir).is_empty());
+    }
+
     #[test]
     fn join_appends_a_missing_line_and_creates_a_missing_file() {
         let text = join_text("[fd00::1]:7654");
         let f = fixture("join-append", Some(b"RELAY_POLICY_PATH=/p"));
-        let input = text.clone();
-        configure(&f.paths, me(), move || Ok(input)).expect("append");
+        configure(&f.paths, me(), input(text.clone())).expect("append");
         assert_eq!(
             fs::read(&f.paths.env_file).unwrap(),
             format!("RELAY_POLICY_PATH=/p\nRELAY_JOIN={text}\n").as_bytes()
         );
 
         let f = fixture("join-create", None);
-        let input = text.clone();
-        configure(&f.paths, me(), move || Ok(input)).expect("create");
+        configure(&f.paths, me(), input(text.clone())).expect("create");
         assert_eq!(
             fs::read(&f.paths.env_file).unwrap(),
             format!("RELAY_JOIN={text}\n").as_bytes()
@@ -532,8 +563,7 @@ mod tests {
         let text = join_text("relay:7654");
         let env = b"RELAY_JOIN=a\nX=1\n  RELAY_JOIN = b\nRELAY_JOINed=keep\n";
         let f = fixture("join-every", Some(env));
-        let input = text.clone();
-        configure(&f.paths, me(), move || Ok(input)).expect("join");
+        configure(&f.paths, me(), input(text.clone())).expect("join");
         assert_eq!(
             fs::read(&f.paths.env_file).unwrap(),
             format!("RELAY_JOIN={text}\nX=1\nRELAY_JOIN={text}\nRELAY_JOINed=keep\n").as_bytes()
@@ -542,27 +572,26 @@ mod tests {
 
     #[test]
     fn join_refuses_a_malformed_or_empty_join_string_env_file_unchanged() {
-        for (input, empty) in [
+        for (text, empty) in [
             ("glp_join_not!base64", false),
             ("not-a-join-string", false),
             ("", true),
             ("   \n", true),
         ] {
             let f = fixture("join-malformed", Some(ENV.as_bytes()));
-            let owned = input.to_string();
-            let err = configure(&f.paths, me(), move || Ok(owned)).expect_err("must refuse");
+            let err = configure(&f.paths, me(), input(text)).expect_err("must refuse");
             if empty {
-                assert!(matches!(err, JoinError::Empty), "{input:?}: {err}");
+                assert!(matches!(err, JoinError::Empty), "{text:?}: {err}");
             } else {
-                assert!(matches!(err, JoinError::Invalid(_)), "{input:?}: {err}");
+                assert!(matches!(err, JoinError::Invalid(_)), "{text:?}: {err}");
             }
             assert_eq!(fs::read(&f.paths.env_file).unwrap(), ENV.as_bytes());
             assert!(leftovers(f.paths.env_file.parent().unwrap()).is_empty());
         }
         // A join string whose address could redirect the dial is refused offline too.
         let f = fixture("join-bad-addr", Some(ENV.as_bytes()));
-        let bad = join_text("https://relay:7654/x");
-        let err = configure(&f.paths, me(), move || Ok(bad)).expect_err("must refuse");
+        let err = configure(&f.paths, me(), input(join_text("https://relay:7654/x")))
+            .expect_err("must refuse");
         assert!(matches!(
             err,
             JoinError::Invalid(ConfigError::BadJoinAddress(_))
@@ -574,7 +603,12 @@ mod tests {
     #[test]
     fn join_refuses_a_symlinked_env_file() {
         let f = fixture("join-symlink", None);
-        let target = f.paths.state_dir.parent().unwrap().join("target.env");
+        let target = f
+            .paths
+            .default_state_dir
+            .parent()
+            .unwrap()
+            .join("target.env");
         fs::write(&target, ENV).unwrap();
         std::os::unix::fs::symlink(&target, &f.paths.env_file).unwrap();
         let err = configure(&f.paths, me(), no_read).expect_err("must refuse");
@@ -588,15 +622,17 @@ mod tests {
 
     #[test]
     fn env_file_state_dir_reads_the_last_assignment() {
-        assert_eq!(env_file_state_dir(b"#RELAY_STATE_DIR=/a\n"), None);
+        let read = env_file_state_dir;
+        assert_eq!(read(b"#RELAY_STATE_DIR=/a\n"), None);
         assert_eq!(
-            env_file_state_dir(b"RELAY_STATE_DIR=/a\nRELAY_STATE_DIR='/b'\n"),
+            read(b"RELAY_STATE_DIR=/a\nRELAY_STATE_DIR='/b'\n"),
             Some(PathBuf::from("/b"))
         );
-        assert_eq!(env_file_state_dir(b"RELAY_STATE_DIR=\n"), None);
+        assert_eq!(read(b"RELAY_STATE_DIR=\n"), None);
     }
 
-    /// `join` writes the file the packaged unit reads and starts that unit.
+    /// `join` writes the file the packaged unit reads, checks the state directory
+    /// it uses, and starts that unit.
     #[test]
     fn env_file_and_unit_match_the_packaged_unit() {
         let unit = fs::read_to_string(concat!(
@@ -605,6 +641,8 @@ mod tests {
         ))
         .expect("read the packaged unit");
         assert!(unit.contains(&format!("EnvironmentFile=-{ENV_FILE}\n")));
+        assert!(unit.contains("StateDirectory=relay-daemon\n"));
+        assert_eq!(DEFAULT_STATE_DIR, "/var/lib/relay-daemon");
         assert_eq!(systemctl::SYSTEMCTL_ARGS[2], "relay-daemon.service");
     }
 }
