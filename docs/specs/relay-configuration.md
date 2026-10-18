@@ -31,7 +31,7 @@ to authenticate as somebody else.
 
 | Surface | Access to the capability |
 |---|---|
-| **The host** | The security floor: today `RELAY_*` environment variables and flags (RC-2); designed, one configuration file (RC-12) |
+| **The host** | The security floor, in one configuration file (RC-12) |
 | **Admin Console** | Today nothing. Designed: every operator setting, read and changed by a human `admin` with step-up (RC-29), and the non-secret floor, read-only (RC-33) |
 | **Control API** | No configuration write route exists (RC-11), and none may be added (RC-32). Designed: reads the non-secret operator settings (RC-31) |
 | **MCP** | No configuration write tool (RC-11). Designed: reads the non-secret operator settings (RC-31) |
@@ -42,9 +42,6 @@ to authenticate as somebody else.
 - **RC-1** The `relay` binary's local subcommands `bootstrap-token` and `console-password`
   create the founding admin's first API Token and first Console credential, run on the Relay's
   host.
-- **RC-2** The Relay reads its settings from command-line flags and `RELAY_*` environment
-  variables; where both set a value, the environment wins.
-- **RC-3** The shipped example environment file covers every setting the binary reads.
 - **RC-4** With no optional setting given, the Relay comes up with the gRPC listener only: no
   control plane, no Console, no OAuth and no approval notification.
 - **RC-5** The approval-gate rules file and the approval webhook secret file are each opened
@@ -117,7 +114,6 @@ writer.
 
 | Claim | Proven by | Seam |
 |---|---|---|
-| RC-3 | `TestRelayEnvExampleCoversTheConfigSurface`, `TestRelayEnvExemptionsAreReal` | packaging |
 | RC-5 | `TestLoadFailsClosed`, `TestLoadRefusesSymlink`, `TestLoadRefusesDirectory` | approval |
 | RC-9 | `TestSecretFilePermissionsAreEnforced` | approval notify |
 | RC-12 | `TestMain_ConfigFlagHonoured`, `TestMain_OtherFlagsRefused`, `TestParseArgs` | composition root |
@@ -127,7 +123,7 @@ writer.
 | RC-22 | `TestDefaults_EachReachValueWhenAbsent`, `TestApprovalGatePathAbsentMeansNoGate`, `TestEveryKeyReachesConfig`, `TestValidate_InvalidValueRefusedNamingSetting`, `TestFromFile_CarriesEverySetting`, `TestNewLogHandler_FormatAndLevel` | relayconfig, composition root |
 | RC-36 | `TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress` | Control API mint |
 
-Claims with **no row**, and so nothing checking them: RC-1, RC-2, RC-4, RC-6, RC-7 (asserted by
+Claims with **no row**, and so nothing checking them: RC-1, RC-4, RC-6, RC-7 (asserted by
 the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absence), RC-35
 (`TestLoadFailsClosed` proves the loader, not the startup refusal).
 
@@ -220,4 +216,11 @@ own infrastructure, documented rather than policed.
 
 ## Retired
 
-None.
+- **RC-2** (retired 2026-10-18) *The Relay reads its settings from command-line flags and
+  `RELAY_*` environment variables; where both set a value, the environment wins.* Untrue once the
+  Relay reads its security floor from one configuration file and from nowhere else (ADR-0043).
+  RC-12 and RC-13 carry the rule: `--config` is the only configuration flag, and a retired
+  `RELAY_*` setting variable refuses start.
+- **RC-3** (retired 2026-10-18) *The shipped example environment file covers every setting the
+  binary reads.* Untrue once the example environment file and its drift test are removed; the
+  example `relay.toml` replaces them, with its own drift test against `Config`.
