@@ -434,7 +434,7 @@ func TestApprovalWebhook_AParkNotifiesTheConfiguredEndpoint(t *testing.T) {
 	defer srv.Close()
 
 	f := startGatedRelay(t, gateAllMutates, WithConfig(func(c *Config) {
-		c.ApprovalWebhookURL = srv.URL
+		c.ApprovalWebhookURL = webhookURLSecret(t, srv.URL)
 	}))
 
 	parkResp := restartMutate(t, f, f.Credential)

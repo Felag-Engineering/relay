@@ -54,7 +54,7 @@ func watchFreezeSignals(ctx context.Context, ctl *capability.Control) {
 				}
 				slog.Info("freeze engaged", "principal", "local-host")
 			case syscall.SIGUSR2:
-				reason := envOr("RELAY_FREEZE_RELEASE_REASON", "released locally on relay host")
+				reason := freezeReleaseReason()
 				if err := ctl.ReleaseFreezeLocal(ctx, reason); err != nil {
 					slog.Error("release freeze failed", "err", err)
 					continue
@@ -63,4 +63,16 @@ func watchFreezeSignals(ctx context.Context, ctl *capability.Control) {
 			}
 		}
 	}
+}
+
+const defaultFreezeReleaseReason = "released locally on relay host"
+
+// freezeReleaseReason is the operator's note recorded with a local release. It
+// is read when SIGUSR2 arrives and is neither floor nor secret, so it is the
+// Relay's one named environment lookup (ADR-0043 decision 6).
+func freezeReleaseReason() string {
+	if v, ok := os.LookupEnv("RELAY_FREEZE_RELEASE_REASON"); ok && v != "" {
+		return v
+	}
+	return defaultFreezeReleaseReason
 }

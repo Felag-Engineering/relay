@@ -814,15 +814,16 @@ fuzz-daemon:
 #   a stray COMPOSE_PROJECT_NAME. Three Nodes by default, nine under --profile demo.
 # - The overlay is named on every down/logs, so an IdP from an OAuth run goes with the
 #   fleet; that is why even the plain targets need Compose >= 2.18 (`!reset`).
-# - The approval gate is chosen per target here, not by the caller's shell or .env.
+# - The Relay's configuration file (and so its approval gate) is chosen per target here, not
+#   by the caller's shell or .env.
 # - Startup waits in two steps, so --wait never covers the init one-shot (it exits, and
 #   older Compose fails `up --wait` on any exited container).
 RELAY_DEMO_COMPOSE := docker compose -p relay-demo -f docker-compose.demo.yml
-DEV_GATE  := DEV_FLEET_APPROVAL_GATE_CONFIG=/etc/relay/approval-gates.json
-DEMO_GATE := DEV_FLEET_APPROVAL_GATE_CONFIG=/etc/relay/approval-gates.demo.json
-DEV_COMPOSE        := $(DEV_GATE) $(RELAY_DEMO_COMPOSE)
-DEMO_COMPOSE       := $(DEMO_GATE) $(RELAY_DEMO_COMPOSE) --profile demo
-DEMO_OAUTH_COMPOSE := $(DEMO_GATE) $(RELAY_DEMO_COMPOSE) -f docker-compose.oauth.yml --profile demo
+DEV_RELAY_CONFIG  := DEV_FLEET_RELAY_CONFIG=./docker/fixtures/relay.dev.toml
+DEMO_RELAY_CONFIG := DEV_FLEET_RELAY_CONFIG=./docker/fixtures/relay.demo.toml
+DEV_COMPOSE        := $(DEV_RELAY_CONFIG) $(RELAY_DEMO_COMPOSE)
+DEMO_COMPOSE       := $(DEMO_RELAY_CONFIG) $(RELAY_DEMO_COMPOSE) --profile demo
+DEMO_OAUTH_COMPOSE := $(DEMO_RELAY_CONFIG) $(RELAY_DEMO_COMPOSE) -f docker-compose.oauth.yml --profile demo
 ALL_COMPOSE        := $(RELAY_DEMO_COMPOSE) -f docker-compose.oauth.yml --profile demo
 DEMO_WAIT_SECONDS ?= 240
 # Must match ROSTER's role=web entries in daemon/tests/dev_fleet_fixtures.rs (a test checks).

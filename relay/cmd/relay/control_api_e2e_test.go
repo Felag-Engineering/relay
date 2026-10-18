@@ -22,10 +22,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/approvalnotify"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
@@ -1004,4 +1006,54 @@ func mcpToolText(t *testing.T, res *sdkmcp.CallToolResult) string {
 		t.Fatalf("Content[0] = %T, want *sdkmcp.TextContent", res.Content[0])
 	}
 	return tc.Text
+}
+
+// TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress: node_plane.advertised_address
+// in the configuration file reaches the join string, and unset the join string
+// carries the certificate hostname on the listen port (RC-36). The listen
+// address is never bound: the fixture serves the node plane over bufconn.
+func TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		advertised string
+		want       string
+	}{
+		{"advertised_address set", "advertised_address = \"localhost:17999\"\n", "localhost:17999"},
+		{"advertised_address unset", "", "localhost:7654"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := "[node_plane]\nlisten_address = \"127.0.0.1:7654\"\n" + tc.advertised +
+				"\n[control_plane]\nenabled = true\n\n[ca]\ndir = " + fmt.Sprintf("%q", t.TempDir()) +
+				"\n\n[store]\npath = " + fmt.Sprintf("%q", filepath.Join(t.TempDir(), "relay.db")) +
+				"\n\n[tls]\nhostname = \"localhost\"\n"
+			path := writeRelayTOML(t, body)
+			sc, err := loadConfig(path, approvalnotify.ReadSecretFile)
+			if err != nil {
+				t.Fatalf("loadConfig: %v", err)
+			}
+
+			f := startRelay(t, WithControlPlane(), WithConfig(func(c *Config) {
+				*c = sc.Config
+				c.ControlEnabled = true
+				c.ControlAddr = "127.0.0.1:0"
+			}))
+			resp := controlAPIRequest(t, f.ClientFor(""), http.MethodPost, f.ControlBase+"/api/v1/enrollment-tokens",
+				f.Credential, map[string]any{"scope": []string{"relay:env=prod"}, "ttl_seconds": 3600})
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("mint status = %d, want %d", resp.StatusCode, http.StatusCreated)
+			}
+			var minted mintTokenAPIResponse
+			if err := json.NewDecoder(resp.Body).Decode(&minted); err != nil {
+				t.Fatalf("decode mint response: %v", err)
+			}
+			js, err := enroll.DecodeJoinString(minted.JoinString)
+			if err != nil {
+				t.Fatalf("join_string does not decode: %v", err)
+			}
+			if got := js.RelayAddress(); got != tc.want {
+				t.Errorf("join string address = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }

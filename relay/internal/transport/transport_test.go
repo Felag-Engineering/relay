@@ -560,7 +560,7 @@ func TestNodePlane_PresentsCAAfterLeaf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServerCertificate: %v", err)
 	}
-	creds := transport.ServerCredentials(sc.GetCertificate, ts.clientCAs, nil)
+	creds := transport.ServerCredentials(sc.GetCertificate, ts.clientCAs, nil, nil)
 
 	chain := handshakePeerChain(t, creds, ts.clientCAs)
 	if len(chain) != 2 {

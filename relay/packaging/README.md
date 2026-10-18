@@ -1,7 +1,8 @@
 # Relay packaging
 
-A hardened `systemd` unit for running the Relay in production, plus an example
-`EnvironmentFile` covering its full startup-configuration surface.
+A hardened `systemd` unit for running the Relay in production, plus
+[`relay.toml.example`](relay.toml.example), the example configuration file
+covering its full startup-configuration surface.
 
 The counterpart on the Node side is
 [`daemon/packaging`](../../daemon/packaging/README.md), and the two have
@@ -27,22 +28,22 @@ side of the tunnel.
 ## Install
 
 ```console
-$ sudo install -m 0755 /path/to/relay /usr/local/bin/relay
+$ sudo install -m 0755 /path/to/relay /usr/bin/relay
 
 # A service account that owns the CA and the store. No shell, no home.
 $ sudo useradd --system --no-create-home --shell /usr/sbin/nologin relay
 
 $ sudo install -m 0644 relay.service /etc/systemd/system/relay.service
 $ sudo mkdir -p /etc/relay
-$ sudo install -m 0640 -o root -g relay relay.env.example /etc/relay/relay.env
-$ sudo "$EDITOR" /etc/relay/relay.env   # set RELAY_HOSTNAME at minimum
+$ sudo install -m 0640 -o root -g relay relay.toml.example /etc/relay/relay.toml
+$ sudo "$EDITOR" /etc/relay/relay.toml   # set tls.hostname, ca.dir and store.path at minimum
 ```
 
-`/etc/relay/relay.env` is `0640 root:relay`: the Relay reads it and nothing else
-should. It holds no secret *values* — every credential is passed as a file path,
-so nothing sensitive reaches `systemctl show`, `ps`, the journal, or a crash
-dump — but it does hold the **security floor**, and whoever can edit it can
-lower that floor at the next restart.
+`/etc/relay/relay.toml` is `0640 root:relay`: the Relay reads it and nothing else
+should. It holds the **security floor**, and whoever can edit it can lower that
+floor at the next restart. The Relay takes nothing from its environment or its
+command line (ADR-0043): a `RELAY_*` setting variable that is still set refuses
+start and names the key in the file that replaces it.
 
 ## Enable
 
@@ -57,9 +58,9 @@ $ systemctl status relay
 The control plane authenticates per-Account API Tokens held in the Relay's own
 store ([ADR-0023](../../docs/adr/0023-retire-the-shared-control-plane-credential.md)) — there is
 deliberately no shared secret in the config. Mint the first one after the Relay
-has started once, pointing `-store-path` at the same store the Relay runs with
-(`RELAY_STORE_PATH` in `/etc/relay/relay.env`). The flag is required: the
-subcommand reads neither the `EnvironmentFile` nor `RELAY_STORE_PATH`.
+has started once, pointing `-store-path` at the same store the Relay runs with (`store.path` in
+`/etc/relay/relay.toml`). The flag is required: the subcommand does not read the
+configuration file.
 
 ```console
 $ sudo -u relay relay bootstrap-token -store-path /var/lib/relay/relay.db
@@ -70,36 +71,38 @@ moment.
 
 ## What is configured here, and what is not
 
-Relay configuration is the operator's, set at startup through this unit and its
-`EnvironmentFile`, and **never reachable from any API** (AGENTS.md invariant
-11). A stolen API Token cannot raise a blast cap, repoint the CA, move a
-listener, or change the OAuth issuer, because no code path exists from a request
-to any of those values.
+Relay configuration is the operator's, read from `/etc/relay/relay.toml` at
+startup, and **never reachable from any API** (AGENTS.md invariant 11). A stolen
+API Token cannot raise a blast cap, repoint the CA, move a listener, or change
+the OAuth issuer, because no code path exists from a request to any of those
+values.
 
 That property is what matters, and it is why several settings live here rather
 than anywhere more convenient:
 
 | Setting | Why it is startup-only |
 |---|---|
-| `RELAY_READ_BLAST_CAP` / `RELAY_MUTATE_BLAST_CAP` | The cap on how much damage one dispatch can do — including from a compromised AI-agent. An API that could raise its own limit is not a limit. |
-| `RELAY_CA_DIR` | The key that mints Node identities. |
-| `RELAY_APPROVAL_GATE_CONFIG` | A stolen credential that could edit its own approval requirements would make approvals decorative. |
-| `RELAY_OAUTH_*` | An API that could repoint its own issuer could authenticate anyone. |
+| `reach.read_blast_cap` / `reach.mutate_blast_cap` | The cap on how much damage one dispatch can do — including from a compromised AI-agent. An API that could raise its own limit is not a limit. |
+| `ca.dir` | The key that mints Node identities. |
+| `approval.gate_rules_path` | A stolen credential that could edit its own approval requirements would make approvals decorative. |
+| `[oauth]` | An API that could repoint its own issuer could authenticate anyone. |
 
 Runtime *objects* — Accounts, API Tokens, Enrollment Tokens, Nodes, Jobs,
 approvals — are managed through `/api/v1` as normal. The line is between
 configuration and objects, not between "important" and "unimportant".
 
-## Secrets are paths, never values
+## Secrets are values in the file, or files it names
 
-Every credential the Relay needs is given to it as a **file path**:
-
-- the approval webhook's signing secret (`RELAY_APPROVAL_WEBHOOK_SECRET_FILE`),
-- the CA key, under the state directory.
-
-Keep it that way when adding anything. A secret passed as an environment
-variable is a secret in every process listing and every crash dump. The Relay
-refuses to start on a world-readable webhook secret rather than signing with one.
+A credential the Relay needs is given either inline (`approval.webhook_secret`,
+`approval.webhook_url`) or by the path of a file holding it
+(`approval.webhook_secret_file`, `approval.webhook_url_file`). Never in the
+environment: a secret passed as an environment variable is a secret in every
+process listing and every crash dump, and a `RELAY_*` setting in the environment
+refuses start. The Relay refuses to start on a group- or world-accessible
+secret file rather than signing with one, and no secret is ever printed in a log
+or an error. Inline secrets depend on `/etc/relay/relay.toml` keeping its
+`0640 root:relay` mode, which the Relay does not yet check itself; use the
+`_file` form until it does.
 
 API Tokens are not configuration at all: they live in the store as hashes, and
 the first is minted with `relay bootstrap-token` (above).
@@ -126,15 +129,16 @@ The Relay is upgraded by replacing the binary and restarting — the same
 config-management push as any other service. It never self-upgrades, and it
 never pushes binaries to Nodes
 ([ADR-0014](../../docs/adr/0014-daemon-lifecycle-iac-upgrades-version-gate.md));
-the Relay's only lever over daemon versions is `RELAY_MIN_DAEMON_VERSION`, which
+the Relay's only lever over daemon versions is `reach.min_daemon_version`, which
 refuses to dispatch to Nodes below it.
 
 ## Keeping the sample honest
 
-`relay.env.example` is covered by a drift gate
-(`relay/cmd/relay/packaging_drift_test.go`): every `RELAY_*` the code reads must
-appear in the sample, or the build fails. The daemon's sample has the same gate
-in its own toolchain (`daemon/tests/packaging_drift.rs`).
+`relay.toml.example` is covered by a drift gate in `relay/internal/relayconfig`
+(`example_test.go`): every key the loader reads must appear in the sample, and
+every value shown commented is the built-in default, or the build fails. The
+daemon's sample has the same gate in its own toolchain
+(`daemon/tests/packaging_drift.rs`).
 
 Both exist because this drift had already happened once — the daemon's sample
 was missing four settings added after it was written, and nothing noticed for

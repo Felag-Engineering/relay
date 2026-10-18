@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -40,6 +39,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/ratelimit"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/relay/relay/internal/relayconfig"
 	"github.com/Felag-Engineering/relay/relay/internal/revocation"
 	"github.com/Felag-Engineering/relay/relay/internal/store"
 	"github.com/Felag-Engineering/relay/relay/internal/transport"
@@ -47,7 +47,8 @@ import (
 	"google.golang.org/grpc"
 )
 
-// Config holds all Relay startup parameters resolved from flags and environment.
+// Config holds the Relay's startup parameters, converted from the configuration
+// file by fromFile.
 type Config struct {
 	Addr      string
 	CADir     string
@@ -55,8 +56,9 @@ type Config struct {
 	Hostname  string
 	// AdvertisedAddress is the node-plane address a join string tells Nodes to
 	// dial (RC-36). Unset, it is the certificate hostname plus the gRPC listen
-	// port. It is startup configuration that no API reaches (invariant 11); no
-	// flag or environment variable sets it.
+	// port. It is read from the configuration file at startup
+	// (node_plane.advertised_address) and no API reaches it (ADR-0043,
+	// invariant 11).
 	AdvertisedAddress   string
 	EnrollIPRate        int
 	EnrollIPBurst       int
@@ -67,16 +69,12 @@ type Config struct {
 	// ReadBlastCap and MutateBlastCap are the blast-radius caps by risk class
 	// (ADR-0004, ADR-0012).
 	//
-	// Set at startup by flag or RELAY_* environment variable, and reachable
-	// from no API — which is invariant 11's requirement. The delivery
-	// mechanism is the root-owned systemd unit and EnvironmentFile in
-	// relay/packaging/.
+	// Read from the configuration file at startup and reachable from no
+	// API — which is invariant 11's requirement (ADR-0043).
 	//
 	// What must stay true: no code path from a request to these values. A
 	// stolen API Token cannot raise its own blast cap, and an API that could
-	// would not be a cap. Secrets stay PATHS rather than values (the
-	// approval-webhook secret below), so
-	// nothing sensitive reaches a process listing or a crash dump.
+	// would not be a cap.
 	ReadBlastCap   int
 	MutateBlastCap int
 
@@ -107,10 +105,9 @@ type Config struct {
 	// exists to catch.
 	CertExpiringFraction float64
 
-	// ApprovalGatePath is the root-owned approval-gate config (ADR-0027):
-	// which dispatches must park for a human. Same startup-only
-	// mechanism as the blast caps — a path,
-	// never settable through any API, since
+	// ApprovalGatePath is the approval-gate config (ADR-0027): which dispatches
+	// must park for a human. Same startup-only mechanism as the blast caps — a
+	// path read from the configuration file, never settable through any API, since
 	// a stolen credential that could edit its own approval requirements would
 	// make the mechanism decorative.
 	//
@@ -129,13 +126,12 @@ type Config struct {
 	// only ever lands on the authenticated /api/v1 endpoint. A deployment whose
 	// webhook is down loses a notification, not the guarantee.
 	//
-	// ApprovalWebhookSecretPath names a root-owned file holding the shared
-	// secret used to sign the outbound body (HMAC-SHA256). It is a path rather
-	// than a value because a secret passed as a flag or an environment variable is a secret in every
-	// process listing and every crash dump.
-	ApprovalWebhookURL        string
-	ApprovalWebhookSecretPath string
-	ApprovalWebhookTimeout    time.Duration
+	// ApprovalWebhookURL may carry a token: it is a secret and is never logged
+	// or put in an error. ApprovalWebhookSecret signs the outbound body
+	// (HMAC-SHA256); it prints as a placeholder under every verb.
+	ApprovalWebhookURL     relayconfig.Secret
+	ApprovalWebhookSecret  relayconfig.Secret
+	ApprovalWebhookTimeout time.Duration
 
 	// ControlEnabled and ControlAddr configure the control-plane HTTP listener
 	// (MCP + /api/v1, ADR-0009/0010) — separate from the node-plane gRPC
@@ -153,12 +149,12 @@ type Config struct {
 	// control-plane listener above rather than one of its own — the Console is
 	// internal-only and shares that listener's exposure posture.
 	//
-	// The two duration fields are file-only Relay configuration in the
+	// The two duration fields are configuration-file settings in the
 	// invariant-11 sense: operator-set at startup, and there is no code path
 	// from any request to either of them. That matters most for
 	// ConsoleStepUpWindow — an Account that could widen its own step-up window
 	// has removed the strongest per-action control in the system (spec 11).
-	// It is clamped to consoleauth.MaxStepUpWindow at parse. It governs the
+	// The loader refuses a value above consoleauth.MaxStepUpWindow. It governs the
 	// privilege-granting Account acts, and never approval decisions, which
 	// always ask for the password.
 	ConsoleEnabled       bool
@@ -266,121 +262,6 @@ func (r jobResultReader) GetJob(ctx context.Context, id string) (jobs.Job, error
 
 func (r jobResultReader) TasksByJob(ctx context.Context, jobID string) ([]jobs.Task, error) {
 	return r.tasksRepo.ByJob(ctx, jobID)
-}
-
-// envOr returns the value of environment variable key if it is non-empty, or
-// fallback otherwise.
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-// parseConfig resolves all Relay startup parameters from CLI flags and
-// environment. RELAY_-prefixed env vars override the corresponding CLI flags
-// for string fields. For integer fields, non-integer env values are silently
-// ignored and the flag default is kept.
-func parseConfig() Config {
-	addr := flag.String("addr", ":7654", "gRPC listen address")
-	caDir := flag.String("ca-dir", "./ca-data", "directory for CA key and certificate")
-	storePath := flag.String("store-path", "./relay-data/relay.db", "path to the Relay's SQLite store file")
-	hostname := flag.String("hostname", "localhost", "hostname for the server certificate SAN")
-
-	// Rate-limit and registry-cap flags. Env overrides follow the RELAY_ prefix
-	// convention; non-integer env values are silently ignored (flag default kept).
-	enrollIPRate := flag.Int("enroll-ip-rate", 5, "per-IP Enrollment rate (tokens/min)")
-	enrollIPBurst := flag.Int("enroll-ip-burst", 3, "per-IP Enrollment burst capacity")
-	enrollGlobalRate := flag.Int("enroll-global-rate", 50, "global Enrollment rate (tokens/min)")
-	enrollGlobalBurst := flag.Int("enroll-global-burst", 10, "global Enrollment burst capacity")
-	enrollMaxTrackedIPs := flag.Int("enroll-max-tracked-ips", 100000, "cap on per-IP rate-limit bucket map")
-	maxNodes := flag.Int("max-nodes", 110000, "registry insert cap (0 = unlimited)")
-	readBlastCap := flag.Int("read-blast-cap", capability.DefaultReadCap,
-		"blast-radius cap for read Operations (max Nodes per Job)")
-	mutateBlastCap := flag.Int("mutate-blast-cap", capability.DefaultMutateCap,
-		"blast-radius cap for mutate Operations and Raw Exec (max Nodes per Job)")
-	dispatchConcurrency := flag.Int("dispatch-concurrency", capability.DefaultDispatchConcurrency,
-		"max Tasks of one Job dispatched at once (per-Job fan-out bound); must be at least 1")
-	approvalGatePath := flag.String("approval-gate-config", "",
-		"path to the root-owned approval-gate config (ADR-0027); empty disables approval gating. "+
-			"A configured path that cannot be loaded refuses startup.")
-	approvalWebhookURL := flag.String("approval-webhook-url", "",
-		"HTTPS endpoint notified (fire-and-forget) when a dispatch parks for approval (ADR-0027); "+
-			"empty disables notification. Decisions never arrive this way — they land on /api/v1.")
-	approvalWebhookSecret := flag.String("approval-webhook-secret-file", "",
-		"path to a root-owned file holding the shared secret used to sign approval webhook bodies "+
-			"(HMAC-SHA256); empty sends unsigned notifications")
-	approvalWebhookTimeout := flag.Duration("approval-webhook-timeout", approvalnotify.DefaultTimeout,
-		"total time budget for one approval webhook delivery attempt")
-	minDaemonVersion := flag.String("min-daemon-version", "",
-		"minimum relay-daemon semver version (ADR-0014); empty disables the outdated gate")
-	certExpiringFraction := flag.Float64("cert-expiring-fraction", nodestate.DefaultCertExpiringFraction,
-		"fraction of a Node identity certificate's LeafValidity remaining below which state:cert-expiring "+
-			"fires (ADR-0034); must be in (0, 1] — there is no off value")
-
-	controlEnabled := flag.Bool("control-enabled", false,
-		"enable the control-plane listener (MCP + /api/v1); disabled by default")
-	controlAddr := flag.String("control-addr", ":9443",
-		"control-plane HTTPS listen address (distinct from -addr, the node-plane gRPC listener)")
-	consoleEnabled := flag.Bool("console-enabled", false,
-		"serve the Admin Console on the control-plane listener (ADR-0009); requires -control-enabled")
-	consoleSessionMaxAge := flag.Duration("console-session-max-age", consoleauth.DefaultAbsoluteLifetime,
-		"absolute lifetime of a Console session, never extended by activity")
-	consoleSessionIdle := flag.Duration("console-session-idle", consoleauth.DefaultIdleTimeout,
-		"idle timeout of a Console session")
-	consoleStepUpWindow := flag.Duration("console-step-up-window", consoleauth.DefaultStepUpWindow,
-		"how recently a human must have re-authenticated for a step-up-gated action; file-only, no Account of any role can extend it")
-	oauthIssuer := flag.String("oauth-issuer", "",
-		"OIDC issuer URL for human MCP sessions (ADR-0024); empty disables OAuth")
-	oauthAudience := flag.String("oauth-audience", "",
-		"this Relay's OAuth resource identifier, checked against each token's aud; required with -oauth-issuer")
-	oauthAccountClaim := flag.String("oauth-account-claim", "email",
-		"token claim whose value names the Account a session resolves to")
-	oauthRequiredScope := flag.String("oauth-required-scope", "",
-		"scope every OAuth token must carry; empty requires none")
-	oauthPublicURL := flag.String("oauth-public-url", "",
-		"externally-reachable base URL of the control plane, used to advertise protected-resource metadata")
-
-	flag.Parse()
-
-	var cfg Config
-	cfg.Addr = envOr("RELAY_ADDR", *addr)
-	cfg.CADir = envOr("RELAY_CA_DIR", *caDir)
-	cfg.StorePath = envOr("RELAY_STORE_PATH", *storePath)
-	cfg.Hostname = envOr("RELAY_HOSTNAME", *hostname)
-
-	cfg.EnrollIPRate = intEnvOr("RELAY_ENROLL_IP_RATE", *enrollIPRate)
-	cfg.EnrollIPBurst = intEnvOr("RELAY_ENROLL_IP_BURST", *enrollIPBurst)
-	cfg.EnrollGlobalRate = intEnvOr("RELAY_ENROLL_GLOBAL_RATE", *enrollGlobalRate)
-	cfg.EnrollGlobalBurst = intEnvOr("RELAY_ENROLL_GLOBAL_BURST", *enrollGlobalBurst)
-	cfg.EnrollMaxTrackedIPs = intEnvOr("RELAY_ENROLL_MAX_TRACKED_IPS", *enrollMaxTrackedIPs)
-	cfg.MaxNodes = intEnvOr("RELAY_MAX_NODES", *maxNodes)
-	cfg.ReadBlastCap = intEnvOr("RELAY_READ_BLAST_CAP", *readBlastCap)
-	cfg.MutateBlastCap = intEnvOr("RELAY_MUTATE_BLAST_CAP", *mutateBlastCap)
-	cfg.DispatchConcurrency = intEnvOr("RELAY_DISPATCH_CONCURRENCY", *dispatchConcurrency)
-
-	cfg.MinDaemonVersion = envOr("RELAY_MIN_DAEMON_VERSION", *minDaemonVersion)
-	cfg.CertExpiringFraction = certExpiringFractionFromEnv(
-		os.Getenv("RELAY_CERT_EXPIRING_FRACTION"), *certExpiringFraction)
-	cfg.ApprovalGatePath = envOr("RELAY_APPROVAL_GATE_CONFIG", *approvalGatePath)
-	cfg.ApprovalWebhookURL = envOr("RELAY_APPROVAL_WEBHOOK_URL", *approvalWebhookURL)
-	cfg.ApprovalWebhookSecretPath = envOr("RELAY_APPROVAL_WEBHOOK_SECRET_FILE", *approvalWebhookSecret)
-	cfg.ApprovalWebhookTimeout = durationEnvOr("RELAY_APPROVAL_WEBHOOK_TIMEOUT", *approvalWebhookTimeout)
-
-	cfg.ControlEnabled = boolEnvOr("RELAY_CONTROL_ENABLED", *controlEnabled)
-	cfg.ControlAddr = envOr("RELAY_CONTROL_ADDR", *controlAddr)
-
-	cfg.ConsoleEnabled = boolEnvOr("RELAY_CONSOLE_ENABLED", *consoleEnabled)
-	cfg.ConsoleSessionMaxAge = durationEnvOr("RELAY_CONSOLE_SESSION_MAX_AGE", *consoleSessionMaxAge)
-	cfg.ConsoleSessionIdle = durationEnvOr("RELAY_CONSOLE_SESSION_IDLE", *consoleSessionIdle)
-	cfg.ConsoleStepUpWindow = clampedStepUpWindow(durationEnvOr("RELAY_CONSOLE_STEP_UP_WINDOW", *consoleStepUpWindow))
-	cfg.OAuthIssuer = envOr("RELAY_OAUTH_ISSUER", *oauthIssuer)
-	cfg.OAuthAudience = envOr("RELAY_OAUTH_AUDIENCE", *oauthAudience)
-	cfg.OAuthAccountClaim = envOr("RELAY_OAUTH_ACCOUNT_CLAIM", *oauthAccountClaim)
-	cfg.OAuthRequiredScope = envOr("RELAY_OAUTH_REQUIRED_SCOPE", *oauthRequiredScope)
-	cfg.OAuthPublicURL = envOr("RELAY_OAUTH_PUBLIC_URL", *oauthPublicURL)
-
-	return cfg
 }
 
 // serverCertObserver returns the callback that makes one listener's server
@@ -736,18 +617,21 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// notifier the operator asked for and did not get is a silent gap in how
 	// they learn a fleet action is waiting.
 	var notifier capability.ApprovalNotifier
-	if cfg.ApprovalWebhookURL != "" {
+	if webhookURL, ok := cfg.ApprovalWebhookURL.Reveal(); ok && webhookURL != "" {
+		var secretBytes []byte
+		if v, ok := cfg.ApprovalWebhookSecret.Reveal(); ok {
+			secretBytes = []byte(v)
+		}
 		n, err := approvalnotify.New(approvalnotify.Config{
-			URL:        cfg.ApprovalWebhookURL,
-			SecretPath: cfg.ApprovalWebhookSecretPath,
-			Timeout:    cfg.ApprovalWebhookTimeout,
+			URL:     webhookURL,
+			Secret:  secretBytes,
+			Timeout: cfg.ApprovalWebhookTimeout,
 		}, approvalnotify.WithLogger(logger))
 		if err != nil {
 			return nil, nil, fmt.Errorf("configure approval webhook: %w", err)
 		}
 		notifier = n
-		slog.Info("approval webhook enabled",
-			"url", cfg.ApprovalWebhookURL, "signed", cfg.ApprovalWebhookSecretPath != "")
+		slog.Info("approval webhook enabled", "signed", cfg.ApprovalWebhookSecret.IsSet())
 	}
 
 	// The approval callout (ADR-0027), over the one Recorder and the same
@@ -1066,7 +950,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 
 func main() {
 	// `relay bootstrap-token` is a standalone utility subcommand (see
-	// bootstrap_token.go), checked before flag.Parse/parseConfig so it never
+	// bootstrap_token.go), checked before argument parsing so it never
 	// touches Relay startup config. It mints the founding admin's first API
 	// Token against the local store and exits; it never starts a server.
 	if len(os.Args) > 1 && os.Args[1] == "bootstrap-token" {
@@ -1080,7 +964,7 @@ func main() {
 	}
 
 	// `relay --version` prints the build stamp and exits. Checked here,
-	// alongside bootstrap-token and before flag.Parse/parseConfig, because the
+	// alongside bootstrap-token and before argument parsing, because the
 	// flag package would otherwise reject it as an unknown flag: an operator
 	// must be able to identify a binary without a valid startup config.
 	//
@@ -1092,7 +976,30 @@ func main() {
 		return
 	}
 
-	cfg := parseConfig()
+	// Startup order follows ADR-0043: refuse retired RELAY_* names, open the
+	// file, decode strictly, validate, and only then build the server. The
+	// file and state checks join here later.
+	path, err := parseArgs(os.Args[1:], os.Stderr)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		os.Exit(2)
+	}
+	if err := relayconfig.RefuseRetiredEnv(os.Environ()); err != nil {
+		fmt.Fprintf(os.Stderr, "relay: %v\n", err)
+		os.Exit(1)
+	}
+	sc, err := loadConfig(path, approvalnotify.ReadSecretFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "relay: %v\n", err)
+		os.Exit(1)
+	}
+	slog.SetDefault(slog.New(newLogHandler(os.Stderr, sc.Log)))
+	for _, w := range sc.Warnings {
+		slog.Warn(w.String())
+	}
+	cfg := sc.Config
 	srv, deps, err := newServer(cfg)
 	if err != nil {
 		slog.Error("build server failed", "err", err)
@@ -1123,6 +1030,7 @@ func main() {
 		"commit", version.Commit,
 		"build_date", version.BuildDate,
 		"addr", cfg.Addr,
+		"config_file", path,
 		"mtls", true,
 		"ca_dir", cfg.CADir,
 		"store_path", cfg.StorePath,
@@ -1213,88 +1121,4 @@ func auditExpiry(ctx context.Context, deps *appDeps, r approval.Request) error {
 		Reason: fmt.Sprintf("approval request %s expired at %s without reaching %s (plan %s): %s",
 			r.ID, r.ExpiresAt.UTC().Format(time.RFC3339), r.Progress(), r.PlanHash, r.Summary),
 	})
-}
-
-// parsedEnvOr reads key from the environment and parses it with parse,
-// falling back to fallback when the variable is unset, unparseable, or
-// rejected by parse (ok == false), and warning on the last two.
-func parsedEnvOr[T any](key string, fallback T, parse func(string) (v T, ok bool)) T {
-	env := os.Getenv(key)
-	if env == "" {
-		return fallback
-	}
-	v, ok := parse(env)
-	if !ok {
-		slog.Warn("ignoring invalid "+key, "value", env)
-		return fallback
-	}
-	return v
-}
-
-// intEnvOr reads an integer from the environment, falling back to fallback
-// and warning on anything unparseable. It applies no bounds of its own:
-// range checks on these values live where the value is consumed.
-func intEnvOr(key string, fallback int) int {
-	return parsedEnvOr(key, fallback, func(s string) (int, bool) {
-		v, err := strconv.Atoi(s)
-		return v, err == nil
-	})
-}
-
-// boolEnvOr reads a boolean (as strconv.ParseBool accepts it) from the
-// environment, falling back to fallback and warning on anything unparseable.
-func boolEnvOr(key string, fallback bool) bool {
-	return parsedEnvOr(key, fallback, func(s string) (bool, bool) {
-		v, err := strconv.ParseBool(s)
-		return v, err == nil
-	})
-}
-
-// durationEnvOr reads a positive duration from the environment, falling back
-// to fallback and warning on anything unparseable.
-//
-// A non-positive value is refused rather than accepted: every duration read
-// this way bounds something (a session's life, a step-up window), and "0"
-// silently meaning "unbounded" is how a control gets turned off by a typo.
-func durationEnvOr(key string, fallback time.Duration) time.Duration {
-	return parsedEnvOr(key, fallback, func(s string) (time.Duration, bool) {
-		d, err := time.ParseDuration(s)
-		return d, err == nil && d > 0
-	})
-}
-
-// clampedStepUpWindow caps the operator's step-up window at
-// consoleauth.MaxStepUpWindow, warning when it does: a window long enough to
-// be convenient is long enough for someone else at the keyboard.
-func clampedStepUpWindow(d time.Duration) time.Duration {
-	clamped, did := consoleauth.ClampStepUpWindow(d)
-	if did {
-		slog.Warn("console step-up window exceeds the maximum; clamped",
-			"requested", d, "effective", clamped)
-	}
-	return clamped
-}
-
-// certExpiringFractionFromEnv reads RELAY_CERT_EXPIRING_FRACTION, given the
-// flag-derived fallback.
-//
-// Unlike every other RELAY_* env var in parseConfig, an unparsable value
-// here does NOT fall back to fallback: ADR-0034 and relay.env.example both
-// promise the Relay REFUSES TO START on a state:cert-expiring fraction
-// outside (0, 1], and silently keeping the default would let a typo
-// (`0.o5`) swap in a different alarm threshold than the operator wrote, with
-// nothing but a log line to notice by. This returns 0 — itself out of
-// range — so the value routes through newServer's existing (0, 1] check and
-// fails startup there: one range check, one fail-startup error message, not
-// two.
-func certExpiringFractionFromEnv(env string, fallback float64) float64 {
-	if env == "" {
-		return fallback
-	}
-	v, err := strconv.ParseFloat(env, 64)
-	if err != nil {
-		slog.Error("invalid RELAY_CERT_EXPIRING_FRACTION; refusing to start", "value", env, "err", err)
-		return 0
-	}
-	return v
 }

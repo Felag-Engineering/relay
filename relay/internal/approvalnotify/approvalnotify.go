@@ -45,6 +45,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -52,6 +53,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -66,7 +68,7 @@ import (
 // DefaultTimeout bounds one delivery attempt end to end.
 const DefaultTimeout = 5 * time.Second
 
-// maxSecretBytes bounds the secret file. A shared secret is short; the bound
+// maxSecretBytes bounds a secret file. A shared secret is short; the bound
 // stops a wrong path (a log, a device) from being read into memory.
 const maxSecretBytes = 4096
 
@@ -85,19 +87,21 @@ const (
 // EventApprovalRequested is the only event this package sends today.
 const EventApprovalRequested = "approval.requested"
 
-// Config is the notifier's root-owned configuration. Like the approval-gate
-// file it is startup configuration, unreachable through any API (invariant 11):
-// an endpoint that could repoint its own approval notifications could route
-// them to itself.
+// Config is the notifier's startup configuration. Like the approval-gate file
+// it comes from the Relay's configuration file and is unreachable through any
+// API (invariant 11): an endpoint that could repoint its own approval
+// notifications could route them to itself.
 type Config struct {
 	// URL is the endpoint to POST to. HTTPS is required except on loopback,
 	// where a local sidecar over HTTP is a normal deployment and the traffic
-	// does not leave the host.
+	// does not leave the host. The URL may carry a token, so it is never
+	// logged or put in an error.
 	URL string
 
-	// SecretPath names a root-owned file holding the shared signing secret.
-	// Empty sends unsigned notifications.
-	SecretPath string
+	// Secret is the shared signing secret, already read through the file check
+	// (ReadSecretFile) by the composition root. Empty sends unsigned
+	// notifications.
+	Secret []byte
 
 	// Timeout bounds one attempt. Zero means DefaultTimeout.
 	Timeout time.Duration
@@ -122,7 +126,8 @@ var _ capability.ApprovalNotifier = (*Notifier)(nil)
 type Option func(*Notifier)
 
 // WithHTTPClient overrides the default client. Used by tests to point at an
-// httptest server; a caller supplying one is responsible for its timeouts.
+// httptest server; a caller supplying one owns its timeouts and its redirect
+// policy.
 func WithHTTPClient(c *http.Client) Option {
 	return func(n *Notifier) { n.client = c }
 }
@@ -149,7 +154,8 @@ func New(cfg Config, opts ...Option) (*Notifier, error) {
 	}
 	u, err := url.Parse(cfg.URL)
 	if err != nil {
-		return nil, fmt.Errorf("approvalnotify: parse url: %w", err)
+		// No %w: a *url.Error embeds the URL.
+		return nil, errors.New("approvalnotify: url could not be parsed")
 	}
 	if err := checkScheme(u); err != nil {
 		return nil, err
@@ -162,18 +168,11 @@ func New(cfg Config, opts ...Option) (*Notifier, error) {
 
 	n := &Notifier{
 		url:     cfg.URL,
-		client:  &http.Client{Timeout: timeout},
+		secret:  bytes.Clone(cfg.Secret),
+		client:  &http.Client{Timeout: timeout, CheckRedirect: refuseRedirect},
 		log:     slog.Default(),
 		timeout: timeout,
 		now:     func() time.Time { return time.Now().UTC() },
-	}
-
-	if cfg.SecretPath != "" {
-		secret, err := readSecret(cfg.SecretPath)
-		if err != nil {
-			return nil, err
-		}
-		n.secret = secret
 	}
 
 	for _, o := range opts {
@@ -181,6 +180,11 @@ func New(cfg Config, opts ...Option) (*Notifier, error) {
 	}
 	return n, nil
 }
+
+// refuseRedirect returns a 3xx to the caller unfollowed. A Relay-authored
+// notice goes to the one endpoint the host configured and nowhere the receiver
+// points it; the Location header is never read or logged.
+func refuseRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // checkScheme requires HTTPS off-host. A plaintext notification to a remote
 // endpoint would put the Relay-authored plan summary — Operation, arguments,
@@ -194,10 +198,10 @@ func checkScheme(u *url.URL) error {
 		if isLoopback(u.Hostname()) {
 			return nil
 		}
-		return fmt.Errorf("approvalnotify: url %q is plaintext http to a non-loopback host — "+
-			"an approval notice carries the Operation, its arguments, and the Nodes it targets", u.Redacted())
+		return errors.New("approvalnotify: url is plaintext http to a non-loopback host — " +
+			"an approval notice carries the Operation, its arguments, and the Nodes it targets")
 	default:
-		return fmt.Errorf("approvalnotify: unsupported url scheme %q (want https)", u.Scheme)
+		return errors.New("approvalnotify: url scheme is not https")
 	}
 }
 
@@ -205,16 +209,19 @@ func isLoopback(host string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
-// readSecret loads the signing secret with the same fail-closed posture the
+// ReadSecretFile loads a secret file (the signing secret, or the webhook URL
+// when it is given by file) with the same fail-closed posture the
 // approval-gate loader uses: no symlink following, checks on the open
 // descriptor rather than the path, and a refusal for anything group- or
 // world-READABLE. The permission bar is stricter than the gate file's because
-// this is secret material, not configuration.
-func readSecret(path string) ([]byte, error) {
+// this is secret material, not configuration. It is the reader the composition
+// root passes to relayconfig.Config.ResolveSecrets; its errors name the path
+// and the mode, never the content.
+func ReadSecretFile(path string) ([]byte, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NOCTTY, 0) //nolint:gosec // G304: an operator-set host path (invariant 11), opened O_NOFOLLOW
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("approvalnotify: secret file %s does not exist", path)
+			return nil, fmt.Errorf("approvalnotify: secret file %s does not exist: %w", path, fs.ErrNotExist)
 		}
 		if errors.Is(err, syscall.ELOOP) {
 			return nil, fmt.Errorf("approvalnotify: secret file %s is a symlink — it must be a regular root-owned file", path)
@@ -306,7 +313,8 @@ func (n *Notifier) deliver(ctx context.Context, requestID string, body []byte) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.url, bytes.NewReader(body))
 	if err != nil {
-		n.log.Error("approval webhook: build request", "request_id", requestID, "err", err)
+		// err is a *url.Error carrying the URL, so it is not logged.
+		n.log.Error("approval webhook: build request failed", "request_id", requestID)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -320,11 +328,8 @@ func (n *Notifier) deliver(ctx context.Context, requestID string, body []byte) {
 
 	resp, err := n.client.Do(req)
 	if err != nil {
-		// The URL is logged redacted: an operator may have embedded a token in
-		// a query string, and a delivery failure must not be how it reaches the
-		// log file.
 		n.log.Warn("approval webhook: delivery failed",
-			"request_id", requestID, "url", redact(n.url), "err", err)
+			"request_id", requestID, "reason", deliveryFailure(err))
 		return
 	}
 	defer resp.Body.Close() //nolint:errcheck
@@ -335,7 +340,7 @@ func (n *Notifier) deliver(ctx context.Context, requestID string, body []byte) {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		n.log.Warn("approval webhook: endpoint refused the notice",
-			"request_id", requestID, "url", redact(n.url), "status", resp.StatusCode)
+			"request_id", requestID, "status", resp.StatusCode)
 	}
 }
 
@@ -355,13 +360,26 @@ func sign(secret []byte, timestamp string, body []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// redact renders a URL without its userinfo or query string for logging.
-func redact(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "(unparseable url)"
+// deliveryFailure names why a delivery failed as one fixed category, never
+// text taken from err. The inner errors are not safe to log either: a
+// *net.DNSError names the host and an x509.HostnameError names it as well. A
+// category is the only form that cannot carry the URL or any part of it.
+func deliveryFailure(err error) string {
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return "name lookup failed"
 	}
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u.Redacted()
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+		return "timed out"
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return "connection refused"
+	}
+	var verify *tls.CertificateVerificationError
+	var record tls.RecordHeaderError
+	if errors.As(err, &verify) || errors.As(err, &record) {
+		return "tls handshake failed"
+	}
+	return "transport error"
 }

@@ -113,7 +113,7 @@ services:
     environment:
       KC_HTTP_PORT: "8180"
       # Fixes the issuer to this exact URL, whichever address a request
-      # arrived on. The Relay's RELAY_OAUTH_ISSUER below must match it.
+      # arrived on. The Relay's oauth.issuer (docker/fixtures/relay.demo-oauth.toml) must match it.
       KC_HOSTNAME: "http://127.0.0.1:8180"
       # No management interface (port 9000): it opens only for health or
       # metrics, and the healthcheck below does not need either.
@@ -153,21 +153,15 @@ services:
       # from starting — so the Relay starts only once the IdP serves the realm.
       idp:
         condition: service_healthy
-    environment:
-      RELAY_OAUTH_ISSUER: "http://127.0.0.1:8180/realms/relay-demo"
-      # The MCP URL clients dial. Claude Code checks the advertised `resource`
-      # against it, and the realm's audience mapper puts it in every token's `aud`.
-      RELAY_OAUTH_AUDIENCE: "https://relay:9443/mcp"
-      RELAY_OAUTH_PUBLIC_URL: "https://relay:9443"
-      # Not the default `email`: an Account name is [A-Za-z0-9._-] only, so no
-      # email address can ever name one. Keycloak's `preferred_username` is the
-      # realm username, which the realm forbids users to edit.
-      RELAY_OAUTH_ACCOUNT_CLAIM: "preferred_username"
-      # The Console stays on, as docker-compose.demo.yml sets it: the Console and
-      # OAuth run together. An unauthenticated request off the Console — /mcp
-      # included — gets the 401 whose `WWW-Authenticate: Bearer
-      # resource_metadata=...` is how a client discovers the sign-in, while a
-      # browser on /console/ is still sent to the Console's own sign-in (#775).
+    volumes:
+      # Compose merges service volumes by container target, so this replaces the base
+      # file's mount of /etc/relay/relay.toml. The overlay ALWAYS mounts the demo-oauth
+      # fixture (docker/fixtures/relay.demo-oauth.toml), so it always uses the demo
+      # approval gate, and it ignores DEV_FLEET_RELAY_CONFIG: Compose cannot merge TOML,
+      # so the OAuth settings and the gate choice cannot be layered over a selected file.
+      # A bare `docker compose -f docker-compose.demo.yml -f docker-compose.oauth.yml`
+      # therefore no longer honours the gate selector.
+      - ./docker/fixtures/relay.demo-oauth.toml:/etc/relay/relay.toml:ro
 
   # The fleet's `init` one-shot also creates the human Account the IdP's user
   # signs in as (docker/dev-fleet-init.sh); the Relay never creates an Account

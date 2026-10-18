@@ -29,6 +29,8 @@
 # connecting with its enrolled certificate — is proved by the integration and cross-binary
 # suites, not here.
 #
+# The Relay is started with --config on a read-only relay.toml this script writes.
+#
 # Needs the Relay binary ('make build', or run from make test-integration, which depends on
 # build) and curl built with HTTP/2. A missing prerequisite is an error, never a skip.
 # Exits non-zero on any failed assertion or timeout.
@@ -41,12 +43,12 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RELAY_BIN="${RELAY_SMOKE_RELAY_BIN:-${REPO_ROOT}/relay/bin/relay}"
+relay_bin="${RELAY_SMOKE_RELAY_BIN:-${REPO_ROOT}/relay/bin/relay}"
 RELAY_PORT="${RELAY_SMOKE_PORT:-17654}"
-RELAY_ADDR="127.0.0.1:${RELAY_PORT}"
-# The Relay's server certificate is issued for --hostname; curl is pointed at that name and
+smoke_addr="127.0.0.1:${RELAY_PORT}"
+# The Relay's server certificate is issued for tls.hostname in its configuration file; curl is pointed at that name and
 # --resolve pins it to the loopback address, so certificate verification is real, not skipped.
-RELAY_HOSTNAME="localhost"
+smoke_hostname="localhost"
 STARTUP_TIMEOUT=10
 CALL_TIMEOUT=5
 
@@ -67,8 +69,8 @@ relay_log="${work_dir}/relay.log"
 ca_dir="${work_dir}/ca"
 frame="${work_dir}/empty-grpc-frame"
 
-if [[ ! -x "${RELAY_BIN}" ]]; then
-    echo "ERROR: relay binary not found at ${RELAY_BIN}; run 'make build' first" >&2
+if [[ ! -x "${relay_bin}" ]]; then
+    echo "ERROR: relay binary not found at ${relay_bin}; run 'make build' first" >&2
     exit 1
 fi
 if ! command -v curl >/dev/null 2>&1; then
@@ -85,9 +87,30 @@ relay_dump_log() {
     cat "${relay_log}" >&2 || true
 }
 
-echo "Starting Relay (mTLS) on ${RELAY_ADDR}..."
-"${RELAY_BIN}" --addr "${RELAY_ADDR}" --hostname "${RELAY_HOSTNAME}" --ca-dir "${ca_dir}" \
-    --store-path "${work_dir}/store/relay.db" >"${relay_log}" 2>&1 &
+echo "Starting Relay (mTLS) on ${smoke_addr}..."
+# The Relay reads its settings from one read-only file and nothing from flags or the
+# environment, and it refuses to start if a retired RELAY_* setting variable is set. So it
+# runs under a filtered environment: a variable the developer has exported must not decide
+# whether this test starts.
+relay_config="${work_dir}/relay.toml"
+cat >"${relay_config}" <<EOF
+[node_plane]
+listen_address = "${smoke_addr}"
+
+[ca]
+dir = "${ca_dir}"
+
+[store]
+path = "${work_dir}/store/relay.db"
+
+[tls]
+hostname = "${smoke_hostname}"
+EOF
+chmod 0400 "${relay_config}"
+child_env=(PATH="${PATH}" HOME="${HOME:-/}")
+[[ -n "${TMPDIR:-}" ]] && child_env+=(TMPDIR="${TMPDIR}")
+[[ -n "${GOCOVERDIR:-}" ]] && child_env+=(GOCOVERDIR="${GOCOVERDIR}")
+env -i "${child_env[@]}" "${relay_bin}" --config "${relay_config}" >"${relay_log}" 2>&1 &
 relay_pid=$!
 
 echo "Waiting for Relay to report listening (up to ${STARTUP_TIMEOUT}s)..."
@@ -130,10 +153,10 @@ grpc_call() {
     local method=$1 headers
     set +e
     headers="$(curl -q -sS --http2 --noproxy '*' --max-time "${CALL_TIMEOUT}" \
-        --cacert "${ca_cert}" --resolve "${RELAY_HOSTNAME}:${RELAY_PORT}:127.0.0.1" \
+        --cacert "${ca_cert}" --resolve "${smoke_hostname}:${RELAY_PORT}:127.0.0.1" \
         -H 'content-type: application/grpc' -H 'te: trailers' \
         --data-binary @"${frame}" -o /dev/null -D - \
-        "https://${RELAY_HOSTNAME}:${RELAY_PORT}/${method}" 2>"${work_dir}/curl.err")"
+        "https://${smoke_hostname}:${RELAY_PORT}/${method}" 2>"${work_dir}/curl.err")"
     CALL_RC=$?
     set -e
     # Here-strings, never `printf | awk ... exit`: under pipefail an early-exiting reader can

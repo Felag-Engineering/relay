@@ -18,7 +18,7 @@ import (
 func TestCrossBinary_RestartUsesPersistedAddress(t *testing.T) {
 	relayBin, daemonBin := skipUnlessFleetBins(t)
 
-	fr := startFleetRelay(t, relayBin, nil)
+	fr := startFleetRelay(t, relayBin, "")
 	token := createFleetToken(t, fr.harness, "relay:env=test")
 
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)

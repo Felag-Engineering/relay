@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -101,33 +100,6 @@ func TestNewServer_Smoke(t *testing.T) {
 
 	// Not started, so Stop is a safe no-op cleanup.
 	t.Cleanup(srv.Stop)
-}
-
-// TestEnvOr verifies the helper returns the env value when set and the fallback
-// when absent or empty.
-func TestEnvOr(t *testing.T) {
-	const key = "RELAY_TEST_ENV_OR_KEY"
-
-	t.Run("absent returns fallback", func(t *testing.T) {
-		os.Unsetenv(key)
-		if got := envOr(key, "default"); got != "default" {
-			t.Errorf("got %q, want %q", got, "default")
-		}
-	})
-
-	t.Run("empty returns fallback", func(t *testing.T) {
-		t.Setenv(key, "")
-		if got := envOr(key, "default"); got != "default" {
-			t.Errorf("got %q, want %q", got, "default")
-		}
-	})
-
-	t.Run("set returns env value", func(t *testing.T) {
-		t.Setenv(key, "from-env")
-		if got := envOr(key, "default"); got != "from-env" {
-			t.Errorf("got %q, want %q", got, "from-env")
-		}
-	})
 }
 
 // TestNewServer_ControlEnabled_SeedsIdentityAndAuthenticates verifies that
@@ -245,41 +217,6 @@ func TestDispatchConcurrency_RefusesZeroAndNegative(t *testing.T) {
 	}
 }
 
-// TestCertExpiringFractionFromEnv_UnparsableRefusesRatherThanFallsBack is the
-// parseConfig-level half of the same guard (#414 security review, F3): an
-// unparsable RELAY_CERT_EXPIRING_FRACTION used to log a warning and silently
-// keep the flag default, contradicting relay.env.example's documented
-// "refuses to start outside (0, 1]" — a typo like "0.o5" would silently swap
-// in a different alarm threshold than the operator wrote. It must now return
-// a value that itself refuses TestCertExpiringFraction_RefusesAnInvalidValue's
-// (0, 1] check, not the fallback.
-func TestCertExpiringFractionFromEnv_UnparsableRefusesRatherThanFallsBack(t *testing.T) {
-	const fallback = 0.25
-	for _, env := range []string{"0.o5", "not-a-number", "  ", "1,5"} {
-		got := certExpiringFractionFromEnv(env, fallback)
-		if got == fallback {
-			t.Errorf("certExpiringFractionFromEnv(%q, %v) = %v, want a value outside (0, 1] "+
-				"(the fallback must not be used for an unparsable value)", env, fallback, got)
-		}
-		if got > 0 && got <= 1 {
-			t.Errorf("certExpiringFractionFromEnv(%q, %v) = %v, which is inside (0, 1] and would "+
-				"NOT refuse startup", env, fallback, got)
-		}
-	}
-}
-
-func TestCertExpiringFractionFromEnv_EmptyUsesFallback(t *testing.T) {
-	if got := certExpiringFractionFromEnv("", 0.25); got != 0.25 {
-		t.Errorf("certExpiringFractionFromEnv(\"\", 0.25) = %v, want 0.25 (the fallback)", got)
-	}
-}
-
-func TestCertExpiringFractionFromEnv_ValidValuePassesThrough(t *testing.T) {
-	if got := certExpiringFractionFromEnv("0.5", 0.25); got != 0.5 {
-		t.Errorf("certExpiringFractionFromEnv(\"0.5\", 0.25) = %v, want 0.5", got)
-	}
-}
-
 // TestCertExpiringWindow_IsOneValueAcrossSurfaces is the wiring-level guard
 // that a zero-value capability.StateEval never reaches production: the window
 // newServer computes once from ca.LeafValidity must be what BOTH the Control
@@ -391,20 +328,4 @@ func TestListeners_Independent(t *testing.T) {
 		t.Fatalf("node-plane listener did not survive control-plane Shutdown: %v", err)
 	}
 	conn.Close()
-}
-
-func TestClampedStepUpWindow(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		in   time.Duration
-		want time.Duration
-	}{
-		{"above the maximum is clamped", 2 * time.Hour, 15 * time.Minute},
-		{"the maximum passes", 15 * time.Minute, 15 * time.Minute},
-		{"below the maximum passes", 5 * time.Minute, 5 * time.Minute},
-	} {
-		if got := clampedStepUpWindow(tc.in); got != tc.want {
-			t.Errorf("%s: clampedStepUpWindow(%v) = %v, want %v", tc.name, tc.in, got, tc.want)
-		}
-	}
 }

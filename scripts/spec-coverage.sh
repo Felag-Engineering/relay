@@ -47,9 +47,9 @@ if [ "${1:-}" != "--summary" ]; then
     n=$((n+1)); mentioned "\`$k\`" || mentioned "$k" || { m=$((m+1)); echo "  - $k"; }
   done; echo "  ($m of $n unmentioned)"; echo
 
-  echo "## Relay settings (RELAY_* in main.go and the packaging example)"
+  echo "## Relay settings (keys in the example relay.toml)"
   n=0; m=0
-  for e in $(grep -rhoE 'RELAY_[A-Z0-9_]+' relay/cmd/relay/main.go relay/packaging/relay.env.example | sort -u); do
+  for e in $(awk '/^\[[a-z_]+\]/ {sec=substr($1,2,length($1)-2)} /^#? ?[a-z_]+ =/ {k=$0; sub(/^#? ?/,"",k); sub(/ =.*/,"",k); print sec "." k}' relay/packaging/relay.toml.example | sort -u); do
     n=$((n+1)); mentioned "$e" || { m=$((m+1)); echo "  - $e"; }
   done; echo "  ($m of $n unmentioned)"; echo
 

@@ -84,7 +84,7 @@ chmod 0600 "${AUTH_FILE}" "${PW_FILE}"
 printf 'Authorization: Bearer %s\n' "$(cat /credential/control-credential)" > "${AUTH_FILE}"
 
 # d. The one Control API wrapper. We dial the in-fleet name `relay` so the
-# server cert SAN (RELAY_HOSTNAME=relay) matches: no insecure flag is needed.
+# server cert SAN (tls.hostname = "relay" in its relay.toml) matches: no insecure flag is needed.
 api() {
     _method="$1"; _path="$2"; _body="${3:-}"
     if [ -n "${_body}" ]; then
