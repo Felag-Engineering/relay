@@ -24,7 +24,8 @@ use relay_transport::join_string::{JoinString, JoinStringError};
 /// the cap bounds what reaches the decoder.
 pub const MAX_JOIN_STRING_LEN: usize = 4096;
 
-/// The four files a persisted identity is made of.
+/// The four files a persisted identity is made of. `relay_addr` is not one of
+/// them: it is written before the identity and is optional for an enrolled Node.
 pub const IDENTITY_FILES: [&str; 4] = ["key.pem", "cert.pem", "ca_bundle.pem", "node_id"];
 
 /// Why the daemon could not be configured. No variant carries the join string or
@@ -119,9 +120,12 @@ pub fn relay_join_from_env() -> Result<Option<String>, ConfigError> {
 /// no identity file at all and `RELAY_JOIN` unset or empty — is `Unconfigured`;
 /// a partial identity or a malformed join string is an error, so a broken Node
 /// shows as failed rather than idle.
+///
+/// `read_join` is called only when no identity file exists, so an enrolled
+/// Node never reads its join string at all, however malformed (DI-38: inert).
 pub fn plan_startup(
     state_dir: &Path,
-    relay_join: Option<String>,
+    read_join: impl FnOnce() -> Result<Option<String>, ConfigError>,
 ) -> Result<StartupPlan, ConfigError> {
     match identity_state(state_dir)? {
         IdentityState::Complete => Ok(StartupPlan::Enrolled),
@@ -129,7 +133,7 @@ pub fn plan_startup(
             state_dir: state_dir.to_path_buf(),
             missing,
         }),
-        IdentityState::Absent => match decode_join(relay_join)? {
+        IdentityState::Absent => match decode_join(read_join()?)? {
             None => Ok(StartupPlan::Unconfigured),
             Some(join) => Ok(StartupPlan::Enroll(join)),
         },
@@ -751,16 +755,16 @@ mod tests {
     fn plan_unconfigured_only_without_identity_or_join() {
         let dir = crate::test_support::TempDir::created("plan-unconfigured");
         assert!(matches!(
-            plan_startup(dir.path(), None),
+            plan_startup(dir.path(), || Ok(None)),
             Ok(StartupPlan::Unconfigured)
         ));
         assert!(matches!(
-            plan_startup(dir.path(), Some(String::new())),
+            plan_startup(dir.path(), || Ok(Some(String::new()))),
             Ok(StartupPlan::Unconfigured)
         ));
         // A state directory that does not exist yet holds no identity either.
         assert!(matches!(
-            plan_startup(&dir.path().join("absent"), None),
+            plan_startup(&dir.path().join("absent"), || Ok(None)),
             Ok(StartupPlan::Unconfigured)
         ));
     }
@@ -768,7 +772,7 @@ mod tests {
     #[test]
     fn plan_enrolls_with_a_valid_join() {
         let dir = crate::test_support::TempDir::created("plan-enroll");
-        match plan_startup(dir.path(), Some(join_for("relay:7654"))) {
+        match plan_startup(dir.path(), || Ok(Some(join_for("relay:7654")))) {
             Ok(StartupPlan::Enroll(j)) => assert_eq!(j.relay_address(), "relay:7654"),
             _ => panic!("want Enroll"),
         }
@@ -777,7 +781,7 @@ mod tests {
     #[test]
     fn plan_refuses_a_malformed_join() {
         let dir = crate::test_support::TempDir::created("plan-malformed");
-        assert!(plan_startup(dir.path(), Some("not-a-join-string".into())).is_err());
+        assert!(plan_startup(dir.path(), || Ok(Some("not-a-join-string".into()))).is_err());
     }
 
     #[test]
@@ -786,7 +790,7 @@ mod tests {
         for present in 1..IDENTITY_FILES.len() {
             let sub = dir.path().join(format!("p{present}"));
             seed(&sub, &IDENTITY_FILES[..present]);
-            let err = plan_startup(&sub, Some(join_for("relay:7654")))
+            let err = plan_startup(&sub, || Ok(Some(join_for("relay:7654"))))
                 .err()
                 .expect("partial identity must refuse");
             match err {
@@ -799,16 +803,33 @@ mod tests {
     }
 
     #[test]
+    fn plan_never_reads_the_join_once_enrolled() {
+        let dir = crate::test_support::TempDir::created("plan-enrolled-unread");
+        seed(dir.path(), &IDENTITY_FILES);
+        assert!(matches!(
+            plan_startup(dir.path(), || panic!(
+                "an enrolled Node must not read RELAY_JOIN"
+            )),
+            Ok(StartupPlan::Enrolled)
+        ));
+        // A join string that could not even be read (not UTF-8) does not matter.
+        assert!(matches!(
+            plan_startup(dir.path(), || Err(ConfigError::JoinNotUnicode)),
+            Ok(StartupPlan::Enrolled)
+        ));
+    }
+
+    #[test]
     fn plan_ignores_the_join_once_enrolled() {
         let dir = crate::test_support::TempDir::created("plan-enrolled");
         seed(dir.path(), &IDENTITY_FILES);
         // Inert: even a malformed join string is never read.
         assert!(matches!(
-            plan_startup(dir.path(), Some("not-a-join-string".into())),
+            plan_startup(dir.path(), || Ok(Some("not-a-join-string".into()))),
             Ok(StartupPlan::Enrolled)
         ));
         assert!(matches!(
-            plan_startup(dir.path(), None),
+            plan_startup(dir.path(), || Ok(None)),
             Ok(StartupPlan::Enrolled)
         ));
     }

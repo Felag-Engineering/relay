@@ -757,8 +757,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // network or Policy read: only a Node with no identity file and no
     // RELAY_JOIN exits cleanly; a partial identity or a malformed join string
     // exits non-zero.
-    let relay_join = config::relay_join_from_env().map_err(|e| e.to_string())?;
-    let plan = config::plan_startup(&enroll::state_dir_from_env(), relay_join)
+    let plan = config::plan_startup(&enroll::state_dir_from_env(), config::relay_join_from_env)
         .map_err(|e| e.to_string())?;
     let (config, identity) = match plan {
         config::StartupPlan::Unconfigured => {

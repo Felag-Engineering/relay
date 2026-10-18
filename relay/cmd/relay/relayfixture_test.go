@@ -147,6 +147,7 @@ func startRelay(t *testing.T, opts ...FixtureOption) *relayFixture {
 	// The TCP node plane is bound before newServer so the join strings the
 	// Minter issues name a port a daemon can actually dial: the advertised
 	// address defaults to the certificate hostname plus this listener's port.
+	// WithConfig hooks run after this default and may override it.
 	var tcpLis net.Listener
 	if spec.plane == nodePlaneTCP {
 		cfg.Addr = "127.0.0.1:0"

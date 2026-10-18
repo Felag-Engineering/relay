@@ -117,6 +117,8 @@ impl ServerCertVerifier for PinVerifier {
         )
         .build()
         .map_err(|e| rustls::Error::General(e.to_string()))?;
+        // No intermediates, deliberately: the leaf must be signed directly by the
+        // pinned CA, and any other chain fails closed.
         let verified =
             inner.verify_server_cert(end_entity, &[], server_name, ocsp_response, now)?;
         self.record(Outcome::Pinned(root));

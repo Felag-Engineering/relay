@@ -15,11 +15,25 @@
 mod common;
 
 use common::TempDir;
+use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+/// A well-formed join string, so a test can tell "the join string was ignored"
+/// from "it was refused".
+fn valid_join() -> String {
+    relay_transport::join_string::JoinString::new(
+        "relay.example:7654".to_string(),
+        [7u8; 32],
+        "tok-test".to_string(),
+    )
+    .encode()
+    .expect("encode join string")
+}
+
 /// Runs the daemon against `state` with `RUST_LOG=info` plus `extra` env.
-fn run(state: &Path, extra: &[(&str, &str)]) -> Output {
+fn run<V: AsRef<OsStr>>(state: &Path, extra: &[(&str, V)]) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_relay-daemon"));
     cmd.env_clear()
         .env("RELAY_STATE_DIR", state)
@@ -61,7 +75,7 @@ fn unconfigured_node_exits_zero() {
     std::fs::create_dir_all(state.path()).expect("create state dir");
 
     for join in [None, Some("")] {
-        let extra: Vec<(&str, &str)> = join.map(|j| ("RELAY_JOIN", j)).into_iter().collect();
+        let extra: Vec<(&str, &str)> = join.into_iter().map(|j| ("RELAY_JOIN", j)).collect();
         let out = run(state.path(), &extra);
         assert!(
             out.status.success(),
@@ -119,13 +133,31 @@ fn partial_identity_exits_nonzero() {
 fn identity_without_address_exits_nonzero() {
     let state = TempDir::new("exit-no-address");
     seed_identity(state.path(), None);
-    // Neither RELAY_ADDR nor a persisted address; a join string is inert.
-    let out = run(state.path(), &[]);
+    // Neither RELAY_ADDR nor a persisted address. A valid join string is set
+    // and must stay inert: its address is never a fallback once enrolled.
+    let join = valid_join();
+    let out = run(state.path(), &[("RELAY_JOIN", join.as_str())]);
     assert!(
         !out.status.success(),
         "an identity with no address must exit non-zero, got {:?}",
         out.status
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("RELAY_ADDR"), "stderr: {stderr}");
+}
+
+#[test]
+fn enrolled_node_never_reads_a_malformed_join() {
+    let state = TempDir::new("exit-enrolled-bad-join");
+    seed_identity(state.path(), None);
+    // Not even UTF-8. An enrolled Node does not read RELAY_JOIN, so the start
+    // proceeds to its normal address check rather than refusing the join string.
+    let bad = OsStr::from_bytes(b"glp_join_\xff\xfe");
+    let out = run(state.path(), &[("RELAY_JOIN", bad)]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("RELAY_JOIN"),
+        "the join string was read: {stderr}"
+    );
     assert!(stderr.contains("RELAY_ADDR"), "stderr: {stderr}");
 }
