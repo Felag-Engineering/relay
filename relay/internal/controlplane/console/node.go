@@ -334,27 +334,63 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 	if v.Revoked {
 		v.RevokedAt = utcStamp(n.RevokedAt)
 	}
-	if v.CertProvenanceKnown {
-		v.CertNotAfter = utcStamp(n.CertNotAfter)
-		v.CertExpiresIn = nodestate.Until(n.CertNotAfter, d.now())
-		v.RenewalCount = n.RenewalCount
-		if !n.EnrolledAt.IsZero() {
-			v.EnrolledAt = utcStamp(n.EnrolledAt)
-		}
-		if !n.LastRenewedAt.IsZero() {
-			v.LastRenewedAt = utcStamp(n.LastRenewedAt)
+	v.applyCertProvenance(d, n)
+	v.applyFingerprintLinks(in)
+
+	if role.AtLeast(accounts.RoleOperator) {
+		if d.Execution {
+			v.RunHref = "/console/run"
 		}
 	}
 
-	// Fingerprint Selector links, built from nodestate's own derivation rather
-	// than by concatenating the raw fingerprint into a term.
-	//
-	// The values are self-reported and reach the registry unvalidated, and this
-	// link is advertised as directly targetable. nodestate.Facts runs
-	// validFactValue, which drops a value carrying a comma, whitespace or a
-	// namespace prefix — the injection that would otherwise let a Node add a
-	// second Selector term to a link the Console offers. A rejected value
-	// renders as text with no link; it is never sanitised into one.
+	v.applyPins(n.NodeID, pins, known)
+
+	// Fingerprint sharing counts. Computed by the read lane, behind the same
+	// describe_node record (capability.NodeDetail): this screen must not
+	// enumerate the whole registry to render two integers about one Node —
+	// that would be a far wider disclosure than the read it actually made,
+	// and one that would then have to be audited as an enumeration to stay
+	// honest.
+	v.PolicyShared, v.TemplateShared = detail.PolicyPeers, detail.TemplatePeers
+
+	v.applyReportedPolicy(d, detail)
+
+	if d.Audit != nil {
+		if recs, err := d.Audit.ByNode(r.Context(), n.NodeID); err == nil {
+			v.applyAuditTrail(recs)
+		}
+	}
+	return v
+}
+
+// applyCertProvenance fills the certificate fields, which are shown only for a
+// Node whose enrollment recorded when its certificate expires.
+func (v *nodeView) applyCertProvenance(d Deps, n registry.Node) {
+	if !v.CertProvenanceKnown {
+		return
+	}
+	v.CertNotAfter = utcStamp(n.CertNotAfter)
+	v.CertExpiresIn = nodestate.Until(n.CertNotAfter, d.now())
+	v.RenewalCount = n.RenewalCount
+	if !n.EnrolledAt.IsZero() {
+		v.EnrolledAt = utcStamp(n.EnrolledAt)
+	}
+	if !n.LastRenewedAt.IsZero() {
+		v.LastRenewedAt = utcStamp(n.LastRenewedAt)
+	}
+}
+
+// applyFingerprintLinks sets the fingerprint Selector links, built from
+// nodestate's own derivation rather than by concatenating the raw fingerprint
+// into a term.
+//
+// The values are self-reported and reach the registry unvalidated, and this
+// link is advertised as directly targetable. nodestate.Facts runs
+// validFactValue, which drops a value carrying a comma, whitespace or a
+// namespace prefix — the injection that would otherwise let a Node add a
+// second Selector term to a link the Console offers. A rejected value
+// renders as text with no link; it is never sanitised into one.
+func (v *nodeView) applyFingerprintLinks(in nodestate.Input) {
 	link := linkContext{}
 	for _, l := range nodestate.Facts(in) {
 		switch l.Key {
@@ -372,136 +408,129 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 			v.TemplateUnloadableHref = link.href(l.String())
 		}
 	}
+}
 
-	if role.AtLeast(accounts.RoleOperator) {
-		if d.Execution {
-			v.RunHref = "/console/run"
-		}
-	}
-
-	// The pin set travels in the query string, which is what keeps this screen
-	// free of a mutating route: pinning is a link, not a write.
-	v.Pin = buildPinState(known, pins, "/console/nodes/"+n.NodeID, "pin")
+// applyPins builds the pin bar and this Node's own pin link.
+//
+// The pin set travels in the query string, which is what keeps this screen
+// free of a mutating route: pinning is a link, not a write.
+func (v *nodeView) applyPins(nodeID string, pins []string, known func(string) bool) {
+	v.Pin = buildPinState(known, pins, "/console/nodes/"+nodeID, "pin")
 	for _, id := range pins {
-		if id == n.NodeID {
+		if id == nodeID {
 			v.Pinned = true
 		}
 	}
 	for i := range v.Pin.Pins {
-		if v.Pin.Pins[i].ID == n.NodeID {
+		if v.Pin.Pins[i].ID == nodeID {
 			v.Pin.Pins[i].Current = true
 			v.Pin.Pins[i].Href = ""
 		}
 	}
 	if !v.Pinned && !v.Pin.Full {
-		v.PinHref = "/console/nodes/" + n.NodeID + pinQuery(append(append([]string(nil), pins...), n.NodeID))
+		v.PinHref = "/console/nodes/" + nodeID + pinQuery(append(append([]string(nil), pins...), nodeID))
 	}
+}
 
-	// Fingerprint sharing counts. Computed by the read lane, behind the same
-	// describe_node record (capability.NodeDetail): this screen must not
-	// enumerate the whole registry to render two integers about one Node —
-	// that would be a far wider disclosure than the read it actually made,
-	// and one that would then have to be audited as an enumeration to stay
-	// honest.
-	v.PolicyShared, v.TemplateShared = detail.PolicyPeers, detail.TemplatePeers
-
-	// The reported-Policy panel arrives with the describe_node result itself
-	// (QRY-28): detail.Policy/detail.PolicyReported are the same lane call
-	// already recorded above against this Node id, not a second door into
-	// the display-only policyview cache. ADR-0025 names a Node's Policy as
-	// part of exactly what describe_node discloses.
-	if detail.PolicyReported {
-		snap := detail.Policy
-		v.Policy = &snap
-		v.PolicyReported = true
-		if unreported(n) {
-			v.PolicyUncorroborated = true
-			v.VersionUnrecorded = n.DaemonVersion == ""
-			v.FingerprintUnrecorded = n.PolicyFingerprint == ""
-		}
-		if !snap.ReportedAt.IsZero() {
-			v.PolicyReportedAt = utcStamp(snap.ReportedAt)
-			v.PolicyReportedAgo = nodestate.Since(snap.ReportedAt, d.now())
-		}
-		// A snapshot refreshes on (re)connect and at no other moment, so an
-		// offline Node's panel is the last thing its engine said and cannot
-		// be re-asked. Saying so is the difference between a stale answer
-		// and an answer known to be stale.
-		v.PolicyStale = !n.Connected
+// applyReportedPolicy fills the reported-Policy panel, which arrives with the
+// describe_node result itself (QRY-28): detail.Policy/detail.PolicyReported
+// are the same lane call already recorded against this Node id, not a second
+// door into the display-only policyview cache. ADR-0025 names a Node's Policy
+// as part of exactly what describe_node discloses.
+func (v *nodeView) applyReportedPolicy(d Deps, detail capability.NodeDetail) {
+	if !detail.PolicyReported {
+		return
 	}
+	n := detail.Node
+	snap := detail.Policy
+	v.Policy = &snap
+	v.PolicyReported = true
+	if unreported(n) {
+		v.PolicyUncorroborated = true
+		v.VersionUnrecorded = n.DaemonVersion == ""
+		v.FingerprintUnrecorded = n.PolicyFingerprint == ""
+	}
+	if !snap.ReportedAt.IsZero() {
+		v.PolicyReportedAt = utcStamp(snap.ReportedAt)
+		v.PolicyReportedAgo = nodestate.Since(snap.ReportedAt, d.now())
+	}
+	// A snapshot refreshes on (re)connect and at no other moment, so an
+	// offline Node's panel is the last thing its engine said and cannot
+	// be re-asked. Saying so is the difference between a stale answer
+	// and an answer known to be stale.
+	v.PolicyStale = !n.Connected
+}
 
-	if d.Audit != nil {
-		if recs, err := d.Audit.ByNode(r.Context(), n.NodeID); err == nil {
-			// The revocation record is read from the WHOLE trail, not from the
-			// windowed rows below: a Node with forty later records would
-			// otherwise lose the one act that explains its state.
-			//
-			// The trail is oldest-first and this takes the FIRST match, which is
-			// the causative revocation. Taking the latest would let the reason
-			// be relabelled: revoke is idempotent-204, so an admin can re-POST
-			// an already-revoked Node with an innocuous reason, and this screen
-			// — now the place an operator reads "why" — would show that one
-			// instead of the act that actually revoked the Node. Both records
-			// survive in the Activity trail either way; what is protected here
-			// is which one this summary attributes.
-			//
-			// The Control API writes no second record for a Node whose cascade
-			// revocation this Relay process already recorded, but a repeat
-			// operator revoke, and any revoke that follows a Relay restart,
-			// still produce one — so first-match stays the defence this screen
-			// needs, not a formality.
-			for i := range recs {
-				if recs[i].Kind == audit.KindNodeRevoke {
-					v.RevokedBy = principalText(factsOfRecord(recs[i]))
-					v.RevocationReason = recs[i].Reason
-					v.RevocationRecorded = true
-					break
-				}
-			}
-
-			// Recent Tasks is Tasks dispatched to this Node, not reads ABOUT
-			// it: filter to KindDispatch BEFORE windowing, so forty page
-			// views of this very screen (each a describe_node read) cannot
-			// push every real Task out of the window. Denies stay —
-			// they are KindDispatch rows with outcome denied_by_policy — and
-			// refusals stay excluded, as they always were: a refusal is
-			// Relay-side and never reached the Node (nodeTaskFrom's doc).
-			tasks := make([]audit.Record, 0, len(recs))
-			for _, rec := range recs {
-				if rec.Kind == audit.KindDispatch {
-					tasks = append(tasks, rec)
-				}
-			}
-			rows, elided := windowed(tasks, nodeTaskRows)
-			v.TasksElided = elided
-			// The same rule denied over and over is ONE fact, not twenty. A
-			// Node that has refused the same read every hour for a day would
-			// otherwise bury its Policy panel under twenty identical
-			// explanations, and the operator would scroll past all of them.
-			//
-			// So the block renders on the first occurrence of each distinct
-			// rule and the repeats keep their outcome chip. The chip is what
-			// makes this safe: nothing is hidden, the row is still there, and
-			// only the redundant prose is dropped.
-			seenRule := map[string]bool{}
-			for _, rec := range rows {
-				t, ok := nodeTaskFrom(rec)
-				if !ok {
-					continue
-				}
-				if t.Denied != nil {
-					if seenRule[t.Denied.Rule] {
-						t.Denied = nil
-						t.RepeatDeny = true
-					} else {
-						seenRule[t.Denied.Rule] = true
-					}
-				}
-				v.Tasks = append(v.Tasks, t)
-			}
+// applyAuditTrail fills the revocation summary and the Recent Tasks list from
+// the Node's audit trail, oldest first.
+func (v *nodeView) applyAuditTrail(recs []audit.Record) {
+	// The revocation record is read from the WHOLE trail, not from the
+	// windowed rows below: a Node with forty later records would
+	// otherwise lose the one act that explains its state.
+	//
+	// The trail is oldest-first and this takes the FIRST match, which is
+	// the causative revocation. Taking the latest would let the reason
+	// be relabelled: revoke is idempotent-204, so an admin can re-POST
+	// an already-revoked Node with an innocuous reason, and this screen
+	// — now the place an operator reads "why" — would show that one
+	// instead of the act that actually revoked the Node. Both records
+	// survive in the Activity trail either way; what is protected here
+	// is which one this summary attributes.
+	//
+	// The Control API writes no second record for a Node whose cascade
+	// revocation this Relay process already recorded, but a repeat
+	// operator revoke, and any revoke that follows a Relay restart,
+	// still produce one — so first-match stays the defence this screen
+	// needs, not a formality.
+	for i := range recs {
+		if recs[i].Kind == audit.KindNodeRevoke {
+			v.RevokedBy = principalText(factsOfRecord(recs[i]))
+			v.RevocationReason = recs[i].Reason
+			v.RevocationRecorded = true
+			break
 		}
 	}
-	return v
+
+	// Recent Tasks is Tasks dispatched to this Node, not reads ABOUT
+	// it: filter to KindDispatch BEFORE windowing, so forty page
+	// views of this very screen (each a describe_node read) cannot
+	// push every real Task out of the window. Denies stay —
+	// they are KindDispatch rows with outcome denied_by_policy — and
+	// refusals stay excluded, as they always were: a refusal is
+	// Relay-side and never reached the Node (nodeTaskFrom's doc).
+	tasks := make([]audit.Record, 0, len(recs))
+	for _, rec := range recs {
+		if rec.Kind == audit.KindDispatch {
+			tasks = append(tasks, rec)
+		}
+	}
+	rows, elided := windowed(tasks, nodeTaskRows)
+	v.TasksElided = elided
+	// The same rule denied over and over is ONE fact, not twenty. A
+	// Node that has refused the same read every hour for a day would
+	// otherwise bury its Policy panel under twenty identical
+	// explanations, and the operator would scroll past all of them.
+	//
+	// So the block renders on the first occurrence of each distinct
+	// rule and the repeats keep their outcome chip. The chip is what
+	// makes this safe: nothing is hidden, the row is still there, and
+	// only the redundant prose is dropped.
+	seenRule := map[string]bool{}
+	for _, rec := range rows {
+		t, ok := nodeTaskFrom(rec)
+		if !ok {
+			continue
+		}
+		if t.Denied != nil {
+			if seenRule[t.Denied.Rule] {
+				t.Denied = nil
+				t.RepeatDeny = true
+			} else {
+				seenRule[t.Denied.Rule] = true
+			}
+		}
+		v.Tasks = append(v.Tasks, t)
+	}
 }
 
 // factRows renders the self-reported Facts.
