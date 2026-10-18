@@ -90,20 +90,27 @@ detail and in Activity. They must occupy **different visual channels**:
   dashed chip is caller-asserted and nothing checked it. These must never read as equally
   authoritative — a jailbroken agent can assert anything it likes, but it cannot forge the filled
   one.
-- **Namespace owns hue, glyph and the mono prefix.** `node:` and `tag:` are quiet and subtly
-  differentiated; `relay:` is filled, distinct in hue, and carries a lock; `state:` carries the
-  tint of its severity behind its mono prefix.
+- **Namespace owns hue and the mono prefix.** `node:` and `tag:` are quiet and subtly
+  differentiated; `relay:` is filled, distinct in hue, and carries its mono prefix, with no lock or
+  other icon; `state:` carries the tint of its severity behind its mono prefix. A fenced chip
+  carries no icon either. (Owner decision, 2026-10-18, D25: the lock this line once required was
+  removed from the code on 2026-08-27, and the owner dropped the idea rather than restore it.)
 
-**Self-reported names.** Where a self-reported value is the visual primary naming an object — a
-Node's hostname on a Fleet row and in the Node detail heading — it takes the trust lane's outline
-treatment (a dashed underline, never a fill, never a trust chip), and the word "self-reported" is
-visible where it is read: the heading itself, the Fleet table's Node column header (below 600px,
-where the header is hidden, the Node cell's own label), and every row's accessible name. The
-verified identifier is always drawn beside it in mono, so two Nodes claiming one hostname stay
+**Self-reported names.** Wherever a Node is shown to a human — a Fleet row, the Node detail
+heading, Compare's column headings, a pin chip, and any other place a Node is named — its
+self-reported hostname is the **primary label**, and the verified Node ID is drawn **secondary**
+beside or beneath it: smaller, in mono, in the muted text colour, and always in full, never
+truncated. The hostname takes the trust lane's outline treatment (a dashed underline, never a
+fill, never a trust chip), and the word "self-reported" is visible where it is read: the heading
+itself, the Fleet table's Node column header (below 600px, where the header is hidden, the Node
+cell's own label), Compare's column headings, and every row's accessible name. Because the
+verified identifier is always drawn beside it, two Nodes claiming one hostname stay
 distinguishable. Only RFC 1123 hostname characters qualify; anything else, a value shaped like a
-Node ID (`node-` then only hex), or nothing, falls back to the Node ID. Where a self-reported value is secondary to the verified ID
-(Compare's column heading), the screen states it in prose instead. Selectors, links, pins and
-`?account=` always use verified IDs. Owner decision, 2026-10-01, #835 (D20).
+Node ID (`node-` then only hex), or nothing, falls back to the Node ID as the primary label, which
+is then not repeated beside itself. Selectors, links, pins and `?account=` always **use** verified
+IDs; only the display order changes. Owner decision, 2026-10-18 (D22), which widened D20
+(2026-10-01, #835): D20 made the hostname primary on Fleet rows and the Node detail heading only,
+and Compare's column headings and the pin chips led with the verified Node ID.
 
 ## Colour budget — the entire allowance
 
@@ -115,7 +122,7 @@ Node ID (`node-` then only hex), or nothing, falls back to the Node ID. Where a 
 | Grey | drift and inertness | `state:template-unloadable`, fingerprint distributions in facets |
 | Green | reachable, and it worked | liveness dot, `success` outcome, the pixel wall's `normal` bucket |
 | Teal (the Relay brand teal) | interactive | links, primary buttons, focus rings, the live indicator — never semantic |
-| Muted red | failure and timeout | nothing else, ever |
+| Muted red | failure and timeout, and destructive acts | the `failure` and `timeout` outcomes; the buttons of acts that revoke, disable or lower authority ("Form controls" below) — nothing else |
 
 **Green was added on 2026-08-27 (owner decision).** It had been in the product
 without being in this table — the liveness dot and the `success` outcome chip
@@ -146,6 +153,13 @@ distinct from green by role and shape rather than by colour: green is a state
 fill (the liveness dot, the `success` chip, the wall's cells), while the accent
 is text, outlines, buttons and the one live dot, which sits on a screen with no
 liveness dot. `TestConsole_AccentPairsClearAA` enforces the contrast rule.
+
+**Red was widened on 2026-10-18 (owner decision, D24).** It had meant failure and timeout and
+nothing else, and the acts that reduce authority were drawn quiet so that an emergency brake would
+not look like an alarm. In use, a Revoke that looked like every other outlined button was the
+problem: an act that cannot be undone did not look it. Red now also marks the button of an act
+that revokes, disables or lowers authority, and only the button — never a row, a chip or a deny.
+A deny is still slate (rule 1), and a failed Task is still the only *outcome* drawn red.
 
 ### Luminance is a second channel, not decoration
 
@@ -233,6 +247,19 @@ because that is its subject, and draws it in the same treatment because it is th
 
 **Label chips** (everywhere). Four namespaces, per the table above.
 
+**Policy fingerprint** (Fleet, Node detail, Compare). The full fingerprint hash, in mono, is always
+drawn; nothing replaces it. Beside it sits a **Policy alias** — a human-readable name a human
+`admin` gave that fingerprint (`docs/specs/query.md`) — or, where none is set, a neutral
+**per-render letter** (A, B, C…) assigned in order of first appearance on that page, so that "the
+Nodes on B" can be said aloud. A letter is not stored, is not stable across pages, carries no colour,
+and is never called "majority", "outlier", "normal" or anything else that ranks one fingerprint
+against another: the fleet's most common Policy is not its desired one (invariant 9, D1). An alias
+is display only. It is never a Selector term, a filter value or an input to anything — the
+`state:policy-fingerprint=` filter and every link that targets a fingerprint carry the hash — and
+it is never shown without the full fingerprint, so a misleading name cannot hide which Policy it is. Where an
+`admin` sees a fingerprint, an **Edit alias** control sits beside it; it is absent for every other
+role (owner decision, 2026-10-18, D23).
+
 **Step-up modal** (apply, every privilege-granting act). A session proves a human
 authorised the *session*; step-up proves a human intended *this action*. It carries a credential
 no agent session holds, and it is the reason ADR-0026 could give a browser an execution surface at
@@ -279,43 +306,56 @@ Screens carry prose that says what they cannot do. Two kinds, told apart by one 
   URL that could not be read, a read that failed, "you already signed this", "your role cannot
   decide this" — is a **situational message**.
 
-Where a screen has standing notes, they are drawn together in **one disclosure at the foot of the
-screen, closed by default**, labelled in plain words ("About this screen"), and built from a native
-`<details>`/`<summary>` so it needs no script under the strict CSP. Every visible note is **one sentence,
-at most ~15 words**. A standing note may be shortened or **deleted** when its substance is already
-in the docs, or is implied by the data it sits next to. The "About this screen" disclosure holds at
-most a short paragraph per screen and links to the docs for the rest. The invariant-2 note and any
-note that qualifies a visible claim stay visible (still one sentence). Situational messages are never
-collapsed or hidden; they render where they always have, because the operator needs them for the
-thing in front of them. **When a note's class is in doubt, it is situational and stays visible.**
-A note that states a property the Console must be visibly bound by is never collapsed. One is
-named: Node detail's "there is no path from this screen to this Node's Policy" (invariant 2).
-(Read egress's ADR-0025 statement was the second; that screen was retired on 2026-10-01, see
-[17](17-read-egress.md).) A note that qualifies a claim the screen
-visibly makes — "every figure is exact", "this is the feed" — is situational too, because hiding
-it makes the visible claim stronger than the truth.
+**No screen carries an "About this screen" disclosure** (owner decision, 2026-10-18, D31). It
+replaced a rule that gathered every standing note into one closed disclosure at the foot of the
+screen; in use, a closed box of caveats was read by nobody and made every screen look unfinished.
+A standing note is therefore either **visible**, as one sentence of at most ~15 words drawn beside
+what it qualifies, or **deleted**, which it may be only when its substance is already in the docs
+or is implied by the data it sits next to. The docs pointer the disclosure carried goes with it.
+Situational messages are never collapsed or hidden; they render where they always have, because
+the operator needs them for the thing in front of them. **When a note's class is in doubt, it is
+situational and stays visible.** A note that states a property the Console must be visibly bound by
+is never collapsed. One is named: Node detail's "there is no path from this screen to this Node's
+Policy" (invariant 2). (Read egress's ADR-0025 statement was the second; that screen was retired on
+2026-10-01, see [17](17-read-egress.md).) A note that qualifies a claim the screen visibly makes —
+"every figure is exact", "this is the feed" — is situational too, because hiding it makes the
+visible claim stronger than the truth.
 
 **Visible does not mean boxed.** A note that must stay visible is kept to one plain sentence and
 drawn as part of the control or figure it qualifies, in the quiet note style, not as a dashed
-block; its longer explanation may stay in the disclosure. The dashed `gap` box is for a message
-about this request, this caller or this record that the operator must stop and read.
+block; its longer explanation lives in the docs. The dashed `gap` box is for a message about this
+request, this caller or this record that the operator must stop and read.
 
 ## Refreshing a screen
 
-A screen that lists things which arrive on their own — calls, Jobs — may offer
-a **Refresh** control, so that what is new is one click away without the browser's reload button.
+A screen that lists things which arrive on their own — calls, Jobs, Nodes and their
+state — may offer a **Refresh** control, so that what is new is one click away without the
+browser's reload button.
 
 - **Where a screen offers a Refresh control, it reloads the page with the current query
   preserved.** It is a plain link to the same screen; it never splices rows into the page someone
   is reading (rule 6).
 - **A Refresh makes exactly the reads a page load makes**, and those reads are audited. Every
-  screen that offers the control says in its "About this screen" disclosure whether a Refresh is
-  recorded, and none claims a record the trail does not hold. (The built Approvals queue is the
-  one exception, writing no read record, #779; it is retired with the Console's approval surface,
+  screen that offers the control says whether a Refresh is recorded in one visible sentence beside
+  it, and none claims a record the trail does not hold. (The built Approvals queue is the one
+  exception, writing no read record, #779; it is retired with the Console's approval surface,
   ADR-0044.)
 - **A Refresh is a deliberate act by the operator.** The Console never reloads a screen on a
   timer: [README](README.md) records the owner decision "No scheduled or repeated reads. Every read
   is a deliberate, audited act."
+
+### How old a page is
+
+A server-rendered page is a snapshot, so a screen that shows one says how old it is (owner
+decision, 2026-10-18, D30). Where a screen states when it was rendered, it states it **relatively**
+— "rendered 40s ago" — inside a `<time>` element whose `datetime` carries the absolute UTC instant
+and whose `title` shows it, so the exact time is one hover or one screen-reader query away. The
+relative text is computed by the server at render. An external script from the Console's own origin
+(`11-console-shell.md`, CSP) may advance that text while the page is open; it reads no data, makes
+no request and never reloads the page, and with scripts off the page still reads correctly as at
+render. A page that has grown old says so **in words and weight** — "rendered 12 min ago, Refresh
+to re-read" in a heavier weight — and never in amber: amber means a machine needs attention now,
+and an old page is the operator's to refresh, not an alarm.
 
 ## Form controls — one treatment
 
@@ -331,23 +371,35 @@ A label and its control are **one unit**: they sit in a single wrapper, label ab
 wrapping a filter bar at any width moves them together and a label is never left beside a different
 field.
 
-Buttons carry **the weight of what they do to authority**, not how dangerous they feel:
+Buttons carry **the weight of what they do to authority**:
 
 | The act | Weight | Treatment |
 |---|---|---|
 | **Grants** authority — create an Account, raise a role, re-enable an Account, mint a credential | primary | filled in the interactive colour, and always beside the password field it spends |
-| **Reduces** authority — disable an Account, lower a role, revoke a credential, cancel | quiet | outlined, no fill, primary text colour |
+| **Destroys or reduces** authority — revoke a credential, disable an Account, lower a role, revoke a Node, and any later revoke or disable | danger | outlined in the muted red: red border and red text, no fill — and it asks a named confirmation first |
+| Stops work in flight — cancel | quiet | outlined, no fill, primary text colour |
 | Reads or navigates — apply a filter, sign in | primary | as today |
 
-The two weights are told apart by **fill against outline** — a channel that survives greyscale and
-every colour-vision deficiency — and by the password field that only a granting form carries,
-never by hue alone. A reducing act is **never red** (red is failure and timeout, and nothing else)
-and never the most prominent control in its row: an emergency brake that looks like an alarm is
-one people hesitate over, and one that outweighs the act beside it teaches the wrong reflex. A form
-that can both grant and reduce — setting a role, which raises or lowers (the Accounts screen
-splits it into Raise and Lower instead, spec 15) — takes the granting
-weight, because it carries the password field and may spend it. Where two answers to one question
-must not be weighted, both take one neutral treatment and this table does not apply.
+Granting and destroying are told apart by **fill against outline** — a channel that survives
+greyscale and every colour-vision deficiency — by hue, and by the password field that only a
+granting form carries. Owner decision, 2026-10-18 (D24), which replaced the rule that a reducing
+act is "never red" and never the most prominent control in its row: a revocation that looked like
+any quiet button did not look like what it is, an act that takes effect at once and cannot be
+undone. A form that can both grant and reduce — setting a role, which raises or lowers (the
+Accounts screen splits it into Raise and Lower instead, spec 15) — takes the granting weight,
+because it carries the password field and may spend it. Where two answers to one question must not
+be weighted, both take one neutral treatment and this table does not
+apply.
+
+**A destructive act asks a named confirmation.** Pressing its button performs nothing: it opens a
+server-rendered confirmation step, reached by GET, that names the target and the consequence in one
+sentence — "Revoke token `dev-fleet-approver`? Anything using it fails immediately; this cannot be
+undone." — and holds the one POST form, with its CSRF token, that performs the act, beside a plain
+link back that performs nothing. It is a page, not a browser `confirm()` dialog and not a script:
+it works with scripts off and under the strict CSP. The confirmation is a presentation step, not a
+control — the capability layer decides the act exactly as it would without it, and no act gains or
+loses step-up by having one (spec 15's matrix is unchanged; revocation still takes no password,
+because an emergency brake that costs one is routed around).
 
 ## The incident ladder
 
@@ -396,8 +448,8 @@ At 800px and below the shell stacks: the nav sits above the content and, with th
 folds behind a **Menu** control (a label tied to a hidden checkbox, so it needs no script; a
 keyboard user toggles it with Space). Below 600px the Fleet deviation table and the Accounts table
 reflow to cards, each cell carrying its own column name, and Compare stacks its Nodes, each value
-labelled by Node ID. No page scrolls sideways; a wide table that remains scrolls inside its own
-container.
+labelled by the Node's name (its hostname, with the Node ID beside it). No page scrolls sideways; a
+wide table that remains scrolls inside its own container.
 
 ## Hard prerequisite: E2a
 

@@ -201,8 +201,18 @@ A hash of a Node's loaded Policy that the daemon reports (in `Hello` and every
 `PolicySnapshot`) and the Relay records in the registry — fleet-wide Policy *drift visibility*
 without the Policy itself ever traveling. Report-only: the Relay observes it but never sets a
 Node's Policy (ADR-0002). Lets an operator confirm a Policy rollout landed everywhere by string
-comparison against the registry (ADR-0002, ADR-0006).
+comparison against the registry (ADR-0002, ADR-0006). A human may name one with a **Policy
+alias**.
 _Avoid_: policy hash, checksum, policy version
+
+**Policy alias**:
+A human-readable name a human `admin` gives one Policy fingerprint on this Relay — "web-hardened"
+— so that people can say which Policy they mean (`docs/specs/query.md`). Display only: always shown
+beside the full fingerprint, never a Selector term or filter value, never an input to Policy
+evaluation or any other decision, and never Policy — the Relay holds it and never sends it to a
+Node (invariant 2). It attaches to a fingerprint, never to a Node or group, so it marks no Policy
+as desired (invariant 9). The Console's per-render letter for an unaliased fingerprint is not one.
+_Avoid_: policy name, policy label (a Label is something else), policy version
 
 **Template root**:
 The directory on a Node from which the relay-daemon loads its Template Operations,

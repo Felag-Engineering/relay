@@ -104,7 +104,9 @@ started: the stream is ordered by time, so a Job that has run for hours sits pag
   read lane (ADR-0025) — the read the Agents screen made before it was retired, not a new kind of
   read.
 - **Empty is said plainly.** With nothing running, the section says "Nothing is running", and
-  under `?account=` it says that Account has nothing running.
+  under `?account=` it says that Account has nothing running — except on a trail with nothing
+  recorded yet, where the section folds into the one explanatory block below ("Nothing recorded
+  yet").
 
 ## Identity on every row
 
@@ -217,12 +219,12 @@ negotiable on a screen whose whole job is careful reading.
 
 **Where events have queued, the click is an obvious control**: drawn as a button, not as a line of
 small text, and it reloads the page with the current filter preserved, at its newest page. Beside
-it, one sentence says what the number counts, in plain lower-case words: events on the stream,
-not rows that will appear, from a stream this page's filter does not narrow, where one Job
-announces itself more than once. The control is a Refresh in the sense of `00-foundations.md`
-("Refreshing a screen"): a deliberate click, never a timer. The "About this screen" disclosure
-says that every reload is an audited read made from this Console; the kind chips' own visible note
-says the default above leaves such reads out.
+it, one sentence says what the number counts, in plain lower-case words: events on the stream, not
+rows that will appear, from a stream this page's filter does not narrow, where one Job announces
+itself more than once. The control is a Refresh in the sense of `00-foundations.md` ("Refreshing a
+screen"): a deliberate click, never a timer. One visible sentence beside the Refresh control says
+that every reload is an audited read made from this Console; the kind chips' own visible note says
+the default above leaves such reads out.
 
 The live region states its condition in words alone ("Live.", "The live stream is not
 connected.", and the rest). It draws no pulsing dot or other animated indicator (owner decision,
@@ -244,9 +246,11 @@ The Principal box takes the Account's ID, and its placeholder says so. Looking a
 is deferred until an audited Account-read path exists (#659): the registry read it needs is one no
 audit record covers.
 
-The screen's "About this screen" disclosure (`00-foundations.md`) holds one short paragraph: how a
-page is bounded, that every Refresh is an audited read made from this Console, and which events are
-on the audit trail rather than here. The rest is recorded here and not repeated on the screen (#849).
+The screen carries no "About this screen" disclosure (owner decision, 2026-10-18, D31;
+`00-foundations.md`). That every Refresh is an audited read made from this Console is said in one
+visible sentence beside the Refresh control; how a page is bounded is the page note's; which events
+are on the audit trail rather than here, like everything below, is recorded here and not repeated
+on the screen (#849).
 A page holds up to a fixed number of dispatches and, separately, of other events, merged by time;
 the two lanes page separately, so a page does not end at a single moment, and Older continues each
 lane from where it stopped (a filter that reads only one lane does end at a single moment). The
@@ -260,6 +264,21 @@ the reasoning is stated above; why read records are left out is under Reads; tha
 sessions is its own section. The messages a
 request provokes stay visible where they render: a part of the URL that could not be read, an
 unknown row kind, what an outcome filter does to the page, and the read sentences above.
+
+## Nothing recorded yet
+
+On a Relay where nothing has been recorded and no filter is applied (owner decision, 2026-10-18,
+D29), the screen does not draw an empty feed and an empty Running now one above the other. It
+draws **one explanatory block** in their place, saying what will appear here and how — "When an
+AI-agent or an operator dispatches a Task, or calls any tool, it appears here." — and keeps the
+live region's sentence ("Live." and the rest) beside it, because whether the stream is connected is
+exactly what someone watching an empty screen needs to know. The filters sit in a native
+`<details>`, closed, below the block: there is nothing yet to narrow.
+
+The condition is **no filter applied** — no kind chip, toggle, filter text, window or `?account=`
+other than the defaults. Where any filter is applied and nothing matches, the filters stay open and
+the screen says that nothing matches this filter, not that nothing has happened: those are
+different facts, and "Empty states stay true" above governs both.
 
 ## Interruption
 

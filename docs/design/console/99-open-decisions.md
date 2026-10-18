@@ -231,6 +231,10 @@ must persist `cert_not_after` first (#440).
    routine"; a Task that ran and genuinely failed is not routine. Everything else that stops a Task
    is a boundary doing its job and stays neutral — above all `denied_by_policy`, which is slate.
 
+*Amended 2026-10-18 (owner, D24):* point 2 is widened. The muted red also marks the **button** of
+an act that revokes, disables or lowers authority, which asks a named confirmation before it acts.
+It still marks no outcome but `failure` and `timeout`, and a deny is still slate.
+
 `console-wireframe-brief.md` rule 1 should be updated to match.
 
 ### D6. The `Jobs` nav destination — **RESOLVED 2026-08-24: dropped**
@@ -418,6 +422,100 @@ not a screen change.
 detail H1, with the verified Node ID beneath it in mono. The hostname is marked self-reported per
 the verified/asserted grammar in `00-foundations.md`. Selectors, links and `?account=`/Node
 references keep using verified IDs.
+
+*Widened 2026-10-18 (owner, D22):* the hostname is primary wherever a Node is shown, not only on
+Fleet rows and the Node detail H1.
+
+### Owner review of the running Console — **RESOLVED 2026-10-18 (owner)**
+
+Taken interactively with the owner on 2026-10-18, after a review of the running Console in a
+browser. Each is a ruling; where it overturned a written rule, the rule was amended in place and
+says what it replaced.
+
+### D22. Hostname first everywhere — **RESOLVED 2026-10-18 (owner)**
+
+Widens D20. Wherever a Node is shown to a human — Fleet, Node detail, Compare's column headings, the
+pin chips, any other mention — the self-reported hostname is the primary label, marked
+self-reported, and the verified Node ID is secondary beside it: smaller, mono, muted, in full and
+never truncated. With no usable hostname the Node ID is the primary label. Selectors, links, pins
+and `?account=` still use verified IDs; only the display order changed (`00-foundations.md`,
+"Self-reported names").
+
+### D23. Policy aliases — **RESOLVED 2026-10-18 (owner)**
+
+A human `admin` may set, rename or clear a human-readable alias for a Policy fingerprint, from the
+Fleet view or Node detail; each change is audited with its old and new value, and takes no step-up
+because an alias gates nothing. The full hash is always drawn beside the alias. An alias is display
+only: never a Selector term, never a filter value, never an input to Policy evaluation or anything
+security-relevant, and never Policy — it is metadata the Relay holds about a fingerprint, so
+invariant 2 is untouched. Where no alias is set, the Console draws a neutral per-render letter (A,
+B, C…) with no colour and no "majority", "outlier" or "normal" wording, for D1's reason: the
+commonest Policy is not the desired one (invariant 9). The capability is `docs/specs/query.md`;
+the write is v0.6.0, so v0.6.0's no-mutation acceptance on the Fleet view now excepts it (spec 01).
+
+### D24. Destructive acts look dangerous and confirm by name — **RESOLVED 2026-10-18 (owner)**
+
+Revoke, Disable and Lower role — and any later revoke or disable — take the danger style (outlined
+in the muted red) and ask a confirmation that names the target and the consequence, as a
+server-rendered step with no script. Replaces the rule that a reducing act is "never red" and
+quiet (`00-foundations.md`, "Form controls"; spec 15) and amends D5. The step-up matrix is
+unchanged: revocation still takes no password.
+
+### D25. No lock on `relay:` chips — **RESOLVED 2026-10-18 (owner)**
+
+`relay:` is filled, distinct in hue, and carries its mono prefix, with no icon; a fenced chip has
+none either. The lock the foundations required was removed from the code on 2026-08-27, and the
+owner dropped the idea rather than restore it.
+
+### D26. A refused Fleet filter is said where it was typed — **RESOLVED 2026-10-18 (owner)**
+
+The count reads "filter not applied", the refusal sits under the field, marked invalid, and the
+whole fleet stays visible below but de-emphasised. Validation is on submit, server-side, by the one
+Selector parser; nothing parses a Selector in the browser (spec 01, "A refused filter").
+
+### D27. System state is the Fleet view's headline — **RESOLVED 2026-10-18 (owner)**
+
+The reachable count and the Policy-fingerprint count, with aliases, are stated first and largest;
+there is no approvals count. Healthy groups stay compressed to one line, collapsed with a native
+`<details>` (spec 01).
+
+### D28. Compare shows differences only, by default — **RESOLVED 2026-10-18 (owner)**
+
+A GET toggle, on by default; "nothing differs" said in words; a differing row emphasised by weight
+and a border, never by a new hue and never on a cell; a "not reported" column still marks its row
+(spec 02).
+
+### D29. Activity's first-run state is one explanatory block — **RESOLVED 2026-10-18 (owner)**
+
+Only with nothing recorded and no filter applied: the feed's and Running now's empty messages fold
+into one block saying what will appear and how, the live-region sentence stays, and the filters
+sit in a closed `<details>`. With a filter applied and nothing matching, the filters stay open
+(spec 04, "Nothing recorded yet").
+
+### D30. Freshness in words, never on a timer — **RESOLVED 2026-10-18 (owner)**
+
+The Fleet view gets a Refresh link. Render times read relatively ("rendered 40s ago") with the
+absolute UTC time in `datetime` and `title`; an old page says so in words and weight, never amber.
+An external same-origin script may advance the relative text; nothing reloads on a timer
+(`00-foundations.md`, "How old a page is").
+
+### D31. No "About this screen" disclosure — **RESOLVED 2026-10-18 (owner)**
+
+Dropped from every screen. A standing note is visible, as one sentence beside what it qualifies,
+or deleted when its substance is in the docs; a note the Console must be visibly bound by was
+never collapsed and still is not (`00-foundations.md`, "Standing notes and situational messages").
+
+### D32. Accounts: the selected panel first, creation behind a button — **RESOLVED 2026-10-18 (owner)**
+
+The selected Account's panel is at the top; the create form is behind **New account** in a native
+`<details>`. The role selects still preselect the current role, not submittable; Lower role is no
+longer drawn dimmed with it selected, and a hint says "choose a lower role" instead (spec 15).
+
+### D33. Access draws an Account ID as an identifier — **RESOLVED 2026-10-18 (owner)**
+
+A subject Account ID a record carries is drawn in the identifier treatment, not as raw text, and a
+name only where the record carries one. Resolving IDs to current names stays deferred until #659
+(spec 20).
 
 ## Prerequisites that already exist as issues
 
