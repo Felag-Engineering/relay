@@ -168,7 +168,7 @@ fn the_default_policy_denies_the_catalog_over_confidential_paths() {
         "/etc/gshadow",
         "/etc/ssh/ssh_host_ed25519_key",
         "/root/.ssh/id_rsa",
-        "/etc/relay-daemon/policy.toml",
+        "/etc/relay-daemon/relay-daemon.env",
         "/var/lib/relay-daemon/key.pem",
         "/proc/self/environ",
         "/proc/kcore",

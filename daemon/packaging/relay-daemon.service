@@ -24,7 +24,7 @@ Wants=network-online.target
 Type=exec
 User=root
 Group=root
-ExecStart=/usr/local/bin/relay-daemon
+ExecStart=/usr/bin/relay-daemon
 # Optional: carries RELAY_ADDR/RELAY_DOMAIN/RELAY_CA_BUNDLE_PATH/RELAY_POLICY_PATH/
 # RELAY_TEMPLATE_DIR/RELAY_NODE_LABELS/RELAY_ENROLLMENT_TOKEN. See relay-daemon.env.example. The
 # leading '-' means a missing file is not a startup failure.

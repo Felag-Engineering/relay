@@ -93,13 +93,22 @@ $ relay-daemon policy check policies/web-prod.toml --strict
 - Catches parse errors, invalid regexes, unresolvable Operation names, and
   allow rules fully shadowed by a deny (a warning; `--strict` promotes warnings
   to failures).
-- **Always runs the self-reference lint**: a warning when the Policy's own reach
-  includes this daemon's config, template files, state dir (identity key/cert),
-  binary, or systemd unit — "this rule lets the wire rewrite the wire's own
-  gate." Decided by probing the real Policy engine, so a finding is proof and an
-  explicit `[[deny]]` silences it. Details and the deliberate absence of a
-  daemon-side deny floor: [template-packs.md](template-packs.md) and the
-  ADR-0021 amendment.
+- **Always runs the self-reference lint**: a warning when the Policy reaches the
+  daemon's own trust root. For **reads** (`file.read`, `file.checksum`, any
+  path-taking Template Operation) it probes only the daemon's secret-bearing
+  files, the identity private key and the environment file; a read of anything
+  else is never a finding. For **writes** (Raw Exec edit in place, overwrite,
+  copy or move over, delete, redirect, chmod, symlink) it probes the trust root
+  at the packaged paths: the Policy file and directory, the environment file,
+  the state directory's key, certificate, CA bundle and persisted address, the
+  template root, `/usr/bin/relay-daemon`, the unit under
+  `/usr/lib/systemd/system/`, and the override unit and `override.conf` drop-in
+  under `/etc/systemd/system/`. A write finding over the Policy file means "this
+  rule lets the wire rewrite the wire's own gate." Decided by probing the real
+  Policy engine, so a finding is proof and an explicit `[[deny]]` silences it.
+  The shipped default passes `--strict` with `--templates`. Details and the
+  deliberate absence of a daemon-side deny floor:
+  [template-packs.md](template-packs.md) and the ADR-0021 amendment.
 - **Warns on a Raw Exec allow pattern not written `^...$`**: allow patterns now
   match the whole command, so an unanchored pattern that used to match as a
   substring no longer does. Run `--strict` in CI before upgrading the daemon

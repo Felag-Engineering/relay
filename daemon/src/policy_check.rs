@@ -60,9 +60,11 @@ rules that are fully shadowed by a deny rule and can therefore never fire,
 deny rules with a \"*\" or empty argument clause that (deny args being
 exact-match) can never fire either, and a Raw Exec allow pattern not anchored
 ^...$ (its meaning changed: allow patterns now match the whole command).
-Always runs the self-reference lint (ADR-0021): a warning when the Policy's
-own reach includes this daemon's config, templates, state dir, binary, or
-unit — decided by probing the real Policy engine, not a second matcher.
+Always runs the self-reference lint (ADR-0021): a warning when the Policy
+allows reading this daemon's identity private key or environment file, or
+writing its trust root (Policy, environment file, state dir files, template
+root, binary, unit) — decided by probing the real Policy engine, not a
+second matcher.
 
 With --templates, also lints the Template Operation files under <dir>
 (ADR-0021) and resolves Operation names against natives + those templates.

@@ -212,10 +212,27 @@ re-applied on the Node where they belong. Symlinks are still refused.
 ### The self-reference lint
 
 `policy check` always asks one more question, with or without `--templates`:
-**does this Policy's reach include the daemon's own trust root?** A rule that
-lets a Task rewrite `policy.toml`, drop a file into `templates.d/`, read the
-Node's private key, or replace the daemon binary or its unit is a rule that lets
-the wire rewrite the wire's own gate.
+**does this Policy's reach include the daemon's own trust root?** The two halves
+differ on purpose:
+
+- **Reads** (`file.read`, `file.checksum`, any path-taking Template Operation)
+  are probed only against the files that hold a secret: the Node's identity
+  private key and the environment file. Reading any other file is never a
+  finding. That includes the Template files themselves: they disclose
+  vocabulary, never a secret (residual R37 in
+  `docs/security/threat-model.md`; the control is narrowing `file.read`'s
+  wildcard to an explicit path list).
+- **Writes** (Raw Exec edit in place, overwrite, copy or move over, delete,
+  redirect, chmod, symlink) are probed against the trust root by exact path at
+  the packaged locations: the Policy file and directory, the environment file,
+  the state directory's `key.pem`, `cert.pem`, `ca_bundle.pem` and persisted
+  address, the template root, `/usr/bin/relay-daemon`, the unit under
+  `/usr/lib/systemd/system/`, and the override unit and `override.conf` drop-in
+  under `/etc/systemd/system/`. A rule that lets a Task rewrite `policy.toml`
+  is a rule that lets the wire rewrite the wire's own gate. The probes name
+  exact paths, so a drop-in or Policy fragment under another name is not
+  flagged (residual R38; the control is a Raw Exec deny over the directory,
+  ADR-0019).
 
 It answers by **probing the real Policy engine** — concrete actions against
 those paths, evaluated exactly as a dispatch would evaluate them — so a finding
