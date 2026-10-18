@@ -86,6 +86,11 @@ they already run, from artifacts they can verify before executing.
   every later start; a Relay address set in its environment overrides the persisted one. With
   neither, the daemon refuses to start: there is no default address. Once enrolled, the join string
   is inert and may be removed (ADR-0031). Retires DI-10.
+- **DI-37** `relay-daemon join` configures a fresh Node in one step: it reads a join string from a
+  prompt or standard input, never from its arguments, writes it where the daemon reads it, owned by
+  root and readable by nobody else, then enables and starts the unit. It refuses on a Node that
+  already holds an identity, changing nothing, and contacts no Relay itself: enrollment happens when
+  the daemon starts. Config management may run it or write the same file directly.
 
 ### File modes
 
@@ -174,6 +179,7 @@ proven by CI install jobs, once they exist; `make verify` alone cannot prove the
 | DI-22 | `pin_match_enrolls`, `pin_mismatch_sends_no_token`, `ca_bundle_mismatch_refused`, `TestCrossBinary_JoinStringEnrolls` | daemon, e2e |
 | DI-23 | `TestRevokedNode_DialAuditedThenThrottled`, `TestServerCredentials_ReportsRevokedBeforeRefusing` | e2e, transport |
 | DI-28 | `default_policy_denies_only_secret_bearing_own_files`, `deny_list_mirrors_adr_0022_exactly`, `default_policy_passes_strict_with_catalog` | daemon |
+| DI-37 | `join_refuses_argv_join_string`, `join_refuses_existing_identity_env_file_unchanged`, `join_writes_env_file_root_0600_atomically`, `join_spawn_argv_is_the_literal_constant`, `spawn_family_appears_only_at_the_sanctioned_sites`, `production_and_test_suppressions_are_pinned_apart` | daemon |
 | DI-38 | `TestCrossBinary_JoinStringEnrolls`, `TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState`, `relay_addr_overrides_persisted_address`, `identity_without_address_exits_nonzero` | e2e, daemon |
 | DI-39 | `lint_read_probes_stop_at_secrets`, `checksum_is_probed_without_templates`, `lint_write_probes_cover_packaged_trust_root`, `current_exe_is_a_write_probe_only`, `exe_equal_to_a_packaged_path_is_not_duplicated` | daemon |
 | DI-40 | `unit_execstart_is_usr_bin` | packaging |
@@ -204,7 +210,6 @@ until it is done.
 | DI-33 | A platform is supported only where CI installs the package, upgrades it over the operator's edited configuration and finds the edit intact, and removes it: Debian 13; Ubuntu 26.04 LTS and 24.04 LTS; RHEL, Rocky Linux and AlmaLinux 10; Fedora's current release; Amazon Linux 2023 — each on `x86_64` and `aarch64`. A platform whose package manager refuses an unsigned local package by default is not supported. This list also governs the Relay packages (`relay-configuration.md`). | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-34 | A documented migration moves a hand-built Node onto the package: it removes the old binary and the old unit under `/etc/systemd/system/`, which would otherwise shadow the packaged one, and says to remove by hand the Policy's self-reference denies for the old binary and unit paths, which the shipped default no longer carries (DI-28). | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-35 | A rendered enrollment bundle pins a daemon version and digest (ADR-0032); which artifact it pins once packages exist is an open question below. Moved from v0.6.5 on 2026-10-16: nothing renders a bundle until v0.7.0. | v0.7.0 — Admin Console: Administration & Execution |
-| DI-37 | `relay-daemon join` configures a fresh Node in one step: it reads a join string from a prompt or standard input, never from its arguments, writes it where the daemon reads it, owned by root and readable by nobody else, then enables and starts the unit. It refuses on a Node that already holds an identity, changing nothing, and contacts no Relay itself: enrollment happens when the daemon starts. Config management may run it or write the same file directly. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-36 | Beside the Policy file, `/etc/relay-daemon/policy.toml`, sits the Policy directory, `/etc/relay-daemon/policy.d`, which the install creates empty and never writes into again. The daemon composes the Policy file and every fragment in it into one Policy with one Policy fingerprint, deny beating allow across all of them; a fragment that is a symlink, not a regular file, or group- or world-writable refuses start, and one fragment that cannot be read or parsed leaves the whole Policy deny-all. | v0.7.0 — Admin Console: Administration & Execution |
 
 ## Out of scope

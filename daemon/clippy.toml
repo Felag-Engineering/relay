@@ -3,10 +3,11 @@
 # Cargo.toml's rust-version, which stays the single place the floor is named.
 
 # Invariant 1: arguments can never change which command runs. The mechanism is that
-# exactly one function builds a process (executor.rs, argv only, never /bin/sh), and
-# every tier reaches it with an argv already fixed by Policy or a Template. A second
-# Command::new anywhere in the daemon would be a spawn path outside that review, so it
-# fails the build; the one sanctioned site carries an explicit allow.
+# two functions build a process, each reviewed: executor.rs (argv only, never /bin/sh),
+# which every tier reaches with an argv already fixed by Policy or a Template, and
+# `join`'s systemctl module, whose argv is a literal no input reaches. Any other
+# Command::new in the daemon would be a spawn path outside that review, so it fails the
+# build; each sanctioned site carries an explicit allow, pinned by clippy_write_ban.rs.
 disallowed-methods = [
   { path = "std::process::Command::new", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
   { path = "tokio::process::Command::new", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
