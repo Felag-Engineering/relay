@@ -57,15 +57,36 @@ Activity scoped to that Account ([04](04-activity.md), `?account=`). Its sign-in
 made to it are on [20 — Access](20-access.md). There is no "connected" state to show: the MCP transport is stateless
 (ADR-0028), so an Account is *active recently* or not, never *connected*.
 
-The list is read-only. Selecting an Account opens its panel, which holds its role and state
-controls above its API Tokens, following the form-control rule in `00-foundations.md`. A role
-change is split by what it does to authority: **Raise role** (the roles above the current one,
-with the password, filled) and **Lower role** (the roles below it, no password, outlined). Each
-select shows the Account's current role, preselected and not submittable, so nothing changes
-without an explicit choice; the server refuses a missing or unchanged role. The state change is as
-before: **Disable** is outlined; the password and **Enable** are filled. Granting buttons sit beside
-the password they spend; **Disable**, **Lower role** and **Revoke** are outlined and quiet, never
-red. Every control keeps its visible label.
+The list is read-only. **Order on the page** (owner decision, 2026-10-18, D31): the selected
+Account's panel comes first, at the top of the screen; then the list; then the create form, which
+sits behind a **New account** button — a native `<details>`, closed by default and open when the
+create form is re-rendered with a refusal — so that creating an Account is a deliberate step and
+never what an admin who came to change one sees first. Selecting an Account opens its panel, which
+holds its role and state controls above its API Tokens, following the form-control rule in
+`00-foundations.md`. A role change is split by what it does to authority: **Raise role** (the roles
+above the current one, with the password, filled) and **Lower role** (the roles below it, no
+password, in the danger style). Each select shows the Account's current role, preselected and not
+submittable, so nothing changes without an explicit choice; the server refuses a missing or
+unchanged role. The **Lower role** button is never drawn dimmed or disabled while the current role
+is selected: a hint beside it says "choose a lower role", and pressing it with the current role
+selected is refused with the same words. The state change is as before: **Disable** takes the
+danger style; the password and **Enable** are filled. Granting buttons sit beside the password they
+spend.
+
+**Disable**, **Lower role** and **Revoke** take the danger style — outlined in the muted red — and
+each asks a confirmation that names its target and its consequence before it acts
+(`00-foundations.md`, "Form controls"; owner decision, 2026-10-18, D23). This replaced the rule
+that they were "outlined and quiet, never red". The confirmations read, for example:
+
+| Act | Confirmation |
+|---|---|
+| Revoke an API Token | "Revoke token `dev-fleet-approver`? Anything using it fails immediately; this cannot be undone." |
+| Disable an Account | "Disable `ci-agent`? It can no longer sign in or call the Relay; re-enabling takes a password." |
+| Lower a role | "Lower `ci-agent` from `admin` to `operator`? Its API Tokens carry the lower role from their next request." |
+
+The confirmation is a server-rendered step with no script, and it changes nothing about who may act
+or whether step-up applies: the matrix above is unchanged, and revocation still takes no password.
+Every control keeps its visible label.
 
 Machine Accounts are first-class, not a footnote. On a fleet driven by an AI-agent, the busiest
 principal in the system is a machine Account, and treating it as an edge case is how it ends up
@@ -80,8 +101,9 @@ answer to "may this Account do X" would be a second control path, and the first 
 Show what a role means in terms of the boundary, not in terms of screens: `operator` may run
 Operations, `admin` may additionally use Raw Exec and set `relay:` labels. Never claim a role can do
 something Policy might still deny — **the ceiling is always what the fleet's own Policy permits.**
-Since #849 the screen draws no per-role lines: it states only that Policy ceiling, in its "About
-this screen" disclosure, and what each role may do is defined in ADR-0010 and GLOSSARY.md
+Since #849 the screen draws no per-role lines: it states only that Policy ceiling, in one visible
+sentence beside the role controls (it had stood in an "About this screen" disclosure, which no
+screen carries since D30), and what each role may do is defined in ADR-0010 and GLOSSARY.md
 (*Account*).
 
 ## API tokens
@@ -139,3 +161,6 @@ authenticates nowhere; re-enabling is a privilege-granting act and takes step-up
 - [ ] An Account cannot elevate itself.
 - [ ] The final `admin` cannot be removed or demoted.
 - [ ] Revoking a token is immediate: the next request carrying it is refused and audited.
+- [ ] Disable, Lower role and Revoke are drawn in the danger style, and each acts only from a
+      confirmation that names its target and consequence; none gains a step-up by it.
+- [ ] The selected Account's panel is above the list, and the create form is behind New account.

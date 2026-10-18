@@ -89,9 +89,20 @@ the Account as it is now, the problem [04](04-activity.md) describes under "Kind
 the registry". **Whether to resolve a subject's ID to its current name is open**, and until it is
 decided the screen shows what the record carries. No kind label is drawn: these records carry none.
 
+**An Account ID the record carries is drawn as an Account ID, not as text** (owner decision,
+2026-10-18, D32). Where a record names its subject Account by ID — inside the record's reason, today
+— the screen draws it in the identifier treatment (mono, in full, never truncated,
+`00-foundations.md` "Identifiers render verbatim"), set apart from the surrounding words with a
+small "Account" caption so it reads as one value rather than as part of a `key=value` string. It is
+not a trust chip: it has neither the filled nor the dashed treatment, because formatting an ID the
+record carries asserts nothing about who authenticated; the actor keeps its verified chip. A name is
+drawn beside it only where the record itself carries one — `account_create`'s `name=`, the host
+password rows — and never looked up. Resolving an ID to its current name stays deferred until an
+audited Account-read path exists (#659).
+
 **OAuth sessions have no sign-in row.** An OAuth sign-in happens at the identity provider, not at
-the Relay, which sees only authenticated calls. This screen lists Console sign-ins; the disclosure
-says that OAuth sign-ins are not among them.
+the Relay, which sees only authenticated calls. This screen lists Console sign-ins, and one visible
+sentence says that OAuth sign-ins are not among them.
 
 ## Filtering and refresh
 
@@ -101,7 +112,8 @@ says so. Looking an Account up by name is deferred until an audited Account-read
 (#659): the registry read it needs is one no audit record covers. Rows are never read from the
 registry. There is no filter by **subject** yet: the subject is
 written into the record's free-text reason, which the audit query seam cannot filter on. The
-disclosure says so rather than offering a filter that would search the page and call it history. It follows the Refresh rules in `00-foundations.md`
+screen says so in one visible sentence beside the filters rather than offering a filter that would
+search the page and call it history. It follows the Refresh rules in `00-foundations.md`
 ("Refreshing a screen"): a deliberate click, never a timer, and every reload is an audited read.
 
 ## Must not appear

@@ -93,7 +93,7 @@ are ADRs yet; several need to be — see [`99-open-decisions.md`](99-open-decisi
 | Decision | Where it bites |
 |---|---|
 | A fourth Label namespace, **`state:`** — Relay-derived, nobody sets it, targetable, never a security-lane target | 01, 02, 05, 00 |
-| **Facts are detail-view only** — not in a facet, never targetable; the hostname alone names a Node on a fleet row and the Node heading, marked self-reported beside the verified ID (D20) | 01, 02, 00 |
+| **Facts are detail-view only** — not in a facet, never targetable; the hostname alone names a Node wherever one is shown, marked self-reported, with the verified ID secondary beside it (D20, widened by D21) | 01, 02, 00 |
 | The fleet view answers **four questions** and nothing else; no collected metrics, ever | 01 |
 | **No scheduled or repeated reads.** Every read is a deliberate, audited act | 03, 04, 01 |
 | Upgrade handling is **progress only** — the Console never offers to push a daemon upgrade | 01 |
@@ -114,3 +114,4 @@ are ADRs yet; several need to be — see [`99-open-decisions.md`](99-open-decisi
 | **The Console has no approval surface** — approvals are answered in-band or on the Control API (ADR-0044, 2026-10-18) | 00, 04, 05, 11, 19 |
 | v0.6.0 **mutating** means reaching the capability layer's write or dispatch path; **Cancel is v0.7.0** | 03, 13 |
 | `console_execution` lands with the composer (v0.7.0), not the shell | 05, 11 |
+| Owner review of the running Console, 2026-10-18 (D21–D32): hostname first everywhere, **Policy aliases**, destructive acts drawn red behind a named confirmation, no "About this screen" disclosure | 00, 01, 02, 04, 15, 20 |
