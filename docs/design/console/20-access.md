@@ -90,7 +90,7 @@ the registry". **Whether to resolve a subject's ID to its current name is open**
 decided the screen shows what the record carries. No kind label is drawn: these records carry none.
 
 **An Account ID the record carries is drawn as an Account ID, not as text** (owner decision,
-2026-10-18, D32). Where a record names its subject Account by ID — inside the record's reason, today
+2026-10-18, D33). Where a record names its subject Account by ID — inside the record's reason, today
 — the screen draws it in the identifier treatment (mono, in full, never truncated,
 `00-foundations.md` "Identifiers render verbatim"), set apart from the surrounding words with a
 small "Account" caption so it reads as one value rather than as part of a `key=value` string. It is

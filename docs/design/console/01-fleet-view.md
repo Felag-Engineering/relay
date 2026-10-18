@@ -50,7 +50,7 @@ literally the language that targets commands, because browsing trains targeting 
 this Job hit?" is then answered by the filter already on screen. A group-by control accepting any
 label key.
 
-**System state — the headline** (owner decision, 2026-10-18, D26). The first thing under the view
+**System state — the headline** (owner decision, 2026-10-18, D27). The first thing under the view
 controls, and the screen's summary: it states, in the largest type on the page after the heading,
 **how many of the matched Nodes are reachable** ("4,009 of 4,012 reachable") and **how many Policy
 fingerprints they report**, each drawn in full beside its Policy alias or per-render letter, with
@@ -116,7 +116,7 @@ namespaces, so the contextual "Run against these" can never be handed a set it c
 Facts (OS, kernel, hostname, IP, packages) are **not** filterable, and none is on the
 row except the hostname. The hostname names the Node as the row's self-reported visual primary,
 with the verified Node ID secondary beside it (`00-foundations.md`, "Self-reported names"; D20,
-D21). The row links by Node
+D22). The row links by Node
 ID, and the hostname is never filterable or targetable. If an
 operator wants to target on OS, their config management stamps `node:os=ubuntu`. The discriminator
 is the configuration-management scope rule (AGENTS.md, *Out of realm*): *what Ansible could check in check-mode is out of realm*.
@@ -124,7 +124,7 @@ is the configuration-management scope rule (AGENTS.md, *Out of realm*): *what An
 ### A refused filter
 
 A filter the Selector parser refuses — an unprefixed term, a `tag:` term, a malformed one — is
-said where it was typed (owner decision, 2026-10-18, D25):
+said where it was typed (owner decision, 2026-10-18, D26):
 
 - **The count reads "filter not applied"**, never "*N* of *M* Nodes": a count beside a filter that
   was not applied reads as that filter's result.
@@ -146,7 +146,7 @@ this Selector", with a link that clears it).
 
 A Policy fingerprint is a hash, and nobody says a hash aloud. A human `admin` may give a
 fingerprint a **Policy alias** — "web-hardened" — from its facet value here or from the
-Fingerprints panel on Node detail (spec 02). Owner decision, 2026-10-18 (D22); the capability is
+Fingerprints panel on Node detail (spec 02). Owner decision, 2026-10-18 (D23); the capability is
 `docs/specs/query.md`.
 
 - **Edit alias** opens a small server-rendered form — the alias, a Save, and a Clear where one is
@@ -220,7 +220,7 @@ config management.
   and pin set preserved, and is an audited read like the page load (`00-foundations.md`,
   "Refreshing a screen"). Beside it, the page says how old it is — "rendered 40s ago", the absolute
   UTC time in its `title` — and an old page says so in words and weight, never in amber
-  (D29). The screen never reloads on a timer.
+  (D30). The screen never reloads on a timer.
 - **Frozen** → the control-plane banner above content; the screen is otherwise unchanged (reads still work).
 - **Relay or CA certificate near expiry** → the same banner slot, per `00-foundations.md`.
 - **`viewer`** → identical, minus the two action buttons.
@@ -242,7 +242,7 @@ config management.
       open question for the owner; changing either constant is out of scope for a test-coverage issue.
 - [ ] The single quarantined Node in a 4,000-Node group is findable without reading any text.
 - [ ] No Fact appears on a row or in a facet.
-- [ ] No route on this screen mutates anything in v0.6.0 except the Policy alias write (D22), which
+- [ ] No route on this screen mutates anything in v0.6.0 except the Policy alias write (D23), which
       reaches the capability layer's alias write and nothing that reaches a Node or a label.
 - [ ] A refused filter shows "filter not applied", its refusal under the field, and the whole
       fleet de-emphasised beneath; nothing parses the filter in the browser.

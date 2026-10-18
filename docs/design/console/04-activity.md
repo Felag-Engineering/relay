@@ -246,7 +246,7 @@ The Principal box takes the Account's ID, and its placeholder says so. Looking a
 is deferred until an audited Account-read path exists (#659): the registry read it needs is one no
 audit record covers.
 
-The screen carries no "About this screen" disclosure (owner decision, 2026-10-18, D30;
+The screen carries no "About this screen" disclosure (owner decision, 2026-10-18, D31;
 `00-foundations.md`). That every Refresh is an audited read made from this Console is said in one
 visible sentence beside the Refresh control; how a page is bounded is the page note's; which events
 are on the audit trail rather than here, like everything below, is recorded here and not repeated
@@ -268,7 +268,7 @@ unknown row kind, what an outcome filter does to the page, and the read sentence
 ## Nothing recorded yet
 
 On a Relay where nothing has been recorded and no filter is applied (owner decision, 2026-10-18,
-D28), the screen does not draw an empty feed and an empty Running now one above the other. It
+D29), the screen does not draw an empty feed and an empty Running now one above the other. It
 draws **one explanatory block** in their place, saying what will appear here and how — "When an
 AI-agent or an operator dispatches a Task, or calls any tool, it appears here." — and keeps the
 live region's sentence ("Live." and the rest) beside it, because whether the stream is connected is

@@ -93,7 +93,7 @@ detail and in Activity. They must occupy **different visual channels**:
 - **Namespace owns hue and the mono prefix.** `node:` and `tag:` are quiet and subtly
   differentiated; `relay:` is filled, distinct in hue, and carries its mono prefix, with no lock or
   other icon; `state:` carries the tint of its severity behind its mono prefix. A fenced chip
-  carries no icon either. (Owner decision, 2026-10-18, D24: the lock this line once required was
+  carries no icon either. (Owner decision, 2026-10-18, D25: the lock this line once required was
   removed from the code on 2026-08-27, and the owner dropped the idea rather than restore it.)
 
 **Self-reported names.** Wherever a Node is shown to a human — a Fleet row, the Node detail
@@ -108,7 +108,7 @@ verified identifier is always drawn beside it, two Nodes claiming one hostname s
 distinguishable. Only RFC 1123 hostname characters qualify; anything else, a value shaped like a
 Node ID (`node-` then only hex), or nothing, falls back to the Node ID as the primary label, which
 is then not repeated beside itself. Selectors, links, pins and `?account=` always **use** verified
-IDs; only the display order changes. Owner decision, 2026-10-18 (D21), which widened D20
+IDs; only the display order changes. Owner decision, 2026-10-18 (D22), which widened D20
 (2026-10-01, #835): D20 made the hostname primary on Fleet rows and the Node detail heading only,
 and Compare's column headings and the pin chips led with the verified Node ID.
 
@@ -154,7 +154,7 @@ fill (the liveness dot, the `success` chip, the wall's cells), while the accent
 is text, outlines, buttons and the one live dot, which sits on a screen with no
 liveness dot. `TestConsole_AccentPairsClearAA` enforces the contrast rule.
 
-**Red was widened on 2026-10-18 (owner decision, D23).** It had meant failure and timeout and
+**Red was widened on 2026-10-18 (owner decision, D24).** It had meant failure and timeout and
 nothing else, and the acts that reduce authority were drawn quiet so that an emergency brake would
 not look like an alarm. In use, a Revoke that looked like every other outlined button was the
 problem: an act that cannot be undone did not look it. Red now also marks the button of an act
@@ -258,7 +258,7 @@ is display only. It is never a Selector term, a filter value or an input to anyt
 `state:policy-fingerprint=` filter and every link that targets a fingerprint carry the hash — and
 it is never shown without the full fingerprint, so a misleading name cannot hide which Policy it is. Where an
 `admin` sees a fingerprint, an **Edit alias** control sits beside it; it is absent for every other
-role (owner decision, 2026-10-18, D22).
+role (owner decision, 2026-10-18, D23).
 
 **Step-up modal** (apply, every privilege-granting act). A session proves a human
 authorised the *session*; step-up proves a human intended *this action*. It carries a credential
@@ -306,7 +306,7 @@ Screens carry prose that says what they cannot do. Two kinds, told apart by one 
   URL that could not be read, a read that failed, "you already signed this", "your role cannot
   decide this" — is a **situational message**.
 
-**No screen carries an "About this screen" disclosure** (owner decision, 2026-10-18, D30). It
+**No screen carries an "About this screen" disclosure** (owner decision, 2026-10-18, D31). It
 replaced a rule that gathered every standing note into one closed disclosure at the foot of the
 screen; in use, a closed box of caveats was read by nobody and made every screen look unfinished.
 A standing note is therefore either **visible**, as one sentence of at most ~15 words drawn beside
@@ -347,7 +347,7 @@ browser's reload button.
 ### How old a page is
 
 A server-rendered page is a snapshot, so a screen that shows one says how old it is (owner
-decision, 2026-10-18, D29). Where a screen states when it was rendered, it states it **relatively**
+decision, 2026-10-18, D30). Where a screen states when it was rendered, it states it **relatively**
 — "rendered 40s ago" — inside a `<time>` element whose `datetime` carries the absolute UTC instant
 and whose `title` shows it, so the exact time is one hover or one screen-reader query away. The
 relative text is computed by the server at render. An external script from the Console's own origin
@@ -382,7 +382,7 @@ Buttons carry **the weight of what they do to authority**:
 
 Granting and destroying are told apart by **fill against outline** — a channel that survives
 greyscale and every colour-vision deficiency — by hue, and by the password field that only a
-granting form carries. Owner decision, 2026-10-18 (D23), which replaced the rule that a reducing
+granting form carries. Owner decision, 2026-10-18 (D24), which replaced the rule that a reducing
 act is "never red" and never the most prominent control in its row: a revocation that looked like
 any quiet button did not look like what it is, an act that takes effect at once and cannot be
 undone. A form that can both grant and reduce — setting a role, which raises or lowers (the

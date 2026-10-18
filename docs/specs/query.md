@@ -282,7 +282,7 @@ its consumers. The rest is ordinary Future work.
 
 - **A hijacked human `admin` session can rename aliases to mislead.** Without the Account's
   password, it can name an unhardened fingerprint "web-hardened" and steer the humans who judge a
-  rollout by name. Accepted by the owner on `2026-10-18` (Console D22) in taking no step-up for an
+  rollout by name. Accepted by the owner on `2026-10-18` (Console D23) in taking no step-up for an
   alias; the compensating controls are QRY-33 (the fingerprint is always beside the name) and
   QRY-30 (every change is audited with its old and new value). Threat model **R39**.
 

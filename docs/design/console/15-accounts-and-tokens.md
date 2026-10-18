@@ -57,7 +57,7 @@ Activity scoped to that Account ([04](04-activity.md), `?account=`). Its sign-in
 made to it are on [20 — Access](20-access.md). There is no "connected" state to show: the MCP transport is stateless
 (ADR-0028), so an Account is *active recently* or not, never *connected*.
 
-The list is read-only. **Order on the page** (owner decision, 2026-10-18, D31): the selected
+The list is read-only. **Order on the page** (owner decision, 2026-10-18, D32): the selected
 Account's panel comes first, at the top of the screen; then the list; then the create form, which
 sits behind a **New account** button — a native `<details>`, closed by default and open when the
 create form is re-rendered with a refusal — so that creating an Account is a deliberate step and
@@ -75,7 +75,7 @@ spend.
 
 **Disable**, **Lower role** and **Revoke** take the danger style — outlined in the muted red — and
 each asks a confirmation that names its target and its consequence before it acts
-(`00-foundations.md`, "Form controls"; owner decision, 2026-10-18, D23). This replaced the rule
+(`00-foundations.md`, "Form controls"; owner decision, 2026-10-18, D24). This replaced the rule
 that they were "outlined and quiet, never red". The confirmations read, for example:
 
 | Act | Confirmation |
@@ -103,7 +103,7 @@ Operations, `admin` may additionally use Raw Exec and set `relay:` labels. Never
 something Policy might still deny — **the ceiling is always what the fleet's own Policy permits.**
 Since #849 the screen draws no per-role lines: it states only that Policy ceiling, in one visible
 sentence beside the role controls (it had stood in an "About this screen" disclosure, which no
-screen carries since D30), and what each role may do is defined in ADR-0010 and GLOSSARY.md
+screen carries since D31), and what each role may do is defined in ADR-0010 and GLOSSARY.md
 (*Account*).
 
 ## API tokens

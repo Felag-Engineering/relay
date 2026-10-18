@@ -44,14 +44,14 @@ fingerprint — so this panel depends on #440 landing first.
 
 **Heading** — the H1 is the Node's hostname, marked self-reported, with the verified node id
 beneath it in mono. With no usable hostname (including one shaped like a Node ID) the H1 is the full Node ID, never a truncated one, and
-it is not repeated beneath. (D20; D21 extends the same order to every place a Node is shown.)
+it is not repeated beneath. (D20; D22 extends the same order to every place a Node is shown.)
 
 **Fingerprints** — Policy and template-set, each with how many Nodes in the fleet share it. That
 comparison is the whole value: confirming a rollout landed is string equality, not trust. The
 Policy fingerprint is drawn in full with its Policy alias beside it, or the neutral per-render
 letter where none is set (`00-foundations.md`, "Policy fingerprint"), and for a human `admin` an
 **Edit alias** control that sets, renames or clears it, exactly as on the Fleet view (spec 01,
-"Policy aliases"; D22). The alias names the fingerprint on this Relay; it is not this Node's
+"Policy aliases"; D23). The alias names the fingerprint on this Relay; it is not this Node's
 Policy, and the panel's "no path to this Node's Policy" note stays true. Template
 set may read the literal `unloadable`, which means the Node's local template set failed to load
 and its template vocabulary is empty (fail closed).
@@ -114,15 +114,15 @@ The pin bar appears on Fleet, Node detail and Compare. Off the Compare screen it
 "Compare these Nodes", disabled with "Pin 1 more to compare" below two pins, so one pin is never a
 dead end. On a Node's own page its chip reads "this Node" and is not a link to the page already
 open. Every other pin chip names its Node by hostname, marked self-reported, with the Node ID
-secondary beside it (`00-foundations.md`, "Self-reported names"; D21); the chip's link and the pin
+secondary beside it (`00-foundations.md`, "Self-reported names"; D22); the chip's link and the pin
 set in the query string carry the Node ID.
 
 **Compare's column headings** lead with each Node's hostname, marked self-reported, with the
-verified Node ID secondary beneath it in full (D21). The Policy fingerprint row draws each hash with
+verified Node ID secondary beneath it in full (D22). The Policy fingerprint row draws each hash with
 its alias or per-render letter, and the letters are assigned once per page, so the same fingerprint
 carries the same letter in every column.
 
-**Differences only** (owner decision, 2026-10-18, D27). Compare shows only the rows that differ by
+**Differences only** (owner decision, 2026-10-18, D28). Compare shows only the rows that differ by
 default. A "Show differences only" checkbox, checked by default, sits in a GET form beside the pin
 bar and carries the pin set; unchecking it and applying shows every row. The choice is a GET
 parameter, so the view is linkable and needs no script. When nothing differs, the
