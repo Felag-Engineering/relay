@@ -44,19 +44,12 @@ type accountFleet struct {
 // real daemon connected, and returns the handles the assertions need.
 func startAccountFleet(t *testing.T, daemonBin string) *accountFleet {
 	t.Helper()
-	ctx := context.Background()
 
 	f := startRelay(t, WithControlPlane(), WithTCPNodePlane())
 
-	_, plaintext, err := f.Deps.tokens.Create(ctx, []string{"relay:env=test"}, time.Hour)
-	if err != nil {
-		t.Fatalf("seed Enrollment Token: %v", err)
-	}
 	relaytest.StartDaemon(t, relaytest.DaemonConfig{
 		Bin:        daemonBin,
-		NodeAddr:   f.NodeAddr,
-		CAPath:     relaytest.WriteTempFile(t, "ca-bundle-*.pem", string(f.Deps.ca.Bundle())),
-		Token:      plaintext,
+		JoinString: mintJoinString(t, f.Deps, "relay:env=test"),
 		StateDir:   t.TempDir(),
 		PolicyPath: relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy),
 		Hostname:   "mcp-account-auth-e2e-node",

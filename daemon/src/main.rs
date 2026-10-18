@@ -85,21 +85,28 @@ fn heartbeat_delay(interval: Duration, jitter_frac: f64, sample: f64) -> Duratio
     interval.mul_f64(scale)
 }
 
-/// Acquires an enrolled identity before connecting to the Relay.
-///
-/// Fail closed: if no enrollment token is configured and no persisted identity
-/// exists in state_dir, this returns an error rather than falling back to a
-/// plaintext dial (ADR-0005, invariant 6).
-async fn acquire_identity(
-    config: &Config,
-) -> Result<crate::identity::Identity, Box<dyn std::error::Error>> {
-    let identity = match config::enroll_config(config)? {
-        Some(cfg) => enroll::ensure_enrolled(&cfg).await?,
-        None => identity::load_identity(&config.state_dir)?.ok_or(
-            "no enrolled identity in state dir; refusing to connect (fail closed, no plaintext)",
-        )?,
-    };
-    Ok(identity)
+/// Enrolls with `join`: builds the Config with the join string's address standing
+/// in for the persisted one, then pins the Relay's CA from the join string before
+/// the token is sent (ADR-0031, invariant 6).
+async fn enroll_with_join(
+    join: relay_transport::join_string::JoinString,
+) -> Result<(Config, crate::identity::Identity), Box<dyn std::error::Error>> {
+    let config = Config::from_env_for(Some(&join)).map_err(|e| e.to_string())?;
+    let cfg = config::enroll_config(&config, join)?;
+    let identity = enroll::ensure_enrolled(&cfg).await?;
+    Ok((config, identity))
+}
+
+/// Loads the persisted identity of an enrolled Node. It never re-enrolls: four
+/// identity files that do not load are an error, never a fresh enrollment, and
+/// there is no plaintext fallback (ADR-0005, invariant 6).
+fn load_enrolled() -> Result<(Config, crate::identity::Identity), Box<dyn std::error::Error>> {
+    let config = Config::from_env().map_err(|e| e.to_string())?;
+    let identity = identity::load_identity(&config.state_dir)?.ok_or(
+        "identity files are present but do not hold a usable identity; \
+         refusing to connect (fail closed, no re-enrollment)",
+    )?;
+    Ok((config, identity))
 }
 
 /// Assembles a `PolicySnapshot` from the live, loaded Policy for the Relay to
@@ -746,12 +753,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .install_default()
         .expect("rustls CryptoProvider installation must succeed at startup");
 
-    let config = Config::from_env().map_err(|e| e.to_string())?;
-
-    // Acquire the enrolled identity before proceeding. Fail closed: if no
-    // token is configured and no persisted identity exists, refuse to connect
-    // rather than fall back to a plaintext dial (ADR-0005, invariant 6).
-    let identity = acquire_identity(&config).await?;
+    // The startup plan (DI-25's exit rule) is decided before any Config,
+    // network or Policy read: only a Node with no identity file and no
+    // RELAY_JOIN exits cleanly; a partial identity or a malformed join string
+    // exits non-zero.
+    let plan = config::plan_startup(&enroll::state_dir_from_env(), config::relay_join_from_env)
+        .map_err(|e| e.to_string())?;
+    let (config, identity) = match plan {
+        config::StartupPlan::Unconfigured => {
+            // The one clean exit, with one log line. `Restart=on-failure` does
+            // not retry it, and nothing watches for the join string to appear.
+            info!(
+                "no identity and no RELAY_JOIN: nothing to enroll with; exiting until configured"
+            );
+            return Ok(());
+        }
+        config::StartupPlan::Enroll(join) => enroll_with_join(join).await?,
+        config::StartupPlan::Enrolled => load_enrolled()?,
+    };
 
     info!(relay = %config.relay_addr, node_id = log_field::untrusted(&identity.node_id), "relay-daemon starting");
 

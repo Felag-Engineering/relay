@@ -28,7 +28,7 @@ x-daemon-base: &daemon-base
   restart: unless-stopped
   depends_on:
     init:
-      # Daemons start only after the token + CA cert exist on the shared volume,
+      # Daemons start only after the join string exists on the shared volume,
       # and init exiting non-zero keeps them all down.
       condition: service_completed_successfully
   healthcheck:
@@ -107,8 +107,8 @@ services:
   # The dev fleet's one bootstrap one-shot (docker/dev-fleet-init.sh): mints the
   # founding admin's credential, creates the dev-approver and Console admin
   # Accounts (and the IdP user under the OAuth overlay), sets the Console
-  # password, mints the relay:-scoped Enrollment Token and exports the public CA
-  # cert, then exits. Besides the Relay it is the only service that mounts
+  # password, mints the relay:-scoped Enrollment Token and writes its join
+  # string for the daemons, then exits. Besides the Relay it is the only service that mounts
   # relay-data, and it mounts it READ-WRITE (minting and the password are store
   # writes). No daemon mounts control-credential or relay-data. A failure here
   # keeps every daemon down.
@@ -150,7 +150,6 @@ services:
     environment:
       RELAY_ADDR: "https://relay:7654"
       RELAY_DOMAIN: "relay"
-      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -168,7 +167,6 @@ services:
     environment:
       RELAY_ADDR: "https://relay:7654"
       RELAY_DOMAIN: "relay"
-      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -188,7 +186,6 @@ services:
     environment:
       RELAY_ADDR: "https://relay:7654"
       RELAY_DOMAIN: "relay"
-      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.db.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -207,7 +204,6 @@ services:
     environment:
       RELAY_ADDR: "https://relay:7654"
       RELAY_DOMAIN: "relay"
-      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -226,7 +222,6 @@ services:
     environment:
       RELAY_ADDR: "https://relay:7654"
       RELAY_DOMAIN: "relay"
-      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -246,7 +241,6 @@ services:
     environment:
       RELAY_ADDR: "https://relay:7654"
       RELAY_DOMAIN: "relay"
-      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -265,7 +259,6 @@ services:
     environment:
       RELAY_ADDR: "https://relay:7654"
       RELAY_DOMAIN: "relay"
-      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.db.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -286,7 +279,6 @@ services:
     environment:
       RELAY_ADDR: "https://relay:7654"
       RELAY_DOMAIN: "relay"
-      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.bastion.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -305,7 +297,6 @@ services:
     environment:
       RELAY_ADDR: "https://relay:7654"
       RELAY_DOMAIN: "relay"
-      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"

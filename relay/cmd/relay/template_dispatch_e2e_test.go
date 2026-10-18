@@ -9,7 +9,6 @@
 package main
 
 import (
-	"context"
 	"os"
 	"strings"
 	"testing"
@@ -33,28 +32,20 @@ body = "echo other-ran"
 `
 
 func TestTemplateDispatchE2E_RunOperationByName(t *testing.T) {
-	deps, nodeAddr, controlBase, authed, _, _ := startSurfaceHarness(t)
-	ctx := context.Background()
+	deps, _, controlBase, authed, _, _ := startSurfaceHarness(t)
 
-	caFile := relaytest.WriteTempFile(t, "ca-bundle-*.pem", string(deps.ca.Bundle()))
 	withRule := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy+relaytest.FixtureTemplatePolicyRule)
 	plain := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 
-	_, tokenHas, err := deps.tokens.Create(ctx, []string{"relay:env=test", "relay:node=has"}, time.Hour)
-	if err != nil {
-		t.Fatalf("seed Enrollment Token: %v", err)
-	}
-	_, tokenLacks, err := deps.tokens.Create(ctx, []string{"relay:env=test", "relay:node=lacks"}, time.Hour)
-	if err != nil {
-		t.Fatalf("seed Enrollment Token: %v", err)
-	}
+	joinHas := mintJoinString(t, deps, "relay:env=test", "relay:node=has")
+	joinLacks := mintJoinString(t, deps, "relay:env=test", "relay:node=lacks")
 
-	bin := relaytest.DaemonConfig{Bin: os.Getenv("RELAY_DAEMON_BIN"), NodeAddr: nodeAddr, CAPath: caFile}
+	bin := relaytest.DaemonConfig{Bin: os.Getenv("RELAY_DAEMON_BIN")}
 	has := bin
-	has.Token, has.StateDir, has.PolicyPath, has.Hostname = tokenHas, t.TempDir(), withRule, "template-e2e-has"
+	has.JoinString, has.StateDir, has.PolicyPath, has.Hostname = joinHas, t.TempDir(), withRule, "template-e2e-has"
 	has.TemplateDir = relaytest.WriteTemplatePack(t, relaytest.FixtureTemplatePack)
 	lacks := bin
-	lacks.Token, lacks.StateDir, lacks.PolicyPath, lacks.Hostname = tokenLacks, t.TempDir(), plain, "template-e2e-lacks"
+	lacks.JoinString, lacks.StateDir, lacks.PolicyPath, lacks.Hostname = joinLacks, t.TempDir(), plain, "template-e2e-lacks"
 	lacks.TemplateDir = relaytest.WriteTemplatePack(t, otherTemplatePack)
 	relaytest.StartDaemon(t, has)
 	relaytest.StartDaemon(t, lacks)

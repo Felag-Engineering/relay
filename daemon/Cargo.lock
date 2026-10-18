@@ -1088,6 +1088,7 @@ dependencies = [
  "relay-log",
  "relay-proto",
  "relay-test-support",
+ "ring",
  "rustls",
  "rustls-pki-types",
  "thiserror",
@@ -1095,6 +1096,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tonic",
+ "tonic-prost",
  "tracing",
  "x509-parser",
 ]

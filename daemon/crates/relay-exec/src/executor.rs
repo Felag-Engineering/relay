@@ -142,7 +142,7 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     // Isolate the child's environment. The daemon's own environment carries
-    // secrets — notably `RELAY_ENROLLMENT_TOKEN` (see enroll.rs), which is a
+    // secrets — notably `RELAY_JOIN` (see enroll.rs), whose Enrollment Token is a
     // fleet-bootstrap credential the enroll path promises is "never logged".
     // Without this, every executed Operation and Raw Exec inherits that
     // environment and could read the token straight out of `/proc/self/environ`
@@ -1306,7 +1306,7 @@ mod tests {
     }
 
     // The child must NOT inherit the daemon's environment. A secret set in the
-    // daemon's own process (here standing in for RELAY_ENROLLMENT_TOKEN) must be
+    // daemon's own process (here standing in for RELAY_JOIN) must be
     // absent from the child's environment, and PATH must be the fixed safe path
     // — proving `env_clear()` closed the `/proc/self/environ` leak while still
     // letting a bare-name argv[0] resolve.

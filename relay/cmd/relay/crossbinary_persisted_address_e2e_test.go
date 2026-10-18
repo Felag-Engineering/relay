@@ -3,23 +3,41 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
-// TestCrossBinary_RestartUsesPersistedAddress proves the daemon persists the
-// Node-plane Relay address at enrollment and dials it on a later start that
-// carries no RELAY_ADDR and no --relay (ADR-0031 decision 4). It runs under
-// make test-crossbinary with the real relay and relay-daemon binaries.
-func TestCrossBinary_RestartUsesPersistedAddress(t *testing.T) {
+// joinedNode is a real daemon enrolled against a real Relay with nothing but a
+// join string from the mint response.
+type joinedNode struct {
+	fr       *fleetRelay
+	daemon   *relaytest.DaemonHandle
+	join     enroll.JoinString
+	stateDir string
+	nodeID   string
+}
+
+// enrollWithJoinStringOnly mints through the devharness create_token op and
+// starts a daemon whose environment carries only that join string: no CA
+// file, no Relay address, no separate token.
+func enrollWithJoinStringOnly(t *testing.T, hostname string) *joinedNode {
+	t.Helper()
 	relayBin, daemonBin := skipUnlessFleetBins(t)
 
 	fr := startFleetRelay(t, relayBin, "")
-	token := createFleetToken(t, fr.harness, "relay:env=test")
+	raw := createFleetJoinString(t, fr.harness, "relay:env=test")
+	join, err := enroll.DecodeJoinString(raw)
+	if err != nil {
+		t.Fatalf("mint response's join_string does not decode: %v", err)
+	}
 
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 	stateDir := t.TempDir()
@@ -32,36 +50,25 @@ func TestCrossBinary_RestartUsesPersistedAddress(t *testing.T) {
 
 	daemon := relaytest.StartDaemon(t, relaytest.DaemonConfig{
 		Bin:        daemonBin,
-		NodeAddr:   fr.addr,
-		CAPath:     fr.caCertPath,
-		Token:      token,
+		JoinString: raw,
 		StateDir:   stateDir,
 		PolicyPath: policyPath,
-		Hostname:   "persisted-addr-node",
+		Hostname:   hostname,
 		LogWriter:  daemonLog,
 	})
 	nodeID := waitForConnected(t, fr.harness, 1)[0]
+	return &joinedNode{fr: fr, daemon: daemon, join: join, stateDir: stateDir, nodeID: nodeID}
+}
 
-	persisted, err := os.ReadFile(filepath.Join(stateDir, "relay_addr"))
-	if err != nil {
-		t.Fatalf("read persisted relay_addr: %v", err)
-	}
-	if got, want := strings.TrimSpace(string(persisted)), "https://"+fr.addr; got != want {
-		t.Fatalf("persisted relay_addr = %q, want %q", got, want)
-	}
-
-	daemon.Kill()
-	waitForNodeConnected(t, fr.harness, nodeID, false)
-
-	daemon.RelaunchWithoutAddress()
-	waitForNodeConnected(t, fr.harness, nodeID, true)
-
-	wantContent := "hello from persisted-address e2e dispatch\n"
+// dispatchFileRead proves the Node runs a Task over its Tunnel.
+func (n *joinedNode) dispatchFileRead(t *testing.T, taskID string) {
+	t.Helper()
+	wantContent := "hello from join string e2e dispatch\n"
 	contentPath := relaytest.WriteTempFile(t, "content-*.txt", wantContent)
-	resp := fr.harness.call(t, map[string]any{
+	resp := n.fr.harness.call(t, map[string]any{
 		"op":              "dispatch",
-		"node_id":         nodeID,
-		"task_id":         "persisted-addr-file-read-1",
+		"node_id":         n.nodeID,
+		"task_id":         taskID,
 		"operation":       "file.read",
 		"args":            map[string]string{"path": contentPath},
 		"timeout_seconds": 15,
@@ -69,4 +76,63 @@ func TestCrossBinary_RestartUsesPersistedAddress(t *testing.T) {
 	if outcome, _ := resp["outcome"].(string); outcome != "OUTCOME_SUCCESS" {
 		t.Errorf("file.read outcome: got %v, want OUTCOME_SUCCESS; stderr=%v", resp["outcome"], resp["stderr"])
 	}
+}
+
+// pemDER returns the DER of the single certificate in path.
+func pemDER(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	block, rest := pem.Decode(raw)
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		t.Fatalf("%s does not hold exactly one PEM certificate", path)
+	}
+	return block.Bytes
+}
+
+// TestCrossBinary_JoinStringEnrolls proves a daemon given only the join string
+// from the mint response enrolls: it dials the join string's address, pins the
+// Relay's CA from its fingerprint, and writes that CA and the address into its
+// state directory, so no CA path is configured by hand (DI-22, DI-38). It runs
+// under make test-crossbinary with the real relay and relay-daemon binaries.
+func TestCrossBinary_JoinStringEnrolls(t *testing.T) {
+	n := enrollWithJoinStringOnly(t, "join-string-node")
+
+	got := pemDER(t, filepath.Join(n.stateDir, "ca_bundle.pem"))
+	want := pemDER(t, n.fr.caCertPath)
+	if !bytes.Equal(got, want) {
+		t.Error("persisted ca_bundle.pem is not the Relay's CA certificate")
+	}
+	fp := n.join.CAFingerprint()
+	if sum := sha256.Sum256(got); !bytes.Equal(sum[:], fp[:]) {
+		t.Error("persisted CA does not match the join string's fingerprint")
+	}
+
+	persisted, err := os.ReadFile(filepath.Join(n.stateDir, "relay_addr"))
+	if err != nil {
+		t.Fatalf("read persisted relay_addr: %v", err)
+	}
+	if got, want := strings.TrimSpace(string(persisted)), "https://"+n.join.RelayAddress(); got != want {
+		t.Fatalf("persisted relay_addr = %q, want %q (the join string's address)", got, want)
+	}
+
+	n.dispatchFileRead(t, "join-string-file-read-1")
+}
+
+// TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState proves the join
+// string is inert once enrolled: a later start with RELAY_JOIN removed and no
+// RELAY_ADDR or --relay connects using the CA and address persisted at
+// enrollment (DI-38, ADR-0031 decision 4).
+func TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState(t *testing.T) {
+	n := enrollWithJoinStringOnly(t, "persisted-state-node")
+
+	n.daemon.Kill()
+	waitForNodeConnected(t, n.fr.harness, n.nodeID, false)
+
+	n.daemon.RelaunchWithoutJoinOrAddress()
+	waitForNodeConnected(t, n.fr.harness, n.nodeID, true)
+
+	n.dispatchFileRead(t, "persisted-state-file-read-1")
 }

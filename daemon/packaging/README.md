@@ -47,11 +47,10 @@ Policy file: land the new artifact, then `systemctl restart relay-daemon`. The R
 only lever over daemon version is refusing to *dispatch* Tasks to an out-of-date Node —
 it never reaches into a Node to change its binary.
 
-## The Enrollment Token today lives in an env file
+## The join string lives in the env file
 
-`relay-daemon.env` carries `RELAY_ENROLLMENT_TOKEN` in plaintext on disk (0600
-root:root). This is a known interim state, not the long-term shape: a future change
-should move it to `systemd`'s `LoadCredential=` (or an equivalent secret-injection
-mechanism) so the token never sits in a world-readable-adjacent config file. The daemon
-reads the token from the environment today; changing that read path is out of scope for
-this change.
+`relay-daemon.env` carries `RELAY_JOIN`, and with it the Enrollment Token, in plaintext
+on disk (0600 root:root). That is decided, not interim (ADR-0031, amended 2026-10-16):
+the daemon reads the join string only when no identity exists, pins the Relay's CA from
+it before sending the token, and ignores it on every later start. Removing the line
+once the Node has enrolled is the compensating control.

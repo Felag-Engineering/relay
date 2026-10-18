@@ -4,10 +4,10 @@
 # does everything the fleet needs before a relay-daemon may start: mints the
 # founding admin's credential, creates the dev Accounts (`dev-approver`, the
 # Console admin and, under the OAuth overlay, the IdP's user), sets the Console
-# password, and mints the Enrollment Token + exports the public CA cert.
+# password, and mints the Enrollment Token, handing the daemons its join string.
 #
 # ADR-0030 / ADR-0032 anchor. Steps c (bootstrap-token → founding admin) and i
-# (Enrollment Token + CA export) are the bootstrap chain ADR-0030's falsifier
+# (Enrollment Token + join string) are the bootstrap chain ADR-0030's falsifier
 # names, formerly docker/mint-credential.sh and docker/bootstrap.sh (folded here
 # by #893; `relay init` does not exist). That falsifier is met only when THESE
 # steps are deleted and the dev fleet uses `relay init`. Whatever replaces them
@@ -22,9 +22,10 @@
 #     no daemon mounts: a control-plane credential readable by every Node is what
 #     a compromised Node would use to drive the fleet, or to approve its own
 #     remediation.
-#   - Daemons get only ca-cert.pem (copied to `bootstrap-shared`), never
-#     ca-key.pem, and an Enrollment Token the Relay accepts only if it is
-#     `relay:`-scoped — it can enroll Nodes and nothing else.
+#   - Daemons get only the join string from the mint response (written to
+#     `bootstrap-shared`): never CA material, which they pin from the join
+#     string's fingerprint, and an Enrollment Token the Relay accepts only if
+#     it is `relay:`-scoped — it can enroll Nodes and nothing else.
 #   - The Console password reaches `relay console-password` through a 0600 temp
 #     file, never argv. The value arrives from the environment, which is itself
 #     a process-listing exposure: acceptable on this fleet and nowhere else.
@@ -168,14 +169,16 @@ fi
 
 # i. A reusable, relay:-scoped Enrollment Token (max_uses 0 = unlimited, so every
 # daemon and every restart of a not-yet-enrolled daemon can use it), minted
-# through the real Control API. Daemons get ONLY the public CA cert.
+# through the real Control API. Daemons get ONLY its join string, which carries
+# the Relay address and the CA fingerprint they pin; the 0600 file is read by
+# docker/daemon-entrypoint.sh. A CA copy left by an older run is removed.
 log "minting a relay:-scoped Enrollment Token..."
-api POST /api/v1/enrollment-tokens \
-    '{"scope":["relay:env=dev","relay:fleet=dev"],"ttl_seconds":86400,"max_uses":0}' \
-    | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' > /bootstrap/enrollment-token
-cp "${CA_CERT}" /bootstrap/ca-cert.pem
-test -s /bootstrap/enrollment-token || die "the minted Enrollment Token was empty"
-test -s /bootstrap/ca-cert.pem
+rm -f /bootstrap/enrollment-token /bootstrap/ca-cert.pem
+( umask 077
+  api POST /api/v1/enrollment-tokens \
+      '{"scope":["relay:env=dev","relay:fleet=dev"],"ttl_seconds":86400,"max_uses":0}' \
+      | sed -n 's/.*"join_string":"\([^"]*\)".*/\1/p' > /bootstrap/join-string )
+test -s /bootstrap/join-string || die "the mint response carried no join string"
 
 # j.
 log "done — sign in at https://127.0.0.1:9443/console/ as ${ADMIN_NAME}."

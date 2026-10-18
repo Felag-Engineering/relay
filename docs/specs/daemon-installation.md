@@ -79,6 +79,13 @@ they already run, from artifacts they can verify before executing.
 - **DI-8** The daemon enrolls with an Enrollment Token and a CA bundle file named by path; the
   token is used only when no identity is persisted, and is inert on every later start.
 - **DI-9** The daemon reads its declared `node:` Labels from its environment.
+- **DI-22** The daemon is configured by a join string — Relay address, CA fingerprint and
+  Enrollment Token in one value (ADR-0031). It pins the Relay's CA from the fingerprint and writes
+  the CA bundle into its state directory, so no CA path is configured by hand.
+- **DI-38** The daemon persists the Relay address with its identity at enrollment and uses it on
+  every later start; a Relay address set in its environment overrides the persisted one. With
+  neither, the daemon refuses to start: there is no default address. Once enrolled, the join string
+  is inert and may be removed (ADR-0031). Retires DI-10.
 
 ### File modes
 
@@ -164,8 +171,10 @@ proven by CI install jobs, once they exist; `make verify` alone cannot prove the
 | DI-30 | `catalog_names_match_ledger`, `ledger_check_refuses_a_changed_body`, `ledger_check_refuses_a_changed_risk_class`, `ledger_check_accepts_a_withdrawn_name_absent_from_the_catalog`, `ledger_check_refuses_a_withdrawn_name_back_in_the_catalog`, `scripts/catalog-ledger-test.sh` | daemon, packaging |
 | DI-17 | `TestMCP_RunOperation_OutdatedNodeVersionRefused` | MCP |
 | DI-21 | `TestRevokedNode_RefusedAfterRestart` | e2e |
+| DI-22 | `pin_match_enrolls`, `pin_mismatch_sends_no_token`, `ca_bundle_mismatch_refused`, `TestCrossBinary_JoinStringEnrolls` | daemon, e2e |
 | DI-23 | `TestRevokedNode_DialAuditedThenThrottled`, `TestServerCredentials_ReportsRevokedBeforeRefusing` | e2e, transport |
 | DI-28 | `default_policy_denies_only_secret_bearing_own_files`, `deny_list_mirrors_adr_0022_exactly`, `default_policy_passes_strict_with_catalog` | daemon |
+| DI-38 | `TestCrossBinary_JoinStringEnrolls`, `TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState`, `relay_addr_overrides_persisted_address`, `identity_without_address_exits_nonzero` | e2e, daemon |
 | DI-39 | `lint_read_probes_stop_at_secrets`, `checksum_is_probed_without_templates`, `lint_write_probes_cover_packaged_trust_root`, `current_exe_is_a_write_probe_only`, `exe_equal_to_a_packaged_path_is_not_duplicated` | daemon |
 | DI-40 | `unit_execstart_is_usr_bin` | packaging |
 
@@ -185,7 +194,6 @@ until it is done.
 
 | Claim | Statement | Milestone |
 |---|---|---|
-| DI-22 | The daemon is configured by a join string — Relay address, CA fingerprint and Enrollment Token in one value (ADR-0031). It pins the Relay's CA from the fingerprint and writes the CA bundle into its state directory, so no CA path is configured by hand. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-24 | The release publishes the daemon as `.deb` and `.rpm` packages for each architecture. A package wraps the release's guarded binary byte for byte — packaging compiles, strips and rewrites nothing — is itself reproducible, built twice and compared, and is listed in the release `SHA256SUMS`. Packages carry no signature of their own before v1.0.0. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-25 | The daemon package installs the binary at `/usr/bin/relay-daemon` and the hardened unit as a system unit, the same binary path a hand-built install uses, and never starts the daemon. It enables the unit on a first install only, only where systemd is running, honouring the distribution's presets; an upgrade never changes whether it is enabled. An enabled unit on a Node that holds neither a persisted identity nor a join string stays inactive at boot without failing or retrying; it starts at the next boot after one is present, or when `relay-daemon join` (DI-37) or config management starts it. Nothing watches for the join string to appear. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-26 | The daemon package places the shipped default Policy as the live Policy only on a first install, only if no Policy file exists and no Policy directory existed before the install began; never on an upgrade or a reinstall. On `.rpm` platforms, where a reinstall after removal is indistinguishable from a first install, those absence checks are the whole guard. No install, upgrade or remove rewrites or re-creates the live Policy. | v0.6.5 — Install Path: relay init, join string, packages |
@@ -197,7 +205,6 @@ until it is done.
 | DI-34 | A documented migration moves a hand-built Node onto the package: it removes the old binary and the old unit under `/etc/systemd/system/`, which would otherwise shadow the packaged one, and says to remove by hand the Policy's self-reference denies for the old binary and unit paths, which the shipped default no longer carries (DI-28). | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-35 | A rendered enrollment bundle pins a daemon version and digest (ADR-0032); which artifact it pins once packages exist is an open question below. Moved from v0.6.5 on 2026-10-16: nothing renders a bundle until v0.7.0. | v0.7.0 — Admin Console: Administration & Execution |
 | DI-37 | `relay-daemon join` configures a fresh Node in one step: it reads a join string from a prompt or standard input, never from its arguments, writes it where the daemon reads it, owned by root and readable by nobody else, then enables and starts the unit. It refuses on a Node that already holds an identity, changing nothing, and contacts no Relay itself: enrollment happens when the daemon starts. Config management may run it or write the same file directly. | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-38 | The daemon persists the Relay address with its identity at enrollment and uses it on every later start; a Relay address set in its environment overrides the persisted one. With neither, the daemon refuses to start: there is no default address. Once enrolled, the join string is inert and may be removed (ADR-0031). Retires DI-10. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-36 | Beside the Policy file, `/etc/relay-daemon/policy.toml`, sits the Policy directory, `/etc/relay-daemon/policy.d`, which the install creates empty and never writes into again. The daemon composes the Policy file and every fragment in it into one Policy with one Policy fingerprint, deny beating allow across all of them; a fragment that is a symlink, not a regular file, or group- or world-writable refuses start, and one fragment that cannot be read or parsed leaves the whole Policy deny-all. | v0.7.0 — Admin Console: Administration & Execution |
 
 ## Out of scope

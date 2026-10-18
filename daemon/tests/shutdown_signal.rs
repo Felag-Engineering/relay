@@ -40,8 +40,8 @@ fn write_file(path: PathBuf, content: &str, mode: u32) {
 /// Replicated here rather than reusing `identity::persist_identity` because
 /// that function is `pub(crate)` and this is a separate integration-test
 /// crate for a bin-only package with no lib target to share it. With this
-/// identity pre-seeded and `RELAY_ENROLLMENT_TOKEN` unset, `acquire_identity`
-/// takes the `load_identity` path and never dials an enrollment endpoint.
+/// identity pre-seeded the startup plan is `Enrolled`: `RELAY_JOIN` is never read
+/// and no enrollment endpoint is dialled.
 fn seed_identity(dir: &Path) {
     std::fs::create_dir_all(dir).expect("create state dir");
 
@@ -69,8 +69,7 @@ fn seed_identity(dir: &Path) {
 /// immediately), with a pre-seeded identity so it never attempts enrollment.
 ///
 /// `env_clear()` isolates the child from the test runner's environment (in
-/// particular, a stray `RELAY_ENROLLMENT_TOKEN` would divert `acquire_identity`
-/// down the enrollment path instead of `load_identity`).
+/// particular, a stray `RELAY_ADDR` would repoint the dial).
 /// Its stdout is captured to `<state_dir>/daemon.log` rather than discarded,
 /// so `wait_for_signal_handlers` can observe readiness instead of guessing at
 /// a startup delay. Stdout, not stderr: `tracing_subscriber::fmt()` writes

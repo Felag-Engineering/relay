@@ -186,14 +186,17 @@ type Config struct {
 type appDeps struct {
 	// logger is the process logger every internal package is handed; it adds
 	// the request, principal and Job ids from the context (logctx).
-	logger     *slog.Logger
-	ca         *ca.CA
-	store      *store.Store
-	registry   registry.Repository
-	jobs       jobs.JobRepository
-	tasks      jobs.TaskRepository
-	audit      audit.Repository
-	tokens     *enroll.Service
+	logger   *slog.Logger
+	ca       *ca.CA
+	store    *store.Store
+	registry registry.Repository
+	jobs     jobs.JobRepository
+	tasks    jobs.TaskRepository
+	audit    audit.Repository
+	tokens   *enroll.Service
+	// minter is the one enrollment Minter the Control API mints through; the
+	// devharness and tests mint join strings through it too, never by hand.
+	minter     *enroll.Minter
 	denylist   *revocation.Denylist
 	conns      *revocation.Connections
 	revocation *revocation.Service
@@ -930,6 +933,7 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 		tasks:      st.Tasks(),
 		audit:      st.Audit(),
 		tokens:     tokenSvc,
+		minter:     enrollmentMinter,
 		denylist:   denylist,
 		conns:      conns,
 		revocation: revocationSvc,

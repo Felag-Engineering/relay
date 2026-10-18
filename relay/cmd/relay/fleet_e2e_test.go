@@ -111,37 +111,35 @@ func (r *fleetRelay) restart(t *testing.T, extraTOML string) {
 	r.harness = dialHarness(t, r.sockPath)
 }
 
-// createFleetToken mints an Enrollment Token scoped to labels via the
-// devharness create_token op.
-func createFleetToken(t *testing.T, harness *harnessClient, labels ...string) string {
+// createFleetJoinString mints an Enrollment Token scoped to labels via the
+// devharness create_token op and returns the join string from its mint
+// response — the only enrollment material a daemon is given.
+func createFleetJoinString(t *testing.T, harness *harnessClient, labels ...string) string {
 	t.Helper()
 	resp := harness.call(t, map[string]any{
 		"op":          "create_token",
 		"labels":      labels,
 		"ttl_seconds": 3600,
 	})
-	token, _ := resp["token"].(string)
-	if token == "" {
-		t.Fatal("create_token: empty token in response")
+	join, _ := resp["join_string"].(string)
+	if join == "" {
+		t.Fatal("create_token: empty join_string in response")
 	}
-	return token
+	return join
 }
 
-// startDaemonSubprocess launches a relay-daemon against relayAddr, enrolling
-// with token, using stateDir/policyPath/hostname — the same environment
-// shape as crossbinary_e2e_test.go's daemon launch. Its persisted identity
+// startDaemonSubprocess launches a relay-daemon enrolling with joinString
+// alone, using stateDir/policyPath/hostname. Its persisted identity, address
 // and dedup markers (daemon/src/dedup.rs) survive a Relaunch against the SAME
 // stateDir, which is what the crash-mid-Job test depends on. The daemon has
 // no reconnect loop of its own (daemon/src/main.rs): when the Relay's stream
 // drops, the process exits, so Relaunch is how a config-management restart is
 // modeled here.
-func startDaemonSubprocess(t *testing.T, daemonBin, relayAddr, caCertPath, token, stateDir, policyPath, hostname string) *relaytest.DaemonHandle {
+func startDaemonSubprocess(t *testing.T, daemonBin, joinString, stateDir, policyPath, hostname string) *relaytest.DaemonHandle {
 	t.Helper()
 	return relaytest.StartDaemon(t, relaytest.DaemonConfig{
 		Bin:        daemonBin,
-		NodeAddr:   relayAddr,
-		CAPath:     caCertPath,
-		Token:      token,
+		JoinString: joinString,
 		StateDir:   stateDir,
 		PolicyPath: policyPath,
 		Hostname:   hostname,
@@ -342,11 +340,11 @@ func TestFleetE2E_OverCapRejectedBothClasses(t *testing.T) {
 
 	fr := startFleetRelay(t, relayBin, "[reach]\nread_blast_cap = 1\nmutate_blast_cap = 1\n")
 
-	tokenA := createFleetToken(t, fr.harness, "relay:env=test", "relay:nodeid=a")
-	tokenB := createFleetToken(t, fr.harness, "relay:env=test", "relay:nodeid=b")
+	joinA := createFleetJoinString(t, fr.harness, "relay:env=test", "relay:nodeid=a")
+	joinB := createFleetJoinString(t, fr.harness, "relay:env=test", "relay:nodeid=b")
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
-	startDaemonSubprocess(t, daemonBin, fr.addr, fr.caCertPath, tokenA, t.TempDir(), policyPath, "fleet-overcap-a")
-	startDaemonSubprocess(t, daemonBin, fr.addr, fr.caCertPath, tokenB, t.TempDir(), policyPath, "fleet-overcap-b")
+	startDaemonSubprocess(t, daemonBin, joinA, t.TempDir(), policyPath, "fleet-overcap-a")
+	startDaemonSubprocess(t, daemonBin, joinB, t.TempDir(), policyPath, "fleet-overcap-b")
 	waitForConnected(t, fr.harness, 2)
 
 	readResp := fr.harness.callRaw(t, map[string]any{
@@ -386,11 +384,11 @@ func TestFleetE2E_JobSpanningOfflineNode(t *testing.T) {
 
 	fr := startFleetRelay(t, relayBin, "")
 
-	tokenA := createFleetToken(t, fr.harness, "relay:env=test", "relay:nodeid=a")
-	tokenB := createFleetToken(t, fr.harness, "relay:env=test", "relay:nodeid=b")
+	joinA := createFleetJoinString(t, fr.harness, "relay:env=test", "relay:nodeid=a")
+	joinB := createFleetJoinString(t, fr.harness, "relay:env=test", "relay:nodeid=b")
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
-	startDaemonSubprocess(t, daemonBin, fr.addr, fr.caCertPath, tokenA, t.TempDir(), policyPath, "fleet-offline-a")
-	daemonB := startDaemonSubprocess(t, daemonBin, fr.addr, fr.caCertPath, tokenB, t.TempDir(), policyPath, "fleet-offline-b")
+	startDaemonSubprocess(t, daemonBin, joinA, t.TempDir(), policyPath, "fleet-offline-a")
+	daemonB := startDaemonSubprocess(t, daemonBin, joinB, t.TempDir(), policyPath, "fleet-offline-b")
 
 	nodeIDs := waitForConnected(t, fr.harness, 2)
 	nodeA := nodeByRelayLabel(t, fr.harness, nodeIDs, "nodeid", "a")
@@ -456,11 +454,11 @@ func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *
 
 	fr := startFleetRelay(t, relayBin, "")
 
-	tokenA := createFleetToken(t, fr.harness, "relay:env=test", "relay:nodeid=a")
-	tokenB := createFleetToken(t, fr.harness, "relay:env=test", "relay:nodeid=b")
+	joinA := createFleetJoinString(t, fr.harness, "relay:env=test", "relay:nodeid=a")
+	joinB := createFleetJoinString(t, fr.harness, "relay:env=test", "relay:nodeid=b")
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
-	startDaemonSubprocess(t, daemonBin, fr.addr, fr.caCertPath, tokenA, t.TempDir(), policyPath, "fleet-freeze-a")
-	startDaemonSubprocess(t, daemonBin, fr.addr, fr.caCertPath, tokenB, t.TempDir(), policyPath, "fleet-freeze-b")
+	startDaemonSubprocess(t, daemonBin, joinA, t.TempDir(), policyPath, "fleet-freeze-a")
+	startDaemonSubprocess(t, daemonBin, joinB, t.TempDir(), policyPath, "fleet-freeze-b")
 	waitForConnected(t, fr.harness, 2)
 
 	// -------------------------------------------------------------------
@@ -591,9 +589,9 @@ func TestFleetE2E_AuditAndRestartSurvival(t *testing.T) {
 
 	fr := startFleetRelay(t, relayBin, "")
 
-	token := createFleetToken(t, fr.harness, "relay:env=test")
+	join := createFleetJoinString(t, fr.harness, "relay:env=test")
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
-	startDaemonSubprocess(t, daemonBin, fr.addr, fr.caCertPath, token, t.TempDir(), policyPath, "fleet-restart-node")
+	startDaemonSubprocess(t, daemonBin, join, t.TempDir(), policyPath, "fleet-restart-node")
 	waitForConnected(t, fr.harness, 1)
 
 	wantContent := "hello from fleet restart-survival e2e\n"
@@ -670,10 +668,10 @@ func TestFleetE2E_CrashMidJobNeverDoubleRuns(t *testing.T) {
 
 	fr := startFleetRelay(t, relayBin, "")
 
-	token := createFleetToken(t, fr.harness, "relay:env=test")
+	join := createFleetJoinString(t, fr.harness, "relay:env=test")
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 	stateDir := t.TempDir()
-	daemon := startDaemonSubprocess(t, daemonBin, fr.addr, fr.caCertPath, token, stateDir, policyPath, "fleet-crash-node")
+	daemon := startDaemonSubprocess(t, daemonBin, join, stateDir, policyPath, "fleet-crash-node")
 	waitForConnected(t, fr.harness, 1)
 
 	harness2 := dialHarness(t, fr.sockPath)

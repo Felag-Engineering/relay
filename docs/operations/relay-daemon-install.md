@@ -49,26 +49,30 @@ The daemon is configured entirely by environment variables (read once at startup
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RELAY_ADDR` | *(none — required to enroll; afterwards the address persisted at enrollment)* | The Relay's Node-plane gRPC address. `http://` is normalized to `https://`; the connection is always mTLS (invariant #6). Overrides the persisted address on every start when set. Also settable as the `--relay <addr>` CLI argument. |
+| `RELAY_JOIN` | *(unset)* | The join string minted with the Enrollment Token: the Relay address, the SHA-256 fingerprint of the Relay's CA, and the token, in one value. Read only when no identity exists: the daemon pins the Relay's CA from the fingerprint before it sends the token, then writes `ca_bundle.pem` and `relay_addr` into its state directory, so no CA path is configured by hand. Inert afterwards; safe to remove once enrolled. Secret: never commit, never log. See [enrollment.md](enrollment.md). |
+| `RELAY_ADDR` | *(the join string's address to enroll; afterwards the address persisted at enrollment)* | Optional override of the Relay's Node-plane gRPC address. `http://` is normalized to `https://`; the connection is always mTLS (invariant #6). Overrides the persisted address on every start when set. Also settable as the `--relay <addr>` CLI argument. |
 | `RELAY_DOMAIN` | *(unset)* | Optional TLS SNI / server-name override when the Relay cert's SAN differs from the dialed host. |
 | `RELAY_STATE_DIR` | `/var/lib/relay-daemon` | Where the enrolled identity (`key.pem`, `cert.pem`, `ca_bundle.pem`, `node_id`, `relay_addr`) and the at-most-once dedup marker store (`seen-tasks/`) persist. |
 | `RELAY_POLICY_PATH` | `/etc/relay-daemon/policy.toml` | Path to this Node's Policy file (ADR-0002). See [policy-as-code.md](policy-as-code.md). |
 | `RELAY_TEMPLATE_DIR` | `/etc/relay-daemon/templates.d` | Root of this Node's Template Operation files, beside `policy.toml` and under the same root-owned trust root (ADR-0021). Absent = no templates installed. The shipped read catalog installs to `templates.d/relay-read/`. See [template-packs.md](template-packs.md). |
 | `RELAY_NODE_LABELS` | *(unset)* | Comma-separated bare `key=value` pairs reported as node-space Labels (the daemon adds the `node:` prefix; it can never emit `relay:` labels — ADR-0006). Example: `env=prod,role=web`. Each key and value must match `[A-Za-z0-9._-]+` (the empty value is accepted); anything else is well-formedness-gated at ingress (#504), never sanitised. A malformed pair is REFUSED at enrollment — the Node does not join — and DROPPED at reconnect — the Node stays connected without that one label. |
-| `RELAY_ENROLLMENT_TOKEN` | *(unset)* | The Enrollment Token, used only when no persisted identity exists. Secret: never commit, never log. See [enrollment.md](enrollment.md). |
-| `RELAY_CA_BUNDLE_PATH` | *(unset)* | Path to the pinned bootstrap CA bundle (the Relay's `ca-cert.pem`) used to authenticate the Relay during first enrollment. Required together with the token for enrollment. |
-| `RELAY_ENROLL_ENDPOINT` | *(falls back to `RELAY_ADDR`)* | Optional distinct endpoint for the enrollment RPC. Must be `https://` — anything else is refused (fail closed). |
+| `RELAY_ENROLL_ENDPOINT` | *(falls back to `RELAY_ADDR`, then the join string's address)* | Optional distinct endpoint for the enrollment RPC. Must be `https://` — anything else is refused (fail closed). The CA pin applies to whichever endpoint is dialled. |
 | `RELAY_HEARTBEAT_INTERVAL_SECS` | `30` | Heartbeat base interval; each send is jittered ±20% so a bulk-restarted fleet spreads out. |
 | `RELAY_SHUTDOWN_GRACE_SECS` | `30` | Graceful-shutdown grace period: on SIGTERM/SIGINT the daemon stops accepting Tasks, drains in-flight ones up to this budget, then exits. |
 | `RUST_LOG` | `info` | Log filter (`tracing_subscriber` EnvFilter syntax). Keep Policy decision events on: see [section 6](#6-local-record-of-policy-decisions). |
 
 Fail-closed behaviors to know about (all deliberate):
 
-- **No identity, no token → refuse to run.** Without a persisted identity or a
-  configured Enrollment Token the daemon exits rather than fall back to a
-  plaintext dial (ADR-0005).
-- **No Relay address → refuse to run.** With neither `RELAY_ADDR` nor an
-  address persisted at enrollment the daemon exits non-zero, naming
+- **No identity, no join string → exit cleanly.** With no identity file at all
+  and `RELAY_JOIN` unset or empty the daemon logs one line and exits 0, so an
+  unconfigured Node stays inactive without failing or retrying. It never falls
+  back to a plaintext dial (ADR-0005).
+- **Broken configuration → refuse to run.** A malformed `RELAY_JOIN`, a partial
+  identity (some but not all of `key.pem`, `cert.pem`, `ca_bundle.pem`,
+  `node_id`), or a Relay CA that does not match the join string's fingerprint
+  exits non-zero; on a pin mismatch the token is never sent.
+- **No Relay address → refuse to run.** An enrolled daemon with neither
+  `RELAY_ADDR` nor an address persisted at enrollment exits non-zero, naming
   `RELAY_ADDR`; there is no localhost default. A Node enrolled before the
   address was persisted keeps working only while `RELAY_ADDR` is set; nothing
   backfills it.
@@ -100,7 +104,6 @@ $ sudo install -m 0755 relay-daemon-${VERSION}-x86_64-unknown-linux-musl /usr/lo
 $ sudo install -m 0644 relay-daemon.service /etc/systemd/system/relay-daemon.service
 $ sudo mkdir -p /etc/relay-daemon
 $ sudo install -m 0644 -o root -g root policy.toml /etc/relay-daemon/policy.toml
-$ sudo install -m 0644 -o root -g root ca-cert.pem /etc/relay-daemon/ca-bundle.pem
 $ sudo install -m 0600 -o root -g root relay-daemon.env /etc/relay-daemon/relay-daemon.env
 $ sudo systemctl daemon-reload
 $ sudo systemctl enable --now relay-daemon
@@ -122,11 +125,10 @@ Where the pieces come from:
   `mutate` + Raw Exec opt-in (ADR-0022) — is
   [`daemon/policy.default.toml`](../../daemon/policy.default.toml). Root-owned,
   not group/world-writable.
-- **`ca-bundle.pem`** is the Relay CA's `ca-cert.pem`, distributed by config
-  management ([enrollment.md](enrollment.md)). It contains no secrets.
 - **`relay-daemon.env`** is the filled-in copy of the example env file, `0600
-  root:root` because it carries the Enrollment Token (a known interim state —
-  see the packaging README).
+  root:root` because its `RELAY_JOIN` carries the Enrollment Token (see the
+  packaging README). No CA file is installed: the daemon pins the Relay's CA from
+  the join string and writes it into its state directory at enrollment.
 
 ## 5. Verify
 

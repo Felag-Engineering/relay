@@ -9,20 +9,17 @@ import (
 )
 
 // DaemonConfig configures a real relay-daemon subprocess launched by
-// StartDaemon. Bin, NodeAddr, CAPath, Token, StateDir, and PolicyPath map
-// directly onto the daemon's enrollment env (RELAY_ADDR/
-// RELAY_ENROLLMENT_TOKEN/RELAY_CA_BUNDLE_PATH/RELAY_ENROLL_ENDPOINT/
-// RELAY_STATE_DIR/RELAY_POLICY_PATH); Hostname becomes HOSTNAME, so distinct
-// calls model distinct fleet Nodes (never reusing on-disk identity unless the
-// caller deliberately reuses StateDir/Hostname, e.g. for a restart).
-// LogWriter, if non-nil, captures the subprocess's combined stdout/stderr;
-// nil discards it (the daemon's own stdout/stderr, as before this helper
-// existed).
+// StartDaemon. JoinString, StateDir and PolicyPath map onto the daemon's env
+// (RELAY_JOIN/RELAY_STATE_DIR/RELAY_POLICY_PATH): the daemon gets its Relay
+// address and the CA fingerprint it pins from the join string alone, never a
+// CA file or a separate address. Hostname becomes HOSTNAME, so distinct calls
+// model distinct fleet Nodes (never reusing on-disk identity unless the caller
+// deliberately reuses StateDir/Hostname, e.g. for a restart). LogWriter, if
+// non-nil, captures the subprocess's combined stdout/stderr; nil discards it.
 type DaemonConfig struct {
-	Bin        string
-	NodeAddr   string
-	CAPath     string
-	Token      string
+	Bin string
+	// JoinString is the join string from the Enrollment Token mint response.
+	JoinString string
 	StateDir   string
 	PolicyPath string
 	Hostname   string
@@ -54,11 +51,8 @@ func StartDaemon(t *testing.T, cfg DaemonConfig) *DaemonHandle {
 		SkipMissingBin(t, "RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
 	}
 
-	env := append(os.Environ(),
-		"RELAY_ADDR=https://"+cfg.NodeAddr,
-		"RELAY_ENROLLMENT_TOKEN="+cfg.Token,
-		"RELAY_CA_BUNDLE_PATH="+cfg.CAPath,
-		"RELAY_ENROLL_ENDPOINT=https://"+cfg.NodeAddr,
+	env := append(withoutDaemonAddressing(os.Environ()),
+		"RELAY_JOIN="+cfg.JoinString,
 		"RELAY_STATE_DIR="+cfg.StateDir,
 		"RELAY_POLICY_PATH="+cfg.PolicyPath,
 		"RELAY_DOMAIN=localhost",
@@ -82,7 +76,7 @@ func StartDaemon(t *testing.T, cfg DaemonConfig) *DaemonHandle {
 // two (e.g. waiting for the dispatcher to deregister the old connection).
 func (h *DaemonHandle) Launch() {
 	h.t.Helper()
-	h.launch([]string{"--relay", "https://" + h.cfg.NodeAddr}, h.env)
+	h.launch(nil, h.env)
 }
 
 func (h *DaemonHandle) launch(args, env []string) {
@@ -118,20 +112,33 @@ func (h *DaemonHandle) Relaunch() {
 	h.Launch()
 }
 
-// RelaunchWithoutAddress kills the current daemon subprocess and starts a fresh
-// one against the SAME StateDir with no Relay address in its argv or
-// environment, and none of the enrollment settings either: a steady-state env
-// file, so the daemon must dial the address persisted at enrollment (ADR-0031
-// decision 4). It models a config-management restart of an enrolled Node whose
-// environment no longer carries the address.
-func (h *DaemonHandle) RelaunchWithoutAddress() {
+// RelaunchWithoutJoinOrAddress kills the current daemon subprocess and starts
+// a fresh one against the SAME StateDir with no RELAY_JOIN and no Relay address
+// in its argv or environment: a steady-state env file after the join string was
+// removed, so the daemon must dial the address and trust the CA it persisted at
+// enrollment (ADR-0031 decision 4, DI-38). It models a config-management
+// restart of an enrolled Node.
+func (h *DaemonHandle) RelaunchWithoutJoinOrAddress() {
 	h.Kill()
-	strip := []string{
-		"RELAY_ADDR=", "RELAY_ENROLL_ENDPOINT=",
-		"RELAY_ENROLLMENT_TOKEN=", "RELAY_CA_BUNDLE_PATH=",
-	}
 	var env []string
 	for _, kv := range h.env {
+		if !strings.HasPrefix(kv, "RELAY_JOIN=") {
+			env = append(env, kv)
+		}
+	}
+	h.launch(nil, env)
+}
+
+// withoutDaemonAddressing drops every variable that could hand the daemon an
+// address, a CA or a credential other than the join string, so a test runner's
+// own environment cannot mask what the join string carries.
+func withoutDaemonAddressing(env []string) []string {
+	strip := []string{
+		"RELAY_ADDR=", "RELAY_ENROLL_ENDPOINT=", "RELAY_JOIN=",
+		"RELAY_ENROLLMENT_TOKEN=", "RELAY_CA_BUNDLE_PATH=",
+	}
+	var out []string
+	for _, kv := range env {
 		drop := false
 		for _, p := range strip {
 			if strings.HasPrefix(kv, p) {
@@ -140,10 +147,10 @@ func (h *DaemonHandle) RelaunchWithoutAddress() {
 			}
 		}
 		if !drop {
-			env = append(env, kv)
+			out = append(out, kv)
 		}
 	}
-	h.launch(nil, env)
+	return out
 }
 
 // Cmd returns the *exec.Cmd of the most recent Launch, for callers that need

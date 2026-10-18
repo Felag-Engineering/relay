@@ -41,7 +41,7 @@ never invokes it.
 | Piece | What it is |
 | --- | --- |
 | `relay` | The Go Relay. Node-plane gRPC on `:7654`, control-plane HTTPS (MCP + `/api/v1`) on `:9443` — distinct listeners, distinct published ports. CA + SQLite store live on the `relay-data` volume. |
-| `init` | A one-shot, on the Relay image: mints the founding admin's token, creates `dev-approver` (with its token — the approval gate forbids self-approval, see [The approval gate](#the-approval-gate)) and the Console `admin` (with its password, see [The Admin Console](#the-admin-console)), mints a `relay:`-scoped Enrollment Token through `POST /api/v1/enrollment-tokens` and exports the Relay's **public** CA certificate for the daemons to pin, then exits. If it fails, no daemon starts. |
+| `init` | A one-shot, on the Relay image: mints the founding admin's token, creates `dev-approver` (with its token — the approval gate forbids self-approval, see [The approval gate](#the-approval-gate)) and the Console `admin` (with its password, see [The Admin Console](#the-admin-console)), mints a `relay:`-scoped Enrollment Token through `POST /api/v1/enrollment-tokens` and writes the response's join string for the daemons, then exits. If it fails, no daemon starts. |
 | `daemon-1..3` | Three relay-daemons (Rust, musl static binary). Each has a baked, root-owned Policy fixture and a private state volume, enrolls on first start, and reports health once it has a persisted identity. The two `role=web` Nodes (`daemon-1`, `daemon-2`) also run the dev-fleet demo service; `daemon-3` (`role=db`) loads a different Policy fixture and runs no demo service. |
 | `daemon-4..9` (`demo` profile) | Six more relay-daemons, started only with `--profile demo`. See [The demo profile](#the-demo-profile). |
 
@@ -58,10 +58,12 @@ Security-relevant choices, made explicit:
   the same rule — ADR-0002 applies to templates verbatim, and its loader is
   fail-closed **whole-set**: a bad mode on one template file empties the
   Node's entire template vocabulary and reports the `unloadable` fingerprint.
-- **The CA private key never reaches a daemon.** `ca-key.pem` lives only on the
-  `relay-data` volume. The short-lived `init` helper mounts that volume
-  **read-write** (it writes the store) to copy out `ca-cert.pem`; the long-lived daemon containers never
-  mount it and only ever receive the **public** cert.
+- **No CA material reaches a daemon.** `ca-key.pem` lives only on the
+  `relay-data` volume, which the short-lived `init` helper mounts **read-write**
+  (it writes the store) and the long-lived daemon containers never mount. A
+  daemon receives only the join string, as `RELAY_JOIN`: it pins the Relay's CA
+  from the join string's fingerprint before sending the token, and writes the
+  CA into its own state volume.
 - **The Enrollment Token is `relay:`-scoped.** It can only join Nodes; it can
   never call the API or run Operations. Enrollment stamps `relay:env=dev` and
   `relay:fleet=dev` onto each Node — these `relay:` labels are what your Selectors

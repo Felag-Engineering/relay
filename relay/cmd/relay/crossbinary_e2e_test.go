@@ -11,10 +11,10 @@
 // the daemon subprocess enrolls against, and is dispatched to, over the real
 // mTLS wire on both ends.
 //
-// Flow: start relay binary -> create_token over the devharness socket ->
-// read the CA bundle directly from disk (no get_ca op; plan-review
-// BLOCKING-1) -> start relay-daemon binary against the real endpoint ->
-// wait_node -> get_node (fingerprint + labels) -> dispatch file.read
+// Flow: start relay binary -> create_token over the devharness socket, which
+// returns the join string from the mint -> start relay-daemon binary with only
+// that join string (it carries the address and the CA fingerprint the daemon
+// pins; no CA file is handed over) -> wait_node -> get_node (fingerprint + labels) -> dispatch file.read
 // (allowed) -> dispatch service.restart sshd (denied by relaytest.FixturePolicy). The
 // Relay never evaluates Policy itself (ADR-0011): the DENIED_BY_POLICY
 // verdict below comes from the daemon's live engine over the real wire.
@@ -251,7 +251,7 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "devharness.sock")
 	storePath := filepath.Join(t.TempDir(), "relay.db")
 
-	relayCmd, relayLog, addr, relayExited := startRelaySubprocess(t, relayBin, caDir, storePath, sockPath, "", "")
+	relayCmd, relayLog, _, relayExited := startRelaySubprocess(t, relayBin, caDir, storePath, sockPath, "", "")
 	t.Cleanup(func() {
 		if relayCmd.Process != nil {
 			relayCmd.Process.Kill() //nolint:errcheck
@@ -283,22 +283,9 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 		"labels":      []string{"relay:env=test"},
 		"ttl_seconds": 3600,
 	})
-	token, _ := tokenResp["token"].(string)
-	if token == "" {
-		t.Fatal("create_token: empty token in response")
-	}
-
-	// Read the CA bundle directly off disk (no get_ca op; plan-review
-	// BLOCKING-1). ca.Open (internal/ca/ca.go, certFileName "ca-cert.pem")
-	// writes it during newServer, strictly before installDevHarness opens the
-	// socket we just dialed, so it is guaranteed to be present by now.
-	caCertPath := filepath.Join(caDir, "ca-cert.pem")
-	caBundle, err := os.ReadFile(caCertPath)
-	if err != nil {
-		t.Fatalf("read CA bundle %q: %v", caCertPath, err)
-	}
-	if len(caBundle) == 0 {
-		t.Fatal("CA bundle is empty")
+	joinString, _ := tokenResp["join_string"].(string)
+	if joinString == "" {
+		t.Fatal("create_token: empty join_string in response")
 	}
 
 	// The shared fixture plus the one allow rule the template pack needs: the
@@ -310,10 +297,7 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 	stateDir := t.TempDir()
 
 	env := append(os.Environ(),
-		"RELAY_ADDR=https://"+addr,
-		"RELAY_ENROLLMENT_TOKEN="+token,
-		"RELAY_CA_BUNDLE_PATH="+caCertPath,
-		"RELAY_ENROLL_ENDPOINT=https://"+addr,
+		"RELAY_JOIN="+joinString,
 		"RELAY_STATE_DIR="+stateDir,
 		"RELAY_POLICY_PATH="+policyPath,
 		"RELAY_TEMPLATE_DIR="+templateRoot,
@@ -324,7 +308,7 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 		"RUST_LOG=warn",
 	)
 
-	daemonCmd = exec.Command(daemonBin, "--relay", "https://"+addr)
+	daemonCmd = exec.Command(daemonBin)
 	daemonCmd.Env = env
 	daemonCmd.Stdout = daemonLog
 	daemonCmd.Stderr = daemonLog
