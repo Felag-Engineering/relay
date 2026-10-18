@@ -86,8 +86,10 @@ token — is drawn from the record as written. Today that record names the subje
 by name only on `account_create` and on the host password rows; an `api_token_revoke` names only the token. Where the screen
 shows a subject's name that the record does not carry, it would be a registry lookup reporting
 the Account as it is now, the problem [04](04-activity.md) describes under "Kind is never read from
-the registry". **Whether to resolve a subject's ID to its current name is open**, and until it is
-decided the screen shows what the record carries. No kind label is drawn: these records carry none.
+the registry". **A subject's ID is resolved to its current name once an audited Account-read path
+exists (#659)** (owner decision, 2026-10-18, D33): the name is drawn beside the ID and marked as the
+Account's name *now* — "now `dev-approver`" — never as what the record said. Until #659 lands the
+screen shows only what the record carries. No kind label is drawn: these records carry none.
 
 **An Account ID the record carries is drawn as an Account ID, not as text** (owner decision,
 2026-10-18, D33). Where a record names its subject Account by ID — inside the record's reason, today
@@ -97,8 +99,7 @@ small "Account" caption so it reads as one value rather than as part of a `key=v
 not a trust chip: it has neither the filled nor the dashed treatment, because formatting an ID the
 record carries asserts nothing about who authenticated; the actor keeps its verified chip. A name is
 drawn beside it only where the record itself carries one — `account_create`'s `name=`, the host
-password rows — and never looked up. Resolving an ID to its current name stays deferred until an
-audited Account-read path exists (#659).
+password rows — and, until #659 lands, never looked up.
 
 **OAuth sessions have no sign-in row.** An OAuth sign-in happens at the identity provider, not at
 the Relay, which sees only authenticated calls. This screen lists Console sign-ins, and one visible
