@@ -24,8 +24,8 @@
 # and the nine-Node demo fleet are docker-compose.demo.yml at the root
 # (DEV-ONLY; docs/dev-fleet.md).
 #
-# Needs Docker Compose v2.24 or newer (the `env_file` long form below) and
-# Docker Engine 28 or newer (see the port notes).
+# Needs Docker Compose v2.24 or newer (the bind-mount long form below, with
+# `create_host_path`) and Docker Engine 28 or newer (see the port notes).
 
 # A fixed project name. A deploy tool that passes its own `-p` (Komodo does)
 # overrides it.
@@ -44,33 +44,29 @@ services:
     # a dev fixture — see docker/relay.Dockerfile.
     build: { context: ../.., dockerfile: docker/relay.Dockerfile, target: runtime }
 
-    # Relay configuration, written by the operator on the HOST and never
-    # committed. Start from relay/packaging/relay.env.example — the same sample
-    # the systemd unit uses, kept complete by a drift test — and set
-    # RELAY_HOSTNAME at minimum. No secret VALUE belongs in it: its values end
-    # up in the container's environment, readable with `docker inspect`.
-    # Anything secret is a file path, mounted read-only below.
+    # The Relay's configuration is one file, written by the operator on the HOST
+    # and never committed (ADR-0043). It is mounted read-only below; the Relay
+    # reads every setting from it and nothing from its environment. Start from
+    # relay/packaging/relay.toml.example and set, for this container's layout:
+    #   tls.hostname                    the name daemons verify (never the placeholder)
+    #   node_plane.listen_address = ":7654"
+    #   control_plane.enabled = true
+    #   control_plane.listen_address = ":9443"
+    #   ca.dir = "/var/lib/relay/ca"
+    #   store.path = "/var/lib/relay/relay.db"
+    # The first four tie to the published ports below and the last two to the
+    # volume, so a different value would only break the stack. Console is off
+    # unless the file sets console.enabled = true, as the packaging default is.
+    # The file must be owned by UID 10001, the Relay's user in the image (or by
+    # root with a group only 10001 holds), mode 0600 or 0640, and readable by
+    # no other account: it may hold inline webhook secrets, and the Relay does
+    # not yet check the file's mode itself. Prefer the webhook_*_file forms for
+    # secrets until it does (RC-15).
     #
-    # REQUIRED: a missing file refuses to start rather than running on
-    # defaults — no approval gate, the default blast caps, no daemon version
-    # gate — which is what a typo in RELAY_ENV_FILE, or a deploy tool without
-    # /etc/relay mounted, would otherwise do silently. RELAY_ENV_FILE is
+    # REQUIRED: `create_host_path: false` makes a missing file refuse to start
+    # rather than Docker creating an empty directory in its place, which the
+    # Relay would then refuse as a configuration file. RELAY_CONFIG_FILE is
     # interpolated from the shell (or a git-ignored `.env` beside this file).
-    env_file:
-      - path: ${RELAY_ENV_FILE:-/etc/relay/relay.env}
-        required: true
-
-    # Pinned here, and they WIN over the env file: each is tied to this
-    # container's layout — the published ports and the volume below — so an
-    # env-file value would only break the stack, not configure it. The Console
-    # is NOT pinned: it is off unless the env file sets
-    # RELAY_CONSOLE_ENABLED=true, as the packaging default is.
-    environment:
-      RELAY_ADDR: ":7654"
-      RELAY_CONTROL_ENABLED: "true"
-      RELAY_CONTROL_ADDR: ":9443"
-      RELAY_CA_DIR: "/var/lib/relay/ca"
-      RELAY_STORE_PATH: "/var/lib/relay/relay.db"
 
     ports:
       # NODE PLANE, on every IPv4 interface by default: relay-daemons on other
@@ -89,6 +85,12 @@ services:
       - "${RELAY_PUBLISH_ADDR:-127.0.0.1}:9443:9443"
 
     volumes:
+      - type: bind
+        source: ${RELAY_CONFIG_FILE:-/etc/relay/relay.toml}
+        target: /etc/relay/relay.toml
+        read_only: true
+        bind:
+          create_host_path: false
       # The CA (key included) and the SQLite store: registry, Jobs, audit
       # trail, Accounts, API Tokens. Back it up; see
       # docs/operations/ca-disaster-recovery.md.
@@ -97,8 +99,8 @@ services:
       # until you add one. To add one, write the rules
       # (docs/operations/approval-gates.md) to a host file owned by root and
       # not group- or world-writable, uncomment this mount, and set
-      # RELAY_APPROVAL_GATE_CONFIG=/etc/relay/approval-gates.json in the env
-      # file. A configured gate that cannot be loaded refuses startup.
+      # approval.gate_rules_path = "/etc/relay/approval-gates.json" in
+      # relay.toml. A configured gate that cannot be loaded refuses startup.
       # - /etc/relay/approval-gates.json:/etc/relay/approval-gates.json:ro
       #
       # Approval webhook signing secret: a FILE, never a value. The Relay
@@ -106,7 +108,7 @@ services:
       # it must be readable by UID 10001, the Relay's user in the image — so
       # today it is owned by 10001. That sits in tension with "root-owned" in
       # AGENTS.md invariant 11; relay-install.md section 7 records it as open.
-      # Set RELAY_APPROVAL_WEBHOOK_SECRET_FILE to the in-container path.
+      # Set approval.webhook_secret_file in relay.toml to the in-container path.
       # - /etc/relay/approval-webhook.secret:/run/relay/approval-webhook.secret:ro
 
     # The container form of relay.service's hardening: no capabilities, no
@@ -129,7 +131,7 @@ services:
     restart: unless-stopped
 
     healthcheck:
-      # Refuses an unset RELAY_HOSTNAME or the sample's placeholder, then
+      # Refuses an unset tls.hostname or the sample's placeholder, then
       # completes a TLS 1.3 handshake with each listener, verified against the
       # Relay's own CA and that hostname, the SAN daemons will check. The
       # node plane is gRPC, which requires ALPN h2. `docker inspect` on the
@@ -139,14 +141,15 @@ services:
         - "sh"
         - "-c"
         - >-
-          case "$${RELAY_HOSTNAME:-}" in
+          h="$$(sed -n 's/^hostname *= *"\(.*\)"$$/\1/p' /etc/relay/relay.toml)";
+          case "$$h" in
           ""|relay.example.internal)
-          echo "RELAY_HOSTNAME is unset or still the example placeholder"; exit 1;;
+          echo "tls.hostname in /etc/relay/relay.toml is unset or still the example placeholder"; exit 1;;
           esac;
           for p in 7654:h2 9443:http/1.1; do
           openssl s_client -quiet -no_ign_eof -tls1_3
           -connect 127.0.0.1:$${p%%:*}
-          -servername "$${RELAY_HOSTNAME}" -verify_hostname "$${RELAY_HOSTNAME}"
+          -servername "$$h" -verify_hostname "$$h"
           -CAfile /var/lib/relay/ca/ca-cert.pem -verify_return_error
           -alpn $${p#*:} </dev/null >/dev/null 2>&1
           || { echo "TLS handshake failed on port $${p%%:*}"; exit 1; }; done

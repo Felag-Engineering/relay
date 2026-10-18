@@ -52,8 +52,8 @@ RUN apk add --no-cache openssl
 # compose — listener separation is honored end to end.
 EXPOSE 7654 9443
 
-# All configuration is supplied as RELAY_* environment by the compose file
-# that runs the image.
+# The Relay reads /etc/relay/relay.toml, mounted read-only by the compose file that
+# runs the image, and nothing from the environment (ADR-0043).
 ENTRYPOINT ["/usr/local/bin/relay"]
 
 # ---- base stage: os plus the binary compiled above --------------------------
@@ -92,12 +92,12 @@ COPY --chmod=0644 docker/fixtures/approval-gates.json /etc/relay/approval-gates.
 # the same dispatches as the file above, but ask in-band with no audience and
 # `requester_allowed: true`, so an MCP client can be asked the approval
 # question (MRTR) or answer with `approve_request`. The Relay reads only the
-# file RELAY_APPROVAL_GATE_CONFIG names: docker-compose.demo.yml defaults that to
-# the file above, and only the Makefile's demo-* targets point it here.
-# `make dev-fleet-up` and `make demo-*` each set it explicitly; only a bare
-# `docker compose -f docker-compose.demo.yml up` reads
-# DEV_FLEET_APPROVAL_GATE_CONFIG from the caller's shell or a repo-root .env,
-# so a stray value there would select this file.
+# file `approval.gate_rules_path` names in the mounted relay.toml: the dev
+# fixture names the file above, and the demo fixtures name this one. The
+# Makefile's DEV_FLEET_RELAY_CONFIG picks the fixture; `make dev-fleet-up` and
+# `make demo-*` each set it explicitly, and only a bare
+# `docker compose -f docker-compose.demo.yml up` reads it from the caller's
+# shell or a repo-root .env, so a stray value there would select the demo gate.
 COPY --chmod=0644 docker/fixtures/approval-gates.demo.json /etc/relay/approval-gates.demo.json
 
 # No credential fixture is baked into the image: since #298 (ADR-0023) the

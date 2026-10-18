@@ -53,48 +53,6 @@ services:
       dockerfile: docker/relay.Dockerfile
       target: dev-fleet
     restart: unless-stopped
-    environment:
-      # Node-plane gRPC listener (relay-daemon dial-home).
-      RELAY_ADDR: ":7654"
-      # Control-plane HTTPS listener (MCP + /api/v1) — the #154 execution flip is
-      # ON because the control plane is enabled. Distinct port from the node
-      # plane: listener separation.
-      RELAY_CONTROL_ENABLED: "true"
-      RELAY_CONTROL_ADDR: ":9443"
-      # Server cert SAN = the in-fleet DNS name daemons and init dial, so
-      # mTLS verification succeeds without any insecure flag inside the fleet.
-      RELAY_HOSTNAME: "relay"
-      RELAY_CA_DIR: "/var/lib/relay/ca"
-      RELAY_STORE_PATH: "/var/lib/relay/store/relay.db"
-      # The approval gate (ADR-0027), baked into the image root-owned 0644 —
-      # Relay CONFIGURATION, not a runtime object, so no Account of any role can
-      # loosen it through the API (invariant 11). It parks fleet-wide mutates
-      # (fan-out >= 2) and every Raw Exec; a single-Node mutate still runs
-      # straight through, so the fleet exercises BOTH paths. Loading it is
-      # fail-closed: a malformed file fails startup rather than silently
-      # meaning "nothing needs approval".
-      #
-      # DEV_FLEET_APPROVAL_GATE_CONFIG picks WHICH baked-in gate file, and
-      # nothing else: both candidates are in the image, root-owned 0644. Unset,
-      # it is the dev gate above (out-of-band, `dev-approver` only). The Makefile
-      # sets it: the dev gate for `make dev-fleet-up`, the demo fleet's in-band
-      # gate (docker/fixtures/approval-gates.demo.json) for `make demo-*`. A bare
-      # `docker compose` of this file reads it from the caller's shell or a
-      # repo-root .env. A path that is not in the image fails startup, like any
-      # other unloadable gate file.
-      RELAY_APPROVAL_GATE_CONFIG: "${DEV_FLEET_APPROVAL_GATE_CONFIG:-/etc/relay/approval-gates.json}"
-      # The Admin Console (ADR-0009), served on the SAME control-plane listener
-      # as MCP and /api/v1 — no new listener and no new auth path (invariant
-      # 10). Browser sessions are one of the authenticator's credential lanes,
-      # beside API Tokens and OAuth, rather than the Console authenticating its
-      # own requests.
-      #
-      # Its TLS is the control plane's TLS, which is the point of the hard
-      # prerequisite in the Console specs: both listeners share one server
-      # certificate (ADR-0031), so the Console's own reachability rides on that
-      # certificate rotating. #446 fixed the rotation; this fleet is where you
-      # would notice if it regressed.
-      RELAY_CONSOLE_ENABLED: "true"
     ports:
       # Distinct published host ports: node plane vs control plane, each bound
       # to 127.0.0.1 (loopback) by default and each opted out of it separately.
@@ -115,6 +73,14 @@ services:
       - "${RELAY_NODE_PUBLISH_ADDR:-127.0.0.1}:7654:7654"
       - "${RELAY_PUBLISH_ADDR:-127.0.0.1}:9443:9443"
     volumes:
+      # The Relay's configuration file, read-only (ADR-0043). Every setting lives in
+      # it, the approval gate's path included; the comments in the fixtures carry the
+      # reasoning. DEV_FLEET_RELAY_CONFIG picks WHICH fixture: unset, it is the dev
+      # one (out-of-band gate, `dev-approver` only). The Makefile sets it, the dev
+      # fixture for `make dev-fleet-up` and the demo one for `make demo-*`. A bare
+      # `docker compose` of this file reads it from the caller's shell or a
+      # repo-root .env.
+      - ${DEV_FLEET_RELAY_CONFIG:-./docker/fixtures/relay.dev.toml}:/etc/relay/relay.toml:ro
       # CA state (ca-cert.pem + ca-key.pem) and the SQLite store persist here, so
       # `compose down` / `up` keeps the same Node identities and audit trail.
       - relay-data:/var/lib/relay

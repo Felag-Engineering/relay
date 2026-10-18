@@ -1,4 +1,4 @@
-# Hardened systemd unit for the Relay (#362).
+# Hardened systemd unit for the Relay.
 #
 # THE HEADLINE DIFFERENCE FROM relay-daemon.service: the Relay needs no
 # privilege at all.
@@ -17,13 +17,14 @@
 # capability back, that is a signal worth stopping on — it would mean something
 # privileged had moved to the wrong side of the tunnel.
 #
-# WHAT THIS UNIT PROTECTS, precisely (AGENTS.md invariant 11): Relay
-# configuration is set at startup by the operator, through this unit and its
-# EnvironmentFile, and is never reachable from any API. A stolen API Token
+# WHAT THIS UNIT PROTECTS, precisely (AGENTS.md invariant 11, ADR-0043): the
+# Relay's configuration is the one file /etc/relay/relay.toml, which the Relay
+# reads itself. Nothing comes from the environment or the command line, so
+# nothing sensitive appears in `systemctl show` or `ps`; a secret is either a
+# value in that file or the path of a file holding it. A stolen API Token
 # cannot raise a blast cap, repoint the CA, move a listener, or change the
 # OAuth issuer, because no code path exists from a request to any of these
-# values. Every secret arrives as a FILE PATH, never as a value, so nothing
-# sensitive appears in `systemctl show`, `ps`, or a crash dump.
+# values.
 #
 # Install: relay/packaging/README.md.
 
@@ -43,17 +44,7 @@ Type=exec
 User=relay
 Group=relay
 
-ExecStart=/usr/local/bin/relay
-
-# Carries the RELAY_* startup configuration. The leading '-' means a missing
-# file is not a startup failure, so a Relay running entirely on flags or
-# defaults still starts. See relay.env.example.
-#
-# Install it 0600 root:relay: the Relay reads it, and nothing else should. It
-# holds no secret VALUES today (secrets are passed as paths), but it does hold
-# the security floor — blast caps, the OAuth issuer, the approval-gate path —
-# and an attacker who can edit it can lower that floor at the next restart.
-EnvironmentFile=-/etc/relay/relay.env
+ExecStart=/usr/bin/relay
 
 Restart=on-failure
 RestartSec=5s
@@ -81,8 +72,8 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 
 # /usr, /etc, /boot, /var read-only except StateDirectory. The root-owned
-# config the Relay reads at startup — the approval-gate file, the
-# control-plane credential hash, the webhook secret — therefore cannot be
+# config the Relay reads at startup — the configuration file and the files it
+# names — therefore cannot be
 # rewritten by the Relay process itself, which is the point: those files are
 # the operator's, and a compromised Relay must not be able to edit its own
 # security floor.

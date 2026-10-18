@@ -49,16 +49,16 @@ type fleetRelay struct {
 	sockPath   string
 }
 
-// startFleetRelay launches a fresh Relay subprocess (with extraEnv, e.g.
-// RELAY_READ_BLAST_CAP/RELAY_MUTATE_BLAST_CAP for the over-cap tests) and
+// startFleetRelay launches a fresh Relay subprocess (with extraTOML appended to
+// its configuration file, e.g. a [reach] table for the over-cap tests) and
 // dials its devharness control socket.
-func startFleetRelay(t *testing.T, relayBin string, extraEnv []string) *fleetRelay {
+func startFleetRelay(t *testing.T, relayBin, extraTOML string) *fleetRelay {
 	t.Helper()
 	caDir := t.TempDir()
 	sockPath := filepath.Join(t.TempDir(), "devharness.sock")
 	storePath := filepath.Join(t.TempDir(), "relay.db")
 
-	cmd, log, addr, exited := startRelaySubprocess(t, relayBin, caDir, storePath, sockPath, "", extraEnv)
+	cmd, log, addr, exited := startRelaySubprocess(t, relayBin, caDir, storePath, sockPath, "", extraTOML)
 	fr := &fleetRelay{
 		relayBin:  relayBin,
 		cmd:       cmd,
@@ -93,7 +93,7 @@ func startFleetRelay(t *testing.T, relayBin string, extraEnv []string) *fleetRel
 // graceful shutdown) and relaunches it against the SAME store path, address,
 // and CA dir, then redials the devharness socket. Jobs/Tasks/audit persist in
 // storePath across this; only the in-memory Router/Execution are rebuilt.
-func (r *fleetRelay) restart(t *testing.T, extraEnv []string) {
+func (r *fleetRelay) restart(t *testing.T, extraTOML string) {
 	t.Helper()
 	if r.cmd.Process != nil {
 		r.cmd.Process.Kill() //nolint:errcheck
@@ -101,7 +101,7 @@ func (r *fleetRelay) restart(t *testing.T, extraEnv []string) {
 	<-r.exited
 	os.Remove(r.sockPath)
 
-	cmd, log, addr, exited := startRelaySubprocess(t, r.relayBin, r.caDir, r.storePath, r.sockPath, r.addr, extraEnv)
+	cmd, log, addr, exited := startRelaySubprocess(t, r.relayBin, r.caDir, r.storePath, r.sockPath, r.addr, extraTOML)
 	r.cmd = cmd
 	r.exited = exited
 	r.log = log
@@ -340,7 +340,7 @@ func skipUnlessFleetBins(t *testing.T) (relayBin, daemonBin string) {
 func TestFleetE2E_OverCapRejectedBothClasses(t *testing.T) {
 	relayBin, daemonBin := skipUnlessFleetBins(t)
 
-	fr := startFleetRelay(t, relayBin, []string{"RELAY_READ_BLAST_CAP=1", "RELAY_MUTATE_BLAST_CAP=1"})
+	fr := startFleetRelay(t, relayBin, "[reach]\nread_blast_cap = 1\nmutate_blast_cap = 1\n")
 
 	tokenA := createFleetToken(t, fr.harness, "relay:env=test", "relay:nodeid=a")
 	tokenB := createFleetToken(t, fr.harness, "relay:env=test", "relay:nodeid=b")
@@ -384,7 +384,7 @@ func TestFleetE2E_OverCapRejectedBothClasses(t *testing.T) {
 func TestFleetE2E_JobSpanningOfflineNode(t *testing.T) {
 	relayBin, daemonBin := skipUnlessFleetBins(t)
 
-	fr := startFleetRelay(t, relayBin, nil)
+	fr := startFleetRelay(t, relayBin, "")
 
 	tokenA := createFleetToken(t, fr.harness, "relay:env=test", "relay:nodeid=a")
 	tokenB := createFleetToken(t, fr.harness, "relay:env=test", "relay:nodeid=b")
@@ -454,7 +454,7 @@ func TestFleetE2E_JobSpanningOfflineNode(t *testing.T) {
 func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *testing.T) {
 	relayBin, daemonBin := skipUnlessFleetBins(t)
 
-	fr := startFleetRelay(t, relayBin, nil)
+	fr := startFleetRelay(t, relayBin, "")
 
 	tokenA := createFleetToken(t, fr.harness, "relay:env=test", "relay:nodeid=a")
 	tokenB := createFleetToken(t, fr.harness, "relay:env=test", "relay:nodeid=b")
@@ -589,7 +589,7 @@ func TestFleetE2E_FreezeStopsDispatch_And_CancelKillsInflightAndUndispatched(t *
 func TestFleetE2E_AuditAndRestartSurvival(t *testing.T) {
 	relayBin, daemonBin := skipUnlessFleetBins(t)
 
-	fr := startFleetRelay(t, relayBin, nil)
+	fr := startFleetRelay(t, relayBin, "")
 
 	token := createFleetToken(t, fr.harness, "relay:env=test")
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
@@ -621,7 +621,7 @@ func TestFleetE2E_AuditAndRestartSurvival(t *testing.T) {
 	assertIntentPlusOutcomes(t, "before restart", auditBefore, 1)
 
 	// Restart the Relay against the SAME store/addr/CA dir.
-	fr.restart(t, nil)
+	fr.restart(t, "")
 
 	jobResp := fr.harness.call(t, map[string]any{"op": "query_job", "job_id": jobID})
 	tasks := toMapSlice(jobResp["tasks"])
@@ -668,7 +668,7 @@ func assertIntentPlusOutcomes(t *testing.T, when string, recs []map[string]any, 
 func TestFleetE2E_CrashMidJobNeverDoubleRuns(t *testing.T) {
 	relayBin, daemonBin := skipUnlessFleetBins(t)
 
-	fr := startFleetRelay(t, relayBin, nil)
+	fr := startFleetRelay(t, relayBin, "")
 
 	token := createFleetToken(t, fr.harness, "relay:env=test")
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
@@ -712,7 +712,7 @@ func TestFleetE2E_CrashMidJobNeverDoubleRuns(t *testing.T) {
 
 	// Restart the Relay on the SAME store/addr/CA dir: its persisted store
 	// still has the Task Dispatched with no Result (TaskRepository.InFlight).
-	fr.restart(t, nil)
+	fr.restart(t, "")
 
 	// Relaunch the daemon against the SAME stateDir: persisted identity and
 	// persisted dedup marker survive. On reconnect, Router.onConnect ->

@@ -31,21 +31,31 @@ esac
 SCRIPT="$REPO_ROOT/scripts/smoke-test.sh"
 fail=0
 
-# --- Stub Relay. Writes a CA certificate where --ca-dir says, prints the line smoke-test.sh
-# waits for, and sleeps; it binds nothing, so only the stub curl ever answers.
-# STUB_RELAY_MODE=exit makes it die before reporting listening.
+# --- Stub Relay. Reads the CA directory from the --config file, writes a CA certificate there,
+# prints the line smoke-test.sh waits for, and sleeps; it binds nothing, so only the stub curl
+# ever answers. It refuses to start without --config, or with any legacy flag, as the real Relay
+# does. The marker file stub/exit-before-listening makes it die before reporting listening (the
+# Relay runs under a filtered environment, so a variable cannot carry the mode).
 mkdir -p "$WORKDIR/stub"
 cat > "$WORKDIR/stub/relay" <<'STUB'
 #!/usr/bin/env bash
-ca=""
+cfg=""
 while [ $# -gt 0 ]; do
-  case "$1" in --ca-dir) ca=$2; shift ;; esac
+  case "$1" in
+    --config) cfg=$2; shift ;;
+    --addr|--ca-dir|--hostname|--store-path) echo "stub relay: legacy flag $1 refused" >&2; exit 2 ;;
+  esac
   shift
 done
-if [ "${STUB_RELAY_MODE:-}" = "exit" ]; then
+if [ -z "$cfg" ]; then
+  echo "stub relay: --config is required" >&2
+  exit 1
+fi
+if [ -e "$(dirname "$0")/exit-before-listening" ]; then
   echo "stub relay: refusing to start" >&2
   exit 1
 fi
+ca="$(sed -n 's/^dir = "\(.*\)"$/\1/p' "$cfg")"
 mkdir -p "$ca" && echo "stub CA certificate" > "$ca/ca-cert.pem"
 echo "level=INFO msg=\"relay listening\" (stub)"
 exec sleep 30
@@ -251,7 +261,9 @@ assert_refused "case8-not-grpc" "positive control: the certless dial itself did 
 # 9: the Relay dies before it reports listening -> exit 1, no call is made.
 new_case relay-exits
 good_responses "$CASE_DIR"
-run_smoke STUB_RELAY_MODE=exit
+touch "$WORKDIR/stub/exit-before-listening"
+run_smoke
+rm -f "$WORKDIR/stub/exit-before-listening"
 assert_refused "case9-relay-exits" "Relay process exited unexpectedly"
 if [ -s "$ARGV_LOG" ]; then
   echo "FAIL: case9-relay-exits: curl was called although the Relay never came up" >&2

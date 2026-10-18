@@ -1,16 +1,24 @@
 package approvalnotify
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -130,14 +138,8 @@ func TestUnsignedByDefault(t *testing.T) {
 // match, and it must cover the timestamp as well as the body so a captured
 // notice cannot be replayed indefinitely.
 func TestSignsWithTheConfiguredSecret(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "secret")
-	if err := os.WriteFile(path, []byte("s3cret-value\n"), 0o600); err != nil {
-		t.Fatalf("write secret: %v", err)
-	}
-
 	srv, ch := notifyServer(t, http.StatusOK)
-	n, err := New(Config{URL: srv.URL, SecretPath: path},
+	n, err := New(Config{URL: srv.URL, Secret: []byte("s3cret-value")},
 		WithHTTPClient(srv.Client()), WithLogger(quietLogger()),
 		WithClock(func() time.Time { return notifyNow }))
 	if err != nil {
@@ -295,7 +297,7 @@ func TestSecretFilePermissionsAreEnforced(t *testing.T) {
 				t.Fatalf("chmod: %v", err)
 			}
 
-			_, err := New(Config{URL: "https://notify.example.com/hook", SecretPath: path})
+			_, err := ReadSecretFile(path)
 			if err == nil {
 				t.Fatalf("mode %04o (%s): a group- or world-accessible signing secret must refuse startup", uint32(tc.mode), tc.bit)
 			}
@@ -315,24 +317,160 @@ func TestSecretFileMustExistAndBeNonEmpty(t *testing.T) {
 	dir := t.TempDir()
 
 	missing := filepath.Join(dir, "nope")
-	if _, err := New(Config{URL: "https://notify.example.com/hook", SecretPath: missing}); err == nil {
+	if _, err := ReadSecretFile(missing); err == nil {
 		t.Error("a configured-but-missing secret file must refuse startup, never silently send unsigned")
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("missing-file error = %v, want it to satisfy errors.Is(fs.ErrNotExist)", err)
 	}
 
 	empty := filepath.Join(dir, "empty")
 	if err := os.WriteFile(empty, []byte("  \n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, err := New(Config{URL: "https://notify.example.com/hook", SecretPath: empty}); err == nil {
+	if _, err := ReadSecretFile(empty); err == nil {
 		t.Error("an empty secret file must refuse startup")
 	}
 }
 
-// TestRedactStripsQueryAndUserinfo: an operator may have embedded a token in
-// the webhook URL, and a delivery failure must not be how it reaches the log.
-func TestRedactStripsQueryAndUserinfo(t *testing.T) {
-	got := redact("https://user:hunter2@notify.example.com/hook?token=abc123")
-	if strings.Contains(got, "hunter2") || strings.Contains(got, "abc123") {
-		t.Errorf("redact = %q, want no credential material", got)
+// TestNewRefusalsCarryNoURL: the URL may carry a token, and a refusal is logged.
+func TestNewRefusalsCarryNoURL(t *testing.T) {
+	for _, raw := range []string{
+		"http://hooks.example.test/T0K3N",
+		"ftp://hooks.example.test/T0K3N",
+		"https://hooks.example.test/T0K3N%zz",
+	} {
+		_, err := New(Config{URL: raw})
+		if err == nil {
+			t.Fatalf("New(%q) succeeded, want a refusal", raw)
+		}
+		if strings.Contains(err.Error(), "hooks.example.test") || strings.Contains(err.Error(), "T0K3N") {
+			t.Errorf("New(%q) error %q carries the URL", raw, err)
+		}
+	}
+}
+
+// lockedBuffer is a log sink safe for the delivery goroutine and the test.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func waitForLog(t *testing.T, b *lockedBuffer, want string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := b.String(); strings.Contains(got, want) {
+			return got
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("log never contained %q; got %q", want, b.String())
+	return ""
+}
+
+func hostPort(t *testing.T, raw string) string {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Host
+}
+
+// TestDeliveryLogsCarryNoURL: no delivery outcome puts the URL, or any part of
+// it, in the log. The production client runs, so its redirect policy is under test.
+func TestDeliveryLogsCarryNoURL(t *testing.T) {
+	run := func(t *testing.T, target string, wantMsg string, extraBanned ...string) string {
+		t.Helper()
+		buf := &lockedBuffer{}
+		n, err := New(Config{URL: target, Timeout: 2 * time.Second},
+			WithLogger(slog.New(slog.NewTextHandler(buf, nil))))
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		n.NotifyParked(context.Background(), testNotice())
+		got := waitForLog(t, buf, wantMsg)
+		for _, banned := range append([]string{"T0K3N", hostPort(t, target)}, extraBanned...) {
+			if strings.Contains(got, banned) {
+				t.Errorf("log carries %q: %s", banned, got)
+			}
+		}
+		return got
+	}
+
+	t.Run("500", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+		got := run(t, srv.URL+"/T0K3N", "endpoint refused the notice")
+		if !strings.Contains(got, "status=500") {
+			t.Errorf("log = %s, want status=500", got)
+		}
+	})
+
+	t.Run("closed", func(t *testing.T) {
+		srv := httptest.NewServer(http.NotFoundHandler())
+		target := srv.URL + "/T0K3N"
+		srv.Close()
+		got := run(t, target, "delivery failed")
+		if !strings.Contains(got, "reason=") {
+			t.Errorf("log = %s, want a reason", got)
+		}
+	})
+
+	t.Run("redirect", func(t *testing.T) {
+		var hits atomic.Int32
+		b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hits.Add(1)
+		}))
+		defer b.Close()
+		a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, b.URL+"/T0K3N-target", http.StatusTemporaryRedirect)
+		}))
+		defer a.Close()
+		got := run(t, a.URL+"/T0K3N", "endpoint refused the notice", hostPort(t, b.URL))
+		if !strings.Contains(got, "status=307") {
+			t.Errorf("log = %s, want status=307", got)
+		}
+		if n := hits.Load(); n != 0 {
+			t.Errorf("redirect target was hit %d times, want 0", n)
+		}
+	})
+}
+
+func TestDeliveryFailure_IsAFixedCategory(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"dns", &url.Error{Op: "Post", URL: "https://hooks.example.test/x",
+			Err: &net.DNSError{Name: "hooks.example.test", IsTimeout: false}}, "name lookup failed"},
+		{"deadline", &url.Error{Op: "Post", URL: "https://hooks.example.test/x", Err: context.DeadlineExceeded}, "timed out"},
+		{"refused", &net.OpError{Op: "dial", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}, "connection refused"},
+		{"other", errors.New("boom hooks.example.test"), "transport error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := deliveryFailure(tc.err)
+			if got != tc.want {
+				t.Errorf("deliveryFailure = %q, want %q", got, tc.want)
+			}
+			if strings.Contains(got, "hooks.example.test") {
+				t.Errorf("category %q carries the host", got)
+			}
+		})
 	}
 }

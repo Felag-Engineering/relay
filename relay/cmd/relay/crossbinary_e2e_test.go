@@ -25,7 +25,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -33,55 +32,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
-// syncBuffer is a mutex-guarded bytes.Buffer: both subprocess log captures
-// are written to concurrently (by the OS pipe copy) and read concurrently
-// (by the readiness poll and, on failure, dumpLogs).
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-// freeLoopbackAddr binds 127.0.0.1:0, reads the OS-assigned port, and closes
-// the listener, returning the address string for a subprocess to bind next.
-// This has an inherent, low-probability TOCTOU window (plan-review SUGG-4):
-// another process could grab the port before the relay subprocess binds it.
-// startRelaySubprocess retries on a fresh port to absorb that rather than
-// flake CI.
-func freeLoopbackAddr() (string, error) {
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	defer lis.Close()
-	return lis.Addr().String(), nil
-}
-
-// startRelaySubprocess launches relayBin with RELAY_DEVHARNESS_SOCKET set to
-// sockPath, and blocks until it logs "relay listening" (the same readiness
-// signal scripts/smoke-test.sh uses). storePath is passed as --store-path (so
-// a caller can restart the Relay against the SAME on-disk store, proving
-// persistence survives restart — fleet_e2e_test.go). extraEnv is appended to
-// the subprocess environment (e.g. RELAY_READ_BLAST_CAP/RELAY_MUTATE_BLAST_CAP
-// for the over-cap tests); nil is fine.
+// startRelaySubprocess launches relayBin against a read-only relay.toml it
+// writes (listen address, caDir, storePath, then extraTOML), with
+// RELAY_DEVHARNESS_SOCKET set to sockPath in an otherwise filtered
+// environment (relayChildEnv), and blocks until it logs "relay listening"
+// (the same readiness signal scripts/smoke-test.sh uses). storePath lets a
+// caller restart the Relay against the SAME on-disk store, proving
+// persistence survives restart — fleet_e2e_test.go. extraTOML is appended to
+// the file (e.g. a [reach] table for the over-cap tests); "" is fine.
 //
 // addr controls port reuse across a restart: "" allocates a fresh free port
 // on every attempt (the #112 behavior — absorbs a rare port collision on a
@@ -97,7 +61,7 @@ func freeLoopbackAddr() (string, error) {
 // same goroutineErr send and blocks forever, since only one send ever
 // happens). Every caller that later kills this subprocess MUST reap it via
 // `<-exited`, never via a second cmd.Wait().
-func startRelaySubprocess(t *testing.T, relayBin, caDir, storePath, sockPath, addr string, extraEnv []string) (cmd *exec.Cmd, log *syncBuffer, gotAddr string, exited chan error) {
+func startRelaySubprocess(t *testing.T, relayBin, caDir, storePath, sockPath, addr, extraTOML string) (cmd *exec.Cmd, log *syncBuffer, gotAddr string, exited chan error) {
 	t.Helper()
 	const maxAttempts = 3
 	const startupTimeout = 10 * time.Second
@@ -116,8 +80,11 @@ func startRelaySubprocess(t *testing.T, relayBin, caDir, storePath, sockPath, ad
 		}
 
 		logBuf := &syncBuffer{}
-		c := exec.Command(relayBin, "--addr", a, "--ca-dir", caDir, "--hostname", "localhost", "--store-path", storePath)
-		c.Env = append(append(os.Environ(), "RELAY_DEVHARNESS_SOCKET="+sockPath), extraEnv...)
+		cfgPath := writeRelayTOML(t, fmt.Sprintf(
+			"[node_plane]\nlisten_address = %q\n\n[ca]\ndir = %q\n\n[store]\npath = %q\n\n[tls]\nhostname = \"localhost\"\n\n%s",
+			a, caDir, storePath, extraTOML))
+		c := exec.Command(relayBin, "--config", cfgPath)
+		c.Env = relayChildEnv("RELAY_DEVHARNESS_SOCKET=" + sockPath)
 		c.Stdout = logBuf
 		c.Stderr = logBuf
 		if err := c.Start(); err != nil {
@@ -284,7 +251,7 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "devharness.sock")
 	storePath := filepath.Join(t.TempDir(), "relay.db")
 
-	relayCmd, relayLog, addr, relayExited := startRelaySubprocess(t, relayBin, caDir, storePath, sockPath, "", nil)
+	relayCmd, relayLog, addr, relayExited := startRelaySubprocess(t, relayBin, caDir, storePath, sockPath, "", "")
 	t.Cleanup(func() {
 		if relayCmd.Process != nil {
 			relayCmd.Process.Kill() //nolint:errcheck

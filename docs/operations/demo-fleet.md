@@ -277,8 +277,8 @@ Gleipnir's own secret input, and never copy it off the laptop.
 **The demo fleet runs its own gate, and it is in-band.** `make demo-reset` and `make demo-up`
 start the Relay on `docker/fixtures/approval-gates.demo.json`, not on the default fleet's
 `approval-gates.json` ([The approval gate](../dev-fleet.md#the-approval-gate)):
-the `make demo-*` targets set `DEV_FLEET_APPROVAL_GATE_CONFIG`, which `docker-compose.demo.yml` hands
-the Relay as `RELAY_APPROVAL_GATE_CONFIG`. A bare `docker compose -f docker-compose.demo.yml --profile demo up` sets
+the `make demo-*` targets set `DEV_FLEET_RELAY_CONFIG`, which `docker-compose.demo.yml` mounts
+read-only as the Relay's `relay.toml`; the fixture's `approval.gate_rules_path` names the gate. A bare `docker compose -f docker-compose.demo.yml --profile demo up` sets
 nothing and gets the default fleet's out-of-band gate — one more reason to use the `make demo-*`
 targets. Both files are baked into the relay image root-owned `0644`. No API writes either of
 them: gate rules are file-loaded today, so the only way to change them is a new image and a

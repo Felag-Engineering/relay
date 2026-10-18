@@ -32,7 +32,7 @@ import (
 func TestFleetE2E_RelayRestartDaemonReconnects_DedupHolds(t *testing.T) {
 	relayBin, daemonBin := skipUnlessFleetBins(t)
 
-	fr := startFleetRelay(t, relayBin, nil)
+	fr := startFleetRelay(t, relayBin, "")
 
 	// marker records every execution's side effect (echo) so the test can
 	// prove exactly-once at the Node; script sleeps well past the Relay
@@ -90,7 +90,7 @@ func TestFleetE2E_RelayRestartDaemonReconnects_DedupHolds(t *testing.T) {
 	// still has the Task Dispatched with no Result. The daemon is never
 	// touched: this is the case #176 unlocked, its own reconnect loop must
 	// re-dial on its own.
-	fr.restart(t, nil)
+	fr.restart(t, "")
 
 	// waitForNodeConnected's shared 15s deadline may be tight for a
 	// reconnect racing the daemon's own backoff (base 1s/cap 30s) plus

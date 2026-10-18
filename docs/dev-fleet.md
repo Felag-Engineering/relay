@@ -293,7 +293,8 @@ schema, webhook, decision endpoint — is
 runs a different, in-band gate (`docker/fixtures/approval-gates.demo.json`), selected by the
 `make demo-*` targets; see
 [The human approver](operations/demo-fleet.md#the-human-approver) in its runbook.
-`make dev-fleet-up` and `make demo-*` each set the selector, `DEV_FLEET_APPROVAL_GATE_CONFIG`,
+`make dev-fleet-up` and `make demo-*` each set the selector, `DEV_FLEET_RELAY_CONFIG`, which
+names the read-only `relay.toml` fixture whose `approval.gate_rules_path` names the baked gate,
 explicitly; only a bare `docker compose` reads it from the caller's shell or a repo-root `.env`.
 Two rules:
 
@@ -312,7 +313,7 @@ through, while `relay:env=dev` (three) waits for a human. The counts differ unde
 Security-relevant choices, made explicit:
 
 - **The gate is Relay configuration, not a runtime object.** It is baked into the image
-  `--chmod=0644`, root-owned, and read from `RELAY_APPROVAL_GATE_CONFIG`. No Account of
+  `--chmod=0644`, root-owned, and read from the path `approval.gate_rules_path` names in the mounted `relay.toml`. No Account of
   any role can read or loosen it through the API (invariant 11) — a stolen credential that
   could edit its own approval requirements would make the whole mechanism decorative.
 - **Loading it is fail-closed.** A malformed, missing, symlinked, or group/world-writable
