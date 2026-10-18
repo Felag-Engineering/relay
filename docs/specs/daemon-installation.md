@@ -39,15 +39,11 @@ they already run, from artifacts they can verify before executing.
   limited to `CAP_DAC_READ_SEARCH` and the system directories (`/usr`, `/etc`, `/boot`) read-only,
   so even a compromised daemon cannot rewrite its own Policy or Templates, install packages, or
   write outside its state directory.
-- **DI-4** The shipped unit runs the binary from `/usr/local/bin/relay-daemon`.
 - **DI-5** Relaxing that sandbox is a drop-in the operator places, documented and never shipped,
   so a Node that may install packages or write elsewhere is one whose operator chose it, visibly,
   in a file on that Node.
 - **DI-6** The shipped default Policy permits read Operations behind a confidentiality deny-list,
   allows no `mutate` Operation and does not enable Raw Exec (ADR-0022).
-- **DI-41** The shipped default Policy's self-reference denies cover the daemon's own Policy,
-  environment file, CA bundle and identity, the binary at `/usr/local/bin/relay-daemon` and the
-  unit at `/etc/systemd/system/relay-daemon.service`.
 - **DI-28** Of the daemon's own files, the shipped default Policy denies reading and
   checksumming only those that carry a secret — the Node's identity private key and the
   environment file, with the daemon's environment oracle beside them. It does not deny its
@@ -174,8 +170,8 @@ proven by CI install jobs, once they exist; `make verify` alone cannot prove the
 | DI-40 | `unit_execstart_is_usr_bin` | packaging |
 
 Claims with **no row**, and so nothing checking them: DI-1 (asserted by the release workflow,
-not a test), DI-2, DI-3, DI-4, DI-5, DI-6, DI-11 (held by the write-ban lint rather than a
-claim-named test), DI-15, DI-18 (an absence), DI-19, DI-20, DI-41. DI-3 also needs a real systemd
+not a test), DI-2, DI-3, DI-5, DI-6, DI-11 (held by the write-ban lint rather than a
+claim-named test), DI-15, DI-18 (an absence), DI-19, DI-20. DI-3 also needs a real systemd
 host: the unit's syscall filter is still a manual check, and no package carrying the unit ships
 until it is done.
 
@@ -307,6 +303,14 @@ beside any broad allow (ADR-0019).
 
 ## Retired
 
+- **DI-4** (retired 2026-10-18) *The shipped unit runs the binary from
+  `/usr/local/bin/relay-daemon`.* Untrue once the shipped unit runs `/usr/bin/relay-daemon`, the
+  path the package and a hand-built install share. DI-40 carries the binary path.
+- **DI-41** (retired 2026-10-18) *The shipped default Policy's self-reference denies cover the
+  daemon's own Policy, environment file, CA bundle and identity, the binary at
+  `/usr/local/bin/relay-daemon` and the unit at `/etc/systemd/system/relay-daemon.service`.*
+  Untrue once the shipped default denies only the daemon's secret-bearing files (ADR-0022,
+  amended 2026-10-16). DI-28 carries the default's self-reference denies.
 - **DI-10** (retired 2026-10-16) *The daemon reads the Relay address on every start and its
   persisted identity stores none, so config management stays authoritative for the address after
   enrollment.* Untrue once the daemon persists the address it dialled at enrollment (ADR-0031,
