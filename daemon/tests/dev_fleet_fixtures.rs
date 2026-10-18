@@ -510,19 +510,15 @@ fn web_policy_allows_reading_the_socket_table() {
     );
 }
 
-/// The replacement for the issue's requested `--strict` gate (BLOCKING 3 /
-/// deviation (c) in the implementation plan): `--strict` also emits a summary
-/// line (`error: lint warnings present and --strict was given`) that names no
-/// operation, so a naive `grep -c warning` over-counts by one. This scopes
-/// the assertion to lines beginning `warning:`, asserts the count is exactly
-/// 7 on web/db, and that all 7 name `file.read` — the self-reference findings
-/// the fixtures' wildcard `file.read` allow produces (documented,
-/// pre-existing, unrelated to this issue's change; see deviation (c) in the
-/// plan). The 7th is the `current_exe()` self-reference target, which is
-/// `target/<profile>/relay-daemon` under `cargo test`, never
-/// `/usr/local/bin/relay-daemon` — so 7 is stable here. If this count ever
-/// moves, the correct response is to read the new finding, not to raise the
-/// number.
+/// `--strict` also emits a summary line (`error: lint warnings present and
+/// --strict was given`) that names no operation, so a naive `grep -c warning`
+/// over-counts by one. This scopes the assertion to lines beginning
+/// `warning:`, asserts the count is exactly 2 on web/db, and that all of them
+/// name `file.read` — the two secret-bearing read targets under the fixtures'
+/// wildcard `file.read` allow: the environment file
+/// (`/etc/relay-daemon/relay-daemon.env`) and the identity private key
+/// (`/var/lib/relay-daemon/key.pem`). If this count ever moves, the correct
+/// response is to read the new finding, not to raise the number.
 ///
 /// The bastion fixture (#452) is asserted separately: predicted **0** — it
 /// has no wildcard `file.read` and no `[raw_exec]` section, so none of
@@ -553,7 +549,7 @@ fn strict_warning_counts_are_pinned_per_fixture() {
         let warnings: Vec<&str> = out.lines().filter(|l| l.starts_with("warning:")).collect();
         assert_eq!(
             warnings.len(),
-            7,
+            2,
             "{} --strict warning count changed; read the new finding, don't raise this number:\n{out}",
             policy.display()
         );

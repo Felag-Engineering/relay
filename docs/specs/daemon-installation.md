@@ -1,6 +1,6 @@
 # Daemon installation
 
-**Status:** designed, not built, as of `2026-10-17`.
+**Status:** designed, not built, as of `2026-10-18`.
 **Claim prefix:** `DI`
 
 ## Purpose
@@ -48,6 +48,29 @@ they already run, from artifacts they can verify before executing.
 - **DI-41** The shipped default Policy's self-reference denies cover the daemon's own Policy,
   environment file, CA bundle and identity, the binary at `/usr/local/bin/relay-daemon` and the
   unit at `/etc/systemd/system/relay-daemon.service`.
+- **DI-28** Of the daemon's own files, the shipped default Policy denies reading and
+  checksumming only those that carry a secret — the Node's identity private key and the
+  environment file, with the daemon's environment oracle beside them. It does not deny its
+  Policy, CA bundle, identity certificate, binary, unit, override unit, drop-ins or the shipped
+  catalog's Template files: none holds a secret, and most are public or already in the Relay's
+  hands. An operator-authored Template file is readable under the wildcard and recorded as R37,
+  never a lint finding. `relay-daemon policy check --strict` passes on the shipped default with
+  the shipped catalog's template root supplied (`--templates`); with no template root supplied,
+  the default's allows for the catalog's names are unknown-name findings `--strict` fails, as
+  ADR-0021 decides (ADR-0022, amended 2026-10-16). Retires DI-41.
+- **DI-39** The self-reference lint probes reads — `file.read`, `file.checksum` and any supplied
+  path-taking Template Operation — only against the daemon's secret-bearing files — the identity
+  private key and the environment file — and probes writes — the Raw Exec shapes: edit in place,
+  overwrite, copy or move over, delete, redirect, chmod, symlink — against its whole trust root
+  at the packaged paths, each by exact path: the Policy file and the Policy directory, the
+  environment file, the state directory's identity key and certificate, CA bundle and persisted
+  address, the template root, the binary at `/usr/bin/relay-daemon`, the unit at
+  `/usr/lib/systemd/system/relay-daemon.service`, the override unit under `/etc/systemd/system/`
+  and the `override.conf` drop-in. The probe of the running binary's own path is a write probe
+  only. A finding is proof that the Policy lets the wire reach its own gate; reading a file that
+  holds no secret is never a finding (ADR-0021, amended 2026-10-16).
+- **DI-40** The shipped unit runs the binary from `/usr/bin/relay-daemon`, the one binary path a
+  packaged and a hand-built install share (ADR-0033, DI-25). Retires DI-4.
 - **DI-7** The shipped example environment file covers every setting the daemon reads.
 - **DI-30** A released catalog Template's name is bound to its body and risk class: CI refuses a
   release that changes either for a released name. The body is the Template's parsed
@@ -146,6 +169,9 @@ proven by CI install jobs, once they exist; `make verify` alone cannot prove the
 | DI-17 | `TestMCP_RunOperation_OutdatedNodeVersionRefused` | MCP |
 | DI-21 | `TestRevokedNode_RefusedAfterRestart` | e2e |
 | DI-23 | `TestRevokedNode_DialAuditedThenThrottled`, `TestServerCredentials_ReportsRevokedBeforeRefusing` | e2e, transport |
+| DI-28 | `default_policy_denies_only_secret_bearing_own_files`, `deny_list_mirrors_adr_0022_exactly`, `default_policy_passes_strict_with_catalog` | daemon |
+| DI-39 | `lint_read_probes_stop_at_secrets`, `checksum_is_probed_without_templates`, `lint_write_probes_cover_packaged_trust_root`, `current_exe_is_a_write_probe_only`, `exe_equal_to_a_packaged_path_is_not_duplicated` | daemon |
+| DI-40 | `unit_execstart_is_usr_bin` | packaging |
 
 Claims with **no row**, and so nothing checking them: DI-1 (asserted by the release workflow,
 not a test), DI-2, DI-3, DI-4, DI-5, DI-6, DI-11 (held by the write-ban lint rather than a
@@ -168,9 +194,6 @@ until it is done.
 | DI-25 | The daemon package installs the binary at `/usr/bin/relay-daemon` and the hardened unit as a system unit, the same binary path a hand-built install uses, and never starts the daemon. It enables the unit on a first install only, only where systemd is running, honouring the distribution's presets; an upgrade never changes whether it is enabled. An enabled unit on a Node that holds neither a persisted identity nor a join string stays inactive at boot without failing or retrying; it starts at the next boot after one is present, or when `relay-daemon join` (DI-37) or config management starts it. Nothing watches for the join string to appear. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-26 | The daemon package places the shipped default Policy as the live Policy only on a first install, only if no Policy file exists and no Policy directory existed before the install began; never on an upgrade or a reinstall. On `.rpm` platforms, where a reinstall after removal is indistinguishable from a first install, those absence checks are the whole guard. No install, upgrade or remove rewrites or re-creates the live Policy. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-27 | The daemon package places the environment file on a first install only, if none exists, owned by root and mode `0600`, and never rewrites it. | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-28 | Of the daemon's own files, the shipped default Policy denies reading and checksumming only those that carry a secret — the Node's identity private key and the environment file, with the daemon's environment oracle beside them. It does not deny its Policy, CA bundle, identity certificate, binary, unit, override unit, drop-ins or the shipped catalog's Template files: none holds a secret, and most are public or already in the Relay's hands. An operator-authored Template file is readable under the wildcard and recorded as R37, never a lint finding. `relay-daemon policy check --strict` passes on the shipped default with the shipped catalog's template root supplied (`--templates`); with no template root supplied, the default's allows for the catalog's names are unknown-name findings `--strict` fails, as ADR-0021 decides (ADR-0022, amended 2026-10-16). Retires DI-41. | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-39 | The self-reference lint probes reads — `file.read`, `file.checksum` and any supplied path-taking Template Operation — only against the daemon's secret-bearing files — the identity private key and the environment file — and probes writes — the Raw Exec shapes: edit in place, overwrite, copy or move over, delete, redirect, chmod, symlink — against its whole trust root at the packaged paths, each by exact path: the Policy file and the Policy directory, the environment file, the state directory's identity key and certificate, CA bundle and persisted address, the template root, the binary at `/usr/bin/relay-daemon`, the unit at `/usr/lib/systemd/system/relay-daemon.service`, the override unit under `/etc/systemd/system/` and the `override.conf` drop-in. The probe of the running binary's own path is a write probe only. A finding is proof that the Policy lets the wire reach its own gate; reading a file that holds no secret is never a finding (ADR-0021, amended 2026-10-16). | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-40 | The shipped unit runs the binary from `/usr/bin/relay-daemon`, the one binary path a packaged and a hand-built install share (ADR-0033, DI-25). Retires DI-4. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-29 | The shipped read catalog ships as its own optional `.deb` and `.rpm` package, depending on the daemon package. Its files are package-owned: replaced on upgrade, removed with the package, and never installed as configuration the package manager would preserve. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-31 | Removing the daemon package removes the binary, the unit and the catalog package, and leaves the Policy, the Policy directory, the environment file and the state directory. `apt purge` removes everything the package created, the Node's identity included; `.rpm` removal never deletes state and prints the paths to delete by hand. Purge deletes only paths the package itself created, never a path read from an operator-edited file. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-32 | The release attaches the standalone unit and example environment file under `SHA256SUMS`, so a hand-built install — documented, not supported — verifies its unit like everything else. | v0.6.5 — Install Path: relay init, join string, packages |

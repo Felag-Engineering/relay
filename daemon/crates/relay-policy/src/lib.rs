@@ -5118,16 +5118,9 @@ mod default_policy_tests {
         "/root/.ssh/id_ecdsa",
         "/root/.ssh/id_ed25519",
         "/root/.ssh/id_dsa",
-        // The daemon's own config and credentials (#287 posture). The last
-        // three were added with the shipped read catalog (#293), surfaced by
-        // pointing `policy check`'s own self-reference lint at this file.
-        "/etc/relay-daemon/policy.toml",
+        // The daemon's own secret-bearing files (ADR-0022, amended 2026-10-16).
         "/etc/relay-daemon/relay-daemon.env",
-        "/etc/relay-daemon/ca-bundle.pem",
         "/var/lib/relay-daemon/key.pem",
-        "/var/lib/relay-daemon/cert.pem",
-        "/usr/local/bin/relay-daemon",
-        "/etc/systemd/system/relay-daemon.service",
         // Kernel/process memory and environment oracles.
         "/proc/kcore",
         "/dev/mem",
@@ -5280,8 +5273,64 @@ mod default_policy_tests {
         assert_eq!(
             in_file, expected,
             "policy.default.toml's file.read deny values must exactly mirror \
-             the ADR-0022 deny-list pinned in this test (as amended by #293)"
+             the ADR-0022 deny-list pinned in this test (ADR-0022, amended 2026-10-16)"
         );
+        let checksum_in_file: std::collections::BTreeSet<String> = policy
+            .deny_rules()
+            .iter()
+            .filter(|r| r.name == "file.checksum")
+            .flat_map(|r| r.args.iter().flatten().cloned())
+            .collect();
+        assert_eq!(
+            checksum_in_file, expected,
+            "every file.read deny must be mirrored exactly on file.checksum \
+             (ADR-0022): a digest confirms a guessed file byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn default_policy_denies_only_secret_bearing_own_files() {
+        let policy = default_policy();
+        let both = [operations::FILE_READ, "file.checksum"];
+
+        for path in [
+            "/var/lib/relay-daemon/key.pem",
+            "/etc/relay-daemon/relay-daemon.env",
+            "/proc/self/environ",
+        ] {
+            for name in both {
+                assert!(
+                    matches!(
+                        policy.evaluate(name, &args(&[path])),
+                        Decision::Deny {
+                            rule: Some(Rule::OperationDeny { .. }),
+                            ..
+                        }
+                    ),
+                    "{name} {path} must be denied by an explicit rule"
+                );
+            }
+        }
+
+        for path in [
+            "/etc/relay-daemon/policy.toml",
+            "/etc/relay-daemon/ca-bundle.pem",
+            "/var/lib/relay-daemon/ca_bundle.pem",
+            "/var/lib/relay-daemon/cert.pem",
+            "/usr/bin/relay-daemon",
+            "/usr/local/bin/relay-daemon",
+            "/usr/lib/systemd/system/relay-daemon.service",
+            "/etc/systemd/system/relay-daemon.service",
+            "/etc/systemd/system/relay-daemon.service.d/override.conf",
+            "/etc/relay-daemon/templates.d/relay-read/catalog.toml",
+        ] {
+            for name in both {
+                assert!(
+                    matches!(policy.evaluate(name, &args(&[path])), Decision::Allow(_)),
+                    "{name} {path} holds no secret and must not be denied"
+                );
+            }
+        }
     }
 
     #[test]

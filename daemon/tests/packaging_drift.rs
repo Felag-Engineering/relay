@@ -16,6 +16,8 @@
 //! a default should be is a judgement the sample makes; whether an operator can
 //! discover the setting at all is not.
 //!
+//! It also pins the shipped unit's binary path (DI-40).
+//!
 //! Its counterpart on the Relay side is
 //! `relay/cmd/relay/packaging_drift_test.go`. Two toolchains, two files, one
 //! rule.
@@ -197,4 +199,30 @@ fn exemptions_are_real() {
              starts with it — a stale exemption is where the next real drift hides"
         );
     }
+}
+
+/// The shipped unit starts the daemon from `/usr/bin` (DI-40), where the package
+/// installs it.
+#[test]
+fn unit_execstart_is_usr_bin() {
+    let unit_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging/relay-daemon.service");
+    let unit = std::fs::read_to_string(&unit_path).unwrap_or_else(|e| {
+        panic!(
+            "read {}: {e} — the unit is part of the shipped surface; \
+             if it moved, move this test with it rather than deleting it",
+            unit_path.display()
+        )
+    });
+
+    let execstart: Vec<&str> = unit
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("ExecStart="))
+        .collect();
+    assert_eq!(
+        execstart,
+        ["ExecStart=/usr/bin/relay-daemon"],
+        "the shipped unit must carry exactly one ExecStart, at /usr/bin (DI-40)"
+    );
 }

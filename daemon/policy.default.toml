@@ -129,31 +129,23 @@ args = [[
     "/root/.ssh/id_dsa",
 ]]
 
-# The daemon's own config and credentials (consistent with the #287
-# self-reference posture): the Policy file itself, the env file carrying the
-# Enrollment Token, the pinned CA bundle, and the Node's identity private key.
+# The daemon's own secret-bearing files: the environment file (it carries the
+# Enrollment Token or join string) and the Node's identity private key. Its
+# Policy, CA bundle, identity certificate, binary, unit and Template files hold
+# no secret — most are public or already in the Relay's hands — and are not
+# denied (ADR-0022).
 [[deny]]
 name = "file.read"
 args = [[
-    "/etc/relay-daemon/policy.toml",
     "/etc/relay-daemon/relay-daemon.env",
-    "/etc/relay-daemon/ca-bundle.pem",
     "/var/lib/relay-daemon/key.pem",
-    "/var/lib/relay-daemon/cert.pem",
-    "/usr/local/bin/relay-daemon",
-    "/etc/systemd/system/relay-daemon.service",
 ]]
 
-# KNOWN RESIDUAL (surfaced by `policy check`'s self-reference lint): the
-# template files under /etc/relay-daemon/templates.d/ cannot be denied by exact
-# path — their names are whatever the installed packs use, and Policy has no
-# subtree deny (the same residual ADR-0022 already records for /etc/ssl/private
-# and per-pid /proc paths). With file.read's "*" allow in place, the AI-agent
-# can therefore read this Node's template files, which discloses its vocabulary
-# but cannot change it (templates are root-owned, ADR-0002/0021). The fix is
-# the same one this file recommends throughout: replace file.read's "*" with an
-# explicit path allow-list. Until you do, `policy check --strict` will report
-# it — truthfully.
+# Template files under /etc/relay-daemon/templates.d/ are readable under
+# file.read's wildcard. A Template body discloses vocabulary, never a secret,
+# and the wire can never change it: recorded as residual R37 in
+# docs/security/threat-model.md. Narrowing file.read's wildcard to an explicit
+# path list closes it.
 
 # Kernel/process memory and environment oracles: kernel memory images, and
 # the daemon's own memory/environment (the environment carries the Enrollment
@@ -204,9 +196,7 @@ args = [[
 [[deny]]
 name = "file.checksum"
 args = [[
-    "/etc/relay-daemon/policy.toml",
     "/etc/relay-daemon/relay-daemon.env",
-    "/etc/relay-daemon/ca-bundle.pem",
     "/var/lib/relay-daemon/key.pem",
 ]]
 
