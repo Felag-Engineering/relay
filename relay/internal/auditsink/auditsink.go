@@ -24,7 +24,9 @@
 // RecordIntent's dispatch_intent record copies the same domain fields, plus a
 // Relay-authored Reason built from closed vocabularies, counts and Relay-minted
 // Node IDs (intentReason); it never carries output. RecordProtocolViolation copies only Relay-authored fields and never any
-// Node-produced bytes, on any risk class.
+// Node-produced bytes, on any risk class. RecordPolicyAlias copies only the
+// fingerprint and the old and new name, and records nothing unless the
+// repository can commit the change and the record together.
 //
 // Logging: Record additionally emits exactly one structured slog Info
 // "audit decision" line per call, for each of the three Kinds it persists
@@ -49,6 +51,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -58,6 +61,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/policyalias"
 )
 
 // idGen mints a new unique audit Record ID. A seam so tests can inject
@@ -75,6 +79,8 @@ type Sink struct {
 var (
 	_ capability.AuditSink      = (*Sink)(nil)
 	_ capability.IntentRecorder = (*Sink)(nil)
+
+	_ capability.PolicyAliasRecorder = (*Sink)(nil)
 )
 
 // Option configures a Sink built by New.
@@ -504,6 +510,55 @@ func (s *Sink) RecordAccountAdmin(ctx context.Context, p capability.Principal, e
 		Reason:      accountAdminReason(e),
 	}
 	return s.append(ctx, rec)
+}
+
+// policyAliasReason renders a policy_alias record's Reason. The names are
+// quoted so a name with spaces stays one unambiguous field.
+//
+//	fingerprint=<hex> old="<name>" new="<name>"
+func policyAliasReason(e capability.PolicyAliasEvent) string {
+	return fmt.Sprintf("fingerprint=%s old=%s new=%s", e.Fingerprint, strconv.Quote(e.Old), strconv.Quote(e.New))
+}
+
+// RecordPolicyAlias implements capability.PolicyAliasRecorder: the alias change
+// and its policy_alias record commit in one transaction, so a change whose
+// record cannot be written does not happen.
+//
+// A repository that cannot make the two atomic (it does not offer
+// audit.PolicyAliasAppender) refuses before an id is minted or the store is
+// touched.
+func (s *Sink) RecordPolicyAlias(ctx context.Context, e capability.PolicyAliasEvent) error {
+	app, ok := s.repo.(audit.PolicyAliasAppender)
+	if !ok {
+		return fmt.Errorf("auditsink: the audit repository cannot record a Policy alias change atomically: %w", capability.ErrPolicyAliasesUnavailable)
+	}
+	if e.Old == e.New {
+		return errors.New("auditsink: a Policy alias change must change the alias")
+	}
+	id, err := s.newID()
+	if err != nil {
+		return fmt.Errorf("auditsink: record policy alias: generate audit record id: %w", err)
+	}
+	rec := audit.Record{
+		ID:          id,
+		Timestamp:   s.now(),
+		Kind:        audit.KindPolicyAlias,
+		Principal:   e.Principal.Attribution(),
+		Attribution: attribution(e.Principal, e.Asserted),
+		Reason:      policyAliasReason(e),
+	}
+	err = app.AppendWithPolicyAlias(ctx, rec, policyalias.Change{Fingerprint: e.Fingerprint, From: e.Old, To: e.New})
+	switch {
+	case err == nil:
+		s.log.Info("policy alias changed", "principal", rec.Principal, "fingerprint", e.Fingerprint, "old", e.Old, "new", e.New)
+		return nil
+	case errors.Is(err, policyalias.ErrTaken):
+		return capability.ErrPolicyAliasTaken
+	case errors.Is(err, policyalias.ErrChanged):
+		return capability.ErrPolicyAliasChanged
+	default:
+		return fmt.Errorf("auditsink: record policy alias: %w", err)
+	}
 }
 
 // baseRecord builds the audit.Record fields common to every Kind: attributed

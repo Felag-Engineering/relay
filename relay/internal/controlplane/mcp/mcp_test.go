@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/relay/relay/internal/opvocab"
+	"github.com/Felag-Engineering/relay/relay/internal/policyalias"
 	"github.com/Felag-Engineering/relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
@@ -143,6 +145,9 @@ type testServer struct {
 	// can seed further Nodes after the fixture is built — the fleet-ordering
 	// test needs an insertion order that differs from Node-ID order.
 	reg *registry.InMemory
+	// aliases is the counted Policy alias source the capability layer was
+	// built over, with an alias seeded for node A's fingerprint.
+	aliases *countingAliases
 }
 
 // newTestServer builds the fixture described on testServer with generous
@@ -212,7 +217,7 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 			Arch:        "amd64",
 			IPAddresses: []string{"10.0.0.1"},
 		},
-		PolicyFingerprint: "sha256:node-a-fingerprint",
+		PolicyFingerprint: nodeAFingerprint,
 		DaemonVersion:     "1.1.0",
 	}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
 		t.Fatalf("seed node A: %v", err)
@@ -235,7 +240,7 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 		RawAllowPatterns:  []string{`^/usr/bin/systemctl restart .+$`},
 		RawDenyPatterns:   []string{`.*rm -rf.*`},
 		AllowedOperations: []string{"system.facts", "file.read"},
-		PolicyFingerprint: "sha256:node-a-fingerprint",
+		PolicyFingerprint: nodeAFingerprint,
 		OperationRules: []policyview.OperationRule{
 			{Name: "service.restart", AllowedArgs: [][]string{{"nginx", "php-fpm"}}},
 			// A zero-arg Operation's rule arrives with nil AllowedArgs (proto
@@ -276,6 +281,15 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 	}
 	t.Cleanup(func() { st.Close() })
 
+	// Node A's fingerprint carries an alias, and the alias source is counted:
+	// QRY-36 says no tool of this surface reads or renders one.
+	if err := st.Audit().(audit.PolicyAliasAppender).AppendWithPolicyAlias(context.Background(),
+		audit.Record{ID: "alias-seed", Timestamp: time.Now().UTC(), Kind: audit.KindPolicyAlias, Principal: "seed"},
+		policyalias.Change{Fingerprint: nodeAFingerprint, To: aliasSeedName}); err != nil {
+		t.Fatalf("seed Policy alias: %v", err)
+	}
+	aliases := &countingAliases{inner: st.PolicyAliases()}
+
 	conduit := newFakeConduit()
 	q := auditquery.New(st.AuditQueries(), st.JobQueries())
 	capSvc := newCapService(t, capSeams{
@@ -288,6 +302,7 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 		jobQ:        q,
 		policyView:  policyCache,
 		nodeVocab:   vocabCache,
+		aliases:     aliases,
 		idem:        st.IdempotencyKeys(),
 		jobsRepo:    st.Jobs(),
 		tasksRepo:   st.Tasks(),
@@ -346,7 +361,26 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 		store:   st,
 		conduit: conduit,
 		reg:     reg,
+		aliases: aliases,
 	}
+}
+
+// aliasSeedName is the Policy alias the fixture gives node A's fingerprint.
+const aliasSeedName = "zz-seeded-policy-alias"
+
+// nodeAFingerprint is a well-formed Policy fingerprint (64 lowercase hex), the
+// only shape the store attaches an alias to.
+const nodeAFingerprint = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+// countingAliases counts how often the alias source is read.
+type countingAliases struct {
+	inner policyalias.Reader
+	lists atomic.Int32
+}
+
+func (c *countingAliases) List(ctx context.Context) (map[string]string, error) {
+	c.lists.Add(1)
+	return c.inner.List(ctx)
 }
 
 // failingReadSink wraps a real *auditsink.Sink but refuses every RecordRead

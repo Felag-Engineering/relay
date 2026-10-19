@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/relay/relay/internal/policyalias"
 )
 
 // Kind distinguishes what kind of event a Record describes: a dispatch
@@ -197,6 +198,11 @@ const (
 	KindPasswordSet   = "password_set"
 	KindPasswordClear = "password_clear"
 
+	// KindPolicyAlias records one Policy alias set, rename or clear. Reason
+	// carries the fingerprint and the old and new value. It is written only
+	// together with the change itself (PolicyAliasAppender).
+	KindPolicyAlias = "policy_alias"
+
 	// The Console's human authentication lane
 	// (docs/design/console/12-login.md). Every attempt is recorded, successful
 	// or not — this is the first link in the chain the UI advisory requires
@@ -307,6 +313,7 @@ var allKinds = []string{
 	KindStepUpThrottled,
 	KindAPITokenMint,
 	KindAPITokenRevoke,
+	KindPolicyAlias,
 }
 
 // Kinds returns every Kind this package defines, in declaration order.
@@ -386,6 +393,7 @@ var notAnAuthFailureKinds = []string{
 	KindStepUp,
 	KindAPITokenMint,
 	KindAPITokenRevoke,
+	KindPolicyAlias,
 }
 
 // AuthFailureKinds is every Kind recording a credential that was submitted
@@ -571,4 +579,15 @@ type Repository interface {
 	// string", and two differently-named methods make the lane you are
 	// querying impossible to miss at the call site.
 	ByOnBehalfOf(ctx context.Context, onBehalfOf string) ([]Record, error)
+}
+
+// PolicyAliasAppender applies a Policy alias change and appends its record to
+// the hash chain in ONE transaction: nil means both landed, an error means
+// neither did. It is kept off Repository so a Repository that cannot make the
+// two atomic simply does not offer it.
+//
+// It returns policyalias.ErrChanged when the stored alias is not c.From, and
+// policyalias.ErrTaken when another fingerprint carries c.To.
+type PolicyAliasAppender interface {
+	AppendWithPolicyAlias(ctx context.Context, r Record, c policyalias.Change) error
 }

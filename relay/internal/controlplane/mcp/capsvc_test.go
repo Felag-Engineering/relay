@@ -27,6 +27,7 @@ type capSeams struct {
 	jobQ       capability.JobQuery
 	policyView capability.PolicyViewSource
 	nodeVocab  capability.TemplateVocabularySource
+	aliases    capability.PolicyAliasSource
 	idem       jobs.IdempotencyRepository
 
 	jobsRepo    jobs.JobRepository
@@ -55,7 +56,7 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 	}
 	rec := capability.NewRecorder(s.audit, nil, nil)
 	ctl := capability.NewControl(rec, s.authz, s.freeze)
-	read := capability.NewReadLane(rec, s.reg, s.auditQ, s.jobQ, s.policyView, s.nodeVocab, 0, nil)
+	read := capability.NewReadLane(rec, s.reg, s.auditQ, s.jobQ, s.policyView, s.nodeVocab, 0, nil, capability.WithPolicyAliasSource(s.aliases))
 
 	if s.cap == nil || s.jobsRepo == nil || s.tasksRepo == nil || s.conduit == nil {
 		t.Fatalf("newCapService: cap, jobsRepo, tasksRepo and conduit are required")

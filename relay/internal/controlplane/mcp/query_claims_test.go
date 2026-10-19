@@ -1,9 +1,11 @@
 package mcp_test
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 )
@@ -224,4 +226,48 @@ func TestMCP_DescribeNode_ReportsNoFingerprintPeerCounts(t *testing.T) {
 			t.Errorf("DescribeNodeOutput reports a fingerprint-peer count: %v", flags)
 		}
 	})
+}
+
+// TestMCP_CarriesNoPolicyAlias proves QRY-36's MCP half: a Policy alias is
+// seeded for node A's fingerprint, and no tool response names it, no tool is
+// about aliases, and the alias source is never read on this surface.
+func TestMCP_CarriesNoPolicyAlias(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+
+	// Armed: the alias exists, so its absence below means something.
+	got, err := ts.aliases.inner.List(context.Background())
+	if err != nil || got[nodeAFingerprint] != aliasSeedName {
+		t.Fatalf("the seeded alias is not in the store: %v, %v", got, err)
+	}
+
+	for name, args := range map[string]map[string]any{
+		"list_nodes":      nil,
+		"describe_node":   {"node_id": ts.nodeA},
+		"list_operations": {"node_id": ts.nodeA},
+	} {
+		text := resultText(t, callTool(t, session, name, args))
+		if name == "describe_node" && !strings.Contains(text, nodeAFingerprint) {
+			t.Errorf("describe_node does not render the fingerprint, so an absent alias proves little: %s", text)
+		}
+		if strings.Contains(text, aliasSeedName) {
+			t.Errorf("%s renders a Policy alias: %s", name, text)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools.Tools {
+		if strings.Contains(strings.ToLower(tool.Name+" "+tool.Description), "alias") {
+			t.Errorf("tool %q mentions an alias: %q", tool.Name, tool.Description)
+		}
+	}
+
+	if n := ts.aliases.lists.Load(); n != 0 {
+		t.Errorf("the alias source was read %d times by MCP tools, want 0", n)
+	}
 }

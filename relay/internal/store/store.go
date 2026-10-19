@@ -31,6 +31,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/freeze"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/mcptask"
+	"github.com/Felag-Engineering/relay/relay/internal/policyalias"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
@@ -329,6 +330,13 @@ func (s *Store) JobQueries() jobs.QueryRepository {
 // Relay-wide emergency stop (ADR-0013).
 func (s *Store) Freeze() freeze.Repository {
 	return &sqliteFreeze{db: s.db}
+}
+
+// PolicyAliases returns the SQLite-backed policyalias.Reader: the display names
+// the Relay holds for Policy fingerprints. Changes are made only through
+// the audit Repository's AppendWithPolicyAlias.
+func (s *Store) PolicyAliases() policyalias.Reader {
+	return &sqlitePolicyAliases{db: s.db}
 }
 
 // Approvals returns the SQLite-backed approval.Repository — parked dispatches

@@ -92,7 +92,7 @@ linters:
         # values that share a prefix (ControlAction, AccountAdminEvent,
         # IntentRecorder, ...) stay usable. Service and New are the retired monolith's
         # names and stay banned so that neither can come back.
-        - pattern: ^capability\.(Service|New|Execution|NewExecution|Recorder|NewRecorder|Control|NewControl|AccountAdmin|NewAccountAdmin|ReadLane|NewReadLane|Approvals|NewApprovals)$
+        - pattern: ^capability\.(Service|New|Execution|NewExecution|Recorder|NewRecorder|Control|NewControl|AccountAdmin|NewAccountAdmin|PolicyAliasAdmin|NewPolicyAliasAdmin|ReadLane|NewReadLane|Approvals|NewApprovals)$
           pkg: ^github\.com/Felag-Engineering/relay/relay/internal/capability$
           msg: "adapter boundary (invariant 10): a concrete capability service or its constructor belongs to the composition root; hold the narrowed seam this package declares"
         # The display-only caches carry Set. An adapter reads a Policy view or a
@@ -107,6 +107,13 @@ linters:
         - pattern: ^registry\.Repository$
           pkg: ^github\.com/Felag-Engineering/relay/relay/internal/registry$
           msg: "adapter boundary (invariant 10): never name the registry's write surface; read Nodes through the read lane"
+        # The concrete audit repository handed to an adapter as a reader also offers
+        # the atomic Policy alias write. Naming the interface that carries it, in a
+        # type assertion or an alias, is the way back from a narrowed reader to the
+        # write that bypasses the capability layer (invariant 10).
+        - pattern: ^audit\.PolicyAliasAppender$
+          pkg: ^github\.com/Felag-Engineering/relay/relay/internal/audit$
+          msg: "adapter boundary (invariant 10): never name the audit repository's Policy alias write; an alias is changed only through the capability layer"
 
     depguard:
       rules:
@@ -147,6 +154,8 @@ linters:
               desc: "an adapter never builds or reads a wire message; only the transport speaks the protocol (invariants 8 and 10)"
             - pkg: github.com/Felag-Engineering/relay/relay/internal/dispatch
               desc: "an adapter reaches a Node only through the capability layer's execution seam (invariant 10)"
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/policyalias
+              desc: "an adapter never builds a Policy alias change; aliases are changed only through the capability layer (invariant 10)"
 
         # The Control API is a thin adapter that manages runtime objects, never Relay
         # configuration: it never reaches the CA key, a listener, a rate limiter or the
@@ -214,6 +223,8 @@ linters:
             - strings$
             - sync$
             - time$
+            - unicode$
+            - unicode/utf8$
             - golang.org/x/sync/errgroup$
             - github.com/Felag-Engineering/relay/relay/internal/accounts$
             - github.com/Felag-Engineering/relay/relay/internal/approval$
@@ -240,6 +251,7 @@ linters:
             - "**/internal/freeze/*.go"
             - "**/internal/jobs/*.go"
             - "**/internal/nodestate/*.go"
+            - "**/internal/policyalias/*.go"
             - "**/internal/registry/*.go"
           deny:
             - pkg: database/sql
@@ -323,6 +335,15 @@ linters:
               desc: "ADR-0028: the SDK stays above this package, or the shim stops being deletable"
             - pkg: github.com/Felag-Engineering/relay/relay/internal/capability
               desc: "capability imports this package; the dependency runs one way"
+        policyalias-imports:
+          list-mode: strict
+          files:
+            - "**/internal/policyalias/*.go"
+            - "!$test"
+          allow:
+            - context$
+            - errors$
+          deny: *domain-deny
         policyview-imports:
           list-mode: strict
           files:

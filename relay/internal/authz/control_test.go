@@ -55,6 +55,7 @@ func TestAuthorizeControl_Floors(t *testing.T) {
 		{capability.ControlAPITokenRead, accounts.RoleAdmin},
 		{capability.ControlAPITokenMint, accounts.RoleAdmin},
 		{capability.ControlAPITokenRevoke, accounts.RoleAdmin},
+		{capability.ControlPolicyAlias, accounts.RoleAdmin},
 	}
 
 	for _, tc := range cases {
@@ -224,10 +225,36 @@ func TestAuthorizeControl_CorruptRoleSatisfiesNothing(t *testing.T) {
 		capability.ControlAPITokenRead,
 		capability.ControlAPITokenMint,
 		capability.ControlAPITokenRevoke,
+		capability.ControlPolicyAlias,
 	} {
 		if err := gate.AuthorizeControl(context.Background(), p, act); err == nil {
 			t.Errorf("AuthorizeControl(%s, role %q) = nil, want a refusal", act, p.Role)
 		}
+	}
+}
+
+// TestAuthorizeControl_PolicyAliasIsAdminAndHumanOnly pins the alias write's
+// floor: admin, and a human Account. A machine admin is refused it, with the
+// human-only reason rather than a role one.
+func TestAuthorizeControl_PolicyAliasIsAdminAndHumanOnly(t *testing.T) {
+	gate := NewRoleGate()
+	ctx := context.Background()
+
+	if err := gate.AuthorizeControl(ctx, human(accounts.RoleAdmin), capability.ControlPolicyAlias); err != nil {
+		t.Errorf("human admin refused: %v", err)
+	}
+	for _, role := range []accounts.Role{accounts.RoleViewer, accounts.RoleOperator} {
+		if err := gate.AuthorizeControl(ctx, human(role), capability.ControlPolicyAlias); !errors.Is(err, ErrUnauthorized) {
+			t.Errorf("human %s = %v, want ErrUnauthorized", role, err)
+		}
+	}
+	err := gate.AuthorizeControl(ctx, machine(accounts.RoleAdmin), capability.ControlPolicyAlias)
+	if !errors.Is(err, ErrUnauthorized) || !strings.Contains(err.Error(), "human-only") {
+		t.Errorf("machine admin = %v, want a human-only ErrUnauthorized", err)
+	}
+	unknownKind := capability.Principal{Account: "x", Role: string(accounts.RoleAdmin)}
+	if err := gate.AuthorizeControl(ctx, unknownKind, capability.ControlPolicyAlias); !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("unknown-kind admin = %v, want ErrUnauthorized", err)
 	}
 }
 

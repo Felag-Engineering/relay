@@ -154,6 +154,39 @@ func dispatchViolations(fileName string, file *ast.File, strictCapabilityIdents 
 		return true
 	})
 
+	return append(violations, policyAliasViolations(fileName, file)...)
+}
+
+// policyAliasViolations is the Policy alias rule of dispatchViolations,
+// unconditional in every file: this surface carries no Policy alias, so it may
+// not select an identifier that mentions one, whatever the receiver or package
+// (capability.PolicyAliasAdmin, audit.PolicyAliasAppender, or
+// x.(audit.PolicyAliasAppender).AppendWithPolicyAlias on a concrete audit
+// repository), nor declare a seam method that reads or writes one. The alias
+// seams are the Console's alone.
+func policyAliasViolations(fileName string, file *ast.File) []string {
+	var violations []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.SelectorExpr:
+			if strings.Contains(v.Sel.Name, "PolicyAlias") {
+				violations = append(violations, fmt.Sprintf(
+					"%s references %s — Policy aliases are display data for the Console alone, and this surface carries none",
+					fileName, v.Sel.Name))
+			}
+		case *ast.InterfaceType:
+			for _, m := range v.Methods.List {
+				for _, name := range m.Names {
+					if strings.Contains(name.Name, "PolicyAlias") {
+						violations = append(violations, fmt.Sprintf(
+							"%s declares a seam method %s — Policy aliases are display data for the Console alone, and this surface carries none",
+							fileName, name.Name))
+					}
+				}
+			}
+		}
+		return true
+	})
 	return violations
 }
 
@@ -283,6 +316,65 @@ func f() { newDispatch() }
 `,
 			strict:     false,
 			wantSubstr: "newDispatch",
+		},
+		{
+			name: "the Policy alias service is refused",
+			src: `package mcp
+import ` + capImport + `
+var _ *capability.PolicyAliasAdmin
+`,
+			strict:     true,
+			wantSubstr: "references PolicyAliasAdmin",
+		},
+		{
+			name: "the Policy alias service is refused through an aliased capability import",
+			src: `package mcp
+import c2 ` + capImport + `
+var _ = c2.NewPolicyAliasAdmin
+`,
+			strict:     true,
+			wantSubstr: "references NewPolicyAliasAdmin",
+		},
+		{
+			name: "the Policy alias service is refused in an execFiles-relaxed file",
+			src: `package mcp
+import ` + capImport + `
+var _ *capability.PolicyAliasAdmin
+`,
+			strict:     false,
+			wantSubstr: "references PolicyAliasAdmin",
+		},
+		{
+			name: "asserting an audit repository to the alias appender is refused",
+			src: `package mcp
+import "github.com/Felag-Engineering/relay/relay/internal/audit"
+func f(x audit.Repository) {
+	_ = x.(audit.PolicyAliasAppender).AppendWithPolicyAlias
+}
+`,
+			strict:     false,
+			wantSubstr: "references PolicyAliasAppender",
+		},
+		{
+			name: "calling the atomic alias write on any receiver is refused",
+			src: `package mcp
+func f(x interface{}) {
+	_ = x.(interface{ AppendWithPolicyAlias() }).AppendWithPolicyAlias
+}
+`,
+			strict:     false,
+			wantSubstr: "references AppendWithPolicyAlias",
+		},
+		{
+			name: "a seam declaring an alias write is refused",
+			src: `package mcp
+import "context"
+type AliasWriter interface {
+	ClearPolicyAlias(ctx context.Context, fingerprint string) error
+}
+`,
+			strict:     false,
+			wantSubstr: "declares a seam method ClearPolicyAlias",
 		},
 		{
 			name: "the deleted NodeReader shape hands back a Node with no context",
