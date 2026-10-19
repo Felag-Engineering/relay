@@ -92,6 +92,7 @@ const (
 	ReloadRefusedSettings
 	ReloadRefusedAudit
 	ReloadRefusedInternal
+	ReloadRefusedSecretFile
 )
 
 func (s ReloadStage) String() string {
@@ -110,6 +111,8 @@ func (s ReloadStage) String() string {
 		return "the reload's audit record could not be written"
 	case ReloadRefusedInternal:
 		return "the reload failed unexpectedly"
+	case ReloadRefusedSecretFile:
+		return "a secret file the configuration names could not be read"
 	}
 	return ""
 }

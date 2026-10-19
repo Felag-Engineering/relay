@@ -82,8 +82,9 @@ type Config struct {
 	// It bounds reach, so invariant 11 allows it as runtime-shaped
 	// configuration; it is not the blast cap (how many Nodes a Job may touch)
 	// and not a security-floor value. It is read from the configuration file at
-	// start and on a host reload (RC-21) and is reachable from no API; it is planned to move to the store-backed settings object
-	// (ADR-0010 amendment 2026-09-15), where invariant 11's "human with step-up, audited" rule
+	// start and on a host reload (RC-21) and is reachable from no API; it is
+	// planned to move to the store-backed settings object (ADR-0010 amendment
+	// 2026-09-15), where invariant 11's "human with step-up, audited" rule
 	// applies. Zero or negative refuses startup.
 	DispatchConcurrency int
 

@@ -630,6 +630,9 @@ func TestConstructorsPanicOnNilSeam(t *testing.T) {
 		{"NewExecution/capChecker", func() {
 			NewExecution(ctl, read, appr, nil, nil, jr, tr, conduit, testSettings, nil, nil)
 		}, "capability: NewExecution: capChecker"},
+		{"NewExecution/settings", func() {
+			NewExecution(ctl, read, appr, capc, nil, jr, tr, conduit, nil, nil, nil)
+		}, "settings must not be nil"},
 		{"NewExecution/jobsRepo", func() {
 			NewExecution(ctl, read, appr, capc, nil, nil, tr, conduit, testSettings, nil, nil)
 		}, "NewExecution: jobsRepo, tasksRepo, and conduit"},

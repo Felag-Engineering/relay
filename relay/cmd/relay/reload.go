@@ -73,6 +73,9 @@ func newReloader(path string, sc startupConfig, deps *appDeps, logs *swapHandler
 // and nothing is swapped until the audit record is written.
 func (r *reloader) reload(ctx context.Context) ([]string, error) {
 	sc, err := r.load(r.path)
+	if errors.Is(err, errSecretFileUnread) {
+		return nil, r.refuse(ctx, auditsink.ReloadRefusedSecretFile, nil, err)
+	}
 	if err != nil {
 		return nil, r.refuse(ctx, auditsink.ReloadRefusedFile, nil, err)
 	}
@@ -135,10 +138,12 @@ func (r *reloader) reload(ctx context.Context) ([]string, error) {
 		return nil, r.refuse(ctx, auditsink.ReloadRefusedAudit, nil, err)
 	}
 
-	// None of these can fail, so a reload is never half-applied.
+	// The handler is built before the first swap, so the swaps below are bare
+	// atomic stores and a reload is never half-applied.
+	handler := newLogHandler(r.stderr, sc.Log)
 	r.gate.swap(files.Gate())
 	r.live.swap(next)
-	r.logs.swap(newLogHandler(r.stderr, sc.Log))
+	r.logs.swap(handler)
 	r.file = sc.File
 
 	slog.Info("configuration reloaded", "changed", keys)

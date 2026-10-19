@@ -28,7 +28,13 @@ hostname = "relay.example.net"
 func TestDiff_EverySchemaKeyClassified(t *testing.T) {
 	logical := map[string]bool{}
 	for _, s := range settings {
+		if logical[s.key] {
+			t.Errorf("setting %s is listed twice", s.key)
+		}
 		logical[s.key] = true
+		if s.class != restartRequired && s.class != appliedByReload {
+			t.Errorf("setting %s has no reload class: classify it restartRequired or appliedByReload", s.key)
+		}
 	}
 	for _, k := range schemaKeys() {
 		if strings.HasSuffix(k, "_file") {
@@ -58,8 +64,10 @@ func TestDiff_RestartRequiredIsRC21sListPlusConsoleWindows(t *testing.T) {
 		"console.session_max_age", "console.session_idle", "console.step_up_window",
 	}
 	var got []string
-	for k := range restartRequired {
-		got = append(got, k)
+	for _, s := range settings {
+		if s.class == restartRequired {
+			got = append(got, s.key)
+		}
 	}
 	slices.Sort(got)
 	slices.Sort(want)
@@ -70,6 +78,18 @@ func TestDiff_RestartRequiredIsRC21sListPlusConsoleWindows(t *testing.T) {
 		if !IsSettingKey(k) {
 			t.Errorf("restart-required key %s is not a schema key", k)
 		}
+	}
+}
+
+func TestDiff_UnclassifiedSettingIsRestartRequired(t *testing.T) {
+	saved := settings
+	t.Cleanup(func() { settings = saved })
+	settings = []setting{{key: "log.level", class: unclassified, differs: differ(func(c Config) int { return int(c.Log.Level) })}}
+	a := loadForDiff(t, diffBase)
+	b := loadForDiff(t, diffBase+"[log]\nlevel = \"debug\"\n")
+	cs := Diff(a, b)
+	if len(cs) != 1 || !cs[0].RestartRequired {
+		t.Errorf("Diff = %+v, want one restart-required change", cs)
 	}
 }
 

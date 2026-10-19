@@ -201,6 +201,18 @@ func TestReloader_RefusalLeavesEverythingUntouched(t *testing.T) {
 			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n")
 			f.openErr = errors.New("the gate file is malformed")
 		}, auditsink.ReloadRefusedNamedFiles, nil},
+		{"CA mismatch", func(f *reloadFixture) {
+			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n")
+			f.r.open = func(gatePath, _, storePath string) (startup.Files, error) {
+				return testStartupFiles(t, Config{ApprovalGatePath: gatePath, CADir: filepath.Join(f.dir, "replaced-ca"), StorePath: storePath}), nil
+			}
+		}, auditsink.ReloadRefusedCA, nil},
+		{"secret file unreadable", func(f *reloadFixture) {
+			f.body = f.toml("[approval]\nwebhook_url_file = \"/run/x/url\"\n")
+			f.r.load = func(string) (startupConfig, error) {
+				return parseConfig([]byte(f.body), func(string) ([]byte, error) { return nil, errors.New("read failed") })
+			}
+		}, auditsink.ReloadRefusedSecretFile, nil},
 		{"setting refused", func(f *reloadFixture) {
 			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n")
 			f.r.load = func(string) (startupConfig, error) {
@@ -246,7 +258,7 @@ func TestReloader_RefusalLeavesEverythingUntouched(t *testing.T) {
 
 func TestReloader_CAFingerprintMismatchRefuses(t *testing.T) {
 	f := newReloadFixture(t)
-	liveBefore := f.deps.live.cur.Load()
+	liveBefore, gateBefore := f.deps.live.cur.Load(), f.deps.gate.cur.Load()
 	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n")
 	f.r.open = func(gatePath, _, storePath string) (startup.Files, error) {
 		// A CA directory key the process is not running on: a different CA.
@@ -256,11 +268,16 @@ func TestReloader_CAFingerprintMismatchRefuses(t *testing.T) {
 	if _, err := f.r.reload(context.Background()); err == nil {
 		t.Fatal("reload with a different CA on disk succeeded")
 	}
-	if f.deps.live.cur.Load() != liveBefore {
-		t.Error("the snapshot was replaced")
+	if f.deps.live.cur.Load() != liveBefore || f.deps.gate.cur.Load() != gateBefore {
+		t.Error("the snapshot or the gate was replaced")
 	}
 	if !strings.Contains(f.logBuf.String(), "restart required") {
 		t.Errorf("log = %q, want restart required", f.logBuf.String())
+	}
+	f.logBuf.Reset()
+	slog.Info("after the refusal")
+	if out := f.logBuf.String(); strings.HasPrefix(out, "{") {
+		t.Errorf("log after a refused reload = %q, want the original text format", out)
 	}
 	recs := f.records(audit.KindConfigReloadRefused)
 	if len(recs) != 1 || !strings.Contains(recs[0].Reason, "the CA on disk is not the CA this Relay is running") {

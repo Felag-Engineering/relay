@@ -110,9 +110,9 @@ type ReadLane struct {
 // NewReadLane returns a ReadLane over rec, reg and the two query seams. rec,
 // reg, auditQ and jobQ are required: a lane with no trail cannot audit its
 // reads, one with no registry or query seam has nothing to read — all
-// composition-root bugs, so each panics rather than degrading. A negative
-// settings source panics for the same reason; a zero window means the
-// state:cert-expiring marker never fires.
+// composition-root bugs, so each panics rather than degrading. A nil
+// settings source panics for the same reason; a zero (or negative, clamped)
+// window means the state:cert-expiring marker never fires.
 //
 // NewReadLane also refuses a Recorder over the no-op AuditSink (F5,
 // cycle-2 security review): a lane that answers every query while recording

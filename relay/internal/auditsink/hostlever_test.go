@@ -134,6 +134,7 @@ func TestHostConfigReloadRefusedRecord_StagePhraseOnly(t *testing.T) {
 		{ReloadRefusedSettings, nil, "an operator setting was refused"},
 		{ReloadRefusedAudit, nil, "the reload's audit record could not be written"},
 		{ReloadRefusedInternal, nil, "the reload failed unexpectedly"},
+		{ReloadRefusedSecretFile, nil, "a secret file the configuration names could not be read"},
 	} {
 		rec, err := HostConfigReloadRefusedRecord("id", hostLeverNow, tc.stage, tc.keys)
 		if err != nil {

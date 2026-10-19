@@ -60,17 +60,18 @@ type Execution struct {
 // with the real Job engine built here from jr, tr, conduit and settings
 // (fans a resolved Selector to one persisted Task per matched Node, fails
 // offline Nodes fast, ADR-0004, and dispatches the rest through conduit
-// concurrently, at most DispatchConcurrency at a time, read per Job). The Freeze, the role floor
-// and the audit trail come from control; Selector resolution and the read
+// concurrently, at most DispatchConcurrency at a time, read per Job). The
+// Freeze, the role floor and the audit trail come from control; Selector resolution and the read
 // lane come from read; the approval callout comes from approvals. All three
 // must share one Recorder so the layer has a single audit trail.
 //
 // Required: control, read, approvals, capc (the blast-radius cap, ADR-0004),
 // jr, tr, conduit, and settings (the OperatorSettingsSource, whose dispatch
-// concurrency must be at least 1 at construction; it bounds reach and no request
-// reaches it, invariant 11). The read lane and capc, when it is a BlastCap, must
-// hold this same source, so a reload cannot split the layer. A nil one is a composition-root wiring bug, not a
-// recoverable runtime condition, so NewExecution panics.
+// concurrency must be at least 1 at construction; it bounds reach and no
+// request reaches it, invariant 11). A nil one is a composition-root wiring
+// bug, not a recoverable runtime condition, so NewExecution panics. The read
+// lane and capc, when it is a BlastCap, must hold this same source, so a
+// reload cannot split the layer.
 //
 // Safe absences: a nil idem means a call carrying an idempotency key is
 // refused (ErrIdempotencyUnavailable), never run unkeyed; a nil newID means

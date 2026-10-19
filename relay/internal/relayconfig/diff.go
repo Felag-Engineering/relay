@@ -20,35 +20,30 @@ type Change struct {
 // admits only members carries names, never values (RC-18).
 func IsSettingKey(key string) bool { return schemaKeySet[key] }
 
-// restartRequired is RC-21's bind-time list: each key is applied by a consumer
-// built once at start that no reload reaches. The OAuth identity provider is
-// the whole [oauth] section. The three Console session and step-up windows are
-// beyond RC-21's enumeration and await the owner's ratification: the Console's
-// authentication is constructed with them once, and a reload that silently did
-// not apply them would leave the file and the running Relay disagreeing.
-var restartRequired = map[string]bool{
-	"node_plane.listen_address":     true,
-	"node_plane.advertised_address": true,
-	"control_plane.enabled":         true,
-	"control_plane.listen_address":  true,
-	"console.enabled":               true,
-	"ca.dir":                        true,
-	"store.path":                    true,
-	"tls.hostname":                  true,
-	"oauth.issuer":                  true,
-	"oauth.audience":                true,
-	"oauth.account_claim":           true,
-	"oauth.required_scope":          true,
-	"oauth.public_url":              true,
-	"console.session_max_age":       true,
-	"console.session_idle":          true,
-	"console.step_up_window":        true,
-}
+// reloadClass says what a reload does with a changed setting. The zero value is
+// deliberately unclassified, which Diff treats as restart-required: a setting
+// nobody classified is never applied live by default (RC-21).
+type reloadClass int
+
+const (
+	unclassified reloadClass = iota
+	// restartRequired is RC-21's bind-time list: the setting's consumer is
+	// built once at start and no reload reaches it. The OAuth identity provider
+	// is the whole [oauth] section. The three Console session and step-up
+	// windows are beyond RC-21's enumeration and await the owner's
+	// ratification: the Console's authentication is constructed with them once,
+	// and a reload that silently did not apply them would leave the file and
+	// the running Relay disagreeing.
+	restartRequired
+	// appliedByReload is a setting whose consumer reads the live snapshot.
+	appliedByReload
+)
 
 // setting is one logical setting: how to tell whether two configurations
-// differ in it.
+// differ in it, and what a reload does with a change.
 type setting struct {
 	key     string
+	class   reloadClass
 	secret  bool
 	differs func(a, b Config) bool
 }
@@ -73,39 +68,39 @@ func secretDiffers(get func(Config) Secret) func(a, b Config) bool {
 // folded into their inline partner; TestDiff_EverySchemaKeyClassified pins that
 // no schema key is left out.
 var settings = []setting{
-	{key: "node_plane.listen_address", differs: differ(func(c Config) string { return c.NodePlane.ListenAddress })},
-	{key: "node_plane.advertised_address", differs: differ(func(c Config) string { return c.NodePlane.AdvertisedAddress })},
-	{key: "control_plane.enabled", differs: differ(func(c Config) bool { return c.ControlPlane.Enabled })},
-	{key: "control_plane.listen_address", differs: differ(func(c Config) string { return c.ControlPlane.ListenAddress })},
-	{key: "console.enabled", differs: differ(func(c Config) bool { return c.Console.Enabled })},
-	{key: "console.session_max_age", differs: differ(func(c Config) int64 { return int64(c.Console.SessionMaxAge) })},
-	{key: "console.session_idle", differs: differ(func(c Config) int64 { return int64(c.Console.SessionIdle) })},
-	{key: "console.step_up_window", differs: differ(func(c Config) int64 { return int64(c.Console.StepUpWindow) })},
-	{key: "ca.dir", differs: differ(func(c Config) string { return c.CA.Dir })},
-	{key: "store.path", differs: differ(func(c Config) string { return c.Store.Path })},
-	{key: "tls.hostname", differs: differ(func(c Config) string { return c.TLS.Hostname })},
-	{key: "oauth.issuer", differs: differ(func(c Config) string { return c.OAuth.Issuer })},
-	{key: "oauth.audience", differs: differ(func(c Config) string { return c.OAuth.Audience })},
-	{key: "oauth.account_claim", differs: differ(func(c Config) string { return c.OAuth.AccountClaim })},
-	{key: "oauth.required_scope", differs: differ(func(c Config) string { return c.OAuth.RequiredScope })},
-	{key: "oauth.public_url", differs: differ(func(c Config) string { return c.OAuth.PublicURL })},
-	{key: "approval.gate_rules_path", differs: differ(func(c Config) string { return c.Approval.GateRulesPath })},
-	{key: "approval.webhook_url", secret: true, differs: secretDiffers(func(c Config) Secret { return c.Approval.WebhookURL })},
-	{key: "approval.webhook_secret", secret: true, differs: secretDiffers(func(c Config) Secret { return c.Approval.WebhookSecret })},
-	{key: "approval.webhook_timeout", differs: differ(func(c Config) int64 { return int64(c.Approval.WebhookTimeout) })},
-	{key: "log.level", differs: differ(func(c Config) int { return int(c.Log.Level) })},
-	{key: "log.format", differs: differ(func(c Config) LogFormat { return c.Log.Format })},
-	{key: "reach.read_blast_cap", differs: differ(func(c Config) int { return c.Reach.ReadBlastCap })},
-	{key: "reach.mutate_blast_cap", differs: differ(func(c Config) int { return c.Reach.MutateBlastCap })},
-	{key: "reach.dispatch_concurrency", differs: differ(func(c Config) int { return c.Reach.DispatchConcurrency })},
-	{key: "reach.min_daemon_version", differs: differ(func(c Config) string { return c.Reach.MinDaemonVersion })},
-	{key: "enrollment.ip_rate_per_minute", differs: differ(func(c Config) int { return c.Enrollment.IPRatePerMinute })},
-	{key: "enrollment.ip_burst", differs: differ(func(c Config) int { return c.Enrollment.IPBurst })},
-	{key: "enrollment.global_rate_per_minute", differs: differ(func(c Config) int { return c.Enrollment.GlobalRatePerMinute })},
-	{key: "enrollment.global_burst", differs: differ(func(c Config) int { return c.Enrollment.GlobalBurst })},
-	{key: "enrollment.max_tracked_ips", differs: differ(func(c Config) int { return c.Enrollment.MaxTrackedIPs })},
-	{key: "enrollment.max_nodes", differs: differ(func(c Config) int { return c.Enrollment.MaxNodes })},
-	{key: "enrollment.cert_expiring_fraction", differs: differ(func(c Config) float64 { return c.Enrollment.CertExpiringFraction })},
+	{key: "node_plane.listen_address", class: restartRequired, differs: differ(func(c Config) string { return c.NodePlane.ListenAddress })},
+	{key: "node_plane.advertised_address", class: restartRequired, differs: differ(func(c Config) string { return c.NodePlane.AdvertisedAddress })},
+	{key: "control_plane.enabled", class: restartRequired, differs: differ(func(c Config) bool { return c.ControlPlane.Enabled })},
+	{key: "control_plane.listen_address", class: restartRequired, differs: differ(func(c Config) string { return c.ControlPlane.ListenAddress })},
+	{key: "console.enabled", class: restartRequired, differs: differ(func(c Config) bool { return c.Console.Enabled })},
+	{key: "console.session_max_age", class: restartRequired, differs: differ(func(c Config) int64 { return int64(c.Console.SessionMaxAge) })},
+	{key: "console.session_idle", class: restartRequired, differs: differ(func(c Config) int64 { return int64(c.Console.SessionIdle) })},
+	{key: "console.step_up_window", class: restartRequired, differs: differ(func(c Config) int64 { return int64(c.Console.StepUpWindow) })},
+	{key: "ca.dir", class: restartRequired, differs: differ(func(c Config) string { return c.CA.Dir })},
+	{key: "store.path", class: restartRequired, differs: differ(func(c Config) string { return c.Store.Path })},
+	{key: "tls.hostname", class: restartRequired, differs: differ(func(c Config) string { return c.TLS.Hostname })},
+	{key: "oauth.issuer", class: restartRequired, differs: differ(func(c Config) string { return c.OAuth.Issuer })},
+	{key: "oauth.audience", class: restartRequired, differs: differ(func(c Config) string { return c.OAuth.Audience })},
+	{key: "oauth.account_claim", class: restartRequired, differs: differ(func(c Config) string { return c.OAuth.AccountClaim })},
+	{key: "oauth.required_scope", class: restartRequired, differs: differ(func(c Config) string { return c.OAuth.RequiredScope })},
+	{key: "oauth.public_url", class: restartRequired, differs: differ(func(c Config) string { return c.OAuth.PublicURL })},
+	{key: "approval.gate_rules_path", class: appliedByReload, differs: differ(func(c Config) string { return c.Approval.GateRulesPath })},
+	{key: "approval.webhook_url", class: appliedByReload, secret: true, differs: secretDiffers(func(c Config) Secret { return c.Approval.WebhookURL })},
+	{key: "approval.webhook_secret", class: appliedByReload, secret: true, differs: secretDiffers(func(c Config) Secret { return c.Approval.WebhookSecret })},
+	{key: "approval.webhook_timeout", class: appliedByReload, differs: differ(func(c Config) int64 { return int64(c.Approval.WebhookTimeout) })},
+	{key: "log.level", class: appliedByReload, differs: differ(func(c Config) int { return int(c.Log.Level) })},
+	{key: "log.format", class: appliedByReload, differs: differ(func(c Config) LogFormat { return c.Log.Format })},
+	{key: "reach.read_blast_cap", class: appliedByReload, differs: differ(func(c Config) int { return c.Reach.ReadBlastCap })},
+	{key: "reach.mutate_blast_cap", class: appliedByReload, differs: differ(func(c Config) int { return c.Reach.MutateBlastCap })},
+	{key: "reach.dispatch_concurrency", class: appliedByReload, differs: differ(func(c Config) int { return c.Reach.DispatchConcurrency })},
+	{key: "reach.min_daemon_version", class: appliedByReload, differs: differ(func(c Config) string { return c.Reach.MinDaemonVersion })},
+	{key: "enrollment.ip_rate_per_minute", class: appliedByReload, differs: differ(func(c Config) int { return c.Enrollment.IPRatePerMinute })},
+	{key: "enrollment.ip_burst", class: appliedByReload, differs: differ(func(c Config) int { return c.Enrollment.IPBurst })},
+	{key: "enrollment.global_rate_per_minute", class: appliedByReload, differs: differ(func(c Config) int { return c.Enrollment.GlobalRatePerMinute })},
+	{key: "enrollment.global_burst", class: appliedByReload, differs: differ(func(c Config) int { return c.Enrollment.GlobalBurst })},
+	{key: "enrollment.max_tracked_ips", class: appliedByReload, differs: differ(func(c Config) int { return c.Enrollment.MaxTrackedIPs })},
+	{key: "enrollment.max_nodes", class: appliedByReload, differs: differ(func(c Config) int { return c.Enrollment.MaxNodes })},
+	{key: "enrollment.cert_expiring_fraction", class: appliedByReload, differs: differ(func(c Config) float64 { return c.Enrollment.CertExpiringFraction })},
 }
 
 // Diff returns one Change per setting whose value differs between running and
@@ -116,7 +111,7 @@ func Diff(running, next Config) []Change {
 		if !s.differs(running, next) {
 			continue
 		}
-		out = append(out, Change{Key: s.key, Secret: s.secret, RestartRequired: restartRequired[s.key]})
+		out = append(out, Change{Key: s.key, Secret: s.secret, RestartRequired: s.class != appliedByReload})
 	}
 	return out
 }
