@@ -4794,8 +4794,11 @@ func TestFleet_UnreportedRendersAsHollowCellChipAndHeaderCount(t *testing.T) {
 			t.Errorf("body lacks %q", want)
 		}
 	}
+	// The System-state headline legitimately says "N Policy fingerprints"; the
+	// bans below are about the group cards, so they read the page without it.
+	cards := strings.Replace(body, systemStateOf(t, body), "", 1)
 	for _, banned := range []string{"every Node here is reachable, current and permitted", "Policy fingerprint</span>", "Policy fingerprints</span>"} {
-		if strings.Contains(body, banned) {
+		if strings.Contains(cards, banned) {
 			t.Errorf("body contains %q", banned)
 		}
 	}

@@ -31,6 +31,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -280,9 +281,10 @@ type fleetGroup struct {
 	// Elided is how many rows the table dropped at deviationRows.
 	Elided int
 
-	// Open is whether this card renders its detail. A group with no deviations
-	// compresses to one line: healthy groups should cost one line of screen,
-	// not a screenful of green.
+	// Open is whether the card's <details> renders open. The body is always in
+	// the page, so a closed card still expands with scripts off. Only a large,
+	// healthy group starts closed: healthy groups should cost one line of
+	// screen, not a screenful of green.
 	Open bool
 }
 
@@ -371,6 +373,18 @@ type fleetView struct {
 	// has no Nodes in it.
 	GroupsElided int
 
+	// Reachable, PolicyFingerprintCount, PolicyFingerprints,
+	// PolicyFingerprintsElided and PolicyFingerprintUnreported are the
+	// System-state headline (spec 01, D27). Counted over the WHOLE matched set:
+	// never over the wall, which caps at wallCap, and never over the drawn
+	// cards, which cap at groupCards.
+	Reachable                   int
+	PolicyFingerprintCount      int                   // distinct, exact
+	PolicyFingerprints          []headlineFingerprint // drawn, at most headlineFingerprints
+	PolicyFingerprintsElided    int
+	PolicyFingerprintUnreported int // matched Nodes with no Policy fingerprint
+	PolicyFingerprintMalformed  int // distinct reported values not of the SHA-256 hex shape, counted and never drawn
+
 	// CertExpiryKnown reports whether the registry holds certificate validity
 	// for EVERY matched Node, and CertExpiryUnknown counts the ones it
 	// does not — Nodes that enrolled before the Relay began recording validity
@@ -412,6 +426,24 @@ func groupParam(groupBy string) string {
 // any taxonomy a human reads at a glance and far short of the thousand a
 // high-cardinality label key produces.
 const groupCards = 40
+
+// headlineFingerprint is one Policy fingerprint in the System-state headline:
+// the full hash and how many matched Nodes report it.
+type headlineFingerprint struct {
+	Hash  string
+	Count int
+}
+
+// headlineFingerprints bounds how many fingerprints the headline lists. Policy
+// is written locally on each Node (invariant 2), so a fleet can report
+// thousands of distinct fingerprints, and spec 01 asks for a screen that
+// renders without a scrollable list. The count is always exact and anything not
+// listed is stated as a number. The list is in count-descending order, so the
+// cap hides the rarest fingerprints.
+const headlineFingerprints = 8
+
+// sha256Hex is the only shape of Policy fingerprint the headline draws in full.
+var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // wallGroup is one run of cells in the fleet-wide wall, kept together and
 // labelled.
@@ -617,6 +649,7 @@ func buildFleetView(d Deps, nodes []registry.Node, filter, groupBy string) fleet
 		v.Groups = append(v.Groups, buildGroup(g.key, g.nodes, listWhole, link))
 	}
 	buildWall(&v, groups)
+	buildHeadline(&v, fns)
 
 	// Counted over the MATCHED set, not the whole fleet: the sentence the
 	// banner renders is about the Nodes on this page.
@@ -675,6 +708,54 @@ func buildWall(v *fleetView, groups []namedGroup) {
 		}
 		v.Legend = append(v.Legend, wallLegend{Bucket: b.bucket, Label: b.label, Count: counts[b.bucket]})
 	}
+}
+
+// buildHeadline fills the System-state headline from every matched Node.
+// Reachable is Connected, the liveness dot's signal and the inverse of
+// state:offline. A Node with no Policy fingerprint is counted apart, never as
+// a fingerprint. The order is display order only: no fingerprint is called the
+// majority or an outlier (spec 01, D27).
+func buildHeadline(v *fleetView, nodes []fleetNode) {
+	tally := map[string]int{}
+	malformed := 0
+	for _, n := range nodes {
+		if n.Connected {
+			v.Reachable++
+		}
+		if n.PolicyFingerprint == "" {
+			v.PolicyFingerprintUnreported++
+			continue
+		}
+		tally[n.PolicyFingerprint]++
+	}
+	v.PolicyFingerprintCount = len(tally)
+	// The headline is the most prominent text on the Console and a fingerprint
+	// is a string the Node reports about itself (invariant 7: a Node is
+	// untrusted for what it says). Spec 01 D27 asks for the full hash, so a
+	// value is drawn only if it has the shape a well-behaved daemon sends,
+	// lowercase SHA-256 hex. Any other value still counts toward the exact
+	// distinct total but is never drawn: unbounded length or bidi characters
+	// would bury the page or spoof its wording.
+	fps := make([]headlineFingerprint, 0, len(tally))
+	for hash, count := range tally {
+		if !sha256Hex.MatchString(hash) {
+			malformed++
+			continue
+		}
+		fps = append(fps, headlineFingerprint{Hash: hash, Count: count})
+	}
+	v.PolicyFingerprintMalformed = malformed
+	sort.Slice(fps, func(i, j int) bool {
+		if fps[i].Count != fps[j].Count {
+			return fps[i].Count > fps[j].Count
+		}
+		return fps[i].Hash < fps[j].Hash
+	})
+	if len(fps) > headlineFingerprints {
+		v.PolicyFingerprintsElided = len(fps) - headlineFingerprints
+		fps = fps[:headlineFingerprints]
+	}
+	v.PolicyFingerprints = fps
 }
 
 // cellSize picks a cell scale for the fleet size.
@@ -1573,8 +1654,20 @@ var fleetTmpl = newScreen("fleet", `
 <section class="systemstate">
   <div class="sshead">
     <h2>System state</h2>
-    <span class="ssline">{{.WallTotal}} {{plural .WallTotal "Node" "Nodes"}}, one cell each{{if .GroupBy}}, grouped by <code>node:{{.GroupBy}}</code>{{end}}</span>
     <span class="asat" title="This page does not update on its own. Reload to re-read the fleet.">as at {{stamp .Now}}</span>
+  </div>
+  <div class="sshl">
+    <span class="ssfig"><b>{{.Reachable}}</b> of {{.Matched}} reachable</span>
+    <span class="ssfig"><b>{{.PolicyFingerprintCount}}</b> Policy {{plural .PolicyFingerprintCount "fingerprint" "fingerprints"}}</span>
+  </div>
+  {{if or .PolicyFingerprints .PolicyFingerprintMalformed .PolicyFingerprintUnreported}}<ul class="ssfps">
+    {{range .PolicyFingerprints}}<li><code class="fphash">{{.Hash}}</code> <b>{{.Count}}</b></li>{{end}}
+    {{if .PolicyFingerprintsElided}}<li class="dim">{{.PolicyFingerprintsElided}} more Policy {{plural .PolicyFingerprintsElided "fingerprint" "fingerprints"}} not listed</li>{{end}}
+    {{if .PolicyFingerprintMalformed}}<li class="dim">{{.PolicyFingerprintMalformed}} malformed, not listed</li>{{end}}
+    {{if .PolicyFingerprintUnreported}}<li>not reported <b>{{.PolicyFingerprintUnreported}}</b></li>{{end}}
+  </ul>{{end}}
+  <div class="sswallhead">
+    <span class="ssline">{{.WallTotal}} {{plural .WallTotal "Node" "Nodes"}}, one cell each{{if .GroupBy}}, grouped by <code>node:{{.GroupBy}}</code>{{end}}</span>
     <div class="sskey">
       {{range .Legend}}<span class="sskeyitem"><i class="cell" data-bucket="{{.Bucket}}" aria-hidden="true"></i><b>{{.Count}}</b> {{.Label}}</span>{{end}}
     </div>
@@ -1590,8 +1683,8 @@ var fleetTmpl = newScreen("fleet", `
 {{end}}
 
 {{range .Groups}}
-<section class="group{{if .Open}} open{{end}}">
-  <header class="ghead">
+<details class="group"{{if .Open}} open{{end}}>
+  <summary class="ghead">
     <h2>{{.Key}}</h2>
     <span class="gcount">{{.Count}} {{plural .Count "Node" "Nodes"}}</span>
     {{if .Offline}}<span class="gdev attn">{{.Offline}} offline</span>{{end}}
@@ -1603,9 +1696,8 @@ var fleetTmpl = newScreen("fleet", `
     {{if .Unreported}}<span class="gdev">{{.Unreported}} not reported</span>{{end}}
     {{if .OffMode}}<span class="gdev drift">{{.Fingerprinted}} {{plural .Fingerprinted "Node" "Nodes"}} on {{.Fingerprints}} Policy {{plural .Fingerprints "fingerprint" "fingerprints"}}</span>{{end}}
     {{if not .Open}}<span class="gdev calm">no deviations</span>{{end}}
-  </header>
+  </summary>
 
-  {{if .Open}}
   <div class="gbody">
     <div class="facets">
       {{range .Facets}}
@@ -1625,6 +1717,7 @@ var fleetTmpl = newScreen("fleet", `
     </div>
 
     <div class="devtable">
+      {{if .Deviations}}
       <table class="cards">
         <caption class="tcap">{{if .ListsWholeFleet}}Every Node in <span class="ident">{{.Key}}</span>, oddest first.{{else}}Deviating Nodes in <span class="ident">{{.Key}}</span>, rarest first.{{end}}</caption>
         <thead><tr>
@@ -1657,11 +1750,11 @@ var fleetTmpl = newScreen("fleet", `
         </tbody>
       </table>
       {{if .Elided}}<p class="mode">{{.Elided}} more {{plural .Elided "Node deviates" "Nodes deviate"}} and are not listed.</p>{{end}}
+      {{end}}
       <p class="mode">{{.ModeLine}}</p>
     </div>
   </div>
-  {{end}}
-</section>
+</details>
 {{end}}
 </div>
 

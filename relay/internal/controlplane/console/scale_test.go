@@ -144,7 +144,7 @@ func TestFleet_TenThousandNodesRenderWithoutAList(t *testing.T) {
 		}
 		body := rec.Body.String()
 
-		cards := strings.Count(body, `<section class="group`)
+		cards := strings.Count(body, `<details class="group`)
 		if cards != groupCards {
 			t.Errorf("drew %d group cards, want exactly %d (groupCards)", cards, groupCards)
 		}
