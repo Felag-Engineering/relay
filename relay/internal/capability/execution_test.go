@@ -163,7 +163,7 @@ func TestEngineOneTaskPerNodePersistedBeforeDispatch(t *testing.T) {
 		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
 		// Concurrent dispatch, so "all creates precede the first dispatch" is
 		// proven under the fan-out and not under the sequential fallback.
-		concurrency: 16,
+		settings: concurrencyOf(16),
 	}
 
 	nodes := []registry.Node{testNode("node-1"), testNode("node-2"), testNode("node-3")}
@@ -652,13 +652,13 @@ func (p *panicConduit) Dispatch(ctx context.Context, nodeID string, task jobs.Ta
 
 func panicTestEngine(jobsRepo jobs.JobRepository, tasksRepo jobs.TaskRepository, c Conduit) *jobEngine {
 	return &jobEngine{
-		jobsRepo:    jobsRepo,
-		tasksRepo:   tasksRepo,
-		intents:     &nonAtomicIntents{tr: tasksRepo},
-		conduit:     c,
-		newID:       sequentialIDs("id-"),
-		now:         func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
-		concurrency: 2,
+		jobsRepo:  jobsRepo,
+		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
+		conduit:   c,
+		newID:     sequentialIDs("id-"),
+		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
+		settings:  concurrencyOf(2),
 	}
 }
 
@@ -1067,7 +1067,7 @@ func TestNewExecutionRefusesDefaultSeams(t *testing.T) {
 	reg := registry.NewInMemory()
 	rec := NewRecorder(noopAuditSink{}, nil, nil)
 	ctl := newControl(rec, allowAllAuthorizer{}, noopFreezeStore{})
-	read := newReadLane(rec, reg, nil, nil, nil, nil, 0, nil)
+	read := newReadLane(rec, reg, nil, nil, nil, nil, testSettings, nil)
 	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 
 	defer func() {
@@ -1075,7 +1075,7 @@ func TestNewExecutionRefusesDefaultSeams(t *testing.T) {
 			t.Fatal("NewExecution over the allow-all/no-op default seams should panic")
 		}
 	}()
-	NewExecution(ctl, read, appr, noopCapChecker{}, nil, jobsRepo, tasksRepo, conduit, DefaultDispatchConcurrency, nil, nil)
+	NewExecution(ctl, read, appr, noopCapChecker{}, nil, jobsRepo, tasksRepo, conduit, testSettings, nil, nil)
 }
 
 // TestNewExecutionAcceptsRealSeams: with real (spy) Authorizer, CapChecker,
@@ -1099,9 +1099,9 @@ func TestNewExecutionAcceptsRealSeams(t *testing.T) {
 
 	rec := NewRecorder(&intentSpySink{audit, &nonAtomicIntents{tr: tasksRepo}}, nil, nil)
 	svc := NewExecution(NewControl(rec, authz, freezeStore),
-		newReadLane(rec, reg, nil, nil, nil, nil, 0, nil),
+		newReadLane(rec, reg, nil, nil, nil, nil, testSettings, nil),
 		newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
-		capChecker, nil, jobsRepo, tasksRepo, conduit, DefaultDispatchConcurrency, sequentialIDs("id-"), nil,
+		capChecker, nil, jobsRepo, tasksRepo, conduit, testSettings, sequentialIDs("id-"), nil,
 	)
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
@@ -1232,7 +1232,7 @@ func TestNewExecutionRefusesWithoutFreeze(t *testing.T) {
 	// real-dispatcher check left that can fire here.
 	rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tasksRepo}}, nil, nil)
 	ctl := newControl(rec, &spyAuthorizer{}, noopFreezeStore{})
-	read := newReadLane(rec, reg, nil, nil, nil, nil, 0, nil)
+	read := newReadLane(rec, reg, nil, nil, nil, nil, testSettings, nil)
 	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 
 	defer func() {
@@ -1240,7 +1240,7 @@ func TestNewExecutionRefusesWithoutFreeze(t *testing.T) {
 			t.Fatal("NewExecution with real Authorizer/CapChecker/AuditSink but a never-frozen FreezeStore should panic")
 		}
 	}()
-	NewExecution(ctl, read, appr, &spyCapChecker{}, nil, jobsRepo, tasksRepo, conduit, DefaultDispatchConcurrency, nil, nil)
+	NewExecution(ctl, read, appr, &spyCapChecker{}, nil, jobsRepo, tasksRepo, conduit, testSettings, nil, nil)
 }
 
 // TestNewExecution_RefusesEachFailOpenSeam: each fail-open seam, alone, makes
@@ -1255,28 +1255,28 @@ func TestNewExecution_RefusesEachFailOpenSeam(t *testing.T) {
 		{"allow-all Authorizer", "allowAllAuthorizer", func(t *testing.T, tr jobs.TaskRepository) (*Control, *ReadLane, *Approvals, CapChecker) {
 			rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}, nil, nil)
 			return newControl(rec, allowAllAuthorizer{}, &fakeFreezeStore{}),
-				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, 0, nil),
+				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, testSettings, nil),
 				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
 				&spyCapChecker{}
 		}},
 		{"no-op CapChecker", "noopCapChecker", func(t *testing.T, tr jobs.TaskRepository) (*Control, *ReadLane, *Approvals, CapChecker) {
 			rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}, nil, nil)
 			return newControl(rec, &spyAuthorizer{}, &fakeFreezeStore{}),
-				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, 0, nil),
+				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, testSettings, nil),
 				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
 				noopCapChecker{}
 		}},
 		{"no-op AuditSink", "noopAuditSink", func(t *testing.T, tr jobs.TaskRepository) (*Control, *ReadLane, *Approvals, CapChecker) {
 			rec := NewRecorder(noopAuditSink{}, nil, nil)
 			return newControl(rec, &spyAuthorizer{}, &fakeFreezeStore{}),
-				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, 0, nil),
+				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, testSettings, nil),
 				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
 				&spyCapChecker{}
 		}},
 		{"no-op FreezeStore", "noopFreezeStore", func(t *testing.T, tr jobs.TaskRepository) (*Control, *ReadLane, *Approvals, CapChecker) {
 			rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}, nil, nil)
 			return newControl(rec, &spyAuthorizer{}, noopFreezeStore{}),
-				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, 0, nil),
+				newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, testSettings, nil),
 				newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
 				&spyCapChecker{}
 		}},
@@ -1294,7 +1294,7 @@ func TestNewExecution_RefusesEachFailOpenSeam(t *testing.T) {
 					t.Errorf("panic = %v, want it to name %s", r, tc.marker)
 				}
 			}()
-			NewExecution(ctl, read, appr, capc, nil, jobsRepo, tasksRepo, newFakeConduit(nil), DefaultDispatchConcurrency, nil, nil)
+			NewExecution(ctl, read, appr, capc, nil, jobsRepo, tasksRepo, newFakeConduit(nil), testSettings, nil, nil)
 		})
 	}
 }
@@ -1314,9 +1314,9 @@ func TestNewExecution_NilOptionalSeamsTakeTheirSafeDefaults(t *testing.T) {
 	intents := &nonAtomicIntents{tr: tasksRepo}
 	rec := NewRecorder(&intentSpySink{&spyAuditSink{}, intents}, nil, nil)
 	x := NewExecution(NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{}),
-		newReadLane(rec, reg, nil, nil, nil, nil, 0, nil),
+		newReadLane(rec, reg, nil, nil, nil, nil, testSettings, nil),
 		newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil),
-		&spyCapChecker{}, nil, jobsRepo, tasksRepo, conduit, DefaultDispatchConcurrency, nil, nil)
+		&spyCapChecker{}, nil, jobsRepo, tasksRepo, conduit, testSettings, nil, nil)
 
 	if _, ok := x.jobEvents.(noopJobEventSink); !ok {
 		t.Errorf("jobEvents = %T, want noopJobEventSink", x.jobEvents)
@@ -1716,13 +1716,13 @@ func newConcurrentEngine(t *testing.T, c Conduit, concurrency int) (*jobEngine, 
 	t.Helper()
 	jobsRepo, tasksRepo := testEngineStore(t)
 	return &jobEngine{
-		jobsRepo:    jobsRepo,
-		tasksRepo:   tasksRepo,
-		intents:     &nonAtomicIntents{tr: tasksRepo},
-		conduit:     c,
-		newID:       sequentialIDs("id-"),
-		now:         func() time.Time { return time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC) },
-		concurrency: concurrency,
+		jobsRepo:  jobsRepo,
+		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
+		conduit:   c,
+		newID:     sequentialIDs("id-"),
+		now:       func() time.Time { return time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC) },
+		settings:  concurrencyOf(concurrency),
 	}, tasksRepo
 }
 
@@ -2184,13 +2184,13 @@ func TestJobEngine_CancelRaceStress(t *testing.T) {
 		}
 		jobID := fmt.Sprintf("job-i%d-1", iter)
 		e := &jobEngine{
-			jobsRepo:    jobsRepo,
-			tasksRepo:   tasksRepo,
-			intents:     &nonAtomicIntents{tr: tasksRepo},
-			conduit:     c,
-			newID:       sequentialIDs(fmt.Sprintf("i%d-", iter)),
-			now:         func() time.Time { return time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC) },
-			concurrency: 16,
+			jobsRepo:  jobsRepo,
+			tasksRepo: tasksRepo,
+			intents:   &nonAtomicIntents{tr: tasksRepo},
+			conduit:   c,
+			newID:     sequentialIDs(fmt.Sprintf("i%d-", iter)),
+			now:       func() time.Time { return time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC) },
+			settings:  concurrencyOf(16),
 		}
 
 		done := make(chan error, 1)
@@ -2493,13 +2493,13 @@ func TestJobEngine_CancelRecheckRaceStress(t *testing.T) {
 
 		jobID := fmt.Sprintf("job-i%d-1", iter)
 		e := &jobEngine{
-			jobsRepo:    jobsRepo,
-			tasksRepo:   tasksRepo,
-			intents:     &nonAtomicIntents{tr: tasksRepo},
-			conduit:     c,
-			newID:       sequentialIDs(fmt.Sprintf("i%d-", iter)),
-			now:         func() time.Time { return time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC) },
-			concurrency: 3,
+			jobsRepo:  jobsRepo,
+			tasksRepo: tasksRepo,
+			intents:   &nonAtomicIntents{tr: tasksRepo},
+			conduit:   c,
+			newID:     sequentialIDs(fmt.Sprintf("i%d-", iter)),
+			now:       func() time.Time { return time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC) },
+			settings:  concurrencyOf(3),
 		}
 
 		done := make(chan error, 1)
@@ -2627,16 +2627,17 @@ func TestNewExecutionPanicsOnNonPositiveDispatchConcurrency(t *testing.T) {
 	// Every other argument is valid, so only the concurrency check can fire.
 	rec := NewRecorder(&intentSpySink{&spyAuditSink{}, &nonAtomicIntents{tr: tr}}, nil, nil)
 	ctl := NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{})
-	read := newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, 0, nil)
 	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 	for _, n := range []int{0, -1} {
+		settings := concurrencyOf(n)
+		read := newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, settings, nil)
 		func() {
 			defer func() {
 				if recover() == nil {
 					t.Errorf("NewExecution(concurrency=%d) did not panic", n)
 				}
 			}()
-			NewExecution(ctl, read, appr, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), n, nil, nil)
+			NewExecution(ctl, read, appr, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), settings, nil, nil)
 		}()
 	}
 }

@@ -8,7 +8,8 @@ import (
 
 // PrincipalLocalHost is the Principal (and Verified.AccountName, with an empty
 // AccountID) of an act performed by root on the Relay host itself: the freeze
-// signal (capability.localHostPrincipal) and the host credential levers.
+// signal (capability.localHostPrincipal), the host credential levers and the
+// configuration reload (SIGHUP).
 // It is not an Account and holds no role.
 const PrincipalLocalHost = "local-host"
 

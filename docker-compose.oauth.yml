@@ -153,15 +153,17 @@ services:
       # from starting — so the Relay starts only once the IdP serves the realm.
       idp:
         condition: service_healthy
+
+  # Compose merges service volumes by container target, so this replaces the base
+  # file's /src/relay.toml. The overlay ALWAYS stages the demo-oauth fixture
+  # (docker/fixtures/relay.demo-oauth.toml), so it always uses the demo approval
+  # gate, and it ignores DEV_FLEET_RELAY_CONFIG: Compose cannot merge TOML, so the
+  # OAuth settings and the gate choice cannot be layered over a selected file. A
+  # bare `docker compose -f docker-compose.demo.yml -f docker-compose.oauth.yml`
+  # therefore no longer honours the gate selector.
+  relay-config:
     volumes:
-      # Compose merges service volumes by container target, so this replaces the base
-      # file's mount of /etc/relay/relay.toml. The overlay ALWAYS mounts the demo-oauth
-      # fixture (docker/fixtures/relay.demo-oauth.toml), so it always uses the demo
-      # approval gate, and it ignores DEV_FLEET_RELAY_CONFIG: Compose cannot merge TOML,
-      # so the OAuth settings and the gate choice cannot be layered over a selected file.
-      # A bare `docker compose -f docker-compose.demo.yml -f docker-compose.oauth.yml`
-      # therefore no longer honours the gate selector.
-      - ./docker/fixtures/relay.demo-oauth.toml:/etc/relay/relay.toml:ro
+      - ./docker/fixtures/relay.demo-oauth.toml:/src/relay.toml:ro
 
   # The fleet's `init` one-shot also creates the human Account the IdP's user
   # signs in as (docker/dev-fleet-init.sh); the Relay never creates an Account

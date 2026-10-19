@@ -52,8 +52,11 @@ type seams struct {
 	nodeVocab  TemplateVocabularySource
 	aliases    PolicyAliasSource
 
-	// certWindow is the state:cert-expiring window handed to the ReadLane.
+	// certWindow is the state:cert-expiring window handed to the ReadLane when
+	// settings is nil. settings, when set, is the one source the read lane and
+	// the Job engine read; a test that changes settings mid-test supplies it.
 	certWindow time.Duration
+	settings   OperatorSettingsSource
 
 	accountsStore AccountStore
 	apiTokens     APITokenStore
@@ -100,11 +103,15 @@ func build(t *testing.T, s seams) *testSvc {
 	}
 	rec := NewRecorder(audit, s.metrics, nil)
 	control := newControl(rec, authz, freeze)
+	settings := s.settings
+	if settings == nil {
+		settings = &StaticOperatorSettings{S: OperatorSettings{CertExpiringWithin: s.certWindow, DispatchConcurrency: DefaultDispatchConcurrency}}
+	}
 	var read *ReadLane
 	if s.auditQ != nil || s.jobQ != nil {
-		read = NewReadLane(rec, s.reg, s.auditQ, s.jobQ, s.policyView, s.nodeVocab, s.certWindow, s.now, WithPolicyAliasSource(s.aliases))
+		read = NewReadLane(rec, s.reg, s.auditQ, s.jobQ, s.policyView, s.nodeVocab, settings, s.now, WithPolicyAliasSource(s.aliases))
 	} else {
-		read = newReadLane(rec, s.reg, nil, nil, s.policyView, s.nodeVocab, s.certWindow, s.now, WithPolicyAliasSource(s.aliases))
+		read = newReadLane(rec, s.reg, nil, nil, s.policyView, s.nodeVocab, settings, s.now, WithPolicyAliasSource(s.aliases))
 	}
 	aliasRec, _ := audit.(PolicyAliasRecorder)
 	aliasAdmin := newPolicyAliasAdmin(control, s.aliases, aliasRec)
@@ -141,7 +148,7 @@ func build(t *testing.T, s seams) *testSvc {
 		if intents == nil {
 			intents = &nonAtomicIntents{tr: s.tasksRepo}
 		}
-		eng := newJobEngine(s.jobsRepo, s.tasksRepo, s.conduit, DefaultDispatchConcurrency, s.newID)
+		eng := newJobEngine(s.jobsRepo, s.tasksRepo, s.conduit, settings, s.newID)
 		eng.intents = intents
 		disp = eng
 	}
@@ -162,10 +169,17 @@ func buildRaw(t *testing.T, s seams) *testSvc {
 	}
 	rec := &Recorder{audit: s.audit, metrics: s.metrics}
 	control := &Control{rec: rec, authz: s.authz, freeze: s.freeze}
+	var rawSettings OperatorSettingsSource
+	switch {
+	case s.settings != nil:
+		rawSettings = s.settings
+	case s.certWindow != 0:
+		rawSettings = &StaticOperatorSettings{S: OperatorSettings{CertExpiringWithin: s.certWindow}}
+	}
 	read := &ReadLane{
 		rec: rec, reg: s.reg, auditQ: s.auditQ, jobQ: s.jobQ,
 		policyView: s.policyView, nodeVocab: s.nodeVocab, aliases: s.aliases,
-		certExpiringWithin: s.certWindow, now: s.now,
+		settings: rawSettings, now: s.now,
 	}
 	acct := &AccountAdmin{control: control, accountStore: s.accountsStore, tokens: s.apiTokens}
 	aliasRec, _ := s.audit.(PolicyAliasRecorder)
@@ -184,4 +198,18 @@ func buildRaw(t *testing.T, s seams) *testSvc {
 		idem:      s.idem,
 	}
 	return &testSvc{svc, read, control, acct, aliasAdmin, appr}
+}
+
+// testSettings is the shared, never-mutated source for tests that need a
+// valid one. A test that changes settings builds its own.
+var testSettings = &StaticOperatorSettings{S: OperatorSettings{DispatchConcurrency: DefaultDispatchConcurrency}}
+
+// caps is a fixed source carrying these blast caps.
+func caps(readCap, mutateCap int) *StaticOperatorSettings {
+	return &StaticOperatorSettings{S: OperatorSettings{ReadBlastCap: readCap, MutateBlastCap: mutateCap}}
+}
+
+// concurrencyOf is a fixed source carrying this dispatch concurrency.
+func concurrencyOf(n int) *StaticOperatorSettings {
+	return &StaticOperatorSettings{S: OperatorSettings{DispatchConcurrency: n}}
 }

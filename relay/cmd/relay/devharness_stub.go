@@ -9,8 +9,7 @@ package main
 // footprint of the feature: a single call site that does nothing.
 //
 // cfg is accepted (but unused) so the signature matches the devharness-tagged
-// build, which needs it to read the file-configured blast caps when
-// constructing its own capability.Execution.
+// build.
 func installDevHarness(cfg Config, deps *appDeps) (func(), error) {
 	return func() {}, nil
 }

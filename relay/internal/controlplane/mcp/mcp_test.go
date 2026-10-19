@@ -295,7 +295,7 @@ func newTestServerWithConcurrency(t *testing.T, accountID string, readCap, mutat
 	capSvc := newCapService(t, capSeams{
 		reg:         reg,
 		authz:       testAuthorizer{},
-		cap:         capability.NewBlastCap(readCap, mutateCap),
+		settings:    blastCaps(readCap, mutateCap),
 		audit:       auditsink.New(st.Audit()),
 		freeze:      st.Freeze(),
 		auditQ:      q,
@@ -423,7 +423,6 @@ func newTestServerWithFailingReadSink(t *testing.T) testServer {
 	capSvc := newCapService(t, capSeams{
 		reg:       reg,
 		authz:     testAuthorizer{},
-		cap:       capability.NewBlastCap(0, 0),
 		audit:     failingReadSink{Sink: auditsink.New(st.Audit())},
 		freeze:    st.Freeze(),
 		auditQ:    q,

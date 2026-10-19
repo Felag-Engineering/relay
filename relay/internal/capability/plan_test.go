@@ -214,7 +214,7 @@ func TestPlanOverCapReportsNotErrors(t *testing.T) {
 	audit := &spyAuditSink{}
 	svc := build(t, seams{reg: reg,
 		authz:    &spyAuthorizer{},
-		cap:      NewBlastCap(100, 2), // mutate-cap = 2, 5 Nodes matched
+		cap:      NewBlastCap(caps(100, 2)), // mutate-cap = 2, 5 Nodes matched
 		audit:    audit,
 		freeze:   &fakeFreezeStore{},
 		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: conduit,

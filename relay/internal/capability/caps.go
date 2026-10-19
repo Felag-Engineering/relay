@@ -7,7 +7,7 @@ import (
 )
 
 // DefaultReadCap and DefaultMutateCap are the blast-radius caps used when the
-// Relay's startup config supplies a non-positive value (see NewBlastCap). The
+// Relay's settings supply a non-positive value (see NewBlastCap). The
 // read-cap is generous; the mutate-cap — which Raw Exec always takes
 // (ADR-0012) — is small, matching the v0.0.5 deliverable.
 const (
@@ -43,27 +43,23 @@ func capName(class jobs.RiskClass) string {
 	return "mutate-cap"
 }
 
-// BlastCap is the real CapChecker (ADR-0004): it enforces two file-configured
-// blast-radius caps chosen by the Action's declared RiskClass. Construct it
-// with NewBlastCap; readCap and mutateCap are unexported so the caps can only
-// change via reconstruction (Relay startup), never at runtime.
+// BlastCap is the real CapChecker (ADR-0004): it enforces two blast-radius
+// caps chosen by the Action's declared RiskClass, read from its
+// OperatorSettingsSource on every Check. The caps change only through that
+// source, which no request reaches (invariant 11).
 type BlastCap struct {
-	readCap   int
-	mutateCap int
+	settings OperatorSettingsSource
 }
 
-// NewBlastCap returns a BlastCap enforcing readCap for RiskClassRead and
-// mutateCap for RiskClassMutate/RiskClassUnspecified. A guardrail must fail
-// closed: any non-positive input is clamped to the package default for that
-// lane rather than being treated as "unlimited".
-func NewBlastCap(readCap, mutateCap int) *BlastCap {
-	if readCap <= 0 {
-		readCap = DefaultReadCap
+// NewBlastCap returns a BlastCap reading its caps from settings. A guardrail
+// must fail closed: any non-positive cap the source reports is clamped to the
+// package default for that lane rather than being treated as "unlimited". A
+// nil source is a composition-root bug and panics.
+func NewBlastCap(settings OperatorSettingsSource) *BlastCap {
+	if settings == nil {
+		panic("capability: NewBlastCap: settings must not be nil")
 	}
-	if mutateCap <= 0 {
-		mutateCap = DefaultMutateCap
-	}
-	return &BlastCap{readCap: readCap, mutateCap: mutateCap}
+	return &BlastCap{settings: settings}
 }
 
 // Check implements CapChecker. RiskClassRead uses the read-cap; both
@@ -73,9 +69,16 @@ func NewBlastCap(readCap, mutateCap int) *BlastCap {
 // than the generous one. The cap is an inclusive maximum: matched == cap is
 // allowed.
 func (b *BlastCap) Check(class jobs.RiskClass, matched int) error {
-	limit := b.mutateCap
+	cfg := b.settings.OperatorSettings()
+	limit := cfg.MutateBlastCap
+	if limit <= 0 {
+		limit = DefaultMutateCap
+	}
 	if class == jobs.RiskClassRead {
-		limit = b.readCap
+		limit = cfg.ReadBlastCap
+		if limit <= 0 {
+			limit = DefaultReadCap
+		}
 	}
 	if matched > limit {
 		return &CapExceededError{Class: class, Matched: matched, Cap: limit}

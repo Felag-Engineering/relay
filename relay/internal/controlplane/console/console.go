@@ -153,12 +153,6 @@ type Deps struct {
 	// one subject where being wrong is worst.
 	Accounts AccountReader
 
-	// CertExpiringWithin is the state:cert-expiring warning window
-	// (ADR-0034): a mirror of a configured startup value (invariant
-	// 11), same "told, never settable" posture as Execution above. Zero (the
-	// default) means the marker never fires.
-	CertExpiringWithin time.Duration
-
 	// Cancel is one of the Console's two write seams (cancel.go): the
 	// same capability.Execution.CancelJob the Control API and MCP call. The role
 	// floor is operator; the scope beyond that floor differs by Account kind

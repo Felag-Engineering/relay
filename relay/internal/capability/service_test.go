@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
@@ -590,7 +589,7 @@ func TestConstructorsPanicOnNilSeam(t *testing.T) {
 	store := &fakeAccountStore{}
 	tokens := &fakeAPITokenStore{}
 	ctl := NewControl(rec, authz, freeze)
-	read := NewReadLane(rec, reg, aq, jq, nil, nil, 0, nil)
+	read := NewReadLane(rec, reg, aq, jq, nil, nil, testSettings, nil)
 	gate := gateEverything(t, 1)
 	astore := newMemApprovals()
 	aauthz := &spyApprovalAuthorizer{}
@@ -608,37 +607,40 @@ func TestConstructorsPanicOnNilSeam(t *testing.T) {
 		{"NewAccountAdmin/control", func() { NewAccountAdmin(nil, store, tokens) }, "NewAccountAdmin: control"},
 		{"NewAccountAdmin/account store", func() { NewAccountAdmin(ctl, nil, tokens) }, "NewAccountAdmin: account store"},
 		{"NewAccountAdmin/API token store", func() { NewAccountAdmin(ctl, store, nil) }, "NewAccountAdmin: API token store"},
-		{"NewReadLane/recorder", func() { NewReadLane(nil, reg, aq, jq, nil, nil, 0, nil) }, "NewReadLane: recorder"},
-		{"NewReadLane/registry", func() { NewReadLane(rec, nil, aq, jq, nil, nil, 0, nil) }, "NewReadLane: registry"},
-		{"NewReadLane/audit query seam", func() { NewReadLane(rec, reg, nil, jq, nil, nil, 0, nil) }, "NewReadLane: audit query seam"},
-		{"NewReadLane/job query seam", func() { NewReadLane(rec, reg, aq, nil, nil, nil, 0, nil) }, "NewReadLane: job query seam"},
-		{"NewReadLane/certExpiringWithin", func() { NewReadLane(rec, reg, aq, jq, nil, nil, -time.Second, nil) }, "NewReadLane: certExpiringWithin"},
+		{"NewReadLane/recorder", func() { NewReadLane(nil, reg, aq, jq, nil, nil, testSettings, nil) }, "NewReadLane: recorder"},
+		{"NewReadLane/registry", func() { NewReadLane(rec, nil, aq, jq, nil, nil, testSettings, nil) }, "NewReadLane: registry"},
+		{"NewReadLane/audit query seam", func() { NewReadLane(rec, reg, nil, jq, nil, nil, testSettings, nil) }, "NewReadLane: audit query seam"},
+		{"NewReadLane/job query seam", func() { NewReadLane(rec, reg, aq, nil, nil, nil, testSettings, nil) }, "NewReadLane: job query seam"},
+		{"NewReadLane/settings", func() { NewReadLane(rec, reg, aq, jq, nil, nil, nil, nil) }, "NewReadLane: settings"},
 		{"NewApprovals/recorder", func() { NewApprovals(nil, gate, astore, aauthz, nil, nil, nil, nil) }, "NewApprovals: recorder"},
 		{"NewApprovals/gate", func() { NewApprovals(rec, nil, astore, aauthz, nil, nil, nil, nil) }, "NewApprovals: gate"},
 		{"NewApprovals/store", func() { NewApprovals(rec, gate, nil, aauthz, nil, nil, nil, nil) }, "NewApprovals: store"},
 		{"NewApprovals/approval authorizer", func() { NewApprovals(rec, gate, astore, nil, nil, nil, nil, nil) }, "NewApprovals: approval authorizer"},
 		{"NewExecution/control", func() {
-			NewExecution(nil, read, appr, capc, nil, jr, tr, conduit, 1, nil, nil)
+			NewExecution(nil, read, appr, capc, nil, jr, tr, conduit, testSettings, nil, nil)
 		}, "capability: NewExecution: control"},
 		{"NewExecution/read lane", func() {
-			NewExecution(ctl, nil, appr, capc, nil, jr, tr, conduit, 1, nil, nil)
+			NewExecution(ctl, nil, appr, capc, nil, jr, tr, conduit, testSettings, nil, nil)
 		}, "capability: NewExecution: read lane"},
 		{"NewExecution/approvals", func() {
-			NewExecution(ctl, read, nil, capc, nil, jr, tr, conduit, 1, nil, nil)
+			NewExecution(ctl, read, nil, capc, nil, jr, tr, conduit, testSettings, nil, nil)
 		}, "capability: NewExecution: approvals"},
 		// rec's AuditSink cannot record intent, so without this check the call
 		// would panic anyway, but with the IntentRecorder text, not this one.
 		{"NewExecution/capChecker", func() {
-			NewExecution(ctl, read, appr, nil, nil, jr, tr, conduit, 1, nil, nil)
+			NewExecution(ctl, read, appr, nil, nil, jr, tr, conduit, testSettings, nil, nil)
 		}, "capability: NewExecution: capChecker"},
+		{"NewExecution/settings", func() {
+			NewExecution(ctl, read, appr, capc, nil, jr, tr, conduit, nil, nil, nil)
+		}, "settings must not be nil"},
 		{"NewExecution/jobsRepo", func() {
-			NewExecution(ctl, read, appr, capc, nil, nil, tr, conduit, 1, nil, nil)
+			NewExecution(ctl, read, appr, capc, nil, nil, tr, conduit, testSettings, nil, nil)
 		}, "NewExecution: jobsRepo, tasksRepo, and conduit"},
 		{"NewExecution/tasksRepo", func() {
-			NewExecution(ctl, read, appr, capc, nil, jr, nil, conduit, 1, nil, nil)
+			NewExecution(ctl, read, appr, capc, nil, jr, nil, conduit, testSettings, nil, nil)
 		}, "NewExecution: jobsRepo, tasksRepo, and conduit"},
 		{"NewExecution/conduit", func() {
-			NewExecution(ctl, read, appr, capc, nil, jr, tr, nil, 1, nil, nil)
+			NewExecution(ctl, read, appr, capc, nil, jr, tr, nil, testSettings, nil, nil)
 		}, "NewExecution: jobsRepo, tasksRepo, and conduit"},
 	}
 
@@ -667,11 +669,11 @@ func TestNewExecution_RefusesReadLaneOverADifferentRecorder(t *testing.T) {
 	recB := NewRecorder(spy, nil, nil)
 	reg := registry.NewInMemory()
 	ctl := NewControl(recA, &spyAuthorizer{}, &fakeFreezeStore{})
-	other := newReadLane(recB, reg, nil, nil, nil, nil, 0, nil)
-	same := newReadLane(recA, reg, nil, nil, nil, nil, 0, nil)
+	other := newReadLane(recB, reg, nil, nil, nil, nil, testSettings, nil)
+	same := newReadLane(recA, reg, nil, nil, nil, nil, testSettings, nil)
 	appr := newApprovals(recA, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 
-	if NewExecution(ctl, same, appr, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), 1, nil, nil) == nil {
+	if NewExecution(ctl, same, appr, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), testSettings, nil, nil) == nil {
 		t.Fatal("NewExecution over a read lane sharing the Control's Recorder returned nil")
 	}
 
@@ -685,7 +687,7 @@ func TestNewExecution_RefusesReadLaneOverADifferentRecorder(t *testing.T) {
 			t.Fatalf("panic = %v, want NewExecution's shared-Recorder refusal", r)
 		}
 	}()
-	NewExecution(ctl, other, appr, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), 1, nil, nil)
+	NewExecution(ctl, other, appr, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), testSettings, nil, nil)
 }
 
 // TestNewExecution_RefusesApprovalsOverADifferentRecorder: the Control and the
@@ -697,11 +699,11 @@ func TestNewExecution_RefusesApprovalsOverADifferentRecorder(t *testing.T) {
 	recB := NewRecorder(spy, nil, nil)
 	reg := registry.NewInMemory()
 	ctl := NewControl(recA, &spyAuthorizer{}, &fakeFreezeStore{})
-	same := newReadLane(recA, reg, nil, nil, nil, nil, 0, nil)
+	same := newReadLane(recA, reg, nil, nil, nil, nil, testSettings, nil)
 	apprA := newApprovals(recA, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 	apprB := newApprovals(recB, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 
-	if NewExecution(ctl, same, apprA, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), 1, nil, nil) == nil {
+	if NewExecution(ctl, same, apprA, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), testSettings, nil, nil) == nil {
 		t.Fatal("NewExecution over an Approvals sharing the Control's Recorder returned nil")
 	}
 
@@ -715,7 +717,7 @@ func TestNewExecution_RefusesApprovalsOverADifferentRecorder(t *testing.T) {
 			t.Fatalf("panic = %v, want NewExecution's approvals shared-Recorder refusal", r)
 		}
 	}()
-	NewExecution(ctl, same, apprB, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), 1, nil, nil)
+	NewExecution(ctl, same, apprB, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), testSettings, nil, nil)
 }
 
 // TestNewApprovals_NilNotifierParksWithoutNotifying: production passes a nil
@@ -725,7 +727,7 @@ func TestNewApprovals_NilNotifierParksWithoutNotifying(t *testing.T) {
 	rec := NewRecorder(&spyAuditSink{}, nil, nil)
 	appr := NewApprovals(rec, gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}, nil, nil, nil, nil)
 	ctl := NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{})
-	read := newReadLane(rec, seedOneNode(t), nil, nil, nil, nil, 0, nil)
+	read := newReadLane(rec, seedOneNode(t), nil, nil, nil, nil, testSettings, nil)
 	svc := newExecution(ctl, read, appr, noopCapChecker{}, nil, noopDispatcher{}, nil)
 
 	_, err := svc.Run(context.Background(), machineRequester, Selector{}, mutateAct())

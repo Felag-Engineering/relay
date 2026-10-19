@@ -32,15 +32,25 @@ single-Relay deployment stack, with no relay-daemons and no fixtures, is
 - Network access to Docker Hub the first time (the Relay/daemon binaries are
   compiled inside multi-stage images; nothing depends on a host Go or Rust
   toolchain).
+- **The Relay's configuration comes from a Linux filesystem, and why.** The Relay refuses
+  `relay.toml`, its gate files and its state directory unless every component of the path sits
+  on a filesystem whose owner and mode the kernel reports itself (ext4, XFS, btrfs, tmpfs,
+  overlayfs). A checkout bind mount fails twice over: it carries your uid and mode `0644`, and on
+  Docker Desktop (macOS, Windows) it arrives over virtiofs, 9p or FUSE. So the `relay-config`
+  one-shot copies the selected fixture and the gates onto the `relay-etc` named volume, which
+  lives on the engine's own Linux filesystem (Docker Desktop's VM included), as `root:10001`
+  `0640` and `root:root` `0644`, and the Relay mounts that volume read-only at `/etc/relay`. A
+  Docker data root on ZFS or NFS is refused the same way, at whichever path crosses it.
 
 Docker is **not** required for `make build`, `make test`, or `make lint`, and CI
-never invokes it.
+never runs the fleet; it only renders these files with `docker compose config`.
 
 ## What is in the box
 
 | Piece | What it is |
 | --- | --- |
-| `relay` | The Go Relay. Node-plane gRPC on `:7654`, control-plane HTTPS (MCP + `/api/v1`) on `:9443` — distinct listeners, distinct published ports. CA + SQLite store live on the `relay-data` volume. |
+| `relay` | The Go Relay. Node-plane gRPC on `:7654`, control-plane HTTPS (MCP + `/api/v1`) on `:9443` — distinct listeners, distinct published ports. Runs as UID 10001 with no capabilities, a read-only root filesystem, `/tmp` on tmpfs and `relay-data` as its one writable volume, which holds the CA and the SQLite store. |
+| `relay-config` | A one-shot, on the Relay image, that stages the Relay's `relay.toml` and the gate files onto the `relay-etc` volume (see [Prerequisites](#prerequisites)), then exits. The Relay starts only after it exits 0. |
 | `init` | A one-shot, on the Relay image: mints the founding admin's token, creates `dev-approver` (with its token — the approval gate forbids self-approval, see [The approval gate](#the-approval-gate)) and the Console `admin` (with its password, see [The Admin Console](#the-admin-console)), mints a `relay:`-scoped Enrollment Token through `POST /api/v1/enrollment-tokens` and writes the response's join string for the daemons, then exits. If it fails, no daemon starts. |
 | `daemon-1..3` | Three relay-daemons (Rust, musl static binary). Each has a baked, root-owned Policy fixture and a private state volume, enrolls on first start, and reports health once it has a persisted identity. The two `role=web` Nodes (`daemon-1`, `daemon-2`) also run the dev-fleet demo service; `daemon-3` (`role=db`) loads a different Policy fixture and runs no demo service. |
 | `daemon-4..9` (`demo` profile) | Six more relay-daemons, started only with `--profile demo`. See [The demo profile](#the-demo-profile). |
@@ -167,6 +177,16 @@ enrollment).
 > `docker inspect --format '{{json .State.Health}}' <relay container>` and
 > `docker compose -f docker-compose.demo.yml logs relay`. If `init` exits non-zero, read
 > `docker compose -p relay-demo logs init`: no daemon starts until it exits 0.
+>
+> `hostfile: refusing <path>: <clause>` in `docker compose -p relay-demo logs relay` names the
+> file and the reason. A "filesystem" clause means the Docker data root, where the volume lives,
+> is on an unsupported filesystem. A relay-data volume written by the earlier root-run Relay is
+> refused too (the CA and store are not owned by 10001): run `make demo-reset` once, which wipes
+> the volumes. If `relay-config` exits non-zero, nothing else starts; read
+> `docker compose -p relay-demo logs relay-config`. A "cannot read /src/..." line there means the
+> checkout's file mode hides a fixture from the one-shot. (The one-shot holds `CAP_CHOWN` and
+> `CAP_DAC_OVERRIDE` only, so a `0600` fixture is still readable; the root filesystem and `/src`
+> are read-only and it has no network.)
 >
 > `refusing: relay-demo is running from another checkout` means stop the fleet from that
 > checkout. If that checkout is gone, run `docker compose -p relay-demo -f docker-compose.demo.yml
@@ -298,7 +318,7 @@ runs a different, in-band gate (`docker/fixtures/approval-gates.demo.json`), sel
 `make demo-*` targets; see
 [The human approver](operations/demo-fleet.md#the-human-approver) in its runbook.
 `make dev-fleet-up` and `make demo-*` each set the selector, `DEV_FLEET_RELAY_CONFIG`, which
-names the read-only `relay.toml` fixture whose `approval.gate_rules_path` names the baked gate,
+names the `relay.toml` fixture, staged read-only for the Relay, whose `approval.gate_rules_path` names the staged gate,
 explicitly; only a bare `docker compose` reads it from the caller's shell or a repo-root `.env`.
 Two rules:
 
@@ -316,8 +336,10 @@ through, while `relay:env=dev` (three) waits for a human. The counts differ unde
 
 Security-relevant choices, made explicit:
 
-- **The gate is Relay configuration, not a runtime object.** It is baked into the image
-  `--chmod=0644`, root-owned, and read from the path `approval.gate_rules_path` names in the mounted `relay.toml`. No Account of
+- **The gate is Relay configuration, not a runtime object.** It is staged root-owned `0644`
+  onto the read-only config volume, and read from the path `approval.gate_rules_path` names in the mounted `relay.toml`.
+  A fixture edit takes effect on the next `make dev-fleet-up` plus a Relay restart
+  (`docker compose -p relay-demo -f docker-compose.demo.yml restart relay`), not an image rebuild. No Account of
   any role can read or loosen it through the API (invariant 11) — a stolen credential that
   could edit its own approval requirements would make the whole mechanism decorative.
 - **Loading it is fail-closed.** A malformed, missing, symlinked, or group/world-writable
