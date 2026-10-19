@@ -112,7 +112,7 @@ func TestAccounts_PhoneCardsLabelEveryCell(t *testing.T) {
 }
 
 func TestCompare_EveryValueCellNamesItsColumn(t *testing.T) {
-	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/compare?nodes=node-web-1,node-web-2").Body.String()
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/compare?nodes=node-web-1,node-web-2&rows=all").Body.String()
 	table := cardTable(t, body, "cmp")
 	got := labelsOf(table)
 	for _, id := range []string{"node-web-1", "node-web-2"} {

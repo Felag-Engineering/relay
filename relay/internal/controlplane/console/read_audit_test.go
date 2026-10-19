@@ -441,31 +441,32 @@ func TestConsole_ProbingForAMissingNodeIsStillRecorded(t *testing.T) {
 // TestCompare_ResolvesOnlyThePinnedNodesAndNeverEnumeratesTheFleet), now
 // expressed on the trail rather than on a fake's call count.
 func TestCompare_RecordsOneReadPerPinnedNode(t *testing.T) {
-	trail := &recordingTrail{}
-	d := realLaneDeps(trail)
+	for _, suffix := range []string{"", "&rows=all", "&rows=all&rows=diff"} {
+		trail := &recordingTrail{}
+		d := realLaneDeps(trail)
 
-	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/compare?nodes="+auditFixtureNode+","+auditFixtureNode2)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /console/compare = %d, want 200; body = %s", rec.Code, rec.Body.String())
-	}
-
-	reads := trail.ofKind(audit.KindRead)
-	var described []string
-	for _, r := range reads {
-		switch r.OperationName {
-		case "describe_node":
-			described = append(described, r.NodeID)
-		case "list_nodes":
-			t.Error("the comparison screen wrote a list_nodes record — it must never enumerate the fleet")
+		rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/compare?nodes="+auditFixtureNode+","+auditFixtureNode2+suffix)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("suffix %q: GET /console/compare = %d, want 200; body = %s", suffix, rec.Code, rec.Body.String())
 		}
-	}
-	want := map[string]bool{auditFixtureNode: true, auditFixtureNode2: true}
-	if len(described) != 2 {
-		t.Fatalf("describe_node records = %v, want exactly 2", described)
-	}
-	for _, id := range described {
-		if !want[id] {
-			t.Errorf("describe_node recorded %q, which was not pinned", id)
+
+		var described []string
+		for _, r := range trail.ofKind(audit.KindRead) {
+			switch r.OperationName {
+			case "describe_node":
+				described = append(described, r.NodeID)
+			case "list_nodes":
+				t.Errorf("suffix %q: the comparison screen wrote a list_nodes record — it must never enumerate the fleet", suffix)
+			}
+		}
+		want := map[string]bool{auditFixtureNode: true, auditFixtureNode2: true}
+		if len(described) != 2 {
+			t.Fatalf("suffix %q: describe_node records = %v, want exactly 2", suffix, described)
+		}
+		for _, id := range described {
+			if !want[id] {
+				t.Errorf("suffix %q: describe_node recorded %q, which was not pinned", suffix, id)
+			}
 		}
 	}
 }
