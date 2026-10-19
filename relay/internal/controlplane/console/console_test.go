@@ -485,11 +485,8 @@ func TestConsole_ARouteAboveTheSessionRoleIsAbsent(t *testing.T) {
 			if r.Path == "/console/events" || r.Path == LoginPath || strings.Contains(r.Path, "{path...}") {
 				continue
 			}
-			path := r.Link()
-			for placeholder, id := range fixtureIDs {
-				path = strings.ReplaceAll(path, placeholder, id)
-			}
-			if strings.Contains(path, "{") {
+			path, ok := fixturePath(r, fixtureIDs)
+			if !ok {
 				continue
 			}
 
@@ -919,6 +916,37 @@ var fixtureIDs = map[string]string{
 	"{token_id}":   "tok-live",
 }
 
+// fixtureLinks are the routes whose fixture link needs more than id
+// substitution to answer 200: the Lower role page wants a role to name, and the
+// revoke page wants a token that is on the Account in its path. Keyed by
+// Route.Path.
+var fixtureLinks = map[string]string{
+	"/console/accounts/{account_id}/lower":                    "/console/accounts/acct-mike/lower?role=operator",
+	"/console/accounts/{account_id}/tokens/{token_id}/revoke": "/console/accounts/" + sweepMachineAccountID + "/tokens/tok-live/revoke",
+}
+
+// selectedAccountsScreen is the Accounts screen with an Account selected, the
+// only page that draws the three danger buttons. gleipnir-prod is the
+// sweepAccounts operator and is not the bearer-lane session's Account, so
+// Lower, Disable, Raise and a live-token Revoke all draw.
+const selectedAccountsScreen = "/console/accounts?account=gleipnir-prod"
+
+// fixturePath is the walkable link for r: the fixtureLinks override when subs
+// is non-nil and one exists, otherwise Link() with subs substituted. ok is
+// false when a placeholder survives.
+func fixturePath(r Route, subs map[string]string) (string, bool) {
+	if subs != nil {
+		if link, ok := fixtureLinks[r.Path]; ok {
+			return link, true
+		}
+	}
+	path := r.Link()
+	for placeholder, id := range subs {
+		path = strings.ReplaceAll(path, placeholder, id)
+	}
+	return path, !strings.Contains(path, "{")
+}
+
 // walkableScreens derives the GET screens a sweep should render FROM A ROUTE
 // TABLE, substituting ids from subs.
 //
@@ -948,11 +976,8 @@ func walkableScreens(routes []Route, subs map[string]string) []string {
 		if r.Path == "/console/events" || r.Path == LoginPath || strings.Contains(r.Path, "{path...}") {
 			continue
 		}
-		path := r.Link()
-		for placeholder, id := range subs {
-			path = strings.ReplaceAll(path, placeholder, id)
-		}
-		if strings.Contains(path, "{") {
+		path, ok := fixturePath(r, subs)
+		if !ok {
 			continue
 		}
 		paths = append(paths, path)
@@ -1039,7 +1064,8 @@ func TestConsole_EveryRenderedFormCarriesACSRFToken(t *testing.T) {
 	formsChecked := 0
 	for _, role := range sessionRoles {
 		h := newTestHandler(d, role)
-		for _, path := range walkableScreens(routesFor(d, role), fixtureIDs) {
+		paths := append(walkableScreens(routesFor(d, role), fixtureIDs), selectedAccountsScreen)
+		for _, path := range paths {
 			rec := get(t, h, path)
 			if rec.Code != http.StatusOK {
 				continue
@@ -1059,23 +1085,69 @@ func TestConsole_EveryRenderedFormCarriesACSRFToken(t *testing.T) {
 	}
 }
 
-// postForms splits a rendered page into its <form method="post"> elements.
-// Each returned string is one form's own markup, so a token belonging to a
+// postForms splits a rendered page into its method="post" elements. Each
+// returned string is one form's own markup, so a token belonging to a
 // NEIGHBOURING form cannot satisfy an assertion about this one.
-func postForms(body string) []string {
+func postForms(body string) []string { return formsWithMethod(body, "post") }
+
+// formsWithMethod splits a rendered page into its <form> elements whose
+// opening tag carries method="<method>", in any attribute position.
+func formsWithMethod(body, method string) []string {
+	want := `method="` + method + `"`
 	var out []string
 	rest := body
 	for {
-		i := strings.Index(rest, `<form method="post"`)
-		if i < 0 {
+		loc := formOpenTag.FindStringIndex(rest)
+		if loc == nil {
 			return out
 		}
-		rest = rest[i:]
+		tag := rest[loc[0]:loc[1]]
+		rest = rest[loc[0]:]
 		j := strings.Index(rest, "</form>")
 		if j < 0 {
-			return append(out, rest)
+			if strings.Contains(tag, want) {
+				out = append(out, rest)
+			}
+			return out
 		}
-		out = append(out, rest[:j])
+		if strings.Contains(tag, want) {
+			out = append(out, rest[:j])
+		}
 		rest = rest[j+len("</form>"):]
+	}
+}
+
+// TestConsole_NoGetFormCarriesACSRFToken: a GET form serialises its inputs into
+// the URL, so the session's CSRF secret in one would land in the address bar,
+// the history and a Referer. The token belongs only to a POST form.
+func TestConsole_NoGetFormCarriesACSRFToken(t *testing.T) {
+	d := withExecution(sweepFixture(), true)
+
+	formsChecked, selectedChecked := 0, 0
+	for _, role := range sessionRoles {
+		h := newTestHandler(d, role)
+		paths := append(walkableScreens(routesFor(d, role), fixtureIDs), selectedAccountsScreen)
+		for _, path := range paths {
+			rec := get(t, h, path)
+			if rec.Code != http.StatusOK {
+				continue
+			}
+			for _, form := range formsWithMethod(rec.Body.String(), "get") {
+				formsChecked++
+				if path == selectedAccountsScreen {
+					selectedChecked++
+				}
+				if strings.Contains(form, `name="csrf_token"`) {
+					t.Errorf("role %s: a GET form on %s carries a csrf_token input, which would put the "+
+						"session's CSRF secret in a URL:\n%s", role, path, form)
+				}
+			}
+		}
+	}
+	if formsChecked == 0 {
+		t.Fatal("the sweep found zero GET forms — it is not inspecting anything")
+	}
+	if selectedChecked < 3 {
+		t.Errorf("the selected-Account screen contributed %d GET forms, want at least 3 (Lower, Disable, Revoke)", selectedChecked)
 	}
 }

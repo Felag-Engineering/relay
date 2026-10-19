@@ -398,6 +398,15 @@ func Routes(d Deps) []Route {
 		{"POST", "/console/accounts/{account_id}/tokens", NavEntry{}, accounts.RoleAdmin, handleMintAPIToken},
 		{"POST", "/console/api-tokens/{token_id}/revoke", NavEntry{}, accounts.RoleAdmin, handleRevokeAPIToken},
 
+		// The confirmation pages for the three acts that reduce authority.
+		// They are reads at the same admin floor as ControlAccountRead and
+		// ControlAPITokenRead, so MinRole narrows to the capability layer's
+		// floor and widens nothing. Their paths differ from the POST paths
+		// because two constrained routes on one path panic at registration.
+		{"GET", "/console/accounts/{account_id}/disable", NavEntry{}, accounts.RoleAdmin, handleConfirmDisable},
+		{"GET", "/console/accounts/{account_id}/lower", NavEntry{}, accounts.RoleAdmin, handleConfirmLowerRole},
+		{"GET", "/console/accounts/{account_id}/tokens/{token_id}/revoke", NavEntry{}, accounts.RoleAdmin, handleConfirmRevokeAPIToken},
+
 		// Not a destination: the stylesheet the content security policy forces
 		// out of the layout, since style-src admits this origin and nothing
 		// inline, and the one external script file for the same reason.

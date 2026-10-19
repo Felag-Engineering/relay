@@ -49,6 +49,7 @@ func TestConsole_AccentPairsClearAA(t *testing.T) {
 		}
 		for _, bg := range bgs {
 			check("--color-accent", bg, 3.0, "WCAG 1.4.11 non-text: focus rings, borders, the nav bar, the live dot")
+			check("--danger-text", bg, 4.5, "destructive button text and border")
 		}
 	}
 }

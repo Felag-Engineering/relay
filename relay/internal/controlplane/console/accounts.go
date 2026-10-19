@@ -61,7 +61,9 @@ package console
 // list, then the create form behind "New account" (design spec 15, D32).
 //
 // The write half lives in accounts_write.go, and this file renders forms as
-// well as rows. The forms for an existing Account render only in the
+// well as rows. The three acts that reduce authority open their confirmation
+// pages (accounts_confirm.go) instead of posting; this screen posts only the
+// granting forms. The forms for an existing Account render only in the
 // SELECTED Account's panel; the list is read-only. What stays absent is
 // a role or PERMISSION editor of any kind — the three roles are ADR-0010's
 // closed set and a custom-permission builder is a second authorization model —
@@ -225,10 +227,14 @@ type accountChange struct {
 	Enabled       bool
 	RoleAction    string
 	EnabledAction string
+	// LowerAction and DisableAction are the confirmation pages
+	// (accounts_confirm.go) the two danger buttons GET; neither performs the act.
+	LowerAction   string
+	DisableAction string
 
 	// RaiseRoles are the roles above the held one (Raise role: password,
 	// .btn.grant); LowerRoles the roles below it (Lower role: no password,
-	// .btn.reduce). Presentation only: handleSetAccountRole re-decides raise
+	// .btn.danger, through a confirmation page). Presentation only: handleSetAccountRole re-decides raise
 	// vs lower from the stored role.
 	RaiseRoles []string
 	LowerRoles []string
@@ -263,9 +269,9 @@ type tokenRow struct {
 
 	Revoked bool
 
-	// RevokeAction is this token's revoke form action. Empty when the
-	// write half is not wired. A NAME, an id and a path — still no field a
-	// secret could occupy.
+	// RevokeAction is this token's confirmation page. Empty when the write
+	// half is not wired. A NAME, an id and a path — still no field a secret
+	// could occupy.
 	RevokeAction string
 }
 
@@ -418,6 +424,8 @@ func handleAccounts(d Deps) http.HandlerFunc {
 					Enabled:       selected.Enabled,
 					RoleAction:    setAccountRoleAction(selected.ID),
 					EnabledAction: setAccountEnabledAction(selected.ID),
+					LowerAction:   confirmLowerRoleAction(selected.ID),
+					DisableAction: confirmDisableAction(selected.ID),
 					RaiseRoles:    raise,
 					LowerRoles:    lower,
 					Self:          capability.SelfTargeted(caller, selected.ID),
@@ -442,7 +450,7 @@ func handleAccounts(d Deps) http.HandlerFunc {
 					// and refusing it would be a second opinion about token
 					// state this screen must not hold.
 					if v.Write != nil && !row.Revoked {
-						row.RevokeAction = revokeAPITokenAction(t.ID)
+						row.RevokeAction = confirmRevokeAction(selected.ID, t.ID)
 					}
 					v.Tokens = append(v.Tokens, row)
 				}
@@ -594,23 +602,20 @@ var accountsTmpl = newScreen("accounts", `
     </form>
     {{end}}
     {{with .LowerRoles}}
-    <form class="ctlform ctlrow rolechange" method="post" action="{{$c.RoleAction}}" autocomplete="off">
-      <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
+    <form class="ctlform ctlrow rolechange" method="get" action="{{$c.LowerAction}}" autocomplete="off">
       <label class="fld"><span class="fldlabel">Lower role to</span>
         <select name="role" aria-describedby="lower-role-hint">
           <option value="" selected disabled>{{$c.Role}} (current)</option>
           {{range .}}<option value="{{.}}">{{.}}</option>{{end}}
         </select>
       </label>
-      <button class="btn reduce" type="submit">Lower role</button>
+      <button class="btn danger" type="submit">Lower role</button>
       <span class="note" id="lower-role-hint">{{$.LowerHint}}</span>
     </form>
     {{end}}
     {{if $c.Enabled}}
-    <form class="ctlform ctlrow" method="post" action="{{$c.EnabledAction}}">
-      <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
-      <input type="hidden" name="enabled" value="false">
-      <button class="btn reduce" type="submit">Disable</button>
+    <form class="ctlform ctlrow" method="get" action="{{$c.DisableAction}}">
+      <button class="btn danger" type="submit">Disable</button>
     </form>
     {{else}}
     <form class="ctlform ctlrow" method="post" action="{{$c.EnabledAction}}">
@@ -646,9 +651,8 @@ var accountsTmpl = newScreen("accounts", `
         <td>{{if .Revoked}}revoked{{else}}live{{end}}</td>
         {{if $.Write}}
         <td>{{with .RevokeAction}}
-          <form class="ctlform" method="post" action="{{.}}">
-            <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
-            <button class="btn reduce" type="submit">Revoke</button>
+          <form class="ctlform" method="get" action="{{.}}">
+            <button class="btn danger" type="submit">Revoke</button>
           </form>
         {{end}}</td>
         {{end}}

@@ -188,6 +188,10 @@ const (
 	// server's refusal when a role form arrives with no role (design spec 15,
 	// D32), so the two are one sentence.
 	lowerRoleHint = "choose a lower role"
+
+	// noRoleRefusal is the refusal for a role form that arrives with no role,
+	// rendered by the role route and by the Lower role confirmation page alike.
+	noRoleRefusal = "No role was chosen: " + lowerRoleHint + ". The role was not changed."
 )
 
 // accountsOffered reports whether the write half is wired at all. Three seams,
@@ -575,7 +579,7 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 		}
 
 		if r.PostFormValue("role") == "" {
-			badRequest(w, pg, "No role was chosen: "+lowerRoleHint+". The role was not changed.")
+			badRequest(w, pg, noRoleRefusal)
 			return
 		}
 		// Role.Valid, not a hand-restated set: the domain owns what the

@@ -93,7 +93,7 @@ const (
 var measuredClasses = map[string]bool{
 	"p.note": true, "p.gap": true, "p.lede": true, "p.kindnote": true,
 	"p.refreshlimit": true, "p.livenote": true, "p.scoped": true,
-	"p.lanekey": true,
+	"p.lanekey": true, "p.confirmq": true,
 	"span.note": true, "span.gap": true, "span.labelnote": true,
 	"span.jcnote": true, "span.phint": true,
 	"div.evnote": true, "p.fielderr": true, "p.unfilterednote": true, "div.fhint": true,
@@ -654,8 +654,12 @@ var copyBudgets = map[string]int{
 	"/console/compare":         40,
 	"/console/accounts":        40,
 	"/console/access":          65,
-	"/console/run":             10,
-	"day one":                  75,
+
+	"/console/accounts/{account_id}/disable":                  20,
+	"/console/accounts/{account_id}/lower":                    20,
+	"/console/accounts/{account_id}/tokens/{token_id}/revoke": 20,
+	"/console/run": 10,
+	"day one":      75,
 }
 
 // budgetPage is one page the budget test renders.
@@ -673,10 +677,7 @@ func budgetPages(t *testing.T) []budgetPage {
 		if r.Method != http.MethodGet || r.Path == "/console/events" || r.Path == LoginPath || strings.Contains(r.Path, "{path...}") {
 			continue
 		}
-		path := r.Link()
-		for placeholder, id := range fixtureIDs {
-			path = strings.ReplaceAll(path, placeholder, id)
-		}
+		path, _ := fixturePath(r, fixtureIDs)
 		if r.Path == "/console/compare" {
 			path += "?nodes=node-web-1,node-web-3"
 		}
