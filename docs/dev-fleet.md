@@ -138,8 +138,10 @@ credential it holds was always minted by a container with store access.
 method on them at all, so "zero mutating routes" is a fact about the types rather
 than a property of the handlers. You can watch the fleet, open a Node, read its
 daemon-reported effective Policy, follow the activity trail, read what has been
-read, and open a parked approval. You cannot run anything, change a label, or
-decide an approval — those arrive in v0.7.0 behind step-up re-authentication.
+read. The Console renders approval records on Activity and Job detail; it decides
+none and lists none, and approvals are decided as in "Approving a parked
+dispatch". You cannot run anything or change a label — those arrive in v0.7.0
+behind step-up re-authentication.
 
 ## Bring the fleet up
 

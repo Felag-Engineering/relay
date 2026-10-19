@@ -1,8 +1,8 @@
 package console
 
 // accounts_write.go is the Accounts screen's write half (spec 15): the
-// Console's THIRD write seam, after Cancel (cancel.go) and Decide
-// (decide.go). It lives in its own file, exactly as those two do, so
+// Console's second write seam, after Cancel (cancel.go). It lives in its own
+// file, as that one does, so
 // seams.go's "every seam here is read-only" claim stays true unqualified.
 //
 // # What this file decides: nothing
@@ -101,7 +101,7 @@ import (
 // AccountAdministrator is the write seam this file holds. Every method
 // mirrors capability.AccountAdmin's signature EXACTLY, so
 // *capability.AccountAdmin satisfies it with no adapter — the same shape
-// JobCanceller and ApprovalDecider already take.
+// JobCanceller already takes.
 type AccountAdministrator interface {
 	CreateAccount(ctx context.Context, p capability.Principal, a accounts.Account) (accounts.Account, error)
 	SetAccountRole(ctx context.Context, p capability.Principal, id string, role accounts.Role) error
@@ -128,9 +128,8 @@ const (
 	revokeAPITokenPattern    = "POST /console/api-tokens/{token_id}/revoke"
 )
 
-// The form-action builders. Each escapes the id exactly as
-// decideApprovalAction does, because an Account id and a token id are not
-// constrained by this package.
+// The form-action builders. Each escapes its id, because an
+// Account id and a token id are not constrained by this package.
 func createAccountAction() string { return "/console/accounts/create" }
 
 func setAccountRoleAction(accountID string) string {
@@ -149,9 +148,9 @@ func revokeAPITokenAction(tokenID string) string {
 	return "/console/api-tokens/" + url.PathEscape(tokenID) + "/revoke"
 }
 
-// Bounds for these routes' own input, declared beside the code that uses them
-// (decide.go's idiom). Each surface bounds its own input independently; none
-// of these duplicates a domain rule, and none is imported from the surface
+// Bounds for these routes' own input, declared beside the code that uses
+// them. Each surface bounds its own input independently; none of these
+// duplicates a domain rule, and none is imported from the surface
 // that happens to agree with it.
 const (
 	// maxAccountIDBytes and maxTokenIDBytes mirror maxJobIDBytes (job.go).
@@ -190,15 +189,15 @@ const (
 // all required:
 //
 //   - AccountAdmin is the write seam itself;
-//   - Auth is PAIRED with it for the reason decideOffered states — a granting
-//     act that cannot be step-up-verified must not be offered at all;
+//   - Auth is PAIRED with it: a granting act that cannot be step-up-verified
+//     must not be offered at all;
 //   - Accounts is required because handleSetAccountRole reads the target's
 //     current role through it. A Deps with AccountAdmin wired and Accounts nil
 //     is constructible, and without this the role route is a nil dereference
 //     rather than an honest absence. The read seam belongs in this write-half
 //     predicate for that reason; it is not a tidy-up waiting to happen.
 //
-// Deliberately NOT through routesFor, unlike cancelOffered and decideOffered:
+// Deliberately NOT through routesFor, unlike cancelOffered:
 // routesFor takes a ROLE, and reading the caller's role inside this screen is
 // exactly what this file must never do. It does not need to — all five write
 // routes carry the SAME MinRole as the read route that renders the form, so
@@ -379,10 +378,11 @@ func writeFailed(w http.ResponseWriter, pg Page, err error, route, ident, undone
 // principal, nil-seam check, ParseForm, page. It returns ok=false having
 // already written the response.
 //
-// ParseForm is REQUIRED, not merely idempotent — decide.go explains why:
-// submittedCSRFToken (security.go) reads the X-CSRF-Token HEADER first and
-// only falls back to the form field, so an HTMX submission never parses the
-// body at all.
+// ParseForm is REQUIRED, not merely idempotent: submittedCSRFToken
+// (security.go) reads the X-CSRF-Token HEADER first and only falls back to the
+// form field, and the layout puts the token in hx-headers on <body>, so for an
+// HTMX submission Secure never parses the body at all. It is also safe on the
+// plain-form path, where the form is already parsed.
 func writePrelude(d Deps, w http.ResponseWriter, r *http.Request, title string) (capability.Principal, Page, bool) {
 	caller, ok := principal(w, r)
 	if !ok {
@@ -441,8 +441,8 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 		}
 
 		// Accepted only as an exact member of the closed set — an ABSENT
-		// field included. Never defaulted in either direction, which is
-		// decide.go's rule for `answer`: a kind or a role must be ASKED for.
+		// field included. Never defaulted in either direction: a kind
+		// or a role must be ASKED for.
 		// Kind.Valid and Role.Valid are the DOMAIN's own closed sets, asked
 		// rather than restated here, so this surface and accounts.Repository
 		// cannot come to disagree about what the sets are.

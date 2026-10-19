@@ -22,16 +22,6 @@ func TestHumanizedDurations(t *testing.T) {
 		{"since 23h", timeSince(ago(23*time.Hour+59*time.Minute), now), "23h ago"},
 		{"since day", timeSince(ago(24*time.Hour), now), "1d ago"},
 		{"since 3d", timeSince(ago(80*time.Hour), now), "3d ago"},
-		{"decision unrecorded", decisionAgo(time.Time{}, now), ""},
-		{"decision recorded", decisionAgo(ago(2*time.Hour), now), "2h ago"},
-		{"span zero", renderSpan(0), "none"},
-		{"span negative", renderSpan(-time.Minute), "none"},
-		{"span minutes", renderSpan(90 * time.Second), "1m"},
-		{"span hours", renderSpan(5 * time.Hour), "5h"},
-		{"ttl expired", renderTTL(0), "expired"},
-		{"ttl seconds", renderTTL(45 * time.Second), "45s left"},
-		{"ttl minutes", renderTTL(10 * time.Minute), "10m left"},
-		{"ttl hours", renderTTL(3 * time.Hour), "3h left"},
 	}
 	for _, c := range cases {
 		if c.got != c.want {

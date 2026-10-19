@@ -337,9 +337,7 @@ browser's reload button.
   is reading (rule 6).
 - **A Refresh makes exactly the reads a page load makes**, and those reads are audited. Every
   screen that offers the control says whether a Refresh is recorded in one visible sentence beside
-  it, and none claims a record the trail does not hold. (The built Approvals queue is the one
-  exception, writing no read record, #779; it is retired with the Console's approval surface,
-  ADR-0044.)
+  it, and none claims a record the trail does not hold.
 - **A Refresh is a deliberate act by the operator.** The Console never reloads a screen on a
   timer: [README](README.md) records the owner decision "No scheduled or repeated reads. Every read
   is a deliberate, audited act."

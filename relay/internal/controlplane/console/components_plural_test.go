@@ -8,7 +8,7 @@ import (
 )
 
 // TestPlan_MatchedCountAgreesWithItsNoun: the shared Plan block (Job detail,
-// the composer, the approval object) said "1 Nodes matched". The count comes
+// the composer) said "1 Nodes matched". The count comes
 // from the caller and the noun from plural, the package's one template
 // plural, so each count appears exactly once and agrees with its word.
 func TestPlan_MatchedCountAgreesWithItsNoun(t *testing.T) {

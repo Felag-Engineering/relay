@@ -68,7 +68,7 @@ type surfaceDeps struct {
 	// Cancel.
 	execution *capability.Execution
 	// approvals is the approval callout: mcp ApprovalDecider; api Approvals and
-	// ApprovalGrants; console Approvals and Decide.
+	// ApprovalGrants; console Approvals (Job detail's read).
 	approvals *capability.Approvals
 	// freezeControl is the Freeze and its role floor (api.Freezer).
 	freezeControl *capability.Control
@@ -247,8 +247,8 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		Jobs: jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
 		// The out-of-band approval decision channel (ADR-0027) — the same
 		// *capability.Approvals again. The decision is the same act however it
-		// arrives, so the API endpoint, the MCP elicitation envelope, and the
-		// Console's approval queue all reach it through this one object.
+		// arrives, so the API endpoint and the MCP elicitation envelope both
+		// reach it through this one object.
 		Approvals: d.approvals,
 		// Batch/window approval grants (ADR-0027 decision 12) — the same
 		// object once more. Requesting a grant creates an ordinary approval
@@ -356,17 +356,7 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// stays false, unchanged: Cancel cannot run anything, only ask
 		// something already running to stop.
 		Cancel: d.execution,
-		// Decide: the Console's other write seam, and the same
-		// *capability.Approvals the Control API's out-of-band decision
-		// endpoint (POST /api/v1/approvals/{id}/decision) and MCP's
-		// approve_request call — so quorum, audience, requester exclusion,
-		// channel strength and the audit record stay one implementation.
-		// Execution stays false, unchanged: this route composes nothing, it
-		// answers a Plan the Relay already built (decide.go's header).
-		// d.consoleAuth is already wired above as Auth, so step-up needs no
-		// new wiring.
-		Decide: d.approvals,
-		// AccountAdmin: the Console's third write seam. d.accountAdmin
+		// AccountAdmin: the Console's second write seam. d.accountAdmin
 		// already carries all five verbs — CreateAccount,
 		// SetAccountRole, SetAccountEnabled, MintAPIToken and RevokeAPIToken
 		// — so no adapter is built for it. The admin floor on every one, the

@@ -294,8 +294,8 @@ func readFailed(w http.ResponseWriter, err error, what string) {
 //
 // The rule is one rule with no per-screen exception: a Console page whose read
 // cannot be audited refuses to render. Several screens cannot express that
-// through their return values, and deliberately so — the approval object
-// renders "the trail could not be read" beside a card it CAN render. That
+// through their return values, and deliberately so — a screen can
+// render "the trail could not be read" beside content it CAN render. That
 // graceful degradation is right for a store that failed and wrong for a trail
 // that cannot record: the first is a partial page, the second is a page the
 // Relay was not willing to serve at all.

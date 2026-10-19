@@ -59,7 +59,6 @@ import (
 	"unicode"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
@@ -94,7 +93,7 @@ const (
 var measuredClasses = map[string]bool{
 	"p.note": true, "p.gap": true, "p.lede": true, "p.kindnote": true,
 	"p.refreshlimit": true, "p.livenote": true, "p.scoped": true,
-	"p.lanekey": true, "p.nodiff": true,
+	"p.lanekey": true,
 	"span.note": true, "span.gap": true, "span.labelnote": true,
 	"span.jcnote": true, "span.phint": true,
 	"div.evnote": true, "p.fielderr": true, "p.unfilterednote": true, "div.fhint": true,
@@ -108,7 +107,6 @@ var boundedClasses = map[string]string{
 	"p.dim":         "an honest absence or a value's annotation",
 	"span.dim":      "an honest absence or a value's annotation",
 	"div.sub":       "a value's annotation",
-	"div.qrules":    "a queue row's data line",
 	"caption.tcap":  "a table caption",
 	"span.wmsg":     "live-status words, one shown at a time",
 	"span.evlive":   "live-status words, one shown at a time",
@@ -116,7 +114,6 @@ var boundedClasses = map[string]string{
 	"div.clabel":    "a cluster's data label",
 	"p.mode":        "Fleet distribution line: counts",
 	"p.rncount":     "a count",
-	"p.back":        "navigation",
 	"p.rolestate":   "Accounts role and state data",
 	"span.unattrib": "what stands in the requester slot when the trail recorded none: a value, a trail defect named",
 	"span.overcap":  "a Plan's over-cap verdict: a state, drawn where the cap arithmetic is",
@@ -139,9 +136,8 @@ var boundedClasses = map[string]string{
 // BoundaryExplanation strings; any other denynote (the Console's own clip
 // note) is measured.
 var exemptClasses = map[string]string{
-	"p.summary":    "Relay-authored approval summary, recorded data",
-	"p.diffchange": "diff data",
-	"p.denynote":   "the capability layer's shared refusal bytes (00 'The deny block')",
+	"p.summary":  "Relay-authored approval summary, recorded data",
+	"p.denynote": "the capability layer's shared refusal bytes (00 'The deny block')",
 }
 
 // valueTags hold a value or a name, not prose: text inside one is never
@@ -650,18 +646,15 @@ func copyBudgetFixture() Deps {
 // Node detail's 75 is above the "under ~60" #849 aimed for: every element on
 // it is a ruled or spec-bound qualifier, and reaching 60 means dropping one.
 var copyBudgets = map[string]int{
-	"/console/{$}":                     0,
-	"/console/nodes/{node_id}":         75,
-	"/console/activity":                60,
-	"/console/jobs/{job_id}":           60,
-	"/console/compare":                 40,
-	"/console/approvals":               60,
-	"/console/approvals/{approval_id}": 85,
-	"/console/accounts":                40,
-	"/console/access":                  65,
-	"/console/run":                     10,
-	"day one":                          75,
-	"grant card":                       105,
+	"/console/{$}":             0,
+	"/console/nodes/{node_id}": 75,
+	"/console/activity":        60,
+	"/console/jobs/{job_id}":   60,
+	"/console/compare":         40,
+	"/console/accounts":        40,
+	"/console/access":          65,
+	"/console/run":             10,
+	"day one":                  75,
 }
 
 // budgetPage is one page the budget test renders.
@@ -689,10 +682,6 @@ func budgetPages(t *testing.T) []budgetPage {
 		pages = append(pages, budgetPage{r.Path, path, h})
 	}
 	pages = append(pages, budgetPage{"day one", "/console/", newTestHandler(dayOneDeps(), accounts.RoleAdmin)})
-	g := consoleGrant("grant-1", "ap-grant", 200, 20)
-	gd := renderableDeps()
-	gd.Approvals = &fakeApprovals{pending: []approval.Request{grantRequest(g, approval.StatePending)}, grants: []approval.Grant{g}}
-	pages = append(pages, budgetPage{"grant card", "/console/approvals/ap-grant", newTestHandler(gd, accounts.RoleAdmin)})
 	return pages
 }
 
@@ -793,37 +782,6 @@ func noteSweepPages(t *testing.T) []sweepPage {
 	unwatched.Events = nil
 	add("day one, unwatched", "/console/", unwatched, accounts.RoleViewer, http.StatusOK)
 	add("day one, untrusted", "/console/", withFleet(renderableDeps()), accounts.RoleAdmin, http.StatusOK)
-
-	signed := pendingApprovalRequest("ap-1")
-	signed.Require.Count = 2
-	signed.Decisions = []approval.Decision{{
-		Account: testAccountName(accounts.RoleOperator), AccountID: testAccountID(accounts.RoleOperator),
-		Approve: true, DeciderHuman: true, At: testNow.Add(-time.Hour),
-	}}
-	add("already signed", "/console/approvals/ap-1", decideRenderDeps(signed, &fakeDecider{}, &fakeAuth{}), accounts.RoleOperator, http.StatusOK)
-	excluded := pendingApprovalRequest("ap-1")
-	excluded.Require.RequesterAllowed = false
-	excluded.RequestedBy, excluded.RequestedByID = testAccountName(accounts.RoleOperator), testAccountID(accounts.RoleOperator)
-	add("excluded requester", "/console/approvals/ap-1", decideRenderDeps(excluded, &fakeDecider{}, &fakeAuth{}), accounts.RoleOperator, http.StatusOK)
-	add("viewer card", "/console/approvals/ap-1", decideRenderDeps(pendingApprovalRequest("ap-1"), &fakeDecider{}, &fakeAuth{}), accounts.RoleViewer, http.StatusOK)
-	expired := pendingApprovalRequest("ap-1")
-	expired.ExpiresAt = testNow.Add(-time.Minute)
-	add("expired", "/console/approvals/ap-1", decideRenderDeps(expired, &fakeDecider{}, &fakeAuth{}), accounts.RoleOperator, http.StatusOK)
-	add("unwired decide", "/console/approvals/ap-1", decideRenderDeps(pendingApprovalRequest("ap-1"), nil, nil), accounts.RoleOperator, http.StatusOK)
-
-	g := consoleGrant("grant-1", "ap-grant", 200, 20)
-	gd := renderableDeps()
-	gd.Approvals = &fakeApprovals{pending: []approval.Request{grantRequest(g, approval.StatePending)}, grants: []approval.Grant{g}}
-	add("grant card", "/console/approvals/ap-grant", gd, accounts.RoleAdmin, http.StatusOK)
-	legacy := g
-	legacy.LegacyNamespacePin = "node"
-	ld := renderableDeps()
-	ld.Approvals = &fakeApprovals{pending: []approval.Request{grantRequest(legacy, approval.StatePending)}, grants: []approval.Grant{legacy}}
-	add("legacy grant card", "/console/approvals/ap-grant", ld, accounts.RoleAdmin, http.StatusOK)
-	ud := renderableDeps()
-	ud.Approvals = &fakeApprovals{pending: []approval.Request{grantRequest(g, approval.StatePending)}, grantsErr: errQueryFailed}
-	add("grant store unreadable", "/console/approvals/ap-grant", ud, accounts.RoleAdmin, http.StatusOK)
-	add("queue, grant store unreadable", "/console/approvals", ud, accounts.RoleAdmin, http.StatusOK)
 
 	add("compare, truncated", "/console/compare?nodes=node-web-1,node-web-2,node-web-3,node-db-1,nope", sweep, accounts.RoleAdmin, http.StatusOK)
 	add("compare, one", "/console/compare?nodes=node-web-1", sweep, accounts.RoleAdmin, http.StatusOK)
@@ -1265,8 +1223,8 @@ func TestCopyBudget_EveryTemplateNoteIsShortOnEveryPath(t *testing.T) {
 			}
 		}
 	}
-	if exempts < 2 {
-		t.Fatalf("found %d exempt template elements, want at least 2 (p.summary, p.diffchange) — the exemption check is not finding them", exempts)
+	if exempts < 1 {
+		t.Fatalf("found %d exempt template elements, want at least 1 (p.summary) — the exemption check is not finding them", exempts)
 	}
 	if elements < 60 {
 		t.Fatalf("measured %d template elements, want at least 60 — the source scan has stopped finding notes", elements)
@@ -1322,10 +1280,6 @@ func TestCopyBudget_GoStringNotesAreShort(t *testing.T) {
 		{"liveCountNote", liveCountNote, maxGoNoteWords},
 		{"collapseNote(2, 1)", collapseNote(2, 1), maxGoNoteWords},
 		{"collapseNote(200, 12)", collapseNote(200, 12), maxGoNoteWords},
-		{"absenceGrantStoreUnreadable", absenceGrantStoreUnreadable, maxGoNoteWords},
-		{"absenceShapeNeverComputed", absenceShapeNeverComputed, maxGoNoteWords},
-		{"absenceNoPrior", absenceNoPrior, maxGoNoteWords},
-		{"absencePriorUnreadable", absencePriorUnreadable, maxGoNoteWords},
 		{"freezeEngagedDetail", freezeEngagedDetail, maxGoNoteWords},
 		{"freezeUnreadableDetail", freezeUnreadableDetail, maxGoNoteWords},
 		{"selfReportedTitle", selfReportedTitle, maxTitleWords},
@@ -1403,8 +1357,8 @@ func TestCopyBudget_ResultHeadingsAreShort(t *testing.T) {
 			return true
 		})
 	}
-	if headings < 25 {
-		t.Fatalf("found %d result headings, want at least 25 — the scan has stopped finding them", headings)
+	if headings < 15 {
+		t.Fatalf("found %d result headings, want at least 15 — the scan has stopped finding them", headings)
 	}
 }
 
@@ -1489,9 +1443,6 @@ func TestConsole_NoDocVoiceInRenderedStrings(t *testing.T) {
 func TestCopyBudget_RuledQualifiersStillRender(t *testing.T) {
 	d := copyBudgetFixture()
 	h := newTestHandler(d, accounts.RoleAdmin)
-	g := consoleGrant("grant-1", "ap-grant", 200, 20)
-	gd := renderableDeps()
-	gd.Approvals = &fakeApprovals{pending: []approval.Request{grantRequest(g, approval.StatePending)}, grants: []approval.Grant{g}}
 	for _, c := range []struct {
 		why, path, want string
 		h               http.Handler
@@ -1512,14 +1463,6 @@ func TestCopyBudget_RuledQualifiersStillRender(t *testing.T) {
 			"This Console&#39;s certificate, re-issued about daily", newTestHandler(dayOneDeps(), accounts.RoleAdmin)},
 		{"cert provenance: the expiry is unknown", "/console/nodes/node-web-1",
 			"so its expiry is unknown until its next renewal", newTestHandler(sweepFixture(), accounts.RoleAdmin)},
-		{"the summary is the Relay's wording, but its Operation names and quoted values are the caller's", "/console/approvals/ap-1",
-			"its Operation names and quoted values are the caller&#39;s", h},
-		{"a missing park record leaves the Selector and arguments unknown, not empty", "/console/approvals/ap-1",
-			"so the Selector and arguments are unknown, not empty", h},
-		{"approval residual risk: the audience is a union", "/console/approvals/ap-grant",
-			"the audience is their union", newTestHandler(gd, accounts.RoleAdmin)},
-		{"08: the Scope must be expanded", "/console/approvals/ap-grant",
-			"Expand the Scope before approving; nothing enforces that yet", newTestHandler(gd, accounts.RoleAdmin)},
 	} {
 		if body := contentOf(get(t, c.h, c.path).Body.String()); !strings.Contains(body, c.want) {
 			t.Errorf("%s: %s no longer renders %q", c.why, c.path, c.want)

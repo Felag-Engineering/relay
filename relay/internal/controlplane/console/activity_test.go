@@ -189,8 +189,11 @@ func TestActivity_AuditorAnswersAllFourFromOneRow(t *testing.T) {
 		t.Error("the on-behalf-of is not rendered as a SEPARATE, asserted chip — merging the two " +
 			"lanes, or passing verified for the asserted one, is how an audit trail becomes fiction")
 	}
-	if !strings.Contains(body, `href="/console/approvals/appr-9"`) {
-		t.Error("the row does not link to the approval that released it")
+	if !strings.Contains(body, `<span class="dim">approval</span> <code>appr-9</code>`) {
+		t.Error("the row does not name the approval that released it")
+	}
+	if strings.Contains(body, `href="/console/approvals`) {
+		t.Error("the row links to an approval screen the Console does not have")
 	}
 	if !strings.Contains(body, "service.restart") {
 		t.Error("the row does not say what happened")

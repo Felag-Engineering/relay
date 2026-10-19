@@ -100,7 +100,9 @@ type Deps struct {
 	// Audit has one screen too: AI-agent history reads through Queries,
 	// leaving node detail's Recent Tasks panel and its node_revoke lookup as
 	// the only reader of the whole trail through this seam.
-	Audit     AuditReader
+	Audit AuditReader
+
+	// Approvals is Job detail's read of a dispatch's approval record.
 	Approvals ApprovalReader
 	Freeze    FreezeReader
 
@@ -167,29 +169,17 @@ type Deps struct {
 	// posture every other seam on this Deps takes.
 	Cancel JobCanceller
 
-	// Decide is the Console's other write seam (decide.go): the same
-	// capability.Approvals.DecideApproval the Control API's out-of-band
-	// endpoint and MCP call. Quorum, audience, requester exclusion, the
-	// machine-self-decision rule, channel strength and the audit row are all
-	// the capability layer's; this package only renders what it decided.
-	//
-	// Decide is PAIRED with Auth: decideOffered refuses to offer the control
-	// unless both are wired, because a decision that cannot be
-	// step-up-verified must not be offered at all. Wiring one without the
-	// other is a composition-root trap, not a supported configuration — see
-	// decideOffered and TestDecide_UnwiredSeamsOfferNothing.
-	Decide ApprovalDecider
-
-	// AccountAdmin is the Console's THIRD write seam (accounts_write.go): the same five capability.AccountAdmin verbs the Control
-	// API calls — CreateAccount, SetAccountRole, SetAccountEnabled,
-	// MintAPIToken and RevokeAPIToken. The admin floor on all of them, the
+	// AccountAdmin is the Console's second write seam (accounts_write.go): the
+	// same five capability.AccountAdmin verbs the Control API calls —
+	// CreateAccount, SetAccountRole, SetAccountEnabled, MintAPIToken and
+	// RevokeAPIToken. The admin floor on all of them, the
 	// self-target refusal, the last-enabled-admin refusal and every audit row
 	// are the capability layer's; this package only renders what it decided.
 	//
 	// PAIRED with Auth AND with Accounts: accountsOffered refuses to offer
 	// any of the five controls unless all three are wired — Auth because a
 	// granting act that cannot be step-up-verified must not be offered at
-	// all (the Decide/Auth precedent above), Accounts because the role route
+	// all, Accounts because the role route
 	// reads the target's current role to tell a raise from a lower. Nil, or
 	// either partner nil, means the controls do not render and the routes
 	// answer unavailable.
@@ -325,8 +315,6 @@ func Routes(d Deps) []Route {
 		// reach must own its path exclusively. Pick a path outside
 		// /console/nodes/ instead, as /console/compare, above, already did
 		// for the same reason.
-		{"GET", "/console/approvals", NavEntry{NavAct, "Approvals", 30}, accounts.RoleViewer, handleApprovals},
-		{"GET", "/console/approvals/{approval_id}", NavEntry{}, accounts.RoleViewer, handleApproval},
 
 		// Accounts, read half (spec 15). The first route in the
 		// Administer group.
@@ -380,8 +368,8 @@ func Routes(d Deps) []Route {
 		// own floor and widens nothing. None is a navigation destination:
 		// they are form targets on the screen above.
 		//
-		// NOT gated behind d.Execution, for the reason cancel.go and
-		// decide.go each already make: ADR-0026 decision 5 scopes that flag
+		// NOT gated behind d.Execution, for the reason cancel.go
+		// already makes: ADR-0026 decision 5 scopes that flag
 		// to the composer and to dispatch, and none of these five composes or
 		// dispatches anything.
 		//
@@ -442,7 +430,7 @@ func Routes(d Deps) []Route {
 		{"POST", LoginPath, NavEntry{}, accounts.RoleViewer, handleLoginSubmit},
 		{"POST", LogoutPath, NavEntry{}, accounts.RoleViewer, handleLogout},
 
-		// Cancel: the first of the Console's two write routes. NOT
+		// Cancel: one of the Console's write routes. NOT
 		// gated behind d.Execution — ADR-0026 decision 5 scopes that flag to
 		// the composer and to dispatch, and Cancel cannot run anything, only
 		// ask something already running to stop. MinRole here is mount-time
@@ -450,29 +438,6 @@ func Routes(d Deps) []Route {
 		// every other MinRole gives); the capability layer's RoleGate,
 		// reached inside handleCancelJob, is the authority.
 		{"POST", "/console/jobs/{job_id}/cancel", NavEntry{}, accounts.RoleOperator, handleCancelJob},
-
-		// Decide: the second write route, and the one that RELEASES
-		// execution rather than only ever reducing it — decide.go's header
-		// states that asymmetry rather than eliding it. Also NOT gated
-		// behind d.Execution, for the same reason: this route composes
-		// nothing, it answers a Plan the Relay already built, and
-		// ADR-0026 decision 5 scopes console_execution to the composer and
-		// the dispatch routes.
-		//
-		// MinRole is RoleOperator because that is the LOWEST floor
-		// authz.requiredRole can ever return (ActionOperation -> operator,
-		// ActionRawExec -> admin; authz.go), so this mount gate can never
-		// hide the route from a principal AuthorizeApprovalDecision would
-		// admit — subtractive only, never wider than the capability layer.
-		//
-		// The path owns itself exclusively: "GET /console/approvals/{id}"
-		// is a three-segment pattern and never matches this four-segment
-		// one, and because this route constrainsReach(), Register also
-		// mounts methodMismatch on the bare path
-		// "/console/approvals/{approval_id}/decision", which collides with
-		// nothing else in this table (contrast the "/console/nodes/add"
-		// hazard documented above).
-		{"POST", "/console/approvals/{approval_id}/decision", NavEntry{}, accounts.RoleOperator, handleDecideApproval},
 	}
 
 	// This placeholder stays mounted: it is only ever appended when d.Execution is true, the

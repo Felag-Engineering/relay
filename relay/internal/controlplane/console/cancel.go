@@ -5,9 +5,8 @@ package console
 // stop a Job's Tasks.
 //
 // This was the Console's FIRST route to reach the capability layer's WRITE
-// path; decide.go's decision route is the second. Every OTHER route
-// in this package (seams.go's header) only ever reads. Cancel is not an
-// execution route, so it is not behind
+// path. Every OTHER route in this package (seams.go's header) only ever
+// reads. Cancel is not an execution route, so it is not behind
 // console_execution (see console.go's Routes and control_surfaces.go's
 // wiring): ADR-0026 decision 5 scopes that flag to the composer and to
 // dispatch, because its reason is the browser-borne fleet-RCE class, and
@@ -18,12 +17,12 @@ package console
 //
 // # Import-scope
 //
-// This file was the Console's FIRST importer of internal/authz; decide.go
-// is the second. Both name exactly one symbol from it: the
-// authz.ErrUnauthorized sentinel, used only to RECOGNIZE a refusal the
-// capability layer already made and RENDER it. Neither constructs, names, or
-// calls a role gate — no_dispatch_test.go's authz allowlist (package-wide,
-// not per-file) enforces that structurally, not by convention.
+// This file was the Console's FIRST importer of internal/authz. It names
+// exactly one symbol from it: the authz.ErrUnauthorized sentinel, used only to
+// RECOGNIZE a refusal the capability layer already made and RENDER it. It
+// does not construct, name, or call a role gate — no_dispatch_test.go's
+// authz allowlist (package-wide, not per-file) enforces that structurally,
+// not by convention.
 //
 // # Who decides
 //

@@ -325,9 +325,8 @@ type jobView struct {
 	// requester on its row, so this is empty for it too.
 	RequesterKind string
 
-	ApprovalID   string
-	ApprovalHref string
-	GrantID      string
+	ApprovalID string
+	GrantID    string
 
 	// Approval carries who gated this dispatch, under which rule, at what
 	// quorum, and what the Relay-authored Summary told them — rendered from
@@ -475,6 +474,37 @@ type jobApproval struct {
 	ParkedBy         string
 	ParkedByVerified bool
 	ParkedByDiffers  bool
+}
+
+// deciderKind renders a Decision's recorded DeciderHuman as the kind label's
+// word. The record is false-by-default — an unknown or unset kind is stored as
+// not human (approval.Decision) — so "machine" here means "not recorded as
+// human", which is the restrictive reading and the one the record itself
+// makes. It reads nothing but the bool it is handed.
+func deciderKind(human bool) string {
+	if human {
+		return "human"
+	}
+	return "machine"
+}
+
+// stampOrAbsent renders t as a UTC stamp, or "not recorded" for the zero time.
+func stampOrAbsent(t time.Time) string {
+	if t.IsZero() {
+		return "not recorded"
+	}
+	return utcStamp(t)
+}
+
+// countApprovals is how many of a request's Decisions approved.
+func countApprovals(req approval.Request) int {
+	n := 0
+	for _, d := range req.Decisions {
+		if d.Approve {
+			n++
+		}
+	}
+	return n
 }
 
 // newJobApproval projects one approval.Request onto the Job screen's
@@ -660,9 +690,6 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 		v.Principal = cmp.Or(v.Principal, row.Principal, "unattributed")
 	} else {
 		v.Principal = cmp.Or(v.Principal, "unattributed")
-	}
-	if v.ApprovalID != "" {
-		v.ApprovalHref = "/console/approvals/" + v.ApprovalID
 	}
 
 	selectorNote := "the Selector is recorded in the audit trail when the dispatch completes"
@@ -1111,7 +1138,7 @@ var jobTmpl = newScreen("job", `
   <div class="jhrow">
     {{template "trust-chip" (trust .Principal .Verified)}}{{template "kind-label" .RequesterKind}}
     {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}<span class="dim">on behalf of (claimed by the caller, not checked)</span>{{end}}
-    {{if .ApprovalHref}}released by approval <a href="{{.ApprovalHref}}"><code>{{short .ApprovalID}}</code></a>{{end}}
+    {{if .ApprovalID}}released by approval <code>{{short .ApprovalID}}</code>{{end}}
     {{with .GrantID}}<span class="grant" title="A human approved a window this plan fell inside, not this plan.">grant {{short .}}</span>{{end}}
   </div>
   <div class="jhrow">
