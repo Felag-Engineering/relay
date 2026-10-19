@@ -8,25 +8,22 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"syscall"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
 // The approval-gate file is Relay CONFIGURATION, not a runtime object
-// (invariant 11). It sits with the blast cap on the root-owned side of the
-// line: the Control API can never read or write it, and no Account of any role
-// can loosen it, because a stolen credential that could edit its own approval
-// requirements would make the whole mechanism decorative.
+// (invariant 11). It sits with the blast cap on the host administrator's side
+// of the line: the Control API can never read or write it, and no Account of
+// any role can loosen it, because a stolen credential that could edit its own
+// approval requirements would make the whole mechanism decorative.
 //
-// It is a dedicated file rather than a section of a general Relay config file
-// because the Relay has no general config file today — it is configured by
-// flags and environment variables, which cannot express a list of rules with
-// ten fields each. Whether the Relay should grow a general config file is a
-// separate, open question; this file deliberately does not pre-empt it,
-// and it mirrors a pattern the product already trusts: the relay-daemon's
-// root-owned local Policy file with a fail-closed loader (ADR-0002).
+// It is a file the Relay's configuration names (approval.gate_rules_path),
+// read under the same file check as the configuration itself (ADR-0043), and
+// it mirrors a pattern the product already trusts: the relay-daemon's local
+// Policy file with a fail-closed loader (ADR-0002).
 //
 // Format is JSON, parsed by encoding/json from the standard library. That is a
 // deliberate trade: TOML or YAML would be friendlier to hand-author, but both
@@ -84,16 +81,50 @@ type fileRequirement struct {
 // never degrade into "nothing needs approval". The caller is expected to treat
 // the error as fatal at startup, exactly as the relay-daemon treats an
 // unloadable Policy file (ADR-0002).
+//
+// The file is one the configuration names, so it is opened through hostfile's
+// check (RC-15, RC-16) and read from the descriptor that was checked; the
+// file's own mode rule (RC-8) is applied on that descriptor as well.
 func Load(path string) (*Gate, error) {
 	if path == "" {
 		return NewGate(nil)
 	}
-
-	f, err := openConfigFile(path)
+	f, err := hostfile.Open(path, hostfile.Named)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, fs.ErrNotExist) {
+			// Pointedly NOT "no gates configured": the operator named a file,
+			// so its absence is a deployment error. Silently continuing here
+			// is precisely how an approval mechanism becomes decorative.
+			return nil, fmt.Errorf("approval: gate config %s does not exist — "+
+				"a configured gate file must be present; configure no path at all to run without approval gates", path)
+		}
+		return nil, fmt.Errorf("approval: gate config: %w", err)
 	}
+	return loadOpened(f, path)
+}
+
+// loadOpened applies the gate file's own mode rule to f, the descriptor the
+// file check passed, then reads and parses it. It closes f.
+func loadOpened(f *os.File, path string) (*Gate, error) {
 	defer f.Close() //nolint:errcheck // read-only
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("approval: stat gate config %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("approval: gate config %s is not a regular file (mode %s)", path, info.Mode())
+	}
+	// Group- or world-writable means someone other than the owner can rewrite
+	// the fleet's approval requirements (RC-8). This is stricter than the file
+	// check, which passes a group-writable file whose group excludes the Relay
+	// (root:wheel 0664, say): refuse rather than warn, since a warning in a log
+	// nobody reads is not a control.
+	if perm := info.Mode().Perm(); perm&0o022 != 0 {
+		return nil, fmt.Errorf("approval: gate config %s is group- or world-writable (mode %04o) — "+
+			"it decides what needs human approval, so it must be writable only by its owner (chmod 0644 or stricter)",
+			path, perm)
+	}
 
 	data, err := io.ReadAll(io.LimitReader(f, MaxConfigBytes+1))
 	if err != nil {
@@ -104,48 +135,6 @@ func Load(path string) (*Gate, error) {
 	}
 
 	return Parse(data)
-}
-
-// openConfigFile opens path with the same fail-closed posture the daemon's
-// Policy loader uses: no symlink following, and a check performed on the OPEN
-// DESCRIPTOR rather than on the path, so the thing validated is the thing read
-// (no TOCTOU window between stat and open).
-func openConfigFile(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NOCTTY, 0) //nolint:gosec // G304: an operator-set host path (invariant 11), opened O_NOFOLLOW
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			// Pointedly NOT "no gates configured": the operator named a file,
-			// so its absence is a deployment error. Silently continuing here
-			// is precisely how an approval mechanism becomes decorative.
-			return nil, fmt.Errorf("approval: gate config %s does not exist — "+
-				"a configured gate file must be present; pass no path at all to run without approval gates", path)
-		}
-		if errors.Is(err, syscall.ELOOP) {
-			return nil, fmt.Errorf("approval: gate config %s is a symlink — "+
-				"the gate file must be a regular root-owned file, not a link into it", path)
-		}
-		return nil, fmt.Errorf("approval: open gate config %s: %w", path, err)
-	}
-
-	info, err := f.Stat()
-	if err != nil {
-		f.Close() //nolint:errcheck // best-effort on an error path
-		return nil, fmt.Errorf("approval: stat gate config %s: %w", path, err)
-	}
-	if !info.Mode().IsRegular() {
-		f.Close() //nolint:errcheck // best-effort on an error path
-		return nil, fmt.Errorf("approval: gate config %s is not a regular file (mode %s)", path, info.Mode())
-	}
-	// Group- or world-writable means someone other than the owner can rewrite
-	// the fleet's approval requirements. Refuse rather than warn: a warning in
-	// a log nobody reads is not a control.
-	if perm := info.Mode().Perm(); perm&0o022 != 0 {
-		f.Close() //nolint:errcheck // best-effort on an error path
-		return nil, fmt.Errorf("approval: gate config %s is group- or world-writable (mode %04o) — "+
-			"it decides what needs human approval, so it must be writable only by its owner (chmod 0644 or stricter)",
-			path, perm)
-	}
-	return f, nil
 }
 
 // Parse validates raw gate-config bytes into a Gate. Exported so tests and a

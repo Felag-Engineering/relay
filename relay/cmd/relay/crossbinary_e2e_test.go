@@ -52,13 +52,9 @@ func relayCADir(layout *relaytest.RelayLayout) string {
 	return filepath.Join(layout.StateDir(), "ca")
 }
 
-// relaySubprocessEnv is the whole environment of a Relay started through a layout. When the
-// Relay runs as the separate uid it gets nothing of the test's own temp or coverage
-// directories, which it could not write.
-func relaySubprocessEnv(layout *relaytest.RelayLayout, extra ...string) []string {
-	if !layout.Separate() {
-		return relayChildEnv(extra...)
-	}
+// relaySubprocessEnv is the whole environment of a Relay started through a layout: nothing of
+// the test's own temp or coverage directories, which the separate uid could not write.
+func relaySubprocessEnv(extra ...string) []string {
 	return append([]string{"PATH=" + os.Getenv("PATH"), "HOME=/"}, extra...)
 }
 
@@ -88,7 +84,7 @@ func startRelaySubprocess(t *testing.T, layout *relaytest.RelayLayout, relayBin,
 
 	fixedAddr := addr != ""
 	bin := layout.InstallBinary(t, relayBin)
-	env := relaySubprocessEnv(layout, "RELAY_DEVHARNESS_SOCKET="+harnessSocketPath(layout))
+	env := relaySubprocessEnv("RELAY_DEVHARNESS_SOCKET=" + harnessSocketPath(layout))
 
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {

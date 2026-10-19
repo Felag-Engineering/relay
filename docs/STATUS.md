@@ -77,7 +77,6 @@ Mirrors AGENTS.md's gap table as read on 2026-10-15.
 |---|---|---|
 | 7 | `tag:`'s writer, and `relay:`'s | [#430](https://github.com/Felag-Engineering/relay/issues/430) |
 | 10 | Console execution | [#438](https://github.com/Felag-Engineering/relay/issues/438) |
-| 11 | Secrets: the Relay can read them and cannot rewrite them, except key material it generates | [#1002](https://github.com/Felag-Engineering/relay/issues/1002) |
 
 What each gap means is in
 [AGENTS.md — Known gaps between these invariants and the code](../AGENTS.md#known-gaps-between-these-invariants-and-the-code);

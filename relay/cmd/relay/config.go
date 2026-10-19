@@ -9,8 +9,9 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
-	"os"
 
+	"github.com/Felag-Engineering/relay/relay/internal/approvalnotify"
+	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
 	"github.com/Felag-Engineering/relay/relay/internal/relayconfig"
 )
 
@@ -52,20 +53,39 @@ type startupConfig struct {
 	Warnings []relayconfig.Warning
 }
 
-// loadConfig reads and validates the file at path. Every refusal names the
-// path, a key or a line — never a value. readSecret is the file check each
-// file-backed secret is read through.
-func loadConfig(path string, readSecret func(string) ([]byte, error)) (startupConfig, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // G304: the operator-named configuration file (invariant 11)
+// maxConfigBytes bounds the configuration file, so a pathological file is
+// refused before it is read into memory.
+const maxConfigBytes = 1 << 20
+
+// loadConfig reads and validates the configuration file at path. The file is
+// opened through hostfile's check as a file holding secrets (RC-15, RC-16) and
+// read from the descriptor that was checked, and every file-backed secret it
+// names is read through the same check (approvalnotify.ReadSecretFile). Every
+// refusal names the path, a key or a line — never a value.
+func loadConfig(path string) (startupConfig, error) {
+	f, err := hostfile.Open(path, hostfile.Secret)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return startupConfig{}, fmt.Errorf("configuration: the configuration file %s does not exist: %w", path, fs.ErrNotExist)
 	case errors.Is(err, fs.ErrPermission):
 		return startupConfig{}, fmt.Errorf("configuration: the configuration file %s cannot be read: %w", path, fs.ErrPermission)
 	case err != nil:
+		return startupConfig{}, fmt.Errorf("configuration: the configuration file %s: %w", path, err)
+	}
+	defer f.Close() //nolint:errcheck // read-only
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	if err != nil {
 		return startupConfig{}, fmt.Errorf("configuration: the configuration file %s could not be read", path)
 	}
+	if len(data) > maxConfigBytes {
+		return startupConfig{}, fmt.Errorf("configuration: the configuration file %s is larger than %d bytes", path, maxConfigBytes)
+	}
+	return parseConfig(data, approvalnotify.ReadSecretFile)
+}
 
+// parseConfig decodes and validates data, the configuration file's contents,
+// reading each file-backed secret through readSecret.
+func parseConfig(data []byte, readSecret func(string) ([]byte, error)) (startupConfig, error) {
 	rc, warns, err := relayconfig.Load(data)
 	if err != nil {
 		return startupConfig{}, err

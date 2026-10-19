@@ -1,6 +1,6 @@
 package main
 
-// bootstrap_token.go implements `relay bootstrap-token`: the local, root-owned
+// bootstrap_token.go implements `relay bootstrap-token`: the local, host-only
 // lever that mints the founding admin Account's first API Token (ADR-0023).
 //
 // It exists because retiring the config-seeded shared credential leaves
@@ -64,7 +64,7 @@ Accounts and mint their tokens over /api/v1, then revoke this one. The
 plaintext is shown exactly once and cannot be recovered — losing it means
 running this again and revoking the old token.
 
-Requires read/write access to the Relay's store file, which is root-owned.
+Requires read/write access to the Relay's store file, which belongs to the Relay's account.
 Safe to run while the Relay is running.
 
 The mint is recorded on the audit trail (api_token_mint), attributed to

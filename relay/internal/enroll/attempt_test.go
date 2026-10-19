@@ -41,9 +41,9 @@ func (o *capturingAttemptObserver) snapshot() []AttemptEvent {
 // needs (WithRateLimiter, WithPostEnrollRevocationCheck, ...).
 func newObservedEnrollServer(t *testing.T, svc *Service, obs AttemptObserver, opts ...ServerOption) (*Server, *registry.InMemory) {
 	t.Helper()
-	realCA, err := ca.Open(t.TempDir())
+	realCA, err := ca.Generate()
 	if err != nil {
-		t.Fatalf("ca.Open: %v", err)
+		t.Fatalf("ca.Generate: %v", err)
 	}
 	reg := registry.NewInMemory()
 	allOpts := append([]ServerOption{WithAttemptObserver(obs)}, opts...)
@@ -329,9 +329,9 @@ func TestAttemptObserver_MalformedShapeTokenID_NotPublished(t *testing.T) {
 func TestAttemptObserver_AtCapacity(t *testing.T) {
 	obs := &capturingAttemptObserver{}
 	svc := NewService(NewMemoryRepository())
-	realCA, err := ca.Open(t.TempDir())
+	realCA, err := ca.Generate()
 	if err != nil {
-		t.Fatalf("ca.Open: %v", err)
+		t.Fatalf("ca.Generate: %v", err)
 	}
 	reg := registry.NewInMemory(registry.WithMaxNodes(1))
 	limiter := ratelimit.New(ratelimit.Config{
@@ -363,9 +363,9 @@ func TestAttemptObserver_AtCapacity(t *testing.T) {
 func TestAttemptObserver_RevokedMidEnrollment(t *testing.T) {
 	obs := &capturingAttemptObserver{}
 	svc := NewService(NewMemoryRepository())
-	realCA, err := ca.Open(t.TempDir())
+	realCA, err := ca.Generate()
 	if err != nil {
-		t.Fatalf("ca.Open: %v", err)
+		t.Fatalf("ca.Generate: %v", err)
 	}
 	reg := registry.NewInMemory()
 	den := &fakeDenylister{}
@@ -447,9 +447,9 @@ func (f failingRecordEnrollment) RecordEnrollment(nodeID string, cert registry.C
 func TestAttemptObserver_RecordEnrollmentFailure_StillExactlyOneAcceptedEvent(t *testing.T) {
 	obs := &capturingAttemptObserver{}
 	svc := NewService(NewMemoryRepository())
-	realCA, err := ca.Open(t.TempDir())
+	realCA, err := ca.Generate()
 	if err != nil {
-		t.Fatalf("ca.Open: %v", err)
+		t.Fatalf("ca.Generate: %v", err)
 	}
 	reg := failingRecordEnrollment{registry.NewInMemory()}
 	srv := NewServer(svc, realCA, reg, WithAttemptObserver(obs))

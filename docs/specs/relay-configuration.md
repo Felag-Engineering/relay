@@ -1,6 +1,6 @@
 # Relay configuration
 
-**Status:** designed, not built, as of `2026-10-18`.
+**Status:** designed, not built, as of `2026-10-19`.
 **Claim prefix:** `RC`
 
 ## Purpose
@@ -55,6 +55,8 @@ to authenticate as somebody else.
 - **RC-12** The security floor lives in one TOML configuration file the Relay reads itself: `/etc/relay/relay.toml` by default, or the path one command-line flag, `--config`, names. That path is the only configuration the Relay accepts from outside the file; the binary otherwise accepts `--version`, `--help` and its subcommands (ADR-0043).
 - **RC-13** No setting is read from the environment or the command line. A `RELAY_*` variable for a setting found in the environment refuses start and names that setting's place in the file.
 - **RC-14** A secret is a value in the configuration file, or a path to a file holding it, for material another tool manages and rotates. Either way it never passes through the environment or the command line (invariant 11).
+- **RC-16** Each file the check covers is opened without following a symlink, checked on that descriptor and read from it, so nothing can change between the check and the read; a path that is a symlink is refused.
+- **RC-17** Everything the Relay generates — its CA private key and its store — lives in its state directory, owned by the Relay's uid. The Relay refuses to start if that directory or the key is readable by any other account.
 - **RC-20** A configuration that cannot work is refused at start — the Console enabled without the control plane, OAuth settings without an issuer. One that is coherent but probably a mistake, such as a mutate cap above the read cap, starts with a prominent warning; when the caps move to the store (RC-29), that warning moves with them.
 - **RC-22** Until store-backed operator settings exist (RC-29), the read and mutate blast caps, the minimum daemon version, the `state:cert-expiring` fraction, the enrollment rate limits, burst and tracked-IP ceiling, the Node cap, and the log level and format are values in the configuration file, validated like every other value, with built-in defaults where absent. The approval-gate rules file's path is one too, with no default: leaving it out means no gate (`approval.md`).
 - **RC-36** An optional advertised address names the address Nodes are told to dial — the address a join string carries — when it differs from the gRPC listen address, as behind a container port mapping. Unset, the join string carries the certificate hostname and the gRPC listen port.
@@ -119,13 +121,15 @@ writer.
 | RC-12 | `TestMain_ConfigFlagHonoured`, `TestMain_OtherFlagsRefused`, `TestParseArgs` | composition root |
 | RC-13 | `TestMain_RetiredEnvNameRefusesNamingKey`, `TestMain_OtherFlagsRefused`, `TestFreezeReleaseReason_IsTheOnlyEnvironmentRead`, `TestRefuseRetiredEnv_NamesKeyNotValue`, `TestRetiredEnvMap_CoversEveryRetiredName` | composition root, relayconfig |
 | RC-14 | `TestSecret_InlineAndFileLoad`, `TestLoadConfig_FileSecretsResolved`, `TestStartupLog_CarriesNoWebhookURLOrSecret`, `TestMain_RetiredEnvNameRefusesNamingKey`, `TestMain_OtherFlagsRefused` | relayconfig, composition root |
+| RC-16 | `TestStart_RefusesSymlinkedConfig`, `TestLoadRefusesSymlink`, `TestGather_SymlinkedAncestorRefused`, `TestGather_DecisionAndReadShareDescriptor`, `TestGather_FIFOLeafDoesNotBlock` | composition root, approval, hostfile |
+| RC-17 | `TestCA_RefusesGroupReadableKeyOrDirectory`, `TestStart_RefusesGroupReadableStateOrKey`, `TestDecide_GeneratedMaterialRule` | ca, composition root, hostfile |
 | RC-20 | `TestValidate_ConsoleWithoutControlPlaneRefused`, `TestValidate_OAuthWithoutIssuerRefused`, `TestValidate_MutateCapAboveReadCapWarns`, `TestMain_CoherentButSuspectConfigStartsWithWarning` | relayconfig, composition root |
 | RC-22 | `TestDefaults_EachReachValueWhenAbsent`, `TestApprovalGatePathAbsentMeansNoGate`, `TestEveryKeyReachesConfig`, `TestValidate_InvalidValueRefusedNamingSetting`, `TestFromFile_CarriesEverySetting`, `TestNewLogHandler_FormatAndLevel` | relayconfig, composition root |
+| RC-35 | `TestStartup_UnloadableGateFileRefuses` | composition root |
 | RC-36 | `TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress` | Control API mint |
 
 Claims with **no row**, and so nothing checking them: RC-1, RC-4, RC-6, RC-7 (asserted by
-the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absence), RC-35
-(`TestLoadFailsClosed` proves the loader, not the startup refusal).
+the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absence).
 
 ### Performance
 
@@ -138,8 +142,6 @@ the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absenc
 | Claim | Statement | Milestone |
 |---|---|---|
 | RC-15 | At start and on every reload the Relay refuses to run if it could write its configuration file or any file the configuration names, or if any account but it and root could read the configuration file or any file holding a secret. It could write a file when it owns the file on a filesystem mounted writable, when a mode bit or access-control list grants it or one of its groups write, when any directory on the file's resolved path is owned by or writable by it, or when it runs as root or holds any capability (ADR-0043). | v0.6.5 — Install Path: relay init, join string, packages |
-| RC-16 | Each file the check covers is opened without following a symlink, checked on that descriptor and read from it, so nothing can change between the check and the read; a path that is a symlink is refused. | v0.6.5 — Install Path: relay init, join string, packages |
-| RC-17 | Everything the Relay generates — its CA private key and its store — lives in its state directory, owned by the Relay's uid. The Relay refuses to start if that directory or the key is readable by any other account. | v0.6.5 — Install Path: relay init, join string, packages |
 | RC-18 | No secret value, inline or in a file, and no approval webhook URL, appears on any surface, in any log or audit record, or in any refusal message. A parse or validation error names the key and the line, never the value; a reload's audit record names a changed secret setting, never its value. | v0.6.5 — Install Path: relay init, join string, packages |
 | RC-19 | The CA directory, store path and certificate hostname have no defaults: unset is a refusal naming the setting. Every value is validated at start and at reload, and an invalid one is a refusal naming the setting, never a warning and a fallback to a default. A missing or unreadable configuration file is a refusal. | v0.6.5 — Install Path: relay init, join string, packages |
 | RC-21 | `SIGHUP` re-reads the configuration file from the path given at start and applies RC-15 before anything else. The reload is all-or-nothing: an invalid value, or a changed bind-time setting — listen addresses, the advertised address (RC-36), CA directory, store path, certificate hostname, whether the control plane and Admin Console are enabled, and the OAuth identity provider — refuses the whole reload, logs the setting and that a restart is required, and leaves the running configuration untouched. A failed reload never exits the process. Every reload is audited, attributed to the Relay's host rather than to any Account, the way the Freeze signal's host lever is, listing what changed. | v0.6.5 — Install Path: relay init, join string, packages |

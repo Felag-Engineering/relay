@@ -308,6 +308,7 @@ linters:
             - strings$
             - syscall$
             - time$
+            - github.com/Felag-Engineering/relay/relay/internal/hostfile$
             - github.com/Felag-Engineering/relay/relay/internal/jobs$
             - github.com/Felag-Engineering/relay/relay/internal/opvocab$
           deny: *domain-deny

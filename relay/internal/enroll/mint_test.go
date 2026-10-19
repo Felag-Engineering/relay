@@ -23,9 +23,9 @@ func (f fixedFingerprint) Fingerprint() string { return string(f) }
 
 func TestEnroll_JoinStringCarriesFingerprintAddressAndToken(t *testing.T) {
 	ctx := context.Background()
-	relayCA, err := ca.Open(t.TempDir())
+	relayCA, err := ca.Generate()
 	if err != nil {
-		t.Fatalf("ca.Open: %v", err)
+		t.Fatalf("ca.Generate: %v", err)
 	}
 	svc := NewService(NewMemoryRepository())
 	minter, err := NewMinter(svc, relayCA, "relay.example.com:7654")

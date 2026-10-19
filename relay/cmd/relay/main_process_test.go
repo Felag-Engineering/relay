@@ -4,14 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // TestMain re-executes the test binary as the Relay when RELAYTEST_RUN_MAIN
@@ -44,19 +42,6 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
-}
-
-// freeLoopbackAddr binds 127.0.0.1:0, reads the OS-assigned port, and closes
-// the listener, returning the address string for a subprocess to bind next.
-// The window between close and the subprocess's bind is inherent and small;
-// startRelaySubprocess retries on a fresh port to absorb it.
-func freeLoopbackAddr() (string, error) {
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	defer lis.Close()
-	return lis.Addr().String(), nil
 }
 
 // relayChildEnv is the one place a Relay child's environment is built. It
@@ -109,35 +94,6 @@ func runRelayMain(t *testing.T, env []string, args ...string) (*exec.Cmd, *syncB
 	return cmd, buf
 }
 
-// waitListening blocks until the Relay logs "relay listening", failing if it
-// exits first. The process is killed and reaped when the test ends.
-func waitListening(t *testing.T, cmd *exec.Cmd, buf *syncBuffer) {
-	t.Helper()
-	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		select {
-		case <-exited:
-		case <-time.After(5 * time.Second):
-		}
-	})
-	deadline := time.After(10 * time.Second)
-	for {
-		if strings.Contains(buf.String(), "relay listening") {
-			return
-		}
-		select {
-		case err := <-exited:
-			exited <- err
-			t.Fatalf("relay exited before listening: %v\n%s", err, buf.String())
-		case <-deadline:
-			t.Fatalf("relay did not report listening within 10s\n%s", buf.String())
-		case <-time.After(25 * time.Millisecond):
-		}
-	}
-}
-
 // exitCode runs cmd to completion and returns its exit code.
 func exitCode(t *testing.T, cmd *exec.Cmd) int {
 	t.Helper()
@@ -152,54 +108,21 @@ func exitCode(t *testing.T, cmd *exec.Cmd) int {
 	return ee.ExitCode()
 }
 
-func TestMain_ConfigFlagHonoured(t *testing.T) {
-	for _, form := range []string{"--config", "-config="} {
-		t.Run(form, func(t *testing.T) {
-			addr, err := freeLoopbackAddr()
-			if err != nil {
-				t.Fatal(err)
-			}
-			body := minimalTOML(t, addr)
-			path := writeRelayTOML(t, body)
-			args := []string{"--config", path}
-			if strings.HasSuffix(form, "=") {
-				args = []string{form + path}
-			}
-			cmd, buf := runRelayMain(t, nil, args...)
-			waitListening(t, cmd, buf)
-
-			caDir, storePath := tomlValue(body, "dir"), tomlValue(body, "path")
-			if _, err := os.Stat(filepath.Join(caDir, "ca-cert.pem")); err != nil {
-				t.Errorf("CA was not created under the file's ca.dir: %v", err)
-			}
-			if _, err := os.Stat(storePath); err != nil {
-				t.Errorf("store was not created at the file's store.path: %v", err)
-			}
-		})
+// TestMain_DefaultConfigPathNamedWhenAbsent: with no --config the Relay reads the default path,
+// and a missing file refuses start naming it. The file is never reached, so this runs as the
+// test's own uid; every start that reads a file is on the separate-uid harness
+// (start_e2e_test.go).
+func TestMain_DefaultConfigPathNamedWhenAbsent(t *testing.T) {
+	if _, err := os.Stat("/etc/relay/relay.toml"); err == nil {
+		t.Skip("the host has /etc/relay/relay.toml")
 	}
-
-	t.Run("default path", func(t *testing.T) {
-		if _, err := os.Stat("/etc/relay/relay.toml"); err == nil {
-			t.Skip("the host has /etc/relay/relay.toml")
-		}
-		cmd, buf := runRelayMain(t, nil)
-		if code := exitCode(t, cmd); code == 0 {
-			t.Fatalf("relay with no configuration file exited 0:\n%s", buf.String())
-		}
-		if !strings.Contains(buf.String(), "/etc/relay/relay.toml") {
-			t.Errorf("output does not name the default path:\n%s", buf.String())
-		}
-	})
-}
-
-// tomlValue returns the quoted value of the first `key = "..."` line.
-func tomlValue(body, key string) string {
-	for _, line := range strings.Split(body, "\n") {
-		if rest, ok := strings.CutPrefix(line, key+" = "); ok {
-			return strings.Trim(rest, `"`)
-		}
+	cmd, buf := runRelayMain(t, nil)
+	if code := exitCode(t, cmd); code == 0 {
+		t.Fatalf("relay with no configuration file exited 0:\n%s", buf.String())
 	}
-	return ""
+	if !strings.Contains(buf.String(), "/etc/relay/relay.toml") {
+		t.Errorf("output does not name the default path:\n%s", buf.String())
+	}
 }
 
 func TestMain_OtherFlagsRefused(t *testing.T) {
@@ -286,30 +209,4 @@ func TestMain_RetiredEnvNameRefusesNamingKey(t *testing.T) {
 			t.Errorf("the file was opened before the environment was refused:\n%s", out)
 		}
 	})
-}
-
-func TestMain_CoherentButSuspectConfigStartsWithWarning(t *testing.T) {
-	addr, err := freeLoopbackAddr()
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := writeRelayTOML(t, minimalTOML(t, addr)+"\n[reach]\nread_blast_cap = 2\nmutate_blast_cap = 5\n")
-	cmd, buf := runRelayMain(t, nil, "--config", path)
-	waitListening(t, cmd, buf)
-
-	out := buf.String()
-	warnAt := -1
-	offset := 0
-	for _, line := range strings.SplitAfter(out, "\n") {
-		if warnAt < 0 && strings.Contains(line, "level=WARN") && strings.Contains(line, "mutate_blast_cap") {
-			warnAt = offset
-		}
-		offset += len(line)
-	}
-	if warnAt < 0 {
-		t.Fatalf("no warning line naming mutate_blast_cap:\n%s", out)
-	}
-	if warnAt > strings.Index(out, "relay listening") {
-		t.Errorf("the warning does not precede 'relay listening':\n%s", out)
-	}
 }

@@ -6,7 +6,8 @@ package relaytest
 // enforces on the files it reads (ADR-0043). No binary carries a way round that check; the
 // harness is the only way a test meets it.
 //
-// The layout, when the separate uid is available:
+// The layout, under /run because the check refuses a file below any directory the Relay can
+// write, and /tmp is world-writable:
 //
 //	<base>/        root:root              0755
 //	  etc/         root:relaytest         0750  the configuration, root:relaytest 0640
@@ -20,9 +21,9 @@ package relaytest
 // certificate) is copied out through sudo.
 //
 // Without passwordless sudo, setpriv, the accounts (scripts/relaytest-user.sh) or the group
-// membership, the Relay runs as the test's own uid in temporary directories and the missing
-// separate uid is recorded in make verify's skip ledger, never passed over; SudoRequiredEnv
-// set to "1" (CI only) makes it a failure instead.
+// membership the test cannot run at all: the Relay refuses to start over files its own uid
+// could write. The test is skipped and the skip recorded in make verify's skip ledger, never
+// passed over; SudoRequiredEnv set to "1" (CI only) makes it a failure instead.
 
 import (
 	"bytes"
@@ -54,6 +55,9 @@ const (
 	verifySkipsEnv = "RELAY_VERIFY_SKIPS"
 	// relayStartTimeout bounds how long sudo may take to hand over to the Relay.
 	relayStartTimeout = 10 * time.Second
+	// layoutParent holds every layout: root-owned and writable by nobody else, so nothing
+	// above a layout is a directory the Relay could write.
+	layoutParent = "/run"
 )
 
 // setprivArgs drops sudo's root to TestUser: its own uid and gid, every supplementary group
@@ -151,7 +155,7 @@ var recordedSkips sync.Map
 
 // requireSeparateUID is the one way a test reacts to the separate uid being unavailable: under
 // SudoRequiredEnv=1 it fails; otherwise it records the skip, named for gate, in make verify's
-// skip ledger (when there is one) and lets the caller run the Relay as its own uid.
+// skip ledger (when there is one) and returns, and the caller skips the test.
 func requireSeparateUID(t logFataler, gate, reason string) {
 	t.Helper()
 	if os.Getenv(SudoRequiredEnv) == "1" {
@@ -160,7 +164,7 @@ func requireSeparateUID(t logFataler, gate, reason string) {
 		return
 	}
 	line := gate + ": the Relay as a separate uid (" + reason + ")"
-	t.Logf("SKIPPING %s; the Relay runs as this test's own uid", line)
+	t.Logf("SKIPPING %s; the Relay refuses to start as this test's own uid", line)
 	ledger := os.Getenv(verifySkipsEnv)
 	if ledger == "" {
 		return
@@ -183,26 +187,26 @@ func requireSeparateUID(t logFataler, gate, reason string) {
 
 // RelayLayout is the set of directories one Relay under test uses, across restarts.
 type RelayLayout struct {
-	sep                              *separateUID // nil: the Relay runs as the test's own uid
+	sep                              *separateUID
 	confDir, binDir, stateDir, ioDir string
 	configs                          atomic.Int64
 	binsMu                           sync.Mutex
 	bins                             map[string]string
 }
 
-// NewRelayLayout builds the layout for one Relay. gate names the make target the calling test
-// runs under, for the skip ledger. Every directory is removed when the test ends.
+// NewRelayLayout builds the layout for one Relay, or skips the test (failing it under
+// SudoRequiredEnv=1) where the Relay cannot run as TestUser. gate names the make target the
+// calling test runs under, for the skip ledger. Every directory is removed when the test ends.
 func NewRelayLayout(t *testing.T, gate string) *RelayLayout {
 	t.Helper()
 	sep, reason := probe()
 	if sep == nil {
 		requireSeparateUID(t, gate, reason)
-		return &RelayLayout{confDir: t.TempDir(), stateDir: t.TempDir(), ioDir: t.TempDir(),
-			bins: map[string]string{}}
+		t.Skipf("the Relay cannot run as a separate uid here (%s)", reason)
 	}
 
-	base := strings.TrimSpace(string(sudo(t, "mktemp", "-d", "/tmp/relaytest.XXXXXXXX")))
-	if filepath.Dir(base) != "/tmp" || !strings.HasPrefix(filepath.Base(base), "relaytest.") {
+	base := strings.TrimSpace(string(sudo(t, "mktemp", "-d", layoutParent+"/relaytest.XXXXXXXX")))
+	if filepath.Dir(base) != layoutParent || !strings.HasPrefix(filepath.Base(base), "relaytest.") {
 		t.Fatalf("sudo mktemp returned an unexpected path %q", base)
 	}
 	t.Cleanup(func() {
@@ -239,43 +243,27 @@ func sudo(t *testing.T, args ...string) []byte {
 	return out
 }
 
-// Separate reports whether the Relay runs as TestUser.
-func (l *RelayLayout) Separate() bool { return l.sep != nil }
+// RelayUID is TestUser's uid.
+func (l *RelayLayout) RelayUID() int { return l.sep.uid }
 
-// RelayUID is TestUser's uid; it is meaningful only when Separate.
-func (l *RelayLayout) RelayUID() int {
-	if l.sep == nil {
-		return os.Getuid()
-	}
-	return l.sep.uid
-}
-
-// IOGID is TestIOGroup's gid; it is meaningful only when Separate.
-func (l *RelayLayout) IOGID() int {
-	if l.sep == nil {
-		return -1
-	}
-	return l.sep.ioGID
-}
+// IOGID is TestIOGroup's gid.
+func (l *RelayLayout) IOGID() int { return l.sep.ioGID }
 
 // ConfigDir holds the configuration files WriteConfig writes.
 func (l *RelayLayout) ConfigDir() string { return l.confDir }
 
-// StateDir is where the Relay's CA directory and store belong. The test cannot read it when
-// Separate; CopyOut is how a public file leaves it.
+// StateDir is where the Relay's CA directory and store belong. The test cannot read it;
+// CopyOut is how a public file leaves it.
 func (l *RelayLayout) StateDir() string { return l.stateDir }
 
 // IODir is where the devharness socket and the Relay's log belong.
 func (l *RelayLayout) IODir() string { return l.ioDir }
 
-// InstallBinary returns the path the Relay should be started from: when Separate, a root-owned
-// copy of src in the layout's bin directory (TestUser could neither reach nor be trusted with a
-// binary under the test user's home); otherwise src.
+// InstallBinary returns the path the Relay should be started from: a root-owned copy of src in
+// the layout's bin directory (TestUser could neither reach nor be trusted with a binary under
+// the test user's home).
 func (l *RelayLayout) InstallBinary(t *testing.T, src string) string {
 	t.Helper()
-	if l.sep == nil {
-		return src
-	}
 	l.binsMu.Lock()
 	defer l.binsMu.Unlock()
 	if dst, ok := l.bins[src]; ok {
@@ -293,41 +281,69 @@ func (l *RelayLayout) InstallBinary(t *testing.T, src string) string {
 }
 
 // WriteConfig writes body as a fresh configuration file and returns its path: root:TestUser
-// 0640 when Separate, so the Relay can read it and nobody but root can write it; otherwise
-// read-only and the test's own.
+// 0640, so the Relay can read it and nobody but root can write it.
 func (l *RelayLayout) WriteConfig(t *testing.T, body string) string {
 	t.Helper()
-	name := fmt.Sprintf("relay-%d.toml", l.configs.Add(1))
-	if l.sep == nil {
-		path := filepath.Join(l.confDir, name)
-		if err := os.WriteFile(path, []byte(body), 0o400); err != nil {
-			t.Fatalf("write %s: %v", path, err)
-		}
-		return path
+	return l.WriteFile(t, fmt.Sprintf("relay-%d.toml", l.configs.Add(1)), body, "root", TestUser, "0640")
+}
+
+// WriteFile writes body to name in ConfigDir with the given owner, group and octal mode, and
+// returns its path: how a test places a secret or gate file, or a configuration file the
+// start-time check must refuse.
+func (l *RelayLayout) WriteFile(t *testing.T, name, body, owner, group, mode string) string {
+	t.Helper()
+	if strings.Contains(name, "/") {
+		t.Fatalf("WriteFile %q: a name, not a path", name)
 	}
 	src := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(src, []byte(body), 0o600); err != nil {
 		t.Fatalf("write %s: %v", src, err)
 	}
 	dst := filepath.Join(l.confDir, name)
-	sudo(t, "install", "-o", "root", "-g", TestUser, "-m", "0640", "--", src, dst)
+	sudo(t, "install", "-o", owner, "-g", group, "-m", mode, "--", src, dst)
 	return dst
 }
 
+// Symlink makes name in ConfigDir a symbolic link to target, as root, and returns its path.
+func (l *RelayLayout) Symlink(t *testing.T, target, name string) string {
+	t.Helper()
+	if strings.Contains(name, "/") {
+		t.Fatalf("Symlink %q: a name, not a path", name)
+	}
+	link := filepath.Join(l.confDir, name)
+	sudo(t, "ln", "-s", "--", target, link)
+	return link
+}
+
+// MakeStateDir creates name under StateDir, owned by TestUser with the given octal mode, and
+// returns its path: how a test hands the Relay a state location it must refuse.
+func (l *RelayLayout) MakeStateDir(t *testing.T, name, mode string) string {
+	t.Helper()
+	if strings.Contains(name, "/") {
+		t.Fatalf("MakeStateDir %q: a name, not a path", name)
+	}
+	dir := filepath.Join(l.stateDir, name)
+	sudo(t, "install", "-d", "-o", TestUser, "-g", TestUser, "-m", mode, dir)
+	return dir
+}
+
+// ChmodState sets the octal mode of path, under StateDir, as TestUser (never as root, so
+// nothing the Relay planted there can redirect root).
+func (l *RelayLayout) ChmodState(t *testing.T, path, mode string) {
+	t.Helper()
+	if rel, err := filepath.Rel(l.stateDir, path); err != nil || strings.HasPrefix(rel, "..") {
+		t.Fatalf("ChmodState %s: not under the state directory %s", path, l.stateDir)
+	}
+	sudo(t, "-u", TestUser, "chmod", mode, "--", path)
+}
+
 // CopyOut returns a path the test can read holding the contents of path, a public file under
-// StateDir such as the CA certificate: when Separate, a copy read as TestUser — never as root,
-// so nothing the Relay plants in its own directory (a symlink) can make root read for it —
-// otherwise path.
+// StateDir such as the CA certificate: a copy read as TestUser — never as root, so nothing the
+// Relay plants in its own directory (a symlink) can make root read for it.
 func (l *RelayLayout) CopyOut(t *testing.T, path string) string {
 	t.Helper()
 	if rel, err := filepath.Rel(l.stateDir, path); err != nil || strings.HasPrefix(rel, "..") {
 		t.Fatalf("CopyOut %s: not under the state directory %s", path, l.stateDir)
-	}
-	if l.sep == nil {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("CopyOut: %v", err)
-		}
-		return path
 	}
 	out := filepath.Join(t.TempDir(), filepath.Base(path))
 	if err := os.WriteFile(out, sudo(t, "-u", TestUser, "cat", "--", path), 0o600); err != nil {
@@ -355,8 +371,8 @@ func (l *RelayLayout) Stat(t *testing.T, path string) (uid, gid int, mode string
 }
 
 // Start launches bin (a path InstallBinary returned) with args, in exactly the environment env,
-// its stdout and stderr written to a fresh log file in IODir. When Separate it runs as TestUser
-// through `sudo -n setpriv`. It returns once the Relay's own process exists, not once it is
+// its stdout and stderr written to a fresh log file in IODir. It runs as TestUser through
+// `sudo -n setpriv`. It returns once the Relay's own process exists, not once it is
 // ready; readiness is the caller's (its log). The process is killed and reaped when the test
 // ends if the caller has not done so.
 func (l *RelayLayout) Start(t *testing.T, bin string, env []string, args ...string) (*RelayProcess, error) {
@@ -365,18 +381,12 @@ func (l *RelayLayout) Start(t *testing.T, bin string, env []string, args ...stri
 	if err != nil {
 		return nil, fmt.Errorf("create the Relay's log in %s: %w", l.ioDir, err)
 	}
-	var cmd *exec.Cmd
-	if l.sep == nil {
-		cmd = exec.Command(bin, args...)
-		cmd.Env = env
-	} else {
-		argv := append([]string{"-n"}, setprivArgs()...)
-		argv = append(argv, "env", "-i")
-		argv = append(argv, env...)
-		argv = append(argv, bin)
-		argv = append(argv, args...)
-		cmd = exec.Command("sudo", argv...)
-	}
+	argv := append([]string{"-n"}, setprivArgs()...)
+	argv = append(argv, "env", "-i")
+	argv = append(argv, env...)
+	argv = append(argv, bin)
+	argv = append(argv, args...)
+	cmd := exec.Command("sudo", argv...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	err = cmd.Start()
@@ -392,21 +402,17 @@ func (l *RelayLayout) Start(t *testing.T, bin string, env []string, args ...stri
 		close(p.done)
 	}()
 
-	if l.sep == nil {
-		p.pid = cmd.Process.Pid
-	} else {
-		pid, err := p.findRelayPID()
-		if err != nil {
-			// sudo runs as root, which the test may not signal itself.
-			_ = exec.Command("sudo", "-n", "kill", "-s", "9", strconv.Itoa(cmd.Process.Pid)).Run() // it may already have exited
-			select {
-			case <-p.done:
-			case <-time.After(5 * time.Second):
-			}
-			return nil, fmt.Errorf("%w\n%s", err, p.Log())
+	pid, err := p.findRelayPID()
+	if err != nil {
+		// sudo runs as root, which the test may not signal itself.
+		_ = exec.Command("sudo", "-n", "kill", "-s", "9", strconv.Itoa(cmd.Process.Pid)).Run() // it may already have exited
+		select {
+		case <-p.done:
+		case <-time.After(5 * time.Second):
 		}
-		p.pid = pid
+		return nil, fmt.Errorf("%w\n%s", err, p.Log())
 	}
+	p.pid = pid
 	t.Cleanup(func() {
 		_ = p.Kill() // best effort: the caller may already have ended it
 		select {
@@ -550,17 +556,14 @@ func (p *RelayProcess) Capabilities() (map[string]string, error) {
 	return caps, nil
 }
 
-// Signal delivers sig to the Relay itself. When Separate it goes through `sudo -n -u
-// relaytest kill`: the test may not signal another uid, and sudo cannot relay SIGKILL. As
-// TestUser and not root, so a pid reused after the Relay exited is refused, never killed.
+// Signal delivers sig to the Relay itself, through `sudo -n -u relaytest kill`: the test may not
+// signal another uid, and sudo cannot relay SIGKILL. As TestUser and not root, so a pid reused
+// after the Relay exited is refused, never killed.
 func (p *RelayProcess) Signal(sig syscall.Signal) error {
 	select {
 	case <-p.done:
 		return fmt.Errorf("relay pid %d has exited", p.pid)
 	default:
-	}
-	if p.layout.sep == nil {
-		return p.cmd.Process.Signal(sig)
 	}
 	out, err := exec.Command("sudo", "-n", "-u", TestUser, "kill", "-s", strconv.Itoa(int(sig)), strconv.Itoa(p.pid)).CombinedOutput()
 	if err != nil {
@@ -572,7 +575,7 @@ func (p *RelayProcess) Signal(sig syscall.Signal) error {
 // Kill sends the Relay SIGKILL: a crash, not a shutdown.
 func (p *RelayProcess) Kill() error { return p.Signal(syscall.SIGKILL) }
 
-// Done is closed once the process the test started (sudo, when Separate) has exited.
+// Done is closed once the process the test started (sudo) has exited.
 func (p *RelayProcess) Done() <-chan struct{} { return p.done }
 
 // Err is the exit error of the process the test started; meaningful once Done is closed.

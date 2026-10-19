@@ -70,7 +70,7 @@ type testSetup struct {
 
 func newTestSetup(t *testing.T) *testSetup {
 	t.Helper()
-	relayCA, err := ca.Open(t.TempDir())
+	relayCA, err := ca.Generate()
 	if err != nil {
 		t.Fatalf("open CA: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestTransport_RejectUntrustedCert(t *testing.T) {
 	)
 
 	// A second, unrelated CA — the server trusts only ts.relayCA.
-	ca2, err := ca.Open(t.TempDir())
+	ca2, err := ca.Generate()
 	if err != nil {
 		t.Fatalf("open CA2: %v", err)
 	}

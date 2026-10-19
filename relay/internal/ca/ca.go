@@ -18,11 +18,15 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
+
+	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
 )
 
 const (
@@ -51,6 +55,9 @@ const (
 	certPerm os.FileMode = 0o644
 
 	caValidity = 10 * 365 * 24 * time.Hour
+
+	// maxPEMBytes bounds what is read from the key and certificate files.
+	maxPEMBytes = 64 << 10
 
 	// LeafValidity is the lifetime issued to Node identity certificates (~2 weeks).
 	LeafValidity = 336 * time.Hour
@@ -87,19 +94,51 @@ type CA struct {
 // subsequent calls (idempotent). The directory is created with mode 0700 if it
 // does not already exist.
 //
+// The directory and the private key are the Relay's generated material
+// (RC-17): each is opened through hostfile's generated-material rule, and Open
+// refuses unless both are owned by the Relay's uid and grant nothing to any
+// other account. The key is read from the descriptor that was checked.
+//
 // Open refuses to proceed when exactly one of the two CA files is present:
 // silently regenerating would orphan already-issued Node certs by replacing
 // their trust root.
 func Open(dir string) (*CA, error) {
+	return open(dir, checkedFiles{})
+}
+
+// generatedFiles opens the CA directory and its private key. Open's is
+// hostfile's generated-material rule; this package's tests substitute their
+// own, because the check refuses every temporary directory a test can make.
+type generatedFiles interface {
+	openDir(path string) (*os.File, error)
+	openKey(path string) (*os.File, error)
+}
+
+type checkedFiles struct{}
+
+func (checkedFiles) openDir(path string) (*os.File, error) {
+	return hostfile.OpenDir(path, hostfile.GeneratedDir)
+}
+
+func (checkedFiles) openKey(path string) (*os.File, error) {
+	return hostfile.Open(path, hostfile.GeneratedFile)
+}
+
+func open(dir string, files generatedFiles) (*CA, error) {
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return nil, fmt.Errorf("ca: create dir: %w", err)
 	}
+	d, err := files.openDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("ca: CA directory: %w", err)
+	}
+	_ = d.Close() // only its owner and mode were wanted
 
 	keyPath := filepath.Join(dir, keyFileName)
 	certPath := filepath.Join(dir, certFileName)
 
-	_, keyErr := os.Stat(keyPath)
-	_, certErr := os.Stat(certPath)
+	_, keyErr := os.Lstat(keyPath)
+	_, certErr := os.Lstat(certPath)
 
 	keyExists := keyErr == nil
 	certExists := certErr == nil
@@ -114,17 +153,36 @@ func Open(dir string) (*CA, error) {
 
 	switch {
 	case keyExists && certExists:
-		return load(dir)
+		return load(dir, files)
 	case !keyExists && !certExists:
 		if err := create(dir); err != nil {
 			return nil, err
 		}
-		return load(dir)
+		return load(dir, files)
 	case keyExists:
 		return nil, errors.New("ca: inconsistent state: ca-key.pem present but ca-cert.pem missing")
 	default:
 		return nil, errors.New("ca: inconsistent state: ca-cert.pem present but ca-key.pem missing")
 	}
+}
+
+// Generate returns a new CA held only in memory. It reads and writes no file,
+// so there is nothing for a file check to decide on; the Relay itself always
+// uses Open.
+func Generate() (*CA, error) {
+	key, der, err := newMaterial()
+	if err != nil {
+		return nil, err
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, fmt.Errorf("ca: parse CA certificate: %w", err)
+	}
+	return &CA{
+		cert:    cert,
+		key:     key,
+		certPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+	}, nil
 }
 
 // Bundle returns a copy of the CA certificate PEM. Callers use this to build
@@ -281,17 +339,17 @@ func (c *CA) issueServerCertificate(dnsNames []string, ipAddresses []net.IP, now
 	}, nil
 }
 
-// create generates a fresh ECDSA P-256 CA key and self-signed certificate,
-// writing both to dir with restrictive permissions using O_CREATE|O_EXCL.
-func create(dir string) error {
+// newMaterial generates a fresh ECDSA P-256 CA key and its self-signed
+// certificate.
+func newMaterial() (*ecdsa.PrivateKey, []byte, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return fmt.Errorf("ca: generate key: %w", err)
+		return nil, nil, fmt.Errorf("ca: generate key: %w", err)
 	}
 
 	serial, err := newSerial()
 	if err != nil {
-		return fmt.Errorf("ca: generate serial: %w", err)
+		return nil, nil, fmt.Errorf("ca: generate serial: %w", err)
 	}
 
 	now := time.Now()
@@ -308,7 +366,17 @@ func create(dir string) error {
 
 	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
 	if err != nil {
-		return fmt.Errorf("ca: create CA certificate: %w", err)
+		return nil, nil, fmt.Errorf("ca: create CA certificate: %w", err)
+	}
+	return key, der, nil
+}
+
+// create generates a fresh CA key and self-signed certificate, writing both to
+// dir with restrictive permissions using O_CREATE|O_EXCL.
+func create(dir string) error {
+	key, der, err := newMaterial()
+	if err != nil {
+		return err
 	}
 
 	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
@@ -330,17 +398,27 @@ func create(dir string) error {
 }
 
 // load reads the CA key and certificate from dir, parses them, and returns a
-// ready CA. All parse errors propagate (corrupt-file path).
-func load(dir string) (*CA, error) {
+// ready CA. All parse errors propagate (corrupt-file path). The key is read
+// from the descriptor files.openKey checked; the certificate is public and is
+// read without following a symlink.
+func load(dir string, files generatedFiles) (*CA, error) {
 	keyPath := filepath.Join(dir, keyFileName)
 	certPath := filepath.Join(dir, certFileName)
 
-	keyRaw, err := os.ReadFile(keyPath) //nolint:gosec // G304: the CA directory is operator-set on the host (invariant 11)
+	kf, err := files.openKey(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("ca: key file: %w", err)
+	}
+	keyRaw, err := readBounded(kf)
 	if err != nil {
 		return nil, fmt.Errorf("ca: read key file: %w", err)
 	}
 
-	certRaw, err := os.ReadFile(certPath) //nolint:gosec // G304: the CA directory is operator-set on the host (invariant 11)
+	cf, err := os.OpenFile(certPath, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NOCTTY, 0) //nolint:gosec // G304: a path under the operator-set CA directory (invariant 11), opened O_NOFOLLOW
+	if err != nil {
+		return nil, fmt.Errorf("ca: open cert file: %w", err)
+	}
+	certRaw, err := readBounded(cf)
 	if err != nil {
 		return nil, fmt.Errorf("ca: read cert file: %w", err)
 	}
@@ -380,6 +458,19 @@ func load(dir string) (*CA, error) {
 		key:     priv,
 		certPEM: certRaw,
 	}, nil
+}
+
+// readBounded reads f to its end, at most maxPEMBytes, and closes it.
+func readBounded(f *os.File) ([]byte, error) {
+	defer f.Close() //nolint:errcheck // read-only
+	data, err := io.ReadAll(io.LimitReader(f, maxPEMBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxPEMBytes {
+		return nil, fmt.Errorf("larger than %d bytes", maxPEMBytes)
+	}
+	return data, nil
 }
 
 // newSerial generates a random positive 128-bit serial number. It retries on

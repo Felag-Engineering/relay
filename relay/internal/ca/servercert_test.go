@@ -70,7 +70,7 @@ func (r *recorder) last(t *testing.T) Rotation {
 // it driven by clk, plus the CA and the rotation recorder.
 func testServerCert(t *testing.T, clk *fakeClock) (*CA, *ServerCertificate, *recorder) {
 	t.Helper()
-	c, err := Open(t.TempDir())
+	c, err := openPlain(t.TempDir())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestServerLeafValidity_IsNotNodeIdentityValidity(t *testing.T) {
 		t.Fatalf("ServerLeafValidity == LeafValidity (%s): the Relay's server leaf must not share the Node identity constant (#403)", LeafValidity)
 	}
 
-	c, err := Open(t.TempDir())
+	c, err := openPlain(t.TempDir())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
