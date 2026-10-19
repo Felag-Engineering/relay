@@ -466,7 +466,7 @@ func harnessDispatch(ctx context.Context, st *harnessState, req harnessRequest) 
 // returns its Policy fingerprint, labels, and live-Tunnel connectivity. No
 // get_ca op exists (plan-review BLOCKING-1): the harness client reads the CA
 // bundle directly from <ca-dir>/ca-cert.pem, which ca.Open writes to disk
-// at startup (openStartupFiles), strictly before installDevHarness opens this socket.
+// at startup (startup.Open), strictly before installDevHarness opens this socket.
 func harnessGetNode(st *harnessState, req harnessRequest) harnessResponse {
 	if req.NodeID == "" {
 		return harnessResponse{Error: "get_node: node_id is required"}

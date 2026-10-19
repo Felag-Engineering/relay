@@ -121,7 +121,7 @@ writer.
 | RC-14 | `TestSecret_InlineAndFileLoad`, `TestLoadConfig_FileSecretsResolved`, `TestStartupLog_CarriesNoWebhookURLOrSecret`, `TestMain_RetiredEnvNameRefusesNamingKey`, `TestMain_OtherFlagsRefused` | relayconfig, composition root |
 | RC-20 | `TestValidate_ConsoleWithoutControlPlaneRefused`, `TestValidate_OAuthWithoutIssuerRefused`, `TestValidate_MutateCapAboveReadCapWarns`, `TestMain_CoherentButSuspectConfigStartsWithWarning` | relayconfig, composition root |
 | RC-22 | `TestDefaults_EachReachValueWhenAbsent`, `TestApprovalGatePathAbsentMeansNoGate`, `TestEveryKeyReachesConfig`, `TestValidate_InvalidValueRefusedNamingSetting`, `TestFromFile_CarriesEverySetting`, `TestNewLogHandler_FormatAndLevel` | relayconfig, composition root |
-| RC-35 | `TestStart_RefusesMalformedGateFile`, `TestStartup_RefusedGateRefusesBeforeTheCA` | composition root |
+| RC-35 | `TestStart_RefusesMalformedGateFile`, `TestStartup_RefusedGateRefusesBeforeTheCA` | composition root, startup |
 | RC-36 | `TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress` | Control API mint |
 
 Claims with **no row**, and so nothing checking them: RC-1, RC-4, RC-6, RC-7 (asserted by

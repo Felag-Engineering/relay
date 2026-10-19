@@ -1,19 +1,14 @@
 package ca
 
 import (
-	"crypto/elliptic"
 	"errors"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"testing"
 
+	"github.com/Felag-Engineering/relay/relay/internal/ca/internal/material"
 	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
 )
 
@@ -134,28 +129,9 @@ func TestCA_RefusesGroupReadableKeyOrDirectory(t *testing.T) {
 	}
 }
 
-// Generate is a CA that touches no file: usable, and distinct on every call.
-func TestGenerate_InMemoryCA(t *testing.T) {
-	a, err := Generate()
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := Generate()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a.Fingerprint() == b.Fingerprint() {
-		t.Error("two generated CAs share a certificate")
-	}
-	csr, _ := newTestCSR(t, "ignored", elliptic.P256())
-	if _, err := a.SignCSR(csr, "node-1"); err != nil {
-		t.Errorf("SignCSR on a generated CA: %v", err)
-	}
-}
-
-// A certificate swapped in beside a checked key is refused: the certificate is read relative to
-// the checked directory, and must certify the key.
-func TestOpen_RefusesCertificateNotCertifyingKey(t *testing.T) {
+// A certificate that is not the key's is refused: the certificate is read relative to the
+// checked directory, and must carry the key's public key.
+func TestOpen_RefusesCertificateNotMatchingKey(t *testing.T) {
 	a, b := filepath.Join(t.TempDir(), "a"), filepath.Join(t.TempDir(), "b")
 	for _, dir := range []string{a, b} {
 		if _, err := openPlain(dir); err != nil {
@@ -170,63 +146,73 @@ func TestOpen_RefusesCertificateNotCertifyingKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := openPlain(a)
-	if c != nil || err == nil || !strings.Contains(err.Error(), "does not certify") {
-		t.Fatalf("open = %v, %v; want the certificate-does-not-certify refusal", c, err)
+	if c != nil || err == nil || !strings.Contains(err.Error(), "does not match the CA private key") {
+		t.Fatalf("open = %v, %v; want the does-not-match refusal", c, err)
 	}
 }
 
-// Generate has no file check, so nothing outside a test may call it: the Relay's CA is always
-// read through Open. Like the no_dispatch guard, this scans every non-test Go file in the module.
-func TestGenerate_HasNoNonTestCallers(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	root := filepath.Join(filepath.Dir(thisFile), "..", "..") // the relay module
-	fset := token.NewFileSet()
-	scanned := 0
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if name := d.Name(); name == "testdata" || name == "bin" || strings.HasPrefix(name, ".") && path != root {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		file, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			return err
-		}
-		scanned++
-		inCA := file.Name.Name == "ca" && filepath.Dir(path) == filepath.Dir(thisFile)
-		ast.Inspect(file, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			switch fn := call.Fun.(type) {
-			case *ast.SelectorExpr:
-				if id, ok := fn.X.(*ast.Ident); ok && id.Name == "ca" && fn.Sel.Name == "Generate" {
-					t.Errorf("%s calls ca.Generate outside a test", path)
-				}
-			case *ast.Ident:
-				if inCA && fn.Name == "Generate" {
-					t.Errorf("%s calls Generate outside a test", path)
-				}
-			}
-			return true
-		})
-		return nil
-	})
-	if err != nil {
+// A certificate that is a symbolic link is refused, even to the right certificate: it is
+// opened relative to the checked directory without following one.
+func TestOpen_RefusesSymlinkedCertificate(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ca")
+	if _, err := openPlain(dir); err != nil {
 		t.Fatal(err)
 	}
-	if scanned < 50 {
-		t.Fatalf("scanned %d production files under %s; the walk did not reach the module", scanned, root)
+	moved := filepath.Join(t.TempDir(), certFileName)
+	if err := os.Rename(filepath.Join(dir, certFileName), moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(moved, filepath.Join(dir, certFileName)); err != nil {
+		t.Fatal(err)
+	}
+	c, err := openPlain(dir)
+	if c != nil || !errors.Is(err, syscall.ELOOP) {
+		t.Fatalf("open = %v, %v; want ELOOP", c, err)
+	}
+}
+
+// swappingFiles opens the CA directory, then moves it aside and puts another complete CA
+// directory at its path before anything else is read: what a path-based read after the check
+// would then see.
+type swappingFiles struct {
+	plainFiles
+	replacement string
+}
+
+func (s swappingFiles) openDir(path string) (*os.File, error) {
+	d, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Rename(path, path+".checked"); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(s.replacement, path); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+// TestOpen_RefusesDirectorySwappedAfterCheck: the certificate comes from the directory that
+// was checked, so a directory swapped in after the check cannot supply a matching pair. A
+// certificate read by path would match the swapped-in key, and the CA would be accepted.
+func TestOpen_RefusesDirectorySwappedAfterCheck(t *testing.T) {
+	root := t.TempDir()
+	dir, replacement := filepath.Join(root, "ca"), filepath.Join(root, "other")
+	for _, d := range []string{dir, replacement} {
+		if _, err := openPlain(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, err := open(dir, swappingFiles{replacement: replacement})
+	if c != nil || err == nil || !strings.Contains(err.Error(), "does not match the CA private key") {
+		t.Fatalf("open = %v, %v; want the does-not-match refusal", c, err)
+	}
+}
+
+// FromMaterial refuses the zero value, the only Material code outside the ca tree can make.
+func TestFromMaterial_RefusesZero(t *testing.T) {
+	if c, err := FromMaterial(material.Material{}); c != nil || err == nil {
+		t.Fatalf("FromMaterial(zero) = %v, %v; want a refusal", c, err)
 	}
 }

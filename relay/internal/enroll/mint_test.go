@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/relay/relay/internal/ca"
+	"github.com/Felag-Engineering/relay/relay/internal/ca/catest"
 )
 
 type fixedFingerprint string
@@ -23,9 +23,9 @@ func (f fixedFingerprint) Fingerprint() string { return string(f) }
 
 func TestEnroll_JoinStringCarriesFingerprintAddressAndToken(t *testing.T) {
 	ctx := context.Background()
-	relayCA, err := ca.Generate()
+	relayCA, err := catest.Generate()
 	if err != nil {
-		t.Fatalf("ca.Generate: %v", err)
+		t.Fatalf("catest.Generate: %v", err)
 	}
 	svc := NewService(NewMemoryRepository())
 	minter, err := NewMinter(svc, relayCA, "relay.example.com:7654")

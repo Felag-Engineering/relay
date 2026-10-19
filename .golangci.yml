@@ -128,6 +128,19 @@ linters:
             - pkg: github.com/Felag-Engineering/relay/relay/internal/relaytest
               desc: "test-only harness (it spawns processes); never import it from production code"
 
+        # catest and startuptest build a CA and start-time Files that no file check decided on
+        # (ADR-0043). Production code gets both only from ca.Open and startup.Open.
+        unchecked-constructors-are-test-only:
+          files:
+            - "!$test"
+            - "!**/internal/ca/catest/**"
+            - "!**/internal/startup/startuptest/**"
+          deny:
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/ca/catest
+              desc: "test-only: a CA read from no file; production code uses ca.Open"
+            - pkg: github.com/Felag-Engineering/relay/relay/internal/startup/startuptest
+              desc: "test-only: start-time Files no check decided on; production code uses startup.Open"
+
         # The import boundaries below are what an import path can express, so they live
         # here rather than in per-package AST tests. A `$` suffix makes an entry an
         # exact match; without it an entry is a prefix. In list-mode strict, anything
