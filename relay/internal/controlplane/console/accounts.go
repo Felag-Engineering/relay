@@ -509,6 +509,7 @@ var accountsTmpl = newScreen("accounts", `
   </tbody>
 </table>
 </div>
+<p class="note">{{.Ceiling}}</p>
 
 {{with .Write}}
 <section class="panel">
@@ -661,11 +662,6 @@ var accountsTmpl = newScreen("accounts", `
   {{end}}
 </section>
 {{end}}
-
-<details class="about">
-<summary>About this screen</summary>
-<p class="gap">{{.Ceiling}}{{template "about-docs" "accounts"}}</p>
-</details>
 `)
 
 // isAgentCallKind reports whether an audit Kind describes a call somebody

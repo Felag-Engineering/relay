@@ -136,25 +136,32 @@ func TestRefresh_NoScriptNoStyleCSPUnchanged(t *testing.T) {
 	}
 }
 
-// TestRefresh_TheDisclosureSaysWhetherAReloadIsAudited: one sentence, in the
-// About disclosure, true to what each screen's reads actually record.
-func TestRefresh_TheDisclosureSaysWhetherAReloadIsAudited(t *testing.T) {
+// TestRefresh_EachScreenSaysBesideRefreshWhetherAReloadIsAudited: one visible
+// sentence beside the control, true to what each screen's reads actually
+// record (00-foundations.md, "Refreshing a screen").
+func TestRefresh_EachScreenSaysBesideRefreshWhetherAReloadIsAudited(t *testing.T) {
 	d, _ := refreshScreens()
 	d.Events = newFakeEvents()
 	h := newTestHandler(d, accounts.RoleAdmin)
 	for path, note := range map[string]string{
-		"/console/activity":  "<b>Every Refresh is an audited read</b>",
-		"/console/approvals": "<b>Opening this queue or a Refresh writes no read record</b>",
-		"/console/access":    "<b>Every Refresh is an audited read</b>",
+		"/console/activity":  "Every Refresh is an audited read made from this Console.",
+		"/console/approvals": "Reloading this queue is not recorded on the audit trail; that is a known gap.",
+		"/console/access":    "Every Refresh is an audited read.",
 	} {
-		inside, outside := splitAbout(t, get(t, h, path).Body.String())
-		mustBeStanding(t, inside, outside, note)
+		body := get(t, h, path).Body.String()
+		mustBeSituational(t, body, note)
+		content := contentOf(body)
+		at := strings.Index(content, `<p class="refreshlimit">`+note)
+		btn := strings.Index(content, "refreshbtn")
+		if at < 0 || btn < 0 || at < btn || at-btn > 300 {
+			t.Errorf("%s: the sentence is not a refreshlimit beside the Refresh control", path)
+		}
 	}
 }
 
 // TestRefresh_TheQueueStatesItsUnauditedReadBesideRefresh: the limit is a
-// security property, so it is visible beside the control, not only in the
-// disclosure (00-foundations.md; #779).
+// security property, so it is visible beside the control
+// (00-foundations.md; #779).
 func TestRefresh_TheQueueStatesItsUnauditedReadBesideRefresh(t *testing.T) {
 	d, _ := refreshScreens()
 	for name, fa := range map[string]*fakeApprovals{"empty": {}, "populated": d.Approvals.(*fakeApprovals)} {
@@ -168,8 +175,8 @@ func TestRefresh_TheQueueStatesItsUnauditedReadBesideRefresh(t *testing.T) {
 	}
 }
 
-// TestRefresh_TheQueueReloadIsNotAnAuditedRead backs the queue's disclosure
-// sentence above with the reads the screen actually makes; Activity's own
+// TestRefresh_TheQueueReloadIsNotAnAuditedRead backs the queue's sentence beside Refresh with the reads
+// the screen actually makes; Activity's own
 // reload is proved below.
 func TestRefresh_TheQueueReloadIsNotAnAuditedRead(t *testing.T) {
 	d, _ := refreshScreens()
@@ -179,12 +186,12 @@ func TestRefresh_TheQueueReloadIsNotAnAuditedRead(t *testing.T) {
 	before := q.auditCalls + q.jobCalls
 	get(t, h, "/console/approvals")
 	if after := q.auditCalls + q.jobCalls; after != before {
-		t.Errorf("the queue made %d read-lane reads; its disclosure says a reload records none", after-before)
+		t.Errorf("the queue made %d read-lane reads; its sentence beside Refresh says a reload records none", after-before)
 	}
 }
 
-// TestRefresh_ActivityReloadIsAnAuditedRead backs Activity's disclosure
-// sentence with the reads the screen actually makes.
+// TestRefresh_ActivityReloadIsAnAuditedRead backs Activity's sentence beside
+// Refresh with the reads the screen actually makes.
 func TestRefresh_ActivityReloadIsAnAuditedRead(t *testing.T) {
 	q := &fakeQueries{}
 	get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin), "/console/activity")

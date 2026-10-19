@@ -100,51 +100,6 @@ var screenFuncs = template.FuncMap{
 		}
 		return many
 	},
-
-	// aboutDoc is the document an About disclosure names, under the shipped
-	// choice (aboutDocsShipped). Rendered by the "about-docs" partial.
-	"aboutDoc": func(screen string) string { return aboutDocFor(aboutDocsShipped, screen) },
-}
-
-// aboutDocsMode is what an "About this screen" disclosure names for further
-// reading: a design document, an operator document, or nothing.
-type aboutDocsMode int
-
-const (
-	aboutDocsNone aboutDocsMode = iota
-	aboutDocsDesign
-	aboutDocsOperator
-)
-
-// aboutDocsShipped is the owner's pending choice of what an About disclosure
-// names for further reading. Changing it is the whole change.
-const aboutDocsShipped = aboutDocsNone
-
-// aboutDocScreens maps each screen that carries an About disclosure to the
-// documents it could name, by mode. No per-screen operator document exists
-// yet, so every operator entry is empty and that mode names nothing until one
-// is written.
-var aboutDocScreens = map[string]struct{ design, operator string }{
-	"fleet":     {"docs/design/console/01-fleet-view.md", ""},
-	"activity":  {"docs/design/console/04-activity.md", ""},
-	"dayone":    {"docs/design/console/10-day-one.md", ""},
-	"approvals": {"docs/design/console/14-approval-queue.md", ""},
-	"accounts":  {"docs/design/console/15-accounts-and-tokens.md", ""},
-	"access":    {"docs/design/console/20-access.md", ""},
-}
-
-// aboutDocFor is the document screen's About names under mode, or "" to name
-// nothing.
-func aboutDocFor(mode aboutDocsMode, screen string) string {
-	docs := aboutDocScreens[screen]
-	switch mode {
-	case aboutDocsDesign:
-		return docs.design
-	case aboutDocsOperator:
-		return docs.operator
-	default:
-		return ""
-	}
 }
 
 // shortHash truncates a hex fingerprint for display, keeping enough to be

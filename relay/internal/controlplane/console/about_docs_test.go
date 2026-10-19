@@ -1,18 +1,16 @@
 package console
 
-// about_docs_test.go proves the "About this screen" docs pointer is one
-// choice made in one place (aboutDocsShipped), whichever of its three modes is
-// shipped, and that the substance #849 cut from the screens still lives in
-// the documents 00-foundations.md now lets a deletion rely on.
+// about_docs_test.go proves that every standing note deleted from a screen
+// still has its substance in the docs. 00-foundations.md (D31) removed the
+// "About this screen" disclosure and the docs pointer it carried; a note is
+// now one visible sentence or deleted, and a deletion may rely only on a
+// document that holds what it said.
 
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
 
 // repoPath resolves a repository-relative path from this package's directory.
@@ -20,119 +18,9 @@ func repoPath(rel string) string {
 	return filepath.Join("..", "..", "..", "..", filepath.FromSlash(rel))
 }
 
-func TestAboutDocs_EveryModeNamesARealDocumentOrNothing(t *testing.T) {
-	if len(aboutDocScreens) == 0 {
-		t.Fatal("aboutDocScreens is empty, so nothing below is tested")
-	}
-	for _, mode := range []aboutDocsMode{aboutDocsNone, aboutDocsDesign, aboutDocsOperator} {
-		for screen := range aboutDocScreens {
-			doc := aboutDocFor(mode, screen)
-			switch {
-			case mode == aboutDocsNone && doc != "":
-				t.Errorf("mode none names %q for %s", doc, screen)
-			case mode == aboutDocsDesign && doc == "":
-				t.Errorf("mode design names nothing for %s", screen)
-			}
-			if doc == "" {
-				continue
-			}
-			if _, err := os.Stat(repoPath(doc)); err != nil {
-				t.Errorf("%s's About would name %s, which does not exist: %v", screen, doc, err)
-			}
-		}
-	}
-	if got := aboutDocFor(aboutDocsDesign, "no-such-screen"); got != "" {
-		t.Errorf("an unknown screen names %q, want nothing", got)
-	}
-}
-
-var aboutDocsCall = regexp.MustCompile(`\{\{template "about-docs" "([a-z]+)"\}\}`)
-
-// TestAboutDocs_EveryAboutEndsInThePartial: every About disclosure in a
-// template carries exactly one call to the partial, keyed to a known screen,
-// so the owner's choice reaches every About and no About hard-codes one.
-func TestAboutDocs_EveryAboutEndsInThePartial(t *testing.T) {
-	regions := 0
-	keys := map[string]bool{}
-	for _, src := range consoleTemplateSources(t) {
-		text := src.text
-		for {
-			i := strings.Index(text, `<details class="about">`)
-			if i < 0 {
-				break
-			}
-			j := strings.Index(text[i:], "</details>")
-			if j < 0 {
-				t.Fatalf("%s:%d: an About disclosure is never closed", src.file, src.line)
-			}
-			region := text[i : i+j]
-			text = text[i+j:]
-			regions++
-			calls := aboutDocsCall.FindAllStringSubmatch(region, -1)
-			if len(calls) != 1 {
-				t.Errorf("%s:%d: an About disclosure calls about-docs %d times, want exactly once", src.file, src.line, len(calls))
-				continue
-			}
-			key := calls[0][1]
-			if _, ok := aboutDocScreens[key]; !ok {
-				t.Errorf("%s:%d: about-docs is called with %q, which aboutDocScreens does not know", src.file, src.line, key)
-			}
-			if keys[key] {
-				t.Errorf("%s:%d: two About disclosures share the key %q", src.file, src.line, key)
-			}
-			keys[key] = true
-		}
-	}
-	if regions == 0 {
-		t.Fatal("found no About disclosure in any template, so nothing was checked")
-	}
-	for key := range aboutDocScreens {
-		if !keys[key] {
-			t.Errorf("aboutDocScreens has %q, which no About disclosure uses", key)
-		}
-	}
-}
-
-// TestAboutDocs_RenderedPointerFollowsTheShippedChoice compares each rendered
-// About with aboutDocFor(aboutDocsShipped, …) — never with a hard-coded
-// answer, so changing the shipped mode is a one-line change.
-func TestAboutDocs_RenderedPointerFollowsTheShippedChoice(t *testing.T) {
-	d := copyBudgetFixture()
-	h := newTestHandler(d, accounts.RoleAdmin)
-	screens := map[string]struct {
-		path string
-		deps Deps
-	}{
-		"fleet":     {"/console/", d},
-		"activity":  {"/console/activity", d},
-		"dayone":    {"/console/", dayOneDeps()},
-		"approvals": {"/console/approvals", d},
-		"accounts":  {"/console/accounts", d},
-		"access":    {"/console/access", d},
-	}
-	if len(screens) != len(aboutDocScreens) {
-		t.Fatalf("this test renders %d screens, aboutDocScreens has %d — add the new one here", len(screens), len(aboutDocScreens))
-	}
-	for key, s := range screens {
-		hh := h
-		if key == "dayone" {
-			hh = newTestHandler(s.deps, accounts.RoleAdmin)
-		}
-		inside, _ := splitAbout(t, get(t, hh, s.path).Body.String())
-		want := aboutDocFor(aboutDocsShipped, key)
-		got := strings.Contains(inside, "<code>docs/")
-		switch {
-		case want == "" && got:
-			t.Errorf("%s's About names a document, but the shipped choice names none:\n%s", key, inside)
-		case want != "" && !strings.Contains(inside, "More in <code>"+want+"</code>."):
-			t.Errorf("%s's About does not name %s, the shipped choice:\n%s", key, want, inside)
-		}
-	}
-}
-
 // TestAbout_DeletedStandingNotesLiveInTheDocs: 00-foundations.md lets a
 // standing note be deleted only when its substance is already in the docs.
-// Where #849 deleted one and wrote its substance into a design document,
+// Where #849 or D31 deleted one and wrote its substance into a design document,
 // that sentence must stay there — a deletion whose substance lives nowhere is
 // the defect this guards.
 func TestAbout_DeletedStandingNotesLiveInTheDocs(t *testing.T) {
@@ -193,13 +81,19 @@ func TestAbout_DeletedStandingNotesLiveInTheDocs(t *testing.T) {
 			"Everything the block renders is fixed at dispatch"},
 		{"docs/design/console/02-node-detail.md", "Compare: nothing self-reported is compared",
 			"nothing self-reported is compared"},
+		{"docs/design/console/04-activity.md", "Activity: fleet events are on the audit trail, not here",
+			"they remain on the audit trail"},
+		{"docs/design/console/10-day-one.md", "Day one: check the CA fingerprint before installing",
+			"Until then the quickstart carries the check"},
+		{"docs/design/console/14-approval-queue.md", "Approvals: the unaudited queue reload, restated in the About",
+			"Reloading the queue is not an audited read"},
 	} {
 		raw, err := os.ReadFile(repoPath(c.doc))
 		if err != nil {
 			t.Fatalf("%s: %v", c.doc, err)
 		}
 		if !strings.Contains(strings.Join(strings.Fields(string(raw)), " "), c.substance) {
-			t.Errorf("%s (cut from the screen by #849) relies on %s holding %q, and it no longer does",
+			t.Errorf("%s (cut from the screen by #849 or D31) relies on %s holding %q, and it no longer does",
 				c.cut, c.doc, c.substance)
 		}
 	}

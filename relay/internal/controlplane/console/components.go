@@ -636,9 +636,6 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 	// number — TestPluralFamiliesKeepOppositeContracts), shared so a
 	// component cannot render "1 Nodes matched".
 	"plural": screenFuncs["plural"],
-	// aboutDoc is screen.go's About docs pointer, shared so the "about-docs"
-	// partial below resolves the same choice every screen does.
-	"aboutDoc": screenFuncs["aboutDoc"],
 }).Parse(`
 {{define "label-chip"}}<span class="chip lbl" data-ns="{{.Namespace}}"{{if .SecurityLane}} data-lane="security"{{end}}{{if .Attention}} data-sev="attention"{{end}} title="{{.}}"><span class="ns">{{.Namespace}}:</span>{{.Key}}{{if .Value}}<span class="eq">=</span>{{.Value}}{{end}}</span>{{end}}
 
@@ -704,12 +701,6 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 
 {{/* refresh: 00-foundations.md, "Refreshing a screen". An anchor, never a timer. */}}
 {{define "refresh"}}<div class="refreshbar"><a class="refreshbtn" href="{{.Href}}">Refresh</a></div>{{end}}
-
-{{/* about-docs ends an "About this screen" paragraph with what it names for
-     further reading (00-foundations.md, "Standing notes and situational
-     messages"). The choice is aboutDocsShipped's, in screen.go; while it is
-     aboutDocsNone this renders nothing. */}}
-{{define "about-docs"}}{{with aboutDoc .}} More in <code>{{.}}</code>.{{end}}{{end}}
 
 {{define "pin-bar"}}<div class="pinbar">
   <span class="pinlbl">Pinned</span>

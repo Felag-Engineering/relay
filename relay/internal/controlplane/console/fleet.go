@@ -1669,10 +1669,6 @@ var fleetTmpl = newScreen("fleet", `
 <p class="gap"><b>{{.CertExpiryUnknown}} {{plural .CertExpiryUnknown "Node has" "Nodes have"}} no recorded validity at all</b>; for {{plural .CertExpiryUnknown "it" "them"}}, a clean State column means unknown, not all-clear.</p>
 {{end}}
 
-<details class="about">
-<summary>About this screen</summary>
-<p class="gap"><b>There are no host metrics here, and there will not be.</b>{{template "about-docs" "fleet"}}</p>
-</details>
 `)
 
 // knownIn is the pin resolver over a Node page a screen has already read.

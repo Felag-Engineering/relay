@@ -5,7 +5,6 @@ package console
 // on a decision, and the new markup is accessible.
 
 import (
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -124,10 +123,9 @@ func TestKindKeys_SayWhatMachineMeansOnADecision(t *testing.T) {
 	}
 }
 
-// TestA11y_KindLabelAndAboutDisclosure: the kind label is plain text a screen
-// reader reads (not hidden, not an image, no empty element), and the About
-// disclosure's summary gives it an accessible name.
-func TestA11y_KindLabelAndAboutDisclosure(t *testing.T) {
+// TestA11y_KindLabelIsPlainText: the kind label is plain text a screen reader
+// reads (not hidden, not an image, no empty element).
+func TestA11y_KindLabelIsPlainText(t *testing.T) {
 	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
 	sum := oneJob(tasks, jobs.RiskClassMutate)
 	sum.RequesterKind = "machine"
@@ -146,16 +144,4 @@ func TestA11y_KindLabelAndAboutDisclosure(t *testing.T) {
 		}
 	}
 
-	activity := contentOf(get(t, newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/activity").Body.String())
-	summary := regexp.MustCompile(`<details class="about">\s*<summary>([^<]+)</summary>`).FindStringSubmatch(activity)
-	if summary == nil || strings.TrimSpace(summary[1]) == "" {
-		t.Error("the About disclosure has no text summary, so it has no accessible name")
-	}
-	css, err := os.ReadFile("assets/console.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if regexp.MustCompile(`details\.about[^{]*\{[^}]*outline:\s*(none|0)`).Match(css) {
-		t.Error("the About disclosure suppresses its focus ring")
-	}
 }

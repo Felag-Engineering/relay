@@ -2121,15 +2121,16 @@ func TestConsole_EveryRenderedWeightHasAFace(t *testing.T) {
 	// the anchor is asserted first — otherwise a layout edit as small as
 	// adding an attribute to <main> silently restores that vacuity.
 	//
-	// Every screen below renders bold in its own content today (13/5/10),
-	// so this is a conjunction: it catches ONE screen losing its emphasis,
-	// which a some-screen-somewhere check cannot. Not every screen belongs
-	// here — the approvals queue is empty under this fixture and correctly
-	// renders no bold at all — but each of these three does.
+	// Every screen below renders bold in its own content today, so this is a
+	// conjunction: it catches ONE screen losing its emphasis, which a
+	// some-screen-somewhere check cannot. Not every screen belongs here — the
+	// approvals queue is empty under this fixture and Activity's default view
+	// renders no bold, its notes being inline — but each of
+	// these three does.
 	for _, path := range []string{
 		"/console/",
 		"/console/nodes/node-web-1",
-		"/console/activity",
+		"/console/compare?nodes=node-web-1,node-web-3",
 	} {
 		rr := get(t, h, path)
 		if rr.Code != 200 {

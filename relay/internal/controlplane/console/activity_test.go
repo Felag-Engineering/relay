@@ -561,7 +561,7 @@ func TestActivity_OlderLinkCarriesBothLaneCursors(t *testing.T) {
 
 // TestActivity_PageStatesItsTwoLaneBoundary. The merge is never truncated, so
 // the page cannot claim to be an instant — and it must say so rather than let
-// an operator infer it. The About says the two lanes are paged separately; what
+// an operator infer it. The page note says the two lanes are paged separately; what
 // that does to a page's boundary, and the single-lane case, are recorded in
 // 04-activity.md (TestAbout_DeletedStandingNotesLiveInTheDocs).
 func TestActivity_PageStatesItsTwoLaneBoundary(t *testing.T) {
@@ -934,16 +934,15 @@ func TestActivity_RelativeWindowResolvesAgainstTheRenderClock(t *testing.T) {
 
 // TestActivity_SpecConflictsAreStatedRatherThanFaked. Spec 04's filter box asks
 // for Selector and Node, and neither has a backing field. The screen renders
-// nothing that looks like them, and its About says which events are on the
-// audit trail rather than here. Why the filter box has no Selector or Node, and
-// why the chips carry no counts, are written down in 04-activity.md rather than
-// on the screen (#849; TestAbout_DeletedStandingNotesLiveInTheDocs).
+// nothing that looks like them. Which events are on the audit trail rather than
+// here, why the filter box has no Selector or Node, and why the chips carry no
+// counts are written down in 04-activity.md rather than on the screen
+// (TestAbout_DeletedStandingNotesLiveInTheDocs).
 func TestActivity_SpecConflictsAreStatedRatherThanFaked(t *testing.T) {
 	body := get(t, newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/activity").Body.String()
 
-	if !strings.Contains(body, "Enrollment Token events and enrollments are on the audit trail, not here.") {
-		t.Error("the screen does not say which events are on the audit trail rather than here — " +
-			"an omission nobody wrote down reads as an oversight")
+	if strings.Contains(body, "are on the audit trail, not here") {
+		t.Error("the screen states which events are on the audit trail rather than here; 04-activity.md holds that")
 	}
 	if !strings.Contains(body, `name="op"`) {
 		t.Fatal("the filter box did not render, so the absence of a field proves nothing")
@@ -1435,5 +1434,16 @@ func TestSummarize_ApprovalDecisionNamesWhichWayItWent(t *testing.T) {
 	if got, want := summarize(both), "revoked an Approval grant"; got != want {
 		t.Errorf("summarize(revocation carrying an answer) = %q, want %q — GrantID is "+
 			"the structural discriminator and must be checked before the answer", got, want)
+	}
+}
+
+func TestActivity_RefreshLimitSentenceOnlyWhereSomethingIsQueried(t *testing.T) {
+	h := newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin)
+	const sentence = "Every Refresh is an audited read"
+	if !strings.Contains(get(t, h, "/console/activity").Body.String(), sentence) {
+		t.Error("the Activity view does not say Refresh is an audited read")
+	}
+	if strings.Contains(get(t, h, "/console/activity?kind=nosuchkind").Body.String(), sentence) {
+		t.Error("the unknown-kind view queries nothing yet claims Refresh is an audited read")
 	}
 }

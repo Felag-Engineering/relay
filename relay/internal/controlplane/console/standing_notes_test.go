@@ -1,10 +1,10 @@
 package console
 
 // standing_notes_test.go proves 00-foundations.md's "Standing notes and
-// situational messages": a note rendered on every view of a screen lives in
-// ONE closed "About this screen" disclosure at the screen's foot; a message
-// rendered because of this request, this caller or this record's state stays
-// visible where it always was.
+// situational messages" (D31): no screen renders an "About this screen"
+// disclosure. A standing note is one visible sentence beside what it
+// qualifies, or it is deleted; a message rendered because of this request,
+// this caller or this record's state stays visible where it renders.
 
 import (
 	"html/template"
@@ -18,52 +18,36 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/policyview"
 )
 
-const aboutOpen = `<details class="about">`
-
-// splitAbout returns the page's single About disclosure and everything
-// outside it. It fails the test unless there is exactly one, it is closed by
-// default, it carries a summary, and nothing but closing markup follows it in
-// the screen's content — the foot of the screen.
-func splitAbout(t *testing.T, body string) (inside, outside string) {
+// mustBeInline asserts msg renders visibly and sits no more than within bytes
+// after the nearest preceding anchor, so a standing note is beside what it
+// qualifies and not at the screen's foot.
+func mustBeInline(t *testing.T, body, msg, anchor string, within int) {
 	t.Helper()
+	mustBeSituational(t, body, msg)
 	content := contentOf(body)
-	if n := strings.Count(content, `<details class="about"`); n != 1 {
-		t.Fatalf("the screen carries %d About disclosures, want exactly 1", n)
+	at := strings.Index(content, msg)
+	from := strings.LastIndex(content[:at], anchor)
+	if from < 0 {
+		t.Errorf("%q has no %q before it", msg, anchor)
+		return
 	}
-	i := strings.Index(content, aboutOpen)
-	if i < 0 {
-		t.Fatal("the About disclosure is open by default, or carries attributes beyond its class")
+	if at-from > within {
+		t.Errorf("%q starts %d bytes after %q, want at most %d", msg, at-from, anchor, within)
 	}
-	rest := content[i:]
-	j := strings.Index(rest, "</details>")
-	if j < 0 {
-		t.Fatal("the About disclosure is never closed")
-	}
-	inside = rest[:j]
-	if !strings.Contains(inside, "<summary>About this screen</summary>") {
-		t.Error("the disclosure does not carry its plain label")
-	}
-	after := rest[j+len("</details>"):]
-	if strings.Contains(after, "<p") || strings.Contains(after, "<section") {
-		t.Errorf("content follows the About disclosure, so it is not at the screen's foot:\n%s", after)
-	}
-	return inside, content[:i] + after
 }
 
-func mustBeStanding(t *testing.T, inside, outside string, notes ...string) {
+func mustNotRender(t *testing.T, body string, msgs ...string) {
 	t.Helper()
-	for _, n := range notes {
-		if !strings.Contains(inside, n) {
-			t.Errorf("standing note %q is not inside the About disclosure", n)
-		}
-		if strings.Contains(outside, n) {
-			t.Errorf("standing note %q is still rendered outside the About disclosure", n)
+	content := contentOf(body)
+	for _, m := range msgs {
+		if strings.Contains(content, m) {
+			t.Errorf("%q is rendered, but it was deleted from the screen", m)
 		}
 	}
 }
 
 // mustBeSituational asserts msg renders, and renders outside any About
-// disclosure — including on a screen that has none.
+// disclosure.
 func mustBeSituational(t *testing.T, body, msg string) {
 	t.Helper()
 	content := contentOf(body)
@@ -98,15 +82,51 @@ func TestStandingNotes_HelperDetectsACollapsedMessage(t *testing.T) {
 	}
 }
 
+// TestStandingNotes_NoScreenRendersAnAboutDisclosure: no rendered page carries the
+// disclosure and no template source can, so it cannot return unseen.
+func TestStandingNotes_NoScreenRendersAnAboutDisclosure(t *testing.T) {
+	check := func(name, body string) {
+		content := contentOf(body)
+		for _, banned := range []string{"About this screen", `class="about"`} {
+			if strings.Contains(content, banned) {
+				t.Errorf("%s renders %q", name, banned)
+			}
+		}
+	}
+	d := copyBudgetFixture()
+	pages := 0
+	for _, role := range sessionRoles {
+		h := newTestHandler(d, role)
+		for _, path := range walkableScreens(routesFor(d, role), fixtureIDs) {
+			check(string(role)+" "+path, get(t, h, path).Body.String())
+			pages++
+		}
+	}
+	if pages == 0 {
+		t.Fatal("no screen was rendered, so nothing was checked")
+	}
+	check("day one", get(t, newTestHandler(dayOneDeps(), accounts.RoleAdmin), "/console/").Body.String())
+	for _, pg := range budgetPages(t) {
+		if pg.key == "grant card" {
+			check("grant card", get(t, pg.h, pg.path).Body.String())
+		}
+	}
+	for _, src := range consoleTemplateSources(t) {
+		for _, banned := range []string{`class="about"`, `"about-docs"`} {
+			if strings.Contains(src.text, banned) {
+				t.Errorf("%s:%d: a template carries %s", src.file, src.line, banned)
+			}
+		}
+	}
+}
+
 // --- Activity ---------------------------------------------------------------
 
-func TestActivity_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
+func TestActivity_StandingNotesAreInline(t *testing.T) {
 	body := get(t, newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/activity").Body.String()
-	inside, outside := splitAbout(t, body)
-	mustBeStanding(t, inside, outside,
-		"Each page holds up to",
-		"Every Refresh is an audited read",
-	)
+	mustBeInline(t, body, "Every Refresh is an audited read made from this Console.", "refreshbtn", 300)
+	mustBeInline(t, body, "Each page holds up to 25 dispatches and 50 other events, paged separately.", `<div class="pager">`, 300)
+	mustNotRender(t, body, "are on the audit trail, not here")
 }
 
 func TestActivity_SituationalMessagesStayVisible(t *testing.T) {
@@ -134,15 +154,22 @@ func TestActivity_SituationalMessagesStayVisible(t *testing.T) {
 
 // --- Access -------------------------------------------------------------
 
-func TestAccess_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
+func TestAccess_StandingNotesAreInline(t *testing.T) {
 	body := get(t, newTestHandler(accessDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/access").Body.String()
-	inside, outside := splitAbout(t, body)
-	mustBeStanding(t, inside, outside,
-		"OAuth sign-ins are not listed.",
-		"There is no filter by the changed Account.",
-		"Every Refresh is an audited read",
-		"limited to admins in the Console only",
-	)
+	mustBeSituational(t, body, "This screen is limited to admins, in this Console only.")
+	c := contentOf(body)
+	form := strings.Index(c, `<form class="viewbar"`)
+	if form < 0 {
+		t.Fatal("the Access filter form is missing")
+	}
+	if strings.Index(c, "limited to admins") > form {
+		t.Error("the admin-only note does not lead the screen")
+	}
+	mustBeInline(t, body, "There is no filter by the changed Account;", "</form>", 80)
+	mustBeInline(t, body, "OAuth sign-ins happen at the identity provider and are not listed.", "failures only</a>", 80)
+	mustBeInline(t, body, "An older failed sign-in may show text typed into the wrong box, not an Account&#39;s name.", "failures only</a>", 200)
+	mustBeInline(t, body, "Every Refresh is an audited read.", "refreshbtn", 300)
+	mustBeInline(t, body, "Each page holds up to", `<div class="pager">`, 80)
 	if strings.Contains(body, "not on the trail") {
 		t.Error("the Access screen still says something is not on the trail")
 	}
@@ -168,10 +195,12 @@ func TestAccess_SituationalMessagesStayVisible(t *testing.T) {
 
 // --- Day one ----------------------------------------------------------------
 
-func TestDayOne_StandingNoteIsInOneClosedDisclosure(t *testing.T) {
+func TestDayOne_RefusingDaemonNoteIsInline(t *testing.T) {
 	body := get(t, newTestHandler(dayOneDeps(), accounts.RoleAdmin), "/console/").Body.String()
-	inside, outside := splitAbout(t, body)
-	mustBeStanding(t, inside, outside, "A daemon that refuses this Relay&#39;s certificate never appears here.")
+	mustBeInline(t, body, "A daemon that refuses this Relay&#39;s certificate never appears here.", "</section>", 80)
+	// 10-day-one.md holds the CA-fingerprint check; the CA row carries the
+	// value to compare.
+	mustNotRender(t, body, "Check the CA fingerprint above")
 }
 
 func TestDayOne_UnwatchedEnrollmentNoteStaysVisible(t *testing.T) {
@@ -256,10 +285,19 @@ func TestApprovals_DecidingCopySaysWhatIsTrue(t *testing.T) {
 	}
 }
 
-func TestFleet_StandingNoteIsInOneClosedDisclosure(t *testing.T) {
+func TestFleet_NoHostMetricsNoteIsDeleted(t *testing.T) {
 	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), fleetPath).Body.String()
-	inside, outside := splitAbout(t, body)
-	mustBeStanding(t, inside, outside, "There are no host metrics here, and there will not be.")
+	mustNotRender(t, body, "no host metrics")
+}
+
+// TestApprovals_UnauditedReloadIsStatedOnceBesideRefresh: the queue says a
+// reload is unaudited in one sentence beside Refresh, not again at its foot.
+func TestApprovals_UnauditedReloadIsStatedOnceBesideRefresh(t *testing.T) {
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{pendingApprovalRequest("ap-1")}}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals?waiting=all").Body.String()
+	mustNotRender(t, body, "Opening this queue or a Refresh writes no read record")
+	mustBeSituational(t, body, "Reloading this queue is not recorded on the audit trail; that is a known gap.")
 }
 
 func TestFleet_NoMatchEmptyStateIsSituational(t *testing.T) {
@@ -339,10 +377,20 @@ func TestNode_MandatedNotesStayVisible(t *testing.T) {
 	}
 }
 
-func TestAccounts_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
+func TestAccounts_PolicyCeilingIsVisibleBesideTheRoles(t *testing.T) {
+	note := `<p class="note">` + template.HTMLEscapeString(policyCeilingNote) + `</p>`
 	body := get(t, newTestHandler(accountsFixture(), accounts.RoleAdmin), accountsPath).Body.String()
-	inside, outside := splitAbout(t, body)
-	mustBeStanding(t, inside, outside, template.HTMLEscapeString(policyCeilingNote))
+	content := contentOf(body)
+	at := strings.Index(content, note)
+	if at < 0 {
+		t.Fatalf("the Policy ceiling note is not rendered as a visible note:\n%s", content)
+	}
+	if end := strings.Index(content, "</table>"); end < 0 || at < end {
+		t.Error("the Policy ceiling note renders before the accounts table ends")
+	}
+	if create := strings.Index(content, "Create an Account"); create < 0 || at > create {
+		t.Error("the Policy ceiling note does not render before the Create panel")
+	}
 	mustBeSituational(t, body, "cannot sign in until a password is set")
 	for i := 0; ; {
 		j := strings.Index(body[i:], "agent call trail")
@@ -354,6 +402,14 @@ func TestAccounts_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
 			t.Errorf("a bare %q is rendered", "agent call trail")
 		}
 		i = at + 1
+	}
+
+	// The note does not depend on the Create panel: it renders unwired too.
+	d := accountsFixture()
+	d.AccountAdmin = nil
+	unwired := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), accountsPath).Body.String())
+	if !strings.Contains(unwired, note) {
+		t.Error("the Policy ceiling note is not rendered when account changes are not wired")
 	}
 }
 
