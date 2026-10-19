@@ -1778,10 +1778,6 @@ var approvalsTmpl = newScreen("approvals", `
 <p class="note">Deciding happens on the request itself, behind step-up; this Console does not decide an Approval grant.</p>
 {{end}}
 
-<details class="about">
-<summary>About this screen</summary>
-<p class="gap"><b>Opening this queue or a Refresh writes no read record</b>, a known gap; opening one request is recorded.{{template "about-docs" "approvals"}}</p>
-</details>
 {{end}}
 `)
 

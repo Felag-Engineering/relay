@@ -252,6 +252,7 @@ var dayOneTmpl = newScreen("dayone", `
       </li>
     </template>
   </section>
+  <p class="note">A daemon that refuses this Relay&#39;s certificate never appears here.</p>
 
   {{if not .Watching}}
   <p class="gap"><b>Rejected attempts are not shown yet</b>, so an empty fleet is not proof nothing tried to join.</p>
@@ -274,9 +275,5 @@ var dayOneTmpl = newScreen("dayone", `
     {{end}}
   </section>
 
-  <details class="about">
-    <summary>About this screen</summary>
-    <p class="gap"><b>A daemon that refuses this Relay&#39;s certificate never appears here.</b> Check the CA fingerprint above before installing one.{{template "about-docs" "dayone"}}</p>
-  </details>
 </div>
 `)

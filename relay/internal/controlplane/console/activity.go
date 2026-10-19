@@ -1673,6 +1673,7 @@ var activityTmpl = newScreen("activity", `
 <p class="lede">Calls the Relay received, and what they did to the fleet.</p>
 
 {{template "refresh" .Refresh}}
+{{if not .UnknownKind}}<p class="refreshlimit">Every Refresh is an audited read made from this Console.</p>{{end}}
 
 <form class="viewbar" method="get" action="/console/activity">
   {{with .Filter.Kind}}<input type="hidden" name="kind" value="{{.}}">{{end}}
@@ -1831,6 +1832,7 @@ var activityTmpl = newScreen("activity", `
   {{with .OlderHref}}<a class="act" href="{{.}}">Older</a>{{end}}
   {{with .ExportHref}}<a href="{{.}}">Export this filter as CSV</a>{{end}}
 </div>
+<p class="note">Each page holds up to {{.JobPageSize}} dispatches and {{.AuditPageSize}} other events, paged separately.</p>
 
 {{if .Filter.Q}}
 <p class="gap"><b>Refine</b> matches text within the rows already on this page; it does not search the trail.</p>
@@ -1840,11 +1842,5 @@ var activityTmpl = newScreen("activity", `
 <p class="gap"><b>Outcome keeps Jobs with at least one <code>{{.Filter.Outcome}}</code> Task</b>; a short page is not the end.</p>
 {{end}}
 
-<details class="about">
-<summary>About this screen</summary>
-<p class="gap">Each page holds up to {{.JobPageSize}} dispatches and {{.AuditPageSize}} other events, paged separately. <b>Every Refresh is an audited read</b> made from this Console. Freeze transitions, Node revokes, Enrollment Token events and enrollments are on the audit trail, not here.{{template "about-docs" "activity"}}</p>
-</details>
-
 {{end}}
-
 `)

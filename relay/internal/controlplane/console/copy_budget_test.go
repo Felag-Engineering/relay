@@ -2,8 +2,8 @@ package console
 
 // copy_budget_test.go holds the Console to 00-foundations.md's "Standing notes
 // and situational messages" as amended for #849: every visible note is one
-// sentence of about fifteen words, the "About this screen" disclosure holds at
-// most a short paragraph, and each screen carries a word budget so explanatory
+// sentence of about fifteen words, no screen carries an "About this screen"
+// disclosure (D31), and each screen carries a word budget so explanatory
 // prose cannot creep back one helpful sentence at a time.
 //
 // The scanner below is hand-rolled rather than golang.org/x/net/html: that
@@ -37,10 +37,6 @@ package console
 // Inline tags (b, i, em, span, ...) with no measured, bounded or exempt class
 // are transparent: text split by them is one run, so a bolded lead clause
 // cannot be what keeps a sentence under the eight-word floor.
-//
-// The source scan treats everything inside <details class="about"> as
-// accounted for: it is measured on the rendered page (one paragraph, at most
-// maxAboutWords), not per element in source.
 //
 // Class names are matched on the element that carries them (tag.class), never
 // by the class alone, so a <span> cannot borrow what a <p> is allowed.
@@ -89,9 +85,6 @@ const (
 	// "about fifteen words"; the slack is for an inline value — a rendered
 	// timestamp is two tokens, a count or a name one.
 	maxNoteWords = 20
-	// maxAboutWords caps an "About this screen" paragraph, including any
-	// docs pointer aboutDocFor could append under any mode.
-	maxAboutWords = 60
 )
 
 // measuredClasses are the elements whose text is explanatory prose: each one
@@ -204,16 +197,12 @@ type proseElem struct {
 	Tag, Class string
 	Text       string
 	Words      int
-	About      bool // inside <details class="about">
 	Bounded    bool // per-element cap only, not budgeted
 	Offset     int
 }
 
 func (e proseElem) String() string {
 	where := "visible"
-	if e.About {
-		where = "About"
-	}
 	if e.Bounded {
 		where = "bounded"
 	}
@@ -278,7 +267,6 @@ type openElem struct {
 	offset  int
 	kind    proseKind
 	class   string // the class that classified it
-	about   bool   // this element is <details class="about">
 	collect *strings.Builder
 	own     strings.Builder // text directly inside, when nothing classifies it
 }
@@ -300,14 +288,6 @@ func proseOf(content string) (elems []proseElem, unclassified []string, err erro
 			}
 		}
 		return nil
-	}
-	inAbout := func() bool {
-		for _, e := range stack {
-			if e.about {
-				return true
-			}
-		}
-		return false
 	}
 	// accountedFor reports whether text here is already classified: collected
 	// by a measured, bounded or exempt element, or inside a value or a
@@ -389,7 +369,7 @@ func proseOf(content string) (elems []proseElem, unclassified []string, err erro
 			if kind == kindMeasured || kind == kindBounded {
 				elems = append(elems, proseElem{
 					Tag: top.tag, Class: top.class, Text: text, Words: countWords(text),
-					About: inAbout(), Bounded: kind == kindBounded, Offset: top.offset,
+					Bounded: kind == kindBounded, Offset: top.offset,
 				})
 			}
 			continue
@@ -397,9 +377,8 @@ func proseOf(content string) (elems []proseElem, unclassified []string, err erro
 
 		classes := classesOf(attrs)
 		e := &openElem{tag: tag, classes: classes, offset: m[0]}
-		e.about = tag == "details" && len(classes) > 0 && classes[0] == "about"
 		if collector() == nil {
-			e.kind, e.class = classify(tag, classes, stack, inAbout())
+			e.kind, e.class = classify(tag, classes, stack)
 			if e.kind == kindNone && tag == "p" && len(classes) == 0 {
 				unclassified = append(unclassified, fmt.Sprintf("byte %d: a bare <p> with no classified container", m[0]))
 			}
@@ -431,7 +410,7 @@ func proseOf(content string) (elems []proseElem, unclassified []string, err erro
 // and, for a bare <p>, its nearest classed ancestor. Every lookup is keyed by
 // tag.class: a class means what it means on the element the Console gave it
 // to, and nowhere else.
-func classify(tag string, classes []string, stack []*openElem, inAbout bool) (proseKind, string) {
+func classify(tag string, classes []string, stack []*openElem) (proseKind, string) {
 	if tag == "li" && len(stack) > 0 {
 		parent := stack[len(stack)-1]
 		if parent.tag == "ul" && len(parent.classes) > 0 && parent.classes[0] == "truths" {
@@ -440,9 +419,6 @@ func classify(tag string, classes []string, stack []*openElem, inAbout bool) (pr
 	}
 	if tag == "p" {
 		if len(classes) == 0 {
-			if inAbout {
-				return kindMeasured, "about"
-			}
 			for i := len(stack) - 1; i >= 0; i-- {
 				if len(stack[i].classes) == 0 {
 					continue
@@ -503,18 +479,15 @@ func TestCopyBudget_CounterMeasuresWhatItShould(t *testing.T) {
 		`<div class="placeholder"><p>Pin two Nodes.</p></div>` +
 		`<section class="panel"><p>an orphan paragraph</p></section>` +
 		`<section class="panel minted"><p>the secret</p></section>` +
-		`<p class="note">outer <span class="phint">inner words</span></p>` +
-		`<details class="about"><summary>About this screen</summary><p class="gap">About words here.</p></details>`
+		`<p class="note">outer <span class="phint">inner words</span></p>`
 	elems, unclassified, err := proseOf(content)
 	if err != nil {
 		t.Fatalf("proseOf: %v", err)
 	}
 	got := map[string]int{}
-	var about, bounded int
+	var bounded int
 	for _, e := range elems {
 		switch {
-		case e.About:
-			about += e.Words
 		case e.Bounded:
 			bounded++
 		default:
@@ -536,9 +509,6 @@ func TestCopyBudget_CounterMeasuresWhatItShould(t *testing.T) {
 	}
 	if len(got) != len(want) {
 		t.Errorf("measured %d visible elements, want %d: %v", len(got), len(want), got)
-	}
-	if about != 3 {
-		t.Errorf("About measured %d words, want 3 — the summary is not prose", about)
 	}
 	if bounded != 2 {
 		t.Errorf("bounded elements = %d, want 2 (span.dim and p.mode)", bounded)
@@ -672,48 +642,26 @@ func copyBudgetFixture() Deps {
 	})
 }
 
-// copyBudgets is each screen's word budget for explanatory prose: Visible
-// outside the About disclosure, and About inside it. Each is the measured
-// count rounded up to a multiple of five, so a screen has at most four words
-// of slack. A count over its budget is a copy problem: cut, do not raise.
+// copyBudgets is each screen's word budget for explanatory prose. Each is the
+// measured count rounded up to a multiple of five, so a screen has at most
+// four words of slack. A count over its budget is a copy problem: cut, do not
+// raise.
 //
 // Node detail's 75 is above the "under ~60" #849 aimed for: every element on
 // it is a ruled or spec-bound qualifier, and reaching 60 means dropping one.
-var copyBudgets = map[string]struct{ Visible, About int }{
-	"/console/{$}":                     {0, 15},
-	"/console/nodes/{node_id}":         {75, 0},
-	"/console/activity":                {35, 40},
-	"/console/jobs/{job_id}":           {60, 0},
-	"/console/compare":                 {40, 0},
-	"/console/approvals":               {60, 20},
-	"/console/approvals/{approval_id}": {85, 0},
-	"/console/accounts":                {20, 20},
-	"/console/access":                  {0, 55},
-	"/console/run":                     {10, 0},
-	"day one":                          {65, 20},
-	"grant card":                       {105, 0},
-}
-
-// aboutScreenOf maps a budget key to its aboutDocScreens key, so the budget
-// can leave out the docs pointer: that is the owner's choice
-// (aboutDocsShipped), bounded on its own by maxAboutWords, and flipping it
-// must stay a one-line change rather than a budget edit on six screens.
-var aboutScreenOf = map[string]string{
-	"/console/{$}":       "fleet",
-	"/console/activity":  "activity",
-	"day one":            "dayone",
-	"/console/approvals": "approvals",
-	"/console/accounts":  "accounts",
-	"/console/access":    "access",
-}
-
-// pointerWords is how many words the shipped docs pointer adds to screen's
-// About.
-func pointerWords(screen string) int {
-	if doc := aboutDocFor(aboutDocsShipped, screen); doc != "" {
-		return countWords(" More in " + doc + ".")
-	}
-	return 0
+var copyBudgets = map[string]int{
+	"/console/{$}":                     0,
+	"/console/nodes/{node_id}":         75,
+	"/console/activity":                60,
+	"/console/jobs/{job_id}":           60,
+	"/console/compare":                 40,
+	"/console/approvals":               60,
+	"/console/approvals/{approval_id}": 85,
+	"/console/accounts":                40,
+	"/console/access":                  65,
+	"/console/run":                     10,
+	"day one":                          75,
+	"grant card":                       105,
 }
 
 // budgetPage is one page the budget test renders.
@@ -748,20 +696,6 @@ func budgetPages(t *testing.T) []budgetPage {
 	return pages
 }
 
-// longestAboutDoc is the most words any About docs pointer could add, under
-// any mode, so flipping aboutDocsShipped can never push an About over its cap.
-func longestAboutDoc() int {
-	longest := 0
-	for _, mode := range []aboutDocsMode{aboutDocsNone, aboutDocsDesign, aboutDocsOperator} {
-		for screen := range aboutDocScreens {
-			if doc := aboutDocFor(mode, screen); doc != "" {
-				longest = max(longest, countWords(" More in "+doc+"."))
-			}
-		}
-	}
-	return longest
-}
-
 func TestCopyBudget_EveryScreenIsWithinItsBudget(t *testing.T) {
 	walked := map[string]bool{}
 	for _, pg := range budgetPages(t) {
@@ -784,49 +718,27 @@ func TestCopyBudget_EveryScreenIsWithinItsBudget(t *testing.T) {
 		for _, u := range unclassified {
 			t.Errorf("%s (%s): %s — classify it in copy_budget_test.go or cut it", pg.key, pg.path, u)
 		}
-		var visible, about, aboutParas int
+		var visible int
 		var listing []string
 		for _, e := range elems {
 			if e.Bounded {
 				continue
 			}
 			listing = append(listing, "  "+e.String())
-			if e.About {
-				about += e.Words
-				aboutParas++
-			} else {
-				visible += e.Words
-			}
+			visible += e.Words
 		}
-		if about > 0 {
-			about -= pointerWords(aboutScreenOf[pg.key])
+		if budget > 0 && visible == 0 {
+			t.Errorf("%s measured no prose at all against a budget of %d — this guard is not running", pg.key, budget)
 		}
-		if budget.Visible+budget.About > 0 && visible+about == 0 {
-			t.Errorf("%s measured no prose at all against a budget of %d+%d — this guard is not running", pg.key, budget.Visible, budget.About)
-		}
-		if visible > budget.Visible {
+		if visible > budget {
 			t.Errorf("%s renders %d visible words, over its budget of %d — cut copy, do not raise the budget:\n%s",
-				pg.key, visible, budget.Visible, strings.Join(listing, "\n"))
+				pg.key, visible, budget, strings.Join(listing, "\n"))
 		}
-		if about > budget.About {
-			t.Errorf("%s renders %d About words, over its budget of %d:\n%s", pg.key, about, budget.About, strings.Join(listing, "\n"))
+		if budget-visible >= 5 {
+			t.Errorf("%s's visible budget %d is %d above the %d words it renders: lower it", pg.key, budget, budget-visible, visible)
 		}
-		if budget.Visible-visible >= 5 {
-			t.Errorf("%s's visible budget %d is %d above the %d words it renders: lower it", pg.key, budget.Visible, budget.Visible-visible, visible)
-		}
-		if budget.About-about >= 5 {
-			t.Errorf("%s's About budget %d is %d above the %d words it renders: lower it", pg.key, budget.About, budget.About-about, about)
-		}
-		disclosures := strings.Count(content, `<details class="about"`)
-		switch {
-		case budget.About == 0 && disclosures != 0:
-			t.Errorf("%s has an About budget of 0 but renders %d About disclosures", pg.key, disclosures)
-		case budget.About > 0 && (disclosures != 1 || aboutParas != 1):
-			t.Errorf("%s's About holds %d paragraphs in %d disclosures, want one short paragraph in one", pg.key, aboutParas, disclosures)
-		}
-		if budget.About+longestAboutDoc() > maxAboutWords && about > 0 {
-			t.Errorf("%s's About budget %d plus the longest docs pointer (%d words) exceeds %d",
-				pg.key, budget.About, longestAboutDoc(), maxAboutWords)
+		if strings.Contains(content, `<details class="about"`) {
+			t.Errorf("%s renders an About disclosure, which no screen carries", pg.key)
 		}
 	}
 	for key := range copyBudgets {
@@ -966,12 +878,8 @@ func TestCopyBudget_EveryVisibleNoteIsOneShortSentence(t *testing.T) {
 		}
 		for _, e := range elems {
 			measured++
-			limit := maxNoteWords
-			if e.About {
-				limit = maxAboutWords
-			}
-			if e.Words > limit {
-				t.Errorf("%s %s: %s is over %d words — one sentence of about fifteen", pg.name, pg.path, e, limit)
+			if e.Words > maxNoteWords {
+				t.Errorf("%s %s: %s is over %d words — one sentence of about fifteen", pg.name, pg.path, e, maxNoteWords)
 			}
 		}
 	}
@@ -1133,8 +1041,8 @@ type sourceElement struct {
 	exempt                   bool
 }
 
-// templateElements finds every measured, bounded and exempt element in src, outside
-// About disclosures, and returns its inner fragment.
+// templateElements finds every measured, bounded and exempt element in src
+// and returns its inner fragment.
 func templateElements(t *testing.T, src templateSource) []sourceElement {
 	t.Helper()
 	text := blank(tmplComment, src.text)
@@ -1152,7 +1060,6 @@ func templateElements(t *testing.T, src templateSource) []sourceElement {
 		classes []string
 	}
 	var stack []anc
-	var aboutDepth int
 	var out []sourceElement
 	for i, m := range tags {
 		closing := masked[m[2]:m[3]] == "/"
@@ -1164,9 +1071,6 @@ func templateElements(t *testing.T, src templateSource) []sourceElement {
 		if closing {
 			for j := len(stack) - 1; j >= 0; j-- {
 				if stack[j].tag == tag {
-					if tag == "details" && aboutDepth > 0 && len(stack[j].classes) > 0 && stack[j].classes[0] == "about" {
-						aboutDepth--
-					}
 					stack = stack[:j]
 					break
 				}
@@ -1179,14 +1083,7 @@ func templateElements(t *testing.T, src templateSource) []sourceElement {
 			ancestors = append(ancestors, &openElem{tag: a.tag, classes: a.classes})
 		}
 		stack = append(stack, anc{tag, classes})
-		if tag == "details" && len(classes) > 0 && classes[0] == "about" {
-			aboutDepth++
-			continue
-		}
-		if aboutDepth > 0 {
-			continue
-		}
-		kind, class := classify(tag, classes, ancestors, false)
+		kind, class := classify(tag, classes, ancestors)
 		if kind != kindMeasured && kind != kindBounded && kind != kindDenynote && kind != kindExempt {
 			continue
 		}
@@ -1216,7 +1113,7 @@ func templateElements(t *testing.T, src templateSource) []sourceElement {
 
 // templateRuns is the source twin of proseOf's unclassified check: every run
 // of minUnclassifiedRun or more words between two tags of a template that no
-// measured, bounded, exempt, value or About element accounts for. It reaches
+// measured, bounded, exempt or value element accounts for. It reaches
 // the branches no fixture renders. A run that spans an {{if}} adds its
 // branches together, so it can over-count; a false positive is classified or
 // split, never raised past.
@@ -1276,13 +1173,12 @@ func templateRuns(src templateSource) []string {
 			ancestors = append(ancestors, &openElem{tag: a.tag, classes: a.classes})
 			accounted = accounted || a.accounted
 		}
-		about := tag == "details" && len(classes) > 0 && classes[0] == "about"
-		kind, _ := classify(tag, classes, ancestors, false)
+		kind, _ := classify(tag, classes, ancestors)
 		transparent := inlineTags[tag] && kind == kindNone && !valueTags[tag]
 		if !transparent {
 			flush()
 		}
-		stack = append(stack, frame{tag, classes, accounted || about || kind != kindNone, transparent})
+		stack = append(stack, frame{tag, classes, accounted || kind != kindNone, transparent})
 	}
 	if len(stack) == 0 || !stack[len(stack)-1].accounted {
 		if run.Len() == 0 {

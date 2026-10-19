@@ -3,8 +3,7 @@ package console
 // visible_qualifiers_test.go proves the note that stays VISIBLE after the
 // standing notes were folded (00-foundations.md, "Standing notes and
 // situational messages"): Activity's read-records sentence is one quiet
-// sentence drawn with the control it qualifies, never a dashed gap box, and
-// never inside the About disclosure.
+// sentence drawn with the control it qualifies, never a dashed gap box.
 
 import (
 	"strings"
