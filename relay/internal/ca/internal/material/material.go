@@ -1,7 +1,9 @@
 // Package material generates a CA private key and its self-signed certificate.
 //
-// It is internal to the ca tree, so only ca and its test-only constructor (catest) can name
-// Material. That is what keeps ca.FromMaterial, which builds a CA that no file check decided
+// It is internal to the ca tree, so only ca and its test-only constructor (catest) can import
+// it, and Material carries a non-exported field, so no struct literal written elsewhere has
+// its type (Go assigns an unnamed look-alike struct to a named one, so unnameable is not
+// enough). That is what keeps ca.FromMaterial, which builds a CA that no file check decided
 // on, callable from nowhere else with anything but a zero value, which it refuses.
 package material
 
@@ -28,6 +30,10 @@ const (
 type Material struct {
 	Key     *ecdsa.PrivateKey
 	CertDER []byte
+
+	// A non-exported field: field names that are not exported are never the same across
+	// packages, so a look-alike literal written outside this package has another type.
+	_ struct{}
 }
 
 // New generates a fresh ECDSA P-256 CA key and its self-signed certificate.

@@ -40,7 +40,7 @@ func Open(gatePath, caDir, storePath string) (Files, error) {
 	if err != nil {
 		return Files{}, fmt.Errorf("open CA: %w", err)
 	}
-	return Files{v: sealed.Files{CA: relayCA, Gate: gate, StorePath: storePath, RecheckStore: recheck}}, nil
+	return Files{v: sealed.New(relayCA, gate, storePath, recheck)}, nil
 }
 
 // FromSealed wraps v. Its parameter's type is internal to the startup tree, so only the
@@ -53,7 +53,9 @@ func FromSealed(v sealed.Files) (Files, error) {
 }
 
 // Valid reports whether f came from Open or FromSealed rather than being the zero value.
-func (f Files) Valid() bool { return f.v.CA != nil && f.v.Gate != nil && f.v.RecheckStore != nil }
+func (f Files) Valid() bool {
+	return f.v.CA != nil && f.v.Gate != nil && f.v.StorePath != "" && f.v.RecheckStore != nil
+}
 
 // CA is the Relay's CA, read from the checked directory.
 func (f Files) CA() *ca.CA { return f.v.CA }

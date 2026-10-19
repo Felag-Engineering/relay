@@ -1,12 +1,19 @@
 package ca
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/ca/internal/material"
 	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
@@ -214,5 +221,75 @@ func TestOpen_RefusesDirectorySwappedAfterCheck(t *testing.T) {
 func TestFromMaterial_RefusesZero(t *testing.T) {
 	if c, err := FromMaterial(material.Material{}); c != nil || err == nil {
 		t.Fatalf("FromMaterial(zero) = %v, %v; want a refusal", c, err)
+	}
+}
+
+// TestValidCA_Refusals: the CA certificate must be the key's, self-signed, a CA allowed to sign
+// certificates, and inside its validity window.
+func TestValidCA_Refusals(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	good := func() *x509.Certificate {
+		return &x509.Certificate{
+			SerialNumber:          big.NewInt(1),
+			Subject:               pkix.Name{CommonName: "Relay CA"},
+			NotBefore:             now.Add(-time.Hour),
+			NotAfter:              now.Add(time.Hour),
+			KeyUsage:              x509.KeyUsageCertSign,
+			BasicConstraintsValid: true,
+			IsCA:                  true,
+		}
+	}
+	// issue makes a certificate for key's public key from tmpl, signed by signer, with parent
+	// as its issuer.
+	issue := func(tmpl, parent *x509.Certificate, signer *ecdsa.PrivateKey) *x509.Certificate {
+		t.Helper()
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, &key.PublicKey, signer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	self := func(mutate func(*x509.Certificate)) *x509.Certificate {
+		tmpl := good()
+		mutate(tmpl)
+		return issue(tmpl, tmpl, key)
+	}
+
+	if err := validCA(self(func(*x509.Certificate) {}), key); err != nil {
+		t.Fatalf("a good CA certificate was refused: %v", err)
+	}
+	otherParent := good()
+	otherParent.Subject = pkix.Name{CommonName: "Someone else"}
+	for _, tc := range []struct {
+		name string
+		cert *x509.Certificate
+		key  *ecdsa.PrivateKey
+		want string
+	}{
+		{"another key's certificate", self(func(*x509.Certificate) {}), other, "does not match the CA private key"},
+		{"not self-signed", issue(good(), otherParent, other), key, "not self-signed"},
+		{"not a CA", self(func(c *x509.Certificate) { c.IsCA = false }), key, "not a certificate authority"},
+		{"no certificate-signing usage", self(func(c *x509.Certificate) { c.KeyUsage = x509.KeyUsageDigitalSignature }), key, "not a certificate authority"},
+		{"expired", self(func(c *x509.Certificate) { c.NotBefore, c.NotAfter = now.Add(-2*time.Hour), now.Add(-time.Hour) }), key, "has expired"},
+		{"not yet valid", self(func(c *x509.Certificate) { c.NotBefore, c.NotAfter = now.Add(time.Hour), now.Add(2*time.Hour) }), key, "not yet valid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validCA(tc.cert, tc.key)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validCA = %v, want a refusal containing %q", err, tc.want)
+			}
+		})
 	}
 }

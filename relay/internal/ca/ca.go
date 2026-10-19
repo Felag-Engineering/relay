@@ -465,13 +465,18 @@ func validCA(cert *x509.Certificate, key *ecdsa.PrivateKey) error {
 	if !key.PublicKey.Equal(cert.PublicKey) {
 		return errors.New("ca: the CA certificate does not match the CA private key")
 	}
-	if err := cert.CheckSignatureFrom(cert); err != nil {
-		return errors.New("ca: the CA certificate is not self-signed by the CA private key")
-	}
 	if !cert.IsCA || !cert.BasicConstraintsValid || cert.KeyUsage&x509.KeyUsageCertSign == 0 {
 		return errors.New("ca: the CA certificate is not a certificate authority that may sign certificates")
 	}
-	if !time.Now().Before(cert.NotAfter) {
+	// After the flags: CheckSignatureFrom also refuses a parent that is not a CA.
+	if err := cert.CheckSignatureFrom(cert); err != nil {
+		return errors.New("ca: the CA certificate is not self-signed by the CA private key")
+	}
+	now := time.Now()
+	if now.Before(cert.NotBefore) {
+		return errors.New("ca: the CA certificate is not yet valid")
+	}
+	if !now.Before(cert.NotAfter) {
 		return errors.New("ca: the CA certificate has expired")
 	}
 	return nil

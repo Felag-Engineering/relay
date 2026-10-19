@@ -1,6 +1,9 @@
 // Package sealed is the plain contents of a startup.Files. It is internal to the startup
-// tree, so only startup and its test-only constructor (startuptest) can name it, which is what
-// keeps startup.FromSealed callable from nowhere else with anything but a zero value.
+// tree, so only startup and its test-only constructor (startuptest) can import it, and Files
+// carries an unexported field, so no struct literal written anywhere else has its type: Go
+// assigns an unnamed look-alike struct to a named one, which is why unnameable is not enough.
+// Together they keep startup.FromSealed callable from nowhere else with anything but a zero
+// value.
 package sealed
 
 import (
@@ -14,4 +17,13 @@ type Files struct {
 	Gate         *approval.Gate
 	StorePath    string
 	RecheckStore func() error
+
+	// A non-exported field: field names that are not exported are never the same across
+	// packages, so a look-alike literal written outside this package has another type.
+	_ struct{}
+}
+
+// New returns Files holding its arguments.
+func New(c *ca.CA, g *approval.Gate, storePath string, recheck func() error) Files {
+	return Files{CA: c, Gate: g, StorePath: storePath, RecheckStore: recheck}
 }

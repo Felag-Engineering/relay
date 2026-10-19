@@ -13,5 +13,5 @@ import (
 
 // Files returns startup.Files holding c, g and storePath, whose store recheck passes.
 func Files(c *ca.CA, g *approval.Gate, storePath string) (startup.Files, error) {
-	return startup.FromSealed(sealed.Files{CA: c, Gate: g, StorePath: storePath, RecheckStore: func() error { return nil }})
+	return startup.FromSealed(sealed.New(c, g, storePath, func() error { return nil }))
 }
