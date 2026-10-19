@@ -96,7 +96,7 @@ verify: fmt lint-relay lint-daemon lint-comments lint-guard-escapes check-daemon
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
         apiclient-check verify-proto docs-check test-security-surface \
         test-codex-review test-ci-changed-paths \
-        test-check-docs test-smoke-test test-maintainer-check test-release-image-guard \
+        test-check-docs test-smoke-test test-packages test-maintainer-check test-release-image-guard \
         test-compose-floor-check compose-floor-check test-license-change-date test-catalog-ledger catalog-ledger-check \
         test-dev-fleet-make test-integration test-crossbinary \
         lint-ci secrets-scan deny-daemon test-vuln-gate

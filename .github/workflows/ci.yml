@@ -205,6 +205,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: make secrets-scan
 
+      # scripts/package-guard-test.sh: the release's package build and guards (DI-24, DI-32),
+      # proved against two builds, a stand-in binary and tampered packages. Needs Go for the
+      # pinned nfpm and the rpm tools to read the packages back.
+      - name: Package build and guard self-test
+        if: ${{ !cancelled() }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y rpm rpm2cpio cpio
+          make test-packages
+
       - name: Install zizmor (pinned in the Makefile)
         if: ${{ !cancelled() }}
         run: make zizmor-tool
