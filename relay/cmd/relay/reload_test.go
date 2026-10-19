@@ -429,10 +429,13 @@ func TestNewServer_ZeroFilesStillRefusedFirst(t *testing.T) {
 }
 
 // TestSignals_OnlyFreezeAndReloadHandleSignals: os/signal is imported by the
-// Freeze lever and the reload lever and nowhere else in the binary, so no third
-// signal-driven path to a running Relay exists.
+// Freeze lever and the reload lever and nowhere else that runs in a serving
+// Relay, so no third signal-driven path to a running Relay exists. The one
+// other importer is relay init's password prompt, which restores the terminal
+// on SIGINT or SIGTERM, lives only while the prompt does, and runs in the
+// short-lived init process, never in a serving Relay.
 func TestSignals_OnlyFreezeAndReloadHandleSignals(t *testing.T) {
-	allowed := map[string]bool{"freeze_signal.go": true, "reload_signal.go": true}
+	allowed := map[string]bool{"freeze_signal.go": true, "reload_signal.go": true, "init_term_linux.go": true}
 	entries, err := fs.ReadDir(os.DirFS("."), ".")
 	if err != nil {
 		t.Fatal(err)
