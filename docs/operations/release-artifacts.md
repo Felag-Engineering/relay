@@ -18,6 +18,7 @@ For tag `v<version>` (e.g. `v0.0.9`, `v0.1.0-beta`), the GitHub Release carries:
 | `relay-<version>-x86_64-unknown-linux-gnu`, `relay-<version>-aarch64-unknown-linux-gnu` | The Relay server binary, statically linked (`CGO_ENABLED=0`). The `-unknown-linux-gnu` triple is kept from before the Relay was static, so names do not change under anyone; the binary has no libc dependency. |
 | `<artifact>.spdx.json` | An SPDX SBOM for each of the four binaries. The Relay's lists the exact Go modules in the binary. The daemon's is derived from `Cargo.lock` — a superset (every target, dev and build dependencies) — because a stripped Rust binary carries no dependency metadata to read. |
 | `relay-image-<version>-linux-<arch>.spdx.json` | An SPDX SBOM for each platform of the Relay image. |
+| `relay-daemon.service`, `relay-daemon.env.example` | The hardened systemd unit and the example environment file a hand-built install takes, byte-equal to the copies inside the daemon packages (DI-32). |
 | `SHA256SUMS` | `sha256sum`-format digests of every file above, bare filenames. |
 | `SHA256SUMS.sigstore.json` | A keyless [cosign](https://docs.sigstore.dev/) bundle signing `SHA256SUMS`. |
 
@@ -203,6 +204,14 @@ only when the tag is visible on a clean `HEAD`. Use the same pinned toolchain an
 runner image family recorded in the workflow, and set `SOURCE_DATE_EPOCH` to the tagged
 commit's committer date. The daemon needs `musl-tools`; `make print-release-daemon-bin`
 prints where it lands.
+
+The daemon's `.deb` and `.rpm` packages are built in both passes from the binaries above, by
+the nfpm pinned under `tools/nfpm` with every manifest's `mtime` taken from
+`SOURCE_DATE_EPOCH`, and the workflow fails unless the two passes' packages are byte-identical
+and each package's `/usr/bin/relay-daemon` is the release binary byte for byte. They are
+uploaded as the run's `packages` artifact and **not yet attached to the Release**: that waits on
+the unit's syscall filter being verified on a real systemd host and on the install matrix
+(`daemon-installation.md`, DI-3 and DI-33). Until then nothing in `SHA256SUMS` names them.
 
 The **image is not byte-reproducible** (Alpine's package index and file timestamps float).
 What is guaranteed is that its `/usr/local/bin/relay` is the released, rebuild-verified

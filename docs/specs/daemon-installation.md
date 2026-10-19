@@ -1,6 +1,6 @@
 # Daemon installation
 
-**Status:** designed, not built, as of `2026-10-18`.
+**Status:** designed, not built, as of `2026-10-19`.
 **Claim prefix:** `DI`
 
 ## Purpose
@@ -73,6 +73,9 @@ they already run, from artifacts they can verify before executing.
   definition, its command text and its ordered slot declarations as the daemon's own parser
   reads them, and not the text rendered for its shell or the engine that renders it. Withdrawing a
   released name is allowed.
+- **DI-32** The release attaches the standalone unit and example environment file under
+  `SHA256SUMS`, so a hand-built install — documented, not supported — verifies its unit like
+  everything else.
 
 ### A fresh Node's configuration
 
@@ -174,6 +177,7 @@ proven by CI install jobs, once they exist; `make verify` alone cannot prove the
 | DI-14 | `drain_grace_expiry_kills_remaining` | daemon |
 | DI-16 | `dedup_survives_reconnect_reload` | daemon |
 | DI-30 | `catalog_names_match_ledger`, `ledger_check_refuses_a_changed_body`, `ledger_check_refuses_a_changed_risk_class`, `ledger_check_accepts_a_withdrawn_name_absent_from_the_catalog`, `ledger_check_refuses_a_withdrawn_name_back_in_the_catalog`, `scripts/catalog-ledger-test.sh` | daemon, packaging |
+| DI-32 | `scripts/package-guard-test.sh`, and the release workflow's guard that `SHA256SUMS` lists the unit and example environment file, byte-equal to the copies inside every daemon package | packaging, release |
 | DI-17 | `TestMCP_RunOperation_OutdatedNodeVersionRefused` | MCP |
 | DI-21 | `TestRevokedNode_RefusedAfterRestart` | e2e |
 | DI-22 | `pin_match_enrolls`, `pin_mismatch_sends_no_token`, `ca_bundle_mismatch_refused`, `TestCrossBinary_JoinStringEnrolls` | daemon, e2e |
@@ -206,7 +210,6 @@ until it is done.
 | DI-27 | The daemon package places the environment file on a first install only, if none exists, owned by root and mode `0600`, and never rewrites it. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-29 | The shipped read catalog ships as its own optional `.deb` and `.rpm` package, depending on the daemon package. Its files are package-owned: replaced on upgrade, removed with the package, and never installed as configuration the package manager would preserve. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-31 | Removing the daemon package removes the binary, the unit and the catalog package, and leaves the Policy, the Policy directory, the environment file and the state directory. `apt purge` removes everything the package created, the Node's identity included; `.rpm` removal never deletes state and prints the paths to delete by hand. Purge deletes only paths the package itself created, never a path read from an operator-edited file. | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-32 | The release attaches the standalone unit and example environment file under `SHA256SUMS`, so a hand-built install — documented, not supported — verifies its unit like everything else. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-33 | A platform is supported only where CI installs the package, upgrades it over the operator's edited configuration and finds the edit intact, and removes it: Debian 13; Ubuntu 26.04 LTS and 24.04 LTS; RHEL, Rocky Linux and AlmaLinux 10; Fedora's current release; Amazon Linux 2023 — each on `x86_64` and `aarch64`. A platform whose package manager refuses an unsigned local package by default is not supported. This list also governs the Relay packages (`relay-configuration.md`). | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-34 | A documented migration moves a hand-built Node onto the package: it removes the old binary and the old unit under `/etc/systemd/system/`, which would otherwise shadow the packaged one, and says to remove by hand the Policy's self-reference denies for the old binary and unit paths, which the shipped default no longer carries (DI-28). | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-35 | A rendered enrollment bundle pins a daemon version and digest (ADR-0032); which artifact it pins once packages exist is an open question below. Moved from v0.6.5 on 2026-10-16: nothing renders a bundle until v0.7.0. | v0.7.0 — Admin Console: Administration & Execution |

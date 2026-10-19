@@ -1,0 +1,72 @@
+# nfpm manifest for the relay-daemon .deb and .rpm (DI-24, DI-25, DI-26, DI-27, DI-31).
+#
+# A template, rendered by scripts/build-packages.sh: the @NAME@ placeholders are substituted
+# before nfpm reads it, and nothing else is. The package wraps the release's guarded binary
+# byte for byte; packaging compiles, strips and rewrites nothing (ADR-0033).
+#
+# Reproducibility: mtime is set explicitly from SOURCE_DATE_EPOCH, every file is listed by
+# name with its mode and owner (no directory globbing, which would read source mtimes and
+# modes), and the rpm build host is fixed. The release builds this twice and compares.
+#
+# Nothing here is configuration the package manager preserves: the live Policy and the
+# environment file are placed by the maintainer scripts on a first install only, and are
+# never package-owned files (ADR-0033 as amended 2026-10-15).
+
+name: relay-daemon
+arch: "@ARCH@"
+platform: linux
+version: "@VERSION@"
+version_schema: semver
+release: "1"
+section: admin
+priority: optional
+maintainer: "Felag Engineering"
+vendor: Felag Engineering
+homepage: "https://github.com/Felag-Engineering/relay"
+license: BUSL-1.1
+description: |-
+  Relay relay-daemon, the privileged fleet-administration Node daemon.
+  Enforces the Node's locally rooted Policy and runs the Operations it allows.
+  The package installs the daemon and its hardened unit and never starts it.
+mtime: "@MTIME@"
+umask: 0o022
+
+contents:
+  - src: "@DAEMON_BIN@"
+    dst: /usr/bin/relay-daemon
+    file_info: {mode: 0o755, owner: root, group: root}
+  - src: "@SRC@/daemon/packaging/relay-daemon.service"
+    dst: /usr/lib/systemd/system/relay-daemon.service
+    file_info: {mode: 0o644, owner: root, group: root}
+  - dst: /usr/share/relay-daemon
+    type: dir
+    file_info: {mode: 0o755, owner: root, group: root}
+  - src: "@SRC@/daemon/policy.default.toml"
+    dst: /usr/share/relay-daemon/policy.default.toml
+    file_info: {mode: 0o644, owner: root, group: root}
+  - src: "@SRC@/daemon/packaging/relay-daemon.env.example"
+    dst: /usr/share/relay-daemon/relay-daemon.env.example
+    file_info: {mode: 0o644, owner: root, group: root}
+  - dst: /usr/share/doc/relay-daemon
+    type: dir
+    file_info: {mode: 0o755, owner: root, group: root}
+  - src: "@SRC@/docs/operations/daemon-privilege-posture.md"
+    dst: /usr/share/doc/relay-daemon/daemon-privilege-posture.md
+    file_info: {mode: 0o644, owner: root, group: root}
+  - src: "@SRC@/LICENSE"
+    dst: /usr/share/doc/relay-daemon/LICENSE
+    file_info: {mode: 0o644, owner: root, group: root}
+
+scripts:
+  preinstall: "@SRC@/daemon/packaging/scripts/preinst.sh"
+  postinstall: "@SRC@/daemon/packaging/scripts/postinst.sh"
+  preremove: "@SRC@/daemon/packaging/scripts/prerm.sh"
+  postremove: "@SRC@/daemon/packaging/scripts/postrm.sh"
+
+deb:
+  compression: gzip
+rpm:
+  compression: gzip
+  buildhost: relay-release
+  group: System Environment/Daemons
+  summary: Relay relay-daemon, the privileged fleet-administration Node daemon

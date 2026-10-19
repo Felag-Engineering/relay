@@ -302,6 +302,15 @@ test-license-change-date:
 test-catalog-ledger:
 	bash scripts/catalog-ledger-test.sh
 
+# Proves scripts/build-packages.sh and scripts/package-guard.sh, the release's package build and
+# guards (DI-24, DI-32): two builds from different paths are byte-identical, the payload is the
+# input binary, and the guards refuse a different binary, a missing SHA256SUMS line and a
+# package declaring configuration files. Builds the pinned nfpm; needs dpkg-deb, rpm, rpm2cpio
+# and cpio. The release workflow runs it on every dry run and tag push.
+.PHONY: test-packages
+test-packages:
+	bash scripts/package-guard-test.sh
+
 # DI-30 against the real ledger. No visible v* tag is a recorded skip under verify and a failure
 # anywhere else (CI fetches tags), the same convention as a missing tool.
 catalog-ledger-check:

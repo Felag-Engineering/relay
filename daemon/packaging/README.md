@@ -7,6 +7,37 @@ for the full per-Operation privilege map, the rationale behind every hardening
 directive, and the documented exception for Nodes that run `pkg.install` or
 filesystem-mutating Raw Exec.
 
+## Packages
+
+`nfpm/` holds the manifests for two packages, each built as `.deb` and `.rpm` by
+`scripts/build-packages.sh` with the nfpm pinned under `tools/nfpm`; `scripts/` holds the
+daemon package's maintainer scripts. The release builds both packages twice and refuses unless
+the two builds are byte-identical, and checks that each package's `/usr/bin/relay-daemon` is the
+release binary byte for byte. **They are not yet attached to a release**: no package carrying
+the unit ships until its syscall filter is verified on a real systemd host and the install
+matrix proves the packages on every supported platform. Until then, install by hand as below.
+
+- **`relay-daemon`** installs `/usr/bin/relay-daemon`, the unit as
+  `/usr/lib/systemd/system/relay-daemon.service`, and reference copies of the default Policy
+  and this directory's environment example under `/usr/share/relay-daemon/`. On a first
+  install only it creates `/etc/relay-daemon`, the empty Policy directory
+  `/etc/relay-daemon/policy.d` and `/var/lib/relay-daemon` (`0700`), each if absent; places the
+  default as `/etc/relay-daemon/policy.toml` only if no Policy file exists and the Policy
+  directory did not exist before the install; places `/etc/relay-daemon/relay-daemon.env`
+  (root `0600`, with an empty `RELAY_JOIN`) only if none exists; and, where systemd is running,
+  runs `systemctl preset`. It never starts or restarts the daemon, and never rewrites the
+  Policy or the environment file. An upgrade runs `systemctl daemon-reload` only.
+- **`relay-read`** is the shipped read catalog, optional, depending on `relay-daemon`. Its
+  Templates are package-owned plain files under `/etc/relay-daemon/templates.d/relay-read/`:
+  replaced on upgrade and removed with the package.
+
+Removing `relay-daemon` stops and disables the unit, then removes the binary and the unit, and
+keeps the Policy, the Policy directory, the environment file and the state directory, which
+holds the Node's identity. `apt purge` then deletes those of them the package created, read
+from a marker under `/var/lib/relay-daemon-package/` that records which existed before the
+first install; a directory holding anything the package did not put there is left and named.
+`.rpm` has no purge: removal prints the paths to delete by hand.
+
 ## Install
 
 ```console

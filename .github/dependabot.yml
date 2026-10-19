@@ -60,6 +60,8 @@ updates:
         dependency-type: all
       - dependency-name: github.com/zricethezav/gitleaks/v8
         dependency-type: all
+      - dependency-name: github.com/goreleaser/nfpm/v2
+        dependency-type: all
     groups:
       go-tools:
         patterns: ["*"]
