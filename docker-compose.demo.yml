@@ -58,8 +58,8 @@ services:
   # (out-of-band gate, `dev-approver` only). The Makefile sets it, the dev fixture
   # for `make dev-fleet-up` and the demo one for `make demo-*`. A bare `docker
   # compose` of this file reads it from the caller's shell or a repo-root .env.
-  # Root with only CAP_CHOWN (to group the file to 10001) and CAP_DAC_READ_SEARCH
-  # (to read a 0600 checkout), no network.
+  # Root with only CAP_CHOWN (to group the file to 10001) and CAP_DAC_OVERRIDE
+  # (to read a 0600 checkout), no network. Every path but /stage is read-only.
   relay-config:
     build:
       context: .
@@ -70,7 +70,7 @@ services:
     network_mode: none
     read_only: true
     cap_drop: [ALL]
-    cap_add: [CHOWN, DAC_READ_SEARCH]
+    cap_add: [CHOWN, DAC_OVERRIDE]
     security_opt:
       - "no-new-privileges:true"
     entrypoint: ["sh", "/dev-fleet-config.sh"]
@@ -150,7 +150,7 @@ services:
           "")
           echo "tls.hostname is not readable from /etc/relay/relay.toml"; exit 1;;
           relay.example.internal)
-          echo "tls.hostname in /etc/relay/relay.toml is unset or still the example placeholder"; exit 1;;
+          echo "tls.hostname in /etc/relay/relay.toml is still the example placeholder"; exit 1;;
           esac;
           for p in 7654:h2 9443:http/1.1; do
           openssl s_client -quiet -no_ign_eof -tls1_3

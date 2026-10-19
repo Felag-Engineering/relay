@@ -15,8 +15,8 @@
 #   approval-gates*.json      root:root  0644, what the gate loader demands
 #
 # The container runs as root with only CAP_CHOWN (to group the file to 10001, a
-# group root is not in) and CAP_DAC_READ_SEARCH (to read a checkout the
-# developer's umask made 0600), with no network. Any failure exits non-zero, and
+# group root is not in) and CAP_DAC_OVERRIDE (to read a checkout the
+# developer's umask made 0600; every path but /stage is read-only), with no network. Any failure exits non-zero, and
 # the Relay depends on this service's success, so the fleet stays down.
 set -eu
 

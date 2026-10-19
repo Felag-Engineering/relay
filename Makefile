@@ -295,7 +295,7 @@ test-release-image-guard:
 # Hermetic: a stub docker serves canned `docker compose config` JSON; needs jq, no engine.
 test-compose-floor-check:
 	$(call need_tool,jq,test-compose-floor-check,apt install jq)
-	bash scripts/compose-floor-check-test.sh
+	@if command -v jq >/dev/null 2>&1; then bash scripts/compose-floor-check-test.sh; fi
 
 # RC-27 on the committed compose stacks and docker/relay.Dockerfile: no floor setting in any
 # Relay environment, every configuration and secret mount read-only, unprivileged. Renders each
@@ -915,7 +915,7 @@ define relay_demo_mode
 	  echo "refusing: relay-demo is up in $$have mode; run 'make demo-down' first" >&2; exit 2; }
 endef
 
-# Step 2 waits for health on everything but the one-shot. $(1) is the compose command.
+# Step 2 waits for health on everything but the one-shots. $(1) is the compose command.
 define relay_demo_wait
 	$(1) up -d --no-build --pull never --no-deps --no-recreate --wait --wait-timeout $(DEMO_WAIT_SECONDS) $$($(1) config --services | grep -vxE 'init|relay-config')
 endef

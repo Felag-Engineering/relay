@@ -245,6 +245,18 @@ STWH="$(layer_tar "$d" stwh gzip)"
 assemble "$WORKDIR/state-whiteout.tar" 10001:10001 amd64 "$ID" "$BASE" "$STWH" "$GOOD_TOP"
 check fail "/var/lib/relay is 'absent'" "state directory whited out by a later layer" "$WORKDIR/state-whiteout.tar" linux/amd64 "$BIN_SHA"
 
+# A later layer that replaces var/lib with a symlink is refused like a symlinked usr/local/bin.
+d="$WORKDIR/src/stlink"; rm -rf "$d"; mkdir -p "$d/var"; ln -s /opt/evil "$d/var/lib"
+STLINK="$(layer_tar "$d" stlink gzip)"
+assemble "$WORKDIR/state-symlink.tar" 10001:10001 amd64 "$ID" "$BASE" "$STLINK" "$GOOD_TOP"
+check fail "ancestor /var/lib is not a directory" "var/lib replaced by a symlink in a later layer" "$WORKDIR/state-symlink.tar" linux/amd64 "$BIN_SHA"
+# A layer that recreates the state directory with an opaque marker inside it still has the directory.
+d="$WORKDIR/src/stopq"; rm -rf "$d"; mkdir -p "$d/var/lib/relay"; chmod 0700 "$d/var/lib/relay"; : >"$d/var/lib/relay/.wh..wh..opq"
+tar --owner=10001 --group=10001 --numeric-owner --sort=name -cf "$L/stopq.tar" -C "$d" var
+gzip -n -c "$L/stopq.tar" >"$L/stopq.blob"
+assemble "$WORKDIR/state-opq.tar" 10001:10001 amd64 "$ID" "$BASE" "$L/stopq.blob" "$GOOD_TOP"
+check ok "" "opaque marker inside the state directory does not remove the directory" "$WORKDIR/state-opq.tar" linux/amd64 "$BIN_SHA"
+
 # 9. Arguments are validated.
 check fail "not 64 lowercase hex" "malformed expected sha" "$WORKDIR/good.tar" linux/amd64 "XYZ"
 check fail "unsupported platform" "unsupported platform" "$WORKDIR/good.tar" linux/riscv64 "$BIN_SHA"

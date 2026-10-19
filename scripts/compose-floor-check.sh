@@ -37,12 +37,15 @@ fi
 # stack that passes. Classification: a Relay-image service builds docker/relay.Dockerfile or
 # names the published image; the Relay is one of those whose entrypoint is the Relay binary (the
 # one-shots override it); a daemon builds docker/daemon.Dockerfile.
-ASSERT_JQ='
+DEFS_JQ='
 def isimage: ((.build.dockerfile // "") | endswith("docker/relay.Dockerfile"))
   or ((.image // "") | test("^ghcr\\.io/felag-engineering/relay([:@]|$)"));
 def isdaemon: (.build.dockerfile // "") | endswith("docker/daemon.Dockerfile");
 def isrelay: isimage and ((.entrypoint == null) or ((.entrypoint | length) == 0)
   or (.entrypoint[0] == "/usr/local/bin/relay") or (.entrypoint[0] == "relay"));
+'
+# Shared by the assertions and the vacuity count, so they classify the same services.
+ASSERT_JQ="$DEFS_JQ"'
 def mounts: .volumes // [];
 def cfgmount: mounts | map(select(.target == "/etc/relay/relay.toml" or .target == "/etc/relay"));
 
@@ -56,6 +59,7 @@ def cfgmount: mounts | map(select(.target == "/etc/relay/relay.toml" or .target 
      elif (cfgmount | any(.read_only != true)) then "\($n): F2: the relay.toml mount is not read_only" else empty end),
     (mounts | map(select(.target != "/var/lib/relay" and .read_only != true)) | .[] |
       "\($n): F3: the mount at \(.target) is not read_only"),
+    (mounts | map(select(.type == "tmpfs")) | .[] | "\($n): F3: the tmpfs volume at \(.target) is not allowed"),
     (([mounts[] | select(.target == "/var/lib/relay")]) as $st |
       if ($st | length) != 1 then "\($n): F4: expected exactly one mount at /var/lib/relay, found \($st | length)"
       elif $st[0].type != "volume" then "\($n): F4: the state mount at /var/lib/relay must be a named volume, not \($st[0].type)"
@@ -67,6 +71,10 @@ def cfgmount: mounts | map(select(.target == "/etc/relay/relay.toml" or .target 
     (if .privileged == true then "\($n): F5: privileged" else empty end),
     (if ((.security_opt // []) | any(. == "no-new-privileges:true" or . == "no-new-privileges")) | not
       then "\($n): F5: security_opt lacks no-new-privileges" else empty end),
+    ((.security_opt // [])[] | select(test("unconfined|disable")) | "\($n): F5: security_opt \(.) lifts a confinement"),
+    (["pid", "ipc", "network_mode"][] as $k | select(.[$k] == "host") | "\($n): F5: \($k): host shares a host namespace"),
+    (if ((.devices // []) | length) > 0 then "\($n): F5: devices are not allowed" else empty end),
+    (if ((.volumes_from // []) | length) > 0 then "\($n): F5: volumes_from is not allowed" else empty end),
     (if .user != "10001:10001" then "\($n): F5: user must be exactly 10001:10001" else empty end),
     (if ((.secrets // []) | length) > 0 or ((.configs // []) | length) > 0
       then "\($n): F6: secrets and configs are not modelled; mount the file read-only instead" else empty end),
@@ -79,9 +87,7 @@ def cfgmount: mounts | map(select(.target == "/etc/relay/relay.toml" or .target 
     "\($n): F9: node-plane port 7654 is published on \(.published); set node_plane.advertised_address in this stack'"'"'s relay.toml (RC-36) and update this check")
 )'
 
-COUNT_JQ='[.services[] | select(
-  (((.build.dockerfile // "") | endswith("docker/relay.Dockerfile")) or ((.image // "") | test("^ghcr\\.io/felag-engineering/relay([:@]|$)")))
-  and ((.entrypoint == null) or ((.entrypoint | length) == 0) or (.entrypoint[0] == "/usr/local/bin/relay") or (.entrypoint[0] == "relay")))] | length'
+COUNT_JQ="$DEFS_JQ"'[.services[] | select(isrelay)] | length'
 
 render() { # render <compose -f/--profile args>...
   env -i PATH="$PATH" HOME="$HOME" docker compose --env-file /dev/null "$@" config --format json
@@ -89,12 +95,16 @@ render() { # render <compose -f/--profile args>...
 
 check_stack() { # check_stack <name> <compose args>...
   local name="$1" json lines count line; shift
-  if ! json="$(cd "$REPO_ROOT" && render "$@" 2>/dev/null)" || ! jq -e . >/dev/null 2>&1 <<<"$json"; then
+  local errfile; errfile="$(mktemp)" || { fail "$name: mktemp failed"; return; }
+  if ! json="$(cd "$REPO_ROOT" && render "$@" 2>"$errfile")" || ! jq -e . >/dev/null 2>&1 <<<"$json"; then
     fail "$name: docker compose config failed or did not print JSON"
+    sed 's/^/    /' "$errfile"
+    rm -f "$errfile"
     return
   fi
+  rm -f "$errfile"
   count="$(jq "$COUNT_JQ" <<<"$json")"
-  if [ "$count" -lt 1 ]; then
+  if ! [ "$count" -ge 1 ] 2>/dev/null; then
     fail "$name: no Relay service found, so nothing was checked"
     return
   fi
@@ -115,6 +125,7 @@ check_stack oauth -f docker-compose.demo.yml -f docker-compose.oauth.yml --profi
 if [ ! -f "$DOCKERFILE" ]; then
   fail "Dockerfile: docker/relay.Dockerfile is missing"
 else
+  dockerfile_failed=0
   dockerfile_report="$(awk '
     { sub(/\r$/, "") }
     /^[ \t]*#/ { next }
@@ -142,10 +153,15 @@ else
         if (effective(s) != "10001:10001") print "D2: stage " s " ends as " effective(s) ", not 10001:10001"
       }
       if (order[n] != "runtime") print "D3: the last stage is " order[n] ", not runtime"
-    }' "$DOCKERFILE")"
-  dockerfile_failed=0
+      print "parsed " n " stages"
+    }' "$DOCKERFILE")" || { fail "Dockerfile: the stage parser failed"; dockerfile_failed=1; }
+  # The END sentinel proves the parser ran to the end and saw a FROM.
+  if [ "$dockerfile_failed" -eq 0 ] && ! grep -qE '^parsed [1-9][0-9]* stages$' <<<"$dockerfile_report"; then
+    fail "Dockerfile: the stage parser reported no stages"; dockerfile_failed=1
+  fi
   while IFS= read -r line; do
     [ -n "$line" ] || continue
+    case "$line" in parsed\ *) continue ;; esac
     dockerfile_failed=1
     fail "Dockerfile: $line"
   done <<<"$dockerfile_report"

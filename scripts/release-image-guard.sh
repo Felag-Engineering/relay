@@ -126,7 +126,7 @@ decompressor() { # <mediaType>: sets the array `decompress`
 }
 
 member_re='^(.)([rwxsStT-]{9}) ([0-9]+)/([0-9]+) +[0-9]+ [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} (.*)$'
-ancestors=("usr" "usr/local" "usr/local/bin")
+ancestors=("usr" "usr/local" "usr/local/bin" "var" "var/lib")
 state_path="var/lib/relay"
 state_entry=""   # "<kind> <perms> <uid>/<gid>" of the state directory as the layers leave it
 
@@ -168,7 +168,8 @@ scan_layer() {
         hidden="${dir:+$dir/}${base#.wh.}"
         if [ "$base" = ".wh..wh..opq" ]; then
           case "$bin_path/" in "${dir:+$dir/}"*) die "opaque whiteout in '${dir:-/}' covers /$bin_path" ;; esac
-          case "$state_path/" in "${dir:+$dir/}"*) state_entry="" ;; esac
+          # The marker hides what is below $dir, not $dir itself, so only a strict ancestor clears.
+          [ "$dir" = "$state_path" ] || case "$state_path/" in "${dir:+$dir/}"*) state_entry="" ;; esac
         elif [ "$hidden" = "$bin_path" ] || [[ "$bin_path" == "$hidden/"* ]]; then
           die "whiteout '$canon' covers /$bin_path"
         elif [ "$hidden" = "$state_path" ] || [[ "$state_path" == "$hidden/"* ]]; then

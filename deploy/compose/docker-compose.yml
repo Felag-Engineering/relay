@@ -64,12 +64,15 @@ services:
     # unless the file sets console.enabled = true, as the packaging default is.
     # At start the Relay refuses the file if it could write it, or if any
     # account but itself and root could read it (RC-15). The layout it accepts
-    # is: owner root, group GID 10001 (a group no host account belongs to), mode
-    # 0640, no ACL granting anyone else, on ext4, XFS, btrfs or tmpfs. A file UID
-    # 10001 owns is refused. It also refuses NFS, CIFS, FUSE, ZFS and a Docker
-    # Desktop share (virtiofs, 9p), and it cannot pass under rootless Docker or
-    # user-namespace remapping, where root's file appears to the container as
-    # owned by nobody. The refusal is in `docker compose logs relay`.
+    # is: owner root, group GID 10001, mode 0640, no ACL granting anyone else,
+    # on ext4, XFS, btrfs or tmpfs. Confirm `getent group 10001` prints nothing
+    # on the host: the check runs inside the container and cannot see host
+    # accounts, and any host member of GID 10001 can read the configuration and
+    # the secrets. A file UID 10001 owns is refused. It also refuses NFS, CIFS,
+    # FUSE, ZFS and a Docker Desktop share (virtiofs, 9p), and it cannot pass
+    # under rootless Docker or user-namespace remapping, where root's file
+    # appears to the container as owned
+    # by nobody. The refusal is in `docker compose logs relay`.
     #
     # REQUIRED: `create_host_path: false` makes a missing file refuse to start
     # rather than Docker creating an empty directory in its place, which the
@@ -178,7 +181,7 @@ services:
           "")
           echo "tls.hostname is not readable from /etc/relay/relay.toml"; exit 1;;
           relay.example.internal)
-          echo "tls.hostname in /etc/relay/relay.toml is unset or still the example placeholder"; exit 1;;
+          echo "tls.hostname in /etc/relay/relay.toml is still the example placeholder"; exit 1;;
           esac;
           for p in 7654:h2 9443:http/1.1; do
           openssl s_client -quiet -no_ign_eof -tls1_3

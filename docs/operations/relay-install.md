@@ -294,15 +294,15 @@ deliberately no `docker-compose.yml` at the repository root.
 
 | Property of `relay/packaging/` | In this stack |
 | --- | --- |
-| Runs as an unprivileged Unix user | **Kept.** The image's `runtime` stage (`docker/relay.Dockerfile`, its last and default stage) runs as UID/GID `10001` (`relay`), never root. Runs as `10001:10001` (stated in the compose file as well as the image). |
+| Runs as an unprivileged Unix user | **Kept.** The image's `runtime` stage (`docker/relay.Dockerfile`, its last and default stage) runs as `10001:10001` (`relay`), never root; the compose file states it as well as the image. |
 | Empty capability set, `NoNewPrivileges` | **Kept.** `cap_drop: [ALL]` and `no-new-privileges`. |
 | Read-only filesystem apart from its state | **Kept.** `read_only: true`; the state volume and a private `/tmp` tmpfs are the only writable paths. |
 | State directory `0700`, owned by the Relay's own Unix user | **Kept.** `/var/lib/relay` is created `0700` and owned by `relay` in the image, and an empty volume takes both on first mount. The CA key inside it is `0600`. |
 | `TasksMax=512` | **Kept.** `pids_limit: 512`. No memory limit is set, here or in the unit. |
 | Secrets are file paths, never values | **Kept.** `relay.toml` and every secret file it names are host files bind-mounted read-only; nothing about the floor is in the container's environment, so `docker inspect` shows mount paths, not settings or secrets. |
-| Configuration set by the operator on the host, unreachable from any API (invariant 11) | **Not kept under a git-driven deploy.** No Relay API reaches it, but the deploy path does. Whoever can push to the branch a deploy tool tracks, or use that tool's interface, controls the published ports, the settings the compose file pins, the image that gets built, and `RELAY_CONFIG_FILE` — so they can point the Relay at a different configuration file, one that sets a hostile `oauth.issuer`, on the next deploy. `.env` files are git-ignored so that none can be committed by accident, but that stops an accident, not a push. Deploy a **pinned commit**, with **auto-deploy webhooks off**, and treat write access to that branch and to the deploy tool (Komodo included) as **root on the Relay host**. |
+| Configuration set by the operator on the host, unreachable from any API (invariant 11) | **Not kept under a git-driven deploy.** No Relay API reaches it, but the deploy path does. Whoever can push to the branch a deploy tool tracks, or use that tool's interface, controls the published ports, the mounts and user the compose file sets, the image that gets built, and `RELAY_CONFIG_FILE` — so they can point the Relay at a different configuration file, one that sets a hostile `oauth.issuer`, on the next deploy. `.env` files are git-ignored so that none can be committed by accident, but that stops an accident, not a push. Deploy a **pinned commit**, with **auto-deploy webhooks off**, and treat write access to that branch and to the deploy tool (Komodo included) as **root on the Relay host**. |
 | Root-owned unit file | **Not kept.** The compose file lives in the checkout; see the row above. |
-| A configuration file the Relay could not write and no other account could read | **Kept.** Checked at start as the container sees it (ADR-0043); the host file is `root:10001` `0640` on ext4, XFS, btrfs or tmpfs.
+| A configuration file the Relay could not write and no other account could read | **Kept.** Checked at start as the container sees it (ADR-0043); the host file is `root:10001` `0640` on ext4, XFS, btrfs or tmpfs. |
 | The unit's finer sandboxing (`SystemCallFilter=@system-service`, `ProtectKernel*`, `MemoryDenyWriteExecute`, `RestrictAddressFamilies`, `ProtectProc`) | **Not claimed.** Docker's default seccomp profile and namespaces cover some of the same ground; they are not equivalent and nothing here asserts they are. |
 | A digest-verified release binary (section 1) | **Not kept yet.** A signed Relay image is published per release (`ghcr.io/felag-engineering/relay`, #892), but the stack still builds the image from the checkout's own source, so what runs is whatever that checkout contains. The compose file switches to the published image, pinned by digest, once the first signed release exists; that is a one-line change. |
 | `Restart=on-failure`, enabled at boot | **`restart: unless-stopped`.** Docker's `on-failure` would not bring the Relay back after a host or Docker restart; `unless-stopped` does, and additionally restarts after a clean exit nobody asked for, which the Relay does not make on its own. Neither restarts an *unhealthy* container: watch the health status. |
@@ -369,8 +369,10 @@ $ sudo install -o root -g 10001 -m 0640 relay/packaging/relay.toml.example /etc/
 $ sudoedit /etc/relay/relay.toml
 ```
 
-Group `10001` is the Relay's group inside the image; no host account belongs to it. Set, for
-this container's layout:
+Group `10001` is the Relay's group inside the image. Confirm `getent group 10001` prints
+nothing on the host and that no account has that GID: the Relay's check runs inside the
+container and cannot see host accounts, and any host member of GID `10001` can read the
+configuration and the secrets. Set, for this container's layout:
 
 - `tls.hostname`, the name relay-daemons will dial. It becomes the server certificate's SAN,
   so it must be the real name: while it is unset or still the sample's

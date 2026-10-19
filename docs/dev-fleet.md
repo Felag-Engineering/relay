@@ -184,7 +184,9 @@ enrollment).
 > refused too (the CA and store are not owned by 10001): run `make demo-reset` once, which wipes
 > the volumes. If `relay-config` exits non-zero, nothing else starts; read
 > `docker compose -p relay-demo logs relay-config`. A "cannot read /src/..." line there means the
-> checkout's file mode hides a fixture from the one-shot.
+> checkout's file mode hides a fixture from the one-shot. (The one-shot holds `CAP_CHOWN` and
+> `CAP_DAC_OVERRIDE` only, so a `0600` fixture is still readable; the root filesystem and `/src`
+> are read-only and it has no network.)
 >
 > `refusing: relay-demo is running from another checkout` means stop the fleet from that
 > checkout. If that checkout is gone, run `docker compose -p relay-demo -f docker-compose.demo.yml

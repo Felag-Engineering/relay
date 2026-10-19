@@ -175,6 +175,34 @@ refuse "18c dev-fleet ends as root" "D2: stage dev-fleet"
 reset; printf 'FROM scratch AS extra\n' >>"$TREE/docker/relay.Dockerfile"
 refuse "18d a stage after runtime" "D3"
 
+reset; mut_relay '.volumes += [{type:"tmpfs",target:"/x",read_only:true}]'
+refuse "19a tmpfs volume entry" "F3: the tmpfs volume at /x"
+reset; mut_relay '.pid = "host"'
+refuse "19b pid host" "F5: pid: host"
+reset; mut_relay '.ipc = "host"'
+refuse "19c ipc host" "F5: ipc: host"
+reset; mut_relay '.network_mode = "host"'
+refuse "19d network_mode host" "F5: network_mode: host"
+reset; mut_relay '.devices = ["/dev/mem:/dev/mem"]'
+refuse "19e devices" "F5: devices"
+reset; mut_relay '.volumes_from = ["init"]'
+refuse "19f volumes_from" "F5: volumes_from"
+reset; mut_relay '.security_opt += ["seccomp=unconfined"]'
+refuse "19g seccomp unconfined" "lifts a confinement"
+
+# A parser that fails on the Dockerfile only must fail the check, not leave an empty report that
+# reads as success.
+reset
+REAL_AWK="$(command -v awk)"
+cat >"$BIN/awk" <<STUB
+#!/usr/bin/env bash
+case "\${!#}" in *relay.Dockerfile) exit 2 ;; esac
+exec "$REAL_AWK" "\$@"
+STUB
+chmod +x "$BIN/awk"
+refuse "20 the Dockerfile stage parser fails" "the stage parser failed" "ok: Dockerfile"
+rm -f "$BIN/awk"
+
 echo
 if [ "$fail" -ne 0 ]; then
   echo "compose-floor-check-test: $fail of $n case(s) FAILED" >&2
