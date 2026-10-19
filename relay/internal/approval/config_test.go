@@ -5,8 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
 )
 
 const validConfig = `{
@@ -35,7 +38,7 @@ func writeConfig(t *testing.T, body string, mode os.FileMode) string {
 }
 
 func TestLoadValidConfig(t *testing.T) {
-	g, err := Load(writeConfig(t, validConfig, 0o600))
+	g, err := loadPlain(writeConfig(t, validConfig, 0o600))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -57,7 +60,7 @@ func TestLoadValidConfig(t *testing.T) {
 // exactly as "tag" and "relay" already do.
 func TestLoadValidConfig_StateNamespaceValidates(t *testing.T) {
 	cfg := `{"rules":[{"name":"r","match":{"selector_namespace":"state"},"require":{"count":1}}]}`
-	g, err := Load(writeConfig(t, cfg, 0o600))
+	g, err := loadPlain(writeConfig(t, cfg, 0o600))
 	if err != nil {
 		t.Fatalf("Load with selector_namespace \"state\": %v", err)
 	}
@@ -82,14 +85,27 @@ func TestEmptyPathMeansNoGates(t *testing.T) {
 // these cases must be an ERROR, never an empty Gate: a Relay that silently
 // decides nothing needs approval because it could not read its own config is
 // exactly the failure this mechanism exists to prevent.
+// loadPlain opens path without hostfile's check, which refuses every temporary directory a
+// test can make, and runs the rest of Load on it. The check itself is hostfile's table test,
+// and the real binary meets it on the separate-uid harness.
+func loadPlain(path string) (*Gate, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	return loadOpened(f, path)
+}
+
 func TestLoadFailsClosed(t *testing.T) {
 	tests := []struct {
 		name string
+		load func(string) (*Gate, error) // nil: loadPlain
 		path func(t *testing.T) string
 		want string
 	}{
 		{
 			name: "missing file",
+			load: Load,
 			path: func(t *testing.T) string { return filepath.Join(t.TempDir(), "absent.json") },
 			want: "does not exist",
 		},
@@ -139,6 +155,13 @@ func TestLoadFailsClosed(t *testing.T) {
 			want: "world-writable",
 		},
 		{
+			// RC-8 on top of the file check: hostfile passes a group-writable file whose group
+			// excludes the Relay (root:wheel 0664), and the gate file still refuses it.
+			name: "group-writable file",
+			path: func(t *testing.T) string { return writeConfig(t, validConfig, 0o664) },
+			want: "group- or world-writable (mode 0664)",
+		},
+		{
 			name: "unknown selector namespace",
 			path: func(t *testing.T) string {
 				return writeConfig(t, `{"rules":[{"name":"r","match":{"selector_namespace":"tenant"},"require":{"count":1}}]}`, 0o600)
@@ -163,7 +186,11 @@ func TestLoadFailsClosed(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			g, err := Load(tc.path(t))
+			load := tc.load
+			if load == nil {
+				load = loadPlain
+			}
+			g, err := load(tc.path(t))
 			if err == nil {
 				t.Fatalf("Load succeeded with %d rules; a config the Relay cannot trust must be an error, never an empty Gate", len(g.Rules()))
 			}
@@ -175,7 +202,8 @@ func TestLoadFailsClosed(t *testing.T) {
 }
 
 // TestLoadRefusesSymlink: the gate file decides what needs human approval, so
-// it must be a real root-owned file rather than a link someone else controls.
+// it must be a real file rather than a link someone else controls; the file
+// check refuses the link before anything reads it.
 func TestLoadRefusesSymlink(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real.json")
@@ -187,16 +215,22 @@ func TestLoadRefusesSymlink(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	if _, err := Load(link); err == nil {
-		t.Fatal("Load followed a symlink; the gate file must not be reachable through one")
+	_, err := Load(link)
+	var r *hostfile.Refusal
+	if !errors.As(err, &r) || r.Clause != hostfile.ClauseSymlink {
+		t.Fatalf("Load(symlink) = %v, want the file check's symlink refusal", err)
 	}
 }
 
 // TestLoadRefusesDirectory covers the non-regular-file case on the open
 // descriptor rather than on the path.
 func TestLoadRefusesDirectory(t *testing.T) {
-	if _, err := Load(t.TempDir()); err == nil {
+	dir := t.TempDir()
+	if _, err := Load(dir); err == nil {
 		t.Fatal("Load accepted a directory as a gate config")
+	}
+	if _, err := loadPlain(dir); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("loadOpened(directory) = %v, want a not-a-regular-file refusal", err)
 	}
 }
 
@@ -207,7 +241,7 @@ func TestLoadRefusesDirectory(t *testing.T) {
 // Loading must refuse it and name the rule, never silently drop the entry.
 func TestLoadRefusesBlankAudienceEntryRatherThanNormalising(t *testing.T) {
 	cfg := `{"rules":[{"name":"blank-approver","require":{"count":1,"audience":[""]}}]}`
-	g, err := Load(writeConfig(t, cfg, 0o600))
+	g, err := loadPlain(writeConfig(t, cfg, 0o600))
 	if g != nil {
 		t.Errorf("Load returned a non-nil Gate on a blank audience entry: %+v", g.Rules())
 	}

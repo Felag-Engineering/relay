@@ -18,7 +18,7 @@ func FuzzSignCSR(f *testing.F) {
 	// Build the CA once, outside the fuzz loop: Open generates a keypair and
 	// SignCSR only reads it, so a single shared CA is safe to reuse across
 	// iterations and avoids per-iteration keygen cost.
-	c, err := Open(f.TempDir())
+	c, err := openPlain(f.TempDir())
 	if err != nil {
 		f.Fatalf("Open: %v", err)
 	}

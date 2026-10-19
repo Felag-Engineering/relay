@@ -163,7 +163,7 @@ func startRelay(t *testing.T, opts ...FixtureOption) *relayFixture {
 		f(&cfg)
 	}
 
-	srv, deps, err := newServerWithHooks(cfg, serverHooks{testMCPOptions: spec.mcpOptions, testRevokedDialClock: spec.revokedDialClock})
+	srv, deps, err := newServerWithHooks(cfg, testStartupFiles(t, cfg), serverHooks{testMCPOptions: spec.mcpOptions, testRevokedDialClock: spec.revokedDialClock})
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}

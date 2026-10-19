@@ -167,7 +167,7 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	// There is no certificate-expiry window option: the MCP read tools
 	// resolve and evaluate nothing — state: Labels arrive already evaluated
 	// on the lane's StateEval, which d.readLane resolves against the same
-	// root-owned window every other surface uses (invariant 11).
+	// configured window every other surface uses (invariant 11).
 	// opts holds exactly the three production options, in this order, with
 	// d.testMCPOptions appended after them — test-only
 	// (serverHooks), empty in production. mcp.New applies options in order,

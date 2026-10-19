@@ -18,11 +18,17 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"time"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/Felag-Engineering/relay/relay/internal/ca/internal/material"
+	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
 )
 
 const (
@@ -50,7 +56,8 @@ const (
 	keyPerm  os.FileMode = 0o600
 	certPerm os.FileMode = 0o644
 
-	caValidity = 10 * 365 * 24 * time.Hour
+	// maxPEMBytes bounds what is read from the key and certificate files.
+	maxPEMBytes = 64 << 10
 
 	// LeafValidity is the lifetime issued to Node identity certificates (~2 weeks).
 	LeafValidity = 336 * time.Hour
@@ -87,44 +94,93 @@ type CA struct {
 // subsequent calls (idempotent). The directory is created with mode 0700 if it
 // does not already exist.
 //
+// The directory and the private key are the Relay's generated material
+// (RC-17): each is opened through hostfile's generated-material rule, and Open
+// refuses unless both are owned by the Relay's uid and grant nothing to any
+// other account. The key is read from the descriptor that was checked.
+//
 // Open refuses to proceed when exactly one of the two CA files is present:
 // silently regenerating would orphan already-issued Node certs by replacing
 // their trust root.
 func Open(dir string) (*CA, error) {
+	return open(dir, checkedFiles{})
+}
+
+// generatedFiles opens the CA directory and its private key. Open's is
+// hostfile's generated-material rule; this package's tests substitute their
+// own, because the check refuses every temporary directory a test can make.
+type generatedFiles interface {
+	openDir(path string) (*os.File, error)
+	openKey(path string) (*os.File, error)
+}
+
+type checkedFiles struct{}
+
+func (checkedFiles) openDir(path string) (*os.File, error) {
+	return hostfile.OpenDir(path, hostfile.GeneratedDir)
+}
+
+func (checkedFiles) openKey(path string) (*os.File, error) {
+	return hostfile.Open(path, hostfile.GeneratedFile)
+}
+
+func open(dir string, files generatedFiles) (*CA, error) {
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return nil, fmt.Errorf("ca: create dir: %w", err)
 	}
-
-	keyPath := filepath.Join(dir, keyFileName)
-	certPath := filepath.Join(dir, certFileName)
-
-	_, keyErr := os.Stat(keyPath)
-	_, certErr := os.Stat(certPath)
-
-	keyExists := keyErr == nil
-	certExists := certErr == nil
-
-	// Propagate unexpected stat errors (e.g. permission denied), not just absence.
-	if keyErr != nil && !os.IsNotExist(keyErr) {
-		return nil, fmt.Errorf("ca: stat key file: %w", keyErr)
+	// The checked directory's descriptor stays open: the certificate is opened relative to
+	// it, so it comes from the directory that was decided on.
+	d, err := files.openDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("ca: CA directory: %w", err)
 	}
-	if certErr != nil && !os.IsNotExist(certErr) {
-		return nil, fmt.Errorf("ca: stat cert file: %w", certErr)
+	defer d.Close() //nolint:errcheck // read-only
+
+	keyExists, err := entryExists(d, keyFileName)
+	if err != nil {
+		return nil, fmt.Errorf("ca: stat key file: %w", err)
+	}
+	certExists, err := entryExists(d, certFileName)
+	if err != nil {
+		return nil, fmt.Errorf("ca: stat cert file: %w", err)
 	}
 
 	switch {
 	case keyExists && certExists:
-		return load(dir)
+		return load(d, dir, files)
 	case !keyExists && !certExists:
 		if err := create(dir); err != nil {
 			return nil, err
 		}
-		return load(dir)
+		return load(d, dir, files)
 	case keyExists:
 		return nil, errors.New("ca: inconsistent state: ca-key.pem present but ca-cert.pem missing")
 	default:
 		return nil, errors.New("ca: inconsistent state: ca-cert.pem present but ca-key.pem missing")
 	}
+}
+
+// FromMaterial builds a CA held only in memory, read from no file and so
+// decided on by no file check; the Relay itself always uses Open. Its
+// parameter's type is internal to this package's tree, so only the test-only
+// constructor (catest, kept out of production code by depguard) can pass it
+// anything but a zero value, which is refused.
+func FromMaterial(m material.Material) (*CA, error) {
+	if m.Key == nil || len(m.CertDER) == 0 {
+		return nil, errors.New("ca: no key material")
+	}
+	cert, err := x509.ParseCertificate(m.CertDER)
+	if err != nil {
+		return nil, fmt.Errorf("ca: parse CA certificate: %w", err)
+	}
+	if err := validCA(cert, m.Key); err != nil {
+		return nil, err
+	}
+	return &CA{
+		cert:    cert,
+		key:     m.Key,
+		certPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: m.CertDER}),
+	}, nil
 }
 
 // Bundle returns a copy of the CA certificate PEM. Callers use this to build
@@ -281,35 +337,14 @@ func (c *CA) issueServerCertificate(dnsNames []string, ipAddresses []net.IP, now
 	}, nil
 }
 
-// create generates a fresh ECDSA P-256 CA key and self-signed certificate,
-// writing both to dir with restrictive permissions using O_CREATE|O_EXCL.
+// create generates a fresh CA key and self-signed certificate, writing both to
+// dir with restrictive permissions using O_CREATE|O_EXCL.
 func create(dir string) error {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	m, err := material.New()
 	if err != nil {
-		return fmt.Errorf("ca: generate key: %w", err)
+		return err
 	}
-
-	serial, err := newSerial()
-	if err != nil {
-		return fmt.Errorf("ca: generate serial: %w", err)
-	}
-
-	now := time.Now()
-	template := x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "Relay CA"},
-		NotBefore:             now.Add(-clockSkew),
-		NotAfter:              now.Add(caValidity),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		MaxPathLenZero:        true,
-	}
-
-	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
-	if err != nil {
-		return fmt.Errorf("ca: create CA certificate: %w", err)
-	}
+	key, der := m.Key, m.CertDER
 
 	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
@@ -329,18 +364,57 @@ func create(dir string) error {
 	return nil
 }
 
-// load reads the CA key and certificate from dir, parses them, and returns a
-// ready CA. All parse errors propagate (corrupt-file path).
-func load(dir string) (*CA, error) {
-	keyPath := filepath.Join(dir, keyFileName)
-	certPath := filepath.Join(dir, certFileName)
+// entryExists reports whether name is present in the directory d, without
+// following a symbolic link.
+func entryExists(d *os.File, name string) (bool, error) {
+	var st unix.Stat_t
+	err := unix.Fstatat(int(d.Fd()), name, &st, unix.AT_SYMLINK_NOFOLLOW)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, unix.ENOENT):
+		return false, nil
+	}
+	return false, err
+}
 
-	keyRaw, err := os.ReadFile(keyPath) //nolint:gosec // G304: the CA directory is operator-set on the host (invariant 11)
+// load reads the CA key and certificate from dir, whose checked descriptor is
+// d, parses them, and returns a ready CA. All parse errors propagate
+// (corrupt-file path). The key is read from the descriptor files.openKey
+// checked; the certificate is public, and is opened relative to d without
+// following a symbolic link. The certificate must certify the key, so a
+// certificate swapped in beside the checked key is refused.
+func load(d *os.File, dir string, files generatedFiles) (*CA, error) {
+	keyPath := filepath.Join(dir, keyFileName)
+
+	// The key is opened by path, walking from the root through hostfile, rather
+	// than relative to d. That is safe because the certificate, which is read
+	// relative to d, must carry this key's public key: a key from anywhere but
+	// the checked directory does not match it, and is refused below.
+	kf, err := files.openKey(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("ca: key file: %w", err)
+	}
+	keyRaw, err := readBounded(kf)
 	if err != nil {
 		return nil, fmt.Errorf("ca: read key file: %w", err)
 	}
 
-	certRaw, err := os.ReadFile(certPath) //nolint:gosec // G304: the CA directory is operator-set on the host (invariant 11)
+	cfd, err := unix.Openat(int(d.Fd()), certFileName, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NOCTTY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, fmt.Errorf("ca: open cert file: %w", err)
+	}
+	cf := os.NewFile(uintptr(cfd), certFileName)
+	info, err := cf.Stat()
+	if err != nil {
+		_ = cf.Close()
+		return nil, fmt.Errorf("ca: stat cert file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		_ = cf.Close()
+		return nil, errors.New("ca: cert file is not a regular file")
+	}
+	certRaw, err := readBounded(cf)
 	if err != nil {
 		return nil, fmt.Errorf("ca: read cert file: %w", err)
 	}
@@ -374,6 +448,9 @@ func load(dir string) (*CA, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ca: parse CA certificate: %w", err)
 	}
+	if err := validCA(cert, priv); err != nil {
+		return nil, err
+	}
 
 	return &CA{
 		cert:    cert,
@@ -382,22 +459,44 @@ func load(dir string) (*CA, error) {
 	}, nil
 }
 
-// newSerial generates a random positive 128-bit serial number. It retries on
-// the astronomically unlikely event that rand.Int returns zero, guaranteeing a
-// non-zero value per RFC 5280 §4.1.2.2.
-func newSerial() (*big.Int, error) {
-	max := new(big.Int).Lsh(big.NewInt(1), 128)
-	for {
-		s, err := rand.Int(rand.Reader, max)
-		if err != nil {
-			return nil, err
-		}
-		if s.Sign() > 0 {
-			return s, nil
-		}
-		// s == 0: retry (probability 1/2^128, included for correctness).
+// validCA refuses a certificate that is not a usable, self-signed CA
+// certificate for key.
+func validCA(cert *x509.Certificate, key *ecdsa.PrivateKey) error {
+	if !key.PublicKey.Equal(cert.PublicKey) {
+		return errors.New("ca: the CA certificate does not match the CA private key")
 	}
+	if !cert.IsCA || !cert.BasicConstraintsValid || cert.KeyUsage&x509.KeyUsageCertSign == 0 {
+		return errors.New("ca: the CA certificate is not a certificate authority that may sign certificates")
+	}
+	// After the flags: CheckSignatureFrom also refuses a parent that is not a CA.
+	if err := cert.CheckSignatureFrom(cert); err != nil {
+		return errors.New("ca: the CA certificate is not self-signed by the CA private key")
+	}
+	now := time.Now()
+	if now.Before(cert.NotBefore) {
+		return errors.New("ca: the CA certificate is not yet valid")
+	}
+	if !now.Before(cert.NotAfter) {
+		return errors.New("ca: the CA certificate has expired")
+	}
+	return nil
 }
+
+// readBounded reads f to its end, at most maxPEMBytes, and closes it.
+func readBounded(f *os.File) ([]byte, error) {
+	defer f.Close() //nolint:errcheck // read-only
+	data, err := io.ReadAll(io.LimitReader(f, maxPEMBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxPEMBytes {
+		return nil, fmt.Errorf("larger than %d bytes", maxPEMBytes)
+	}
+	return data, nil
+}
+
+// newSerial generates a random positive 128-bit serial number.
+func newSerial() (*big.Int, error) { return material.NewSerial() }
 
 // writeFileExcl PEM-encodes der as blockType and writes it to path with perm,
 // using O_CREATE|O_EXCL so a concurrent creator is detected and the file mode

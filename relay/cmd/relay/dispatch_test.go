@@ -254,7 +254,7 @@ func TestDispatcher_DispatchUnknownNode(t *testing.T) {
 func TestTunnelSink_GatedByControlEnabled(t *testing.T) {
 	t.Run("disabled: execution stays off", func(t *testing.T) {
 		cfg := baseTestConfig(t)
-		srv, deps, err := newServer(cfg)
+		srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 		if err != nil {
 			t.Fatalf("newServer: %v", err)
 		}
@@ -274,7 +274,7 @@ func TestTunnelSink_GatedByControlEnabled(t *testing.T) {
 		cfg.ControlEnabled = true
 		cfg.ControlAddr = "127.0.0.1:0"
 
-		srv, deps, err := newServer(cfg)
+		srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 		if err != nil {
 			t.Fatalf("newServer: %v", err)
 		}

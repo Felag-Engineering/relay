@@ -104,7 +104,7 @@ func TestOpen_CreatesOnFirstRun(t *testing.T) {
 	// with its own (potentially different) mode.
 	dir := filepath.Join(t.TempDir(), "ca-store")
 
-	ca, err := Open(dir)
+	ca, err := openPlain(dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -155,11 +155,11 @@ func TestOpen_CreatesOnFirstRun(t *testing.T) {
 func TestOpen_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 
-	ca1, err := Open(dir)
+	ca1, err := openPlain(dir)
 	if err != nil {
 		t.Fatalf("first Open: %v", err)
 	}
-	ca2, err := Open(dir)
+	ca2, err := openPlain(dir)
 	if err != nil {
 		t.Fatalf("second Open: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestOpen_InconsistentState(t *testing.T) {
 				t.Fatalf("setup: %v", err)
 			}
 
-			ca, err := Open(dir)
+			ca, err := openPlain(dir)
 			if err == nil {
 				t.Error("Open succeeded on inconsistent state, want error")
 			}
@@ -200,7 +200,7 @@ func TestOpen_InconsistentState(t *testing.T) {
 func TestOpen_CorruptFiles(t *testing.T) {
 	// Build a valid CA in a reference dir to obtain well-formed file bytes.
 	refDir := t.TempDir()
-	if _, err := Open(refDir); err != nil {
+	if _, err := openPlain(refDir); err != nil {
 		t.Fatalf("setup reference CA: %v", err)
 	}
 	validKey, err := os.ReadFile(filepath.Join(refDir, keyFileName))
@@ -248,7 +248,7 @@ func TestOpen_CorruptFiles(t *testing.T) {
 				t.Fatalf("write cert: %v", err)
 			}
 
-			ca, err := Open(dir)
+			ca, err := openPlain(dir)
 			if err == nil {
 				t.Error("Open succeeded on corrupt files, want error")
 			}
@@ -260,7 +260,7 @@ func TestOpen_CorruptFiles(t *testing.T) {
 }
 
 func TestSignCSR_Valid(t *testing.T) {
-	ca, err := Open(t.TempDir())
+	ca, err := openPlain(t.TempDir())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestSignCSR_Valid(t *testing.T) {
 }
 
 func TestSignCSR_CNOverridesCSR(t *testing.T) {
-	ca, err := Open(t.TempDir())
+	ca, err := openPlain(t.TempDir())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestSignCSR_CNOverridesCSR(t *testing.T) {
 }
 
 func TestSignCSR_ExpiryBounds(t *testing.T) {
-	ca, err := Open(t.TempDir())
+	ca, err := openPlain(t.TempDir())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -377,7 +377,7 @@ func TestSignCSR_ExpiryBounds(t *testing.T) {
 }
 
 func TestSignCSR_Malformed(t *testing.T) {
-	ca, err := Open(t.TempDir())
+	ca, err := openPlain(t.TempDir())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestSignCSR_Malformed(t *testing.T) {
 
 func TestBundle_IsCAPEM(t *testing.T) {
 	dir := t.TempDir()
-	ca, err := Open(dir)
+	ca, err := openPlain(dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestBundle_IsCAPEM(t *testing.T) {
 // directory.
 func TestFingerprint_IsTheCACertificateDigest(t *testing.T) {
 	dir := t.TempDir()
-	c, err := Open(dir)
+	c, err := openPlain(dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -466,7 +466,7 @@ func TestFingerprint_IsTheCACertificateDigest(t *testing.T) {
 		t.Errorf("Fingerprint() = %q, want 64 hex characters (SHA-256, no colons)", c.Fingerprint())
 	}
 
-	reopened, err := Open(dir)
+	reopened, err := openPlain(dir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
