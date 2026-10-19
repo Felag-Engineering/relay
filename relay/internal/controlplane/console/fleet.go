@@ -525,6 +525,12 @@ func handleFleet(d Deps) http.HandlerFunc {
 		v := buildFleetView(d, nodes, r.URL.Query().Get("filter"), r.URL.Query().Get("group"))
 		p.Scripts = []string{freshnessScript}
 
+		// The page states its age relative to when it was rendered, so a copy
+		// shown from the HTTP cache would claim "rendered just now" about an old
+		// read. A back navigation therefore re-reads, which is an audited read
+		// and a deliberate act, not a timer.
+		w.Header().Set("Cache-Control", "no-store")
+
 		// The pin is carried, not computed: this screen is where an operator
 		// picks the second and third Node of a comparison, and a fleet view
 		// that dropped the pin on the way through would make pinning one Node
