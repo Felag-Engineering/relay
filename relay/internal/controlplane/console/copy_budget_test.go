@@ -125,6 +125,7 @@ var boundedClasses = map[string]string{
 	"span.ssline": "Fleet wall header: a count and a grouping key",
 	"span.gcount": "a Fleet group's Node count",
 	"span.gdev":   "a Fleet group header chip: a count and a state name",
+	"span.ssfig":  "Fleet System-state headline: a count and what it counts",
 	"span.seen":   "Node detail header: liveness and last seen",
 	// A plain chip (no CSS of its own): which part of a finished Job's dispatch
 	// record the trail lacks (#887). Two branches, one ever shown.

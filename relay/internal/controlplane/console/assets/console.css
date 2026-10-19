@@ -863,8 +863,18 @@ details.filters[open] > summary::before { transform: rotate(45deg); }
   margin-bottom: var(--space-4);
   overflow: hidden;
 }
-.ghead { display: flex; align-items: baseline; gap: var(--space-3); padding: var(--space-4) var(--space-5); flex-wrap: wrap; }
-.group.open .ghead { border-bottom: 1px solid var(--border-subtle); }
+/* The card is a native <details>, so it needs no script (spec 01). */
+.ghead { display: flex; align-items: baseline; gap: var(--space-3); padding: var(--space-4) var(--space-5); flex-wrap: wrap; list-style: none; cursor: pointer; }
+.ghead::-webkit-details-marker { display: none; }
+.ghead::before {
+  content: ""; width: 6px; height: 6px; flex: none; align-self: center;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform var(--duration-fast) var(--ease-out);
+}
+.group[open] > .ghead::before { transform: rotate(45deg); }
+.group[open] > .ghead { border-bottom: 1px solid var(--border-subtle); }
+/* .group clips overflow, which would cut the global ring's +2px offset. */
+.ghead:focus-visible { outline-offset: -2px; }
 .ghead h2 { margin: 0; font-size: var(--text-base); font-weight: var(--weight-semibold); letter-spacing: -0.01em; }
 .gcount { font-size: var(--text-sm); color: var(--text-second); font-variant-numeric: tabular-nums; }
 .gdev { font-size: var(--text-sm); color: var(--text-second); font-variant-numeric: tabular-nums; }
@@ -896,7 +906,16 @@ details.filters[open] > summary::before { transform: rotate(45deg); }
   padding: var(--space-4) var(--space-5) var(--space-5);
   margin-bottom: var(--space-4);
 }
-.sshead { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
+.sshead { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-3); }
+/* The headline is the largest type in the content area after the page heading,
+ * which is --text-xl (.topbar h1); spec 01, D27. */
+.sshl { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-6); margin-bottom: var(--space-2); }
+.ssfig { font-size: var(--text-lg); color: var(--text-second); font-variant-numeric: tabular-nums; }
+.ssfig b { color: var(--text-primary); font-weight: var(--weight-semibold); }
+.ssfps { list-style: none; margin: 0 0 var(--space-4); padding: 0; display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--text-sm); color: var(--text-second); }
+.ssfps b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.fphash { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-primary); overflow-wrap: anywhere; }
+.sswallhead { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
 .sshead h2 {
   margin: 0; font-size: var(--text-2xs); letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--text-muted); font-weight: var(--weight-semibold);
