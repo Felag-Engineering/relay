@@ -131,7 +131,7 @@ func confirmReadFailed(w http.ResponseWriter, pg Page, err error, ident, what st
 			accountsScreenPath)
 	case errors.Is(err, accounts.ErrTokenNotFound):
 		confirmRefusal(w, pg, http.StatusNotFound,
-			"No API Token matching "+ident+" appears in this Relay's records. Nothing was changed.",
+			"No API Token of this Account matches the request. Nothing was changed.",
 			accountsScreenPath)
 	case errors.Is(err, capability.ErrAccountsUnavailable):
 		unavailable(w, "Account administration")

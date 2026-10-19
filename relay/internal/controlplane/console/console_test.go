@@ -1126,7 +1126,12 @@ func formMethodOf(tag string) string {
 	if m == nil {
 		return "get"
 	}
-	return strings.ToLower(m[1] + m[2] + m[3])
+	// Anything but post is a GET form: HTML falls back to GET for an
+	// invalid method value, so a token in such a form would reach a URL.
+	if strings.EqualFold(m[1]+m[2]+m[3], "post") {
+		return "post"
+	}
+	return "get"
 }
 
 func TestFormsWithMethod_ClassifiesByTheMethodAttribute(t *testing.T) {
@@ -1139,6 +1144,7 @@ func TestFormsWithMethod_ClassifiesByTheMethodAttribute(t *testing.T) {
 		{"unquoted post", `<form method=post action="/x">`, "post"},
 		{"class before method", `<form class="ctlform" action="/x" method="post">`, "post"},
 		{"class before method, no value match", `<form class="method" action="/x">`, "get"},
+		{"invalid method falls back to GET", `<form method="put" action="/x">`, "get"},
 	}
 	for _, c := range cases {
 		body := c.tag + `<input name="csrf_token"></form>`
