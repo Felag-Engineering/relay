@@ -1212,8 +1212,23 @@ a.chiplink:hover .chip.trust { box-shadow: 0 0 0 1px var(--color-accent); }
   white-space: pre-wrap; word-break: break-all; color: var(--text-second);
 }
 .cmp tr[data-diff="1"] { background: var(--bg-elevated); }
-.cmp tr[data-diff="1"] th.cmpkey { color: var(--text-primary); font-weight: var(--weight-semibold); border-left: 2px solid var(--border-mid); }
-.cmp tr[data-diff="1"] td pre, .cmp tr[data-diff="1"] td code { color: var(--text-primary); font-weight: var(--weight-medium); }
+.cmp tr[data-diff="1"] th.cmpkey { color: var(--text-primary); font-weight: var(--weight-semibold); border-left: 3px solid var(--text-second); }
+.cmp tr[data-diff="1"] td pre, .cmp tr[data-diff="1"] td code { color: var(--text-primary); font-weight: var(--weight-semibold); }
+
+.cmpview { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin: 0 0 var(--space-4); }
+.cmpdiffonly {
+  display: inline-flex; align-items: center; gap: var(--space-2); min-height: 44px;
+  font-size: var(--text-sm); color: var(--text-primary); cursor: pointer;
+}
+.cmpdiffonly input { accent-color: var(--color-accent); width: 1rem; height: 1rem; margin: 0; }
+/* Twin of .viewbar button: change both together. */
+.cmpview button {
+  font: inherit; font-size: var(--text-sm); font-weight: var(--weight-medium);
+  padding: var(--space-2) var(--space-4);
+  border: 0; border-radius: var(--radius-lg); background: var(--color-accent); color: var(--on-accent); cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.cmpview button:hover { background: var(--accent-hover); }
 
 .panels { display: flex; gap: var(--space-4); align-items: flex-start; flex-wrap: wrap; }
 .pcol { flex: 1; min-width: 300px; display: flex; flex-direction: column; gap: var(--space-4); }

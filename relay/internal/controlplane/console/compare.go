@@ -46,12 +46,20 @@ package console
 // ADR-0011), and the Relay has no implementation of it to reach for. The
 // screen may say "these two differ here". It may never say "this one would
 // deny".
+//
+// Only the rows that differ are drawn unless the request is rows=all (spec 02,
+// D28). An unchecked checkbox sends nothing, so the form always sends a hidden
+// rows=all and the checkbox adds rows=diff. "The same" is said only when no row
+// differs and no agreeing row agrees on "not reported", which is an absence. When
+// nothing differs but some row agrees only on "not reported", the default view
+// draws the full table rather than a bare "the same".
 
 import (
 	"context"
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -90,6 +98,16 @@ const notReported = "not reported"
 // for: no raw-allow patterns, no rule of that name. Never an empty cell — an
 // empty cell reads as a rendering bug.
 const absent = "—"
+
+// rowsParam carries the row view. It has two values because an unchecked
+// checkbox sends nothing: the form always sends "all" and the checkbox adds
+// "diff", so every row is shown only when "all" arrives without "diff".
+const rowsParam = "rows"
+
+func showAllRows(q url.Values) bool {
+	v := q[rowsParam]
+	return slices.Contains(v, "all") && !slices.Contains(v, "diff")
+}
 
 // nodePin is one pinned Node as the pin bar draws it.
 type nodePin struct {
@@ -300,6 +318,52 @@ type compareView struct {
 	// not been told" must not be read as "these Nodes agree".
 	AnyPolicyMissing bool
 	AllPolicyMissing bool
+
+	// ShowAll is true when the request asked for every row; it drives the
+	// checkbox.
+	ShowAll bool
+	// AnyDiffers is true when some row differs, computed before filtering.
+	AnyDiffers bool
+	// SameReported is true when no row differs and no agreeing row agrees on
+	// "not reported". An agreement on an absence is never agreement, so this is
+	// the only condition under which the page says the Nodes reported the same.
+	SameReported bool
+	// Filtered is true when the identical rows were removed from the view.
+	Filtered bool
+}
+
+// applyRowView settles which rows the page draws.
+func (v *compareView) applyRowView(all bool) {
+	v.ShowAll = all
+	v.AnyDiffers = anyDiffers(v.FingerprintRows) || anyDiffers(v.PolicyRows)
+	v.SameReported = !v.AnyDiffers && !agreesOnNotReported(v.FingerprintRows) && !agreesOnNotReported(v.PolicyRows)
+	v.Filtered = !all && v.AnyDiffers
+	if v.Filtered {
+		v.FingerprintRows = onlyDiffering(v.FingerprintRows)
+		v.PolicyRows = onlyDiffering(v.PolicyRows)
+	}
+}
+
+func anyDiffers(rows []compareRow) bool {
+	return slices.ContainsFunc(rows, func(r compareRow) bool { return r.Differs })
+}
+
+// agreesOnNotReported reports whether a row that does not differ holds
+// notReported in every column.
+func agreesOnNotReported(rows []compareRow) bool {
+	return slices.ContainsFunc(rows, func(r compareRow) bool {
+		return !r.Differs && len(r.Values) > 0 && r.Values[0] == notReported
+	})
+}
+
+func onlyDiffering(rows []compareRow) []compareRow {
+	var out []compareRow
+	for _, r := range rows {
+		if r.Differs {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func handleCompare(d Deps) http.HandlerFunc {
@@ -320,7 +384,8 @@ func handleCompare(d Deps) http.HandlerFunc {
 		}
 		d, lane := latched(d)
 
-		ids, overflow := parsePins(r.URL.Query().Get("nodes"))
+		q := r.URL.Query()
+		ids, overflow := parsePins(q.Get("nodes"))
 		v, err := buildCompareView(r.Context(), d, caller, ids)
 		if err != nil {
 			readFailed(w, err, "the pinned Nodes' registry records")
@@ -330,6 +395,7 @@ func handleCompare(d Deps) http.HandlerFunc {
 			return
 		}
 		v.Truncated = overflow
+		v.applyRowView(showAllRows(q))
 		renderScreen(w, p, compareTmpl, v)
 	}
 }
@@ -581,6 +647,15 @@ func orAbsent(s string) string {
 var compareTmpl = newScreen("compare", `
 {{if .Pin.Any}}{{template "pin-bar" .Pin}}{{end}}
 
+{{if ge (len .Columns) 2}}
+<form class="cmpview" method="get" action="/console/compare">
+  <input type="hidden" name="nodes" value="{{.Pin.Raw}}">
+  <input type="hidden" name="rows" value="all">
+  <label class="cmpdiffonly"><input type="checkbox" name="rows" value="diff"{{if not .ShowAll}} checked{{end}}> Show differences only</label>
+  <button type="submit">Apply</button>
+</form>
+{{end}}
+
 {{if .Truncated}}<p class="gap"><b>Only three Nodes can be compared</b>; unpin one to swap in another.</p>{{end}}
 
 {{with .Unknown}}
@@ -593,9 +668,11 @@ var compareTmpl = newScreen("compare", `
   <p>Pin from a row on the <a href="/console/{{.Pin.Query}}">fleet</a> or from a Node's own page.</p>
 </div>
 {{else}}
+{{if .SameReported}}<p class="nodiff">These Nodes reported the same Policy and fingerprints.</p>{{end}}
+{{if or .ShowAll (not .SameReported)}}
 <div class="tablescroll">
 <table class="cmp">
-  <caption class="tcap">What {{len .Columns}} Nodes reported. Rows that differ are marked.</caption>
+  <caption class="tcap">{{if .Filtered}}What {{len .Columns}} Nodes reported. Only rows that differ are shown.{{else}}What {{len .Columns}} Nodes reported. Rows that differ are marked.{{end}}</caption>
   <thead>
     <tr>
       <th scope="col"><span class="vh">Dimension</span></th>
@@ -622,6 +699,7 @@ var compareTmpl = newScreen("compare", `
 </div>
 
 <p class="note">Each cell is what that Node's daemon <b>reported</b>; this screen never predicts what will run.</p>
+{{end}}
 
 {{if .AllPolicyMissing}}
 <p class="gap"><b>Neither Node has reported its Policy since the Relay last started</b>, so identical Policy rows mean nothing.</p>
