@@ -1183,66 +1183,28 @@ func fetchActivity(ctx context.Context, d Deps, caller capability.Principal, f a
 	var out activityFetch
 	var rows []activityRow
 	if jobLane {
-		page, err := d.Queries.QueryJobs(ctx, caller, capability.JobFilter{
-			RequesterAccountID: f.Account,
-			OnBehalfOf:         f.OnBehalfOf,
-			Operation:          f.Op,
-			Since:              f.Since,
-			Until:              f.Until,
-		}, jobPage)
+		jobRows, next, err := fetchJobLane(ctx, d, caller, f, jobPage)
 		if err != nil {
 			return activityFetch{}, err
 		}
-		outcome := outcomeFromLabel(f.Outcome)
-		for _, sum := range page.Jobs {
-			// EXACT, because the counts come from the aggregate: the
-			// predicate is "this Job produced at least one X". Applied here
-			// and not in the query because JobFilter has no outcome field —
-			// see the page's own note about what that costs.
-			if outcome != nil && sum.Counts[*outcome] == 0 {
-				continue
-			}
-			out.PageCalls++
-			rows = append(rows, dispatchRowFromJob(sum))
-		}
-		out.JobNext = page.Next
+		out.PageCalls += len(jobRows)
+		out.JobNext = next
+		rows = append(rows, jobRows...)
 	}
 
 	if len(trailKinds) > 0 {
-		filter := capability.AuditFilter{
-			Kinds:      trailKinds,
-			AccountID:  f.Account,
-			OnBehalfOf: f.OnBehalfOf,
-			Outcome:    outcomeFromLabel(f.Outcome),
-			Since:      f.Since,
-			Until:      f.Until,
-		}
-		if f.Op != "" {
-			filter.Operations = []string{f.Op}
-		}
-		page, err := d.Queries.QueryAudit(ctx, caller, filter, auditPage)
+		trailRows, lane, err := fetchTrailLane(ctx, d, caller, f, trailKinds, auditPage)
 		if err != nil {
 			return activityFetch{}, err
 		}
-		out.PageCalls += len(page.Rows)
-		for _, row := range page.Rows {
-			if !f.ShowConsole && consoleRead(row) {
-				out.ConsoleLeftOut++
-				continue
-			}
-			rows = append(rows, eventRowFromTrail(factsOfRow(row)))
-		}
-		out.AuditNext = page.Next
+		out.PageCalls += lane.pageCalls
+		out.ConsoleLeftOut = lane.consoleLeftOut
+		out.AuditNext = lane.next
+		rows = append(rows, trailRows...)
 	}
 
 	if f.Q != "" {
-		kept := rows[:0]
-		for _, row := range rows {
-			if matchesQuery(row, f.Q) {
-				kept = append(kept, row)
-			}
-		}
-		rows = kept
+		rows = filterRowsByQuery(rows, f.Q)
 	}
 
 	// Both lanes return newest-first, so a stable sort by time interleaves
@@ -1250,6 +1212,86 @@ func fetchActivity(ctx context.Context, d Deps, caller capability.Principal, f a
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].at.After(rows[j].at) })
 	out.Rows = rows
 	return out, nil
+}
+
+// fetchJobLane queries one page of Jobs and returns its dispatch rows with the
+// lane's next cursor.
+func fetchJobLane(ctx context.Context, d Deps, caller capability.Principal, f activityFilter,
+	page capability.PageRequest,
+) (rows []activityRow, next string, err error) {
+	res, err := d.Queries.QueryJobs(ctx, caller, capability.JobFilter{
+		RequesterAccountID: f.Account,
+		OnBehalfOf:         f.OnBehalfOf,
+		Operation:          f.Op,
+		Since:              f.Since,
+		Until:              f.Until,
+	}, page)
+	if err != nil {
+		return nil, "", err
+	}
+	outcome := outcomeFromLabel(f.Outcome)
+	for _, sum := range res.Jobs {
+		// EXACT, because the counts come from the aggregate: the
+		// predicate is "this Job produced at least one X". Applied here
+		// and not in the query because JobFilter has no outcome field —
+		// see the page's own note about what that costs.
+		if outcome != nil && sum.Counts[*outcome] == 0 {
+			continue
+		}
+		rows = append(rows, dispatchRowFromJob(sum))
+	}
+	return rows, res.Next, nil
+}
+
+// trailLane is what fetchTrailLane reports besides its rows: the page's next
+// cursor, how many rows the query returned, and how many of those the
+// Console-read default dropped.
+type trailLane struct {
+	next                      string
+	pageCalls, consoleLeftOut int
+}
+
+// fetchTrailLane queries one page of the audit trail for kinds and returns its
+// event rows, leaving out Console reads unless the filter shows them.
+func fetchTrailLane(ctx context.Context, d Deps, caller capability.Principal, f activityFilter,
+	kinds []string, page capability.PageRequest,
+) ([]activityRow, trailLane, error) {
+	filter := capability.AuditFilter{
+		Kinds:      kinds,
+		AccountID:  f.Account,
+		OnBehalfOf: f.OnBehalfOf,
+		Outcome:    outcomeFromLabel(f.Outcome),
+		Since:      f.Since,
+		Until:      f.Until,
+	}
+	if f.Op != "" {
+		filter.Operations = []string{f.Op}
+	}
+	res, err := d.Queries.QueryAudit(ctx, caller, filter, page)
+	if err != nil {
+		return nil, trailLane{}, err
+	}
+	lane := trailLane{next: res.Next, pageCalls: len(res.Rows)}
+	var rows []activityRow
+	for _, row := range res.Rows {
+		if !f.ShowConsole && consoleRead(row) {
+			lane.consoleLeftOut++
+			continue
+		}
+		rows = append(rows, eventRowFromTrail(factsOfRow(row)))
+	}
+	return rows, lane, nil
+}
+
+// filterRowsByQuery keeps the rows matching q, in order.
+func filterRowsByQuery(rows []activityRow, q string) []activityRow {
+	kept := rows[:0]
+	for _, row := range rows {
+		if matchesQuery(row, q) {
+			kept = append(kept, row)
+		}
+	}
+	return kept
 }
 
 func kindChips(f activityFilter) []kindChip {
