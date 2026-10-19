@@ -99,6 +99,39 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 		return true
 	})
 
+	return append(violations, policyAliasViolations(fileName, file)...)
+}
+
+// policyAliasViolations is the Policy alias rule of dispatchViolations,
+// unconditional in every file: this surface carries no Policy alias, so it may
+// not select an identifier that mentions one, whatever the receiver or package
+// (capability.PolicyAliasAdmin, audit.PolicyAliasAppender, or
+// x.(audit.PolicyAliasAppender).AppendWithPolicyAlias on a concrete audit
+// repository), nor declare a seam method that reads or writes one. The alias
+// seams are the Console's alone.
+func policyAliasViolations(fileName string, file *ast.File) []string {
+	var violations []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.SelectorExpr:
+			if strings.Contains(v.Sel.Name, "PolicyAlias") {
+				violations = append(violations, fmt.Sprintf(
+					"%s references %s — Policy aliases are display data for the Console alone, and this surface carries none",
+					fileName, v.Sel.Name))
+			}
+		case *ast.InterfaceType:
+			for _, m := range v.Methods.List {
+				for _, name := range m.Names {
+					if strings.Contains(name.Name, "PolicyAlias") {
+						violations = append(violations, fmt.Sprintf(
+							"%s declares a seam method %s — Policy aliases are display data for the Console alone, and this surface carries none",
+							fileName, name.Name))
+					}
+				}
+			}
+		}
+		return true
+	})
 	return violations
 }
 
@@ -166,6 +199,61 @@ func TestDispatchViolations_Fixtures(t *testing.T) {
 func f() { newDispatch() }
 `,
 			wantSubstr: "newDispatch",
+		},
+		{
+			name: "the Policy alias service is refused",
+			src: `package api
+import ` + capImport + `
+var _ *capability.PolicyAliasAdmin
+`,
+			wantSubstr: "references PolicyAliasAdmin",
+		},
+		{
+			name: "the Policy alias service is refused through an aliased capability import",
+			src: `package api
+import c2 ` + capImport + `
+var _ = c2.NewPolicyAliasAdmin
+`,
+			wantSubstr: "references NewPolicyAliasAdmin",
+		},
+		{
+			name: "asserting an audit repository to the alias appender is refused",
+			src: `package api
+import "github.com/Felag-Engineering/relay/relay/internal/audit"
+func f(x audit.Repository) {
+	_ = x.(audit.PolicyAliasAppender).AppendWithPolicyAlias
+}
+`,
+			wantSubstr: "references PolicyAliasAppender",
+		},
+		{
+			name: "calling the atomic alias write on any receiver is refused",
+			src: `package api
+func f(x interface{}) {
+	_ = x.(interface{ AppendWithPolicyAlias() }).AppendWithPolicyAlias
+}
+`,
+			wantSubstr: "references AppendWithPolicyAlias",
+		},
+		{
+			name: "a seam declaring an alias write is refused",
+			src: `package api
+import "context"
+type AliasWriter interface {
+	SetPolicyAlias(ctx context.Context, fingerprint, name string) error
+}
+`,
+			wantSubstr: "declares a seam method SetPolicyAlias",
+		},
+		{
+			name: "a seam declaring an alias read is refused",
+			src: `package api
+import "context"
+type AliasReader interface {
+	PolicyAliases(ctx context.Context) (map[string]string, error)
+}
+`,
+			wantSubstr: "declares a seam method PolicyAliases",
 		},
 		{
 			// The false-positive guard: this is exactly what execution.go does.

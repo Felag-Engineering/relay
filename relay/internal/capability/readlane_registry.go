@@ -101,6 +101,10 @@ type ReadLane struct {
 
 	// now is the clock Selector resolution reads; nil means time.Now().UTC().
 	now func() time.Time
+
+	// aliases is the Policy alias read (policyalias.go). Nil means not wired:
+	// PolicyAliases returns ErrPolicyAliasesUnavailable, never an empty map.
+	aliases PolicyAliasSource
 }
 
 // NewReadLane returns a ReadLane over rec, reg and the two query seams. rec,
@@ -115,7 +119,7 @@ type ReadLane struct {
 // none of them is exactly the "unauditable read succeeded" state ADR-0025
 // forbids. policyView, nodeVocab and now may be nil — absence is documented on
 // the fields; a nil now means time.Now().UTC().
-func NewReadLane(rec *Recorder, reg registry.Repository, auditQ AuditQuery, jobQ JobQuery, policyView PolicyViewSource, nodeVocab TemplateVocabularySource, certExpiringWithin time.Duration, now func() time.Time) *ReadLane {
+func NewReadLane(rec *Recorder, reg registry.Repository, auditQ AuditQuery, jobQ JobQuery, policyView PolicyViewSource, nodeVocab TemplateVocabularySource, certExpiringWithin time.Duration, now func() time.Time, opts ...ReadLaneOption) *ReadLane {
 	if rec == nil {
 		panic("capability: NewReadLane: recorder must not be nil")
 	}
@@ -134,14 +138,18 @@ func NewReadLane(rec *Recorder, reg registry.Repository, auditQ AuditQuery, jobQ
 	if _, ok := rec.audit.(noopAuditSink); ok {
 		panic("capability: NewReadLane: requires a real AuditSink (NewRecorder); noopAuditSink would answer every read while recording none of them")
 	}
-	return newReadLane(rec, reg, auditQ, jobQ, policyView, nodeVocab, certExpiringWithin, now)
+	return newReadLane(rec, reg, auditQ, jobQ, policyView, nodeVocab, certExpiringWithin, now, opts...)
 }
 
 // newReadLane assembles a ReadLane with no checks. Only NewReadLane and _test.go
 // files call it; it is the only route to a lane with no query seams or over the
 // no-op sink, which the QRY-17 call-time tests need.
-func newReadLane(rec *Recorder, reg registry.Repository, auditQ AuditQuery, jobQ JobQuery, policyView PolicyViewSource, nodeVocab TemplateVocabularySource, certExpiringWithin time.Duration, now func() time.Time) *ReadLane {
-	return &ReadLane{rec: rec, reg: reg, auditQ: auditQ, jobQ: jobQ, policyView: policyView, nodeVocab: nodeVocab, certExpiringWithin: certExpiringWithin, now: now}
+func newReadLane(rec *Recorder, reg registry.Repository, auditQ AuditQuery, jobQ JobQuery, policyView PolicyViewSource, nodeVocab TemplateVocabularySource, certExpiringWithin time.Duration, now func() time.Time, opts ...ReadLaneOption) *ReadLane {
+	l := &ReadLane{rec: rec, reg: reg, auditQ: auditQ, jobQ: jobQ, policyView: policyView, nodeVocab: nodeVocab, certExpiringWithin: certExpiringWithin, now: now}
+	for _, o := range opts {
+		o(l)
+	}
+	return l
 }
 
 // ErrNodeNotFound is returned by DescribeNode for an id the registry does not

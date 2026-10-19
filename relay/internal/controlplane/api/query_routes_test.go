@@ -1,11 +1,61 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
+
+// countingAliasSource is a Policy alias source that counts how often it is read.
+type countingAliasSource struct {
+	aliases map[string]string
+	lists   int
+}
+
+func (c *countingAliasSource) List(context.Context) (map[string]string, error) {
+	c.lists++
+	return c.aliases, nil
+}
+
+// TestControlAPI_CarriesNoPolicyAlias proves QRY-36's Control API half: with a
+// Policy alias held for a Node's fingerprint, the single-Node read does not
+// render it, no route is about aliases, and the alias source is never read.
+func TestControlAPI_CarriesNoPolicyAlias(t *testing.T) {
+	const fingerprint = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const aliasName = "zz-seeded-policy-alias"
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-a", PolicyFingerprint: fingerprint}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	src := &countingAliasSource{aliases: map[string]string{fingerprint: aliasName}}
+	lane := newCapService(t, capSeams{reg: reg, audit: &fakeCapabilityAuditSink{}, now: fixedNow, aliases: src}).ReadLane
+	h := newTestHandler(Deps{NodeReader: lane, Audit: &fakeAuditor{}, Now: fixedNow})
+
+	rec := do(t, h, http.MethodGet, "/api/v1/nodes/node-a", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body = %s", rec.Code, rec.Body.String())
+	}
+	// Armed: the fingerprint is rendered, so an absent alias is meaningful.
+	if !strings.Contains(rec.Body.String(), fingerprint) {
+		t.Fatalf("the Node read does not render the fingerprint: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), aliasName) {
+		t.Errorf("the Node read renders a Policy alias: %s", rec.Body.String())
+	}
+	if src.lists != 0 {
+		t.Errorf("the alias source was read %d times by the Control API, want 0", src.lists)
+	}
+
+	for _, r := range Routes() {
+		if strings.Contains(strings.ToLower(r.Pattern()), "alias") {
+			t.Errorf("route %q is about Policy aliases; the Control API carries none", r.Pattern())
+		}
+	}
+}
 
 // queryDisclosureNameRegex names the Query capability's two Control-API
 // absences — the Policy view and Operation-vocabulary discovery — by the

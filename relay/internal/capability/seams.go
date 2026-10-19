@@ -93,7 +93,37 @@ const (
 
 	// ControlAPITokenRevoke is DELETE /api/v1/api-tokens/{token_id}.
 	ControlAPITokenRevoke ControlAction = "api_token_revoke"
+
+	// ControlPolicyAlias is setting, renaming or clearing a Policy alias:
+	// admin and human Account only. It takes no step-up, because an alias
+	// gates nothing.
+	ControlPolicyAlias ControlAction = "policy_alias"
 )
+
+// PolicyAliasSource is the read side of Policy aliases: every alias the Relay
+// holds, fingerprint to alias. It is read-only, and an alias never reaches
+// Selector resolution, a Plan or a dispatch.
+type PolicyAliasSource interface {
+	List(ctx context.Context) (map[string]string, error)
+}
+
+// PolicyAliasRecorder makes a Policy alias change AND appends its audit record
+// in one transaction: nil means both landed, an error means neither did. It is
+// kept off AuditSink, exactly like IntentRecorder, so a sink that cannot make
+// the two atomic cannot claim to.
+type PolicyAliasRecorder interface {
+	RecordPolicyAlias(ctx context.Context, e PolicyAliasEvent) error
+}
+
+// PolicyAliasEvent is one alias change. Old and New are "" for "no alias". It
+// has no Node, Label or Selector field: an alias attaches to a fingerprint.
+type PolicyAliasEvent struct {
+	Principal   Principal
+	Fingerprint string
+	Old         string
+	New         string
+	Asserted    Assertions
+}
 
 // AccountStore is the Account half of the collaborator accountadmin.go needs:
 // five methods narrowed from accounts.Repository. Deliberately not

@@ -611,8 +611,9 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// of each surface holding its own cache reference — and, for vocabCache,
 	// what lets a Template Operation be dispatched at all: the capability
 	// layer resolves its fan-out and class from it (ADR-0042). Without it
-	// every Template dispatch is refused. A nil clock is the real one.
-	readLane := capability.NewReadLane(rec, reg, queries, queries, policyCache, vocabCache, certExpiringWithin, nil)
+	// every Template dispatch is refused. A nil clock is the real one. The
+	// Policy alias source is the store's read-only view of the aliases.
+	readLane := capability.NewReadLane(rec, reg, queries, queries, policyCache, vocabCache, certExpiringWithin, nil, capability.WithPolicyAliasSource(st.PolicyAliases()))
 
 	// The out-of-band notification envelope (ADR-0027). Optional: with no
 	// URL configured nothing is pushed and approvers poll the queue. Configured

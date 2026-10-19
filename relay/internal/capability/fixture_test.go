@@ -20,6 +20,7 @@ type testSvc struct {
 	*ReadLane
 	*Control
 	*AccountAdmin
+	*PolicyAliasAdmin
 	*Approvals
 }
 
@@ -49,6 +50,7 @@ type seams struct {
 	jobQ       JobQuery
 	policyView PolicyViewSource
 	nodeVocab  TemplateVocabularySource
+	aliases    PolicyAliasSource
 
 	// certWindow is the state:cert-expiring window handed to the ReadLane.
 	certWindow time.Duration
@@ -100,10 +102,12 @@ func build(t *testing.T, s seams) *testSvc {
 	control := newControl(rec, authz, freeze)
 	var read *ReadLane
 	if s.auditQ != nil || s.jobQ != nil {
-		read = NewReadLane(rec, s.reg, s.auditQ, s.jobQ, s.policyView, s.nodeVocab, s.certWindow, s.now)
+		read = NewReadLane(rec, s.reg, s.auditQ, s.jobQ, s.policyView, s.nodeVocab, s.certWindow, s.now, WithPolicyAliasSource(s.aliases))
 	} else {
-		read = newReadLane(rec, s.reg, nil, nil, s.policyView, s.nodeVocab, s.certWindow, s.now)
+		read = newReadLane(rec, s.reg, nil, nil, s.policyView, s.nodeVocab, s.certWindow, s.now, WithPolicyAliasSource(s.aliases))
 	}
+	aliasRec, _ := audit.(PolicyAliasRecorder)
+	aliasAdmin := newPolicyAliasAdmin(control, s.aliases, aliasRec)
 	var acct *AccountAdmin
 	if s.accountsStore != nil || s.apiTokens != nil {
 		acct = NewAccountAdmin(control, s.accountsStore, s.apiTokens)
@@ -146,7 +150,7 @@ func build(t *testing.T, s seams) *testSvc {
 	if s.hasExecution() {
 		checkRealDispatch(x)
 	}
-	return &testSvc{x, read, control, acct, appr}
+	return &testSvc{x, read, control, acct, aliasAdmin, appr}
 }
 
 // buildRaw is a struct literal: no defaults and no construction guards, for
@@ -160,10 +164,12 @@ func buildRaw(t *testing.T, s seams) *testSvc {
 	control := &Control{rec: rec, authz: s.authz, freeze: s.freeze}
 	read := &ReadLane{
 		rec: rec, reg: s.reg, auditQ: s.auditQ, jobQ: s.jobQ,
-		policyView: s.policyView, nodeVocab: s.nodeVocab,
+		policyView: s.policyView, nodeVocab: s.nodeVocab, aliases: s.aliases,
 		certExpiringWithin: s.certWindow, now: s.now,
 	}
 	acct := &AccountAdmin{control: control, accountStore: s.accountsStore, tokens: s.apiTokens}
+	aliasRec, _ := s.audit.(PolicyAliasRecorder)
+	aliasAdmin := &PolicyAliasAdmin{control: control, src: s.aliases, rec: aliasRec}
 	appr := &Approvals{
 		rec: rec, gate: s.gate, store: s.approvals, authz: s.approvalAuthz,
 		grants: s.grants, tasks: s.mcpTasks, notifier: s.approvalNotifier, now: s.now,
@@ -177,5 +183,5 @@ func buildRaw(t *testing.T, s seams) *testSvc {
 		jobEvents: s.jobEvents,
 		idem:      s.idem,
 	}
-	return &testSvc{svc, read, control, acct, appr}
+	return &testSvc{svc, read, control, acct, aliasAdmin, appr}
 }

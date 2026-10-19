@@ -18,6 +18,7 @@ type capSeams struct {
 	audit      capability.AuditSink
 	now        func() time.Time
 	certWindow time.Duration
+	aliases    capability.PolicyAliasSource
 
 	accountsStore capability.AccountStore
 	apiTokens     capability.APITokenStore
@@ -75,7 +76,7 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 	}
 	rec := capability.NewRecorder(s.audit, nil, nil)
 	layer := &capLayer{
-		ReadLane: capability.NewReadLane(rec, s.reg, emptyQueries{}, emptyQueries{}, nil, nil, s.certWindow, s.now),
+		ReadLane: capability.NewReadLane(rec, s.reg, emptyQueries{}, emptyQueries{}, nil, nil, s.certWindow, s.now, capability.WithPolicyAliasSource(s.aliases)),
 	}
 	if s.authz != nil {
 		layer.Control = capability.NewControl(rec, s.authz, neverFrozen{})
