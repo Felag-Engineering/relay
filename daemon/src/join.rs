@@ -7,8 +7,10 @@
 //! contacts no Relay: enrollment happens when the daemon starts.
 //!
 //! The join string is held as the redacting `JoinString` once decoded, and every
-//! buffer that held its text is wiped when dropped; no message this module prints
-//! carries it or any part of it.
+//! buffer this module owns that holds its text is wiped when dropped. Two copies
+//! are not: std's buffered stdin reader, and `JoinString`'s own fields, both freed
+//! unwiped when the process exits right after. No message this module prints
+//! carries the join string or any part of it.
 
 mod env_file;
 mod systemctl;
@@ -18,6 +20,7 @@ use std::fs;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rustix::termios::{tcgetattr, tcsetattr, LocalModes, OptionalActions, Termios};
 use zeroize::Zeroizing;
@@ -277,18 +280,25 @@ fn read_join_input() -> Result<Secret, JoinError> {
     let limit = MAX_JOIN_STRING_LEN + 2;
     let mut buf = Zeroizing::new(Vec::with_capacity(limit));
     {
-        let _echo = if interactive {
+        let echo = if interactive {
             eprint!("Paste the join string (input is hidden): ");
             let _ = io::stderr().flush();
             Some(EchoOff::new().map_err(JoinError::Read)?)
         } else {
             None
         };
-        stdin
-            .lock()
-            .take(limit as u64)
-            .read_until(b'\n', &mut buf)
-            .map_err(JoinError::Read)?;
+        let read = stdin.lock().take(limit as u64).read_until(b'\n', &mut buf);
+        // The prompt ends here, and only one side may end it: if the interrupt
+        // handler claimed it first it is restoring echo and exiting 130 having
+        // told the operator nothing changed, so this thread must not go on to
+        // write anything. Claimed before a read error is returned, too.
+        if echo.as_ref().is_some_and(|e| e.on_interrupt.is_some()) && !AT_PROMPT.claim() {
+            loop {
+                std::thread::park();
+            }
+        }
+        read.map_err(JoinError::Read)?;
+        drop(echo);
     }
     if interactive {
         eprintln!();
@@ -301,6 +311,29 @@ fn read_join_input() -> Result<Secret, JoinError> {
         }
     }
 }
+
+/// Decides which side ends the prompt: the main thread, once the line is read, or
+/// the interrupt handler, on a Ctrl-C. Opened once echo is off; each side claims
+/// it with one atomic swap, so exactly one wins. The handler restores echo and
+/// exits only if it won; the main thread writes nothing unless it won.
+struct PromptGate(AtomicBool);
+
+impl PromptGate {
+    const fn new() -> Self {
+        PromptGate(AtomicBool::new(false))
+    }
+
+    fn open(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    /// True for exactly one caller per `open`.
+    fn claim(&self) -> bool {
+        self.0.swap(false, Ordering::SeqCst)
+    }
+}
+
+static AT_PROMPT: PromptGate = PromptGate::new();
 
 /// Turns terminal echo off for its lifetime and restores the saved settings on
 /// drop, and on an interrupt: a Ctrl-C while the prompt is up restores echo before
@@ -323,6 +356,12 @@ impl EchoOff {
             }
             return Err(e.into());
         }
+        // Opened only once echo is off, so the handler can never restore echo
+        // before this thread turns it off. A Ctrl-C before this point is caught
+        // and ignored, with echo still on.
+        if on_interrupt.is_some() {
+            AT_PROMPT.open();
+        }
         Ok(EchoOff {
             saved,
             on_interrupt,
@@ -339,8 +378,11 @@ impl Drop for EchoOff {
     }
 }
 
-/// Listens for SIGINT on the runtime `main` runs in; on one, restores `saved` and
-/// exits 130 with nothing written. `None` outside a runtime, which leaves the
+/// Listens for SIGINT on the runtime `main` runs in; on one that claims
+/// [`AT_PROMPT`], restores `saved` and exits 130 with nothing written. Any other
+/// SIGINT is ignored: once registered, the signal stays caught for the rest of the
+/// run, so a Ctrl-C after the prompt does not interrupt `join` (a child such as
+/// `systemctl` still receives it). `None` outside a runtime, which leaves the
 /// default action (and `stty echo` as the recovery the install guide documents).
 fn restore_on_interrupt(saved: Termios) -> Option<tokio::task::JoinHandle<()>> {
     use tokio::signal::unix::{signal, SignalKind};
@@ -348,11 +390,13 @@ fn restore_on_interrupt(saved: Termios) -> Option<tokio::task::JoinHandle<()>> {
     let _entered = handle.enter();
     let mut interrupt = signal(SignalKind::interrupt()).ok()?;
     Some(handle.spawn(async move {
-        if interrupt.recv().await.is_some() {
-            let _ = tcsetattr(io::stdin(), OptionalActions::Now, &saved);
-            eprintln!();
-            eprintln!("relay-daemon join: interrupted; nothing was changed");
-            std::process::exit(130);
+        while interrupt.recv().await.is_some() {
+            if AT_PROMPT.claim() {
+                let _ = tcsetattr(io::stdin(), OptionalActions::Now, &saved);
+                eprintln!();
+                eprintln!("relay-daemon join: interrupted; nothing was changed");
+                std::process::exit(130);
+            }
         }
     }))
 }
@@ -416,6 +460,37 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .filter(|n| n.contains(".join-"))
             .collect()
+    }
+
+    /// Exactly one side ends the prompt, however the two race.
+    #[test]
+    fn prompt_gate_lets_exactly_one_side_win() {
+        let gate = PromptGate::new();
+        assert!(!gate.claim(), "a gate never opened has nothing to claim");
+        gate.open();
+        assert!(gate.claim());
+        assert!(!gate.claim(), "the loser of the swap must not proceed");
+
+        for _ in 0..200 {
+            let gate = std::sync::Arc::new(PromptGate::new());
+            gate.open();
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let racers: Vec<_> = (0..2)
+                .map(|_| {
+                    let (gate, barrier) = (gate.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        gate.claim()
+                    })
+                })
+                .collect();
+            let wins = racers
+                .into_iter()
+                .map(|t| t.join().unwrap())
+                .filter(|w| *w)
+                .count();
+            assert_eq!(wins, 1);
+        }
     }
 
     #[test]

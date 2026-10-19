@@ -111,6 +111,10 @@ One subcommand changes the Node, and it too contacts no Relay:
   the daemon starts. Every refusal leaves the file untouched. Exit codes `0`
   configured and started / `1` refused or failed / `2` given arguments; `130`
   when Ctrl-C at the prompt cancels it, which restores echo and changes nothing.
+  Once the join string is entered, Ctrl-C no longer interrupts `join` itself: it
+  stays caught for the rest of the run, so the file is never left half-handled. A
+  slow `systemctl` can still be interrupted — it receives the Ctrl-C, and `join`
+  then reports that the join string is written but the unit was not started.
   If a terminal is ever left without echo, `stty echo` restores it. Config
   management may write the same line itself instead.
 
