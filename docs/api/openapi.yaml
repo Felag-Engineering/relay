@@ -1451,6 +1451,35 @@ components:
         deciding_rule:
           type: string
           description: The Policy rule text behind a deny, verbatim from the daemon's engine.
+        pass:
+          type: string
+          enum: [precondition, deny, guard, allow, default]
+          description: |
+            The pass of the daemon's Policy evaluation that produced the verdict,
+            verbatim from the daemon and never evaluated by the Relay. Also absent
+            when the answering daemon does not report it (a daemon older than this
+            field), so absence is not "no rule decided": only `default` says
+            deny-by-default.
+        rule_section:
+          type: string
+          enum: [operation, deny, raw_exec_allow, raw_exec_deny]
+          description: |
+            The section of the Node's Policy file holding the rule that decided.
+            Present only when a rule decided; with `rule_index` and `rule_line` it
+            is the reference `relay-daemon policy explain` prints. Verbatim from
+            the daemon and never evaluated by the Relay. Also absent when the
+            answering daemon does not report it, so absence is not "no rule decided".
+        rule_index:
+          type: integer
+          minimum: 0
+          description: The deciding rule's index within `rule_section`. Present only with `rule_section`; the daemon's answer, verbatim.
+        rule_line:
+          type: integer
+          minimum: 1
+          description: The deciding rule's 1-based line in the Policy file. Absent when the daemon did not know the line; the daemon's answer, verbatim.
+        matched_on:
+          type: string
+          description: What the deciding pass matched on, in the daemon's words. Positions and indices only, never an argument value; verbatim from the daemon.
         reason: { type: string }
         refusal_explanation:
           type: string

@@ -163,6 +163,35 @@ func TestVerdict_ConvertsFields(t *testing.T) {
 			&relayv1.PolicyVerdict{QueryId: "q-2", Allowed: false, DecidingRule: "deny-rm-rf"},
 			jobs.Verdict{Allowed: false, DecidingRule: "deny-rm-rf"},
 		},
+		{
+			"deny by rule carries the rule reference",
+			&relayv1.PolicyVerdict{
+				QueryId: "q-3", DecidingRule: "denied by explicit rule",
+				Pass: relayv1.PolicyPass_POLICY_PASS_DENY, RuleSection: relayv1.PolicyRuleSection_POLICY_RULE_SECTION_DENY,
+				RuleIndex: 0, RuleLine: 5, MatchedOn: "the invocation's arguments",
+			},
+			jobs.Verdict{
+				DecidingRule: "denied by explicit rule", Pass: "deny", RuleSection: "deny",
+				RuleIndex: 0, RuleLine: 5, MatchedOn: "the invocation's arguments",
+			},
+		},
+		{
+			"allow with rule",
+			&relayv1.PolicyVerdict{
+				QueryId: "q-4", Allowed: true,
+				Pass: relayv1.PolicyPass_POLICY_PASS_ALLOW, RuleSection: relayv1.PolicyRuleSection_POLICY_RULE_SECTION_RAW_EXEC_ALLOW,
+				RuleIndex: 2, RuleLine: 0, MatchedOn: "the joined command",
+			},
+			jobs.Verdict{Allowed: true, Pass: "allow", RuleSection: "raw_exec_allow", RuleIndex: 2, MatchedOn: "the joined command"},
+		},
+		{
+			"default has no section, so no index or line",
+			&relayv1.PolicyVerdict{
+				QueryId: "q-5", DecidingRule: "no allow rule",
+				Pass: relayv1.PolicyPass_POLICY_PASS_DEFAULT, RuleIndex: 4, RuleLine: 9, MatchedOn: "no allow rule for this operation",
+			},
+			jobs.Verdict{DecidingRule: "no allow rule", Pass: "default", MatchedOn: "no allow rule for this operation"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -170,6 +199,33 @@ func TestVerdict_ConvertsFields(t *testing.T) {
 				t.Errorf("verdict(%+v) = %+v, want %+v", tt.pv, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestVerdict_UnrecognizedPassAndSectionAreDropped(t *testing.T) {
+	got := verdict(&relayv1.PolicyVerdict{
+		Pass: relayv1.PolicyPass(99), RuleSection: relayv1.PolicyRuleSection(99), RuleIndex: 3, RuleLine: 7,
+	})
+	if got.Pass != "" || got.RuleSection != "" || got.RuleIndex != 0 || got.RuleLine != 0 {
+		t.Errorf("verdict with unrecognised pass and section = %+v, want all rule reference fields zero", got)
+	}
+}
+
+// TestPolicyPassAndRuleSectionNamesAreTotal is the Relay-side twin of the
+// daemon's exhaustive match: a new /proto value fails here rather than
+// rendering as nothing on every surface.
+func TestPolicyPassAndRuleSectionNamesAreTotal(t *testing.T) {
+	for v, name := range relayv1.PolicyPass_name {
+		got := passName(relayv1.PolicyPass(v))
+		if (name == "POLICY_PASS_UNSPECIFIED") != (got == "") {
+			t.Errorf("passName(%s) = %q: only the unspecified value maps to \"\"", name, got)
+		}
+	}
+	for v, name := range relayv1.PolicyRuleSection_name {
+		got := ruleSectionName(relayv1.PolicyRuleSection(v))
+		if (name == "POLICY_RULE_SECTION_UNSPECIFIED") != (got == "") {
+			t.Errorf("ruleSectionName(%s) = %q: only the unspecified value maps to \"\"", name, got)
+		}
 	}
 }
 

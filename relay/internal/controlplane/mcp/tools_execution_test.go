@@ -446,3 +446,49 @@ func TestRenderRunError_TemplateRefusalsPassThroughVerbatim(t *testing.T) {
 		}
 	}
 }
+
+// TestPreflightRender_CarriesRuleReference: the daemon's rule reference
+// survives renderPlan as data, rule_index 0 is a real index that stays on the
+// wire, and a verdict with no rule carries no rule key at all.
+func TestPreflightRender_CarriesRuleReference(t *testing.T) {
+	out := renderPlan(capability.PlanResult{
+		Matched: 2,
+		Verdicts: []capability.NodeVerdict{
+			{
+				NodeID: "node-a", Status: capability.VerdictDeny, DecidingRule: "denied by explicit rule",
+				Pass: "deny", RuleSection: "deny", RuleIndex: 0, RuleLine: 5, MatchedOn: "the invocation's arguments",
+			},
+			{NodeID: "node-b", Status: capability.VerdictAllow},
+		},
+	})
+
+	a, b := out.Verdicts[0], out.Verdicts[1]
+	if a.RuleIndex == nil || *a.RuleIndex != 0 {
+		t.Fatalf("node-a RuleIndex = %v, want a pointer to 0", a.RuleIndex)
+	}
+	if a.Pass != "deny" || a.RuleSection != "deny" || a.RuleLine != 5 || a.MatchedOn != "the invocation's arguments" {
+		t.Errorf("node-a = %+v, want the daemon's rule reference verbatim", a)
+	}
+	if b.RuleIndex != nil {
+		t.Errorf("node-b RuleIndex = %v, want nil when there is no rule section", *b.RuleIndex)
+	}
+
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var wire struct {
+		Verdicts []map[string]any `json:"verdicts"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, ok := wire.Verdicts[0]["rule_index"]; !ok || got != float64(0) {
+		t.Errorf("node-a JSON rule_index = %v (present %v), want 0 present", got, ok)
+	}
+	for _, key := range []string{"pass", "rule_section", "rule_index", "rule_line", "matched_on"} {
+		if _, ok := wire.Verdicts[1][key]; ok {
+			t.Errorf("node-b JSON carries %q, want every rule key absent", key)
+		}
+	}
+}

@@ -49,9 +49,17 @@ type RenderedTaskResult struct {
 
 // RenderedVerdict is one Node's Plan verdict, before a surface tags it.
 type RenderedVerdict struct {
-	NodeID             string
-	Verdict            string
-	DecidingRule       string
+	NodeID       string
+	Verdict      string
+	DecidingRule string
+	// Pass, RuleSection, RuleLine and MatchedOn are the daemon's account of the
+	// deciding rule, copied verbatim and display-only. RuleIndex is nil when
+	// RuleSection is empty, because index 0 is a real index.
+	Pass               string
+	RuleSection        string
+	RuleIndex          *int
+	RuleLine           int
+	MatchedOn          string
 	Reason             string
 	RefusalExplanation string
 	Outdated           bool
@@ -179,10 +187,20 @@ func RenderJobState(ctx context.Context, results JobResultReader, jobID string) 
 func RenderPlan(pr capability.PlanResult) RenderedPlan {
 	verdicts := make([]RenderedVerdict, 0, len(pr.Verdicts))
 	for _, v := range pr.Verdicts {
+		var ruleIndex *int
+		if v.RuleSection != "" {
+			idx := v.RuleIndex
+			ruleIndex = &idx
+		}
 		verdicts = append(verdicts, RenderedVerdict{
 			NodeID:             v.NodeID,
 			Verdict:            VerdictName(v.Status),
 			DecidingRule:       v.DecidingRule,
+			Pass:               v.Pass,
+			RuleSection:        v.RuleSection,
+			RuleIndex:          ruleIndex,
+			RuleLine:           v.RuleLine,
+			MatchedOn:          v.MatchedOn,
 			Reason:             v.Reason,
 			RefusalExplanation: capability.VerdictExplanation(v.Status),
 			Outdated:           v.Outdated,

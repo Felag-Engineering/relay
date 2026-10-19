@@ -2,7 +2,10 @@ package dispatch
 
 import (
 	"regexp"
+	"slices"
 	"testing"
+
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest/protowalk"
@@ -70,16 +73,15 @@ func TestTaskRequest_CarriesNoPreviewFlag(t *testing.T) {
 // unknown is the Relay's own conclusion about its inability to ask — a Node
 // can never claim it.
 //
-// Same residual as TestTaskRequest_CarriesNoPreviewFlag above (SR7):
-// protowalk.WalkReachableMessageFields does not traverse enums, so an unknown
-// expressed as a new enum value rather than a new field name would be
-// outside this walk too — worth stating, not worth a test against a wire
-// shape that does not exist today.
+// protowalk.WalkReachableMessageFields does not traverse enums (SR7), so the
+// value names of the two enums PolicyVerdict carries are checked and pinned
+// here directly: a new value is a reviewed edit, never a silent addition.
 func TestPolicyVerdict_CannotExpressUnknown(t *testing.T) {
 	md := (&relayv1.PolicyVerdict{}).ProtoReflect().Descriptor()
 
 	protowalk.AssertExactTopLevelFieldSet(t, md, map[string]bool{
 		"query_id": true, "allowed": true, "deciding_rule": true, "unsupported": true,
+		"pass": true, "rule_index": true, "rule_line": true, "matched_on": true, "rule_section": true,
 	})
 
 	unknownFieldName := regexp.MustCompile(`(?i)unknown|offline|unreachable`)
@@ -90,4 +92,39 @@ func TestPolicyVerdict_CannotExpressUnknown(t *testing.T) {
 				"to ask (PF-22), never a Policy answer", fieldName)
 		}
 	})
+
+	for _, enum := range []struct {
+		name   string
+		values protoreflect.EnumValueDescriptors
+		want   []string
+	}{
+		{
+			"PolicyPass", relayv1.PolicyPass(0).Descriptor().Values(),
+			[]string{
+				"POLICY_PASS_UNSPECIFIED", "POLICY_PASS_PRECONDITION", "POLICY_PASS_DENY",
+				"POLICY_PASS_GUARD", "POLICY_PASS_ALLOW", "POLICY_PASS_DEFAULT",
+			},
+		},
+		{
+			"PolicyRuleSection", relayv1.PolicyRuleSection(0).Descriptor().Values(),
+			[]string{
+				"POLICY_RULE_SECTION_UNSPECIFIED", "POLICY_RULE_SECTION_OPERATION",
+				"POLICY_RULE_SECTION_DENY", "POLICY_RULE_SECTION_RAW_EXEC_ALLOW",
+				"POLICY_RULE_SECTION_RAW_EXEC_DENY",
+			},
+		},
+	} {
+		var got []string
+		for i := 0; i < enum.values.Len(); i++ {
+			name := string(enum.values.Get(i).Name())
+			got = append(got, name)
+			if unknownFieldName.MatchString(name) {
+				t.Errorf("%s has a value named %q — a Node must never be able to assert "+
+					"\"I do not know\" on the wire (PF-22)", enum.name, name)
+			}
+		}
+		if !slices.Equal(got, enum.want) {
+			t.Errorf("%s values = %v, want exactly %v — a new value is a reviewed edit", enum.name, got, enum.want)
+		}
+	}
 }
