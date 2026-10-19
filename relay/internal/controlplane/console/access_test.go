@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -220,6 +221,35 @@ func accessArticleContaining(t *testing.T, body, needle string) string {
 	t.Fatalf("no article contains %q:\n%s", needle, body)
 	return ""
 }
+
+// accessCSSRuleBodies returns the body of every rule in css whose selector
+// list contains selector exactly. A selector may be declared more than once.
+func accessCSSRuleBodies(css, selector string) []string {
+	for {
+		i := strings.Index(css, "/*")
+		if i < 0 {
+			break
+		}
+		j := strings.Index(css[i+2:], "*/")
+		if j < 0 {
+			css = css[:i]
+			break
+		}
+		css = css[:i] + css[i+2+j+2:]
+	}
+	var out []string
+	for _, m := range accessRuleRE.FindAllStringSubmatch(css, -1) {
+		for _, sel := range strings.Split(m[1], ",") {
+			if strings.TrimSpace(sel) == selector {
+				out = append(out, m[2])
+				break
+			}
+		}
+	}
+	return out
+}
+
+var accessRuleRE = regexp.MustCompile(`([^{}]+)\{([^{}]*)\}`)
 
 // accessCountingAccounts is a minimal AccountReader that records every call it
 // receives, answering an Account named differently from anything a seeded
@@ -430,7 +460,7 @@ func TestAccess_EachFamilyChipNarrowsAtTheSeam(t *testing.T) {
 }
 
 // TestAccess_ASubjectIsShownAsItsRecordNamesIt is spec 20's second
-// acceptance line: the subject is the record's Reason, verbatim, never a
+// acceptance line: the subject comes from the record's Reason alone, never a
 // registry lookup.
 func TestAccess_ASubjectIsShownAsItsRecordNamesIt(t *testing.T) {
 	d, sink, _, actor := accessStoreDeps(t)
@@ -444,11 +474,12 @@ func TestAccess_ASubjectIsShownAsItsRecordNamesIt(t *testing.T) {
 	fa := &accessCountingAccounts{}
 	d.Accounts = fa
 
-	const wantReason = "account_id=" + accessFixtureSubject + " role=operator"
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/access?kind=account").Body.String()
-	if !strings.Contains(contentOf(body), wantReason) {
-		t.Errorf("the account_role row does not render the record's Reason verbatim (%q):\n%s",
-			wantReason, contentOf(body))
+	article := accessArticleContaining(t, body, ">account_role<")
+	for _, want := range []string{`<span class="ident acctid">` + accessFixtureSubject + `</span>`, "role=operator"} {
+		if !strings.Contains(article, want) {
+			t.Errorf("the account_role row does not draw the record's %q:\n%s", want, article)
+		}
 	}
 	if strings.Contains(body, countingAccountName) {
 		t.Error("the page contains the registry's current name for the subject — the subject must " +
@@ -857,16 +888,34 @@ func TestAccess_EveryAuthFailureKindIsAnAccessKind(t *testing.T) {
 // TestAccess_ARowHasNoFieldASecretCouldOccupy follows
 // TestAccounts_ATokenRowHasNoFieldASecretCouldOccupy's shape.
 func TestAccess_ARowHasNoFieldASecretCouldOccupy(t *testing.T) {
-	typ := reflect.TypeOf(accessRow{})
-	for i := 0; i < typ.NumField(); i++ {
-		f := typ.Field(i)
-		for _, word := range []string{"Password", "Hash", "Secret", "Plaintext", "Value"} {
-			if strings.Contains(f.Name, word) {
-				t.Errorf("accessRow.%s names %q — this screen must never hold a credential's material",
-					f.Name, word)
+	pkgPath := reflect.TypeOf(accessRow{}).PkgPath()
+	visited := map[reflect.Type]bool{}
+	var walk func(typ reflect.Type, path string)
+	walk = func(typ reflect.Type, path string) {
+		if visited[typ] {
+			return
+		}
+		visited[typ] = true
+		for i := 0; i < typ.NumField(); i++ {
+			f := typ.Field(i)
+			fieldPath := path + "." + f.Name
+			for _, word := range []string{"Password", "Hash", "Secret", "Plaintext", "Value"} {
+				if strings.Contains(f.Name, word) {
+					t.Errorf("%s names %q — this screen must never hold a credential's material",
+						fieldPath, word)
+				}
+			}
+			ft := f.Type
+			for ft.Kind() == reflect.Pointer || ft.Kind() == reflect.Slice || ft.Kind() == reflect.Array {
+				ft = ft.Elem()
+			}
+			// Only this package's own struct types: the walk stops at time.Time.
+			if ft.Kind() == reflect.Struct && ft.PkgPath() == pkgPath {
+				walk(ft, fieldPath)
 			}
 		}
 	}
+	walk(reflect.TypeOf(accessRow{}), "accessRow")
 }
 
 // TestAccess_NoRoleComparisonLivesInThisScreen follows
@@ -1050,5 +1099,226 @@ func TestAccess_AHostLeverRowNamesTheHost(t *testing.T) {
 		if a := accessArticleContaining(t, content, needle); strings.Contains(a, "a name that is not an Account") {
 			t.Errorf("the host-lever %q row says a name is not an Account:\n%s", needle, a)
 		}
+	}
+}
+
+// TestAccess_ParseAccessRecordSplitsOnlyTheAccountID: only a leading account_id= is split off a record, spec 20 (D33).
+func TestAccess_ParseAccessRecordSplitsOnlyTheAccountID(t *testing.T) {
+	cases := []struct {
+		in, id, name, after string
+	}{
+		{"account_id=acct-1 name=admin kind=human role=operator", "acct-1", "admin", "kind=human role=operator"},
+		{"account_id=acct-1 role=operator", "acct-1", "", "role=operator"},
+		{"account_id=acct-1 name=admin removed=false", "acct-1", "admin", "removed=false"},
+		{"account_id=acct-1 name= removed=true", "acct-1", "", "name= removed=true"},
+		{"account_id=a  role=r", "a", "", " role=r"},
+		{"role=r account_id=a", "", "", ""},
+		{"api_token_id=tok-1", "", "", ""},
+		{"refused before any credential was checked; next attempt accepted in 5s", "", "", ""},
+		{"account_id=", "", "", ""},
+	}
+	for _, c := range cases {
+		got := parseAccessRecord(c.in)
+		if got.Text != c.in {
+			t.Errorf("%q: Text = %q, want the input verbatim", c.in, got.Text)
+		}
+		if got.AccountID != c.id || got.Name != c.name || got.After != c.after {
+			t.Errorf("%q: got id=%q name=%q after=%q, want id=%q name=%q after=%q",
+				c.in, got.AccountID, got.Name, got.After, c.id, c.name, c.after)
+		}
+	}
+}
+
+// TestAccess_AnAccountIDInARecordRendersAsAnIdentifierWithCaption: an Account ID in a record is an identifier with an Account caption, not a trust chip, spec 20 (D33).
+func TestAccess_AnAccountIDInARecordRendersAsAnIdentifierWithCaption(t *testing.T) {
+	const id = "acct-586eb7efd9a47a49981b1d7cee43bafc"
+	q := &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindAccountRole, Timestamp: testNow, Reason: "account_id=" + id + " role=operator",
+			Verified: capability.VerifiedIdentity{AccountID: "acct-admin", AccountName: "admin"}},
+	}}
+	body := get(t, newTestHandler(accessDeps(q), accounts.RoleAdmin), "/console/access").Body.String()
+	article := accessArticleContaining(t, body, ">account_role<")
+	for _, want := range []string{
+		`<span class="acctcap">Account</span>`,
+		`<span class="ident acctid">` + id + `</span>`,
+		"role=operator",
+		`data-trust="verified"`,
+	} {
+		if !strings.Contains(article, want) {
+			t.Errorf("article lacks %q:\n%s", want, article)
+		}
+	}
+	if strings.Contains(article, "account_id=acct-") {
+		t.Errorf("the raw account_id= text is still drawn:\n%s", article)
+	}
+	start := strings.Index(article, `<span class="acctref"`)
+	if start == -1 {
+		t.Fatalf("article lacks the acctref span:\n%s", article)
+	}
+	ref := article[start:]
+	end := strings.Index(ref, `role=operator`)
+	if end == -1 {
+		t.Fatalf("article lacks role=operator after the acctref span:\n%s", ref)
+	}
+	ref = ref[:end]
+	for _, banned := range []string{"chip", "trust"} {
+		if strings.Contains(ref, banned) {
+			t.Errorf("the Account ID is drawn with %q — it is an identifier, not a trust chip:\n%s", banned, ref)
+		}
+	}
+}
+
+// TestAccess_AnAccountNameIsDrawnOnlyWhereTheRecordCarriesOne: a name is drawn only where the record carries one, spec 20 (D33).
+func TestAccess_AnAccountNameIsDrawnOnlyWhereTheRecordCarriesOne(t *testing.T) {
+	const id = accessFixtureSubject
+	q := &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindAccountCreate, Timestamp: testNow, Reason: "account_id=" + id + " name=admin kind=human role=operator"},
+		{Kind: audit.KindPasswordSet, Principal: audit.PrincipalLocalHost, Timestamp: testNow, Reason: "account_id=" + id + " name=admin"},
+		{Kind: audit.KindAccountEnable, Timestamp: testNow, Reason: "account_id=" + id},
+		{Kind: audit.KindAPITokenMint, Timestamp: testNow, Reason: "account_id=" + id + " api_token_id=tok-1"},
+	}}
+	d := accessDeps(q)
+	fa := &accessCountingAccounts{}
+	d.Accounts = fa
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/access").Body.String()
+
+	const withName = `<span class="ident acctid">` + id + `</span> <span class="ident acctname">admin</span>`
+	for _, kind := range []string{audit.KindAccountCreate, audit.KindPasswordSet} {
+		if a := accessArticleContaining(t, body, ">"+kind+"<"); !strings.Contains(a, withName) {
+			t.Errorf("%s article lacks %q:\n%s", kind, withName, a)
+		}
+	}
+	for _, kind := range []string{audit.KindAccountEnable, audit.KindAPITokenMint} {
+		a := accessArticleContaining(t, body, ">"+kind+"<")
+		if !strings.Contains(a, `<span class="ident acctid">`+id+`</span>`) {
+			t.Errorf("%s article does not draw the ID:\n%s", kind, a)
+		}
+		if strings.Contains(a, "acctname") {
+			t.Errorf("%s article draws a name its record does not carry:\n%s", kind, a)
+		}
+	}
+	if strings.Contains(body, countingAccountName) {
+		t.Error("the page contains the registry's name for the subject")
+	}
+	if fa.calls != 0 || q.auditCalls != 1 || q.jobCalls != 0 {
+		t.Errorf("registry calls = %d, audit reads = %d, job reads = %d; want 0, 1, 0",
+			fa.calls, q.auditCalls, q.jobCalls)
+	}
+}
+
+// TestAccess_ARecordWithNoAccountIDIsUnchanged: a record without an account_id= is drawn as it was, spec 20 (D33).
+func TestAccess_ARecordWithNoAccountIDIsUnchanged(t *testing.T) {
+	const prose = "refused before any credential was checked; next attempt accepted in 5s"
+	q := &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindAPITokenRevoke, Timestamp: testNow, Reason: "api_token_id=tok-1"},
+		{Kind: audit.KindStepUpThrottled, Timestamp: testNow, Reason: prose},
+	}}
+	body := get(t, newTestHandler(accessDeps(q), accounts.RoleAdmin), "/console/access").Body.String()
+	for kind, reason := range map[string]string{audit.KindAPITokenRevoke: "api_token_id=tok-1", audit.KindStepUpThrottled: prose} {
+		a := accessArticleContaining(t, body, ">"+kind+"<")
+		if want := `<div class="evreason mono">` + reason + `</div>`; !strings.Contains(a, want) {
+			t.Errorf("%s article lacks %q:\n%s", kind, want, a)
+		}
+		if strings.Contains(a, "acctref") || strings.Contains(a, "acctcap") {
+			t.Errorf("%s article draws an Account ID its record does not carry:\n%s", kind, a)
+		}
+	}
+}
+
+// TestAccess_ARecordsAccountIDAndNameAreEscaped: a record's Account ID and name are HTML-escaped, spec 20 (D33).
+func TestAccess_ARecordsAccountIDAndNameAreEscaped(t *testing.T) {
+	q := &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindAccountCreate, Timestamp: testNow, Reason: "account_id=<b>x</b> name=<i>y</i>"},
+	}}
+	body := contentOf(get(t, newTestHandler(accessDeps(q), accounts.RoleAdmin), "/console/access").Body.String())
+	for _, raw := range []string{"<b>x</b>", "<i>y</i>"} {
+		if strings.Contains(body, raw) {
+			t.Errorf("the page contains unescaped %q", raw)
+		}
+	}
+	for _, esc := range []string{"&lt;b&gt;x&lt;/b&gt;", "&lt;i&gt;y&lt;/i&gt;"} {
+		if !strings.Contains(body, esc) {
+			t.Errorf("the page lacks the escaped %q", esc)
+		}
+	}
+}
+
+// TestAccess_TheAccountIDIsNeverTruncated: the Account ID is never truncated by the stylesheet, spec 20 (D33).
+func TestAccess_TheAccountIDIsNeverTruncated(t *testing.T) {
+	raw, err := assetsFS.ReadFile("assets/console.css")
+	if err != nil {
+		t.Fatalf("read console.css: %v", err)
+	}
+	css := string(raw)
+	anyHas := func(selector, decl string) bool {
+		for _, b := range accessCSSRuleBodies(css, selector) {
+			if strings.Contains(b, decl) {
+				return true
+			}
+		}
+		return false
+	}
+	// The chain that lets a long reason scroll inside .feed's overflow: hidden
+	// instead of being clipped by it.
+	for _, c := range []struct{ selector, decl string }{
+		{".evreason", "overflow-x: auto"}, {".evreason", "min-width: 0"},
+		{".evbody", "min-width: 0"}, {".ev", "min-width: 0"},
+		{".acctref", "white-space: nowrap"},
+	} {
+		if !anyHas(c.selector, c.decl) {
+			t.Errorf("no %s rule declares %q", c.selector, c.decl)
+		}
+	}
+	for _, selector := range []string{".acctref", ".acctid", ".acctcap", ".acctname"} {
+		bodies := accessCSSRuleBodies(css, selector)
+		if len(bodies) == 0 {
+			t.Errorf("%s has no rule", selector)
+		}
+		for _, b := range bodies {
+			for _, banned := range []string{"ellipsis", "text-overflow", "overflow", "max-width",
+				"text-transform", "word-break", "overflow-wrap"} {
+				if strings.Contains(b, banned) {
+					t.Errorf("%s declares %q — an Account ID is drawn in full", selector, banned)
+				}
+			}
+		}
+	}
+}
+
+// TestAccess_TheRealWritersReasonsDrawTheirAccountIDAndName: the real writers' Reasons draw their Account ID and name, spec 20 (D33).
+func TestAccess_TheRealWritersReasonsDrawTheirAccountIDAndName(t *testing.T) {
+	d, sink, st, actor := accessStoreDeps(t)
+	seedAccessTrail(t, sink, st, actor)
+	rec, err := auditsink.HostPasswordSetRecord("fixture-password-set-named", testNow, accessFixtureSubject, "subject-name")
+	if err != nil {
+		t.Fatalf("HostPasswordSetRecord: %v", err)
+	}
+	if err := st.Audit().Append(context.Background(), rec); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/access").Body.String()
+	named := accessArticleContaining(t, body, "subject-name")
+	const wantNamed = `<span class="ident acctid">` + accessFixtureSubject + `</span> <span class="ident acctname">subject-name</span>`
+	if !strings.Contains(named, wantNamed) {
+		t.Errorf("the named password_set article lacks %q:\n%s", wantNamed, named)
+	}
+	for _, swapped := range []string{
+		`<span class="ident acctid">subject-name</span>`, `<span class="ident acctname">` + accessFixtureSubject + `</span>`,
+	} {
+		if strings.Contains(named, swapped) {
+			t.Errorf("the named password_set article contains %q", swapped)
+		}
+	}
+
+	const idSpan = `<span class="ident acctid">` + accessFixtureSubject + `</span>`
+	for _, kind := range []string{audit.KindAccountCreate, audit.KindAccountRole, audit.KindAccountEnable,
+		audit.KindAccountDisable, audit.KindAPITokenMint, audit.KindPasswordClear} {
+		if a := accessArticleContaining(t, body, ">"+kind+"<"); !strings.Contains(a, idSpan) {
+			t.Errorf("%s article lacks %q:\n%s", kind, idSpan, a)
+		}
+	}
+	if a := accessArticleContaining(t, body, ">"+audit.KindAPITokenRevoke+"<"); strings.Contains(a, "acctid") {
+		t.Errorf("the api_token_revoke article draws an Account ID:\n%s", a)
 	}
 }
