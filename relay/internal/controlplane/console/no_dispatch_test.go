@@ -43,15 +43,17 @@ import (
 // read/exec partition: every file here legitimately handles
 // capability.Principal, since that is how a page attributes what it renders.
 
-// writeSeamName reports whether name is one of the package's THREE write
-// seams: JobCanceller (cancel.go, #595), ApprovalDecider (decide.go, #453) and
-// AccountAdministrator (accounts_write.go, #655). Each lives in its own file
-// so seams.go's "every seam here is read-only" claim stays unqualified, and
-// each is refused by name — and through an alias — on a type assertion below.
+// writeSeamName reports whether name is a write seam the Console must never
+// recover by assertion: the package's two, JobCanceller (cancel.go) and
+// AccountAdministrator (accounts_write.go), each in its own file so seams.go's
+// "every seam here is read-only" claim stays unqualified, and ApprovalDecider,
+// which is RETIRED — the Console decides no approval (AP-80) — and stays on
+// the list so that re-declaring one and recovering it still trips. Each is
+// refused by name, and through an alias, on a type assertion below.
 //
-// A list rather than three literal comparisons, because this guard has already
-// been found to under-enforce once: the check and the alias collector must
-// agree about what a write seam IS, and a single list is what makes them.
+// A list rather than literal comparisons, because this guard has already been
+// found to under-enforce once: the check and the alias collector must agree
+// about what a write seam IS, and a single list is what makes them.
 func writeSeamName(name string) bool {
 	switch name {
 	case "ApprovalDecider", "JobCanceller", "AccountAdministrator":
@@ -68,29 +70,12 @@ const (
 	nodevocabImportPath  = "github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 	eventsImportPath     = "github.com/Felag-Engineering/relay/relay/internal/events"
 
-	// authzImportPath is cancel.go's own import (#595); decide.go (#453),
-	// accounts.go (#654) and accounts_write.go (#655) are the other three
-	// files that name package authz, each for the same one symbol
-	// (ErrUnauthorized). The allowlist below is PACKAGE-WIDE rather than
-	// per-file, so a further importer needs no change here — see the
-	// allowlist's own doc.
+	// authzImportPath is cancel.go's own import; accounts.go and
+	// accounts_write.go are the other files that name package authz, each for
+	// the same one symbol (ErrUnauthorized). The allowlist below is
+	// PACKAGE-WIDE rather than per-file, so a further importer needs no change
+	// here — see the allowlist's own doc.
 	authzImportPath = "github.com/Felag-Engineering/relay/relay/internal/authz"
-
-	// approvalDecideFile is the one file allowed to name
-	// capability.ApprovalDecision (see the allowlist below): decide.go, the
-	// only admissible caller of DecideApproval. e.Name() is a base name, so
-	// this comparison is well-formed, and a rename of decide.go fails this
-	// guard loudly rather than silently disabling it.
-	//
-	// Rejected alternative: an adapter in the composition root that calls
-	// DecideApproval so the Console package never names the argument type at
-	// all. That would leave this guard untouched — and leave a guard whose
-	// message asserts something no longer true (that no Console file may
-	// name the type), while routing AROUND the guard instead of updating it.
-	// A file-scoped allowlist with fixtures in both directions is the honest
-	// version: the guard still says something true, and it fails loudly if
-	// the one admissible file moves or a second one is added.
-	approvalDecideFile = "decide.go"
 )
 
 // dispatchViolations AST-inspects file and returns one message per rule caught.
@@ -199,12 +184,11 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	// legitimate purpose either, and a guard that has to reason about which
 	// spelling compiles is a guard nobody trusts.
 	//
-	// The SAME lesson applies to the package's THREE write seams —
-	// ApprovalDecider, JobCanceller and AccountAdministrator (#655) — and a
-	// security review (cycle 2) caught that the prior revision did not apply
-	// it: the *ast.Ident arm below only ever matched the names LITERALLY, so
+	// The SAME lesson applies to the package's write seams — JobCanceller and
+	// AccountAdministrator, and the retired ApprovalDecider: the *ast.Ident arm
+	// below must not match the names only LITERALLY, or
 	// `type probeSeam = ApprovalDecider` followed by
-	// `any(d.Approvals).(probeSeam)` recovered the seam with the guard
+	// `any(d.Approvals).(probeSeam)` recovers the seam with the guard
 	// silent. spec.Type can be a bare *ast.Ident for a package-LOCAL type
 	// (there is no selector to inspect, unlike registry.Repository or
 	// events.Bus), so that case is collected here too, by name, alongside
@@ -221,7 +205,7 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 		}
 		if ident, ok := spec.Type.(*ast.Ident); ok && writeSeamName(ident.Name) {
 			aliasOf[spec.Name.Name] = fmt.Sprintf(
-				"aliases %s — recovering one of the package's three write seams through a renamed "+
+				"aliases %s — recovering one of the package's write seams through a renamed "+
 					"alias is the same escalation as recovering it by its own name", ident.Name)
 		}
 		return true
@@ -236,23 +220,20 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	// This list is consulted ONLY from checkRecoveredWriteSurface below, which
 	// is itself reached ONLY from *ast.TypeAssertExpr and *ast.CaseClause. So
 	// it catches a write method RECOVERED by a type assertion or a
-	// type-switch case, and a bare anonymous-interface DECLARATION — for
-	// example, declaring ApprovalDecider itself in decide.go — produces
+	// type-switch case, and a bare anonymous-interface DECLARATION produces
 	// nothing on its own; see the fixtures below for both directions.
 	//
-	// The approval verbs are here because the claim that survives (#453) is
-	// narrower than "zero mutating routes": the WRITE HALF of the approval
-	// mechanism is reachable only through the two named seams this package
-	// declares for it — ApprovalDecider (decide.go) for deciding, and no seam
-	// at all for opening or closing a Grant window. That is a fact about the
-	// TYPES the composition root hands this package, not a promise about the
-	// handlers, and it only holds if a fourth door cannot open by anonymous
-	// recovery: Deps.Approvals is wired to the same *capability.Approvals that
-	// carries DecideApproval, RequestGrant and RevokeGrant
-	// (control_surfaces.go), so an anonymous-interface assertion would
-	// recover any of them without naming a banned type or adding an import.
-	// This verb list is what keeps that door shut — the same hole for
-	// ApprovalReader that #427 closed for events.Bus.
+	// The approval verbs are here because the approval mechanism's WRITE HALF
+	// has NO seam in this package: the Console decides no approval and opens
+	// or closes no Grant window (AP-80). That is a fact about the TYPES the
+	// composition root hands this package, not a promise about the handlers,
+	// and it only holds if a door cannot open by anonymous recovery:
+	// Deps.Approvals is wired to the *capability.Approvals that carries
+	// DecideApproval, RequestGrant and RevokeGrant (control_surfaces.go), so
+	// an anonymous-interface assertion would recover any of them without
+	// naming a banned type or adding an import. This verb list is what keeps
+	// that door shut — the same hole for ApprovalReader that the events.Bus
+	// ban closes for the event seam.
 	//
 	// The dispatch/control verbs (#595) close the SAME hole, not a new one
 	// the Cancel seam introduced: Deps.Approvals was already wired
@@ -317,6 +298,50 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 		return name == "Upsert" || name == "RecordDecision"
 	}
 
+	// approvalListingMethod matches the READ methods of *capability.Approvals
+	// that ApprovalReader deliberately does not declare. Deps.Approvals is
+	// wired to *capability.Approvals, which carries PendingApprovals,
+	// LastApprovedOfSameShape, ActiveGrants and GrantForApproval beyond the
+	// one Approval read the seam declares. The narrowing holds only if those
+	// cannot be recovered by anonymous assertion — the same hole the write-verb
+	// list closes for writes. Like writeSurfaceMethod, it is consulted only for
+	// type assertions and type-switch cases, so a named seam DECLARING such a
+	// method is not refused by this rule.
+	approvalListingMethod := func(name string) bool {
+		for _, prefix := range []string{"Pending", "LastApproved", "Active", "GrantFor"} {
+			if strings.HasPrefix(name, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// A NAMED local interface declaring one of those methods is the same door
+	// with a name on it (`type lister interface{ PendingApprovals(...) }`
+	// then `any(d.Approvals).(lister)`). Record it in aliasOf so the
+	// *ast.Ident arm refuses asserting to it; declaring it stays legal.
+	ast.Inspect(file, func(n ast.Node) bool {
+		spec, ok := n.(*ast.TypeSpec)
+		if !ok {
+			return true
+		}
+		iface, ok := spec.Type.(*ast.InterfaceType)
+		if !ok || iface.Methods == nil {
+			return true
+		}
+		for _, m := range iface.Methods.List {
+			for _, name := range m.Names {
+				if writeSurfaceMethod(name.Name) || approvalListingMethod(name.Name) {
+					aliasOf[spec.Name.Name] = fmt.Sprintf(
+						"is an interface declaring %s — recovering a write or listing method from a "+
+							"narrowed seam through a named interface is the same escalation as "+
+							"through an anonymous one", name.Name)
+				}
+			}
+		}
+		return true
+	})
+
 	checkRecoveredWriteSurface := func(expr ast.Expr) {
 		if star, ok := expr.(*ast.StarExpr); ok {
 			expr = star.X
@@ -327,29 +352,24 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 				violations = append(violations, fmt.Sprintf("%s: type-asserts to a type that %s", fileName, msg))
 			}
 		case *ast.Ident:
-			// The residual an allowlist-by-file otherwise opens: after
-			// narrowing the capability.ApprovalDecision ban to decide.go, any
-			// console file could still write d.Approvals.(ApprovalDecider) —
-			// a NAMED local seam. This arm refuses that BY THEIR OWN NAME,
-			// and — since a security review (cycle 2) found the first
-			// version of this claim false — refuses a direct ALIAS of
-			// either name too (`type probeSeam = ApprovalDecider`), because
-			// the aliasOf pass above now records that alias just as it
-			// already did for registry.Repository/events.Bus.
+			// A NAMED local seam is refused BY ITS OWN NAME, and a direct ALIAS
+			// of one too (`type probeSeam = ApprovalDecider`), because the
+			// aliasOf pass above records that alias just as it does for
+			// registry.Repository and events.Bus. ApprovalDecider is retired
+			// and no longer declared, so recovering it by name is refused as the
+			// escalation it would be.
 			//
-			// What this does NOT catch, and the message below does not
-			// claim to: a SECOND, independently-declared interface (or
-			// struct) that merely happens to share ApprovalDecider's or
-			// JobCanceller's method set structurally, without naming either
-			// identifier anywhere. That residual is the same one the
-			// anonymous-interface check below already lives with for every
-			// other banned method name. Declaring or accepting one of the
-			// three write seams as a parameter stays legal — only a type
-			// assertion or type-switch case naming one, or an alias of one,
-			// is refused.
+			// What this does NOT catch, and the message below does not claim
+			// to: a SECOND, independently-declared interface (or struct) that
+			// merely happens to share a write seam's method set structurally,
+			// without naming its identifier anywhere. That residual is the same
+			// one the anonymous-interface check below already lives with for
+			// every other banned method name. Declaring or accepting a write
+			// seam as a parameter stays legal — only a type assertion or
+			// type-switch case naming one, or an alias of one, is refused.
 			if writeSeamName(t.Name) {
 				violations = append(violations, fmt.Sprintf(
-					"%s: type-asserts to %s — recovering one of the package's three write seams "+
+					"%s: type-asserts to %s — recovering one of the package's write seams "+
 						"by its own name is the same escalation as recovering the underlying type",
 					fileName, t.Name))
 				return
@@ -369,6 +389,11 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 							"%s: type-asserts to an anonymous interface declaring %s — recovering a "+
 								"write method from a narrowed read seam is the thing this guard "+
 								"exists to stop, whichever type it is spelled through", fileName, name.Name))
+					} else if approvalListingMethod(name.Name) {
+						violations = append(violations, fmt.Sprintf(
+							"%s: type-asserts to an anonymous interface declaring %s — the Console lists no "+
+								"pending approval and no Grant (AP-80); recovering a listing read from the "+
+								"narrowed approval seam undoes that", fileName, name.Name))
 					}
 				}
 			}
@@ -382,41 +407,18 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == capAlias {
 					switch v.Sel.Name {
 					case "ApprovalDecision":
-						// The argument type of DecideApproval. Naming it is
-						// what BUILDING the call requires, so it is allowed
-						// in exactly the one file that is meant to build it
-						// (#453) — everywhere else, naming it is the first
-						// half of an escalation with no legitimate use.
-						//
-						// RESIDUAL, worth being honest about (found under
-						// review, cycle 2): this rule stops a second file
-						// from NAMING the type or RECOVERING the method by
-						// assertion — it does not, and cannot, stop a second
-						// file from calling d.Decide.DecideApproval(...)
-						// directly, because Deps.Decide is already a
-						// package-visible, legitimately-typed seam and
-						// calling a method through the type it is declared
-						// as is not an escalation this guard exists to
-						// catch. A two-file change — a helper in decide.go
-						// that BUILDS the capability.ApprovalDecision and is
-						// called from elsewhere — would reach DecideApproval
-						// without naming the type at the call site and
-						// without tripping anything here. That is not a
-						// regression this change introduced: the equivalent
-						// hole is wider still for JobCanceller, whose
-						// CancelJob takes no argument type to ban at all.
-						// The violation message below says exactly what is
-						// enforced and no more.
-						if fileName != approvalDecideFile {
-							violations = append(violations, fmt.Sprintf(
-								"%s references capability.ApprovalDecision — only decide.go may NAME this type; naming a write's argument type outside its one admissible file is the first half of undoing that (this guard does not and cannot stop a call through the already-typed Deps.Decide seam itself)",
-								fileName))
-						}
+						// The argument type of DecideApproval. No file in this
+						// package may name it: the Console decides no approval
+						// (AP-80), so naming the type is the first half of
+						// undoing that, and there is no allowlisted file.
+						violations = append(violations, fmt.Sprintf(
+							"%s references capability.ApprovalDecision — the Console decides no approval (AP-80); naming the decision argument type is the first half of undoing that",
+							fileName))
 					case "GrantRequest":
-						// The argument type of the OTHER approval write verb.
-						// No file in this package may open a Grant window at
-						// all, decide.go included, so this stays banned
-						// outright — never narrowed to an allowlist.
+						// The argument type of the approval mechanism's other
+						// write verb. No file in this package may open a Grant
+						// window, so this stays banned outright — never narrowed
+						// to an allowlist.
 						violations = append(violations, fmt.Sprintf(
 							"%s references capability.GrantRequest — the Console never asks for a Grant; naming the argument type of a write is the first half of undoing that",
 							fileName))
@@ -487,8 +489,7 @@ func TestDispatchViolations_Fixtures(t *testing.T) {
 		name string
 		src  string
 		// file is the filename dispatchViolations is told this source came
-		// from. Defaults to "fixture.go", which is never decide.go, so every
-		// case not naming this exercises the ordinary (non-allowlisted) path.
+		// from. Defaults to "fixture.go".
 		file       string
 		wantSubstr string // "" = expect NO violations
 	}{
@@ -620,9 +621,7 @@ func f(a any) {
 			wantSubstr: "RevokeGrant",
 		},
 		{
-			// Fixture (i): naming the decision argument type at all still
-			// violates in an ordinary file (the default filename, never
-			// decide.go).
+			// Naming the decision argument type violates in an ordinary file.
 			name: "naming the decision argument type at all",
 			src: `package console
 import ` + capImport + `
@@ -631,24 +630,19 @@ var _ = capability.ApprovalDecision{}
 			wantSubstr: "capability.ApprovalDecision",
 		},
 		{
-			// Fixture (ii): the SAME source, told it came from decide.go,
-			// produces nothing — the one file the allowlist admits.
-			name: "naming the decision argument type in decide.go produces nothing",
+			// The same source violates under the name decide.go too: there is
+			// no allowlisted file any more.
+			name: "naming the decision argument type violates in decide.go too",
 			src: `package console
 import ` + capImport + `
 var _ = capability.ApprovalDecision{}
 `,
 			file:       "decide.go",
-			wantSubstr: "",
+			wantSubstr: "ApprovalDecision",
 		},
 		{
-			// Fixture (iii): a TYPE ASSERTION recovering DecideApproval
-			// through an anonymous interface still violates even in
-			// decide.go — copied verbatim from "anonymous interface
-			// recovering DecideApproval from the approval seam" below, with
-			// file set to decide.go. Naming the argument TYPE is allowed
-			// there; recovering the METHOD through an anonymous interface
-			// never is, whichever file it is spelled in.
+			// A TYPE ASSERTION recovering DecideApproval through an
+			// anonymous interface violates whichever file it is spelled in.
 			name: "anonymous interface recovering DecideApproval still violates in decide.go",
 			src: `package console
 import (
@@ -666,31 +660,9 @@ func f(a any) {
 			wantSubstr: "DecideApproval",
 		},
 		{
-			// Fixture (iv): the false-positive guard for the seam itself —
-			// declaring the NAMED ApprovalDecider interface in decide.go is
-			// not a type assertion and must produce nothing, mirroring
-			// "declaring the JobCanceller seam produces nothing" below.
-			name: "declaring the ApprovalDecider seam in decide.go produces nothing",
-			src: `package console
-import (
-	"context"
-	"github.com/Felag-Engineering/relay/relay/internal/approval"
-	` + capImport + `
-)
-type ApprovalDecider interface {
-	DecideApproval(ctx context.Context, p capability.Principal, in capability.ApprovalDecision) (approval.Request, error)
-}
-func f(a ApprovalDecider) { _, _ = a.DecideApproval(context.Background(), capability.Principal{}, capability.ApprovalDecision{}) }
-`,
-			file:       "decide.go",
-			wantSubstr: "",
-		},
-		{
-			// Fixture (v): the residual the allowlist otherwise opens — a
-			// type assertion to the NAMED local seam, in ANY file (not just
-			// decide.go), recovers the write method without naming the
-			// banned type or importing anything new, so it must violate
-			// wherever it is spelled.
+			// A type assertion to the retired NAMED seam recovers the write
+			// method without naming the banned type or importing anything
+			// new, so it must violate wherever it is spelled.
 			name: "type-asserting to the ApprovalDecider seam by name violates anywhere",
 			src: `package console
 func f(a any) { _, _ = a.(ApprovalDecider) }
@@ -711,9 +683,9 @@ func f(a any) { _, _ = a.(probeSeam) }
 			wantSubstr: "probeSeam",
 		},
 		{
-			// The false-positive guard for the widened verb list: these are
-			// the reads ApprovalReader actually declares, and seams.go must
-			// keep being allowed to declare them.
+			// The false-positive guard: the narrowed ApprovalReader declares
+			// the one read Job detail makes, and seams.go must keep being
+			// allowed to declare it.
 			name: "declaring the approval read seam produces nothing",
 			src: `package console
 import (
@@ -721,14 +693,147 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/approval"
 )
 type approvals interface {
-	PendingApprovals(ctx context.Context) ([]approval.Request, error)
 	Approval(ctx context.Context, id string) (approval.Request, error)
-	ActiveGrants(ctx context.Context) ([]approval.Grant, error)
-	GrantForApproval(ctx context.Context, requestID string) (approval.Grant, error)
 }
-func f(a approvals) { _, _ = a.PendingApprovals(context.Background()) }
+func f(a approvals) { _, _ = a.Approval(context.Background(), "x") }
 `,
 			wantSubstr: "",
+		},
+		{
+			name: "anonymous interface recovering PendingApprovals from the approval seam",
+			src: `package console
+import (
+	"context"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+)
+func f(a any) {
+	_, _ = a.(interface {
+		PendingApprovals(context.Context) ([]approval.Request, error)
+	})
+}
+`,
+			wantSubstr: "PendingApprovals",
+		},
+		{
+			name: "anonymous interface recovering LastApprovedOfSameShape from the approval seam",
+			src: `package console
+import (
+	"context"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+)
+func f(a any) {
+	_, _ = a.(interface {
+		LastApprovedOfSameShape(context.Context, approval.Request) (approval.Request, error)
+	})
+}
+`,
+			wantSubstr: "LastApprovedOfSameShape",
+		},
+		{
+			name: "anonymous interface recovering ActiveGrants from the approval seam",
+			src: `package console
+import (
+	"context"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+)
+func f(a any) {
+	_, _ = a.(interface {
+		ActiveGrants(context.Context) ([]approval.Grant, error)
+	})
+}
+`,
+			wantSubstr: "ActiveGrants",
+		},
+		{
+			name: "anonymous interface recovering GrantForApproval from the approval seam",
+			src: `package console
+import (
+	"context"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+)
+func f(a any) {
+	_, _ = a.(interface {
+		GrantForApproval(context.Context, string) (approval.Grant, error)
+	})
+}
+`,
+			wantSubstr: "GrantForApproval",
+		},
+		{
+			name: "a type-switch case recovering PendingApprovals from the approval seam",
+			src: `package console
+import (
+	"context"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+)
+func f(a any) {
+	switch a.(type) {
+	case interface {
+		PendingApprovals(context.Context) ([]approval.Request, error)
+	}:
+	}
+}
+`,
+			wantSubstr: "PendingApprovals",
+		},
+		{
+			name: "anonymous interface recovering Approval, the one declared read, produces nothing",
+			src: `package console
+import (
+	"context"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+)
+func f(a any) {
+	_, _ = a.(interface {
+		Approval(ctx context.Context, id string) (approval.Request, error)
+	})
+}
+`,
+			wantSubstr: "",
+		},
+		{
+			// The rule is about recovery, not declaration.
+			name: "a named seam declaring a listing read produces nothing",
+			src: `package console
+import (
+	"context"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+)
+type lister interface {
+	PendingApprovals(ctx context.Context) ([]approval.Request, error)
+}
+func f(l lister) { _, _ = l.PendingApprovals(context.Background()) }
+`,
+			wantSubstr: "",
+		},
+		{
+			name: "asserting to a named local interface declaring PendingApprovals",
+			src: `package console
+import (
+	"context"
+	"github.com/Felag-Engineering/relay/relay/internal/approval"
+)
+type lister interface {
+	PendingApprovals(ctx context.Context) ([]approval.Request, error)
+}
+func f(a any) { _, _ = a.(lister) }
+`,
+			wantSubstr: "declaring PendingApprovals",
+		},
+		{
+			name: "a type-switch case naming a local interface declaring DecideApproval",
+			src: `package console
+import "context"
+type decider interface {
+	DecideApproval(ctx context.Context, id string) error
+}
+func f(a any) {
+	switch a.(type) {
+	case decider:
+	}
+}
+`,
+			wantSubstr: "declaring DecideApproval",
 		},
 		{
 			// The SAME pre-existing hole (#595), reached through a third
@@ -871,10 +976,9 @@ func f(a AccountReader) { _, _ = a.Accounts(context.Background(), capability.Pri
 			wantSubstr: "",
 		},
 		{
-			// The third write seam (#655), by its own name. Same direction
-			// as the ApprovalDecider/JobCanceller arms: recovering a write
-			// seam from an `any` is the escalation, whichever of the three
-			// it is.
+			// The second write seam, by its own name. Same direction as the
+			// ApprovalDecider/JobCanceller arms: recovering a write seam from
+			// an `any` is the escalation, whichever it is.
 			name: "type-asserting to the AccountAdministrator seam by name violates anywhere",
 			src: `package console
 func f(a any) { _, _ = a.(AccountAdministrator) }

@@ -1,9 +1,8 @@
 // Package main: mcp_elicitation_refusals_e2e_test.go is S6 of #646 (v0.7.0):
 // proof for docs/specs/approval.md AP-61, AP-62, AP-64, AP-65, AP-66, AP-67,
-// AP-69, AP-71 (and AP-16/AP-17/AP-19 kept proven for an MCP-originated
-// request), plus the ADR-0040-as-amended rescue: the Console and the Control
-// API keep deciding any parked request, including one an MCP client parked,
-// unchanged.
+// AP-69, AP-71 (and AP-17 kept proven for an MCP-originated request), plus
+// the ADR-0040-as-amended rescue: the Control API keeps deciding any parked
+// request, including one an MCP client parked, unchanged.
 //
 // The answer path is reached here only via the #721 hook
 // (WithMCPServerOptions(mcp.WithApprovalElicitation())) — redundant since
@@ -12,8 +11,7 @@
 // its composition-root proof.
 //
 // No origin check is built here: AP-74..76 were retired by ADR-0040's
-// amendment. The Console and Control API decision paths are exercised, never
-// narrowed.
+// amendment. The Control API decision path is exercised, never narrowed.
 package main
 
 import (
@@ -22,7 +20,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -84,10 +81,6 @@ const (
 // metaKeyReplayedFrom mirrors elicit's own unexported replayedFromMetaKey —
 // duplicated here since this test cannot reach the unexported original.
 const metaKeyReplayedFrom = "io.gleipnir/replayed-from"
-
-// consolePassword is dana's Console password across every test below that
-// decides on the Console.
-const consolePassword = "dana's console password"
 
 // gateInBandAudienceOmitsCaller is an askable-shaped in-band rule (requester
 // allowed, channel in-band) whose audience names only "alice" — the caller in
@@ -344,45 +337,6 @@ func sealUnderAnotherKey(t *testing.T, accountID, requestID, planHash string, ar
 		t.Fatalf("sealed state = %q, want the requeststate version prefix rs1.", sealed)
 	}
 	return sealed
-}
-
-// consoleDecide signs dana in on the Console and approves requestID there,
-// asserting the card's own plan_hash matches wantPlanHash before deciding.
-// Every Console GET this performs is an audited read (ADR-0025) that writes
-// its own KindRead record — callers comparing audit-trail length must
-// capture it BEFORE calling this, never across it.
-func consoleDecide(t *testing.T, f *relayFixture, requestID, wantPlanHash string) {
-	t.Helper()
-	mintConsoleHumanAccount(t, f, "dana", consolePassword, accounts.RoleOperator)
-
-	client := consoleClient(t, f)
-	consoleSignIn(t, client, f, "dana", consolePassword)
-
-	cardResp, err := client.Get(f.ControlBase + "/console/approvals/" + requestID)
-	if err != nil {
-		t.Fatalf("GET approval card: %v", err)
-	}
-	cardBody := readAll(t, cardResp)
-	csrfToken := consoleHiddenField(t, cardBody, "csrf_token")
-	planHash := consoleHiddenField(t, cardBody, "plan_hash")
-	if planHash != wantPlanHash {
-		t.Fatalf("card's plan_hash = %q, want the park's own %q", planHash, wantPlanHash)
-	}
-
-	decideResp, err := client.PostForm(f.ControlBase+"/console/approvals/"+requestID+"/decision", url.Values{
-		"csrf_token": {csrfToken},
-		"plan_hash":  {planHash},
-		"answer":     {"approve"},
-		"reason":     {"decided on the console"},
-		"password":   {consolePassword},
-	})
-	if err != nil {
-		t.Fatalf("POST decision: %v", err)
-	}
-	decideBody := readAll(t, decideResp)
-	if decideResp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("decide status = %d, want 303; body %s", decideResp.StatusCode, decideBody)
-	}
 }
 
 // assertRedriveRuns re-drives the original parked call, carrying no answer
@@ -1244,15 +1198,14 @@ func TestMCPElicitation_DuplicateRetryReAttaches(t *testing.T) {
 // The rescue (ADR-0040 as amended)
 // -----------------------------------------------------------------------
 
-// TestApprovalCallout_ConsoleDecidesAnMCPParkedRequest is the ADR-0040-as-
-// amended rescue for a request parked over MCP under a NON-askable rule: the
-// Console still decides it — nothing is dispatched from the Console itself
-// (AP-19), the decision is attributed to the deciding human, verified,
-// out-of-band and step-up'd (AP-16, AP-17) — and the requester's re-drive
-// over the SAME MCP session then runs. No existing e2e test parks over MCP
-// and decides on the Console: the Console tests (approval_console_e2e_test.go)
-// park through the Control API.
-func TestApprovalCallout_ConsoleDecidesAnMCPParkedRequest(t *testing.T) {
+// TestApprovalCallout_ControlAPIDecidesAnMCPParkedRequest is the ADR-0040-as-
+// amended rescue for a request parked over MCP under a NON-askable rule: a
+// human Account still decides it on the Control API — nothing is dispatched
+// by the decision itself, which is attributed to the deciding human, verified
+// and out-of-band (AP-17) — and the requester's re-drive over the SAME MCP
+// session then runs. No other e2e test parks over MCP and decides on the
+// Control API under a non-askable rule.
+func TestApprovalCallout_ControlAPIDecidesAnMCPParkedRequest(t *testing.T) {
 	cases := []struct {
 		name string
 		gate string
@@ -1262,7 +1215,7 @@ func TestApprovalCallout_ConsoleDecidesAnMCPParkedRequest(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f, token, _ := startElicitingRelayWith(t, tc.gate, WithConfig(func(c *Config) { c.ConsoleEnabled = true }))
+			f, token, _ := startElicitingRelayWith(t, tc.gate)
 			session := connectEliciting(t, f, token)
 
 			res := relaytest.CallTool(t, session, "run_operation", restartNginxArgs())
@@ -1278,13 +1231,21 @@ func TestApprovalCallout_ConsoleDecidesAnMCPParkedRequest(t *testing.T) {
 			ph := out.PendingApproval.PlanHash
 
 			if got := len(allJobs(t, f)); got != 0 {
-				t.Errorf("Jobs before the Console decision = %d, want 0", got)
+				t.Errorf("Jobs before the decision = %d, want 0", got)
 			}
 			if dispatchCount, _ := auditCounts(t, f); dispatchCount != 0 {
-				t.Errorf("KindDispatch records before the Console decision = %d, want 0 — AP-19: nothing dispatches from the Console", dispatchCount)
+				t.Errorf("KindDispatch records before the decision = %d, want 0 — a park dispatches nothing", dispatchCount)
 			}
 
-			consoleDecide(t, f, rid, ph)
+			dana := mintAccount(t, f, "dana", accounts.KindHuman, accounts.RoleOperator)
+			decideResp := controlAPIRequest(t, f.ClientFor(dana), http.MethodPost,
+				f.ControlBase+"/api/v1/approvals/"+rid+"/decision", dana,
+				map[string]any{"approve": true, "plan_hash": ph})
+			defer decideResp.Body.Close()
+			if decideResp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(decideResp.Body)
+				t.Fatalf("decision status = %d, want 200; body = %s", decideResp.StatusCode, body)
+			}
 
 			if got := fetchApproval(t, f, rid); got.State != "approved" {
 				t.Errorf("approval state = %q, want approved", got.State)
@@ -1318,112 +1279,86 @@ func TestApprovalCallout_ConsoleDecidesAnMCPParkedRequest(t *testing.T) {
 				t.Errorf("Attribution.Asserted.OnBehalfOf = %q, want empty — out of band, dana IS the approver, verified", d.Attribution.Asserted.OnBehalfOf)
 			}
 
-			records, err := f.Deps.audit.List(context.Background())
-			if err != nil {
-				t.Fatalf("audit List: %v", err)
-			}
-			var sawStepUp bool
-			for _, r := range records {
-				if r.Kind == audit.KindStepUp && r.Attribution.Verified.AccountName == "dana" {
-					sawStepUp = true
-				}
-			}
-			if !sawStepUp {
-				t.Error("no KindStepUp record attributed to dana")
-			}
-
 			assertRedriveRuns(t, f, session, rid)
 		})
 	}
 }
 
-// TestMCPElicitation_StrandedAnswerIsRescuedOnTheConsoleAndControlAPI is
+// TestMCPElicitation_StrandedAnswerIsRescuedOnTheControlAPI is
 // threat-model R27's rescue: a request that emitted a question, whose answer
 // is then refused for a state sealed under another key — simulating a
 // restart landing on a replica with a different seal key — stays pending and
 // STRANDED (a further plain re-drive still asks nobody, since it is now an
-// OBSERVED park), and is rescued on the Console and on the Control API
-// (mirrors TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue's plain-
+// OBSERVED park), and is rescued on the Control API, which is the rescue's only
+// decision surface (mirrors TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue's plain-
 // retry proof, minus the question).
-func TestMCPElicitation_StrandedAnswerIsRescuedOnTheConsoleAndControlAPI(t *testing.T) {
-	cases := []string{"console", "control api"}
-	for _, tc := range cases {
-		t.Run(tc, func(t *testing.T) {
-			f, token, accountID := startElicitingRelayWith(t, gateAllMutatesInBandAskable, WithConfig(func(c *Config) { c.ConsoleEnabled = true }))
-			session := connectEliciting(t, f, token)
-			q, qid, rid, ph := askApproval(t, session, restartNginxArgs())
+func TestMCPElicitation_StrandedAnswerIsRescuedOnTheControlAPI(t *testing.T) {
+	f, token, accountID := startElicitingRelayWith(t, gateAllMutatesInBandAskable)
+	session := connectEliciting(t, f, token)
+	q, qid, rid, ph := askApproval(t, session, restartNginxArgs())
 
-			foreign := sealUnderAnotherKey(t, accountID, rid, ph, restartNginxArgs())
-			before := auditLen(t, f)
-			qf := *q
-			qf.RequestState = foreign
-			res := answerAsResponder(t, session, restartNginxArgs(), &qf, qid, "accept")
-			assertStateRefusedNothingRecorded(t, f, res, requeststate.ErrTampered.Error(), before, rid)
+	foreign := sealUnderAnotherKey(t, accountID, rid, ph, restartNginxArgs())
+	before := auditLen(t, f)
+	qf := *q
+	qf.RequestState = foreign
+	res := answerAsResponder(t, session, restartNginxArgs(), &qf, qid, "accept")
+	assertStateRefusedNothingRecorded(t, f, res, requeststate.ErrTampered.Error(), before, rid)
 
-			// R27 stranding: a plain re-drive renders pending_approval with no
-			// question — it is now an OBSERVED park.
-			strandedRes := relaytest.CallTool(t, session, "run_operation", restartNginxArgs())
-			if strandedRes.NeedsInput() {
-				t.Fatal("NeedsInput() = true, want false — the park is now OBSERVED, not created")
-			}
-			var strandedOut mcp.RunOrPlanOutput
-			relaytest.DecodeToolJSON(t, strandedRes, &strandedOut)
-			if strandedOut.PendingApproval == nil || strandedOut.PendingApproval.RequestID != rid {
-				t.Fatalf("stranded re-drive = %+v, want it still pending on %q", strandedOut, rid)
-			}
-
-			// assertRescuerDecided checks the decision record AND, via
-			// elicitDecisionView (as TestApprovalCallout_ConsoleDecidesAnMCPParkedRequest
-			// does), that the Control API's own view of the decision reports
-			// the rescuer as Human — this rescue is only credible if it was a
-			// person who decided it, not merely that "dana"/"bianca" is the
-			// recorded name.
-			assertRescuerDecided := func(t *testing.T, rescuer string) {
-				t.Helper()
-				view := decisionRecordsFor(t, f, rid)
-				if len(view) != 1 || view[0].Attribution.Verified.AccountName != rescuer || view[0].DecisionChannel != "out-of-band" {
-					t.Errorf("decision records = %+v, want %s's out-of-band decision", view, rescuer)
-				}
-				getResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+rid, f.Credential, nil)
-				defer getResp.Body.Close()
-				var dview elicitDecisionView
-				if err := json.NewDecoder(getResp.Body).Decode(&dview); err != nil {
-					t.Fatalf("decode approval: %v", err)
-				}
-				if len(dview.Decisions) != 1 {
-					t.Fatalf("decisions = %+v, want exactly 1", dview.Decisions)
-				}
-				cd := dview.Decisions[0]
-				if cd.Account != rescuer || !cd.Approve || cd.Channel != "out-of-band" || !cd.Human {
-					t.Errorf("Control API decision = %+v, want %s's human out-of-band approval", cd, rescuer)
-				}
-			}
-
-			switch tc {
-			case "console":
-				consoleDecide(t, f, rid, ph)
-				assertRescuerDecided(t, "dana")
-			case "control api":
-				bianca := mintAccount(t, f, "bianca", accounts.KindHuman, accounts.RoleOperator)
-				decideResp := controlAPIRequest(t, f.ClientFor(bianca), http.MethodPost,
-					f.ControlBase+"/api/v1/approvals/"+rid+"/decision", bianca,
-					map[string]any{"approve": true, "plan_hash": ph})
-				defer decideResp.Body.Close()
-				if decideResp.StatusCode != http.StatusOK {
-					body, _ := io.ReadAll(decideResp.Body)
-					t.Fatalf("decision status = %d, want 200; body = %s", decideResp.StatusCode, body)
-				}
-				var decided approvalBody
-				if err := json.NewDecoder(decideResp.Body).Decode(&decided); err != nil {
-					t.Fatalf("decode decision: %v", err)
-				}
-				if decided.State != "approved" {
-					t.Errorf("state = %q, want approved", decided.State)
-				}
-				assertRescuerDecided(t, "bianca")
-			}
-
-			assertRedriveRuns(t, f, session, rid)
-		})
+	// R27 stranding: a plain re-drive renders pending_approval with no
+	// question — it is now an OBSERVED park.
+	strandedRes := relaytest.CallTool(t, session, "run_operation", restartNginxArgs())
+	if strandedRes.NeedsInput() {
+		t.Fatal("NeedsInput() = true, want false — the park is now OBSERVED, not created")
 	}
+	var strandedOut mcp.RunOrPlanOutput
+	relaytest.DecodeToolJSON(t, strandedRes, &strandedOut)
+	if strandedOut.PendingApproval == nil || strandedOut.PendingApproval.RequestID != rid {
+		t.Fatalf("stranded re-drive = %+v, want it still pending on %q", strandedOut, rid)
+	}
+
+	// assertRescuerDecided checks the decision record AND, via
+	// elicitDecisionView (as TestApprovalCallout_ControlAPIDecidesAnMCPParkedRequest
+	// does), that the Control API's own view of the decision reports the
+	// rescuer as Human — the rescue is only credible if a person decided
+	// it, not merely if the recorded name matches rescuer.
+	assertRescuerDecided := func(t *testing.T, rescuer string) {
+		t.Helper()
+		view := decisionRecordsFor(t, f, rid)
+		if len(view) != 1 || view[0].Attribution.Verified.AccountName != rescuer || view[0].DecisionChannel != "out-of-band" {
+			t.Errorf("decision records = %+v, want %s's out-of-band decision", view, rescuer)
+		}
+		getResp := controlAPIRequest(t, f.Client(), http.MethodGet, f.ControlBase+"/api/v1/approvals/"+rid, f.Credential, nil)
+		defer getResp.Body.Close()
+		var dview elicitDecisionView
+		if err := json.NewDecoder(getResp.Body).Decode(&dview); err != nil {
+			t.Fatalf("decode approval: %v", err)
+		}
+		if len(dview.Decisions) != 1 {
+			t.Fatalf("decisions = %+v, want exactly 1", dview.Decisions)
+		}
+		cd := dview.Decisions[0]
+		if cd.Account != rescuer || !cd.Approve || cd.Channel != "out-of-band" || !cd.Human {
+			t.Errorf("Control API decision = %+v, want %s's human out-of-band approval", cd, rescuer)
+		}
+	}
+
+	bianca := mintAccount(t, f, "bianca", accounts.KindHuman, accounts.RoleOperator)
+	decideResp := controlAPIRequest(t, f.ClientFor(bianca), http.MethodPost,
+		f.ControlBase+"/api/v1/approvals/"+rid+"/decision", bianca,
+		map[string]any{"approve": true, "plan_hash": ph})
+	defer decideResp.Body.Close()
+	if decideResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(decideResp.Body)
+		t.Fatalf("decision status = %d, want 200; body = %s", decideResp.StatusCode, body)
+	}
+	var decided approvalBody
+	if err := json.NewDecoder(decideResp.Body).Decode(&decided); err != nil {
+		t.Fatalf("decode decision: %v", err)
+	}
+	if decided.State != "approved" {
+		t.Errorf("state = %q, want approved", decided.State)
+	}
+	assertRescuerDecided(t, "bianca")
+
+	assertRedriveRuns(t, f, session, rid)
 }

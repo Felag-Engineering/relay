@@ -5,11 +5,15 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/audit"
+	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 )
 
@@ -24,9 +28,9 @@ const testCredential = accounts.TokenPrefix + "1234567890abcdef.test-secret" // 
 // rather than by hand-injecting a principal. Invariant 10 is one auth path;
 // a test harness that invents a second one stops testing the thing that ships.
 //
-// The Account carries an ID as well as a name. That is not decoration: the
-// approval queue asks whether a Request is the CALLER'S OWN, and the rule
-// requires both identities to be non-empty — without an ID here, every fixture
+// The Account carries an ID as well as a name. That is not decoration: a
+// self-targeting refusal asks whether a target is the CALLER'S OWN Account, and
+// the rule requires both identities to be non-empty — without an ID here, every fixture
 // would land on the empty-equals-empty branch and every such assertion would
 // pass without meaning anything.
 type roleVerifier struct{ role accounts.Role }
@@ -444,9 +448,8 @@ func TestConsole_RegisterMountsEveryRouteWithoutPatternConflict(t *testing.T) {
 // actually wraps — so this test fails again if that oracle ever comes back.
 //
 // THE SWEEP COVERS EVERY METHOD, NOT ONLY GET (#655). It used to `continue`
-// on every non-GET route, which left POST /console/jobs/{job_id}/cancel and
-// POST /console/approvals/{approval_id}/decision unswept, and would have left
-// this issue's five Accounts write routes unswept beside them. Two things
+// on every non-GET route, which left POST /console/jobs/{job_id}/cancel
+// unswept, and would have left this issue's five Accounts write routes unswept beside them. Two things
 // carry the widening:
 //
 //   - the OPTIONS method-oracle sub-loop is now UNCONDITIONAL on method. It
@@ -740,6 +743,142 @@ func TestConsole_ReadEgressIsRetired(t *testing.T) {
 	}
 }
 
+// TestConsole_HasNoApprovalSurface proves AP-80 at the route table: the
+// Console mounts no approvals queue, no request screen and no decision route
+// for any role, with console_execution off or on; the ordinary 404 answers
+// every such path; and the navigation carries no Approvals destination, no
+// pending count and no orphaned Act heading.
+func TestConsole_HasNoApprovalSurface(t *testing.T) {
+	walked := 0
+	for _, execution := range []bool{false, true} {
+		d := withExecution(sweepFixture(), execution)
+		for _, role := range sessionRoles {
+			h := newTestHandler(d, role)
+
+			for _, r := range Routes(d) {
+				if strings.HasPrefix(r.Path, "/console/approvals") {
+					t.Errorf("execution=%v: Routes mounts %s %s", execution, r.Method, r.Path)
+				}
+			}
+			for _, r := range routesFor(d, role) {
+				if strings.HasPrefix(r.Path, "/console/approvals") {
+					t.Errorf("execution=%v role %s: routesFor reaches %s %s", execution, role, r.Method, r.Path)
+				}
+			}
+
+			want := get(t, h, "/console/nonesuch")
+			if want.Code != http.StatusNotFound {
+				t.Fatalf("role %s: /console/nonesuch = %d, want 404", role, want.Code)
+			}
+			for _, c := range []struct{ method, path string }{
+				{http.MethodGet, "/console/approvals"},
+				{http.MethodGet, "/console/approvals/"},
+				{http.MethodGet, "/console/approvals?waiting=all"},
+				{http.MethodGet, "/console/approvals/ap-1"},
+				{http.MethodGet, "/console/approvals/ap-1/decision"},
+				{http.MethodOptions, "/console/approvals/ap-1/decision"},
+			} {
+				got := request(t, h, c.method, c.path)
+				if got.Code != http.StatusNotFound {
+					t.Errorf("execution=%v role %s: %s %s = %d, want 404", execution, role, c.method, c.path, got.Code)
+					continue
+				}
+				if !bytes.Equal(got.Body.Bytes(), want.Body.Bytes()) {
+					t.Errorf("execution=%v role %s: %s %s is not the Console's ordinary 404 page", execution, role, c.method, c.path)
+				}
+			}
+
+			nav := navOf(get(t, h, "/console/").Body.String())
+			if strings.Contains(nav, ">Approvals<") || strings.Contains(nav, "/console/approvals") {
+				t.Errorf("execution=%v role %s: the navigation still offers Approvals", execution, role)
+			}
+			for _, sec := range Nav(d, role, "") {
+				for _, item := range sec.Items {
+					if item.Label == "Approvals" {
+						t.Errorf("execution=%v role %s: Nav carries an Approvals item", execution, role)
+					}
+				}
+				// Run was the Act group's only other entry; with no Run for
+				// this role the group must not render empty.
+				if sec.Group == NavAct && (len(sec.Items) != 1 || sec.Items[0].Label != "Run") {
+					t.Errorf("execution=%v role %s: the Act group holds %+v, want Run alone or no group", execution, role, sec.Items)
+				}
+			}
+			if !execution {
+				for _, sec := range Nav(d, role, "") {
+					if sec.Group == NavAct {
+						t.Errorf("role %s: execution is off, yet Nav draws an Act group", role)
+					}
+				}
+				if strings.Contains(nav, ">Act<") {
+					t.Errorf("role %s: execution is off, yet the navigation draws an Act heading", role)
+				}
+			}
+
+			for _, path := range walkableScreens(routesFor(d, role), fixtureIDs) {
+				rec := get(t, h, path)
+				if rec.Code == http.StatusOK {
+					walked++
+				}
+				if strings.Contains(rec.Body.String(), `href="/console/approvals`) {
+					t.Errorf("execution=%v role %s: %s links to the approvals surface", execution, role, path)
+				}
+			}
+		}
+	}
+	if walked == 0 {
+		t.Fatal("the sweep rendered no screen — it is not running")
+	}
+}
+
+// TestConsole_ADecisionPostOnARealSessionFindsNothing proves AP-80 past the
+// CSRF gate, which the route-table test cannot reach: a genuine signed-in
+// session with a genuine CSRF token and the right password posting to the
+// retired decision path gets the ordinary 404, takes no step-up and records no
+// decision.
+func TestConsole_ADecisionPostOnARealSessionFindsNothing(t *testing.T) {
+	x := newRealWriteFix(t)
+	oldSession := x.session.Value
+
+	rec := x.post(t, "/console/approvals/ap-1/decision", url.Values{
+		"plan_hash": {"hash-ap-1"},
+		"answer":    {"approve"},
+		"password":  {realWritePassword},
+	})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("POST the retired decision path = %d, want 404; body %s", rec.Code, contentOf(rec.Body.String()))
+	}
+	if c := cookieNamed(rec.Result().Cookies(), consoleauth.SessionCookieName); c != nil {
+		t.Errorf("the retired decision path set a session cookie %q", c.Name)
+	}
+	if x.session.Value != oldSession {
+		t.Error("the retired decision path rotated the session")
+	}
+	if n := countKind(x, t, audit.KindStepUp); n != 0 {
+		t.Errorf("%d step_up records, want 0: no step-up may be taken for a path that is not there", n)
+	}
+	if n := countKind(x, t, audit.KindApprovalDecided); n != 0 {
+		t.Errorf("%d approval_decided records, want 0", n)
+	}
+}
+
+// TestApprovalReader_ReadsOneRecordAndCannotListOrDecide pins the seam's
+// narrowing (AP-80): the Console's approval seam declares the one read Job
+// detail makes and nothing that lists, decides or opens a window.
+func TestApprovalReader_ReadsOneRecordAndCannotListOrDecide(t *testing.T) {
+	typ := reflect.TypeOf((*ApprovalReader)(nil)).Elem()
+	if typ.NumMethod() != 1 || typ.Method(0).Name != "Approval" {
+		t.Fatalf("ApprovalReader declares %d methods, want exactly Approval", typ.NumMethod())
+	}
+	for i := 0; i < typ.NumMethod(); i++ {
+		for _, prefix := range []string{"Pending", "LastApproved", "Active", "GrantFor", "Decide", "Request", "Revoke"} {
+			if strings.HasPrefix(typ.Method(i).Name, prefix) {
+				t.Errorf("ApprovalReader declares %s", typ.Method(i).Name)
+			}
+		}
+	}
+}
+
 // TestConsole_V060MountsNoUnbuiltScreen is a regression pin for the exact
 // defect #464 fixed, not a derived property: these specific v0.7.0 screens
 // (console/06, 09, 16) must not be reachable in v0.6.0, however the route
@@ -767,9 +906,8 @@ func TestConsole_V060MountsNoUnbuiltScreen(t *testing.T) {
 // fixtureIDs are the object ids the screen fixtures actually contain, so a
 // parameterised route can be walked rather than skipped.
 var fixtureIDs = map[string]string{
-	"{node_id}":     "node-web-1",
-	"{job_id}":      "job-1",
-	"{approval_id}": "ap-1",
+	"{node_id}": "node-web-1",
+	"{job_id}":  "job-1",
 
 	// The Accounts write half's two parameters (#655). Both exist in
 	// sweepAccounts (fakes_test.go), and acct-mike is chosen deliberately: it

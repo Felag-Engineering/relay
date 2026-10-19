@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
@@ -198,112 +197,35 @@ func TestStepUp_TheSessionIDDiffersAfterStepUp(t *testing.T) {
 	}
 }
 
-// decideSessionFixture is a real-Service Decide fixture with two pending
-// approvals, signed in as mike. It follows the session cookie like a browser.
-type decideSessionFixture struct {
-	f       *loginFixture
-	decider *fakeDecider
-	session *http.Cookie
-}
-
-func newDecideSessionFixture(t *testing.T, decider *fakeDecider) *decideSessionFixture {
-	t.Helper()
-	fa := &fakeApprovals{pending: []approval.Request{pendingApprovalRequest("ap-1"), pendingApprovalRequest("ap-2")}}
-	f := newLoginFixtureWith(t, func(d *Deps) {
-		d.Approvals = fa
-		d.Decide = decider
-	})
-	rec, cookies := f.signIn(t, "mike", consolePassword)
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("sign-in = %d", rec.Code)
-	}
-	return &decideSessionFixture{f: f, decider: decider, session: cookieNamed(cookies, consoleauth.SessionCookieName)}
-}
-
-func (s *decideSessionFixture) card(t *testing.T, id string) string {
-	t.Helper()
-	rec := s.f.do(t, httptest.NewRequest(http.MethodGet, "/console/approvals/"+id, nil), s.session)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET card %s = %d", id, rec.Code)
-	}
-	return rec.Body.String()
-}
-
-// decide submits a decision from the card's own form and follows a rotated
-// cookie.
-func (s *decideSessionFixture) decide(t *testing.T, id, password string) *httptest.ResponseRecorder {
-	t.Helper()
-	form := decideForm(s.card(t, id), "approve", "", password)
-	req := httptest.NewRequest(http.MethodPost, decideApprovalAction(id), strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := s.f.do(t, req, s.session)
-	if c := cookieNamed(rec.Result().Cookies(), consoleauth.SessionCookieName); c != nil && c.Value != "" && c.MaxAge >= 0 {
-		s.session = &http.Cookie{Name: c.Name, Value: c.Value}
-	}
-	return rec
-}
-
-func TestStepUp_TheSessionIDDiffersAfterAStepUpToDecide(t *testing.T) {
-	s := newDecideSessionFixture(t, &fakeDecider{})
-	old := s.session
-
-	rec := s.decide(t, "ap-1", consolePassword)
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("decide = %d; body %s", rec.Code, contentOf(rec.Body.String()))
-	}
-	if s.session.Value == old.Value {
-		t.Fatal("the decision's step-up did not rotate the session identifier")
-	}
-	dead := s.f.do(t, httptest.NewRequest(http.MethodGet, "/console/", nil), old)
-	if dead.Code != http.StatusSeeOther || !strings.HasPrefix(dead.Header().Get("Location"), LoginPath) {
-		t.Errorf("the old cookie got %d to %q, want a 303 to sign-in", dead.Code, dead.Header().Get("Location"))
-	}
-}
-
-// TestStepUp_ADecisionInsideTheWindowStillNeedsAPassword is the AP-16 guard:
-// a decision re-authenticates at the moment of deciding, even though a
-// decision's own step-up stamped the session a moment ago.
-func TestStepUp_ADecisionInsideTheWindowStillNeedsAPassword(t *testing.T) {
-	decider := &fakeDecider{}
-	s := newDecideSessionFixture(t, decider)
-
-	if rec := s.decide(t, "ap-1", consolePassword); rec.Code != http.StatusSeeOther {
-		t.Fatalf("first decision = %d; body %s", rec.Code, contentOf(rec.Body.String()))
-	}
-
-	if !strings.Contains(s.card(t, "ap-2"), `id="decide-password" name="password" type="password" autocomplete="current-password" required`) {
-		t.Error("inside the window the decision form no longer marks its password input required")
-	}
-	rec := s.decide(t, "ap-2", "")
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("a password-less decision inside the window = %d, want 401", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "Step-up re-authentication is required to decide an approval. Nothing was decided.") {
-		t.Errorf("the refusal copy changed:\n%s", contentOf(rec.Body.String()))
-	}
-	if len(decider.calls) != 1 {
-		t.Errorf("the decider has %d calls, want 1: the second decision must not have been taken", len(decider.calls))
-	}
-}
-
+// A refusal that comes AFTER a real step-up must render the rotated session's
+// CSRF token, not the dead one's: the step-up rotated the session before the
+// capability layer refused.
 func TestStepUp_ARefusalAfterAStepUpRendersTheRotatedCSRFToken(t *testing.T) {
-	decider := &fakeDecider{err: approval.ErrPlanChanged}
-	s := newDecideSessionFixture(t, decider)
-	oldToken := s.f.sessions.CSRFToken(consoleauth.ParseSessionID(s.session.Value)).Reveal()
+	x := newRealWriteFix(t)
+	oldCookie := x.session.Value
+	oldToken := x.sessions.CSRFToken(consoleauth.ParseSessionID(x.session.Value)).Reveal()
 
-	rec := s.decide(t, "ap-1", consolePassword)
+	// The password is right, so the step-up passes and rotates; the name is
+	// taken, so CreateAccount then refuses.
+	rec := x.post(t, createAccountAction(), createForm(x.target.Name, realWritePassword))
 	if rec.Code != http.StatusConflict {
-		t.Fatalf("decide with a changed plan = %d, want 409; body %s", rec.Code, contentOf(rec.Body.String()))
+		t.Fatalf("create with a taken name = %d, want 409; body %s", rec.Code, contentOf(rec.Body.String()))
 	}
-	newToken := s.f.sessions.CSRFToken(consoleauth.ParseSessionID(s.session.Value)).Reveal()
-	if newToken == oldToken {
+	if x.session.Value == oldCookie {
 		t.Fatal("the session did not rotate")
+	}
+	newToken := x.sessions.CSRFToken(consoleauth.ParseSessionID(x.session.Value)).Reveal()
+	if newToken == oldToken {
+		t.Fatal("the rotated session carries the old CSRF token")
 	}
 	if !strings.Contains(rec.Body.String(), newToken) {
 		t.Error("the refusal page does not carry the rotated session's CSRF token")
 	}
 	if strings.Contains(rec.Body.String(), oldToken) {
 		t.Error("the refusal page carries the dead session's CSRF token")
+	}
+	if n := countKind(x, t, audit.KindStepUp); n != 1 {
+		t.Errorf("%d step_up records, want 1: the refusal must have come after a step-up", n)
 	}
 }
 
@@ -370,48 +292,25 @@ func TestStepUp_TheWindowIsReadFromConsoleauth(t *testing.T) {
 			t.Error("an Account was created on a dead session")
 		}
 	})
-
-	t.Run("decide never consults the window", func(t *testing.T) {
-		decider := &fakeDecider{}
-		auth := &fakeAuth{fresh: true}
-		f := newLoginFixtureWith(t, func(d *Deps) {
-			d.Approvals = &fakeApprovals{pending: []approval.Request{pendingApprovalRequest("ap-1")}}
-			d.Decide = decider
-			d.Auth = auth
-		})
-		id, _, err := f.svc.Login(context.Background(), consoleauth.Attempt{
-			Name: "mike", Password: accounts.NewPassword(consolePassword), Source: "127.0.0.1",
-		})
-		if err != nil {
-			t.Fatalf("sign in: %v", err)
-		}
-		body := url.Values{
-			"csrf_token": {f.sessions.CSRFToken(id).Reveal()},
-			"plan_hash":  {"hash-ap-1"},
-			"answer":     {"approve"},
-		}
-		req := httptest.NewRequest(http.MethodPost, decideApprovalAction("ap-1"), strings.NewReader(body.Encode()))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		rec := f.do(t, req, &http.Cookie{Name: consoleauth.SessionCookieName, Value: id.Reveal()})
-
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("status = %d, want 401; body %s", rec.Code, contentOf(rec.Body.String()))
-		}
-		if auth.requireCalls != 0 {
-			t.Errorf("decide consulted the window %d times", auth.requireCalls)
-		}
-		if len(decider.calls) != 0 {
-			t.Error("a decision was taken with no password")
-		}
-	})
 }
 
-// requireStepUp's own per-act empty-password branch, called directly: the
-// decide handler's early check refuses first, so no handler-level test can
-// reach it. A fresh window must not stand in for a decision's password.
+// requireStepUp's own per-act empty-password branch, called directly with a
+// test-local ask: no production route uses stepUpPerAct yet, and the composer's
+// mutate apply must. A fresh window must not stand in for a per-act password.
 func TestStepUp_APerActAskRefusesAnEmptyPasswordInsideTheWindow(t *testing.T) {
 	x := newWriteFix(t, nil)
 	x.auth.fresh = true
+
+	perActAsk := stepUpAsk{
+		mode:     stepUpPerAct,
+		required: "Step-up re-authentication is required to apply.",
+		undone:   "Nothing was applied.",
+		act:      "a per-act test ask",
+		render: func(w http.ResponseWriter, pg Page, status int, heading, _, _ string) {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(heading))
+		},
+	}
 
 	var proceeded bool
 	rec := httptest.NewRecorder()
@@ -424,21 +323,21 @@ func TestStepUp_APerActAskRefusesAnEmptyPasswordInsideTheWindow(t *testing.T) {
 		}),
 	).Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		pg := Page{CSRFToken: x.csrf}
-		proceeded = requireStepUp(Deps{Auth: x.auth}, w, r, &pg, decideStepUp)
+		proceeded = requireStepUp(Deps{Auth: x.auth}, w, r, &pg, perActAsk)
 	}))
 
-	req := httptest.NewRequest(http.MethodPost, "/console/approvals/ap-1/decision", strings.NewReader("password="))
+	req := httptest.NewRequest(http.MethodPost, "/console/", strings.NewReader("password="))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(x.session)
 	boundary.ServeHTTP(rec, req)
 
 	if proceeded {
-		t.Fatal("requireStepUp let a password-less per-act decision proceed")
+		t.Fatal("requireStepUp let a password-less per-act ask proceed")
 	}
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body %s", rec.Code, contentOf(rec.Body.String()))
 	}
-	if !strings.Contains(rec.Body.String(), "Step-up re-authentication is required to decide an approval. Nothing was decided.") {
+	if !strings.Contains(rec.Body.String(), "Step-up re-authentication is required to apply. Nothing was applied.") {
 		t.Errorf("the refusal copy changed:\n%s", contentOf(rec.Body.String()))
 	}
 	if x.auth.requireCalls != 0 {

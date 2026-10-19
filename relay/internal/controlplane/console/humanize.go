@@ -40,31 +40,14 @@ func timeSince(t, now time.Time) string {
 	return strconv.Itoa(int(d.Hours()/24)) + "d ago"
 }
 
-// decisionAgo is timeSince, except that an unrecorded time renders as nothing
-// rather than "never".
-func decisionAgo(t time.Time, now time.Time) string {
-	if t.IsZero() {
+// verifiedKind returns kind only for an actor drawn in the VERIFIED lane, and
+// "" otherwise. A kind label qualifies the Account the Relay authenticated
+// (00-foundations.md, "Kind label"); beside a dashed chip it would read as a
+// fact about an identity nothing checked. Every place that draws a kind label
+// passes through here, with the same verified test its chip uses.
+func verifiedKind(verified bool, kind string) string {
+	if !verified {
 		return ""
 	}
-	return timeSince(t, now)
-}
-
-// renderSpan renders a window length for a human.
-func renderSpan(d time.Duration) string {
-	if d <= 0 {
-		return "none"
-	}
-	return minutesOrHours(d)
-}
-
-// renderTTL renders the time an approval has left.
-func renderTTL(d time.Duration) string {
-	switch {
-	case d <= 0:
-		return "expired"
-	case d < time.Minute:
-		return strconv.Itoa(int(d.Seconds())) + "s left"
-	default:
-		return minutesOrHours(d) + " left"
-	}
+	return kind
 }

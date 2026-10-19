@@ -190,8 +190,8 @@ type consoleSessionContextKey struct{}
 // Carrying the whole Session here would put a stale Role and Kind on the
 // context right next to the authoritative fresh ones, with nothing in the
 // type saying which is which. The trap is specific and the step-up POST
-// walks straight into it: it gates privilege-granting Account acts and
-// approval decisions (console/stepup.go), and it needs the ID from here — so
+// walks straight into it: it gates privilege-granting Account acts
+// (console/stepup.go), and it needs the ID from here — so
 // `cs.Session.Role` would be the nearest field to hand and would read
 // `admin` for a demoted admin until their session lapsed on its own.
 //

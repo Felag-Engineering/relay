@@ -89,8 +89,8 @@ Selector → Policy → blast cap regardless of the credential's role
 
 **From [ADR-0044](../adr/0044-the-console-does-not-decide-approvals.md) (2026-10-18):** a human
 Account's API Token has always been able to decide a parked approval it is eligible for, on the
-Control API decision endpoint, with no step-up at the moment of deciding. Once `approval.md`
-AP-80 removes the Console's approval surface, that endpoint is the **only** out-of-band decision
+Control API decision endpoint, with no step-up at the moment of deciding. Since `approval.md`
+AP-80 removed the Console's approval surface, that endpoint is the **only** out-of-band decision
 path, so this adversary holds the one lever for an out-of-band approval. Bounded as before by the
 audience, requester exclusion, role floor and plan-hash binding on each decision, and by the
 blast cap and Node Policy underneath.
@@ -132,11 +132,10 @@ ADR-0026 decision 3), and approval decisions are not windowed; all of those stay
 **From the 2026-09-18 approval decisions — withdrawn unbuilt 2026-10-18:** a bulk approve in
 the Console would have taken one step-up for the whole act; see **R22**, now closed.
 [ADR-0044](../adr/0044-the-console-does-not-decide-approvals.md) removes the Console's approval
-surface entirely (`docs/specs/approval.md` AP-80, designed): once that lands this adversary can
-no longer decide any approval, singly or in bulk, and the out-of-band decision lives only on the
-Control API, behind the **Stolen API credential** adversary's boundary — where a human Account's
-token could always decide, and still can. Until AP-80 lands the built Console decide action, one
-step-up per decision, is still reachable.
+surface entirely (`docs/specs/approval.md` AP-80): this adversary can no longer decide any
+approval, singly or in bulk, and the out-of-band decision lives only on the Control API, behind
+the **Stolen API credential** adversary's boundary — where a human Account's token could always
+decide, and still can.
 
 **From the Plan capability ([ADR-0038](../adr/0038-plan-is-an-approved-route-of-execution.md),
 not yet built):** an approved-but-incomplete route is the asset here, because it is standing
@@ -240,9 +239,9 @@ Policy file: #2; Enrollment (certless) ↔ CA: #7.
 AI-agent surface; the Control API and Admin Console are additional crossings of the same
 caller ↔ Relay boundary, all gated by the one capability layer (invariant #10). *(Written
 when the Console added no execution surface. [ADR-0026](../adr/0026-admin-console-execution-surface.md)
-gives it one; today the Console decides approvals — a surface
-[ADR-0044](../adr/0044-the-console-does-not-decide-approvals.md) removes, `approval.md` AP-80 —
-cancels, and administers Accounts, and its
+gives it one; today the Console cancels and administers Accounts (it once decided approvals, a surface
+[ADR-0044](../adr/0044-the-console-does-not-decide-approvals.md) and `approval.md` AP-80 removed),
+and its
 execution composer is unbuilt (`AGENTS.md` gap row 10, #438). The defense is written for the
 surface the ADR describes, not the one built so far: all three crossings are treated as
 carrying execution, and the boundary rests entirely on the capability layer and the

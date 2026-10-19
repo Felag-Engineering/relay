@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/policyview"
 )
@@ -211,93 +210,11 @@ func TestDayOne_UnwatchedEnrollmentNoteStaysVisible(t *testing.T) {
 
 // --- Approval object: every message is about this caller or this record -----
 
-func TestApproval_SituationalMessagesStayVisible(t *testing.T) {
-	t.Run("already signed", func(t *testing.T) {
-		req := pendingApprovalRequest("ap-1")
-		req.Require.Count = 2
-		req.Decisions = []approval.Decision{{
-			Account: testAccountName(accounts.RoleOperator), AccountID: testAccountID(accounts.RoleOperator),
-			Approve: true, DeciderHuman: true, At: testNow.Add(-time.Hour),
-		}}
-		d := decideRenderDeps(req, &fakeDecider{}, &fakeAuth{})
-		mustBeSituational(t, get(t, newTestHandler(d, accounts.RoleOperator), "/console/approvals/ap-1").Body.String(),
-			"You already signed this at")
-	})
-	t.Run("excluded requester", func(t *testing.T) {
-		req := pendingApprovalRequest("ap-1")
-		req.Require.RequesterAllowed = false
-		req.RequestedBy, req.RequestedByID = testAccountName(accounts.RoleOperator), testAccountID(accounts.RoleOperator)
-		d := decideRenderDeps(req, &fakeDecider{}, &fakeAuth{})
-		mustBeSituational(t, get(t, newTestHandler(d, accounts.RoleOperator), "/console/approvals/ap-1").Body.String(),
-			"You cannot decide this one</b>")
-	})
-	t.Run("role below the floor", func(t *testing.T) {
-		d := decideRenderDeps(pendingApprovalRequest("ap-1"), &fakeDecider{}, &fakeAuth{})
-		mustBeSituational(t, get(t, newTestHandler(d, accounts.RoleViewer), "/console/approvals/ap-1").Body.String(),
-			"Your role cannot decide this</b>")
-	})
-	t.Run("expired", func(t *testing.T) {
-		req := pendingApprovalRequest("ap-1")
-		req.ExpiresAt = testNow.Add(-time.Minute)
-		d := decideRenderDeps(req, &fakeDecider{}, &fakeAuth{})
-		mustBeSituational(t, get(t, newTestHandler(d, accounts.RoleOperator), "/console/approvals/ap-1").Body.String(),
-			"The TTL lapsed at")
-	})
-}
-
 // --- The two stale strings ---------------------------------------------------
-
-// TestApprovals_DecidingCopySaysWhatIsTrue: the Console decides a single-Plan
-// approval behind step-up today (decide.go). The queue and the Grant card said
-// it could not; both said so wrongly. It still does not decide a Grant, and
-// that true statement stays.
-func TestApprovals_DecidingCopySaysWhatIsTrue(t *testing.T) {
-	stale := []string{
-		"Deciding arrives with step-up in the administration milestone.",
-		"cannot decide anything yet",
-		"administration milestone",
-	}
-
-	d := renderableDeps()
-	d.Approvals = &fakeApprovals{pending: []approval.Request{pendingApprovalRequest("ap-1")}}
-	queue := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals?waiting=all").Body.String())
-	if !strings.Contains(queue, "Deciding happens on the request itself, behind step-up") {
-		t.Error("the queue does not say where and how deciding happens")
-	}
-	if !strings.Contains(queue, "this Console does not decide an Approval grant") {
-		t.Error("the queue dropped the true statement that an Approval grant is not decided here")
-	}
-
-	g := consoleGrant("grant-1", "ap-grant", 200, 20)
-	gd := renderableDeps()
-	gd.Approvals = &fakeApprovals{pending: []approval.Request{grantRequest(g, approval.StatePending)}, grants: []approval.Grant{g}}
-	card := contentOf(get(t, newTestHandler(gd, accounts.RoleAdmin), "/console/approvals/ap-grant").Body.String())
-	if !strings.Contains(card, "so this Console does not decide an Approval grant") {
-		t.Error("the Approval grant card does not say this Console does not decide it")
-	}
-
-	for _, page := range []string{queue, card} {
-		for _, s := range stale {
-			if strings.Contains(page, s) {
-				t.Errorf("stale copy %q is still rendered", s)
-			}
-		}
-	}
-}
 
 func TestFleet_NoHostMetricsNoteIsDeleted(t *testing.T) {
 	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), fleetPath).Body.String()
 	mustNotRender(t, body, "no host metrics")
-}
-
-// TestApprovals_UnauditedReloadIsStatedOnceBesideRefresh: the queue says a
-// reload is unaudited in one sentence beside Refresh, not again at its foot.
-func TestApprovals_UnauditedReloadIsStatedOnceBesideRefresh(t *testing.T) {
-	d := renderableDeps()
-	d.Approvals = &fakeApprovals{pending: []approval.Request{pendingApprovalRequest("ap-1")}}
-	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals?waiting=all").Body.String()
-	mustNotRender(t, body, "Opening this queue or a Refresh writes no read record")
-	mustBeSituational(t, body, "Reloading this queue is not recorded on the audit trail; that is a known gap.")
 }
 
 func TestFleet_NoMatchEmptyStateIsSituational(t *testing.T) {

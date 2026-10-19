@@ -65,12 +65,6 @@ func TestAbout_DeletedStandingNotesLiveInTheDocs(t *testing.T) {
 			"A throttled attempt is not a failed one."},
 		{"docs/design/console/10-day-one.md", "Day one: why a daemon trusts this Relay",
 			"a daemon trusts this Relay because it was installed with the CA bundle"},
-		{"docs/design/console/14-approval-queue.md", "Approvals: no Approve on a row",
-			"A one-click Approve control on a row"},
-		{"docs/design/console/14-approval-queue.md", "Approvals: lapsed requests sort last",
-			"A **lapsed** request sorts **last**"},
-		{"docs/design/console/14-approval-queue.md", "Approvals: the audience reasoning",
-			"a Request with no audience is shown rather than hidden"},
 		{"docs/design/console/15-accounts-and-tokens.md", "Accounts: one password covers granting acts until the window lapses",
 			"one password covers granting acts until the window lapses"},
 		{"docs/design/console/15-accounts-and-tokens.md", "Accounts: the token value is shown once",
@@ -85,8 +79,6 @@ func TestAbout_DeletedStandingNotesLiveInTheDocs(t *testing.T) {
 			"they remain on the audit trail"},
 		{"docs/design/console/10-day-one.md", "Day one: check the CA fingerprint before installing",
 			"Until then the quickstart carries the check"},
-		{"docs/design/console/14-approval-queue.md", "Approvals: the unaudited queue reload, restated in the About",
-			"Reloading the queue is not an audited read"},
 	} {
 		raw, err := os.ReadFile(repoPath(c.doc))
 		if err != nil {

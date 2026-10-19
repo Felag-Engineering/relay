@@ -406,8 +406,8 @@ chips on Job detail (13) and the `approval` row in Activity (04), which no longe
 decision.
 
 Made moot by this: D10's Console half (the card's diff placement, the queue's fan-out tiebreak);
-the queue's unaudited read (#779) once the screen is removed. Specs 08 and 14 stay in place,
-marked retired, while the screens are still in the code (`docs/specs/approval.md` AP-80).
+the queue's unaudited read (#779) once the screen is removed. Specs 08 and 14 are retired stubs;
+the screens are removed (`docs/specs/approval.md` AP-80).
 
 **Not settled by it — needs the owner:** whether "cut out of the UI completely" also reaches
 [19 — Approval rules](19-approval-rules.md), the page where an `admin` edits the gate rules

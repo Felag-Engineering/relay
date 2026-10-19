@@ -45,7 +45,7 @@ import (
 
 // accountsWriteFile is the one file both guards below inspect. A base name, so
 // renaming the file fails these guards loudly rather than silently disabling
-// them — the shape approvalDecideFile already uses (no_dispatch_test.go).
+// them — the same base-name check no_dispatch_test.go makes.
 const accountsWriteFile = "accounts_write.go"
 
 // ---------------------------------------------------------------------------
@@ -828,8 +828,8 @@ const (
 // every bearer-lane POST before routing. The seams are fakes because the
 // refusal branches (throttled, bad credential, no session) are what these
 // tests are about, and a real store would only obscure what the handler does
-// with the error it gets back. This is TestDecide_StepUpHappensBeforeTheDecision's
-// shape.
+// with the error it gets back. A shared order recorder lets a test assert
+// StepUp happened strictly before the capability call.
 type writeFix struct {
 	f       *loginFixture
 	session *http.Cookie
@@ -1818,8 +1818,7 @@ func TestAccountsWrite_ARealSessionPostWithTheWrongCSRFTokenIsRefused(t *testing
 // therefore goes AROUND Secure, via newTestHandlerSkippingCSRF, which never
 // wires console sessions into its Authenticator at all. It must NOT be
 // "fixed" by routing through the CSRF-checked handler, which would make it
-// stop testing this branch — the warning
-// TestDecide_MissingConsoleSessionFailsClosed carries, for the same reason.
+// stop testing this branch.
 func TestAccountsWrite_MissingConsoleSessionFailsClosed(t *testing.T) {
 	admin := &fakeAccountAdmin{}
 	d := sweepFixture()

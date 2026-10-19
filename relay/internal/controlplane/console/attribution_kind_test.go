@@ -133,7 +133,7 @@ func TestJob_FallbackPrincipalCarriesNoKind(t *testing.T) {
 	}
 }
 
-// --- Job detail and the approval object: each approver ---------------------
+// --- Job detail: each approver ---------------------
 
 // twoDeciders is one human and one machine approving Decision, as recorded.
 func twoDeciders() []approval.Decision {
@@ -173,35 +173,6 @@ func TestJob_EachApproverCarriesTheKindItsDecisionRecorded(t *testing.T) {
 	// human — must be gone, or a human decider is the unmarked case again.
 	if strings.Contains(body, `<span class="dim">machine</span>`) {
 		t.Error("the retired grey machine word is still rendered")
-	}
-}
-
-func TestApproval_EachDeciderCarriesTheKindItsDecisionRecorded(t *testing.T) {
-	req := pendingApprovalRequest("ap-1")
-	req.RequestedBy, req.RequestedByID = "gleipnir", "acct-1"
-	req.Require.Count = 3
-	req.Decisions = twoDeciders()
-	d := renderableDeps()
-	d.Approvals = &fakeApprovals{pending: []approval.Request{req}}
-
-	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-1").Body.String())
-	decisions := section(t, content, `<h3>Decisions</h3>`, `</table>`)
-
-	if !strings.Contains(decisions, `>mike</span> `+kindLabel("human")) {
-		t.Errorf("a human decider is not labelled human:\n%s", decisions)
-	}
-	if !strings.Contains(decisions, `>relay-bot</span> `+kindLabel("machine")) {
-		t.Errorf("a machine decider is not labelled machine:\n%s", decisions)
-	}
-	if strings.Contains(content, `<span class="dim">machine</span>`) {
-		t.Error("the retired grey machine word is still rendered")
-	}
-
-	// The approval record carries no requester kind, so the requester line
-	// shows none — nothing is derived in its place.
-	requester := section(t, content, `requested by</dt>`, `</dd>`)
-	if n := drawnKinds(requester); n != 0 {
-		t.Errorf("the requester line drew %d kind labels; the approval record carries no requester kind", n)
 	}
 }
 

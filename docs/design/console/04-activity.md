@@ -166,8 +166,7 @@ promises to show it later.
 ### Reads made from this Console
 
 Most screens this Console renders read through the capability layer's audited read lane (the
-built Approvals queue does not, #779; it is retired with the Console's approval surface,
-ADR-0044). So most pages an operator opens are
+Approvals queue did not; it was removed with the Console's approval surface, ADR-0044). So most pages an operator opens are
 themselves calls on the trail, attributed to their own Account, and every reload of this screen is
 one. Where read records are shown, they would bury everything else within minutes of use.
 

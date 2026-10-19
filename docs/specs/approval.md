@@ -1,6 +1,6 @@
 # Approval
 
-**Status:** designed, not built, as of `2026-09-28`.
+**Status:** designed, not built, as of `2026-10-18`.
 **Claim prefix:** `AP`
 
 ## Purpose
@@ -227,6 +227,8 @@ whose approver Relay verifies.
 Control API alone. Both claims are still true of the code and stay here as current until AP-80,
 Designed, removes the Console path and retires them. The Control API half of AP-16 carries on
 unchanged in AP-80.
+
+- **AP-80** Out-of-band decisions are made on the **Control API decision endpoint only**, under a per-person Account. The Admin Console has **no approval surface**: no list of pending requests, no approval request screen, no decision on any request — singly or several at once — and no step-up taken for one, and its navigation carries no Approvals destination and no pending count. It may still render what an approval left on another record — an `approval` row in Activity, approver chips on a Job, a Plan's state on its own detail screen — with no control that decides. A request's partial quorum (AP-73) is read from the Control API's read of that request. Retires AP-16 and AP-19, and narrows AP-73's queue to the Control API. (ADR-0044, owner decision 2026-10-18.)
 
 - **AP-60** A gated dispatch that parks under an in-band rule, from a client that can be asked, is
   answered with an approval **question** carrying the Relay-authored summary, the request ID and
@@ -562,7 +564,7 @@ neither. `make verify` covers every row below; the end-to-end rows additionally 
 | AP-13 | `TestStrongChannelSatisfiesAWeakerRule`, `TestAssertedApproverDoesNotWeakenAnOutOfBandRule` | approval |
 | AP-14 | `TestUnstatedChannelDefaultsToOutOfBand` | approval |
 | AP-16 | `TestDecide_StepUpHappensBeforeTheDecision`, `TestApprovalCallout_ConsoleDecideRun`, `TestStepUp_ADecisionInsideTheWindowStillNeedsAPassword`, `TestStepUp_APerActAskRefusesAnEmptyPasswordInsideTheWindow` | Console, e2e |
-| AP-17 | `TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel`, `TestApprovalCallout_ConsoleDecideRun`, `TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestE2EOAuth_ApproveRequestOnAHumanSessionStillRecordsAnAssertion` | capability, MCP, e2e |
+| AP-17 | `TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel`, `TestApprovalCallout_ControlAPIDecidesAnMCPParkedRequest`, `TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestE2EOAuth_ApproveRequestOnAHumanSessionStillRecordsAnAssertion` | capability, MCP, e2e |
 | AP-19 | `TestApprovalCallout_ConsoleDecideRun` | e2e |
 | AP-20 | `TestApprovedPlanDispatchesAndBindsTheJob`, `TestDecisionMustCiteTheRequestsPlanHash` | capability |
 | AP-21 | `TestRegistryDriftReParksAnApprovedPlan` | capability |
@@ -572,11 +574,12 @@ neither. `make verify` covers every row below; the end-to-end rows additionally 
 | AP-25 | `TestExpiredRequestIsNotDecidableOrSatisfiable` | approval |
 | AP-26 | `TestApprovalCallout_ParkDecideRun` | e2e |
 | AP-27 | `TestDenyIsTerminalAndBeatsApproval`, `TestDenialIsTerminalAndAudited` | approval |
-| AP-73 | `TestQuorumNeedsDistinctDeciders`, `TestRecordDecisionPersistsQuorumProgress`, `TestBlankAudienceEntryCannotPadPastQuorumCheck`, `TestDecide_PartialQuorumNamesWhoSigned` | approval, capability, Console |
+| AP-73 | `TestQuorumNeedsDistinctDeciders`, `TestRecordDecisionPersistsQuorumProgress`, `TestBlankAudienceEntryCannotPadPastQuorumCheck`, `TestApprovalCallout_PartialQuorumIsReadFromTheControlAPI` | approval, capability, e2e |
 | AP-28 | `TestDecideApprovalDoesNotDispatch`, `TestApprovalCallout_ParkDecideRun` | capability, e2e |
 | AP-77 | `TestBindJob_BindsOnceAndReportsTheBoundJob`, `TestBindJob_ConcurrentClaimsExactlyOneWins`, `TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch`, `TestJobEngine_ReservedRunSurvivesRequestCancellationAfterCreateJob`, `TestRun_ReDriveOfAReleasedApprovalReAttachesAndDispatchesNothing`, `TestRun_ConcurrentReDrivesDispatchExactlyOneJob`, `TestRun_ReleasedApprovalReAttachesEvenWhenAGrantCoversThePlan`, `TestRun_ReleasedApprovalPastItsDeadlineParksAfresh`, `TestRun_DifferentRequesterReAttachesToTheReleasedJob`, `TestApprovalRelease_ReDriveOnAnySurfaceReAttaches`, `TestApprovalRelease_DifferentAccountReAttachesAndRunsNothing`, `TestRunAuthorizeDeniedShortCircuits` | store, capability, e2e |
 | AP-78 | `TestMCPElicitation_UnrecognisedMRTRClientGetsPendingApproval`, `TestMCPElicitation_ClaudeCodeOnAnAPITokenSessionIsNotAsked`, `TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsNotAskedAndNotAccepted`, `TestMCPElicitation_SpoofedClaudeCodeOnANonOAuthSessionEarnsNothing`, `TestElicit_WhoIsAskedByNameAndSession`, `TestElicit_ClaudeCodeOnAnAPITokenSessionIsNotAsked`, `TestElicit_ClaudeCodeRetryOnAnAPITokenSessionIsAnOrdinaryCall`, `TestE2EOAuth_SessionResolvesToTheAccount` | e2e, MCP |
 | AP-79 | `TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestMCPElicitation_ClaudeCodeHumanAnswerMeetsTheSameRefusals`, `TestMCPElicitation_ResponderOnAnOAuthHumanSessionIsIgnored`, `TestMCPElicitation_MachineOAuthSessionNeverTakesTheVerifiedPath`, `TestMCPElicitation_HumanAPITokenSessionStillNeedsAResponder`, `TestElicitedAnswer_OAuthHumanSessionAnswerIsTheHumansVerifiedDecision`, `TestElicitedAnswer_OAuthHumanSessionDeclineIsADenial`, `TestElicitedAnswer_ResponderOnAnOAuthHumanSessionIsIgnored`, `TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName`, `TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts`, `TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals`, `TestOAuthHumanSession_ChecksTheAccountKindNotTheAuthMethod`, `TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified` | e2e, MCP, capability |
+| AP-80 | `TestConsole_HasNoApprovalSurface`, `TestConsole_ADecisionPostOnARealSessionFindsNothing`, `TestApprovalReader_ReadsOneRecordAndCannotListOrDecide`, `TestApprovalCallout_TheConsoleHasNoApprovalSurface`, `TestApprovalCallout_PartialQuorumIsReadFromTheControlAPI` | Console, e2e |
 | AP-29 | `TestGrantDoesNotCoverOutsideItsScope`, `TestRawExecIsASeparateOptIn` | approval |
 | AP-30 | `TestRawExecIsASeparateOptIn` | approval |
 | AP-33 | `TestCreateGrant_RefusesTheRetiredSelectorNamespace` | API |
@@ -667,7 +670,6 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 | AP-55 | A Relay whose store holds no gate rules at first start **seeds the shipped default** — `read` ungated, `mutate` and Raw Exec at self-confirmation in-band, with second-person and out-of-band available to raise any rule to — as one audited act attributed to the system and not to an Account. After that the store is the only source: no file is read, and the Relay does not re-seed on a later start. Retires AP-7; depends on AP-72. (ADR-0027 §Amendment 2026-09-16, which declined a root-owned file seeding the store as two sources for one setting; #590.) | v0.7.0 — Admin Console: Administration & Execution |
 | AP-56 | An approval grant never covers Raw Exec: every Raw Exec needs its own decision, and a Scope naming Raw Exec is refused. Retires AP-30. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
 | AP-57 | An approval grant's window is capped at 4 hours, and a longer one is refused. Retires AP-31 and narrows AP-53. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
-| AP-80 | Out-of-band decisions are made on the **Control API decision endpoint only**, under a per-person Account. The Admin Console has **no approval surface**: no list of pending requests, no approval request screen, no decision on any request — singly or several at once — and no step-up taken for one, and its navigation carries no Approvals destination and no pending count. It may still render what an approval left on another record — an `approval` row in Activity, approver chips on a Job, a Plan's state on its own detail screen — with no control that decides. A request's partial quorum (AP-73) is read from the Control API's read of that request. Retires AP-16 and AP-19, and narrows AP-73's queue to the Control API. (ADR-0044, owner decision 2026-10-18.) | v0.7.0 — Admin Console: Administration & Execution |
 | AP-72 | Gate rules are runtime objects in the Relay's store, edited only by a human `admin` in the Admin Console with step-up re-authentication, audited per rule with old and new values, and taking effect on the next dispatch; no MCP tool and no Control API route writes them, and none may be added. Retires AP-4, AP-8 and AP-54 — the store is the only source, no file is read, and there is nothing left to fail to load. (ADR-0027 §Amendment 2026-09-15; #590, #596.) | v0.7.0 — Admin Console: Administration & Execution |
 
 ## Out of scope
