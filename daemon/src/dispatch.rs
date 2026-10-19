@@ -27,8 +27,8 @@ use crate::config::MAX_OUTPUT_BYTES;
 use crate::dedup::DedupStore;
 use crate::executor::{execute, ExecRequest};
 use crate::gen::{
-    policy_query, task_request, Operation, Outcome, PolicyQuery, PolicyVerdict, RawExec, RiskClass,
-    TaskRequest, TaskResult,
+    policy_query, task_request, Operation, Outcome, PolicyPass, PolicyQuery, PolicyRuleSection,
+    PolicyVerdict, RawExec, RiskClass, TaskRequest, TaskResult,
 };
 use crate::log_field;
 use crate::not_executed::{denied_by_policy_result, not_executed, not_executed_after};
@@ -38,7 +38,7 @@ use crate::operations::registry::{self, FnRunner, OpCtx, OpRegistration, Resolve
 #[cfg(test)]
 use crate::operations::schema::{OP_ARG_NAME, OP_ARG_PATH, OP_ARG_UNIT, OP_ARG_VERSION};
 use crate::policy::decision_log::{self, argv_digest, DecisionFields, DenyDetail, Tier};
-use crate::policy::{Decision, Explained, MatchedOn, Policy, Request};
+use crate::policy::{Decision, Explained, MatchedOn, Pass, Policy, Request, RuleSection};
 use crate::scheduler::{QueuedOutcome, Scheduler};
 use crate::services::Services;
 use crate::templates::TemplateSet;
@@ -252,6 +252,7 @@ pub fn evaluate_policy_query(
             allowed: false,
             deciding_rule: UNSUPPORTED_REASON.to_string(),
             unsupported: true,
+            ..Default::default()
         },
         // Malformed query with no action: deny with a non-empty deciding_rule so
         // the caller can distinguish a protocol error from a Policy deny.
@@ -260,8 +261,9 @@ pub fn evaluate_policy_query(
             allowed: false,
             deciding_rule: "empty policy query action".to_string(),
             unsupported: false,
+            ..Default::default()
         },
-        QueryDecision::Decided(explained) => decision_to_verdict(query_id, explained.decision),
+        QueryDecision::Decided(explained) => decision_to_verdict(query_id, explained),
     }
 }
 
@@ -314,7 +316,7 @@ fn operation_inputs(entry: &dyn ResolvedOp, op: &Operation) -> (Vec<String>, Vec
     (entry.positional_args(op), entry.path_arg_positions())
 }
 
-/// Convert an engine `Decision` into a `PolicyVerdict`.
+/// Convert an engine `Explained` into a `PolicyVerdict`.
 ///
 /// `deciding_rule` is the engine's own `reason` string verbatim, for every
 /// deny sub-case (explicit operation deny, explicit raw_exec deny, or
@@ -323,20 +325,51 @@ fn operation_inputs(entry: &dyn ResolvedOp, op: &Operation) -> (Vec<String>, Vec
 /// path, so the plan-verdict text and the apply-path stderr text are
 /// identical for the same input — one shared source, no re-decision, no
 /// parallel evaluator (ADR-0011).
-fn decision_to_verdict(query_id: String, decision: Decision) -> PolicyVerdict {
-    match decision {
-        Decision::Allow(_) => PolicyVerdict {
-            query_id,
-            allowed: true,
-            deciding_rule: String::new(),
-            unsupported: false,
-        },
-        Decision::Deny { reason, .. } => PolicyVerdict {
-            query_id,
-            allowed: false,
-            deciding_rule: reason,
-            unsupported: false,
-        },
+///
+/// The pass, rule reference and matched-on are copied from the same
+/// `Explained` that `policy explain` prints, on allow and deny alike. The
+/// Raw Exec permit is dropped: a hypothetical never runs anything.
+fn decision_to_verdict(query_id: String, explained: Explained) -> PolicyVerdict {
+    let (allowed, deciding_rule) = match explained.decision {
+        Decision::Allow(_) => (true, String::new()),
+        Decision::Deny { reason, .. } => (false, reason),
+    };
+    let rule = explained.rule;
+    PolicyVerdict {
+        query_id,
+        allowed,
+        deciding_rule,
+        unsupported: false,
+        pass: wire_pass(explained.pass) as i32,
+        rule_section: rule.map_or(PolicyRuleSection::Unspecified, |r| {
+            wire_rule_section(r.section)
+        }) as i32,
+        rule_index: rule.map_or(0, |r| u32::try_from(r.index).unwrap_or(u32::MAX)),
+        rule_line: rule
+            .and_then(|r| r.line)
+            .map_or(0, |l| u32::try_from(l).unwrap_or(u32::MAX)),
+        matched_on: explained.matched_on.to_string(),
+    }
+}
+
+/// Exhaustive on purpose: a new `Pass` does not compile until it is mapped.
+fn wire_pass(pass: Pass) -> PolicyPass {
+    match pass {
+        Pass::Precondition => PolicyPass::Precondition,
+        Pass::Deny => PolicyPass::Deny,
+        Pass::Guard => PolicyPass::Guard,
+        Pass::Allow => PolicyPass::Allow,
+        Pass::Default => PolicyPass::Default,
+    }
+}
+
+/// Exhaustive on purpose: a new `RuleSection` does not compile until it is mapped.
+fn wire_rule_section(section: RuleSection) -> PolicyRuleSection {
+    match section {
+        RuleSection::Operation => PolicyRuleSection::Operation,
+        RuleSection::Deny => PolicyRuleSection::Deny,
+        RuleSection::RawExecAllow => PolicyRuleSection::RawExecAllow,
+        RuleSection::RawExecDeny => PolicyRuleSection::RawExecDeny,
     }
 }
 
@@ -1456,6 +1489,140 @@ deny = ["secret"]
         crate::gen::PolicyQuery {
             query_id: query_id.to_string(),
             action: Some(policy_query::Action::RawExec(crate::gen::RawExec { argv })),
+        }
+    }
+
+    /// Every pass reaches the wire with the rule reference and matched-on the
+    /// engine reported (ADR-0011); unsupported and action-less queries leave
+    /// all of it zero.
+    #[test]
+    fn policy_verdict_carries_pass_rule_and_matched_on() {
+        use crate::gen::{PolicyPass as P, PolicyRuleSection as S};
+        let policy = from_toml_str(
+            "\
+[[operation]]
+name = \"file.read\"
+allowed_args = [[\"*\"]]
+
+[[deny]]
+name = \"file.read\"
+args = [[\"/etc/shadow\"]]
+
+[raw_exec]
+allow = [\"^/bin/echo .+$\"]
+deny = [\"secret\"]
+",
+        )
+        .expect("policy must parse");
+        let read =
+            |path: &str| make_policy_query_operation("q", operations::FILE_READ, OP_ARG_PATH, path);
+        let raw = |argv: &[&str]| {
+            make_policy_query_raw_exec("q", argv.iter().map(|a| a.to_string()).collect())
+        };
+
+        struct Want {
+            label: &'static str,
+            query: crate::gen::PolicyQuery,
+            allowed: bool,
+            pass: P,
+            section: S,
+            index: u32,
+            line: u32,
+            matched_on: &'static str,
+        }
+        let cases = vec![
+            Want {
+                label: "allow",
+                query: read("/var/log/x"),
+                allowed: true,
+                pass: P::Allow,
+                section: S::Operation,
+                index: 0,
+                line: 1,
+                matched_on: "the invocation's arguments",
+            },
+            Want {
+                label: "deny by rule",
+                query: read("/etc/shadow"),
+                allowed: false,
+                pass: P::Deny,
+                section: S::Deny,
+                index: 0,
+                line: 5,
+                matched_on: "the invocation's arguments",
+            },
+            Want {
+                label: "default",
+                query: make_policy_query_operation("q", operations::SYSTEM_FACTS, "", ""),
+                allowed: false,
+                pass: P::Default,
+                section: S::Unspecified,
+                index: 0,
+                line: 0,
+                matched_on: "no allow rule for this operation",
+            },
+            Want {
+                label: "precondition",
+                query: read("/a/../b"),
+                allowed: false,
+                pass: P::Precondition,
+                section: S::Unspecified,
+                index: 0,
+                line: 0,
+                matched_on: "argument 0 is not a canonical path",
+            },
+            Want {
+                label: "guard",
+                query: raw(&["/bin/echo", "XYZZY value"]),
+                allowed: false,
+                pass: P::Guard,
+                section: S::Unspecified,
+                index: 0,
+                line: 0,
+                matched_on: "argv[1] is empty or contains whitespace (not a single token)",
+            },
+            Want {
+                label: "raw exec deny",
+                query: raw(&["/bin/echo", "secret"]),
+                allowed: false,
+                pass: P::Deny,
+                section: S::RawExecDeny,
+                index: 0,
+                line: 11,
+                matched_on: "the joined command",
+            },
+        ];
+        for c in cases {
+            let v = evaluate_policy_query(&c.query, &policy, TemplateSet::empty_static());
+            assert_eq!(v.allowed, c.allowed, "{}", c.label);
+            assert!(!v.unsupported, "{}", c.label);
+            assert_eq!(v.pass, c.pass as i32, "{}", c.label);
+            assert_eq!(v.rule_section, c.section as i32, "{}", c.label);
+            assert_eq!(v.rule_index, c.index, "{}", c.label);
+            assert_eq!(v.rule_line, c.line, "{}", c.label);
+            assert_eq!(v.matched_on, c.matched_on, "{}", c.label);
+            assert!(!v.matched_on.contains("XYZZY"), "{}", c.label);
+        }
+
+        let unsupported = evaluate_policy_query(
+            &make_policy_query_operation("q", "no.such.op", "", ""),
+            &policy,
+            TemplateSet::empty_static(),
+        );
+        let no_action = evaluate_policy_query(
+            &crate::gen::PolicyQuery {
+                query_id: "q".to_string(),
+                action: None,
+            },
+            &policy,
+            TemplateSet::empty_static(),
+        );
+        for (label, v) in [("unsupported", unsupported), ("no action", no_action)] {
+            assert_eq!(v.pass, 0, "{label}");
+            assert_eq!(v.rule_section, 0, "{label}");
+            assert_eq!(v.rule_index, 0, "{label}");
+            assert_eq!(v.rule_line, 0, "{label}");
+            assert!(v.matched_on.is_empty(), "{label}");
         }
     }
 

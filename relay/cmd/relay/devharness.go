@@ -53,6 +53,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/auditquery"
 	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
@@ -61,7 +62,7 @@ import (
 // registry/tokens/Freeze/store access, router as the transport-level Conduit
 // (raw "dispatch" op + list_connected/get_node's connected field), and execution
 // as the sole entry point for anything that must go through the capability
-// pipeline (run_job/cancel_job/get_freeze).
+// pipeline (run_job/preflight_job/cancel_job/get_freeze).
 type harnessState struct {
 	deps      *appDeps
 	router    *dispatch.Router
@@ -152,8 +153,9 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 
 	rec := capability.NewRecorder(harnessAudit, nil, deps.logger)
 	ctl := capability.NewControl(rec, devHarnessAuthorizer{}, deps.store.Freeze())
-	// NewReadLane requires both query seams. The harness reaches execution only
-	// through Run and a human CancelJob, neither of which consults them.
+	// NewReadLane requires both query seams. The harness reaches the capability
+	// layer only through Run, a human CancelJob and the Policy preflight, none
+	// of which consults them.
 	q := auditquery.New(deps.store.AuditQueries(), deps.store.JobQueries())
 	read := capability.NewReadLane(rec, deps.registry, q, q, nil, nil, 0, nil)
 	approvals := capability.NewApprovals(rec, gate, deps.store.Approvals(), devHarnessAuthorizer{}, nil, nil, nil, nil)
@@ -239,6 +241,19 @@ type harnessNodeResult struct {
 	Outcome string `json:"outcome"`
 }
 
+// harnessVerdict is one Node's verdict from a preflight_job, carrying the
+// daemon's pass and rule reference exactly as the capability layer returned it.
+type harnessVerdict struct {
+	NodeID       string `json:"node_id"`
+	Status       string `json:"status"`
+	DecidingRule string `json:"deciding_rule,omitempty"`
+	Pass         string `json:"pass,omitempty"`
+	RuleSection  string `json:"rule_section,omitempty"`
+	RuleIndex    int    `json:"rule_index"`
+	RuleLine     int    `json:"rule_line"`
+	MatchedOn    string `json:"matched_on,omitempty"`
+}
+
 // harnessTaskInfo is one Task's queryable state (query_job, list_inflight).
 // JobID is only populated by list_inflight — query_job's caller already
 // knows job_id (it is the query key), so it is left empty there.
@@ -294,6 +309,8 @@ type harnessResponse struct {
 	// non-failing helper.
 	JobID   string              `json:"job_id,omitempty"`
 	Results []harnessNodeResult `json:"results,omitempty"`
+	// Verdicts is preflight_job's per-Node result.
+	Verdicts []harnessVerdict `json:"verdicts,omitempty"`
 	// Frozen is get_freeze's result.
 	Frozen bool `json:"frozen,omitempty"`
 	// NodeIDs is list_connected's result.
@@ -346,6 +363,8 @@ func dispatchHarnessRequest(ctx context.Context, st *harnessState, req harnessRe
 		return harnessGetNode(st, req)
 	case "run_job":
 		return harnessRunJob(ctx, st, req)
+	case "preflight_job":
+		return harnessPreflightJob(ctx, st, req)
 	case "cancel_job":
 		return harnessCancelJob(ctx, st, req)
 	case "get_freeze":
@@ -495,6 +514,41 @@ func harnessRunJob(ctx context.Context, st *harnessState, req harnessRequest) ha
 			resp.JobID = r.JobID
 		}
 		resp.Results = append(resp.Results, harnessNodeResult{NodeID: r.NodeID, Outcome: outcomeString(r.Outcome)})
+	}
+	return resp
+}
+
+// harnessPreflightJob asks the Policy preflight (Execution.Plan, through the
+// capability layer: invariant 10) what each Node's live Policy would decide for
+// the same Selector and Action run_job takes. Nothing is dispatched.
+func harnessPreflightJob(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
+	sel, err := capability.ParseSelector(req.Selector)
+	if err != nil {
+		return harnessResponse{Error: fmt.Sprintf("preflight_job: parse selector %q: %v", req.Selector, err)}
+	}
+
+	act, err := harnessRunJobAction(req)
+	if err != nil {
+		return harnessResponse{Error: fmt.Sprintf("preflight_job: %v", err)}
+	}
+
+	pr, err := st.execution.Plan(ctx, capability.Principal{Account: "devharness"}, sel, act)
+	if err != nil {
+		return harnessResponse{Error: err.Error()}
+	}
+
+	resp := harnessResponse{Verdicts: make([]harnessVerdict, 0, len(pr.Verdicts))}
+	for _, v := range pr.Verdicts {
+		resp.Verdicts = append(resp.Verdicts, harnessVerdict{
+			NodeID:       v.NodeID,
+			Status:       controlplane.VerdictName(v.Status),
+			DecidingRule: v.DecidingRule,
+			Pass:         v.Pass,
+			RuleSection:  v.RuleSection,
+			RuleIndex:    v.RuleIndex,
+			RuleLine:     v.RuleLine,
+			MatchedOn:    v.MatchedOn,
+		})
 	}
 	return resp
 }

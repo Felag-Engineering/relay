@@ -148,6 +148,122 @@ func (Outcome) EnumDescriptor() ([]byte, []int) {
 	return file_relay_v1_relay_proto_rawDescGZIP(), []int{1}
 }
 
+// PolicyPass is the stage of the daemon's decide that produced a verdict.
+type PolicyPass int32
+
+const (
+	PolicyPass_POLICY_PASS_UNSPECIFIED  PolicyPass = 0 // not decided by Policy (unsupported, no action), or a daemon that does not report it
+	PolicyPass_POLICY_PASS_PRECONDITION PolicyPass = 1
+	PolicyPass_POLICY_PASS_DENY         PolicyPass = 2
+	PolicyPass_POLICY_PASS_GUARD        PolicyPass = 3
+	PolicyPass_POLICY_PASS_ALLOW        PolicyPass = 4
+	PolicyPass_POLICY_PASS_DEFAULT      PolicyPass = 5
+)
+
+// Enum value maps for PolicyPass.
+var (
+	PolicyPass_name = map[int32]string{
+		0: "POLICY_PASS_UNSPECIFIED",
+		1: "POLICY_PASS_PRECONDITION",
+		2: "POLICY_PASS_DENY",
+		3: "POLICY_PASS_GUARD",
+		4: "POLICY_PASS_ALLOW",
+		5: "POLICY_PASS_DEFAULT",
+	}
+	PolicyPass_value = map[string]int32{
+		"POLICY_PASS_UNSPECIFIED":  0,
+		"POLICY_PASS_PRECONDITION": 1,
+		"POLICY_PASS_DENY":         2,
+		"POLICY_PASS_GUARD":        3,
+		"POLICY_PASS_ALLOW":        4,
+		"POLICY_PASS_DEFAULT":      5,
+	}
+)
+
+func (x PolicyPass) Enum() *PolicyPass {
+	p := new(PolicyPass)
+	*p = x
+	return p
+}
+
+func (x PolicyPass) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PolicyPass) Descriptor() protoreflect.EnumDescriptor {
+	return file_relay_v1_relay_proto_enumTypes[2].Descriptor()
+}
+
+func (PolicyPass) Type() protoreflect.EnumType {
+	return &file_relay_v1_relay_proto_enumTypes[2]
+}
+
+func (x PolicyPass) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PolicyPass.Descriptor instead.
+func (PolicyPass) EnumDescriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{2}
+}
+
+// PolicyRuleSection names the part of a Node's Policy file holding the rule
+// that decided.
+type PolicyRuleSection int32
+
+const (
+	PolicyRuleSection_POLICY_RULE_SECTION_UNSPECIFIED    PolicyRuleSection = 0 // no rule decided, or a daemon that does not report it
+	PolicyRuleSection_POLICY_RULE_SECTION_OPERATION      PolicyRuleSection = 1 // [[operation]]
+	PolicyRuleSection_POLICY_RULE_SECTION_DENY           PolicyRuleSection = 2 // [[deny]]
+	PolicyRuleSection_POLICY_RULE_SECTION_RAW_EXEC_ALLOW PolicyRuleSection = 3 // [raw_exec].allow
+	PolicyRuleSection_POLICY_RULE_SECTION_RAW_EXEC_DENY  PolicyRuleSection = 4 // [raw_exec].deny
+)
+
+// Enum value maps for PolicyRuleSection.
+var (
+	PolicyRuleSection_name = map[int32]string{
+		0: "POLICY_RULE_SECTION_UNSPECIFIED",
+		1: "POLICY_RULE_SECTION_OPERATION",
+		2: "POLICY_RULE_SECTION_DENY",
+		3: "POLICY_RULE_SECTION_RAW_EXEC_ALLOW",
+		4: "POLICY_RULE_SECTION_RAW_EXEC_DENY",
+	}
+	PolicyRuleSection_value = map[string]int32{
+		"POLICY_RULE_SECTION_UNSPECIFIED":    0,
+		"POLICY_RULE_SECTION_OPERATION":      1,
+		"POLICY_RULE_SECTION_DENY":           2,
+		"POLICY_RULE_SECTION_RAW_EXEC_ALLOW": 3,
+		"POLICY_RULE_SECTION_RAW_EXEC_DENY":  4,
+	}
+)
+
+func (x PolicyRuleSection) Enum() *PolicyRuleSection {
+	p := new(PolicyRuleSection)
+	*p = x
+	return p
+}
+
+func (x PolicyRuleSection) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PolicyRuleSection) Descriptor() protoreflect.EnumDescriptor {
+	return file_relay_v1_relay_proto_enumTypes[3].Descriptor()
+}
+
+func (PolicyRuleSection) Type() protoreflect.EnumType {
+	return &file_relay_v1_relay_proto_enumTypes[3]
+}
+
+func (x PolicyRuleSection) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PolicyRuleSection.Descriptor instead.
+func (PolicyRuleSection) EnumDescriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{3}
+}
+
 type EnrollRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	EnrollmentToken string                 `protobuf:"bytes,1,opt,name=enrollment_token,json=enrollmentToken,proto3" json:"enrollment_token,omitempty"` // reusable, scoped, expiring, revocable
@@ -2081,6 +2197,14 @@ func (*PolicyQuery_RawExec) isPolicyQuery_Action() {}
 // about a disconnected Node, never a wire value. On deny, deciding_rule names
 // the Policy rule that denied (acceptable extra detail per ADR-0011, since
 // describe_node already exposes effective Policy to authorized callers).
+//
+// pass, rule_section, rule_index, rule_line and matched_on are the daemon's own
+// account of which pass and rule decided. They are display-only on the Relay,
+// which never evaluates them (ADR-0011, invariant 12). All of them stay zero
+// when `unsupported` is set or the query had no action. They are also zero from
+// a daemon older than these fields, which does not report them, so an empty
+// pass never means "no rule decided": only POLICY_PASS_DEFAULT says
+// deny-by-default.
 type PolicyVerdict struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	QueryId      string                 `protobuf:"bytes,1,opt,name=query_id,json=queryId,proto3" json:"query_id,omitempty"`                // echoes the PolicyQuery
@@ -2091,7 +2215,12 @@ type PolicyVerdict struct {
 	// is what a real dispatch of the same action would report (ADR-0011 parity).
 	// Always accompanied by allowed=false; deciding_rule then explains the
 	// vocabulary miss rather than naming a Policy rule.
-	Unsupported   bool `protobuf:"varint,4,opt,name=unsupported,proto3" json:"unsupported,omitempty"`
+	Unsupported   bool              `protobuf:"varint,4,opt,name=unsupported,proto3" json:"unsupported,omitempty"`
+	Pass          PolicyPass        `protobuf:"varint,5,opt,name=pass,proto3,enum=relay.v1.PolicyPass" json:"pass,omitempty"`                                         // the stage of the daemon's decide that produced the verdict
+	RuleIndex     uint32            `protobuf:"varint,6,opt,name=rule_index,json=ruleIndex,proto3" json:"rule_index,omitempty"`                                       // index within rule_section; meaningful only when rule_section is set
+	RuleLine      uint32            `protobuf:"varint,7,opt,name=rule_line,json=ruleLine,proto3" json:"rule_line,omitempty"`                                          // 1-based source line; 0 = the loader did not know it
+	MatchedOn     string            `protobuf:"bytes,8,opt,name=matched_on,json=matchedOn,proto3" json:"matched_on,omitempty"`                                        // the daemon's matched-on text: positions and indices, never an argument value
+	RuleSection   PolicyRuleSection `protobuf:"varint,9,opt,name=rule_section,json=ruleSection,proto3,enum=relay.v1.PolicyRuleSection" json:"rule_section,omitempty"` // set exactly when a rule decided (pass DENY or ALLOW)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2152,6 +2281,41 @@ func (x *PolicyVerdict) GetUnsupported() bool {
 		return x.Unsupported
 	}
 	return false
+}
+
+func (x *PolicyVerdict) GetPass() PolicyPass {
+	if x != nil {
+		return x.Pass
+	}
+	return PolicyPass_POLICY_PASS_UNSPECIFIED
+}
+
+func (x *PolicyVerdict) GetRuleIndex() uint32 {
+	if x != nil {
+		return x.RuleIndex
+	}
+	return 0
+}
+
+func (x *PolicyVerdict) GetRuleLine() uint32 {
+	if x != nil {
+		return x.RuleLine
+	}
+	return 0
+}
+
+func (x *PolicyVerdict) GetMatchedOn() string {
+	if x != nil {
+		return x.MatchedOn
+	}
+	return ""
+}
+
+func (x *PolicyVerdict) GetRuleSection() PolicyRuleSection {
+	if x != nil {
+		return x.RuleSection
+	}
+	return PolicyRuleSection_POLICY_RULE_SECTION_UNSPECIFIED
 }
 
 var File_relay_v1_relay_proto protoreflect.FileDescriptor
@@ -2292,12 +2456,19 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\bquery_id\x18\x01 \x01(\tR\aqueryId\x123\n" +
 	"\toperation\x18\x02 \x01(\v2\x13.relay.v1.OperationH\x00R\toperation\x12.\n" +
 	"\braw_exec\x18\x03 \x01(\v2\x11.relay.v1.RawExecH\x00R\arawExecB\b\n" +
-	"\x06action\"\x8b\x01\n" +
+	"\x06action\"\xd0\x02\n" +
 	"\rPolicyVerdict\x12\x19\n" +
 	"\bquery_id\x18\x01 \x01(\tR\aqueryId\x12\x18\n" +
 	"\aallowed\x18\x02 \x01(\bR\aallowed\x12#\n" +
 	"\rdeciding_rule\x18\x03 \x01(\tR\fdecidingRule\x12 \n" +
-	"\vunsupported\x18\x04 \x01(\bR\vunsupported*S\n" +
+	"\vunsupported\x18\x04 \x01(\bR\vunsupported\x12(\n" +
+	"\x04pass\x18\x05 \x01(\x0e2\x14.relay.v1.PolicyPassR\x04pass\x12\x1d\n" +
+	"\n" +
+	"rule_index\x18\x06 \x01(\rR\truleIndex\x12\x1b\n" +
+	"\trule_line\x18\a \x01(\rR\bruleLine\x12\x1d\n" +
+	"\n" +
+	"matched_on\x18\b \x01(\tR\tmatchedOn\x12>\n" +
+	"\frule_section\x18\t \x01(\x0e2\x1b.relay.v1.PolicyRuleSectionR\vruleSection*S\n" +
 	"\tRiskClass\x12\x1a\n" +
 	"\x16RISK_CLASS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fRISK_CLASS_READ\x10\x01\x12\x15\n" +
@@ -2311,7 +2482,21 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x11OUTCOME_CANCELLED\x10\x05\x12\x17\n" +
 	"\x13OUTCOME_UNREACHABLE\x10\x06\x12\x1b\n" +
 	"\x17OUTCOME_VERSION_REFUSED\x10\a\x12\x17\n" +
-	"\x13OUTCOME_UNSUPPORTED\x10\b2\x83\x01\n" +
+	"\x13OUTCOME_UNSUPPORTED\x10\b*\xa4\x01\n" +
+	"\n" +
+	"PolicyPass\x12\x1b\n" +
+	"\x17POLICY_PASS_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18POLICY_PASS_PRECONDITION\x10\x01\x12\x14\n" +
+	"\x10POLICY_PASS_DENY\x10\x02\x12\x15\n" +
+	"\x11POLICY_PASS_GUARD\x10\x03\x12\x15\n" +
+	"\x11POLICY_PASS_ALLOW\x10\x04\x12\x17\n" +
+	"\x13POLICY_PASS_DEFAULT\x10\x05*\xc8\x01\n" +
+	"\x11PolicyRuleSection\x12#\n" +
+	"\x1fPOLICY_RULE_SECTION_UNSPECIFIED\x10\x00\x12!\n" +
+	"\x1dPOLICY_RULE_SECTION_OPERATION\x10\x01\x12\x1c\n" +
+	"\x18POLICY_RULE_SECTION_DENY\x10\x02\x12&\n" +
+	"\"POLICY_RULE_SECTION_RAW_EXEC_ALLOW\x10\x03\x12%\n" +
+	"!POLICY_RULE_SECTION_RAW_EXEC_DENY\x10\x042\x83\x01\n" +
 	"\n" +
 	"Enrollment\x12;\n" +
 	"\x06Enroll\x12\x17.relay.v1.EnrollRequest\x1a\x18.relay.v1.EnrollResponse\x128\n" +
@@ -2331,84 +2516,88 @@ func file_relay_v1_relay_proto_rawDescGZIP() []byte {
 	return file_relay_v1_relay_proto_rawDescData
 }
 
-var file_relay_v1_relay_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_relay_v1_relay_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
 var file_relay_v1_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_relay_v1_relay_proto_goTypes = []any{
 	(RiskClass)(0),              // 0: relay.v1.RiskClass
 	(Outcome)(0),                // 1: relay.v1.Outcome
-	(*EnrollRequest)(nil),       // 2: relay.v1.EnrollRequest
-	(*EnrollResponse)(nil),      // 3: relay.v1.EnrollResponse
-	(*RenewRequest)(nil),        // 4: relay.v1.RenewRequest
-	(*RenewResponse)(nil),       // 5: relay.v1.RenewResponse
-	(*JoinString)(nil),          // 6: relay.v1.JoinString
-	(*DaemonMessage)(nil),       // 7: relay.v1.DaemonMessage
-	(*RelayMessage)(nil),        // 8: relay.v1.RelayMessage
-	(*Hello)(nil),               // 9: relay.v1.Hello
-	(*Heartbeat)(nil),           // 10: relay.v1.Heartbeat
-	(*Ping)(nil),                // 11: relay.v1.Ping
-	(*TaskRequest)(nil),         // 12: relay.v1.TaskRequest
-	(*TaskCancel)(nil),          // 13: relay.v1.TaskCancel
-	(*Operation)(nil),           // 14: relay.v1.Operation
-	(*OperationDescriptor)(nil), // 15: relay.v1.OperationDescriptor
-	(*RawExec)(nil),             // 16: relay.v1.RawExec
-	(*TaskResult)(nil),          // 17: relay.v1.TaskResult
-	(*StreamChunk)(nil),         // 18: relay.v1.StreamChunk
-	(*Label)(nil),               // 19: relay.v1.Label
-	(*Facts)(nil),               // 20: relay.v1.Facts
-	(*PolicySnapshot)(nil),      // 21: relay.v1.PolicySnapshot
-	(*OperationRule)(nil),       // 22: relay.v1.OperationRule
-	(*DenyRule)(nil),            // 23: relay.v1.DenyRule
-	(*TemplateSnapshot)(nil),    // 24: relay.v1.TemplateSnapshot
-	(*TemplateDescriptor)(nil),  // 25: relay.v1.TemplateDescriptor
-	(*TemplateSlot)(nil),        // 26: relay.v1.TemplateSlot
-	(*ArgMatcher)(nil),          // 27: relay.v1.ArgMatcher
-	(*PolicyQuery)(nil),         // 28: relay.v1.PolicyQuery
-	(*PolicyVerdict)(nil),       // 29: relay.v1.PolicyVerdict
-	nil,                         // 30: relay.v1.Operation.ArgsEntry
+	(PolicyPass)(0),             // 2: relay.v1.PolicyPass
+	(PolicyRuleSection)(0),      // 3: relay.v1.PolicyRuleSection
+	(*EnrollRequest)(nil),       // 4: relay.v1.EnrollRequest
+	(*EnrollResponse)(nil),      // 5: relay.v1.EnrollResponse
+	(*RenewRequest)(nil),        // 6: relay.v1.RenewRequest
+	(*RenewResponse)(nil),       // 7: relay.v1.RenewResponse
+	(*JoinString)(nil),          // 8: relay.v1.JoinString
+	(*DaemonMessage)(nil),       // 9: relay.v1.DaemonMessage
+	(*RelayMessage)(nil),        // 10: relay.v1.RelayMessage
+	(*Hello)(nil),               // 11: relay.v1.Hello
+	(*Heartbeat)(nil),           // 12: relay.v1.Heartbeat
+	(*Ping)(nil),                // 13: relay.v1.Ping
+	(*TaskRequest)(nil),         // 14: relay.v1.TaskRequest
+	(*TaskCancel)(nil),          // 15: relay.v1.TaskCancel
+	(*Operation)(nil),           // 16: relay.v1.Operation
+	(*OperationDescriptor)(nil), // 17: relay.v1.OperationDescriptor
+	(*RawExec)(nil),             // 18: relay.v1.RawExec
+	(*TaskResult)(nil),          // 19: relay.v1.TaskResult
+	(*StreamChunk)(nil),         // 20: relay.v1.StreamChunk
+	(*Label)(nil),               // 21: relay.v1.Label
+	(*Facts)(nil),               // 22: relay.v1.Facts
+	(*PolicySnapshot)(nil),      // 23: relay.v1.PolicySnapshot
+	(*OperationRule)(nil),       // 24: relay.v1.OperationRule
+	(*DenyRule)(nil),            // 25: relay.v1.DenyRule
+	(*TemplateSnapshot)(nil),    // 26: relay.v1.TemplateSnapshot
+	(*TemplateDescriptor)(nil),  // 27: relay.v1.TemplateDescriptor
+	(*TemplateSlot)(nil),        // 28: relay.v1.TemplateSlot
+	(*ArgMatcher)(nil),          // 29: relay.v1.ArgMatcher
+	(*PolicyQuery)(nil),         // 30: relay.v1.PolicyQuery
+	(*PolicyVerdict)(nil),       // 31: relay.v1.PolicyVerdict
+	nil,                         // 32: relay.v1.Operation.ArgsEntry
 }
 var file_relay_v1_relay_proto_depIdxs = []int32{
-	19, // 0: relay.v1.EnrollRequest.self_labels:type_name -> relay.v1.Label
-	20, // 1: relay.v1.EnrollRequest.facts:type_name -> relay.v1.Facts
-	19, // 2: relay.v1.EnrollResponse.assigned_labels:type_name -> relay.v1.Label
-	9,  // 3: relay.v1.DaemonMessage.hello:type_name -> relay.v1.Hello
-	10, // 4: relay.v1.DaemonMessage.heartbeat:type_name -> relay.v1.Heartbeat
-	17, // 5: relay.v1.DaemonMessage.task_result:type_name -> relay.v1.TaskResult
-	18, // 6: relay.v1.DaemonMessage.stream_chunk:type_name -> relay.v1.StreamChunk
-	21, // 7: relay.v1.DaemonMessage.policy:type_name -> relay.v1.PolicySnapshot
-	29, // 8: relay.v1.DaemonMessage.policy_verdict:type_name -> relay.v1.PolicyVerdict
-	24, // 9: relay.v1.DaemonMessage.templates:type_name -> relay.v1.TemplateSnapshot
-	11, // 10: relay.v1.RelayMessage.ping:type_name -> relay.v1.Ping
-	12, // 11: relay.v1.RelayMessage.task:type_name -> relay.v1.TaskRequest
-	13, // 12: relay.v1.RelayMessage.task_cancel:type_name -> relay.v1.TaskCancel
-	28, // 13: relay.v1.RelayMessage.policy_query:type_name -> relay.v1.PolicyQuery
-	20, // 14: relay.v1.Hello.facts:type_name -> relay.v1.Facts
-	19, // 15: relay.v1.Hello.labels:type_name -> relay.v1.Label
-	14, // 16: relay.v1.TaskRequest.operation:type_name -> relay.v1.Operation
-	16, // 17: relay.v1.TaskRequest.raw_exec:type_name -> relay.v1.RawExec
+	21, // 0: relay.v1.EnrollRequest.self_labels:type_name -> relay.v1.Label
+	22, // 1: relay.v1.EnrollRequest.facts:type_name -> relay.v1.Facts
+	21, // 2: relay.v1.EnrollResponse.assigned_labels:type_name -> relay.v1.Label
+	11, // 3: relay.v1.DaemonMessage.hello:type_name -> relay.v1.Hello
+	12, // 4: relay.v1.DaemonMessage.heartbeat:type_name -> relay.v1.Heartbeat
+	19, // 5: relay.v1.DaemonMessage.task_result:type_name -> relay.v1.TaskResult
+	20, // 6: relay.v1.DaemonMessage.stream_chunk:type_name -> relay.v1.StreamChunk
+	23, // 7: relay.v1.DaemonMessage.policy:type_name -> relay.v1.PolicySnapshot
+	31, // 8: relay.v1.DaemonMessage.policy_verdict:type_name -> relay.v1.PolicyVerdict
+	26, // 9: relay.v1.DaemonMessage.templates:type_name -> relay.v1.TemplateSnapshot
+	13, // 10: relay.v1.RelayMessage.ping:type_name -> relay.v1.Ping
+	14, // 11: relay.v1.RelayMessage.task:type_name -> relay.v1.TaskRequest
+	15, // 12: relay.v1.RelayMessage.task_cancel:type_name -> relay.v1.TaskCancel
+	30, // 13: relay.v1.RelayMessage.policy_query:type_name -> relay.v1.PolicyQuery
+	22, // 14: relay.v1.Hello.facts:type_name -> relay.v1.Facts
+	21, // 15: relay.v1.Hello.labels:type_name -> relay.v1.Label
+	16, // 16: relay.v1.TaskRequest.operation:type_name -> relay.v1.Operation
+	18, // 17: relay.v1.TaskRequest.raw_exec:type_name -> relay.v1.RawExec
 	0,  // 18: relay.v1.TaskRequest.risk_class:type_name -> relay.v1.RiskClass
-	30, // 19: relay.v1.Operation.args:type_name -> relay.v1.Operation.ArgsEntry
+	32, // 19: relay.v1.Operation.args:type_name -> relay.v1.Operation.ArgsEntry
 	0,  // 20: relay.v1.OperationDescriptor.risk_class:type_name -> relay.v1.RiskClass
 	1,  // 21: relay.v1.TaskResult.outcome:type_name -> relay.v1.Outcome
-	22, // 22: relay.v1.PolicySnapshot.operation_rules:type_name -> relay.v1.OperationRule
-	23, // 23: relay.v1.PolicySnapshot.deny_rules:type_name -> relay.v1.DenyRule
-	27, // 24: relay.v1.OperationRule.allowed_args:type_name -> relay.v1.ArgMatcher
-	27, // 25: relay.v1.DenyRule.args:type_name -> relay.v1.ArgMatcher
-	25, // 26: relay.v1.TemplateSnapshot.templates:type_name -> relay.v1.TemplateDescriptor
+	24, // 22: relay.v1.PolicySnapshot.operation_rules:type_name -> relay.v1.OperationRule
+	25, // 23: relay.v1.PolicySnapshot.deny_rules:type_name -> relay.v1.DenyRule
+	29, // 24: relay.v1.OperationRule.allowed_args:type_name -> relay.v1.ArgMatcher
+	29, // 25: relay.v1.DenyRule.args:type_name -> relay.v1.ArgMatcher
+	27, // 26: relay.v1.TemplateSnapshot.templates:type_name -> relay.v1.TemplateDescriptor
 	0,  // 27: relay.v1.TemplateDescriptor.risk_class:type_name -> relay.v1.RiskClass
-	26, // 28: relay.v1.TemplateDescriptor.slots:type_name -> relay.v1.TemplateSlot
-	14, // 29: relay.v1.PolicyQuery.operation:type_name -> relay.v1.Operation
-	16, // 30: relay.v1.PolicyQuery.raw_exec:type_name -> relay.v1.RawExec
-	2,  // 31: relay.v1.Enrollment.Enroll:input_type -> relay.v1.EnrollRequest
-	4,  // 32: relay.v1.Enrollment.Renew:input_type -> relay.v1.RenewRequest
-	7,  // 33: relay.v1.Tunnel.Open:input_type -> relay.v1.DaemonMessage
-	3,  // 34: relay.v1.Enrollment.Enroll:output_type -> relay.v1.EnrollResponse
-	5,  // 35: relay.v1.Enrollment.Renew:output_type -> relay.v1.RenewResponse
-	8,  // 36: relay.v1.Tunnel.Open:output_type -> relay.v1.RelayMessage
-	34, // [34:37] is the sub-list for method output_type
-	31, // [31:34] is the sub-list for method input_type
-	31, // [31:31] is the sub-list for extension type_name
-	31, // [31:31] is the sub-list for extension extendee
-	0,  // [0:31] is the sub-list for field type_name
+	28, // 28: relay.v1.TemplateDescriptor.slots:type_name -> relay.v1.TemplateSlot
+	16, // 29: relay.v1.PolicyQuery.operation:type_name -> relay.v1.Operation
+	18, // 30: relay.v1.PolicyQuery.raw_exec:type_name -> relay.v1.RawExec
+	2,  // 31: relay.v1.PolicyVerdict.pass:type_name -> relay.v1.PolicyPass
+	3,  // 32: relay.v1.PolicyVerdict.rule_section:type_name -> relay.v1.PolicyRuleSection
+	4,  // 33: relay.v1.Enrollment.Enroll:input_type -> relay.v1.EnrollRequest
+	6,  // 34: relay.v1.Enrollment.Renew:input_type -> relay.v1.RenewRequest
+	9,  // 35: relay.v1.Tunnel.Open:input_type -> relay.v1.DaemonMessage
+	5,  // 36: relay.v1.Enrollment.Enroll:output_type -> relay.v1.EnrollResponse
+	7,  // 37: relay.v1.Enrollment.Renew:output_type -> relay.v1.RenewResponse
+	10, // 38: relay.v1.Tunnel.Open:output_type -> relay.v1.RelayMessage
+	36, // [36:39] is the sub-list for method output_type
+	33, // [33:36] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_relay_v1_relay_proto_init() }
@@ -2444,7 +2633,7 @@ func file_relay_v1_relay_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_relay_v1_relay_proto_rawDesc), len(file_relay_v1_relay_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      4,
 			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   2,

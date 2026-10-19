@@ -247,14 +247,17 @@ func TestPreflightResultCarriesNoApprovalField(t *testing.T) {
 	assertExactStructFieldSet(t, reflect.TypeOf(PlanResult{}), map[string]bool{
 		"Matched": true, "Frozen": true, "CapExceeded": true, "NoNodesMatched": true, "Verdicts": true,
 	}, "no addition to PlanResult is anticipated yet")
-	// NodeVerdict's set is the one most likely to be legitimately tripped by
-	// planned work: PF-20 (v0.8.1, Designed) adds a deny REASON KIND beside
-	// DecidingRule (e.g. distinguishing "denied by rule" from "denied:
-	// unsupported argument value"), which is a new field here, not a new
-	// approval-shaped one — reviewers should expect that addition and check
-	// it is not would_require_approval in disguise.
+	// Pass, RuleSection, RuleIndex, RuleLine and MatchedOn are the daemon's
+	// account of the deciding pass and rule (ADR-0011), display-only; none is
+	// approval-shaped. NodeVerdict's set is still the one most likely to be
+	// legitimately tripped by planned work: PF-20 (v0.8.1, Designed) adds a
+	// deny REASON KIND beside DecidingRule (e.g. distinguishing "denied by
+	// rule" from "denied: unsupported argument value"), which is a new field
+	// here, not a new approval-shaped one — reviewers should expect that
+	// addition and check it is not would_require_approval in disguise.
 	assertExactStructFieldSet(t, reflect.TypeOf(NodeVerdict{}), map[string]bool{
 		"NodeID": true, "Status": true, "DecidingRule": true, "Reason": true, "Outdated": true,
+		"Pass": true, "RuleSection": true, "RuleIndex": true, "RuleLine": true, "MatchedOn": true,
 	}, "PF-20, v0.8.1, is expected to add a deny-reason-kind field here — that is a legitimate addition, an approval-shaped one is not")
 }
 

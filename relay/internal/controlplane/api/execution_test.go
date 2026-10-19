@@ -971,3 +971,41 @@ func TestAPI_ExplanationAbsentWhenNotRefused(t *testing.T) {
 		t.Errorf("n-failure refusal_explanation = %q, want empty", got)
 	}
 }
+
+// TestPreflightRender_CarriesRuleReference is the Control API twin of the MCP
+// test of the same name: rule_index 0 stays on the wire beside its section,
+// and a verdict with no rule carries no rule key.
+func TestPreflightRender_CarriesRuleReference(t *testing.T) {
+	out := renderPlan(capability.PlanResult{
+		Matched: 2,
+		Verdicts: []capability.NodeVerdict{
+			{
+				NodeID: "node-a", Status: capability.VerdictDeny, DecidingRule: "denied by explicit rule",
+				Pass: "deny", RuleSection: "deny", RuleIndex: 0, RuleLine: 5, MatchedOn: "the invocation's arguments",
+			},
+			{NodeID: "node-b", Status: capability.VerdictAllow},
+		},
+	})
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var wire struct {
+		Verdicts []map[string]any `json:"verdicts"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	a := wire.Verdicts[0]
+	if got, ok := a["rule_index"]; !ok || got != float64(0) {
+		t.Errorf("node-a rule_index = %v (present %v), want 0 present", got, ok)
+	}
+	if a["pass"] != "deny" || a["rule_section"] != "deny" || a["rule_line"] != float64(5) || a["matched_on"] != "the invocation's arguments" {
+		t.Errorf("node-a = %v, want the daemon's rule reference verbatim", a)
+	}
+	for _, key := range []string{"pass", "rule_section", "rule_index", "rule_line", "matched_on"} {
+		if _, ok := wire.Verdicts[1][key]; ok {
+			t.Errorf("node-b carries %q, want every rule key absent", key)
+		}
+	}
+}

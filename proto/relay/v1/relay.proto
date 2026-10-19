@@ -330,12 +330,40 @@ message PolicyQuery {
   }
 }
 
+// PolicyPass is the stage of the daemon's decide that produced a verdict.
+enum PolicyPass {
+  POLICY_PASS_UNSPECIFIED  = 0;  // not decided by Policy (unsupported, no action), or a daemon that does not report it
+  POLICY_PASS_PRECONDITION = 1;
+  POLICY_PASS_DENY         = 2;
+  POLICY_PASS_GUARD        = 3;
+  POLICY_PASS_ALLOW        = 4;
+  POLICY_PASS_DEFAULT      = 5;
+}
+
+// PolicyRuleSection names the part of a Node's Policy file holding the rule
+// that decided.
+enum PolicyRuleSection {
+  POLICY_RULE_SECTION_UNSPECIFIED    = 0;  // no rule decided, or a daemon that does not report it
+  POLICY_RULE_SECTION_OPERATION      = 1;  // [[operation]]
+  POLICY_RULE_SECTION_DENY           = 2;  // [[deny]]
+  POLICY_RULE_SECTION_RAW_EXEC_ALLOW = 3;  // [raw_exec].allow
+  POLICY_RULE_SECTION_RAW_EXEC_DENY  = 4;  // [raw_exec].deny
+}
+
 // PolicyVerdict is the daemon's answer, from the same enforcement engine that
 // decides at execution time (ADR-0011). `allowed` is a plain bool so the wire
 // can express only allow/deny; unknown(offline) is a Relay-side conclusion
 // about a disconnected Node, never a wire value. On deny, deciding_rule names
 // the Policy rule that denied (acceptable extra detail per ADR-0011, since
 // describe_node already exposes effective Policy to authorized callers).
+//
+// pass, rule_section, rule_index, rule_line and matched_on are the daemon's own
+// account of which pass and rule decided. They are display-only on the Relay,
+// which never evaluates them (ADR-0011, invariant 12). All of them stay zero
+// when `unsupported` is set or the query had no action. They are also zero from
+// a daemon older than these fields, which does not report them, so an empty
+// pass never means "no rule decided": only POLICY_PASS_DEFAULT says
+// deny-by-default.
 message PolicyVerdict {
   string query_id      = 1;   // echoes the PolicyQuery
   bool   allowed       = 2;   // allow = true, deny = false
@@ -346,4 +374,9 @@ message PolicyVerdict {
   // Always accompanied by allowed=false; deciding_rule then explains the
   // vocabulary miss rather than naming a Policy rule.
   bool   unsupported   = 4;
+  PolicyPass        pass         = 5;  // the stage of the daemon's decide that produced the verdict
+  uint32            rule_index   = 6;  // index within rule_section; meaningful only when rule_section is set
+  uint32            rule_line    = 7;  // 1-based source line; 0 = the loader did not know it
+  string            matched_on   = 8;  // the daemon's matched-on text: positions and indices, never an argument value
+  PolicyRuleSection rule_section = 9;  // set exactly when a rule decided (pass DENY or ALLOW)
 }

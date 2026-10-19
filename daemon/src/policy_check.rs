@@ -1306,7 +1306,9 @@ deny = ["secret"]
     #[tokio::test]
     async fn would_allow_parity_with_actual_dispatch() {
         use crate::dedup::DedupStore;
-        use crate::gen::{task_request, Outcome, RawExec as GenRawExec, TaskRequest};
+        use crate::gen::{
+            task_request, Outcome, PolicyRuleSection, RawExec as GenRawExec, TaskRequest,
+        };
         use crate::scheduler::Scheduler;
         use crate::services::Services;
         use crate::templates::TemplateSet;
@@ -1338,6 +1340,9 @@ deny = ["secret"]
             label: &'static str,
             action: CaseAction,
             expect_allow: bool,
+            // The rule the verdict names: (section, index); Unspecified when
+            // no rule decided.
+            expect_rule: (crate::gen::PolicyRuleSection, u32),
         }
 
         let cases = [
@@ -1345,11 +1350,13 @@ deny = ["secret"]
                 label: "raw-exec allow",
                 action: CaseAction::RawExec(vec!["/bin/echo".to_string(), "hi".to_string()]),
                 expect_allow: true,
+                expect_rule: (PolicyRuleSection::RawExecAllow, 0),
             },
             Case {
                 label: "raw-exec deny",
                 action: CaseAction::RawExec(vec!["/bin/echo".to_string(), "secret".to_string()]),
                 expect_allow: false,
+                expect_rule: (PolicyRuleSection::RawExecDeny, 0),
             },
             Case {
                 label: "raw-exec whitespace element denied",
@@ -1358,6 +1365,7 @@ deny = ["secret"]
                     "hello world".to_string(),
                 ]),
                 expect_allow: false,
+                expect_rule: (PolicyRuleSection::Unspecified, 0),
             },
             Case {
                 label: "operation deny (service.restart sshd)",
@@ -1366,6 +1374,7 @@ deny = ["secret"]
                     args: &[("unit", "sshd")],
                 },
                 expect_allow: false,
+                expect_rule: (PolicyRuleSection::Unspecified, 0),
             },
         ];
 
@@ -1409,6 +1418,12 @@ deny = ["secret"]
             assert_eq!(
                 verdict.allowed, case.expect_allow,
                 "[{}] verdict.allowed must match expectation",
+                case.label
+            );
+            assert_eq!(
+                (verdict.rule_section, verdict.rule_index),
+                (case.expect_rule.0 as i32, case.expect_rule.1),
+                "[{}] verdict must name the deciding rule",
                 case.label
             );
             assert_eq!(
@@ -1613,6 +1628,54 @@ allow = [\".*\"]
                 out.code == EXIT_VALID,
                 out.stdout.starts_with("explain: ALLOW")
             );
+        }
+    }
+
+    /// The in-process twin of the cross-binary preflight test: the wire verdict
+    /// and `explain` read the same `Explained`.
+    #[test]
+    fn explain_and_policy_verdict_name_the_same_rule() {
+        let compiled = policy::from_toml_str(POLICY).expect("policy must parse");
+        let specs: [Vec<String>; 4] = [
+            s(&["operation", "service.restart", "unit=nginx"]),
+            s(&["operation", "service.restart", "unit=sshd"]),
+            s(&["operation", "service.restart", "unit=cron"]),
+            s(&["raw-exec", "--", "/bin/echo", "hi"]),
+        ];
+        for spec in specs {
+            let mut iter = spec.iter().peekable();
+            let parsed = parse_spec(&mut iter, "--would-allow").expect("spec must parse");
+            let query = build_query(&parsed);
+            let QueryDecision::Decided(e) = decide_query(
+                query.action.as_ref(),
+                &compiled,
+                crate::templates::TemplateSet::empty_static(),
+            ) else {
+                panic!("{spec:?} must be decided");
+            };
+            let v = crate::dispatch::evaluate_policy_query(
+                &query,
+                &compiled,
+                crate::templates::TemplateSet::empty_static(),
+            );
+            let want_pass = format!("POLICY_PASS_{}", e.pass.to_string().to_uppercase());
+            assert_eq!(
+                crate::gen::PolicyPass::try_from(v.pass).map(|p| p.as_str_name()),
+                Ok(want_pass.as_str()),
+                "{spec:?}"
+            );
+            assert_eq!(
+                v.rule_index,
+                e.rule.map_or(0, |r| r.index as u32),
+                "{spec:?}"
+            );
+            assert_eq!(
+                v.rule_line,
+                e.rule.and_then(|r| r.line).map_or(0, |l| l as u32),
+                "{spec:?}"
+            );
+            assert_eq!(v.rule_section != 0, e.rule.is_some(), "{spec:?}");
+            assert_eq!(v.matched_on, e.matched_on.to_string(), "{spec:?}");
         }
     }
 }

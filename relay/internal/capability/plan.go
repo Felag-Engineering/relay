@@ -67,6 +67,17 @@ type NodeVerdict struct {
 	DecidingRule string
 	Reason       string
 	Outdated     bool
+
+	// Pass, RuleSection, RuleIndex, RuleLine and MatchedOn are the daemon's
+	// account of the deciding pass and rule, copied verbatim from its
+	// PolicyVerdict (ADR-0011) onto VerdictAllow and VerdictDeny only. They are
+	// display-only: Status never reads them (invariant 12), and none is
+	// approval-shaped.
+	Pass        string
+	RuleSection string
+	RuleIndex   int
+	RuleLine    int
+	MatchedOn   string
 }
 
 // planResult is what dispatcher.query returns: just the per-Node verdicts.
@@ -125,12 +136,22 @@ func (e *jobEngine) query(ctx context.Context, d dispatch) (planResult, error) {
 			// so this is not a deny (ADR-0021).
 			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictUnsupported, DecidingRule: v.DecidingRule, Outdated: n.Outdated})
 		} else if v.Allowed {
-			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictAllow, Outdated: n.Outdated})
+			nv := ruleReference(v)
+			nv.NodeID, nv.Status, nv.Outdated = n.NodeID, VerdictAllow, n.Outdated
+			verdicts = append(verdicts, nv)
 		} else {
-			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictDeny, DecidingRule: v.DecidingRule, Outdated: n.Outdated})
+			nv := ruleReference(v)
+			nv.NodeID, nv.Status, nv.DecidingRule, nv.Outdated = n.NodeID, VerdictDeny, v.DecidingRule, n.Outdated
+			verdicts = append(verdicts, nv)
 		}
 	}
 	return planResult{verdicts: verdicts}, nil
+}
+
+// ruleReference copies the daemon's pass and rule reference out of v and
+// nothing else; Status is never derived from it.
+func ruleReference(v jobs.Verdict) NodeVerdict {
+	return NodeVerdict{Pass: v.Pass, RuleSection: v.RuleSection, RuleIndex: v.RuleIndex, RuleLine: v.RuleLine, MatchedOn: v.MatchedOn}
 }
 
 // Plan resolves sel, authorizes p against act, and — unlike Run — checks the

@@ -512,3 +512,80 @@ func TestPlanAuthzDeniedRecordsRefusalNoVerdicts(t *testing.T) {
 		t.Errorf("AuditEntry.Kind = %v, want AuditKindRefusal", audit.entry.Kind)
 	}
 }
+
+// TestPreflightCarriesTheDaemonsRuleReferenceVerbatim: a deny and an allow
+// carry the daemon's pass and rule reference unchanged; an unsupported verdict
+// and an offline Node carry none (ADR-0011).
+func TestPreflightCarriesTheDaemonsRuleReferenceVerbatim(t *testing.T) {
+	reg := seedNodes(t, 4)
+	var log []string
+	conduit := newFakeConduit(&log)
+	for _, id := range []string{"node-0", "node-1", "node-2"} {
+		conduit.connected[id] = true
+	}
+	ref := jobs.Verdict{Pass: "deny", RuleSection: "deny", RuleIndex: 0, RuleLine: 5, MatchedOn: "the invocation's arguments"}
+	deny := ref
+	deny.DecidingRule = "denied by explicit rule"
+	allow := jobs.Verdict{Allowed: true, Pass: "allow", RuleSection: "operation", RuleIndex: 1, RuleLine: 9, MatchedOn: "the invocation's arguments"}
+	unsupported := ref
+	unsupported.Unsupported, unsupported.DecidingRule = true, "not in vocabulary"
+	conduit.verdicts["node-0"] = deny
+	conduit.verdicts["node-1"] = allow
+	conduit.verdicts["node-2"] = unsupported
+	// node-3 is offline.
+
+	svc, _, _ := newPlanTestService(t, reg, conduit)
+	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	got := map[string]NodeVerdict{}
+	for _, v := range pr.Verdicts {
+		got[v.NodeID] = v
+	}
+
+	same := func(nv NodeVerdict, want jobs.Verdict) bool {
+		return nv.Pass == want.Pass && nv.RuleSection == want.RuleSection && nv.RuleIndex == want.RuleIndex &&
+			nv.RuleLine == want.RuleLine && nv.MatchedOn == want.MatchedOn
+	}
+	if v := got["node-0"]; v.Status != VerdictDeny || !same(v, deny) {
+		t.Errorf("deny verdict = %+v, want the daemon's rule reference %+v", v, deny)
+	}
+	if v := got["node-1"]; v.Status != VerdictAllow || !same(v, allow) {
+		t.Errorf("allow verdict = %+v, want the daemon's rule reference %+v", v, allow)
+	}
+	for _, id := range []string{"node-2", "node-3"} {
+		if v := got[id]; !same(v, jobs.Verdict{}) {
+			t.Errorf("%s verdict = %+v, want no rule reference", id, v)
+		}
+	}
+}
+
+// TestPreflightStatusNeverReadsThePass is the invariant 12 control: Status
+// derives from Allowed and Unsupported alone, whatever the display-only pass
+// says.
+func TestPreflightStatusNeverReadsThePass(t *testing.T) {
+	reg := seedNodes(t, 2)
+	var log []string
+	conduit := newFakeConduit(&log)
+	conduit.connected["node-0"] = true
+	conduit.connected["node-1"] = true
+	conduit.verdicts["node-0"] = jobs.Verdict{Allowed: false, Pass: "allow"}
+	conduit.verdicts["node-1"] = jobs.Verdict{Allowed: true, Pass: "deny"}
+
+	svc, _, _ := newPlanTestService(t, reg, conduit)
+	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	got := map[string]VerdictStatus{}
+	for _, v := range pr.Verdicts {
+		got[v.NodeID] = v.Status
+	}
+	if got["node-0"] != VerdictDeny {
+		t.Errorf("Allowed=false with pass allow: status = %v, want VerdictDeny", got["node-0"])
+	}
+	if got["node-1"] != VerdictAllow {
+		t.Errorf("Allowed=true with pass deny: status = %v, want VerdictAllow", got["node-1"])
+	}
+}

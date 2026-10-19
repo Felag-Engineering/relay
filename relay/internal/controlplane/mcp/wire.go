@@ -290,11 +290,18 @@ type ExecutionOutput struct {
 //
 // RefusalExplanation is the Relay's framing of the boundary a deny verdict
 // belongs to; DecidingRule remains the daemon's rule text, verbatim — two
-// different authors on the same verdict, exactly as on PerNodeResult.
+// different authors on the same verdict, exactly as on PerNodeResult. Pass,
+// RuleSection, RuleIndex, RuleLine and MatchedOn are likewise the daemon's
+// answer, verbatim and display-only (invariant 12).
 type PerNodeVerdict struct {
 	NodeID             string `json:"node_id"`
 	Verdict            string `json:"verdict"`
 	DecidingRule       string `json:"deciding_rule,omitempty"`
+	Pass               string `json:"pass,omitempty" jsonschema:"The pass of the Node's Policy evaluation that produced the verdict: precondition, deny, guard, allow or default. Only default means deny-by-default; the field is also absent when the daemon does not report it. Display-only: the daemon's answer, verbatim."`
+	RuleSection        string `json:"rule_section,omitempty" jsonschema:"The section of the Node's Policy file holding the rule that decided (operation, deny, raw_exec_allow or raw_exec_deny). Present only when a rule decided and the daemon reports it; with rule_index and rule_line it is the reference relay-daemon policy explain prints. Display-only: the daemon's answer, verbatim."`
+	RuleIndex          *int   `json:"rule_index,omitempty" jsonschema:"The deciding rule's index within rule_section; present only with rule_section. Display-only: the daemon's answer, verbatim."`
+	RuleLine           int    `json:"rule_line,omitempty" jsonschema:"The deciding rule's 1-based line in the Node's Policy file; absent when the daemon did not know the line. Display-only: the daemon's answer, verbatim."`
+	MatchedOn          string `json:"matched_on,omitempty" jsonschema:"What the deciding pass matched on, in the daemon's words: positions and indices, never an argument value. Display-only: the daemon's answer, verbatim."`
 	Reason             string `json:"reason,omitempty"`
 	RefusalExplanation string `json:"refusal_explanation,omitempty" jsonschema:"Present only on verdict=deny: the Relay's framing of the boundary that would refuse it. Nothing would be dispatched. deciding_rule remains the daemon's rule text, verbatim."`
 	// Outdated is the ADR-0014 apply-time-refusal hint: true when this

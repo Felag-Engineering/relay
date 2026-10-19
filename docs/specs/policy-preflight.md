@@ -1,6 +1,6 @@
 # Policy preflight
 
-**Status:** designed, not built, as of `2026-09-20`.
+**Status:** designed, not built, as of `2026-10-19`.
 **Claim prefix:** `PF`
 
 > **The capability is Policy preflight; the option is still spelled `plan` on the wire.** ADR-0038
@@ -205,7 +205,7 @@ they are the names in the tree. They are renamed by the PR that lands PF-19, not
 | PF-7 | `TestPreflightNeverConsultsCachedPolicyOrVocabulary` (behavioural, Native Operation: zero cache reads, with an armed control showing the cache spies are wired), `TestPreflightTemplateExclusionNeverDecidesAVerdict` (behavioural, Template Operation: the vocabulary decides only exclusion; every queried Node's verdict is the daemon's even where the cache disagrees; the Policy view is never read), `TestCachedPolicyAndVocabularyReachOnlyTheDisplayReadLane` (structural: the two cached sources reach only the display read lane and, for the vocabulary, `template.go` — not a guard against a future cached source) | capability |
 | PF-8 | `TestPlanReturnsPerNodeVerdictsNoJobOrTask`, `TestMCP_RunOperation_Plan_VerdictsNoExecution`, `TestMCP_RunOperation_Plan_AuditedAsPlanNoJobOrTask`, `policy_query_spawns_no_process_and_records_no_dedup` | capability, MCP, daemon |
 | PF-9 | `TestPolicyQuery_CarriesNoTaskID`, `TestWireCarriesNoCallerIdentity` (exact field sets of `PolicyQuery`, `Operation` and `RawExec`), `TestTaskRequest_CarriesNoPreviewFlag` (second half: `TaskRequest`'s field set and a nested walk that skips enums) | compile-time |
-| PF-10 | `TestPlanReportsUnsupportedDistinctFromDeny`, `TestPlanReturnsPerNodeVerdictsNoJobOrTask` (asserts the deny verdict's `DecidingRule == "deny-rm-rf"`, proving the deciding-rule half) | capability |
+| PF-10 | `TestPlanReportsUnsupportedDistinctFromDeny`, `TestPlanReturnsPerNodeVerdictsNoJobOrTask` (asserts the deny verdict's `DecidingRule == "deny-rm-rf"`, proving the deciding-rule half), `TestCrossBinary_PreflightDenyCarriesTheRuleReferencePolicyExplainPrints` (real binaries: a deny's deciding rule, pass and rule reference equal what `policy explain` prints for the same question) | capability, cross-binary |
 | PF-11 | `plan_and_apply_agree_on_unsupported` (daemon-answered form); `TestPreflightTemplateExclusionNeverDecidesAVerdict`, `TestRun_TemplateExcludesNonReportingNodesAndNeverSendsThem` (Relay-excluded form: the same reason on the verdict and the Task), `TestTemplateDispatchE2E_RunOperationByName` (both halves through MCP against real daemons) | daemon, capability, MCP |
 | PF-12 | `TestMCP_Plan_PlanVsRealRunParity` | MCP |
 | PF-13 | `TestBuildOperationAction_UnknownArgOnAValidCallIsRejected` (name half); value half, three independent links on different Operations rather than one chain: `TestPreflightCarriesAnIllFormedArgumentValueToTheDaemon` (Relay passes the value through unaltered), `TestBuildOperationAction_IllFormedArgValueIsNotRefused` (MCP), `plan_and_apply_agree_on_a_non_canonical_template_path` (daemon) | MCP, capability, daemon |
@@ -213,8 +213,8 @@ they are the names in the tree. They are renamed by the PR that lands PF-19, not
 | PF-15 | `TestPolicyQuery_RawExecRoundTrip` | Relay wire conversion |
 | PF-16 | `TestMCP_RawExec_Plan_ArgvVerbatimMutateClass` | MCP |
 | PF-18 | `TestPlanAuthzDeniedRecordsRefusalNoVerdicts` | capability |
-| PF-22 | `TestVerdictZeroValueIsUnknownNeverAllow` (zero-value half), `TestPolicyVerdict_CannotExpressUnknown` (wire half: `PolicyVerdict`'s field set and a nested walk that skips enums) | capability, compile-time |
-| PF-23 | `TestPreflightNeverConsultsTheApprovalGate` (behavioural, with an armed control: the same call through a real run parks), `TestPreflightResultCarriesNoApprovalField` (response half, on the result's field sets; the surfaces rest on invariant 10) | capability |
+| PF-22 | `TestVerdictZeroValueIsUnknownNeverAllow` (zero-value half), `TestPolicyVerdict_CannotExpressUnknown` (wire half: `PolicyVerdict`'s field set and a nested walk that skips enums, plus the exact value names of the two enums `PolicyVerdict` carries, which the walk does not reach) | capability, compile-time |
+| PF-23 | `TestPreflightNeverConsultsTheApprovalGate` (behavioural, with an armed control: the same call through a real run parks), `TestPreflightResultCarriesNoApprovalField` (response half, on the result's field sets, which now include the display-only pass and rule-reference fields on `NodeVerdict`; the surfaces rest on invariant 10) | capability |
 
 Claims with **no row**, and so nothing checking them:
 

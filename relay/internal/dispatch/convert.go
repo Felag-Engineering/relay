@@ -79,15 +79,58 @@ func policyQuery(queryID string, act jobs.Action) *relayv1.PolicyQuery {
 }
 
 // verdict converts a wire PolicyVerdict into the domain jobs.Verdict that
-// capability.Conduit.Query returns. There is no "unrecognized" case to
-// default here — Allowed and Unsupported are plain bools and DecidingRule a
-// plain string, so every wire value maps unambiguously.
+// capability.Conduit.Query returns. Allowed and Unsupported are plain bools
+// and DecidingRule a plain string, so every wire value maps unambiguously.
+// The pass and rule reference are display data copied from the daemon, never
+// an outcome: an unspecified or unrecognised pass or section maps to "", and
+// a rule index and line are kept only alongside a section (invariant 12).
 func verdict(pv *relayv1.PolicyVerdict) jobs.Verdict {
-	return jobs.Verdict{
+	v := jobs.Verdict{
 		Allowed:      pv.GetAllowed(),
 		DecidingRule: pv.GetDecidingRule(),
 		Unsupported:  pv.GetUnsupported(),
+		Pass:         passName(pv.GetPass()),
+		MatchedOn:    pv.GetMatchedOn(),
 	}
+	if v.RuleSection = ruleSectionName(pv.GetRuleSection()); v.RuleSection != "" {
+		v.RuleIndex = int(pv.GetRuleIndex())
+		v.RuleLine = int(pv.GetRuleLine())
+	}
+	return v
+}
+
+// passName is the daemon's Pass display name for a wire PolicyPass, "" for
+// the unspecified or an unrecognised value.
+func passName(p relayv1.PolicyPass) string {
+	switch p {
+	case relayv1.PolicyPass_POLICY_PASS_PRECONDITION:
+		return "precondition"
+	case relayv1.PolicyPass_POLICY_PASS_DENY:
+		return "deny"
+	case relayv1.PolicyPass_POLICY_PASS_GUARD:
+		return "guard"
+	case relayv1.PolicyPass_POLICY_PASS_ALLOW:
+		return "allow"
+	case relayv1.PolicyPass_POLICY_PASS_DEFAULT:
+		return "default"
+	}
+	return ""
+}
+
+// ruleSectionName names the Policy file section for a wire PolicyRuleSection,
+// "" for the unspecified or an unrecognised value.
+func ruleSectionName(s relayv1.PolicyRuleSection) string {
+	switch s {
+	case relayv1.PolicyRuleSection_POLICY_RULE_SECTION_OPERATION:
+		return "operation"
+	case relayv1.PolicyRuleSection_POLICY_RULE_SECTION_DENY:
+		return "deny"
+	case relayv1.PolicyRuleSection_POLICY_RULE_SECTION_RAW_EXEC_ALLOW:
+		return "raw_exec_allow"
+	case relayv1.PolicyRuleSection_POLICY_RULE_SECTION_RAW_EXEC_DENY:
+		return "raw_exec_deny"
+	}
+	return ""
 }
 
 // relayOnlyOutcomes mirrors the wire Outcome values /proto marks

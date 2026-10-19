@@ -124,11 +124,19 @@ type perNodeResult struct {
 //
 // RefusalExplanation is the Relay's framing of the boundary a deny verdict
 // belongs to; DecidingRule remains the daemon's rule text, verbatim — two
-// different authors on the same verdict, exactly as on perNodeResult.
+// different authors on the same verdict, exactly as on perNodeResult. Pass,
+// RuleSection, RuleIndex, RuleLine and MatchedOn are likewise the daemon's
+// answer, verbatim and display-only; RuleIndex is absent unless RuleSection is
+// set.
 type perNodeVerdict struct {
 	NodeID             string `json:"node_id"`
 	Verdict            string `json:"verdict"`
 	DecidingRule       string `json:"deciding_rule,omitempty"`
+	Pass               string `json:"pass,omitempty"`
+	RuleSection        string `json:"rule_section,omitempty"`
+	RuleIndex          *int   `json:"rule_index,omitempty"`
+	RuleLine           int    `json:"rule_line,omitempty"`
+	MatchedOn          string `json:"matched_on,omitempty"`
 	Reason             string `json:"reason,omitempty"`
 	RefusalExplanation string `json:"refusal_explanation,omitempty"`
 	Outdated           bool   `json:"outdated,omitempty"`

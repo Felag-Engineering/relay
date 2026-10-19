@@ -389,6 +389,28 @@ type Verdict struct {
 	// DecidingRule then explains the vocabulary miss rather than naming a
 	// Policy rule.
 	Unsupported bool
+
+	// The daemon's own account of which pass and rule decided (ADR-0011). They
+	// are display-only: nothing on the Relay branches on them (invariant 12).
+	// All stay empty when Unsupported is set or the daemon does not report them
+	// (a daemon older than the field), so an empty Pass is "not reported", never
+	// "no rule decided"; only "default" says deny-by-default.
+
+	// Pass is the daemon's pass name: "precondition", "deny", "guard", "allow"
+	// or "default".
+	Pass string
+	// RuleSection is "operation", "deny", "raw_exec_allow" or "raw_exec_deny";
+	// empty when no rule decided.
+	RuleSection string
+	// RuleIndex is the rule's index within RuleSection; meaningful only when
+	// RuleSection is set.
+	RuleIndex int
+	// RuleLine is the rule's 1-based source line; 0 when the daemon's loader
+	// did not know it.
+	RuleLine int
+	// MatchedOn is the daemon's text, verbatim: positions and indices, never
+	// an argument value.
+	MatchedOn string
 }
 
 // JobRepository persists Jobs and their Stages.
