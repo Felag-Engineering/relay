@@ -122,6 +122,9 @@ func TestActivity_FreshRelaySaysNothingHappenedRatherThanNothingMatches(t *testi
 	if !strings.Contains(body, "Nothing has been recorded yet") {
 		t.Error("an empty trail does not say so")
 	}
+	if !strings.Contains(body, "When an AI-agent or an operator dispatches a Task, or calls any tool, it appears here.") {
+		t.Error("a fresh Relay's Activity does not carry the first-run explanation")
+	}
 
 	// With a filter, the filter-shaped copy is the right copy.
 	filtered := contentOf(get(t, h, "/console/activity?q=nosuchthing").Body.String())

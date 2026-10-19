@@ -116,4 +116,23 @@ dom.check(
   "the region did not report its connection state during the reconnect"
 );
 
+// --- first run: the page has the live region but neither feed nor Running now
+//
+// The empty, unfiltered screen draws one explanatory block and no feed, so an
+// event for a Job can only queue. Nothing may throw for the missing elements.
+const bareCounter = { textContent: "0" };
+const bareRegion = dom.makeElement("live", {
+  "data-events": "/console/events?kinds=job",
+  "data-last-event-id": "evt-9",
+}, { "#live-new-count": bareCounter });
+const bareWorld = dom.install({}, { "[data-live-region]": bareRegion });
+delete require.cache[require.resolve(path.join(assets, "stream.js"))];
+delete require.cache[require.resolve(path.join(assets, "activity.js"))];
+require(path.join(assets, "stream.js"));
+require(path.join(assets, "activity.js"));
+dom.check(bareWorld.opened.length === 1, "activity.js did not open a stream on a page with no feed");
+bareWorld.emit("job", "evt-10", JSON.stringify({ job_id: "job-new", transition: "created" }));
+dom.check(bareCounter.textContent === "1", "a Job on a page with no feed was not queued");
+dom.check(bareRegion.getAttribute("data-queued") === "yes", "the region was not marked as queued on a page with no feed");
+
 console.log("OK  stream.js + activity.js: connect, resume across a reconnect, flip in place, queue off-page, render nothing");

@@ -11,6 +11,7 @@ package console
 import (
 	"context"
 	"encoding/csv"
+	"errors"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -1288,6 +1289,179 @@ func TestActivity_ExhaustedPositionSaysSoRatherThanNothingMatches(t *testing.T) 
 	}
 	if len(q.jobCursors) != 0 || len(q.auditCursors) != 0 {
 		t.Errorf("a finished lane was queried anyway: job=%v audit=%v", q.jobCursors, q.auditCursors)
+	}
+}
+
+const firstRunSentence = "When an AI-agent or an operator dispatches a Task, or calls any tool, it appears here."
+
+// TestActivity_FirstRunIsOneBlockWithFiltersCollapsed: nothing recorded and
+// nothing asked for is one explanatory block with the filters closed, not
+// three stacked panels (04-activity.md, "Nothing recorded yet").
+func TestActivity_FirstRunIsOneBlockWithFiltersCollapsed(t *testing.T) {
+	d := activityDeps(&fakeQueries{})
+	d.Events = newFakeEvents()
+	body := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity").Body.String())
+
+	for _, want := range []string{firstRunSentence, `<div class="empty">`, `<h2>Nothing has been recorded yet.</h2>`, `data-when="on">Live.`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the first-run page lacks %q", want)
+		}
+	}
+	for _, absent := range []string{`<section class="runningnow"`, "Nothing is running.", `<div class="feed"`, "Nothing matches.", `<details class="filters" open`} {
+		if strings.Contains(body, absent) {
+			t.Errorf("the first-run page still carries %q", absent)
+		}
+	}
+	for _, once := range []string{"data-live-region", `id="live-new-count"`} {
+		if n := strings.Count(body, once); n != 1 {
+			t.Errorf("%q appears %d times, want 1", once, n)
+		}
+	}
+
+	open := strings.Index(body, `<details class="filters">`)
+	if open < 0 {
+		t.Fatalf("the filters are not in a closed <details>:\n%s", body)
+	}
+	closeAt := open + strings.Index(body[open:], "</details>")
+	for _, inside := range []string{`<form class="viewbar"`, `<div class="kindbar">`} {
+		if i := strings.Index(body, inside); i < open || i > closeAt {
+			t.Errorf("%q is not inside the collapsed filters", inside)
+		}
+	}
+	if s := strings.Index(body, firstRunSentence); s < 0 || s > open {
+		t.Error("the explanation does not precede the filters")
+	}
+	if l := strings.Index(body, "data-live-region"); l < strings.Index(body, `<div class="empty">`) || l > open {
+		t.Error("the live region is not inside the first-run block")
+	}
+	if k := strings.Index(body, "Read records are left out of this feed"); k < closeAt {
+		t.Error("the reads-left-out note is hidden inside, or missing from beside, the collapsed filters")
+	}
+}
+
+// TestActivity_FilteredEmptyKeepsFiltersOpenAndSaysNothingMatches: a filter
+// that matches nothing is not first run.
+func TestActivity_FilteredEmptyKeepsFiltersOpenAndSaysNothingMatches(t *testing.T) {
+	d := activityDeps(&fakeQueries{})
+	d.Events = newFakeEvents()
+	h := newTestHandler(d, accounts.RoleAdmin)
+	for _, path := range []string{
+		"/console/activity?q=nosuchthing",
+		"/console/activity?op=service.restart",
+		"/console/activity?account=acct-1",
+		"/console/activity?window=7d",
+		"/console/activity?kind=dispatch",
+		"/console/activity?outcome=failure",
+	} {
+		body := contentOf(get(t, h, path).Body.String())
+		for _, absent := range []string{`<details class="filters"`, firstRunSentence} {
+			if strings.Contains(body, absent) {
+				t.Errorf("%s carries %q", path, absent)
+			}
+		}
+		for _, want := range []string{`<form class="viewbar"`, "Nothing matches.", `<section class="runningnow"`} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s lacks %q", path, want)
+			}
+		}
+	}
+
+	// An unreadable value is dropped, so no filter is applied; the page keeps
+	// its filters open and the note visible rather than hiding it.
+	body := contentOf(get(t, h, "/console/activity?window=bogus").Body.String())
+	if !strings.Contains(body, "Part of this URL could not be read") {
+		t.Error("an unreadable window is not named")
+	}
+	if strings.Contains(body, `<details class="filters"`) {
+		t.Error("the note about an unreadable URL value is inside a collapsed disclosure")
+	}
+}
+
+// TestActivity_ConsoleToggleAloneStillShowsFirstRun: without a kind filter the
+// Console toggle changes nothing the page shows, so it is not a filter.
+func TestActivity_ConsoleToggleAloneStillShowsFirstRun(t *testing.T) {
+	d := activityDeps(&fakeQueries{})
+	d.Events = newFakeEvents()
+	body := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity?console=show").Body.String())
+	if !strings.Contains(body, firstRunSentence) || !strings.Contains(body, `<details class="filters">`) {
+		t.Error("?console=show alone hides the first-run block")
+	}
+	if strings.Contains(body, `<section class="runningnow"`) {
+		t.Error("?console=show alone draws Running now on an empty page")
+	}
+}
+
+// TestActivity_NonEmptyFeedHasNoFirstRunBlock: a row, or a running Job, is
+// something to show.
+func TestActivity_NonEmptyFeedHasNoFirstRunBlock(t *testing.T) {
+	done := finishedJob("job-done", "p", "acct-1")
+	done.State = jobs.JobStateComplete
+	for name, q := range map[string]*fakeQueries{
+		"finished row": {jobs: []capability.JobSummary{done}},
+		"running job":  {jobs: []capability.JobSummary{runningJob("job-1", "p", "acct-1")}},
+	} {
+		d := activityDeps(q)
+		d.Events = newFakeEvents()
+		body := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity").Body.String())
+		for _, absent := range []string{`<details class="filters"`, firstRunSentence} {
+			if strings.Contains(body, absent) {
+				t.Errorf("%s: carries %q", name, absent)
+			}
+		}
+		for _, want := range []string{`<form class="viewbar"`, `<div class="feed"`, `<section class="runningnow"`} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s: lacks %q", name, want)
+			}
+		}
+	}
+}
+
+// TestActivityView_FirstRunPredicate: each disqualifier alone turns first run
+// off. The Note row matters most: the Note line sits inside the closed
+// disclosure on first run.
+func TestActivityView_FirstRunPredicate(t *testing.T) {
+	if !(&activityView{}).firstRun() {
+		t.Fatal("the zero view is not first run")
+	}
+	for name, mutate := range map[string]func(*activityView){
+		"Narrowing":        func(v *activityView) { v.Narrowing = true },
+		"Note":             func(v *activityView) { v.Note = "a value was ignored" },
+		"Scrolled":         func(v *activityView) { v.Scrolled = true },
+		"Exhausted":        func(v *activityView) { v.Exhausted = true },
+		"RunningNow.Paged": func(v *activityView) { v.RunningNow.Paged = true },
+		"a row":            func(v *activityView) { v.Rows = []activityRow{{}} },
+		"a running Job":    func(v *activityView) { v.RunningNow.Entries = []runningNowEntry{{}} },
+		"ConsoleLeftOut":   func(v *activityView) { v.ConsoleLeftOut = 1 },
+		"OlderHref":        func(v *activityView) { v.OlderHref = "/console/activity?x=1" },
+	} {
+		v := &activityView{}
+		mutate(v)
+		if v.firstRun() {
+			t.Errorf("%s alone does not turn first run off", name)
+		}
+	}
+}
+
+// TestActivity_RefusalPagesNeverRenderFirstRun: the unknown-kind, read-failed
+// and refused-unaudited early returns draw no feed, so none may say the trail
+// is empty.
+func TestActivity_RefusalPagesNeverRenderFirstRun(t *testing.T) {
+	cases := map[string]struct {
+		q    *fakeQueries
+		path string
+	}{
+		"unknown kind":    {&fakeQueries{}, "/console/activity?kind=nosuchkind"},
+		"read failed":     {&fakeQueries{jobsErr: constErr("store down")}, "/console/activity"},
+		"refused unaudit": {&fakeQueries{jobsErr: errors.Join(capability.ErrReadUnaudited, errQueryFailed)}, "/console/activity"},
+	}
+	for name, c := range cases {
+		body := get(t, newTestHandler(activityDeps(c.q), accounts.RoleAdmin), c.path).Body.String()
+		if strings.Contains(body, "When an AI-agent or an operator dispatches a Task") {
+			t.Errorf("%s: renders the first-run sentence", name)
+		}
+		if strings.Contains(body, `<details class="filters"`) {
+			t.Errorf("%s: renders the first-run block", name)
+		}
 	}
 }
 

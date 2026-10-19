@@ -284,7 +284,11 @@ func TestActivity_RunningNowEmptyStates(t *testing.T) {
 		return s
 	}
 
-	if s := section(&fakeQueries{}, "/console/activity"); !strings.Contains(s, "Nothing is running.") {
+	// An empty, unfiltered page is the first-run block and draws no section, so
+	// the plain empty message is proven on a feed with a finished row.
+	done := finishedJob("job-done", "p", "acct-1")
+	done.State = jobs.JobStateComplete
+	if s := section(&fakeQueries{jobs: []capability.JobSummary{done}}, "/console/activity"); !strings.Contains(s, "Nothing is running.") {
 		t.Errorf("an empty section does not say so plainly:\n%s", s)
 	}
 	if s := section(&fakeQueries{}, "/console/activity?account=acct-1"); !strings.Contains(s, "This Account has nothing running.") {
