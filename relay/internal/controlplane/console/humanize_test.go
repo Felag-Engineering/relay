@@ -39,3 +39,44 @@ func TestHumanizedDurations(t *testing.T) {
 		}
 	}
 }
+
+// renderedAgeCases is the table renderedAgo is held to, and the one
+// assets/freshness.js is held to under node.
+var renderedAgeCases = []struct {
+	age   time.Duration
+	text  string
+	stale bool
+}{
+	{-5 * time.Second, "rendered just now", false},
+	{0, "rendered just now", false},
+	{999 * time.Millisecond, "rendered just now", false},
+	{time.Second, "rendered 1s ago", false},
+	{40 * time.Second, "rendered 40s ago", false},
+	{59 * time.Second, "rendered 59s ago", false},
+	{time.Minute, "rendered 1 min ago", false},
+	{4*time.Minute + 59*time.Second, "rendered 4 min ago", false},
+	{5 * time.Minute, "rendered 5 min ago, Refresh to re-read", true},
+	{12 * time.Minute, "rendered 12 min ago, Refresh to re-read", true},
+	{59*time.Minute + 59*time.Second, "rendered 59 min ago, Refresh to re-read", true},
+	{time.Hour, "rendered 1 hr ago, Refresh to re-read", true},
+	{23*time.Hour + 59*time.Minute, "rendered 23 hr ago, Refresh to re-read", true},
+	{24 * time.Hour, "rendered 1 day ago, Refresh to re-read", true},
+	{72 * time.Hour, "rendered 3 days ago, Refresh to re-read", true},
+}
+
+func TestRenderedAgo_Wording(t *testing.T) {
+	for _, tc := range renderedAgeCases {
+		text, stale := renderedAgo(tc.age)
+		if text != tc.text || stale != tc.stale {
+			t.Errorf("renderedAgo(%v) = %q, %v; want %q, %v", tc.age, text, stale, tc.text, tc.stale)
+		}
+	}
+}
+
+// A render instant ahead of the clock is a skew, not a page from the future.
+func TestRenderedAgo_NegativeAgeReadsAsJustNow(t *testing.T) {
+	text, stale := renderedAgo(-5 * time.Second)
+	if text != "rendered just now" || stale {
+		t.Errorf("renderedAgo(-5s) = %q, %v", text, stale)
+	}
+}

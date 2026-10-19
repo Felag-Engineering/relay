@@ -21,6 +21,7 @@ import (
 	"html/template"
 	"net/url"
 	"sort"
+	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
@@ -573,6 +574,34 @@ func newRefresh(path string, q url.Values) Refresh {
 	return Refresh{Href: path + "?" + q.Encode()}
 }
 
+// renderedAge is how old a page is (00-foundations.md "How old a page is").
+type renderedAge struct {
+	// Instant is the render instant as the Console's UTC stamp. It fills both
+	// datetime and title, the form every other time element in the Console
+	// uses (a valid HTML global date and time).
+	Instant string
+	// AgeSeconds is the whole seconds between the render instant and now at
+	// render, never negative; assets/freshness.js counts on from it.
+	AgeSeconds int
+	// Text is the server's words, complete with scripts off.
+	Text  string
+	Stale bool
+}
+
+func newRenderedAge(at, now time.Time) renderedAge {
+	age := now.Sub(at)
+	if age < 0 {
+		age = 0
+	}
+	text, stale := renderedAgo(age)
+	return renderedAge{
+		Instant:    utcStamp(at),
+		AgeSeconds: int(age / time.Second),
+		Text:       text,
+		Stale:      stale,
+	}
+}
+
 // --- The live region --------------------------------------------------------
 
 // Live is the shell's live-region component (spec 11 line 113 — "incoming
@@ -729,4 +758,8 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
   <button type="submit">Cancel</button>
   <span class="jcnote">Cancel asks this Job&#39;s in-flight Tasks to end; nothing later is affected.</span>
 </form>{{end}}
+
+{{/* rendered-age: 00-foundations.md, "How old a page is". The server's words are
+complete with scripts off; assets/freshness.js only advances them. */}}
+{{define "rendered-age"}}<span class="asat"><time datetime="{{.Instant}}" title="{{.Instant}}" data-rendered-age data-age="{{.AgeSeconds}}"{{if .Stale}} data-stale="yes"{{end}}>{{.Text}}</time></span>{{end}}
 `))

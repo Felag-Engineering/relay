@@ -1,7 +1,7 @@
 package console
 
 // refresh_test.go proves 00-foundations.md's "Refreshing a screen" and how
-// specs 03, 04 and 14 apply it: Refresh is a plain link that reloads the
+// specs 01, 03, 04 and 14 apply it: Refresh is a plain link that reloads the
 // screen with its query preserved, and the Console never reloads a screen on
 // a timer.
 
@@ -79,6 +79,25 @@ func TestRefresh_ControlsPreserveTheQuery(t *testing.T) {
 		t.Errorf("Activity's Refresh does not keep its filters and page position:\n%s", activity)
 	}
 
+	// Fleet spells the grouping out, so a default that shifts between loads
+	// cannot change the view, and never echoes a parameter it does not know.
+	fh := newTestHandler(fleetFixture(), accounts.RoleAdmin)
+	for _, tc := range []struct{ path, href string }{
+		{"/console/?filter=node:role=web&group=env&pin=node-web-1", "/console/?filter=node%3Arole%3Dweb&amp;group=env&amp;pin=node-web-1"},
+		{"/console/?group=-", "/console/?group=-"},
+		{"/console/?filter=tag:x&group=env", "/console/?filter=tag%3Ax&amp;group=env"},
+		{"/console/?filter=node:role=nonesuch&group=-", "/console/?filter=node%3Arole%3Dnonesuch&amp;group=-"},
+		{"/console/?nonesuch=1&group=env", "/console/?group=env"},
+	} {
+		got := contentOf(get(t, fh, tc.path).Body.String())
+		if !strings.Contains(got, `<a class="refreshbtn" href="`+tc.href+`">Refresh</a>`) {
+			t.Errorf("Fleet's Refresh at %s is not %s:\n%s", tc.path, tc.href, got)
+		}
+		if strings.Contains(got, "nonesuch=1") {
+			t.Errorf("Fleet's Refresh at %s echoes a parameter the screen does not understand", tc.path)
+		}
+	}
+
 	access := contentOf(get(t, h, "/console/access?kind=sign-in&failures=1&window=24h").Body.String())
 	if !strings.Contains(access, `<a class="refreshbtn" href="/console/access?failures=1&amp;kind=sign-in&amp;window=24h">Refresh</a>`) {
 		t.Errorf("Access' Refresh does not keep its filters:\n%s", access)
@@ -127,8 +146,13 @@ func TestRefresh_NoScriptNoStyleCSPUnchanged(t *testing.T) {
 	d, paths := refreshScreens()
 	d.Events = newFakeEvents()
 	h := newTestHandler(d, accounts.RoleAdmin)
-	for _, p := range append(paths, "/console/activity") {
-		rec := get(t, h, p)
+	fh := newTestHandler(fleetFixture(), accounts.RoleAdmin)
+	for _, p := range append(paths, "/console/activity", "/console/") {
+		handler := h
+		if p == "/console/" {
+			handler = fh
+		}
+		rec := get(t, handler, p)
 		if got := rec.Header().Get("Content-Security-Policy"); got != pinnedCSP {
 			t.Errorf("%s: CSP = %q, want the unchanged policy", p, got)
 		}
@@ -143,12 +167,18 @@ func TestRefresh_EachScreenSaysBesideRefreshWhetherAReloadIsAudited(t *testing.T
 	d, _ := refreshScreens()
 	d.Events = newFakeEvents()
 	h := newTestHandler(d, accounts.RoleAdmin)
+	fh := newTestHandler(fleetFixture(), accounts.RoleAdmin)
 	for path, note := range map[string]string{
+		"/console/":          "Every Refresh is an audited read.",
 		"/console/activity":  "Every Refresh is an audited read made from this Console.",
 		"/console/approvals": "Reloading this queue is not recorded on the audit trail; that is a known gap.",
 		"/console/access":    "Every Refresh is an audited read.",
 	} {
-		body := get(t, h, path).Body.String()
+		handler := h
+		if path == "/console/" {
+			handler = fh
+		}
+		body := get(t, handler, path).Body.String()
 		mustBeSituational(t, body, note)
 		content := contentOf(body)
 		at := strings.Index(content, `<p class="refreshlimit">`+note)

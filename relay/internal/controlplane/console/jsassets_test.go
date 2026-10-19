@@ -27,7 +27,10 @@ package console
 // name is silently excluded from every ordinary build — the test compiles,
 // lints clean and never runs.
 import (
+	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -48,5 +51,40 @@ func TestAssets_JavaScriptBehavesUnderADOM(t *testing.T) {
 				t.Errorf("%s produced no result:\n%s", script, out)
 			}
 		})
+	}
+}
+
+// TestAssets_FreshnessAdvancesUnderADOM hands assets/freshness.js the table
+// renderedAgo is held to and fails if the script words any age differently.
+func TestAssets_FreshnessAdvancesUnderADOM(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed; assets/freshness.js is asserted at the text level by freshness_test.go")
+	}
+
+	type row struct {
+		AgeMs int64  `json:"ageMs"`
+		Text  string `json:"text"`
+		Stale bool   `json:"stale"`
+	}
+	var rows []row
+	for _, tc := range renderedAgeCases {
+		rows = append(rows, row{tc.age.Milliseconds(), tc.text, tc.stale})
+	}
+	table, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "table.json")
+	if err := os.WriteFile(path, table, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := exec.Command(node, "testdata/check_freshness.js", path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("check_freshness.js failed:\n%s", out)
+	}
+	if !strings.Contains(string(out), "OK") {
+		t.Errorf("check_freshness.js produced no result:\n%s", out)
 	}
 }

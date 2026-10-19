@@ -333,12 +333,13 @@ type fleetView struct {
 	GroupBy   string
 	GroupKeys []string
 
-	// Now is when this page was rendered.
+	// Now is when this page was rendered, stated relatively through Rendered.
 	//
 	// "Can I reach it?" is answered from a socket state read at render time,
-	// and live updates are not built. Without a stamp, a tab left open
-	// overnight shows a confidently green fleet from twelve hours ago, with
-	// relative last-seen values stale in the same direction.
+	// and live updates are not built. With scripts on, the stated age advances
+	// and an old tab says so, rather than showing a confidently green fleet
+	// from twelve hours ago. With scripts off it reads correctly as at render
+	// and no later: the UTC instant is in the title, and the words do not age.
 	Now time.Time
 
 	Groups []fleetGroup
@@ -522,6 +523,8 @@ func handleFleet(d Deps) http.HandlerFunc {
 		}
 
 		v := buildFleetView(d, nodes, r.URL.Query().Get("filter"), r.URL.Query().Get("group"))
+		p.Scripts = []string{freshnessScript}
+
 		// The pin is carried, not computed: this screen is where an operator
 		// picks the second and third Node of a comparison, and a fleet view
 		// that dropped the pin on the way through would make pinning one Node
@@ -534,6 +537,30 @@ func handleFleet(d Deps) http.HandlerFunc {
 		pinRows(v.Groups, pins)
 		renderScreen(w, p, fleetTmpl, v)
 	}
+}
+
+// freshnessScript advances the page's "rendered ... ago" words; see
+// assets/freshness.js.
+const freshnessScript = "/console/assets/freshness.js"
+
+// Rendered is how old this page is, at render (00-foundations.md, "How old a
+// page is").
+func (v fleetView) Rendered() renderedAge { return newRenderedAge(v.Now, v.Now) }
+
+// RefreshControl reloads exactly this view: the filter as typed (a refused one
+// included), the grouping spelled out as ClearHref does ("-" for none) so a
+// default grouping that shifts between loads cannot change the view, and the
+// pin. Nothing else travels.
+func (v fleetView) RefreshControl() Refresh {
+	q := url.Values{}
+	if v.Filter != "" {
+		q.Set("filter", v.Filter)
+	}
+	q.Set("group", v.GroupParam())
+	if v.Pin.Raw != "" {
+		q.Set("pin", v.Pin.Raw)
+	}
+	return newRefresh(fleetPath, q)
 }
 
 // ClearHref is the fleet with the filter dropped and the grouping and pin
@@ -1555,7 +1582,11 @@ var fleetTmpl = newScreen("fleet", `
   {{with .Pin.Raw}}<input type="hidden" name="pin" value="{{.}}">{{end}}
   <button type="submit">Apply</button>
   <span class="vcount{{if not .FilterOK}} refused{{end}}">{{if .FilterOK}}{{.Matched}} of {{.Total}} {{plural .Total "Node" "Nodes"}}{{else}}filter not applied{{end}}</span>
+  {{/* Beside the count, inside the view bar, as 01-fleet-view.md draws it. A link in a GET form
+  submits nothing, and the wrapper keeps the age and Refresh from joining the count's text. */}}
+  <div class="freshline">{{template "rendered-age" .Rendered}}{{template "refresh" .RefreshControl}}</div>
 </form>
+<p class="refreshlimit">Every Refresh is an audited read.</p>
 
 {{if .Pin.Any}}{{template "pin-bar" .Pin}}{{end}}
 
@@ -1574,7 +1605,6 @@ var fleetTmpl = newScreen("fleet", `
   <div class="sshead">
     <h2>System state</h2>
     <span class="ssline">{{.WallTotal}} {{plural .WallTotal "Node" "Nodes"}}, one cell each{{if .GroupBy}}, grouped by <code>node:{{.GroupBy}}</code>{{end}}</span>
-    <span class="asat" title="This page does not update on its own. Reload to re-read the fleet.">as at {{stamp .Now}}</span>
     <div class="sskey">
       {{range .Legend}}<span class="sskeyitem"><i class="cell" data-bucket="{{.Bucket}}" aria-hidden="true"></i><b>{{.Count}}</b> {{.Label}}</span>{{end}}
     </div>
