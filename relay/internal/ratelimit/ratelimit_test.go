@@ -249,3 +249,35 @@ func TestNew_MaxTrackedIPsClamp(t *testing.T) {
 		}
 	}
 }
+
+func TestLimiter_ReadsConfigSourcePerCall(t *testing.T) {
+	clk := &advanceable{t: base}
+	cfg := Config{PerIPRatePerMin: 0.0001, PerIPBurst: 1, GlobalRatePerMin: 0.0001, GlobalBurst: 100, MaxTrackedIPs: 10}
+	l := New(cfg, WithClock(clk.clock), WithConfigSource(func() Config { return cfg }))
+
+	if !l.Allow("10.0.0.1") {
+		t.Fatal("first call: want allowed")
+	}
+	if l.Allow("10.0.0.1") {
+		t.Fatal("second call at burst 1: want denied")
+	}
+
+	// A larger per-IP rate, applied without rebuilding the limiter, refills the bucket.
+	cfg.PerIPRatePerMin = 6000
+	cfg.PerIPBurst = 5
+	clk.advance(time.Second)
+	if !l.Allow("10.0.0.1") {
+		t.Fatal("after the source raised the rate: want allowed")
+	}
+
+	// A lowered burst clamps the held tokens on the next call.
+	cfg.PerIPBurst = 1
+	cfg.PerIPRatePerMin = 0.0001
+	clk.advance(time.Second)
+	if !l.Allow("10.0.0.2") {
+		t.Fatal("fresh IP: want allowed")
+	}
+	if l.Allow("10.0.0.2") {
+		t.Fatal("fresh IP second call at lowered burst 1: want denied")
+	}
+}

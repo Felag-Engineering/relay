@@ -382,7 +382,7 @@ func TestNewReadLaneRefusesNoopAuditSink(t *testing.T) {
 			t.Errorf("panic = %v, want NewReadLane's noopAuditSink refusal", r)
 		}
 	}()
-	NewReadLane(rec, reg, auditQ, jobQ, nil, nil, 0, nil)
+	NewReadLane(rec, reg, auditQ, jobQ, nil, nil, testSettings, nil)
 }
 
 // TestNewReadLaneAcceptsRealAuditSink is the positive twin of
@@ -392,7 +392,7 @@ func TestNewReadLaneAcceptsRealAuditSink(t *testing.T) {
 	reg := registry.NewInMemory()
 	rec := NewRecorder(&spyAuditSink{}, nil, nil)
 
-	if NewReadLane(rec, reg, &spyAuditQuery{}, &spyJobQuery{}, nil, nil, 0, nil) == nil {
+	if NewReadLane(rec, reg, &spyAuditQuery{}, &spyJobQuery{}, nil, nil, testSettings, nil) == nil {
 		t.Fatal("NewReadLane over a real AuditSink returned nil")
 	}
 }

@@ -554,7 +554,7 @@ func handleFleet(d Deps) http.HandlerFunc {
 			return
 		}
 
-		v := buildFleetView(d, nodes, r.URL.Query().Get("filter"), r.URL.Query().Get("group"))
+		v := buildFleetView(d, nodes, listing.Eval.CertExpiringWithin, r.URL.Query().Get("filter"), r.URL.Query().Get("group"))
 		p.Scripts = []string{freshnessScript}
 
 		// The page states its age relative to when it was rendered, so a copy
@@ -618,9 +618,11 @@ func (v fleetView) ClearHref() string {
 }
 
 // buildFleetView is the whole screen as a pure function of the fleet, the
-// filter and the grouping. Kept separate from the handler so it is testable
+// filter and the grouping; certExpiringWithin is the capability layer's
+// state:cert-expiring window for this read (ListNodes' Eval), so the Console
+// never holds a copy that a reload could leave stale. Kept separate from the handler so it is testable
 // against a slice of registry.Node with no HTTP anywhere.
-func buildFleetView(d Deps, nodes []registry.Node, filter, groupBy string) fleetView {
+func buildFleetView(d Deps, nodes []registry.Node, certExpiringWithin time.Duration, filter, groupBy string) fleetView {
 	v := fleetView{
 		Now:      d.now(),
 		Total:    len(nodes),
@@ -640,7 +642,7 @@ func buildFleetView(d Deps, nodes []registry.Node, filter, groupBy string) fleet
 			// never blanked: a typo must not feel like an outage.
 			matched = nodes
 		} else {
-			ev := capability.StateEval{Now: d.now(), CertExpiringWithin: d.CertExpiringWithin}
+			ev := capability.StateEval{Now: d.now(), CertExpiringWithin: certExpiringWithin}
 			matched = matched[:0:0]
 			for _, n := range nodes {
 				if sel.Matches(n, ev) {
@@ -657,7 +659,7 @@ func buildFleetView(d Deps, nodes []registry.Node, filter, groupBy string) fleet
 
 	fns := make([]fleetNode, 0, len(matched))
 	for _, n := range matched {
-		fns = append(fns, newFleetNode(d, n))
+		fns = append(fns, newFleetNode(d, n, certExpiringWithin))
 	}
 
 	groups := groupNodes(fns, v.GroupBy)
@@ -825,8 +827,8 @@ func unreported(n registry.Node) bool {
 }
 
 // newFleetNode projects one registry record into a row.
-func newFleetNode(d Deps, n registry.Node) fleetNode {
-	in := nodestate.Input{Node: n, Now: d.now(), CertExpiringWithin: d.CertExpiringWithin}
+func newFleetNode(d Deps, n registry.Node, certExpiringWithin time.Duration) fleetNode {
+	in := nodestate.Input{Node: n, Now: d.now(), CertExpiringWithin: certExpiringWithin}
 
 	fn := fleetNode{
 		ID:       n.NodeID,

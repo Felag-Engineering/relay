@@ -13,13 +13,12 @@ import (
 
 // capSeams is the set of collaborators a test hands to newCapService. idem,
 // newID and concurrency may be zero (NewExecution's safe absences; a zero
-// concurrency takes the default). audit, authz, freeze, both query seams, cap
+// concurrency takes the default). audit, authz, freeze, both query seams
 // and the execution seams are required, as the capability constructors
 // require them.
 type capSeams struct {
 	reg    registry.Repository
 	authz  capability.Authorizer
-	cap    capability.CapChecker
 	audit  capability.AuditSink
 	freeze capability.FreezeStore
 
@@ -35,6 +34,9 @@ type capSeams struct {
 	conduit     capability.Conduit
 	newID       func() (string, error)
 	concurrency int
+	// settings carries the blast caps (and, with concurrency, the dispatch
+	// bound); nil means the defaults.
+	settings *capability.StaticOperatorSettings
 }
 
 // capLayer is what a test holds a built capability layer as: the Execution and
@@ -55,15 +57,23 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 		t.Fatalf("newCapService: audit, authz, freeze, auditQ and jobQ are required")
 	}
 	rec := capability.NewRecorder(s.audit, nil, nil)
-	ctl := capability.NewControl(rec, s.authz, s.freeze)
-	read := capability.NewReadLane(rec, s.reg, s.auditQ, s.jobQ, s.policyView, s.nodeVocab, 0, nil, capability.WithPolicyAliasSource(s.aliases))
-
-	if s.cap == nil || s.jobsRepo == nil || s.tasksRepo == nil || s.conduit == nil {
-		t.Fatalf("newCapService: cap, jobsRepo, tasksRepo and conduit are required")
+	// One source for the read lane, the BlastCap and the Execution, as the
+	// composition root wires them.
+	settings := &capability.StaticOperatorSettings{}
+	if s.settings != nil {
+		settings.S = s.settings.S
 	}
-	conc := s.concurrency
-	if conc == 0 {
-		conc = capability.DefaultDispatchConcurrency
+	if s.concurrency != 0 {
+		settings.S.DispatchConcurrency = s.concurrency
+	}
+	if settings.S.DispatchConcurrency == 0 {
+		settings.S.DispatchConcurrency = capability.DefaultDispatchConcurrency
+	}
+	ctl := capability.NewControl(rec, s.authz, s.freeze)
+	read := capability.NewReadLane(rec, s.reg, s.auditQ, s.jobQ, s.policyView, s.nodeVocab, settings, nil, capability.WithPolicyAliasSource(s.aliases))
+
+	if s.jobsRepo == nil || s.tasksRepo == nil || s.conduit == nil {
+		t.Fatalf("newCapService: jobsRepo, tasksRepo and conduit are required")
 	}
 	// A gate with no rules: nothing parks, so the store and authorizer below it
 	// are unreachable on every path these tests drive.
@@ -72,7 +82,7 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 		t.Fatalf("approval.NewGate: %v", err)
 	}
 	appr := capability.NewApprovals(rec, gate, unreachableApprovalStore{}, denyApprovalDecisions{}, nil, nil, nil, nil)
-	exec := capability.NewExecution(ctl, read, appr, s.cap, s.idem, s.jobsRepo, s.tasksRepo, s.conduit, conc, s.newID, nil)
+	exec := capability.NewExecution(ctl, read, appr, capability.NewBlastCap(settings), s.idem, s.jobsRepo, s.tasksRepo, s.conduit, settings, s.newID, nil)
 	return &capLayer{Execution: exec, ReadLane: read, Control: ctl}
 }
 
@@ -86,4 +96,10 @@ type denyApprovalDecisions struct{}
 
 func (denyApprovalDecisions) AuthorizeApprovalDecision(context.Context, capability.Principal, jobs.ActionKind) error {
 	return errors.New("test: approval decisions are not wired")
+}
+
+// blastCaps is the settings a fixture hands newCapService to give the layer
+// these blast caps; zero takes the package default, as BlastCap clamps it.
+func blastCaps(readCap, mutateCap int) *capability.StaticOperatorSettings {
+	return &capability.StaticOperatorSettings{S: capability.OperatorSettings{ReadBlastCap: readCap, MutateBlastCap: mutateCap}}
 }

@@ -101,7 +101,7 @@ func TestFleet_HeadlineCountsUnreportedFingerprintsApart(t *testing.T) {
 	}
 
 	d = withFleet(d, append(fleetNodes(d), registry.Node{NodeID: "node-new", Connected: true})...)
-	v := buildFleetView(d, fleetNodes(d), "", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "-")
 	if v.PolicyFingerprintCount != 3 {
 		t.Errorf("PolicyFingerprintCount = %d, want 3: a Node with no fingerprint is not a fingerprint", v.PolicyFingerprintCount)
 	}
@@ -125,7 +125,7 @@ func TestFleet_HeadlineCountsTheMatchedSetNotTheDrawnCards(t *testing.T) {
 		})
 	}
 	d := withFleet(renderableDeps(), nodes...)
-	v := buildFleetView(d, fleetNodes(d), "", "shard")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "shard")
 
 	if len(v.Groups) != groupCards {
 		t.Fatalf("drew %d cards, want %d", len(v.Groups), groupCards)
@@ -159,7 +159,7 @@ func TestFleet_HeadlineCountsTheMatchedSetNotTheDrawnCards(t *testing.T) {
 // whole fleet (spec 01, D26).
 func TestFleet_HeadlineCountsTheWholeFleetUnderARefusedFilter(t *testing.T) {
 	d := fleetFixture()
-	v := buildFleetView(d, fleetNodes(d), "tag:x", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "tag:x", "-")
 	if v.FilterOK {
 		t.Fatal("tag:x was accepted; this test needs a refused filter")
 	}
@@ -216,7 +216,7 @@ func TestFleet_HeadlineIsTheLargestTypeAfterTheHeading(t *testing.T) {
 func TestFleet_GroupsAreNativeDetails(t *testing.T) {
 	d := fleetFixture()
 	body := fleetBody(t, d, "?group=role")
-	v := buildFleetView(d, fleetNodes(d), "", "role")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "role")
 
 	if got := strings.Count(body, `<details class="group"`); got != len(v.Groups) {
 		t.Errorf("%d <details> cards, want %d", got, len(v.Groups))
@@ -308,7 +308,7 @@ func TestFleet_HeadlineNeverDrawsAMalformedFingerprint(t *testing.T) {
 		registry.Node{NodeID: "node-bidi", PolicyFingerprint: bidi, Connected: true},
 		registry.Node{NodeID: "node-good", PolicyFingerprint: good, Connected: true},
 	)
-	v := buildFleetView(d, fleetNodes(d), "", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "-")
 	if v.PolicyFingerprintCount != 3 {
 		t.Errorf("PolicyFingerprintCount = %d, want 3: malformed values still count", v.PolicyFingerprintCount)
 	}

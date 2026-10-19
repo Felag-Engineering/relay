@@ -132,7 +132,7 @@ func TestFleet_NoFactAppearsOnARowOrInAFacet(t *testing.T) {
 // state, and the pixel wall has exactly four buckets.
 func TestFleet_DerivesStateAndBucketsTheWall(t *testing.T) {
 	d := fleetFixture()
-	v := buildFleetView(d, fleetNodes(d), "", "role")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "role")
 
 	byKey := map[string]fleetGroup{}
 	for _, g := range v.Groups {
@@ -181,7 +181,7 @@ func TestFleet_OfflineComesFromConnectednessNotLastSeen(t *testing.T) {
 		// Connected left false: not connected now, despite the recent LastSeen.
 	}}...)
 
-	v := buildFleetView(d, fleetNodes(d), "", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "-")
 	if len(v.Groups) != 1 || v.Groups[0].Offline != 1 {
 		t.Fatalf("a Node seen 1s ago but not connected was not rendered offline: %+v", v.Groups)
 	}
@@ -193,7 +193,7 @@ func TestFleet_OfflineComesFromConnectednessNotLastSeen(t *testing.T) {
 func TestFleet_FilterUsesTheRealSelectorParser(t *testing.T) {
 	d := fleetFixture()
 
-	v := buildFleetView(d, fleetNodes(d), "node:role=web", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "node:role=web", "-")
 	if !v.FilterOK {
 		t.Fatalf("a valid node: selector was rejected: %s", v.FilterError)
 	}
@@ -201,7 +201,7 @@ func TestFleet_FilterUsesTheRealSelectorParser(t *testing.T) {
 		t.Errorf("node:role=web matched %d Nodes, want 3", v.Matched)
 	}
 
-	v = buildFleetView(d, fleetNodes(d), "relay:quarantine=on", "-")
+	v = buildFleetView(d, fleetNodes(d), 0, "relay:quarantine=on", "-")
 	if v.Matched != 1 {
 		t.Errorf("relay:quarantine=on matched %d Nodes, want 1", v.Matched)
 	}
@@ -214,7 +214,7 @@ func TestFleet_FilterUsesTheRealSelectorParser(t *testing.T) {
 func TestFleet_UnresolvableNamespacesAreRefusedByName(t *testing.T) {
 	d := fleetFixture()
 	term := "tag:pci"
-	v := buildFleetView(d, fleetNodes(d), term, "-")
+	v := buildFleetView(d, fleetNodes(d), 0, term, "-")
 	if v.FilterOK {
 		t.Errorf("%s was accepted as a filter, but nothing can resolve it yet", term)
 	}
@@ -241,7 +241,7 @@ func TestFleet_UnresolvableNamespacesAreRefusedByName(t *testing.T) {
 // layer's own detail is rendered once, sentence-cased, with one example.
 func TestFleet_GenericFilterRefusalIsOneCapitalisedSentence(t *testing.T) {
 	d := fleetFixture()
-	v := buildFleetView(d, fleetNodes(d), "foo", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "foo", "-")
 	msg := v.FilterError
 	if msg == "" || msg[0] < 'A' || msg[0] > 'Z' {
 		t.Errorf("the refusal does not start upper-case: %q", msg)
@@ -273,7 +273,7 @@ func TestFleet_RefusedFilterIsSaidUnderTheField(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := fleetFixture()
-			want := buildFleetView(d, fleetNodes(d), tc.term, "-")
+			want := buildFleetView(d, fleetNodes(d), 0, tc.term, "-")
 			if want.FilterOK {
 				t.Fatalf("%q was accepted; the test needs a refused term", tc.term)
 			}
@@ -357,7 +357,7 @@ func TestFleet_ValidFilterRendersUnchanged(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := fleetFixture()
-			v := buildFleetView(d, fleetNodes(d), tc.term, "-")
+			v := buildFleetView(d, fleetNodes(d), 0, tc.term, "-")
 			body := get(t, newTestHandler(d, accounts.RoleAdmin),
 				fleetPath+"?filter="+url.QueryEscape(tc.term)+"&group=-").Body.String()
 
@@ -458,7 +458,7 @@ func TestFleet_PlaceholderIsAResolvableSelector(t *testing.T) {
 func TestFleet_StateFilterResolvesLikeAnyOtherNamespace(t *testing.T) {
 	d := fleetFixture()
 
-	v := buildFleetView(d, fleetNodes(d), "state:offline", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "state:offline", "-")
 	if !v.FilterOK {
 		t.Fatalf("state:offline was rejected as a filter: %s", v.FilterError)
 	}
@@ -667,7 +667,7 @@ func TestFleet_SmallHealthyFleetStillShowsItsNodes(t *testing.T) {
 		{NodeID: "node-b", NodeLabels: map[string]string{"role": "web"}, DaemonVersion: "0.6.0", PolicyFingerprint: "same", Connected: true},
 	}...)
 
-	v := buildFleetView(d, fleetNodes(d), "", "role")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "role")
 	g := v.Groups[0]
 
 	if !g.Open {
@@ -701,7 +701,7 @@ func TestFleet_LargeHealthyGroupStillCompresses(t *testing.T) {
 	d := renderableDeps()
 	d = withFleet(d, nodes...)
 
-	v := buildFleetView(d, fleetNodes(d), "", "role")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "role")
 	if v.Groups[0].Open {
 		t.Error("a large, entirely healthy group did not compress to one line")
 	}
@@ -859,7 +859,7 @@ func TestNode_RepeatedDeniesExplainThemselvesOnce(t *testing.T) {
 // system.
 func TestFleet_OneWallForTheWholeFleet(t *testing.T) {
 	d := fleetFixture()
-	v := buildFleetView(d, fleetNodes(d), "", "role")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "role")
 
 	if len(v.Wall) != 2 {
 		t.Fatalf("the wall has %d groups, want 2 (web, db)", len(v.Wall))
@@ -887,7 +887,7 @@ func TestFleet_OneWallForTheWholeFleet(t *testing.T) {
 // would put it last, because it is rare — which is precisely why it matters.
 func TestFleet_WallLegendCountsEveryBucketAndLeadsWithTheWorst(t *testing.T) {
 	d := fleetFixture()
-	v := buildFleetView(d, fleetNodes(d), "", "role")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "role")
 
 	if len(v.Legend) == 0 {
 		t.Fatal("the wall has no legend")
@@ -945,7 +945,7 @@ func TestFleet_RevokedNodeIsVisibleAndDistinctFromOffline(t *testing.T) {
 		{NodeID: "node-fine", NodeLabels: map[string]string{"role": "web"}, Connected: true},
 	}...)
 
-	v := buildFleetView(d, fleetNodes(d), "", "role")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "role")
 	g := v.Groups[0]
 
 	if g.Revoked != 1 {
@@ -1000,7 +1000,7 @@ func TestFleet_DeviatingRowsLeadEvenWhenTheyAreTheMajority(t *testing.T) {
 	d := renderableDeps()
 	d = withFleet(d, nodes...)
 
-	v := buildFleetView(d, fleetNodes(d), "", "role")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "role")
 	rows := v.Groups[0].Deviations
 
 	if len(rows) != 10 {
@@ -1035,7 +1035,7 @@ func TestFleet_HighCardinalityGroupingDoesNotRebuildTheList(t *testing.T) {
 	d := renderableDeps()
 	d = withFleet(d, nodes...)
 
-	v := buildFleetView(d, fleetNodes(d), "", "shard")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "shard")
 
 	if len(v.Groups) > groupCards {
 		t.Errorf("rendered %d group cards, want at most %d", len(v.Groups), groupCards)
@@ -1060,7 +1060,7 @@ func TestFleet_StateChipsCarryTheirSeverity(t *testing.T) {
 		// Connected left false: offline.
 	}}...)
 
-	v := buildFleetView(d, fleetNodes(d), "", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "-")
 	bySeverity := map[string]bool{}
 	for _, c := range v.Groups[0].Deviations[0].States {
 		bySeverity[c.Key] = c.Attention
@@ -1085,12 +1085,12 @@ func TestFleet_StateChipsCarryTheirSeverity(t *testing.T) {
 // the other alarm markers.
 func TestFleet_CertExpiringMarkerFires(t *testing.T) {
 	d := renderableDeps()
-	d.CertExpiringWithin = 84 * time.Hour
 	d = withFleet(d, []registry.Node{
 		{NodeID: "node-a", Connected: true, CertNotAfter: testNow.Add(10 * time.Hour)},
 	}...)
 
-	v := buildFleetView(d, fleetNodes(d), "", "-")
+	d.Queries.(*fakeQueries).eval.CertExpiringWithin = 84 * time.Hour
+	v := buildFleetView(d, fleetNodes(d), 84*time.Hour, "", "-")
 	g := v.Groups[0]
 	if g.Expiring != 1 {
 		t.Fatalf("group Expiring = %d, want 1", g.Expiring)
@@ -1314,7 +1314,7 @@ func TestFleet_TemplateSetFacetExists(t *testing.T) {
 		{NodeID: "e", Connected: true},
 	}...)
 
-	v := buildFleetView(d, fleetNodes(d), "", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "-")
 	var tf *facet
 	for i := range v.Groups[0].Facets {
 		if v.Groups[0].Facets[i].Title == "Template set" {
@@ -1351,7 +1351,7 @@ func TestFleet_FingerprintFacetTermsResolveToTheFullValue(t *testing.T) {
 		{NodeID: "c", PolicyFingerprint: "bbbb444455556666", Connected: true},
 	}...)
 
-	v := buildFleetView(d, fleetNodes(d), "", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "-")
 	var pf *facet
 	for i := range v.Groups[0].Facets {
 		if v.Groups[0].Facets[i].Title == "Policy fingerprint" {
@@ -1374,7 +1374,7 @@ func TestFleet_FingerprintFacetTermsResolveToTheFullValue(t *testing.T) {
 		t.Fatalf("facet term = %q, want the FULL fingerprint, not the short hash", term)
 	}
 
-	got := buildFleetView(d, fleetNodes(d), term, "-")
+	got := buildFleetView(d, fleetNodes(d), 0, term, "-")
 	if !got.FilterOK {
 		t.Fatalf("the facet's own term %q was rejected as a filter: %s", term, got.FilterError)
 	}
@@ -1404,7 +1404,7 @@ func TestFleet_FacetTermsAreAlwaysExactlyOneSelectorTerm(t *testing.T) {
 		},
 	}...)
 
-	v := buildFleetView(d, fleetNodes(d), "", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "-")
 	checked := 0
 	for _, g := range v.Groups {
 		for _, f := range g.Facets {
@@ -1462,7 +1462,7 @@ func TestFleet_ACollidingShortHashDoesNotHijackTheHonestBucket(t *testing.T) {
 		{NodeID: "node-z-hostile", Connected: true, PolicyFingerprint: hostile},
 	}...)
 
-	v := buildFleetView(d, fleetNodes(d), "", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "-")
 	var pf *facet
 	for i := range v.Groups[0].Facets {
 		if v.Groups[0].Facets[i].Title == "Policy fingerprint" {
@@ -1497,7 +1497,7 @@ func TestFleet_ACollidingShortHashDoesNotHijackTheHonestBucket(t *testing.T) {
 		t.Errorf("the colliding value's row is targetable: %+v", hostileRow)
 	}
 
-	got := buildFleetView(d, fleetNodes(d), honestRow.Term, "-")
+	got := buildFleetView(d, fleetNodes(d), 0, honestRow.Term, "-")
 	if !got.FilterOK {
 		t.Fatalf("the honest bucket's own term %q was rejected as a filter: %s", honestRow.Term, got.FilterError)
 	}
@@ -1531,7 +1531,7 @@ func TestFleet_ASelfReportedSentinelDoesNotJoinTheSentinelBucket(t *testing.T) {
 		{NodeID: "node-hostile", Connected: true, TemplateSetFingerprint: "no templates installed"},
 	}...)
 
-	v := buildFleetView(d, fleetNodes(d), "", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "-")
 	var tf *facet
 	for i := range v.Groups[0].Facets {
 		if v.Groups[0].Facets[i].Title == "Template set" {
@@ -1577,7 +1577,7 @@ func TestFleet_ASelfReportedSentinelDoesNotJoinTheSentinelBucket(t *testing.T) {
 		{NodeID: "node-a", Connected: true, TemplateSetFingerprint: nodestate.TemplateUnloadable},
 		{NodeID: "node-b", Connected: true, TemplateSetFingerprint: "none installed"},
 	}...)
-	v2 := buildFleetView(d2, fleetNodes(d2), "", "-")
+	v2 := buildFleetView(d2, fleetNodes(d2), 0, "", "-")
 	for i := range v2.Groups[0].Facets {
 		if v2.Groups[0].Facets[i].Title != "Template set" {
 			continue
@@ -1626,7 +1626,7 @@ func TestFleet_DaemonVersionFacetIsGatedLikeTheFingerprints(t *testing.T) {
 		{NodeID: "node-hostile", Connected: true, DaemonVersion: "1.4.2, tag:x=y"},
 	}...)
 
-	v := buildFleetView(d, fleetNodes(d), "", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "-")
 	var vf *facet
 	for i := range v.Groups[0].Facets {
 		if v.Groups[0].Facets[i].Title == "Daemon version" {
@@ -1698,7 +1698,7 @@ func TestFleet_FacetSaysWhyAValueIsNotALink(t *testing.T) {
 // whose whole chip grammar exists to keep those apart.
 func TestFleet_StateFacetKeepsNamespacesApart(t *testing.T) {
 	d := fleetFixture()
-	v := buildFleetView(d, fleetNodes(d), "", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "-")
 
 	var sf *facet
 	for i := range v.Groups[0].Facets {
@@ -1775,7 +1775,7 @@ func TestFleet_RevokedIsDeclaredInTheFacetToo(t *testing.T) {
 	d = withFleet(d, []registry.Node{
 		{NodeID: "gone", RevokedAt: testNow.Add(-time.Hour)},
 	}...)
-	v := buildFleetView(d, fleetNodes(d), "", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "-")
 
 	var found bool
 	for _, f := range v.Groups[0].Facets {
@@ -3174,7 +3174,7 @@ func legendCount(v fleetView, b wallBucket) int {
 
 func TestFleet_UnreportedNodeIsNeitherNormalNorCalledCurrent(t *testing.T) {
 	d := unreportedFleet()
-	v := buildFleetView(d, fleetNodes(d), "", "env")
+	v := buildFleetView(d, fleetNodes(d), 0, "", "env")
 	g := v.Groups[0]
 
 	if len(g.Deviations) == 0 || g.Deviations[0].ID != "node-5" {
@@ -3217,7 +3217,7 @@ func TestFleet_UnreportedNodeIsNeitherNormalNorCalledCurrent(t *testing.T) {
 func TestFleet_OfflineUnreportedNodeStaysAttention(t *testing.T) {
 	d := withFleet(renderableDeps(),
 		registry.Node{NodeID: "node-off", NodeLabels: map[string]string{"env": "prod"}, Connected: false})
-	g := buildFleetView(d, fleetNodes(d), "", "env").Groups[0]
+	g := buildFleetView(d, fleetNodes(d), 0, "", "env").Groups[0]
 
 	n := g.Deviations[0]
 	if n.Bucket != wallAttention {
@@ -3238,7 +3238,7 @@ func TestFleet_OfflineUnreportedNodeStaysAttention(t *testing.T) {
 func TestFleet_FencedOutranksUnreported(t *testing.T) {
 	d := withFleet(renderableDeps(),
 		registry.Node{NodeID: "node-rev", NodeLabels: map[string]string{"env": "prod"}, RevokedAt: testNow})
-	g := buildFleetView(d, fleetNodes(d), "", "env").Groups[0]
+	g := buildFleetView(d, fleetNodes(d), 0, "", "env").Groups[0]
 	if got := g.Deviations[0].Bucket; got != wallFenced {
 		t.Errorf("bucket = %q, want fenced", got)
 	}
@@ -3252,7 +3252,7 @@ func TestFleet_AllUnreportedGroupClaimsNoOneIsCurrent(t *testing.T) {
 		registry.Node{NodeID: "a", NodeLabels: map[string]string{"env": "prod"}, Connected: true},
 		registry.Node{NodeID: "b", NodeLabels: map[string]string{"env": "prod"}, Connected: true},
 	)
-	g := buildFleetView(d, fleetNodes(d), "", "env").Groups[0]
+	g := buildFleetView(d, fleetNodes(d), 0, "", "env").Groups[0]
 	if !strings.HasPrefix(g.ModeLine, "no Node in this group can be called reachable, current and permitted") {
 		t.Errorf("mode line = %q", g.ModeLine)
 	}
@@ -3270,7 +3270,7 @@ func TestFleet_UnreportedIsNotCountedOffMode(t *testing.T) {
 			DaemonVersion: "0.6.0", PolicyFingerprint: fp, Connected: true}
 	}
 	d := withFleet(renderableDeps(), n("a", "A"), n("b", "A"), n("c", "B"), n("d", ""))
-	g := buildFleetView(d, fleetNodes(d), "", "env").Groups[0]
+	g := buildFleetView(d, fleetNodes(d), 0, "", "env").Groups[0]
 	if g.OffMode != 1 || g.Unreported != 1 {
 		t.Errorf("OffMode = %d, Unreported = %d; want 1 (only B) and 1", g.OffMode, g.Unreported)
 	}
@@ -3283,7 +3283,7 @@ func TestFleet_VersionWithoutFingerprintIsUnreported(t *testing.T) {
 		registry.Node{NodeID: "b", NodeLabels: map[string]string{"env": "prod"},
 			DaemonVersion: "0.6.0", Connected: true},
 	)
-	g := buildFleetView(d, fleetNodes(d), "", "env").Groups[0]
+	g := buildFleetView(d, fleetNodes(d), 0, "", "env").Groups[0]
 	if g.Unreported != 1 || g.OffMode != 0 {
 		t.Errorf("Unreported = %d, OffMode = %d; want 1 and 0", g.Unreported, g.OffMode)
 	}
@@ -3310,7 +3310,7 @@ func facetRowCount(g fleetGroup, title, label string) int {
 
 func TestFleet_ValueFacetsSumToTheGroupCount(t *testing.T) {
 	d := unreportedFleet()
-	g := buildFleetView(d, fleetNodes(d), "", "env").Groups[0]
+	g := buildFleetView(d, fleetNodes(d), 0, "", "env").Groups[0]
 	for _, title := range []string{"Daemon version", "Policy fingerprint", "Template set"} {
 		found := false
 		for _, f := range g.Facets {
@@ -3353,7 +3353,7 @@ func TestFleet_SelfReportedSentinelLiteralCannotJoinTheUnreportedRow(t *testing.
 		n("b", "s:unreported", "s:unreported"),
 		n("c", "", ""),
 	)
-	g := buildFleetView(d, fleetNodes(d), "", "env").Groups[0]
+	g := buildFleetView(d, fleetNodes(d), 0, "", "env").Groups[0]
 	for _, title := range []string{"Daemon version", "Policy fingerprint"} {
 		for _, f := range g.Facets {
 			if f.Title != title {
@@ -3447,7 +3447,7 @@ func TestFleet_StateColumnOnlyWhenARowHasAState(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := withFleet(renderableDeps(), tc.nodes...)
 
-			v := buildFleetView(d, fleetNodes(d), "", "role")
+			v := buildFleetView(d, fleetNodes(d), 0, "", "role")
 			if got := v.Groups[0].ShowState; got != tc.wantState {
 				t.Fatalf("ShowState = %v, want %v", got, tc.wantState)
 			}

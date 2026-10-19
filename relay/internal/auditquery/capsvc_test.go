@@ -16,11 +16,12 @@ import (
 // capability.NewReadLane requires them; authz builds the Control over it, the
 // execution seams build the Execution, and a test that sets none reads through the lane alone.
 type capSeams struct {
-	reg    registry.Repository
-	authz  capability.Authorizer
-	cap    capability.CapChecker
-	audit  capability.AuditSink
-	freeze capability.FreezeStore
+	reg   registry.Repository
+	authz capability.Authorizer
+	// settings carries the blast caps; nil means the defaults.
+	settings *capability.StaticOperatorSettings
+	audit    capability.AuditSink
+	freeze   capability.FreezeStore
 
 	auditQ capability.AuditQuery
 	jobQ   capability.JobQuery
@@ -60,11 +61,15 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 	if hasExec && (s.freeze == nil || s.authz == nil) {
 		t.Fatalf("newCapService: execution seams need a freeze store and an authorizer")
 	}
-	if hasExec && s.cap == nil {
-		t.Fatalf("newCapService: execution seams need a CapChecker")
-	}
 	rec := capability.NewRecorder(s.audit, nil, nil)
-	read := capability.NewReadLane(rec, s.reg, s.auditQ, s.jobQ, nil, nil, 0, nil)
+	// One source for the read lane, the BlastCap and the Execution, as the
+	// composition root wires them.
+	settings := &capability.StaticOperatorSettings{}
+	if s.settings != nil {
+		settings.S = s.settings.S
+	}
+	settings.S.DispatchConcurrency = capability.DefaultDispatchConcurrency
+	read := capability.NewReadLane(rec, s.reg, s.auditQ, s.jobQ, nil, nil, settings, nil)
 	layer := &capLayer{ReadLane: read}
 	if s.authz == nil {
 		return layer
@@ -83,7 +88,7 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 	}
 	appr := capability.NewApprovals(rec, gate, unreachableApprovalStore{}, denyApprovalDecisions{}, nil, nil, nil, nil)
 	if hasExec {
-		layer.Execution = capability.NewExecution(layer.Control, read, appr, s.cap, nil, s.jobsRepo, s.tasksRepo, s.conduit, capability.DefaultDispatchConcurrency, s.newID, nil)
+		layer.Execution = capability.NewExecution(layer.Control, read, appr, capability.NewBlastCap(settings), nil, s.jobsRepo, s.tasksRepo, s.conduit, settings, s.newID, nil)
 	}
 	return layer
 }
@@ -98,4 +103,10 @@ type denyApprovalDecisions struct{}
 
 func (denyApprovalDecisions) AuthorizeApprovalDecision(context.Context, capability.Principal, jobs.ActionKind) error {
 	return errors.New("test: approval decisions are not wired")
+}
+
+// blastCaps is the settings a fixture hands newCapService to give the layer
+// these blast caps; zero takes the package default, as BlastCap clamps it.
+func blastCaps(readCap, mutateCap int) *capability.StaticOperatorSettings {
+	return &capability.StaticOperatorSettings{S: capability.OperatorSettings{ReadBlastCap: readCap, MutateBlastCap: mutateCap}}
 }

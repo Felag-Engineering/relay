@@ -93,11 +93,11 @@ type ReadLane struct {
 	policyView PolicyViewSource
 	nodeVocab  TemplateVocabularySource
 
-	// certExpiringWithin is the state:cert-expiring warning window
-	// (ADR-0034), threaded into every Selector resolution via stateEval.
-	// Zero means the marker never fires; the composition root always passes a
-	// real value (invariant 11: file-only, no API reads or sets it).
-	certExpiringWithin time.Duration
+	// settings supplies the state:cert-expiring warning window (ADR-0034),
+	// read per request and threaded into every Selector resolution via
+	// stateEval. A zero window means the marker never fires; nil means zero
+	// (struct-literal test lanes only). No API reads or sets it (invariant 11).
+	settings OperatorSettingsSource
 
 	// now is the clock Selector resolution reads; nil means time.Now().UTC().
 	now func() time.Time
@@ -110,16 +110,16 @@ type ReadLane struct {
 // NewReadLane returns a ReadLane over rec, reg and the two query seams. rec,
 // reg, auditQ and jobQ are required: a lane with no trail cannot audit its
 // reads, one with no registry or query seam has nothing to read — all
-// composition-root bugs, so each panics rather than degrading. A negative
-// certExpiringWithin panics for the same reason; zero means the
-// state:cert-expiring marker never fires.
+// composition-root bugs, so each panics rather than degrading. A nil
+// settings source panics for the same reason; a zero (or negative, clamped)
+// window means the state:cert-expiring marker never fires.
 //
 // NewReadLane also refuses a Recorder over the no-op AuditSink (F5,
 // cycle-2 security review): a lane that answers every query while recording
 // none of them is exactly the "unauditable read succeeded" state ADR-0025
 // forbids. policyView, nodeVocab and now may be nil — absence is documented on
 // the fields; a nil now means time.Now().UTC().
-func NewReadLane(rec *Recorder, reg registry.Repository, auditQ AuditQuery, jobQ JobQuery, policyView PolicyViewSource, nodeVocab TemplateVocabularySource, certExpiringWithin time.Duration, now func() time.Time, opts ...ReadLaneOption) *ReadLane {
+func NewReadLane(rec *Recorder, reg registry.Repository, auditQ AuditQuery, jobQ JobQuery, policyView PolicyViewSource, nodeVocab TemplateVocabularySource, settings OperatorSettingsSource, now func() time.Time, opts ...ReadLaneOption) *ReadLane {
 	if rec == nil {
 		panic("capability: NewReadLane: recorder must not be nil")
 	}
@@ -132,20 +132,20 @@ func NewReadLane(rec *Recorder, reg registry.Repository, auditQ AuditQuery, jobQ
 	if jobQ == nil {
 		panic("capability: NewReadLane: job query seam must not be nil")
 	}
-	if certExpiringWithin < 0 {
-		panic("capability: NewReadLane: certExpiringWithin must not be negative")
+	if settings == nil {
+		panic("capability: NewReadLane: settings must not be nil")
 	}
 	if _, ok := rec.audit.(noopAuditSink); ok {
 		panic("capability: NewReadLane: requires a real AuditSink (NewRecorder); noopAuditSink would answer every read while recording none of them")
 	}
-	return newReadLane(rec, reg, auditQ, jobQ, policyView, nodeVocab, certExpiringWithin, now, opts...)
+	return newReadLane(rec, reg, auditQ, jobQ, policyView, nodeVocab, settings, now, opts...)
 }
 
 // newReadLane assembles a ReadLane with no checks. Only NewReadLane and _test.go
 // files call it; it is the only route to a lane with no query seams or over the
 // no-op sink, which the QRY-17 call-time tests need.
-func newReadLane(rec *Recorder, reg registry.Repository, auditQ AuditQuery, jobQ JobQuery, policyView PolicyViewSource, nodeVocab TemplateVocabularySource, certExpiringWithin time.Duration, now func() time.Time, opts ...ReadLaneOption) *ReadLane {
-	l := &ReadLane{rec: rec, reg: reg, auditQ: auditQ, jobQ: jobQ, policyView: policyView, nodeVocab: nodeVocab, certExpiringWithin: certExpiringWithin, now: now}
+func newReadLane(rec *Recorder, reg registry.Repository, auditQ AuditQuery, jobQ JobQuery, policyView PolicyViewSource, nodeVocab TemplateVocabularySource, settings OperatorSettingsSource, now func() time.Time, opts ...ReadLaneOption) *ReadLane {
+	l := &ReadLane{rec: rec, reg: reg, auditQ: auditQ, jobQ: jobQ, policyView: policyView, nodeVocab: nodeVocab, settings: settings, now: now}
 	for _, o := range opts {
 		o(l)
 	}
@@ -291,7 +291,11 @@ func (l *ReadLane) stateEval() StateEval {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return StateEval{Now: now(), CertExpiringWithin: l.certExpiringWithin}
+	var window time.Duration
+	if l.settings != nil {
+		window = max(l.settings.OperatorSettings().CertExpiringWithin, 0)
+	}
+	return StateEval{Now: now(), CertExpiringWithin: window}
 }
 
 // DescribeNode returns one Node, its fingerprint peer counts, and its

@@ -135,7 +135,7 @@ func (*fakeCapabilityAuditSink) RecordAccountAdmin(context.Context, capability.P
 // no adapter, exactly like Exec/Approvals/AccountAdmin already do. now and
 // certExpiringWithin are pinned so a test asserting a state: label does not
 // race the wall clock — the `state:` instant now comes from the lane's own
-// clock (detail.Eval), not from Deps.Now/Deps.CertExpiringWithin.
+// clock (detail.Eval), not from Deps.Now.
 func newNodeReaderLane(t *testing.T, reg registry.Repository, sink capability.AuditSink, now func() time.Time, certExpiringWithin time.Duration) NodeReader {
 	t.Helper()
 	return newCapService(t, capSeams{
