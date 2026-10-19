@@ -8,8 +8,8 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
-// The two DEV-ONLY approval-gate fixtures the dev fleet bakes into the relay
-// image (docker/relay.Dockerfile): the default three-Node fleet's, and the
+// The two DEV-ONLY approval-gate fixtures the dev fleet stages onto its read-only
+// config volume (docker/dev-fleet-config.sh): the default three-Node fleet's, and the
 // nine-Node demo fleet's, which the Makefile's demo-* targets select. The Relay's gate
 // loader is fail-closed, so a fixture this parser refuses crash-loops that
 // fleet's Relay; these tests catch it here instead, and pin the posture each
@@ -17,8 +17,8 @@ import (
 // docs/operations/demo-fleet.md, "The human approver").
 //
 // Hermetic: they read the committed fixtures and run them through Parse. They
-// do not exercise Load's file-mode checks, which the image's COPY --chmod
-// satisfies and config_test.go covers.
+// do not exercise Load's file-mode checks, which the staged root-owned 0644
+// files satisfy and config_test.go covers.
 
 // fixturesDir is this package's directory walked back up to the repository
 // root (relay/internal/approval -> relay/internal -> relay -> .), then down.

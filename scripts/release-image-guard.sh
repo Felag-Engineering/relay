@@ -7,8 +7,10 @@
 # <binary-sha256> is the released binary's line in SHA256SUMS. Asserts, for that platform's
 # manifest in the archive:
 #   - every blob it touches hashes to the digest that names it (nothing is trusted by filename);
-#   - the config says User 10001:10001 and Entrypoint ["/usr/local/bin/relay"], for the right
-#     os/architecture;
+#   - the config says User 10001:10001, no RELAY_* in Env, and Entrypoint
+#     ["/usr/local/bin/relay"], for the right os/architecture;
+#   - var/lib/relay, the state directory, is a directory owned 10001/10001 with mode 0700 once
+#     every layer is applied, so a fresh volume mounted there inherits both;
 #   - usr/local/bin/relay is a single regular file, 0755 root:root, in the TOPMOST layer, with no
 #     whiteout or opaque marker in that layer covering it, and its sha256 is <binary-sha256>;
 #   - with <version> (the stamp without its leading v), the image loaded from the archive itself
@@ -99,6 +101,9 @@ config="$(blob "$config_digest")"
 # ---- config --------------------------------------------------------------------
 [ "$(jq -r '.config.User // ""' "$config")" = "10001:10001" ] \
   || die "config User is '$(jq -r '.config.User // ""' "$config")', want 10001:10001"
+relay_env="$(jq -r '[.config.Env[]? | split("=")[0] | select(startswith("RELAY_"))] | join(", ")' "$config")" \
+  || die "config Env is malformed"
+[ -z "$relay_env" ] || die "config Env sets $relay_env: the image carries no configuration (RC-27, ADR-0043)"
 [ "$(jq -c '.config.Entrypoint // null' "$config")" = '["/usr/local/bin/relay"]' ] \
   || die "config Entrypoint is $(jq -c '.config.Entrypoint // null' "$config"), want [\"/usr/local/bin/relay\"]"
 [ "$(jq -r '.os + "/" + .architecture' "$config")" = "$platform" ] \
@@ -122,6 +127,8 @@ decompressor() { # <mediaType>: sets the array `decompress`
 
 member_re='^(.)([rwxsStT-]{9}) ([0-9]+)/([0-9]+) +[0-9]+ [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} (.*)$'
 ancestors=("usr" "usr/local" "usr/local/bin")
+state_path="var/lib/relay"
+state_entry=""   # "<kind> <perms> <uid>/<gid>" of the state directory as the layers leave it
 
 # scan_layer <blob> <top|lower>: list the layer (never extracting it) and enforce the path
 # rules. Names are canonicalised before they are compared with anything: a member that spells
@@ -161,8 +168,11 @@ scan_layer() {
         hidden="${dir:+$dir/}${base#.wh.}"
         if [ "$base" = ".wh..wh..opq" ]; then
           case "$bin_path/" in "${dir:+$dir/}"*) die "opaque whiteout in '${dir:-/}' covers /$bin_path" ;; esac
+          case "$state_path/" in "${dir:+$dir/}"*) state_entry="" ;; esac
         elif [ "$hidden" = "$bin_path" ] || [[ "$bin_path" == "$hidden/"* ]]; then
           die "whiteout '$canon' covers /$bin_path"
+        elif [ "$hidden" = "$state_path" ] || [[ "$state_path" == "$hidden/"* ]]; then
+          state_entry=""
         fi
         continue ;;
     esac
@@ -173,6 +183,9 @@ scan_layer() {
       [ "$canon" = "$anc" ] || continue
       [ "$kind" = "d" ] || die "ancestor /$anc is not a directory (tar type '$kind')"
     done
+
+    # The latest layer to mention the state directory decides, as it does at run time.
+    [ "$canon" != "$state_path" ] || state_entry="$kind $perms $uid/$gid"
 
     [ "$canon" = "$bin_path" ] || continue
     [ "$which" = top ] || continue   # a lower copy is shadowed or whited out; the top layer decides
@@ -201,6 +214,8 @@ for ((i = 0; i < layer_count; i++)); do
   fi
 done
 
+[ "$state_entry" = "d rwx------ 10001/10001" ] \
+  || die "/$state_path is '${state_entry:-absent}' after every layer, want a directory 'd rwx------ 10001/10001'"
 [ "$found" -ne 0 ] || die "/$bin_path is not in the topmost layer (a binary only in a lower layer is not what the image runs)"
 [ "$found" -eq 1 ] || die "/$bin_path appears $found times in the topmost layer"
 

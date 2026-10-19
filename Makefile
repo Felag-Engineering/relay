@@ -58,7 +58,7 @@ tool_bin = GOWORK=off go -C "$(CURDIR)/tools/$(1)" tool -n $(1)
         test-check-docs test-smoke-test test-maintainer-check \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
         demo-build demo-reset demo-reset-oauth demo-fault demo-up demo-up-oauth demo-down demo-creds \
-        relay-demo-owner test-release-image-guard test-license-change-date test-catalog-ledger catalog-ledger-check \
+        relay-demo-owner test-release-image-guard test-compose-floor-check compose-floor-check test-license-change-date test-catalog-ledger catalog-ledger-check \
         test-dev-fleet-make \
         fuzz-relay fuzz-daemon \
         verify verify-proto proto-lint opschema-check openapi-check gen-apiclient apiclient-check \
@@ -97,7 +97,7 @@ verify: fmt lint-relay lint-daemon lint-comments lint-guard-escapes check-daemon
         apiclient-check verify-proto docs-check test-security-surface \
         test-codex-review test-ci-changed-paths \
         test-check-docs test-smoke-test test-maintainer-check test-release-image-guard \
-        test-license-change-date test-catalog-ledger catalog-ledger-check \
+        test-compose-floor-check compose-floor-check test-license-change-date test-catalog-ledger catalog-ledger-check \
         test-dev-fleet-make test-integration test-crossbinary \
         lint-ci secrets-scan deny-daemon test-vuln-gate
 	@echo
@@ -289,6 +289,33 @@ test-security-surface:
 # Hermetic: tiny archives built from tar, jq and sha256sum; no Docker.
 test-release-image-guard:
 	bash scripts/release-image-guard-test.sh
+
+# Proves scripts/compose-floor-check.sh refuses each way a Relay container could stop taking its
+# configuration as read-only mounts, or run privileged (RC-27), and accepts the good shape.
+# Hermetic: a stub docker serves canned `docker compose config` JSON; needs jq, no engine.
+test-compose-floor-check:
+	$(call need_tool,jq,test-compose-floor-check,apt install jq)
+	bash scripts/compose-floor-check-test.sh
+
+# RC-27 on the committed compose stacks and docker/relay.Dockerfile: no floor setting in any
+# Relay environment, every configuration and secret mount read-only, unprivileged. Renders each
+# stack with `docker compose config`, which needs the Compose CLI plugin and jq but no engine.
+# The need_tool convention, written inline because the Compose CLI is a docker plugin, not a
+# binary: under `make verify` a missing plugin or jq is a recorded skip (as for every other
+# missing tool), anywhere else, CI included, it fails.
+compose-floor-check:
+	@missing=""; \
+	docker compose version >/dev/null 2>&1 || missing="docker compose"; \
+	command -v jq >/dev/null 2>&1 || missing="$${missing:+$$missing and }jq"; \
+	if [ -n "$$missing" ]; then \
+		if [ -n "$$RELAY_VERIFY_SKIPS" ]; then \
+			echo "verify: SKIPPING compose-floor-check — $$missing not installed (CI runs it)"; \
+			echo "compose-floor-check ($$missing not installed)" >> "$$RELAY_VERIFY_SKIPS"; \
+			exit 0; \
+		fi; \
+		echo "compose-floor-check: $$missing is not installed" >&2; exit 1; \
+	fi; \
+	bash scripts/compose-floor-check.sh
 
 # Proves scripts/license-change-date.sh, the release workflow's BSL Change Date gate: a date
 # three to four years after the release passes, anything else fails. Hermetic: bash and date.
@@ -825,15 +852,16 @@ fuzz-daemon:
 
 ## --- local dev fleet (DEV-ONLY; Docker + Compose >= 2.18) ---
 # The laptop fleet (docs/dev-fleet.md) and its nine-Node demo (docs/operations/demo-fleet.md).
-# Never in build/test/lint or CI: the hermetic gate must never depend on Docker.
+# The fleet never runs in build/test/lint or CI. CI only renders the compose files with
+# `docker compose config` (no engine) for compose-floor-check.
 # - One fixed project, relay-demo: docker-compose.demo.yml names it, and -p pins it against
 #   a stray COMPOSE_PROJECT_NAME. Three Nodes by default, nine under --profile demo.
 # - The overlay is named on every down/logs, so an IdP from an OAuth run goes with the
 #   fleet; that is why even the plain targets need Compose >= 2.18 (`!reset`).
 # - The Relay's configuration file (and so its approval gate) is chosen per target here, not
 #   by the caller's shell or .env.
-# - Startup waits in two steps, so --wait never covers the init one-shot (it exits, and
-#   older Compose fails `up --wait` on any exited container).
+# - Startup waits in two steps, so --wait never covers the relay-config and init one-shots (they
+#   exit, and older Compose fails `up --wait` on any exited container).
 RELAY_DEMO_COMPOSE := docker compose -p relay-demo -f docker-compose.demo.yml
 DEV_RELAY_CONFIG  := DEV_FLEET_RELAY_CONFIG=./docker/fixtures/relay.dev.toml
 DEMO_RELAY_CONFIG := DEV_FLEET_RELAY_CONFIG=./docker/fixtures/relay.demo.toml
@@ -889,7 +917,7 @@ endef
 
 # Step 2 waits for health on everything but the one-shot. $(1) is the compose command.
 define relay_demo_wait
-	$(1) up -d --no-build --pull never --no-deps --no-recreate --wait --wait-timeout $(DEMO_WAIT_SECONDS) $$($(1) config --services | grep -vx init)
+	$(1) up -d --no-build --pull never --no-deps --no-recreate --wait --wait-timeout $(DEMO_WAIT_SECONDS) $$($(1) config --services | grep -vxE 'init|relay-config')
 endef
 
 # Step 1 runs init to completion (every daemon depends on it) and starts the daemons.

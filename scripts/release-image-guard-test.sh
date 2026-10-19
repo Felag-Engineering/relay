@@ -41,10 +41,20 @@ layer_tar() {
   echo "$L/$name.blob"
 }
 
-mk_base() { # a lower layer holding only /etc/os-release
-  local d="$WORKDIR/src/base"; rm -rf "$d"; mkdir -p "$d/etc"; echo alpine >"$d/etc/os-release"
-  layer_tar "$d" base
+# mk_base_with <name> <uid|none> <mode>: a lower layer holding /etc/os-release and, unless <uid>
+# is "none", the state directory var/lib/relay owned <uid>/<uid> with <mode>.
+mk_base_with() {
+  local name="$1" uid="$2" mode="$3" d="$WORKDIR/src/$1"
+  rm -rf "$d"; mkdir -p "$d/etc" "$d/var/lib/relay"; echo alpine >"$d/etc/os-release"
+  chmod "$mode" "$d/var/lib/relay"
+  tar --sort=name --owner=0 --group=0 --numeric-owner -cf "$L/$name.tar" -C "$d" etc
+  if [ "$uid" != none ]; then
+    tar --owner="$uid" --group="$uid" --numeric-owner -rf "$L/$name.tar" -C "$d" var/lib/relay
+  fi
+  cp "$L/$name.tar" "$L/$name.blob"
+  echo "$L/$name.blob"
 }
+mk_base() { mk_base_with base 10001 0700; }
 mk_top() { # name, mode, content: a top layer holding the binary
   local d="$WORKDIR/src/$1"; rm -rf "$d"; mkdir -p "$d/usr/local/bin"
   printf '%s' "$3" >"$d/usr/local/bin/relay"; chmod "$2" "$d/usr/local/bin/relay"
@@ -76,7 +86,8 @@ assemble() {
 
   local cfg="$WORKDIR/config.json" mf="$WORKDIR/manifest.json" ix="$WORKDIR/image-index.json"
   jq -nc --arg u "$user" --arg a "$arch" --argjson ids "$diffids" \
-    '{architecture:$a, os:"linux", config:{User:$u, Entrypoint:["/usr/local/bin/relay"]}, rootfs:{type:"layers",diff_ids:$ids}}' >"$cfg"
+    '{architecture:$a, os:"linux", config:{User:$u, Entrypoint:["/usr/local/bin/relay"]}, rootfs:{type:"layers",diff_ids:$ids}}
+     | if env.CONFIG_ENV then .config.Env = (env.CONFIG_ENV | fromjson) else . end' >"$cfg"
   local ch; ch="$(put "$cfg")"
   jq -nc --arg c "sha256:$ch" --argjson l "$layers" \
     '{schemaVersion:2, mediaType:"application/vnd.oci.image.manifest.v1+json", config:{mediaType:"application/vnd.oci.image.config.v1+json",digest:$c,size:1}, layers:$l}' \
@@ -210,12 +221,36 @@ LOWANC="$(layer_tar "$d" lowanc gzip)"
 assemble "$WORKDIR/lowancestor.tar" 10001:10001 amd64 "$ID" "$LOWANC" "$GOOD_TOP"
 check fail "ancestor /usr/local/bin is not a directory" "symlinked ancestor in a lower layer" "$WORKDIR/lowancestor.tar" linux/amd64 "$BIN_SHA"
 
+# 8c. The config's Env: no RELAY_* name, and a refused value is never echoed.
+CONFIG_ENV='["PATH=/usr/bin"]' assemble "$WORKDIR/envok.tar" 10001:10001 amd64 "$ID" "$BASE" "$GOOD_TOP"
+check ok "" "Env without a RELAY_ name passes" "$WORKDIR/envok.tar" linux/amd64 "$BIN_SHA"
+CONFIG_ENV='["PATH=/usr/bin","RELAY_HOSTNAME=secret-x"]' assemble "$WORKDIR/envrelay.tar" 10001:10001 amd64 "$ID" "$BASE" "$GOOD_TOP"
+check fail "config Env sets RELAY_HOSTNAME" "Env names RELAY_HOSTNAME" "$WORKDIR/envrelay.tar" linux/amd64 "$BIN_SHA"
+n=$((n + 1))
+if bash "$GUARD" "$WORKDIR/envrelay.tar" linux/amd64 "$BIN_SHA" 2>&1 | grep -qF secret-x; then
+  echo "FAIL: the guard echoed an Env value"; fail=1
+else
+  echo "PASS: the guard prints Env names, never values"
+fi
+
+# 8d. The state directory: 10001/10001 0700 after every layer.
+assemble "$WORKDIR/state-root.tar" 10001:10001 amd64 "$ID" "$(mk_base_with stroot 0 0700)" "$GOOD_TOP"
+check fail "want a directory 'd rwx------ 10001/10001'" "state directory owned by root" "$WORKDIR/state-root.tar" linux/amd64 "$BIN_SHA"
+assemble "$WORKDIR/state-mode.tar" 10001:10001 amd64 "$ID" "$(mk_base_with stmode 10001 0755)" "$GOOD_TOP"
+check fail "want a directory 'd rwx------ 10001/10001'" "state directory mode 0755" "$WORKDIR/state-mode.tar" linux/amd64 "$BIN_SHA"
+assemble "$WORKDIR/state-none.tar" 10001:10001 amd64 "$ID" "$(mk_base_with stnone none 0700)" "$GOOD_TOP"
+check fail "/var/lib/relay is 'absent'" "no state directory" "$WORKDIR/state-none.tar" linux/amd64 "$BIN_SHA"
+d="$WORKDIR/src/stwh"; rm -rf "$d"; mkdir -p "$d/var/lib"; : >"$d/var/lib/.wh.relay"
+STWH="$(layer_tar "$d" stwh gzip)"
+assemble "$WORKDIR/state-whiteout.tar" 10001:10001 amd64 "$ID" "$BASE" "$STWH" "$GOOD_TOP"
+check fail "/var/lib/relay is 'absent'" "state directory whited out by a later layer" "$WORKDIR/state-whiteout.tar" linux/amd64 "$BIN_SHA"
+
 # 9. Arguments are validated.
 check fail "not 64 lowercase hex" "malformed expected sha" "$WORKDIR/good.tar" linux/amd64 "XYZ"
 check fail "unsupported platform" "unsupported platform" "$WORKDIR/good.tar" linux/riscv64 "$BIN_SHA"
 
 if [ "$fail" -eq 0 ]; then
-  echo "PASS: scripts/release-image-guard.sh accepts a well-formed archive and refuses a wrong binary digest, a root or unset User, a tampered blob, a symlink or hardlink or wrong-mode binary, a malformed digest, a binary only in a lower layer (with or without an opaque whiteout), a named whiteout, a platform set other than amd64+arm64, non-canonical spellings of the binary's path, a symlinked ancestor directory and bad arguments ($n cases) (#892)."
+  echo "PASS: scripts/release-image-guard.sh accepts a well-formed archive and refuses a wrong binary digest, a root or unset User, a RELAY_* name in Env (never echoing its value), a state directory that is not 10001/10001 0700 once every layer is applied, a tampered blob, a symlink or hardlink or wrong-mode binary, a malformed digest, a binary only in a lower layer (with or without an opaque whiteout), a named whiteout, a platform set other than amd64+arm64, non-canonical spellings of the binary's path, a symlinked ancestor directory and bad arguments ($n cases) (#892)."
   exit 0
 fi
 echo "FAIL: scripts/release-image-guard.sh self-test" >&2

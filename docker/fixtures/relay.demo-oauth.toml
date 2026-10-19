@@ -1,14 +1,15 @@
 # The Relay's configuration for the local Docker fleet — DEV-ONLY (docs/dev-fleet.md).
 #
-# Mounted read-only at /etc/relay/relay.toml by docker-compose.oauth.yml. The Relay reads
+# Staged root:10001 0640 onto the relay-etc volume by the relay-config one-shot
+# (docker/dev-fleet-config.sh); the Relay mounts that volume read-only at /etc/relay. It reads
 # every setting from this one file and nothing from its environment (ADR-0043, invariant 11),
 # so nothing a request can do reaches it.
 #
-# The approval gate (ADR-0027) is baked into the image root-owned 0644. It is Relay
+# The approval gate (ADR-0027) is staged beside it, root-owned 0644. It is Relay
 # CONFIGURATION, not a runtime object, so no Account of any role can loosen it through the
 # API. The demo gate (docker/fixtures/approval-gates.demo.json) is the demo fleet's in-band
 # gate. Loading it is fail-closed: a malformed file fails startup rather than silently
-# meaning "nothing needs approval". `approval.gate_rules_path` names WHICH baked-in gate file;
+# meaning "nothing needs approval". `approval.gate_rules_path` names WHICH staged gate file;
 # the Makefile chooses the fixture (DEV_FLEET_RELAY_CONFIG) per target.
 
 # The Admin Console (ADR-0009) is served on the SAME control-plane listener as MCP and

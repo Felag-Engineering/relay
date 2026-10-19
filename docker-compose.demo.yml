@@ -10,8 +10,8 @@
 # demo` (#452; docs/dev-fleet.md, "The demo profile"); daemon-4..9 carry
 # `profiles: ["demo"]`, so nothing above daemon-3 changes without it.
 #
-# Startup order: relay (healthy) -> init (exit 0) -> daemons. If init fails, no
-# daemon starts.
+# Startup order: relay-config (exit 0) -> relay (healthy) -> init (exit 0) ->
+# daemons. If relay-config or init fails, nothing after it starts.
 name: relay-demo
 
 # All nine daemon services are byte-identical except for their per-Node
@@ -47,12 +47,61 @@ x-daemon-base: &daemon-base
     start_period: 5s
 
 services:
+  # The Relay's configuration, staged onto the relay-etc volume (see the volumes
+  # below) by docker/dev-fleet-config.sh: relay.toml root:10001 0640 and the gate
+  # files root:root 0644. A named volume is on the engine's own Linux filesystem,
+  # which the Relay's start-time check accepts; a bind mount from the checkout
+  # carries the developer's uid and mode and, on Docker Desktop, arrives over
+  # virtiofs, 9p or FUSE, which it refuses (docs/dev-fleet.md). So the checkout is
+  # mounted here, read-only, and the Relay mounts the staged copy.
+  # DEV_FLEET_RELAY_CONFIG still picks WHICH fixture: unset, it is the dev one
+  # (out-of-band gate, `dev-approver` only). The Makefile sets it, the dev fixture
+  # for `make dev-fleet-up` and the demo one for `make demo-*`. A bare `docker
+  # compose` of this file reads it from the caller's shell or a repo-root .env.
+  # Root with only CAP_CHOWN (to group the file to 10001) and CAP_DAC_READ_SEARCH
+  # (to read a 0600 checkout), no network.
+  relay-config:
+    build:
+      context: .
+      dockerfile: docker/relay.Dockerfile
+      target: dev-fleet
+    user: "0:0"
+    restart: "no"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    security_opt:
+      - "no-new-privileges:true"
+    entrypoint: ["sh", "/dev-fleet-config.sh"]
+    volumes:
+      - ./docker/dev-fleet-config.sh:/dev-fleet-config.sh:ro
+      - ${DEV_FLEET_RELAY_CONFIG:-./docker/fixtures/relay.dev.toml}:/src/relay.toml:ro
+      - ./docker/fixtures/approval-gates.json:/src/approval-gates.json:ro
+      - ./docker/fixtures/approval-gates.demo.json:/src/approval-gates.demo.json:ro
+      - relay-etc:/stage
+
   relay:
     build:
       context: .
       dockerfile: docker/relay.Dockerfile
       target: dev-fleet
     restart: unless-stopped
+    # Unprivileged and capability-free: the Relay's start-time check refuses
+    # root and any capability (ADR-0043). Its one writable path is relay-data.
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - "no-new-privileges:true"
+    depends_on:
+      relay-config:
+        # `restart: true` recreates the Relay when the one-shot is re-run, so
+        # switching fixtures on a running fleet reaches it.
+        condition: service_completed_successfully
+        restart: true
     ports:
       # Distinct published host ports: node plane vs control plane, each bound
       # to 127.0.0.1 (loopback) by default and each opted out of it separately.
@@ -73,14 +122,14 @@ services:
       - "${RELAY_NODE_PUBLISH_ADDR:-127.0.0.1}:7654:7654"
       - "${RELAY_PUBLISH_ADDR:-127.0.0.1}:9443:9443"
     volumes:
-      # The Relay's configuration file, read-only (ADR-0043). Every setting lives in
-      # it, the approval gate's path included; the comments in the fixtures carry the
-      # reasoning. DEV_FLEET_RELAY_CONFIG picks WHICH fixture: unset, it is the dev
-      # one (out-of-band gate, `dev-approver` only). The Makefile sets it, the dev
-      # fixture for `make dev-fleet-up` and the demo one for `make demo-*`. A bare
-      # `docker compose` of this file reads it from the caller's shell or a
-      # repo-root .env.
-      - ${DEV_FLEET_RELAY_CONFIG:-./docker/fixtures/relay.dev.toml}:/etc/relay/relay.toml:ro
+      # The Relay's configuration directory, read-only (ADR-0043): relay.toml and
+      # the gate files staged by relay-config. Every setting lives in relay.toml,
+      # the approval gate's path included; the comments in the fixtures carry the
+      # reasoning.
+      - type: volume
+        source: relay-etc
+        target: /etc/relay
+        read_only: true
       # CA state (ca-cert.pem + ca-key.pem) and the SQLite store persist here, so
       # `compose down` / `up` keeps the same Node identities and audit trail.
       - relay-data:/var/lib/relay
@@ -94,11 +143,22 @@ services:
         - "sh"
         - "-c"
         - >-
+          h="$$(awk '/^\[/ { t = ($$0 ~ /^\[tls\][ \t]*(#.*)?$$/) } ;
+          t && /^hostname[ \t]*=/ { if (match($$0, /"[^"]*"/)) print substr($$0, RSTART + 1, RLENGTH - 2); exit }'
+          /etc/relay/relay.toml)";
+          case "$$h" in
+          "")
+          echo "tls.hostname is not readable from /etc/relay/relay.toml"; exit 1;;
+          relay.example.internal)
+          echo "tls.hostname in /etc/relay/relay.toml is unset or still the example placeholder"; exit 1;;
+          esac;
           for p in 7654:h2 9443:http/1.1; do
           openssl s_client -quiet -no_ign_eof -tls1_3
-          -connect 127.0.0.1:$${p%%:*} -servername relay -verify_hostname relay
+          -connect 127.0.0.1:$${p%%:*}
+          -servername "$$h" -verify_hostname "$$h"
           -CAfile /var/lib/relay/ca/ca-cert.pem -verify_return_error
-          -alpn $${p#*:} </dev/null >/dev/null 2>&1 || exit 1; done
+          -alpn $${p#*:} </dev/null >/dev/null 2>&1
+          || { echo "TLS handshake failed on port $${p%%:*}"; exit 1; }; done
       interval: 3s
       timeout: 5s
       retries: 20
@@ -309,6 +369,9 @@ services:
 # All named => persist across `compose down`; wiped only with `compose down -v`.
 volumes:
   relay-data:
+  # The Relay's staged configuration (see relay-config). Rewritten on every
+  # `compose up`; nothing else writes it.
+  relay-etc:
   bootstrap-shared:
   # Holds ONLY the control-plane admin credential. Separate from
   # bootstrap-shared so daemons never mount it (see the init service).
