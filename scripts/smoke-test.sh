@@ -81,10 +81,11 @@ layout_dir=""    # root-owned, separate uid only
 alive() { ps -p "$1" -o pid= >/dev/null 2>&1; }
 
 # signal_relay <signal>: to the Relay itself. sudo cannot relay SIGKILL, and this script may
-# not signal another uid, so as the separate uid it goes through `sudo -n kill`.
+# not signal another uid, so as the separate uid it goes through `sudo -n -u relaytest kill`:
+# as relaytest and not root, so a pid reused after the Relay exited is refused, never killed.
 signal_relay() {
     if [[ -n "${layout_dir}" ]]; then
-        sudo -n kill -s "$1" "${relay_pid}" 2>/dev/null || true
+        sudo -n -u "${TEST_USER}" kill -s "$1" "${relay_pid}" 2>/dev/null || true
     else
         kill -s "$1" "${relay_pid}" 2>/dev/null || true
     fi
@@ -264,10 +265,11 @@ echo "Relay is listening."
 
 ca_cert="${ca_dir}/ca-cert.pem"
 if [[ -n "${layout_dir}" ]]; then
-    # The CA directory is the Relay's alone; its public certificate is copied out, into a file
-    # this user owns (so the redirect is deliberately not sudo's).
+    # The CA directory is the Relay's alone; its public certificate is copied out, read as
+    # relaytest (never root, so nothing the Relay plants there, a symlink, can make root read
+    # for it) into a file this user owns (so the redirect is deliberately not sudo's).
     # shellcheck disable=SC2024
-    sudo -n cat -- "${ca_cert}" >"${work_dir}/ca-cert.pem" 2>/dev/null || true
+    sudo -n -u "${TEST_USER}" cat -- "${ca_cert}" >"${work_dir}/ca-cert.pem" 2>/dev/null || true
     ca_cert="${work_dir}/ca-cert.pem"
 fi
 if [[ ! -s "${ca_cert}" ]]; then

@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -82,16 +81,19 @@ func TestHarness_RelayRunsAsSeparateUid(t *testing.T) {
 		t.Fatal(err)
 	}
 	relayGID, _ := strconv.Atoi(u.Gid)
-	assertOwnerMode(t, cfg, 0, relayGID, 0o640)
-	assertOwnerMode(t, layout.ConfigDir(), 0, relayGID, 0o750)
-	assertOwnerMode(t, layout.StateDir(), layout.RelayUID(), relayGID, 0o700)
-	assertOwnerMode(t, layout.IODir(), layout.RelayUID(), layout.IOGID(), fs.ModeSetgid|0o770)
+	assertOwnerMode(t, layout, cfg, 0, relayGID, "640")
+	assertOwnerMode(t, layout, layout.ConfigDir(), 0, relayGID, "750")
+	assertOwnerMode(t, layout, layout.StateDir(), layout.RelayUID(), relayGID, "700")
+	assertOwnerMode(t, layout, layout.IODir(), layout.RelayUID(), layout.IOGID(), "2770")
 	if relayGID == layout.IOGID() {
 		t.Errorf("relaytest's own group is relaytest-io: an IO-group member could read the configuration")
 	}
 
 	// As anyone but root the test meets the same walls a group member does.
 	if os.Geteuid() != 0 {
+		if _, err := os.Lstat(cfg); !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("the test reached the configuration's directory entry (err=%v); only root and the Relay may", err)
+		}
 		if _, err := os.ReadFile(cfg); !errors.Is(err, fs.ErrPermission) {
 			t.Errorf("the test read the configuration (err=%v); only root and the Relay may", err)
 		}
@@ -116,21 +118,15 @@ func waitForRelayLog(t *testing.T, proc *relaytest.RelayProcess, want string) {
 	}
 }
 
-// assertOwnerMode checks path's owner, group and permission bits (setgid included).
-func assertOwnerMode(t *testing.T, path string, uid, gid int, mode fs.FileMode) {
+// assertOwnerMode checks path's owner, group and octal mode (setgid included), read through
+// sudo because a non-root test cannot reach inside the configuration directory.
+func assertOwnerMode(t *testing.T, layout *relaytest.RelayLayout, path string, uid, gid int, mode string) {
 	t.Helper()
-	fi, err := os.Lstat(path)
-	if err != nil {
-		t.Fatal(err)
+	gotUID, gotGID, gotMode := layout.Stat(t, path)
+	if gotUID != uid || gotGID != gid {
+		t.Errorf("%s owner = %d:%d, want %d:%d", path, gotUID, gotGID, uid, gid)
 	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		t.Fatalf("%s: no stat_t", path)
-	}
-	if int(st.Uid) != uid || int(st.Gid) != gid {
-		t.Errorf("%s owner = %d:%d, want %d:%d", path, st.Uid, st.Gid, uid, gid)
-	}
-	if got := fi.Mode() & (fs.ModePerm | fs.ModeSetgid | fs.ModeSetuid | fs.ModeSticky); got != mode {
-		t.Errorf("%s mode = %v, want %v", path, got, mode)
+	if gotMode != mode {
+		t.Errorf("%s mode = %s, want %s", path, gotMode, mode)
 	}
 }

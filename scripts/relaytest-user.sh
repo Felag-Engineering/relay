@@ -9,6 +9,9 @@
 # to exercise the harness locally runs `sudo scripts/relaytest-user.sh "$USER"`. Idempotent.
 # A shell that was open before it ran does not have the new group: start a new login, or run
 # the suites under `sg relaytest-io -c '...'`.
+#
+# Recovery: a run killed mid-test (a timeout panic) can leave the Relay and its layout behind;
+# `sudo pkill -u relaytest; sudo rm -rf /tmp/relaytest.*` clears both.
 set -euo pipefail
 
 member="${1:?usage: relaytest-user.sh <user to add to relaytest-io>}"
@@ -18,6 +21,10 @@ if [[ "$(id -u)" -ne 0 ]]; then
     exit 1
 fi
 id "${member}" >/dev/null
+if [[ "${member}" == relaytest ]]; then
+    echo "relaytest-user.sh: relaytest must never be in relaytest-io; name the user who runs the tests" >&2
+    exit 1
+fi
 
 getent group relaytest-io >/dev/null || groupadd --system relaytest-io
 if ! getent passwd relaytest >/dev/null; then

@@ -282,6 +282,11 @@ func (l *RelayLayout) InstallBinary(t *testing.T, src string) string {
 		return dst
 	}
 	dst := filepath.Join(l.binDir, filepath.Base(src))
+	for other, d := range l.bins {
+		if d == dst {
+			t.Fatalf("InstallBinary %s: %s already installs as %s", src, other, dst)
+		}
+	}
 	sudo(t, "install", "-o", "root", "-g", "root", "-m", "0755", "--", src, dst)
 	l.bins[src] = dst
 	return dst
@@ -310,7 +315,9 @@ func (l *RelayLayout) WriteConfig(t *testing.T, body string) string {
 }
 
 // CopyOut returns a path the test can read holding the contents of path, a public file under
-// StateDir such as the CA certificate: a copy made through sudo when Separate, otherwise path.
+// StateDir such as the CA certificate: when Separate, a copy read as TestUser — never as root,
+// so nothing the Relay plants in its own directory (a symlink) can make root read for it —
+// otherwise path.
 func (l *RelayLayout) CopyOut(t *testing.T, path string) string {
 	t.Helper()
 	if rel, err := filepath.Rel(l.stateDir, path); err != nil || strings.HasPrefix(rel, "..") {
@@ -323,10 +330,28 @@ func (l *RelayLayout) CopyOut(t *testing.T, path string) string {
 		return path
 	}
 	out := filepath.Join(t.TempDir(), filepath.Base(path))
-	if err := os.WriteFile(out, sudo(t, "cat", "--", path), 0o600); err != nil {
+	if err := os.WriteFile(out, sudo(t, "-u", TestUser, "cat", "--", path), 0o600); err != nil {
 		t.Fatalf("write %s: %v", out, err)
 	}
 	return out
+}
+
+// Stat reports path's owner, group and octal mode (setgid included, as stat's %a prints it),
+// read through sudo: the test may not traverse the configuration directory itself.
+func (l *RelayLayout) Stat(t *testing.T, path string) (uid, gid int, mode string) {
+	t.Helper()
+	fields := strings.Fields(string(sudo(t, "stat", "-c", "%u %g %a", "--", path)))
+	if len(fields) != 3 {
+		t.Fatalf("stat %s: unexpected output %q", path, fields)
+	}
+	var err error
+	if uid, err = strconv.Atoi(fields[0]); err == nil {
+		gid, err = strconv.Atoi(fields[1])
+	}
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return uid, gid, fields[2]
 }
 
 // Start launches bin (a path InstallBinary returned) with args, in exactly the environment env,
@@ -525,8 +550,9 @@ func (p *RelayProcess) Capabilities() (map[string]string, error) {
 	return caps, nil
 }
 
-// Signal delivers sig to the Relay itself. When Separate it goes through `sudo -n kill`: the
-// test may not signal another uid, and sudo cannot relay SIGKILL.
+// Signal delivers sig to the Relay itself. When Separate it goes through `sudo -n -u
+// relaytest kill`: the test may not signal another uid, and sudo cannot relay SIGKILL. As
+// TestUser and not root, so a pid reused after the Relay exited is refused, never killed.
 func (p *RelayProcess) Signal(sig syscall.Signal) error {
 	select {
 	case <-p.done:
@@ -536,9 +562,9 @@ func (p *RelayProcess) Signal(sig syscall.Signal) error {
 	if p.layout.sep == nil {
 		return p.cmd.Process.Signal(sig)
 	}
-	out, err := exec.Command("sudo", "-n", "kill", "-s", strconv.Itoa(int(sig)), strconv.Itoa(p.pid)).CombinedOutput()
+	out, err := exec.Command("sudo", "-n", "-u", TestUser, "kill", "-s", strconv.Itoa(int(sig)), strconv.Itoa(p.pid)).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("sudo -n kill -s %d %d: %w: %s", int(sig), p.pid, err, out)
+		return fmt.Errorf("sudo -n -u %s kill -s %d %d: %w: %s", TestUser, int(sig), p.pid, err, out)
 	}
 	return nil
 }
