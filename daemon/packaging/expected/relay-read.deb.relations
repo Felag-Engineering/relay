@@ -1,0 +1,10 @@
+Fields: Architecture Depends Description Homepage Installed-Size Maintainer Package Priority Section Version
+Depends: relay-daemon
+Pre-Depends: 
+Provides: 
+Replaces: 
+Conflicts: 
+Breaks: 
+Recommends: 
+Suggests: 
+Enhances: 

@@ -76,9 +76,9 @@ place() {
 
 umask 077
 
-# /etc/relay-daemon counts as the package's when it did not exist before the install began,
-# even if the catalog package, unpacked in the same transaction, created it first. Purge only
-# ever removes it empty.
+# `created etc` is recorded exactly when preinst did not see /etc/relay-daemon, whoever made it
+# between then and now. It may be this script, or the catalog package unpacked earlier in the
+# same transaction. Purge removes the directory only if it is empty.
 if ! exists "$ETC"; then
   mkdir -m 0755 "$ETC"
 fi

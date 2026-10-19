@@ -1,0 +1,2 @@
+drwxr-xr-x root:root caps=(none) /etc/relay-daemon/templates.d/relay-read
+-rw-r--r-- root:root caps=(none) /etc/relay-daemon/templates.d/relay-read/catalog.toml

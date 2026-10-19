@@ -13,9 +13,12 @@ filesystem-mutating Raw Exec.
 `scripts/build-packages.sh` with the nfpm pinned under `tools/nfpm`; `scripts/` holds the
 daemon package's maintainer scripts. The release builds both packages twice and refuses unless
 the two builds are byte-identical, and checks that each package's `/usr/bin/relay-daemon` is the
-release binary byte for byte. **They are not yet attached to a release**: no package carrying
-the unit ships until its syscall filter is verified on a real systemd host and the install
-matrix proves the packages on every supported platform. Until then, install by hand as below.
+release binary byte for byte. It also reads every package with `dpkg-deb` and `rpm` and checks
+its whole content against `expected/` and `scripts/`. **The packages are not yet attached to a
+release.** They are held until the install matrix proves them on every supported platform and
+the unit's syscall filter has been verified on a real systemd host. The standalone unit and
+environment example are already release attachments. Until the packages are attached, install
+by hand as below.
 
 - **`relay-daemon`** installs `/usr/bin/relay-daemon`, the unit as
   `/usr/lib/systemd/system/relay-daemon.service`, and reference copies of the default Policy

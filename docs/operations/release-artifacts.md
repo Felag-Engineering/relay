@@ -208,10 +208,14 @@ prints where it lands.
 The daemon's `.deb` and `.rpm` packages are built in both passes from the binaries above, by
 the nfpm pinned under `tools/nfpm` with every manifest's `mtime` taken from
 `SOURCE_DATE_EPOCH`, and the workflow fails unless the two passes' packages are byte-identical
-and each package's `/usr/bin/relay-daemon` is the release binary byte for byte. They are
-uploaded as the run's `packages` artifact and **not yet attached to the Release**: that waits on
-the unit's syscall filter being verified on a real systemd host and on the install matrix
-(`daemon-installation.md`, DI-3 and DI-33). Until then nothing in `SHA256SUMS` names them.
+and each package's `/usr/bin/relay-daemon` is the release binary byte for byte. Because both
+passes run the same nfpm, that comparison proves determinism, not integrity. A separate check
+reads every package with `dpkg-deb` and `rpm` and compares its whole content (payload listing,
+maintainer scripts, relationships, and every file it carries from the repository) with the
+repository. The packages are uploaded as the run's `packages` artifact and are **not yet
+attached to the Release**. Attaching them waits on the install matrix and on the unit's syscall
+filter being verified on a real systemd host (`daemon-installation.md`, DI-33 and DI-3). Until
+then nothing in `SHA256SUMS` names them. The standalone unit is attached already.
 
 The **image is not byte-reproducible** (Alpine's package index and file timestamps float).
 What is guaranteed is that its `/usr/local/bin/relay` is the released, rebuild-verified

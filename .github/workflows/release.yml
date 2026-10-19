@@ -496,13 +496,24 @@ jobs:
       #     SHA256SUMS (DI-32);
       #   - the catalog package carries the shipped catalog, and no package declares
       #     configuration the package manager would preserve (ADR-0033, DI-29);
+      #   - every package's whole content -- payload listing with modes and owners, no setuid,
+      #     setgid or file capability, maintainer scripts, triggers, relationships and control
+      #     fields, and every file carried from the repository -- equals what the repository
+      #     says (`content`, against daemon/packaging/expected and daemon/packaging/scripts);
       #   - every package is listed in SHA256SUMS.packages.
-      # The packages are built, compared and guarded on every run but are NOT attached to the
-      # Release: none carrying the unit ships until the unit's syscall filter is verified on a
-      # real systemd host (daemon-installation.md, DI-3) and the install matrix proves them
-      # (DI-33). They travel as the `packages` workflow artifact only, with their own sums file,
-      # which stays out of the signed SHA256SUMS until they are attached: a SHA256SUMS naming
-      # files the Release does not carry would fail every `sha256sum --check` of it.
+      # `content` reads with dpkg-deb and rpm, never nfpm, because the two-pass comparison
+      # above cannot catch a compromised or buggy packager: both passes run the same pinned
+      # nfpm, so a deterministic fault produces the same wrong bytes twice. The comparison
+      # proves determinism; `content` is the integrity check.
+      #
+      # The packages are built, compared and guarded on every run, but they are NOT attached to
+      # the Release. They are held until the install matrix (DI-33) proves them on every
+      # supported platform, and until the unit's syscall filter is verified on a real systemd
+      # host (DI-3). The standalone unit and environment example ARE attached (DI-32), so the
+      # unit already ships as a hand-install artifact before that verification. The packages
+      # travel only as the `packages` workflow artifact, with their own sums file, which stays
+      # out of the signed SHA256SUMS until they are attached: a SHA256SUMS naming files the
+      # Release does not carry would fail every `sha256sum --check` of it.
       - name: Guard - packages wrap the release binary and the attached unit
         env:
           VERSION: ${{ steps.assemble.outputs.version }}
@@ -520,10 +531,10 @@ jobs:
                   bash "${guard}" same "${f}" /usr/bin/relay-daemon "${bin}"
                   bash "${guard}" same "${f}" /usr/lib/systemd/system/relay-daemon.service dist/relay-daemon.service
                   bash "${guard}" same "${f}" /usr/share/relay-daemon/relay-daemon.env.example dist/relay-daemon.env.example
+                  bash "${guard}" content "${f}" relay-daemon
                   ;;
                 relay-read[_-]*)
-                  bash "${guard}" same "${f}" /etc/relay-daemon/templates.d/relay-read/catalog.toml \
-                    daemon/packaging/templates.d/relay-read/catalog.toml
+                  bash "${guard}" content "${f}" relay-read
                   ;;
                 *) echo "::error::unexpected package $(basename "${f}")"; exit 1 ;;
               esac

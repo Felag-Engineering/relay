@@ -1,0 +1,5 @@
+provides: relay-read = @VR@
+requires: relay-daemon
+requires: rpmlib(CompressedFileNames) <= 3.0.4-1
+requires: rpmlib(FileDigests) <= 4.6.0-1
+requires: rpmlib(PayloadFilesHavePrefix) <= 4.0-1
