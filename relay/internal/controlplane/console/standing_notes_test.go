@@ -388,8 +388,8 @@ func TestAccounts_PolicyCeilingIsVisibleBesideTheRoles(t *testing.T) {
 	if end := strings.Index(content, "</table>"); end < 0 || at < end {
 		t.Error("the Policy ceiling note renders before the accounts table ends")
 	}
-	if create := strings.Index(content, "Create an Account"); create < 0 || at > create {
-		t.Error("the Policy ceiling note does not render before the Create panel")
+	if create := strings.Index(content, "<summary>New account</summary>"); create < 0 || at > create {
+		t.Error("the Policy ceiling note does not render before New account")
 	}
 	mustBeSituational(t, body, "cannot sign in until a password is set")
 	for i := 0; ; {

@@ -57,6 +57,9 @@ package console
 // configuration of any kind (invariant 11): the role block is prose about
 // where the boundary falls, never an inventory of editable values.
 //
+// The screen draws the selected Account's panel first, then the read-only
+// list, then the create form behind "New account" (design spec 15, D32).
+//
 // The write half lives in accounts_write.go, and this file renders forms as
 // well as rows. The forms for an existing Account render only in the
 // SELECTED Account's panel; the list is read-only. What stays absent is
@@ -67,6 +70,7 @@ package console
 
 import (
 	"errors"
+	"html/template"
 	"net/http"
 	"net/url"
 	"time"
@@ -125,24 +129,47 @@ type accountsView struct {
 	// no form of any kind renders, which is the honest-absence posture every
 	// other seam on this Deps takes. accountsOffered decides it.
 	Write *accountsWriteControls
+
+	// Create is the "New account" form; nil exactly when Write is.
+	Create *accountCreateForm
+
+	// LowerHint is drawn inside the Lower role form (lowerRoleHint).
+	LowerHint string
 }
 
-// accountsWriteControls is everything the write forms need that is not
-// per-row: the CSRF token every Console POST carries, the create form's
-// action, and the two CLOSED option lists its selects render from.
+// accountsWriteControls is everything the row and token forms need
+// beyond the row itself: the CSRF token every Console POST carries, whether a
+// recent step-up makes the password optional, and the mint form's closed
+// lifetime options.
+type accountsWriteControls struct {
+	CSRFToken string
+	// StepUpFresh renders the three granting forms' password field as
+	// optional. Presentation only: requireStepUp re-decides on submit.
+	StepUpFresh bool
+	TTLs        []ttlOption
+}
+
+// accountCreateForm is the "New account" form. One type serves the screen
+// (Open false, no echo) and the refused re-render, which draws the same
+// definition open with the caller's own submission echoed back. The echoes are
+// bounded by handleCreateAccount and escaped by html/template. There is no
+// password field, so a password cannot be echoed.
 //
 // The option lists are built from accounts.RoleViewer/Operator/Admin and
 // accounts.KindHuman/KindMachine rather than hand-typed strings, so a screen
 // and the domain cannot come to disagree about what the closed sets are.
-type accountsWriteControls struct {
-	CSRFToken string
-	// StepUpFresh renders the four granting forms' password field as
-	// optional. Presentation only: requireStepUp re-decides on submit.
-	StepUpFresh  bool
+type accountCreateForm struct {
+	CSRFToken    string
 	CreateAction string
-	Roles        []string
-	Kinds        []string
-	TTLs         []ttlOption
+	// StepUpFresh renders the password field as optional; presentation only.
+	StepUpFresh bool
+	Roles       []string
+	Kinds       []string
+	Open        bool
+	Refusal     string
+	Name        string
+	Kind        string
+	Role        string
 }
 
 // ttlOption is one entry in the mint form's closed lifetime select. The
@@ -338,14 +365,20 @@ func handleAccounts(d Deps) http.HandlerFunc {
 			Ceiling:  policyCeilingNote,
 		}
 		if accountsOffered(d) {
+			fresh := stepUpFresh(d, r)
 			v.Write = &accountsWriteControls{
-				CSRFToken:    p.CSRFToken,
-				StepUpFresh:  stepUpFresh(d, r),
-				CreateAction: createAccountAction(),
-				Roles:        allRoleNames(),
-				Kinds:        []string{string(accounts.KindHuman), string(accounts.KindMachine)},
-				TTLs:         ttlOptions(),
+				CSRFToken:   p.CSRFToken,
+				StepUpFresh: fresh,
+				TTLs:        ttlOptions(),
 			}
+			v.Create = &accountCreateForm{
+				CSRFToken:    p.CSRFToken,
+				CreateAction: createAccountAction(),
+				StepUpFresh:  fresh,
+				Roles:        allRoleNames(),
+				Kinds:        accountKinds(),
+			}
+			v.LowerHint = lowerRoleHint
 		}
 
 		var selected accounts.Account
@@ -434,6 +467,11 @@ func handleAccounts(d Deps) http.HandlerFunc {
 	}
 }
 
+// accountKinds is the closed Account kind set, from the domain's constants.
+func accountKinds() []string {
+	return []string{string(accounts.KindHuman), string(accounts.KindMachine)}
+}
+
 // allRoleNames is the closed role set, in ascending authority, built from the
 // domain's own constants so this screen cannot drift from it.
 func allRoleNames() []string {
@@ -489,47 +527,35 @@ var accountsRefusedTmpl = newScreen("accounts-refused", `
 </div>
 `)
 
+// accountsCreateRefusedTmpl is the create form alone, open, with the refusal.
+// It is parsed on a clone of accountsTmpl so it draws the one "account-create"
+// definition the screen draws and the two cannot drift.
+var accountsCreateRefusedTmpl = template.Must(template.Must(accountsTmpl.Clone()).New("accounts-create-refused").Parse(`
+{{template "account-create" .}}
+<p class="back"><a href="/console/accounts">Back to Accounts</a></p>
+`))
+
 var accountsTmpl = newScreen("accounts", `
-{{if not .Write}}<p class="note">Account and token changes are not wired into this Relay&#39;s Console.</p>{{end}}
-
-<div class="tablescroll">
-<table class="rows cards">
-  <thead><tr><th scope="col">Account</th><th scope="col">Kind</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">Last authentication</th><th scope="col">Last tool call</th></tr></thead>
-  <tbody>
-  {{range .Accounts}}
-    <tr>
-      <td data-label="Account">{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{.Href}}">{{.Name}}</a>{{end}}</td>
-      <td data-label="Kind"><span class="kind" data-kind="{{.Kind}}">{{.Kind}}</span></td>
-      <td data-label="Role">{{.Role}}</td>
-      <td data-label="State">{{.State}}</td>
-      <td data-label="Last authentication">{{stamp .LastAuthAt}}</td>
-      <td data-label="Last tool call">{{if .Machine}}{{if .LastCallAt.IsZero}}<span class="dim">no tool call in the last {{$.CallPage}} recorded calls</span>{{else}}<a href="{{.LastCallHref}}">{{stamp .LastCallAt}}</a>{{end}}{{end}}</td>
-    </tr>
-  {{end}}
-  </tbody>
-</table>
-</div>
-<p class="note">{{.Ceiling}}</p>
-
-{{with .Write}}
-<section class="panel">
-  <h3>Create an Account</h3>
+{{define "account-create"}}
+<details class="panel newaccount" id="new-account"{{if .Open}} open{{end}}>
+  <summary>New account</summary>
+  {{with .Refusal}}<p class="fielderr" role="alert">{{.}}</p>{{end}}
   <form class="ctlform ctlgrid" method="post" action="{{.CreateAction}}">
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
     <div class="fld">
       <label class="fldlabel" for="create-name">Name</label>
-      <input id="create-name" name="name" maxlength="64" required>
+      <input id="create-name" name="name" maxlength="64" required autocomplete="off"{{with .Name}} value="{{.}}"{{end}}>
     </div>
     <div class="fld">
       <label class="fldlabel" for="create-kind">Kind</label>
       <select id="create-kind" name="kind">
-        {{range .Kinds}}<option value="{{.}}">{{.}}</option>{{end}}
+        {{range .Kinds}}<option value="{{.}}"{{if eq . $.Kind}} selected{{end}}>{{.}}</option>{{end}}
       </select>
     </div>
     <div class="fld">
       <label class="fldlabel" for="create-role">Role</label>
       <select id="create-role" name="role">
-        {{range .Roles}}<option value="{{.}}">{{.}}</option>{{end}}
+        {{range .Roles}}<option value="{{.}}"{{if eq . $.Role}} selected{{end}}>{{.}}</option>{{end}}
       </select>
     </div>
     <div class="fld">
@@ -539,8 +565,10 @@ var accountsTmpl = newScreen("accounts", `
     <button class="btn grant" type="submit">Create Account</button>
   </form>
   <p class="note">A <b>human</b> Account cannot sign in until a password is set with <code>relay console-password</code> on the Relay host.</p>
-</section>
+</details>
 {{end}}
+
+{{if not .Write}}<p class="note">Account and token changes are not wired into this Relay&#39;s Console.</p>{{end}}
 
 {{if .Selected}}
 {{with .Change}}{{$c := .}}
@@ -570,12 +598,13 @@ var accountsTmpl = newScreen("accounts", `
     <form class="ctlform ctlrow rolechange" method="post" action="{{$c.RoleAction}}" autocomplete="off">
       <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
       <label class="fld"><span class="fldlabel">Lower role to</span>
-        <select name="role" required>
+        <select name="role" aria-describedby="lower-role-hint">
           <option value="" selected disabled>{{$c.Role}} (current)</option>
           {{range .}}<option value="{{.}}">{{.}}</option>{{end}}
         </select>
       </label>
       <button class="btn reduce" type="submit">Lower role</button>
+      <span class="note" id="lower-role-hint">{{$.LowerHint}}</span>
     </form>
     {{end}}
     {{if $c.Enabled}}
@@ -602,7 +631,7 @@ var accountsTmpl = newScreen("accounts", `
   {{if .SelectedFound}}
   <h3>API Tokens &mdash; <span class="ident">{{.SelectedName}}</span></h3>
   {{if .TokensUnreadable}}
-  <p class="note">This Account&#39;s API Tokens could not be read; the table above is unaffected.</p>
+  <p class="note">This Account&#39;s API Tokens could not be read; the Account list below is unaffected.</p>
   {{else if .Tokens}}
   <div class="tablescroll">
   <table class="rows">
@@ -638,7 +667,7 @@ var accountsTmpl = newScreen("accounts", `
     <input type="hidden" name="csrf_token" value="{{.Write.CSRFToken}}">
     <div class="fld">
       <label class="fldlabel" for="mint-name">Token name</label>
-      <input id="mint-name" name="name" maxlength="128" required>
+      <input id="mint-name" name="name" maxlength="128" required autocomplete="off">
     </div>
     <div class="fld">
       <label class="fldlabel" for="mint-ttl">Lifetime</label>
@@ -662,6 +691,27 @@ var accountsTmpl = newScreen("accounts", `
   {{end}}
 </section>
 {{end}}
+
+<div class="tablescroll">
+<table class="rows cards">
+  <thead><tr><th scope="col">Account</th><th scope="col">Kind</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">Last authentication</th><th scope="col">Last tool call</th></tr></thead>
+  <tbody>
+  {{range .Accounts}}
+    <tr>
+      <td data-label="Account">{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{.Href}}">{{.Name}}</a>{{end}}</td>
+      <td data-label="Kind"><span class="kind" data-kind="{{.Kind}}">{{.Kind}}</span></td>
+      <td data-label="Role">{{.Role}}</td>
+      <td data-label="State">{{.State}}</td>
+      <td data-label="Last authentication">{{stamp .LastAuthAt}}</td>
+      <td data-label="Last tool call">{{if .Machine}}{{if .LastCallAt.IsZero}}<span class="dim">no tool call in the last {{$.CallPage}} recorded calls</span>{{else}}<a href="{{.LastCallHref}}">{{stamp .LastCallAt}}</a>{{end}}{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+<p class="note">{{.Ceiling}}</p>
+
+{{with .Create}}{{template "account-create" .}}{{end}}
 `)
 
 // isAgentCallKind reports whether an audit Kind describes a call somebody

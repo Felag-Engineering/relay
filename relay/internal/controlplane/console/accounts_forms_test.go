@@ -163,9 +163,26 @@ func TestAccountsForms_TheStylesheetWeighsGrantAboveReduce(t *testing.T) {
 			t.Errorf("%s borrows the failure colour — red is failure and timeout and nothing else: %q", sel, d)
 		}
 	}
-	invalid := decls(".rolechange:invalid .btn")
+	invalid := decls(".rolechange:invalid .btn.grant")
 	if !strings.Contains(invalid, "opacity") {
-		t.Errorf("a role-change form that cannot submit yet does not read as inactive: %q", invalid)
+		t.Errorf("a Raise form that cannot submit yet does not read as inactive: %q", invalid)
+	}
+	// Lower role is never dimmed: no rule that can reach the reducing button
+	// carries opacity.
+	for _, m := range cssRulePattern.FindAllStringSubmatch(css, -1) {
+		sel := strings.TrimSpace(m[1])
+		if !strings.Contains(m[2], "opacity") {
+			continue
+		}
+		if strings.Contains(sel, ":invalid .btn") && sel != ".rolechange:invalid .btn.grant" {
+			t.Errorf("%q dims a button that is not Raise role", sel)
+		}
+		if strings.Contains(sel, ".btn.reduce") {
+			t.Errorf("%q dims the reducing button", sel)
+		}
+	}
+	if d := decls(".newaccount > summary"); !strings.Contains(d, "min-height: 44px") {
+		t.Errorf("the New account summary is the only control that opens the form and is under the 44px target: %q", d)
 	}
 	focus := decls(".ctlform input:focus, .ctlform select:focus")
 	if !strings.Contains(focus, "outline: 2px solid var(--color-accent)") {

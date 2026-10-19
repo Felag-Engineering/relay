@@ -1852,12 +1852,21 @@ dl.kv dd { min-width: 0; }
 .ctlrow input:not([type="hidden"]) { width: 100%; min-width: 11em; }
 .ctlrow select { min-width: 7.5em; }
 .acctchange .ctlrow + .ctlrow { margin-top: var(--space-2); }
-/* A role change cannot submit until a different role is chosen: its select is
- * required and preselects the current role as a disabled placeholder (#830).
- * The button reads as inactive while the form is invalid; native validation
- * still blocks the submit and says why, so this is presentation, not the
- * control. */
-.rolechange:invalid .btn { opacity: 0.5; }
+/* Raise role cannot submit until a different role is chosen: its select is
+ * required and preselects the current role as a disabled placeholder. The
+ * button reads as inactive while the form is invalid; native validation still
+ * blocks the submit and says why. Lower role's select is not required, so its
+ * form is never invalid and its button never dims: it carries the "choose a
+ * lower role" hint and the server refuses an empty submit in those words. */
+.rolechange:invalid .btn.grant { opacity: 0.5; }
+.rolechange .note { margin: 0; align-self: center; }
+
+/* "New account": a <details> does not inherit section.panel's spacing. The
+ * summary is the only control that opens the form, so it keeps the 44px
+ * target; list-item keeps the native disclosure marker. */
+.newaccount { margin-top: var(--space-4); }
+.newaccount > summary { display: list-item; min-height: 44px; line-height: 44px; cursor: pointer; font-weight: var(--weight-medium); }
+.newaccount[open] > summary { margin-bottom: var(--space-2); }
 
 /* A standalone form: fields flow left to right and wrap WHOLE, never mid-field,
  * with the submit button on the same baseline as the last field. */
