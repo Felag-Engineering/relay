@@ -387,7 +387,7 @@ as amended 2026-09-24; ADR-0028 §Amendment 2026-08-17). The Request waits in
 Relay authors what the approver sees, so the requesting AI-agent can
 neither truncate nor spin it. The decision arrives by one of two paths: **out-of-band**, on
 the Control API's authenticated decision endpoint, where the approver is verified (the Admin
-Console has no approval surface, ADR-0044; its built one is being removed); or
+Console has no approval surface, ADR-0044); or
 **in-band**, through the requesting client's MCP session (`approve_request`, or an MRTR
 answer), where the approver is asserted and only as honest as the client (ADR-0027,
 ADR-0029). An Approval **narrows** — it permits
@@ -702,9 +702,8 @@ The human-facing web UI for operators to observe the fleet, administer the contr
 Operations and Raw Exec run from the Console, preflight-by-default and with step-up re-auth
 on a mutate apply, behind the root-owned `console_execution` flag (ADR-0026, superseding
 ADR-0009's no-execution scope). A thin adapter over the same operator capability layer as
-the MCP surface (ADR-0003, ADR-0009); it renders decisions, it never makes them. It is to have
-no approval surface — an **Approval** is decided in-band or on the Control API (ADR-0044); its
-built one is being removed. Distinct
+the MCP surface (ADR-0003, ADR-0009); it renders decisions, it never makes them. It has
+no approval surface — an **Approval** is decided in-band or on the Control API (ADR-0044). Distinct
 from the **AI-agent**, which drives the Relay over MCP.
 _Avoid_: dashboard, portal, admin panel, "the UI"
 
