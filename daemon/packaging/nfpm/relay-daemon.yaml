@@ -1,0 +1,64 @@
+# nfpm manifest for the relay-daemon package (.deb and .rpm).
+#
+# Built only by scripts/package-daemon.sh, which renders the mtime token below from
+# SOURCE_DATE_EPOCH and supplies the RELAY_PKG_* variables. The token is not valid YAML,
+# so nfpm refuses this file unrendered and a wall-clock mtime is not reachable.
+#
+# The payload holds no /etc or /var entry and no directory entry: the package manager
+# would remove directories it owns on `remove`, and remove keeps the Policy directory
+# and state. The postinst creates them. Nothing here is a config file (ADR-0033).
+name: relay-daemon
+arch: ${RELAY_PKG_ARCH}
+platform: linux
+version: ${RELAY_PKG_VERSION}
+version_schema: semver
+release: "1"
+section: admin
+priority: optional
+maintainer: Felag Engineering
+vendor: Felag Engineering
+homepage: https://github.com/Felag-Engineering/relay
+license: BUSL-1.1
+description: |
+  Relay daemon: the privileged on-Node daemon of the Relay fleet-administration control plane.
+  Installing this package never starts the daemon; enabling and starting it is the
+  operator's or their configuration management's decision.
+
+mtime: "@SOURCE_DATE_EPOCH@"
+umask: 0o022
+disable_globbing: true
+
+contents:
+  - src: ${RELAY_DAEMON_BIN}
+    dst: /usr/bin/relay-daemon
+    expand: true
+    file_info: {mode: 0755, owner: root, group: root}
+  - src: daemon/packaging/relay-daemon.service
+    dst: /usr/lib/systemd/system/relay-daemon.service
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: daemon/policy.default.toml
+    dst: /usr/share/relay-daemon/policy.default.toml
+    file_info: {mode: 0644, owner: root, group: root}
+  - src: daemon/packaging/relay-daemon.env.example
+    dst: /usr/share/relay-daemon/relay-daemon.env.example
+    file_info: {mode: 0644, owner: root, group: root}
+
+deb:
+  compression: gzip
+rpm:
+  compression: gzip
+  buildhost: relay-release
+
+overrides:
+  deb:
+    scripts:
+      preinstall: daemon/packaging/nfpm/scripts/deb-preinst.sh
+      postinstall: daemon/packaging/nfpm/scripts/deb-postinst.sh
+      preremove: daemon/packaging/nfpm/scripts/deb-prerm.sh
+      postremove: daemon/packaging/nfpm/scripts/deb-postrm.sh
+  rpm:
+    scripts:
+      preinstall: daemon/packaging/nfpm/scripts/rpm-pre.sh
+      postinstall: daemon/packaging/nfpm/scripts/rpm-post.sh
+      preremove: daemon/packaging/nfpm/scripts/rpm-preun.sh
+      postremove: daemon/packaging/nfpm/scripts/rpm-postun.sh

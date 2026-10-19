@@ -1,7 +1,7 @@
 # tools/
 
-One Go module per pinned dev tool: `buf`, `golangci-lint`, `govulncheck`, `actionlint` and
-`gitleaks`. Each directory holds only a `go.mod` (with a `tool` directive) and a `go.sum`.
+One Go module per pinned dev tool: `buf`, `golangci-lint`, `govulncheck`, `actionlint`, `gitleaks` and
+`nfpm`. Each directory holds only a `go.mod` (with a `tool` directive) and a `go.sum`.
 Makefile targets run a tool as `go -C tools/<name> tool -n <name>`, which builds it into the
 content-addressed Go build cache and prints the path. So every checkout runs the pins its own
 `go.sum` names, nothing reads the shared `GOPATH/bin`, and nothing needs installing first (#891,

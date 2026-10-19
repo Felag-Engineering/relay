@@ -187,6 +187,18 @@ jobs:
         with:
           prefix: go-${{ github.job }}
 
+      # Builds the relay-daemon and relay-read packages with the pinned nfpm, checks their
+      # contents, modes and rebuild equality, the release guard's refusals, and the
+      # maintainer scripts' behaviour under a fake root. The on-host install proof is the
+      # install matrix's job, not this step's. rpm and cpio are installed for the guard.
+      - name: Install package inspection tools
+        if: ${{ !cancelled() }}
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm cpio
+
+      - name: Package build and maintainer-script self-test (DI-24, DI-32)
+        if: ${{ !cancelled() }}
+        run: make test-packages
+
       # Tracked files only, every run, drafts included: a credential pushed to a draft is
       # as leaked as one pushed anywhere else. security-nightly.yml scans the history.
       - name: Secrets scan (gitleaks)

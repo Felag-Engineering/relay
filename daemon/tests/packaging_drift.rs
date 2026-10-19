@@ -226,3 +226,40 @@ fn unit_execstart_is_usr_bin() {
         "the shipped unit must carry exactly one ExecStart, at /usr/bin (DI-40)"
     );
 }
+
+/// The daemon package places the example verbatim as the live environment file,
+/// so a non-empty `RELAY_JOIN` placeholder would make every fresh Node exit
+/// non-zero at boot (DI-25, DI-27). An empty value is the clean "unconfigured"
+/// exit.
+#[test]
+fn env_example_leaves_a_fresh_node_unconfigured() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging/relay-daemon.env.example");
+    let sample = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "read {}: {e} — the sample config is part of the shipped surface; \
+             if it moved, move this test with it rather than deleting it",
+            path.display()
+        )
+    });
+
+    let values: Vec<&str> = sample
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.strip_prefix("RELAY_JOIN"))
+        .filter_map(|rest| rest.trim_start().strip_prefix('='))
+        .collect();
+
+    assert!(
+        !values.is_empty(),
+        "the sample no longer assigns RELAY_JOIN; the package places it as the live \
+         environment file and `relay-daemon join` replaces that line in place"
+    );
+    for value in values {
+        assert!(
+            value.trim().is_empty(),
+            "RELAY_JOIN must be empty in the sample: the package places it verbatim, and a \
+             non-empty value the daemon cannot decode fails every fresh Node at boot"
+        );
+    }
+}

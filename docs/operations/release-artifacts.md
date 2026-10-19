@@ -16,6 +16,7 @@ For tag `v<version>` (e.g. `v0.0.9`, `v0.1.0-beta`), the GitHub Release carries:
 |---|---|
 | `relay-daemon-<version>-x86_64-unknown-linux-musl`, `relay-daemon-<version>-aarch64-unknown-linux-musl` | The relay-daemon, statically linked (musl, ADR-0007). No libc or distro expectations; drops onto any Linux Node of that architecture. |
 | `relay-<version>-x86_64-unknown-linux-gnu`, `relay-<version>-aarch64-unknown-linux-gnu` | The Relay server binary, statically linked (`CGO_ENABLED=0`). The `-unknown-linux-gnu` triple is kept from before the Relay was static, so names do not change under anyone; the binary has no libc dependency. |
+| `relay-daemon.service`, `relay-daemon.env.example` | The hardened systemd unit and the example environment file, byte-equal to the copies the daemon packages carry. Verify them against `SHA256SUMS` before a hand-built install (documented, not supported). |
 | `<artifact>.spdx.json` | An SPDX SBOM for each of the four binaries. The Relay's lists the exact Go modules in the binary. The daemon's is derived from `Cargo.lock` — a superset (every target, dev and build dependencies) — because a stripped Rust binary carries no dependency metadata to read. |
 | `relay-image-<version>-linux-<arch>.spdx.json` | An SPDX SBOM for each platform of the Relay image. |
 | `SHA256SUMS` | `sha256sum`-format digests of every file above, bare filenames. |
@@ -196,6 +197,10 @@ with `CGO_ENABLED=0`; `cargo build --locked`; the checkout and `CARGO_HOME` path
 out of the daemon; and `SOURCE_DATE_EPOCH` pinned to the tagged commit. The recipes are the
 Makefile's `build-relay` and `build-daemon-release`, unchanged for development, CI and
 release.
+
+The relay-daemon and relay-read `.deb` and `.rpm` packages are built in both passes and compared
+the same way, and a guard checks each wraps the release binary unchanged. They are not attached to
+a release until the install matrix has installed them on every supported platform.
 
 To rebuild a release yourself, work from a `git clone` checked out at the tag, **not** a
 source archive: the version stamp (`scripts/build-version.sh`) reports the release version

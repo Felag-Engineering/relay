@@ -1,0 +1,40 @@
+# nfpm manifest for the relay-read catalog package (.deb and .rpm).
+#
+# Built only by scripts/package-daemon.sh. The catalog is a plain package-owned file, never
+# a config file (ADR-0033); Templates load at the daemon's next restart, so there are no
+# maintainer scripts. The package is architecture-independent and is built for every
+# target architecture, so the release can compare the copies byte for byte.
+name: relay-read
+arch: all
+platform: linux
+version: ${RELAY_PKG_VERSION}
+version_schema: semver
+release: "1"
+section: admin
+priority: optional
+maintainer: Felag Engineering
+vendor: Felag Engineering
+homepage: https://github.com/Felag-Engineering/relay
+license: BUSL-1.1
+description: |
+  Relay read catalog: read-class Template Operations that make a freshly enrolled Node
+  interrogable without local authoring. Installed under the relay-daemon templates directory.
+
+mtime: "@SOURCE_DATE_EPOCH@"
+umask: 0o022
+disable_globbing: true
+
+depends:
+  - relay-daemon
+
+contents:
+  - src: daemon/packaging/templates.d/relay-read/catalog.toml
+    dst: /etc/relay-daemon/templates.d/relay-read/catalog.toml
+    type: file
+    file_info: {mode: 0644, owner: root, group: root}
+
+deb:
+  compression: gzip
+rpm:
+  compression: gzip
+  buildhost: relay-release

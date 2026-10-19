@@ -38,7 +38,7 @@ export GOTOOLCHAIN ?= $(GO_TOOLCHAIN)
 endif
 
 # The pinned dev tools: one Go module per tool under tools/<name>/ (see tools/README.md).
-GO_TOOLS := buf golangci-lint govulncheck actionlint gitleaks
+GO_TOOLS := buf golangci-lint govulncheck actionlint gitleaks nfpm
 
 # tool_bin prints the path of tools/<name>'s pinned binary, building it into GOCACHE if
 # needed. GOCACHE is content-addressed, so the binary a checkout runs is the one its own
@@ -58,7 +58,7 @@ tool_bin = GOWORK=off go -C "$(CURDIR)/tools/$(1)" tool -n $(1)
         test-check-docs test-smoke-test test-maintainer-check \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
         demo-build demo-reset demo-reset-oauth demo-fault demo-up demo-up-oauth demo-down demo-creds \
-        relay-demo-owner test-release-image-guard test-license-change-date test-catalog-ledger catalog-ledger-check \
+        relay-demo-owner test-release-image-guard packages test-packages test-license-change-date test-catalog-ledger catalog-ledger-check \
         test-dev-fleet-make \
         fuzz-relay fuzz-daemon \
         verify verify-proto proto-lint opschema-check openapi-check gen-apiclient apiclient-check \
@@ -73,7 +73,8 @@ tool_bin = GOWORK=off go -C "$(CURDIR)/tools/$(1)" tool -n $(1)
 # self-test, the changed-paths classifier
 # self-test, the docs-check, smoke-test, maintainer-check and dev-fleet Makefile
 # guard self-tests, the strict-umask test lane, both cross-binary suites, the
-# shell/workflow linters (lint-ci), the catalog-ledger gate, the secrets scan and the daemon's
+# shell/workflow linters (lint-ci), the package build and maintainer-script self-test
+# (test-packages), the catalog-ledger gate, the secrets scan and the daemon's
 # cargo-deny policy. Work can pass the inner loop and fail CI on a class of problem the
 # author never looked at.
 #
@@ -85,7 +86,7 @@ tool_bin = GOWORK=off go -C "$(CURDIR)/tools/$(1)" tool -n $(1)
 # It is deliberately slower than `make test` — race builds and two e2e suites —
 # and deliberately not what you run on every save. Run it before opening a PR.
 #
-# buf, golangci-lint, govulncheck, actionlint and gitleaks are built from tools/ by
+# buf, golangci-lint, govulncheck, actionlint, gitleaks and nfpm are built from tools/ by
 # `go tool` and so never absent where Go is: their gates always run. The tools that are
 # not Go-built (shellcheck, zizmor, cargo-deny) are SKIPPED WITH A NOTICE when absent
 # rather than silently passed over or hard-failed: a check you did not run must not
@@ -97,7 +98,7 @@ verify: fmt lint-relay lint-daemon lint-comments lint-guard-escapes check-daemon
         apiclient-check verify-proto docs-check test-security-surface \
         test-codex-review test-ci-changed-paths \
         test-check-docs test-smoke-test test-maintainer-check test-release-image-guard \
-        test-license-change-date test-catalog-ledger catalog-ledger-check \
+        test-license-change-date test-catalog-ledger catalog-ledger-check test-packages \
         test-dev-fleet-make test-integration test-crossbinary \
         lint-ci secrets-scan deny-daemon test-vuln-gate
 	@echo
@@ -290,6 +291,22 @@ test-security-surface:
 test-release-image-guard:
 	bash scripts/release-image-guard-test.sh
 
+# Proves the package build and the maintainer scripts. package-scripts-test.sh needs only a
+# shell and always runs; package-guard-test.sh builds real packages with the pinned nfpm and
+# inspects them, so it needs dpkg-deb, rpm, rpm2cpio and cpio. need_tool exits only its own
+# recipe line, so the run line is guarded again. The on-host install proof is the install
+# matrix's job; this proves the build, the guard and the scripts' behaviour under a fake root.
+test-packages:
+	@bash scripts/package-scripts-test.sh
+	$(call need_tool,dpkg-deb,test-packages,apt install dpkg)
+	$(call need_tool,rpm,test-packages,apt install rpm cpio)
+	$(call need_tool,rpm2cpio,test-packages,apt install rpm cpio)
+	$(call need_tool,cpio,test-packages,apt install rpm cpio)
+	@if command -v dpkg-deb >/dev/null 2>&1 && command -v rpm >/dev/null 2>&1 \
+		&& command -v rpm2cpio >/dev/null 2>&1 && command -v cpio >/dev/null 2>&1; then \
+		NFPM="$$($(call tool_bin,nfpm))" && NFPM="$$NFPM" bash scripts/package-guard-test.sh; \
+	fi
+
 # Proves scripts/license-change-date.sh, the release workflow's BSL Change Date gate: a date
 # three to four years after the release passes, anything else fails. Hermetic: bash and date.
 test-license-change-date:
@@ -463,6 +480,18 @@ build-daemon:
 # workspace rooted at daemon/.
 build-daemon-release:
 	cd daemon && $(DAEMON_STAMP) CC_$(subst -,_,$(RELEASE_DAEMON_TARGET))=musl-gcc RUSTFLAGS="$(DAEMON_RELEASE_RUSTFLAGS)" cargo build --release --locked -p relay-daemon --target $(RELEASE_DAEMON_TARGET)
+
+# The relay-daemon and relay-read .deb and .rpm packages, wrapped around a binary that is
+# already built: this target never builds one, so the payload is the guarded release binary
+# (DI-24). Locally: `make build-daemon-release packages`. SOURCE_DATE_EPOCH defaults to the
+# commit time; release.yml sets PKG_BIN, PKG_VERSION, PKG_ARCH and PKG_OUT per architecture.
+PKG_ARCH    ?= $(if $(findstring aarch64,$(RELEASE_DAEMON_TARGET)),arm64,amd64)
+PKG_VERSION ?= $(shell bash scripts/build-version.sh | awk '{print $$1}')
+PKG_BIN     ?= $(DAEMON_RELEASE_BIN)
+PKG_OUT     ?= $(CURDIR)/dist/packages
+
+packages:
+	@NFPM="$$($(call tool_bin,nfpm))" && 	SOURCE_DATE_EPOCH="$${SOURCE_DATE_EPOCH:-$$(git log -1 --format=%ct HEAD)}" 	bash scripts/package-daemon.sh --nfpm "$$NFPM" --bin "$(PKG_BIN)" --version "$(PKG_VERSION)" 		--arch "$(PKG_ARCH)" --out "$(PKG_OUT)"
 
 # Where build-daemon-release leaves its binary (CARGO_TARGET_DIR-safe).
 print-release-daemon-bin:
