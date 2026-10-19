@@ -37,8 +37,8 @@ type identityFixture struct {
 	tokens  *accounts.TokenService
 	founder accounts.Account
 	// bootstrap is the founding admin's credential — the equivalent of
-	// `relay bootstrap-token` output, and the only way in before any other
-	// Account exists.
+	// `relay init` output, and the only way in before any other Account
+	// exists.
 	bootstrap string
 }
 
@@ -74,15 +74,17 @@ func newIdentityFixtureWith(t *testing.T, wrap func(capability.AccountStore) cap
 	t.Cleanup(func() { st.Close() })
 
 	ctx := context.Background()
-	founder, err := st.Accounts().EnsureFoundingAdmin(ctx)
+	founder, err := st.Accounts().Create(ctx, accounts.Account{
+		Name: testAdminName, Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+	})
 	if err != nil {
-		t.Fatalf("seed founding admin: %v", err)
+		t.Fatalf("create the founding admin: %v", err)
 	}
 
 	tokenSvc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
 
-	// The founding admin's bootstrap credential, minted exactly as
-	// `relay bootstrap-token` does — so these tests drive the real credential
+	// The founding admin's first credential, minted through the same
+	// TokenService `relay init --recover` uses — so these tests drive the real credential
 	// path end to end rather than a fixture that stands in for one.
 	_, bootstrap, err := tokenSvc.Mint(ctx, founder.ID, "bootstrap", time.Hour)
 	if err != nil {
@@ -246,7 +248,7 @@ func TestIdentityAPI_AdminCreatesAccountAndMintsTokenEndToEnd(t *testing.T) {
 		t.Fatalf("audit kinds = %v, want [%s %s]", kinds, audit.KindAccountCreate, audit.KindAPITokenMint)
 	}
 	for _, r := range f.auditRecords(t) {
-		if !strings.HasPrefix(r.Principal, accounts.FoundingAdminName+":") {
+		if !strings.HasPrefix(r.Principal, testAdminName+":") {
 			t.Errorf("audit record %q attributed to %q, want the founding admin Account", r.Kind, r.Principal)
 		}
 	}
@@ -411,7 +413,7 @@ func TestIdentityAPI_AccountTokenAuthenticatesAndRevocationCutsAccess(t *testing
 		t.Fatalf("after revoke: status %d, want 401", rec.Code)
 	}
 
-	// The seeded founding-admin path is unaffected by any of it.
+	// The founding admin's path is unaffected by any of it.
 	if rec := f.call(t, f.bootstrap, http.MethodGet, "/api/v1/accounts", nil); rec.Code != http.StatusOK {
 		t.Fatalf("founding admin after revoke: status %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -542,8 +544,6 @@ func TestIdentityAPI_ErrorMapping(t *testing.T) {
 	}{
 		{"duplicate name", http.MethodPost, "/api/v1/accounts",
 			createAccountRequest{Name: "TAKEN", Kind: "machine", Role: "viewer"}, http.StatusConflict},
-		{"reserved name", http.MethodPost, "/api/v1/accounts",
-			createAccountRequest{Name: accounts.FoundingAdminName, Kind: "human", Role: "admin"}, http.StatusBadRequest},
 		{"malformed name", http.MethodPost, "/api/v1/accounts",
 			createAccountRequest{Name: "bad name", Kind: "human", Role: "viewer"}, http.StatusBadRequest},
 		{"unknown kind", http.MethodPost, "/api/v1/accounts",

@@ -13,7 +13,6 @@ import (
 
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
-	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
@@ -501,7 +500,7 @@ func TestMCP_ZeroMatch_RefusesBothExecutionTools(t *testing.T) {
 // a Job started over MCP can be cancelled over MCP; the in-flight Task
 // reports cancelled, the pending sibling (never dispatched) also reports
 // cancelled, get_job re-reads the same result, and the cancel itself is
-// audited attributed to FoundingAdmin (DECISION 2).
+// audited attributed to the first admin (DECISION 2).
 //
 // RB5 (plan review): explicit channel synchronization, no sleep — fakeConduit
 // signals ready right before blocking node A's Dispatch, and this test waits
@@ -579,8 +578,8 @@ func TestMCP_CancelJob_InFlightAndPendingSibling(t *testing.T) {
 	for _, rec := range records {
 		if rec.Kind == audit.KindJobCancel {
 			foundCancel = true
-			if rec.Principal != controlplane.FoundingAdmin().Attribution() {
-				t.Errorf("cancel audit record Principal = %q, want %q", rec.Principal, controlplane.FoundingAdmin().Attribution())
+			if rec.Principal != testAdminAttribution {
+				t.Errorf("cancel audit record Principal = %q, want %q", rec.Principal, testAdminAttribution)
 			}
 		}
 	}
@@ -636,7 +635,7 @@ func TestMCP_TimeoutSeconds_ThreadsToTask(t *testing.T) {
 
 // TestMCP_RunOperation_AuditedWithPrincipal is the "every call is audited
 // with principal" acceptance line: after a run, the audit trail carries an
-// entry attributed to FoundingAdmin (Run's intrinsic audit fired with the
+// entry attributed to the first admin (Run's intrinsic audit fired with the
 // context Principal — no new audit code needed for the tools themselves).
 func TestMCP_RunOperation_AuditedWithPrincipal(t *testing.T) {
 	ts := newTestServer(t)
@@ -660,8 +659,8 @@ func TestMCP_RunOperation_AuditedWithPrincipal(t *testing.T) {
 		t.Fatal("no audit records found for the Job")
 	}
 	for _, rec := range records {
-		if rec.Principal != controlplane.FoundingAdmin().Attribution() {
-			t.Errorf("audit record Principal = %q, want %q", rec.Principal, controlplane.FoundingAdmin().Attribution())
+		if rec.Principal != testAdminAttribution {
+			t.Errorf("audit record Principal = %q, want %q", rec.Principal, testAdminAttribution)
 		}
 	}
 }

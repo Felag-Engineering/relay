@@ -2124,10 +2124,10 @@ func TestAccountsWrite_TheMintFormOffersNoFreeFormTTL(t *testing.T) {
 
 func TestAccountsWrite_TheCreateFormSaysAHumanAccountCannotYetSignIn(t *testing.T) {
 	body := contentOf(accountsWriteBody(t, ""))
-	if !strings.Contains(body, "relay console-password") {
-		t.Errorf("the create panel does not name `relay console-password`. No capability seam "+
-			"can set a password, so the screen must not imply a human Account it creates can "+
-			"sign in:\n%s", body)
+	if !strings.Contains(body, "cannot sign in until a password is set") || !strings.Contains(body, "relay init") {
+		t.Errorf("the create panel does not say a human Account needs a Console password. No "+
+			"capability seam can set one, so the screen must not imply a human Account it creates "+
+			"can sign in:\n%s", body)
 	}
 }
 

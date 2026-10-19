@@ -848,17 +848,20 @@ func (f *fakeAccounts) APITokens(_ context.Context, _ capability.Principal, acco
 	return f.tokens[accountID], nil
 }
 
-// foundingAdminFixture is the ONE Account a fresh Relay actually has.
+// testAdminName names the first admin in these tests. No name is reserved:
+// `relay init` creates the first admin with the name the operator gives it.
+const testAdminName = "first-admin"
+
+// foundingAdminFixture is the ONE Account a Relay has after `relay init`.
 //
-// Every field is what EnsureFoundingAdmin (internal/store/accounts.go) really
-// seeds: the reserved name, human, admin, enabled. LastSeenAt is deliberately
-// ZERO — the row is created at startup, before anybody has signed in — which
-// is what makes the day-one render exercise stamp's "—" rather than a
-// timestamp somebody chose to make the assertion convenient.
+// Every field is what `relay init` creates: the operator's chosen name, human,
+// admin, enabled. LastSeenAt is deliberately ZERO, which is what makes the
+// day-one render exercise stamp's "—" rather than a timestamp somebody chose
+// to make the assertion convenient.
 func foundingAdminFixture() accounts.Account {
 	return accounts.Account{
 		ID:        "acct-founding",
-		Name:      accounts.FoundingAdminName,
+		Name:      testAdminName,
 		Kind:      accounts.KindHuman,
 		Role:      accounts.RoleAdmin,
 		Enabled:   true,
@@ -875,10 +878,10 @@ func dayOneDeps() Deps {
 	d.Trust = fakeTrust{ca: testCAFingerprint, server: testServerFingerprint}
 	d.Events = newFakeEvents()
 	// Restated rather than inherited from renderableDeps, exactly as the
-	// fleet is above: this is what a fresh Relay IS. EnsureFoundingAdmin seeded an
-	// enabled human admin at startup who has never authenticated, so "day
-	// one" for the Accounts screen is one row and not an empty table — see
-	// accounts.go's header and the named skip in dayone_test.go.
+	// fleet is above: this is what a fresh Relay IS. `relay init` created one
+	// enabled human admin, so "day one" for the Accounts screen is one row and
+	// not an empty table — see accounts.go's header and the named skip in
+	// dayone_test.go.
 	d.Accounts = &fakeAccounts{accounts: []accounts.Account{foundingAdminFixture()}}
 	return d
 }
@@ -900,10 +903,10 @@ func renderableDeps() Deps {
 		// (#680: the fleet listing and node detail have no other door) is
 		// what used to live on the now-deleted FleetReader seam.
 		Queries: &fakeQueries{nodes: []registry.Node{{NodeID: "node-a", Connected: true}}},
-		// THE SMALLEST TRUTHFUL ACCOUNT FIXTURE IS ONE, NOT ZERO. A Relay
-		// that mounts the Console has run EnsureFoundingAdmin in the same
-		// startup branch, so it cannot hold fewer Accounts than this — and a
-		// fixture with none would make every incidental sweep render a state
+		// THE SMALLEST TRUTHFUL ACCOUNT FIXTURE IS ONE, NOT ZERO. Reaching
+		// a Console screen takes a signed-in human Account, so a Relay
+		// serving one cannot hold fewer Accounts than this — and a fixture
+		// with none would make every incidental sweep render a state
 		// production never reaches.
 		Accounts: &fakeAccounts{accounts: []accounts.Account{foundingAdminFixture()}},
 		Now:      func() time.Time { return testNow },

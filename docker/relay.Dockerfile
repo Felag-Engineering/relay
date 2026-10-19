@@ -103,7 +103,7 @@ COPY --chmod=0644 docker/fixtures/approval-gates.demo.json /etc/relay/approval-g
 # No credential fixture is baked into the image: since #298 (ADR-0023) the
 # control plane accepts only per-Account API Tokens, and the dev fleet's first
 # one is minted at runtime by the `init` service (docker/dev-fleet-init.sh)
-# using this image's own `relay bootstrap-token` subcommand.
+# using this image's own `relay init` subcommand.
 
 # ---- unprivileged: os plus the non-root user, still without a binary ----------
 # The container expression of relay/packaging/relay.service's `User=relay`: the

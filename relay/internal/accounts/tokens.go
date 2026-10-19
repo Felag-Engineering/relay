@@ -60,7 +60,7 @@ func NewPlaintext(secret string) Plaintext { return Plaintext{secret: secret} }
 //
 //   - relay/internal/controlplane/api/accounts.go — the Control API's mint
 //     response.
-//   - relay/cmd/relay/bootstrap_token.go — `relay bootstrap-token`'s stdout.
+//   - relay/cmd/relay/init.go — `relay init`'s stdout.
 //   - relay/internal/controlplane/console/accounts_write.go — the Console's
 //     mint response. It is the one write route on that surface that
 //     does not post-redirect-get, precisely so the plaintext never enters a

@@ -74,6 +74,36 @@ func (f Files) StorePath() string { return f.v.StorePath }
 // could already write the Relay's own directory.
 func (f Files) RecheckStore() error { return f.v.RecheckStore() }
 
+// ErrStoreAbsent is CheckExistingStore's refusal when the store's directory or file does not
+// exist: the Relay creates its store at its own first start, and nothing else does.
+var ErrStoreAbsent = errors.New("the store does not exist yet")
+
+// CheckExistingStore is Open's store-directory check, for a caller that acts on a store the
+// Relay already created and must create nothing itself (RC-28): it refuses with ErrStoreAbsent
+// when the directory or the store file is absent, and otherwise refuses unless the directory
+// is the Relay's alone (RC-17) and the store is a regular file.
+func CheckExistingStore(storePath string) error {
+	dir := filepath.Dir(storePath)
+	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("store directory %s: %w", dir, ErrStoreAbsent)
+	}
+	d, err := hostfile.OpenDir(dir, hostfile.GeneratedDir)
+	if err != nil {
+		return fmt.Errorf("store directory: %w", err)
+	}
+	defer d.Close() //nolint:errcheck // read-only
+	fi, err := os.Lstat(storePath)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return fmt.Errorf("store %s: %w", storePath, ErrStoreAbsent)
+	case err != nil:
+		return fmt.Errorf("store %s: %w", storePath, err)
+	case !fi.Mode().IsRegular():
+		return fmt.Errorf("store %s: not a regular file", storePath)
+	}
+	return nil
+}
+
 // checkStoreDir creates the store's directory owner-only if it is absent, as the store would,
 // and refuses unless it is the Relay's alone (RC-17).
 func checkStoreDir(storePath string) error {

@@ -380,10 +380,6 @@ func writeFailedWith(w http.ResponseWriter, pg Page, err error, route, ident, un
 		status, res = http.StatusConflict, accountsWriteResultView{Heading: "That Account name is already in use. Names are unique so an audit " +
 			"attribution is never ambiguous. " + undone,
 		}
-	case errors.Is(err, accounts.ErrReservedName):
-		status, res = http.StatusBadRequest, accountsWriteResultView{Heading: "That name is reserved. The founding admin is created by seeding, never " +
-			"from a screen. " + undone,
-		}
 	case errors.Is(err, accounts.ErrInvalidName), errors.Is(err, accounts.ErrInvalidKind),
 		errors.Is(err, accounts.ErrInvalidRole), errors.Is(err, accounts.ErrInvalidTTL):
 		status, res = http.StatusBadRequest, accountsWriteResultView{

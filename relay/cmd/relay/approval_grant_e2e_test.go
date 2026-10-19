@@ -85,7 +85,7 @@ func TestApprovalGrant_RequestApproveReleaseExhaust(t *testing.T) {
 	// requester_allowed: false, and that carries over to a grant unchanged,
 	// because a grant IS an approval request.
 	requester := f.Credential
-	requesterName := accounts.FoundingAdminName
+	requesterName := testAdminName
 	approver := mintAccount(t, f, "ana", accounts.KindHuman, accounts.RoleOperator)
 
 	// 1. Asking for the window creates a PENDING request, not a usable grant.
@@ -211,7 +211,7 @@ func TestApprovalGrant_RequestApproveReleaseExhaust(t *testing.T) {
 func TestApprovalGrant_RevokeClosesTheWindowImmediately(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutates)
 	requester := f.Credential
-	requesterName := accounts.FoundingAdminName
+	requesterName := testAdminName
 	approver := mintAccount(t, f, "ana", accounts.KindHuman, accounts.RoleOperator)
 
 	createResp := requestGrant(t, f, requester, requesterName, 50)
@@ -271,7 +271,7 @@ func TestApprovalGrant_RevokeClosesTheWindowImmediately(t *testing.T) {
 func TestApprovalGrant_RequesterCannotApproveTheirOwnWindow(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutates)
 	requester := f.Credential
-	requesterName := accounts.FoundingAdminName
+	requesterName := testAdminName
 
 	createResp := requestGrant(t, f, requester, requesterName, 10)
 	defer createResp.Body.Close()
@@ -310,7 +310,7 @@ func TestApprovalGrant_RefusesAWindowOverUngatedWork(t *testing.T) {
 }`
 	f := startGatedRelay(t, rawExecOnly)
 
-	resp := requestGrant(t, f, f.Credential, accounts.FoundingAdminName, 10)
+	resp := requestGrant(t, f, f.Credential, testAdminName, 10)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422 for a grant over work nothing gates", resp.StatusCode)

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/ca"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
@@ -102,17 +101,11 @@ func TestNewServer_Smoke(t *testing.T) {
 	t.Cleanup(srv.Stop)
 }
 
-// TestNewServer_ControlEnabled_SeedsIdentityAndAuthenticates verifies that
-// enabling the control plane brings up a listener whose only credential is a
-// per-Account API Token (#298, ADR-0023).
-//
-// This replaces the previous "requires a credential hash file" test: there is
-// no longer a credential in Relay configuration to be missing or malformed.
-// What must hold instead is that the identity substrate is established at
-// startup — the founding admin Account is seeded, so `relay bootstrap-token`
-// has something to mint against and the control plane is never up with no way
-// to authenticate to it.
-func TestNewServer_ControlEnabled_SeedsIdentityAndAuthenticates(t *testing.T) {
+// TestNewServer_ControlEnabled_SeedsNoAccount verifies that enabling the
+// control plane seeds no Account (RC-28): the first admin is created by
+// `relay init`, with the name the operator gives it, and the Relay holds none
+// until then.
+func TestNewServer_ControlEnabled_SeedsNoAccount(t *testing.T) {
 	cfg := baseTestConfig(t)
 	cfg.ControlEnabled = true
 	cfg.ControlAddr = ":0"
@@ -128,12 +121,12 @@ func TestNewServer_ControlEnabled_SeedsIdentityAndAuthenticates(t *testing.T) {
 		t.Fatal("deps.control should be non-nil when ControlEnabled")
 	}
 
-	admin, err := deps.store.Accounts().GetByName(context.Background(), accounts.FoundingAdminName)
+	all, err := deps.store.Accounts().List(context.Background())
 	if err != nil {
-		t.Fatalf("founding admin account not seeded at startup: %v", err)
+		t.Fatalf("list accounts: %v", err)
 	}
-	if !admin.Enabled || admin.Role != accounts.RoleAdmin {
-		t.Errorf("founding admin = %+v, want an enabled admin", admin)
+	if len(all) != 0 {
+		t.Errorf("accounts after start = %+v, want none: the Relay seeds no Account", all)
 	}
 }
 

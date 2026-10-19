@@ -77,10 +77,10 @@ count below is for nine.
    | --- | --- | --- | --- | --- | --- | --- |
    | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ |
 
-   **Credential lifetime.** Every credential a reset mints expires 24h later — the founding
-   admin's (`-ttl 24h`) and `dev-approver`'s (`ttl_seconds` 86400), both in
-   `docker/dev-fleet-init.sh` — and the Gleipnir token minted below matches that same 86400s. So
-   reset on demo day, not the night before.
+   **Credential lifetime.** `dev-approver`'s credential (`ttl_seconds` 86400, in
+   `docker/dev-fleet-init.sh`) expires 24h after a reset, and the Gleipnir token minted below
+   matches that same 86400s. The first admin's, minted by `relay init`, does not expire; it dies
+   with the volume. So reset on demo day, not the night before.
 
 5. Mint Gleipnir's credentials — [Credentials for Gleipnir (copy-paste)](#credentials-for-gleipnir-copy-paste),
    next — then run [Confirming the reset took](#confirming-the-reset-took).
@@ -367,10 +367,10 @@ with `"kind": "human"`.
 ### The bypass beat, scripted exactly
 
 Framing up front: the AI-agent is out of the loop for this beat. The presenter drives MCP by
-hand, with the founding admin's credential, and asks the bastion for `/etc/shadow`. That
-credential is `.dev-fleet/control-credential`: the founding-admin Account, human, role admin —
-the most powerful credential this control plane issues
-(`relay/internal/store/accounts.go`'s `EnsureFoundingAdmin`).
+hand, with the first admin's credential, and asks the bastion for `/etc/shadow`. That
+credential is `.dev-fleet/control-credential`: the `admin` Account (`CONSOLE_ADMIN_NAME`) that
+`relay init` created, human, role admin — the most powerful credential this control plane
+issues.
 
 Literal command (`scripts/dev-fleet-mcp.sh call` sends `tools/call` without the Tasks
 capability, so the result is a plain tool result, not a task handle):
@@ -692,8 +692,8 @@ ran their Jobs and read back as described in this section.
 admin included.** Sign-in maps a claim to an Account *name* and checks only that the Account
 exists and is enabled; it does not restrict OAuth sign-in by Account kind. ADR-0024's rule that
 the Relay never creates an Account from a token stops the IdP from *minting* Accounts — it does
-not stop it naming an existing one. A realm user called `founding-admin` would sign in as the
-founding admin.
+not stop it naming an existing one. A realm user called `admin` would sign in as the fleet's
+first admin.
 
 So this IdP has **no administrator.** The overlay sets no `KC_BOOTSTRAP_ADMIN_*`, so Keycloak's
 master realm has no user, and the realm is imported from the fixture at start, which needs none.

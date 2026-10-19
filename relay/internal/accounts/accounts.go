@@ -15,14 +15,12 @@
 // credential for one*, and conflating them is how "revoke the token" and
 // "disable the human" become the same button by accident.
 //
-// # The founding admin
+// # The first admin
 //
-// The Relay's config-seeded control-plane credential (ADR-0010's staged authz)
-// predates Accounts. It does not disappear: on first start it resolves to the
-// **founding admin Account** — a real, stored, listable Account like any other,
-// so audit attributes it as that Account rather than as a special case, and so
-// the eventual removal of the seeded credential is a token change and not an
-// identity change. See [FoundingAdminName] and the store's idempotent seeding.
+// No Account is privileged by name. The first human `admin` is created by
+// `relay init` on the Relay's host, with the name the operator gives it
+// (ADR-0030, amended 2026-10-16); the Relay seeds no Account at start, and no
+// name is reserved against any creation path.
 package accounts
 
 import (
@@ -31,12 +29,6 @@ import (
 	"strings"
 	"time"
 )
-
-// FoundingAdminName is the reserved Account name the config-seeded
-// control-plane credential resolves to. Reserved: no other Account may be
-// created with it, so the founding identity can never be shadowed by a
-// later-created Account that would then inherit its audit history.
-const FoundingAdminName = "founding-admin"
 
 var (
 	// ErrNotFound is returned when an Account does not exist.
@@ -56,10 +48,10 @@ var (
 	// ErrInvalidKind is returned for a kind outside the closed set.
 	ErrInvalidKind = errors.New("accounts: invalid account kind")
 
-	// ErrReservedName is returned when a caller tries to create an Account
-	// using a reserved name (today: FoundingAdminName). The founding admin is
-	// created by seeding, never by the API.
-	ErrReservedName = errors.New("accounts: reserved account name")
+	// ErrHumanAccountExists is returned when the first admin is asked for on
+	// a store that already holds a human Account: the first admin is created
+	// once, and every later Account through a credentialed surface.
+	ErrHumanAccountExists = errors.New("accounts: a human account already exists")
 
 	// ErrLastAdmin is returned by SetRole and SetEnabled when the change
 	// would leave zero enabled admin rows: demoting the last enabled
@@ -182,9 +174,6 @@ type Account struct {
 	LastSeenAt time.Time
 }
 
-// IsFoundingAdmin reports whether a is the seeded founding admin Account.
-func (a Account) IsFoundingAdmin() bool { return a.Name == FoundingAdminName }
-
 // Attribution is the string form recorded on audit entries: "name:role".
 //
 // Name rather than ID because an audit trail is read by humans during an
@@ -236,9 +225,9 @@ func NormalizeName(name string) string {
 type Repository interface {
 	// Create stores a new Account and returns it as stored (with its assigned
 	// ID and CreatedAt). Returns ErrNameTaken if the normalized name exists,
-	// ErrReservedName for a reserved name, and ErrInvalidName/Role/Kind for a
-	// malformed input — validated here rather than trusted from the caller,
-	// because this is the write path every surface funnels through.
+	// and ErrInvalidName/Role/Kind for a malformed input — validated here
+	// rather than trusted from the caller, because this is the write path
+	// every surface funnels through.
 	Create(ctx context.Context, a Account) (Account, error)
 
 	// Get returns the Account with the given ID, or ErrNotFound.
@@ -288,7 +277,7 @@ type Repository interface {
 	//     AUTHENTICATE. Revoking that admin's last API Token locks the
 	//     control plane out just as effectively as demoting or disabling the
 	//     Account would have — this rule does not see tokens at all.
-	//     Recovery in that case is `relay bootstrap-token` on the host,
+	//     Recovery in that case is `relay init --recover` on the host,
 	//     exactly as docs/specs/accounts-and-access.md accepts. Do not read
 	//     this rule as "lockout is now impossible".
 	//   - There is no Delete on this interface, so spec 15's "removed" is
@@ -309,11 +298,4 @@ type Repository interface {
 	// failure here must never fail the request it accompanies, since
 	// last-seen is advisory and the caller has already authenticated.
 	TouchLastSeen(ctx context.Context, id string, at time.Time) error
-
-	// EnsureFoundingAdmin creates the founding admin Account if it does not
-	// exist and returns it either way — the idempotent, deterministic seeding
-	// the acceptance criteria require. Never modifies an existing founding
-	// admin: if an operator has since disabled it or changed its role, that
-	// decision survives every restart.
-	EnsureFoundingAdmin(ctx context.Context) (Account, error)
 }

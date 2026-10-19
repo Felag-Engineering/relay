@@ -67,10 +67,14 @@ func authRequest(t *testing.T, a *Authenticator, credential string) (int, capabi
 	return rec.Code, seen
 }
 
+// testAdminName names the first admin in these tests. No name is reserved, so
+// it is an ordinary name.
+const testAdminName = "first-admin"
+
 func storedFoundingAdmin() accounts.Account {
 	return accounts.Account{
 		ID:      "acct-founding",
-		Name:    accounts.FoundingAdminName,
+		Name:    testAdminName,
 		Kind:    accounts.KindHuman,
 		Role:    accounts.RoleAdmin,
 		Enabled: true,
@@ -117,7 +121,7 @@ func TestAuthenticator_BootstrapTokenResolvesToStoredFoundingAdmin(t *testing.T)
 	if code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", code)
 	}
-	if seen.ID != "acct-founding" || seen.Name != accounts.FoundingAdminName || seen.Role != string(accounts.RoleAdmin) {
+	if seen.ID != "acct-founding" || seen.Name != testAdminName || seen.Role != string(accounts.RoleAdmin) {
 		t.Errorf("principal = %+v, want the stored founding admin as admin", seen)
 	}
 }

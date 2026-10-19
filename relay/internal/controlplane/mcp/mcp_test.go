@@ -1416,6 +1416,13 @@ func TestMCP_RequiresCredential(t *testing.T) {
 	}
 }
 
+// testAdminName names the first admin staticVerifier authenticates as. No
+// name is reserved, so it is an ordinary name.
+const testAdminName = "first-admin"
+
+// testAdminAttribution is the audit attribution of staticVerifier's Account.
+var testAdminAttribution = testAdminName + ":" + string(accounts.RoleAdmin)
+
 // staticVerifier is a controlplane.TokenVerifier accepting exactly one
 // credential, as the founding admin Account — enough for the MCP surface
 // tests, whose subject is the tool surface rather than the credential path
@@ -1433,7 +1440,7 @@ func (v staticVerifier) Verify(_ context.Context, credential string) (accounts.A
 	}
 	return accounts.Account{
 		ID:      v.accountID,
-		Name:    accounts.FoundingAdminName,
+		Name:    testAdminName,
 		Kind:    accounts.KindHuman,
 		Role:    accounts.RoleAdmin,
 		Enabled: true,

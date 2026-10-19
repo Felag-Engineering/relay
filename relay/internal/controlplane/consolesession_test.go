@@ -192,8 +192,8 @@ func TestConsoleSession_AuthenticatesTheConsole(t *testing.T) {
 			if !reached {
 				t.Fatalf("a valid Console cookie was refused on %s: status = %d", c.target, status)
 			}
-			if p.Role != string(accounts.RoleAdmin) || p.Account != accounts.FoundingAdminName {
-				t.Errorf("principal = %s (%s), want %s (admin)", p.Account, p.Role, accounts.FoundingAdminName)
+			if p.Role != string(accounts.RoleAdmin) || p.Account != testAdminName {
+				t.Errorf("principal = %s (%s), want %s (admin)", p.Account, p.Role, testAdminName)
 			}
 			if p.AuthMethod != capability.AuthMethodConsoleSession {
 				t.Errorf("AuthMethod = %q, want %q", p.AuthMethod, capability.AuthMethodConsoleSession)

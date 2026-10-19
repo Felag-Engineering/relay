@@ -86,7 +86,7 @@ as an `EnvironmentFile`, with the reasoning behind each setting:
 | `-approval-webhook-url` | `RELAY_APPROVAL_WEBHOOK_URL` | *(empty)* | HTTPS endpoint notified (fire-and-forget) when a dispatch parks for approval. Empty disables notification. Decisions never arrive this way — they land on `/api/v1`. |
 | `-approval-webhook-secret-file` | `RELAY_APPROVAL_WEBHOOK_SECRET_FILE` | *(empty)* | Path to a root-owned file holding the shared secret that signs approval webhook bodies (HMAC-SHA256). A path, never the secret itself; a world-readable file refuses startup. Empty sends unsigned notifications. |
 | `-approval-webhook-timeout` | `RELAY_APPROVAL_WEBHOOK_TIMEOUT` | `5s` | Total time budget for one approval webhook delivery attempt. |
-| `-console-enabled` | `RELAY_CONSOLE_ENABLED` | `false` | Serve the Admin Console on the control-plane listener (ADR-0009, ADR-0026); requires `-control-enabled`. Humans sign in with a password held as an argon2id hash in the store — set the first one with `relay console-password` (below). |
+| `-console-enabled` | `RELAY_CONSOLE_ENABLED` | `false` | Serve the Admin Console on the control-plane listener (ADR-0009, ADR-0026); requires `-control-enabled`. Humans sign in with a password held as an argon2id hash in the store — the first admin's is set by `relay init` (below). |
 | `-console-session-max-age` | `RELAY_CONSOLE_SESSION_MAX_AGE` | `12h` | Absolute lifetime of a Console session; never extended by activity. |
 | `-console-session-idle` | `RELAY_CONSOLE_SESSION_IDLE` | `30m` | Idle timeout of a Console session. |
 | `-console-step-up-window` | `RELAY_CONSOLE_STEP_UP_WINDOW` | `5m` | How recently a human must have re-entered their password for a privilege-granting Account act to proceed without being asked again. Maximum `15m`: a larger value is clamped, with a startup warning. Sign-in alone does not satisfy it. A successful step-up rotates the session identifier. Startup-only, like everything here: no Account of any role can extend it through any API. |
@@ -104,16 +104,17 @@ start; nothing sets or raises them through an API.
 Subcommands (checked before flag parsing):
 
 - `relay --version` / `-version` / `-V` — print the build stamp and exit.
-- `relay bootstrap-token -store-path <path>` — mint the founding admin Account's first
-  API Token and print it to stdout. This is how you obtain a control-plane credential;
-  there is none in Relay configuration
-  ([control-plane-credential.md](control-plane-credential.md), ADR-0023).
-- `relay console-password -store-path <path> -account <name> [-password-file <path>] [-clear]`
-  — set (or, with `-clear`, remove) a human Account's Admin Console sign-in password,
-  reading it from `-password-file` or standard input. There is deliberately no flag that
-  takes the password itself. The Account must already exist and be a human Account; the
-  Console has no default credential, so the first password is set here, on the Relay host,
-  against the root-owned store. Safe to run while the Relay is running.
+- `relay init [--config <path>] --admin <name>` — create the first admin, once the Relay has
+  started and created its store: a human `admin` Account with the name you give, its Console
+  password (prompted for, not echoed) and its first API Token, printed to stdout once. This is
+  how you obtain the first control-plane credential; there is none in Relay configuration
+  ([control-plane-credential.md](control-plane-credential.md), ADR-0023, ADR-0030). Run it as
+  the Relay's own account (`sudo -u relay relay init …`): it reads the configuration through
+  the same start-time check as the Relay, so it refuses root. On a Relay that already has a
+  human Account it creates nothing, prints no credential, and says what is there.
+- `relay init [--config <path>] --recover <name>` — mint a new API Token for an enabled human
+  `admin` who has lost theirs, audited. It refuses a disabled, non-admin or machine Account.
+  Safe to run while the Relay is running.
 
 ## 3. First start
 
@@ -227,11 +228,10 @@ $ sudo systemctl enable --now relay
 $ systemctl status relay
 ```
 
-The control plane comes up with no usable credential until you mint one. Run
-`relay bootstrap-token -store-path /var/lib/relay/relay.db` on this host (the same path as
-`RELAY_STORE_PATH` in `relay.env`) and switch your callers to the printed token —
-see [control-plane-credential.md](control-plane-credential.md). If the Admin Console is
-enabled, set the first human password with `relay console-password` the same way.
+The control plane comes up with no Account and no usable credential until you create the
+first admin. Run `sudo -u relay relay init --admin <your-name>` on this host: it prompts for
+that admin's Console password and prints its first API Token. Switch your callers to
+credentials of their own — see [control-plane-credential.md](control-plane-credential.md).
 
 ## 5. Operational levers on the Relay host
 
@@ -405,14 +405,15 @@ $ docker compose -f deploy/compose/docker-compose.yml ps   # wait for relay to b
 The Relay creates its CA on first start and logs its fingerprint
 (`docker compose -f deploy/compose/docker-compose.yml logs relay`).
 
-**4. Mint the founding admin's API Token** — the first control-plane credential, minted
-locally against the store ([control-plane-credential.md](control-plane-credential.md),
-ADR-0023). It is printed once and never stored; put it in a vault at that moment, and hold it
-in `RELAY_TOKEN` for the rest of this procedure without echoing it:
+**4. Create the first admin** with `relay init`, which runs as the Relay's own account inside
+the container: a human `admin` Account named as you choose, its Console password (prompted
+for twice, not echoed), and its first API Token — the first control-plane credential
+([control-plane-credential.md](control-plane-credential.md), ADR-0030). The token is printed
+once and never stored; put it in a vault at that moment, and hold it in `RELAY_TOKEN` for the
+rest of this procedure without echoing it:
 
 ```console
-$ docker compose -f deploy/compose/docker-compose.yml exec relay \
-    relay bootstrap-token -store-path /var/lib/relay/relay.db
+$ docker compose -f deploy/compose/docker-compose.yml exec relay relay init --admin <your-name>
 $ read -rs RELAY_TOKEN     # paste the token printed above
 ```
 
@@ -424,20 +425,10 @@ $ docker compose -f deploy/compose/docker-compose.yml cp \
     relay:/var/lib/relay/ca/ca-cert.pem ./relay-ca-cert.pem
 ```
 
-**5. Set the Console password** (only if you enabled the Console in step 2) with
-`relay console-password`. It reads the password from standard input, so nothing puts it in a
-process listing or on disk:
-
-```console
-$ read -rs PW && printf '%s\n' "$PW" | \
-    docker compose -f deploy/compose/docker-compose.yml exec -T relay \
-      relay console-password -store-path /var/lib/relay/relay.db -account founding-admin
-$ unset PW
-```
-
-`founding-admin` is the human admin Account `bootstrap-token` used. Every act in the Console
-is attributed to the Account that signed in, so give each further person their own human
-Account (`POST /api/v1/accounts`) and their own password, rather than sharing this one.
+**5. Reach the Console** (only if you enabled it in step 2) as the admin from step 4, with the
+password you gave `relay init`. Every act in the Console is attributed to the Account that
+signed in, so give each further person their own Account (`POST /api/v1/accounts`) rather than
+sharing this one.
 
 Then, if you want the control plane reachable beyond this host, set `RELAY_PUBLISH_ADDR` to
 the host's LAN address (or `0.0.0.0`) and run the `up -d` from step 3 again. Sign in at

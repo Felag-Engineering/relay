@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
@@ -35,11 +37,25 @@ func serveControlPlane(t *testing.T, deps *appDeps) (base string, pool *x509.Cer
 	return "https://" + controlLis.Addr().String(), pool
 }
 
-// bootstrapCredential mints the founding admin Account's API Token against
-// deps' store and returns the plaintext — the in-process equivalent of running
-// `relay bootstrap-token` (bootstrap_token.go), which is how a real operator
-// obtains the first credential now that the shared seeded credential is gone
-// (#298, ADR-0023).
+// testAdminName names the founding admin the in-process fixtures create. No
+// name is reserved, so it is an ordinary name.
+const testAdminName = "first-admin"
+
+// testAdmin is the founding admin's Principal shape: the name, role and kind
+// principalFromAccount projects from the Account bootstrapCredential creates.
+func testAdmin() capability.Principal {
+	return capability.Principal{
+		Account: testAdminName,
+		Role:    string(accounts.RoleAdmin),
+		Kind:    string(accounts.KindHuman),
+	}
+}
+
+// bootstrapCredential creates the founding admin Account in deps' store if it
+// is absent, mints it an API Token and returns the plaintext — the in-process
+// stand-in for `relay init`, which is how a real operator obtains the first
+// credential (ADR-0030). init's own path is proven over the shippable binary
+// in init_e2e_test.go.
 //
 // It mints through the real accounts.TokenService against the real store, so a
 // test using it authenticates over exactly the production path.
@@ -47,9 +63,14 @@ func bootstrapCredential(t *testing.T, deps *appDeps) string {
 	t.Helper()
 	ctx := context.Background()
 
-	admin, err := deps.store.Accounts().EnsureFoundingAdmin(ctx)
+	admin, err := deps.store.Accounts().GetByName(ctx, testAdminName)
+	if errors.Is(err, accounts.ErrNotFound) {
+		admin, err = deps.store.Accounts().Create(ctx, accounts.Account{
+			Name: testAdminName, Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+		})
+	}
 	if err != nil {
-		t.Fatalf("ensure founding admin: %v", err)
+		t.Fatalf("create the founding admin: %v", err)
 	}
 	svc := accounts.NewTokenService(deps.store.APITokens(), deps.store.Accounts(), nil)
 	_, plaintext, err := svc.Mint(ctx, admin.ID, "test-bootstrap", time.Hour)
@@ -72,7 +93,7 @@ func (v staticVerifier) Verify(_ context.Context, credential string) (accounts.A
 	}
 	return accounts.Account{
 		ID:      "acct-test-founding",
-		Name:    accounts.FoundingAdminName,
+		Name:    testAdminName,
 		Kind:    accounts.KindHuman,
 		Role:    accounts.RoleAdmin,
 		Enabled: true,

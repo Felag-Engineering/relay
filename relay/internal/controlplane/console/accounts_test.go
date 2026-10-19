@@ -290,7 +290,7 @@ func TestAccounts_AHumanAccountHasNoLastToolCallCell(t *testing.T) {
 func TestAccounts_APageViewRecordsExactlyOneReadRecord(t *testing.T) {
 	for _, path := range []string{
 		accountsPath,
-		accountsPath + "?account=" + accounts.FoundingAdminName,
+		accountsPath + "?account=" + testAdminName,
 	} {
 		trail := &recordingTrail{}
 		rec := get(t, newTestHandler(realLaneDeps(trail), accounts.RoleAdmin), path)
@@ -441,8 +441,8 @@ func TestAccounts_AboutNamesThePolicyCeiling(t *testing.T) {
 // TestAccounts_DayOneShowsTheFoundingAdmin is what makes the day-one exemption
 // honest. The criterion dayone_test.go sweeps is about measuring a fleet that
 // does not exist yet; an Account table is not a fleet, and on a fresh Relay it
-// has exactly one true row — EnsureFoundingAdmin seeded it in the same startup
-// branch that mounts the Console.
+// has exactly one true row — the admin `relay init` created, without whom
+// nobody could have signed in to see it.
 //
 // The <thead> is EXPECTED here, not tolerated: one real row under column
 // headings is the honest first-boot shape, and it is the shape a real operator
@@ -462,7 +462,7 @@ func TestAccounts_DayOneShowsTheFoundingAdmin(t *testing.T) {
 		t.Fatalf("a fresh Relay renders %d Account rows, want exactly 1 (the founding admin)", got)
 	}
 
-	row := rowFor(t, body, accounts.FoundingAdminName)
+	row := rowFor(t, body, testAdminName)
 	for _, want := range []string{
 		string(accounts.KindHuman),
 		string(accounts.RoleAdmin),

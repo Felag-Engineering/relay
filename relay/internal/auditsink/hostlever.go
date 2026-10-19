@@ -1,7 +1,8 @@
 package auditsink
 
-// hostlever.go builds the audit records for the host-side credential levers
-// (`relay console-password`, `relay bootstrap-token`).
+// hostlever.go builds the audit records for the host-side credential lever,
+// `relay init`: the first admin's creation, Console password and first API
+// Token, and a recovery re-mint.
 //
 // These are record BUILDERS, not Sink methods: Sink.append is a write of its
 // own, and the fail-closed rule for these acts needs the record and the
@@ -39,6 +40,21 @@ func hostRecord(id string, now time.Time, kind, reason string) audit.Record {
 	}
 }
 
+// HostAccountCreateRecord builds the account_create record for the first
+// admin, created by `relay init`. The Reason is the API create's own, byte for
+// byte, so a trail query for one matches the other; attribution tells them
+// apart.
+func HostAccountCreateRecord(id string, now time.Time, accountID, accountName, kind, role string) (audit.Record, error) {
+	if id == "" || accountID == "" || accountName == "" || kind == "" || role == "" {
+		return audit.Record{}, errors.New("auditsink: a host account-create record needs an audit id, an account id, a name, a kind and a role")
+	}
+	reason := accountAdminReason(capability.AccountAdminEvent{
+		Kind: capability.AccountAdminCreate, AccountID: accountID, AccountName: accountName,
+		AccountKind: kind, Role: role,
+	})
+	return hostRecord(id, now, audit.KindAccountCreate, reason), nil
+}
+
 // HostPasswordSetRecord builds the password_set record for a Console password
 // set on the named Account by the host lever. It names the Account, never the
 // password or its hash.
@@ -63,7 +79,7 @@ func HostPasswordClearRecord(id string, now time.Time, accountID, accountName st
 }
 
 // HostAPITokenMintRecord builds the api_token_mint record for a token minted
-// by `relay bootstrap-token`. The Reason is the API mint's own, byte for byte,
+// by `relay init`, first or recovered. The Reason is the API mint's own, byte for byte,
 // so a trail query for one matches the other; attribution tells them apart.
 // It carries the token's public ID, never its secret.
 func HostAPITokenMintRecord(id string, now time.Time, accountID, tokenID string) (audit.Record, error) {

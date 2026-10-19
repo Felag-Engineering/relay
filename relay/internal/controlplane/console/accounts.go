@@ -21,13 +21,12 @@ package console
 //
 // # The table renders unconditionally
 //
-// There is no "you have no Accounts" branch, because that Relay cannot exist.
-// EnsureFoundingAdmin runs at startup (relay/cmd/relay/main.go) inside the
-// same ControlEnabled branch that mounts the Console, and fails the boot
-// closed if it cannot seed; it creates an enabled human admin. So a Console
-// that is serving this route is a Console with at least one Account, an
-// else-branch here would be dead copy, and the honest first-boot shape is one
-// row under a <thead> rather than an empty state. dayone_test.go carries the
+// There is no "you have no Accounts" branch, because that Console cannot be
+// reached: this route serves only a signed-in human Account, and the first is
+// the admin `relay init` creates. So a Console that is serving this route is a
+// Console with at least one Account, an else-branch here would be dead copy,
+// and the honest first-boot shape is one row under a <thead> rather than an
+// empty state. dayone_test.go carries the
 // matching named skip, and TestAccounts_DayOneShowsTheFoundingAdmin pins the
 // shape that skip hands over.
 //
@@ -571,7 +570,7 @@ var accountsTmpl = newScreen("accounts", `
     </div>
     <button class="btn grant" type="submit">Create Account</button>
   </form>
-  <p class="note">A <b>human</b> Account cannot sign in until a password is set with <code>relay console-password</code> on the Relay host.</p>
+  <p class="note">A <b>human</b> Account cannot sign in until a password is set, and only <code>relay init</code> sets one.</p>
 </details>
 {{end}}
 

@@ -182,9 +182,6 @@ func writeAccountError(w http.ResponseWriter, err error, title, selfTargetVerb s
 	case errors.Is(err, accounts.ErrNameTaken):
 		writeProblem(w, http.StatusConflict, "account name already in use",
 			"names are unique so audit attribution is never ambiguous")
-	case errors.Is(err, accounts.ErrReservedName):
-		writeProblem(w, http.StatusBadRequest, "reserved account name",
-			"the founding admin is created by seeding, never through the API")
 	case errors.Is(err, accounts.ErrInvalidName),
 		errors.Is(err, accounts.ErrInvalidKind),
 		errors.Is(err, accounts.ErrInvalidRole):

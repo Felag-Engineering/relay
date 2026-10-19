@@ -165,11 +165,14 @@ services:
 
   # The fleet's `init` one-shot also creates the human Account the IdP's user
   # signs in as (docker/dev-fleet-init.sh); the Relay never creates an Account
-  # from a token (ADR-0024).
+  # from a token (ADR-0024). Its `relay init` reads the Relay's own configuration,
+  # so it mounts the same file the relay service does under this overlay.
   init:
     environment:
       # Must equal the realm user's username (the token's preferred_username).
       OAUTH_ACCOUNT_NAME: "demo-user"
+    volumes:
+      - ./docker/fixtures/relay.demo-oauth.toml:/etc/relay/relay.toml:ro
 
 volumes:
   idp-data:
