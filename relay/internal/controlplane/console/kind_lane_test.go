@@ -55,29 +55,6 @@ func TestJob_DeciderWithNoAccountIDGetsNoKind(t *testing.T) {
 	}
 }
 
-// TestApproval_DecidersAreInTheLaneTheirRecordEarns reuses Job detail's rule:
-// verified only when the Decision carries an Account ID. It was hard-coded
-// verified before, which drew an unattributed decision as authenticated.
-func TestApproval_DecidersAreInTheLaneTheirRecordEarns(t *testing.T) {
-	req := pendingApprovalRequest("ap-1")
-	req.Require.Count = 3
-	req.Decisions = []approval.Decision{
-		unattributedDecider(),
-		{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow},
-	}
-	d := renderableDeps()
-	d.Approvals = &fakeApprovals{pending: []approval.Request{req}}
-	decisions := section(t, contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-1").Body.String()),
-		`<h3>Decisions</h3>`, `</table>`)
-
-	if !strings.Contains(decisions, dashedChip+"ghost</span></td>") {
-		t.Errorf("a decision with no Account ID is not dashed, or carries a kind:\n%s", decisions)
-	}
-	if !strings.Contains(decisions, verifiedChip+`mike</span> `+kindLabel("human")) {
-		t.Errorf("a decision with an Account ID is not verified with its kind:\n%s", decisions)
-	}
-}
-
 func TestActivity_UnverifiedRequesterGetsNoKind(t *testing.T) {
 	q := &fakeQueries{jobs: []capability.JobSummary{{
 		JobID: "job-1", CreatedAt: testNow, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate,
@@ -110,16 +87,6 @@ func TestKindKeys_SayWhatMachineMeansOnADecision(t *testing.T) {
 	job := jobBody(t, jobDeps(&fakeQueries{jobs: []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)}, tasks: tasks}), jobPath(""))
 	if key := section(t, job, `<p class="lanekey"><span class="kind">`, `</p>`); !strings.Contains(key, "machine means &ldquo;not recorded as human&rdquo;") {
 		t.Errorf("Job detail's key does not say what machine means on a decision:\n%s", key)
-	}
-
-	req := pendingApprovalRequest("ap-1")
-	req.Require.Count = 2
-	req.Decisions = []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, DeciderHuman: true, At: testNow}}
-	d := renderableDeps()
-	d.Approvals = &fakeApprovals{pending: []approval.Request{req}}
-	card := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-1").Body.String())
-	if !strings.Contains(card, "<b>machine</b> means &ldquo;not recorded as human&rdquo;") {
-		t.Error("the approval object's key does not say what machine means on a decision")
 	}
 }
 

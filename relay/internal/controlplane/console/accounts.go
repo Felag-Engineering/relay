@@ -279,8 +279,7 @@ func handleAccounts(d Deps) http.HandlerFunc {
 		// record nothing and the sweep would have nothing to assert.
 		//
 		// The third option, rejected: classify the trail read as EXEMPT with a
-		// why, which /console/approvals is precedent for
-		// (read_audit_test.go). Rejected on properties, not on taste — an
+		// why (read_audit_test.go). Rejected on properties, not on taste — an
 		// exempt route is skipped by the real-lane sweep, so the read would go
 		// unproven, and it drops out of
 		// TestConsole_AnUnauditableReadRefusesTheScreen entirely, which would

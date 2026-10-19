@@ -9,17 +9,15 @@ package console
 //   - stepUpWindowed: the four privilege-granting Account acts. An empty
 //     password proceeds only while consoleauth says this session's step-up
 //     stamp is fresh (owner decision 2026-10-05: one password per
-//     window). the composer uses stepUpPerAct unless a human first
-//     amends ADR-0026 decision 3 and threat-model R11.
-//   - stepUpPerAct: approval decide (approval.md AP-16: "re-authenticates at
-//     the moment of deciding") and the bulk decide (AP-59: "entered
-//     immediately before it is submitted"). A password is always required and
-//     verified in that request, and the window is never consulted. Decide and
-//     bulk decide may NEVER accept the window: moving either to stepUpWindowed
-//     is a spec change to approval.md, made by a human first, not a code edit.
+//     window).
+//   - stepUpPerAct: reserved for the composer's mutate apply (ADR-0026
+//     decision 3). A password is always required and verified in that
+//     request, and the window is never consulted. Moving that apply to
+//     stepUpWindowed first needs ADR-0026 decision 3 and threat-model R11
+//     amended by a human, not a code edit.
 //
 // Known and deliberate: a successful step-up in EITHER mode stamps the
-// session, so a decision's password also opens the window for the Account
+// session, so a per-act password also opens the window for the Account
 // acts. The stamp is the proof of a recent credential, whoever asked for it.
 //
 // Every successful step-up, in either mode, rotates the session identifier (a
@@ -57,19 +55,19 @@ const (
 type stepUpAsk struct {
 	mode stepUpMode
 	// required is the no-password sentence, e.g. "Step-up re-authentication
-	// is required to decide an approval."
+	// is required to create an Account."
 	required string
-	// undone says what did not happen, e.g. "Nothing was decided."
+	// undone says what did not happen, e.g. "Nothing was changed."
 	undone string
-	// act is a log label, e.g. "an approval decision".
+	// act is a log label, e.g. "an Account creation".
 	act string
 	// render writes status and the act's result page.
 	render func(w http.ResponseWriter, pg Page, status int, heading, href, label string)
 }
 
 // refuseMissing renders the 401 for a request that carried no password and
-// had no fresh window to stand in for one. Shared with decide's early check
-// so the copy is defined once.
+// had no fresh window to stand in for one. Defined once so every early check
+// shares its copy.
 func (a stepUpAsk) refuseMissing(w http.ResponseWriter, pg Page) {
 	a.render(w, pg, http.StatusUnauthorized, a.required+" "+a.undone, "", "")
 }
@@ -136,7 +134,7 @@ func requireStepUp(d Deps, w http.ResponseWriter, r *http.Request, pg *Page, ask
 // stepUpWithoutPassword is requireStepUp's empty-password branch.
 func stepUpWithoutPassword(d Deps, w http.ResponseWriter, r *http.Request, pg Page, ask stepUpAsk, id consoleauth.SessionID) bool {
 	if ask.mode == stepUpPerAct {
-		// The window is not consulted: a decision always costs a password.
+		// The window is not consulted: a per-act ask always costs a password.
 		ask.refuseMissing(w, pg)
 		return false
 	}

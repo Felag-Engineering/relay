@@ -863,8 +863,18 @@ details.filters[open] > summary::before { transform: rotate(45deg); }
   margin-bottom: var(--space-4);
   overflow: hidden;
 }
-.ghead { display: flex; align-items: baseline; gap: var(--space-3); padding: var(--space-4) var(--space-5); flex-wrap: wrap; }
-.group.open .ghead { border-bottom: 1px solid var(--border-subtle); }
+/* The card is a native <details>, so it needs no script (spec 01). */
+.ghead { display: flex; align-items: baseline; gap: var(--space-3); padding: var(--space-4) var(--space-5); flex-wrap: wrap; list-style: none; cursor: pointer; }
+.ghead::-webkit-details-marker { display: none; }
+.ghead::before {
+  content: ""; width: 6px; height: 6px; flex: none; align-self: center;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform var(--duration-fast) var(--ease-out);
+}
+.group[open] > .ghead::before { transform: rotate(45deg); }
+.group[open] > .ghead { border-bottom: 1px solid var(--border-subtle); }
+/* .group clips overflow, which would cut the global ring's +2px offset. */
+.ghead:focus-visible { outline-offset: -2px; }
 .ghead h2 { margin: 0; font-size: var(--text-base); font-weight: var(--weight-semibold); letter-spacing: -0.01em; }
 .gcount { font-size: var(--text-sm); color: var(--text-second); font-variant-numeric: tabular-nums; }
 .gdev { font-size: var(--text-sm); color: var(--text-second); font-variant-numeric: tabular-nums; }
@@ -896,7 +906,16 @@ details.filters[open] > summary::before { transform: rotate(45deg); }
   padding: var(--space-4) var(--space-5) var(--space-5);
   margin-bottom: var(--space-4);
 }
-.sshead { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
+.sshead { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-3); }
+/* The headline is the largest type in the content area after the page heading,
+ * which is --text-xl (.topbar h1); spec 01, D27. */
+.sshl { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-6); margin-bottom: var(--space-2); }
+.ssfig { font-size: var(--text-lg); color: var(--text-second); font-variant-numeric: tabular-nums; }
+.ssfig b { color: var(--text-primary); font-weight: var(--weight-semibold); }
+.ssfps { list-style: none; margin: 0 0 var(--space-4); padding: 0; display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--text-sm); color: var(--text-second); }
+.ssfps b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.fphash { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-primary); overflow-wrap: anywhere; }
+.sswallhead { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
 .sshead h2 {
   margin: 0; font-size: var(--text-2xs); letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--text-muted); font-weight: var(--weight-semibold);
@@ -1243,17 +1262,6 @@ dl.kv + dl.kv { margin-top: var(--space-2); }
  * the one identifier the card exists to show. A soft wrap inserts no character, so
  * double-click, select and copy still yield the whole token. */
 dl.wrapid dd code { overflow-wrap: anywhere; }
-/* Per-row, not per-dl (#640 cycle 2 review, BLOCKING 2): the approval card's
-   "requested by" and "plan hash" rows share ONE dl.kv (approvals.go), and
-   code.planhash's dd is a horizontal scroll container — align-items: baseline
-   on the whole dl would pin ITS scrollbar edge to the dt's text baseline
-   instead of stretching it to the row, which looks broken there. dl.kv's
-   default cross-axis alignment (grid's own "stretch") is already correct for
-   every plain-text row, including plan hash; only "requested by" needs its dt
-   lined up with the trust chip's first line rather than stretched to match
-   it, because the chip's own line-height differs from plain text. .baseline
-   marks that one row's dt/dd, not the dl. */
-.kv dt.baseline, .kv dd.baseline { align-self: baseline; }
 
 .polblock { border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg-canvas); }
 .polrow { display: flex; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border-subtle); font-size: var(--text-sm); }
@@ -1450,91 +1458,6 @@ section.panel { margin-top: var(--space-4); }
 .trow { display: flex; gap: var(--space-3); align-items: baseline; font-size: var(--text-sm); padding: 2px 0; }
 .exit { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--failure); }
 
-/* --- Approval queue ------------------------------------------------------- */
-.queue { display: flex; flex-direction: column; gap: var(--space-2); }
-.qrow {
-  display: flex; gap: var(--space-4); align-items: flex-start; color: inherit;
-  background: var(--bg-surface); border: 1px solid var(--border-subtle);
-  border-left: 3px solid var(--border-subtle); border-radius: var(--radius-section);
-  padding: var(--space-4) var(--space-5);
-  transition: border-color var(--duration-fast) var(--ease-out);
-}
-.qrow:hover { text-decoration: none; border-color: var(--color-accent); }
-/* Expiry pressure is the one countdown in the Console that earns its keep. */
-.qrow.urgent { border-left-color: var(--attention); background: var(--attention-bg); }
-.qrow.lapsed { border-left-color: var(--inert); opacity: 0.7; }
-.qmain { flex: 1; min-width: 0; }
-.qhead { display: flex; gap: var(--space-2); align-items: baseline; flex-wrap: wrap; }
-.qhead code { font-family: var(--font-mono); font-size: var(--text-sm); }
-.qsummary { font-size: var(--text-sm); color: var(--text-primary); margin-top: var(--space-2); }
-.qrules { font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-1); }
-.qside { width: 180px; flex: none; text-align: right; }
-.quorum { font-size: var(--text-sm); color: var(--text-second); font-variant-numeric: tabular-nums; }
-.quorum b { color: var(--text-primary); }
-.qttl { font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-1); font-variant-numeric: tabular-nums; }
-.qrow.urgent .qttl { color: var(--attention-text); font-weight: var(--weight-medium); }
-.qshape { font-size: var(--text-xs); color: var(--security); margin-top: var(--space-1); }
-.qscope { font-size: var(--text-sm); color: var(--text-second); margin-top: var(--space-1); font-family: var(--font-mono); }
-.fgroup { font-size: var(--text-2xs); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); align-self: center; }
-
-/* --- The approval object (spec 08) ---------------------------------------
- *
- * The diff callout is "the single most valuable element on the screen and it
- * must be the most eye-catching text on the card". So the changed clause is the
- * largest, heaviest type on the page — in the EXISTING amber, which already
- * means "needs attention now". No new colour: a changed fan-out is not a new
- * kind of thing, it is the thing this screen was always about. */
-.diff {
-  border: 1px solid var(--attention-line); border-left: 3px solid var(--attention);
-  background: var(--attention-bg); border-radius: var(--radius-section);
-  padding: var(--space-4) var(--space-5); margin-bottom: var(--space-4); max-width: 780px;
-}
-.diffhead { font-size: var(--text-sm); color: var(--text-second); }
-.diffchange {
-  margin: var(--space-2) 0 0; font-size: var(--text-lg); font-weight: 700;
-  color: var(--attention-text); letter-spacing: -0.01em;
-}
-.nodiff { margin: 0; font-size: var(--text-sm); color: var(--text-second); }
-.diff .note { margin-bottom: 0; }
-
-/* The Scope disclosure, closed by default, in the .ogroup idiom: expanding it
- * is a deliberate cost, and v0.7.0 makes approving a Grant require it. */
-details.scope { background: var(--bg-canvas); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); margin: var(--space-3) 0; }
-details.scope > summary { padding: var(--space-3) var(--space-4); cursor: pointer; font-size: var(--text-sm); list-style: none; }
-details.scope > summary::-webkit-details-marker { display: none; }
-details.scope[open] > summary { border-bottom: 1px solid var(--border-subtle); }
-details.scope > dl, details.scope > p, details.scope > ul { margin-left: var(--space-4); margin-right: var(--space-4); }
-.joblist { list-style: none; padding: 0; margin: 0 0 var(--space-3); display: flex; flex-wrap: wrap; gap: var(--space-3); font-family: var(--font-mono); font-size: var(--text-sm); }
-.back { font-size: var(--text-sm); margin: 0 0 var(--space-3); }
-
-/* --- The decision form (#453) ----------------------------------------------
- *
- * Spec 08 item 5: "Approve and Deny are visually identical in weight; neither
- * is focused on load." One class, .decideanswer, for BOTH buttons — no colour,
- * no border-weight difference, nothing that reads as "the recommended one".
- * A visually dominant Approve is the rubber-stamp failure this screen exists
- * to prevent, asserted here rather than only in the markup, exactly as the
- * queue's read-only claim is asserted from the route table and not merely
- * from a missing button. Neither button carries autofocus (approvals.go). */
-.decideform {
-  border: 1px solid var(--border-subtle); border-radius: var(--radius-section);
-  background: var(--bg-surface); padding: var(--space-5);
-  max-width: 440px; display: flex; flex-direction: column; gap: var(--space-3);
-  margin-top: var(--space-4);
-}
-.decideform label { font-size: var(--text-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
-.decideform input, .decideform textarea {
-  font: inherit; padding: var(--space-2) var(--space-3); border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg); background: var(--bg-canvas); color: var(--text-primary);
-}
-.decideanswers { display: flex; gap: var(--space-3); }
-.decideanswer {
-  flex: 1; font: inherit; font-weight: var(--weight-medium); padding: var(--space-3);
-  border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
-  background: var(--bg-elevated); color: var(--text-primary); cursor: pointer;
-}
-.decideanswer:hover { background: var(--bg-canvas); }
-
 .summary { font-size: var(--text-base); margin: var(--space-3) 0 0; }
 .empty { max-width: 44em; }
 .empty h2 { font-size: var(--text-lg); font-weight: var(--weight-semibold); margin: var(--space-1) 0 var(--space-2); }
@@ -1674,29 +1597,13 @@ details.scope > dl, details.scope > p, details.scope > ul { margin-left: var(--s
 .chip.attempt[data-attempt="failed"]    { border-width: 2px; border-color: var(--text-second); font-weight: var(--weight-medium); }
 .chip.attempt[data-attempt="throttled"] { color: var(--inert); border-color: var(--inert); border-style: dotted; }
 
-/* --- The approval card on a phone ----------------------------------------
- *
- * Spec 08: "renders legibly at 390px wide with no horizontal scroll and 44px
- * minimum hit targets". An approver arrives from a link, on a phone, and this
- * is the highest-stakes rendering in the system.
- *
- * The plan hash is the one unbreakable token on the card, and it is what a
- * decision commits to — so the CONTAINER scrolls and the identifier is never
- * broken across lines, the same rule .tablescroll and .devtable follow. */
-.qrow { min-height: 44px; }
-/* The card's own touch targets. A .qrow minimum covers the QUEUE and nothing on
- * the approval object, whose targets are the back link and the Jobs a Grant
- * released. The link inside the diff callout is deliberately NOT enlarged: it
- * sits mid-sentence, and a 44px inline box there breaks the line rhythm of the
- * one paragraph on the card that has to be read. That one is on the manual
- * pass. */
-.back a, .joblist a { display: inline-flex; align-items: center; min-height: 44px; }
+/* The plan hash is the one unbreakable token on a Plan, and what an approval
+ * commits to — so the CONTAINER scrolls and the identifier is never broken
+ * across lines, the same rule .tablescroll and .devtable follow. */
 dl.kv dd { min-width: 0; }
 .planhash { display: block; overflow-x: auto; }
 
 @media (max-width: 480px) {
-  .qrow { flex-direction: column; }
-  .qside { width: auto; text-align: left; }
   dl.kv { grid-template-columns: 1fr; }
 }
 
@@ -1777,8 +1684,8 @@ dl.kv dd { min-width: 0; }
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 .refreshbtn:hover { text-decoration: none; border-color: var(--color-accent); }
-/* The approval queue's one visible sentence that its Refresh is not audited
- * (#779). It qualifies the control above it, so it is quiet note text. */
+/* The one visible sentence beside Refresh saying whether a reload is audited.
+ * It qualifies the control above it, so it is quiet note text. */
 .refreshlimit { font-size: var(--text-xs); color: var(--text-muted); margin: calc(-1 * var(--space-3)) 0 var(--space-4); max-width: 64em; }
 
 /* How old a page is (00-foundations.md): relative, with the UTC instant in its title,

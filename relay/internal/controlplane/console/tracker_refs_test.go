@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/relay/relay/internal/approval"
 )
 
 // trackerRef matches "#<number>" as a word of its own. It is applied to
@@ -46,9 +45,9 @@ func TestConsole_NoRenderedScreenCarriesATrackerReference(t *testing.T) {
 	h := newTestHandler(d, accounts.RoleAdmin)
 
 	paths := walkableScreens(routesFor(d, accounts.RoleAdmin), fixtureIDs)
-	// The guard is the walk reaching the two screens that carried a reference.
-	if len(paths) == 0 || !slices.Contains(paths, "/console/approvals") || !slices.Contains(paths, "/console/nodes/node-web-1") {
-		t.Fatalf("the route walk did not reach the Approvals queue and a Node page: %v", paths)
+	// The guard is the walk reaching Activity and a Node page.
+	if len(paths) == 0 || !slices.Contains(paths, "/console/activity") || !slices.Contains(paths, "/console/nodes/node-web-1") {
+		t.Fatalf("the route walk did not reach Activity and a Node page: %v", paths)
 	}
 	// Situational paths the walk does not reach.
 	paths = append(paths,
@@ -67,14 +66,4 @@ func TestConsole_NoRenderedScreenCarriesATrackerReference(t *testing.T) {
 		t.Fatalf("GET %s on a day-one Relay = %d, want 200", fleetPath, rec.Code)
 	}
 	assertNoTrackerRef(t, fleetPath+" (day one)", rec.Body.String())
-
-	g := consoleGrant("grant-1", "ap-grant", 200, 20)
-	g.LegacyNamespacePin = "node"
-	gd := renderableDeps()
-	gd.Approvals = &fakeApprovals{pending: []approval.Request{grantRequest(g, approval.StatePending)}, grants: []approval.Grant{g}}
-	rec = get(t, newTestHandler(gd, accounts.RoleAdmin), "/console/approvals/ap-grant")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET the legacy-pinned Grant card = %d, want 200", rec.Code)
-	}
-	assertNoTrackerRef(t, "/console/approvals/ap-grant", rec.Body.String())
 }

@@ -58,42 +58,17 @@ func (f fakeAudit) filter(keep func(audit.Record) bool) []audit.Record {
 	return out
 }
 
-// fakeApprovals is the approval read seam: the queue, one record, the
-// same-shape lookup, and the two Grant reads.
-//
-// It is a POINTER type because shapeCalls has to survive the call. The
-// assertion that matters most here is a NEGATIVE one — the Console must never
-// ask about a record whose shape was never computed — and a counter on a value
-// receiver would be incremented on a copy and read as zero however the handler
-// behaved.
+// fakeApprovals is the approval read seam: the one-record read Job detail
+// makes.
 type fakeApprovals struct {
 	pending []approval.Request
 
-	// resolved are records reachable by id but not in the queue: the prior
-	// approval a diff compares against is, by definition, no longer pending.
+	// resolved are records reachable by id but not in pending.
 	resolved []approval.Request
 
-	// grants are every Grant this Relay holds, live or not. ActiveGrants
-	// filters them exactly as the capability layer does; GrantForApproval does
-	// not, which is the whole reason that read exists.
-	grants []approval.Grant
-
-	grantsErr error
-
-	// pendingErr and approvalErr fail the queue read and the one-record read
-	// as a wired store would: a runtime failure, not an absence.
-	pendingErr  error
+	// approvalErr fails the one-record read as a wired store would: a runtime
+	// failure, not an absence.
 	approvalErr error
-
-	// shapeCalls counts LastApprovedOfSameShape calls.
-	shapeCalls int
-}
-
-func (f *fakeApprovals) PendingApprovals(context.Context) ([]approval.Request, error) {
-	if f.pendingErr != nil {
-		return nil, f.pendingErr
-	}
-	return f.pending, nil
 }
 
 // Approval returns the real sentinel for an unknown id, as the capability
@@ -108,51 +83,6 @@ func (f *fakeApprovals) Approval(_ context.Context, id string) (approval.Request
 		}
 	}
 	return approval.Request{}, approval.ErrNotFound
-}
-
-// LastApprovedOfSameShape mirrors the store's own predicate rather than
-// indexing a map the test filled in: approved, same shape key, not this record.
-//
-// The distinction is not pedantry. A fixture that mapped "prior" to "current"
-// by hand would still find a prior after a change that made the two records'
-// shape keys DIFFER — which is precisely the regression the Grant diff test is
-// there to catch.
-func (f *fakeApprovals) LastApprovedOfSameShape(_ context.Context, r approval.Request) (approval.Request, error) {
-	f.shapeCalls++
-	for _, prior := range f.resolved {
-		if prior.State == approval.StateApproved && prior.ID != r.ID && prior.ShapeKey == r.ShapeKey {
-			return prior, nil
-		}
-	}
-	return approval.Request{}, approval.ErrNotFound
-}
-
-func (f *fakeApprovals) ActiveGrants(context.Context) ([]approval.Grant, error) {
-	if f.grantsErr != nil {
-		return nil, f.grantsErr
-	}
-	var out []approval.Grant
-	for _, g := range f.grants {
-		if g.Active(testNow) {
-			out = append(out, g)
-		}
-	}
-	return out, nil
-}
-
-func (f *fakeApprovals) GrantForApproval(_ context.Context, requestID string) (approval.Grant, error) {
-	// The store is down, which is NOT ErrGrantNotFound: the two answers are
-	// what the capability layer keeps distinct by letting the sentinel travel
-	// unwrapped, and a fake that collapsed them could not test the difference.
-	if f.grantsErr != nil {
-		return approval.Grant{}, f.grantsErr
-	}
-	for _, g := range f.grants {
-		if g.RequestID == requestID {
-			return g, nil
-		}
-	}
-	return approval.Grant{}, approval.ErrGrantNotFound
 }
 
 type constErr string
@@ -282,7 +212,7 @@ func matchRow(f capability.AuditFilter, row capability.AuditRow) bool {
 	case f.JobID != "" && row.JobID != f.JobID:
 		return false
 	// ApprovalID and GrantID are honoured for the same reason JobID is: the
-	// approval object joins the park record on approval_id and the
+	// Job detail joins the park record on approval_id and the
 	// released-Job list on grant_id, and a fake that returned every row would
 	// let a screen that dropped either filter render perfectly.
 	case f.ApprovalID != "" && row.ApprovalID != f.ApprovalID:
@@ -341,8 +271,8 @@ func (f *fakeQueries) QueryAudit(_ context.Context, _ capability.Principal, filt
 	// the paging-termination bug this branch exists to fix. A stub is not an
 	// offset and must never be parsed as one.
 	//
-	// Otherwise the cursor is a REAL offset, which the approval object's
-	// released-Job walk depends on: the trail fans a dispatch out to one row
+	// Otherwise the cursor is a REAL offset, which a released-Job
+	// walk depends on: the trail fans a dispatch out to one row
 	// PER NODE, so a Grant over many Nodes needs several pages before a
 	// second Job appears at all.
 	if f.auditNext != "" {
@@ -570,43 +500,6 @@ func (f *fakeCanceller) CancelJob(_ context.Context, p capability.Principal, job
 	return f.err
 }
 
-// decideCall records one DecideApproval invocation's arguments (#453).
-type decideCall struct {
-	Principal capability.Principal
-	Decision  capability.ApprovalDecision
-}
-
-// fakeDecider is the Decide write seam. It records every call rather than
-// deciding anything — quorum, audience, requester exclusion, channel
-// strength and the audit row are the capability layer's, and a fake that
-// "helpfully" enforced any of them would be asserting against its own
-// implementation instead of the real domain.
-//
-// order, when non-nil, is a shared recorder both this fake and fakeAuth
-// append to, so a test can assert StepUp happened strictly before
-// DecideApproval (TestDecide_StepUpHappensBeforeTheDecision).
-type fakeDecider struct {
-	calls []decideCall
-	err   error
-	order *[]string
-	// onErr is what DecideApproval returns alongside err. The capability
-	// layer returns the current Request, not the zero value, on
-	// ErrNotPending/ErrDuplicateDecider (#724); the default here is the zero
-	// value, so every existing test is unaffected.
-	onErr approval.Request
-}
-
-func (f *fakeDecider) DecideApproval(_ context.Context, p capability.Principal, in capability.ApprovalDecision) (approval.Request, error) {
-	f.calls = append(f.calls, decideCall{Principal: p, Decision: in})
-	if f.order != nil {
-		*f.order = append(*f.order, "DecideApproval")
-	}
-	if f.err != nil {
-		return f.onErr, f.err
-	}
-	return approval.Request{ID: in.RequestID, PlanHash: in.PlanHash}, nil
-}
-
 // The five calls fakeAccountAdmin records, each carrying exactly what the
 // handler passed, so a test asserts what reached the seam rather than that
 // something did.
@@ -661,7 +554,7 @@ const (
 //
 // order, when non-nil, is a shared recorder both this fake and fakeAuth append
 // to, so a test can assert StepUp happened strictly BEFORE the capability
-// call — the shape fakeDecider already takes.
+// call.
 type fakeAccountAdmin struct {
 	creates []createAccountCall
 	roles   []setRoleCall
@@ -740,11 +633,11 @@ func (f *fakeAccountAdmin) record(verb string) {
 // fakeAuth implements the Console's six-method Authenticator (login.go)
 // over nothing but recorded calls and configurable errors — no real store,
 // no real session. Login and Logout are here only to satisfy the interface;
-// decide_test.go exercises real sessions through loginFixture (a REAL
+// stepup_test.go exercises real sessions through loginFixture (a REAL
 // consoleauth.Service), which is what proves the session-lane properties
 // this fake cannot: fakeAuth exists for the seam-level refusal branches
 // (throttled, bad credential, no session), where a real store would only
-// obscure what handleDecideApproval does with the error it gets back.
+// obscure what a handler does with the error it gets back.
 type fakeAuth struct {
 	loginErr  error
 	logoutErr error
@@ -1092,17 +985,13 @@ func sweepFixture() Deps {
 				{Account: "gleipnir-prod", AccountID: sweepMachineAccountID, Approve: true, Channel: approval.ChannelInBand, OnBehalfOf: "carol", At: testNow.Add(-30 * time.Minute)},
 			}},
 	}}
-	// Decide and Auth are both wired (#453) so the route sweeps and the
-	// snapshot producer see the REAL decision card — an unwired seam would
-	// silently make every sweep exercise the honest-absence branch instead
-	// of the form.
-	d.Decide = &fakeDecider{}
+	// Auth is wired so the route sweeps and the snapshot producer see the REAL
+	// Accounts forms; AccountAdmin pairs with it.
 	d.Auth = &fakeAuth{}
-	// AccountAdmin is wired for the same reason Decide and Auth are, one line
-	// up (#655): an unwired write seam would silently make every sweep render
-	// the Accounts screen's honest-absence branch instead of the five forms,
-	// so the CSRF-token sweep and the snapshot producer would be asserting
-	// about a page that does not ship.
+	// AccountAdmin is wired for the same reason: an unwired write seam would
+	// silently make every sweep render the Accounts screen's honest-absence
+	// branch instead of the five forms, so the CSRF-token sweep and the
+	// snapshot producer would be asserting about a page that does not ship.
 	d.AccountAdmin = &fakeAccountAdmin{}
 	d.Audit = fakeAudit{records: []audit.Record{
 		{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow},

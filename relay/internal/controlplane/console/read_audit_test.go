@@ -70,7 +70,6 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
@@ -121,17 +120,12 @@ func (r readAuditRule) audited() bool { return r.tool != "" }
 // when that migration lands. After #680 there is no such exemption left: the
 // comparison screen — the last registry read off the lane — now resolves
 // every pinned Node through Queries.DescribeNode, one audited record per id.
-// One row below deliberately names no issue number: GET /console/approvals
-// is classified by what it CAN read — its trail reads ARE on the audited lane
-// and are recorded whenever there is a Request to read for, so there is
-// nothing to migrate at all.
-//
 // A WRITE exemption is a route that is not a read at all: the capability layer
 // records it under its own kind, and there is no future in which it becomes an
 // audited read — so it names no closing issue, and inventing one would be a
 // comment claiming more than is true. The write entries here have always
-// worked this way: the cancel and decision rows cite #595 and #453, which are
-// the issues that BUILT those routes, and the login/logout rows cite nothing
+// worked this way: the cancel row cites #595, which is
+// the issue that BUILT that route, and the login/logout rows cite nothing
 // at all.
 //
 // What an exemption of EITHER kind must never become is a place to put a
@@ -158,19 +152,6 @@ var consoleReadAudit = map[string]readAuditRule{
 	"GET /console/activity": {
 		path: "/console/activity",
 		tool: "query_jobs",
-	},
-	"GET /console/approvals": {
-		path: "/console/approvals",
-		// The queue reads the approval seam first and the trail only for a
-		// Request it found. With an empty queue it records nothing, which is
-		// correct — it read no fleet or trail data — so this route is
-		// classified by what it CAN read rather than by this fixture.
-		why: "reads ApprovalReader; its trail reads go through the audited " +
-			"lane (approvals.go) and are recorded when there is a Request to read for",
-	},
-	"GET /console/approvals/{approval_id}": {
-		path: "/console/approvals/" + auditFixtureApproval,
-		tool: "query_audit",
 	},
 	"GET /console/accounts": {
 		path: "/console/accounts",
@@ -234,13 +215,6 @@ var consoleReadAudit = map[string]readAuditRule{
 		why: "a write, not a read (#595): the capability layer records the cancel as " +
 			"job_cancel with its Principal, and a refusal as a refusal",
 	},
-	"POST /console/approvals/{approval_id}/decision": {
-		path: "",
-		why: "a write, not a read (#453): the capability layer records the decision as " +
-			"approval_decided with its Principal, the plan hash and the channel " +
-			"(approval_decide.go), and consoleauth records its own step_up event; a " +
-			"refusal is rendered as a refusal and appends nothing",
-	},
 
 	// ── The Accounts write half (#655) ───────────────────────────────────
 	//
@@ -296,10 +270,9 @@ var consoleReadAudit = map[string]readAuditRule{
 }
 
 const (
-	auditFixtureNode     = "node-web-1"
-	auditFixtureNode2    = "node-web-2"
-	auditFixtureJob      = "job-1"
-	auditFixtureApproval = "ap-1"
+	auditFixtureNode  = "node-web-1"
+	auditFixtureNode2 = "node-web-2"
+	auditFixtureJob   = "job-1"
 )
 
 // TestConsole_EveryRouteIsClassifiedForReadAuditing is the guard proper: the
@@ -674,7 +647,6 @@ func realLaneDeps(trail *recordingTrail) Deps {
 
 	d := renderableDeps()
 	d.Queries = svc.ReadLane
-	d.Approvals = &fakeApprovals{resolved: []approval.Request{{ID: auditFixtureApproval}}}
 	// Without this, GET /console/events 503s before RecordEventSubscription
 	// is ever reached — d.Events == nil is checked first — which would make
 	// this file's sweeps prove nothing about the one route this is the

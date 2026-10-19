@@ -300,8 +300,8 @@ is emitted and `approve_request` is refused as too weak a channel.
 
 - **No audience** means any Account whose role clears the decision floor, which is the floor
   the Action needed to be requested: `operator` for an Operation, `admin` for a Raw Exec. So
-  `dev-approver` (human, admin), the founding admin (human, admin) and the Console's `admin`
-  (human, admin) may each decide any request here. The AI-agent's `operator` Account
+  `dev-approver` (human, admin) and the founding admin (human, admin) may each decide any
+  request here, on the Control API. The AI-agent's `operator` Account
   (`auto-incident-response`) may decide a gated Operation, and never a Raw Exec; so may
   `demo-user`, the OAuth fleet's human operator.
 - **`requester_allowed: true`** means the requester may fill the slot. A **human** requester —
@@ -343,10 +343,7 @@ it does not itself dispatch (on the asked-in-band path the client's retry is tha
        '{"approve":true,"plan_hash":"<plan-hash>","reason":"approved on stage"}'
    ```
 
-   or in the Console, signed in as `admin`, which mounts an approval decision route with step-up
-   re-authentication. `admin` is inside this gate's empty audience, so a Console decision is
-   accepted here *(predicted)*; on the default fleet's gate it is refused as not in the
-   audience.
+   The Console has no approval surface (ADR-0044); the Control API is the out-of-band path.
 
 **What is structural, and what is not.** Much less than on the default fleet, deliberately: the
 demo gate exists to show the in-band question, and an in-band answer is, by construction, the

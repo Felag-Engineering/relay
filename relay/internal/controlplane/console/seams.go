@@ -32,11 +32,10 @@ package console
 // configuration — Execution — is a mirror the composition root sets, not a value
 // this package can read from anywhere.
 //
-// There are now THREE write seams on Deps — JobCanceller (cancel.go),
-// ApprovalDecider (decide.go) and AccountAdministrator
-// (accounts_write.go) — and none lives in this file, on purpose: each
-// gets its own file so this file's "every seam here is read-only" claim stays
-// true of seams.go without qualification.
+// There are TWO write seams on Deps — JobCanceller (cancel.go) and
+// AccountAdministrator (accounts_write.go) — and neither lives in this file,
+// on purpose: each gets its own file so this file's "every seam here is
+// read-only" claim stays true of seams.go without qualification.
 //
 // The filtered, paginated, per-principal audit/Job query lane is the
 // capability layer's — see QueryReader below. Job detail reads nothing else:
@@ -90,33 +89,21 @@ type AuditReader interface {
 	ByNode(ctx context.Context, nodeID string) ([]audit.Record, error)
 }
 
-// ApprovalReader is the approval queue and the approval object, read-only
-// (ADR-0027). *capability.Approvals satisfies all five methods.
+// ApprovalReader is Job detail's read of the one approval record a dispatch
+// names (ADR-0027), so the Job header can show its approvers, rule, quorum and
+// plan hash. It declares no PendingApprovals, LastApprovedOfSameShape,
+// ActiveGrants or GrantForApproval, so no Console screen lists pending requests
+// or Grants (AP-80). *capability.Approvals satisfies it and still carries those
+// methods. The no_dispatch guard refuses a type assertion or type-switch case
+// that recovers them through an anonymous interface or a named local interface
+// declaring one of them; it does not catch a type declared in another package.
 //
-// DecideApproval is still absent FROM THIS INTERFACE, which is still
-// read-only — the decision method lives on ApprovalDecider in decide.go,
-// for the same reason JobCanceller lives in cancel.go rather than
-// here: this file's "every seam here is read-only" header stays true without
-// qualification. RequestGrant and RevokeGrant both remain absent from every
-// seam this package holds. RevokeGrant is worth naming explicitly because it
-// is the one a future editor is most likely to add — closing a window feels
-// safer than opening one — and it is still a write on the approval mechanism.
-// Deciding, where it is offered, comes through the capability layer's
-// decision method, the same one the Control API and MCP call, so quorum,
-// audience, requester-exclusion and channel strength stay one implementation.
-//
-// The three reads beyond the queue are what the approval object renders:
-// LastApprovedOfSameShape is the anti-fatigue diff's lookup (D10),
-// ActiveGrants tells the queue which pending Requests are Grants, and
-// GrantForApproval resolves one Request's Grant IN EVERY STATE — the prior
-// Grant a diff compares against is usually the expired or exhausted one
-// ActiveGrants cannot return.
+// DecideApproval, RequestGrant and RevokeGrant are absent from every seam this
+// package holds. RevokeGrant is worth naming explicitly because it is the one a
+// future editor is most likely to add — closing a window feels safer than
+// opening one — and it is still a write on the approval mechanism.
 type ApprovalReader interface {
-	PendingApprovals(ctx context.Context) ([]approval.Request, error)
 	Approval(ctx context.Context, id string) (approval.Request, error)
-	LastApprovedOfSameShape(ctx context.Context, r approval.Request) (approval.Request, error)
-	ActiveGrants(ctx context.Context) ([]approval.Grant, error)
-	GrantForApproval(ctx context.Context, requestID string) (approval.Grant, error)
 }
 
 // AccountReader is the Account registry and its API Tokens, read-only (spec
@@ -126,8 +113,8 @@ type ApprovalReader interface {
 // EVERY WRITE VERB ON THE ACCOUNT LANE IS STILL ABSENT FROM THIS INTERFACE:
 // CreateAccount, SetAccountRole, SetAccountEnabled, MintAPIToken and
 // RevokeAPIToken. All five live on AccountAdministrator in
-// accounts_write.go — the same split JobCanceller and ApprovalDecider already
-// take, which is what keeps this file's "every seam here is read-only" claim
+// accounts_write.go — the same split JobCanceller already takes,
+// which is what keeps this file's "every seam here is read-only" claim
 // true unqualified. MintAPIToken is the one worth naming on its own, because
 // "the Accounts screen needs a mint button" sounds like a rendering problem
 // and is not: minting is a reveal-once credential issue, it belongs to the

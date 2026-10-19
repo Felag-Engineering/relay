@@ -14,7 +14,7 @@ what stands: **MCP is the approved pathway, and the Console and the Control API 
 request without being relied on.** The shelved properties below survived the amendment unchanged;
 two more, which the amendment's review surfaced and the owner chose to record rather than solve,
 were added on `2026-09-25`. On `2026-10-18` ADR-0044 removed the Console's half of that: the
-Console is to have no approval surface (`approval.md` AP-80), and the **Control API decision
+Console has no approval surface (`approval.md` AP-80), and the **Control API decision
 endpoint is the one out-of-band path**, kept as the rescue.
 
 It exists because the alternative was losing the argument. Each property below was reasoned
@@ -146,7 +146,7 @@ precisely the path the shipped posture tells people not to use — so the risk i
 accepted rather than closed (threat model **R27**).
 
 *(Re-premised `2026-10-18`, ADR-0044.)* This paragraph first named "the Console and the Control
-API". The Console is to have no approval surface (`approval.md` AP-80), so the rescue rests on
+API". The Console has no approval surface (`approval.md` AP-80), so the rescue rests on
 the Control API alone, and it has **no UI**: a human needs an API Token for a human Account, a
 way to make an authenticated request, and the request's ID — from the webhook payload, the MCP
 park result, or the Control API's list of pending requests. That makes the rescue harder and

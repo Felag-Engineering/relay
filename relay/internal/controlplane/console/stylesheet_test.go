@@ -649,7 +649,6 @@ var identifierCaseAllowlist = map[string]string{
 	"accounts.go .kind .Kind":       "Account kind vocabulary (human|machine); the Kind label is an upper-cased eyebrow by design (00-foundations, \"Kind label\")",
 	"components.go .kind .":         "the kind-label component; guarded by eq \"human\"/\"machine\" in the template itself",
 	"layout.go .navsec .Group":      "NavGroup constants (nav.go), fixed vocabulary",
-	"approvals.go .fgroup .Name":    "filter-dimension names, constants in approvals.go (waiting, requester, quorum, operation, risk)",
 	"compare.go .tcap len .Columns": "a count; numbers have no case",
 	"fleet.go .ftitle .Title":       "facet names (State, Daemon version, Policy fingerprint, Template set); the label-key title takes the LabelKey code branch, pinned by TestFleet_RoleFacetTitleRendersAsCode",
 }

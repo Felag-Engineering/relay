@@ -72,8 +72,8 @@ landed by hand, ahead of the loop.
 
 [03](03-agent-sessions.md) is retired: it was folded into 04 on 2026-09-29 (D17).
 [14](14-approval-queue.md) and [08](08-approval-object.md) are retired: on 2026-10-18 the owner
-removed approval from the Console entirely (ADR-0044, D21). Both screens are still in the code
-until `docs/specs/approval.md` AP-80 removes them; build nothing further on either.
+removed approval from the Console entirely (ADR-0044, D21). Both screens were removed from the
+code (`docs/specs/approval.md` AP-80).
 [17](17-read-egress.md) is retired: dropped on 2026-10-01 (owner decision, D11); Activity (04)
 carries read-class calls. Specs 11–20 have
 no artboard; the wireframes cover 1–10 plus the shared-grammar sheet.

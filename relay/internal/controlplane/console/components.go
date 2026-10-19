@@ -510,29 +510,10 @@ type StepUp struct {
 // There is nothing here to be careful granting, because Cancel can never
 // make the fleet do more than it was already doing.
 //
-// A third paragraph, beside the two above, so the package does not quietly
-// acquire two step-up idioms: the approval decision form (decide.go and
-// approvals.go's approvalDecideControl) deliberately does NOT use
-// [StepUp], even though deciding an approval is exactly the kind of mutate
-// release step-up exists for. StepUp models a STANDALONE confirmation — its
-// own FormAction, one "Authorise" button, and a WindowText that assumes the
-// recent-auth WINDOW model (spec 11), where a stale stamp triggers a
-// separate prompt. The approval decision rejects that model outright (see
-// decide.go's header: every decision costs its own password, the window is
-// never consulted) and spec 08 item 5 asks for an INLINE field on the
-// decision form itself, which must also carry two equal-weight answer
-// buttons and a hidden plan hash — none of which [StepUp] can express, and a
-// nested `<form>` is not valid HTML regardless. So the decision form carries
-// its own password field, using the SAME field name, type and autocomplete
-// as this component (`password`, `type="password"`,
-// `autocomplete="current-password"`) so the two agree on the credential's
-// shape even though they are two different forms. [StepUp]'s expected
-// consumer remains the composer's standalone mutate apply; it is not
-// dead by accident.
-// The decision form's HANDLER does run the shared requireStepUp ladder
-// (stepup.go) in its per-act mode, so the package still has ONE step-up idiom
-// server-side, while the form keeps its own inline field for the HTML reasons
-// above.
+// [StepUp] models a STANDALONE confirmation — its own FormAction, one
+// "Authorise" button, and a WindowText that assumes the recent-auth WINDOW
+// model (spec 11). Its expected consumer is the composer's standalone mutate
+// apply; it is not dead by accident.
 
 // --- Pin to compare ---------------------------------------------------------
 

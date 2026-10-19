@@ -404,8 +404,7 @@ type activityRow struct {
 	Unrecorded bool
 	Pending    bool
 
-	ApprovalID   string
-	ApprovalHref string
+	ApprovalID string
 
 	// GrantID is set only when a batch/window Grant released this dispatch.
 	// Rendered separately from ApprovalID because the distinction — "a human
@@ -1393,9 +1392,6 @@ func dispatchRowFromJob(sum capability.JobSummary) activityRow {
 	row.AwaitingRecord = row.Running && sum.Selector == "" && len(sum.Args) == 0 &&
 		len(sum.RawExecArgv) == 0 && sum.ApprovalID == "" && sum.GrantID == "" &&
 		sum.OnBehalfOf == ""
-	if sum.ApprovalID != "" {
-		row.ApprovalHref = "/console/approvals/" + sum.ApprovalID
-	}
 	if sum.Requester == "" {
 		// The Job engine publishes JobCompleted BEFORE its audit record is
 		// written, so a Job can be on this screen with no requester yet. Say
@@ -1485,9 +1481,6 @@ func eventRowFromTrail(f trailFacts) activityRow {
 	row.ReadClass = risk == jobs.RiskClassRead
 	if f.NodeID != "" {
 		row.NodeHref = "/console/nodes/" + f.NodeID
-	}
-	if f.ApprovalID != "" {
-		row.ApprovalHref = "/console/approvals/" + f.ApprovalID
 	}
 	if f.JobID != "" {
 		row.JobID = f.JobID
@@ -1832,7 +1825,7 @@ var activityTmpl = newScreen("activity", `
         {{if .Running}}<span class="overcap">{{.Resolved}} of {{.FanOut}} Tasks resolved</span>{{end}}
         {{if .NodeHref}}<a href="{{.NodeHref}}"><code>{{.NodeID}}</code></a>{{end}}
         {{if and .JobHref (not .OpIsLink)}}<a href="{{.JobHref}}">Job <code>{{short .JobID}}</code></a>{{end}}
-        {{with .ApprovalHref}}<a href="{{.}}">approval</a>{{end}}
+        {{with .ApprovalID}}<span class="dim">approval</span> <code>{{short .}}</code>{{end}}
         {{with .GrantID}}<span class="grant" title="An Approval grant released this: a human approved a window, not this plan.">grant {{short .}}</span>{{end}}
         {{with .RunningHref}}<a class="rnlink" href="{{.}}">in Running now</a>{{end}}
       </div>

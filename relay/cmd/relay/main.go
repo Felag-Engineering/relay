@@ -155,8 +155,7 @@ type Config struct {
 	// ConsoleStepUpWindow — an Account that could widen its own step-up window
 	// has removed the strongest per-action control in the system (spec 11).
 	// The loader refuses a value above consoleauth.MaxStepUpWindow. It governs the
-	// privilege-granting Account acts, and never approval decisions, which
-	// always ask for the password.
+	// privilege-granting Account acts.
 	ConsoleEnabled       bool
 	ConsoleSessionMaxAge time.Duration
 	ConsoleSessionIdle   time.Duration

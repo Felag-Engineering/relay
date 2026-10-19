@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/relay/relay/internal/approval"
 )
 
 var (
@@ -146,14 +145,6 @@ func TestLayout_PhoneNavCollapsesWithoutScript(t *testing.T) {
 	if aside < 0 || toggle < aside || navbody < toggle || nav < navbody || navEnd < nav || foot < navEnd || asideEnd < foot {
 		t.Errorf("shell order wrong: aside=%d toggle=%d navbody=%d nav=%d /nav=%d foot=%d /aside=%d",
 			aside, toggle, navbody, nav, navEnd, foot, asideEnd)
-	}
-
-	req := approval.Request{ID: "ap-1", State: approval.StatePending, Require: approval.Requirement{Count: 1}, ExpiresAt: testNow.Add(1)}
-	d := renderableDeps()
-	d.Approvals = &fakeApprovals{pending: []approval.Request{req}}
-	card := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-1").Body.String()
-	if strings.Contains(card, "navtoggle") {
-		t.Error("focus mode rendered the menu toggle along with the nav it controls")
 	}
 }
 
