@@ -617,7 +617,16 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 	// number — TestPluralFamiliesKeepOppositeContracts), shared so a
 	// component cannot render "1 Nodes matched".
 	"plural": screenFuncs["plural"],
+	// selfReportedTitle is the tooltip every self-reported hostname carries;
+	// the node-name partial needs it at parse time.
+	"selfReportedTitle": screenFuncs["selfReportedTitle"],
 }).Parse(`
+{{/* node-name draws a Node for a human: the self-reported hostname leads and
+the full verified ID follows it. .Hostname must already have passed through
+primaryHostname; an empty one leaves the ID alone as the label
+(00-foundations, "Self-reported names"). */}}
+{{define "node-name"}}{{if .Hostname}}<span class="selfrep" title="{{selfReportedTitle}}">{{.Hostname}}<span class="vh"> (self-reported)</span></span> {{end}}<code class="nodeid">{{.ID}}</code>{{end}}
+
 {{define "label-chip"}}<span class="chip lbl" data-ns="{{.Namespace}}"{{if .SecurityLane}} data-lane="security"{{end}}{{if .Attention}} data-sev="attention"{{end}} title="{{.}}"><span class="ns">{{.Namespace}}:</span>{{.Key}}{{if .Value}}<span class="eq">=</span>{{.Value}}{{end}}</span>{{end}}
 
 {{/* kind-label is the word human or machine drawn after a trust chip
@@ -686,8 +695,8 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 {{define "pin-bar"}}<div class="pinbar">
   <span class="pinlbl">Pinned</span>
   {{range .Pins}}<span class="pinchip">
-    {{if .Current}}<code>{{.ID}}</code><span class="dim">this Node</span>
-    {{else if .Known}}<a href="{{.Href}}"><code>{{.ID}}</code></a>
+    {{if .Current}}<span class="pinname">{{template "node-name" .}}</span><span class="dim">this Node</span>
+    {{else if .Known}}<a href="{{.Href}}">{{template "node-name" .}}</a>
     {{else}}<code class="dim">{{.ID}}</code><span class="dim" title="A pinned id is whatever the link carried; the Relay checks it against the registry.">not in this registry</span>{{end}}
     <a class="unpin" href="{{.UnpinHref}}">unpin</a></span>{{end}}
   {{if .ShowCompare}}{{with .CompareHref}}<a class="act" href="{{.}}">Compare these Nodes</a>{{else}}<span class="act dim">Compare these Nodes</span><span class="dim">Pin 1 more to compare</span>{{end}}{{end}}

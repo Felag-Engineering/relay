@@ -318,7 +318,7 @@ func (l *ReadLane) stateEval() StateEval {
 // pays it, whether or not it reads the two fields back — the Control API
 // and MCP construct and discard them today (only the Console Node-detail
 // screen renders PolicyShared/TemplateShared from them), and the Console's
-// own pin bar (pinsKnown, node.go) and Compare screen (buildCompareView,
+// own pin bar (pinsResolved, node.go) and Compare screen (buildCompareView,
 // compare.go) each call DescribeNode up to maxPins (3) further times per
 // render without ever reading the counts back. In the worst observed case —
 // a Node-detail page with a full pin bar — that is four scans for one page

@@ -113,6 +113,11 @@ func showAllRows(q url.Values) bool {
 type nodePin struct {
 	ID string
 
+	// Hostname is the self-reported hostname, already passed through
+	// primaryHostname. Empty means the chip leads with the ID. Display only:
+	// Href and UnpinHref carry the ID.
+	Hostname string
+
 	// Known reports that this id resolved to a Node in the registry. Href is
 	// set only when it did — an id that resolves to nothing is not a link to a
 	// page about a machine, because there is no machine.
@@ -207,6 +212,10 @@ func parsePins(raw string) (ids []string, overflow bool) {
 	return ids, false
 }
 
+// pinResolver answers, for one pinned id, whether it is a Node in the registry
+// and, if so, its hostname already passed through primaryHostname.
+type pinResolver func(id string) (hostname string, known bool)
+
 // buildPinState renders the pin bar for the screen at selfPath, which is where
 // an unpin link returns the operator. selfParam is the query key that screen
 // carries its pin in — "pin" everywhere except the comparison itself, whose
@@ -218,14 +227,16 @@ func parsePins(raw string) (ids []string, overflow bool) {
 // bar that otherwise only ever holds real machines, which is a screen telling
 // an operator a Node exists.
 //
-// known is a PARAMETER rather than a read off Deps because the answer is a
+// resolve is a PARAMETER rather than a read off Deps because the answer is a
 // registry disclosure, and where a screen gets one matters. The two
 // screens on the audited read lane resolve pins from what that lane already
 // gave them — the fleet listing from its own audited page, node detail from
 // an audited describe per pinned id — so the pin bar never becomes a second,
-// unaudited door into the registry. A nil known resolves nothing, which draws
-// every chip dead rather than drawing a claim the screen cannot support.
-func buildPinState(known func(string) bool, ids []string, selfPath, selfParam string) pinState {
+// unaudited door into the registry. The hostname a chip leads with comes from
+// the same read that answered known, so drawing it discloses nothing more. A
+// nil resolve resolves nothing, which draws every chip dead rather than drawing
+// a claim the screen cannot support.
+func buildPinState(resolve pinResolver, ids []string, selfPath, selfParam string) pinState {
 	p := pinState{Raw: strings.Join(ids, ","), Full: len(ids) >= maxPins, ShowCompare: selfPath != comparePath}
 	for _, id := range ids {
 		unpin := selfPath
@@ -233,10 +244,13 @@ func buildPinState(known func(string) bool, ids []string, selfPath, selfParam st
 			unpin += "?" + url.Values{selfParam: {strings.Join(rest, ",")}}.Encode()
 		}
 		pin := nodePin{ID: id, UnpinHref: unpin}
-		if known != nil {
-			pin.Known = known(id)
+		if resolve != nil {
+			pin.Hostname, pin.Known = resolve(id)
 		}
-		if pin.Known {
+		if !pin.Known {
+			// An unresolved id has no hostname; naming one would invent it.
+			pin.Hostname = ""
+		} else {
 			pin.Href = "/console/nodes/" + id + p.Query()
 		}
 		p.Pins = append(p.Pins, pin)
@@ -271,9 +285,10 @@ func without(ids []string, drop string) []string {
 
 // compareColumn is one Node's column heading.
 //
-// Hostname is here as the heading that says WHICH machine this column is,
-// exactly as node detail's own header uses it. It is not a Fact row being
-// diffed, and no other Fact appears on this screen at all.
+// Hostname is the heading's primary label, already passed through
+// primaryHostname; the full verified ID is drawn secondary
+// (00-foundations, "Self-reported names"). It is not a Fact row being diffed,
+// and no other Fact appears on this screen at all.
 type compareColumn struct {
 	ID        string
 	Hostname  string
@@ -413,7 +428,7 @@ type pinnedResolution struct {
 // buildCompareView is the whole screen as a function of the ids named in the
 // URL, each resolved through the audited read lane: one
 // describe_node record per pinned id, at most maxPins (3) — the same honest
-// accounting pinsKnown (node.go) already documents. An unknown or malformed
+// accounting pinsResolved (node.go) already documents. An unknown or malformed
 // id resolves to the Unknown list, a dead chip on the pin bar; any OTHER
 // error is returned so the page fails closed as a whole.
 func buildCompareView(ctx context.Context, d Deps, caller capability.Principal, ids []string) (compareView, error) {
@@ -430,11 +445,18 @@ func buildCompareView(ctx context.Context, d Deps, caller capability.Principal, 
 		}
 	}
 
-	known := make(map[string]bool, len(resolutions))
+	byID := make(map[string]pinnedResolution, len(resolutions))
 	for _, res := range resolutions {
-		known[res.id] = res.known
+		byID[res.id] = res
 	}
-	v := compareView{Pin: buildPinState(func(id string) bool { return known[id] }, ids, comparePath, "nodes")}
+	resolve := func(id string) (string, bool) {
+		res := byID[id]
+		if !res.known {
+			return "", false
+		}
+		return primaryHostname(res.detail.Node.Facts.Hostname), true
+	}
+	v := compareView{Pin: buildPinState(resolve, ids, comparePath, "nodes")}
 
 	var snaps []*policyview.Snapshot
 	for _, res := range resolutions {
@@ -448,7 +470,7 @@ func buildCompareView(ctx context.Context, d Deps, caller capability.Principal, 
 		n := res.detail.Node
 		col := compareColumn{
 			ID:        n.NodeID,
-			Hostname:  n.Facts.Hostname,
+			Hostname:  primaryHostname(n.Facts.Hostname),
 			Href:      "/console/nodes/" + n.NodeID + v.Pin.Query(),
 			Connected: n.Connected,
 			LastSeen:  nodestate.Since(n.LastSeen, d.now()),
@@ -678,8 +700,7 @@ var compareTmpl = newScreen("compare", `
       <th scope="col"><span class="vh">Dimension</span></th>
       {{range .Columns}}<th scope="col" class="cmpnode">
         <span class="dot" data-live="{{if .Connected}}on{{else}}off{{end}}" role="img" aria-label="{{if .Connected}}connected{{else}}not connected{{end}}"></span>
-        <a href="{{.Href}}" class="nodeid">{{.ID}}</a>
-        {{with .Hostname}}<div class="sub">{{.}}</div>{{end}}
+        <a href="{{.Href}}" class="cmpname">{{if .Hostname}}<span class="selfrep" title="{{selfReportedTitle}}">{{.Hostname}}</span> <span class="selfreptag">self-reported</span> {{end}}<code class="nodeid">{{.ID}}</code></a>
         <div class="sub">{{if .Connected}}connected{{else}}last seen {{.LastSeen}} ago{{end}}</div>
         <div class="sub">{{if .PolicyReported}}Policy received {{if .PolicyReportedAt}}{{.PolicyReportedAt}}{{else}}at a time that was not recorded{{end}}{{else}}Policy not reported{{end}}</div>
       </th>{{end}}
@@ -688,11 +709,11 @@ var compareTmpl = newScreen("compare", `
   <tbody>
     {{range .FingerprintRows}}<tr{{if .Differs}} data-diff="1"{{end}}>
       <th scope="row" class="cmpkey">{{.Key}}</th>
-      {{range $i, $v := .Values}}<td data-label="{{(index $.Columns $i).ID}}"><code>{{$v}}</code></td>{{end}}
+      {{range $i, $v := .Values}}<td data-label="{{with index $.Columns $i}}{{with .Hostname}}{{.}} (self-reported) · {{end}}{{.ID}}{{end}}"><code>{{$v}}</code></td>{{end}}
     </tr>{{end}}
     {{range .PolicyRows}}<tr{{if .Differs}} data-diff="1"{{end}}>
       <th scope="row" class="cmpkey">{{.Key}}</th>
-      {{range $i, $v := .Values}}<td data-label="{{(index $.Columns $i).ID}}"><pre>{{$v}}</pre></td>{{end}}
+      {{range $i, $v := .Values}}<td data-label="{{with index $.Columns $i}}{{with .Hostname}}{{.}} (self-reported) · {{end}}{{.ID}}{{end}}"><pre>{{$v}}</pre></td>{{end}}
     </tr>{{end}}
   </tbody>
 </table>

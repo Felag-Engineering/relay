@@ -538,7 +538,7 @@ func handleFleet(d Deps) http.HandlerFunc {
 			return
 		}
 		// listing.Nodes may be a NIL slice when the whole fleet is empty —
-		// buildFleetView and knownIn both range over it, so both already
+		// buildFleetView and resolveIn both range over it, so both already
 		// tolerate that; stated here so the next reader does not have to
 		// re-derive it.
 		nodes := listing.Nodes
@@ -562,7 +562,7 @@ func handleFleet(d Deps) http.HandlerFunc {
 		// Pins resolve against the page this screen ALREADY read and already
 		// audited, not through a second door into the registry: one screen,
 		// one disclosure, one record.
-		v.Pin = buildPinState(knownIn(nodes), pins, fleetPath, "pin")
+		v.Pin = buildPinState(resolveIn(nodes), pins, fleetPath, "pin")
 		pinRows(v.Groups, pins)
 		renderScreen(w, p, fleetTmpl, v)
 	}
@@ -1675,7 +1675,7 @@ var fleetTmpl = newScreen("fleet", `
   <div class="wall" data-size="{{.CellSize}}" role="img" aria-label="{{.WallTotal}} Nodes: {{range .Legend}}{{.Count}} {{.Label}}. {{end}}Nodes are listed below.">
     {{range .Wall}}<div class="wallgroup">
       {{if $.GroupBy}}<span class="walllabel" aria-hidden="true"><span class="ident">{{.Key}}</span></span>{{end}}
-      <div class="wallcells">{{range .Nodes}}<a class="cell" data-bucket="{{.Bucket}}" href="{{.Href}}{{$.Pin.Query}}" tabindex="-1" aria-hidden="true" title="{{.ID}}{{with .Hostname}} — {{.}}{{end}} · {{.BucketLabel}}"></a>{{end}}</div>
+      <div class="wallcells">{{range .Nodes}}<a class="cell" data-bucket="{{.Bucket}}" href="{{.Href}}{{$.Pin.Query}}" tabindex="-1" aria-hidden="true" title="{{with .Hostname}}{{.}} (self-reported) · {{end}}{{.ID}} · {{.BucketLabel}}"></a>{{end}}</div>
     </div>{{end}}
   </div>
   {{if .WallElided}}<p class="mode">{{.WallElided}} more {{plural .WallElided "Node is" "Nodes are"}} not drawn — the wall caps at {{.WallCap}} cells.</p>{{end}}
@@ -1731,7 +1731,7 @@ var fleetTmpl = newScreen("fleet", `
         {{range .Deviations}}
           <tr>
             <td class="livecell"><span class="dot" data-live="{{if .Connected}}on{{else}}off{{end}}" role="img" aria-label="{{if .Connected}}connected{{else}}not connected{{end}}"></span></td>
-            <td data-label="Node{{if .Hostname}} · hostname self-reported{{end}}"><a href="{{.Href}}{{$.Pin.Query}}" class="noderef">{{with .Hostname}}<span class="selfrep" title="{{selfReportedTitle}}">{{.}}<span class="vh"> (self-reported)</span></span> {{end}}<code class="nodeid">{{.ID}}</code></a></td>
+            <td data-label="Node{{if .Hostname}} · hostname self-reported{{end}}"><a href="{{.Href}}{{$.Pin.Query}}" class="noderef">{{template "node-name" .}}</a></td>
             {{if $showState}}<td data-label="State"><div class="statecell">{{if .Revoked}}<span class="chip fenced" title="Revoked {{.RevokedAt}}. The record is kept so the Node stays investigable.">revoked</span>{{end}}
               {{if .Quarantined}}<span class="chip fenced" title="Quarantined by an admin. Reversible.">quarantined</span>{{end}}
               {{if .Unreported}}<span class="chip unreported" title="Missing a recorded daemon version or Policy fingerprint; not a state: label, not targetable.">not reported</span>{{end}}
@@ -1766,15 +1766,19 @@ var fleetTmpl = newScreen("fleet", `
 
 `)
 
-// knownIn is the pin resolver over a Node page a screen has already read.
+// resolveIn is the pin resolver over a Node page a screen has already read.
 //
 // It closes over the slice rather than re-querying, which is the whole point:
 // the ids in a pin bar are whatever a link carried, and resolving them must
-// not be a fresh, unrecorded look at the registry.
-func knownIn(nodes []registry.Node) func(string) bool {
-	set := make(map[string]bool, len(nodes))
+// not be a fresh, unrecorded look at the registry. The hostname it returns is
+// the listing's own, passed through primaryHostname.
+func resolveIn(nodes []registry.Node) pinResolver {
+	hosts := make(map[string]string, len(nodes))
 	for _, n := range nodes {
-		set[n.NodeID] = true
+		hosts[n.NodeID] = primaryHostname(n.Facts.Hostname)
 	}
-	return func(id string) bool { return set[id] }
+	return func(id string) (string, bool) {
+		host, ok := hosts[id]
+		return host, ok
+	}
 }

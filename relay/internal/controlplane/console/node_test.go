@@ -686,7 +686,7 @@ func TestNode_OwnPinReadsAsThisNode(t *testing.T) {
 	if !strings.Contains(body, `<span class="dim">this Node</span>`) {
 		t.Error("a Node's own chip does not read as this Node")
 	}
-	if strings.Contains(body, `<a href="/console/nodes/n1?pin=n1"><code>n1</code></a>`) {
+	if strings.Contains(body, `<a href="/console/nodes/n1?pin=n1"><code class="nodeid">n1</code></a>`) {
 		t.Error("a Node's own chip links to the page already open")
 	}
 	if !strings.Contains(body, `href="/console/nodes/n1"`) {
@@ -694,7 +694,7 @@ func TestNode_OwnPinReadsAsThisNode(t *testing.T) {
 	}
 
 	body = get(t, h, "/console/nodes/n2?pin=n1").Body.String()
-	if !strings.Contains(body, `<a href="/console/nodes/n1?pin=n1"><code>n1</code></a>`) || strings.Contains(body, `<span class="dim">this Node</span>`) {
+	if !strings.Contains(body, `<a href="/console/nodes/n1?pin=n1"><code class="nodeid">n1</code></a>`) || strings.Contains(body, `<span class="dim">this Node</span>`) {
 		t.Error("another Node's chip should be a link and never read as this Node")
 	}
 }
@@ -1121,7 +1121,7 @@ func TestCompare_RendersMixedCaseNodeIDsVerbatimInsideAnIdentifierClass(t *testi
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/compare?nodes=node-AbCd01,node-eFgH02").Body.String()
 
 	for _, id := range []string{"node-AbCd01", "node-eFgH02"} {
-		if !strings.Contains(body, `class="nodeid">`+id+`</a>`) {
+		if !strings.Contains(body, `<code class="nodeid">`+id+`</code></a>`) {
 			t.Errorf("the Node ID %q is not rendered verbatim inside class=\"nodeid\"", id)
 		}
 	}

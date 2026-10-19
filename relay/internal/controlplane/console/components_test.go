@@ -540,7 +540,11 @@ func TestComponents_ContainNoInlineScript(t *testing.T) {
 		"plan":        Plan{Selector: "s", Matched: 1, Cap: 5, Hash: "h"},
 		"step-up":     StepUp{Action: "a", FormAction: "/x", CSRFToken: "t"},
 		"pin-bar": pinState{
-			Pins:        []nodePin{{ID: "n1", Known: true, Href: "/console/nodes/n1", UnpinHref: "/console/"}},
+			Pins: []nodePin{
+				{ID: "n1", Known: true, Href: "/console/nodes/n1", UnpinHref: "/console/"},
+				{ID: "n2", Hostname: "web-1", Known: true, Href: "/console/nodes/n2", UnpinHref: "/console/"},
+				{ID: "n3", Hostname: "web-2", Known: true, Current: true, UnpinHref: "/console/"},
+			},
 			CompareHref: "/console/compare?nodes=n1", FleetHref: "/console/?pin=n1",
 			ShowCompare: true,
 		},
