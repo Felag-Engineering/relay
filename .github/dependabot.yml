@@ -40,10 +40,16 @@ updates:
 
   # Version updates bump only the tool itself: bumping a tool's transitive dependencies on
   # their own would drift its build list away from what upstream tested (the gitleaks /
-  # charmbracelet-ansi class of break).
+  # charmbracelet-ansi class of break). The lint and scan tools are listed by directory, not
+  # as /tools/*, because tools/nfpm is not one of them: it builds release packages and has its
+  # own entry below. A new tool directory must be added to one list or the other.
   - package-ecosystem: gomod
     directories:
-      - /tools/*
+      - /tools/actionlint
+      - /tools/buf
+      - /tools/gitleaks
+      - /tools/golangci-lint
+      - /tools/govulncheck
     schedule:
       interval: monthly
     cooldown:
@@ -65,6 +71,21 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: "deps(tools)"
+
+  # nfpm writes the daemon's .deb and .rpm, so a bump changes release bytes. It is never grouped
+  # with the lint tools, and its PRs say so in their prefix.
+  - package-ecosystem: gomod
+    directory: /tools/nfpm
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    allow:
+      - dependency-name: github.com/goreleaser/nfpm/v2
+        dependency-type: all
+    commit-message:
+      prefix: "deps(release)"
 
   - package-ecosystem: cargo
     directories:

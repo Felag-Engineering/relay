@@ -1,0 +1,11 @@
+Package: relay-daemon
+Version: @VERSION@
+Section: admin
+Priority: optional
+Architecture: @ARCH@
+Maintainer: Felag Engineering
+Installed-Size: @INSTALLED_SIZE@
+Homepage: https://github.com/Felag-Engineering/relay
+Description: Relay relay-daemon, the privileged fleet-administration Node daemon.
+ Enforces the Node's locally rooted Policy and runs the Operations it allows.
+ The package installs the daemon and its hardened unit and never starts it.

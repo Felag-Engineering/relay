@@ -1,0 +1,15 @@
+drwxr-xr-x root/root ./usr/
+drwxr-xr-x root/root ./usr/bin/
+-rwxr-xr-x root/root ./usr/bin/relay-daemon
+drwxr-xr-x root/root ./usr/lib/
+drwxr-xr-x root/root ./usr/lib/systemd/
+drwxr-xr-x root/root ./usr/lib/systemd/system/
+-rw-r--r-- root/root ./usr/lib/systemd/system/relay-daemon.service
+drwxr-xr-x root/root ./usr/share/
+drwxr-xr-x root/root ./usr/share/doc/
+drwxr-xr-x root/root ./usr/share/doc/relay-daemon/
+-rw-r--r-- root/root ./usr/share/doc/relay-daemon/LICENSE
+-rw-r--r-- root/root ./usr/share/doc/relay-daemon/daemon-privilege-posture.md
+drwxr-xr-x root/root ./usr/share/relay-daemon/
+-rw-r--r-- root/root ./usr/share/relay-daemon/policy.default.toml
+-rw-r--r-- root/root ./usr/share/relay-daemon/relay-daemon.env.example

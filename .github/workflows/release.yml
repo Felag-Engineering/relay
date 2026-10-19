@@ -18,6 +18,10 @@
 #                                           + guards attestations  write a Release)
 #                                                       \-> latest (packages:write only)
 #
+# `build` also wraps each daemon binary in .deb and .rpm packages, and `reproducible` compares
+# both passes' packages and guards them against the release binary. They are uploaded as the
+# `packages` workflow artifact and are not attached to the Release (see that guard's comment).
+#
 # The three privileged jobs never start on a dry run (job-level `if:`), so a pull request
 # or a dispatch never holds id-token, packages, attestations or contents:write. This file
 # is never run under pull_request_target.
@@ -65,6 +69,13 @@ on:
       - scripts/release-image-guard.sh
       - scripts/license-change-date.sh
       - scripts/catalog-ledger.sh
+      - scripts/build-packages.sh
+      - scripts/package-guard.sh
+      - scripts/package-guard-test.sh
+      - daemon/packaging/**
+      - daemon/policy.default.toml
+      - docs/operations/daemon-privilege-posture.md
+      - tools/nfpm/**
       - LICENSE
       - daemon/Cargo.toml
       - daemon/Cargo.lock
@@ -230,6 +241,7 @@ jobs:
             rustc -vV
             cargo -V
             go version
+            echo "nfpm: $(GOWORK=off go -C "$SRC/tools/nfpm" list -m all | grep goreleaser/nfpm)"
             echo "SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH}"
             echo "commit: $(git -C "$SRC" rev-parse HEAD)"
           } | tee "$GITHUB_WORKSPACE/dist/BUILDENV.${ARCH}.${PASS}"
@@ -323,6 +335,32 @@ jobs:
                     "relay-${version}-${RELAY_TRIPLE}" > "SHA256SUMS.${ARCH}"
           cat "SHA256SUMS.${ARCH}"
 
+      # The packages wrap the binary staged above, byte for byte: packaging compiles, strips
+      # and rewrites nothing (DI-24, ADR-0033). nfpm is the one pinned under tools/nfpm, and
+      # every manifest's mtime comes from SOURCE_DATE_EPOCH, so the rebuild pass, from its
+      # different checkout path, must produce the same bytes; `reproducible` compares them.
+      # The catalog package is architecture-independent and built by the x86_64 passes only.
+      - name: Build the packages from the staged binary
+        run: |
+          set -euo pipefail
+          version="${EXPECTED_TAG#v}"
+          catalog=()
+          if [ "${ARCH}" = x86_64 ]; then catalog=(--catalog); fi
+          bash "$SRC/scripts/build-packages.sh" "${version}" "${ARCH}" \
+            "dist/relay-daemon-${version}-${DAEMON_TRIPLE}" dist/packages "${catalog[@]}"
+          (cd dist/packages && sha256sum -- * > "../SHA256SUMS.packages.${ARCH}")
+          cat "dist/SHA256SUMS.packages.${ARCH}"
+
+      # The package build and guards' own tests, once: the guards `reproducible` relies on
+      # must refuse what they claim to refuse.
+      - name: Test the package build and guards
+        if: matrix.arch == 'x86_64' && matrix.pass == 'primary'
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y rpm rpm2cpio cpio
+          cd "$SRC"
+          bash scripts/package-guard-test.sh
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bin-${{ matrix.arch }}-${{ matrix.pass }}
@@ -340,7 +378,7 @@ jobs:
     name: Rebuild matches, SBOMs
     needs: build
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     outputs:
@@ -371,6 +409,22 @@ jobs:
             fi
             for f in "${a}"/relay-*; do
               cmp "${f}" "${b}/$(basename "${f}")" || { echo "::error::${arch}: $(basename "${f}") differs"; fail=1; }
+            done
+            # The packages are compared exactly as the binaries are (DI-24).
+            if ! diff "${a}/SHA256SUMS.packages.${arch}" "${b}/SHA256SUMS.packages.${arch}"; then
+              echo "::error::${arch}: the rebuild's packages differ from the primary build's"
+              fail=1
+              continue
+            fi
+            want=2
+            if [ "${arch}" = x86_64 ]; then want=4; fi
+            n="$(find "${a}/packages" -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' \) | wc -l)"
+            if [ "${n}" -ne "${want}" ]; then
+              echo "::error::${arch}: ${n} packages built, expected ${want}"
+              fail=1
+            fi
+            for f in "${a}"/packages/*; do
+              cmp "${f}" "${b}/packages/$(basename "${f}")" || { echo "::error::${arch}: $(basename "${f}") differs"; fail=1; }
             done
           done
           exit "${fail}"
@@ -416,14 +470,103 @@ jobs:
               *)              "${SYFT}" scan "file:${f}" -o "spdx-json=${f}.spdx.json" ;;
             esac
           done
+
+      # A hand-built install verifies its unit and environment example like everything else
+      # (DI-32), so both are release attachments under SHA256SUMS. Staged after the SBOMs,
+      # which describe binaries only.
+      - name: Stage the standalone unit and environment example
+        run: |
+          set -euo pipefail
+          cp daemon/packaging/relay-daemon.service dist/relay-daemon.service
+          cp daemon/packaging/relay-daemon.env.example dist/relay-daemon.env.example
+
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
           cd dist
           sha256sum relay-* > SHA256SUMS
           cat SHA256SUMS
+
+      - name: Install package inspection tools
+        run: sudo apt-get update && sudo apt-get install -y rpm rpm2cpio cpio
+
+      # The packages are guarded by reading their own bytes (scripts/package-guard.sh):
+      #   - each relay-daemon package's /usr/bin/relay-daemon is the release binary (DI-24);
+      #   - its unit and environment example are the attached standalone files, and both are in
+      #     SHA256SUMS (DI-32);
+      #   - the catalog package carries the shipped catalog, and no package declares
+      #     configuration the package manager would preserve (ADR-0033, DI-29);
+      #   - every package's identity -- name, epoch, version and architecture, computed from
+      #     this release's version and the pass's architecture, never read from the package --
+      #     and its whole content -- payload listing with modes and owners, no setuid,
+      #     setgid or file capability, maintainer scripts, triggers, relationships and control
+      #     fields, and every file carried from the repository -- equals what the repository
+      #     says (`content`, against daemon/packaging/expected and daemon/packaging/scripts);
+      #   - every package is listed in SHA256SUMS.packages.
+      # `content` reads with dpkg-deb and rpm, never nfpm, because the two-pass comparison
+      # above cannot catch a compromised or buggy packager: both passes run the same pinned
+      # nfpm, so a deterministic fault produces the same wrong bytes twice. The comparison
+      # proves determinism; `content` is the integrity check.
+      #
+      # The packages are built, compared and guarded on every run, but they are NOT attached to
+      # the Release. They are held until the install matrix (DI-33) proves them on every
+      # supported platform, and until the unit's syscall filter is verified on a real systemd
+      # host (DI-3). The standalone unit and environment example ARE attached (DI-32), so the
+      # unit already ships as a hand-install artifact before that verification. The packages
+      # travel only as the `packages` workflow artifact, with their own sums file, which stays
+      # out of the signed SHA256SUMS until they are attached: a SHA256SUMS naming files the
+      # Release does not carry would fail every `sha256sum --check` of it.
+      - name: Guard - packages wrap the release binary and the attached unit
+        env:
+          VERSION: ${{ steps.assemble.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p packages
+          guard=scripts/package-guard.sh
+          for p in x86_64:x86_64-unknown-linux-musl aarch64:aarch64-unknown-linux-musl; do
+            arch="${p%%:*}"; triple="${p##*:}"
+            bin="dist/relay-daemon-${VERSION}-${triple}"
+            [ -f "${bin}" ] || { echo "::error::no release binary ${bin}"; exit 1; }
+            for f in bins/bin-"${arch}"-primary/packages/*; do
+              case "$(basename "${f}")" in
+                relay-daemon[_-]*)
+                  bash "${guard}" same "${f}" /usr/bin/relay-daemon "${bin}"
+                  bash "${guard}" same "${f}" /usr/lib/systemd/system/relay-daemon.service dist/relay-daemon.service
+                  bash "${guard}" same "${f}" /usr/share/relay-daemon/relay-daemon.env.example dist/relay-daemon.env.example
+                  bash "${guard}" content "${f}" relay-daemon "${VERSION}" "${arch}"
+                  ;;
+                relay-read[_-]*)
+                  bash "${guard}" content "${f}" relay-read "${VERSION}" "${arch}"
+                  ;;
+                *) echo "::error::unexpected package $(basename "${f}")"; exit 1 ;;
+              esac
+              bash "${guard}" no-config "${f}"
+              # The digest both passes agreed on (compared above) is this package's.
+              bash "${guard}" listed "bins/bin-${arch}-primary/SHA256SUMS.packages.${arch}" "${f}"
+              cp "${f}" packages/
+            done
+            cat "bins/bin-${arch}-primary/SHA256SUMS.packages.${arch}" >> packages/SHA256SUMS.packages
+          done
+          bash "${guard}" listed dist/SHA256SUMS dist/relay-daemon.service dist/relay-daemon.env.example
+          cat packages/SHA256SUMS.packages
+          bash "${guard}" listed packages/SHA256SUMS.packages packages/*.deb packages/*.rpm
+          # Nothing under dist/ is a package: dist/ is the release set.
+          if find dist -name '*.deb' -o -name '*.rpm' | grep -q .; then
+            echo "::error::a package is in the release set before it may be attached"
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-dist
           path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages
+          path: packages/
           if-no-files-found: error
           retention-days: 7
 

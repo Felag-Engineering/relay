@@ -1,0 +1,5 @@
+drwxr-xr-x root/root ./etc/
+drwxr-xr-x root/root ./etc/relay-daemon/
+drwxr-xr-x root/root ./etc/relay-daemon/templates.d/
+drwxr-xr-x root/root ./etc/relay-daemon/templates.d/relay-read/
+-rw-r--r-- root/root ./etc/relay-daemon/templates.d/relay-read/catalog.toml
