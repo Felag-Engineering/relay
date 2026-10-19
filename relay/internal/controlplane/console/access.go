@@ -29,14 +29,16 @@ package console
 // api-token row — is written into the record's free-text Reason, which the
 // audit query seam cannot filter on. The Actor filter (accessFilter.Account)
 // matches the VERIFIED actor instead, the same AccountID Activity's own
-// Principal filter matches. The subject is rendered as the record's Reason,
-// verbatim, and never resolved through Deps.Accounts — accessRowFrom does
+// Principal filter matches. The subject comes from the record's Reason alone,
+// with its leading Account ID drawn as an identifier (spec 20, D33), and is
+// never resolved through Deps.Accounts — accessRowFrom does
 // not touch that seam at all (04-activity.md's "Kind is never read from the
 // registry" reasoning applies the same way here).
 
 import (
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -266,9 +268,48 @@ type accessRow struct {
 	// three families.
 	Source string
 
-	// Record is f.Reason, verbatim — the subject as the record itself names
-	// it, never resolved through the Account registry.
-	Record string
+	// Record is f.Reason, split only to draw its Account ID as an identifier —
+	// the subject as the record itself names it, never resolved through the
+	// Account registry.
+	Record accessRecord
+}
+
+// accessRecord is the record's Reason, split only to draw the subject Account
+// ID it carries as an identifier (spec 20, D33). Every part comes from the
+// Reason itself.
+type accessRecord struct {
+	Text      string // f.Reason verbatim; the template draws it as-is when AccountID == ""
+	AccountID string // the value of the Reason's leading account_id= token
+	Name      string // the value of the first non-empty name= token after it, else ""
+	After     string // the tokens after account_id=, minus the consumed name=, rejoined with " "
+}
+
+// parseAccessRecord splits reason at its leading account_id= token. It splits
+// on a single space so After keeps the record's exact bytes.
+func parseAccessRecord(reason string) accessRecord {
+	rec := accessRecord{Text: reason}
+	tokens := strings.Split(reason, " ")
+	// Only a leading account_id= is the record naming its subject: every writer of an
+	// Access-kind Reason puts it first, and spec 20 (D33) draws only the ID the record
+	// carries. One appearing later is record text and stays text, so prose that quotes
+	// the key is never dressed as an identifier.
+	id, ok := strings.CutPrefix(tokens[0], "account_id=")
+	if !ok || id == "" {
+		return rec
+	}
+	rec.AccountID = id
+	rest := tokens[1:]
+	for i, tok := range rest {
+		name, ok := strings.CutPrefix(tok, "name=")
+		if !ok || name == "" {
+			continue
+		}
+		rec.Name = name
+		rest = slices.Delete(slices.Clone(rest), i, i+1)
+		break
+	}
+	rec.After = strings.Join(rest, " ")
+	return rec
 }
 
 // accessRowFrom builds one row from the shared trail projection. It never
@@ -284,7 +325,7 @@ func accessRowFrom(f trailFacts) accessRow {
 		When:      utcStamp(f.Timestamp),
 		Summary:   accessSummary(f),
 		Attempt:   accessAttempt(f.Kind),
-		Record:    f.Reason,
+		Record:    parseAccessRecord(f.Reason),
 	}
 	if f.VerifiedAccountID != "" {
 		row.Actor = principalText(f)
@@ -638,7 +679,7 @@ var accessTmpl = newScreen("access", `
       <div class="evmeta">
         {{with .Source}}from <code>{{.}}</code>{{end}}
       </div>
-      {{with .Record}}<div class="evreason mono">{{.}}</div>{{end}}
+      {{with .Record}}{{if .Text}}<div class="evreason mono">{{if .AccountID}}<span class="acctref"><span class="acctcap">Account</span> <span class="ident acctid">{{.AccountID}}</span>{{with .Name}} <span class="ident acctname">{{.}}</span>{{end}}</span>{{with .After}} {{.}}{{end}}{{else}}{{.Text}}{{end}}</div>{{end}}{{end}}
     </div>
   </article>
 {{else}}
