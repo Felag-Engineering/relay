@@ -38,8 +38,8 @@ import (
 // Store is the Relay's single SQLite-backed persistence handle.
 type Store struct {
 	db               *sql.DB
-	maxNodes         int    // 0 = unlimited; see WithMaxNodes
-	minDaemonVersion string // ADR-0014 gate; empty = off; see WithMinDaemonVersion
+	maxNodes         func() int    // 0 = unlimited; see WithMaxNodes
+	minDaemonVersion func() string // ADR-0014 gate; empty = off; see WithMinDaemonVersion
 	logger           *slog.Logger
 
 	// regOnce/reg memoise the registry, which unlike the other repositories
@@ -58,8 +58,16 @@ type Option func(*Store)
 // cap now lives here because the registry it applies to is store-backed.
 func WithMaxNodes(n int) Option {
 	return func(s *Store) {
-		s.maxNodes = n
+		s.maxNodes = func() int { return n }
 	}
+}
+
+// WithMaxNodesSource is WithMaxNodes with the cap read on every Upsert, so a
+// reloaded configuration applies to the next enrollment (RC-21). The cap is
+// enforced here, inside the Upsert transaction, rather than in the capability
+// layer, so a check cannot race a concurrent enrollment.
+func WithMaxNodesSource(src func() int) Option {
+	return func(s *Store) { s.maxNodes = src }
 }
 
 // WithMinDaemonVersion sets the minimum relay-daemon version (ADR-0014) used
@@ -69,8 +77,15 @@ func WithMaxNodes(n int) Option {
 // only, never settable through any API (invariant 11, ADR-0010).
 func WithMinDaemonVersion(v string) Option {
 	return func(s *Store) {
-		s.minDaemonVersion = v
+		s.minDaemonVersion = func() string { return v }
 	}
+}
+
+// WithMinDaemonVersionSource is WithMinDaemonVersion with the version read
+// every time Outdated is derived, so a reloaded configuration applies to the
+// next read (RC-21).
+func WithMinDaemonVersionSource(src func() string) Option {
+	return func(s *Store) { s.minDaemonVersion = src }
 }
 
 // WithLogger overrides the Store's logger seam (production default:

@@ -985,3 +985,30 @@ func TestLabelNamespaceTable(t *testing.T) {
 		t.Errorf("nsRelay.table() = %q, want %q", got, "relay_labels")
 	}
 }
+
+func TestRegistry_MaxNodesAndMinVersionReadPerCall(t *testing.T) {
+	maxNodes, minVersion := 1, ""
+	st, _ := openTestStore(t,
+		WithMaxNodesSource(func() int { return maxNodes }),
+		WithMinDaemonVersionSource(func() string { return minVersion }))
+	reg := st.Registry()
+
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-a", DaemonVersion: "1.1.0"}); err != nil {
+		t.Fatalf("insert node-a: %v", err)
+	}
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-b"}); !errors.Is(err, registry.ErrAtCapacity) {
+		t.Fatalf("insert at cap 1: want ErrAtCapacity, got %v", err)
+	}
+	maxNodes = 2
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-b"}); err != nil {
+		t.Fatalf("insert after the cap was raised: %v", err)
+	}
+
+	if n, _ := reg.Get("node-a"); n.Outdated {
+		t.Error("Outdated with no minimum: want false")
+	}
+	minVersion = "1.2.0"
+	if n, _ := reg.Get("node-a"); !n.Outdated {
+		t.Error("Outdated after the minimum was raised: want true")
+	}
+}

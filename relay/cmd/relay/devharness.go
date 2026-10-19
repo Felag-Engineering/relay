@@ -157,11 +157,11 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	// layer only through Run, a human CancelJob and the Policy preflight, none
 	// of which consults them.
 	q := auditquery.New(deps.store.AuditQueries(), deps.store.JobQueries())
-	read := capability.NewReadLane(rec, deps.registry, q, q, nil, nil, 0, nil)
+	read := capability.NewReadLane(rec, deps.registry, q, q, nil, nil, deps.live, nil)
 	approvals := capability.NewApprovals(rec, gate, deps.store.Approvals(), devHarnessAuthorizer{}, nil, nil, nil, nil)
 	execution := capability.NewExecution(ctl, read, approvals,
-		capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap), nil,
-		deps.jobs, deps.tasks, router, cfg.DispatchConcurrency, nil, nil)
+		capability.NewBlastCap(deps.live), nil,
+		deps.jobs, deps.tasks, router, deps.live, nil, nil)
 
 	st := &harnessState{deps: deps, router: router, execution: execution}
 

@@ -57,7 +57,7 @@ func newCapService(s capSeams) *capLayer {
 		auditQ, jobQ = emptyAuditQuery{}, emptyJobQuery{}
 	}
 	layer := &capLayer{
-		ReadLane: capability.NewReadLane(rec, s.reg, auditQ, jobQ, s.policyView, s.nodeVocab, 0, nil),
+		ReadLane: capability.NewReadLane(rec, s.reg, auditQ, jobQ, s.policyView, s.nodeVocab, &capability.StaticOperatorSettings{S: capability.OperatorSettings{DispatchConcurrency: capability.DefaultDispatchConcurrency}}, nil),
 	}
 	if s.authz != nil {
 		layer.Control = capability.NewControl(rec, s.authz, neverFrozen{})

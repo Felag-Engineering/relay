@@ -112,3 +112,86 @@ func TestHostLeverRecords_RefuseMissingIdentifiers(t *testing.T) {
 		t.Error("an empty token id was accepted")
 	}
 }
+
+func TestHostConfigReloadRecord_KeysOnlyAndHostAttributed(t *testing.T) {
+	rec, err := HostConfigReloadRecord("id-1", hostLeverNow, []string{"log.format", "approval.webhook_secret"})
+	if err != nil {
+		t.Fatalf("HostConfigReloadRecord: %v", err)
+	}
+	if rec.Kind != audit.KindConfigReload || rec.Principal != "local-host" {
+		t.Errorf("Kind = %q, Principal = %q", rec.Kind, rec.Principal)
+	}
+	if want := "configuration reloaded on the Relay host; changed: log.format, approval.webhook_secret"; rec.Reason != want {
+		t.Errorf("Reason = %q, want %q", rec.Reason, want)
+	}
+	// The same attribution as the host credential levers, which match the freeze signal's.
+	set, _ := HostPasswordSetRecord("a", hostLeverNow, "acct", "admin")
+	if rec.Principal != set.Principal || !reflect.DeepEqual(rec.Attribution, set.Attribution) {
+		t.Errorf("attribution differs from the host lever's: %+v vs %+v", rec.Attribution, set.Attribution)
+	}
+
+	none, err := HostConfigReloadRecord("id-2", hostLeverNow, nil)
+	if err != nil || none.Reason != "configuration reloaded on the Relay host; no setting changed" {
+		t.Errorf("no change: Reason = %q, err = %v", none.Reason, err)
+	}
+	if _, err := HostConfigReloadRecord("", hostLeverNow, nil); err == nil {
+		t.Error("an empty id was accepted")
+	}
+	for _, k := range []string{"relay.example", "http://127.0.0.1:1/hook-token", ""} {
+		if _, err := HostConfigReloadRecord("id", hostLeverNow, []string{"log.format", k}); err == nil {
+			t.Errorf("non-member key %q was accepted", k)
+		}
+	}
+}
+
+func TestHostConfigReloadRefusedRecord_StagePhraseOnly(t *testing.T) {
+	const prefix = "configuration reload refused on the Relay host; "
+	for _, tc := range []struct {
+		stage ReloadStage
+		keys  []string
+		want  string
+	}{
+		{ReloadRefusedFile, nil, "the configuration file was refused (file check, decode or validation)"},
+		{ReloadRefusedRestart, []string{"ca.dir", "tls.hostname"}, "restart required: ca.dir, tls.hostname"},
+		{ReloadRefusedNamedFiles, nil, "a file the configuration names, or the store or CA directory, was refused"},
+		{ReloadRefusedCA, nil, "restart required: the CA on disk is not the CA this Relay is running"},
+		{ReloadRefusedSettings, nil, "an operator setting was refused"},
+		{ReloadRefusedAudit, nil, "the reload's audit record could not be written"},
+		{ReloadRefusedInternal, nil, "the reload failed unexpectedly"},
+		{ReloadRefusedSecretFile, nil, "a secret file the configuration names could not be read"},
+	} {
+		rec, err := HostConfigReloadRefusedRecord("id", hostLeverNow, tc.stage, tc.keys)
+		if err != nil {
+			t.Fatalf("stage %d: %v", tc.stage, err)
+		}
+		if rec.Kind != audit.KindConfigReloadRefused || rec.Principal != "local-host" || rec.Reason != prefix+tc.want {
+			t.Errorf("stage %d: Kind = %q, Principal = %q, Reason = %q", tc.stage, rec.Kind, rec.Principal, rec.Reason)
+		}
+	}
+	for name, call := range map[string]func() error{
+		"restart stage without keys": func() error {
+			_, err := HostConfigReloadRefusedRecord("id", hostLeverNow, ReloadRefusedRestart, nil)
+			return err
+		},
+		"keys on another stage": func() error {
+			_, err := HostConfigReloadRefusedRecord("id", hostLeverNow, ReloadRefusedFile, []string{"ca.dir"})
+			return err
+		},
+		"non-member key": func() error {
+			_, err := HostConfigReloadRefusedRecord("id", hostLeverNow, ReloadRefusedRestart, []string{"relay.example"})
+			return err
+		},
+		"unknown stage": func() error {
+			_, err := HostConfigReloadRefusedRecord("id", hostLeverNow, ReloadStage(99), nil)
+			return err
+		},
+		"empty id": func() error {
+			_, err := HostConfigReloadRefusedRecord("", hostLeverNow, ReloadRefusedFile, nil)
+			return err
+		},
+	} {
+		if call() == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}

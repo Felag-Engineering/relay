@@ -278,7 +278,7 @@ func TestDispatchViolations_Fixtures(t *testing.T) {
 			name: "capability selector not on the pure-read allow-list (strict)",
 			src: `package mcp
 import ` + capImport + `
-var _ = capability.NewBlastCap(0, 0)
+var _ = capability.NewBlastCap(nil)
 `,
 			strict:     true,
 			wantSubstr: "not on the pure-read allow-list",

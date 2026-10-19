@@ -47,8 +47,11 @@ Every setting is in the configuration file; the Relay reads none from flags or t
 
 // startupConfig is everything main needs from a loaded configuration file.
 type startupConfig struct {
-	Config   Config
-	Log      relayconfig.Log
+	Config Config
+	Log    relayconfig.Log
+	// File is the validated configuration with its secrets resolved: what a
+	// reload diffs the next file against.
+	File     relayconfig.Config
 	Warnings []relayconfig.Warning
 }
 
@@ -85,6 +88,10 @@ func loadConfig(path string) (startupConfig, error) {
 	return parseConfig(data, approvalnotify.ReadSecretFile)
 }
 
+// errSecretFileUnread marks a load that failed because a file-backed secret
+// could not be read, so a reload can name that stage without the error's text.
+var errSecretFileUnread = errors.New("a secret file could not be read")
+
 // parseConfig decodes and validates data, the configuration file's contents,
 // reading each file-backed secret through readSecret.
 func parseConfig(data []byte, readSecret func(string) ([]byte, error)) (startupConfig, error) {
@@ -102,9 +109,13 @@ func parseConfig(data []byte, readSecret func(string) ([]byte, error)) (startupC
 		return b, err
 	}
 	if err := rc.ResolveSecrets(read); err != nil {
-		return startupConfig{}, errors.Join(append([]error{err}, readerErrs...)...)
+		errs := append([]error{err}, readerErrs...)
+		if len(readerErrs) > 0 {
+			errs = append(errs, errSecretFileUnread)
+		}
+		return startupConfig{}, errors.Join(errs...)
 	}
-	return startupConfig{Config: fromFile(rc), Log: rc.Log, Warnings: warns}, nil
+	return startupConfig{Config: fromFile(rc), Log: rc.Log, File: rc, Warnings: warns}, nil
 }
 
 // fromFile maps the validated file onto the Config newServer takes.

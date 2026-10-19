@@ -38,6 +38,15 @@ func WithClock(c Clock) Option {
 	return func(l *Limiter) { l.now = c }
 }
 
+// WithConfigSource makes the Limiter read its parameters from src on every
+// Allow instead of holding the ones it was constructed with, so a reloaded
+// configuration applies to the next request (RC-21). src is called under the
+// Limiter's lock and must be cheap and must not call back into the Limiter.
+// New's cfg is the initial value.
+func WithConfigSource(src func() Config) Option {
+	return func(l *Limiter) { l.src = src }
+}
+
 // bucket is a single token-bucket accumulator.
 type bucket struct {
 	tokens float64
@@ -56,31 +65,38 @@ type Limiter struct {
 	gBurst     float64
 	maxTracked int
 	now        Clock
+	src        func() Config // when set, read once per Allow
 }
 
 // New constructs a Limiter from cfg. Both the per-IP and global buckets start
 // full (tokens == burst). opts are applied after construction; use WithClock
 // in tests.
 func New(cfg Config, opts ...Option) *Limiter {
-	maxTracked := cfg.MaxTrackedIPs
-	if maxTracked <= 0 {
-		maxTracked = defaultMaxTrackedIPs
-	}
 	l := &Limiter{
-		perIP:      make(map[string]*bucket),
-		ipRate:     cfg.PerIPRatePerMin / 60.0,
-		ipBurst:    cfg.PerIPBurst,
-		gRate:      cfg.GlobalRatePerMin / 60.0,
-		gBurst:     cfg.GlobalBurst,
-		maxTracked: maxTracked,
-		now:        time.Now,
+		perIP: make(map[string]*bucket),
+		now:   time.Now,
 	}
+	l.apply(cfg)
 	for _, o := range opts {
 		o(l)
 	}
 	start := l.now()
 	l.global = &bucket{tokens: l.gBurst, last: start}
 	return l
+}
+
+// apply sets the rate parameters from cfg, clamping MaxTrackedIPs as New
+// documents. Must be called with l.mu held, or before the Limiter is shared.
+// A lowered burst takes effect through refill's clamp.
+func (l *Limiter) apply(cfg Config) {
+	l.ipRate = cfg.PerIPRatePerMin / 60.0
+	l.ipBurst = cfg.PerIPBurst
+	l.gRate = cfg.GlobalRatePerMin / 60.0
+	l.gBurst = cfg.GlobalBurst
+	l.maxTracked = cfg.MaxTrackedIPs
+	if l.maxTracked <= 0 {
+		l.maxTracked = defaultMaxTrackedIPs
+	}
 }
 
 // refill adds tokens that have accumulated since b.last at the given rate,
@@ -105,6 +121,9 @@ func (l *Limiter) Allow(ip string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	if l.src != nil {
+		l.apply(l.src())
+	}
 	now := l.now()
 
 	// Check the global gate first. Returning early here means the per-IP map is

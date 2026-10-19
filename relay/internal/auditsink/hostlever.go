@@ -1,8 +1,9 @@
 package auditsink
 
 // hostlever.go builds the audit records for the host-side credential lever,
-// `relay init`: the first admin's creation, Console password and first API
-// Token, and a recovery re-mint.
+// `relay init` (the first admin's creation, Console password and first API
+// Token, and a recovery re-mint), and for the host's configuration reload
+// (SIGHUP).
 //
 // These are record BUILDERS, not Sink methods: Sink.append is a write of its
 // own, and the fail-closed rule for these acts needs the record and the
@@ -10,15 +11,18 @@ package auditsink
 // caller hands the built record to the store, which writes both or neither.
 //
 // No builder takes a password, hash, token value or other secret, so a record
-// structurally cannot carry one.
+// structurally cannot carry one. The reload builders admit only members of the
+// configuration schema's closed key set and fixed stage phrases.
 
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/relayconfig"
 )
 
 // hostPrincipal is root on the Relay host: role-less and AccountID-less,
@@ -90,4 +94,93 @@ func HostAPITokenMintRecord(id string, now time.Time, accountID, tokenID string)
 		Kind: capability.AccountAdminTokenMint, AccountID: accountID, TokenID: tokenID,
 	})
 	return hostRecord(id, now, audit.KindAPITokenMint, reason), nil
+}
+
+// ReloadStage is the point at which a configuration reload was refused. Its
+// String is a fixed phrase, so no error text can reach a record's Reason.
+type ReloadStage int
+
+const (
+	ReloadRefusedFile ReloadStage = iota + 1
+	ReloadRefusedRestart
+	ReloadRefusedNamedFiles
+	ReloadRefusedCA
+	ReloadRefusedSettings
+	ReloadRefusedAudit
+	ReloadRefusedInternal
+	ReloadRefusedSecretFile
+)
+
+func (s ReloadStage) String() string {
+	switch s {
+	case ReloadRefusedFile:
+		return "the configuration file was refused (file check, decode or validation)"
+	case ReloadRefusedRestart:
+		return "restart required"
+	case ReloadRefusedNamedFiles:
+		return "a file the configuration names, or the store or CA directory, was refused"
+	case ReloadRefusedCA:
+		return "restart required: the CA on disk is not the CA this Relay is running"
+	case ReloadRefusedSettings:
+		return "an operator setting was refused"
+	case ReloadRefusedAudit:
+		return "the reload's audit record could not be written"
+	case ReloadRefusedInternal:
+		return "the reload failed unexpectedly"
+	case ReloadRefusedSecretFile:
+		return "a secret file the configuration names could not be read"
+	}
+	return ""
+}
+
+// settingKeys checks that every key is a member of the schema's closed key
+// set, which a value can never be.
+func settingKeys(keys []string) error {
+	for _, k := range keys {
+		if !relayconfig.IsSettingKey(k) {
+			return errors.New("auditsink: a reload record names only configuration setting keys")
+		}
+	}
+	return nil
+}
+
+// HostConfigReloadRecord builds the config_reload record for a reload the host
+// applied. changed holds setting keys, never values; a secret setting appears
+// by key like any other (RC-18).
+func HostConfigReloadRecord(id string, now time.Time, changed []string) (audit.Record, error) {
+	if id == "" {
+		return audit.Record{}, errors.New("auditsink: a host reload record needs an audit id")
+	}
+	if err := settingKeys(changed); err != nil {
+		return audit.Record{}, err
+	}
+	reason := "configuration reloaded on the Relay host; no setting changed"
+	if len(changed) > 0 {
+		reason = "configuration reloaded on the Relay host; changed: " + strings.Join(changed, ", ")
+	}
+	return hostRecord(id, now, audit.KindConfigReload, reason), nil
+}
+
+// HostConfigReloadRefusedRecord builds the config_reload_refused record for a
+// reload the Relay refused. restartRequired holds the setting keys that need a
+// restart, and is required exactly when stage is ReloadRefusedRestart.
+func HostConfigReloadRefusedRecord(id string, now time.Time, stage ReloadStage, restartRequired []string) (audit.Record, error) {
+	if id == "" {
+		return audit.Record{}, errors.New("auditsink: a host reload record needs an audit id")
+	}
+	phrase := stage.String()
+	if phrase == "" {
+		return audit.Record{}, errors.New("auditsink: unknown reload stage")
+	}
+	if (stage == ReloadRefusedRestart) != (len(restartRequired) > 0) {
+		return audit.Record{}, errors.New("auditsink: restart-required keys belong to the restart stage, and only to it")
+	}
+	if err := settingKeys(restartRequired); err != nil {
+		return audit.Record{}, err
+	}
+	if stage == ReloadRefusedRestart {
+		phrase += ": " + strings.Join(restartRequired, ", ")
+	}
+	return hostRecord(id, now, audit.KindConfigReloadRefused,
+		"configuration reload refused on the Relay host; "+phrase), nil
 }

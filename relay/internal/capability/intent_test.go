@@ -27,7 +27,7 @@ func TestEngineRecordsIntentWithTasksBeforeAnyDispatch(t *testing.T) {
 	intents := &nonAtomicIntents{tr: &recordingTasks{TaskRepository: tasksRepo, log: &log}}
 	e := &jobEngine{
 		jobsRepo: jobsRepo, tasksRepo: tasksRepo, intents: intents, conduit: conduit,
-		newID: sequentialIDs("id-"), now: time.Now, concurrency: 4,
+		newID: sequentialIDs("id-"), now: time.Now, settings: concurrencyOf(4),
 	}
 	nodes := []registry.Node{testNode("node-1"), testNode("node-2")}
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
@@ -88,7 +88,7 @@ func TestEngineIntentFailureDispatchesNothing(t *testing.T) {
 	intents := &nonAtomicIntents{tr: tasksRepo, err: errors.New("disk full")}
 	e := &jobEngine{
 		jobsRepo: jobsRepo, tasksRepo: tasksRepo, intents: intents, conduit: conduit,
-		newID: sequentialIDs("id-"), now: time.Now, concurrency: 4,
+		newID: sequentialIDs("id-"), now: time.Now, settings: concurrencyOf(4),
 	}
 	d := newDispatch(Principal{Account: "alice"}, Selector{}, []registry.Node{testNode("node-1")},
 		jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
@@ -114,7 +114,7 @@ func TestEngineWithoutIntentRecorderRefusesToPersist(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	e := &jobEngine{
 		jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: newFakeConduit(nil),
-		newID: sequentialIDs("id-"), now: time.Now, concurrency: 4,
+		newID: sequentialIDs("id-"), now: time.Now, settings: concurrencyOf(4),
 	}
 	d := newDispatch(Principal{Account: "alice"}, Selector{}, []registry.Node{testNode("node-1")},
 		jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
@@ -132,7 +132,7 @@ func TestNewExecutionPanicsWhenAuditSinkHasNoIntentRecorder(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	rec := NewRecorder(&spyAuditSink{}, nil, nil)
 	ctl := NewControl(rec, &spyAuthorizer{}, &fakeFreezeStore{})
-	read := newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, 0, nil)
+	read := newReadLane(rec, registry.NewInMemory(), nil, nil, nil, nil, testSettings, nil)
 	appr := newApprovals(rec, noopApprovalGate{}, nil, nil, nil, nil, noopApprovalNotifier{}, nil)
 	defer func() {
 		r := recover()
@@ -143,7 +143,7 @@ func TestNewExecutionPanicsWhenAuditSinkHasNoIntentRecorder(t *testing.T) {
 			t.Errorf("panic = %v, want it to name IntentRecorder", r)
 		}
 	}()
-	NewExecution(ctl, read, appr, &spyCapChecker{}, nil, jobsRepo, tasksRepo, newFakeConduit(nil), DefaultDispatchConcurrency, nil, nil)
+	NewExecution(ctl, read, appr, &spyCapChecker{}, nil, jobsRepo, tasksRepo, newFakeConduit(nil), testSettings, nil, nil)
 }
 
 // nonAtomicIntents is the IntentRecorder the in-package tests use when their

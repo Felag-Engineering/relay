@@ -107,6 +107,10 @@ const errQueryFailed = constErr("the query lane failed")
 // a test that wants to prove the Console gates on the declared risk class
 // needs a seam that hands the bytes over anyway.
 type fakeQueries struct {
+	// eval is the StateEval every read reports, as the real lane reports the
+	// settings' cert-expiring window.
+	eval capability.StateEval
+
 	jobs  []capability.JobSummary
 	tasks []capability.TaskRow
 	rows  []capability.AuditRow
@@ -317,7 +321,7 @@ func (f *fakeQueries) ListNodes(context.Context, capability.Principal, string) (
 	if f.nodesErr != nil {
 		return capability.NodeListing{}, f.nodesErr
 	}
-	return capability.NodeListing{Nodes: f.nodes}, nil
+	return capability.NodeListing{Nodes: f.nodes, Eval: f.eval}, nil
 }
 
 func (f *fakeQueries) DescribeNode(_ context.Context, _ capability.Principal, nodeID string) (capability.NodeDetail, error) {
@@ -329,7 +333,7 @@ func (f *fakeQueries) DescribeNode(_ context.Context, _ capability.Principal, no
 		if n.NodeID != nodeID {
 			continue
 		}
-		d := capability.NodeDetail{Node: n}
+		d := capability.NodeDetail{Node: n, Eval: f.eval}
 		// The peer counts are computed the way the real lane computes them,
 		// not stubbed: a screen asserting "3 Nodes share this fingerprint"
 		// must be asserting the same arithmetic production runs.

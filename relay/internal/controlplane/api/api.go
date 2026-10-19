@@ -201,13 +201,6 @@ type Deps struct {
 	// Now returns the current time, used to timestamp lifecycle audit
 	// Records. Defaults to time.Now().UTC() when nil.
 	Now func() time.Time
-	// CertExpiringWithin is the state:cert-expiring warning window
-	// (ADR-0034): a mirror of a configured startup value (invariant
-	// 11) — this surface is TOLD it, and no route reads or sets it. Zero
-	// (the default) means the marker never fires. No handler in this package
-	// reads it: handleGetNode's state: instant comes from the capability read
-	// lane's own clock (NodeReader.DescribeNode's capability.NodeDetail.Eval).
-	CertExpiringWithin time.Duration
 }
 
 // Route is one /api/v1 route: its HTTP method, its path (in net/http

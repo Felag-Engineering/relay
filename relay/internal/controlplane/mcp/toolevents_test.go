@@ -17,7 +17,6 @@ import (
 
 	"github.com/Felag-Engineering/relay/relay/internal/auditquery"
 	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
-	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
@@ -78,7 +77,6 @@ func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolC
 	capSvc := newCapService(t, capSeams{
 		reg:       reg,
 		authz:     testAuthorizer{},
-		cap:       capability.NewBlastCap(0, 0),
 		audit:     auditsink.New(st.Audit()),
 		freeze:    st.Freeze(),
 		auditQ:    q,
