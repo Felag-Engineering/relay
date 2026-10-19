@@ -38,6 +38,7 @@ Again:
 Created alice (acct-…), a human admin, with its Console password and its first API Token 7f3c….
 Recorded on the audit trail as account_create, password_set and api_token_mint, attributed to local-host.
 The API Token below is shown once and cannot be recovered; a lost one is replaced with relay init --recover.
+Keep the Console password safe: no surface resets it, and relay init --recover does not.
 glp_7f3c….g7Kx…_Q
 ```
 
@@ -69,8 +70,13 @@ Notes:
 - **Recovery refuses a disabled, non-admin or machine Account.** Disabling an Account retires
   its authority on purpose; minting it a fresh credential would reverse that decision
   silently. Re-enable it explicitly (as another admin) if that is what you want.
-- **The first token does not expire.** Use it to create the Accounts your callers need, then
-  mint yourself a token with a lifetime and revoke this one, as below.
+- **Token lifetime.** `--ttl <duration>` (e.g. `24h`) sets the lifetime of the token either form
+  mints. Without it the token does not expire: use it to create the Accounts your callers need,
+  then mint yourself a token with a lifetime and revoke this one, as below.
+- **The Console password cannot be reset.** The password `--admin` sets is the only Console
+  password any surface sets, and nothing resets it: `--recover` mints an API Token and never
+  touches a password, and there is no other way to set one. A forgotten Console password is not
+  recoverable. Other human Accounts reach the Console only through OAuth, where it is configured.
 
 ## The intended flow
 
@@ -222,8 +228,10 @@ someone else's downtime.
 - **Lost the plaintext?** There is no recovery, by design — only a hash is stored. Mint a
   replacement and revoke the old one.
 - **Locked out entirely** (no working admin token): `relay init --recover <name>` on the Relay
-  host re-mints for any enabled human admin. With no enabled human admin left, recovery
-  requires local root on the Relay host acting on the store directly. There is deliberately
+  host re-mints an API Token for any enabled human admin; it does not reset a Console password,
+  which nothing does. With no enabled human admin left, an enabled admin of any kind re-enables
+  one through the Control API; with none, recovery requires local root on the Relay host acting
+  on the store directly. There is deliberately
   no `--force` flag; see ADR-0023's residual note.
 
 ## Why SHA-256, not a password KDF

@@ -3,9 +3,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -140,5 +143,121 @@ func TestIsTerminal_FalseForAFile(t *testing.T) {
 	defer f.Close()
 	if isTerminal(f) {
 		t.Error("isTerminal is true for a regular file")
+	}
+}
+
+// typeLines writes each line to the terminal once the reader is waiting.
+func typeLines(t *testing.T, controller *os.File, lines ...string) {
+	t.Helper()
+	for _, l := range lines {
+		time.Sleep(100 * time.Millisecond)
+		if _, err := controller.Write([]byte(l + "\n")); err != nil {
+			t.Errorf("type a line: %v", err)
+			return
+		}
+	}
+}
+
+// On a terminal the password is asked for twice; two different entries create
+// nothing.
+func TestInitFirstAdmin_TwoDifferentEntriesCreateNothing(t *testing.T) {
+	controller, term := openPTY(t)
+	_ = echoes(controller)
+	st := openInitStore(t)
+	io := newInitIO(t, "")
+	go typeLines(t, controller, "correct horse battery staple", "correct horse battery stapler")
+	code := initFirstAdmin(context.Background(), st, "alice", 0, term, io.stdout, io.stderr)
+	if code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	out, errOut := io.read(t)
+	if out != "" || !strings.Contains(errOut, "the two passwords differ") {
+		t.Errorf("stdout %q, stderr %q: want nothing, and the mismatch", out, errOut)
+	}
+	if all, _ := st.Accounts().List(context.Background()); len(all) != 0 {
+		t.Errorf("accounts = %+v, want none", all)
+	}
+}
+
+// An interrupt at the prompt restores the terminal's echo before the process
+// exits with 130, and the handler is gone once the read returns.
+func TestReadNoEcho_AnInterruptRestoresEchoThenExits130(t *testing.T) {
+	controller, term := openPTY(t)
+	_ = echoes(controller)
+	exited := make(chan bool, 1)
+	exitOnInterrupt = func(code int) {
+		tio, err := unix.IoctlGetTermios(int(term.Fd()), unix.TCGETS)
+		exited <- code == interruptedExitCode && err == nil && tio.Lflag&unix.ECHO != 0
+	}
+	t.Cleanup(func() { exitOnInterrupt = os.Exit })
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = readNoEcho(term)
+		close(done)
+	}()
+	time.Sleep(100 * time.Millisecond) // let the read install its handler and turn echo off
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case ok := <-exited:
+		if !ok {
+			t.Error("the interrupt exited with echo still off, or with a code other than 130")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the interrupt was not handled")
+	}
+	if _, err := controller.Write([]byte("end\n")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("readNoEcho did not return")
+	}
+
+	// The handler is removed with the prompt: an interrupt now reaches a
+	// channel of the test's own, and exitOnInterrupt is not called again.
+	own := make(chan os.Signal, 1)
+	signal.Notify(own, syscall.SIGINT)
+	defer signal.Stop(own)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	<-own
+	select {
+	case <-exited:
+		t.Error("the prompt's interrupt handler outlived the prompt")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// A pasted line longer than the terminal's line buffer is cut short by the
+// terminal itself; it is refused, never taken as a shorter password.
+func TestReadNoEcho_RefusesALineAtTheTerminalLimit(t *testing.T) {
+	controller, term := openPTY(t)
+	_ = echoes(controller)
+	type result struct {
+		line string
+		err  error
+	}
+	got := make(chan result, 1)
+	go func() {
+		line, err := readNoEcho(term)
+		got <- result{line, err}
+	}()
+	time.Sleep(100 * time.Millisecond)
+	go func() { _, _ = controller.Write([]byte(strings.Repeat("x", 5000) + "\n")) }()
+	select {
+	case r := <-got:
+		if r.err == nil {
+			t.Fatalf("a %d-byte line was accepted as a password", len(r.line))
+		}
+		if !strings.Contains(r.err.Error(), "limit") {
+			t.Errorf("err = %v, want the terminal-limit refusal", r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("readNoEcho did not return")
 	}
 }

@@ -14,7 +14,7 @@ import (
 // returns the status plus the assertions the handler saw.
 func requestWithHeaders(t *testing.T, headers map[string]string) (int, capability.Assertions) {
 	t.Helper()
-	a := NewAuthenticator(&fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential})
+	a := NewAuthenticator(&fakeVerifier{acct: storedFirstAdmin(), valid: testCredential})
 
 	var seen capability.Assertions
 	h := a.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -89,7 +89,7 @@ func TestAssertions_MalformedHeadersAreRefused(t *testing.T) {
 // answering 400 to an unauthenticated caller would tell them their credential
 // was fine, which is exactly the oracle the generic 401 exists to prevent.
 func TestAssertions_AuthenticationIsCheckedFirst(t *testing.T) {
-	a := NewAuthenticator(&fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential})
+	a := NewAuthenticator(&fakeVerifier{acct: storedFirstAdmin(), valid: testCredential})
 	h := a.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("handler reached with a bad credential")
 	}))
@@ -108,7 +108,7 @@ func TestAssertions_AuthenticationIsCheckedFirst(t *testing.T) {
 // The verified lane carries which credential acted, so "revoke the compromised
 // one" is a targeted act rather than revoking all of an Account's tokens.
 func TestAssertions_PrincipalCarriesTheTokenID(t *testing.T) {
-	a := NewAuthenticator(&fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential})
+	a := NewAuthenticator(&fakeVerifier{acct: storedFirstAdmin(), valid: testCredential})
 
 	var seen capability.Principal
 	h := a.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -121,7 +121,7 @@ func TestAssertions_PrincipalCarriesTheTokenID(t *testing.T) {
 	if seen.TokenID != "tok-1" {
 		t.Errorf("Principal.TokenID = %q, want the verifying token's id", seen.TokenID)
 	}
-	if seen.AccountID != "acct-founding" {
+	if seen.AccountID != "acct-first-admin" {
 		t.Errorf("Principal.AccountID = %q, want the stored Account's id", seen.AccountID)
 	}
 }

@@ -2124,10 +2124,13 @@ func TestAccountsWrite_TheMintFormOffersNoFreeFormTTL(t *testing.T) {
 
 func TestAccountsWrite_TheCreateFormSaysAHumanAccountCannotYetSignIn(t *testing.T) {
 	body := contentOf(accountsWriteBody(t, ""))
-	if !strings.Contains(body, "cannot sign in until a password is set") || !strings.Contains(body, "relay init") {
-		t.Errorf("the create panel does not say a human Account needs a Console password. No "+
-			"capability seam can set one, so the screen must not imply a human Account it creates "+
-			"can sign in:\n%s", body)
+	if !strings.Contains(body, "No surface sets a") || !strings.Contains(body, "Console password; it signs in through OAuth, if configured") {
+		t.Errorf("the create panel does not say no surface sets a Console password for the Account it "+
+			"creates. No capability seam can set one, and relay init sets one only for the first admin, "+
+			"so the screen must not imply a human Account it creates can sign in with a password:\n%s", body)
+	}
+	if strings.Contains(body, "relay init</code> sets one") {
+		t.Error("the create panel claims relay init sets a password for the Account it creates; it never does")
 	}
 }
 

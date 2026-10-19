@@ -27,7 +27,7 @@ package console
 // Console with at least one Account, an else-branch here would be dead copy,
 // and the honest first-boot shape is one row under a <thead> rather than an
 // empty state. dayone_test.go carries the
-// matching named skip, and TestAccounts_DayOneShowsTheFoundingAdmin pins the
+// matching named skip, and TestAccounts_DayOneShowsTheFirstAdmin pins the
 // shape that skip hands over.
 //
 // # The last tool call, and what it honestly cannot say
@@ -570,7 +570,7 @@ var accountsTmpl = newScreen("accounts", `
     </div>
     <button class="btn grant" type="submit">Create Account</button>
   </form>
-  <p class="note">A <b>human</b> Account cannot sign in until a password is set, and only <code>relay init</code> sets one.</p>
+  <p class="note">No surface sets a <b>human</b> Account's Console password; it signs in through OAuth, if configured.</p>
 </details>
 {{end}}
 

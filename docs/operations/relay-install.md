@@ -104,17 +104,20 @@ start; nothing sets or raises them through an API.
 Subcommands (checked before flag parsing):
 
 - `relay --version` / `-version` / `-V` — print the build stamp and exit.
-- `relay init [--config <path>] --admin <name>` — create the first admin, once the Relay has
+- `relay init [--config <path>] [--ttl <duration>] --admin <name>` — create the first admin, once the Relay has
   started and created its store: a human `admin` Account with the name you give, its Console
   password (prompted for, not echoed) and its first API Token, printed to stdout once. This is
   how you obtain the first control-plane credential; there is none in Relay configuration
   ([control-plane-credential.md](control-plane-credential.md), ADR-0023, ADR-0030). Run it as
   the Relay's own account (`sudo -u relay relay init …`): it reads the configuration through
   the same start-time check as the Relay, so it refuses root. On a Relay that already has a
-  human Account it creates nothing, prints no credential, and says what is there.
-- `relay init [--config <path>] --recover <name>` — mint a new API Token for an enabled human
-  `admin` who has lost theirs, audited. It refuses a disabled, non-admin or machine Account.
-  Safe to run while the Relay is running.
+  human Account it creates nothing, prints no credential, and says what is there. The Console
+  password it sets is the only one any surface sets, and nothing resets it: a forgotten Console
+  password cannot be recovered.
+- `relay init [--config <path>] [--ttl <duration>] --recover <name>` — mint a new API Token for
+  an enabled human `admin` who has lost theirs, audited. It never touches the Console password.
+  It refuses a disabled, non-admin or machine Account. Safe to run while the Relay is running.
+- `--ttl` sets the lifetime of the token either form mints, e.g. `24h`; the default is no expiry.
 
 ## 3. First start
 
@@ -426,9 +429,11 @@ $ docker compose -f deploy/compose/docker-compose.yml cp \
 ```
 
 **5. Reach the Console** (only if you enabled it in step 2) as the admin from step 4, with the
-password you gave `relay init`. Every act in the Console is attributed to the Account that
-signed in, so give each further person their own Account (`POST /api/v1/accounts`) rather than
-sharing this one.
+password you gave `relay init`. That password is the only Console password any surface sets, and
+nothing resets it: if it is forgotten, it cannot be recovered. Other people get their own Account
+(`POST /api/v1/accounts`) and an API Token; no surface sets a Console password for them, so they
+reach the Console only through OAuth, where it is configured
+([control-plane-credential.md](control-plane-credential.md)).
 
 Then, if you want the control plane reachable beyond this host, set `RELAY_PUBLISH_ADDR` to
 the host's LAN address (or `0.0.0.0`) and run the `up -d` from step 3 again. Sign in at

@@ -265,11 +265,11 @@ const testTokenID = "tok-test"
 // name is reserved, so it is an ordinary name.
 const testAdminName = "first-admin"
 
-// testFoundingAdminAccountID is staticVerifier's stand-in for the Relay-
+// testFirstAdminAccountID is staticVerifier's stand-in for the Relay-
 // assigned stable identifier a real store would mint for the first admin. Given so tests can assert Attribution.Verified.AccountID is
 // non-empty and identity-stable, mirroring what principalFromAccount does
 // with a real Account in production.
-const testFoundingAdminAccountID = "acct-founding-admin"
+const testFirstAdminAccountID = "acct-first-admin"
 
 type staticVerifier struct{ credential string }
 
@@ -278,7 +278,7 @@ func (v staticVerifier) Verify(_ context.Context, credential string) (accounts.A
 		return accounts.Account{}, accounts.APIToken{}, accounts.ErrTokenInvalid
 	}
 	return accounts.Account{
-		ID:      testFoundingAdminAccountID,
+		ID:      testFirstAdminAccountID,
 		Name:    testAdminName,
 		Kind:    accounts.KindHuman,
 		Role:    accounts.RoleAdmin,
@@ -301,7 +301,7 @@ func testAdmin() capability.Principal {
 // part of the identity, not decoration on it.
 func testPrincipal() capability.Principal {
 	p := testAdmin()
-	p.AccountID = testFoundingAdminAccountID
+	p.AccountID = testFirstAdminAccountID
 	p.TokenID = testTokenID
 	p.AuthMethod = capability.AuthMethodAPIToken
 	// The authentication boundary now stamps the peer address into the
@@ -616,8 +616,8 @@ func TestHandleRevokeToken_CascadeRecordsCarryPrincipalAndDerivedReason(t *testi
 			t.Errorf("%s: Principal = %q, want %q", nodeID, row.Principal, wantPrincipal)
 		}
 		v := row.Attribution.Verified
-		if v.AccountID == "" || v.AccountID != testFoundingAdminAccountID {
-			t.Errorf("%s: Verified.AccountID = %q, want the founding admin's non-empty id %q", nodeID, v.AccountID, testFoundingAdminAccountID)
+		if v.AccountID == "" || v.AccountID != testFirstAdminAccountID {
+			t.Errorf("%s: Verified.AccountID = %q, want the founding admin's non-empty id %q", nodeID, v.AccountID, testFirstAdminAccountID)
 		}
 		if v.AccountName == "" || v.AccountName != testAdminName {
 			t.Errorf("%s: Verified.AccountName = %q, want %q", nodeID, v.AccountName, testAdminName)

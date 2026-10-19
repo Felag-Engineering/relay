@@ -82,7 +82,7 @@ Security-relevant choices, made explicit:
 
   It lives on its own volume, which the daemons deliberately do not mount — an
   admin credential readable by every Node is exactly what a compromised Node
-  would use to drive the whole fleet. It is a live, non-expiring admin credential
+  would use to drive the whole fleet. It is a live 24h admin credential (`--ttl 24h`)
   for the `admin` Account; keeping it on a volume at all is a dev-fleet
   convenience only — in a real deployment the
   credential goes from the operator's terminal straight into a secret store (see

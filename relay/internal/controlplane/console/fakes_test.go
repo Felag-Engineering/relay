@@ -852,15 +852,15 @@ func (f *fakeAccounts) APITokens(_ context.Context, _ capability.Principal, acco
 // `relay init` creates the first admin with the name the operator gives it.
 const testAdminName = "first-admin"
 
-// foundingAdminFixture is the ONE Account a Relay has after `relay init`.
+// firstAdminFixture is the ONE Account a Relay has after `relay init`.
 //
 // Every field is what `relay init` creates: the operator's chosen name, human,
 // admin, enabled. LastSeenAt is deliberately ZERO, which is what makes the
 // day-one render exercise stamp's "—" rather than a timestamp somebody chose
 // to make the assertion convenient.
-func foundingAdminFixture() accounts.Account {
+func firstAdminFixture() accounts.Account {
 	return accounts.Account{
-		ID:        "acct-founding",
+		ID:        "acct-first-admin",
 		Name:      testAdminName,
 		Kind:      accounts.KindHuman,
 		Role:      accounts.RoleAdmin,
@@ -882,7 +882,7 @@ func dayOneDeps() Deps {
 	// enabled human admin, so "day one" for the Accounts screen is one row and
 	// not an empty table — see accounts.go's header and the named skip in
 	// dayone_test.go.
-	d.Accounts = &fakeAccounts{accounts: []accounts.Account{foundingAdminFixture()}}
+	d.Accounts = &fakeAccounts{accounts: []accounts.Account{firstAdminFixture()}}
 	return d
 }
 
@@ -908,7 +908,7 @@ func renderableDeps() Deps {
 		// serving one cannot hold fewer Accounts than this — and a fixture
 		// with none would make every incidental sweep render a state
 		// production never reaches.
-		Accounts: &fakeAccounts{accounts: []accounts.Account{foundingAdminFixture()}},
+		Accounts: &fakeAccounts{accounts: []accounts.Account{firstAdminFixture()}},
 		Now:      func() time.Time { return testNow },
 	}
 }
@@ -1046,7 +1046,7 @@ const sweepMachineAccountID = "acct-gleipnir"
 // sweepAccounts is the RICH Account fixture: every shape the screen renders
 // differently is present exactly once.
 //
-// The founding admin (never authenticated), a second human admin, a human
+// The first admin (never authenticated), a second human admin, a human
 // viewer, a machine Account with calls on the trail, and a disabled Account —
 // so the "disabled" word, the machine/human kind split and the two
 // last-authentication branches are all walked by any sweep that renders this
@@ -1057,7 +1057,7 @@ const sweepMachineAccountID = "acct-gleipnir"
 func sweepAccounts() *fakeAccounts {
 	return &fakeAccounts{
 		accounts: []accounts.Account{
-			foundingAdminFixture(),
+			firstAdminFixture(),
 			{
 				ID: "acct-mike", Name: "mike", Kind: accounts.KindHuman,
 				Role: accounts.RoleAdmin, Enabled: true,

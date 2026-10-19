@@ -36,8 +36,8 @@ import (
 )
 
 const initUsage = `Usage:
-  relay init [--config PATH] --admin NAME
-  relay init [--config PATH] --recover NAME
+  relay init [--config PATH] [--ttl DURATION] --admin NAME
+  relay init [--config PATH] [--ttl DURATION] --recover NAME
 
 Run as the Relay's own account, after the Relay has started once:
   sudo -u relay relay init --admin alice
@@ -49,7 +49,11 @@ Run as the Relay's own account, after the Relay has started once:
                 credential, and reports what is there.
 --recover NAME  Mint a new API Token for NAME, an enabled human admin, and print it
                 to stdout once. For an admin who has lost every API Token.
+--ttl DURATION  Lifetime of the API Token minted, e.g. 24h. Default 0: no expiry.
 --config PATH   The Relay's configuration file (default /etc/relay/relay.toml).
+
+The Console password set by --admin is the only one any surface sets, and nothing
+resets it: --recover mints an API Token and never touches a password.
 
 There is no flag that takes the password: a password on a command line is a password
 in every process listing and shell history. When stdin is not a terminal, the password
@@ -96,6 +100,7 @@ func runInitCommand(args []string, envErr error, stdin, stdout, stderr *os.File)
 	path := set.String("config", relayconfig.DefaultPath, "path of the Relay's configuration file")
 	admin := set.String("admin", "", "name of the first admin to create")
 	recoverName := set.String("recover", "", "name of the enabled human admin to mint a new API Token for")
+	ttl := set.Duration("ttl", 0, "lifetime of the API Token minted; 0 means no expiry")
 	if err := set.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -112,6 +117,9 @@ func runInitCommand(args []string, envErr error, stdin, stdout, stderr *os.File)
 	case (*admin == "") == (*recoverName == ""):
 		fmt.Fprintln(stderr, "relay init: give exactly one of --admin NAME or --recover NAME")
 		fmt.Fprint(stderr, initUsage)
+		return 2
+	case *ttl < 0:
+		fmt.Fprintln(stderr, "relay init: --ttl must not be negative")
 		return 2
 	}
 
@@ -146,14 +154,14 @@ func runInitCommand(args []string, envErr error, stdin, stdout, stderr *os.File)
 
 	ctx := context.Background()
 	if *recoverName != "" {
-		return initRecover(ctx, st, *recoverName, stdout, stderr)
+		return initRecover(ctx, st, *recoverName, *ttl, stdout, stderr)
 	}
-	return initFirstAdmin(ctx, st, *admin, stdin, stdout, stderr)
+	return initFirstAdmin(ctx, st, *admin, *ttl, stdin, stdout, stderr)
 }
 
 // initFirstAdmin creates the first admin on a store with no human Account, or
 // reports state and emits nothing.
-func initFirstAdmin(ctx context.Context, st *store.Store, name string, stdin, stdout, stderr *os.File) int {
+func initFirstAdmin(ctx context.Context, st *store.Store, name string, ttl time.Duration, stdin, stdout, stderr *os.File) int {
 	if err := accounts.ValidateName(name); err != nil {
 		fmt.Fprintf(stderr, "relay init: %q is not a valid Account name: 1 to 64 characters of letters, digits, '.', '_' and '-', starting with a letter or digit.\n", name)
 		return 2
@@ -168,6 +176,14 @@ func initFirstAdmin(ctx context.Context, st *store.Store, name string, stdin, st
 	}
 	if reportExisting(all, stderr) {
 		return 0
+	}
+	// A machine Account may already hold the name; refused before the prompt
+	// rather than after the operator has typed a password twice.
+	for _, a := range all {
+		if accounts.NormalizeName(a.Name) == accounts.NormalizeName(name) {
+			fmt.Fprintf(stderr, "relay init: an Account named %q already exists (a %s Account); choose another name. Nothing was created.\n", a.Name, a.Kind)
+			return 1
+		}
 	}
 
 	password, err := readNewPassword(stdin, stderr, name)
@@ -194,7 +210,7 @@ func initFirstAdmin(ctx context.Context, st *store.Store, name string, stdin, st
 		Password: hash,
 		Issue: func(acct accounts.Account) (accounts.APIToken, []audit.Record, error) {
 			now := time.Now()
-			tok, pt, err := accounts.GenerateToken(acct.ID, initTokenName, 0, now)
+			tok, pt, err := accounts.GenerateToken(acct.ID, initTokenName, ttl, now)
 			if err != nil {
 				return accounts.APIToken{}, nil, err
 			}
@@ -223,6 +239,7 @@ func initFirstAdmin(ctx context.Context, st *store.Store, name string, stdin, st
 	fmt.Fprintf(stderr, "Recorded on the audit trail as %s, %s and %s, attributed to %s.\n",
 		audit.KindAccountCreate, audit.KindPasswordSet, audit.KindAPITokenMint, audit.PrincipalLocalHost)
 	fmt.Fprintln(stderr, "The API Token below is shown once and cannot be recovered; a lost one is replaced with relay init --recover.")
+	fmt.Fprintln(stderr, "Keep the Console password safe: no surface resets it, and relay init --recover does not.")
 	return emitCredential(stdout, stderr, plaintext.Reveal(), tokenID)
 }
 
@@ -271,7 +288,10 @@ func reportExisting(all []accounts.Account, stderr io.Writer) bool {
 	}
 	fmt.Fprintf(stderr, "relay init: this Relay already has %d human Account(s), so its first admin exists. Nothing was created and no credential was emitted.\n", humans)
 	if len(admins) == 0 {
-		fmt.Fprintln(stderr, "No human admin is enabled.")
+		fmt.Fprintln(stderr, "No human admin is enabled, so relay init --recover has no Account to mint for.")
+		fmt.Fprintln(stderr, "The way out: an enabled admin, a machine Account included, re-enables one through the Control API")
+		fmt.Fprintln(stderr, "(POST /api/v1/accounts/{id}/enable). With no enabled admin at all, recovery is local root acting on")
+		fmt.Fprintln(stderr, "the store directly; see docs/operations/control-plane-credential.md.")
 	} else {
 		fmt.Fprintf(stderr, "Enabled human admins: %s.\n", strings.Join(admins, ", "))
 		fmt.Fprintln(stderr, "An enabled human admin who has lost every API Token gets a new one with: relay init --recover NAME")
@@ -281,7 +301,7 @@ func reportExisting(all []accounts.Account, stderr io.Writer) bool {
 }
 
 // initRecover re-mints an API Token for an enabled human admin.
-func initRecover(ctx context.Context, st *store.Store, name string, stdout, stderr *os.File) int {
+func initRecover(ctx context.Context, st *store.Store, name string, ttl time.Duration, stdout, stderr *os.File) int {
 	// Naming the Account in a refusal is fine here: this caller can read the
 	// store, so there is nothing to enumerate that it cannot already read.
 	acct, err := st.Accounts().GetByName(ctx, name)
@@ -309,7 +329,7 @@ func initRecover(ctx context.Context, st *store.Store, name string, stdout, stde
 	}
 
 	tokenSvc := accounts.NewTokenService(recordedTokens{TokenRepository: st.APITokens(), st: st}, st.Accounts(), nil)
-	tok, plaintext, err := tokenSvc.Mint(ctx, acct.ID, recoveryTokenName, 0)
+	tok, plaintext, err := tokenSvc.Mint(ctx, acct.ID, recoveryTokenName, ttl)
 	if err != nil {
 		fmt.Fprintf(stderr, "relay init: mint: %v\n", err)
 		fmt.Fprintln(stderr, "No token was minted: a credential that cannot be recorded on the audit trail is not issued.")
@@ -318,6 +338,7 @@ func initRecover(ctx context.Context, st *store.Store, name string, stdout, stde
 	fmt.Fprintf(stderr, "Minted API Token %s for %s (%s).\n", tok.ID, acct.Name, acct.ID)
 	fmt.Fprintf(stderr, "Recorded on the audit trail as %s, attributed to %s.\n", audit.KindAPITokenMint, audit.PrincipalLocalHost)
 	fmt.Fprintln(stderr, "Tokens it no longer holds stay valid until revoked; revoke them once this one works.")
+	fmt.Fprintln(stderr, "Its Console password is unchanged: no surface resets a Console password.")
 	fmt.Fprintln(stderr, "The API Token below is shown once and cannot be recovered.")
 	return emitCredential(stdout, stderr, plaintext.Reveal(), tok.ID)
 }
@@ -362,9 +383,10 @@ func readNewPassword(stdin *os.File, prompt io.Writer, name string) (accounts.Pa
 	return accounts.NewPassword(line), nil
 }
 
-// maxPromptBytes bounds a password read: one byte past the longest the Relay
-// accepts, so an over-long one is refused as too long rather than truncated
-// into a different password.
+// maxPromptBytes bounds a password read from stdin: one byte past the longest
+// the Relay accepts, so an over-long one is refused as too long rather than
+// truncated into a different password. A terminal has its own, lower, limit:
+// see terminalLineLimit.
 const maxPromptBytes = accounts.MaxPasswordBytes + 1
 
 // readLine reads one line from r, without its line ending, reading no further

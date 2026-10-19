@@ -81,6 +81,8 @@ func (s *TokenService) Mint(ctx context.Context, accountID, name string, ttl tim
 // the path every surface takes; this is for the one caller that stores the
 // token inside a transaction it opens itself, because the Account it is for is
 // created in that same transaction (the first admin, made by `relay init`).
+// It skips Mint's existence and enabled checks, so its call sites are
+// enumerated by TestGenerateToken_CallSitesAreEnumerated.
 //
 // ttl of 0 means no expiry. A negative ttl is ErrInvalidTTL.
 func GenerateToken(accountID, name string, ttl time.Duration, now time.Time) (APIToken, Plaintext, error) {

@@ -77,10 +77,10 @@ count below is for nine.
    | --- | --- | --- | --- | --- | --- | --- |
    | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ |
 
-   **Credential lifetime.** `dev-approver`'s credential (`ttl_seconds` 86400, in
-   `docker/dev-fleet-init.sh`) expires 24h after a reset, and the Gleipnir token minted below
-   matches that same 86400s. The first admin's, minted by `relay init`, does not expire; it dies
-   with the volume. So reset on demo day, not the night before.
+   **Credential lifetime.** Every credential a reset mints expires 24h later — the first
+   admin's (`relay init --ttl 24h`) and `dev-approver`'s (`ttl_seconds` 86400), both in
+   `docker/dev-fleet-init.sh` — and the Gleipnir token minted below matches that same 86400s. So
+   reset on demo day, not the night before.
 
 5. Mint Gleipnir's credentials — [Credentials for Gleipnir (copy-paste)](#credentials-for-gleipnir-copy-paste),
    next — then run [Confirming the reset took](#confirming-the-reset-took).

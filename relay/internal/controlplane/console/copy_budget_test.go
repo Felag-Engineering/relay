@@ -657,7 +657,7 @@ var copyBudgets = map[string]int{
 	"/console/activity":        60,
 	"/console/jobs/{job_id}":   60,
 	"/console/compare":         40,
-	"/console/accounts":        40,
+	"/console/accounts":        34,
 	"/console/access":          65,
 	"/console/run":             10,
 	"day one":                  75,

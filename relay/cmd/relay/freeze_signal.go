@@ -12,8 +12,8 @@ import (
 
 // watchFreezeSignals is the local, host-side lever for the Relay-wide Freeze
 // (ADR-0013): SIGUSR1 engages, SIGUSR2 releases. Both
-// are otherwise-unused Unix signals (the Relay imports no os/signal
-// elsewhere) reserved for this purpose, chosen over a root-owned file so
+// are otherwise-unused Unix signals (the only other handler is relay init's
+// password prompt, for SIGINT and SIGTERM) reserved for this purpose, chosen over a root-owned file so
 // engage/release require nothing more than an operator (or a monitoring
 // system's alert action) with process-signal privilege on the Relay host —
 // no new config surface to write and reload.

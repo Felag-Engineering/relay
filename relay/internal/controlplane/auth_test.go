@@ -22,7 +22,7 @@ const testToken = accounts.TokenPrefix + "fedcba9876543210.control-plane-test" /
 // now drives the API Token path.
 func testAuthenticator() *Authenticator {
 	return NewAuthenticator(&fakeVerifier{
-		acct:  storedFoundingAdmin(),
+		acct:  storedFirstAdmin(),
 		valid: testToken,
 	})
 }

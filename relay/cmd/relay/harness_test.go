@@ -92,7 +92,7 @@ func (v staticVerifier) Verify(_ context.Context, credential string) (accounts.A
 		return accounts.Account{}, accounts.APIToken{}, accounts.ErrTokenInvalid
 	}
 	return accounts.Account{
-		ID:      "acct-test-founding",
+		ID:      "acct-test-first-admin",
 		Name:    testAdminName,
 		Kind:    accounts.KindHuman,
 		Role:    accounts.RoleAdmin,

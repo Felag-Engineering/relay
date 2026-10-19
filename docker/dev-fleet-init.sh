@@ -71,15 +71,15 @@ esac
 # the human admin ${ADMIN_NAME}, sets its Console password from stdin and prints
 # its first API Token, and nothing else, to stdout. On a re-run the admin exists
 # on the volume, so init creates nothing and prints nothing, and
-# `relay init --recover` re-mints that admin's API Token instead. Old tokens are
-# not revoked and die with the volume. The Console password is set once, on the
+# `relay init --recover` re-mints that admin's API Token instead. Each token
+# expires after 24h; old ones are not revoked and die with the volume. The Console password is set once, on the
 # first run: changing CONSOLE_ADMIN_PASSWORD afterwards needs a fresh volume.
 ( umask 077
   log "creating the first admin ${ADMIN_NAME} with relay init..."
-  printf '%s\n' "${PASSWORD}" | relay init --config "${CONFIG}" --admin "${ADMIN_NAME}" > /credential/control-credential
+  printf '%s\n' "${PASSWORD}" | relay init --config "${CONFIG}" --ttl 24h --admin "${ADMIN_NAME}" > /credential/control-credential
   if ! test -s /credential/control-credential; then
       log "${ADMIN_NAME} exists already; re-minting its API Token with relay init --recover..."
-      relay init --config "${CONFIG}" --recover "${ADMIN_NAME}" > /credential/control-credential
+      relay init --config "${CONFIG}" --ttl 24h --recover "${ADMIN_NAME}" > /credential/control-credential
   fi )
 chmod 0600 /credential/control-credential
 test -s /credential/control-credential || die "relay init printed no credential"

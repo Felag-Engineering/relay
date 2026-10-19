@@ -133,7 +133,7 @@ func humanAccount(name string, role accounts.Role, enabled bool) accounts.Accoun
 func oauthAuthenticator(t *testing.T, f *idpFixture, lookup *fakeLookup, scope string) *Authenticator {
 	t.Helper()
 	return NewAuthenticator(
-		&fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential},
+		&fakeVerifier{acct: storedFirstAdmin(), valid: testCredential},
 		WithOAuth(
 			OAuthConfig{Issuer: testIssuer, Audience: testAudience, RequiredScope: scope},
 			f.verifier, lookup,
@@ -333,7 +333,7 @@ func TestOAuth_CredentialKindsAreRoutedNotTried(t *testing.T) {
 	lookup := &fakeLookup{accts: map[string]accounts.Account{
 		"mike": humanAccount("mike", accounts.RoleAdmin, true),
 	}}
-	tokenVerifier := &fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential}
+	tokenVerifier := &fakeVerifier{acct: storedFirstAdmin(), valid: testCredential}
 	a := NewAuthenticator(tokenVerifier, WithOAuth(
 		OAuthConfig{Issuer: testIssuer, Audience: testAudience},
 		f.verifier, lookup, "https://relay.example.internal:9443"+ProtectedResourceMetadataPath))
@@ -356,7 +356,7 @@ func TestOAuth_CredentialKindsAreRoutedNotTried(t *testing.T) {
 // Without an IdP configured the Relay advertises no flow and refuses anything
 // that is not an API Token — fail closed rather than 401-with-a-dead-pointer.
 func TestOAuth_NotConfiguredRefusesAndAdvertisesNothing(t *testing.T) {
-	a := NewAuthenticator(&fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential})
+	a := NewAuthenticator(&fakeVerifier{acct: storedFirstAdmin(), valid: testCredential})
 
 	code, _ := authRequest(t, a, "eyJhbGciOiJSUzI1NiJ9.e30.sig")
 	if code != http.StatusUnauthorized {
