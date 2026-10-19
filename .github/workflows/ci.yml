@@ -465,7 +465,20 @@ jobs:
           prefix: cargo-${{ github.job }}
           rust-cachekey: ${{ steps.toolchain.outputs.cachekey }}
 
-      - run: make test-integration
+      # The separate-uid real-binary harness: the smoke test, make test-integration and
+      # test-crossbinary start the real Relay as `relaytest`, with `relaytest-io` as its one
+      # supplementary group, over root-owned fixtures built through passwordless sudo
+      # (relay/internal/relaytest/separateuid.go). The runner joins relaytest-io here, but a
+      # running job never sees a group added after it started, so each suite runs under
+      # `sg relaytest-io`. RELAY_E2E_SUDO_REQUIRED=1 makes a missing separate uid a failure;
+      # locally it is a recorded skip.
+      - name: Create the separate-uid test accounts
+        run: sudo bash scripts/relaytest-user.sh "$(id -un)"
+
+      - name: Integration (Relay as a separate uid)
+        env:
+          RELAY_E2E_SUDO_REQUIRED: "1"
+        run: sg relaytest-io -c 'make test-integration'
 
       # #112: cross-binary CI smoke test (real relay + real relay-daemon over
       # loopback TCP), driven through the devharness build-tag-gated control
@@ -475,7 +488,10 @@ jobs:
       # exercises it via the devharness-tagged one.
       - run: make lint-devharness
       - run: make devharness-absent-check
-      - run: make test-crossbinary
+      - name: Cross-binary (Relay as a separate uid)
+        env:
+          RELAY_E2E_SUDO_REQUIRED: "1"
+        run: sg relaytest-io -c 'make test-crossbinary'
 
       - name: Save Go build and module cache
         if: github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'

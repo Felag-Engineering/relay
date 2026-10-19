@@ -38,14 +38,38 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
-// startRelaySubprocess launches relayBin against a read-only relay.toml it
-// writes (listen address, caDir, storePath, then extraTOML), with
-// RELAY_DEVHARNESS_SOCKET set to sockPath in an otherwise filtered
-// environment (relayChildEnv), and blocks until it logs "relay listening"
-// (the same readiness signal scripts/smoke-test.sh uses). storePath lets a
-// caller restart the Relay against the SAME on-disk store, proving
-// persistence survives restart — fleet_e2e_test.go. extraTOML is appended to
-// the file (e.g. a [reach] table for the over-cap tests); "" is fine.
+// crossbinaryGate names the make target these suites run under, for the skip ledger.
+const crossbinaryGate = "test-crossbinary"
+
+// harnessSocketPath is where a layout's Relay serves its devharness socket: the group-shared
+// IO directory, never the state directory.
+func harnessSocketPath(layout *relaytest.RelayLayout) string {
+	return filepath.Join(layout.IODir(), "devharness.sock")
+}
+
+// relayCADir is where a layout's Relay keeps its CA.
+func relayCADir(layout *relaytest.RelayLayout) string {
+	return filepath.Join(layout.StateDir(), "ca")
+}
+
+// relaySubprocessEnv is the whole environment of a Relay started through a layout. When the
+// Relay runs as the separate uid it gets nothing of the test's own temp or coverage
+// directories, which it could not write.
+func relaySubprocessEnv(layout *relaytest.RelayLayout, extra ...string) []string {
+	if !layout.Separate() {
+		return relayChildEnv(extra...)
+	}
+	return append([]string{"PATH=" + os.Getenv("PATH"), "HOME=/"}, extra...)
+}
+
+// startRelaySubprocess launches relayBin through layout (relaytest.RelayLayout: as a separate
+// uid where the host allows it) against a fresh read-only relay.toml (listen address, the
+// layout's CA directory and store, then extraTOML), with RELAY_DEVHARNESS_SOCKET at
+// harnessSocketPath in an otherwise filtered environment, and blocks until it logs "relay
+// listening" (the same readiness signal scripts/smoke-test.sh uses). Restarting through the
+// SAME layout reuses the same on-disk CA and store, proving persistence survives restart —
+// fleet_e2e_test.go. extraTOML is appended to the file (e.g. a [reach] table for the over-cap
+// tests); "" is fine.
 //
 // addr controls port reuse across a restart: "" allocates a fresh free port
 // on every attempt (the #112 behavior — absorbs a rare port collision on a
@@ -55,18 +79,16 @@ import (
 // reallocate a different port out from under it — only the bind/listen/
 // startup attempt itself is retried, to absorb TIME_WAIT after a kill -9.
 //
-// The returned exited channel is fed by the single goroutine below that owns
-// c.Wait() for the lifetime of the returned *exec.Cmd: os/exec.Cmd.Wait may
-// only ever be called once (a second concurrent call races the first for the
-// same goroutineErr send and blocks forever, since only one send ever
-// happens). Every caller that later kills this subprocess MUST reap it via
-// `<-exited`, never via a second cmd.Wait().
-func startRelaySubprocess(t *testing.T, relayBin, caDir, storePath, sockPath, addr, extraTOML string) (cmd *exec.Cmd, log *syncBuffer, gotAddr string, exited chan error) {
+// The Relay is ended only through the returned process (Kill, Signal), never by signalling
+// the process the test started: as a separate uid that is sudo, which cannot relay SIGKILL.
+func startRelaySubprocess(t *testing.T, layout *relaytest.RelayLayout, relayBin, addr, extraTOML string) (proc *relaytest.RelayProcess, gotAddr string) {
 	t.Helper()
 	const maxAttempts = 3
 	const startupTimeout = 10 * time.Second
 
 	fixedAddr := addr != ""
+	bin := layout.InstallBinary(t, relayBin)
+	env := relaySubprocessEnv(layout, "RELAY_DEVHARNESS_SOCKET="+harnessSocketPath(layout))
 
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -79,38 +101,31 @@ func startRelaySubprocess(t *testing.T, relayBin, caDir, storePath, sockPath, ad
 			}
 		}
 
-		logBuf := &syncBuffer{}
-		cfgPath := writeRelayTOML(t, fmt.Sprintf(
+		cfgPath := layout.WriteConfig(t, fmt.Sprintf(
 			"[node_plane]\nlisten_address = %q\n\n[ca]\ndir = %q\n\n[store]\npath = %q\n\n[tls]\nhostname = \"localhost\"\n\n%s",
-			a, caDir, storePath, extraTOML))
-		c := exec.Command(relayBin, "--config", cfgPath)
-		c.Env = relayChildEnv("RELAY_DEVHARNESS_SOCKET=" + sockPath)
-		c.Stdout = logBuf
-		c.Stderr = logBuf
-		if err := c.Start(); err != nil {
+			a, relayCADir(layout), filepath.Join(layout.StateDir(), "relay.db"), extraTOML))
+		p, err := layout.Start(t, bin, env, "--config", cfgPath)
+		if err != nil {
 			t.Fatalf("start relay (attempt %d): %v", attempt, err)
 		}
-
-		exitedAttempt := make(chan error, 1)
-		go func() { exitedAttempt <- c.Wait() }()
 
 		ready := false
 		deadline := time.After(startupTimeout)
 	pollLoop:
 		for {
-			if strings.Contains(logBuf.String(), "relay listening") {
+			if strings.Contains(p.Log(), "relay listening") {
 				ready = true
 				break pollLoop
 			}
 			select {
-			case werr := <-exitedAttempt:
-				lastErr = fmt.Errorf("relay exited before listening (attempt %d): %v\n%s", attempt, werr, logBuf.String())
+			case <-p.Done():
+				lastErr = fmt.Errorf("relay exited before listening (attempt %d): %v\n%s", attempt, p.Err(), p.Log())
 				break pollLoop
 			case <-deadline:
-				c.Process.Kill() //nolint:errcheck
-				<-exitedAttempt
+				p.Kill() //nolint:errcheck
+				<-p.Done()
 				lastErr = fmt.Errorf("relay did not report listening within %v (attempt %d, likely port collision or lingering TIME_WAIT)\n%s",
-					startupTimeout, attempt, logBuf.String())
+					startupTimeout, attempt, p.Log())
 				break pollLoop
 			case <-time.After(50 * time.Millisecond):
 			}
@@ -123,15 +138,15 @@ func startRelaySubprocess(t *testing.T, relayBin, caDir, storePath, sockPath, ad
 			// is the only evidence. Registered before the caller's kill cleanup, so it
 			// runs after it, on the complete log.
 			t.Cleanup(func() {
-				if strings.Contains(logBuf.String(), "WARNING: DATA RACE") {
-					t.Errorf("relay subprocess reported a data race:\n%s", logBuf.String())
+				if log := p.Log(); strings.Contains(log, "WARNING: DATA RACE") {
+					t.Errorf("relay subprocess reported a data race:\n%s", log)
 				}
 			})
-			return c, logBuf, a, exitedAttempt
+			return p, a
 		}
 	}
 	t.Fatalf("failed to start relay after %d attempts: %v", maxAttempts, lastErr)
-	return nil, nil, "", nil
+	return nil, ""
 }
 
 // waitForSocket polls until path exists or deadline expires.
@@ -247,17 +262,13 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 		relaytest.SkipMissingBin(t, "RELAY_BIN and/or RELAY_DAEMON_BIN not set; skipping cross-binary e2e (run via make test-crossbinary)")
 	}
 
-	caDir := t.TempDir()
-	sockPath := filepath.Join(t.TempDir(), "devharness.sock")
-	storePath := filepath.Join(t.TempDir(), "relay.db")
+	layout := relaytest.NewRelayLayout(t, crossbinaryGate)
+	sockPath := harnessSocketPath(layout)
 
-	relayCmd, relayLog, _, relayExited := startRelaySubprocess(t, relayBin, caDir, storePath, sockPath, "", "")
+	relayProc, _ := startRelaySubprocess(t, layout, relayBin, "", "")
 	t.Cleanup(func() {
-		if relayCmd.Process != nil {
-			relayCmd.Process.Kill() //nolint:errcheck
-		}
-		<-relayExited
-		os.Remove(sockPath)
+		relayProc.Kill() //nolint:errcheck
+		<-relayProc.Done()
 	})
 
 	var daemonCmd *exec.Cmd
@@ -269,7 +280,7 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 		if !t.Failed() {
 			return
 		}
-		t.Logf("--- relay log ---\n%s", relayLog.String())
+		t.Logf("--- relay log ---\n%s", relayProc.Log())
 		if daemonCmd != nil {
 			t.Logf("--- relay-daemon log ---\n%s", daemonLog.String())
 		}

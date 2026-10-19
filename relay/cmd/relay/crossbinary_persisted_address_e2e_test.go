@@ -44,7 +44,7 @@ func enrollWithJoinStringOnly(t *testing.T, hostname string) *joinedNode {
 	daemonLog := &syncBuffer{}
 	t.Cleanup(func() {
 		if t.Failed() {
-			t.Logf("relay log:\n%s\ndaemon log:\n%s", fr.log.String(), daemonLog.String())
+			t.Logf("relay log:\n%s\ndaemon log:\n%s", fr.proc.Log(), daemonLog.String())
 		}
 	})
 
