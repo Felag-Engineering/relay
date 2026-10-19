@@ -781,6 +781,7 @@ func noteSweepPages(t *testing.T) []sweepPage {
 	running := cancelDeps(&fakeQueries{jobs: []capability.JobSummary{runningJob("job-1", "p", "a")}}, &fakeCanceller{})
 	running.Events = newFakeEvents()
 	add("running now", "/console/activity", running, accounts.RoleOperator, http.StatusOK)
+	add("activity, first run", "/console/activity", dayOneDeps(), accounts.RoleAdmin, http.StatusOK)
 	for _, q := range []string{"?window=fortnight", "?kind=nonesuch"} {
 		add("access", "/console/access"+q, sweep, accounts.RoleAdmin, http.StatusOK)
 	}

@@ -764,6 +764,11 @@ type activityView struct {
 	// activityFilter.narrowing.
 	Narrowing bool
 
+	// FirstRun says nothing is on this view and nothing was asked for, so the
+	// screen draws one explanatory block and collapses the filters
+	// (04-activity.md, "Nothing recorded yet").
+	FirstRun bool
+
 	OlderHref  string
 	ResetHref  string
 	ExportHref string
@@ -1020,6 +1025,22 @@ func (v *activityView) fill(d Deps, caller capability.Principal, f activityFilte
 	if v.Scrolled || len(v.Rows) > 0 || v.ConsoleLeftOut > 0 || v.OlderHref != "" {
 		v.ExportHref = f.base() + exportSuffix(f)
 	}
+	v.FirstRun = v.firstRun()
+}
+
+// firstRun reports whether the view is the empty, unfiltered, page-one
+// Activity screen. The Note term is load-bearing: on first run the Note line
+// sits inside the closed filters disclosure, so a dropped URL value must keep
+// the filters open and the note visible. It is called only from fill, after
+// both reads succeed, so a failed or refused read never claims nothing was
+// recorded. ShowConsole is not a term: without a kind filter it changes nothing
+// the page shows, and with one Narrowing is already set. ConsoleLeftOut is
+// always zero on an unfiltered page; it is kept as defence in depth.
+func (v *activityView) firstRun() bool {
+	return !v.Narrowing && v.Note == "" &&
+		!v.Scrolled && !v.Exhausted && !v.RunningNow.Paged &&
+		len(v.Rows) == 0 && len(v.RunningNow.Entries) == 0 &&
+		v.ConsoleLeftOut == 0 && v.OlderHref == ""
 }
 
 // linkRunningRows points each running dispatch row at its Running now entry
@@ -1675,6 +1696,15 @@ var activityTmpl = newScreen("activity", `
 {{template "refresh" .Refresh}}
 {{if not .UnknownKind}}<p class="refreshlimit">Every Refresh is an audited read made from this Console.</p>{{end}}
 
+{{if .FirstRun}}
+<div class="empty">
+  <h2>Nothing has been recorded yet.</h2>
+  <p>When an AI-agent or an operator dispatches a Task, or calls any tool, it appears here.</p>
+  {{template "live-region" .Live}}
+</div>
+<details class="filters">
+<summary>Filters</summary>
+{{end}}
 <form class="viewbar" method="get" action="/console/activity">
   {{with .Filter.Kind}}<input type="hidden" name="kind" value="{{.}}">{{end}}
   {{if .Filter.ShowConsole}}<input type="hidden" name="console" value="show">{{end}}
@@ -1718,6 +1748,7 @@ var activityTmpl = newScreen("activity", `
 <div class="kindbar">
   {{range .Kinds}}<a class="kchip{{if .Current}} on{{end}}" href="{{.Href}}">{{.Kind}}</a>{{end}}
 </div>
+{{if .FirstRun}}</details>{{end}}
 {{with .ReadsLeftOutHref}}<p class="kindnote">Read records are left out of this feed: <a href="{{.}}">show them</a>.</p>{{end}}
 
 {{if .UnknownKind}}
@@ -1733,6 +1764,7 @@ var activityTmpl = newScreen("activity", `
 {{end}}
 {{if .Filter.Account}}<p class="scoped">Showing one Account only. <a href="{{.AllAccountsHref}}">Show every Account</a>.</p>{{end}}
 
+{{if not .FirstRun}}
 <section class="runningnow" id="running-now" aria-label="Running now">
   <div class="ftitle">Running now <span class="phint">Longest-running first; not narrowed by the kind chips or the time window.</span></div>
   {{with .RunningNow}}
@@ -1823,6 +1855,7 @@ var activityTmpl = newScreen("activity", `
   {{else}}<p class="dim">Nothing has been recorded yet.</p>{{end}}
 {{end}}
 </div>
+{{end}}
 
 {{with .CollapseNote}}<p class="gap">{{.}}</p>{{end}}
 
