@@ -40,6 +40,39 @@ func timeSince(t, now time.Time) string {
 	return strconv.Itoa(int(d.Hours()/24)) + "d ago"
 }
 
+// pageStaleAfter is the age past which a page says it is old and asks to be
+// refreshed. A page is a snapshot of reachability, so it is old enough to say
+// so well before an operator would notice; 00-foundations.md "How old a page
+// is" brackets it with 40s (fresh) and 12 min (old).
+const pageStaleAfter = 5 * time.Minute
+
+// renderedAgo is how a page states its own age: "rendered 40s ago", and past
+// pageStaleAfter "rendered 12 min ago, Refresh to re-read" (00-foundations.md
+// "How old a page is"). assets/freshness.js produces the same words as the page
+// ages; TestAssets_FreshnessAdvancesUnderADOM holds the two equal.
+func renderedAgo(age time.Duration) (text string, stale bool) {
+	if age < 0 {
+		age = 0
+	}
+	switch {
+	case age < time.Second:
+		text = "rendered just now"
+	case age < time.Minute:
+		text = "rendered " + strconv.Itoa(int(age/time.Second)) + "s ago"
+	case age < time.Hour:
+		text = "rendered " + strconv.Itoa(int(age/time.Minute)) + " min ago"
+	case age < 24*time.Hour:
+		text = "rendered " + strconv.Itoa(int(age/time.Hour)) + " hr ago"
+	default:
+		text = "rendered " + countOf(int(age/(24*time.Hour)), "day", "days") + " ago"
+	}
+	stale = age >= pageStaleAfter
+	if stale {
+		text += ", Refresh to re-read"
+	}
+	return text, stale
+}
+
 // verifiedKind returns kind only for an actor drawn in the VERIFIED lane, and
 // "" otherwise. A kind label qualifies the Account the Relay authenticated
 // (00-foundations.md, "Kind label"); beside a dashed chip it would read as a
