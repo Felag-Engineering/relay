@@ -12,6 +12,7 @@ mod catalog;
 mod config;
 mod dedup;
 mod dispatch;
+mod join;
 mod policy_check;
 mod scheduler;
 mod selfref;
@@ -738,6 +739,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // intercepted before Config/network/identity/tracing setup.
     if args.get(1).map(String::as_str) == Some("dump-operation-schema") {
         let code = operations::schema::run();
+        std::process::exit(code);
+    }
+
+    // `join` (DI-37) is offline too: it reads the join string from a prompt or
+    // stdin, never argv, writes the environment file and starts the unit, and
+    // contacts no Relay. Intercepted before tracing, so it prints to stderr.
+    if args.get(1).map(String::as_str) == Some("join") {
+        let code = join::run(&args[2..]);
         std::process::exit(code);
     }
 

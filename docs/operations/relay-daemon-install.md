@@ -95,6 +95,29 @@ All fully offline — no network, no identity, no Relay:
 - `relay-daemon dump-operation-schema` — print the canonical Operation schema
   JSON (ADR-0015).
 
+One subcommand changes the Node, and it too contacts no Relay:
+
+- `sudo relay-daemon join` — configure a fresh Node in one step (DI-37). It reads
+  the join string from a prompt with echo off, or from standard input
+  (`relay-daemon join < join.txt`), and refuses one given as an argument. It
+  validates the string offline, refuses if the state directory holds any identity
+  file (the default `/var/lib/relay-daemon`, and any `RELAY_STATE_DIR` the
+  environment file sets; the caller's own environment is ignored), removes any
+  temporary file an interrupted run left beside the environment file, then
+  replaces only the `RELAY_JOIN` line of
+  `/etc/relay-daemon/relay-daemon.env` (adding it, or creating the file, if
+  absent) through a `0600` root-owned temporary file renamed into place, and runs
+  `/usr/bin/systemctl enable --now relay-daemon.service`. Enrollment happens when
+  the daemon starts. Every refusal leaves the file untouched. Exit codes `0`
+  configured and started / `1` refused or failed / `2` given arguments; `130`
+  when Ctrl-C at the prompt cancels it, which restores echo and changes nothing.
+  Once the join string is entered, Ctrl-C no longer interrupts `join` itself: it
+  stays caught for the rest of the run, so the file is never left half-handled. A
+  slow `systemctl` can still be interrupted — it receives the Ctrl-C, and `join`
+  then reports that the join string is written but the unit was not started.
+  If a terminal is ever left without echo, `stty echo` restores it. Config
+  management may write the same line itself instead.
+
 ## 4. Install on the Node
 
 Per [`daemon/packaging/README.md`](../../daemon/packaging/README.md):

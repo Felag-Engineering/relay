@@ -3,31 +3,32 @@
 # Cargo.toml's rust-version, which stays the single place the floor is named.
 
 # Invariant 1: arguments can never change which command runs. The mechanism is that
-# exactly one function builds a process (executor.rs, argv only, never /bin/sh), and
-# every tier reaches it with an argv already fixed by Policy or a Template. A second
-# Command::new anywhere in the daemon would be a spawn path outside that review, so it
-# fails the build; the one sanctioned site carries an explicit allow.
+# two functions build a process, each reviewed: executor.rs (argv only, never /bin/sh),
+# which every tier reaches with an argv already fixed by Policy or a Template, and
+# `join`'s systemctl module, whose argv is a literal no input reaches. Any other
+# Command::new in the daemon would be a spawn path outside that review, so it fails the
+# build; each sanctioned site carries an explicit allow, pinned by clippy_write_ban.rs.
 disallowed-methods = [
-  { path = "std::process::Command::new", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
-  { path = "tokio::process::Command::new", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "std::process::Command::new", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
+  { path = "tokio::process::Command::new", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
   # libc is a direct dependency, so its exec/fork/spawn family is a route around the
   # Command ban above.
-  { path = "libc::execv", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
-  { path = "libc::execve", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
-  { path = "libc::execvp", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
-  { path = "libc::execvpe", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
-  { path = "libc::execl", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
-  { path = "libc::execle", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
-  { path = "libc::execlp", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
-  { path = "libc::fexecve", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
-  { path = "libc::fork", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
-  { path = "libc::vfork", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
-  { path = "libc::posix_spawn", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
-  { path = "libc::posix_spawnp", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
-  { path = "libc::system", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "libc::execv", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
+  { path = "libc::execve", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
+  { path = "libc::execvp", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
+  { path = "libc::execvpe", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
+  { path = "libc::execl", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
+  { path = "libc::execle", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
+  { path = "libc::execlp", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
+  { path = "libc::fexecve", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
+  { path = "libc::fork", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
+  { path = "libc::vfork", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
+  { path = "libc::posix_spawn", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
+  { path = "libc::posix_spawnp", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
+  { path = "libc::system", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
   # glibc only: the libc crate has no execveat for musl, so allow-invalid keeps the musl
   # lint pass free of a does-not-resolve warning; the gnu passes still ban it.
-  { path = "libc::execveat", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)", allow-invalid = true },
-  { path = "libc::clone", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
-  { path = "libc::syscall", reason = "only executor.rs spawns processes (AGENTS.md invariant 1)" },
+  { path = "libc::execveat", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)", allow-invalid = true },
+  { path = "libc::clone", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
+  { path = "libc::syscall", reason = "only executor.rs and join's systemctl module spawn processes (AGENTS.md invariant 1)" },
 ]

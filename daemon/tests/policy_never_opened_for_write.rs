@@ -15,8 +15,10 @@
 //!
 //! # It proves
 //!
-//! * no daemon code path opens or mutates a file, except the two reviewed
-//!   writers (`crates/relay-transport/src/identity.rs`, `src/dedup.rs`) and the dev-only
+//! * no daemon code path opens or mutates a file, except the three reviewed
+//!   writers (`crates/relay-transport/src/identity.rs`, `src/dedup.rs`,
+//!   `src/join/env_file.rs`) and
+//!   the dev-only
 //!   `relay-test-support` fixtures, and none of those is a module that names
 //!   the Policy path — subject to the limits below;
 //! * the Policy path is named only by three non-writing modules
@@ -49,7 +51,7 @@
 //!     cause a loud false positive, never a silent miss.
 //! (e) Macro-generated code, and writes performed through a crate that wraps
 //!     a filesystem syscall. `rustix` IS a production dependency
-//!     (`Cargo.toml`), but only with `features = ["process"]` — no `fs`
+//!     (`Cargo.toml`), but only with `features = ["process", "termios"]` — no `fs`
 //!     feature, so it exposes no filesystem-write API for this guard to miss.
 //!     Cargo unifies features across the whole workspace, so that holds only
 //!     while NO member enables `fs` or `use-libc`; `clippy_write_ban.rs`
@@ -977,6 +979,11 @@ fn production_write_sites_are_exactly_the_allowlist() {
             "the at-most-once marker store — DedupStore::open/record (ADR-0004)",
         ),
         (
+            "src/join/env_file.rs",
+            "`relay-daemon join` replacing the environment file — write_atomically, a \
+             temporary file renamed over it, and removing its own stale temporaries (DI-37)",
+        ),
+        (
             "crates/relay-test-support/src/lib.rs",
             "dev-only fixtures; never a normal dependency (tests/clippy_write_ban.rs)",
         ),
@@ -1040,6 +1047,7 @@ fn policy_path_reaches_only_the_read_only_loader() {
     let write_allowlist = [
         "crates/relay-transport/src/identity.rs",
         "src/dedup.rs",
+        "src/join/env_file.rs",
         "crates/relay-test-support/src/lib.rs",
     ];
     let expected = ["src/config.rs", "src/main.rs", "src/selfref.rs"];

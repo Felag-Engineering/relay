@@ -7,8 +7,9 @@
 //! error. That is only as strong as the files that carry it, so this test pins
 //! them. `scripts/clippy-ban-probe.sh` (`make check-daemon-bans`) proves each entry
 //! FIRES; this proves the configuration around it cannot be removed or bypassed
-//! without a test failing. `relay-exec` is also the only crate that spawns a
-//! process (invariant 1): its one `Command::new` carries a statement-level allow.
+//! without a test failing. Two sites spawn a process (invariant 1), each reviewed:
+//! `relay-exec`'s one `Command::new`, under a statement-level allow, and the bin's
+//! `join` spawn module, whose whole spawn is one allowed, pinned function.
 //!
 //! # It proves
 //!
@@ -31,7 +32,7 @@
 //!   (`relay-policy` on `{relay-proto, relay-log}`; `relay-exec` on
 //!   `{relay-proto}`; `relay-ops` on `{relay-proto, relay-policy, relay-exec,
 //!   relay-log}`; `relay-log` and `relay-proto` on none);
-//! * (f) `rustix` keeps EXACTLY `features = ["process"]` workspace-wide: Cargo
+//! * (f) `rustix` keeps EXACTLY `features = ["process", "termios"]` workspace-wide: Cargo
 //!   unifies features, so one member enabling `fs` or `use-libc` would break the
 //!   property `policy_never_opened_for_write.rs` and the executor rely on;
 //! * (g) the set of lint suppressions that could hide a write or exec ban is
@@ -44,8 +45,9 @@
 //!   a statement, block, match arm or macro call does not make anything test code),
 //!   so a test allow cannot be moved onto production code at an unchanged count;
 //! * (h) the spawn family (`Command`, `pre_exec`, libc `exec*`/`fork`/`clone`/`system`/
-//!   `syscall`, `SYS_execve`-style numbers) appears only in `relay-exec`'s
-//!   `executor.rs`, in every crate and the bin, whatever lint allow is in scope. The
+//!   `syscall`, `SYS_execve`-style numbers) appears only at the two sanctioned sites,
+//!   `relay-exec`'s `executor.rs` and the bin's `join` spawn module, in every crate and
+//!   the bin, whatever lint allow is in scope. The
 //!   regex catches a `Command` alias (the alias names `Command` in its `use`),
 //!   brace-imported libc names, and bare `system(`/`syscall(` calls. It misses a
 //!   module alias such as `use libc as l; l::syscall`; clippy's resolved-path ban
@@ -69,7 +71,7 @@
 //! environment this repository does not control ((a) covers the repo's own
 //! Makefile and CI). The textual spawn census (h) likewise cannot see an
 //! identifier built by a macro; `macro_rules!` is refused in the read-only crates
-//! and the bin has no exec suppression. The census (h) also misses a module alias
+//! and the bin's one exec suppression is pinned to the function it covers. The census (h) also misses a module alias
 //! of `libc`; the clippy ban and the `unsafe` census catch it instead. A read-only
 //! crate's non-test code that needs a write must be refused by review, not by this
 //! test: the pinned map below is where a reviewer sees a new suppression.
@@ -1352,7 +1354,7 @@ fn rustix_resolves_without_fs_or_use_libc_in_the_shipped_build() {
 }
 
 #[test]
-fn rustix_keeps_exactly_the_process_feature_workspace_wide() {
+fn rustix_keeps_exactly_the_process_and_termios_features_workspace_wide() {
     let root = parse(&daemon().join("Cargo.toml"));
     let rustix = root
         .get("workspace")
@@ -1361,9 +1363,9 @@ fn rustix_keeps_exactly_the_process_feature_workspace_wide() {
         .expect("[workspace.dependencies] rustix");
     assert_eq!(
         features_of(rustix),
-        vec!["process".to_string()],
-        "[workspace.dependencies] rustix must keep EXACTLY features = [\"process\"] (no `fs`, no \
-         `use-libc`): see the comment beside it in Cargo.toml"
+        vec!["process".to_string(), "termios".to_string()],
+        "[workspace.dependencies] rustix must keep EXACTLY features = [\"process\", \"termios\"] \
+         (no `fs`, no `use-libc`): see the comment beside it in Cargo.toml"
     );
     assert_ne!(
         rustix.get("default-features").and_then(Value::as_bool),
@@ -1412,6 +1414,8 @@ fn pinned_suppressions() -> BTreeMap<&'static str, usize> {
         // `mod tests` fixtures build template trees; exec is covered by the spawn
         // census (h), which no module-level allow can hide from.
         ("crates/relay-ops/src/templates.rs", 1),
+        // The second sanctioned spawn (invariant 1): `join`'s `systemctl` command.
+        ("src/join/systemctl.rs", 1),
     ])
 }
 
@@ -1490,6 +1494,10 @@ fn lint_suppressions_are_exactly_the_pinned_map() {
 /// statement.
 const FILE_READ_OPEN: &str = "letopened=std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK|libc::O_NOCTTY).open(path);";
 
+/// The whole function the `join` spawn's allow covers, whitespace removed: it
+/// builds the command and runs it, so nothing outside the pin can add to it.
+const JOIN_SPAWN: &str = "pubfnenable_and_start()->io::Result<ExitStatus>{Command::new(SYSTEMCTL).args(SYSTEMCTL_ARGS).env_clear().stdin(Stdio::null()).status()}";
+
 /// Production suppressions, by file: each pinned to its attribute and to the squeezed
 /// text of the statement or item it covers, so one cannot be moved, widened or
 /// pointed at other code at an unchanged count. These are the only places a
@@ -1523,6 +1531,18 @@ fn pinned_production_suppressions() -> BTreeMap<&'static str, Vec<(&'static str,
             vec![(
                 "[allow(clippy::disallowed_methods,reason=\"\")]",
                 FILE_READ_OPEN,
+            )],
+        ),
+        // Invariant 1: the second sanctioned spawn, `join` starting the unit. The
+        // one function that builds and runs the command is covered and pinned, so
+        // the argv constants, the cleared environment and the null stdin cannot
+        // change unreviewed; the constants' values are pinned by
+        // `join_spawn_argv_is_the_literal_constant`.
+        (
+            "src/join/systemctl.rs",
+            vec![(
+                "[allow(clippy::disallowed_methods,reason=\"\")]",
+                JOIN_SPAWN,
             )],
         ),
     ])
@@ -2169,12 +2189,12 @@ fn is_probe_file(rel: &str) -> bool {
     rel.starts_with("crates/") && rel.ends_with("/ban_probe.rs")
 }
 
-/// Invariant 1: exactly one file builds a process. clippy's `Command::new` ban and
-/// its statement-level allow are the first line; this is the second, because an
+/// Invariant 1: exactly two files build a process, each reviewed. clippy's
+/// `Command::new` ban and the pinned allows are the first line; this is the second, because an
 /// aliased `Command`, a brace-imported libc `fork`, or a `pre_exec` inside a
 /// module-level lint allow passes clippy. It reads every crate and the bin.
 #[test]
-fn spawn_family_appears_only_in_relay_exec_executor() {
+fn spawn_family_appears_only_at_the_sanctioned_sites() {
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
     for (rel, src) in sources() {
         if is_probe_file(&rel) {
@@ -2185,13 +2205,17 @@ fn spawn_family_appears_only_in_relay_exec_executor() {
             seen.insert(rel, n);
         }
     }
-    // The `use tokio::process::Command;` import, `Command::new`, and `cmd.pre_exec`.
-    let want = BTreeMap::from([("crates/relay-exec/src/executor.rs".to_string(), 3usize)]);
+    let want = BTreeMap::from([
+        // The `use tokio::process::Command;` import, `Command::new`, and `cmd.pre_exec`.
+        ("crates/relay-exec/src/executor.rs".to_string(), 3usize),
+        // `join`'s import and its one `Command::new`.
+        ("src/join/systemctl.rs".to_string(), 2usize),
+    ]);
     assert_eq!(
         seen, want,
-        "the spawn family (Command, pre_exec, libc exec/fork/system) must appear only in \
-         relay-exec's executor.rs, at its one sanctioned site (AGENTS.md invariant 1): a second \
-         place that can build a process is a spawn path outside that review"
+        "the spawn family (Command, pre_exec, libc exec/fork/system) must appear only at the \
+         two sanctioned sites, relay-exec's executor.rs and join's systemctl module (AGENTS.md \
+         invariant 1): another place that can build a process is a spawn path outside that review"
     );
 }
 
