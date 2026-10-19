@@ -261,12 +261,12 @@ func handleNode(d Deps) http.HandlerFunc {
 		p.TitleSelfReported = host != ""
 		p.Banner = banner(d, r)
 		pins, _ := parsePins(r.URL.Query().Get("pin"))
-		known, err := pinsKnown(ctx, d, caller, n.NodeID, pins)
+		resolve, err := pinsResolved(ctx, d, caller, n, pins)
 		if err != nil {
 			readFailed(w, err, "the pinned Nodes' registry records")
 			return
 		}
-		v := buildNodeView(d, r, detail, p.Role, pins, known)
+		v := buildNodeView(d, r, detail, p.Role, pins, resolve)
 		if refusedUnaudited(w, lane, "this Node's registry record") {
 			return
 		}
@@ -274,7 +274,7 @@ func handleNode(d Deps) http.HandlerFunc {
 	}
 }
 
-// pinsKnown resolves the pin bar's ids through the AUDITED lane, one
+// pinsResolved resolves the pin bar's ids through the AUDITED lane, one
 // describe_node per id, and returns the resolver buildPinState draws with.
 //
 // One record per pinned Node, not per page view of the fleet: the set is
@@ -289,26 +289,33 @@ func handleNode(d Deps) http.HandlerFunc {
 // that is the answer, and the read that produced it is already recorded. Any
 // OTHER error — including an unauditable one — is returned, so the page fails
 // closed as a whole rather than silently drawing a bar it could not resolve.
-func pinsKnown(ctx context.Context, d Deps, caller capability.Principal, self string, ids []string) (func(string) bool, error) {
-	set := map[string]bool{self: true}
+func pinsResolved(ctx context.Context, d Deps, caller capability.Principal, self registry.Node, ids []string) (pinResolver, error) {
+	type resolution struct {
+		host  string
+		known bool
+	}
+	set := map[string]resolution{self.NodeID: {primaryHostname(self.Facts.Hostname), true}}
 	for _, id := range ids {
 		if _, seen := set[id]; seen {
 			continue
 		}
-		_, err := d.Queries.DescribeNode(ctx, caller, id)
+		detail, err := d.Queries.DescribeNode(ctx, caller, id)
 		switch {
 		case err == nil:
-			set[id] = true
+			set[id] = resolution{primaryHostname(detail.Node.Facts.Hostname), true}
 		case errors.Is(err, capability.ErrNodeNotFound), errors.Is(err, capability.ErrInvalidFilter):
-			set[id] = false
+			set[id] = resolution{}
 		default:
 			return nil, err
 		}
 	}
-	return func(id string) bool { return set[id] }, nil
+	return func(id string) (string, bool) {
+		r := set[id]
+		return r.host, r.known
+	}, nil
 }
 
-func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role accounts.Role, pins []string, known func(string) bool) nodeView {
+func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role accounts.Role, pins []string, resolve pinResolver) nodeView {
 	n := detail.Node
 	in := nodestate.Input{Node: n, Now: d.now(), CertExpiringWithin: d.CertExpiringWithin}
 
@@ -343,7 +350,7 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 		}
 	}
 
-	v.applyPins(n.NodeID, pins, known)
+	v.applyPins(n.NodeID, pins, resolve)
 
 	// Fingerprint sharing counts. Computed by the read lane, behind the same
 	// describe_node record (capability.NodeDetail): this screen must not
@@ -414,8 +421,8 @@ func (v *nodeView) applyFingerprintLinks(in nodestate.Input) {
 //
 // The pin set travels in the query string, which is what keeps this screen
 // free of a mutating route: pinning is a link, not a write.
-func (v *nodeView) applyPins(nodeID string, pins []string, known func(string) bool) {
-	v.Pin = buildPinState(known, pins, "/console/nodes/"+nodeID, "pin")
+func (v *nodeView) applyPins(nodeID string, pins []string, resolve pinResolver) {
+	v.Pin = buildPinState(resolve, pins, "/console/nodes/"+nodeID, "pin")
 	for _, id := range pins {
 		if id == nodeID {
 			v.Pinned = true

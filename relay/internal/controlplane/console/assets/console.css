@@ -1026,7 +1026,12 @@ tr.attnrow td { background: var(--attention-bg); }
               color: var(--text-muted); margin-left: var(--space-2); }
 a.noderef:hover { text-decoration: none; }
 .noderef .selfrep { display: block; }
-.noderef .selfrep + .nodeid { display: block; font-size: var(--text-xs); color: var(--text-second); }
+/* The verified Node ID drawn secondary to a self-reported hostname: smaller, mono (.nodeid),
+ * muted, in full (00-foundations, "Self-reported names"). No rule may clip, ellipsise or clamp
+ * a .nodeid. Where the ID sits in a card, heading or chip it wraps anywhere, as .nodehead and
+ * dl.wrapid do: a soft wrap inserts no character and the full ID stays on screen at 390px. */
+.selfrep ~ .nodeid { font-size: var(--text-xs); color: var(--text-muted); }
+.noderef .selfrep + .nodeid { display: block; }
 /* A verified chip that is a link: the chip keeps its own fill; the link adds a ring on hover.
    Focus uses the global :focus-visible ring and is never suppressed. */
 a.chiplink:hover { text-decoration: none; }
@@ -1146,7 +1151,7 @@ a.chiplink:hover .chip.trust { box-shadow: 0 0 0 1px var(--color-accent); }
 /* anywhere, not break-word: it lowers the flex item's min-content width, which is what
  * stops a 37-character Node id widening the page at 390px. See the card exception
  * note above dl.wrapid. */
-.nodehead .nodeid { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
+.nodehead .nodeid { white-space: normal; overflow-wrap: anywhere; min-width: 0; color: var(--text-muted); }
 .seen { font-size: var(--text-sm); color: var(--text-second); }
 .labelrow {
   display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap;
@@ -1186,10 +1191,11 @@ a.chiplink:hover .chip.trust { box-shadow: 0 0 0 1px var(--color-accent); }
   color: var(--text-second); font-weight: var(--weight-medium);
 }
 .pinchip {
-  display: inline-flex; align-items: baseline; gap: var(--space-2);
+  display: inline-flex; flex-wrap: wrap; max-width: 100%; align-items: baseline; gap: var(--space-2);
   padding: 2px var(--space-2); border: 1px solid var(--border-mid); border-radius: var(--radius-md);
 }
 .pinchip code { font-family: var(--font-mono); font-size: var(--text-xs); }
+.pinchip .selfrep, .pinchip .nodeid { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
 /* An id that resolved to no Node keeps its chip and loses its link: it is
  * still in the pin set, so it must still be unpinnable. */
 .pinchip .dim { font-size: var(--text-2xs); }
@@ -1207,6 +1213,9 @@ a.chiplink:hover .chip.trust { box-shadow: 0 0 0 1px var(--color-accent); }
  * of which would inherit th's uppercase and tracking; the tracking alone adds ~50px to
  * a 37-character id. */
 .cmp th.cmpnode { text-transform: none; letter-spacing: 0; }
+.cmpname .nodeid { display: block; }
+.cmpname .selfrep, .cmpname .nodeid { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+a.cmpname:hover { text-decoration: none; }
 .cmp td pre, .cmp td code {
   margin: 0; font-family: var(--font-mono); font-size: var(--text-xs);
   white-space: pre-wrap; word-break: break-all; color: var(--text-second);
@@ -1906,7 +1915,7 @@ dl.kv dd { min-width: 0; }
   table.cards td.num { white-space: normal; }
 
   /* Compare stacks: each Node's column header becomes a legend line and each
-   * value cell names its Node by ID (never hostname, which is self-reported). */
+   * value cell names its Node hostname-first, marked self-reported, with the full ID. */
   .cmp, .cmp thead, .cmp tbody, .cmp tr, .cmp th, .cmp td { display: block; }
   /* The empty corner header is hidden as .vh does (that rule applies at every
    * width, so it is repeated here), keeping it for screen readers. */
@@ -1921,7 +1930,7 @@ dl.kv dd { min-width: 0; }
     content: attr(data-label); display: block;
     font-family: var(--font-mono); font-size: var(--text-2xs); letter-spacing: 0; text-transform: none;
     color: var(--text-muted); font-weight: var(--weight-medium);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    white-space: normal; overflow-wrap: anywhere;
   }
   table.cards td.pincell .pinbtn { min-height: 34px; }
 }

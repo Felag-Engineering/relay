@@ -116,14 +116,15 @@ func TestCompare_EveryValueCellNamesItsColumn(t *testing.T) {
 	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/compare?nodes=node-web-1,node-web-2").Body.String()
 	table := cardTable(t, body, "cmp")
 	got := labelsOf(table)
-	for _, id := range []string{"node-web-1", "node-web-2"} {
-		if !got[id] {
-			t.Errorf("no Compare value cell is labelled with the Node ID %q; labels: %v", id, got)
+	want := []string{"web-1 (self-reported) · node-web-1", "web-2 (self-reported) · node-web-2"}
+	for _, label := range want {
+		if !got[label] {
+			t.Errorf("no Compare value cell is labelled %q; labels: %v", label, got)
 		}
 	}
 	for label := range got {
-		if label != "node-web-1" && label != "node-web-2" {
-			t.Errorf("Compare value cell labelled %q, which is not a rendered column ID", label)
+		if label != want[0] && label != want[1] {
+			t.Errorf("Compare value cell labelled %q, which is not a rendered column label", label)
 		}
 	}
 	if !strings.Contains(table, "<code>") || !strings.Contains(table, "<pre>") {
