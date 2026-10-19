@@ -921,7 +921,7 @@ var fixtureIDs = map[string]string{
 // revoke page wants a token that is on the Account in its path. Keyed by
 // Route.Path.
 var fixtureLinks = map[string]string{
-	"/console/accounts/{account_id}/lower":                    "/console/accounts/acct-mike/lower?role=operator",
+	"/console/accounts/{account_id}/lower":                    "/console/accounts/" + targetAdminID + "/lower?role=operator",
 	"/console/accounts/{account_id}/tokens/{token_id}/revoke": "/console/accounts/" + sweepMachineAccountID + "/tokens/tok-live/revoke",
 }
 
@@ -1091,9 +1091,9 @@ func TestConsole_EveryRenderedFormCarriesACSRFToken(t *testing.T) {
 func postForms(body string) []string { return formsWithMethod(body, "post") }
 
 // formsWithMethod splits a rendered page into its <form> elements whose
-// opening tag carries method="<method>", in any attribute position.
+// method is "<method>", in any attribute position, in any case. A form with no
+// method attribute is a GET, as in HTML.
 func formsWithMethod(body, method string) []string {
-	want := `method="` + method + `"`
 	var out []string
 	rest := body
 	for {
@@ -1101,19 +1101,57 @@ func formsWithMethod(body, method string) []string {
 		if loc == nil {
 			return out
 		}
-		tag := rest[loc[0]:loc[1]]
+		match := formMethodOf(rest[loc[0]:loc[1]]) == method
 		rest = rest[loc[0]:]
 		j := strings.Index(rest, "</form>")
 		if j < 0 {
-			if strings.Contains(tag, want) {
+			if match {
 				out = append(out, rest)
 			}
 			return out
 		}
-		if strings.Contains(tag, want) {
+		if match {
 			out = append(out, rest[:j])
 		}
 		rest = rest[j+len("</form>"):]
+	}
+}
+
+var formMethodAttr = regexp.MustCompile(`(?i)\smethod\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))`)
+
+// formMethodOf is the lower-cased method of a form's opening tag, "get" when
+// the attribute is absent.
+func formMethodOf(tag string) string {
+	m := formMethodAttr.FindStringSubmatch(tag)
+	if m == nil {
+		return "get"
+	}
+	return strings.ToLower(m[1] + m[2] + m[3])
+}
+
+func TestFormsWithMethod_ClassifiesByTheMethodAttribute(t *testing.T) {
+	cases := []struct {
+		name, tag, want string
+	}{
+		{"no method attribute", `<form action="/x">`, "get"},
+		{"upper-case GET", `<form method="GET" action="/x">`, "get"},
+		{"POST", `<form method="POST" action="/x">`, "post"},
+		{"unquoted post", `<form method=post action="/x">`, "post"},
+		{"class before method", `<form class="ctlform" action="/x" method="post">`, "post"},
+		{"class before method, no value match", `<form class="method" action="/x">`, "get"},
+	}
+	for _, c := range cases {
+		body := c.tag + `<input name="csrf_token"></form>`
+		other := "post"
+		if c.want == "post" {
+			other = "get"
+		}
+		if got := formsWithMethod(body, c.want); len(got) != 1 {
+			t.Errorf("%s: %q is not classified %s", c.name, c.tag, c.want)
+		}
+		if got := formsWithMethod(body, other); len(got) != 0 {
+			t.Errorf("%s: %q is also classified %s", c.name, c.tag, other)
+		}
 	}
 }
 

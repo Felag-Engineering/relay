@@ -234,8 +234,8 @@ type accountChange struct {
 
 	// RaiseRoles are the roles above the held one (Raise role: password,
 	// .btn.grant); LowerRoles the roles below it (Lower role: no password,
-	// .btn.danger, through a confirmation page). Presentation only: handleSetAccountRole re-decides raise
-	// vs lower from the stored role.
+	// .btn.danger, through a confirmation page). Presentation only:
+	// handleSetAccountRole re-decides raise vs lower from the stored role.
 	RaiseRoles []string
 	LowerRoles []string
 

@@ -125,9 +125,13 @@ func confirmReadFailed(w http.ResponseWriter, pg Page, err error, ident, what st
 		renderScreen(w, pg, accountsRefusedTmpl, cancelResultView{
 			Heading: "The Relay refused this read: " + err.Error() + ".",
 		})
-	case errors.Is(err, accounts.ErrNotFound), errors.Is(err, accounts.ErrTokenNotFound):
+	case errors.Is(err, accounts.ErrNotFound):
 		confirmRefusal(w, pg, http.StatusNotFound,
 			"No Account matching "+ident+" appears in this Relay's records. Nothing was changed.",
+			accountsScreenPath)
+	case errors.Is(err, accounts.ErrTokenNotFound):
+		confirmRefusal(w, pg, http.StatusNotFound,
+			"No API Token matching "+ident+" appears in this Relay's records. Nothing was changed.",
 			accountsScreenPath)
 	case errors.Is(err, capability.ErrAccountsUnavailable):
 		unavailable(w, "Account administration")
