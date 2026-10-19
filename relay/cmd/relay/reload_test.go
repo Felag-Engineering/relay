@@ -195,26 +195,26 @@ func TestReloader_RefusalLeavesEverythingUntouched(t *testing.T) {
 	}{
 		{"load error", func(f *reloadFixture) { f.body = "this is not toml [" }, auditsink.ReloadRefusedFile, nil},
 		{"bind-time change", func(f *reloadFixture) {
-			f.body = strings.Replace(f.toml("[reach]\nmutate_blast_cap = 7\n"), "localhost", "other.example", 1)
+			f.body = strings.Replace(f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n"), "localhost", "other.example", 1)
 		}, auditsink.ReloadRefusedRestart, []string{"tls.hostname"}},
 		{"open error", func(f *reloadFixture) {
-			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n")
+			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n")
 			f.openErr = errors.New("the gate file is malformed")
 		}, auditsink.ReloadRefusedNamedFiles, nil},
 		{"CA mismatch", func(f *reloadFixture) {
-			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n")
+			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n")
 			f.r.open = func(gatePath, _, storePath string) (startup.Files, error) {
 				return testStartupFiles(t, Config{ApprovalGatePath: gatePath, CADir: filepath.Join(f.dir, "replaced-ca"), StorePath: storePath}), nil
 			}
 		}, auditsink.ReloadRefusedCA, nil},
 		{"secret file unreadable", func(f *reloadFixture) {
-			f.body = f.toml("[approval]\nwebhook_url_file = \"/run/x/url\"\n")
+			f.body = f.toml("[approval]\nwebhook_url_file = \"/run/x/url\"\n[log]\nformat = \"json\"\n")
 			f.r.load = func(string) (startupConfig, error) {
 				return parseConfig([]byte(f.body), func(string) ([]byte, error) { return nil, errors.New("read failed") })
 			}
 		}, auditsink.ReloadRefusedSecretFile, nil},
 		{"setting refused", func(f *reloadFixture) {
-			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n")
+			f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n")
 			f.r.load = func(string) (startupConfig, error) {
 				sc := mustParse(t, f.body)
 				sc.Config.DispatchConcurrency = 0
@@ -259,7 +259,7 @@ func TestReloader_RefusalLeavesEverythingUntouched(t *testing.T) {
 func TestReloader_CAFingerprintMismatchRefuses(t *testing.T) {
 	f := newReloadFixture(t)
 	liveBefore, gateBefore := f.deps.live.cur.Load(), f.deps.gate.cur.Load()
-	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n")
+	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n")
 	f.r.open = func(gatePath, _, storePath string) (startup.Files, error) {
 		// A CA directory key the process is not running on: a different CA.
 		return testStartupFiles(t, Config{ApprovalGatePath: gatePath, CADir: filepath.Join(f.dir, "replaced-ca"), StorePath: storePath}), nil
@@ -295,7 +295,7 @@ func TestReloader_AuditFailureRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.r.newID = func() (string, error) { return "collide", nil }
-	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n")
+	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n")
 
 	if _, err := f.r.reload(context.Background()); err == nil {
 		t.Fatal("reload succeeded though its audit record could not be written")
@@ -330,7 +330,7 @@ func TestReloader_PanicDoesNotExit(t *testing.T) {
 	f := newReloadFixture(t)
 	good := f.r.open
 	f.r.open = func(string, string, string) (startup.Files, error) { panic("boom") }
-	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n")
+	f.body = f.toml("[reach]\nmutate_blast_cap = 7\n[log]\nformat = \"json\"\n")
 
 	hup := make(chan os.Signal, 1)
 	ctx, cancel := context.WithCancel(context.Background())
