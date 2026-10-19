@@ -104,7 +104,7 @@ var measuredClasses = map[string]bool{
 	"p.lanekey": true, "p.nodiff": true,
 	"span.note": true, "span.gap": true, "span.labelnote": true,
 	"span.jcnote": true, "span.phint": true,
-	"div.evnote": true, "div.filtererr": true, "div.fhint": true,
+	"div.evnote": true, "p.fielderr": true, "p.unfilterednote": true, "div.fhint": true,
 }
 
 // boundedClasses are held to maxNoteWords but not budgeted: each is data, or

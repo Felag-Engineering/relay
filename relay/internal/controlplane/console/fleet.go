@@ -570,10 +570,9 @@ func buildFleetView(d Deps, nodes []registry.Node, filter, groupBy string) fleet
 		if err != nil {
 			v.FilterOK = false
 			v.FilterError = err.Error()
-			// A rejected filter shows the WHOLE fleet with the error stated,
-			// not an empty screen. An operator who mistypes a term is still
-			// looking at their fleet, and blanking the page makes a typo feel
-			// like an outage.
+			// A refused filter leaves the WHOLE fleet on the page, drawn
+			// de-emphasised under a note that it is unfiltered (spec 01, D26),
+			// never blanked: a typo must not feel like an outage.
 			matched = nodes
 		} else {
 			ev := capability.StateEval{Now: d.now(), CertExpiringWithin: d.CertExpiringWithin}
@@ -1543,7 +1542,8 @@ var fleetTmpl = newScreen("fleet", `
 <form class="viewbar" method="get" action="/console/">
   <div class="vfield wide">
     <label class="vlabel" for="filter">Filter</label>
-    <input id="filter" name="filter" value="{{.Filter}}" placeholder="e.g. node:role=web, state:offline" spellcheck="false" autocomplete="off">
+    <input id="filter" name="filter" value="{{.Filter}}" placeholder="e.g. node:role=web, state:offline" spellcheck="false" autocomplete="off"{{if not .FilterOK}} aria-invalid="true" aria-describedby="filter-error"{{end}}>
+    {{if not .FilterOK}}<p class="fielderr" id="filter-error">{{.FilterError}}</p>{{end}}
   </div>
   <div class="vfield">
     <label class="vlabel" for="group">Group by</label>
@@ -1554,12 +1554,11 @@ var fleetTmpl = newScreen("fleet", `
   </div>
   {{with .Pin.Raw}}<input type="hidden" name="pin" value="{{.}}">{{end}}
   <button type="submit">Apply</button>
-  <span class="vcount">{{.Matched}} of {{.Total}} {{plural .Total "Node" "Nodes"}}</span>
+  <span class="vcount{{if not .FilterOK}} refused{{end}}">{{if .FilterOK}}{{.Matched}} of {{.Total}} {{plural .Total "Node" "Nodes"}}{{else}}filter not applied{{end}}</span>
 </form>
 
 {{if .Pin.Any}}{{template "pin-bar" .Pin}}{{end}}
 
-{{if not .FilterOK}}<div class="filtererr"><b>That filter was not applied.</b> {{.FilterError}}</div>{{end}}
 {{if .NoMatch}}
 <div class="empty">
   <h2>No Nodes match this Selector.</h2>
@@ -1568,6 +1567,8 @@ var fleetTmpl = newScreen("fleet", `
 </div>
 {{end}}
 
+{{if not .FilterOK}}<p class="unfilterednote">Filter not applied: every Node is shown below, unfiltered.</p>{{end}}
+<div class="fleetresults{{if not .FilterOK}} unfiltered{{end}}">
 {{if .Wall}}
 <section class="systemstate">
   <div class="sshead">
@@ -1662,6 +1663,7 @@ var fleetTmpl = newScreen("fleet", `
   {{end}}
 </section>
 {{end}}
+</div>
 
 {{if .GroupsElided}}<p class="gap"><b>{{.GroupsElided}} {{plural .GroupsElided "group is" "groups are"}} not shown</b>; the page draws the {{len .Groups}} largest; narrow the filter or group by fewer values.</p>{{end}}
 
