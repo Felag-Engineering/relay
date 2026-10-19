@@ -12,9 +12,14 @@
 #       (no dpkg conffiles, no rpm %config): the live Policy and environment file are placed by
 #       maintainer scripts, never package-owned (ADR-0033), and the catalog's Templates are
 #       package-owned plain files (DI-29).
-#   package-guard.sh content <package> <relay-daemon|relay-read>
+#   package-guard.sh content <package> <relay-daemon|relay-read> <version> <x86_64|aarch64>
 #       The package's whole content, read with the distribution's own tools and never with
 #       nfpm, equals what the repository says it must be:
+#         - its identity is the expected one, computed from <version> and <arch> and never
+#           read from the package: on .deb the whole control file equals
+#           daemon/packaging/expected/<name>.deb.control with only Version, Architecture and
+#           Installed-Size filled in (Package, epoch-free Version, amd64|arm64 or all); on .rpm
+#           NAME, EPOCHNUM (0), VERSION-RELEASE and ARCH (x86_64|aarch64 or noarch) are exact;
 #         - its payload listing (path, type, mode, owner; and on rpm, file capabilities) equals
 #           daemon/packaging/expected/<name>.<deb|rpm>.files, and no entry is setuid, setgid or
 #           sticky or carries a file capability;
@@ -23,8 +28,8 @@
 #           `rpm -qp --scripts --triggers --filetriggers` equals the source scripts, each under
 #           the one header line rpm itself prints, and declares no trigger);
 #         - its relationships and control fields equal
-#           daemon/packaging/expected/<name>.<deb|rpm>.relations, with the package's own
-#           version-release and rpm architecture tag normalised;
+#           daemon/packaging/expected/<name>.<deb|rpm>.relations, with the EXPECTED
+#           version-release and rpm architecture tag written as placeholders;
 #         - every file it carries from the repository (default Policy, LICENSE, the privilege
 #           posture document, the unit, the environment example, the catalog) is byte-equal to
 #           its source.
@@ -53,26 +58,64 @@ files_view() {
   esac
 }
 
-# relations_view PACKAGE: every relationship the package declares, normalised for its own
-# version-release (@VR@) and rpm architecture tag (@ISA@); on .deb also the set of control
-# field names, so an unexpected field is refused even when its value is empty-looking.
+# identity NAME VERSION ARCH: sets the identity the package must carry, derived from the
+# release version and architecture the caller expects and never read from the package:
+#   DEB_VERSION  <base>[~<pre>][+<meta>]-1   (no epoch)     RPM_VR  the same, pre's '-' as '_'
+#   DEB_ARCH     amd64 | arm64, or all for the catalog       RPM_ARCH  x86_64 | aarch64 | noarch
+#   RPM_ISA      the rpm architecture tag in Provides (x86-64 | aarch-64), empty for noarch
+# These are the transformations nfpm applies to a semver version; a package whose identity
+# differs, whatever produced it, is refused.
+identity() {
+  local name="$1" v="$2" arch="$3" base pre="" meta=""
+  [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?$ ]] \
+    || die "'$v' is not a release version"
+  base="${v%%[-+]*}"
+  if [[ "$v" == *-* ]]; then pre="${v#*-}"; pre="${pre%%+*}"; fi
+  if [[ "$v" == *+* ]]; then meta="${v#*+}"; fi
+  DEB_VERSION="$base${pre:+~$pre}${meta:++$meta}-1"
+  RPM_VR="$base${pre:+~${pre//-/_}}${meta:++$meta}-1"
+  case "$arch" in
+    x86_64) DEB_ARCH=amd64; RPM_ARCH=x86_64; RPM_ISA=x86-64 ;;
+    aarch64) DEB_ARCH=arm64; RPM_ARCH=aarch64; RPM_ISA=aarch-64 ;;
+    *) die "unknown architecture '$arch'" ;;
+  esac
+  if [ "$name" = relay-read ]; then DEB_ARCH=all; RPM_ARCH=noarch; RPM_ISA=""; fi
+}
+
+# relations_view PACKAGE: every relationship the package declares, with the EXPECTED
+# version-release written as @VR@ and the expected rpm architecture tag as @ISA@, so a package
+# carrying any other version or architecture in a relationship differs from the baseline. On
+# .deb also the set of control field names.
 relations_view() {
   local pkg="$1" vr
   case "$pkg" in
     *.deb)
-      vr="$(dpkg-deb -f "$pkg" Version)"
+      vr="$DEB_VERSION"
       echo "Fields: $(dpkg-deb -f "$pkg" | awk -F: '/^[A-Za-z][A-Za-z0-9-]*:/ {print $1}' | sort | paste -sd ' ' -)"
       for f in Depends Pre-Depends Provides Replaces Conflicts Breaks Recommends Suggests Enhances; do
         echo "$f: $(dpkg-deb -f "$pkg" "$f")"
       done | sed "s|${vr//./\\.}|@VR@|g"
       ;;
     *.rpm)
-      vr="$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$pkg")"
+      vr="$RPM_VR"
+      local isa='s/^//'
+      if [ -n "$RPM_ISA" ]; then isa="s/(${RPM_ISA})/(@ISA@)/g"; fi
       for q in provides requires conflicts obsoletes recommends suggests supplements enhances; do
         rpm -qp "--$q" "$pkg" | sed "s/^/$q: /"
-      done | sed -e "s|${vr//./\\.}|@VR@|g" -e 's/([a-z0-9_]*-64)/(@ISA@)/g'
+      done | sed -e "s|${vr//./\\.}|@VR@|g" -e "$isa"
       ;;
   esac
+}
+
+# control_expected NAME PKG: the reviewed .deb control file with only Version, Architecture
+# (both from identity) and Installed-Size (read from the package, and required to be a number)
+# filled in.
+control_expected() {
+  local size
+  size="$(dpkg-deb -f "$2" Installed-Size)"
+  [[ "$size" =~ ^[0-9]+$ ]] || refuse "$PKG_NAME: Installed-Size '$size' is not a number"
+  sed -e "s|@VERSION@|$DEB_VERSION|" -e "s|@ARCH@|$DEB_ARCH|" -e "s|@INSTALLED_SIZE@|$size|" \
+    "$EXPECTED/$1.deb.control"
 }
 
 # rpm_scripts_expected NAME: what `rpm -qp --scripts --triggers --filetriggers` prints for
@@ -104,8 +147,21 @@ content() {
   case "$name" in relay-daemon | relay-read) ;; *) die "unknown package name: $name" ;; esac
   [ -f "$pkg" ] || die "no package at $pkg"
   PKG_NAME="$(basename "$pkg")"
+  identity "$name" "$3" "$4"
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' EXIT
+
+  # Identity: name, epoch, version and architecture are the expected ones, never values taken
+  # from the package itself.
+  if [ "$fmt" = deb ]; then
+    dpkg-deb -f "$pkg" > "$work/control"
+    control_expected "$name" "$pkg" > "$work/control.want"
+    compare_view "control file" "$work/control.want" "$work/control"
+  else
+    rpm -qp --qf '%{NAME} %{EPOCHNUM} %{VERSION}-%{RELEASE} %{ARCH}\n' "$pkg" > "$work/ident" 2>/dev/null
+    printf '%s 0 %s %s\n' "$name" "$RPM_VR" "$RPM_ARCH" > "$work/ident.want"
+    compare_view "name, epoch, version and architecture" "$work/ident.want" "$work/ident"
+  fi
 
   # Payload listing, and no privilege bits or capabilities anywhere.
   files_view "$pkg" > "$work/files"
@@ -236,8 +292,8 @@ case "$cmd" in
     echo "package-guard: $(basename "$pkg") declares no configuration files"
     ;;
   content)
-    [ "$#" -eq 3 ] || die "usage: content <package> <relay-daemon|relay-read>"
-    content "$(realpath "$2")" "$3"
+    [ "$#" -eq 5 ] || die "usage: content <package> <relay-daemon|relay-read> <version> <x86_64|aarch64>"
+    content "$(realpath "$2")" "$3" "$4" "$5"
     ;;
   *) die "usage: $0 same|listed|no-config|content ..." ;;
 esac

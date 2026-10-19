@@ -140,14 +140,15 @@ check "catalog rpm requires relay-daemon" lists '^relay-daemon$' "$(rpm -qpR "$r
 check "catalog deb depends on relay-daemon" lists '^relay-daemon$' "$(dpkg-deb -f "$read_deb" Depends)"
 
 # The content guard reads every package with dpkg-deb and rpm, never nfpm, against the
-# repository's expected listings, scripts and relationships.
+# repository's expected identity, listings, scripts and relationships.
 for p in "$deb" "$rpmf"; do
-  expect_ok "$(basename "$p"): content as expected" bash "$guard" content "$p" relay-daemon
+  expect_ok "$(basename "$p"): content as expected" bash "$guard" content "$p" relay-daemon "$version" x86_64
 done
 for p in "$read_deb" "$read_rpm"; do
-  expect_ok "$(basename "$p"): content as expected" bash "$guard" content "$p" relay-read
+  expect_ok "$(basename "$p"): content as expected" bash "$guard" content "$p" relay-read "$version" x86_64
 done
-expect_refused "a daemon package checked as the catalog is refused" 1 bash "$guard" content "$deb" relay-read
+expect_refused "a daemon package checked as the catalog is refused" 1 bash "$guard" content "$deb" relay-read "$version" x86_64
+expect_refused "a malformed expected version is a usage error" 2 bash "$guard" content "$deb" relay-daemon '1.2.3"x' x86_64
 
 # Tampered packages: each is built from a copy of the packaging inputs with one thing changed,
 # and the real guard, which compares against this repository, must refuse it. A file
@@ -162,33 +163,38 @@ cp "$root/docs/operations/daemon-privilege-posture.md" "$fake/docs/operations/"
 cp "$root/LICENSE" "$fake/"
 cp -r "$root/tools/nfpm" "$fake/tools/nfpm"
 
-# tampered NAME EDIT...: builds the daemon packages from the fake tree after running EDIT in it,
-# then restores the tree. Prints the output directory.
+# tampered NAME EDIT...: builds packages from the fake tree after running EDIT in it, then
+# restores the tree, and prints the output directory. T_VERSION and T_ARCH override the version
+# and architecture built (the guard is still told the real ones); T_CATALOG=1 builds the
+# catalog package too.
 tampered() {
   local name="$1"; shift
-  local out="$work/t-$name"
+  local out="$work/t-$name" extra=()
+  if [ -n "${T_CATALOG:-}" ]; then extra=(--catalog); fi
   rm -rf "$fake.bak"; cp -r "$fake" "$fake.bak"
   (cd "$fake" && "$@") || { bad "tamper $name: edit failed"; return 1; }
-  bash "$fake/scripts/build-packages.sh" "$version" x86_64 "$work/one/relay-daemon" "$out" >/dev/null 2>&1 \
-    || bad "tamper $name: build failed"
+  bash "$fake/scripts/build-packages.sh" "${T_VERSION:-$version}" "${T_ARCH:-x86_64}" \
+    "$work/one/relay-daemon" "$out" "${extra[@]}" >/dev/null 2>&1 || bad "tamper $name: build failed"
   rm -rf "$fake"; mv "$fake.bak" "$fake"
   printf '%s\n' "$out"
 }
-# refuses_both WHAT DEB-REASON RPM-REASON OUTDIR: the content guard refuses both packages, exit 1,
-# and its refusal names the check expected to catch the tampering, so a case cannot pass by
-# being refused for some other reason.
+# refused_for TEST-NAME REASON PACKAGE GUARD-NAME: the content guard refuses PACKAGE (checked as
+# GUARD-NAME at this test's version, x86_64) with exit 1, and its refusal names the check
+# expected to catch the tampering, so a case cannot pass by being refused for another reason.
 refused_for() {
-  local name="$1" reason="$2" pkg="$3" rc=0 err
-  err="$(bash "$guard" content "$pkg" relay-daemon 2>&1 >/dev/null)" || rc=$?
+  local name="$1" reason="$2" pkg="$3" as="${4:-relay-daemon}" rc=0 err
+  err="$(bash "$guard" content "$pkg" "$as" "$version" x86_64 2>&1 >/dev/null)" || rc=$?
   if [ "$rc" -eq 1 ] && grep -Eq "REFUSED: .*($reason)" <<<"$err"; then ok "$name"
   else bad "$name (exit $rc: $(grep REFUSED <<<"$err" | head -1))"; fi
 }
 refuses_both() {
   local what="$1" deb_reason="$2" rpm_reason="$3" out="$4"
-  refused_for "deb with $what is refused" "$deb_reason" "$(echo "$out"/*.deb)"
-  refused_for "rpm with $what is refused" "$rpm_reason" "$(echo "$out"/*.rpm)"
+  refused_for "deb with $what is refused" "$deb_reason" "$(echo "$out"/relay-daemon*.deb)"
+  refused_for "rpm with $what is refused" "$rpm_reason" "$(echo "$out"/relay-daemon*.rpm)"
 }
 manifest=daemon/packaging/nfpm/relay-daemon.yaml
+read_manifest=daemon/packaging/nfpm/relay-read.yaml
+ident="name, epoch, version and architecture differs"
 refuses_both "a changed maintainer script" "postinst differs" "scriptlets and triggers differs" \
   "$(tampered script sh -c 'echo "touch /tmp/x" >> daemon/packaging/scripts/postinst.sh')"
 refuses_both "a setuid binary" "payload listing differs" "payload listing differs" \
@@ -201,10 +207,43 @@ refuses_both "a changed default Policy" "policy.default.toml differs" "policy.de
   "$(tampered policy sh -c 'echo "# changed" >> daemon/policy.default.toml')"
 refuses_both "a changed LICENSE" "LICENSE differs" "LICENSE differs" \
   "$(tampered license sh -c 'echo "changed" >> LICENSE')"
-refuses_both "an extra relationship" "relationships differs" "relationships differs" \
+refuses_both "an extra relationship" "control file differs" "relationships differs" \
   "$(tampered relation sed -i 's|^mtime:|replaces:\n  - other-daemon\nconflicts:\n  - other-daemon\nprovides:\n  - other-daemon\nmtime:|' "$manifest")"
 refuses_both "an added trigger or scriptlet" "control archive members differs" "scriptlets and triggers differs" \
   "$(tampered trigger sed -i 's|^deb:|deb:\n  triggers:\n    interest:\n      - /usr/lib/x|; s|^rpm:|rpm:\n  scripts:\n    posttrans: "@SRC@/daemon/packaging/scripts/prerm.sh"|' "$manifest")"
+
+# Identity: everything else is the real daemon's, only the name, epoch, version or architecture
+# differs.
+refused_for "deb renamed to another package is refused" "control file differs" \
+  "$(echo "$(tampered rename sed -i 's/^name: relay-daemon$/name: openssh-server/' "$manifest")"/*.deb)"
+refused_for "rpm renamed to another package is refused" "$ident" \
+  "$(echo "$work"/t-rename/*.rpm)"
+refuses_both "an epoch" "control file differs" "$ident" \
+  "$(tampered epoch sed -i 's/^release: "1"$/release: "1"\nepoch: "9"/' "$manifest")"
+refuses_both "a bumped version" "control file differs" "$ident" \
+  "$(T_VERSION=99.0.0 tampered version true)"
+refuses_both "the wrong architecture" "control file differs" "$ident" \
+  "$(T_ARCH=aarch64 tampered arch true)"
+
+# The real relay-daemon .deb re-wrapped by hand with another name and an epoch: same payload,
+# same scripts, same md5sums; only the control file's identity changed.
+rewrap="$work/rewrap"
+mkdir -p "$rewrap"
+dpkg-deb -R "$deb" "$rewrap/tree"
+sed -i -e 's/^Package: .*/Package: openssh-server/' -e 's/^Version: .*/Version: 9:99.0/' "$rewrap/tree/DEBIAN/control"
+dpkg-deb --root-owner-group -b "$rewrap/tree" "$rewrap/evil.deb" >/dev/null 2>&1 || bad "rewrap builds"
+refused_for "a hand re-wrapped deb with another name and epoch is refused" "control file differs" "$rewrap/evil.deb"
+
+# The catalog package: a changed Template and an extra payload file.
+refused_for "catalog deb with a changed Template is refused" "catalog.toml differs" \
+  "$(echo "$(T_CATALOG=1 tampered catalog sh -c 'echo "# changed" >> daemon/packaging/templates.d/relay-read/catalog.toml')"/relay-read*.deb)" relay-read
+refused_for "catalog rpm with a changed Template is refused" "catalog.toml differs" \
+  "$(echo "$work"/t-catalog/relay-read*.rpm)" relay-read
+refused_for "catalog deb with an extra payload file is refused" "payload listing differs" \
+  "$(echo "$(T_CATALOG=1 tampered catextra sed -i 's|^contents:|contents:\n  - src: "@SRC@/LICENSE"\n    dst: /etc/relay-daemon/templates.d/relay-read/extra.toml\n    file_info: {mode: 0o644, owner: root, group: root}|' "$read_manifest")"/relay-read*.deb)" relay-read
+refused_for "catalog rpm with an extra payload file is refused" "payload listing differs" \
+  "$(echo "$work"/t-catextra/relay-read*.rpm)" relay-read
+
 
 # postrm's purge and removal listing, run unprivileged on a copy whose fixed paths are moved
 # under a temporary root (and whose systemd probe is off). Only the four path constants and the

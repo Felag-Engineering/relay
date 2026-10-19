@@ -496,7 +496,9 @@ jobs:
       #     SHA256SUMS (DI-32);
       #   - the catalog package carries the shipped catalog, and no package declares
       #     configuration the package manager would preserve (ADR-0033, DI-29);
-      #   - every package's whole content -- payload listing with modes and owners, no setuid,
+      #   - every package's identity -- name, epoch, version and architecture, computed from
+      #     this release's version and the pass's architecture, never read from the package --
+      #     and its whole content -- payload listing with modes and owners, no setuid,
       #     setgid or file capability, maintainer scripts, triggers, relationships and control
       #     fields, and every file carried from the repository -- equals what the repository
       #     says (`content`, against daemon/packaging/expected and daemon/packaging/scripts);
@@ -531,10 +533,10 @@ jobs:
                   bash "${guard}" same "${f}" /usr/bin/relay-daemon "${bin}"
                   bash "${guard}" same "${f}" /usr/lib/systemd/system/relay-daemon.service dist/relay-daemon.service
                   bash "${guard}" same "${f}" /usr/share/relay-daemon/relay-daemon.env.example dist/relay-daemon.env.example
-                  bash "${guard}" content "${f}" relay-daemon
+                  bash "${guard}" content "${f}" relay-daemon "${VERSION}" "${arch}"
                   ;;
                 relay-read[_-]*)
-                  bash "${guard}" content "${f}" relay-read
+                  bash "${guard}" content "${f}" relay-read "${VERSION}" "${arch}"
                   ;;
                 *) echo "::error::unexpected package $(basename "${f}")"; exit 1 ;;
               esac

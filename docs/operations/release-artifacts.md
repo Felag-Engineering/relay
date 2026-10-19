@@ -210,9 +210,19 @@ the nfpm pinned under `tools/nfpm` with every manifest's `mtime` taken from
 `SOURCE_DATE_EPOCH`, and the workflow fails unless the two passes' packages are byte-identical
 and each package's `/usr/bin/relay-daemon` is the release binary byte for byte. Because both
 passes run the same nfpm, that comparison proves determinism, not integrity. A separate check
-reads every package with `dpkg-deb` and `rpm` and compares its whole content (payload listing,
-maintainer scripts, relationships, and every file it carries from the repository) with the
-repository. The packages are uploaded as the run's `packages` artifact and are **not yet
+reads every package with `dpkg-deb` and `rpm` and compares it with a reviewed baseline in the
+repository (`daemon/packaging/expected/`):
+- the package's identity, computed from the release version and architecture rather than read
+  from the package: the whole `.deb` control file, and the `.rpm` name, epoch,
+  version-release and architecture;
+- the payload listing, with modes, owners and rpm file capabilities, and no setuid or setgid
+  entry;
+- the maintainer scripts and triggers;
+- the declared relationships;
+- the files carried from the repository: default Policy, LICENSE, posture document, unit,
+  environment example and catalog.
+
+It does not check timestamps. The binary's bytes are a separate check against the release binary. The packages are uploaded as the run's `packages` artifact and are **not yet
 attached to the Release**. Attaching them waits on the install matrix and on the unit's syscall
 filter being verified on a real systemd host (`daemon-installation.md`, DI-33 and DI-3). Until
 then nothing in `SHA256SUMS` names them. The standalone unit is attached already.
