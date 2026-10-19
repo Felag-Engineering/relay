@@ -202,7 +202,7 @@ type Deps struct {
 	// Records. Defaults to time.Now().UTC() when nil.
 	Now func() time.Time
 	// CertExpiringWithin is the state:cert-expiring warning window
-	// (ADR-0034): a mirror of a root-owned startup value (invariant
+	// (ADR-0034): a mirror of a configured startup value (invariant
 	// 11) — this surface is TOLD it, and no route reads or sets it. Zero
 	// (the default) means the marker never fires. No handler in this package
 	// reads it: handleGetNode's state: instant comes from the capability read

@@ -17,6 +17,12 @@ import (
 type startupFiles struct {
 	ca   *ca.CA
 	gate *approval.Gate
+	// recheckStore checks the store's directory again; newServer calls it immediately
+	// before it opens the store. SQLite opens the store and its journal files by path, and
+	// resolves symbolic links itself, so the store cannot be opened from the checked
+	// descriptor: what remains is the window between this check and those opens, against
+	// an account that could already write the Relay's own directory.
+	recheckStore func() error
 }
 
 // openStartupFiles is the start-time check on everything the configuration
@@ -36,7 +42,7 @@ func openStartupFiles(cfg Config) (startupFiles, error) {
 	if err != nil {
 		return startupFiles{}, fmt.Errorf("open CA: %w", err)
 	}
-	return startupFiles{ca: relayCA, gate: gate}, nil
+	return startupFiles{ca: relayCA, gate: gate, recheckStore: func() error { return checkStoreDir(cfg.StorePath) }}, nil
 }
 
 // checkStoreDir creates the store's directory owner-only if it is absent, as

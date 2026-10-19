@@ -33,7 +33,9 @@ func testStartupFiles(t testing.TB, cfg Config) startupFiles {
 		t.Fatalf("generate CA: %v", err)
 	}
 	got, _ := testCAs.LoadOrStore(cfg.CADir, fresh)
-	files := startupFiles{ca: got.(*ca.CA)}
+	// The store's directory is a test temp directory, which the check refuses; the
+	// recheck is hostfile's, proven on the harness (TestStart_RefusesGroupReadableStateOrKey).
+	files := startupFiles{ca: got.(*ca.CA), recheckStore: func() error { return nil }}
 	if cfg.ApprovalGatePath == "" {
 		files.gate, err = approval.NewGate(nil)
 	} else {
@@ -48,23 +50,25 @@ func testStartupFiles(t testing.TB, cfg Config) startupFiles {
 	return files
 }
 
-// TestStartup_UnloadableGateFileRefuses is RC-35 at the composition root: a configured gate
-// file that cannot be loaded refuses start before anything is built, and the server cannot be
-// built without a gate read through the check, so no path runs ungated.
-func TestStartup_UnloadableGateFileRefuses(t *testing.T) {
+// TestStartup_RefusedGateRefusesBeforeTheCA: a configured gate file that is absent, or that
+// the file check refuses, refuses start before the CA directory is touched, and the server
+// cannot be built without a gate read through the check. In-process, every file a test can
+// make is refused by the check itself (sticky /tmp, the test's own uid, or root), so a
+// malformed gate reaching the parser is proven on the harness instead
+// (TestStart_RefusesMalformedGateFile, RC-35).
+func TestStartup_RefusedGateRefusesBeforeTheCA(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		path func(t *testing.T) string
 	}{
 		{"absent", func(t *testing.T) string { return filepath.Join(t.TempDir(), "absent.json") }},
-		{"malformed", func(t *testing.T) string {
+		{"refused by the file check", func(t *testing.T) string {
 			p := filepath.Join(t.TempDir(), "gates.json")
-			if err := os.WriteFile(p, []byte(`{"rules": [`), 0o600); err != nil {
+			if err := os.WriteFile(p, []byte(`{"rules": []}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			return p
 		}},
-		{"a directory", func(t *testing.T) string { return t.TempDir() }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := baseTestConfig(t)
@@ -72,7 +76,7 @@ func TestStartup_UnloadableGateFileRefuses(t *testing.T) {
 			cfg.ApprovalGatePath = tc.path(t)
 			files, err := openStartupFiles(cfg)
 			if err == nil {
-				t.Fatal("openStartupFiles accepted an unloadable gate file")
+				t.Fatal("openStartupFiles accepted a gate file it could not load")
 			}
 			if !strings.Contains(err.Error(), "approval gate") {
 				t.Errorf("err = %v, want it to name the approval gate", err)
@@ -98,9 +102,10 @@ func TestStartup_UnloadableGateFileRefuses(t *testing.T) {
 }
 
 // TestStartupFiles_OnlyTheCheckBuildsThem pins that no production file in this package hands
-// the composition root a CA or gate the start-time check did not read: a startupFiles literal
-// with fields appears only in openStartupFiles, and newServer is called only from main, with
-// openStartupFiles' result.
+// the composition root a CA, gate or store check the start-time check did not supply: a
+// startupFiles literal with fields, or an assignment to one of its fields, appears only in
+// openStartupFiles; newServerWithHooks is called only from newServer; and newServer is called
+// only from main, with the value main's one openStartupFiles call returned.
 func TestStartupFiles_OnlyTheCheckBuildsThem(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -112,7 +117,8 @@ func TestStartupFiles_OnlyTheCheckBuildsThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	fset := token.NewFileSet()
-	newServerCalls := 0
+	newServerCalls, withHooksCalls, filesFromCheck, filesAssigned := 0, 0, 0, 0
+	fields := map[string]bool{"ca": true, "gate": true, "recheckStore": true}
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -128,15 +134,37 @@ func TestStartupFiles_OnlyTheCheckBuildsThem(t *testing.T) {
 			if fn != nil {
 				fnName = fn.Name.Name
 			}
+			allowed := name == "startup_files.go" && fnName == "openStartupFiles"
 			ast.Inspect(decl, func(n ast.Node) bool {
 				switch v := n.(type) {
 				case *ast.CompositeLit:
-					allowed := name == "startup_files.go" && fnName == "openStartupFiles"
 					if id, ok := v.Type.(*ast.Ident); ok && id.Name == "startupFiles" && len(v.Elts) != 0 && !allowed {
 						t.Errorf("%s: %s builds a startupFiles with fields; only openStartupFiles may", name, fnName)
 					}
+				case *ast.AssignStmt:
+					for i, lhs := range v.Lhs {
+						if sel, ok := lhs.(*ast.SelectorExpr); ok && fields[sel.Sel.Name] && !allowed {
+							t.Errorf("%s: %s assigns .%s; only openStartupFiles fills a startupFiles", name, fnName, sel.Sel.Name)
+						}
+						if id, ok := lhs.(*ast.Ident); ok && id.Name == "files" && fnName == "main" {
+							filesAssigned++
+							if len(v.Rhs) == 1 {
+								if call, ok := v.Rhs[0].(*ast.CallExpr); ok {
+									if f, ok := call.Fun.(*ast.Ident); ok && f.Name == "openStartupFiles" && i == 0 {
+										filesFromCheck++
+									}
+								}
+							}
+						}
+					}
 				case *ast.CallExpr:
 					id, ok := v.Fun.(*ast.Ident)
+					if ok && id.Name == "newServerWithHooks" {
+						withHooksCalls++
+						if fnName != "newServer" {
+							t.Errorf("%s: %s calls newServerWithHooks; only newServer may", name, fnName)
+						}
+					}
 					if !ok || id.Name != "newServer" {
 						return true
 					}
@@ -150,7 +178,10 @@ func TestStartupFiles_OnlyTheCheckBuildsThem(t *testing.T) {
 			})
 		}
 	}
-	if newServerCalls != 1 {
-		t.Errorf("found %d production call(s) to newServer, want exactly 1 (main)", newServerCalls)
+	if newServerCalls != 1 || withHooksCalls != 1 {
+		t.Errorf("found %d production call(s) to newServer and %d to newServerWithHooks, want exactly 1 each", newServerCalls, withHooksCalls)
+	}
+	if filesFromCheck != 1 || filesAssigned != 1 {
+		t.Errorf("main assigns files %d time(s), %d from openStartupFiles; want exactly once, from openStartupFiles", filesAssigned, filesFromCheck)
 	}
 }

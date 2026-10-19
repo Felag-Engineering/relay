@@ -6,14 +6,17 @@ package relaytest
 // enforces on the files it reads (ADR-0043). No binary carries a way round that check; the
 // harness is the only way a test meets it.
 //
-// The layout, under /run because the check refuses a file below any directory the Relay can
-// write, and /tmp is world-writable:
+// The layout is in two places. The files the check reads are under /run, because the check
+// refuses a file below any directory the Relay can write and /tmp is world-writable; /run is
+// root-owned and writable by nobody else. The binaries are under /tmp, because /run is often
+// mounted noexec (it is on GitHub's runners) and the check never looks at the binary:
 //
-//	<base>/        root:root              0755
+//	<base>/        root:root              0755  /run/relaytest.*
 //	  etc/         root:relaytest         0750  the configuration, root:relaytest 0640
-//	  bin/         root:root              0755  root-owned copies of the binaries under test
 //	  state/       relaytest:relaytest    0700  the CA directory and the store
 //	  io/          relaytest:relaytest-io 2770  the devharness socket and the Relay's log
+//	<bin>/         root:root              0755  /tmp/relaytest-bin.*: root-owned copies of
+//	                                            the binaries under test
 //
 // The test is in TestIOGroup and in nothing else the Relay owns, so it reaches the socket and
 // the log only through that group, and no member of that group can read or write the
@@ -55,9 +58,12 @@ const (
 	verifySkipsEnv = "RELAY_VERIFY_SKIPS"
 	// relayStartTimeout bounds how long sudo may take to hand over to the Relay.
 	relayStartTimeout = 10 * time.Second
-	// layoutParent holds every layout: root-owned and writable by nobody else, so nothing
-	// above a layout is a directory the Relay could write.
+	// layoutParent holds every layout's checked files: root-owned and writable by nobody
+	// else, so nothing above them is a directory the Relay could write.
 	layoutParent = "/run"
+	// binParent holds every layout's binaries: a filesystem that allows exec, which /run
+	// often does not. Each layout's bin directory is root-owned under it.
+	binParent = "/tmp"
 )
 
 // setprivArgs drops sudo's root to TestUser: its own uid and gid, every supplementary group
@@ -215,16 +221,25 @@ func NewRelayLayout(t *testing.T, gate string) *RelayLayout {
 		}
 	})
 	sudo(t, "chmod", "0755", base)
+	binDir := strings.TrimSpace(string(sudo(t, "mktemp", "-d", binParent+"/relaytest-bin.XXXXXXXX")))
+	if filepath.Dir(binDir) != binParent || !strings.HasPrefix(filepath.Base(binDir), "relaytest-bin.") {
+		t.Fatalf("sudo mktemp returned an unexpected path %q", binDir)
+	}
+	t.Cleanup(func() {
+		if out, err := exec.Command("sudo", "-n", "rm", "-rf", "--", binDir).CombinedOutput(); err != nil {
+			t.Errorf("remove the separate-uid bin directory %s: %v: %s", binDir, err, out)
+		}
+	})
+	sudo(t, "chmod", "0755", binDir)
 	l := &RelayLayout{
 		sep:      sep,
 		confDir:  filepath.Join(base, "etc"),
-		binDir:   filepath.Join(base, "bin"),
+		binDir:   binDir,
 		stateDir: filepath.Join(base, "state"),
 		ioDir:    filepath.Join(base, "io"),
 		bins:     map[string]string{},
 	}
 	sudo(t, "install", "-d", "-o", "root", "-g", TestUser, "-m", "0750", l.confDir)
-	sudo(t, "install", "-d", "-o", "root", "-g", "root", "-m", "0755", l.binDir)
 	sudo(t, "install", "-d", "-o", TestUser, "-g", TestUser, "-m", "0700", l.stateDir)
 	sudo(t, "install", "-d", "-o", TestUser, "-g", TestIOGroup, "-m", "2770", l.ioDir)
 	return l

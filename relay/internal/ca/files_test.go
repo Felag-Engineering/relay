@@ -3,8 +3,14 @@ package ca
 import (
 	"crypto/elliptic"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -144,5 +150,83 @@ func TestGenerate_InMemoryCA(t *testing.T) {
 	csr, _ := newTestCSR(t, "ignored", elliptic.P256())
 	if _, err := a.SignCSR(csr, "node-1"); err != nil {
 		t.Errorf("SignCSR on a generated CA: %v", err)
+	}
+}
+
+// A certificate swapped in beside a checked key is refused: the certificate is read relative to
+// the checked directory, and must certify the key.
+func TestOpen_RefusesCertificateNotCertifyingKey(t *testing.T) {
+	a, b := filepath.Join(t.TempDir(), "a"), filepath.Join(t.TempDir(), "b")
+	for _, dir := range []string{a, b} {
+		if _, err := openPlain(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other, err := os.ReadFile(filepath.Join(b, certFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(a, certFileName), other, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := openPlain(a)
+	if c != nil || err == nil || !strings.Contains(err.Error(), "does not certify") {
+		t.Fatalf("open = %v, %v; want the certificate-does-not-certify refusal", c, err)
+	}
+}
+
+// Generate has no file check, so nothing outside a test may call it: the Relay's CA is always
+// read through Open. Like the no_dispatch guard, this scans every non-test Go file in the module.
+func TestGenerate_HasNoNonTestCallers(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	root := filepath.Join(filepath.Dir(thisFile), "..", "..") // the relay module
+	fset := token.NewFileSet()
+	scanned := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); name == "testdata" || name == "bin" || strings.HasPrefix(name, ".") && path != root {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		scanned++
+		inCA := file.Name.Name == "ca" && filepath.Dir(path) == filepath.Dir(thisFile)
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			switch fn := call.Fun.(type) {
+			case *ast.SelectorExpr:
+				if id, ok := fn.X.(*ast.Ident); ok && id.Name == "ca" && fn.Sel.Name == "Generate" {
+					t.Errorf("%s calls ca.Generate outside a test", path)
+				}
+			case *ast.Ident:
+				if inCA && fn.Name == "Generate" {
+					t.Errorf("%s calls Generate outside a test", path)
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned < 50 {
+		t.Fatalf("scanned %d production files under %s; the walk did not reach the module", scanned, root)
 	}
 }

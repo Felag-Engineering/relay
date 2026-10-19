@@ -317,10 +317,10 @@ func newServer(cfg Config, files startupFiles) (*grpc.Server, *appDeps, error) {
 }
 
 func newServerWithHooks(cfg Config, files startupFiles, hooks serverHooks) (*grpc.Server, *appDeps, error) {
-	if files.ca == nil || files.gate == nil {
+	if files.ca == nil || files.gate == nil || files.recheckStore == nil {
 		// Never a default: an absent gate would read as "nothing needs
 		// approval", the failure approval.Load exists to prevent.
-		return nil, nil, errors.New("build server: the CA and the approval gate were not read through the start-time file check")
+		return nil, nil, errors.New("build server: the CA, the approval gate and the store directory were not read through the start-time file check")
 	}
 	relayCA := files.ca
 
@@ -370,6 +370,9 @@ func newServerWithHooks(cfg Config, files startupFiles, hooks serverHooks) (*grp
 	// internal log lines must set the default before newServer.
 	logger := slog.New(logctx.NewHandler(slog.Default().Handler()))
 
+	if err := files.recheckStore(); err != nil {
+		return nil, nil, err
+	}
 	st, err := store.Open(cfg.StorePath, store.WithMaxNodes(cfg.MaxNodes), store.WithMinDaemonVersion(cfg.MinDaemonVersion), store.WithLogger(logger))
 	if err != nil {
 		return nil, nil, fmt.Errorf("open store: %w", err)

@@ -69,6 +69,9 @@ func loadConfig(path string) (startupConfig, error) {
 		return startupConfig{}, fmt.Errorf("configuration: the configuration file %s does not exist: %w", path, fs.ErrNotExist)
 	case errors.Is(err, fs.ErrPermission):
 		return startupConfig{}, fmt.Errorf("configuration: the configuration file %s cannot be read: %w", path, fs.ErrPermission)
+	case errors.As(err, new(*hostfile.Refusal)):
+		// The refusal names the path itself.
+		return startupConfig{}, fmt.Errorf("configuration: %w", err)
 	case err != nil:
 		return startupConfig{}, fmt.Errorf("configuration: the configuration file %s: %w", path, err)
 	}

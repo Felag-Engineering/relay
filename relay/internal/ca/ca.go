@@ -23,8 +23,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
 )
@@ -128,37 +129,31 @@ func open(dir string, files generatedFiles) (*CA, error) {
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return nil, fmt.Errorf("ca: create dir: %w", err)
 	}
+	// The checked directory's descriptor stays open: the certificate is opened relative to
+	// it, so it comes from the directory that was decided on.
 	d, err := files.openDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("ca: CA directory: %w", err)
 	}
-	_ = d.Close() // only its owner and mode were wanted
+	defer d.Close() //nolint:errcheck // read-only
 
-	keyPath := filepath.Join(dir, keyFileName)
-	certPath := filepath.Join(dir, certFileName)
-
-	_, keyErr := os.Lstat(keyPath)
-	_, certErr := os.Lstat(certPath)
-
-	keyExists := keyErr == nil
-	certExists := certErr == nil
-
-	// Propagate unexpected stat errors (e.g. permission denied), not just absence.
-	if keyErr != nil && !os.IsNotExist(keyErr) {
-		return nil, fmt.Errorf("ca: stat key file: %w", keyErr)
+	keyExists, err := entryExists(d, keyFileName)
+	if err != nil {
+		return nil, fmt.Errorf("ca: stat key file: %w", err)
 	}
-	if certErr != nil && !os.IsNotExist(certErr) {
-		return nil, fmt.Errorf("ca: stat cert file: %w", certErr)
+	certExists, err := entryExists(d, certFileName)
+	if err != nil {
+		return nil, fmt.Errorf("ca: stat cert file: %w", err)
 	}
 
 	switch {
 	case keyExists && certExists:
-		return load(dir, files)
+		return load(d, dir, files)
 	case !keyExists && !certExists:
 		if err := create(dir); err != nil {
 			return nil, err
 		}
-		return load(dir, files)
+		return load(d, dir, files)
 	case keyExists:
 		return nil, errors.New("ca: inconsistent state: ca-key.pem present but ca-cert.pem missing")
 	default:
@@ -397,13 +392,28 @@ func create(dir string) error {
 	return nil
 }
 
-// load reads the CA key and certificate from dir, parses them, and returns a
-// ready CA. All parse errors propagate (corrupt-file path). The key is read
-// from the descriptor files.openKey checked; the certificate is public and is
-// read without following a symlink.
-func load(dir string, files generatedFiles) (*CA, error) {
+// entryExists reports whether name is present in the directory d, without
+// following a symbolic link.
+func entryExists(d *os.File, name string) (bool, error) {
+	var st unix.Stat_t
+	err := unix.Fstatat(int(d.Fd()), name, &st, unix.AT_SYMLINK_NOFOLLOW)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, unix.ENOENT):
+		return false, nil
+	}
+	return false, err
+}
+
+// load reads the CA key and certificate from dir, whose checked descriptor is
+// d, parses them, and returns a ready CA. All parse errors propagate
+// (corrupt-file path). The key is read from the descriptor files.openKey
+// checked; the certificate is public, and is opened relative to d without
+// following a symbolic link. The certificate must certify the key, so a
+// certificate swapped in beside the checked key is refused.
+func load(d *os.File, dir string, files generatedFiles) (*CA, error) {
 	keyPath := filepath.Join(dir, keyFileName)
-	certPath := filepath.Join(dir, certFileName)
 
 	kf, err := files.openKey(keyPath)
 	if err != nil {
@@ -414,9 +424,14 @@ func load(dir string, files generatedFiles) (*CA, error) {
 		return nil, fmt.Errorf("ca: read key file: %w", err)
 	}
 
-	cf, err := os.OpenFile(certPath, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NOCTTY, 0) //nolint:gosec // G304: a path under the operator-set CA directory (invariant 11), opened O_NOFOLLOW
+	cfd, err := unix.Openat(int(d.Fd()), certFileName, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NOCTTY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, fmt.Errorf("ca: open cert file: %w", err)
+	}
+	cf := os.NewFile(uintptr(cfd), certFileName)
+	if info, err := cf.Stat(); err != nil || !info.Mode().IsRegular() {
+		_ = cf.Close()
+		return nil, errors.New("ca: cert file is not a regular file")
 	}
 	certRaw, err := readBounded(cf)
 	if err != nil {
@@ -451,6 +466,9 @@ func load(dir string, files generatedFiles) (*CA, error) {
 	cert, err := x509.ParseCertificate(certBlock.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("ca: parse CA certificate: %w", err)
+	}
+	if !priv.PublicKey.Equal(cert.PublicKey) {
+		return nil, errors.New("ca: the CA certificate does not certify the CA private key")
 	}
 
 	return &CA{

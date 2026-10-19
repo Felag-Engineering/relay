@@ -207,15 +207,16 @@ run_smoke() {
   SUDO_LOG="$CASE_DIR/sudo-argv"
   : > "$ARGV_LOG"
   : > "$SUDO_LOG"
-  mkdir -p "$CASE_DIR/layouts"
+  mkdir -p "$CASE_DIR/layouts" "$CASE_DIR/bins"
   OUT="$(env -u RELAY_VERIFY_SKIPS -u RELAY_E2E_SUDO_REQUIRED \
          PATH="$WORKDIR/stub:/usr/bin:/bin" RELAY_SMOKE_PORT=65000 \
          RELAY_SMOKE_RELAY_BIN="$WORKDIR/stub/relay" STUB_RESPONSES="$CASE_DIR" \
-         RELAY_SMOKE_LAYOUT_PARENT="$CASE_DIR/layouts" STUB_SUDO_LOG="$SUDO_LOG" STUB_FAKE_UID=65533 \
+         RELAY_SMOKE_LAYOUT_PARENT="$CASE_DIR/layouts" RELAY_SMOKE_BIN_PARENT="$CASE_DIR/bins" STUB_SUDO_LOG="$SUDO_LOG" STUB_FAKE_UID=65533 \
          STUB_ARGV_LOG="$ARGV_LOG" "$@" bash "$SCRIPT" 2>&1)"
   RC=$?
-  if [ -n "$(ls -A "$CASE_DIR/layouts")" ]; then
-    echo "FAIL: $CASE_DIR: the script left its layout behind: $(ls -A "$CASE_DIR/layouts")" >&2
+  left="$(find "$CASE_DIR/layouts" "$CASE_DIR/bins" -mindepth 1 -maxdepth 1)"
+  if [ -n "$left" ]; then
+    echo "FAIL: $CASE_DIR: the script left its layout behind: $left" >&2
     fail=$((fail + 1))
   fi
 }
@@ -405,7 +406,8 @@ fi
 # 13: the separate-uid branch, end to end against the stubs -> PASS, and every privileged step
 # took the exact form the Go harness uses (relaytest.TestSetprivArgs): the setpriv drop, the
 # Relay signalled and its CA certificate read as relaytest and never as root, the layout
-# made in the layout parent and removed (run_smoke fails a case that leaves it).
+# made in the layout parent, the binary installed in its own bin directory, and both removed
+# (run_smoke fails a case that leaves either).
 new_case separate-uid
 good_responses "$CASE_DIR"
 LEDGER="$CASE_DIR/skips"
@@ -414,6 +416,7 @@ run_smoke RELAY_VERIFY_SKIPS="$LEDGER" RELAY_E2E_SUDO_REQUIRED=1
 assert_rc "case13-separate-uid" 0
 assert_contains "case13-separate-uid" "PASS:"
 layout_re="${CASE_DIR//./\\.}/layouts/relaytest\\.[A-Za-z0-9]*"
+bins_re="${CASE_DIR//./\\.}/bins/relaytest-bin\\.[A-Za-z0-9]*"
 if ! grep -q "^The Relay runs as relaytest over root-owned fixtures in ${layout_re}\\.\$" <<<"$OUT"; then
   echo "FAIL: case13-separate-uid: the script did not take the separate-uid branch in the layout parent" >&2
   fail=$((fail + 1))
@@ -430,7 +433,9 @@ fi
 for want in "^-n -u relaytest cat -- ${layout_re}/state/ca/ca-cert\\.pem\$" \
             '^-n -u relaytest kill -s TERM [0-9][0-9]*$' \
             "^-n install -o root -g relaytest -m 0640 -- .*/relay\\.toml ${layout_re}/etc/relay\\.toml\$" \
-            "^-n rm -rf -- ${layout_re}\$"; do
+            "^-n rm -rf -- ${layout_re}\$" \
+            "^-n install -o root -g root -m 0755 -- .* ${bins_re}/relay\$" \
+            "^-n rm -rf -- ${bins_re}\$"; do
   grep -q -- "$want" "$SUDO_LOG" \
     || { echo "FAIL: case13-separate-uid: no sudo call matching [$want]" >&2; fail=$((fail + 1)); }
 done

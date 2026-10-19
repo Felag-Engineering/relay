@@ -289,6 +289,16 @@ func TestStart_RefusesSymlinkedConfig(t *testing.T) {
 	})
 }
 
+// TestStart_RefusesMalformedGateFile is RC-35 on the shippable binary: a gate-rules file the
+// file check passes, root-owned and well placed, that cannot be parsed refuses start, naming
+// the approval gate; the Relay never runs ungated because its rules did not load.
+func TestStart_RefusesMalformedGateFile(t *testing.T) {
+	bin, layout := shippableLayout(t)
+	gate := layout.WriteFile(t, "gates.json", `{"rules": [`, "root", relaytest.TestUser, "0640")
+	cfg := layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), "\n[approval]\ngate_rules_path = \""+gate+"\"\n"))
+	wantInOutput(t, refusedStart(t, layout, bin, cfg), "load approval gate config", "parse gate config")
+}
+
 // TestStart_RefusesGroupReadableStateOrKey is RC-17 on the shippable binary: the CA directory,
 // the CA private key and the store's directory are the Relay's alone, or start is refused.
 func TestStart_RefusesGroupReadableStateOrKey(t *testing.T) {

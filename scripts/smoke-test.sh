@@ -33,7 +33,10 @@
 #
 # The Relay runs as a separate uid: the same harness, and the same layout, as the Go suites
 # (relay/internal/relaytest/separateuid.go), since it refuses to start over files its own uid
-# could write (ADR-0043). Fixtures are root-owned, under /run, and built through `sudo -n`; the
+# could write (ADR-0043). Fixtures are root-owned, under /run (root-owned and writable by
+# nobody else, where /tmp is world-writable), and built through `sudo -n`; the binary is a
+# root-owned copy under /tmp, because /run is often mounted noexec and the check never reads
+# the binary. The
 # Relay starts through `sudo -n setpriv` as relaytest with relaytest-io as its one
 # supplementary group; its log is in a relaytest:relaytest-io 2770 directory, the only thing
 # this script reaches through that group; the CA certificate is copied out through sudo.
@@ -52,6 +55,8 @@
 #                           scripts/smoke-test-test.sh; nothing in the Makefile or CI sets it.
 #   RELAY_SMOKE_LAYOUT_PARENT the directory the layout is made in (default /run, root-owned
 #                           and writable by nobody else). The same kind of seam.
+#   RELAY_SMOKE_BIN_PARENT  the directory the binary's copy is made in (default /tmp, which
+#                           allows exec). The same kind of seam.
 #   RELAY_E2E_SUDO_REQUIRED "1" makes a missing separate uid a failure instead of a skip.
 #   RELAY_VERIFY_SKIPS      make verify's skip ledger, set by the Makefile.
 set -euo pipefail
@@ -74,11 +79,13 @@ TEST_IO_GROUP="relaytest-io"
 SETPRIV=(setpriv --reuid="${TEST_USER}" --regid="${TEST_USER}" --groups="${TEST_IO_GROUP}" --inh-caps=-all)
 
 layout_parent="${RELAY_SMOKE_LAYOUT_PARENT:-/run}"
+bin_parent="${RELAY_SMOKE_BIN_PARENT:-/tmp}"
 
 relay_pid=""     # the Relay's own process
 started_pid=""   # the process this script started: sudo in front of the Relay
 work_dir=""
 layout_dir=""    # root-owned
+bin_dir=""       # root-owned
 
 # alive <pid>: true while the process exists. Not `kill -0`: the Relay is another user's
 # process, which this script may not signal.
@@ -102,6 +109,7 @@ cleanup() {
         wait "${started_pid}" 2>/dev/null || true
     fi
     case "${layout_dir}" in "${layout_parent}"/relaytest.*) sudo -n rm -rf -- "${layout_dir}" ;; esac
+    case "${bin_dir}" in "${bin_parent}"/relaytest-bin.*) sudo -n rm -rf -- "${bin_dir}" ;; esac
     case "${work_dir}" in /*) rm -rf "${work_dir}" ;; esac
 }
 trap cleanup EXIT
@@ -166,11 +174,16 @@ sudo -n chmod 0755 "${layout_dir}"
 conf_dir="${layout_dir}/etc"
 state_dir="${layout_dir}/state"
 sudo -n install -d -o root -g "${TEST_USER}" -m 0750 "${conf_dir}"
-sudo -n install -d -o root -g root -m 0755 "${layout_dir}/bin"
 sudo -n install -d -o "${TEST_USER}" -g "${TEST_USER}" -m 0700 "${state_dir}"
 sudo -n install -d -o "${TEST_USER}" -g "${TEST_IO_GROUP}" -m 2770 "${layout_dir}/io"
-sudo -n install -o root -g root -m 0755 -- "${relay_bin}" "${layout_dir}/bin/relay"
-relay_bin="${layout_dir}/bin/relay"
+bin_dir="$(sudo -n mktemp -d "${bin_parent}/relaytest-bin.XXXXXXXX")"
+case "${bin_dir}" in
+    "${bin_parent}"/relaytest-bin.*) ;;
+    *) echo "ERROR: sudo mktemp returned an unexpected path '${bin_dir}'" >&2; bin_dir=""; exit 1 ;;
+esac
+sudo -n chmod 0755 "${bin_dir}"
+sudo -n install -o root -g root -m 0755 -- "${relay_bin}" "${bin_dir}/relay"
+relay_bin="${bin_dir}/relay"
 relay_log="${layout_dir}/io/relay.log"
 echo "The Relay runs as ${TEST_USER} over root-owned fixtures in ${layout_dir}."
 ca_dir="${state_dir}/ca"

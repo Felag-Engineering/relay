@@ -58,14 +58,14 @@ import (
 // As with the Control API's Deps, every field here is a purpose-built seam over
 // runtime-object machinery — never Relay configuration. The one field that
 // looks like configuration, Execution, is not settable from here or from any
-// API: it mirrors a root-owned value the composition root reads at startup, and
-// this package can only be told what it is.
+// API: it mirrors a startup value the composition root sets, and this
+// package can only be told what it is.
 type Deps struct {
 	// Logger is where the Console's operational errors go; nil means
 	// slog.Default(). Wiring, not configuration.
 	Logger *slog.Logger
 
-	// Execution mirrors the root-owned console_execution setting (ADR-0026
+	// Execution mirrors the console_execution floor setting (ADR-0026
 	// decision 5). When false the execution routes are NOT MOUNTED and the
 	// composer is not rendered — an absent capability, not an RBAC refusal.
 	//
@@ -152,7 +152,7 @@ type Deps struct {
 	Accounts AccountReader
 
 	// CertExpiringWithin is the state:cert-expiring warning window
-	// (ADR-0034): a mirror of a root-owned startup value (invariant
+	// (ADR-0034): a mirror of a configured startup value (invariant
 	// 11), same "told, never settable" posture as Execution above. Zero (the
 	// default) means the marker never fires.
 	CertExpiringWithin time.Duration
