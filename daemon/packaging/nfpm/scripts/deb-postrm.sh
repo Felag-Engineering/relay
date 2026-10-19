@@ -35,7 +35,7 @@ case "${1:-}" in
     fi
     if [ "$made_state" = yes ] && [ -d /var/lib/relay-daemon ] && [ ! -L /var/lib/relay-daemon ]; then
       rm -rf --one-file-system -- /var/lib/relay-daemon
-    else
+    elif [ -e /var/lib/relay-daemon ] || [ -L /var/lib/relay-daemon ]; then
       echo "relay-daemon package: kept /var/lib/relay-daemon" >&2
     fi
     if [ "$made_etc" = yes ] && [ -d /etc/relay-daemon ] && [ ! -L /etc/relay-daemon ]; then

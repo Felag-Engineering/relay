@@ -491,7 +491,10 @@ PKG_BIN     ?= $(DAEMON_RELEASE_BIN)
 PKG_OUT     ?= $(CURDIR)/dist/packages
 
 packages:
-	@NFPM="$$($(call tool_bin,nfpm))" && 	SOURCE_DATE_EPOCH="$${SOURCE_DATE_EPOCH:-$$(git log -1 --format=%ct HEAD)}" 	bash scripts/package-daemon.sh --nfpm "$$NFPM" --bin "$(PKG_BIN)" --version "$(PKG_VERSION)" 		--arch "$(PKG_ARCH)" --out "$(PKG_OUT)"
+	@NFPM="$$($(call tool_bin,nfpm))" && \
+		SOURCE_DATE_EPOCH="$${SOURCE_DATE_EPOCH:-$$(git log -1 --format=%ct HEAD)}" \
+		bash scripts/package-daemon.sh --nfpm "$$NFPM" --bin "$(PKG_BIN)" --version "$(PKG_VERSION)" \
+		--arch "$(PKG_ARCH)" --out "$(PKG_OUT)"
 
 # Where build-daemon-release leaves its binary (CARGO_TARGET_DIR-safe).
 print-release-daemon-bin:

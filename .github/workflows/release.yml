@@ -342,10 +342,14 @@ jobs:
             aarch64) pkg_arch=arm64 ;;
             *) echo "::error::unsupported arch ${ARCH}"; exit 1 ;;
           esac
+          # nfpm reads the staged binaries; it must leave them as the guards above saw them.
+          staged="$RUNNER_TEMP/staged-binaries.sha256"
+          (cd dist && sha256sum relay-* > "$staged")
           cd "$SRC"
           make packages \
             PKG_BIN="$GITHUB_WORKSPACE/dist/relay-daemon-${version}-${DAEMON_TRIPLE}" \
             PKG_VERSION="${version}" PKG_ARCH="${pkg_arch}" PKG_OUT="$GITHUB_WORKSPACE/dist/pkg"
+          (cd "$GITHUB_WORKSPACE/dist" && sha256sum --check --strict --quiet "$staged")
           mv "$GITHUB_WORKSPACE"/dist/pkg/* "$GITHUB_WORKSPACE/dist/"
           rmdir "$GITHUB_WORKSPACE/dist/pkg"
 

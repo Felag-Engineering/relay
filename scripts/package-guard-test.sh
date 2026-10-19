@@ -82,7 +82,9 @@ case_build_refuses_dirty_out() {
 }
 case_nfpm_refuses_unrendered_manifest() {
   local d; d="$(fresh)"; mkdir -p "$d"
-  refuses '.' env RELAY_PKG_VERSION=1.0.0 RELAY_PKG_ARCH=amd64 RELAY_DAEMON_BIN="$WORKDIR/bin-amd64" \
+  # From the repo root, so the manifest's relative sources resolve and only the token can refuse.
+  refuses 'Parsing time' bash -c 'cd "$1" && shift && exec "$@"' _ "$REPO_ROOT" \
+    env RELAY_PKG_VERSION=1.0.0 RELAY_PKG_ARCH=amd64 RELAY_DAEMON_BIN="$WORKDIR/bin-amd64" \
     "$NFPM" pkg -f "$REPO_ROOT/daemon/packaging/nfpm/relay-daemon.yaml" -p deb -t "$d/"
 }
 
@@ -101,22 +103,34 @@ case_rebuild_is_byte_identical_across_locale() {
 }
 case_rebuild_is_byte_identical_across_GOMAXPROCS() { rebuild_differs_by GOMAXPROCS=1; }
 case_rebuild_is_byte_identical_across_inputs() {
-  local a b; a="$(fresh)"; b="$(fresh)"
+  # A second copy of everything package-daemon.sh reads, with other mtimes, built under another
+  # umask and cwd. The checkout itself is never touched.
+  local a b c="$WORKDIR/repo-copy" f; a="$(fresh)"; b="$(fresh)"
+  rm -rf "$c"; mkdir -p "$c/scripts" "$c/daemon/packaging"
+  cp "$BUILD" "$c/scripts/"
+  cp -r "$REPO_ROOT/daemon/packaging/nfpm" "$REPO_ROOT/daemon/packaging/templates.d" \
+    "$REPO_ROOT/daemon/packaging/relay-daemon.service" "$REPO_ROOT/daemon/packaging/relay-daemon.env.example" \
+    "$c/daemon/packaging/"
+  cp "$REPO_ROOT/daemon/policy.default.toml" "$c/daemon/"
+  find "$c" -type f -exec touch -d '2001-01-01' {} +
   build "$a" amd64 $EPOCH "$VER" || return
-  touch -d '2001-01-01' "$REPO_ROOT/daemon/packaging/relay-daemon.service" 2>/dev/null || true
-  ( umask 077; cd "$WORKDIR" && build "$b" amd64 $EPOCH "$VER" ) || return
+  f="$c/scripts/package-daemon.sh"
+  ( umask 077; cd "$WORKDIR" && env SOURCE_DATE_EPOCH=$EPOCH bash "$f" --nfpm "$NFPM" --bin "$WORKDIR/bin-amd64" \
+      --version "$VER" --arch amd64 --out "$b" >"$b.log" 2>&1 ) \
+    || { fail_with "build from the copy failed: $(tail -n 3 "$b.log" | tr '\n' ' ')"; return; }
   same_set "$a" "$b"
 }
 
 case_dev_version_builds_reproducibly() {
-  local a b c v
+  local a b c d v
   a="$(fresh)"; b="$(fresh)"; c="$(fresh)"
   build "$a" amd64 $EPOCH "$VER" && build "$b" amd64 $EPOCH "$VER" && same_set "$a" "$b" || return
   v="$(printf '%s' "$VER" | tr - '~')"
   [ -f "$a/relay-daemon_${v}-1_amd64.deb" ] || fail_with "deb name does not carry the version: $(ls "$a" | tr '\n' ' ')"
   [ "$(dpkg-deb -f "$(pkg "$a" 'relay-daemon_*.deb')" Version)" = "${v}-1" ] || fail_with "deb Version field is not ${v}-1"
-  build "$c" amd64 $EPOCH "$VER.dirty" || return
-  [ "$(rpm -qp --qf '%{VERSION}' "$(pkg "$c" 'relay-daemon-*.rpm')")" != "" ] || fail_with "dirty rpm has no version"
+  d="$(fresh)"
+  build "$c" amd64 $EPOCH "$VER.dirty" && build "$d" amd64 $EPOCH "$VER.dirty" && same_set "$c" "$d" || return
+  [ "$(rpm -qp --qf '%{VERSION}' "$(pkg "$c" 'relay-daemon-*.rpm')")" = "${v}.dirty" ] || fail_with "dirty rpm version is not ${v}.dirty"
 }
 
 case_relay_read_independent_of_target_arch() {
@@ -177,12 +191,23 @@ case_daemon_layout_exact() {
 }
 
 case_catalog_layout_exact() {
-  local a f got want='f 0644 0 0 /etc/relay-daemon/templates.d/relay-read/catalog.toml'; a="$(fresh)"
+  local a f got want_file='f 0644 0 0 /etc/relay-daemon/templates.d/relay-read/catalog.toml' want_deb; a="$(fresh)"
+  want_deb='d 0755 0 0 /etc
+d 0755 0 0 /etc/relay-daemon
+d 0755 0 0 /etc/relay-daemon/templates.d
+d 0755 0 0 /etc/relay-daemon/templates.d/relay-read
+'"$want_file"
   build "$a" amd64 $EPOCH "$VER" || return
   for f in "$a"/relay-read*; do
     got="$(bash "$GUARD" list "$f" | awk '$1 == "f" {print $1, $2, $3, $4, $6}')"
-    [ "$got" = "$want" ] || fail_with "$(basename "$f") layout differs: $got"
+    [ "$got" = "$want_file" ] || fail_with "$(basename "$f") layout differs: $got"
     [ "$(bash "$GUARD" list "$f" | grep -c '^[^fd] ')" = 0 ] || fail_with "$(basename "$f") has a non-file entry"
+    case "$f" in
+      *.deb)
+        got="$(bash "$GUARD" list "$f" | awk '{print $1, $2, $3, $4, $6}')"
+        [ "$got" = "$want_deb" ] || fail_with "$(basename "$f") full listing differs: $got"
+        ;;
+    esac
     bash "$GUARD" payload "$f" /etc/relay-daemon/templates.d/relay-read/catalog.toml "$CATALOG" || fail_with "$(basename "$f") catalog differs"
     [ -z "$(bash "$GUARD" conffiles "$f")" ] || fail_with "$(basename "$f") has configuration files"
     bash "$GUARD" maintscripts "$f" "$SCRIPTS" || fail_with "$(basename "$f") has maintainer scripts"
@@ -227,6 +252,54 @@ case_maintscripts_refuse_a_changed_script() {
   refuses 'embedded POSTUN differs' bash "$GUARD" maintscripts "$(pkg "$BUILT" 'relay-daemon-*.rpm')" "$d"
 }
 
+# deb_with_member <deb> <member>: a copy of the .deb whose control archive also holds <member>.
+deb_with_member() {
+  local src="$1" member="$2" t out; t="$(fresh)"; out="$t.deb"
+  dpkg-deb -R "$src" "$t" && printf '#!/bin/sh\ntrue\n' >"$t/DEBIAN/$member" && chmod 0755 "$t/DEBIAN/$member" \
+    && dpkg-deb --root-owner-group -b "$t" "$out" >/dev/null 2>&1 || return 1
+  echo "$out"
+}
+deb_hook_case() { # member package-glob
+  built || return
+  local f; f="$(deb_with_member "$(pkg "$BUILT" "$2")" "$1")" || { fail_with "could not repack the .deb"; return; }
+  refuses 'control members are' bash "$GUARD" maintscripts "$f" "$SCRIPTS"
+}
+case_maintscripts_refuse_a_deb_config_script() { deb_hook_case config 'relay-daemon_*.deb'; }
+case_maintscripts_refuse_a_deb_triggers_member() { deb_hook_case triggers 'relay-daemon_*.deb'; }
+case_maintscripts_refuse_a_deb_templates_member() { deb_hook_case templates 'relay-daemon_*.deb'; }
+case_maintscripts_refuse_a_deb_member_in_relay_read() { deb_hook_case config 'relay-read_*.deb'; }
+
+# rpm_with_hook <nfpm-rpm-script-key>: a relay-daemon .rpm built from the manifest with one more
+# rpm script hook; prints its path.
+rpm_with_hook() {
+  local key="$1" m="$WORKDIR/hook-$1.yaml" o; o="$(fresh)"; mkdir -p "$o"
+  sed -e "s|@SOURCE_DATE_EPOCH@|2023-11-14T22:13:20Z|" \
+      -e "s|^  buildhost: relay-release\$|&\n  scripts:\n    $key: daemon/packaging/nfpm/scripts/rpm-pre.sh|" \
+      "$REPO_ROOT/daemon/packaging/nfpm/relay-daemon.yaml" >"$m"
+  grep -q "^ *$key:" "$m" || return 1
+  ( cd "$REPO_ROOT" && env RELAY_PKG_VERSION=1.0.0 RELAY_PKG_ARCH=amd64 RELAY_DAEMON_BIN="$WORKDIR/bin-amd64" \
+      SOURCE_DATE_EPOCH=$EPOCH "$NFPM" pkg -f "$m" -p rpm -t "$o/" >/dev/null 2>&1 ) || return 1
+  pkg "$o" '*.rpm'
+}
+rpm_hook_case() { # nfpm-key TAG
+  local f; f="$(rpm_with_hook "$1")" || { fail_with "could not build an .rpm with a $1 hook"; return; }
+  [ "$(rpm -qp --qf "%{$2}" "$f")" != "(none)" ] || { fail_with "the fixture .rpm has no $2 hook"; return; }
+  refuses "embeds a $2 hook" bash "$GUARD" maintscripts "$f" "$SCRIPTS"
+}
+case_maintscripts_refuse_an_rpm_pretrans() { rpm_hook_case pretrans PRETRANS; }
+case_maintscripts_refuse_an_rpm_posttrans() { rpm_hook_case posttrans POSTTRANS; }
+case_maintscripts_refuse_an_rpm_verify_script() { rpm_hook_case verify VERIFYSCRIPT; }
+# nfpm cannot write rpm triggers, so a rpm wrapper reports one for the real package.
+rpm_trigger_case() { # TAG
+  built || return
+  local shim; shim="$(fresh)"; mkdir -p "$shim"
+  printf '#!/bin/sh\ncase "$*" in *"%%{%s}"*) printf "trigger body"; exit 0 ;; esac\nexec %s "$@"\n' "$1" "$(command -v rpm)" >"$shim/rpm"
+  chmod +x "$shim/rpm"
+  refuses "embeds a $1 hook" env PATH="$shim:$PATH" bash "$GUARD" maintscripts "$(pkg "$BUILT" 'relay-daemon-*.rpm')" "$SCRIPTS"
+}
+case_maintscripts_refuse_an_rpm_trigger_script() { rpm_trigger_case TRIGGERSCRIPTS; }
+case_maintscripts_refuse_an_rpm_file_trigger_script() { rpm_trigger_case FILETRIGGERSCRIPTS; }
+
 # --- the release guard ------------------------------------------------------------------------
 
 AMD="" ARM="" DIST=""
@@ -257,6 +330,14 @@ case_release_guard_refuses_a_package_missing_from_SHA256SUMS() {
   f="$(cd "$d" && ls relay-daemon_*_amd64.deb)"
   grep -v " $f\$" "$d/SHA256SUMS" >"$d/S" && mv "$d/S" "$d/SHA256SUMS"
   refuses "not exactly one line for relay-daemon_" release "$d"
+}
+case_release_guard_refuses_a_package_of_another_version() {
+  local d other="0.0.8-0.dev+g0123456789ab" arch; mk_dist || return; d="$DIST"
+  for arch in x86_64 aarch64; do
+    mv "$d/relay-daemon-$VER-$arch-unknown-linux-musl" "$d/relay-daemon-$other-$arch-unknown-linux-musl"
+  done
+  sums "$d"
+  refuses 'has Version' bash "$GUARD" release "$d" "$other" "$SCRIPTS" "$CATALOG"
 }
 case_release_guard_refuses_a_different_env_example() {
   local d; mk_dist || return; d="$DIST"

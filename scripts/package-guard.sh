@@ -116,7 +116,7 @@ cmd_payload() {
 
 cmd_maintscripts() {
   [ "$#" -eq 2 ] || die "usage: maintscripts <pkg> <scripts-dir>"
-  local pkg="$1" dir="$2" kind name pair
+  local pkg="$1" dir="$2" kind name pair members want_members tag s
   kind="$(pkg_kind "$pkg")"
   if [ "$kind" = deb ]; then
     need dpkg-deb
@@ -124,6 +124,19 @@ cmd_maintscripts() {
   else
     need rpm
     name="$(rpm -qp --qf '%{NAME}' "$pkg")"
+  fi
+  # Hooks the committed scripts do not cover must be absent, whatever the package name.
+  if [ "$kind" = deb ]; then
+    members="$(dpkg-deb --ctrl-tarfile "$pkg" | tar -tf - | sed -e 's|^\./||' -e '/^$/d' | sort | tr '\n' ' ')"
+    case "$name" in
+      relay-daemon) want_members="control md5sums postinst postrm preinst prerm " ;;
+      *) want_members="control md5sums " ;;
+    esac
+    [ "$members" = "$want_members" ] || die "$pkg: control members are '${members% }', want '${want_members% }'"
+  else
+    for tag in PRETRANS POSTTRANS VERIFYSCRIPT TRIGGERSCRIPTS FILETRIGGERSCRIPTS; do
+      [ "$(rpm -qp --qf "%{$tag}" "$pkg")" = "(none)" ] || die "$pkg embeds a $tag hook; the packages have none"
+    done
   fi
   case "$name" in
     relay-read)
@@ -237,6 +250,19 @@ only_one() { # <dir> <glob>: print the single match, or die
   printf '%s/%s\n' "$dir" "$m"
 }
 
+# check_version <pkg> <version>: the package's own Version is the release version, with the
+# hyphens of a pre-release written as "~" (and a deb's "-1" revision).
+check_version() {
+  local pkg="$1" release="$2" tilde='~' got want
+  want="${release//-/$tilde}"
+  if [ "$(pkg_kind "$pkg")" = deb ]; then
+    got="$(dpkg-deb -f "$pkg" Version)"; want="$want-1"
+  else
+    got="$(rpm -qp --qf '%{VERSION}' "$pkg")"
+  fi
+  [ "$got" = "$want" ] || die "$pkg has Version '$got', want '$want' for release $release"
+}
+
 cmd_release() {
   [ "$#" -eq 4 ] || die "usage: release <dist> <version> <scripts-dir> <catalog-file>"
   local dist="$1" version="$2" scripts="$3" catalog="$4"
@@ -253,6 +279,7 @@ cmd_release() {
     bin="$dist/relay-daemon-${version}-${rpm_arch}-unknown-linux-musl"
     [ -f "$bin" ] || die "no release binary $bin"
     for f in "$deb" "$rpm"; do
+      check_version "$f" "$version"
       cmd_payload "$f" /usr/bin/relay-daemon "$bin"
       cmd_maintscripts "$f" "$scripts"
       cmd_payload "$f" /usr/lib/systemd/system/relay-daemon.service "$dist/relay-daemon.service"
@@ -263,6 +290,7 @@ cmd_release() {
   deb="$(only_one "$dist" "relay-read_*_all.deb")"
   rpm="$(only_one "$dist" "relay-read-*.noarch.rpm")"
   for f in "$deb" "$rpm"; do
+    check_version "$f" "$version"
     cmd_payload "$f" /etc/relay-daemon/templates.d/relay-read/catalog.toml "$catalog"
     cmd_maintscripts "$f" "$scripts"
     pkgs+=("$f")

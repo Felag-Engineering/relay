@@ -310,6 +310,37 @@ case_purge_removes_only_what_the_package_created() { # deb
   expect "purge left the marker directory" absent "$MARK"
 }
 
+case_deb_reinstall_from_config_files_keeps_created() { # deb
+  new_root present; paths
+  first_install deb
+  remove deb
+  clear_log
+  must deb-preinst install 1.0; must deb-postinst configure 1.0
+  expect "a reinstall from config-files ran preset" no_line preset "$R/systemctl.log"
+  expect "a reinstall from config-files dropped created" created_is made_etc=yes made_policy_dir=yes placed_policy=yes placed_env=yes made_state=yes
+  expect "a reinstall from config-files left the first-install flag" absent "$MARK/first-install"
+  must deb-prerm remove; must deb-postrm remove; must deb-postrm purge
+  expect "purge kept policy.toml the package placed" absent "$ETC/policy.toml"
+  expect "purge kept the env file the package placed" absent "$ETC/relay-daemon.env"
+  expect "purge kept the state directory the package made" absent "$STATE"
+  expect "purge left /etc entries behind" empty_dir "$R/etc"
+}
+
+case_deb_purge_never_follows_a_symlink_that_replaced_etc() { # deb
+  new_root present; paths
+  first_install deb
+  remove deb
+  mv "$ETC" "$R/moved-etc"
+  mkdir -p "$R/other"; printf 'victim policy\n' >"$R/other/policy.toml"; printf 'victim env\n' >"$R/other/relay-daemon.env"
+  mkdir "$R/other/policy.d"
+  ln -s "$R/other" "$ETC"
+  must deb-postrm purge
+  expect "purge deleted policy.toml through the symlink" has_text "$R/other/policy.toml" "victim policy"
+  expect "purge deleted the env file through the symlink" has_text "$R/other/relay-daemon.env" "victim env"
+  expect "purge removed policy.d through the symlink" test -d "$R/other/policy.d"
+  expect "the symlink did not survive" test -L "$ETC"
+}
+
 case_rpm_erase_deletes_nothing_and_lists_created_paths() { # rpm
   new_root present; paths
   first_install rpm
@@ -359,6 +390,8 @@ done
 run_case case_first_install_empty_second_argument
 run_case case_missing_arguments_are_safe
 run_case case_purge_removes_only_what_the_package_created
+run_case case_deb_reinstall_from_config_files_keeps_created
+run_case case_deb_purge_never_follows_a_symlink_that_replaced_etc
 run_case case_rpm_erase_deletes_nothing_and_lists_created_paths
 
 echo

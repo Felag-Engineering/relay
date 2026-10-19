@@ -1,7 +1,7 @@
 # nfpm manifest for the relay-daemon package (.deb and .rpm).
 #
 # Built only by scripts/package-daemon.sh, which renders the mtime token below from
-# SOURCE_DATE_EPOCH and supplies the RELAY_PKG_* variables. The token is not valid YAML,
+# SOURCE_DATE_EPOCH and supplies the RELAY_PKG_* variables. The token is not a valid time,
 # so nfpm refuses this file unrendered and a wall-clock mtime is not reachable.
 #
 # The payload holds no /etc or /var entry and no directory entry: the package manager
