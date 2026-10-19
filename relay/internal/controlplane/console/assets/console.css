@@ -811,6 +811,7 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
 }
 .viewbar input::placeholder { color: var(--text-muted); }
 .viewbar input:focus, .viewbar select:focus { outline: 2px solid var(--color-accent); outline-offset: -1px; }
+.viewbar input[aria-invalid="true"] { border-color: var(--attention); }
 .viewbar select {
   font: inherit; font-size: var(--text-sm); padding: var(--space-2) var(--space-2);
   border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
@@ -824,15 +825,17 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
 }
 .viewbar button:hover { background: var(--accent-hover); }
 .vcount { margin-left: auto; font-size: var(--text-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.vcount.refused { color: var(--text-primary); font-weight: var(--weight-medium); }
 
-/* A rejected filter is amber, and the fleet stays on screen behind it: blanking
- * the page would make a typo feel like an outage. */
-.filtererr {
-  padding: var(--space-3) var(--space-4); margin-bottom: var(--space-4); font-size: var(--text-sm);
-  background: var(--attention-bg); border: 1px solid var(--attention-line);
-  border-radius: var(--radius-lg); color: var(--attention-text);
-}
-.filtererr b { font-weight: var(--weight-semibold); }
+/* A refused filter is said under the field it was typed in (spec 01, D26). */
+.fielderr { margin: 0; font-size: var(--text-sm); color: var(--attention-text); }
+/* ...and the fleet stays on screen, de-emphasised, so it cannot be read as the filter's
+ * matches; it is not blanked, because an empty page makes a typo feel like an outage. */
+.unfilterednote { margin: 0 0 var(--space-3); font-size: var(--text-sm); color: var(--text-primary); font-weight: var(--weight-medium); }
+.fleetresults.unfiltered { opacity: 0.6; }
+/* Opacity also fades the focus ring, and a child cannot undo it: give the results full
+ * contrast back while focus is inside them (00-foundations: nothing suppresses a focus ring). */
+.fleetresults.unfiltered:focus-within { opacity: 1; }
 
 /* --- Rollup cards --------------------------------------------------------- */
 .group {

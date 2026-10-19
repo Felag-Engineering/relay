@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"math"
@@ -253,6 +254,168 @@ func TestFleet_GenericFilterRefusalIsOneCapitalisedSentence(t *testing.T) {
 	}
 	if strings.Contains(msg, "every term needs") {
 		t.Errorf("the refusal still carries the old lead: %q", msg)
+	}
+}
+
+// TestFleet_RefusedFilterIsSaidUnderTheField: a refused filter reads "filter
+// not applied" in the count, states the parser's refusal directly under the
+// field (marked invalid), and leaves the whole fleet on the page, de-emphasised
+// under a note that it is unfiltered (spec 01, D26). Nothing validates in the
+// browser.
+func TestFleet_RefusedFilterIsSaidUnderTheField(t *testing.T) {
+	inputTag := regexp.MustCompile(`<input id="filter"[^>]*>`)
+	errPara := regexp.MustCompile(`<p class="fielderr" id="filter-error">([^<]*)</p>`)
+
+	for _, tc := range []struct{ name, term string }{
+		{"unprefixed term", "role=web"},
+		{"tag: term", "tag:team=ops"},
+		{"malformed term", "node:role"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := fleetFixture()
+			want := buildFleetView(d, fleetNodes(d), tc.term, "-")
+			if want.FilterOK {
+				t.Fatalf("%q was accepted; the test needs a refused term", tc.term)
+			}
+			body := get(t, newTestHandler(d, accounts.RoleAdmin),
+				fleetPath+"?filter="+url.QueryEscape(tc.term)+"&group=-").Body.String()
+
+			if !strings.Contains(body, `<span class="vcount refused">filter not applied</span>`) {
+				t.Errorf("the count does not read %q", "filter not applied")
+			}
+			if n := strings.Count(body, `class="vcount`); n != 1 {
+				t.Errorf("the page has %d vcount spans, want 1", n)
+			}
+			if strings.Contains(body, fmt.Sprintf("of %d Nodes</span>", len(fleetNodes(d)))) {
+				t.Errorf("a refused filter still reads like a match count")
+			}
+
+			tag := inputTag.FindString(body)
+			if tag == "" {
+				t.Fatal("no filter input in the page")
+			}
+			for _, attr := range []string{`aria-invalid="true"`, `aria-describedby="filter-error"`} {
+				if !strings.Contains(tag, attr) {
+					t.Errorf("the filter input lacks %s: %s", attr, tag)
+				}
+			}
+			if strings.Contains(tag, "pattern=") || strings.Contains(tag, "required") {
+				t.Errorf("the filter input validates in the browser: %s", tag)
+			}
+
+			m := errPara.FindStringSubmatchIndex(body)
+			if m == nil {
+				t.Fatal("no field error paragraph in the page")
+			}
+			if got := html.UnescapeString(body[m[2]:m[3]]); got != want.FilterError {
+				t.Errorf("field error = %q, want the parser's own words %q", got, want.FilterError)
+			}
+			if in, lbl := strings.Index(body, `<input id="filter"`), strings.Index(body, `for="group"`); in >= m[0] || m[0] >= lbl {
+				t.Errorf("the field error is not directly under the filter field")
+			}
+
+			if strings.Contains(body, `class="filtererr"`) || strings.Contains(body, "That filter was not applied.") {
+				t.Errorf("the old banner is still rendered")
+			}
+
+			note := strings.Index(body, `class="unfilterednote"`)
+			wrap := strings.Index(body, `class="fleetresults unfiltered"`)
+			if note < 0 || wrap < 0 || note > wrap {
+				t.Fatalf("the unfiltered note (%d) must precede the dimmed results (%d)", note, wrap)
+			}
+			// The wrapper closes before the page-level gap notes and the
+			// About disclosure; end the slice at the first of them.
+			inside := body[wrap:]
+			for _, after := range []string{`<p class="gap">`, `<details class="about">`} {
+				if i := strings.Index(inside, after); i >= 0 {
+					inside = inside[:i]
+				}
+			}
+			for _, n := range fleetNodes(d) {
+				if !strings.Contains(inside, string(n.NodeID)) {
+					t.Errorf("Node %s is not on the page: a refused filter must not blank the fleet", n.NodeID)
+				}
+			}
+			if !strings.Contains(inside, `class="systemstate"`) {
+				t.Errorf("the System state wall is not inside the dimmed results")
+			}
+		})
+	}
+}
+
+// TestFleet_ValidFilterRendersUnchanged: a valid filter, including one that
+// matches nothing, is never marked refused.
+func TestFleet_ValidFilterRendersUnchanged(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		term      string
+		wantEmpty bool
+	}{
+		{"no filter", "", false},
+		{"matching term", "node:role=web", false},
+		{"term matching nothing", "node:role=nonesuch", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := fleetFixture()
+			v := buildFleetView(d, fleetNodes(d), tc.term, "-")
+			body := get(t, newTestHandler(d, accounts.RoleAdmin),
+				fleetPath+"?filter="+url.QueryEscape(tc.term)+"&group=-").Body.String()
+
+			count := fmt.Sprintf(`<span class="vcount">%d of %d Nodes</span>`, v.Matched, v.Total)
+			if !strings.Contains(body, count) {
+				t.Errorf("the count does not read %q", count)
+			}
+			for _, absent := range []string{
+				"aria-invalid", `aria-describedby="filter-error"`, `id="filter-error"`,
+				"unfilterednote", "vcount refused", "fleetresults unfiltered",
+			} {
+				if strings.Contains(body, absent) {
+					t.Errorf("a valid filter renders %q", absent)
+				}
+			}
+			if !strings.Contains(body, `class="fleetresults"`) {
+				t.Errorf("the results wrapper is missing")
+			}
+			if tc.wantEmpty && !strings.Contains(body, "No Nodes match this Selector.") {
+				t.Errorf("a valid filter that matches nothing lost its empty state")
+			}
+		})
+	}
+}
+
+// TestFleet_RefusedFilterStylesAreInTheStylesheet: the classes the template
+// puts on a refused filter keep their styling, and the dimming never fades the
+// focus ring.
+func TestFleet_RefusedFilterStylesAreInTheStylesheet(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+	stripped := cssCommentPattern.ReplaceAllString(css, "")
+
+	rules := map[string]string{}
+	for _, m := range cssRulePattern.FindAllStringSubmatch(stripped, -1) {
+		for _, sel := range strings.Split(m[1], ",") {
+			rules[strings.TrimSpace(sel)] += m[2]
+		}
+	}
+	declares := func(selector, decl string) {
+		t.Helper()
+		if !strings.Contains(rules[selector], decl) {
+			t.Errorf("%s does not declare %q (declares %q)", selector, decl, rules[selector])
+		}
+	}
+	declares(".fleetresults.unfiltered", "opacity:")
+	declares(".fleetresults.unfiltered:focus-within", "opacity: 1")
+	declares(".fielderr", "color:")
+	declares(".vcount.refused", "font-weight:")
+	declares(`.viewbar input[aria-invalid="true"]`, "border-color:")
+
+	dark, light := splitThemes(t, css)
+	for name, tokens := range map[string]map[string]string{"dark": dark, "light": light} {
+		fg := mustResolve(t, name, tokens, "--attention-text")
+		bg := mustResolve(t, name, tokens, "--bg-surface")
+		if r := contrastRatio(fg, bg); r < 4.5 {
+			t.Errorf("%s: the field error (--attention-text on --bg-surface) is %.2f:1, below 4.5:1", name, r)
+		}
 	}
 }
 
