@@ -741,6 +741,7 @@ func TestAccountsWrite_OnlyTheMintViewHasAFieldASecretCouldOccupy(t *testing.T) 
 		reflect.TypeOf(accountRow{}),
 		reflect.TypeOf(tokenRow{}),
 		reflect.TypeOf(accountsWriteControls{}),
+		reflect.TypeOf(accountCreateForm{}),
 		reflect.TypeOf(accountsWriteResultView{}),
 	} {
 		for i := range typ.NumField() {
@@ -755,6 +756,15 @@ func TestAccountsWrite_OnlyTheMintViewHasAFieldASecretCouldOccupy(t *testing.T) 
 						"exactly one render", typ.Name(), f.Name, word)
 				}
 			}
+		}
+	}
+
+	// The create form is re-drawn with the caller's submission echoed back, so
+	// the password having no field is a fact about the type.
+	create := reflect.TypeOf(accountCreateForm{})
+	for i := range create.NumField() {
+		if strings.Contains(create.Field(i).Name, "Password") {
+			t.Errorf("accountCreateForm.%s could hold the password the form is never to echo", create.Field(i).Name)
 		}
 	}
 
@@ -1909,6 +1919,13 @@ func TestAccountsWrite_TheAccountListIsReadOnly(t *testing.T) {
 	if !strings.Contains(body, `action="`+createAccountAction()+`"`) {
 		t.Error("the create form is gone from the screen")
 	}
+	at := strings.Index(body, `<details class="panel newaccount" id="new-account">`)
+	if at < 0 {
+		t.Fatal("the create form is not behind a closed New account details")
+	}
+	if form := strings.Index(body, `action="`+createAccountAction()+`"`); form < at {
+		t.Error("the create form sits outside the New account details")
+	}
 }
 
 // TestAccountsWrite_EveryRoleSelectPreselectsTheCurrentRoleAndCannotSubmitIt:
@@ -1933,8 +1950,17 @@ func TestAccountsWrite_EveryRoleSelectPreselectsTheCurrentRoleAndCannotSubmitIt(
 		}
 		var raise, lower int
 		for _, f := range forms {
-			if !strings.Contains(f, `<select name="role" required>`) {
-				t.Errorf("%s: the role select is not required:\n%s", tc.query, f)
+			if strings.Contains(f, `type="password"`) {
+				if !strings.Contains(f, `<select name="role" required>`) {
+					t.Errorf("%s: the Raise role select is not required:\n%s", tc.query, f)
+				}
+			} else {
+				if !strings.Contains(f, `<select name="role" aria-describedby="lower-role-hint">`) {
+					t.Errorf("%s: the Lower role select does not point at its hint:\n%s", tc.query, f)
+				}
+				if strings.Contains(f, "required") {
+					t.Errorf("%s: the Lower role form is required, so it can be invalid and dim:\n%s", tc.query, f)
+				}
 			}
 			if got := len(regexp.MustCompile(`<option[^>]* selected`).FindAllString(f, -1)); got != 1 {
 				t.Errorf("%s: %d selected options, want exactly 1:\n%s", tc.query, got, f)
@@ -2178,10 +2204,19 @@ func TestAccountsWrite_AnUnchangedOrMissingRoleIsRefusedAndNeverWrites(t *testin
 		{"admin to admin", targetAdminID, url.Values{"role": {"admin"}}},
 		{"viewer to viewer", targetViewerID, url.Values{"role": {"viewer"}, "password": {"p"}}},
 		{"no role", targetViewerID, url.Values{}},
+		{"empty role field", targetAdminID, url.Values{"role": {""}}},
 	} {
 		rec := x.post(t, setAccountRoleAction(tc.id), tc.form)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: status = %d, want 400; body %s", tc.name, rec.Code, contentOf(rec.Body.String()))
+		}
+		body := rec.Body.String()
+		want := "That is already this Account&#39;s role"
+		if strings.HasPrefix(tc.name, "no role") || strings.HasPrefix(tc.name, "empty") {
+			want = template.HTMLEscapeString("No role was chosen: " + lowerRoleHint + ".")
+		}
+		if !strings.Contains(body, want) {
+			t.Errorf("%s: the refusal does not say %q:\n%s", tc.name, want, contentOf(body))
 		}
 	}
 	if len(x.admin.roles) != 0 {

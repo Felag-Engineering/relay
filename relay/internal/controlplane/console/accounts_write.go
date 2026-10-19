@@ -183,6 +183,11 @@ const (
 		"Another admin must exist first: a control plane with zero enabled admins has no way back in."
 
 	roleChangedRefusal = "The Account changed while you were editing. Review its current role and retry."
+
+	// lowerRoleHint is the hint drawn inside the Lower role form and also the
+	// server's refusal when a role form arrives with no role (design spec 15,
+	// D32), so the two are one sentence.
+	lowerRoleHint = "choose a lower role"
 )
 
 // accountsOffered reports whether the write half is wired at all. Three seams,
@@ -216,12 +221,53 @@ func accountsStepUp(undone string) stepUpAsk {
 		required: "Step-up re-authentication is required for this act.",
 		undone:   undone,
 		act:      "an account administration act",
-		render: func(w http.ResponseWriter, pg Page, status int, heading, href, label string) {
-			w.WriteHeader(status)
-			renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
-				Heading: heading, Href: href, Label: label,
-			})
-		},
+		render:   renderWriteResult,
+	}
+}
+
+// writeRefusalRender draws one refusal; it has the shape of stepUpAsk.render.
+type writeRefusalRender func(w http.ResponseWriter, pg Page, status int, heading, href, label string)
+
+// renderWriteResult draws a refusal on the plain result page.
+func renderWriteResult(w http.ResponseWriter, pg Page, status int, heading, href, label string) {
+	w.WriteHeader(status)
+	renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
+		Heading: heading, Href: href, Label: label,
+	})
+}
+
+// createRefusal draws a refused create as the "New account" form, open, with
+// the refusal above it (design spec 15, D32). form is captured by value, so
+// the caller sets StepUpFresh before building the closure.
+//
+// The form reopens for a refusal the caller can answer by editing or retrying
+// it, and only when the refusal carries no link. It does not reopen for:
+//   - authz.ErrUnauthorized (403): the capability layer refused the caller and
+//     no edit to the form changes that, so the plain page renders it
+//     (invariant 10);
+//   - a refusal with a link: a session that ended, and "could not confirm",
+//     where the Account may exist and reopening would invite a duplicate;
+//   - 404 and the accounts.IsInvalidToken 409, which have no link and so would
+//     reopen, but create cannot return either.
+//
+// The CSRF token comes from the pg passed in, never from anything captured
+// earlier: after a successful step-up pg holds the rotated session's token.
+func createRefusal(form accountCreateForm) writeRefusalRender {
+	return func(w http.ResponseWriter, pg Page, status int, heading, href, label string) {
+		answerable := status == http.StatusBadRequest ||
+			status == http.StatusUnauthorized ||
+			status == http.StatusConflict ||
+			status == http.StatusTooManyRequests ||
+			status == http.StatusInternalServerError
+		if href != "" || !answerable {
+			renderWriteResult(w, pg, status, heading, href, label)
+			return
+		}
+		w.WriteHeader(status)
+		form.Open = true
+		form.Refusal = heading
+		form.CSRFToken = pg.CSRFToken
+		renderScreen(w, pg, accountsCreateRefusedTmpl, form)
 	}
 }
 
@@ -278,7 +324,7 @@ func accountsHrefFor(name string) string {
 	return accountsScreenPath + "?" + url.Values{"account": {name}}.Encode()
 }
 
-// writeFailed renders a refusal the capability layer (or the domain) made.
+// writeFailedWith renders, through render, a refusal the capability layer (or the domain) made.
 // One switch shared by the four non-mint routes, with its classification
 // aligned to api.writeAccountError so the two surfaces agree on what each
 // refusal MEANS.
@@ -292,69 +338,62 @@ func accountsHrefFor(name string) string {
 // not-found sentence and the log field are worded for both rather than
 // assuming an id, so create can never render "no Account with the id
 // <a name>".
-func writeFailed(w http.ResponseWriter, pg Page, err error, route, ident, undone, subject string) {
+func writeFailedWith(w http.ResponseWriter, pg Page, err error, route, ident, undone, subject string, render writeRefusalRender) {
+	var (
+		status int
+		res    accountsWriteResultView
+	)
 	switch {
 	case errors.Is(err, authz.ErrUnauthorized):
 		// The capability layer decided this; this screen renders what it
 		// decided and does not restate the rule (invariant 10).
-		w.WriteHeader(http.StatusForbidden)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
+		status, res = http.StatusForbidden, accountsWriteResultView{
 			Heading: "The Relay refused this: " + err.Error() + ". " + undone,
-		})
+		}
 	case errors.Is(err, capability.ErrSelfTargeted):
-		w.WriteHeader(http.StatusConflict)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
+		status, res = http.StatusConflict, accountsWriteResultView{
 			Heading: selfTargetRefusal + " " + undone,
 			Href:    accountsScreenPath,
 			Label:   "Back to Accounts.",
-		})
+		}
 	case errors.Is(err, accounts.ErrLastAdmin):
-		w.WriteHeader(http.StatusConflict)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
+		status, res = http.StatusConflict, accountsWriteResultView{
 			Heading: lastAdminRefusal + " " + undone,
 			Href:    accountsScreenPath,
 			Label:   "Back to Accounts.",
-		})
+		}
 	case errors.Is(err, accounts.ErrRoleChanged):
-		w.WriteHeader(http.StatusConflict)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
+		status, res = http.StatusConflict, accountsWriteResultView{
 			Heading: roleChangedRefusal + " " + undone,
 			Href:    accountsScreenPath,
 			Label:   "Back to Accounts.",
-		})
+		}
 	case errors.Is(err, accounts.ErrNotFound), errors.Is(err, accounts.ErrTokenNotFound):
-		w.WriteHeader(http.StatusNotFound)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
+		status, res = http.StatusNotFound, accountsWriteResultView{
 			Heading: "No " + subject + " matching " + ident + " appears in this Relay's records. " + undone,
-		})
+		}
 	case errors.Is(err, accounts.ErrNameTaken):
-		w.WriteHeader(http.StatusConflict)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
-			Heading: "That Account name is already in use. Names are unique so an audit " +
-				"attribution is never ambiguous. " + undone,
-		})
+		status, res = http.StatusConflict, accountsWriteResultView{Heading: "That Account name is already in use. Names are unique so an audit " +
+			"attribution is never ambiguous. " + undone,
+		}
 	case errors.Is(err, accounts.ErrReservedName):
-		w.WriteHeader(http.StatusBadRequest)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
-			Heading: "That name is reserved. The founding admin is created by seeding, never " +
-				"from a screen. " + undone,
-		})
+		status, res = http.StatusBadRequest, accountsWriteResultView{Heading: "That name is reserved. The founding admin is created by seeding, never " +
+			"from a screen. " + undone,
+		}
 	case errors.Is(err, accounts.ErrInvalidName), errors.Is(err, accounts.ErrInvalidKind),
 		errors.Is(err, accounts.ErrInvalidRole), errors.Is(err, accounts.ErrInvalidTTL):
-		w.WriteHeader(http.StatusBadRequest)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
+		status, res = http.StatusBadRequest, accountsWriteResultView{
 			Heading: "The Relay refused this: " + err.Error() + ". " + undone,
-		})
+		}
 	case accounts.IsInvalidToken(err):
 		// Minting for a disabled Account: TokenService refuses it with the
 		// same opaque ErrTokenInvalid every failed verification returns.
-		w.WriteHeader(http.StatusConflict)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
-			Heading: "This Relay would not mint a credential for that Account. Enable the Account " +
-				"before minting one for it. " + undone,
-		})
+		status, res = http.StatusConflict, accountsWriteResultView{Heading: "This Relay would not mint a credential for that Account. Enable the Account " +
+			"before minting one for it. " + undone,
+		}
 	case errors.Is(err, capability.ErrAccountsUnavailable):
 		unavailable(w, "Account administration")
+		return
 	default:
 		// "Did not happen" would be a claim this branch cannot back:
 		// capability/accountadmin.go returns an error on a SUCCESSFUL write
@@ -364,14 +403,18 @@ func writeFailed(w http.ResponseWriter, pg Page, err error, route, ident, undone
 		// "could not confirm", never "nothing happened".
 		pg.logger().Error("console account administration returned an error",
 			"route", route, "subject", subject, "target", ident, "error", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
-			Heading: "The Relay could not confirm this change was fully recorded. Reload the " +
-				"Accounts screen and read the current state before trying again.",
+		status, res = http.StatusInternalServerError, accountsWriteResultView{Heading: "The Relay could not confirm this change was fully recorded. Reload the " +
+			"Accounts screen and read the current state before trying again.",
 			Href:  accountsScreenPath,
 			Label: "Back to Accounts.",
-		})
+		}
 	}
+	render(w, pg, status, res.Heading, res.Href, res.Label)
+}
+
+// writeFailed is writeFailedWith drawing the plain result page.
+func writeFailed(w http.ResponseWriter, pg Page, err error, route, ident, undone, subject string) {
+	writeFailedWith(w, pg, err, route, ident, undone, subject, renderWriteResult)
 }
 
 // writePrelude is the opening every one of the five handlers shares:
@@ -434,9 +477,35 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 			return
 		}
 
+		// What the operator typed is echoed into a refused re-render, each
+		// field only when it passes its own check, so a refusal of one never
+		// resets another to the first option. The password is never echoed.
 		name := r.PostFormValue("name")
+		kind := accounts.Kind(r.PostFormValue("kind"))
+		role := accounts.Role(r.PostFormValue("role"))
+		form := accountCreateForm{
+			CreateAction: createAccountAction(),
+			Roles:        allRoleNames(),
+			Kinds:        accountKinds(),
+		}
+		if name != "" && len(name) <= maxAccountNameBytes {
+			form.Name = name
+		}
+		if kind.Valid() {
+			form.Kind = string(kind)
+		}
+		if role.Valid() {
+			form.Role = string(role)
+		}
+		// refuseInput draws a refusal of this surface's own bounds. The window
+		// is read only here, because a form is being drawn.
+		refuseInput := func(heading string) {
+			form.StepUpFresh = stepUpFresh(d, r)
+			createRefusal(form)(w, pg, http.StatusBadRequest, heading, "", "")
+		}
+
 		if name == "" || len(name) > maxAccountNameBytes {
-			badRequest(w, pg, "An Account needs a name of 1 to 64 bytes. Nothing was created.")
+			refuseInput("An Account needs a name of 1 to 64 bytes. Nothing was created.")
 			return
 		}
 
@@ -446,26 +515,30 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 		// Kind.Valid and Role.Valid are the DOMAIN's own closed sets, asked
 		// rather than restated here, so this surface and accounts.Repository
 		// cannot come to disagree about what the sets are.
-		kind := accounts.Kind(r.PostFormValue("kind"))
 		if !kind.Valid() {
-			badRequest(w, pg, "This form did not carry a recognisable Account kind. Nothing was created.")
+			refuseInput("This form did not carry a recognisable Account kind. Nothing was created.")
 			return
 		}
-		role := accounts.Role(r.PostFormValue("role"))
 		if !role.Valid() {
-			badRequest(w, pg, "This form did not carry a recognisable role. Nothing was created.")
+			refuseInput("This form did not carry a recognisable role. Nothing was created.")
 			return
 		}
 
-		if !requireStepUp(d, w, r, &pg, accountsStepUp("Nothing was created.")) {
+		// A step-up refusal draws the password as required, the safe direction.
+		ask := accountsStepUp("Nothing was created.")
+		ask.render = createRefusal(form)
+		if !requireStepUp(d, w, r, &pg, ask) {
 			return
 		}
+		// The caller has just proved the password or is inside the window.
+		// Presentation only; the next act re-decides.
+		form.StepUpFresh = true
 
 		created, err := d.AccountAdmin.CreateAccount(r.Context(), caller, accounts.Account{
 			Name: name, Kind: kind, Role: role, Enabled: true,
 		})
 		if err != nil {
-			writeFailed(w, pg, err, createAccountPattern, name, "Nothing was created.", "Account")
+			writeFailedWith(w, pg, err, createAccountPattern, name, "Nothing was created.", "Account", createRefusal(form))
 			return
 		}
 		http.Redirect(w, r, accountsHrefFor(created.Name), http.StatusSeeOther)
@@ -484,6 +557,12 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 // still accepts, and audits, a no-op role change. A self-targeted request
 // skips this check and falls through, so the capability layer refuses AND
 // audits it (ErrSelfTargeted).
+//
+// An absent role is refused in the hint's own words (lowerRoleHint): the
+// Lower role form's current-role option is disabled, so pressing it with that
+// option selected posts no role. A hand-built empty POST meant as a raise gets
+// the same "lower" wording, which is acceptable because the rendered Raise
+// select is required and the page cannot send it.
 func handleSetAccountRole(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		caller, pg, ok := writePrelude(d, w, r, "Accounts")
@@ -495,8 +574,12 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 			return
 		}
 
+		if r.PostFormValue("role") == "" {
+			badRequest(w, pg, "No role was chosen: "+lowerRoleHint+". The role was not changed.")
+			return
+		}
 		// Role.Valid, not a hand-restated set: the domain owns what the
-		// three roles are (accounts.Role), and an absent field fails it.
+		// three roles are (accounts.Role).
 		role := accounts.Role(r.PostFormValue("role"))
 		if !role.Valid() {
 			badRequest(w, pg, "This form did not carry a recognisable role. The role was not changed.")

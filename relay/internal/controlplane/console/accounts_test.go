@@ -500,6 +500,9 @@ func TestAccounts_TheTokenPanelRendersOnlyForTheSelectedAccount(t *testing.T) {
 	if strings.Contains(bare, "tok-live") {
 		t.Error("the bare Accounts path rendered a token panel — tokens are per selected Account")
 	}
+	if strings.Contains(bare, "Role and state") || strings.Contains(bare, "API Tokens &mdash;") {
+		t.Error("the bare Accounts path rendered a selected Account's panel")
+	}
 
 	selected := get(t, h, accountsPath+"?account=gleipnir-prod").Body.String()
 	for _, want := range []string{
@@ -514,6 +517,10 @@ func TestAccounts_TheTokenPanelRendersOnlyForTheSelectedAccount(t *testing.T) {
 		if !strings.Contains(selected, want) {
 			t.Errorf("the token panel does not render %q:\n%s", want, contentOf(selected))
 		}
+	}
+	panel, list := strings.Index(selected, "API Tokens &mdash;"), strings.Index(selected, `<table class="rows cards">`)
+	if panel < 0 || list < 0 || panel > list {
+		t.Errorf("the token panel (at %d) does not come before the Account list (at %d)", panel, list)
 	}
 }
 
@@ -570,6 +577,9 @@ func TestAccounts_AFailedTokenReadDegradesOnePanel(t *testing.T) {
 	}
 	if !strings.Contains(body, "mike") {
 		t.Error("a failed token read took the Account table down with it")
+	}
+	if !strings.Contains(body, "the Account list below is unaffected") {
+		t.Errorf("the degraded panel does not say the list below is unaffected:\n%s", body)
 	}
 }
 
