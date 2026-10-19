@@ -399,11 +399,8 @@ func TestConsole_EveryGetRouteIsSweptForCSP(t *testing.T) {
 		// ReplaceAll per fixtureIDs placeholder), not route patterns — Link()
 		// differs from Path for the root route ("/console/{$}" links as
 		// "/console/") — so comparing against r.Path would be red on day one.
-		link := r.Link()
-		for placeholder, id := range fixtureIDs {
-			link = strings.ReplaceAll(link, placeholder, id)
-		}
-		if strings.Contains(link, "{") {
+		link, ok := fixturePath(r, fixtureIDs)
+		if !ok {
 			t.Errorf("GET %s has no substitution in fixtureIDs, so walkableScreens silently skips it "+
 				"— add one, or this route's CSP is unswept", r.Path)
 			continue

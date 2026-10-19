@@ -216,6 +216,40 @@ var consoleReadAudit = map[string]readAuditRule{
 			"job_cancel with its Principal, and a refusal as a refusal",
 	},
 
+	// ── The Accounts confirmation pages (#1046) ──────────────────────────
+	//
+	// These DO read Account data, so they sit outside "Not data reads". Each
+	// is a confirmation step for an Account write and performs nothing: it
+	// reads the target through the capability layer, which authorizes the read
+	// and records it only on refusal. That is the same unrecorded Account read
+	// GET /console/accounts documents, tracked in #659 against
+	// internal/capability. The write itself is recorded by the POST route's
+	// entry below.
+	"GET /console/accounts/{account_id}/disable": {
+		path: "",
+		why: "a confirmation step for an Account write that performs nothing: it reads the target " +
+			"Account (ControlAccountRead) to name it, which the capability layer authorizes and " +
+			"records only on refusal — the same unrecorded Account read GET /console/accounts " +
+			"documents, tracked in #659 against internal/capability. The write itself is " +
+			"recorded by the POST route's entry",
+	},
+	"GET /console/accounts/{account_id}/lower": {
+		path: "",
+		why: "a confirmation step for an Account write that performs nothing: it reads the target " +
+			"Account (ControlAccountRead) to name it, which the capability layer authorizes and " +
+			"records only on refusal — the same unrecorded Account read GET /console/accounts " +
+			"documents, tracked in #659 against internal/capability. The write itself is " +
+			"recorded by the POST route's entry",
+	},
+	"GET /console/accounts/{account_id}/tokens/{token_id}/revoke": {
+		path: "",
+		why: "a confirmation step for a token revocation that performs nothing: it reads the owning " +
+			"Account (ControlAccountRead) and its API Tokens (ControlAPITokenRead) to name the " +
+			"token, which the capability layer authorizes and records only on refusal — the same " +
+			"unrecorded Account read GET /console/accounts documents, tracked in #659 against " +
+			"internal/capability. The revocation itself is recorded by the POST route's entry",
+	},
+
 	// ── The Accounts write half (#655) ───────────────────────────────────
 	//
 	// Five writes, not reads. Each names ITS OWN capability audit kind and is
