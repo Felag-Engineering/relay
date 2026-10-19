@@ -934,9 +934,16 @@ fn demo_profile_is_additive() {
         }
     }
 
-    let expected: BTreeSet<&str> = ["relay", "init", "daemon-1", "daemon-2", "daemon-3"]
-        .into_iter()
-        .collect();
+    let expected: BTreeSet<&str> = [
+        "relay",
+        "relay-config",
+        "init",
+        "daemon-1",
+        "daemon-2",
+        "daemon-3",
+    ]
+    .into_iter()
+    .collect();
 
     assert_eq!(
         no_profile, expected,

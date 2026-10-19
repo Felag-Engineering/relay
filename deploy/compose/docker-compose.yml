@@ -7,10 +7,11 @@
 # docs/operations/relay-install.md, "Running it with Docker Compose". Read that
 # section before exposing anything.
 #
-# This is a SECOND deployment path beside the hardened systemd unit in
-# relay/packaging/, not a replacement for it: ADR-0033 makes the container the
-# evaluation artifact. It has NOT yet been reviewed by a human as hardened. It
-# is a single host with no high-availability claim.
+# This is a supported deployment path beside the hardened systemd unit in
+# relay/packaging/, not a replacement for it (ADR-0033). It is NOT called
+# production until a human hardening review of this documented deployment has
+# closed (RC-27); no human has yet reviewed it as hardened. It is a single host
+# with no high-availability claim.
 #
 # NEVER RUN IT ON A HOST THAT ALSO HOLDS A DEVELOPMENT CHECKOUT OF THIS REPO.
 # Every checkout and worktree carries this same file with the same project
@@ -44,6 +45,10 @@ services:
     # a dev fixture — see docker/relay.Dockerfile.
     build: { context: ../.., dockerfile: docker/relay.Dockerfile, target: runtime }
 
+    # Stated here as well as in the image, so a swapped-in image cannot run the
+    # Relay as root: its start-time check refuses a root process (ADR-0043).
+    user: "10001:10001"
+
     # The Relay's configuration is one file, written by the operator on the HOST
     # and never committed (ADR-0043). It is mounted read-only below; the Relay
     # reads every setting from it and nothing from its environment. Start from
@@ -58,10 +63,16 @@ services:
     # volume, so a different value would only break the stack. Console is off
     # unless the file sets console.enabled = true, as the packaging default is.
     # At start the Relay refuses the file if it could write it, or if any
-    # account but itself and root could read it (RC-15): own it by root with a
-    # group only UID 10001 (the Relay's user in the image) holds, mode 0640. A
-    # file UID 10001 owns is refused. This stack's layout is reworked for that
-    # check in S16 (#1018); until then it may refuse to start.
+    # account but itself and root could read it (RC-15). The layout it accepts
+    # is: owner root, group GID 10001, mode 0640, no ACL granting anyone else,
+    # on ext4, XFS, btrfs or tmpfs. Confirm `getent group 10001` prints nothing
+    # on the host: the check runs inside the container and cannot see host
+    # accounts, and any host member of GID 10001 can read the configuration and
+    # the secrets. A file UID 10001 owns is refused. It also refuses NFS, CIFS,
+    # FUSE, ZFS and a Docker Desktop share (virtiofs, 9p), and it cannot pass
+    # under rootless Docker or user-namespace remapping, where root's file
+    # appears to the container as owned
+    # by nobody. The refusal is in `docker compose logs relay`.
     #
     # REQUIRED: `create_host_path: false` makes a missing file refuse to start
     # rather than Docker creating an empty directory in its place, which the
@@ -76,6 +87,10 @@ services:
       # to the internet lets anyone exhaust the global bucket and deny
       # enrollment to your own Nodes.
       - "${RELAY_NODE_PUBLISH_ADDR:-0.0.0.0}:7654:7654"
+      # The host port (left) is what relay-daemons dial and what a join string
+      # carries. Publish it on any other host port and you must set
+      # node_plane.advertised_address = "<tls.hostname>:<host port>" in relay.toml
+      # (RC-36).
       # CONTROL PLANE (MCP, /api/v1, /metrics, and the Console when enabled)
       # on host LOOPBACK by default. It is an execution surface for whoever
       # holds an API Token or a Console password. Set RELAY_PUBLISH_ADDR to a
@@ -93,7 +108,9 @@ services:
           create_host_path: false
       # The CA (key included) and the SQLite store: registry, Jobs, audit
       # trail, Accounts, API Tokens. Back it up; see
-      # docs/operations/ca-disaster-recovery.md.
+      # docs/operations/ca-disaster-recovery.md. The Docker data root holding
+      # this volume must be on an allowlisted filesystem (ext4, XFS, btrfs,
+      # tmpfs), because the Relay checks its state directory too.
       - relay-data:/var/lib/relay
       # Approval gates (ADR-0027): none by default, so NOTHING NEEDS APPROVAL
       # until you add one. To add one, write the rules
@@ -102,14 +119,30 @@ services:
       # uncomment this mount, and set
       # approval.gate_rules_path = "/etc/relay/approval-gates.json" in
       # relay.toml. A configured gate that cannot be loaded refuses startup.
-      # - /etc/relay/approval-gates.json:/etc/relay/approval-gates.json:ro
+      # - type: bind
+      #   source: /etc/relay/approval-gates.json
+      #   target: /etc/relay/approval-gates.json
+      #   read_only: true
+      #   bind: { create_host_path: false }
       #
       # Approval webhook signing secret, as a file: placed like relay.toml,
-      # owned by root with a group only UID 10001 holds, mode 0640. The Relay
-      # refuses it if it could write it or any other account could read it
-      # (RC-15), so a secret file UID 10001 owns is refused.
-      # Set approval.webhook_secret_file in relay.toml to the in-container path.
-      # - /etc/relay/approval-webhook.secret:/run/relay/approval-webhook.secret:ro
+      # owned by root with group GID 10001, mode 0640. The Relay refuses it if
+      # it could write it or any other account could read it (RC-15), so a
+      # secret file UID 10001 owns is refused. Set approval.webhook_secret_file
+      # in relay.toml to the in-container path.
+      # - type: bind
+      #   source: /etc/relay/approval-webhook.secret
+      #   target: /etc/relay/approval-webhook.secret
+      #   read_only: true
+      #   bind: { create_host_path: false }
+      #
+      # The webhook URL is a secret too, because an incoming-webhook URL carries
+      # its token. Same placement; set approval.webhook_url_file.
+      # - type: bind
+      #   source: /etc/relay/approval-webhook.url
+      #   target: /etc/relay/approval-webhook.url
+      #   read_only: true
+      #   bind: { create_host_path: false }
 
     # The container form of relay.service's hardening: no capabilities, no
     # privilege gain, a read-only root filesystem apart from the state volume
@@ -141,10 +174,14 @@ services:
         - "sh"
         - "-c"
         - >-
-          h="$$(sed -n 's/^hostname *= *"\(.*\)"$$/\1/p' /etc/relay/relay.toml)";
+          h="$$(awk '/^\[/ { t = ($$0 ~ /^\[tls\][ \t]*(#.*)?$$/) } ;
+          t && /^hostname[ \t]*=/ { if (match($$0, /"[^"]*"/)) print substr($$0, RSTART + 1, RLENGTH - 2); exit }'
+          /etc/relay/relay.toml)";
           case "$$h" in
-          ""|relay.example.internal)
-          echo "tls.hostname in /etc/relay/relay.toml is unset or still the example placeholder"; exit 1;;
+          "")
+          echo "tls.hostname is not readable from /etc/relay/relay.toml"; exit 1;;
+          relay.example.internal)
+          echo "tls.hostname in /etc/relay/relay.toml is still the example placeholder"; exit 1;;
           esac;
           for p in 7654:h2 9443:http/1.1; do
           openssl s_client -quiet -no_ign_eof -tls1_3
