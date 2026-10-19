@@ -69,7 +69,7 @@ func runWithRepo(t *testing.T, wrap func(audit.Repository) audit.Repository) (st
 	svc := newCapService(t, capSeams{
 		reg:       reg,
 		authz:     authz.NewRoleGate(),
-		cap:       capability.NewBlastCap(10, 10),
+		settings:  blastCaps(10, 10),
 		audit:     auditsink.New(wrap(st.Audit())),
 		freeze:    st.Freeze(),
 		auditQ:    q,

@@ -33,7 +33,7 @@ func TestBlastCapCheck(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bc := NewBlastCap(tt.readCap, tt.mutateCap)
+			bc := NewBlastCap(caps(tt.readCap, tt.mutateCap))
 			err := bc.Check(tt.class, tt.matched)
 			if tt.wantErr && err == nil {
 				t.Fatalf("Check(%v, %d) = nil, want an error", tt.class, tt.matched)
@@ -60,19 +60,22 @@ func TestNewBlastCapClampsNonPositiveToDefaults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bc := NewBlastCap(tt.readCap, tt.mutateCap)
-			if bc.readCap != tt.wantReadCap {
-				t.Errorf("readCap = %d, want %d", bc.readCap, tt.wantReadCap)
-			}
-			if bc.mutateCap != tt.wantMutateCap {
-				t.Errorf("mutateCap = %d, want %d", bc.mutateCap, tt.wantMutateCap)
+			bc := NewBlastCap(caps(tt.readCap, tt.mutateCap))
+			for class, want := range map[jobs.RiskClass]int{jobs.RiskClassRead: tt.wantReadCap, jobs.RiskClassMutate: tt.wantMutateCap} {
+				if err := bc.Check(class, want); err != nil {
+					t.Errorf("Check(%v, %d) = %v, want nil at the cap", class, want, err)
+				}
+				var capErr *CapExceededError
+				if err := bc.Check(class, want+1); !errors.As(err, &capErr) || capErr.Cap != want {
+					t.Errorf("Check(%v, %d) = %v, want a CapExceededError with Cap %d", class, want+1, err, want)
+				}
 			}
 		})
 	}
 }
 
 func TestCapExceededErrorContent(t *testing.T) {
-	bc := NewBlastCap(100, 10)
+	bc := NewBlastCap(caps(100, 10))
 	err := bc.Check(jobs.RiskClassMutate, 11)
 	if err == nil {
 		t.Fatal("Check() = nil, want an error")
@@ -101,7 +104,7 @@ func TestCapExceededErrorContent(t *testing.T) {
 }
 
 func TestCapExceededErrorContentReadCap(t *testing.T) {
-	bc := NewBlastCap(10, 100)
+	bc := NewBlastCap(caps(10, 100))
 	err := bc.Check(jobs.RiskClassRead, 11)
 	if err == nil {
 		t.Fatal("Check() = nil, want an error")
@@ -151,7 +154,7 @@ func TestRunBlastCapRejectsOversizedSelector(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := seedNodes(t, 5)
 			disp := &spyDispatcher{}
-			svc := build(t, seams{reg: reg, cap: NewBlastCap(tt.readCap, tt.mutateCap)})
+			svc := build(t, seams{reg: reg, cap: NewBlastCap(caps(tt.readCap, tt.mutateCap))})
 			svc.disp = disp
 
 			sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}

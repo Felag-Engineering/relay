@@ -367,6 +367,31 @@ func (l *RelayLayout) CopyOut(t *testing.T, path string) string {
 	return out
 }
 
+// CopyOutStore returns the path of a copy the test can read of the SQLite store at dbPath
+// (under StateDir) together with its -wal and -shm files when present, copied as TestUser into
+// one temporary directory: CopyOut alone would lose the committed frames still in the WAL.
+// Call it only after the Relay has exited, so the three files are a consistent set.
+func (l *RelayLayout) CopyOutStore(t *testing.T, dbPath string) string {
+	t.Helper()
+	dir := t.TempDir()
+	out := ""
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		src := dbPath + suffix
+		if suffix != "" && exec.Command("sudo", "-n", "-u", TestUser, "test", "-e", src).Run() != nil {
+			continue
+		}
+		dst := l.CopyOut(t, src)
+		moved := filepath.Join(dir, filepath.Base(src))
+		if err := os.Rename(dst, moved); err != nil {
+			t.Fatalf("move %s: %v", dst, err)
+		}
+		if suffix == "" {
+			out = moved
+		}
+	}
+	return out
+}
+
 // Stat reports path's owner, group and octal mode (setgid included, as stat's %a prints it),
 // read through sudo: the test may not traverse the configuration directory itself.
 func (l *RelayLayout) Stat(t *testing.T, path string) (uid, gid int, mode string) {

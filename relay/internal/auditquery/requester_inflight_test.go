@@ -124,7 +124,7 @@ func TestRun_RequesterIsReadableAndEnforcedWhileEveryTaskIsPending(t *testing.T)
 	svc := newCapService(t, capSeams{
 		reg:       reg,
 		authz:     authz.NewRoleGate(),
-		cap:       capability.NewBlastCap(10, 10),
+		settings:  blastCaps(10, 10),
 		audit:     auditsink.New(st.Audit()),
 		freeze:    st.Freeze(),
 		auditQ:    q,

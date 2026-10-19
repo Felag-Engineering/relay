@@ -198,6 +198,19 @@ const (
 	KindPasswordSet   = "password_set"
 	KindPasswordClear = "password_clear"
 
+	// KindConfigReload records a host-initiated reload of the Relay's
+	// configuration file that changed the running configuration (RC-21). It is
+	// attributed to PrincipalLocalHost and names the changed settings by key,
+	// never a value (RC-18).
+	KindConfigReload = "config_reload"
+
+	// KindConfigReloadRefused records a host-initiated reload that was refused,
+	// leaving the running configuration unchanged (RC-21). Same attribution;
+	// its Reason names only restart-required setting keys or a fixed stage
+	// phrase, never a value or an error's text. A distinct kind so a query can
+	// tell an applied change from an attempt without parsing Reason.
+	KindConfigReloadRefused = "config_reload_refused"
+
 	// KindPolicyAlias records one Policy alias set, rename or clear. Reason
 	// carries the fingerprint and the old and new value. It is written only
 	// together with the change itself (PolicyAliasAppender).
@@ -304,6 +317,8 @@ var allKinds = []string{
 	KindAccountDisable,
 	KindPasswordSet,
 	KindPasswordClear,
+	KindConfigReload,
+	KindConfigReloadRefused,
 	KindLoginSucceeded,
 	KindLoginFailed,
 	KindLoginThrottled,
@@ -388,6 +403,8 @@ var notAnAuthFailureKinds = []string{
 	KindAccountDisable,
 	KindPasswordSet,
 	KindPasswordClear,
+	KindConfigReload,
+	KindConfigReloadRefused,
 	KindLoginSucceeded,
 	KindLogout,
 	KindStepUp,

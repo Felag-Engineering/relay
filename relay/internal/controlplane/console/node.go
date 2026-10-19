@@ -317,7 +317,7 @@ func pinsResolved(ctx context.Context, d Deps, caller capability.Principal, self
 
 func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role accounts.Role, pins []string, resolve pinResolver) nodeView {
 	n := detail.Node
-	in := nodestate.Input{Node: n, Now: d.now(), CertExpiringWithin: d.CertExpiringWithin}
+	in := nodestate.Input{Node: n, Now: d.now(), CertExpiringWithin: detail.Eval.CertExpiringWithin}
 
 	v := nodeView{
 		ID:                  n.NodeID,

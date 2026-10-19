@@ -48,8 +48,11 @@ Every setting is in the configuration file; the Relay reads none from flags or t
 
 // startupConfig is everything main needs from a loaded configuration file.
 type startupConfig struct {
-	Config   Config
-	Log      relayconfig.Log
+	Config Config
+	Log    relayconfig.Log
+	// File is the validated configuration with its secrets resolved: what a
+	// reload diffs the next file against.
+	File     relayconfig.Config
 	Warnings []relayconfig.Warning
 }
 
@@ -105,7 +108,7 @@ func parseConfig(data []byte, readSecret func(string) ([]byte, error)) (startupC
 	if err := rc.ResolveSecrets(read); err != nil {
 		return startupConfig{}, errors.Join(append([]error{err}, readerErrs...)...)
 	}
-	return startupConfig{Config: fromFile(rc), Log: rc.Log, Warnings: warns}, nil
+	return startupConfig{Config: fromFile(rc), Log: rc.Log, File: rc, Warnings: warns}, nil
 }
 
 // fromFile maps the validated file onto the Config newServer takes.

@@ -15,7 +15,6 @@ import (
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/approval"
-	"github.com/Felag-Engineering/relay/relay/internal/approvalnotify"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/auditquery"
 	"github.com/Felag-Engineering/relay/relay/internal/auditsink"
@@ -32,7 +31,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/logctx"
 	"github.com/Felag-Engineering/relay/relay/internal/metrics"
-	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/relay/relay/internal/opvocab"
 	"github.com/Felag-Engineering/relay/relay/internal/policyview"
@@ -70,8 +68,9 @@ type Config struct {
 	// ReadBlastCap and MutateBlastCap are the blast-radius caps by risk class
 	// (ADR-0004, ADR-0012).
 	//
-	// Read from the configuration file at startup and reachable from no
-	// API — which is invariant 11's requirement (ADR-0043).
+	// Read from the configuration file at start and on a host reload (RC-21),
+	// and reachable from no API — which is invariant 11's requirement
+	// (ADR-0043).
 	//
 	// What must stay true: no code path from a request to these values. A
 	// stolen API Token cannot raise its own blast cap, and an API that could
@@ -82,33 +81,34 @@ type Config struct {
 	// DispatchConcurrency is the per-Job bound on Tasks in flight at once.
 	// It bounds reach, so invariant 11 allows it as runtime-shaped
 	// configuration; it is not the blast cap (how many Nodes a Job may touch)
-	// and not a security-floor value. It is startup-only today and reachable
-	// from no API; it is planned to move to the store-backed settings object
+	// and not a security-floor value. It is read from the configuration file at
+	// start and on a host reload (RC-21) and is reachable from no API; it is planned to move to the store-backed settings object
 	// (ADR-0010 amendment 2026-09-15), where invariant 11's "human with step-up, audited" rule
 	// applies. Zero or negative refuses startup.
 	DispatchConcurrency int
 
 	// MinDaemonVersion is the minimum relay-daemon version (ADR-0014); empty
-	// means the gate is off and no Node is ever Outdated. Same startup-only,
+	// means the gate is off and no Node is ever Outdated. Same file-only,
 	// never-API-settable mechanism as ReadBlastCap/MutateBlastCap above
-	// (invariant 11, ADR-0010). A malformed value refuses startup — see
-	// newServer.
+	// (invariant 11, ADR-0010). A malformed value refuses start and a reload —
+	// see newRunning.
 	MinDaemonVersion string
 
 	// CertExpiringFraction sets the state:cert-expiring warning window
 	// (ADR-0034): a Node fires the marker once less than this fraction
-	// of its identity certificate's lifetime remains. Same startup-only,
+	// of its identity certificate's lifetime remains. Same file-only,
 	// never-API-settable mechanism as the fields above (invariant 11) — a
 	// fraction rather than an absolute duration, so it tracks any future
 	// change to ca.LeafValidity instead of going stale against it. There is
-	// deliberately no "off" value: newServer refuses startup outside (0, 1],
+	// deliberately no "off" value: newRunning refuses outside (0, 1],
 	// because a silently disabled alarm is exactly the failure this marker
 	// exists to catch.
 	CertExpiringFraction float64
 
 	// ApprovalGatePath is the approval-gate config (ADR-0027): which dispatches
-	// must park for a human. Same startup-only mechanism as the blast caps — a
-	// path read from the configuration file, never settable through any API, since
+	// must park for a human. Same file-only mechanism as the blast caps, and the
+	// gate file is re-read on a host reload (RC-21) — a path read from the
+	// configuration file, never settable through any API, since
 	// a stolen credential that could edit its own approval requirements would
 	// make the mechanism decorative.
 	//
@@ -201,6 +201,11 @@ type appDeps struct {
 	conns      *revocation.Connections
 	revocation *revocation.Service
 	limiter    *ratelimit.Limiter
+	// live is the configuration snapshot the operator settings are read from,
+	// and gate the approval gate; a reload (reload.go) swaps both. Held here for
+	// the reloader and tests only: no adapter receives either (invariant 10).
+	live *liveConfig
+	gate *liveGate
 	// freezeControl is the Freeze and its role floor — the part of the
 	// capability layer the SIGUSR1/SIGUSR2 host lever (watchFreezeSignals)
 	// drives. Always built, independent of ControlEnabled.
@@ -340,41 +345,32 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// material, nothing secret, and safe to log.
 	slog.Info("relay certificate authority", "ca_fingerprint", relayCA.Fingerprint())
 
-	// A malformed min_daemon_version refuses startup rather than silently
-	// leaving the outdated gate in an unpredictable state (ADR-0014). Empty
-	// is valid — it means the gate is off.
-	if cfg.MinDaemonVersion != "" && !registry.ValidVersion(cfg.MinDaemonVersion) {
-		return nil, nil, fmt.Errorf("invalid min-daemon-version %q: not a valid semver version", cfg.MinDaemonVersion)
-	}
-
-	// There is deliberately no "off" value for the cert-expiring fraction
-	// (ADR-0034): a silently disabled alarm is exactly the failure
-	// state:cert-expiring exists to catch, so an out-of-range value refuses
-	// startup rather than degrading to "never fires".
-	if cfg.CertExpiringFraction <= 0 || cfg.CertExpiringFraction > 1 {
-		return nil, nil, fmt.Errorf("invalid cert-expiring-fraction %v: must be in (0, 1]", cfg.CertExpiringFraction)
-	}
-	// The per-Job dispatch bound has no "off" value: zero would
-	// dispatch nothing, so it refuses startup.
-	if cfg.DispatchConcurrency < 1 {
-		return nil, nil, fmt.Errorf("invalid dispatch-concurrency %d: must be at least 1", cfg.DispatchConcurrency)
-	}
-	// Computed once, from the CA's own LeafValidity constant, and handed to
-	// every surface below (invariant 11) — a Duration, never the fraction
-	// itself, so capability/mcp/api never need to import internal/ca to make
-	// sense of it (nodestate's own package doc explains why).
-	certExpiringWithin := nodestate.CertExpiringWindow(ca.LeafValidity, cfg.CertExpiringFraction)
-
 	// An injected logger, not slog.SetDefault: installing a wrapper around the
 	// default handler as the default would recurse through the log package
 	// (logctx.Handler). It reads the default now, so a test that captures
 	// internal log lines must set the default before newServer.
 	logger := slog.New(logctx.NewHandler(slog.Default().Handler()))
 
+	// The operator settings and the notifier, validated by the one path a
+	// reload also takes. live is the snapshot every reach-bounding consumer
+	// below reads on use, so a reload applies to the next request.
+	r, err := newRunning(cfg, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	live := &liveConfig{}
+	live.swap(r)
+	if r.notifier != nil {
+		slog.Info("approval webhook enabled", "signed", cfg.ApprovalWebhookSecret.IsSet())
+	}
+
 	if err := files.RecheckStore(); err != nil {
 		return nil, nil, err
 	}
-	st, err := store.Open(files.StorePath(), store.WithMaxNodes(cfg.MaxNodes), store.WithMinDaemonVersion(cfg.MinDaemonVersion), store.WithLogger(logger))
+	st, err := store.Open(files.StorePath(),
+		store.WithMaxNodesSource(func() int { return live.OperatorSettings().MaxNodes }),
+		store.WithMinDaemonVersionSource(func() string { return live.OperatorSettings().MinDaemonVersion }),
+		store.WithLogger(logger))
 	if err != nil {
 		return nil, nil, fmt.Errorf("open store: %w", err)
 	}
@@ -421,13 +417,8 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		relayv1.Enrollment_Enroll_FullMethodName: {},
 	}
 
-	limiter := ratelimit.New(ratelimit.Config{
-		PerIPRatePerMin:  float64(cfg.EnrollIPRate),
-		PerIPBurst:       float64(cfg.EnrollIPBurst),
-		GlobalRatePerMin: float64(cfg.EnrollGlobalRate),
-		GlobalBurst:      float64(cfg.EnrollGlobalBurst),
-		MaxTrackedIPs:    cfg.EnrollMaxTrackedIPs,
-	})
+	limiter := ratelimit.New(rateConfig(live.OperatorSettings()),
+		ratelimit.WithConfigSource(func() ratelimit.Config { return rateConfig(live.OperatorSettings()) }))
 
 	// eventBus is the Relay's one in-process event seam: registry
 	// transitions, Job transitions, MCP tool calls, and enrollment
@@ -560,8 +551,10 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// here was built: a load failure refuses start rather than degrading, so an
 	// empty Gate only ever means "no rules configured", never "the rules could
 	// not be read".
-	approvalGate := files.Gate()
-	if n := len(approvalGate.Rules()); n > 0 {
+	// The gate is held behind a swappable pointer so a reload replaces it whole.
+	approvalGate := &liveGate{}
+	approvalGate.swap(files.Gate())
+	if n := len(files.Gate().Rules()); n > 0 {
 		slog.Info("approval gating enabled", "rules", n, "config", cfg.ApprovalGatePath)
 	}
 
@@ -604,8 +597,8 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 
 	// The read lane: filtered, paginated queries over the audit trail
 	// and over Jobs/Tasks — one seam, shared by every surface (invariant 10).
-	// certExpiringWithin is state:cert-expiring's warning window
-	// (ADR-0034), computed once above and shared by every surface below. The
+	// live supplies state:cert-expiring's warning window (ADR-0034), read per
+	// request, and is the one source the BlastCap and the Execution below share. The
 	// Policy-view and Template-vocabulary reads (QRY-28) are the same
 	// policyCache/vocabCache the Tunnel handler writes into below (ts),
 	// Get-only from this side. Wiring them here is what lets
@@ -616,30 +609,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// layer resolves its fan-out and class from it (ADR-0042). Without it
 	// every Template dispatch is refused. A nil clock is the real one. The
 	// Policy alias source is the store's read-only view of the aliases.
-	readLane := capability.NewReadLane(rec, reg, queries, queries, policyCache, vocabCache, certExpiringWithin, nil, capability.WithPolicyAliasSource(st.PolicyAliases()))
-
-	// The out-of-band notification envelope (ADR-0027). Optional: with no
-	// URL configured nothing is pushed and approvers poll the queue. Configured
-	// but unusable is a startup error, on the gate config's precedent — a
-	// notifier the operator asked for and did not get is a silent gap in how
-	// they learn a fleet action is waiting.
-	var notifier capability.ApprovalNotifier
-	if webhookURL, ok := cfg.ApprovalWebhookURL.Reveal(); ok && webhookURL != "" {
-		var secretBytes []byte
-		if v, ok := cfg.ApprovalWebhookSecret.Reveal(); ok {
-			secretBytes = []byte(v)
-		}
-		n, err := approvalnotify.New(approvalnotify.Config{
-			URL:     webhookURL,
-			Secret:  secretBytes,
-			Timeout: cfg.ApprovalWebhookTimeout,
-		}, approvalnotify.WithLogger(logger))
-		if err != nil {
-			return nil, nil, fmt.Errorf("configure approval webhook: %w", err)
-		}
-		notifier = n
-		slog.Info("approval webhook enabled", "signed", cfg.ApprovalWebhookSecret.IsSet())
-	}
+	readLane := capability.NewReadLane(rec, reg, queries, queries, policyCache, vocabCache, live, nil, capability.WithPolicyAliasSource(st.PolicyAliases()))
 
 	// The approval callout (ADR-0027), over the one Recorder and the same
 	// RoleGate as dispatch. Batch/window grants (ADR-0027 decision
@@ -650,7 +620,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// same reason: a handle is only ever minted for a dispatch the gate parked,
 	// so with no rules configured nothing parks and the table stays empty. A nil
 	// clock is the real one.
-	approvals := capability.NewApprovals(rec, approvalGate, st.Approvals(), roleGate, st.Grants(), st.MCPTasks(), notifier, nil)
+	approvals := capability.NewApprovals(rec, approvalGate, st.Approvals(), roleGate, st.Grants(), st.MCPTasks(), liveNotifier{live}, nil)
 
 	var execution *capability.Execution
 	var controlSrv *controlplane.Server
@@ -697,13 +667,13 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			// The real BlastCap (ADR-0004/0012; see the ReadBlastCap/MutateBlastCap
 			// doc comment on Config for the file-vs-flag deviation flagged for
 			// human review).
-			capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap),
+			capability.NewBlastCap(live),
 			// Dispatch idempotency keys: the MCP execution tools forward an
 			// optional key so a call re-issued after a lost response re-attaches to
 			// its Job. Without this a keyed call is refused, never run unkeyed.
 			st.IdempotencyKeys(),
 			st.Jobs(), st.Tasks(), router,
-			cfg.DispatchConcurrency,
+			live,
 			nil, // newID: the production default
 			// The event seam's Job-grained publisher.
 			eventsink.Jobs(eventBus))
@@ -896,9 +866,6 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 				caFingerprint: relayCA.Fingerprint(),
 				serverCert:    controlCert,
 			},
-			// state:cert-expiring's warning window (ADR-0034), the same
-			// value every other surface below was handed.
-			certExpiringWithin: certExpiringWithin,
 			// Test-only (serverHooks): empty on the production path,
 			// since newServer always calls newServerWithHooks with an empty
 			// serverHooks. See mcpSurface.Mount.
@@ -942,6 +909,8 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		conns:      conns,
 		revocation: revocationSvc,
 		limiter:    limiter,
+		live:       live,
+		gate:       approvalGate,
 		execution:  execution,
 
 		freezeControl: freezeControl,
@@ -994,6 +963,10 @@ func main() {
 		}
 		os.Exit(2)
 	}
+	// Registered before the file is read: until a handler is installed SIGHUP's
+	// default action ends the process, and a signal sent during start is queued
+	// and served once the watcher starts (reload_signal.go).
+	hup := notifyReload()
 	if err := relayconfig.RefuseRetiredEnv(os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "relay: %v\n", err)
 		os.Exit(1)
@@ -1003,7 +976,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "relay: %v\n", err)
 		os.Exit(1)
 	}
-	slog.SetDefault(slog.New(newLogHandler(os.Stderr, sc.Log)))
+	// The base handler is swappable so a reload can change the level and format
+	// (RC-21); slog.SetDefault is called once.
+	logs := newSwapHandler(newLogHandler(os.Stderr, sc.Log))
+	slog.SetDefault(slog.New(logs))
 	for _, w := range sc.Warnings {
 		slog.Warn(w.String())
 	}
@@ -1033,6 +1009,8 @@ func main() {
 	// activation rationale. It must start before Serve so a signal sent
 	// immediately after startup is never missed.
 	go watchFreezeSignals(context.Background(), deps.freezeControl)
+	// SIGHUP reloads the configuration file (reload_signal.go).
+	go watchReload(context.Background(), hup, newReloader(path, sc, deps, logs, os.Stderr))
 	lis, err := net.Listen("tcp", cfg.Addr) //nolint:noctx // process-lifetime listener opened at startup; there is no context to bound it
 	if err != nil {
 		slog.Error("listen failed", "addr", cfg.Addr, "err", err)

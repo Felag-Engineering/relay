@@ -115,12 +115,6 @@ type surfaceDeps struct {
 	// Nil leaves that block on the screen saying it is not wired.
 	trust console.TrustReader
 
-	// certExpiringWithin is the state:cert-expiring warning window
-	// (ADR-0034), computed once in newServer from ca.LeafValidity and handed
-	// to every surface below — MCP, the Control API, and the Console all
-	// resolve `state:` against the SAME window (invariant 11).
-	certExpiringWithin time.Duration
-
 	// testMCPOptions are appended AFTER the production mcp.New options below,
 	// so a test can construct the real MCP surface with an option the
 	// composition root does not itself pass. See serverHooks, below: this
@@ -265,9 +259,6 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// interface) and turn every audited read into a nil-receiver panic
 		// instead of the documented skip.
 		Reads: readAuditorOrNil(d.auditSink),
-		// state:cert-expiring's warning window (ADR-0034) — the same
-		// value every other surface resolves `state:` against.
-		CertExpiringWithin: d.certExpiringWithin,
 	})
 }
 
@@ -344,9 +335,6 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// layer's (authz.go), as is the decision that a successful read
 		// records nothing — the latter an open question, in front of a human.
 		Accounts: d.accountAdmin,
-		// state:cert-expiring's warning window (ADR-0034) — the same
-		// value every other surface resolves `state:` against.
-		CertExpiringWithin: d.certExpiringWithin,
 		// Cancel: one of the Console's two write seams. d.execution
 		// already implements CancelJob — the same method the Control API and
 		// MCP call — so no adapter is built for it; the role floor is

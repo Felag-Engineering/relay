@@ -57,17 +57,19 @@ type Execution struct {
 }
 
 // NewExecution returns the dispatch pipeline over control, read and approvals,
-// with the real Job engine built here from jr, tr, conduit and concurrency
+// with the real Job engine built here from jr, tr, conduit and settings
 // (fans a resolved Selector to one persisted Task per matched Node, fails
 // offline Nodes fast, ADR-0004, and dispatches the rest through conduit
-// concurrently, at most concurrency at a time). The Freeze, the role floor
+// concurrently, at most DispatchConcurrency at a time, read per Job). The Freeze, the role floor
 // and the audit trail come from control; Selector resolution and the read
 // lane come from read; the approval callout comes from approvals. All three
 // must share one Recorder so the layer has a single audit trail.
 //
 // Required: control, read, approvals, capc (the blast-radius cap, ADR-0004),
-// jr, tr, conduit, and concurrency >= 1 (it bounds reach and is startup-only,
-// invariant 11). A nil one is a composition-root wiring bug, not a
+// jr, tr, conduit, and settings (the OperatorSettingsSource, whose dispatch
+// concurrency must be at least 1 at construction; it bounds reach and no request
+// reaches it, invariant 11). The read lane and capc, when it is a BlastCap, must
+// hold this same source, so a reload cannot split the layer. A nil one is a composition-root wiring bug, not a
 // recoverable runtime condition, so NewExecution panics.
 //
 // Safe absences: a nil idem means a call carrying an idempotency key is
@@ -91,7 +93,7 @@ type Execution struct {
 // halt it. The AuditSink must also implement IntentRecorder: the Job's
 // Tasks are persisted through it, in one transaction with its
 // dispatch-intent record. See dispatcher's doc comment in dispatch.go.
-func NewExecution(control *Control, read *ReadLane, approvals *Approvals, capc CapChecker, idem jobs.IdempotencyRepository, jr jobs.JobRepository, tr jobs.TaskRepository, conduit Conduit, concurrency int, newID func() (string, error), jobEvents JobEventSink) *Execution {
+func NewExecution(control *Control, read *ReadLane, approvals *Approvals, capc CapChecker, idem jobs.IdempotencyRepository, jr jobs.JobRepository, tr jobs.TaskRepository, conduit Conduit, settings OperatorSettingsSource, newID func() (string, error), jobEvents JobEventSink) *Execution {
 	if control == nil {
 		panic("capability: NewExecution: control must not be nil")
 	}
@@ -113,10 +115,19 @@ func NewExecution(control *Control, read *ReadLane, approvals *Approvals, capc C
 	if jr == nil || tr == nil || conduit == nil {
 		panic("capability: NewExecution: jobsRepo, tasksRepo, and conduit must not be nil")
 	}
-	if concurrency < 1 {
+	if settings == nil {
+		panic("capability: NewExecution: settings must not be nil")
+	}
+	if settings.OperatorSettings().DispatchConcurrency < 1 {
 		panic("capability: NewExecution: dispatch concurrency must be at least 1")
 	}
-	x := newExecution(control, read, approvals, capc, idem, newJobEngine(jr, tr, conduit, concurrency, newID), jobEvents)
+	if read.settings != settings {
+		panic("capability: NewExecution: the read lane and the Execution must share one OperatorSettingsSource")
+	}
+	if bc, ok := capc.(*BlastCap); ok && bc.settings != settings {
+		panic("capability: NewExecution: the BlastCap and the Execution must share one OperatorSettingsSource")
+	}
+	x := newExecution(control, read, approvals, capc, idem, newJobEngine(jr, tr, conduit, settings, newID), jobEvents)
 	checkRealDispatch(x)
 	return x
 }

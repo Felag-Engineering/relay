@@ -42,15 +42,31 @@ func (ns labelNamespace) table() string {
 	return "node_labels"
 }
 
+// nodeCap and minVersion read the configured Node cap and minimum daemon
+// version at use; an unset source is no cap and no gate.
+func (r *sqliteRegistry) nodeCap() int {
+	if r.maxNodes == nil {
+		return 0
+	}
+	return r.maxNodes()
+}
+
+func (r *sqliteRegistry) minVersion() string {
+	if r.minDaemonVersion == nil {
+		return ""
+	}
+	return r.minDaemonVersion()
+}
+
 // sqliteRegistry implements registry.Repository against the nodes/node_labels/
 // relay_labels tables, mirroring internal/registry.InMemory's semantics
 // exactly (this is the security-relevant part: the two label namespaces are
 // never confused, and Upsert's insert-vs-update distinction is preserved).
 type sqliteRegistry struct {
 	db               *sql.DB
-	maxNodes         int          // 0 = unlimited
-	logger           *slog.Logger // nil means slog.Default() (log)
-	minDaemonVersion string       // ADR-0014 gate; empty = off
+	maxNodes         func() int    // 0 = unlimited; nil = unlimited
+	logger           *slog.Logger  // nil means slog.Default() (log)
+	minDaemonVersion func() string // ADR-0014 gate; empty = off; nil = off
 
 	// connected is the live Tunnel set. In memory and never written to SQLite:
 	// a Relay restart means nothing is connected, and a persisted flag that
@@ -105,12 +121,12 @@ func (r *sqliteRegistry) Upsert(rep registry.Report) (registry.Node, error) {
 	now := roundTripTime(time.Now().UTC())
 
 	if !exists {
-		if r.maxNodes > 0 {
+		if maxNodes := r.nodeCap(); maxNodes > 0 {
 			count, err := countNodes(ctx, tx)
 			if err != nil {
 				return registry.Node{}, err
 			}
-			if count >= r.maxNodes {
+			if count >= maxNodes {
 				return registry.Node{}, registry.ErrAtCapacity
 			}
 		}
@@ -456,7 +472,7 @@ func (r *sqliteRegistry) ListChecked() ([]registry.Node, error) {
 // reused from within an in-flight Upsert tx before minDaemonVersion is known
 // to matter there.
 func (r *sqliteRegistry) withOutdated(n registry.Node) registry.Node {
-	n.Outdated = registry.Outdated(n.DaemonVersion, r.minDaemonVersion)
+	n.Outdated = registry.Outdated(n.DaemonVersion, r.minVersion())
 	// Connected is derived on the same read, for the same reason: it is a fact
 	// about right now, and a stored one would go stale the instant a stream
 	// closed.

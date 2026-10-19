@@ -19,7 +19,7 @@
 //     MarkDispatched but before (or during) the send/result leaves the Task
 //     Dispatched with no Result — exactly TaskRepository.InFlight()'s
 //     definition.
-//   - Dispatch is concurrent (bounded per Job, NewExecution's concurrency argument),
+//   - Dispatch is concurrent (bounded per Job, by the settings source's DispatchConcurrency),
 //     but persist-then-dispatch and persist-then-send still hold per Task:
 //     every Task is Pending before any dispatch goroutine starts, and each
 //     goroutine does MarkDispatched before Conduit.Dispatch.
@@ -210,12 +210,17 @@ func (e *jobEngine) gateFor(jobID string) *jobGate {
 }
 
 // dispatchLimit is the per-Job in-flight bound. The fallback to 1 exists only
-// for &jobEngine{} literals in white-box tests; NewExecution refuses < 1.
+// for &jobEngine{} literals in white-box tests; NewExecution refuses a source
+// reporting < 1 at construction. It is read per Job run, so a reload applies to
+// the next Job.
 func (e *jobEngine) dispatchLimit() int {
-	if e.concurrency < 1 {
+	if e.settings == nil {
 		return 1
 	}
-	return e.concurrency
+	if n := e.settings.OperatorSettings().DispatchConcurrency; n >= 1 {
+		return n
+	}
+	return 1
 }
 
 // jobEngine is the real Job engine: it implements the unexported dispatcher
@@ -230,8 +235,8 @@ type jobEngine struct {
 	newID     idGen
 	now       func() time.Time
 
-	// concurrency is the per-Job in-flight bound; NewExecution guarantees >= 1.
-	concurrency int
+	// settings supplies the per-Job in-flight bound (dispatchLimit).
+	settings OperatorSettingsSource
 
 	// gates holds the cancel gate of every Job running in THIS process.
 	gatesMu sync.Mutex
@@ -856,7 +861,7 @@ func (e *jobEngine) resolveCancelled(ctx context.Context, task jobs.Task) (jobs.
 //
 // What stays best-effort under ADR-0013: (i) a Dispatched Task that wins the
 // race keeps its real outcome; (ii) the pre-send window — Tasks already inside
-// the Tunnel write when the cancel is recorded, at most -dispatch-concurrency
+// the Tunnel write when the cancel is recorded, at most reach.dispatch_concurrency
 // per Job. A TaskCancel can reach the daemon before such a Task's TaskRequest,
 // and the daemon treats a cancel for an unknown id as a no-op, so that Task
 // runs. Every other Dispatched Task's worker sees the gate and withholds its
@@ -937,17 +942,17 @@ func (e *jobEngine) prefixedID(prefix string) (string, error) {
 // newJobEngine builds the real Job engine with no checks. Only NewExecution and
 // _test.go files call it; NewExecution validates first. A nil newID takes
 // defaultID.
-func newJobEngine(jr jobs.JobRepository, tr jobs.TaskRepository, c Conduit, concurrency int, newID idGen) *jobEngine {
+func newJobEngine(jr jobs.JobRepository, tr jobs.TaskRepository, c Conduit, settings OperatorSettingsSource, newID idGen) *jobEngine {
 	if newID == nil {
 		newID = defaultID
 	}
 	return &jobEngine{
-		jobsRepo:    jr,
-		tasksRepo:   tr,
-		conduit:     c,
-		newID:       newID,
-		concurrency: concurrency,
-		now:         func() time.Time { return time.Now().UTC() },
+		jobsRepo:  jr,
+		tasksRepo: tr,
+		conduit:   c,
+		newID:     newID,
+		settings:  settings,
+		now:       func() time.Time { return time.Now().UTC() },
 		// A directly-constructed engine must never hold a nil sink.
 		// newExecution (pipeline.go) overwrites this with the real one.
 		events: noopJobEventSink{},

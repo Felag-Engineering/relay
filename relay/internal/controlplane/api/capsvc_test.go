@@ -75,8 +75,9 @@ func newCapService(t *testing.T, s capSeams) *capLayer {
 		t.Fatalf("newCapService: audit is required")
 	}
 	rec := capability.NewRecorder(s.audit, nil, nil)
+	settings := &capability.StaticOperatorSettings{S: capability.OperatorSettings{CertExpiringWithin: s.certWindow, DispatchConcurrency: capability.DefaultDispatchConcurrency}}
 	layer := &capLayer{
-		ReadLane: capability.NewReadLane(rec, s.reg, emptyQueries{}, emptyQueries{}, nil, nil, s.certWindow, s.now, capability.WithPolicyAliasSource(s.aliases)),
+		ReadLane: capability.NewReadLane(rec, s.reg, emptyQueries{}, emptyQueries{}, nil, nil, settings, s.now, capability.WithPolicyAliasSource(s.aliases)),
 	}
 	if s.authz != nil {
 		layer.Control = capability.NewControl(rec, s.authz, neverFrozen{})
