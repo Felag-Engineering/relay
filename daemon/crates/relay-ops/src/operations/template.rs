@@ -648,10 +648,12 @@ impl SlotType {
                 if value.len() > MAX_PATH_BYTES {
                     return Err("exceeds the maximum length");
                 }
-                // Reject ASCII control chars (NUL, newline, tab, CR, …) and DEL:
-                // a Path value is a filename, never a place for a newline.
-                if value.chars().any(|c| (c as u32) < 0x20 || c == '\u{7f}') {
-                    return Err("contains an ASCII control character");
+                // Reject every control character: C0 (NUL, newline, tab, CR, …),
+                // DEL and C1 (U+0080..U+009F, which holds the CSI introducer). A
+                // Path value is a filename, never a place for a newline or a
+                // terminal escape.
+                if value.chars().any(char::is_control) {
+                    return Err("contains a control character");
                 }
                 // A Template path is a plain filename: no Unicode whitespace and
                 // no character a shell, a glob or an argument parser gives
@@ -858,6 +860,8 @@ mod tests {
             "/etc/\n/x",      // newline (control)
             "/etc/\0/x",      // NUL
             "/etc/\tx",       // tab
+            "/\u{80}",        // C1 control
+            "/etc/\u{9b}x",   // C1 CSI introducer
         ] {
             assert!(
                 SlotType::Path.validate(bad).is_err(),
