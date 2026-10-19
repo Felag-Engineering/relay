@@ -170,7 +170,7 @@ func (r Rule) Validate() error {
 	return nil
 }
 
-// Gate is the evaluated approval-gate configuration: the root-owned rules
+// Gate is the evaluated approval-gate configuration: the configured rules
 // deciding which dispatches must park (ADR-0027).
 //
 // The zero Gate has no rules and gates nothing, which is exactly the behaviour

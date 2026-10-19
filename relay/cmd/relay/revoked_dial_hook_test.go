@@ -16,7 +16,8 @@ import (
 // point leaves it nil, and no production file sets it.
 func TestControlSurfaces_TestOnlyRevokedDialClockIsNilInProduction(t *testing.T) {
 	t.Run("runtime: nil on the production entry point", func(t *testing.T) {
-		_, deps, err := newServer(baseTestConfig(t))
+		cfg := baseTestConfig(t)
+		_, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 		if err != nil {
 			t.Fatalf("newServer: %v", err)
 		}

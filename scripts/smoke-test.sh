@@ -31,15 +31,18 @@
 #
 # The Relay is started with --config on a read-only relay.toml this script writes.
 #
-# The Relay runs as a separate uid where the host allows it: the same harness, and the same
-# layout, as the Go suites (relay/internal/relaytest/separateuid.go). Fixtures are root-owned
-# and built through `sudo -n`; the Relay starts through `sudo -n setpriv` as relaytest with
-# relaytest-io as its one supplementary group; its log is in a relaytest:relaytest-io 2770
-# directory, the only thing this script reaches through that group; the CA certificate is
-# copied out through sudo. Without passwordless sudo, setpriv, the accounts
-# (scripts/relaytest-user.sh) or the group, the Relay runs as this user and the missing
-# separate uid is recorded in make verify's skip ledger; RELAY_E2E_SUDO_REQUIRED=1 (CI only)
-# makes that a failure.
+# The Relay runs as a separate uid: the same harness, and the same layout, as the Go suites
+# (relay/internal/relaytest/separateuid.go), since it refuses to start over files its own uid
+# could write (ADR-0043). Fixtures are root-owned, under /run (root-owned and writable by
+# nobody else, where /tmp is world-writable), and built through `sudo -n`; the binary is a
+# root-owned copy under /tmp, because /run is often mounted noexec and the check never reads
+# the binary. The
+# Relay starts through `sudo -n setpriv` as relaytest with relaytest-io as its one
+# supplementary group; its log is in a relaytest:relaytest-io 2770 directory, the only thing
+# this script reaches through that group; the CA certificate is copied out through sudo.
+# Without passwordless sudo, setpriv, the accounts (scripts/relaytest-user.sh) or the group the
+# test cannot run: it is skipped, and the skip recorded in make verify's skip ledger;
+# RELAY_E2E_SUDO_REQUIRED=1 (CI only) makes that a failure.
 #
 # Needs the Relay binary ('make build', or run from make test-integration, which depends on
 # build) and curl built with HTTP/2. A missing prerequisite is an error, never a skip.
@@ -50,6 +53,10 @@
 #                           `make verify` runs in several worktrees do not reach one another.
 #   RELAY_SMOKE_RELAY_BIN   the Relay binary to test (default relay/bin/relay). A seam for
 #                           scripts/smoke-test-test.sh; nothing in the Makefile or CI sets it.
+#   RELAY_SMOKE_LAYOUT_PARENT the directory the layout is made in (default /run, root-owned
+#                           and writable by nobody else). The same kind of seam.
+#   RELAY_SMOKE_BIN_PARENT  the directory the binary's copy is made in (default /tmp, which
+#                           allows exec). The same kind of seam.
 #   RELAY_E2E_SUDO_REQUIRED "1" makes a missing separate uid a failure instead of a skip.
 #   RELAY_VERIFY_SKIPS      make verify's skip ledger, set by the Makefile.
 set -euo pipefail
@@ -71,39 +78,38 @@ TEST_USER="relaytest"
 TEST_IO_GROUP="relaytest-io"
 SETPRIV=(setpriv --reuid="${TEST_USER}" --regid="${TEST_USER}" --groups="${TEST_IO_GROUP}" --inh-caps=-all)
 
-relay_pid=""     # the Relay's own process
-started_pid=""   # the process this script started: the Relay, or sudo in front of it
-work_dir=""
-layout_dir=""    # root-owned, separate uid only
+layout_parent="${RELAY_SMOKE_LAYOUT_PARENT:-/run}"
+bin_parent="${RELAY_SMOKE_BIN_PARENT:-/tmp}"
 
-# alive <pid>: true while the process exists. Not `kill -0`: as the separate uid the Relay is
-# another user's process, which this script may not signal.
+relay_pid=""     # the Relay's own process
+started_pid=""   # the process this script started: sudo in front of the Relay
+work_dir=""
+layout_dir=""    # root-owned
+bin_dir=""       # root-owned
+
+# alive <pid>: true while the process exists. Not `kill -0`: the Relay is another user's
+# process, which this script may not signal.
 alive() { ps -p "$1" -o pid= >/dev/null 2>&1; }
 
 # signal_relay <signal>: to the Relay itself. sudo cannot relay SIGKILL, and this script may
-# not signal another uid, so as the separate uid it goes through `sudo -n -u relaytest kill`:
-# as relaytest and not root, so a pid reused after the Relay exited is refused, never killed.
+# not signal another uid, so it goes through `sudo -n -u relaytest kill`: as relaytest and not
+# root, so a pid reused after the Relay exited is refused, never killed.
 signal_relay() {
-    if [[ -n "${layout_dir}" ]]; then
-        sudo -n -u "${TEST_USER}" kill -s "$1" "${relay_pid}" 2>/dev/null || true
-    else
-        kill -s "$1" "${relay_pid}" 2>/dev/null || true
-    fi
+    sudo -n -u "${TEST_USER}" kill -s "$1" "${relay_pid}" 2>/dev/null || true
 }
 
 cleanup() {
     if [[ -n "${relay_pid}" ]]; then
         signal_relay TERM
-    elif [[ -n "${started_pid}" && -n "${layout_dir}" ]]; then
+    elif [[ -n "${started_pid}" ]]; then
         # sudo never handed over; it runs as root, which this script may not signal itself.
         sudo -n kill -s KILL "${started_pid}" 2>/dev/null || true
-    elif [[ -n "${started_pid}" ]]; then
-        kill "${started_pid}" 2>/dev/null || true
     fi
     if [[ -n "${started_pid}" ]]; then
         wait "${started_pid}" 2>/dev/null || true
     fi
-    case "${layout_dir}" in /tmp/relaytest.*) sudo -n rm -rf -- "${layout_dir}" ;; esac
+    case "${layout_dir}" in "${layout_parent}"/relaytest.*) sudo -n rm -rf -- "${layout_dir}" ;; esac
+    case "${bin_dir}" in "${bin_parent}"/relaytest-bin.*) sudo -n rm -rf -- "${bin_dir}" ;; esac
     case "${work_dir}" in /*) rm -rf "${work_dir}" ;; esac
 }
 trap cleanup EXIT
@@ -153,31 +159,33 @@ if [[ -n "${reason}" ]]; then
         echo "FAIL: the Relay cannot run as a separate uid: ${reason} — and RELAY_E2E_SUDO_REQUIRED=1, so this is a failure, not a skip" >&2
         exit 1
     fi
-    echo "smoke-test: SKIPPING the Relay as a separate uid (${reason}); it runs as this user"
+    echo "smoke-test: SKIPPING: the Relay cannot run as a separate uid (${reason}), and it refuses to start over files this user could write"
     if [[ -n "${RELAY_VERIFY_SKIPS:-}" ]]; then
         echo "test-integration: smoke test, the Relay as a separate uid (${reason})" >> "${RELAY_VERIFY_SKIPS}"
     fi
-    relay_log="${work_dir}/relay.log"
-    state_dir="${work_dir}/state"
-    conf_dir="${work_dir}"
-else
-    layout_dir="$(sudo -n mktemp -d /tmp/relaytest.XXXXXXXX)"
-    case "${layout_dir}" in
-        /tmp/relaytest.*) ;;
-        *) echo "ERROR: sudo mktemp returned an unexpected path '${layout_dir}'" >&2; layout_dir=""; exit 1 ;;
-    esac
-    sudo -n chmod 0755 "${layout_dir}"
-    conf_dir="${layout_dir}/etc"
-    state_dir="${layout_dir}/state"
-    sudo -n install -d -o root -g "${TEST_USER}" -m 0750 "${conf_dir}"
-    sudo -n install -d -o root -g root -m 0755 "${layout_dir}/bin"
-    sudo -n install -d -o "${TEST_USER}" -g "${TEST_USER}" -m 0700 "${state_dir}"
-    sudo -n install -d -o "${TEST_USER}" -g "${TEST_IO_GROUP}" -m 2770 "${layout_dir}/io"
-    sudo -n install -o root -g root -m 0755 -- "${relay_bin}" "${layout_dir}/bin/relay"
-    relay_bin="${layout_dir}/bin/relay"
-    relay_log="${layout_dir}/io/relay.log"
-    echo "The Relay runs as ${TEST_USER} over root-owned fixtures in ${layout_dir}."
+    exit 0
 fi
+layout_dir="$(sudo -n mktemp -d "${layout_parent}/relaytest.XXXXXXXX")"
+case "${layout_dir}" in
+    "${layout_parent}"/relaytest.*) ;;
+    *) echo "ERROR: sudo mktemp returned an unexpected path '${layout_dir}'" >&2; layout_dir=""; exit 1 ;;
+esac
+sudo -n chmod 0755 "${layout_dir}"
+conf_dir="${layout_dir}/etc"
+state_dir="${layout_dir}/state"
+sudo -n install -d -o root -g "${TEST_USER}" -m 0750 "${conf_dir}"
+sudo -n install -d -o "${TEST_USER}" -g "${TEST_USER}" -m 0700 "${state_dir}"
+sudo -n install -d -o "${TEST_USER}" -g "${TEST_IO_GROUP}" -m 2770 "${layout_dir}/io"
+bin_dir="$(sudo -n mktemp -d "${bin_parent}/relaytest-bin.XXXXXXXX")"
+case "${bin_dir}" in
+    "${bin_parent}"/relaytest-bin.*) ;;
+    *) echo "ERROR: sudo mktemp returned an unexpected path '${bin_dir}'" >&2; bin_dir=""; exit 1 ;;
+esac
+sudo -n chmod 0755 "${bin_dir}"
+sudo -n install -o root -g root -m 0755 -- "${relay_bin}" "${bin_dir}/relay"
+relay_bin="${bin_dir}/relay"
+relay_log="${layout_dir}/io/relay.log"
+echo "The Relay runs as ${TEST_USER} over root-owned fixtures in ${layout_dir}."
 ca_dir="${state_dir}/ca"
 
 echo "Starting Relay (mTLS) on ${smoke_addr}..."
@@ -200,51 +208,42 @@ path = "${state_dir}/store/relay.db"
 hostname = "${smoke_hostname}"
 EOF
 chmod 0400 "${relay_config}"
-if [[ -n "${layout_dir}" ]]; then
-    # root:relaytest 0640: the Relay reads it, nobody but root writes it, and the IO group
-    # cannot read it.
-    sudo -n install -o root -g "${TEST_USER}" -m 0640 -- "${relay_config}" "${conf_dir}/relay.toml"
-    relay_config="${conf_dir}/relay.toml"
-    # Nothing of this user's own temp or coverage directories, which the Relay cannot write.
-    # The redirect is this user's, deliberately: the log is opened here, in the IO directory,
-    # and the Relay writes through the descriptor it inherits.
-    # shellcheck disable=SC2024
-    sudo -n "${SETPRIV[@]}" env -i PATH="${PATH}" HOME=/ \
-        "${relay_bin}" --config "${relay_config}" >"${relay_log}" 2>&1 </dev/null &
-    started_pid=$!
-    # The Relay's own pid: the descendant of sudo running as relaytest (a direct child, or a
-    # grandchild when sudo interposes a pty monitor).
-    relay_uid="$(id -u "${TEST_USER}")"
-    pid_deadline=$(( $(date +%s) + STARTUP_TIMEOUT ))
-    while [[ -z "${relay_pid}" ]]; do
-        relay_pid="$(ps -e -o pid=,ppid=,ruid= | awk -v root="${started_pid}" -v u="${relay_uid}" '
-            { pid[NR] = $1; ppid[NR] = $2; uid[NR] = $3 }
-            END {
-                under[root] = 1
-                for (grew = 1; grew; ) {
-                    grew = 0
-                    for (i = 1; i <= NR; i++)
-                        if ((ppid[i] in under) && !(pid[i] in under)) { under[pid[i]] = 1; grew = 1 }
-                }
+# root:relaytest 0640: the Relay reads it, nobody but root writes it, and the IO group
+# cannot read it.
+sudo -n install -o root -g "${TEST_USER}" -m 0640 -- "${relay_config}" "${conf_dir}/relay.toml"
+relay_config="${conf_dir}/relay.toml"
+# Nothing of this user's own temp or coverage directories, which the Relay cannot write.
+# The redirect is this user's, deliberately: the log is opened here, in the IO directory,
+# and the Relay writes through the descriptor it inherits.
+# shellcheck disable=SC2024
+sudo -n "${SETPRIV[@]}" env -i PATH="${PATH}" HOME=/ \
+    "${relay_bin}" --config "${relay_config}" >"${relay_log}" 2>&1 </dev/null &
+started_pid=$!
+# The Relay's own pid: the descendant of sudo running as relaytest (a direct child, or a
+# grandchild when sudo interposes a pty monitor).
+relay_uid="$(id -u "${TEST_USER}")"
+pid_deadline=$(( $(date +%s) + STARTUP_TIMEOUT ))
+while [[ -z "${relay_pid}" ]]; do
+    relay_pid="$(ps -e -o pid=,ppid=,ruid= | awk -v root="${started_pid}" -v u="${relay_uid}" '
+        { pid[NR] = $1; ppid[NR] = $2; uid[NR] = $3 }
+        END {
+            under[root] = 1
+            for (grew = 1; grew; ) {
+                grew = 0
                 for (i = 1; i <= NR; i++)
-                    if (pid[i] != root && (pid[i] in under) && uid[i] == u) { print pid[i]; exit }
-            }')"
-        [[ -n "${relay_pid}" ]] && break
-        if ! alive "${started_pid}" || [[ "$(date +%s)" -ge "${pid_deadline}" ]]; then
-            echo "ERROR: the Relay did not start as ${TEST_USER}" >&2
-            relay_dump_log
-            exit 1
-        fi
-        sleep 0.05
-    done
-else
-    child_env=(PATH="${PATH}" HOME="${HOME:-/}")
-    [[ -n "${TMPDIR:-}" ]] && child_env+=(TMPDIR="${TMPDIR}")
-    [[ -n "${GOCOVERDIR:-}" ]] && child_env+=(GOCOVERDIR="${GOCOVERDIR}")
-    env -i "${child_env[@]}" "${relay_bin}" --config "${relay_config}" >"${relay_log}" 2>&1 &
-    started_pid=$!
-    relay_pid="${started_pid}"
-fi
+                    if ((ppid[i] in under) && !(pid[i] in under)) { under[pid[i]] = 1; grew = 1 }
+            }
+            for (i = 1; i <= NR; i++)
+                if (pid[i] != root && (pid[i] in under) && uid[i] == u) { print pid[i]; exit }
+        }')"
+    [[ -n "${relay_pid}" ]] && break
+    if ! alive "${started_pid}" || [[ "$(date +%s)" -ge "${pid_deadline}" ]]; then
+        echo "ERROR: the Relay did not start as ${TEST_USER}" >&2
+        relay_dump_log
+        exit 1
+    fi
+    sleep 0.05
+done
 
 echo "Waiting for Relay to report listening (up to ${STARTUP_TIMEOUT}s)..."
 deadline=$(( $(date +%s) + STARTUP_TIMEOUT ))
@@ -264,14 +263,12 @@ done
 echo "Relay is listening."
 
 ca_cert="${ca_dir}/ca-cert.pem"
-if [[ -n "${layout_dir}" ]]; then
-    # The CA directory is the Relay's alone; its public certificate is copied out, read as
-    # relaytest (never root, so nothing the Relay plants there, a symlink, can make root read
-    # for it) into a file this user owns (so the redirect is deliberately not sudo's).
-    # shellcheck disable=SC2024
-    sudo -n -u "${TEST_USER}" cat -- "${ca_cert}" >"${work_dir}/ca-cert.pem" 2>/dev/null || true
-    ca_cert="${work_dir}/ca-cert.pem"
-fi
+# The CA directory is the Relay's alone; its public certificate is copied out, read as
+# relaytest (never root, so nothing the Relay plants there, a symlink, can make root read
+# for it) into a file this user owns (so the redirect is deliberately not sudo's).
+# shellcheck disable=SC2024
+sudo -n -u "${TEST_USER}" cat -- "${ca_cert}" >"${work_dir}/ca-cert.pem" 2>/dev/null || true
+ca_cert="${work_dir}/ca-cert.pem"
 if [[ ! -s "${ca_cert}" ]]; then
     echo "ERROR: Relay reported listening but wrote no CA certificate at ${ca_cert}" >&2
     relay_dump_log

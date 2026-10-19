@@ -1,6 +1,6 @@
 # Relay configuration
 
-**Status:** designed, not built, as of `2026-10-18`.
+**Status:** designed, not built, as of `2026-10-19`.
 **Claim prefix:** `RC`
 
 ## Purpose
@@ -121,11 +121,11 @@ writer.
 | RC-14 | `TestSecret_InlineAndFileLoad`, `TestLoadConfig_FileSecretsResolved`, `TestStartupLog_CarriesNoWebhookURLOrSecret`, `TestMain_RetiredEnvNameRefusesNamingKey`, `TestMain_OtherFlagsRefused` | relayconfig, composition root |
 | RC-20 | `TestValidate_ConsoleWithoutControlPlaneRefused`, `TestValidate_OAuthWithoutIssuerRefused`, `TestValidate_MutateCapAboveReadCapWarns`, `TestMain_CoherentButSuspectConfigStartsWithWarning` | relayconfig, composition root |
 | RC-22 | `TestDefaults_EachReachValueWhenAbsent`, `TestApprovalGatePathAbsentMeansNoGate`, `TestEveryKeyReachesConfig`, `TestValidate_InvalidValueRefusedNamingSetting`, `TestFromFile_CarriesEverySetting`, `TestNewLogHandler_FormatAndLevel` | relayconfig, composition root |
+| RC-35 | `TestStart_RefusesMalformedGateFile`, `TestStartup_RefusedGateRefusesBeforeTheCA` | composition root, startup |
 | RC-36 | `TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress` | Control API mint |
 
 Claims with **no row**, and so nothing checking them: RC-1, RC-4, RC-6, RC-7 (asserted by
-the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absence), RC-35
-(`TestLoadFailsClosed` proves the loader, not the startup refusal).
+the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absence).
 
 ### Performance
 

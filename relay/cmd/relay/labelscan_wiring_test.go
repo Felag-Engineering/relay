@@ -64,7 +64,7 @@ func TestNewServer_RunsDeclinedLabelScanAtStartup(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prevDefault) })
 
-	srv, deps, err := newServer(cfg)
+	srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestNewServer_RunsDeclinedLabelScanAtStartup(t *testing.T) {
 func TestNewServer_WiresLabelsDeclinedMetric(t *testing.T) {
 	cfg := baseTestConfig(t)
 
-	srv, deps, err := newServer(cfg)
+	srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}

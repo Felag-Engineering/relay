@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/ca"
+	"github.com/Felag-Engineering/relay/relay/internal/ca/catest"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/relay/relay/internal/transport"
 	"google.golang.org/grpc"
@@ -70,7 +71,7 @@ type testSetup struct {
 
 func newTestSetup(t *testing.T) *testSetup {
 	t.Helper()
-	relayCA, err := ca.Open(t.TempDir())
+	relayCA, err := catest.Generate()
 	if err != nil {
 		t.Fatalf("open CA: %v", err)
 	}
@@ -281,7 +282,7 @@ func TestTransport_RejectUntrustedCert(t *testing.T) {
 	)
 
 	// A second, unrelated CA — the server trusts only ts.relayCA.
-	ca2, err := ca.Open(t.TempDir())
+	ca2, err := catest.Generate()
 	if err != nil {
 		t.Fatalf("open CA2: %v", err)
 	}

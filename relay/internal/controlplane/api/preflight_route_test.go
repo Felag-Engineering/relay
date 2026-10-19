@@ -195,12 +195,20 @@ func TestConsoleServesNoSeparatePreflightRoute(t *testing.T) {
 		"POST /console/accounts/{account_id}/enabled": true,
 		"POST /console/accounts/{account_id}/tokens":  true,
 		"POST /console/api-tokens/{token_id}/revoke":  true,
-		"GET /console/assets/{path...}":               true,
-		"GET /console/events":                         true,
-		"GET " + console.LoginPath:                    true,
-		"POST " + console.LoginPath:                   true,
-		"POST " + console.LogoutPath:                  true,
-		"POST /console/jobs/{job_id}/cancel":          true,
+		// The confirmation steps for the three acts that reduce authority: a
+		// named GET page in front of an unchanged Account write. They are
+		// confirmation steps, not previews. They evaluate no Policy, dispatch
+		// nothing, and preview nothing. The act is decided only by the POST
+		// route above (PF-1 reviewed).
+		"GET /console/accounts/{account_id}/disable":                  true,
+		"GET /console/accounts/{account_id}/lower":                    true,
+		"GET /console/accounts/{account_id}/tokens/{token_id}/revoke": true,
+		"GET /console/assets/{path...}":                               true,
+		"GET /console/events":                                         true,
+		"GET " + console.LoginPath:                                    true,
+		"POST " + console.LoginPath:                                   true,
+		"POST " + console.LogoutPath:                                  true,
+		"POST /console/jobs/{job_id}/cancel":                          true,
 		// The one route this guard exists to constrain: the composer PF-21
 		// describes, mounted only with Execution on. It is a placeholder
 		// today (#438, the console-execution gap), not a preflight route —

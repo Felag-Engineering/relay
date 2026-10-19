@@ -98,11 +98,13 @@ A credential the Relay needs is given either inline (`approval.webhook_secret`,
 (`approval.webhook_secret_file`, `approval.webhook_url_file`). Never in the
 environment: a secret passed as an environment variable is a secret in every
 process listing and every crash dump, and a `RELAY_*` setting in the environment
-refuses start. The Relay refuses to start on a group- or world-accessible
-secret file rather than signing with one, and no secret is ever printed in a log
-or an error. Inline secrets depend on `/etc/relay/relay.toml` keeping its
-`0640 root:relay` mode, which the Relay does not yet check itself; use the
-`_file` form until it does.
+refuses start. At start the Relay refuses to run if it could write the
+configuration file or any file it names, or if any account but itself and root
+could read the configuration file or a secret file — so a secret file is placed
+like the configuration, `0640 root:relay` — and no secret is ever printed in a
+log or an error. The CA directory, its private key and the store's directory are
+the Relay's own: owned by the service account, and refused if any other account
+can read them.
 
 API Tokens are not configuration at all: they live in the store as hashes, and
 the first is minted with `relay bootstrap-token` (above).

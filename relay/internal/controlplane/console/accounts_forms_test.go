@@ -4,7 +4,7 @@ package console
 // 00-foundations.md, "Form controls — one treatment": every write form opts
 // into the shared control styling, every visible control keeps a visible
 // label, and each submit button carries the weight of what it does to
-// authority — filled for an act that grants, quiet for one that reduces.
+// authority — filled for an act that grants, danger for one that reduces.
 
 import (
 	"regexp"
@@ -47,18 +47,18 @@ func TestAccountsForms_EveryWriteFormTakesTheSharedControlStyle(t *testing.T) {
 
 // TestAccountsForms_ButtonWeightFollowsWhatTheActDoesToAuthority is the
 // foundations table, as markup: the granting acts are filled (.btn.grant) and
-// the reducing ones quiet (.btn.reduce). The role change is split so no form
-// both grants and reduces: Raise role is filled and carries the password field
-// to prove it, Lower role is outlined and carries none.
+// the reducing ones outlined in the muted red (.btn.danger). The role change is
+// split so no form both grants and reduces: Raise role is filled and carries
+// the password field to prove it, Lower role is a danger button and carries none.
 func TestAccountsForms_ButtonWeightFollowsWhatTheActDoesToAuthority(t *testing.T) {
 	want := map[string]string{
 		"Raise role":     "btn grant",
-		"Lower role":     "btn reduce",
+		"Lower role":     "btn danger",
 		"Enable":         "btn grant",
 		"Create Account": "btn grant",
 		"Mint API Token": "btn grant",
-		"Disable":        "btn reduce",
-		"Revoke":         "btn reduce",
+		"Disable":        "btn danger",
+		"Revoke":         "btn danger",
 	}
 	seen := map[string]bool{}
 	for _, body := range accountsFormsBodies(t) {
@@ -129,11 +129,12 @@ func TestAccountsForms_NoInlineStyleOrScript(t *testing.T) {
 	}
 }
 
-// TestAccountsForms_TheStylesheetWeighsGrantAboveReduce reads the rules the
-// markup above relies on: a reducing button has no fill and never borrows the
-// failure colour, a granting one is filled, and the shared field rule keeps a
-// visible focus ring rather than trusting the browser default.
-func TestAccountsForms_TheStylesheetWeighsGrantAboveReduce(t *testing.T) {
+// TestAccountsForms_TheStylesheetWeighsGrantAgainstDanger reads the rules the
+// markup above relies on: a danger button has no fill and is outlined in the
+// muted red, a granting one is filled, only the danger button spends the red
+// text token, and the shared field rule keeps a visible focus ring rather than
+// trusting the browser default.
+func TestAccountsForms_TheStylesheetWeighsGrantAgainstDanger(t *testing.T) {
 	raw, err := assetsFS.ReadFile("assets/console.css")
 	if err != nil {
 		t.Fatalf("read console.css: %v", err)
@@ -153,21 +154,28 @@ func TestAccountsForms_TheStylesheetWeighsGrantAboveReduce(t *testing.T) {
 	if !strings.Contains(grant, "background: var(--color-accent)") {
 		t.Errorf(".btn.grant is not filled in the interactive colour: %q", grant)
 	}
-	reduce := decls(".btn.reduce")
-	if !strings.Contains(reduce, "background: transparent") {
-		t.Errorf(".btn.reduce is filled — a reducing act must be quiet: %q", reduce)
+	danger := decls(".btn.danger")
+	for _, want := range []string{"background: transparent", "border-color: var(--danger-text)", "color: var(--danger-text)"} {
+		if !strings.Contains(danger, want) {
+			t.Errorf(".btn.danger lacks %q — outlined in the muted red, no fill: %q", want, danger)
+		}
 	}
-	for _, sel := range []string{".btn.reduce", ".btn.reduce:hover"} {
-		d := decls(sel)
-		if strings.Contains(d, "--failure") || strings.Contains(d, "--color-red") {
-			t.Errorf("%s borrows the failure colour — red is failure and timeout and nothing else: %q", sel, d)
+	hover := decls(".btn.danger:hover")
+	if strings.Contains(hover, "background") && !strings.Contains(hover, "background: var(--bg-elevated)") {
+		t.Errorf(".btn.danger:hover fills with something other than --bg-elevated: %q", hover)
+	}
+	// Red marks only the button, never a row, a chip or a deny.
+	for _, m := range cssRulePattern.FindAllStringSubmatch(css, -1) {
+		sel := strings.TrimSpace(m[1])
+		if strings.Contains(m[2], "var(--danger-text)") && !strings.HasPrefix(sel, ".btn.danger") {
+			t.Errorf("%q spends --danger-text; only .btn.danger may", sel)
 		}
 	}
 	invalid := decls(".rolechange:invalid .btn.grant")
 	if !strings.Contains(invalid, "opacity") {
 		t.Errorf("a Raise form that cannot submit yet does not read as inactive: %q", invalid)
 	}
-	// Lower role is never dimmed: no rule that can reach the reducing button
+	// Lower role is never dimmed: no rule that can reach the danger button
 	// carries opacity.
 	for _, m := range cssRulePattern.FindAllStringSubmatch(css, -1) {
 		sel := strings.TrimSpace(m[1])
@@ -177,8 +185,8 @@ func TestAccountsForms_TheStylesheetWeighsGrantAboveReduce(t *testing.T) {
 		if strings.Contains(sel, ":invalid .btn") && sel != ".rolechange:invalid .btn.grant" {
 			t.Errorf("%q dims a button that is not Raise role", sel)
 		}
-		if strings.Contains(sel, ".btn.reduce") {
-			t.Errorf("%q dims the reducing button", sel)
+		if strings.Contains(sel, ".btn.danger") {
+			t.Errorf("%q dims the danger button", sel)
 		}
 	}
 	if d := decls(".newaccount > summary"); !strings.Contains(d, "min-height: 44px") {

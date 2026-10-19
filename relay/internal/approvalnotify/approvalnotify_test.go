@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
 )
 
 var notifyNow = time.Date(2026, 8, 14, 9, 0, 0, 0, time.UTC)
@@ -253,63 +254,80 @@ func TestNewRejectsAnEmptyURL(t *testing.T) {
 	}
 }
 
-// TestSecretFilePermissionsAreEnforced: the secret is signing key material, so
-// the bar is stricter than the gate config's — group- or world-READABLE is
-// refused, not just writable.
+// TestSecretFilePermissionsAreEnforced: a secret file is read through
+// hostfile's check under its Secret rule (ADR-0043): refused if the Relay could
+// write it, or if any account but the Relay and root could read it. The table
+// is the modes this test has always walked, one bit each, on the layout a
+// package installs (root-owned, the Relay's own group), plus a foreign group;
+// each outcome is the Secret rule's verdict on that file. Group read for the
+// Relay's own group, and execute bits, grant no other account access and are
+// accepted, which is the change from the owner-only mode rule this test used to
+// pin (RC-9, whose wording is the owner's to settle).
 //
-// The mode is forced with os.Chmod rather than passed to os.WriteFile because
-// WriteFile's perm argument is masked by the process umask: at umask 0o077
-// every mode below would land 0o600 — exactly what the production check
-// ACCEPTS — and the test would assert a refusal of an input that is no longer
-// refusable, failing on its own t.Fatal (#508). chmod(2) is not umask-masked,
-// so the fixture is loose by construction on every runner. Forcing a mode is
-// right here for the same reason it is wrong in a production writer (#507):
-// force the declared mode only where the declared mode is the tightest one, or
-// where a test fixture is deliberately widened. A fixture that must be loose to
-// be a valid input is the second case.
-//
-// The gate is `perm&0o077 != 0`: six independent bits. A single fixture that
-// trips several at once (0o644 alone, as this test once was) discriminates
-// none of them — a regression narrowing the mask to 0o007 or 0o070 would keep
-// it green — so each case below trips exactly ONE bit, with 0o644 kept as the
-// historical witness. Every bit is its own re-admission: a readable secret
-// forges approval notifications, a writable one replaces the signing key
-// outright.
+// The process facts are fixed rather than gathered, since a test may run as
+// root, which the check refuses outright; the real gatherer and the real binary
+// meet it on the separate-uid harness (TestStart_RefusesSecretReadableByOthers).
 func TestSecretFilePermissionsAreEnforced(t *testing.T) {
+	const relayUID, relayGID, wheel = 4242, 4243, 10
+	proc := hostfile.Process{
+		UIDs:   [3]uint32{relayUID, relayUID, relayUID},
+		GIDs:   [3]uint32{relayGID, relayGID, relayGID},
+		Groups: []uint32{relayGID},
+	}
+	const ext4 = 0xEF53
 	for _, tc := range []struct {
-		mode os.FileMode
-		bit  string
+		mode   uint32
+		gid    uint32
+		bit    string
+		refuse hostfile.Clause // 0: accepted
 	}{
-		{0o640, "group-readable, other bits clear"},
-		{0o620, "group-writable, other bits clear"},
-		{0o610, "group-executable, other bits clear"},
-		{0o604, "world-readable, group bits clear"},
-		{0o602, "world-writable, group bits clear"},
-		{0o601, "world-executable, group bits clear"},
-		{0o644, "group- and world-readable — both bits at once"},
+		{0o640, relayGID, "group-readable by the Relay's own group", 0},
+		{0o620, relayGID, "group-writable", hostfile.ClauseWriteGrant},
+		{0o610, relayGID, "group-executable", 0},
+		{0o604, relayGID, "world-readable", hostfile.ClauseReadableByOther},
+		{0o602, relayGID, "world-writable", hostfile.ClauseWriteGrant},
+		{0o601, relayGID, "world-executable", 0},
+		{0o644, relayGID, "group- and world-readable", hostfile.ClauseReadableByOther},
+		{0o640, wheel, "group-readable by a group the Relay is not", hostfile.ClauseReadableByOther},
 	} {
-		t.Run(fmt.Sprintf("%04o", uint32(tc.mode)), func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "secret")
-			if err := os.WriteFile(path, []byte("s3cret"), 0o600); err != nil {
-				t.Fatalf("write secret: %v", err)
+		t.Run(fmt.Sprintf("%04o-gid%d", tc.mode, tc.gid), func(t *testing.T) {
+			facts := hostfile.Facts{Process: proc, Path: []hostfile.Node{
+				{Name: "/", Kind: hostfile.KindDir, Mode: 0o755, FSType: ext4},
+				{Name: "etc", Kind: hostfile.KindDir, Mode: 0o755, FSType: ext4},
+				{Name: "secret", Kind: hostfile.KindRegular, GID: tc.gid, Mode: tc.mode, FSType: ext4},
+			}}
+			err := hostfile.Decide(facts, hostfile.Secret)
+			if tc.refuse == 0 {
+				if err != nil {
+					t.Fatalf("%s: refused (%v), want accepted", tc.bit, err)
+				}
+				return
 			}
-			if err := os.Chmod(path, tc.mode); err != nil {
-				t.Fatalf("chmod: %v", err)
-			}
-
-			_, err := ReadSecretFile(path)
-			if err == nil {
-				t.Fatalf("mode %04o (%s): a group- or world-accessible signing secret must refuse startup", uint32(tc.mode), tc.bit)
-			}
-			// Pin the refusal to THIS file's mode, so a rejection arriving from
-			// some other check cannot stand in for the permission gate.
-			if want := fmt.Sprintf("%04o", uint32(tc.mode)); !strings.Contains(err.Error(), want) {
-				t.Errorf("mode %s (%s): err = %q, want it to name the offending mode", want, tc.bit, err)
-			}
-			if !strings.Contains(err.Error(), "0600") {
-				t.Errorf("err = %q, want it to say how to fix the permissions", err)
+			var r *hostfile.Refusal
+			if !errors.As(err, &r) || r.Clause != tc.refuse {
+				t.Fatalf("%s: err = %v, want the %q refusal", tc.bit, err, tc.refuse)
 			}
 		})
+	}
+
+	// ReadSecretFile is that check: a symbolic link is refused by it before
+	// anything is read, whoever the test runs as.
+	dir := t.TempDir()
+	real := filepath.Join(dir, "secret")
+	if err := os.WriteFile(real, []byte("s3cret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReadSecretFile(link)
+	var r *hostfile.Refusal
+	if !errors.As(err, &r) || r.Clause != hostfile.ClauseSymlink {
+		t.Fatalf("ReadSecretFile(symlink) = %v, want the file check's symlink refusal", err)
+	}
+	if strings.Contains(err.Error(), "s3cret") {
+		t.Errorf("refusal carries the content: %v", err)
 	}
 }
 
@@ -327,7 +345,11 @@ func TestSecretFileMustExistAndBeNonEmpty(t *testing.T) {
 	if err := os.WriteFile(empty, []byte("  \n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, err := ReadSecretFile(empty); err == nil {
+	f, err := os.Open(empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readOpenedSecret(f, empty); err == nil {
 		t.Error("an empty secret file must refuse startup")
 	}
 }

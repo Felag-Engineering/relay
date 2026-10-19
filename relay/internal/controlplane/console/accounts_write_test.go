@@ -48,6 +48,10 @@ import (
 // them — the same base-name check no_dispatch_test.go makes.
 const accountsWriteFile = "accounts_write.go"
 
+// accountsConfirmFile is the confirmation pages' file, held to the same
+// caller-role rules. A base name, for the same rename-fails-loudly reason.
+const accountsConfirmFile = "accounts_confirm.go"
+
 // ---------------------------------------------------------------------------
 // Guard A — the write half reads no caller role, by two independent mechanisms
 // ---------------------------------------------------------------------------
@@ -61,10 +65,16 @@ const accountsWriteFile = "accounts_write.go"
 // position for the same reason.
 func parseWriteHalf(t *testing.T) (*token.FileSet, *ast.File) {
 	t.Helper()
+	return parseGuardedFile(t, accountsWriteFile)
+}
+
+// parseGuardedFile is parseWriteHalf for any file the caller-role guards cover.
+func parseGuardedFile(t *testing.T, name string) (*token.FileSet, *ast.File) {
+	t.Helper()
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filepath.Join(".", accountsWriteFile), nil, parser.SkipObjectResolution)
+	file, err := parser.ParseFile(fset, filepath.Join(".", name), nil, parser.SkipObjectResolution)
 	if err != nil {
-		t.Fatalf("parse %s: %v", accountsWriteFile, err)
+		t.Fatalf("parse %s: %v", name, err)
 	}
 	return fset, file
 }
@@ -73,10 +83,15 @@ func parseWriteHalf(t *testing.T) (*token.FileSet, *ast.File) {
 // dropped, so Layer 1's string bans scan CODE and not prose.
 func writeHalfCode(t *testing.T) string {
 	t.Helper()
-	fset, file := parseWriteHalf(t)
+	return guardedFileCode(t, accountsWriteFile)
+}
+
+func guardedFileCode(t *testing.T, name string) string {
+	t.Helper()
+	fset, file := parseGuardedFile(t, name)
 	var buf bytes.Buffer
 	if err := printer.Fprint(&buf, fset, file); err != nil {
-		t.Fatalf("print %s: %v", accountsWriteFile, err)
+		t.Fatalf("print %s: %v", name, err)
 	}
 	return buf.String()
 }
@@ -84,7 +99,8 @@ func writeHalfCode(t *testing.T) string {
 // callerAuthorityProducers are this package's functions that RETURN a
 // caller-authority value: principal() reads the Principal the authentication
 // boundary injected (console.go), page() carries the caller's role on Page
-// (layout.go), and writePrelude (accounts_write.go) returns both.
+// (layout.go), and writePrelude (accounts_write.go) and confirmPrelude
+// (accounts_confirm.go) return both.
 //
 // A local bound from any of them holds the CALLER's authority whatever it is
 // named, which is the whole point of Layer 2: the spelling bans in Layer 1
@@ -104,6 +120,8 @@ var callerAuthorityProducers = map[string]bool{
 	"principal":    true,
 	"page":         true,
 	"writePrelude": true,
+	// confirmPrelude returns the caller and Page just as writePrelude does.
+	"confirmPrelude": true,
 }
 
 // callerAuthoritySelectors are the same thing reached through a package
@@ -263,6 +281,13 @@ func callerAuthorityNames(file *ast.File) map[string]bool {
 	return out
 }
 
+// callerRoleSpellings are the source spellings of a caller-role comparison,
+// banned in every file the caller-role guards cover.
+var callerRoleSpellings = []string{
+	"ReachableBy(", "== accounts.Role", "!= accounts.Role",
+	"RoleGate", "requiredRole", "caller.Role", "pg.Role",
+}
+
 // TestAccountsWrite_NoCallerRoleComparisonLivesInTheWriteHalf is invariant 10
 // as a source fact: accounts_write.go must interpret NO caller role. The
 // route's MinRole subtracts reach at mount time and the capability layer
@@ -290,10 +315,7 @@ func TestAccountsWrite_NoCallerRoleComparisonLivesInTheWriteHalf(t *testing.T) {
 		"capability layer authorizes; a comparison here is a third, unreviewed answer (invariant 10)."
 
 	// --- Layer 1: the spelling bans, accounts.go's list in full ------------
-	for _, banned := range []string{
-		"ReachableBy(", "== accounts.Role", "!= accounts.Role",
-		"RoleGate", "requiredRole", "caller.Role", "pg.Role",
-	} {
+	for _, banned := range callerRoleSpellings {
 		if strings.Contains(code, banned) {
 			t.Errorf(message, accountsWriteFile, banned)
 		}
@@ -877,6 +899,12 @@ func newWriteFix(t *testing.T, mutate func(*Deps)) *writeFix {
 		admin:   admin,
 		auth:    auth,
 	}
+}
+
+// get fetches path over the fixture's session. A GET needs no CSRF token.
+func (x *writeFix) get(t *testing.T, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	return x.f.do(t, httptest.NewRequest(http.MethodGet, path, nil), x.session)
 }
 
 // post submits form to path over the fixture's session, adding the session's
@@ -1874,14 +1902,23 @@ func accountsWriteBody(t *testing.T, query string) string {
 // is visible in the HTML, not only in the handler. An enabled row's Disable
 // control has no password field; a disabled row's Enable form has one.
 func TestAccountsWrite_TheStateControlAsymmetryIsInTheMarkup(t *testing.T) {
-	// The controls render only in the selected Account's panel (#830).
-	disable := formWithAction(t, accountsWriteBody(t, "?account=ana"), setAccountEnabledAction(targetViewerID))
+	// The controls render only in the selected Account's panel (#830). The
+	// reducing controls GET their confirmation page; the POST form, and the
+	// enabled=false it submits, are on that page.
+	disable := formWithAction(t, accountsWriteBody(t, "?account=ana"), confirmDisableAction(targetViewerID))
 	if strings.Contains(disable, `type="password"`) {
 		t.Errorf("the Disable control carries a password field — disabling is the durable "+
 			"off-switch and can only reduce:\n%s", disable)
 	}
-	if !strings.Contains(disable, `value="false"`) {
-		t.Errorf("the Disable control does not submit enabled=false:\n%s", disable)
+	if !strings.Contains(disable, `method="get"`) {
+		t.Errorf("the Disable control does not GET its confirmation page:\n%s", disable)
+	}
+	confirm := contentOf(accountsConfirmBody(t, confirmDisableAction(targetViewerID)))
+	if strings.Contains(confirm, `type="password"`) {
+		t.Errorf("the Disable confirmation carries a password field:\n%s", confirm)
+	}
+	if !strings.Contains(confirm, `value="false"`) {
+		t.Errorf("the Disable confirmation does not submit enabled=false:\n%s", confirm)
 	}
 
 	enable := formWithAction(t, accountsWriteBody(t, "?account=retired-ci"), setAccountEnabledAction(targetDisabledID))
@@ -1895,10 +1932,13 @@ func TestAccountsWrite_TheStateControlAsymmetryIsInTheMarkup(t *testing.T) {
 
 	// And the revoke control, which is also a reducing act.
 	revoke := formWithAction(t, accountsWriteBody(t, "?account=gleipnir-prod"),
-		revokeAPITokenAction(targetLiveToken))
+		confirmRevokeAction(targetOperatorID, targetLiveToken))
 	if strings.Contains(revoke, `type="password"`) {
 		t.Errorf("the Revoke control carries a password field — revocation is the incident "+
 			"instrument and only ever reduces:\n%s", revoke)
+	}
+	if !strings.Contains(revoke, `method="get"`) {
+		t.Errorf("the Revoke control does not GET its confirmation page:\n%s", revoke)
 	}
 }
 
@@ -1907,7 +1947,10 @@ func TestAccountsWrite_TheStateControlAsymmetryIsInTheMarkup(t *testing.T) {
 func TestAccountsWrite_TheAccountListIsReadOnly(t *testing.T) {
 	body := accountsWriteBody(t, "")
 	for _, a := range sweepAccounts().accounts {
-		for _, action := range []string{setAccountRoleAction(a.ID), setAccountEnabledAction(a.ID)} {
+		for _, action := range []string{
+			setAccountRoleAction(a.ID), setAccountEnabledAction(a.ID),
+			confirmLowerRoleAction(a.ID), confirmDisableAction(a.ID),
+		} {
 			if strings.Contains(body, `action="`+action+`"`) {
 				t.Errorf("the list carries a form posting to %s — the list is read-only", action)
 			}
@@ -1943,7 +1986,9 @@ func TestAccountsWrite_EveryRoleSelectPreselectsTheCurrentRoleAndCannotSubmitIt(
 	}
 	for _, tc := range cases {
 		body := accountsWriteBody(t, tc.query)
-		forms := regexp.MustCompile(`(?s)<form[^>]*action="`+regexp.QuoteMeta(setAccountRoleAction(tc.id))+`".*?</form>`).
+		// Raise posts to the role route; Lower GETs its confirmation page.
+		forms := regexp.MustCompile(`(?s)<form[^>]*action="(?:`+regexp.QuoteMeta(setAccountRoleAction(tc.id))+`|`+
+			regexp.QuoteMeta(confirmLowerRoleAction(tc.id))+`)".*?</form>`).
 			FindAllString(body, -1)
 		if len(forms) == 0 {
 			t.Fatalf("%s: no role form found for %s", tc.query, tc.id)
@@ -2007,7 +2052,10 @@ func TestAccountsWrite_TheSignedInAccountsPanelSaysWhyItCannotChange(t *testing.
 	if !strings.Contains(body, template.HTMLEscapeString(selfPanelNote)) {
 		t.Errorf("the panel does not say why it cannot change:\n%s", contentOf(body))
 	}
-	for _, action := range []string{setAccountRoleAction(self), setAccountEnabledAction(self)} {
+	for _, action := range []string{
+		setAccountRoleAction(self), setAccountEnabledAction(self),
+		confirmLowerRoleAction(self), confirmDisableAction(self),
+	} {
 		if strings.Contains(body, `action="`+action+`"`) {
 			t.Errorf("the signed-in Account's panel offers a form posting to %s", action)
 		}

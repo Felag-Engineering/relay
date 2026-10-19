@@ -22,7 +22,7 @@ import (
 // as its one supplementary group and no capabilities, over a configuration only root can
 // write, a state directory only the Relay can enter, and a group-shared IO directory that
 // holds its log. Runs under make test-integration (RELAY_SHIPPABLE_BIN); without sudo or
-// setpriv the harness records a skip in make verify's skip ledger, and under
+// setpriv the harness records a skip in make verify's skip ledger and skips, and under
 // RELAY_E2E_SUDO_REQUIRED=1 it fails.
 func TestHarness_RelayRunsAsSeparateUid(t *testing.T) {
 	bin := os.Getenv("RELAY_SHIPPABLE_BIN")
@@ -30,9 +30,6 @@ func TestHarness_RelayRunsAsSeparateUid(t *testing.T) {
 		relaytest.SkipMissingBin(t, "RELAY_SHIPPABLE_BIN not set; skipping the separate-uid harness test (run via make test-integration)")
 	}
 	layout := relaytest.NewRelayLayout(t, "test-integration")
-	if !layout.Separate() {
-		t.Skip("the separate uid is unavailable here; the skip is recorded in the skip ledger")
-	}
 
 	addr, err := freeLoopbackAddr()
 	if err != nil {
@@ -41,7 +38,7 @@ func TestHarness_RelayRunsAsSeparateUid(t *testing.T) {
 	cfg := layout.WriteConfig(t, fmt.Sprintf(
 		"[node_plane]\nlisten_address = %q\n\n[ca]\ndir = %q\n\n[store]\npath = %q\n\n[tls]\nhostname = \"localhost\"\n",
 		addr, filepath.Join(layout.StateDir(), "ca"), filepath.Join(layout.StateDir(), "relay.db")))
-	proc, err := layout.Start(t, layout.InstallBinary(t, bin), relaySubprocessEnv(layout), "--config", cfg)
+	proc, err := layout.Start(t, layout.InstallBinary(t, bin), relaySubprocessEnv(), "--config", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

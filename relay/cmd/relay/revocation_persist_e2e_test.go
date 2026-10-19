@@ -55,7 +55,7 @@ func persistTestConfig(t *testing.T) Config {
 // single writer; the second Open must not race the first handle).
 func bootServer(t *testing.T, cfg Config) (*bufconn.Listener, *appDeps, *grpc.Server) {
 	t.Helper()
-	srv, deps, err := newServer(cfg)
+	srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}

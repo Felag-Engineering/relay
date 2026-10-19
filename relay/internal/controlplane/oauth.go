@@ -45,8 +45,8 @@ type OIDCVerifier interface {
 
 // OAuthConfig configures the resource-server half.
 //
-// This is Relay configuration (invariant 11): it comes from flags and a
-// root-owned local file, and is never reachable through the Control API. An
+// This is Relay configuration (invariant 11): it comes from the Relay's
+// configuration file, and is never reachable through the Control API. An
 // API that could repoint its own issuer could authenticate anyone.
 type OAuthConfig struct {
 	// Issuer is the IdP's issuer identifier, used for discovery and checked

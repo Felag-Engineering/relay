@@ -1,7 +1,7 @@
 package main
 
 // console_password.go implements `relay console-password`: the local,
-// root-owned lever that sets a human Account's Admin Console sign-in password
+// host-only lever that sets a human Account's Admin Console sign-in password
 // (docs/design/console/12-login.md).
 //
 // # Why a local subcommand and not an API
@@ -60,7 +60,7 @@ is a password in every process listing and shell history.
 The Account must already exist and be a human Account. Create one over
 /api/v1/accounts, or use the seeded founding admin.
 
-Requires read/write access to the Relay's store file, which is root-owned.
+Requires read/write access to the Relay's store file, which belongs to the Relay's account.
 Safe to run while the Relay is running; the new password takes effect on the
 next sign-in, and sessions already open are unaffected.
 

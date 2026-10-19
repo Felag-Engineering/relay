@@ -41,6 +41,7 @@ import (
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/relay/relay/internal/relayconfig"
 	"github.com/Felag-Engineering/relay/relay/internal/revocation"
+	"github.com/Felag-Engineering/relay/relay/internal/startup"
 	"github.com/Felag-Engineering/relay/relay/internal/store"
 	"github.com/Felag-Engineering/relay/relay/internal/transport"
 	"github.com/Felag-Engineering/relay/relay/internal/version"
@@ -309,16 +310,20 @@ const declinedScanBudget = 30 * time.Second
 // newServer is the one production entry point: it builds the composition
 // root with an empty serverHooks, so no test-only seam is ever populated on
 // the path main takes. See newServerWithHooks and serverHooks
-// (control_surfaces.go).
-func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
-	return newServerWithHooks(cfg, serverHooks{})
+// (control_surfaces.go). files is what startup.Open read through the
+// start-time file check; newServer opens neither the CA nor the gate itself,
+// and opens the store at the path whose directory the check decided on.
+func newServer(cfg Config, files startup.Files) (*grpc.Server, *appDeps, error) {
+	return newServerWithHooks(cfg, files, serverHooks{})
 }
 
-func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, error) {
-	relayCA, err := ca.Open(cfg.CADir)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open CA: %w", err)
+func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*grpc.Server, *appDeps, error) {
+	if !files.Valid() {
+		// Never a default: an absent gate would read as "nothing needs
+		// approval", the failure approval.Load exists to prevent.
+		return nil, nil, errors.New("build server: the CA, the approval gate and the store directory were not read through the start-time file check")
 	}
+	relayCA := files.CA()
 
 	clientCAs := x509.NewCertPool()
 	if !clientCAs.AppendCertsFromPEM(relayCA.Bundle()) {
@@ -366,7 +371,10 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// internal log lines must set the default before newServer.
 	logger := slog.New(logctx.NewHandler(slog.Default().Handler()))
 
-	st, err := store.Open(cfg.StorePath, store.WithMaxNodes(cfg.MaxNodes), store.WithMinDaemonVersion(cfg.MinDaemonVersion), store.WithLogger(logger))
+	if err := files.RecheckStore(); err != nil {
+		return nil, nil, err
+	}
+	st, err := store.Open(files.StorePath(), store.WithMaxNodes(cfg.MaxNodes), store.WithMinDaemonVersion(cfg.MinDaemonVersion), store.WithLogger(logger))
 	if err != nil {
 		return nil, nil, fmt.Errorf("open store: %w", err)
 	}
@@ -548,15 +556,11 @@ func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, 
 	// reason (capability's allowlist bars internal/audit).
 	queries := auditquery.New(st.AuditQueries(), st.JobQueries())
 
-	// The approval gate (ADR-0027). Loaded BEFORE the capability layer is
-	// built, and a load failure aborts startup rather than degrading: an empty
-	// Gate must only ever mean "no rules configured", never "the rules could
-	// not be read". approval.Load draws that distinction — an empty path is the
-	// former, everything else is an error.
-	approvalGate, err := approval.Load(cfg.ApprovalGatePath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("load approval gate config: %w", err)
-	}
+	// The approval gate (ADR-0027), loaded by startup.Open before anything
+	// here was built: a load failure refuses start rather than degrading, so an
+	// empty Gate only ever means "no rules configured", never "the rules could
+	// not be read".
+	approvalGate := files.Gate()
 	if n := len(approvalGate.Rules()); n > 0 {
 		slog.Info("approval gating enabled", "rules", n, "config", cfg.ApprovalGatePath)
 	}
@@ -960,7 +964,7 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "bootstrap-token" {
 		os.Exit(runBootstrapTokenCommand(os.Args[2:], os.Stdout, os.Stderr))
 	}
-	// `relay console-password` is the same shape of local, root-owned lever
+	// `relay console-password` is the same shape of local, host-only lever
 	// for the Console's first human credential: reaching the Console
 	// requires a password, so the first one cannot be set through it.
 	if len(os.Args) > 1 && os.Args[1] == "console-password" {
@@ -980,9 +984,9 @@ func main() {
 		return
 	}
 
-	// Startup order follows ADR-0043: refuse retired RELAY_* names, open the
-	// file, decode strictly, validate, and only then build the server. The
-	// file and state checks join here later.
+	// Startup order follows ADR-0043: refuse retired RELAY_* names, open and
+	// check the file, decode strictly, validate, open and check every file it
+	// names, check the state locations, and only then build the server.
 	path, err := parseArgs(os.Args[1:], os.Stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -994,7 +998,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "relay: %v\n", err)
 		os.Exit(1)
 	}
-	sc, err := loadConfig(path, approvalnotify.ReadSecretFile)
+	sc, err := loadConfig(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "relay: %v\n", err)
 		os.Exit(1)
@@ -1004,7 +1008,12 @@ func main() {
 		slog.Warn(w.String())
 	}
 	cfg := sc.Config
-	srv, deps, err := newServer(cfg)
+	files, err := startup.Open(cfg.ApprovalGatePath, cfg.CADir, cfg.StorePath)
+	if err != nil {
+		slog.Error("start-time file check refused", "err", err)
+		os.Exit(1)
+	}
+	srv, deps, err := newServer(cfg, files)
 	if err != nil {
 		slog.Error("build server failed", "err", err)
 		os.Exit(1)

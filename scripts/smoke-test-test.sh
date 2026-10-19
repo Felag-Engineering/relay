@@ -7,17 +7,18 @@
 # up, and when curl cannot speak HTTP/2. It also proves the dial is certless by construction:
 # curl is invoked with -q (no ~/.curlrc) and never with a client certificate or key. And it
 # proves the separate-uid harness's absence is never a silent pass: without a usable sudo the
-# script records a skip in make verify's skip ledger, and under RELAY_E2E_SUDO_REQUIRED=1 it
-# fails instead.
+# script skips, records the skip in make verify's skip ledger, and dials nothing, and under
+# RELAY_E2E_SUDO_REQUIRED=1 it fails instead.
 #
 # Hermetic: the REAL smoke-test.sh runs against a stub Relay (bash; binds nothing) and a stub
 # curl that replays responses. The response SHAPE is a recorded real capture — real curl 8.5
 # against the real Relay on 2026-10-02, CRLFs included (the codex-review-test.sh "recorded real
 # capture" idiom); only the status and message vary per case. No Go, no Rust, no network, no
-# writes outside its own `mktemp -d`, except case 13's /tmp/relaytest.* layout, which the
-# script under test removes (and this file removes, failing, if it did not). A stub sudo that
-# refuses keeps every other case off the separate uid, whatever the host allows. The real Relay half of the proof, separate uid
-# included, is `make test-integration`, which runs smoke-test.sh against the built binary.
+# writes outside its own `mktemp -d`: the script under test makes its layout there
+# (RELAY_SMOKE_LAYOUT_PARENT) and must remove it. Every case runs the separate-uid branch
+# through a stub sudo that runs commands as this user, except the two that prove a missing
+# separate uid is a recorded skip or a failure, whatever the host allows. The real Relay half
+# of the proof is `make test-integration`, which runs smoke-test.sh against the built binary.
 #
 # NOT `set -e`: every case must run and be reported, not stop at the first failure
 # (security-surface-test.sh:13).
@@ -56,7 +57,7 @@ if [ -z "$cfg" ]; then
   echo "stub relay: --config is required" >&2
   exit 1
 fi
-if [ -e "$(dirname "$0")/exit-before-listening" ]; then
+if [ -e "__STUB_DIR__/exit-before-listening" ]; then
   echo "stub relay: refusing to start" >&2
   exit 1
 fi
@@ -66,6 +67,9 @@ echo "level=INFO msg=\"relay listening\" (stub)"
 exec sleep 30
 STUB
 chmod +x "$WORKDIR/stub/relay"
+# The script under test runs a copy of the stub installed in its layout, so the marker's
+# directory is fixed here rather than read from $0.
+sed -i "s#__STUB_DIR__#$WORKDIR/stub#" "$WORKDIR/stub/relay"
 
 # --- Stub curl. `--version` answers with the recorded real feature line (HTTP2 dropped when
 # STUB_NO_HTTP2 is set). Any other call appends its argv to $STUB_ARGV_LOG, then replays the
@@ -94,9 +98,9 @@ exit 0
 STUB
 chmod +x "$WORKDIR/stub/curl"
 
-# --- Stub sudo. By default it refuses as a sudo that wants a password does, so every case runs
-# the Relay as this user and the separate uid is unavailable whatever the host has. With
-# STUB_SUDO_LOG set it logs its argv there and runs the command as this user instead: `-n` and
+# --- Stub sudo. With STUB_SUDO_LOG empty it refuses as a sudo that wants a password does, so
+# the separate uid is unavailable whatever the host has. With STUB_SUDO_LOG set it logs its
+# argv there and runs the command as this user instead: `-n` and
 # `-u <user>` are dropped, install's -o/-g ownership is dropped (nobody here can chown), and
 # setpriv's flags are dropped, its command run as a child so the Relay is sudo's descendant
 # as it is under the real sudo.
@@ -127,7 +131,7 @@ esac
 STUB
 chmod +x "$WORKDIR/stub/sudo"
 
-# --- Stub accounts, for the separate-uid case only (STUB_FAKE_UID set; otherwise each passes
+# --- Stub accounts, for the separate-uid branch (STUB_FAKE_UID set; otherwise each passes
 # through). relaytest is given STUB_FAKE_UID and relaytest-io this user's own group, and ps
 # reports this user's processes as STUB_FAKE_UID's, so the script finds the stub Relay as it
 # finds the real one: sudo's descendant running as relaytest.
@@ -194,17 +198,27 @@ OUT=""
 RC=0
 ARGV_LOG=""
 
-# run_smoke [VAR=value ...] — the real smoke-test.sh against the stubs, responses from CASE_DIR.
-# The caller's skip ledger and sudo switch never reach it: a stub case's skip is not one of
-# make verify's, and only the cases that set them on purpose see them.
+# run_smoke [VAR=value ...] — the real smoke-test.sh against the stubs, responses from CASE_DIR,
+# on the stubbed separate uid (STUB_SUDO_LOG= turns it off). The caller's skip ledger and sudo
+# switch never reach it: a stub case's skip is not one of make verify's, and only the cases
+# that set them on purpose see them.
 run_smoke() {
   ARGV_LOG="$CASE_DIR/argv"
+  SUDO_LOG="$CASE_DIR/sudo-argv"
   : > "$ARGV_LOG"
+  : > "$SUDO_LOG"
+  mkdir -p "$CASE_DIR/layouts" "$CASE_DIR/bins"
   OUT="$(env -u RELAY_VERIFY_SKIPS -u RELAY_E2E_SUDO_REQUIRED \
          PATH="$WORKDIR/stub:/usr/bin:/bin" RELAY_SMOKE_PORT=65000 \
          RELAY_SMOKE_RELAY_BIN="$WORKDIR/stub/relay" STUB_RESPONSES="$CASE_DIR" \
+         RELAY_SMOKE_LAYOUT_PARENT="$CASE_DIR/layouts" RELAY_SMOKE_BIN_PARENT="$CASE_DIR/bins" STUB_SUDO_LOG="$SUDO_LOG" STUB_FAKE_UID=65533 \
          STUB_ARGV_LOG="$ARGV_LOG" "$@" bash "$SCRIPT" 2>&1)"
   RC=$?
+  left="$(find "$CASE_DIR/layouts" "$CASE_DIR/bins" -mindepth 1 -maxdepth 1)"
+  if [ -n "$left" ]; then
+    echo "FAIL: $CASE_DIR: the script left its layout behind: $left" >&2
+    fail=$((fail + 1))
+  fi
 }
 
 assert_rc() {
@@ -332,13 +346,19 @@ http_resp "$CASE_DIR" Enrollment_Enroll 404
 run_smoke
 assert_refused "case8-not-grpc" "positive control: the certless dial itself did not work"
 
-# 9: the Relay dies before it reports listening -> exit 1, no call is made.
+# 9: the Relay dies before it reports listening -> exit 1, no call is made. It may die before
+# the script finds its pid, or after; either is a failure naming it.
 new_case relay-exits
 good_responses "$CASE_DIR"
 touch "$WORKDIR/stub/exit-before-listening"
 run_smoke
 rm -f "$WORKDIR/stub/exit-before-listening"
-assert_refused "case9-relay-exits" "Relay process exited unexpectedly"
+assert_rc "case9-relay-exits" 1
+assert_not_contains "case9-relay-exits" "PASS:"
+case "$OUT" in
+  *"Relay process exited unexpectedly"* | *"the Relay did not start as relaytest"*) ;;
+  *) echo "FAIL: case9-relay-exits: output names neither exit:" >&2; printf '%s\n' "$OUT" | sed 's/^/    /' >&2; fail=$((fail + 1)) ;;
+esac
 if [ -s "$ARGV_LOG" ]; then
   echo "FAIL: case9-relay-exits: curl was called although the Relay never came up" >&2
   fail=$((fail + 1))
@@ -350,15 +370,21 @@ good_responses "$CASE_DIR"
 run_smoke STUB_NO_HTTP2=1
 assert_refused "case10-no-http2" "no HTTP/2 support"
 
-# 11: no usable sudo, under make verify -> the run passes on its mTLS verdict, and the missing
-# separate uid is a line in the skip ledger, never a silent pass.
+# 11: no usable sudo, under make verify -> a skip, never a pass: no PASS verdict, no dial, and
+# the missing separate uid is a line in the skip ledger. The Relay refuses to start as this
+# user, so there is nothing to run.
 new_case no-sudo-ledger
 good_responses "$CASE_DIR"
 LEDGER="$CASE_DIR/skips"
 : > "$LEDGER"
-run_smoke RELAY_VERIFY_SKIPS="$LEDGER"
+run_smoke RELAY_VERIFY_SKIPS="$LEDGER" STUB_SUDO_LOG= STUB_FAKE_UID=
 assert_rc "case11-no-sudo-skip-recorded" 0
-assert_contains "case11-no-sudo-skip-recorded" "SKIPPING the Relay as a separate uid (sudo -n is not passwordless here)"
+assert_contains "case11-no-sudo-skip-recorded" "SKIPPING: the Relay cannot run as a separate uid (sudo -n is not passwordless here)"
+assert_not_contains "case11-no-sudo-skip-recorded" "PASS:"
+if [ -s "$ARGV_LOG" ]; then
+  echo "FAIL: case11-no-sudo-skip-recorded: curl was called on a skip" >&2
+  fail=$((fail + 1))
+fi
 if [ "$(cat "$LEDGER")" != "test-integration: smoke test, the Relay as a separate uid (sudo -n is not passwordless here)" ]; then
   echo "FAIL: case11-no-sudo-skip-recorded: skip ledger holds [$(cat "$LEDGER")]" >&2
   fail=$((fail + 1))
@@ -370,7 +396,7 @@ new_case no-sudo-required
 good_responses "$CASE_DIR"
 LEDGER="$CASE_DIR/skips"
 : > "$LEDGER"
-run_smoke RELAY_VERIFY_SKIPS="$LEDGER" RELAY_E2E_SUDO_REQUIRED=1
+run_smoke RELAY_VERIFY_SKIPS="$LEDGER" RELAY_E2E_SUDO_REQUIRED=1 STUB_SUDO_LOG= STUB_FAKE_UID=
 assert_refused "case12-no-sudo-required-fails" "RELAY_E2E_SUDO_REQUIRED=1, so this is a failure, not a skip"
 if [ -s "$ARGV_LOG" ] || [ -s "$LEDGER" ]; then
   echo "FAIL: case12-no-sudo-required-fails: curl was called or a skip was recorded" >&2
@@ -380,24 +406,19 @@ fi
 # 13: the separate-uid branch, end to end against the stubs -> PASS, and every privileged step
 # took the exact form the Go harness uses (relaytest.TestSetprivArgs): the setpriv drop, the
 # Relay signalled and its CA certificate read as relaytest and never as root, the layout
-# removed. The stub sudo's mktemp is the real one, so the layout is a real /tmp/relaytest.*
-# directory the script itself must remove; anything left is removed here and is a failure.
+# made in the layout parent, the binary installed in its own bin directory, and both removed
+# (run_smoke fails a case that leaves either).
 new_case separate-uid
 good_responses "$CASE_DIR"
-SUDO_LOG="$CASE_DIR/sudo-argv"
 LEDGER="$CASE_DIR/skips"
-: > "$SUDO_LOG"
 : > "$LEDGER"
-run_smoke STUB_SUDO_LOG="$SUDO_LOG" STUB_FAKE_UID=65533 RELAY_VERIFY_SKIPS="$LEDGER" RELAY_E2E_SUDO_REQUIRED=1
+run_smoke RELAY_VERIFY_SKIPS="$LEDGER" RELAY_E2E_SUDO_REQUIRED=1
 assert_rc "case13-separate-uid" 0
 assert_contains "case13-separate-uid" "PASS:"
-layout="$(sed -n 's/^The Relay runs as relaytest over root-owned fixtures in \(\/tmp\/relaytest\.[A-Za-z0-9]*\)\.$/\1/p' <<<"$OUT")"
-if [ -z "$layout" ]; then
-  echo "FAIL: case13-separate-uid: the script did not take the separate-uid branch" >&2
-  fail=$((fail + 1))
-elif [ -e "$layout" ]; then
-  echo "FAIL: case13-separate-uid: the layout $layout was left behind" >&2
-  rm -rf -- "$layout"
+layout_re="${CASE_DIR//./\\.}/layouts/relaytest\\.[A-Za-z0-9]*"
+bins_re="${CASE_DIR//./\\.}/bins/relaytest-bin\\.[A-Za-z0-9]*"
+if ! grep -q "^The Relay runs as relaytest over root-owned fixtures in ${layout_re}\\.\$" <<<"$OUT"; then
+  echo "FAIL: case13-separate-uid: the script did not take the separate-uid branch in the layout parent" >&2
   fail=$((fail + 1))
 fi
 want_setpriv="-n setpriv --reuid=relaytest --regid=relaytest --groups=relaytest-io --inh-caps=-all env -i "
@@ -409,10 +430,12 @@ if [ "$(grep -c . <<<"$drops")" -ne 1 ] || [ "${drops:0:${#want_setpriv}}" != "$
   sed 's/^/    /' "$SUDO_LOG" >&2
   fail=$((fail + 1))
 fi
-for want in '^-n -u relaytest cat -- /tmp/relaytest\.[A-Za-z0-9]*/state/ca/ca-cert\.pem$' \
+for want in "^-n -u relaytest cat -- ${layout_re}/state/ca/ca-cert\\.pem\$" \
             '^-n -u relaytest kill -s TERM [0-9][0-9]*$' \
-            '^-n install -o root -g relaytest -m 0640 -- .*/relay\.toml /tmp/relaytest\.[A-Za-z0-9]*/etc/relay\.toml$' \
-            '^-n rm -rf -- /tmp/relaytest\.[A-Za-z0-9]*$'; do
+            "^-n install -o root -g relaytest -m 0640 -- .*/relay\\.toml ${layout_re}/etc/relay\\.toml\$" \
+            "^-n rm -rf -- ${layout_re}\$" \
+            "^-n install -o root -g root -m 0755 -- .* ${bins_re}/relay\$" \
+            "^-n rm -rf -- ${bins_re}\$"; do
   grep -q -- "$want" "$SUDO_LOG" \
     || { echo "FAIL: case13-separate-uid: no sudo call matching [$want]" >&2; fail=$((fail + 1)); }
 done
@@ -430,4 +453,4 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "PASS: smoke-test.sh passes only on a reached certless Enroll plus interceptor refusals of certless Renew and Tunnel/Open, and fails when nothing listens, when either interceptor is off, on the right code with the wrong message, when everything is refused, on a non-gRPC answer, when the Relay never starts, and without HTTP/2; every dial is certless by construction; a missing separate uid is a recorded skip, or a failure under RELAY_E2E_SUDO_REQUIRED=1; the separate-uid branch drops with the Go harness's exact setpriv argv and touches the Relay only as relaytest."
+echo "PASS: smoke-test.sh passes only on a reached certless Enroll plus interceptor refusals of certless Renew and Tunnel/Open, and fails when nothing listens, when either interceptor is off, on the right code with the wrong message, when everything is refused, on a non-gRPC answer, when the Relay never starts, and without HTTP/2; every dial is certless by construction; a missing separate uid is a recorded skip that dials nothing, or a failure under RELAY_E2E_SUDO_REQUIRED=1; the separate-uid branch drops with the Go harness's exact setpriv argv and touches the Relay only as relaytest."

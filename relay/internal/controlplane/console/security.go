@@ -85,10 +85,10 @@ import (
 // existed here: the server renders the token into the HTML directly
 // (layout.go's hx-headers attribute and the hidden field), and no shipped
 // script reads any cookie. Verified precisely, because the loose version of
-// this claim invites a grep that appears to refute it: the three shipped
-// scripts (activity.js, dayone.js, stream.js) contain no occurrence of
-// "cookie" or "csrf" and make exactly one network call between them, an
-// EventSource GET. console.css mentions both words in prose comments, which is
+// this claim invites a grep that appears to refute it: the four shipped
+// scripts (activity.js, dayone.js, freshness.js, stream.js) contain no
+// occurrence of "cookie" or "csrf" and make exactly one network call between
+// them, an EventSource GET. console.css mentions both words in prose comments, which is
 // not a reader.
 //
 // # `__Host-` forces Path=/; accepted

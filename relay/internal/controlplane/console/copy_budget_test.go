@@ -97,6 +97,7 @@ var measuredClasses = map[string]bool{
 	"span.note": true, "span.gap": true, "span.labelnote": true,
 	"span.jcnote": true, "span.phint": true,
 	"div.evnote": true, "p.fielderr": true, "p.unfilterednote": true, "div.fhint": true,
+	"p.confirmq": true,
 }
 
 // boundedClasses are held to maxNoteWords but not budgeted: each is data, or
@@ -130,6 +131,9 @@ var boundedClasses = map[string]string{
 	// A plain chip (no CSS of its own): which part of a finished Job's dispatch
 	// record the trail lacks (#887). Two branches, one ever shown.
 	"span.outcomeunk": "a Job's recording state chip: a state name, not a note",
+	// Fleet's relative render time beside Refresh: "rendered 12 min ago, Refresh to
+	// re-read" at most, a value that ages rather than a note.
+	"span.asat": "how old the page is: a relative time beside Refresh",
 }
 
 // exemptClasses are not measured at all, keyed by "tag.class". denynote is
@@ -647,7 +651,8 @@ func copyBudgetFixture() Deps {
 // Node detail's 75 is above the "under ~60" #849 aimed for: every element on
 // it is a ruled or spec-bound qualifier, and reaching 60 means dropping one.
 var copyBudgets = map[string]int{
-	"/console/{$}":             0,
+	// The six-word sentence beside Fleet's Refresh, which 00 "Refreshing a screen" requires.
+	"/console/{$}":             6,
 	"/console/nodes/{node_id}": 75,
 	"/console/activity":        60,
 	"/console/jobs/{job_id}":   60,
@@ -656,6 +661,10 @@ var copyBudgets = map[string]int{
 	"/console/access":          65,
 	"/console/run":             10,
 	"day one":                  75,
+
+	"/console/accounts/{account_id}/disable":                  20,
+	"/console/accounts/{account_id}/lower":                    20,
+	"/console/accounts/{account_id}/tokens/{token_id}/revoke": 20,
 }
 
 // budgetPage is one page the budget test renders.
@@ -673,10 +682,7 @@ func budgetPages(t *testing.T) []budgetPage {
 		if r.Method != http.MethodGet || r.Path == "/console/events" || r.Path == LoginPath || strings.Contains(r.Path, "{path...}") {
 			continue
 		}
-		path := r.Link()
-		for placeholder, id := range fixtureIDs {
-			path = strings.ReplaceAll(path, placeholder, id)
-		}
+		path, _ := fixturePath(r, fixtureIDs)
 		if r.Path == "/console/compare" {
 			path += "?nodes=node-web-1,node-web-3"
 		}

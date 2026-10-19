@@ -11,7 +11,7 @@
 # the suites under `sg relaytest-io -c '...'`.
 #
 # Recovery: a run killed mid-test (a timeout panic) can leave the Relay and its layout behind;
-# `sudo pkill -u relaytest; sudo rm -rf /tmp/relaytest.*` clears both.
+# `sudo pkill -u relaytest; sudo rm -rf /run/relaytest.*` clears both.
 set -euo pipefail
 
 member="${1:?usage: relaytest-user.sh <user to add to relaytest-io>}"

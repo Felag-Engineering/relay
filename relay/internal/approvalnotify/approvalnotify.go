@@ -63,6 +63,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
 )
 
 // DefaultTimeout bounds one delivery attempt end to end.
@@ -99,7 +100,8 @@ type Config struct {
 	URL string
 
 	// Secret is the shared signing secret, already read through the file check
-	// (ReadSecretFile) by the composition root. Empty sends unsigned
+	// (ReadSecretFile) by the composition root, or given inline in the
+	// configuration file. Empty sends unsigned
 	// notifications.
 	Secret []byte
 
@@ -210,37 +212,27 @@ func isLoopback(host string) bool {
 }
 
 // ReadSecretFile loads a secret file (the signing secret, or the webhook URL
-// when it is given by file) with the same fail-closed posture the
-// approval-gate loader uses: no symlink following, checks on the open
-// descriptor rather than the path, and a refusal for anything group- or
-// world-READABLE. The permission bar is stricter than the gate file's because
-// this is secret material, not configuration. It is the reader the composition
-// root passes to relayconfig.Config.ResolveSecrets; its errors name the path
-// and the mode, never the content.
+// when it is given by file). It is opened through hostfile's check as a file
+// holding a secret (RC-15, RC-16): refused if the Relay could write it or any
+// account but the Relay and root could read it, and read from the descriptor
+// that was checked. It is the reader the composition root passes to
+// relayconfig.Config.ResolveSecrets; its errors name the path and why, never
+// the content.
 func ReadSecretFile(path string) ([]byte, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NOCTTY, 0) //nolint:gosec // G304: an operator-set host path (invariant 11), opened O_NOFOLLOW
+	f, err := hostfile.Open(path, hostfile.Secret)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("approvalnotify: secret file %s does not exist: %w", path, fs.ErrNotExist)
 		}
-		if errors.Is(err, syscall.ELOOP) {
-			return nil, fmt.Errorf("approvalnotify: secret file %s is a symlink — it must be a regular root-owned file", path)
-		}
-		return nil, fmt.Errorf("approvalnotify: open secret file %s: %w", path, err)
+		return nil, fmt.Errorf("approvalnotify: secret file: %w", err)
 	}
-	defer f.Close() //nolint:errcheck // read-only
+	return readOpenedSecret(f, path)
+}
 
-	info, err := f.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("approvalnotify: stat secret file %s: %w", path, err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("approvalnotify: secret file %s is not a regular file (mode %s)", path, info.Mode())
-	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		return nil, fmt.Errorf("approvalnotify: secret file %s is group- or world-accessible (mode %04o) — "+
-			"it is signing key material and must be readable only by its owner (chmod 0600)", path, perm)
-	}
+// readOpenedSecret reads a secret from f, the descriptor the file check
+// passed, and closes it.
+func readOpenedSecret(f *os.File, path string) ([]byte, error) {
+	defer f.Close() //nolint:errcheck // read-only
 
 	data, err := io.ReadAll(io.LimitReader(f, maxSecretBytes+1))
 	if err != nil {

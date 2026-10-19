@@ -58,14 +58,14 @@ import (
 // As with the Control API's Deps, every field here is a purpose-built seam over
 // runtime-object machinery — never Relay configuration. The one field that
 // looks like configuration, Execution, is not settable from here or from any
-// API: it mirrors a root-owned value the composition root reads at startup, and
-// this package can only be told what it is.
+// API: it mirrors a startup value the composition root sets, and this
+// package can only be told what it is.
 type Deps struct {
 	// Logger is where the Console's operational errors go; nil means
 	// slog.Default(). Wiring, not configuration.
 	Logger *slog.Logger
 
-	// Execution mirrors the root-owned console_execution setting (ADR-0026
+	// Execution mirrors the console_execution floor setting (ADR-0026
 	// decision 5). When false the execution routes are NOT MOUNTED and the
 	// composer is not rendered — an absent capability, not an RBAC refusal.
 	//
@@ -154,7 +154,7 @@ type Deps struct {
 	Accounts AccountReader
 
 	// CertExpiringWithin is the state:cert-expiring warning window
-	// (ADR-0034): a mirror of a root-owned startup value (invariant
+	// (ADR-0034): a mirror of a configured startup value (invariant
 	// 11), same "told, never settable" posture as Execution above. Zero (the
 	// default) means the marker never fires.
 	CertExpiringWithin time.Duration
@@ -397,6 +397,15 @@ func Routes(d Deps) []Route {
 		{"POST", "/console/accounts/{account_id}/enabled", NavEntry{}, accounts.RoleAdmin, handleSetAccountEnabled},
 		{"POST", "/console/accounts/{account_id}/tokens", NavEntry{}, accounts.RoleAdmin, handleMintAPIToken},
 		{"POST", "/console/api-tokens/{token_id}/revoke", NavEntry{}, accounts.RoleAdmin, handleRevokeAPIToken},
+
+		// The confirmation pages for the three acts that reduce authority.
+		// They are reads at the same admin floor as ControlAccountRead and
+		// ControlAPITokenRead, so MinRole narrows to the capability layer's
+		// floor and widens nothing. Their paths differ from the POST paths
+		// because two constrained routes on one path panic at registration.
+		{"GET", "/console/accounts/{account_id}/disable", NavEntry{}, accounts.RoleAdmin, handleConfirmDisable},
+		{"GET", "/console/accounts/{account_id}/lower", NavEntry{}, accounts.RoleAdmin, handleConfirmLowerRole},
+		{"GET", "/console/accounts/{account_id}/tokens/{token_id}/revoke", NavEntry{}, accounts.RoleAdmin, handleConfirmRevokeAPIToken},
 
 		// Not a destination: the stylesheet the content security policy forces
 		// out of the layout, since style-src admits this origin and nothing

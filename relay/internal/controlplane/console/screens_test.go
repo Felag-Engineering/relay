@@ -1736,9 +1736,10 @@ func TestFleet_StateFacetKeepsNamespacesApart(t *testing.T) {
 // confidently green fleet from twelve hours ago.
 func TestFleet_SaysWhenItWasTrue(t *testing.T) {
 	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
-	if !strings.Contains(body, "as at "+testNow.Format("2006-01-02 15:04:05Z")) {
-		t.Error("the fleet view does not say when it was rendered")
+	if !strings.Contains(contentOf(body), `<time datetime="2026-08-25 12:00:00Z" title="2026-08-25 12:00:00Z" data-rendered-age data-age="0">rendered just now</time>`) {
+		t.Error("the fleet view does not say how old it is, with the UTC instant in datetime and title")
 	}
+	mustNotRender(t, body, "as at ", "does not update on its own")
 }
 
 // TestRegistry_QuarantineIsPinnedToItsValue is the decision recorded on

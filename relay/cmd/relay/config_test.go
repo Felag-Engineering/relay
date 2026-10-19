@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/relay/relay/internal/approvalnotify"
+	"github.com/Felag-Engineering/relay/relay/internal/hostfile"
 	"github.com/Felag-Engineering/relay/relay/internal/relayconfig"
 )
 
@@ -27,12 +27,16 @@ func writeConfigFile(t *testing.T, body string) string {
 	return path
 }
 
+// readSecretPlain reads a secret file without hostfile's check, which refuses every temporary
+// directory a test can make; the check is approvalnotify.ReadSecretFile's, proven there and on
+// the separate-uid harness.
+func readSecretPlain(path string) ([]byte, error) { return os.ReadFile(path) }
+
 // webhookURLSecret builds a relayconfig.Secret holding rawURL, the only way
 // outside relayconfig to get one.
 func webhookURLSecret(t *testing.T, rawURL string) relayconfig.Secret {
 	t.Helper()
-	path := writeConfigFile(t, requiredTOML+"[approval]\nwebhook_url = \""+rawURL+"\"\n")
-	sc, err := loadConfig(path, approvalnotify.ReadSecretFile)
+	sc, err := parseConfig([]byte(requiredTOML+"[approval]\nwebhook_url = \""+rawURL+"\"\n"), readSecretPlain)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +55,7 @@ hostname = "relay.example.test"
 `
 
 func TestFromFile_CarriesEverySetting(t *testing.T) {
-	path := writeConfigFile(t, `
+	sc, err := parseConfig([]byte(`
 [node_plane]
 listen_address = "127.0.0.1:7001"
 advertised_address = "relay.example.test:7002"
@@ -93,8 +97,7 @@ global_burst = 24
 max_tracked_ips = 25
 max_nodes = 26
 cert_expiring_fraction = 0.3
-`)
-	sc, err := loadConfig(path, approvalnotify.ReadSecretFile)
+`), readSecretPlain)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +138,7 @@ cert_expiring_fraction = 0.3
 
 func TestLoadConfig_MissingFileRefusedNamingPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "absent.toml")
-	_, err := loadConfig(path, approvalnotify.ReadSecretFile)
+	_, err := loadConfig(path)
 	if err == nil || !strings.Contains(err.Error(), path) || !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("err = %v, want one naming %s that satisfies fs.ErrNotExist", err, path)
 	}
@@ -143,7 +146,7 @@ func TestLoadConfig_MissingFileRefusedNamingPath(t *testing.T) {
 
 func TestLoadConfig_DirectoryRefused(t *testing.T) {
 	dir := t.TempDir()
-	_, err := loadConfig(dir, approvalnotify.ReadSecretFile)
+	_, err := loadConfig(dir)
 	if err == nil || !strings.Contains(err.Error(), dir) {
 		t.Errorf("err = %v, want a refusal naming %s", err, dir)
 	}
@@ -157,15 +160,14 @@ func TestLoadConfig_UnreadableFileRefused(t *testing.T) {
 	if err := os.Chmod(path, 0); err != nil {
 		t.Fatal(err)
 	}
-	_, err := loadConfig(path, approvalnotify.ReadSecretFile)
+	_, err := loadConfig(path)
 	if err == nil || !errors.Is(err, fs.ErrPermission) || !strings.Contains(err.Error(), path) {
 		t.Errorf("err = %v, want a permission refusal naming %s", err, path)
 	}
 }
 
 func TestLoadConfig_InvalidValueNamesKeyAndLineNotValue(t *testing.T) {
-	path := writeConfigFile(t, requiredTOML+"[reach]\nread_blast_cap = 0\n")
-	_, err := loadConfig(path, approvalnotify.ReadSecretFile)
+	_, err := parseConfig([]byte(requiredTOML+"[reach]\nread_blast_cap = 0\n"), readSecretPlain)
 	if err == nil {
 		t.Fatal("a zero blast cap was accepted")
 	}
@@ -183,8 +185,7 @@ func TestLoadConfig_FileSecretsResolved(t *testing.T) {
 	if err := os.WriteFile(secretFile, []byte("signing-value\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	path := writeConfigFile(t, requiredTOML+"[approval]\nwebhook_url_file = \""+urlFile+"\"\nwebhook_secret_file = \""+secretFile+"\"\n")
-	sc, err := loadConfig(path, approvalnotify.ReadSecretFile)
+	sc, err := parseConfig([]byte(requiredTOML+"[approval]\nwebhook_url_file = \""+urlFile+"\"\nwebhook_secret_file = \""+secretFile+"\"\n"), readSecretPlain)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,33 +197,36 @@ func TestLoadConfig_FileSecretsResolved(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_WebhookSecretFileModeNamed(t *testing.T) {
+// A secret file the file check refuses refuses start, naming the key and the check's reason
+// and never the file's content.
+func TestLoadConfig_SecretFileRefusalNamesKey(t *testing.T) {
 	secretFile := filepath.Join(t.TempDir(), "secret")
 	if err := os.WriteFile(secretFile, []byte("signing-value\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(secretFile, 0o644); err != nil {
-		t.Fatal(err)
+	refuse := func(p string) ([]byte, error) {
+		if _, err := os.ReadFile(p); err != nil {
+			return nil, err
+		}
+		return nil, &hostfile.Refusal{Path: p, Component: "secret", Clause: hostfile.ClauseReadableByOther}
 	}
-	path := writeConfigFile(t, requiredTOML+"[approval]\nwebhook_url = \"https://hooks.example.test/x\"\nwebhook_secret_file = \""+secretFile+"\"\n")
-	_, err := loadConfig(path, approvalnotify.ReadSecretFile)
+	_, err := parseConfig([]byte(requiredTOML+"[approval]\nwebhook_url = \"https://hooks.example.test/x\"\nwebhook_secret_file = \""+secretFile+"\"\n"), refuse)
 	if err == nil {
-		t.Fatal("a group- and world-readable secret file was accepted")
+		t.Fatal("a secret file the check refused was accepted")
 	}
-	for _, want := range []string{"0644", "approval.webhook_secret_file"} {
+	for _, want := range []string{"approval.webhook_secret_file", "an account other than the Relay and root could read it"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %v, want it to contain %q", err, want)
 		}
 	}
-	if strings.Contains(err.Error(), "signing-value") {
-		t.Errorf("err carries the file's content: %v", err)
+	if strings.Contains(err.Error(), "signing-value") || strings.Contains(err.Error(), "hooks.example.test") {
+		t.Errorf("err carries a secret: %v", err)
 	}
 }
 
 func TestLoadConfig_MissingSecretFileReasonIsPrecise(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "absent")
-	path := writeConfigFile(t, requiredTOML+"[approval]\nwebhook_url = \"https://hooks.example.test/x\"\nwebhook_secret_file = \""+missing+"\"\n")
-	_, err := loadConfig(path, approvalnotify.ReadSecretFile)
+	_, err := parseConfig([]byte(requiredTOML+"[approval]\nwebhook_url = \"https://hooks.example.test/x\"\nwebhook_secret_file = \""+missing+"\"\n"), readSecretPlain)
 	if err == nil {
 		t.Fatal("a missing secret file was accepted")
 	}

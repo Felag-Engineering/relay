@@ -27,7 +27,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/relay/relay/internal/approvalnotify"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
@@ -1026,10 +1025,9 @@ func TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress(t *testing.T) {
 				"\n[control_plane]\nenabled = true\n\n[ca]\ndir = " + fmt.Sprintf("%q", t.TempDir()) +
 				"\n\n[store]\npath = " + fmt.Sprintf("%q", filepath.Join(t.TempDir(), "relay.db")) +
 				"\n\n[tls]\nhostname = \"localhost\"\n"
-			path := writeRelayTOML(t, body)
-			sc, err := loadConfig(path, approvalnotify.ReadSecretFile)
+			sc, err := parseConfig([]byte(body), readSecretPlain)
 			if err != nil {
-				t.Fatalf("loadConfig: %v", err)
+				t.Fatalf("parseConfig: %v", err)
 			}
 
 			f := startRelay(t, WithControlPlane(), WithConfig(func(c *Config) {

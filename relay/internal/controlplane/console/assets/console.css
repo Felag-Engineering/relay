@@ -189,6 +189,8 @@
   --inert-bg: var(--bg-subtle);
 
   --failure: var(--color-red);
+  /* The destructive-act button's text and border; TestConsole_AccentPairsClearAA measures it. */
+  --danger-text: #f47a6d;
   --failure-bg: rgba(240, 85, 69, 0.10);
 
   --ok: var(--color-green);
@@ -295,6 +297,7 @@
     --security-bg: rgba(109, 60, 199, 0.09);
     --security-line: rgba(109, 60, 199, 0.30);
     --failure-bg: rgba(212, 58, 42, 0.08);
+    --danger-text: #b02e20;
     --ok-bg: rgba(26, 150, 64, 0.09);
     /* Same reasoning as the dark theme above. Normal was 2.02:1 here.
      *
@@ -1711,6 +1714,15 @@ dl.kv dd { min-width: 0; }
 /* The one visible sentence beside Refresh saying whether a reload is audited.
  * It qualifies the control above it, so it is quiet note text. */
 .refreshlimit { font-size: var(--text-xs); color: var(--text-muted); margin: calc(-1 * var(--space-3)) 0 var(--space-4); max-width: 64em; }
+
+/* How old a page is (00-foundations.md): relative, with the UTC instant in its title,
+ * and beside the count inside the view bar, as 01-fleet-view.md draws it. An old page
+ * reads heavier, never in amber. */
+.freshline { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-3); }
+.freshline .asat { font-size: var(--text-sm); }
+.freshline .refreshbar { margin: 0; }
+.asat time[data-stale="yes"] { font-weight: var(--weight-semibold); color: var(--text-primary); }
+
 /* Activity's queue control, once something has queued: drawn as a button in
  * the interactive colour so it reads as the thing to click, not as a line of
  * small print. Still hidden until then, by the [data-queued] rule above. */
@@ -1739,12 +1751,12 @@ dl.kv dd { min-width: 0; }
  *
  * Buttons carry the WEIGHT OF WHAT THEY DO TO AUTHORITY. .btn.grant — create
  * an Account, raise a role, re-enable, mint — is filled in the interactive
- * colour and always sits beside the password field it spends. .btn.reduce —
- * disable, lower a role, revoke — is outlined and quiet. The two are told apart by fill
- * against outline, which survives greyscale and colour-blindness, and never by
- * hue alone. A reducing act is never red: red is failure and timeout and
- * nothing else, and a brake that looks like an alarm is one people hesitate
- * over. Nothing here removes or shrinks a focus ring; the global
+ * colour and always sits beside the password field it spends. .btn.danger —
+ * disable, lower a role, revoke — is outlined in the muted red, with no fill.
+ * Red marks only the button, never a row, a chip or a deny. Fill against
+ * outline is what separates grant from danger, so the pair survives greyscale
+ * and colour-blindness. A danger button opens a confirmation page and never
+ * performs the act itself. Nothing here removes or shrinks a focus ring; the global
  * :focus-visible rule still applies, and fields keep the inset ring the
  * sign-in page and filter bar use. */
 .ctlform { margin: 0; }
@@ -1770,8 +1782,8 @@ dl.kv dd { min-width: 0; }
 }
 .btn.grant { background: var(--color-accent); border-color: var(--color-accent); color: var(--on-accent); }
 .btn.grant:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-.btn.reduce { background: transparent; border-color: var(--border-mid); color: var(--text-primary); font-weight: var(--weight-normal); }
-.btn.reduce:hover { background: var(--bg-elevated); border-color: var(--text-muted); }
+.btn.danger { background: transparent; border-color: var(--danger-text); color: var(--danger-text); }
+.btn.danger:hover { background: var(--bg-elevated); }
 
 /* A control line: one line each, bottom-aligned so a labelled field and a
  * bare button share a baseline. The selected Account's control block stacks
@@ -1790,6 +1802,11 @@ dl.kv dd { min-width: 0; }
  * lower role" hint and the server refuses an empty submit in those words. */
 .rolechange:invalid .btn.grant { opacity: 0.5; }
 .rolechange .note { margin: 0; align-self: center; }
+
+/* The confirmation page for an act that reduces authority: one sentence, then
+ * the single form beside a plain link back. */
+.confirm .confirmq { font-size: var(--text-base); margin: 0 0 var(--space-3); }
+.confirm .ctlrow { align-items: center; }
 
 /* "New account": a <details> does not inherit section.panel's spacing. The
  * summary is the only control that opens the form, so it keeps the 44px

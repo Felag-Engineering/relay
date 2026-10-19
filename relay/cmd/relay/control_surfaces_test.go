@@ -294,7 +294,7 @@ func TestControlSurfaces_TestOnlyMCPOptionHookIsEmptyInProduction(t *testing.T) 
 		cfg.ControlEnabled = true
 		cfg.ControlAddr = "127.0.0.1:0"
 
-		_, deps, err := newServer(cfg)
+		_, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 		if err != nil {
 			t.Fatalf("newServer: %v", err)
 		}

@@ -242,6 +242,12 @@ func TestAccountsWrite_LowerRoleIsNeverDimmedAndCarriesTheHint(t *testing.T) {
 		if strings.Contains(lower, "required") {
 			t.Errorf("%s: the Lower role form can be invalid, so a stylesheet could dim it:\n%s", q, lower)
 		}
+		open := lower[:strings.Index(lower, ">")]
+		for _, want := range []string{`method="get"`, `autocomplete="off"`} {
+			if !strings.Contains(open, want) {
+				t.Errorf("%s: the Lower role form lacks %s: %s", q, want, open)
+			}
+		}
 	}
 }
 

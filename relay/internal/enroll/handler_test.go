@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/ca"
+	"github.com/Felag-Engineering/relay/relay/internal/ca/catest"
 	"github.com/Felag-Engineering/relay/relay/internal/ratelimit"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
@@ -56,9 +57,9 @@ func genCSR(t *testing.T, cn string) []byte {
 // newEnrollServer is a test helper that wires up a Server with the provided Service.
 func newEnrollServer(t *testing.T, svc *Service) (*Server, *registry.InMemory, *ca.CA) {
 	t.Helper()
-	realCA, err := ca.Open(t.TempDir())
+	realCA, err := catest.Generate()
 	if err != nil {
-		t.Fatalf("ca.Open: %v", err)
+		t.Fatalf("catest.Generate: %v", err)
 	}
 	reg := registry.NewInMemory()
 	return NewServer(svc, realCA, reg), reg, realCA
@@ -393,9 +394,9 @@ func (f *fakeDenylister) RevokeNode(nodeID string) { f.revoked = append(f.revoke
 // It returns the server, the registry, and the denylister for assertions.
 func buildRaceServer(t *testing.T, svc *Service) (*Server, *registry.InMemory, *fakeDenylister) {
 	t.Helper()
-	realCA, err := ca.Open(t.TempDir())
+	realCA, err := catest.Generate()
 	if err != nil {
-		t.Fatalf("ca.Open: %v", err)
+		t.Fatalf("catest.Generate: %v", err)
 	}
 	reg := registry.NewInMemory()
 	den := &fakeDenylister{}
@@ -505,9 +506,9 @@ func ctxFromIP(ip string) context.Context {
 // real CA and an optionally capped registry. Returns the server and the registry.
 func newLimitedServer(t *testing.T, svc *Service, cfg ratelimit.Config, regOpts ...registry.Option) (*Server, *registry.InMemory) {
 	t.Helper()
-	realCA, err := ca.Open(t.TempDir())
+	realCA, err := catest.Generate()
 	if err != nil {
-		t.Fatalf("ca.Open: %v", err)
+		t.Fatalf("catest.Generate: %v", err)
 	}
 	reg := registry.NewInMemory(regOpts...)
 	srv := NewServer(svc, realCA, reg, WithRateLimiter(ratelimit.New(cfg)))

@@ -62,7 +62,7 @@ func TestNewServer_Smoke(t *testing.T) {
 		CertExpiringFraction: nodestate.DefaultCertExpiringFraction,
 	}
 
-	srv, deps, err := newServer(cfg)
+	srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestNewServer_ControlEnabled_SeedsIdentityAndAuthenticates(t *testing.T) {
 	cfg.ControlEnabled = true
 	cfg.ControlAddr = ":0"
 
-	srv, deps, err := newServer(cfg)
+	srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestNewServer_MinDaemonVersion(t *testing.T) {
 		cfg := baseTestConfig(t)
 		cfg.MinDaemonVersion = "not-a-version"
 
-		srv, deps, err := newServer(cfg)
+		srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 		if err == nil {
 			t.Fatal("expected newServer to error on a malformed min-daemon-version")
 		}
@@ -158,7 +158,7 @@ func TestNewServer_MinDaemonVersion(t *testing.T) {
 		cfg := baseTestConfig(t)
 		cfg.MinDaemonVersion = ""
 
-		srv, deps, err := newServer(cfg)
+		srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 		if err != nil {
 			t.Fatalf("newServer: %v", err)
 		}
@@ -170,7 +170,7 @@ func TestNewServer_MinDaemonVersion(t *testing.T) {
 		cfg := baseTestConfig(t)
 		cfg.MinDaemonVersion = "1.2.0"
 
-		srv, deps, err := newServer(cfg)
+		srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 		if err != nil {
 			t.Fatalf("newServer: %v", err)
 		}
@@ -188,7 +188,7 @@ func TestCertExpiringFraction_RefusesAnInvalidValue(t *testing.T) {
 		cfg := baseTestConfig(t)
 		cfg.CertExpiringFraction = frac
 
-		srv, deps, err := newServer(cfg)
+		srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 		if err == nil {
 			t.Errorf("cert-expiring-fraction %v: newServer succeeded, want a refusal", frac)
 			continue
@@ -206,7 +206,7 @@ func TestDispatchConcurrency_RefusesZeroAndNegative(t *testing.T) {
 		cfg := baseTestConfig(t)
 		cfg.DispatchConcurrency = n
 
-		srv, deps, err := newServer(cfg)
+		srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 		if err == nil {
 			t.Errorf("dispatch-concurrency %d: newServer succeeded, want a refusal", n)
 			continue
@@ -291,7 +291,7 @@ func TestListeners_Independent(t *testing.T) {
 	cfg.ControlEnabled = true
 	cfg.ControlAddr = ":0"
 
-	srv, deps, err := newServer(cfg)
+	srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
