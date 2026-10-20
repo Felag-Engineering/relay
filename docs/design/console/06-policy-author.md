@@ -3,15 +3,15 @@
 **Artboard 10** (drawn as Policy Author; the layout below supersedes it). Arrange first-party
 catalog fragments into cohorts and take the files away. **Milestone v0.7.0.**
 
-*(The file keeps its `06-policy-author.md` name so existing links hold. The screen was the
-per-Operation Policy Author until 2026-09-18.)*
+*(The file keeps its `06-policy-author.md` name so links hold.)*
 
 **Capability:** `docs/specs/policy-catalog.md` — the claims live there (`PC-n`); this file is the
 screen. If the two disagree, the capability spec wins.
 **Governing:** ADR-0002, ADR-0011, ADR-0021, ADR-0022, ADR-0026, ADR-0033, invariants #2, #3, #9,
 #12.
-**Backend:** the catalog embedded in the Relay binary, byte-identical to the release artifact; daemon versions from the registry through
-the capability layer's read lane. **No write path of any kind.**
+**Backend:** the catalog embedded in the Relay binary, byte-identical to the release artifact;
+daemon versions from the registry through the capability layer's read lane. **No write path of
+any kind.**
 
 ## What this screen is for
 
@@ -41,8 +41,8 @@ Three columns.
 not listed: it is already on every Node and is not a catalog fragment.
 
 Each row: the fragment name in mono, its one-line purpose, its risk badge, its required daemon
-release, and its SHA-256 (PC-16). Expanding a row shows the full fragment text and **what this grants** in plain words
-(PC-13). A fragment newer than some Nodes' daemons carries the count and the consequence on each
+release, and its SHA-256 (PC-16). Expanding a row shows the full fragment text and **what this
+grants** in plain words (PC-13). A fragment newer than some Nodes' daemons carries the count and the consequence on each
 (PC-14): a daemon that predates the Policy directory silently ignores the fragment; a later
 daemon that cannot load it refuses everything.
 
@@ -91,8 +91,7 @@ reopens an arrangement from a previous export (PC-10).
 Paths, variable names and the check's mechanism are illustrative. Four properties are
 load-bearing and none may be dropped: the digest comes from the release, never from this screen
 (PC-16), and this task itself is Relay-rendered text the operator reviews once and commits (Open
-question 2); `validate:` runs the
-daemon's own checker before the file is placed; the mode is fixed because the daemon refuses a
+question 2); `validate:` runs the daemon's own checker before the file is placed; the mode is fixed because the daemon refuses a
 group- or world-writable fragment; and a copy, never a symlink, because the Policy directory
 refuses symlinks. The daemon applies Policy on restart (`daemon-installation.md`).
 

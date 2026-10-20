@@ -8,28 +8,22 @@ carries no claims.
 
 This is not a capability Relay has. It is the set of approval properties that were **designed,
 argued for, and then deliberately shelved** when the owner decided on `2026-09-24` that Gleipnir
-would own the permission model for now (ADR-0040). That decision first took the form of strict
-separation — the surface which created a request answers it — and was amended the next day to
-what stands: **MCP is the approved pathway, and the Console and the Control API keep deciding any
-request without being relied on.** The shelved properties below survived the amendment unchanged;
-two more, which the amendment's review surfaced and the owner chose to record rather than solve,
-were added on `2026-09-25`. On `2026-10-18` ADR-0044 removed the Console's half of that: the
-Console has no approval surface (`approval.md` AP-80), and the **Control API decision
-endpoint is the one out-of-band path**, kept as the rescue.
+would own the permission model for now (ADR-0040). As amended the next day, the posture is:
+**MCP is the approved pathway, and the Relay's own surfaces keep deciding any request without
+being relied on.** Two more properties, surfaced by that amendment's review, were recorded
+rather than solved on `2026-09-25`. Since ADR-0044 (`2026-10-18`) the Console has no approval
+surface (`approval.md` AP-80), so the **Control API decision endpoint is the one out-of-band
+path**, kept as the rescue.
 
-It exists because the alternative was losing the argument. Each property below was reasoned
-through with the owner, some of them twice; three of them had reached a Designed claim with a
-milestone before the direction changed. Deleting them would leave the next person to pick this up
-re-deriving the reasoning from scratch — and, worse, re-deriving it from the *summary* of the
-reasoning rather than the reasoning itself, which is how a rejected idea comes back in a weaker
-form than the one that was rejected.
-
-So the argument is kept whole here, in the voice it was made in. When the permissions rework
+It exists so the argument is not lost. Each property was reasoned through with the owner, some
+twice, and three had reached a Designed claim with a milestone before the direction changed.
+Deleting them would leave the next person re-deriving the reasoning from a summary of it, which
+is how a rejected idea comes back weaker than the one rejected. When the permissions rework
 happens, this document is what it argues with.
 
-**A stub carries no claim IDs and no milestones** (`README.md`, *The establishing phase*).
-Inventing either for work nobody has scheduled would make this read like a commitment, which is
-exactly what it is not. Everything below is prose, and none of it binds the loop.
+**A stub carries no claim IDs and no milestones** (`README.md`, *The establishing phase*):
+either would make this read like a commitment. Everything below is prose, and none of it binds
+the loop.
 
 ## What is shelved
 
@@ -45,11 +39,11 @@ The argument for it, which has not been refuted and is only outweighed:
 
 > **In-band is an assumption about the client; out-of-band is evidence.**
 
-An in-band answer comes back over the same session that asked, so the guarantee that a human
-decided rests entirely on the client keeping a rule Relay cannot check. An out-of-band answer
-arrives with a credential the asking session does not have, which is a fact about the world
-rather than a claim about a counterparty. That asymmetry is not a matter of degree, and it is
-why the two channels were built as an ordered pair rather than as a preference.
+An in-band answer comes back over the session that asked, so the guarantee that a human decided
+rests on the client keeping a rule Relay cannot check. An out-of-band answer arrives with a
+credential the asking session does not have — a fact about the world, not a claim about a
+counterparty. That asymmetry is why the two channels were built as an ordered pair rather than
+a preference.
 
 The counter-argument that won, for now: Relay is expected to sit behind a firewall the on-call
 human cannot easily cross, so a rule demanding out-of-band routes the decision to a surface the
@@ -59,26 +53,22 @@ now*).
 
 ### An approver Relay verifies
 
-Distinct from the channel, and the property the channel was a means to. Today, and for the
-foreseeable interim, every approval of agent-originated work **on the approved pathway** records
-the **verified** Account whose credential made the call — the machine relaying the answer — and
-the human only as an **assertion** beside it (`approval.md`, *Attribution*). An auditor can
-separate the two, which is the whole point of keeping the lanes structurally apart, but on that
-path the verified lane will never name the human. (A human who decides the same request on the
-Control API *is* verified — the rescue path still works — but nothing directs anyone there, so it
-is not the posture this document is about. The Console was the other such path until ADR-0044
-removed it.)
+Distinct from the channel, and the property the channel was a means to. For the foreseeable
+interim, every approval of agent-originated work **on the approved pathway** records the
+**verified** Account whose credential made the call — the machine relaying the answer — and the
+human only as an **assertion** beside it (`approval.md`, *Attribution*). An auditor can separate
+the two, but on that path the verified lane never names the human. (A human who decides the
+same request on the Control API *is* verified, but nothing directs anyone there.)
 
-What is shelved is the posture in which it does: a decision whose approver is an Account Relay
-itself authenticated, with a role, an audience membership and — on the Console, until ADR-0044
-removed its approval surface — a step-up re-authentication taken at the moment of deciding.
-That is what makes an audit trail able to answer *"a human authenticated to Relay and approved this"* rather than *"a client told us a
-human approved this."*
+What is shelved is the posture in which the verified lane does name the human: a decision whose
+approver is an Account Relay itself authenticated, with a role, an audience membership and a
+step-up re-authentication taken at the moment of deciding. That lets an audit trail answer *"a
+human authenticated to Relay and approved this"* rather than *"a client told us a human approved
+this."*
 
-The reason this is worth keeping distinct from the channel: a future design could plausibly
-deliver a verified approver **without** out-of-band — for instance by having the client present
-the approver's own Relay credential, or by an identity assertion Relay can check against the
-provider it already trusts. Collapsing the two into one shelved idea would hide that option.
+It is kept distinct from the channel because a future design could deliver a verified approver
+**without** out-of-band — for instance by having the client present the approver's own Relay
+credential, or an identity assertion Relay can check against the provider it already trusts.
 
 ### The grant-issuance floor
 
@@ -90,20 +80,17 @@ refused.
 
 This was an owner decision of `2026-09-14`, adopted as an ADR-0027 amendment on `2026-09-24`, and
 carried as a Designed claim (`approval.md` AP-58, v0.6.5) until ADR-0040 shelved it the same day.
-It is **the one shelved item that had already been adopted by an ADR**, which is why it is named
-here precisely rather than paraphrased.
+It is **the one shelved item an ADR had already adopted**, so it is stated precisely here.
 
-The argument, which is about leverage rather than about channels in general: deriving a grant's
-requirement from the live gate at the Scope's worst case (`approval.md` AP-35) prices it at what
-the gate demands — and the seeded default demands self-confirmation in-band. So on a default
-install a single asserted answer from the requesting session can open standing authorization over
-a described set of future work. A floor exists precisely because derivation cannot raise a
+The argument is about leverage: deriving a grant's requirement from the live gate at the Scope's
+worst case (`approval.md` AP-35) prices it at what the gate demands — and the seeded default
+demands self-confirmation in-band. So on a default install one asserted answer from the
+requesting session can open standing authorization over future work. Derivation cannot raise a
 requirement above what the rules say, and a grant is the last place to accept an assertion.
 
-Worth naming what did **not** move with it. The other two bounds adopted in the same ADR-0027
-amendment — a grant never covering Raw Exec, and a 4-hour window cap — are **not** shelved. They
-remain Designed at v0.6.5 (`approval.md` AP-56, AP-57), because neither depends on who may answer
-or on which surface. Only the issuance rung went.
+The other two bounds from the same ADR-0027 amendment — a grant never covering Raw Exec, and a
+4-hour window cap — are **not** shelved. They remain Designed at v0.6.5 (`approval.md` AP-56,
+AP-57), because neither depends on who may answer or on which surface.
 
 ### Second-person rules whose second person Relay authenticated
 
@@ -112,45 +99,40 @@ A rule may exclude the requester from its own audience, and that mechanism is bu
 someone Relay itself authenticated.
 
 Under the interim direction, a second-person rule on an MCP-originated request is satisfied by a
-second human the *client* routed to and asserted — which is a genuine second person, and is not
-nothing, but it is a second person in Gleipnir's directory rather than in Relay's. The stronger
-version, where the second approver holds a Relay Account and the two-person property is one Relay
-can demonstrate from its own records, is what waits here.
+second human the *client* routed to and asserted — a genuine second person, but one in
+Gleipnir's directory rather than Relay's. What waits here is the stronger version: the second
+approver holds a Relay Account, and Relay can demonstrate the two-person property from its own
+records.
 
-The reason this is listed separately from "an approver Relay verifies" rather than folded into
-it: two-person release is the property customers ask for by name, and it is the one where the
-difference between "we can show you two distinct humans signed" and "a client told us two did" is
-most likely to be the thing being bought.
+It is listed apart from "an approver Relay verifies" because two-person release is what
+customers ask for by name, and where "we can show you two distinct humans signed" versus "a
+client told us two did" is most likely the thing being bought.
 
 ### Restarts strand an in-flight approval
 
 *Recorded 2026-09-25 by owner ruling; deliberately not solved.*
 
-The MRTR round trip (#646, `approval.md` AP-60 … AP-71) hands the client a **sealed request
-state** and requires it back on the retried call. The key that seals it is minted once per process
-and is never configuration — the right choice for invariant 11, because there is nothing to reach
-from an API — and so it does not survive a restart. A restart **while a human is deciding**
-invalidates the answer: the retry arrives carrying state the new process cannot open, and it is
-refused, fail-closed. The request itself is still pending and still correct.
+The MRTR round trip (`approval.md` AP-60 … AP-71) hands the client a **sealed request state** and
+requires it back on the retried call. The sealing key is minted once per process and is never
+configuration — right for invariant 11, since there is nothing to reach from an API — so it does
+not survive a restart. A restart **while a human is deciding** invalidates the answer: the retry
+carries state the new process cannot open, and is refused, fail-closed. The request itself is
+still pending and still correct.
 
-What turns that from a refusal into an availability problem is **AP-62**: a question is emitted
-only for a park the call *created*, and a re-drive that bounces off a request already pending
-re-pages nobody. That rule exists for a good reason — it is what stops every poll re-paging a
-human — but it means that after a restart the client is never asked again. The request waits,
-answerable by nobody on the approved pathway, until its TTL expires.
+**AP-62** turns that refusal into an availability problem: a question is emitted only for a park
+the call *created*, and a re-drive that bounces off an already-pending request re-pages nobody.
+That stops every poll re-paging a human, but after a restart the client is never asked again.
+The request waits, answerable by nobody on the approved pathway, until its TTL expires.
 
-Under strict separation this would have been a hard outage. It is tolerable now for **one reason
-only**: the Control API decision endpoint still decides any request, so a human who notices can
-rescue it by hand. That rescue is manual, it depends on someone knowing to look, and it is
-precisely the path the shipped posture tells people not to use — so the risk is real, and it is
-accepted rather than closed (threat model **R27**).
+It is tolerable for **one reason only**: the Control API decision endpoint still decides any
+request, so a human who notices can rescue it by hand. That rescue is manual, depends on someone
+knowing to look, and is the path the shipped posture tells people not to use — so the risk is
+real, and accepted rather than closed (threat model **R27**).
 
-*(Re-premised `2026-10-18`, ADR-0044.)* This paragraph first named "the Console and the Control
-API". The Console has no approval surface (`approval.md` AP-80), so the rescue rests on
-the Control API alone, and it has **no UI**: a human needs an API Token for a human Account, a
-way to make an authenticated request, and the request's ID — from the webhook payload, the MCP
-park result, or the Control API's list of pending requests. That makes the rescue harder and
-less likely to happen, and the owner accepted that on `2026-10-18`. **If the Control API decision
+Since ADR-0044 (`2026-10-18`) the rescue rests on the Control API alone, which has **no UI**: a
+human needs an API Token for a human Account, a way to make an authenticated request, and the
+request's ID — from the webhook payload, the MCP park result, or the Control API's list of
+pending requests. The owner accepted that on `2026-10-18`. **If the Control API decision
 endpoint is ever removed, this risk stops being tolerable and must be closed first** — the
 condition ADR-0040's amendment attached to the Console, carried over to what is left.
 
@@ -172,13 +154,10 @@ The owner chose not to solve it in v0.7.0. A future spec picks it up.
 *Recorded 2026-09-25 by owner ruling; unresolved by design.*
 
 When Relay says an answer "arrived over MCP", which identity does that bind — **any MCP Account**,
-or **the exact client that asked**? Today's code and the MRTR design answer it partly and
-implicitly: the sealed request state binds the *calling Account* (AP-65), and `approve_request`
-binds nothing at all beyond an authenticated session. Neither is a decision about what the
-question *should* be, and the owner ruled that this is a problem for a real authentication system,
-not for this spec.
-
-The two answers pull in opposite directions, which is why it is not decided by default:
+or **the exact client that asked**? Today the answer is partial and implicit: the sealed request
+state binds the *calling Account* (AP-65), and `approve_request` binds nothing beyond an
+authenticated session. The owner ruled this a problem for a real authentication system, not for
+this spec. The two answers pull in opposite directions:
 
 - **Surface-only** — any authenticated MCP Account may answer. Simple, and it keeps a request
   decidable when the asking client has gone away. But it makes **another MCP Account a
@@ -194,43 +173,37 @@ Unresolved by design. Whatever the permissions rework decides about identity dec
 
 ## What would bring each back
 
-No milestone, no issue, and no commitment to an order. Any one of these is enough to reopen the
-whole document; the first is the one that is actually expected.
+No milestone, no issue, and no committed order. Any one of these reopens the whole document; the
+first is the one expected.
 
 - **The permissions rework.** The owner's stated intent is to "significantly rework and understand
-  how the permissions will work in the future" (ADR-0040). Relay and Gleipnir currently represent
-  the same human twice, differently, and the interim answer is to let one of them own it. When
-  that is worked through properly, this document is an input to it and ADR-0040 is the first thing
-  the rework amends.
-- **A deployment where the approver can reach Relay directly.** The firewall argument is the load
-  bearing one, and it is an argument about *where the Relay sits*, not about approvals. Remove
-  the firewall — an operator's own network, a co-located Relay, a customer whose on-call people
-  already hold Relay Accounts — and out-of-band becomes cheap rather than unreachable, and most of
-  the trade ADR-0040 makes stops being worth making.
-- **For the restart risk specifically: a first real outage.** A request stranded by a restart in
-  a deployment where nobody reaches for the Control API is the event that makes this worth
-  solving; either candidate fix above is a bounded piece of work once someone needs it. Removing
-  the Control API decision endpoint would force it outright (ADR-0044).
-- **For surface versus client identity: any authentication design at all.** It is not a question
-  this document can answer, and it should not be answered here first.
+  how the permissions will work in the future" (ADR-0040). Relay and Gleipnir represent the same
+  human twice, differently, and the interim answer lets one of them own it. This document is an
+  input to that rework, and ADR-0040 is the first thing it amends.
+- **A deployment where the approver can reach Relay directly.** The firewall argument is the
+  load-bearing one, and it is about *where the Relay sits*, not about approvals. Without the
+  firewall — an operator's own network, a co-located Relay, on-call people who already hold Relay
+  Accounts — out-of-band becomes cheap, and most of ADR-0040's trade stops being worth making.
+- **For the restart risk: a first real outage** — a request stranded by a restart where nobody
+  reaches for the Control API. Either candidate fix above is bounded work. Removing the Control
+  API decision endpoint would force it outright (ADR-0044).
+- **For surface versus client identity: any authentication design at all.** This document should
+  not answer it first.
 - **A customer who needs evidence rather than an assertion.** An audit or compliance posture that
-  cannot accept "a client told us a human approved this" is a product requirement, not a
-  preference. The mechanism to serve it is already in the code and already tested; what is
-  missing is a rule that uses it. That makes this the cheapest of the three to act on, and it is
-  the reason ADR-0040 declined to delete the channel mechanism.
+  cannot accept "a client told us a human approved this" is a product requirement. The mechanism
+  is already built and tested; only a rule using it is missing. That makes this the cheapest to
+  act on, and is why ADR-0040 declined to delete the channel mechanism.
 
 ## Relationship to `approval.md`
 
-`approval.md` is the durable capability specification and describes what Relay does today. This
-document describes what it deliberately does not. Nothing here is a claim, nothing here is
-Designed, and nothing here may be cited as a requirement.
+`approval.md` describes what Relay does today; this document describes what it deliberately does
+not. Nothing here is a claim or Designed, and nothing here may be cited as a requirement.
 
-Two things that did *not* come here, and should not be moved here later without a decision:
+Two things stay in `approval.md` and should not move here without a decision:
 
 - **AP-69** — an `out-of-band` rule yields no answerable question, on any client. It stays in
   `approval.md` as a safety property: while the channel mechanism exists, a client must never be
   asked a question whose answer the rule would refuse. Such a park renders as `pending_approval`
   and is decided on the Relay surfaces — which is one of the reasons the owner kept them.
-- **The built channel claims** — AP-12, AP-13, AP-14 and the weak-channel refusal. The code still
-  does all of it and the claims are still true. A spec describes what the system does, not what
-  its shipped configuration exercises.
+- **The built channel claims** — AP-12, AP-13, AP-14 and the weak-channel refusal. They are still
+  true: a spec describes what the system does, not what its shipped configuration exercises.

@@ -32,9 +32,9 @@ something alarming and has two options: revoke its API Token — heavyweight, no
 and really credential management rather than incident response — or Freeze the entire fleet,
 stopping every other actor's legitimate work to stop one. Neither is what the situation calls for.
 
-The obvious reach, "end the session", is not a control at all. An MCP session is authenticated by a
-bearer token; dropping the connection buys the seconds it takes the client to reconnect with the
-same credential.
+"End the session" is not a control: an MCP session is authenticated by a bearer token, and
+dropping the connection buys the seconds it takes the client to reconnect with the same
+credential.
 
 ## Decisions
 

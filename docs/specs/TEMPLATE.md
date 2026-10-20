@@ -4,11 +4,9 @@
 **Claim prefix:** `XX`
 
 The date says when this spec was last checked against the code, not when it was last edited.
-Status and claim prefix are the only header metadata: which surfaces reach this capability,
-which ADRs govern it, and which invariants it touches all have their own sections below, and a
-hand-maintained summary of a section two hundred lines down is a second source of truth that
-nothing checks. The first version of `execution.md` carried one and it disagreed with its own
-body, in both directions, within two days.
+Status and claim prefix are the only header metadata: surfaces, governing ADRs and invariants
+have their own sections below, and a header summary of them is a second source of truth that
+nothing checks.
 
 The prefix is two or three capital letters, unique across `docs/specs/`. Every claim in this
 file is `**XX-n**`; `n` is never reused, so a retired claim leaves a gap and a line under *Retired*.
@@ -32,14 +30,14 @@ Relay-side authorization, the blast-radius cap before dispatch, and the daemon's
 engine are three different places, and conflating them is how invariant 12 gets violated.
 
 Write it as **claims**: one statement per bullet that a test could be pointed at, each with its
-ID. Prose between claims is fine for orientation, but the claim is the unit.
+ID. Prose between claims may orient; the claim is the unit.
 
 - **XX-1** <a single statement about what the system does today>
 - **XX-2** <another>
 
-If a claim here is not true of the code, one of the two is a bug. A claim that is *decided but
-not yet true* does not belong here — it belongs in *Designed, not built* below, and the loop
-promotes it up when the PR that makes it true lands.
+If a claim here is not true of the code, one of the two is a bug. A claim *decided but not yet
+true* belongs in *Designed, not built* below; the loop promotes it when the PR that makes it
+true lands.
 
 ## Refusals
 
@@ -55,13 +53,12 @@ Refusals are claims too, with IDs from the same sequence.
 
 The ADRs that constrain this capability and the numbered `AGENTS.md` invariants it touches, each
 with a sentence on *how* it binds here. If a change would contradict one, stop — that is a new
-ADR in front of a human, not a spec edit. If it touches nothing, say so explicitly; that is a
-useful claim to have reviewed.
+ADR in front of a human, not a spec edit. If it touches nothing, say so explicitly.
 
 ## Seams and proof
 
-Where this is tested. Prefer an existing seam to a new one, and the highest seam available —
-the fewer seams across the codebase, the better. Name new ones explicitly and justify them.
+Where this is tested. Prefer an existing seam to a new one, and the highest seam available.
+Name and justify any new one.
 Note whether `make verify` is sufficient, or whether changes here need `make test-integration`
 or the dev fleet.
 
@@ -70,9 +67,9 @@ or the dev fleet.
 One row per claim above that something actually asserts. The loop maintains this table: the PR
 that makes a claim true adds its row in the same change.
 
-Naming test functions is a deliberate exception to the "never file paths" rule. A test name is
-stable enough to cite, the link is verifiable, and a named test that no longer exists is a
-signal the behaviour moved. Cite the test, never the file it lives in.
+Naming test functions is a deliberate exception to the "never file paths" rule: a test name is
+stable and verifiable, and one that no longer exists signals the behaviour moved. Cite the
+test, never its file.
 
 | Claim | Proven by | Seam |
 |---|---|---|
@@ -84,8 +81,7 @@ dropping the claim or inventing a test that does not exist; they are the testing
 ### Performance
 
 The spec states the shape; the benchmark states the number. **Never quote a measured value
-here** — it is environment-dependent and goes stale by nobody deciding anything, which is the
-same failure mode as putting a headcount in an invariant.
+here** — it is environment-dependent and goes stale without anyone deciding anything.
 
 | Characteristic | Contract | Measured by |
 |---|---|---|
@@ -98,14 +94,14 @@ Keep three kinds of claim apart:
 - **Observed** — how fast it is today. That is a benchmark, and only the benchmark's name
   belongs here.
 
-*(none)* is an honest entry. It makes an unmeasured claim visible instead of unknown.
+*(none)* is an honest entry: it makes an unmeasured claim visible.
 
 ## Designed, not built
 
 Decided, and not yet true of the code. Each row is a claim with an ID from the same sequence,
-tagged with the milestone that delivers it, so a reader cannot mistake it for current behaviour
-and `/decompose` can find it. When the implementing PR lands, the loop moves the claim into
-Behaviour or Refusals — same ID, same words — and adds its proof row.
+tagged with the milestone that delivers it so `/decompose` can find it. When the implementing
+PR lands, the loop moves the claim into Behaviour or Refusals — same ID, same words — and adds
+its proof row.
 
 | Claim | Statement | Milestone |
 |---|---|---|
@@ -118,8 +114,8 @@ invites filling. Everything above this section describes today. Nothing in it do
 ## Out of scope
 
 What this capability deliberately does not do, and where that work lives instead. Be specific:
-this is the section a reviewer checks a diff against, and the one that stops an issue from
-quietly widening the capability.
+a reviewer checks a diff against this section, and it stops an issue quietly widening the
+capability.
 
 ## Accepted residual risk *(optional)*
 
@@ -129,9 +125,9 @@ exists. A risk nobody accepted on the record is not residual; it is an open ques
 
 ## Future work *(optional)*
 
-Named, not decided: work agreed in principle with no milestone and no ADR. The difference from
-*Designed, not built* is exactly that — a Designed claim has a milestone; a Future work item
-has a sentence. When one is decided it moves up, gets an ID and a milestone, and leaves here.
+Named, not decided: work agreed in principle with no milestone and no ADR. A Designed claim
+has a milestone; a Future work item has a sentence. Once decided, it moves up with an ID and a
+milestone.
 
 ## Open questions
 
@@ -141,8 +137,8 @@ tracked; one left in a closed issue is lost.
 ## Retired
 
 Every claim ID that no longer exists, one line each: the ID, the date, why, and the issue.
-IDs are never reused, so this is what explains a gap; `make docs-check` fails on a gap that is
-not listed here. `None.` when nothing has been retired. Everything else about how the spec
-changed is in its git history — the Status line says when it was last true.
+IDs are never reused, so this explains a gap; `make docs-check` fails on a gap not listed
+here. `None.` when nothing has been retired. Everything else about how the spec changed is in
+its git history.
 
 - **XX-n** — `<YYYY-MM-DD>` — <why it was retired> (#NNN)

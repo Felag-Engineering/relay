@@ -1,11 +1,9 @@
 # 03 — Agent activity (retired)
 
-**Retired 2026-09-29 (owner decision).** The Agents screen was folded into
-[04 — Activity](04-activity.md). Activity now carries this screen's call-grained stream, its
-polling collapse, its rule for leaving out reads made from this Console, its running-Job rows,
-Cancel, and its list of recently active Accounts (removed from Activity by
-owner decision, 2026-10-01). Sign-ins and Account changes, which Activity used
-to carry, moved to [20 — Access](20-access.md).
+**Retired 2026-09-29 (owner decision, D17).** The Agents screen was folded into
+[04 — Activity](04-activity.md), which carries its call-grained stream, polling collapse, rule for
+leaving out reads made from this Console, running-Job rows and Cancel. Sign-ins and Account
+changes are on [20 — Access](20-access.md).
 
 The file keeps its name so existing links hold. Where a citation names a section of this file:
 

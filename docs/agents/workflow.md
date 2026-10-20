@@ -6,8 +6,8 @@ than restating it. If a command and this file disagree, this file wins and the c
 
 The premise is spec-driven development: **a capability specification says what Relay does,
 code follows it, and the loop that writes the code may never rewrite the sentence it is
-implementing.** The rest of this file is the machinery that makes that hold when most of the
-work is done by agents.
+implementing.** The rest of this file is the machinery that keeps that true when agents do
+most of the work.
 
 ## The chain
 
@@ -45,11 +45,10 @@ Two entries skip the top of the chain:
 ## Claims and claim IDs
 
 A spec is a set of **claims**: single statements a test can be pointed at. Each carries a
-stable ID, `<PREFIX>-<n>`, where the prefix is declared once in the spec's header and `n` is
-never reused. IDs are how the chain stays mechanical: a design says which claims it delivers,
-an issue names the claims it implements, a PR's proof rows cite them, and `check-docs` verifies
-the whole set. The format is in `docs/specs/TEMPLATE.md`; the rules `check-docs` enforces are
-in `scripts/check-docs.sh`.
+stable ID, `<PREFIX>-<n>`; the prefix is declared once in the spec's header and `n` is never
+reused. A design says which claims it delivers, an issue names the claims it implements, a PR's
+proof rows cite them, and `check-docs` verifies the set. The format is in
+`docs/specs/TEMPLATE.md`; the rules are in `scripts/check-docs.sh`.
 
 A claim lives in one of two places:
 
@@ -58,15 +57,14 @@ A claim lives in one of two places:
 | **Behaviour** / **Refusals** | True of `main` today | You, via `/spec-author`; the loop, only by promoting from Designed |
 | **Designed, not built** | Decided, tagged with its milestone, not yet true | You put it there; the loop promotes it when the implementing PR lands |
 
-A spec's `**Status:**` follows from that: `current as of <date>` when its Designed section is
-empty and Behaviour was checked against the code on that date; `designed, not built, as of
-<date>` when the Designed section has rows. Both bind the loop. The two legacy states,
-`aspirational` and `stub`, mark a spec that has not been migrated: it is intent only, and the
-loop treats it as context rather than as a requirement. The establishing phase ends per spec,
-when its status leaves those two states, and ends for the repo when none remain.
-`scripts/spec-coverage.sh --summary` prints the numbers that track it (legacy specs, proof
-rows); without the flag it also lists code surfaces no spec names — each is either a missing
-claim or dead weight, for a human to decide. It reports and never fails.
+A spec's `**Status:**` follows: `current as of <date>` when its Designed section is empty and
+Behaviour was checked against the code that day; `designed, not built, as of <date>` when the
+Designed section has rows. Both bind the loop. The legacy states `aspirational` and `stub` mark
+an unmigrated spec: intent only, which the loop treats as context, not a requirement. The
+establishing phase ends per spec when its status leaves those states, and for the repo when
+none remain. `scripts/spec-coverage.sh --summary` prints the numbers (legacy specs, proof
+rows); without the flag it also lists code surfaces no spec names, each a missing claim or
+dead weight for a human to decide. It reports and never fails.
 
 ## Authority
 
@@ -86,10 +84,9 @@ writes any artifact in the first two rows, and stops rather than guessing.
 
 ## Reviewers
 
-Two vendors sit where a second model pays for itself, because it has different blind spots and
-the value of a review is in what the author did not see — and because the Codex allowance is
-plan quota rather than API spend, not every gate, every cycle: Codex is spent once per issue,
-on the finished change.
+A second vendor has different blind spots, and a review's value is in what the author did not
+see. The Codex allowance is plan quota, not API spend, so Codex is spent once per issue, on the
+finished change, not at every gate.
 
 | Gate | Claude | Codex |
 |---|---|---|
@@ -100,31 +97,29 @@ on the finished change.
 | Security surface | `devloop-security-reviewer` | — (Claude alone, every cycle) |
 | Final diff, once per issue | — | `scripts/codex-review.sh diff`, or `security` when the surface is touched |
 
-Five or six Codex runs per issue — the plan review, each code-review cycle, the security
-review, and `/pr-respond`'s re-review — exhausted the ChatGPT-plan quota in one night (#694).
-Claude alone does the plan review and every fix cycle. Codex runs ONCE per issue, on the final
-diff, BEFORE the commit: its review scope is the uncommitted working tree, so a run after the
-commit would review an empty diff. A blocking finding buys one fix cycle and one further Codex
-run, then the issue escalates. `/pr-respond` gets at most one Codex run after its fixes. Model
-`gpt-5.6-terra` by default, overridable per run with `RELAY_CODEX_MODEL`.
+Claude alone does the plan review and every fix cycle; Codex at every gate exhausted the plan
+quota in one night (#694). Codex runs ONCE per issue, on the final diff, BEFORE the commit: it
+reviews the uncommitted working tree, so a run after the commit would review an empty diff. A
+blocking finding buys one fix cycle and one further Codex run, then the issue escalates.
+`/pr-respond` gets at most one Codex run after its fixes. The model is `gpt-5.6-terra` by
+default, overridable per run with `RELAY_CODEX_MODEL`.
 
-Claude's findings are worked to a close first; Codex's single review arrives afterwards, at its
-own stage, and its findings are merged into the same record. The developer fixes or justifies
-each one; a finding neither fixed nor justified goes into the PR body under **Unresolved**, and
-the PR is labelled `loop:needs-human`. Codex is a reviewer only. It never implements, and
-because it now sits on only one gate per issue, its absence leaves the WHOLE ISSUE
-single-vendor, not one gate of several — the PR body must say so.
+Claude's findings are worked to a close first; Codex's findings are then merged into the same
+record. The developer fixes or justifies each one; a finding neither fixed nor justified goes
+into the PR body under **Unresolved**, and the PR is labelled `loop:needs-human`. Codex only
+reviews, never implements. Because it sits on one gate per issue, its absence leaves the WHOLE
+ISSUE single-vendor, and the PR body must say so.
 
-Absence is anything that is not a structured verdict — an exhausted usage quota and a rejected
-credential both land there — decided on the parsed payload, never on message text:
-`scripts/codex-review.sh` exits 3 for all of them. Exit 2 (the script refused before ever
-invoking Codex) and exit 1 (a killed run, or a failed classifier) are failures: escalate, never
-record as a single-reviewer gate. A recorded absence must carry the script's structural reason
-token and the model (`Codex: absent (reason=<token>, model <slug>)`): the token NARROWS the
-cause without fully distinguishing it — `reason=no-result` covers both a transient quota
-exhaustion and a permanent misconfiguration such as a rejected model slug, and only the
-script's own stderr replay, never quoted into anything durable, says which. A blocking Codex
-finding is severity `critical` or `high` in the plugin's output schema.
+Absence is anything that is not a structured verdict (an exhausted quota, a rejected
+credential), decided on the parsed payload, never on message text: `scripts/codex-review.sh`
+exits 3 for all of them. Exit 2 (refused before invoking Codex) and exit 1 (a killed run, or a
+failed classifier) are failures: escalate, never record as a single-reviewer gate. A recorded
+absence carries the script's reason token and the model
+(`Codex: absent (reason=<token>, model <slug>)`). The token narrows the cause without settling
+it: `reason=no-result` covers both a transient quota exhaustion and a permanent
+misconfiguration such as a rejected model slug; only the script's stderr replay, never quoted
+into anything durable, says which. A blocking Codex finding is severity `critical` or `high`
+in the plugin's output schema.
 
 ## The security surface
 
@@ -139,8 +134,8 @@ Only `/dev-loop-queue` (which runs `/dev-loop --non-interactive`) and `/pr-respo
 schedule. Everything above GATE 3 needs you present. `docs/agents/routines.md` has the
 environment, the caps and the `loop:halt` kill switch; both routines check it first.
 
-Unattended stops, in every case by labelling the issue or PR `loop:needs-human` with a comment
-saying why:
+An unattended run stops, labelling the issue or PR `loop:needs-human` with a comment saying
+why, on:
 
 - an issue that is underspecified, or that cites a spec without naming the claims it promotes;
 - a change that would make a bound claim, an invariant or an ADR untrue;

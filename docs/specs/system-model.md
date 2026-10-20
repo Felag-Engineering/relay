@@ -4,11 +4,11 @@
 
 ## Purpose
 
-A flat list of Nodes tells an AI-agent what exists; it does not tell it what *matters*. The
-System Model is a persistent, shared map of the fleet as a connected system — **Services**
-(named groupings of Nodes), **Dependencies** between them, and **Annotations** carrying what
-someone learned — so an AI-agent investigating an incident can reason about impact and ripple
-effects instead of rediscovering the fleet's shape every session.
+A flat list of Nodes tells an AI-agent what exists, not what *matters*. The System Model is a
+persistent, shared map of the fleet as a connected system — **Services** (named groupings of
+Nodes), **Dependencies** between them, and **Annotations** carrying what someone learned — so an
+AI-agent investigating an incident can reason about impact instead of rediscovering the fleet's
+shape every session.
 
 It is **advisory**. It informs which Selector an AI-agent chooses and how it reasons about blast
 radius; it never executes, never widens anything, and is never a description of how the fleet
@@ -16,11 +16,10 @@ radius; it never executes, never widens anything, and is never a description of 
 
 ## Surfaces
 
-Nothing reaches this capability yet. It is unbuilt and scheduled for milestone v1.1.0, after
-the v1 contracts freeze, as additive-only work.
-
-ADR-0008 designs it for MCP — reads as Resources, writes as Tools — and the v1.1.0 milestone
-adds Control API parity. The Admin Console reserves a rollup component for a later view.
+Nothing reaches this capability yet. It is unbuilt and scheduled for milestone v1.1.0, after the
+v1 contracts freeze, as additive-only work. ADR-0008 designs it for MCP — reads as Resources,
+writes as Tools — and v1.1.0 adds Control API parity. The Admin Console reserves a rollup
+component for a later view.
 
 ## Behaviour
 
@@ -87,9 +86,8 @@ _Not yet written._
 
 ## Decided in interrogation
 
-- `2026-09-14` — **The System Model stays in Relay's scope, deferred.** Not designed or built in the
-  first pass; this spec remains a stub. The owner sees a strong case for the model being recorded
-  and available in Relay, and is open to moving it out. The two cases, for when it is picked up:
+- `2026-09-14` — **The System Model stays in Relay's scope, deferred** past the first pass. The
+  owner sees a strong case for keeping it in Relay and is open to moving it out. The two cases:
   - *In Relay:* one shared, audited record of what Services run where, available to every
     consumer — Gleipnir, other AI-agents, humans on the Console — rather than locked inside one
     AI-agent's memory.

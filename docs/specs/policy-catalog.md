@@ -12,9 +12,8 @@ fragments an operator selects by name, arranges into cohorts that match their co
 groups, and hands to config management to install.
 
 It is a planning aid that ends at the operator's clipboard. The Relay never applies Policy to a
-Node, and nothing here changes that: the catalog makes the *authoring* half of Policy cheap while
-leaving the *delivery* half exactly where invariant 2 puts it. Widening what a Node will ever do
-stays a deliberate local act; the catalog only makes it a short one.
+Node: the catalog makes *authoring* Policy cheap and leaves *delivery* where invariant 2 puts it.
+Widening what a Node will do stays a deliberate local act, only a shorter one.
 
 The shipped default Policy is not part of the catalog. It keeps its own rules (ADR-0022,
 ADR-0033): installed once if absent, the operator's file from then on. Catalog fragments are
@@ -31,9 +30,8 @@ additions beside it, each opt-in.
 
 ## Behaviour
 
-Nothing yet. The catalog is unbuilt; everything it will do is under *Designed, not built*. The
-one statement true of `main` today is the refusal below, which the catalog must never make
-untrue.
+Nothing yet: everything the catalog will do is under *Designed, not built*. The one statement
+true of `main` today is the refusal below, which the catalog must never make untrue.
 
 ## Refusals
 
@@ -44,9 +42,8 @@ untrue.
 ## Governing ADRs and invariants
 
 - **Invariant 2 / ADR-0002** — the catalog's whole shape. Output ends at download or clipboard;
-  delivery is the customer's config management. Distributing Policy through the Relay is Future
-  work in `policy.md`, admissible only if it adds no path by which the Relay can widen what a Node
-  permits, and would need its own ADR; the catalog does not approach it.
+  delivery is the customer's config management. Distributing Policy through the Relay (Future
+  work in `policy.md`) would need its own ADR; the catalog does not approach it.
 - **Invariant 3 / ADR-0002** — deny-by-default is untouched: a catalog fragment not in a Node's
   Policy directory permits nothing. The screen's own authoring emits deny rules only.
 - **Invariant 12 / ADR-0011** — the screen describes what a fragment grants; it never computes
@@ -74,8 +71,7 @@ Once built, the catalog's content is proven where it is published: CI runs the d
 `policy check` against every catalog fragment and compares each against its previous release, so
 a fragment the daemon cannot load, or one widened in place, fails the build rather than a fleet.
 The screen is proven at the Console's handler seam; PC-1 by the structural guard that no adapter
-reaches a Node except through dispatch. `make verify` is sufficient; nothing here needs the dev
-fleet.
+reaches a Node except through dispatch. `make verify` suffices; nothing needs the dev fleet.
 
 ### What proves each claim
 
@@ -135,8 +131,7 @@ Every row depends on the daemon loading a Policy directory beside the Policy fil
 
 - **Catalog fragments that define Templates** — for example nginx config test and reload, or
   journal vacuum. Needs a decision that first-party `mutate` Templates are admissible (a new ADR
-  or an ADR-0021 amendment), #626 so a Template can be dispatched at all, and `policy.md`'s
-  Templates-in-Policy model to be ratified.
+  or an ADR-0021 amendment), and `policy.md`'s Templates-in-Policy model to be ratified.
 - **Which catalog fragments a Node runs** — the daemon reporting each loaded fragment's name and
   digest, so the Fleet view can say which Nodes run which catalog fragments without the Relay
   storing an arrangement.
@@ -152,8 +147,8 @@ Every row depends on the daemon loading a Policy directory beside the Policy fil
    compromised Relay or hijacked Console session could serve allow entries in a file presented as
    a deny fragment, or an install task with the check removed. As designed, the only control is
    that both are shown in full and land in the customer's IaC repo through their review — the task
-   once, when first committed. A deny-only mode in `policy check` would
-   let the install task refuse the deny fragment; nothing mechanical covers the task. Forced at
+   once, when first committed. A deny-only mode in `policy check` would let the install task
+   refuse the deny fragment; nothing mechanical covers the task. Forced at
    `/design`: either such checks, or the owner accepts the risk on the record with a threat-model
    row naming both artifacts.
 

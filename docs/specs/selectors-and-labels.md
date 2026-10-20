@@ -6,25 +6,25 @@ of this draft. Describes intended behaviour, not the code (see the establishing 
 
 ## Purpose
 
-Labels are how a Node is described. A Selector is how a caller says which Nodes it means. Every
-capability that acts on more than one Node takes a Selector, so this is the shared addressing
-vocabulary of the whole control plane.
+Labels describe a Node; a Selector says which Nodes a caller means. Every capability that acts
+on more than one Node takes a Selector, so this is the control plane's shared addressing
+vocabulary.
 
-The model is four namespaces with one writer each. A Node describes itself in `node:`, and
-nothing remote can change that. The Relay applies `relay:` labels as a consequence of its own
-actions, and neither users nor Nodes edit them. Users organise the fleet with `tag:`. `state:`
-tracks a Node's current condition and is written by nobody.
+There are four namespaces with one writer each. A Node describes itself in `node:`, and nothing
+remote can change that. The Relay applies `relay:` labels as a consequence of its own actions.
+Users organise the fleet with `tag:`. `state:` tracks a Node's current condition and is written
+by nobody.
 
-It is a security boundary, not a convenience. What a Selector resolves to determines the blast
-radius of everything downstream, and **who is allowed to write a Label determines whether a
-target can be forged.** A compromised Node that could label itself into the quarantine lane
-would escape quarantine by describing itself out of it.
+This is a security boundary. What a Selector resolves to sets the blast radius of everything
+downstream, and **who may write a Label decides whether a target can be forged.** A
+compromised Node that could write its own quarantine label could describe itself out of
+quarantine.
 
 ## Surfaces
 
 A Selector is accepted wherever a capability acts on or lists Nodes: `list_nodes`,
 `run_operation` and `raw_exec` over MCP; the Control API's execution and node routes; the
-Console's fleet filter. One grammar, one parser, one resolver — no surface evaluates a Selector
+Console's fleet filter. One grammar, one parser, one resolver; no surface evaluates a Selector
 itself.
 
 Label **writes** are deliberately asymmetric:
@@ -52,9 +52,9 @@ Every Label is namespaced, and a namespace is immutable from every side but its 
 
 **Only `relay:` is a valid security-lane target — with one exception for engaging a
 quarantine.** Remediation targets `relay:` and only `relay:`. Engaging a quarantine may target
-`relay:` or `tag:`, because no Node can write either; lifting one targets `relay:` only; `node:`
-and `state:` are never a quarantine target, because a Node controls them (`quarantine-node.md`).
-This is invariant 7 as amended on 2026-09-16 (ADR-0006, ADR-0020). `node:` and `state:` remain routine targeting only.
+`relay:` or `tag:`, because no Node can write either; lifting one targets `relay:` only
+(`quarantine-node.md`). `node:` and `state:` are routine targeting only, because a Node controls
+them (invariant 7, amended 2026-09-16; ADR-0006, ADR-0020).
 
 The writers are structurally separated, not separated by permission: a report from a daemon
 cannot reach the `relay:` or `tag:` labels on its Node record, and a daemon can never revoke or
@@ -144,18 +144,16 @@ this spec.
 - A marker written with a value, or a fact written bare, is a parse error rather than a silently
   empty match.
 
-Deriving at resolution time rather than storing a denormalised copy is why a second code path
-exists in resolution. The alternative was a stored copy with recompute triggers on several
-separate events.
+Deriving at resolution time is why resolution has a second code path; the alternative, a stored
+copy, needed recompute triggers on several separate events.
 
 ### The grammar
 
 A Selector is **an AND of terms**. There is no OR across keys and no parentheses, so a Selector's
 blast radius stays legible at a glance.
 
-- **Every term carries a namespace prefix.** An unprefixed term is a parse error, never a guess —
-  the parser is fail-closed, because a term silently interpreted in the wrong namespace is a
-  targeting error with a blast radius.
+- **Every term carries a namespace prefix.** An unprefixed term is a parse error, never a guess:
+  a term read in the wrong namespace is a targeting error with a blast radius.
 - `node:key=value`, `relay:key=value`, `tag:key=value` — key and value both required.
 - `state:marker` or `state:fact=value` — from the closed vocabulary above.
 - **A value set** matches any listed value for one key: `node:role=web|api`.
@@ -164,28 +162,26 @@ blast radius stays legible at a glance.
   can only range over labels the Relay itself wrote.
 - **Negation** excludes: `!tag:canary=true`, `!state:offline`, `!node:env=dev`. It is valid for
   `node:`, `tag:` and `state:` only.
-- **A negated `relay:` term is a parse error.** With negation, a `relay:` label the store declined
-  to serve would otherwise make a quarantined Node match `!relay:quarantine=on`, and be targeted
-  as though it were not quarantined.
+- **A negated `relay:` term is a parse error.** Otherwise a `relay:` label the store declined to
+  serve would make a quarantined Node match `!relay:quarantine=on`.
 - **An empty Selector** matches every Node for reads and listing, and is **refused for
   dispatch**. Targeting the whole fleet must be written deliberately (for example
   `node:hostname=*`), so an AI-agent that forgets a Selector gets an error, not the fleet.
 
 ### Resolution
 
-Resolution walks the registry and returns the Nodes matching every term. The resolved **count**
-is what the blast-radius cap is checked against (invariant 5), so resolution is what makes the cap
-meaningful.
+Resolution walks the registry and returns the Nodes matching every term. The blast-radius cap is
+checked against the resolved **count** (invariant 5).
 
 A Selector's resolved set is the same for every surface and every caller; authorization decides
 who may *ask*, never what matches.
 
 ### Labels the store declines to serve
 
-The stored-Label allowlist is deliberately **narrower than the parser**, because the hazard is a
-term concatenated back together by a Console href or an AI-agent — so rendering must be gated
-more tightly than parsing. A stored Label outside the allowlist is declined at read-back rather
-than deleted or rewritten: *decline to serve, never write*.
+The stored-Label allowlist is deliberately **narrower than the parser**: the hazard is a term
+concatenated back together by a Console href or an AI-agent, so rendering is gated more tightly
+than parsing. A stored Label outside the allowlist is declined at read-back, never deleted or
+rewritten: *decline to serve, never write*.
 
 A declined label is invisible to resolution. For a positive term that can only remove a Node from
 a match. For a negated term it can **add** one (see *Accepted residual risk*) — which is why
@@ -212,10 +208,9 @@ disclosed residual (threat-model register R13) with operator-facing remediation.
 
 ## Governing ADRs and invariants
 
-- **Invariant 7** (ADR-0006, ADR-0020, ADR-0034) — the whole of it. Binds as written: its
-  `tag:` clause (an operator through the control plane) is consistent with every surface,
-  MCP included, being a control-plane adapter. This spec is where the invariant's per-namespace
-  mechanism lives.
+- **Invariant 7** (ADR-0006, ADR-0020, ADR-0034) — the whole of it, as written; its `tag:` clause
+  (an operator through the control plane) covers every surface, MCP included. This spec holds
+  the invariant's per-namespace mechanism.
 - **Invariant 5** (ADR-0004) — the cap is checked against the *resolved* count.
 - **Invariant 10** — one parser and one resolver in the capability layer; no surface evaluates a
   Selector itself.
@@ -235,8 +230,8 @@ disclosed residual (threat-model register R13) with operator-facing remediation.
 ## Seams and proof
 
 Parsing and resolution live in the capability layer; label authority lives in the registry; the
-`state:` vocabulary lives in its own package with no database import. Tested at those seams rather
-than through a surface.
+`state:` vocabulary lives in its own package with no database import. Tests sit at those seams,
+not at a surface.
 
 ### What proves each claim
 
@@ -264,9 +259,9 @@ Claims above with **no row**, and so nothing checking them:
   all-or-nothing load and `labels-invalid`, `tag:` writes on every surface and bulk tagging
   audited as one action, the per-Node limits, the new `state:` markers, value sets, value globs,
   negation and the negated-`relay:` refusal, and the empty-Selector refusal on dispatch.
-- That a zero-width space in a reported fact is accepted. It is —
-  `TestFacts_ZeroWidthSpaceIsAcceptedKnownGap` documents it as a **known gap** rather than proving
-  it safe, which is the honest state and not the same as coverage.
+- That a zero-width space in a reported fact is accepted. It is;
+  `TestFacts_ZeroWidthSpaceIsAcceptedKnownGap` documents it as a **known gap**, which is not
+  coverage.
 - That `relay:` labels can only be written through the Relay's own actions. The immutability
   boundary is tested from both directions, but no test asserts the *absence* of any other write
   path the way `no_dispatch` asserts the absence of a parallel dispatch path.
@@ -325,6 +320,6 @@ Wanted, deliberately not in the first pass.
   file; `daemon-installation.md` currently puts them in the daemon's environment file beside the
   join string. One home is chosen in both specs (raised 2026-10-15).
 
-No other question is open. Who may take the actions that write `relay:` labels is settled in `enrollment.md` and
-`quarantine-node.md`; a re-enrolled Node is a new record whose tags do not follow it
-(`enrollment.md`).
+No other question is open. Who may take the actions that write `relay:` labels is settled in
+`enrollment.md` and `quarantine-node.md`; a re-enrolled Node is a new record whose tags do not
+follow it (`enrollment.md`).

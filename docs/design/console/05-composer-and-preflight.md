@@ -8,10 +8,10 @@ step-up re-auth.
 
 ## What this screen is for
 
-ADR-0026 reversed ADR-0009's no-execution stance for exactly this: *a skeptical operator does not
-come to trust a fleet-wide RCE system by reading its documentation. They trust it by probing the
-boundary themselves — composing an Operation, seeing the Preflight, watching a Policy rule deny it,
-and reading the rule that fired.* **The wall is the same wall.** An Operation dispatched here traverses
+ADR-0026 gave the Console execution for this: *a skeptical operator does not come to trust a
+fleet-wide RCE system by reading its documentation. They trust it by probing the boundary
+themselves — composing an Operation, seeing the Preflight, watching a Policy rule deny it, and
+reading the rule that fired.* **The wall is the same wall.** An Operation dispatched here traverses
 Selector → Policy → blast cap → audit identically to one from MCP.
 
 ## The rhythm
@@ -28,8 +28,8 @@ Two columns. Left is the form, right is empty until preflighted.
 
 **Left — the form.** An Operation picker driven by `list_operations` schemas, each entry showing
 its risk badge. Beneath it, schema-driven argument fields showing their constraints inline as
-quiet helper text *before* submission — enum choices, patterns, charsets. ADR-0001's legibility
-bar applies to humans too. Then a Selector input with a live match line: "matches 2,214 Nodes ·
+quiet helper text *before* submission — enum choices, patterns, charsets (ADR-0001's legibility
+bar). Then a Selector input with a live match line: "matches 2,214 Nodes ·
 mutate-cap 2,500 ✓".
 
 A **Raw Exec** tab exists and is visible only to `admin`. Raw Exec is always mutate-class and
@@ -50,34 +50,31 @@ Beneath the Preflight, and only then, **Apply**.
 
 Rendered as arithmetic inside the fan-out line, never as a setting. Over-cap is **informative, not
 an error**: no red, no shake, no disabled control without explanation. The number is a fact about
-this Relay's configuration, which no screen can edit and no Account of any role can raise
-(invariant #11).
+this Relay's configuration that this screen cannot edit (invariant #11).
 
 ## Apply
 
-Clicking Apply opens the **step-up** modal. This is the strongest per-action human-intent binding
-in the system and the reason a browser may dispatch at all. `read`-class dispatch does **not**
-require step-up — it is bounded by the read cap and audited metadata-only, and gating it would
-make the preflight-first habit expensive enough to route around.
+Clicking Apply opens the **step-up** modal: the strongest per-action human-intent binding in the
+system, and the reason a browser may dispatch at all. `read`-class dispatch does **not** require
+step-up — it is bounded by the read cap and audited metadata-only, and gating it would make the
+preflight-first habit expensive enough to route around.
 
-If the deployment's approval gate matches this action, applying **parks** the Job for sign-off
-rather than dispatching. Say so before the click, not after — and say where it is answered: the
-Console decides no approval (ADR-0044), so a parked Console request is decided on the Control
-API.
+If the approval gate matches this action, applying **parks** the Job rather than dispatching. Say
+so before the click, and say where it is answered: the Console decides no approval (ADR-0044), so
+a parked Console request is decided on the Control API.
 
 ## Editing after a Preflight
 
 Any edit re-preflights: new plan hash, and **existing approvals fall away**. Approvers do not
-amend — an approver who wants changes sends it back. An approval commits to a plan hash over the
-Operation, its arguments and the *resolved fan-out*; letting the thing change under a signature
-would make the signature meaningless, and letting an approver edit then approve collapses
-`requester_allowed: false`.
+amend; an approver who wants changes sends it back. An approval commits to a plan hash over the
+Operation, its arguments and the *resolved fan-out*: a change under a signature makes it
+meaningless, and an approver who edits then approves collapses `requester_allowed: false`.
 
 ## Entry points
 
-Two, per the design session: the **Run** nav item (discoverability — ADR-0026's wedge argument
-requires that the first operator to open the Console can find it) and **contextually** from a
-filtered fleet view or a Node ("Run against these 4,012", "Run here"), pre-filling the Selector.
+Two: the **Run** nav item (ADR-0026's wedge argument needs the first operator to open the Console
+to find it) and **contextually** from a filtered fleet view or a Node ("Run against these 4,012",
+"Run here"), pre-filling the Selector.
 
 ## Must not appear
 
@@ -89,9 +86,8 @@ filtered fleet view or a Node ("Run against these 4,012", "Run here"), pre-filli
 
 ## States
 
-- **`console_execution = off`** — the routes are not mounted and this screen **does not exist**.
-  Not greyed out, not "unavailable": absent. `absent` beats `forbidden` and that property is the
-  whole point of the flag.
+- **`console_execution = off`** — the routes are not mounted and this screen **does not exist**:
+  not greyed out, not "unavailable", absent. That is the point of the flag.
 - **`viewer`** — no Run nav item, no contextual entry.
 - **`operator`** — composer yes, Raw Exec tab no.
 - **Frozen** — Preflights still resolve, Apply is refused with the Freeze reason. Say what is still

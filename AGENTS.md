@@ -118,17 +118,16 @@ it needs an ADR, not a quiet workaround.
     dispatch-level minimum-version gate. (ADR-0014)
 
 **The numbering is a public interface.** `docs/security/threat-model.md` maps all fourteen to
-the boundaries they defend; ADR-0006, ADR-0010, ADR-0020, ADR-0026, and ADR-0034 each record
-amending a specific numbered invariant; GLOSSARY.md, `docs/security/threat-model.md`, and
-several Go source comments cite them by number. Amend an invariant in place and record the
-amendment in its ADR. **Never renumber or drop one.**
+the boundaries they defend; ADR-0006, ADR-0010, ADR-0020, ADR-0026 and ADR-0034 each record
+amending a numbered invariant; the glossary, the threat model and Go source comments cite them
+by number. Amend an invariant in place and record the amendment in its ADR. **Never renumber
+or drop one.**
 
-**Amending one is not finished until its consumers are updated.** `docs/security/threat-model.md`
-maps each invariant to the boundary it defends and is the one that goes silently wrong: it has
-no mechanism of its own to notice an amendment, so every amendment that skips it leaves it
-describing the previous system (three did, between 2026-09-08 and 09-10). An amendment PR
-checks it, the capability specs that cite the invariant, `GLOSSARY.md`, and the ADRs the
-amending ADR says it amends — each of those must record the amendment on its own page.
+**Amending one is not finished until its consumers are updated.** The threat model is the one
+that goes silently wrong: nothing in it notices an amendment, so one that skips it leaves it
+describing the previous system. An amendment PR checks it, the capability specs that cite the
+invariant, `GLOSSARY.md`, and the ADRs the amending ADR amends; each must record the amendment
+on its own page.
 
 ### Known gaps between these invariants and the code
 
@@ -151,17 +150,15 @@ and that rule is the only thing keeping it honest.
 
 Two rules, each learned from a gap above.
 
-**A constraint, not a status report.** Write *"where X happens, it happens thus"* — never
+**A constraint, not a status report.** Write *"where X happens, it happens thus"*, never
 *"X happens."* A constraint stays true across the milestone that builds it; a status claim goes
-stale the moment it ships or slips. Invariants 7 and 10 are stale for exactly this reason, and
-neither would be if the clause had been written as a rule.
+stale the moment it ships or slips. That is why invariants 7 and 10 are stale.
 
-**The property, not the mechanism that currently delivers it.** State what must hold, not how
-today's code holds it. A mechanism-shaped invariant breaks the moment a second mechanism
-arrives satisfying the same property differently — which is what the Template tier did to
-invariant 1's "argv, never `/bin/sh`". The property there was always the *second* sentence:
-arguments can never change which command runs. Where the mechanisms are worth writing down,
-they belong in the capability specification, not here.
+**The property, not the mechanism that currently delivers it.** A mechanism-shaped invariant
+breaks when a second mechanism satisfies the same property differently, as the Template tier
+did to invariant 1's "argv, never `/bin/sh`". The property was always the *second* sentence:
+arguments can never change which command runs. Mechanisms belong in the capability
+specification.
 
 If a constraint genuinely cannot avoid asserting that something exists, it belongs in the gap
 table with its issue number until it does.
@@ -175,11 +172,10 @@ table with its issue number until it does.
 > from the code is expected, and the two rows below that name a capability spec do not apply to
 > it; the invariant row always does. See the establishing phase in `docs/specs/README.md`.
 
-That rule is deliberately absolute, because the right direction depends on which kind of
-statement disagreed — and getting it backwards is expensive in one specific way. Invariant 2
-says the Relay may never write a Node's Policy. An agent that found a write path and "fixed
-the document to match the code" would amend away this system's central security property,
-having followed a reasonable-sounding rule correctly.
+The rule is absolute because the right direction depends on which statement disagreed, and
+getting it backwards is expensive. Invariant 2 says the Relay may never write a Node's Policy.
+An agent that found a write path and "fixed the document to match the code" would amend away
+the system's central security property.
 
 | Conflict | What it means | Who resolves |
 |---|---|---|
@@ -187,9 +183,8 @@ having followed a reasonable-sounding rule correctly.
 | A capability spec ↔ the code | Either the spec is stale, or the code has the bug the spec correctly describes | A human, always |
 | A capability spec ↔ an ADR or an invariant | The spec is subordinate — the presumption is that the spec is the defect | A human, always |
 
-Only ADRs and the invariants carry human sign-off by construction. Everything below that line
-is maintained continuously, including by agents, so nothing below it silently wins against the
-code.
+Only ADRs and the invariants carry human sign-off by construction. Everything else is
+maintained continuously, including by agents, so nothing else silently wins against the code.
 
 This governs a disagreement you **discover**. When you are **making** a change, the spec
 leads: write the capability specification first, then the code, in the same PR. Intent flows
@@ -197,13 +192,12 @@ spec → code; drift escalates.
 
 ## Out of realm — proposed, and deliberately rejected
 
-Each of these has been asked for. Each is a "no" with an authority behind it, which means
-you may refuse the work rather than negotiate with yourself about it. An issue never
-redefines one; if a task appears to require one, stop and flag it.
+Each has been asked for, and each is a "no" with an authority behind it, so you may refuse
+the work outright. An issue never redefines one; if a task appears to require one, stop and
+flag it.
 
 - **Configuration management.** Relay is response and fleet administration. *If Ansible could
-  check it in check-mode, it is out of realm.* Settled 2026-07-08 and restated here in its own
-  right, because its original home is being retired.
+  check it in check-mode, it is out of realm.* (Settled 2026-07-08.)
 - **Desired-state reconciliation.** The System Model is advisory. Relay does not converge a
   fleet toward a spec, ever. (Invariant 9)
 - **Software distribution.** The Relay never pushes binaries and the daemon never
@@ -213,9 +207,8 @@ redefines one; if a task appears to require one, stop and flag it.
 - **A general-purpose remote shell.** Raw Exec is a conspicuous, regex-gated exception to a
   typed vocabulary, not the primary path. (Invariant 1)
 - **Widening the `relay` binary.** It may perform an act only if no credential could exist
-  to perform it over the wire. The official CLI was built and then deliberately removed; a
-  bootstrap command with no stated boundary becomes that CLI again, one convenient verb at
-  a time. (ADR-0030)
+  to perform it over the wire. The official CLI was deliberately removed; a bootstrap command
+  with no stated boundary becomes that CLI again, one convenient verb at a time. (ADR-0030)
 
 ## Repository layout
 
@@ -234,7 +227,7 @@ redefines one; if a task appears to require one, stop and flag it.
 /docs/adr/           architecture decision records — the *why*.
 /docs/agents/        per-repo configuration agent skills read (tracker, labels, domain rules).
 /docs/api/           Control API reference and OpenAPI surface.
-/docs/brand/         the relay_ wordmark and icon (SVG + PNG) and how to use them.
+/docs/brand/         the relay_ wordmark and icon (SVG) and how to use them.
 /docs/design/        console/ is the Console's live per-screen specification, cited from source;
                      the rest is pre-ADR design for work not yet decided.
 /docs/operations/    operator-facing runbooks: install, enrollment, upgrades, recovery, demo fleet.
@@ -266,36 +259,34 @@ Two toolchains. The `Makefile` wraps both — prefer it.
 | Daemon only (Rust) | `cd daemon && cargo build && cargo test && cargo clippy` |
 
 **`make build test lint` is the fast inner loop. It is not what CI runs, and the gap has
-bitten.** CI additionally runs the race detector, the proto-drift and proto-breaking gates,
-the operation-schema and OpenAPI drift checks, the docs and security-surface self-checks, the
-strict-umask runs, the devharness absence check, both cross-binary suites, the shell and workflow
-linters, the secrets scan, and the daemon's cargo-deny policy. Work can pass the inner loop and fail CI on a class of problem the author
-never looked at. `make verify` mirrors CI gate for gate; it is deliberately slow and deliberately
-not what you run on every save. On a pull request CI skips the gates a change cannot reach — the
-toolchain jobs for documentation-only changes, the proto gates when neither `/proto` nor its
-generated code moved, the advisory scans when no lockfile moved (`scripts/ci-changed-paths.sh`);
-a **draft** PR runs only the docs job until it is marked ready for review; pushes to `main` run
+bitten.** CI also runs the race detector, the proto-drift and proto-breaking gates, the
+operation-schema and OpenAPI drift checks, the docs and security-surface self-checks, the
+strict-umask runs, the devharness absence check, both cross-binary suites, the shell and
+workflow linters, the secrets scan, and the daemon's cargo-deny policy. `make verify` mirrors
+CI gate for gate; it is deliberately slow. On a pull request CI skips the gates a change
+cannot reach (toolchain jobs for docs-only changes, proto gates when neither `/proto` nor its
+generated code moved, advisory scans when no lockfile moved; `scripts/ci-changed-paths.sh`). A
+**draft** PR runs only the docs job until marked ready for review; pushes to `main` run
 everything.
 
-- **Go (relay):** `gofmt`/`go vet`/`golangci-lint`, under the toolchain the `Makefile` exports.
-  The version is named once, in `relay/go.mod`'s `go` directive, and the `Makefile` derives
-  `GOTOOLCHAIN` from it so every target runs that toolchain whatever the host's `go` happens to
-  be. Two limits, stated because both have bitten: `GOTOOLCHAIN` re-execs the `go` command and
-  not its sibling binaries, so `gofmt` is invoked out of `go env GOROOT`; and a bare
-  `cd relay && go test ./...` outside `make` is not pinned at all — `internal/version`'s
-  toolchain contract test is what catches that one. `GOTOOLCHAIN=local make <target>` is the
-  one-run escape hatch. Raising the Go version is a decision, not a chore: it is one edit in
-  `relay/go.mod`, and #572 is the open question it waits on.
+- **Go (relay):** `gofmt`/`go vet`/`golangci-lint`. The version is named once, in
+  `relay/go.mod`'s `go` directive, and the `Makefile` derives `GOTOOLCHAIN` from it so every
+  target runs that toolchain whatever the host's `go`. Two limits: `GOTOOLCHAIN` re-execs the
+  `go` command and not its sibling binaries, so `gofmt` is invoked out of `go env GOROOT`; and
+  a bare `cd relay && go test ./...` outside `make` is not pinned (`internal/version`'s
+  toolchain contract test catches that). `GOTOOLCHAIN=local make <target>` is the one-run escape
+  hatch. Raising the Go version is a decision, not a chore: one edit in `relay/go.mod`, waiting
+  on #572.
 - **Rust (daemon):** stable toolchain, with the floor declared as `rust-version` in
   `daemon/Cargo.toml`; `cargo fmt`/`cargo clippy -- -D warnings`. There is deliberately no
   `rust-toolchain.toml` — it would override the components and targets CI and the musl Docker
   build install. Build the daemon for musl when producing release artifacts (small static
   binary for the fleet).
 - **Proto codegen is version-sensitive.** Run `make proto-tools` before `make proto`: it pins
-  protoc-gen-go, protoc-gen-go-grpc and buf, at the versions the `proto-tools` target names.
-  Unpinned `@latest` produces a spurious diff that false-positives the proto-drift gate, and so
-  does a second checkout that installed a different version into the shared `GOPATH/bin` — if
-  the gate reports drift you did not cause, re-run `make proto-tools` before believing it.
+  protoc-gen-go, protoc-gen-go-grpc and buf. An unpinned or different version (including one
+  another checkout installed into the shared `GOPATH/bin`) produces a spurious diff that
+  false-positives the proto-drift gate; if it reports drift you did not cause, re-run
+  `make proto-tools` before believing it.
 - `make test` is hermetic and will not catch real-binary startup bugs. `make verify` includes
   `make test-integration`; run that target on its own when the diff touches Relay startup, the
   composition root, or config defaults and you are not yet ready for a full verify.
@@ -308,9 +299,8 @@ everything.
 then the ADR(s) governing it. `docs/agents/domain.md` carries the consumer rules; the invariants
 above are the index into `docs/adr/`.
 
-**2. Shape before you spec.** Ambiguity is resolved by interrogation, not by guessing.
-Stress-test the idea against the codebase and the ADRs *first*; a decision reached in the
-conversation is worth more than one discovered mid-implementation.
+**2. Shape before you spec.** Resolve ambiguity by interrogation, not guessing. Stress-test
+the idea against the codebase and the ADRs *first*.
 
 **3. Spec, design, decompose, implement.** The order is deliberate, and who may author what
 changes at each step. The full chain, its five human gates and the authority table are in
@@ -338,10 +328,9 @@ before the issue closes (see 7).
 
 **If you are implementing, you read a spec's claims and never write them.** A change that would
 make any claim in a migrated capability spec untrue is a stop-and-escalate, not a docs edit: a
-human updates the spec first, and the code follows. That is *When documents and the code
-disagree*, above, applied before the disagreement exists. The loop does maintain a spec's
-*evidence* — proof rows, Status, and promoting a Designed claim verbatim once its test
-lands — and nothing else; the split is the authority table in `docs/agents/workflow.md`.
+human updates the spec first, and the code follows. The loop maintains only a spec's
+*evidence*: proof rows, Status, and promoting a Designed claim verbatim once its test lands
+(the authority table in `docs/agents/workflow.md`).
 
 Bugs never get specs: diagnose and fix. If the spec described the broken behaviour as correct,
 that is an escalation too.
@@ -349,40 +338,34 @@ that is an escalation too.
 Specs and tickets name modules and contracts, **never file paths or code snippets**: those go
 stale within a sprint.
 
-**4. Work the current milestone.** **GitHub milestones are the authority on what is in flight**
-— read them with `gh`, don't infer the target from a file. A milestone's acceptance criteria live
+**4. Work the current milestone.** **GitHub milestones are the authority on what is in flight**:
+read them with `gh`, don't infer the target from a file. A milestone's acceptance criteria live
 on its issues; durable behaviour lives in the capability specification, never in a planning
-document. `ROADMAP.md` was retired on 2026-09-12: its status was a hand-synced copy of GitHub
-that went badly stale, and its acceptance criteria now live in `docs/specs/`. Git history has it
-if you need the milestone narrative.
+document.
 
-Milestones here were deliberately built out of order, and some are gated on things an agent
-cannot supply (real hardware, an open licensing decision). Issues decompose a milestone; they
-never redefine one. Don't pull future milestones forward, and don't self-assign a gated one.
+Milestones were deliberately built out of order, and some are gated on things an agent cannot
+supply (real hardware, an open licensing decision). Issues decompose a milestone; they never
+redefine one. Don't pull future milestones forward, and don't self-assign a gated one.
 
 **5. Contract-first.** Wire or Operation changes start in `/proto`, then regenerate, then
 implement both sides. `/proto` is the single source of truth; don't hand-edit generated code.
 
-**6. Verify before you open a PR.** `make verify` is the gate, not `make build test lint` —
-see Toolchains above for why the difference has bitten. Two failure modes to report rather
-than swallow: a **skipped** gate is not a passed gate, and `verify-proto` skips the proto-drift
-and proto-breaking checks with a notice when `buf` is absent. If your diff touches `/proto` and
-those gates were skipped, say so in the PR body. CI runs them regardless, and invariant 8 plus
-the escalation list below both put `/proto` in front of a person.
+**6. Verify before you open a PR.** `make verify` is the gate, not `make build test lint`. A
+**skipped** gate is not a passed gate: `verify-proto` skips the proto-drift and proto-breaking
+checks with a notice when `buf` is absent. If your diff touches `/proto` and those gates were
+skipped, say so in the PR body.
 
 **7. Write an ADR** when a decision is hard to reverse, surprising without context, *and* the
 result of a real trade-off — all three, not any one. Number it sequentially in `docs/adr/`.
 Match the surrounding style: ADRs here are longer than the usual one-paragraph form because
 they encode invariants agents are expected to check themselves against.
 
-**Promote before the issue closes.** An implementation specification is a GitHub issue and is
-disposable; a closed issue is not a record. Before the PR merges, lift everything in it that
-outlives the change: behaviour that is now true of the system → the **capability specification**;
-a decision meeting all three tests above → an **ADR**, cited by number rather than re-argued;
-a shift in domain language → **GLOSSARY.md**; a change to what must always be true → **an
-invariant above**, which is a conversation with a human and an ADR amendment, never a quiet
-edit. This is the most common way a repo
-loses its own reasoning.
+**Promote before the issue closes.** A closed issue is not a record. Before the PR merges, lift
+everything that outlives the change: behaviour now true of the system → the **capability
+specification**; a decision meeting all three tests above → an **ADR**, cited by number rather
+than re-argued; a shift in domain language → **GLOSSARY.md**; a change to what must always be
+true → **an invariant above**, which is a conversation with a human and an ADR amendment,
+never a quiet edit. This is the most common way a repo loses its own reasoning.
 
 **8. Update GLOSSARY.md** in the same change whenever the domain language shifts.
 
@@ -410,8 +393,8 @@ break. It is not a changelog and not a design document.
 
 ## Agent skills
 
-Agent skills read their per-repo configuration from `docs/agents/`. Keep these current: they
-are what a fresh session — including an unattended cloud routine — uses instead of asking.
+Agent skills read their per-repo configuration from `docs/agents/`. Keep it current: it is
+what a fresh session, including an unattended cloud routine, uses instead of asking.
 
 - **Issue tracker** — GitHub Issues on `Felag-Engineering/relay` via the `gh` CLI,
   with GitHub milestones as the human-owned spine above it. See `docs/agents/issue-tracker.md`.
@@ -426,14 +409,12 @@ are what a fresh session — including an unattended cloud routine — uses inst
 
 ## Routines & merge authority
 
-This repo is **product-only.** It is built largely by a Claude-driven agentic loop — working
-one issue at a time on a branch, running `make verify`, having a separate
-agent review the diff, and opening a PR. It runs both as interactive sessions and as unattended
-cloud routines.
+This repo is **product-only.** It is built largely by a Claude-driven loop that works one
+issue at a time on a branch, runs `make verify`, has a separate agent review the diff, and
+opens a PR, both interactively and as unattended cloud routines.
 
-**Nothing merges autonomously. A person is always the merge authority.** This is the load-bearing
-guardrail on a repo that ships remote code execution; it does not relax because a run is
-unattended.
+**Nothing merges autonomously. A person is always the merge authority.** On a repo that ships
+remote code execution this guardrail does not relax because a run is unattended.
 
 If you are an agent implementing an issue: **stay in scope**, you have **no merge authority**
 (open a PR; a human merges), and **stop and flag a human** rather than guess on a hard call.
@@ -447,10 +428,10 @@ the architecture invariants; they always land in front of a person. Editing an i
 never a docs chore.
 
 **Running unattended changes what you have, not what you may do.** A routine gets a fresh clone
-and sees only what is committed here plus whatever skills its environment supplies. If a skill
-or command the workflow depends on is missing, say so and stop — do not improvise the pipeline
-by hand. An escalation you cannot deliver interactively becomes a PR left unmerged with the
-reason stated plainly, never a decision made on the human's behalf.
+and sees only what is committed plus the skills its environment supplies. If a skill or command
+the workflow depends on is missing, say so and stop; do not improvise the pipeline by hand. An
+escalation you cannot deliver interactively becomes a PR left unmerged with the reason stated
+plainly, never a decision made on the human's behalf.
 
 **Unattended runs use `/dev-loop-queue` and `/pr-respond`.** The queue takes one `loop:ready`
 issue per tick and opens a PR without ever waiting for a merge; `pr-respond` addresses a human's
@@ -458,8 +439,8 @@ review comments on an open loop PR and hands it back. Nothing above those two ru
 Either way a human merges, and `loop:halt` on any open issue stops every tick before it starts
 work.
 
-**Schedulers don't source `~/.profile`,** so `cargo`, `go`, and `buf` may be missing from a
-routine's `PATH`. The Makefile prepends the usual toolchain directories to compensate, but
-`buf` is not part of a normal dev setup and will usually be absent — which silently downgrades
-`make verify` by two proto gates. Install it with `make proto-tools`, or report the skip.
-Never let a routine's thinner environment quietly become a weaker standard of proof.
+**Schedulers don't source `~/.profile`,** so `cargo`, `go` and `buf` may be missing from a
+routine's `PATH`. The Makefile prepends the usual toolchain directories, but `buf` is usually
+absent, which silently drops two proto gates from `make verify`. Install it with
+`make proto-tools`, or report the skip. Never let a thinner environment become a weaker
+standard of proof.

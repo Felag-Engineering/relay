@@ -51,19 +51,14 @@ Execution forms a three-tier model ordered by trust:
 Two corrections. Neither changes the decision above.
 
 **AGENTS.md invariant 1 never summarised this ADR faithfully.** It read *"Operations are typed
-and native (argv, never `/bin/sh`)"* — collapsing the three-tier model above into two and
-omitting Template Operations entirely. While tier 2 was unbuilt the omission was invisible.
-Once ADR-0021 built it, the summary became an active defect in three ways: it was literally
-false, because the daemon's template executor constructs `/bin/sh -c` and had to carry a source
-comment defending itself against the invariant; it misdirected, because an agent asked to add
-an Operation read "typed and native" and was pointed at the frozen tier; and it manufactured
-false positives, because a security reviewer checking a diff against the invariant finds a
-shell in `template.rs` and reports a violation that is not one.
+and native (argv, never `/bin/sh`)"*, collapsing the three tiers into two and omitting Template
+Operations. Once ADR-0021 built tier 2, the summary was false (the template executor runs
+`/bin/sh -c`), it pointed an agent adding an Operation at the frozen tier, and it made a
+security reviewer report the shell in `template.rs` as a violation that is not one.
 
-The invariant now states the property this ADR actually protects — that nothing on the wire can
-compose or escalate a command — and names how each of the three tiers holds it. The per-tier
-mechanism lives in `docs/specs/execution.md`, so the invariant does not go stale again when a
-mechanism changes.
+The invariant now states the property this ADR protects, that nothing on the wire can compose
+or escalate a command, and names how each tier holds it. The per-tier mechanism lives in
+`docs/specs/execution.md`, so the invariant does not go stale when a mechanism changes.
 
 **"Recurring Raw Exec patterns are candidates for promotion to Native Operations"** (in
 Consequences above) is superseded by ADR-0021's native-vocabulary freeze. Promotion targets

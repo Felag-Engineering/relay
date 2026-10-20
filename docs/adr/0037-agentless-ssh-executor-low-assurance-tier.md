@@ -2,10 +2,9 @@
 
 **Status:** Proposed.
 
-**Status: Proposed — a potential new avenue, not an accepted decision.** Records the
-option and the guardrails it would require. Ratification is a human call; this ADR
-touches the security surface and the founding thesis (ADR-0002) and must not be adopted
-without review.
+A potential new avenue, not an accepted decision: it records the option and the guardrails
+it would require. Ratification is a human call; it touches the security surface and the
+founding thesis (ADR-0002) and must not be adopted without review.
 
 An optional execution mode in which the **Relay** initiates SSH *into* Nodes and runs a
 curated, parameter-validated command through a **Relay-side executor**, with **no

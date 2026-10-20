@@ -9,9 +9,7 @@ audit.
 ## What this screen is for
 
 Establishing a **per-human identity** that every subsequent action is attributed to. ADR-0009
-rejected reusing the MCP static admin token for humans precisely because it yields no per-human
-identity, no RBAC and no per-human audit — unacceptable for a surface that can reach fleet
-execution.
+rejected reusing the MCP static admin token for humans because it yields no per-human identity, RBAC or audit.
 
 ## The screen
 
@@ -21,16 +19,15 @@ reveal whether this deployment exists or how big it is.
 
 ## Local password
 
-Local username/password is the **baseline** so small fleets without an IdP can use the Console;
-OIDC is an additional method, not a replacement (ADR-0009, revised 2026-07-02, accepting that the
-Relay holds password hashes).
+Local username/password is the **baseline**, so small fleets without an IdP can use the Console;
+OIDC is an additional method, not a replacement (ADR-0009, which accepts that the Relay holds
+password hashes).
 
 - Hashed at rest with a memory-hard KDF. Never logged, never echoed, never in a URL.
 - **No user enumeration.** A wrong username and a wrong password produce the same message and the
   same response time.
-- Throttled per source and per Account. (#279 is about per-Account *Job* rate limits, the blast
-  cap's sibling; it is not a dependency of this screen.) Defaults: per source, 10 failures a minute
-  then `429` with backoff; per Account, a **progressive delay** that doubles per consecutive
+- Throttled per source and per Account. Defaults: per source, 10 failures a minute then `429`
+  with backoff; per Account, a **progressive delay** that doubles per consecutive
   failure and caps at 60s. **No hard lockout**: a lockout lets an attacker lock the admin out of
   the Console during the incident they are causing, which is worse than the brute force it
   prevents. Every throttled attempt is audited.
@@ -82,8 +79,6 @@ link in the chain `ui-advisory.md` requires end-to-end: **login → action → a
 - [x] No route other than login, its assets and health is reachable unauthenticated.
 - [x] No persistent credential satisfies step-up.
 - [ ] A successful OIDC login for an unknown subject is refused, not auto-provisioned.
-      **Not implemented (#418).** The local password baseline shipped; the human OIDC
-      browser flow did not, so this criterion is untested rather than met. ADR-0024's
-      resource-server half (machine callers) is unaffected and already exists. Tracked
-      as the remaining half of this spec.
+      **Not implemented.** The human OIDC browser flow is unbuilt, so this is untested rather
+      than met. ADR-0024's resource-server half (machine callers) exists.
 - [x] Repeated failures slow an Account down and never lock it out; the delay is visible and audited.

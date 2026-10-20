@@ -1,47 +1,38 @@
 # 99 — Open decisions
 
-**Read this before writing Console code.** Several things the screen specs describe are **not
-decided**. They are drawn in the wireframes because a wireframe is the cheap place to see an idea,
-not because anyone has ruled on them.
+**Read this before writing Console code.** It records each decision the screen specs depend on:
+what is settled, by whom, and what is still open. Something drawn in a wireframe is not decided
+until it is recorded here or in an ADR.
 
 Per AGENTS.md, an implementing agent has **no merge authority** and must **stop and flag a human
-rather than guess on a hard call**. Every item in the first two sections is a hard call. Building
-past one turns a sketch into an accidental architecture, which is precisely the failure this file
-exists to prevent.
+rather than guess on a hard call**. Every open item below is a hard call.
 
 ---
 
 ## Blocking — needs an ADR before the code lands
 
-> **D1 and D2 were resolved on 2026-08-24.** D1's ADR-0034 is merged. D2's ADR-0035 was drafted,
-> then **deferred — not adopted** in review (#443). Both are kept here with their reasoning. A
-> summary of what the review changed after the issues were cut is at the end of this file.
-
 ### D1. The `state:` Label namespace — **RESOLVED 2026-08-24 — drafted as [ADR-0034](../../adr/0034-state-labels-relay-derived-namespace.md)**
 
 **What:** a fourth namespace of Relay-derived labels, targetable by Selectors, writable by nobody.
 
-**Why it exists:** operational state is what fleet maintenance actually targets — "run this on the
-ones that are behind" — and today it is not expressible. Labels target; Facts explicitly do not;
-and daemon version and the fingerprints are *neither*, as `Hello` shows by carrying
-`daemon_version` and `Facts` as separate fields.
+**Why it exists:** operational state is what fleet maintenance targets — "run this on the ones that
+are behind". Labels target; Facts do not; daemon version and the fingerprints are *neither* (`Hello`
+carries `daemon_version` and `Facts` as separate fields).
 
-**ADR-0034 is merged**, with the GLOSSARY.md and AGENTS.md invariant #7 amendments. Its Consequences
-carry the review's additions: the registry must first persist liveness and certificate validity
-(#440), the `cert-expiring` window is 25% of `LeafValidity` remaining, `tag:` parsing lands in the
-same Selector change, and the security-lane assertion lives on the `relay:` write path (#430).
+**ADR-0034 is merged**, with the GLOSSARY.md and invariant #7 amendments. Its Consequences carry
+the review's additions: the `cert-expiring` window is 25% of `LeafValidity` remaining, `tag:`
+parsing lands in the same Selector change, and the security-lane assertion lives on the `relay:`
+write path (#430).
 
 #### The governing rule: every `state:` label is Node-local and objective
 
 Computable from one Node's registry record, with **no reference to any other Node**.
 
-This is not a style preference. The first draft defined `state:policy-drift` as "fingerprint
-behind the fleet's mode", which is fleet-relative and fails badly: roll a Policy to 51% of the
-fleet and the mode flips, so the other 49% become "drifted" without anything about them changing.
-A Selector targeting it would **silently invert its meaning mid-rollout**. It also smuggles
-desired-state past invariant #9 — computing "behind" requires a notion of what the fleet *should*
-be on, and GLOSSARY.md deliberately defines fingerprints as an observation ("confirm a rollout
-landed by string comparison"), not a target.
+The first draft defined `state:policy-drift` as "fingerprint behind the fleet's mode". Roll a
+Policy to 51% of the fleet and the mode flips, so the other 49% become "drifted" without anything
+about them changing: a Selector targeting it would **silently invert its meaning mid-rollout**. It
+also smuggles desired-state past invariant #9 — "behind" needs a notion of what the fleet *should*
+run, and GLOSSARY.md defines fingerprints as an observation, not a target.
 
 #### The closed vocabulary
 
@@ -64,30 +55,26 @@ Two shapes, both Node-local.
 | `state:policy-fingerprint=` | the fingerprint reported in `Hello` / `PolicySnapshot` |
 | `state:template-fingerprint=` | the template-set fingerprint, or the literal `unloadable` |
 
-**Drift is not a label.** It stays an observation — the facet rail's fingerprint distribution and
-a presentational count on the rollup card. Targeting "the ones that are behind" is
-`state:policy-fingerprint=4b18…c02`: Node-local, objective, and stable under rollout. The facet
-rail is the UI for it — click the old fingerprint, the filter fills in.
+**Drift is not a label.** It stays an observation — the facet rail's fingerprint distribution and a
+count on the rollup card. "The ones that are behind" is `state:policy-fingerprint=4b18…c02`:
+Node-local, objective, stable under rollout. Click the old fingerprint in the facet rail and the
+filter fills in.
 
 #### Resolution model
 
 `state:` terms are **evaluated at Selector-resolution time** as predicates over registry data, not
-materialised as rows. Every surviving label is Node-local, so this is cheap and always correct.
-Materialising would mean recomputing on every `Hello`, every `PolicySnapshot`, every disconnect
-and every min-version config change, and keeping a denormalised copy that can go stale — for no
-correctness gain.
-
-Selector resolution therefore gains a second code path alongside label matching. That is the cost,
-and it is accepted.
+materialised. Every label is Node-local, so this is cheap and always correct; materialising would
+mean recomputing on every `Hello`, `PolicySnapshot`, disconnect and min-version change, and keeping
+a copy that can go stale. The accepted cost is a second code path in Selector resolution beside
+label matching.
 
 #### Also settled
 
 - The vocabulary is **closed** and lives in the contract. Free-form state labels would become a
   second `tag:` with none of the guarantees, and Selectors written against them would silently
   stop matching when a definition changed.
-- `state:` is **never** a valid security-lane target. Invariant #7 stands unchanged: quarantine,
-  remediation and secret distribution target `relay:` and only `relay:`. Rationale: `state:` is
-  computed partly from what the Node itself reports, so a compromised Node can influence it.
+- `state:` is **never** a valid security-lane target (invariant #7): it is computed partly from
+  what the Node itself reports, so a compromised Node can influence it.
 - **No Account of any role can write one**, enforced structurally, not by permission check.
 - `state:` labels appear in `list_nodes` output, so the AI-agent and the Control API target them
   identically to the Console. No Console-only concept.
@@ -102,148 +89,66 @@ goes stale).
 **Outcome: cut.** Suspension was plumbing for a control nothing yet needs, and review found the
 draft could lock every admin out (an `operator` may suspend admins; lifting is an admin call; every
 call from a suspended Account is refused). Disconnect had no object: MCP is stateless (ADR-0028),
-so there is no connection to drop — and therefore no "agent session" either; spec 03 is now
-per-Account activity. Stopping one actor today is **revoking its API Tokens** or **Freeze**; the
-incident ladder stays at ADR-0020's three rungs. ADR-0035's banner and #443 carry the constraints
-any revival must meet. The reasoning below is kept as the record of the design.
-
-**The problem with the first draft:** an MCP session is authenticated by a bearer token, so killing
-the connection buys seconds — the client reconnects with the same credential. "End session" as
-drawn was theatre: it looked like a brake and was not one.
-
-**What the operator actually needs**, watching the stream and seeing something alarming: stop it
-now, without freezing the whole fleet, reversibly. Revoking the Account's API Token gets the first
-two and fails the third. Freeze gets the first and third and fails the second.
-
-So the missing rung is **Account-scoped, not session-scoped**. It suspends the actor.
-
-#### The incident ladder, completed
-
-| Rung | Fences | Reversible |
-|---|---|---|
-| `relay:quarantine` | one Node | yes |
-| **suspend Account** | one actor | yes — **the gap this fills** |
-| revoke Node | one Node | no |
-| Freeze | everything | yes |
-
-Quarantine fences a machine; suspend fences an actor. The symmetry is deliberate and worth
-teaching.
-
-#### Two controls, two intents
-
-- **Disconnect** — drops the connection, no state change. For an agent stuck in a loop that just
-  needs its context broken. It may reconnect immediately, and the UI must say so. Not a security
-  control and must not be presented as one.
-- **Suspend** — the durable, reversible, Account-scoped brake.
-
-#### Suspension semantics
-
-- **Every call is refused**, not merely dispatch. The actor is suspended because it is not trusted,
-  and reading is exfiltration by construction (ADR-0021); narrowing to dispatch would leave the
-  exfiltration path open. Refused calls are still audited, so a suspended agent remains observable
-  through what it attempts.
-- **In-flight Tasks keep running**, exactly as under Freeze. Cancel is the instrument for those.
-  Two controls, one consistent meaning of "stop".
-- The Account may still connect; it simply gets nowhere. This is what makes the control durable
-  where a connection kill is not.
-
-#### Authorization — mirrors Freeze exactly
-
-**`operator`+ to engage. `admin` + step-up, with an audited reason, to lift.** ADR-0013 already
-settled this asymmetry for Freeze — cheap to engage, deliberate to release — and the reasoning
-transfers: no friction on the emergency path, and an attacker who suspends your agents has made
-noise rather than progress.
-
-#### Recorded in ADR-0035; still open within it
-
-- Whether suspension lives on the Account model (ADR-0010) as a state, or as a capability-layer
-  verb. It is an Account-state change, so the former is the presumption.
-- Whether a suspended Account's existing Enrollment Tokens and API Tokens remain valid (they
-  should — suspension is not revocation, and conflating them costs the reversibility that is the
-  whole point).
-- The audit shape: engage, lift, and every refused call while suspended.
+so there is no connection to drop and no "agent session". Stopping one actor is **revoking its API
+Tokens** or **Freeze**; the incident ladder stays at ADR-0020's three rungs. The design — an
+Account-scoped, reversible brake that refuses every call, with Freeze's engage/lift asymmetry — and
+the constraints any revival must meet are recorded in ADR-0035 and #443.
 
 ## Needs a ruling — smaller, but not an implementer's call
 
 ### D3. The word "outdated" — **RESOLVED 2026-08-24**
 
-**Settled by the code, not by preference.** `Outdated` is a live field on the MCP wire —
-`relay/internal/controlplane/mcp/tools_execution.go` returns it on every Preflight entry, and
-`mcp_plan_test.go` pins its meaning: *"outdated:true — a real dispatch would refuse it, but Plan
-mode never [does]."* That is ADR-0014's meaning, shipped and under test.
+**Settled by the code.** `Outdated` is a live field on the MCP wire: `tools_execution.go` returns
+it on every Preflight entry, and `mcp_plan_test.go` pins ADR-0014's meaning.
 
 **`outdated` means: the Node's daemon is below the Relay's configured dispatch minimum.**
-`ui-advisory.md`'s use of the word for Policy-fingerprint drift is the incorrect one, and D1 has
-removed that concept from the UI regardless.
+`ui-advisory.md`'s use of the word for Policy-fingerprint drift is wrong, and D1 removed that
+concept from the UI anyway.
 
-The Console uses **`state:outdated`**, matching the wire. An earlier draft of these specs used
-`state:version-gated`, which was more legible in isolation and violated AGENTS.md's no-synonyms
-rule: an operator reading a Preflight through MCP and the same Preflight in the Console would have
-seen two words for one thing. Renaming the wire field instead was rejected — ADR-0014 mandates
-additive-only evolution within `relay.v1`, so a rename is a breaking contract change for a
-cosmetic gain.
-
-**Follow-up work this creates:**
-- GLOSSARY.md gains an `outdated` entry pinned to ADR-0014's meaning, with *Avoid: version-gated,
-  stale, behind*.
-- `ui-advisory.md`'s "`outdated` flags" sentence, which refers to Policy fingerprints, is corrected.
+The Console uses **`state:outdated`**, matching the wire. `state:version-gated` would have given an
+operator two words for one thing across MCP and the Console (GLOSSARY.md, *Avoid*). Renaming the
+wire field was rejected: ADR-0014 requires additive-only evolution within `relay.v1`.
 
 ### D4. `state:cert-expiring` — **RESOLVED 2026-08-24: include it**
 
-Node identity certificates carry `LeafValidity = 336 * time.Hour` (`relay/internal/ca/ca.go`), and
-renewal is cert-authenticated and jittered. The Relay issued the certificate, so it knows every
-Node's `NotAfter`; "expires within the warning window and has not renewed" is computable from one
-Node's record against a config threshold — the same shape as `state:outdated`, and it passes D1's
-Node-local rule.
+Node identity certificates carry `LeafValidity = 336 * time.Hour` (`relay/internal/ca/ca.go`). The
+Relay issued each one, so it knows every Node's `NotAfter`; "expires within the warning window and
+has not renewed" is computable from one Node's record — D1's Node-local rule.
 
-**It is an alarm, not a to-do list.** Node certificate renewal is already fully automatic and
-involves no human: `rpc Renew` is cert-authenticated over mTLS (deliberately excluded from the
-certless allowlist), the daemon runs `renew::run` as a spawned task, the Relay reissues for the
-**same `node_id`** derived from the verified peer cert rather than the CSR so provenance survives,
-and renewals are jittered to spread the fleet. `state:cert-expiring` therefore fires only when
-**that automation has failed** on a specific Node — which is what makes it worth surfacing and
-also what makes it rare.
+**It is an alarm, not a to-do list.** Renewal is fully automatic: `rpc Renew` is cert-authenticated
+over mTLS, the daemon runs `renew::run` as a spawned task, the Relay reissues for the **same
+`node_id`** derived from the verified peer cert, and renewals are jittered. `state:cert-expiring`
+fires only when **that automation has failed** on a specific Node, so it is rare and meaningful. It
+is the only early warning: otherwise `state:offline` reports the Node after the two-week fuse has
+burned down.
 
-**Why it earns a slot:** it is the only early warning for a failure nothing else catches in time. A
-Node that stops renewing is invisible until it drops off, at which point `state:offline` reports it
-after a two-week fuse has already burned down.
-
-**Why 336 hours:** `LeafValidity` is a deliberate security property of *Node identity* certs — a
-stolen Node key self-expires in two weeks, bounding the damage of a compromised machine
-independently of whether anyone noticed and revoked it. Automatic renewal is what makes a short
-lifetime free to the operator.
+**Why 336 hours:** a stolen Node key self-expires in two weeks, whether or not anyone noticed and
+revoked it. Automatic renewal makes the short lifetime free.
 
 **Settled in review: 25% of `LeafValidity` remaining** (84h). The daemon renews at a jittered
 50–75% of the lifetime (relay-transport `renew`), so under a quarter left means the whole renewal
-window was missed. A threshold inside the jitter window would alarm on a healthy fleet. File-only
-configuration (invariant #11), as a fraction so it tracks any change to the lifetime. The registry
-must persist `cert_not_after` first (#440).
+window was missed; a threshold inside the jitter window would alarm on a healthy fleet. It is Relay
+configuration (invariant #11), a fraction so it tracks any change to the lifetime.
 
 ### D5. Colour deviations from the brief — **RESOLVED 2026-08-24: both accepted**
 
 1. **Amber is split from indigo.** Amber means *attention now* (Freeze, `state:offline`,
    `state:outdated`, `state:cert-expiring`, over-cap notes). Indigo means *the security lane*
-   (`relay:` labels and the acts that set them). `console-wireframe-brief.md` reserved amber for
-   the Freeze banner and quarantine, then used amber for the odd Node out in the pixel wall — so
-   it already contradicted itself. Splitting keeps quarantine visually bound to `relay:` everywhere
-   it appears, rather than sharing a colour with "this machine is unreachable".
-2. **One muted red exists**, on `failure` and `timeout` only. The brief says "red for nothing
-   routine"; a Task that ran and genuinely failed is not routine. Everything else that stops a Task
-   is a boundary doing its job and stays neutral — above all `denied_by_policy`, which is slate.
-
-*Amended 2026-10-18 (owner, D24):* point 2 is widened. The muted red also marks the **button** of
-an act that revokes, disables or lowers authority, which asks a named confirmation before it acts.
-It still marks no outcome but `failure` and `timeout`, and a deny is still slate.
+   (`relay:` labels and the acts that set them). The brief reserved amber for Freeze and
+   quarantine, then used it for the odd Node out in the pixel wall; splitting keeps quarantine bound
+   to `relay:` rather than sharing a colour with "this machine is unreachable".
+2. **One muted red exists**, on `failure` and `timeout`. A Task that ran and failed is not routine.
+   Everything else that stops a Task is a boundary doing its job and stays neutral — above all
+   `denied_by_policy`, which is slate. *Widened by D24:* the red also marks the **button** of an act
+   that revokes, disables or lowers authority; it still marks no other outcome.
 
 `console-wireframe-brief.md` rule 1 should be updated to match.
 
 ### D6. The `Jobs` nav destination — **RESOLVED 2026-08-24: dropped**
 
-Activity already renders Job rows and filters to them, so a separate Jobs destination was a
-duplicate list to keep consistent with the first one. Removed before anyone builds it twice.
-
-**Job detail remains its own page**, reached from any dispatch row in Activity and from a Node's
-recent Tasks. (The agent stream it was also reached from was folded into Activity, 2026-09-29.) Dropping the list does not drop the record.
+Activity already renders Job rows and filters to them, so a Jobs destination would be a duplicate
+list. **Job detail remains its own page**, reached from any dispatch row in Activity and from a
+Node's recent Tasks.
 
 ### D7. Policy as its own nav item — **RESOLVED 2026-08-24: keeps its slot**
 
@@ -251,26 +156,22 @@ Policy authoring is recurring work and the deny-to-fix loop is central to the tr
 enrollment is mostly a one-off by comparison. Folding Policy under "Node setup" would bury the
 screen operators return to.
 
-### Resulting navigation — nine destinations, three groups
+### Resulting navigation — eight destinations, three groups
 
 ```
 Observe      Fleet · Activity
-Act          Run · Policy · Approvals
+Act          Run · Policy
 Administer   Add Nodes · Accounts · Access · Incident
 ```
 
-*(2026-10-18: eight destinations — Approvals is removed (D21). `00-foundations.md` carries the
-current list.)*
+Approvals left with D21; `00-foundations.md` carries the current list.
 
 ### D15. CSP violation reporting — **DEFERRED (#460)**
 
-Spec 11's CSP section says to "report violations rather than silently dropping them, because a
-CSP violation in this product is a security event, not a rendering glitch." #460 (the Console
-CSRF fix) implements the rest of that section but ships no `report-to`/`Reporting-Endpoints`
-pair, deliberately: naming a reporting group with no endpoint behind it is worse than naming
-none, because it looks like a working control while silently dropping every report.
-
-Four reasons, recorded here rather than left an unrecorded omission:
+Spec 11 calls a CSP violation a security event that should be reported. The Console ships the rest
+of spec 11's CSP but no `report-to`/`Reporting-Endpoints` pair, deliberately: a reporting group
+with no endpoint behind it looks like a working control while silently dropping every report.
+Four reasons:
 
 1. **A report sink is an unauthenticated POST.** The Reporting API delivers to whatever endpoint
    the header names with no credential attached, so the sink is attacker-reachable by
@@ -285,46 +186,31 @@ Four reasons, recorded here rather than left an unrecorded omission:
    violation is a security event per spec 11, it belongs in the audit trail — under a `kind` that
    does not exist yet — against ADR-0025's posture that the Relay authors its own audit records
    rather than accepting one from an unauthenticated caller.
-4. **It is on neither spec 11's acceptance list nor v0.6.0's.** Nothing currently promises this
-   ships in this milestone.
+4. **It is on neither spec 11's acceptance list nor v0.6.0's.**
 
-**What would close it:** a ruling on the sink (a new audit `kind`, most likely, given (3)), plus a
-bounded, rate-limited, unauthenticated route built to receive it — sized as its own change, not a
-rider on a CSRF fix.
+**What would close it:** a ruling on the sink (most likely a new audit `kind`, given (3)), plus a
+bounded, rate-limited, unauthenticated route to receive it — its own change.
 
 ### D16. What the Console calls a Policy preflight — **RESOLVED 2026-09-20: "Preflight" (#575)**
 
 **What:** ADR-0038 gave the word **Plan** to an approved route of execution and renamed the
-no-execution preview **Policy preflight**. These specs and the Console's copy still said "Plan" in
-the old sense — and the Console is the one surface where both meanings will appear on screen at
-once: a preflight verdict before a mutate apply, and an approved Plan, with its plan hash, in the
-approval queue. A button or card labelled "Plan" would then be genuinely ambiguous to an operator
-who never read GLOSSARY.md, and the button label is a UX call, not a terminology correction.
+no-execution preview **Policy preflight**. On the Console both meanings could appear at once, so a
+control labelled "Plan" would be ambiguous.
 
-**Ruling (owner, 2026-09-20):** the Console says **Preflight**. The composer's primary action is
-`Preflight`; the rendered verdict is the Preflight; the Agents stream's outcome chip for a
-preflight call reads `preflight`. **Plan** is reserved for the approved route (ADR-0038) and for
-the plan hash an approval commits to (ADR-0027) — the approval object, the Job's Plan block and
-every "plan hash" keep the word, and the shared Plan renderer keeps its name because it renders a
-Preflight verdict in the composer and a Plan on the other two screens (00). Spec 05 was renamed
-from "Composer and Plan" to "Composer and Preflight" in the same sweep. The wire still spells the
-option `plan` until the code follows (GLOSSARY.md): that spelling is a contract, the label is copy,
-and they are allowed to differ until the contract moves.
+**Ruling (owner, 2026-09-20):** the Console says **Preflight**: the composer's primary action, the
+rendered verdict, and the outcome chip for a preflight call. **Plan** is reserved for the approved
+route (ADR-0038) and the plan hash an approval commits to (ADR-0027): the Job's Plan block and every
+"plan hash" keep the word, and the shared Plan renderer keeps its name (00). The wire still spells
+the option `plan` (GLOSSARY.md): the spelling is contract, the label is copy.
 
-**Residual, recorded by the #675 loop on 2026-09-22 — not part of the ruling above:** the two
-pre-ADR design notes that predate it — `docs/design/console-wireframe-brief.md` and
-`docs/design/ui-advisory.md` — were deliberately **not** swept. They are kept as the pre-ADR
-record: rewriting them would make the 2026-08-07 planning session appear to have used a word it
-did not, and a naive sweep would rename the shared Plan renderer and the Plan blocks this ruling
-keeps. Each carries a reader note in its header pointing here instead.
+The pre-ADR notes `docs/design/console-wireframe-brief.md` and `docs/design/ui-advisory.md` were
+deliberately not swept: they are the pre-ADR record, and each carries a header note pointing here.
 
 ### D17. Agents folded into Activity; Access split out — **RESOLVED 2026-09-29 (owner)**
 
-**What:** the Agents screen (03) and Activity (04) were split by grain: Agents listed one row per
-tool call for recently active Accounts, and Activity listed one row per Job plus every non-dispatch
-event, sign-ins and Account changes included. In use, that split did not match the questions people
-bring. "What did the agents do?" was on one screen, and "who signed in?" was mixed into the other,
-with the fleet's changes.
+**What:** the Agents screen (03) and Activity (04) were split by grain, which did not match the
+questions people bring: "what did the AI-agents do?" was on one screen, and "who signed in?" was
+mixed into the other with the fleet's changes.
 
 **Ruling (owner, 2026-09-29):**
 
@@ -342,24 +228,21 @@ with the fleet's changes.
    records stay on the audit read lane under its existing role rules, so the Control API is
    unchanged. Making the records themselves admin-only would be a capability-layer decision, and it
    was not taken.
-5. **Password changes are not on the trail**, because the host-side `relay console-password` (and
-   `relay bootstrap-token`) write no audit record. Raised as
-   [#782](https://github.com/Felag-Engineering/relay/issues/782), independent of this
-   redesign.
+5. **Password changes were not on the trail**, because the host-side commands wrote no audit
+   record. **Resolved:** `relay init`, which replaced them, writes its records in the same
+   transaction as the change, attributed to `local-host` ([20](20-access.md)).
 
-The navigation stays at nine destinations: Agents leaves Observe, and Access joins Administer.
+Agents leaves Observe, and Access joins Administer.
 
-*Amended 2026-10-01 (owner, #829):* point 1's strip is gone. Activity keeps the `?account=`
-filter and Running now, but no longer lists recently active Accounts. Point 3 no longer holds for
-Activity: freeze transitions, Node revokes and Enrollment Token mints and revokes are not drawn
-there, because Activity lists tool calls only. They stay on the audit trail, and giving them a
-home is follow-up work. The Access half of point 3 is unchanged ([04](04-activity.md), Grain).
+*Amended 2026-10-01 (owner):* point 1's strip is gone; Activity keeps the `?account=` filter and
+Running now. Point 3 no longer holds for Activity: it lists tool calls only, so freeze transitions,
+Node revokes and Enrollment Token mints and revokes stay on the audit trail undrawn. The Access half
+of point 3 is unchanged ([04](04-activity.md), Grain).
 
 ### D18. Running now; the Account filter names an ID — **RESOLVED 2026-09-30 (owner)**
 
-**Why:** once #793 put running Jobs on Activity at their own time, a Job that has run for hours sat
-pages down the stream. The Agents screen had shown every running Job on its first page; retiring
-it (D17) would have lost that.
+**Why:** with running Jobs on Activity at their own time, a Job that has run for hours sits pages
+down the stream. The Agents screen had shown every running Job on its first page.
 
 **Ruling (owner, 2026-09-30):**
 
@@ -376,10 +259,9 @@ it (D17) would have lost that.
    its own, and Job detail stops naming an Operation called `raw_exec` as the tier, before the
    Agents screen is removed.
 
-*Amended 2026-10-01 (owner, #829):* point 4 is reversed. Activity draws no `other` row, and a
-record kind no tool-call family claims stays on the audit trail without being drawn. In point 3,
-the "Who is active" strip no longer exists; `?account=` still names the verified Account ID, and
-the Accounts screen's last-tool-call link still uses it.
+*Amended 2026-10-01 (owner):* point 4 is reversed: Activity draws no `other` row, and a record
+kind no tool-call family claims stays on the audit trail. In point 3, the "Who is active" strip is
+gone; the Accounts screen's last-tool-call link still uses the verified Account ID.
 
 ### D19. A failed sign-in records the typed name only when it is a real Account's — **RESOLVED 2026-09-30 (owner)**
 
@@ -388,12 +270,12 @@ password into that box has had it stored in the audit trail and shown on Access.
 
 **Ruling (owner, 2026-09-30):** record, and show, the typed name only when it matches an existing
 Account; otherwise record no typed text. The check is made when the attempt is recorded, so the
-secret is never stored. The trail may therefore tell "unknown name" from "wrong password" apart
-for a real Account. That is acceptable because only admins read these records, through Access, and
-admins already see every Account. The sign-in **response** stays one indistinguishable refusal in
-message and time (spec 12). Any future surface that reads the audit trail must not return failed
-sign-in records below `admin` ([20](20-access.md)). This reverses the "no which-half indication"
-rule spec 20 carried and `audit.go` states; it does not touch spec 12.
+secret is never stored. The trail may therefore tell "unknown name" from "wrong password" for a
+real Account; that is acceptable because only admins read these records, through Access, and admins
+already see every Account. The sign-in **response** stays one indistinguishable refusal in message
+and time (spec 12). Any future surface that reads the audit trail must not return failed sign-in
+records below `admin` ([20](20-access.md)). This reversed spec 20's earlier "no which-half
+indication" rule; it does not touch spec 12.
 
 ### D21. Approval leaves the Console — **RESOLVED 2026-10-18 (owner), [ADR-0044](../../adr/0044-the-console-does-not-decide-approvals.md)**
 
@@ -405,9 +287,9 @@ manual rescue. The Console still renders what an approval left behind on another
 chips on Job detail (13) and the `approval` row in Activity (04), which no longer links to a
 decision.
 
-Made moot by this: D10's Console half (the card's diff placement, the queue's fan-out tiebreak);
-the queue's unaudited read (#779) once the screen is removed. Specs 08 and 14 are retired stubs;
-the screens are removed (`docs/specs/approval.md` AP-80).
+Made moot: D10's Console half (the card's diff placement, the queue's fan-out tiebreak) and the
+queue's unaudited read (#779). Specs 08 and 14 are retired stubs; the screens are removed
+(`docs/specs/approval.md` AP-80).
 
 **Not settled by it — needs the owner:** whether "cut out of the UI completely" also reaches
 [19 — Approval rules](19-approval-rules.md), the page where an `admin` edits the gate rules
@@ -418,19 +300,14 @@ not a screen change.
 
 ### D20. Hostname is the visual primary — **RESOLVED 2026-10-01 (owner)**
 
-**Ruling (owner, 2026-10-01, #835):** the hostname is the visual primary on Fleet rows and the Node
-detail H1, with the verified Node ID beneath it in mono. The hostname is marked self-reported per
-the verified/asserted grammar in `00-foundations.md`. Selectors, links and `?account=`/Node
-references keep using verified IDs.
-
-*Widened 2026-10-18 (owner, D22):* the hostname is primary wherever a Node is shown, not only on
-Fleet rows and the Node detail H1.
+**Ruling (owner, 2026-10-01):** the hostname is the visual primary on Fleet rows and the Node
+detail H1, marked self-reported, with the verified Node ID beneath it in mono. Selectors, links and
+`?account=`/Node references keep using verified IDs. *Widened by D22* to wherever a Node is shown.
 
 ### Owner review of the running Console — **RESOLVED 2026-10-18 (owner)**
 
-Taken interactively with the owner on 2026-10-18, after a review of the running Console in a
-browser. Each is a ruling; where it overturned a written rule, the rule was amended in place and
-says what it replaced.
+Taken with the owner on 2026-10-18, after a review of the running Console in a browser. Each is a
+ruling; where it overturned a written rule, that rule was amended in place.
 
 ### D22. Hostname first everywhere — **RESOLVED 2026-10-18 (owner)**
 
@@ -451,7 +328,7 @@ security-relevant, and never Policy — it is metadata the Relay holds about a f
 invariant 2 is untouched. Where no alias is set, the Console draws a neutral per-render letter (A,
 B, C…) with no colour and no "majority", "outlier" or "normal" wording, for D1's reason: the
 commonest Policy is not the desired one (invariant 9). The capability is `docs/specs/query.md`;
-the write is v0.6.0, so v0.6.0's no-mutation acceptance on the Fleet view now excepts it (spec 01).
+the write is v0.6.0, so the Fleet view's no-mutation acceptance excepts it (spec 01).
 
 ### D24. Destructive acts look dangerous and confirm by name — **RESOLVED 2026-10-18 (owner)**
 
@@ -464,8 +341,7 @@ unchanged: revocation still takes no password.
 ### D25. No lock on `relay:` chips — **RESOLVED 2026-10-18 (owner)**
 
 `relay:` is filled, distinct in hue, and carries its mono prefix, with no icon; a fenced chip has
-none either. The lock the foundations required was removed from the code on 2026-08-27, and the
-owner dropped the idea rather than restore it.
+none either. The lock the foundations once required is dropped, not restored.
 
 ### D26. A refused Fleet filter is said where it was typed — **RESOLVED 2026-10-18 (owner)**
 
@@ -508,8 +384,8 @@ never collapsed and still is not (`00-foundations.md`, "Standing notes and situa
 ### D32. Accounts: the selected panel first, creation behind a button — **RESOLVED 2026-10-18 (owner)**
 
 The selected Account's panel is at the top; the create form is behind **New account** in a native
-`<details>`. The role selects still preselect the current role, not submittable; Lower role is no
-longer drawn dimmed with it selected, and a hint says "choose a lower role" instead (spec 15).
+`<details>`. The role selects preselect the current role, not submittable; Lower role is never drawn
+dimmed with it selected — a hint says "choose a lower role" instead (spec 15).
 
 ### D33. Access draws an Account ID as an identifier — **RESOLVED 2026-10-18 (owner)**
 
@@ -521,69 +397,29 @@ name only where the record carries one. Resolving IDs to current names stays def
 
 ### D8. [#397](https://github.com/Felag-Engineering/relay/issues/397) — three route families have no role gate — **RESOLVED: gates landed**
 
-**Broader than earlier drafts of this file recorded.** Three `/api/v1` route families authenticate
-the caller and then never check their role:
+Enrollment-token mint, Node revoke and Freeze engage/release authenticated the caller and never
+checked a role, so a `viewer` could do all three; that blocked specs 09 and 16.
 
-| Route | Handler |
-|---|---|
-| `POST /api/v1/enrollment-tokens` | `api/tokens.go` |
-| `POST /api/v1/nodes/{node_id}/revoke` | `api/nodes.go` |
-| `POST /api/v1/freeze/engage` · `/release` | `api/freeze.go` |
+**Resolved (2026-08-24).** Five floors are enforced from the one `authz.RoleGate`: mint `admin`,
+token revoke `admin`, Node revoke `admin`, Freeze engage a **human** `operator`+, Freeze release
+`admin` with a reason. Freeze's floor lives in `capability.Control`, so the Console inherits it;
+mint and revoke are checked at the Control API surface, because `capability`'s import allowlist
+bars `internal/enroll` and `internal/revocation`. Every refusal is audited as a `refusal` with the
+Account, and `TestEveryRouteIsRoleClassified` fails any route added without a declared floor.
 
-So a `viewer` can mint a token that stamps `relay:` labels, revoke Nodes, and engage or release the
-fleet Freeze — while the documentation says all three are admin-only. `requireAdmin` exists
-(`api/accounts.go`) and is referenced only from `accounts.go`.
+**Still owed:** ADR-0020 asks for `admin` **+ step-up re-authentication** on Node revoke, and the
+Control API has no step-up mechanism (`api/nodes.go`). Spec 16 may state the role requirement as
+enforced; it may not yet promise the step-up.
 
-**Added in review:** Freeze engage is **human-principal only** — a machine Account at `operator`
-must not be able to freeze the fleet. Recorded on #397 as an acceptance line.
+### D13. [#403](https://github.com/Felag-Engineering/relay/issues/403) — the Relay's server certificate never rotates — **RESOLVED: the leaf rotates in-process**
 
-**Nothing here needs deciding.** Minting requires `admin` per ADR-0032 §5; Freeze is `operator`+ to
-engage and `admin` with an audited reason to release per ADR-0013; revocation is `admin` + step-up
-per ADR-0020's incident ladder. The gates are specified and absent.
-
-**Blocked two specs, not one:**
-- **[09 — Add Nodes](09-add-nodes.md)**, whose whole subject is minting.
-- **[16 — Incident](16-incident-ladder.md)**, which specifies revoke as `admin` + step-up and
-  Freeze as `operator`+ / `admin`. Building a UI whose controls state a role requirement the API
-  does not enforce is worse than building nothing: it documents a protection that is not there.
-
-**Resolved (2026-08-24).** The floors are enforced, all five of them, from the one
-`authz.RoleGate` the capability layer already held: mint `admin`, token revoke `admin`
-(the fourth route, which this entry's table did not name — found by the structural guard),
-Node revoke `admin`, Freeze engage a human `operator`+, Freeze release `admin` with a
-reason. Freeze's floor lives in `capability.Control`, so the Console inherits it rather
-than re-deriving it; mint and revoke are checked at the Control API surface because
-`capability`'s import allowlist bars `internal/enroll` and `internal/revocation`, leaving
-no capability-layer method to gate. Every refusal is audited as a `refusal` with the
-Account, and `TestEveryRouteIsRoleClassified` now fails any route added without a declared
-floor.
-
-**One half of D8 is still owed:** ADR-0020 asks for `admin` **+ step-up re-authentication**
-on Node revoke, and there is no step-up mechanism on the Control API yet. Spec 16 may state
-the role requirement as enforced; it may not yet promise the step-up.
-
-### D13. [#403](https://github.com/Felag-Engineering/relay/issues/403) — the Relay's server certificate never rotates **(blocking, and not a UI bug)**
-
-`relay/cmd/relay/main.go:391` and `:575` each call `IssueServerCertificate` once at process start.
-There is **no `GetCertificate` callback anywhere**, and the leaf borrows `LeafValidity` (336h — the
-constant meant for Node identity). A Relay running longer than fourteen days serves an expired
-certificate and **the whole fleet fail-closes off it.** Unnoticed only because nothing has run for
-two continuous weeks.
-
-Tracked as [#403](https://github.com/Felag-Engineering/relay/issues/403), and as **E2a**
-in `../self-serve-enrollment.md` ("lands first and alone"), with acceptance criteria already
-written there. Its sibling [#404](https://github.com/Felag-Engineering/relay/issues/404)
-collapses the two listeners onto one multi-SAN certificate. **Neither needs a specification** — the
-fix is settled in ADR-0031 §5. Repeated here because **the Console's own TLS rides on the same certificate** (ADR-0031 puts both listeners on
-one): a Console shipped before E2a lands breaks for every user at the fourteen-day mark. No Console
-work should be considered done against a Relay that still has this defect.
-
-**Nothing about the fix is manual.** The Relay is its own CA; `IssueServerCertificate` is an
-in-process call against a key already on disk. The fix is to call it again from a `GetCertificate`
-callback when the leaf is within a jittered fraction of expiry — the process mints its own
-replacement, in memory, with no operator involvement and no restart. Short validity is not a cost
-here, because rotation is a function call; ADR-0031 §5 asks only that the server leaf get **its own
-constant** rather than borrowing the identity one.
+The server leaf was issued once at process start with the Node-identity lifetime, so a Relay up
+past fourteen days would have served an expired certificate to the fleet and the Console alike.
+**Resolved** (E2a in `../self-serve-enrollment.md`): the leaf has its own constant,
+`ca.ServerLeafValidity` (24h), and is re-issued in-process before it expires, with each rotation
+logged and counted (`serverCertObserver`, `relay/cmd/relay/main.go`). Its sibling
+[#404](https://github.com/Felag-Engineering/relay/issues/404) — one multi-SAN certificate for both
+listeners (ADR-0031 decision 1) — is open, so each listener still has its own leaf.
 
 ### D14. CA rotation has no story — **raised as [#412](https://github.com/Felag-Engineering/relay/issues/412)**
 
@@ -591,30 +427,27 @@ constant** rather than borrowing the identity one.
 the more urgent case is unbounded: **if the CA key is ever compromised, there is no rotation path
 at all.**
 
-Rotation is genuinely hard here and that is by design. ADR-0031's join string pins the **CA
-fingerprint**, and the daemon verifies the presented chain roots in a certificate matching that pin
-*before anything else happens*. Every Node's trust anchor is that one CA, and the daemon's security
-model is built on distrusting the Relay — so the Relay cannot simply hand out a new anchor.
+Rotation is hard by design. The join string pins the **CA fingerprint**, and the daemon verifies
+the presented chain against that pin *before anything else*. Every Node's trust anchor is that one
+CA, and the daemon's security model distrusts the Relay, so the Relay cannot simply hand out a new
+anchor.
 
-Not a Console concern and not in scope for these specs. Recorded because it surfaced while
-specifying certificate expiry, and because an unsolved trust-root rotation story is cheap to design
-now and very expensive to retrofit. Raised as decision issue **#412** (2026-08-24) for a future ADR
-covering both planned rotation and CA-key compromise, which may want different answers.
+Not a Console concern. Recorded because it surfaced while specifying certificate expiry, and a
+trust-root rotation story is cheap to design now and expensive to retrofit. Open as decision issue
+**#412**, for an ADR covering planned rotation and CA-key compromise, which may want different
+answers.
 
 ### D9. The SSE seam must cover MCP tool calls — **RESOLVED 2026-08-24: widen it**
 
-`console-backend-coverage.md` scopes the v0.6.0 event seam to "registry and Job state
-transitions". The agent stream (spec 03) needs **MCP tool-call events**, which is a third
-publisher, not a filter on the first two: a `list_nodes` call transitions no registry state and
-creates no Job.
+The call-grained stream (now Activity, spec 04) needs **MCP tool-call events**, a third publisher
+beside registry and Job transitions: a `list_nodes` call changes no registry state and creates no
+Job.
 
 **One in-process pub/sub, four publishers** — registry transitions, Job transitions, MCP tool
-calls, and **enrollment attempts** (spec 10's day-one watch: Relay-side outcomes only, token ID
-never plaintext) — built once in v0.6.0. Events carry monotonic IDs from a bounded per-publisher
-ring buffer so a client can resume from `Last-Event-ID`; a client too far behind receives a `gap`
-event and reloads its region rather than pretending continuity. A second event mechanism later is worse than widening this one now,
-and the agent stream is read-only, so v0.6.0's zero-mutating-routes acceptance criterion is
-untouched.
+calls, and **enrollment attempts** (spec 10's watch: Relay-side outcomes only, token ID never
+plaintext). Events carry monotonic IDs from a bounded per-publisher ring buffer so a client can
+resume from `Last-Event-ID`; a client too far behind receives a `gap` event and reloads its region
+rather than pretending continuity.
 
 **A hard constraint on the tool-call publisher.** Its events carry **arguments** — file paths,
 Selectors, and for `raw_exec` the full argv. That is the point and it is fine. It must **never**
@@ -622,30 +455,25 @@ carry read *results*: ADR-0025's no-retention property is about the data, not ab
 an event bus that ships read output has leaked it just as surely as an audit row that stores it.
 Assert this structurally, the way `no_dispatch` is asserted.
 
-`console-backend-coverage.md`'s SSE row says four publishers.
-
 ### D10. The approval record needs a shape key — **RESOLVED 2026-08-24, and it is a v0.5.0 decision**
 
-*(Console half moot 2026-10-18 (D21, ADR-0044): spec 08's card and spec 14's queue are retired,
-so the diff placement and the fan-out tiebreak below no longer have a screen. The shape key
-itself stands in the approval domain; what renders its diff now is an open question in
-`docs/specs/approval.md`.)*
+*(Console half moot since D21: specs 08 and 14 are retired, so the diff placement and the fan-out
+tiebreak have no screen. The shape key stands in the approval domain; what renders its diff is an
+open question in `docs/specs/approval.md`.)*
 
-Spec 08's anti-fatigue diff — "same as what you approved Tuesday, except the fan-out grew
-1,180 → 2,214" — is the highest-value element on the highest-stakes screen. It has to find *the
-last approved action of the same shape*, so the approval record must be queryable by shape.
+The anti-fatigue diff — "same as what you approved Tuesday, except the fan-out grew 1,180 →
+2,214" — has to find *the last approved action of the same shape*, so the approval record must be
+queryable by shape.
 
 **Add one field: a shape key.** A hash over the Operation and the **normalised Selector**,
 deliberately **excluding** fan-out and any argument expected to vary. Finding the prior approval
 becomes a lookup rather than a scan, and "same shape, different scale" is precisely what the diff
 exists to express.
 
-**Why this cannot wait.** v0.5.0 lands well before the Console. Retrofitting means a migration over
-records whose shape key cannot be recomputed — normalising a Selector after the fact is guesswork,
-and the approval trail is exactly the data you least want to guess about. *(v0.5.0 had already
-shipped when this was written, so it is a retrofit — #415 — but `v0.1.0-beta` has not started and
-no production approval records exist, so the migration is over test data.)* For a Grant (#378) the
-key hashes the Scope.
+**Why this could not wait.** Retrofitting means a migration over records whose shape key cannot be
+recomputed — normalising a Selector after the fact is guesswork, and the approval trail is the data
+you least want to guess about. It landed as a retrofit (#415) before any production approval
+records existed. For a Grant (#378) the key hashes the Scope.
 
 **What the v0.5.0 work must settle:** the normalisation rules for a Selector (term order,
 whitespace, namespace canonicalisation), and which arguments are part of the shape versus part of
@@ -683,39 +511,13 @@ arguments, and this section already rules out guessing. Each such record gets a 
 `legacy:<request id>` key, so it is its own shape and the read seams refuse it — the callout can
 never say "you approved this Tuesday" about a record whose shape nobody knows.
 
-**Still missing, and worth naming.** The diff this enables is not yet *renderable*. The approval
-record stores no arguments and no Selector — only the Relay-authored `plan_summary` prose — so
-"same as Tuesday, except 1.24.0 → 1.25.0" cannot be produced from stored data without parsing that
-prose, which is the exact fidelity problem the summary exists to prevent. #415 makes finding the
-prior record a lookup; **#426 must decide where the diff inputs come from.**
-
-**Settled by #426: three sources and no new column.**
-
-- *A Grant's* numbers come from the `approval_grants` scope/window columns, reached from the
-  Request by `GrantByRequest` (a read and a join, never a claim path — and deliberately **not**
-  `ActiveGrants`, because the prior Grant a diff compares against is usually the expired or
-  exhausted one). `HashGrantShape` excludes exactly the fan-out ceiling, the window and `max_uses`,
-  so two Grants sharing a shape key can differ **only** in those three, and all three are stored.
-  That is the spec's headline sentence rendered from columns.
-- *A Plan's* scale arguments and its Selector come from the **park's own `approval_requested` audit
-  record**, joined on `approval_id` (`idx_audit_approval`). `auditsink.baseRecord` already persists
-  the Selector as written, the arguments and the raw-exec argv there. This is not the render-time
-  scan rejected above: the prior record is still found by shape key, and these are two exact-id
-  reads of records already identified.
-- *The fan-out comes from nowhere, and the callout says so.* A park creates **no Job at all**, so
-  there is no Task and no result anywhere for the record being rendered — only for a prior one that
-  already ran. "1,180 → 2,214" is therefore unavailable, and the card names the fan-out as
-  uncomparable rather than parsing a number back out of the summary. Making it comparable means
-  putting the resolved fan-out on the approval record, which is #469 and its own change.
-
-Two consequences worth recording as deviations rather than leaving them to be discovered:
-
-1. **The diff renders FIRST on the card**, above spec 08's card order (requester 1, action 2, diff
-   3). The spec also calls it "the most eye-catching text on the card", and those two cannot both
-   be satisfied by a callout in third place. `TestApproval_DiffIsTheFirstThingOnTheCard` pins it.
-2. **Spec 14's per-row fan-out cannot be rendered**, for the same reason as above, so neither the
-   row nor the "then largest fan-out" tiebreak carries one. #462 stays open, narrowed to the
-   tiebreak and blocked on #469.
+**Where the diff inputs come from** (settled by #426, for the retired card): a Grant's numbers from
+the `approval_grants` scope/window columns, reached by `GrantByRequest` (deliberately not
+`ActiveGrants`: the prior Grant is usually expired or exhausted); a Plan's scale arguments and
+Selector from the park's own `approval_requested` audit record, joined on `approval_id` — two
+exact-id reads of records already found by shape key, not a scan. The fan-out comes from nowhere:
+a park creates no Job, so "1,180 → 2,214" is unavailable until the resolved fan-out is on the
+approval record (#469).
 
 ---
 
@@ -724,19 +526,12 @@ Two consequences worth recording as deviations rather than leaving them to be di
 ### D11. A read-egress view — **RESOLVED 2026-08-24: specified as [17](17-read-egress.md); REVERSED 2026-10-01**
 
 **Reversed 2026-10-01 (owner decision):** the screen is dropped. Activity ([04](04-activity.md))
-is the single log of control-plane traffic; read-class calls appear there as `read` and
-read-class `dispatch` rows. [17](17-read-egress.md) is retired.
+is the single log of control-plane traffic; read-class calls appear there as `read` and read-class
+`dispatch` rows. [17](17-read-egress.md) is retired.
 
-ADR-0021 says reading is exfiltration by construction; ADR-0022 builds a 25-path confidentiality
-deny-list around it; ADR-0025 makes every read auditable and fails the read closed if the audit
-write fails. All that machinery existed and nothing in the Console surfaced any of it.
-
-Specified without a wireframe, by choice. **No new collection is required** — every row derives
-from a `KindRead` audit record that already exists.
-
-The screen is a map of **exposure surface**, not a data browser: the audit trail can say a read
-happened, by whom, of what and when, but never what it contained. That limit is what stops the
-screen becoming a second copy of the fleet's secrets.
+It was proposed because ADR-0021, ADR-0022 and ADR-0025 build read-exposure machinery the Console
+did not surface. Its limit carries over to Activity: the trail can say a read happened, by whom,
+of what and when, but never what it contained.
 
 ### D12. A capability preview — "what could this Account actually do?"
 
@@ -748,39 +543,29 @@ pursued.
 
 ## Known gaps with no spec yet
 
-**None.** Every screen named in earlier drafts now has one: the Console shell (11), login (12), Job
-detail (13), the approval queue (14, retired 2026-10-18), Accounts and API tokens (15), the
-incident ladder (16) and read egress (17, retired 2026-10-01).
+**None.** Every screen named in earlier drafts has a spec.
 
-Two dimensions that cut across every screen and are not drawn anywhere: a `viewer` sees a
-**structurally smaller** Console rather than a greyed-out one, and `console_execution = off`
-removes Run **entirely** rather than disabling it. ADR-0026's insight is that *absent* beats
-*forbidden*; an implementation that ships a disabled composer has given the property away.
+Two dimensions cut across every screen and are drawn nowhere: a `viewer` sees a **structurally
+smaller** Console, not a greyed-out one, and `console_execution = off` removes Run **entirely**.
+*Absent* beats *forbidden* (ADR-0026).
 
 ---
 
 ## Review, 2026-08-24 — what changed after the issues were cut
 
-Recorded so the issues, the specs and the ROADMAP are read as one thing.
+What still governs:
 
-- **There are no agent sessions.** MCP is stateless (ADR-0028); spec 03 is per-Account activity in
-  a 15-minute window. Disconnect is gone; Suspend is deferred (D2, #443). #432 closed.
-- **v0.6.0 "zero mutating routes"** means *no Console route reaches the capability layer's write or
-  dispatch path*. A session, a saved view or an audit query is not that. **Cancel is v0.7.0** on
-  both Job detail (13) and the agent stream (03).
-- **`console_execution`** lands with the composer (v0.7.0, spec 05), through config → packaging
-  sample → drift gate. In v0.6.0 there is no execution route for it to gate; the shell's property
-  is that the nav is built from mounted routes, exercised by the `viewer` dimension.
-- **Backend seams the issues assumed existed:** the registry gains liveness and certificate
-  validity (#440); audit/Job query seams live in the capability layer's read lane (#441); saved
-  views get a preference store (#442). #414 is `state:` evaluation only and is blocked by #440.
-- **Read egress** rows derive from `KindRead`, read-class `KindDispatch` and Task outcomes — no new
-  collection, but not `KindRead` alone.
-- **A batch is a Grant** over a Scope (ADR-0027, #378 amendment); specs 08 and 14 render Scopes.
+- **There are no agent sessions.** MCP is stateless (ADR-0028). Disconnect is gone; Suspend is
+  deferred (D2, #443).
+- **v0.6.0 "zero mutating routes"** means *no Console route reaches the capability layer's write
+  or dispatch path*. A session, a saved view or an audit query is not that. **Cancel is v0.7.0.**
+- **`console_execution`** lands with the composer (v0.7.0, spec 05), as file-only Relay
+  configuration. Until then the shell's property is that the nav is built from mounted routes.
+- **Backend seams:** audit/Job query seams live in the capability layer's read lane; saved views
+  need a preference store (#442).
+- **A batch is a Grant** over a Scope (ADR-0027).
 - **Day one** shows Relay-side enrollment rejections only; daemon-side fingerprint rejections are
   invisible to the Relay by design (#444 for a handshake-abort hook).
-- **Login throttling** is not gated on #279 (that is per-Account *Job* rate); spec 12 carries
-  defaults, with progressive delay and no hard lockout.
-- **Freeze engage is human-principal only** (#397).
-- **#397 and #403** carry the `blocking` label and no milestone: they are landed by hand ahead of
-  the loop, since the loop walks milestones.
+- **Login throttling** carries its own defaults (spec 12), with progressive delay and no hard
+  lockout.
+- **Freeze engage is human-principal only.**

@@ -1,72 +1,56 @@
 # Self-serve enrollment — implementation breakdown
 
-**Status:** live breakdown, maintained. ADR-0030 through ADR-0033 are **merged**, not drafts;
-the issues below now live in the GitHub milestone
-**v0.6.5 — Install Path: relay init, join string, packages**, which is the authority on what
-is in flight (AGENTS.md, "Work the current milestone").
+**Status:** breakdown from the design conversation of 2026-08-18, which settled eleven decisions
+across ADR-0030 to ADR-0033 (all accepted). Most items have shipped; each says where it stands.
+The GitHub milestone **v0.6.5 — Install Path: relay init, join string, packages** is the
+authority on what is in flight (AGENTS.md, "Work the current milestone"), and its
+[design plan](plans/v0.6.5-install-path-relay-init-join-string-packages.md) is the step list.
 
-Working document for the `v0.1.0-beta` "Self-serve evaluation" block
-([docs/specs/](../specs/) `v0.1.0-beta`). It expands the five issues recorded there
-into a dependency-ordered set, after the design conversation of 2026-08-18 settled eleven
-decisions across four ADRs.
-
-**Nothing here authorizes work.** Every item below touches at least one of the surfaces
-AGENTS.md requires escalating — `proto`-adjacent contract, mTLS/auth/CA code, Policy
-distribution, `GLOSSARY.md`, the `Makefile`, or CI. None of it goes through the dev-loop
-unreviewed regardless of sequencing.
+**Nothing here authorizes work.** Every item touches a surface AGENTS.md requires escalating —
+`proto`-adjacent contract, mTLS/auth/CA code, Policy distribution, `GLOSSARY.md`, the
+`Makefile`, or CI.
 
 ## The decisions this rests on
 
 | ADR | Settles |
 |---|---|
-| [0030](../adr/0030-relay-init-and-the-boundary-of-the-relay-binary.md) | What may live in the `relay` binary; `relay init` as one atomic first-boot transaction |
-| [0031](../adr/0031-one-server-certificate-and-the-fingerprint-pinned-join-string.md) | One server cert for both listeners; multi-SAN; join string replaces `RELAY_CA_BUNDLE_PATH`; address persistence |
+| [0030](../adr/0030-relay-init-and-the-boundary-of-the-relay-binary.md) | What may live in the `relay` binary; `relay init` |
+| [0031](../adr/0031-one-server-certificate-and-the-fingerprint-pinned-join-string.md) | One server cert for both listeners; multi-SAN; the join string; address persistence |
 | [0032](../adr/0032-enrollment-bundles-are-minted-and-rendered-in-one-act.md) | Mint and render are one act; no re-render; three formats |
-| [0033](../adr/0033-first-party-installation-artifacts.md) | No `curl \| sh`; installer in the release; daemon OS packages first; Policy as a `noreplace` conffile |
+| [0033](../adr/0033-first-party-installation-artifacts.md) | No `curl \| sh`; daemon OS packages first; the Relay as an OS package (amended 2026-10-15) |
 
-## Mapping to the issues already on the ROADMAP
+## Mapping to the original issues
 
-| Existing | Becomes | Note |
+| Issue | Became | State |
 |---|---|---|
-| #398 — ADR: what belongs in the `relay` binary | **satisfied by ADR-0030** | Close against the ADR — *done: closed 2026-09-17; ADR-0030 landed in PR #411* |
-| #400 — `relay init` | **E4** | Scope unchanged; now depends on E2 + E3 |
-| #401 — the join command | **E5 + E6** | Split: daemon-side verification, then steady-state address |
-| #399 — container image | **E9** | Unchanged |
-| #402 — quickstart | **E12** | Unchanged |
-| #361 — thin Ansible role (`v0.4.0` [6/7]) | **closed as superseded** | E3 renders the same playbook from the capability layer (owner decision, 2026-08-18) |
-| #397 — enrollment mint has no role gate | **prerequisite of E3** — *resolved: closed by PR #447, 2026-08-25* | Rendering on top of an ungated mint would wrap a privilege escalation in a convenience |
+| #398 — ADR: what belongs in the `relay` binary | ADR-0030 | closed |
+| #400 — `relay init` | **E4** | closed |
+| #401 — the join command | **E5 + E6** | closed |
+| #399 — container image | **E9** | closed |
+| #402 — quickstart | **E12** | open |
+| #361 — thin Ansible role | closed as superseded | E3 renders the same playbook from the capability layer (owner decision, 2026-08-18) |
+| #397 — enrollment mint has no role gate | prerequisite of E3 | closed by PR #447 |
 
 ---
 
 ## Phase 1 — Relay (Go)
 
 ### E2a · Server certificate rotation — **live defect, lands first and alone**
-**ADR-0031 §5 · escalate: mTLS + CA · no dependencies**
+**ADR-0031 §5 · escalate: mTLS + CA · no dependencies · built (#403)**
 
-The server certificate is minted once at process start, held static, and carries
-`LeafValidity` (336h — the constant documented for *Node identity* certs). Nothing renews
-it, so a Relay running longer than fourteen days serves an expired certificate and the
-fleet fail-closes off. Unseen only because nothing has run one for two continuous weeks.
-
-- Re-issue through a `GetCertificate` callback when the leaf is within a jittered fraction
-  of expiry.
-- Give the server leaf its own validity constant; stop borrowing the identity one.
-
-**Acceptance**
-- A test advancing past expiry gets a valid certificate without a restart.
-- A test asserts the server leaf and Node identity leaf no longer share a constant.
-
-This predates every other decision here and blocks nothing. It should not wait.
+The server certificate was minted once at process start with the Node-identity validity
+(336h), so a Relay up longer than fourteen days served an expired certificate and the fleet
+fail-closed off. The leaf is now re-issued through a `GetCertificate` callback before expiry,
+under its own `ServerLeafValidity` constant.
 
 ### E2 · One server certificate, multi-SAN
-**ADR-0031 §1–2 · escalate: mTLS + CA**
+**ADR-0031 §1–2 · escalate: mTLS + CA · open (#404)**
 
-- Collapse `main.go:391` and `main.go:575` to one `IssueServerCertificate` call; share the
-  `tls.Certificate` between listeners.
+- One `NewServerCertificate` call shared between both listeners, which today each issue
+  their own.
 - Keep two `tls.Config`s. The Node plane requires a client certificate for every RPC
   except the certless `Enroll`; the control plane requires none.
-- SAN set: `-hostname` + detected non-loopback IPs + loopback + a repeatable `-san`.
-- Replace the comment at `main.go:572-574`, which currently states the opposite decision.
+- SAN set: the hostname + detected non-loopback IPs + loopback + any operator-added names.
 
 **Acceptance**
 - A structural test asserts the node-plane config requires client certs and the
@@ -75,91 +59,70 @@ This predates every other decision here and blocks nothing. It should not wait.
 - Startup logs the CA fingerprint and the leaf fingerprint, labelled distinctly.
 
 ### E3 · Enrollment bundle rendering
-**ADR-0032 · escalate: Control API + auth · depends on #397 (resolved: PR #447)**
+**ADR-0032 · escalate: Control API + auth · unbuilt; deferred in `docs/specs/enrollment.md`,
+and DI-35 moved to v0.7.0, where the Console renders bundles**
 
 - `render: []` on `POST /api/v1/enrollment-tokens`; `renderings` in the response.
-- Formats `join`, `ansible`, `shell`. Renderer is a pure function of join string, scope,
+- Formats `join`, `ansible`, `shell`. The renderer is a pure function of join string, scope
   and expiry.
-- `admin`-gated — **which requires #397 first.** The gate does not exist today; a `viewer`
-  can mint a token that stamps `relay:` labels. *(Resolved: PR #447 role-gated the mint and
-  closed #397 on 2026-08-25.)*
-- The `ansible` rendering pins a daemon version + SHA-256 baked into the Relay build
-  (ADR-0032 §6), rendered into `get_url` + `checksum` so verify-then-install survives.
+- `admin`-gated (the mint is role-gated since PR #447).
+- The `ansible` rendering pins a daemon version + SHA-256 (ADR-0032 §6), rendered into
+  `get_url` + `checksum` so verify-then-install survives.
 - The `ansible` rendering inlines the token (ADR-0030, interim) and carries its expiry in
   a header comment.
 
 **Acceptance**
 - A structural test asserts the renderer package has no store dependency.
-- OpenAPI spec covers `render`/`renderings`; `make apiclient-check` stays green.
+- The OpenAPI spec covers `render`/`renderings`; `make apiclient-check` stays green.
 - One audit event per mint, whatever was rendered.
 
 ### E4 · `relay init`
-**ADR-0030 · escalate: auth + CA · depends on E2, E3**
+**ADR-0030 (amended 2026-10-16) · built (#400)**
 
-- One transaction: CA, store, founding admin, first API Token, first Enrollment Token,
-  rendered playbook.
-- Idempotent — existing CA/store/admin adopted, never recreated or repaired. Re-running
-  reports state and emits no new secret without an explicit flag.
-- Writes `/etc/relay/relay.env` with `RELAY_CONTROL_ENABLED=true`. The **binary** default
-  stays `false`.
-- First Enrollment Token defaults to a short TTL (hours), because ADR-0030 inlines it.
-- Prints both fingerprints, the Console URL, the admin token, the join string, the
-  playbook.
-
-**Acceptance**
-- **Falsifier:** `docker/bootstrap.sh` and `docker/mint-credential.sh` are deleted and the
-  dev fleet comes up green on `relay init`.
-- `init` calls the E3 capability rather than a second implementation.
+Shipped narrower than first planned: `relay init --admin <name>` creates the first admin and
+its first API Token, and `--recover <name>` re-mints a token for an enabled human admin. It runs
+as the Relay's own account on a store the Relay already created; it creates neither the CA nor
+the store, and mints no Enrollment Token. It replaced `relay bootstrap-token` and
+`relay console-password`. Behaviour: `docs/specs/relay-configuration.md` RC-28.
 
 ---
 
 ## Phase 2 — relay-daemon (Rust) · parallel with Phase 1
 
 ### E5 · Join string and fingerprint verification
-**ADR-0031 §3 · escalate: enrollment + mTLS**
+**ADR-0031 §3 · escalate: enrollment + mTLS · built (#401)**
 
-- Parse `glp_join_<base64(host:port · ca-fingerprint · enrollment-token)>` from
-  `RELAY_JOIN` — one opaque `glp_`-prefixed string, greppable by secret scanners and safe
-  unquoted in a shell (ADR-0031 §3).
-- Verify the presented chain roots in a certificate whose SHA-256 DER digest matches the
-  pin, before anything else happens.
-- Remove `RELAY_CA_BUNDLE_PATH` — replaced, not deprecated.
+The daemon reads one opaque `glp_join_` string from `RELAY_JOIN` (the Relay's address, its CA
+fingerprint and the Enrollment Token), verifies the presented chain against the pin before
+sending the token, and refuses a mismatch without fallback. `RELAY_CA_BUNDLE_PATH` and
+`RELAY_ENROLLMENT_TOKEN` are gone. Behaviour: `docs/specs/enrollment.md`,
+`docs/specs/daemon-installation.md`.
 
-**Acceptance**
-- A wrong fingerprint refuses enrollment and exits; it never falls back.
-- `RELAY_CA_BUNDLE_PATH` is gone from `config.rs` *and* from
-  `daemon/packaging/relay-daemon.env.example` — `daemon/tests/packaging_drift.rs` should
-  catch a miss, and that it does is worth asserting.
-- The parser gets a fuzz target (`daemon/fuzz/` exists): it is pre-identity attack surface
-  reachable by anyone who can hand a Node a config file.
+Still owed from the original acceptance: a fuzz target for the parser under `daemon/fuzz/`. It
+is pre-identity attack surface reachable by anyone who can hand a Node a config file.
 
 ### E6 · Persisted address, `RELAY_ADDR` override
-**ADR-0031 §4**
+**ADR-0031 §4 · built**
 
-- Persist the Relay address at enrollment alongside identity; use it thereafter.
-- `RELAY_ADDR`, when set, wins on every start.
-
-**Acceptance**
-- A two-line env file (`RELAY_JOIN`, `RELAY_NODE_LABELS`) enrolls and reconnects.
-- Setting `RELAY_ADDR` after enrollment repoints the daemon with no state-directory edit.
+The daemon persists the Relay address at enrollment alongside its identity; `RELAY_ADDR`, when
+set, wins on every start.
 
 ---
 
-## Phase 3 — Packaging · depends on E4, E5
+## Phase 3 — Packaging
 
-### E7 · `relay-install.sh` in the release
-**ADR-0033 §1–2 · escalate: CI/release**
+### E7 · Relay host install
+**ADR-0033 · escalate: CI/release**
 
-Ships beside `SHA256SUMS`. Service account, binary, hardened unit, env file, `relay init`.
-Whatever it installs comes under a drift gate of the same kind as
-`packaging_drift_test.go` — that drift already happened once and went unnoticed for
-several milestones.
+`relay-install.sh` was withdrawn before it was built (ADR-0033, amended 2026-10-15): the Relay
+host is installed by an OS package that installs, enables where presets allow, and never
+starts. Planned as v0.6.5 step S14.
 
 ### E8 · Daemon `.deb` / `.rpm`
 **ADR-0033 §3–4 · escalate: Policy distribution**
 
-`policy.default.toml` → `/etc/relay-daemon/policy.toml` as a conffile /
-`%config(noreplace)`.
+The packages place the live Policy once, if absent, rather than as a conffile (ADR-0033 as
+amended; `docs/specs/daemon-installation.md` DI-26).
 
 **Acceptance**
 - Fresh install → the Node comes up read-only per ADR-0022, not deny-all.
@@ -168,7 +131,7 @@ several milestones.
   change.
 
 ### E9 · Relay container image (#399)
-**ADR-0033 §5.** Documented as the evaluation artifact, not the production deployment. No
+**ADR-0033 §5 · built.** The image is a production path (ADR-0033, amended 2026-10-15). No
 daemon image.
 
 ---
@@ -176,40 +139,23 @@ daemon image.
 ## Phase 4 — Documentation
 
 ### E10 · Rewrite the operations docs
-`relay-install.md`, `relay-daemon-install.md`, `enrollment.md` around the new path.
-Includes the DNS guidance (multi-SAN makes DNS optional for the Node plane) and the
-fingerprint/trust-store instructions from ADR-0031. Fixes the already-stale claim at
-`relay-install.md:112-116` that no packaged Relay unit exists — `relay/packaging/relay.service`
-landed in #362.
+`relay-install.md`, `relay-daemon-install.md`, `enrollment.md` around the new path, including
+the DNS guidance (multi-SAN makes DNS optional for the Node plane) and the fingerprint and
+trust-store instructions from ADR-0031. Planned as v0.6.5 step S17.
 
 ### E11 · `GLOSSARY.md` — **join string**
-**Escalate: AGENTS.md-flagged file.** Must record that it is *not* a synonym for
-Enrollment Token; the glossary already lists "join key" as a term to avoid, and the two
-entries would otherwise fight.
+Done: the entry records that a join string is *not* a synonym for Enrollment Token.
 
 ### E12 · Quickstart (#402)
-Ties E4, E5, E7, E8 together. Four commands, two artifacts.
+Ties E4, E5, E7, E8 together. Four commands, two artifacts. Open.
 
 ---
 
-## Phase 5 — Migration · depends on E5, E6
+## Phase 5 — Migration
 
 ### E14 · Dev fleet and e2e suite onto `RELAY_JOIN`
-**ADR-0031 · escalate: CI**
-
-Removing `RELAY_CA_BUNDLE_PATH` breaks every existing consumer of the old enrollment
-surface, and E4's falsifier only covers `docker/bootstrap.sh`:
-
-- `docker-compose.demo.yml` (then `docker-compose.yml`, lines 171-205) — three daemons wired through
-  `RELAY_CA_BUNDLE_PATH` + `RELAY_ENROLLMENT_TOKEN`.
-- `docker/daemon-entrypoint.sh` — reads the token from a file into the env var.
-- `relay/cmd/relay/*_e2e_test.go` and `crossbinary_e2e_test.go` — exercise enrollment
-  directly.
-
-**Acceptance**
-- `docker compose -f docker-compose.demo.yml up` produces an enrolled fleet with no `ca-cert.pem` on any shared
-  volume.
-- The daemon containers never mount CA material; only the join string reaches them.
+**ADR-0031 · built.** The dev fleet, the demo compose file and the end-to-end suites enroll
+with a join string; no daemon container mounts CA material.
 
 ---
 
@@ -224,14 +170,12 @@ file and prints its fingerprint, and confirms the state directory is writable. I
 deliberately does **not** validate the Enrollment Token, because doing so would spend a
 `max_uses` against a token sized to the batch.
 
-It fits the daemon's existing offline-subcommand pattern (`policy check`,
-`dump-operation-schema`) and is outside ADR-0030's boundary question, which governs the
-`relay` binary only.
+It fits the daemon's offline-subcommand pattern (`policy check`, `dump-operation-schema`) and
+is outside ADR-0030's boundary question, which governs the `relay` binary only.
 
-**Why it was raised:** today the whole failure class — SAN mismatch, closed firewall,
-group-writable Policy, unreachable address — surfaces as journald lines discovered on N
-machines after the fact, which for a 5-Node evaluation means five broken hosts and no
-obvious next move.
+**Why it was raised:** the whole failure class — SAN mismatch, closed firewall, group-writable
+Policy, unreachable address — surfaces as journald lines discovered on N machines after the
+fact.
 
 **Why it might be dropped:** multi-SAN (E2) removes the largest single cause, and `policy
 check` already covers the Policy half. The residue is firewall and reachability, which a

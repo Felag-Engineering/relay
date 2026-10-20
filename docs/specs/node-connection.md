@@ -6,17 +6,16 @@ of this draft. Describes intended behaviour, not the code (see the establishing 
 
 ## Purpose
 
-After a Node has enrolled, it needs one lasting, trusted link to the Relay. The Relay sends Tasks
-down that link, and the relay-daemon sends back acknowledgements, results, heartbeats and its view
-of itself. This capability is that link: how a relay-daemon dials home, how each side proves to
-the other who it is, what the Node says about itself, how the link survives drops and restarts,
-and how the Relay knows whether a Node is reachable right now.
+An enrolled Node needs one lasting, trusted link to the Relay. The Relay sends Tasks down it; the
+relay-daemon sends back acknowledgements, results, heartbeats and its view of itself. This
+capability is that link: how a relay-daemon dials home, how each side proves who it is, what the
+Node says about itself, how the link survives drops and restarts, and how the Relay knows whether
+a Node is reachable now.
 
-It is the plumbing that decides whether the fleet is actually there. When it fails silently, a
-Node looks healthy while being unreachable, or looks unreachable while its daemon is fine — and
-the AI-agent and the operator end up reasoning about a fleet that does not exist. So this spec
-defines "connected" by evidence the Node is alive, not by a stream that has not yet noticed it
-died, and it holds that line at fleet scale without flooding the network.
+When this fails silently, a Node looks healthy while unreachable, or unreachable while its daemon
+is fine, and the AI-agent and the operator reason about a fleet that does not exist. So
+"connected" is defined by evidence the Node is alive, not by a stream that has not yet noticed
+it died, and that holds at fleet scale without flooding the network.
 
 ## Surfaces
 
@@ -43,7 +42,7 @@ died, and it holds that line at fleet scale without flooding the network.
   `enrollment.md` (ADR-0031).
 - **One Relay server certificate** serves the Node plane and the control plane, and is re-issued
   in-process before it expires, so a long-running Relay never presents an expired certificate. Its
-  expiry is exposed as a metric (`observability.md`); rotation stays automatic.
+  expiry is exposed as a metric (`observability.md`).
 - **A renewed Node certificate is used from the next connect.** There is no forced reconnect; the
   registry's certificate fingerprint updates when the Node next connects, and that change is
   audited (below).
@@ -83,7 +82,7 @@ died, and it holds that line at fleet scale without flooding the network.
 - A Task already sent on a replaced stream is covered by at-most-once: the relay-daemon dedups by
   Task ID across reconnects and process restarts, and `execution.md` owns those semantics.
 - **Repeated replacement for one Node is audited.** Two parties presenting the same certificate
-  keep replacing each other, and that churn is how a stolen certificate in use becomes visible.
+  keep replacing each other; that churn makes a stolen certificate in use visible.
 
 ### Reconnecting, and admission at fleet scale
 
@@ -92,9 +91,8 @@ died, and it holds that line at fleet scale without flooding the network.
 - **The Relay paces session admission.** It admits new sessions up to an operator-set rate. Above
   that rate it refuses with a **retry-after hint**, and the daemon honours the hint, with jitter,
   in place of its own backoff.
-- A fleet reconnecting after a Relay restart is therefore admitted within a time bounded by the
-  admission rate, and the Relay is never overwhelmed. A Node waiting for admission is
-  `state:offline`.
+- A fleet reconnecting after a Relay restart is admitted within a time bounded by the admission
+  rate, without overwhelming the Relay. A Node waiting for admission is `state:offline`.
 
 ### What a Node reports about itself
 
@@ -168,8 +166,7 @@ Node offline.
 - **Invariant 7** (ADR-0006, ADR-0017) — a self-report can carry `node:` labels and influence
   `state:`, but never write `relay:` or `tag:`.
 - **Invariant 11** — the listeners and the server certificate are security floor; the admission
-  rate and the minimum daemon version merely bound reach and may become runtime operator settings.
-  Every value is operator-set at startup today.
+  rate and the minimum daemon version only bound reach and may become runtime operator settings.
 - **ADR-0005 — needs amending.** It names keepalive tuning at scale as a consequence; this spec
   decides the specifics: the heartbeat deadline, the Task acknowledgement, admission pacing, and
   one current stream per Node.
@@ -184,8 +181,8 @@ Node offline.
 ## Seams and proof
 
 _Not yet written._ This spec's claims are the backlog of its testing issue. Connection behaviour
-spans both binaries, so most claims need the cross-binary suites or the dev fleet; `make verify`
-alone will not prove them.
+spans both binaries, so most claims need the cross-binary suites or the dev fleet, not `make
+verify` alone.
 
 ### What proves each claim
 
@@ -247,4 +244,4 @@ Claims with **no row**, and so nothing checking them:
 
 ## Open questions
 
-None open. The stub's twelve questions were settled with the owner on `2026-09-14`.
+None open; settled with the owner on `2026-09-14`.

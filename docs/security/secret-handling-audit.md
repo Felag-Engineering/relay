@@ -1,22 +1,20 @@
 # Secret-handling audit
 
-> **Scope note (2026-09-20).** This audit (dated 2026-08-11) was performed against the shared
-> control-plane credential model that ADR-0023 has since retired. It does **not** cover the
-> secrets added after it: Account passwords (argon2id hashes, set by `relay init`),
-> Admin Console sessions and their cookies, or the approval webhook signing secret
-> (`RELAY_APPROVAL_WEBHOOK_SECRET_FILE`). A re-audit is pending; until it lands, read the body
-> below as a record of what was checked then, not as a claim about today's secret inventory.
+> **Scope note.** This audit (dated 2026-08-11) was performed against the shared control-plane
+> credential model that ADR-0023 has since retired, and before the join string (ADR-0031) and
+> the one configuration file (ADR-0043). It does **not** cover the secrets added since: Account
+> passwords (argon2id hashes, set by `relay init`), Admin Console sessions and their cookies,
+> or the approval webhook signing secret (`webhook_secret` / `webhook_secret_file` in
+> `relay.toml`). A re-audit is pending; until it lands, read the body as a record of what was
+> checked then, not as today's secret inventory. File and line references are as of the audit.
 
 ## Purpose & scope
 
-This note is a systematic sweep confirming that no secret — Enrollment Token, CA private
-key, Node private key, control-plane credential digest, or CSR/certificate material — reaches
-a structured log, the audit trail, or an error/RPC message on either side of Relay: the
-Relay (Go) or the relay-daemon (Rust). It is a companion to, not a replacement for, the
-project's STRIDE threat model, which covers the broader threat surface; this note is narrower
-and mechanical — secret inventory crossed with every logging/error-formatting surface,
-confirming the guard in place at each intersection. It does not reintroduce or restate the
-threat model's contents; see `docs/security/threat-model.md` for the broader STRIDE analysis.
+A mechanical sweep confirming that no secret — Enrollment Token, CA private key, Node private
+key, control-plane credential digest, or CSR/certificate material — reaches a structured log,
+the audit trail, or an error/RPC message, on the Relay (Go) or the relay-daemon (Rust): the
+secret inventory crossed with every logging and error-formatting surface, naming the guard at
+each intersection. The broader threat surface is `docs/security/threat-model.md`.
 
 ## Secret inventory
 
@@ -67,30 +65,27 @@ Separately from the verbatim store above, `auditsink.go`'s supplementary decisio
 routing/attribution metadata — kind, principal, selector, action kind/name, job ID, and
 aggregate outcome counts — and by its own package doc's claim never carries an Action's
 `OperationArgs` or `RawExecArgv`, any `NodeResult`'s `Stdout`/`Stderr`/`Truncated`, or any
-token/key material. That claim was previously unverified by any test — no existing test set
-`OperationArgs` — and is now enforced by
-`TestRecordDispatchDecisionLineExcludesOperationArgs` in `auditsink_test.go`, which asserts
-both halves at once: the decision line omits the secret-bearing arg value and the captured
-output, while the store (per the accepted decision above) still retains all three.
+token/key material. `TestRecordDispatchDecisionLineExcludesOperationArgs` in
+`auditsink_test.go` enforces that claim, asserting both halves at once: the decision line omits
+the secret-bearing arg value and the captured output, while the store (per the accepted
+decision above) still retains all three.
 
 ## Pinned fragile guarantee: no `Debug` on Rust secret structs
 
-On the Rust side, the "never logged" guarantee for `EnrollConfig` (the Enrollment Token) and
-`Identity` (the Node private key) previously rested only on those structs deriving no
-`Debug` plus a `/// never logged` doc comment — a convention, not a guarantee enforced by the
-compiler. A future `#[derive(Debug)]` on either struct would silently reopen the leak. Both
-structs now carry a `#[cfg(test)] mod no_debug_guard` (in `daemon/src/enroll.rs` and
-`daemon/src/identity.rs` respectively): a manual `NoDebug` impl that conflicts (`E0119`) with
-a blanket impl the moment the struct gains a `Debug` impl, turning that regression into a
-build failure under `cargo test` rather than a silent log leak. The guard modules are
-`#[cfg(test)]`-only, so nothing changes in the shipped musl binary.
+On the Rust side, `EnrollConfig` (the Enrollment Token) and `Identity` (the Node private key)
+derive no `Debug`, and a future `#[derive(Debug)]` would silently reopen a leak. Each struct
+carries a `#[cfg(test)] mod no_debug_guard` (in `daemon/crates/relay-transport/src/enroll.rs`
+and `daemon/crates/relay-transport/src/identity.rs`): a manual `NoDebug` impl that conflicts
+(`E0119`) with a blanket impl the moment the struct gains a `Debug` impl, so that regression is
+a build failure under `cargo test`, not a silent log leak. The guards are test-only, so nothing
+changes in the shipped musl binary.
 
 ## Pinned fragile guarantee: the Go `accounts.Plaintext` wrapper
 
-A minted API Token's plaintext is the one secret in the inventory that a surface is *supposed*
-to emit — once, in the mint response — which makes "and nowhere else" the whole guarantee. A
-bare `string` would rest that guarantee on reviewer discipline: any `%v`, any `slog.Any`, any
-`json.Marshal` of an enclosing struct would print it.
+A minted API Token's plaintext is the one secret a surface is *supposed* to emit — once, in
+the mint response — so "and nowhere else" is the whole guarantee. A bare `string` would rest it
+on reviewer discipline: any `%v`, `slog.Any` or `json.Marshal` of an enclosing struct would
+print it.
 
 `accounts.Plaintext` (`internal/accounts/tokens.go`) is the Go counterpart of the Rust
 no-`Debug` guard above. It wraps an unexported field and implements `fmt.Stringer`,
@@ -104,6 +99,6 @@ real `slog.NewJSONHandler`, and also asserts that the stored record never holds 
 
 ## Findings
 
-None found; no secret reaches any surface. Three previously comment-only guarantees — the
-Rust no-`Debug` invariant, the `logDecision` exclusion, and the API Token plaintext's
-confinement to the mint response — are now pinned with tests.
+None found; no secret reaches any surface. Three guarantees that rested on comments — the Rust
+no-`Debug` invariant, the `logDecision` exclusion, and the API Token plaintext's confinement to
+the mint response — are pinned with tests.

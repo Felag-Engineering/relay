@@ -1,22 +1,20 @@
 # Issue tracker: GitHub
 
-Issues for this repo live in GitHub Issues on
-[`Felag-Engineering/relay`](https://github.com/Felag-Engineering/relay),
-driven through the `gh` CLI. Capability specifications are files in `docs/specs/`, not
-issues — an issue is disposable and a spec is durable (`docs/agents/workflow.md`).
+Issues live in GitHub Issues on
+[`Felag-Engineering/relay`](https://github.com/Felag-Engineering/relay), driven through the
+`gh` CLI.
 
 ## Conventions
 
-- **GitHub milestones are the planning spine.** They are human-owned, and they are the
-  authority on what is in flight. Issues decompose a milestone; they never redefine one. Don't
-  pull future milestones forward. A milestone's acceptance criteria live on its issues; durable
-  behaviour lives in the capability specification for that capability.
+- **GitHub milestones are the planning spine.** They are human-owned and the authority on what
+  is in flight. Issues decompose a milestone; they never redefine one. Don't pull future
+  milestones forward. Acceptance criteria live on the issues; durable behaviour lives in the
+  capability specification.
 - **Capability specs are files; implementation specs are issues.** A *capability
-  specification* lives at `docs/specs/<capability>.md`, is durable, and is canonical for what
-  that capability does across every surface. An *implementation specification* **is** the
-  issue, and is disposable — it dies with its PR. The file holds behaviour; the issue holds
-  this one change. If a comment on the issue changes a decision, fold it back into the file.
-  See `docs/specs/README.md`.
+  specification* at `docs/specs/<capability>.md` is durable and canonical for what that
+  capability does across every surface. An *implementation specification* **is** the issue,
+  and dies with its PR. If a comment on the issue changes a decision, fold it back into the
+  file. See `docs/specs/README.md`.
 - **Promote before the issue closes.** A closed issue is not a record. Behaviour that is now
   true → the capability spec; a hard-to-reverse, surprising, real-trade-off decision → an ADR;
   a language shift → `GLOSSARY.md`; a change to an architecture invariant → `AGENTS.md` plus an
@@ -31,8 +29,8 @@ issues — an issue is disposable and a spec is durable (`docs/agents/workflow.m
 gh issue create --title "<title>" --body-file <path> --label <triage-label> [--milestone <milestone>]
 ```
 
-Apply the triage label from `triage-labels.md`. Set the milestone whenever the work belongs
-to one — an issue with no milestone is invisible to milestone-driving skills.
+Apply the triage label from `triage-labels.md`. Set the milestone whenever the work belongs to
+one: an issue with no milestone is invisible to milestone-driving skills.
 
 **For a capability specification**, write the file first, then open a short tracking issue
 whose body links to it rather than duplicating it:
@@ -74,15 +72,13 @@ A bug skips all of that: write it by hand with acceptance criteria, label it `bu
 gh issue view <number> --json title,body,labels,milestone,comments
 ```
 
-Read the full body **and** the comments; decisions frequently land in comments rather than
-in the original body.
+Read the full body **and** the comments; decisions often land in comments.
 
 ## Merge authority
 
-**No skill, agent, or routine merges anything.** The pipeline always ends by opening a PR
-for a human. This is not a style preference — see "Routines & merge authority" in
-`AGENTS.md` and the escalation list there. An agent that believes it should merge has
-misread its instructions.
+**No skill, agent, or routine merges anything.** The pipeline always ends by opening a PR for
+a human (see "Routines & merge authority" in `AGENTS.md`). An agent that believes it should
+merge has misread its instructions.
 
 ## PRs as a request surface
 

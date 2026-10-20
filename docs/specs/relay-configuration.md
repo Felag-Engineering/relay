@@ -11,21 +11,18 @@ for a human, and whether the Console exists at all.
 
 It is **two tiers, split by what an attacker gains from changing the setting.**
 
-- The **security floor** is set by whoever administers the Relay's host, outside Relay, in
-  **one configuration file** the Relay reads itself (ADR-0043), and nothing Relay runs or
-  accepts can write it. It is the small set that decides *who may authenticate at all* and
-  *whether the gate exists*: listeners and TLS material, the identity provider Relay believes,
-  the authentication windows, the approval notification path, and whether the Console may
-  execute.
-- **Operator settings**, where the store holds them (RC-29), are runtime objects changed by a
-  human `admin` in the Console with step-up re-authentication, audited, taking effect on the
-  next request; until then they are values in the configuration file (RC-22). They are the
-  dials an operator genuinely turns as a fleet grows and confidence grows with it —
-  including the blast caps and the approval-gate rules.
+- The **security floor** is set by whoever administers the Relay's host, in **one configuration
+  file** the Relay reads itself (ADR-0043), and nothing Relay runs or accepts can write it. It
+  decides *who may authenticate at all* and *whether the gate exists*: listeners and TLS
+  material, the identity provider Relay believes, the authentication windows, the approval
+  notification path, and whether the Console may execute.
+- **Operator settings** are the dials an operator turns as a fleet and confidence grow, the blast
+  caps and approval-gate rules among them. Where the store holds them (RC-29) they are runtime
+  objects changed by a human `admin` in the Console with step-up, audited, taking effect on the
+  next request; until then they are values in the configuration file (RC-22).
 
-The tiering is the whole point: administering a Relay should not mean editing a file and
-restarting a service, and no dial an operator turns should hand a stolen credential the ability
-to authenticate as somebody else.
+Administering a Relay should not mean editing a file and restarting a service, and no dial an
+operator turns should let a stolen credential authenticate as somebody else.
 
 ## Surfaces
 
@@ -52,14 +49,44 @@ to authenticate as somebody else.
 - **RC-7** The release publishes a Relay container image to the registry, signed keylessly at its
   digest, running as an unprivileged uid; the deployment stack pins it by digest and runs it with a
   read-only root filesystem, every capability dropped and one durable volume.
-- **RC-12** The security floor lives in one TOML configuration file the Relay reads itself: `/etc/relay/relay.toml` by default, or the path one command-line flag, `--config`, names. That path is the only configuration the Relay accepts from outside the file; the binary otherwise accepts `--version`, `--help` and its subcommands (ADR-0043).
-- **RC-13** No setting is read from the environment or the command line. A `RELAY_*` variable for a setting found in the environment refuses start and names that setting's place in the file.
-- **RC-14** A secret is a value in the configuration file, or a path to a file holding it, for material another tool manages and rotates. Either way it never passes through the environment or the command line (invariant 11).
-- **RC-20** A configuration that cannot work is refused at start — the Console enabled without the control plane, OAuth settings without an issuer. One that is coherent but probably a mistake, such as a mutate cap above the read cap, starts with a prominent warning; when the caps move to the store (RC-29), that warning moves with them.
-- **RC-21** `SIGHUP` re-reads the configuration file from the path given at start and applies RC-15 before anything else. The reload is all-or-nothing: an invalid value, or a changed bind-time setting — listen addresses, the advertised address (RC-36), CA directory, store path, certificate hostname, whether the control plane and Admin Console are enabled, and the OAuth identity provider — refuses the whole reload, logs the setting and that a restart is required, and leaves the running configuration untouched. A failed reload never exits the process. Every reload is audited, attributed to the Relay's host rather than to any Account, the way the Freeze signal's host lever is, listing what changed.
-- **RC-22** Until store-backed operator settings exist (RC-29), the read and mutate blast caps, the minimum daemon version, the `state:cert-expiring` fraction, the enrollment rate limits, burst and tracked-IP ceiling, the Node cap, and the log level and format are values in the configuration file, validated like every other value, with built-in defaults where absent. The approval-gate rules file's path is one too, with no default: leaving it out means no gate (`approval.md`).
-- **RC-27** The Relay container image takes its configuration file, and any secret files it names, as a read-only mount: nothing about the floor is in the container's environment, so inspecting the container shows a mount path, not settings or secrets. The deployment stack runs it unprivileged, with no capabilities, a read-only root filesystem, and the CA and store on one durable volume. Its documentation calls it production only once a human hardening review of that deployment has closed (ADR-0033).
-- **RC-36** An optional advertised address names the address Nodes are told to dial — the address a join string carries — when it differs from the gRPC listen address, as behind a container port mapping. Unset, the join string carries the certificate hostname and the gRPC listen port.
+- **RC-12** The security floor lives in one TOML configuration file the Relay reads itself:
+  `/etc/relay/relay.toml` by default, or the path one command-line flag, `--config`, names.
+  That path is the only configuration the Relay accepts from outside the file; the binary
+  otherwise accepts `--version`, `--help` and its subcommands (ADR-0043).
+- **RC-13** No setting is read from the environment or the command line. A `RELAY_*` variable
+  for a setting found in the environment refuses start and names that setting's place in the
+  file.
+- **RC-14** A secret is a value in the configuration file, or a path to a file holding it, for
+  material another tool manages and rotates. Either way it never passes through the environment
+  or the command line (invariant 11).
+- **RC-20** A configuration that cannot work is refused at start — the Console enabled without
+  the control plane, OAuth settings without an issuer. One that is coherent but probably a
+  mistake, such as a mutate cap above the read cap, starts with a prominent warning; when the
+  caps move to the store (RC-29), that warning moves with them.
+- **RC-21** `SIGHUP` re-reads the configuration file from the path given at start and applies
+  RC-15 before anything else. The reload is all-or-nothing: an invalid value, or a changed
+  bind-time setting — listen addresses, the advertised address (RC-36), CA directory, store
+  path, certificate hostname, whether the control plane and Admin Console are enabled, and the
+  OAuth identity provider — refuses the whole reload, logs the setting and that a restart is
+  required, and leaves the running configuration untouched. A failed reload never exits the
+  process. Every reload is audited, attributed to the Relay's host rather than to any Account,
+  the way the Freeze signal's host lever is, listing what changed.
+- **RC-22** Until store-backed operator settings exist (RC-29), the read and mutate blast caps,
+  the minimum daemon version, the `state:cert-expiring` fraction, the enrollment rate limits,
+  burst and tracked-IP ceiling, the Node cap, and the log level and format are values in the
+  configuration file, validated like every other value, with built-in defaults where absent.
+  The approval-gate rules file's path is one too, with no default: leaving it out means no gate
+  (`approval.md`).
+- **RC-27** The Relay container image takes its configuration file, and any secret files it
+  names, as a read-only mount: nothing about the floor is in the container's environment, so
+  inspecting the container shows a mount path, not settings or secrets. The deployment stack
+  runs it unprivileged, with no capabilities, a read-only root filesystem, and the CA and store
+  on one durable volume. Its documentation calls it production only once a human hardening
+  review of that deployment has closed (ADR-0033).
+- **RC-36** An optional advertised address names the address Nodes are told to dial — the
+  address a join string carries — when it differs from the gRPC listen address, as behind a
+  container port mapping. Unset, the join string carries the certificate hostname and the gRPC
+  listen port.
 
 ## Refusals
 
@@ -75,19 +102,16 @@ to authenticate as somebody else.
 
 ## Governing ADRs and invariants
 
-- **Invariant 11 / ADR-0010** — the invariant this capability implements, narrowed on
-  2026-09-15 from *"configuration is unreachable from any API"* to *"no credential can change the
-  terms on which credentials are accepted"*. Recorded in ADR-0010's amendment of that date. Its
-  secret-file clause was reworded on 2026-10-15 (ADR-0033; ADR-0010's amendment of that date):
-  its headline now names the Relay process alongside credentials — *neither a credential nor the
-  Relay itself* can change the terms — and secrets never pass through the environment or the
-  command line; the Relay can read them and cannot rewrite them, except key material it
-  generates.
+- **Invariant 11 / ADR-0010** — the invariant this capability implements: *neither a credential
+  nor the Relay itself* can change the terms on which credentials are accepted, and secrets never
+  pass through the environment or the command line; the Relay can read them and cannot rewrite
+  them, except key material it generates (ADR-0010 amendments of 2026-09-15 and 2026-10-15,
+  ADR-0033).
 - **Invariant 10 / ADR-0009, ADR-0026** — Console-only settings are an adapter offering less, not
   a parallel control path. `console_execution` stays root-owned.
-- **Invariant 5 / ADR-0004, ADR-0012** — the blast caps remain enforced on the Relay before
-  dispatch; only where they are set changes — the configuration file until RC-29 (RC-22), then
-  the store. Both ADRs carry a 2026-09-15 amendment saying so.
+- **Invariant 5 / ADR-0004, ADR-0012** — the blast caps are enforced on the Relay before
+  dispatch; only where they are set changes: the configuration file until RC-29 (RC-22), then the
+  store (both ADRs' 2026-09-15 amendments).
 - **ADR-0027** — the approval gate. Amended 2026-09-15: its rules are store-backed and
   Console-edited; the webhook path stays root-owned. Amended 2026-09-16: the shipped default gate
   is seeded into the store once, on first boot (`approval.md`).
@@ -106,11 +130,10 @@ to authenticate as somebody else.
 
 ## Seams and proof
 
-Configuration is read into one value at startup and, where reload exists (RC-21), replaced
-wholesale on a successful reload. Where operator settings exist (RC-29), they are read through a
-store-backed settings seam the capability layer consults, never a package-level variable a
-surface can reach; the Console's settings screens call that seam, and no other adapter holds a
-writer.
+Configuration is read into one value at startup and replaced wholesale on a successful reload
+(RC-21). Where operator settings are store-backed (RC-29), they are read through a settings seam
+the capability layer consults, never a package-level variable a surface can reach; the Console's
+settings screens call that seam, and no other adapter holds a writer.
 
 ### What proves each claim
 
@@ -176,27 +199,26 @@ the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absenc
 approval-gate rules in the store and no root-set bound above them, an attacker holding a human
 `admin` session and that Account's password can raise the mutate cap to the whole fleet and
 remove every approval gate, then dispatch within the limits they just set. Step-up and the audit
-trail are the controls; neither prevents it. It applies to the caps once RC-29 lands; until then
-they are values in the configuration file, out of the Console's reach.
+trail are the controls; neither prevents it. It applies once RC-29 lands; until then the caps are
+in the configuration file, out of the Console's reach.
 
-This was decided deliberately: a root-set ceiling above the Console value was offered and
-declined in favour of one source of truth per setting. It is **R15** in
-`docs/security/threat-model.md`, accepted by the owner on 2026-09-15 — invariant 11's "the API
-can never raise its own limits" becomes "the API cannot, and a human in the Console can".
+A root-set ceiling above the Console value was offered and declined in favour of one source of
+truth per setting. **R15** in `docs/security/threat-model.md`, accepted by the owner on
+2026-09-15: "the API can never raise its own limits" becomes "the API cannot, and a human in the
+Console can".
 
-**A purged Relay host keeps its CA private key.** No package operation destroys the CA, so
-`apt purge` moves the state directory — CA and store together — aside instead of deleting it,
-and the key stays on disk until someone deletes it by hand. Losing the CA by one mistyped command
-would force the whole fleet to enroll again, and that was judged the worse outcome. Accepted by
-the owner on 2026-10-15 and recorded as **R34**. The compensating controls: the moved directory is
-root-owned and unreadable to every other account; purge prints where it went; and the
-documentation that describes purge says to delete it, or destroy the host, when the Relay is gone
-for good.
+**A purged Relay host keeps its CA private key.** No package operation destroys the CA:
+`apt purge` moves the state directory — CA and store together — aside, and the key stays on disk
+until someone deletes it. Losing the CA to one mistyped command would force the whole fleet to
+enroll again, judged the worse outcome. Accepted by the owner on 2026-10-15 as **R34**. The
+controls: the moved directory is root-owned and unreadable to every other account; purge prints
+where it went; and the purge documentation says to delete it, or destroy the host, when the Relay
+is gone for good.
 
 **R35 is closed by design** (ADR-0043): a container's floor is a read-only mounted file, not
-injected environment, so inspecting the container no longer reveals it. It stays open until
-that is built (#1002). Who can *write* a deployment's configuration source is the operator's
-own infrastructure, documented rather than policed.
+injected environment, so inspecting the container does not reveal it (RC-27). Who can *write* a
+deployment's configuration source is the operator's own infrastructure, documented rather than
+policed.
 
 ## Future work
 
@@ -212,9 +234,9 @@ own infrastructure, documented rather than policed.
   throughout; if that ever stops being true, store-backed settings need a cache-invalidation
   story that startup-only configuration never needed.
 - **The operator runbook describes retired mechanisms** — the shared control-plane credential,
-  "no packaged unit exists", and, since 2026-10-15, its Compose section's container-as-evaluation
-  framing and its secret-file modes. Stale documentation rather than an open decision, but it is
-  what an operator reads first; ADR-0033's amendment lists it for update.
+  "no packaged unit exists", its Compose section's container-as-evaluation framing and its
+  secret-file modes. Stale documentation rather than an open decision, but it is what an operator
+  reads first; ADR-0033's amendment lists it for update.
 
 ## Retired
 

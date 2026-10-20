@@ -5,16 +5,15 @@
 
 ## Purpose
 
-A Node joins the fleet only after something puts the relay-daemon on it. At fleet scale that
-something is the customer's config management, never a person. This capability covers what config
+A Node joins the fleet only after something puts the relay-daemon on it, and at fleet scale that
+is the customer's config management, never a person. This capability covers what config
 management is handed and what it does with it: the release artifacts, the verified install, the
-local files the daemon reads, the hardened init-system unit, upgrades, and taking a Node back
-out.
+local files the daemon reads, the hardened unit, upgrades, and taking a Node back out.
 
 The per-Node install is the product's biggest adoption cost **and** the reason it can be trusted:
 the daemon is where deny-by-default Policy lives, where at-most-once is enforced, and where the
-Relay's authority stops. So installation is deliberately the customer's act, performed by tools
-they already run, from artifacts they can verify before executing.
+Relay's authority stops. So installation is the customer's act, by tools they already run, from
+artifacts they can verify before executing.
 
 ## Surfaces
 
@@ -160,10 +159,10 @@ Relay never pushes a binary (invariant 14).
 
 ## Seams and proof
 
-Installation has no Relay-side seam by construction — that absence is the capability's central
-property. On the Node, the loaders for Policy and Templates own mode enforcement, the identity
-and dedup stores own the state directory, and the unit owns privilege. Packaging claims are
-proven by CI install jobs, once they exist; `make verify` alone cannot prove them.
+Installation has no Relay-side seam, by construction: that absence is the capability's central
+property. On the Node, the Policy and Template loaders own mode enforcement, the identity and
+dedup stores own the state directory, and the unit owns privilege. Packaging claims are proven by
+CI install jobs once they exist; `make verify` alone cannot prove them.
 
 ### What proves each claim
 
@@ -235,33 +234,30 @@ until it is done.
 ## Accepted residual risk
 
 **The Enrollment Token sits in plaintext on a fresh Node.** It is in a `0600` root-owned
-environment file until config management removes it, so it is readable by root-equivalent access
-and lands in backups and images of the Node taken before first start. It is short-lived, scoped, and
-inert once the Node holds its certificate — but nothing enforces its removal, and a golden image
-built from an enrolled Node would carry a live token.
+environment file until config management removes it, so root-equivalent access can read it and it
+lands in backups and images taken before first start. It is short-lived, scoped and inert once the
+Node holds its certificate, but nothing enforces its removal, and a golden image built from an
+enrolled Node would carry a live token.
 
-Delivering it through `systemd LoadCredential=` or the customer's secret store removes this, at
-the cost of a second supported path; both are named in *Future work*. Accepted by the owner on
-2026-09-15 and recorded as **R16** in `docs/security/threat-model.md`. The compensating controls
-are a short token TTL and use limit, and config management removing the join string after first
-start. **Revoking the token is not the cleanup step**: revocation is the containment cascade
-(`enrollment.md`) and disconnects every Node the token enrolled; reserve it for a token believed
-leaked (#584).
+Delivering it through `systemd LoadCredential=` or the customer's secret store would remove this,
+at the cost of a second supported path (*Future work*). Accepted by the owner on 2026-09-15 as
+**R16** in `docs/security/threat-model.md`. The compensating controls are a short token TTL and use
+limit, and config management removing the join string after first start. **Revoking the token is
+not the cleanup step**: revocation is the containment cascade (`enrollment.md`) and disconnects
+every Node the token enrolled; reserve it for a token believed leaked.
 
 **The join string can outlive the daemon.** Removing the daemon package leaves its environment
-file behind, by the same rule that leaves the Policy, so a join string config management never
-cleared survives decommissioning on disk; its token stays usable for other enrollments until it
-expires or is revoked. Accepted by the owner on 2026-10-15 and recorded as **R36**, widening R16.
-The compensating controls are R16's, plus purging (`.deb`) or deleting the printed path (`.rpm`)
-when a Node leaves for good.
+file, as it leaves the Policy, so a join string config management never cleared survives
+decommissioning, and its token stays usable until it expires or is revoked. Accepted by the owner
+on 2026-10-15 as **R36**, widening R16. The controls are R16's, plus purging (`.deb`) or deleting
+the printed path (`.rpm`) when a Node leaves for good.
 
 **An operator-authored Template body is readable under the shipped default.** The default's
 `file.read` wildcard reaches the template root, which no exact-path deny can cover, so a read
 Task can return an operator's Template file to the AI-agent. No RPC carries a body and drift
 visibility stays fingerprint-only (ADR-0021); a body discloses vocabulary, never a secret, and the
-wire can never change it. Accepted by the owner on 2026-10-16 and recorded as **R37**; formerly a
-`policy check --strict` finding the shipped file could never clear. The control is the one
-ADR-0022 has always named: replace the wildcard with an explicit allow-list.
+wire can never change it. Accepted by the owner on 2026-10-16 as **R37**. The control is
+ADR-0022's: replace the wildcard with an explicit allow-list.
 
 **The self-reference lint's write probes name exact paths.** The probes are concrete actions, and
 absence of a finding is not proof of unreachability (ADR-0021), so a Raw Exec allow that reaches a
@@ -271,16 +267,15 @@ default enables no Raw Exec, so the exposure exists only where an operator write
 the hardened unit refuses the writes under `/etc` and `/usr` unless an operator drop-in relaxes it
 (DI-3, DI-5) but never those in the state directory, which is why the probes name the identity key
 and certificate, the CA bundle and the persisted address exactly. Accepted by the owner on
-2026-10-16 and recorded as **R38**; the control is a Raw Exec deny pattern over those directories
-beside any broad allow (ADR-0019).
+2026-10-16 as **R38**; the control is a Raw Exec deny pattern over those directories beside any
+broad allow (ADR-0019).
 
 ## Future work
 
 - **Older distribution releases**, one at a time, each with its own CI row.
-- **A distinct sandbox-refusal outcome**, so a Task the systemd unit forbids is reported as a
-  sandbox refusal rather than a failure — an operator reading "failed" where the truth is "this
-  Node's unit forbids it" files a bug, and an AI-agent reading it retries. It is a `/proto`
-  outcome, decided before it is built.
+- **A distinct sandbox-refusal outcome**, so a Task the systemd unit forbids is not reported as a
+  failure, which an operator files as a bug and an AI-agent retries. It is a `/proto` outcome,
+  decided before it is built.
 - **An Alpine package.** It waits on a confinement of the Policy and Templates the daemon applies
   to itself, independent of the init system — Landlock, or a private mount namespace with those
   paths read-only — and on a decision to sign `apk` packages, which `apk` requires by default.
@@ -292,16 +287,15 @@ beside any broad allow (ADR-0019).
   role below. The shipped read catalog's package is not one: it is a template pack, not a
   catalog fragment.
 - **A first-party Ansible role** that installs the daemon and places catalog fragments named in a
-  group's variables. Until one exists, `policy-catalog.md`'s exported install task stands alone.
-  A thin role was closed as superseded once (#361); reviving it is a decision, not a chore.
+  group's variables. Until one exists, `policy-catalog.md`'s exported install task stands alone;
+  reviving the thin role once closed as superseded is a decision, not a chore.
 - **`LoadCredential=` for the Enrollment Token**, closing the residual risk above.
 - **In-place Policy and Template reload**, so tightening Policy across a fleet costs no restarts.
   Deliberately not first-pass: it is a second path by which the privileged side's authority
   changes.
-- **Agentless SSH (ADR-0037)** — tracked as a possible future path, and out of this capability.
-  A Node with no daemon has no local Policy engine, no argument-level deny-by-default and no
-  at-most-once, so the Relay would become the only thing deciding. If it is ever adopted it needs
-  its own capability spec and its own ADR rather than a row in this one.
+- **Agentless SSH (ADR-0037)**, out of this capability. A Node with no daemon has no local Policy
+  engine, no argument-level deny-by-default and no at-most-once, so the Relay would be the only
+  thing deciding; adopting it needs its own capability spec and ADR.
 
 ## Open questions
 

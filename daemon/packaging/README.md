@@ -1,24 +1,24 @@
 # relay-daemon packaging
 
 A hardened `systemd` unit for running `relay-daemon` in production, plus an example
-`EnvironmentFile`. See
+`EnvironmentFile`.
 [docs/operations/daemon-privilege-posture.md](../../docs/operations/daemon-privilege-posture.md)
-for the full per-Operation privilege map, the rationale behind every hardening
-directive, and the documented exception for Nodes that run `pkg.install` or
-filesystem-mutating Raw Exec.
+has the per-Operation privilege map, the reason for every hardening directive, and the
+exception for Nodes that run `pkg.install` or filesystem-mutating Raw Exec.
 
 ## Packages
 
 `nfpm/` holds the manifests for two packages, each built as `.deb` and `.rpm` by
 `scripts/build-packages.sh` with the nfpm pinned under `tools/nfpm`; `scripts/` holds the
 daemon package's maintainer scripts. The release builds both packages twice and refuses unless
-the two builds are byte-identical, and checks that each package's `/usr/bin/relay-daemon` is the
-release binary byte for byte. It also reads every package with `dpkg-deb` and `rpm` and checks
-its whole content against `expected/` and `scripts/`. **The packages are not yet attached to a
-release.** They are held until the install matrix proves them on every supported platform and
-the unit's syscall filter has been verified on a real systemd host. The standalone unit and
-environment example are already release attachments. Until the packages are attached, install
-by hand as below.
+the builds are byte-identical and each package's `/usr/bin/relay-daemon` is the release binary.
+It reads every package with `dpkg-deb` and `rpm` and checks its whole content against
+`expected/` and `scripts/`.
+
+**The packages are not yet attached to a release.** They wait until the install matrix proves
+them on every supported platform and the unit's syscall filter is verified on a real systemd
+host. The standalone unit and environment example are release attachments; until the packages
+are, install by hand as below.
 
 - **`relay-daemon`** installs `/usr/bin/relay-daemon`, the unit as
   `/usr/lib/systemd/system/relay-daemon.service`, and reference copies of the default Policy
@@ -34,17 +34,17 @@ by hand as below.
   Templates are package-owned plain files under `/etc/relay-daemon/templates.d/relay-read/`:
   replaced on upgrade and removed with the package.
 
-Removing `relay-daemon` stops and disables the unit, then removes the binary and the unit, and
-keeps the Policy, the Policy directory, the environment file and the state directory, which
-holds the Node's identity. `apt purge` then deletes those of them the package created, read
-from a marker under `/var/lib/relay-daemon-package/` that records which existed before the
-first install; a directory holding anything the package did not put there is left and named.
-`.rpm` has no purge: removal prints the paths to delete by hand.
+Removing `relay-daemon` stops and disables the unit and removes the binary and the unit. It
+keeps the Policy, the Policy directory, the environment file and the state directory (the
+Node's identity). `apt purge` then deletes those the package created, using a marker under
+`/var/lib/relay-daemon-package/` that records what existed before the first install; a
+directory holding anything the package did not put there is left and named. `.rpm` has no
+purge: removal prints the paths to delete by hand.
 
 ## Install
 
 ```console
-$ sudo install -m 0755 /path/to/relay-daemon /usr/local/bin/relay-daemon
+$ sudo install -m 0755 /path/to/relay-daemon /usr/bin/relay-daemon
 $ sudo install -m 0644 relay-daemon.service /etc/systemd/system/relay-daemon.service
 $ sudo mkdir -p /etc/relay-daemon
 $ sudo install -m 0644 -o root -g root /path/to/policy.toml /etc/relay-daemon/policy.toml
@@ -52,18 +52,18 @@ $ sudo install -m 0600 -o root -g root relay-daemon.env.example /etc/relay-daemo
 $ sudo "$EDITOR" /etc/relay-daemon/relay-daemon.env   # fill in RELAY_* values, see below
 ```
 
-If you have not authored a Policy yet, install the shipped default
+Without a Policy of your own, install the shipped default
 ([`../policy.default.toml`](../policy.default.toml), ADR-0022): `read` pre-allowed with a
-confidentiality deny-list; `mutate` + Raw Exec stay opt-in.
+confidentiality deny-list; `mutate` and Raw Exec opt-in.
 
 `relay-read-catalog.ledger` binds each released name in the shipped read catalog to its body
 digest and risk class. It is append-only, and a changed Template ships under a new name.
 
-Policy (`/etc/relay-daemon/policy.toml`) must be root-owned and not group/world-writable
-— the daemon's fail-closed loader refuses it otherwise. Policy is delivered by the
-customer's config management, **never over the wire**: the Relay may query a Node's
-Policy fingerprint but can never modify a Node's Policy (ADR-0002). Rotating Policy is a
-config-management push followed by a daemon reload/restart, not an API call.
+Policy (`/etc/relay-daemon/policy.toml`) must be root-owned and not group- or world-writable;
+the daemon's fail-closed loader refuses it otherwise. Policy is delivered by the customer's
+config management, **never over the wire**: the Relay may query a Node's Policy fingerprint
+but can never modify it (ADR-0002). Changing Policy is a config-management push followed by a
+daemon restart, not an API call.
 
 ## Enable
 
@@ -75,16 +75,14 @@ $ systemctl status relay-daemon
 
 ## Upgrades
 
-The daemon never self-upgrades and the Relay never pushes a binary (ADR-0014). Upgrading
-`/usr/local/bin/relay-daemon` flows through the same config-management pipeline as the
-Policy file: land the new artifact, then `systemctl restart relay-daemon`. The Relay's
-only lever over daemon version is refusing to *dispatch* Tasks to an out-of-date Node —
-it never reaches into a Node to change its binary.
+The daemon never self-upgrades and the Relay never pushes a binary (ADR-0014). Upgrade
+`/usr/bin/relay-daemon` through the same config management as the Policy file: land the
+new artifact, then `systemctl restart relay-daemon`. The Relay's only lever is refusing to
+*dispatch* Tasks to an out-of-date Node.
 
 ## The join string lives in the env file
 
-`relay-daemon.env` carries `RELAY_JOIN`, and with it the Enrollment Token, in plaintext
-on disk (0600 root:root). That is decided, not interim (ADR-0031, amended 2026-10-16):
-the daemon reads the join string only when no identity exists, pins the Relay's CA from
-it before sending the token, and ignores it on every later start. Removing the line
-once the Node has enrolled is the compensating control.
+`relay-daemon.env` carries `RELAY_JOIN`, and with it the Enrollment Token, in plaintext on disk
+(`0600 root:root`). That is decided, not interim (ADR-0031, amended 2026-10-16): the daemon
+reads the join string only when no identity exists, pins the Relay's CA from it before sending
+the token, and ignores it on every later start. Remove the line once the Node has enrolled.

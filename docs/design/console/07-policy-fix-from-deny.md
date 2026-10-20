@@ -10,10 +10,9 @@ path.**
 ## What this screen is for
 
 `ui-advisory.md` sets the bar: *the operator must be able to go from "denied" to "I understand
-exactly why, and what file to change in my IaC" without leaving the Console.* Until this screen,
-that sentence had no implementation.
+exactly why, and what file to change in my IaC" without leaving the Console.*
 
-Reached from a deny — in a Preflight, a Job result, or an approval card.
+Reached from a deny in a Preflight or a Job result.
 
 ## Layout
 

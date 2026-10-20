@@ -8,14 +8,13 @@ pass is what is built today.
 Freeze is the stop button. Engaged, the Relay refuses to dispatch anything new to the fleet —
 every risk class, every caller, regardless of authorization, Policy or blast cap.
 
-It exists for one situation: *"I don't trust what is driving this."* Every other control in Relay
-answers a question about the request — is this caller allowed, is this Operation permitted, is
-this too many Nodes. Freeze answers a question about the *driver*, and it is the only control
-that needs no theory about which request is the bad one.
+It exists for one situation: *"I don't trust what is driving this."* Every other control answers
+a question about the request — is this caller allowed, is this Operation permitted, is this too
+many Nodes. Freeze answers a question about the *driver*, and needs no theory about which
+request is the bad one.
 
-That is why it covers reads as well as mutations. An untrusted driver exfiltrating through
-`file.read` is the same problem as one restarting services, and a stop button that only stopped
-half the traffic would be the wrong shape.
+So it covers reads as well as mutations: an untrusted driver exfiltrating through `file.read` is
+the same problem as one restarting services.
 
 ## Surfaces
 
@@ -23,12 +22,11 @@ half the traffic would be the wrong shape.
 |---|---|
 | **Control API** | `POST /api/v1/freeze/engage`, `POST /api/v1/freeze/release` |
 | **Relay host** | `SIGUSR1` engages, `SIGUSR2` releases — the local lever, see below |
-| **Admin Console** | Future work (#457) — not in the first pass |
+| **Admin Console** | Future work — not in the first pass |
 
 The host-side lever is **unreachable from any surface, by construction**: the Control API holds an
 interface carrying only the gated pair, so no route can reach the local path even by accident.
-The two are different roots of authority and that difference is visible at the call site rather
-than hidden behind a Principal the role gate happens to wave through.
+The two are different roots of authority, and the difference is visible at the call site.
 
 ## Behaviour
 
@@ -38,16 +36,15 @@ than hidden behind a Principal the role gate happens to wave through.
 resolution and before authorization — the outermost gate in the pipeline.
 
 That includes **every advance of an approved Plan.** An advance is new dispatch, so it meets the
-same outermost gate with no special rule, and a Plan approved before the Freeze is not a way past
-one (`plan.md`, ADR-0038). The intuition worth naming, because it is the one that would build a
-bypass: "a human already approved this" is a statement about authorization, and a Freeze is not an
-authorization check.
+same outermost gate, and a Plan approved before the Freeze is no way past one (`plan.md`,
+ADR-0038). "A human already approved this" is a statement about authorization, and a Freeze is
+not an authorization check.
 
 **Does not stop:**
 
-- **Policy preflights.** Observation is exactly what is wanted during an incident, so a preflight
-  answers while frozen and reports the frozen state advisorily (ADR-0011, ADR-0013). This is the
-  exemption, and it is the only one: a preflight sends no Task.
+- **Policy preflights.** Observation is what an incident needs, so a preflight answers while
+  frozen and reports the frozen state advisorily (ADR-0011, ADR-0013). This is the only
+  exemption: a preflight sends no Task.
 - **In-flight steps of an approved Plan.** The step already dispatched keeps running, on the same
   reasoning as any in-flight Task below. **Advancing** that Plan does not — see *Stops*.
 - **In-flight Tasks.** They keep running unless separately cancelled. Indiscriminately killing
@@ -67,47 +64,42 @@ Deliberately a fire alarm: anyone may pull the handle, the chief clears re-entry
 | **Engage** | `operator`+ **and a human Account** | `SIGUSR1`, no reason required |
 | **Release** | `admin`, with an audited reason | `SIGUSR2`, with a reason |
 
-Three things about that table are load-bearing:
+What is load-bearing in that table:
 
-**Engaging over the API requires a human Account** (amended 2026-08-24). "Anyone may pull the
-handle" was always an argument about people. A machine Account at `operator` — an AI-agent —
-halting the fleet is not the fire alarm the cheapness argument had in mind; it is a jailbroken
-driver switching off its own overseers, which is a denial of service. Automation that genuinely
-needs to stop dispatch uses the host lever, where the authority is root on the box rather than a
-stealable credential.
+**Engaging over the API requires a human Account** (ADR-0013, amended 2026-08-24). "Anyone may
+pull the handle" is an argument about people. A machine Account — an AI-agent — halting the fleet
+is a jailbroken driver switching off its own overseers: a denial of service. Automation that
+genuinely needs to stop dispatch uses the host lever, whose authority is root on the box rather
+than a stealable credential.
 
 **Release is not human-only.** An incident must have an automated way back.
 
-**The host lever exists because the distrusted thing may be the API credential itself.** When it
-is, root-on-the-box must suffice to pull the cord — so the local path bypasses the role gate. It
-is not a backdoor around authorization; it is a *different* authority, and the asymmetry is the
-point.
+**The host lever exists because the distrusted thing may be the API credential itself.** Root on
+the box must then suffice, so the local path bypasses the role gate. It is a *different*
+authority, not a backdoor.
 
-**A release always carries a reason.** Both paths require one, including the local lever, because
-"why did the fleet start moving again" is the question an incident review asks.
+**A release always carries a reason**, on both paths, because "why did the fleet start moving
+again" is the question an incident review asks.
 
 ### Failing closed
 
-**A failed read of the Freeze state refuses dispatch.** A guardrail must never fail open, even at
-the cost of availability during a store blip. An unreadable stop button is treated as engaged.
+**A failed read of the Freeze state refuses dispatch.** An unreadable stop button is treated as
+engaged, even at the cost of availability during a store blip.
 
-The Freeze **survives a Relay restart**. A stop button that forgot itself on process exit would
-be released by the crash it might have been engaged for.
+The Freeze **survives a Relay restart**; otherwise the crash it was engaged for could release it.
 
 ### An accepted information disclosure
 
 Because the Freeze gate runs before authorization, a caller not authorized for the Operation
-still learns the Relay is frozen before being told they are denied. Accepted: every caller
-reaching that path is already mTLS-authenticated, so there is no anonymous caller to leak it to,
-and spending registry-resolution work to order the two refusals more tidily would be a cost with
-no security return.
+still learns the Relay is frozen. Accepted: every caller reaching that path is already
+authenticated, and reordering the two refusals would cost registry-resolution work for no
+security return.
 
 ### Auditing
 
 Every engage and release is audited with the Account that did it, or `local-host` for the signal
-path. A refused engage or release is audited too — an attempt to stop the fleet that was turned
-away is exactly as interesting as one that succeeded, and a refused attempt leaves the Freeze
-state untouched.
+path. A refused engage or release is audited too, as interesting as a successful one, and leaves
+the Freeze state untouched.
 
 ## Refusals
 
@@ -136,11 +128,10 @@ state untouched.
 
 ## Seams and proof
 
-The Freeze lives behind a small store seam — read, engage, release — with a safe default of
-"never frozen" for composition roots that wire no real store. **That default is a missing stop
-button, not a fail-open of authorization**, and the composition root's fail-open guard requires a
-real Freeze store alongside a real dispatcher for exactly that reason: an un-stoppable real
-executor is the same class of wiring bug as an unauthorized one.
+The Freeze lives behind a small store seam — read, engage, release — with a default of "never
+frozen" for composition roots that wire no real store. **That default is a missing stop button**,
+so the composition root's fail-open guard requires a real Freeze store alongside a real
+dispatcher: an unstoppable real executor is the same class of wiring bug as an unauthorized one.
 
 ### What proves each claim
 
@@ -167,9 +158,8 @@ Claims above with **no row**, and so nothing checking them:
   — the gate is on new dispatch only — but not asserted.
 - That the host lever is unreachable from any surface. True by the interface the API holds, and
   argued at the call site, but there is no structural test like `no_dispatch`.
-- That a Freeze stops the next **advance** of an approved Plan. Unbuilt rather than untested —
-  the capability does not exist yet (`plan.md`), and the claim sits in its testing backlog. It is
-  named here because this is where someone will look for it.
+- That a Freeze stops the next **advance** of an approved Plan. Unbuilt rather than untested: Plans
+  do not exist yet (`plan.md`).
 
 ### Performance
 
@@ -179,36 +169,31 @@ Claims above with **no row**, and so nothing checking them:
 | Engage latency | Takes effect for the next dispatch attempt; nothing in flight is revisited | *(none)* |
 
 There are no benchmarks in this repository. The Freeze read is on the path of **every** dispatch,
-including a 10,000-Node read, so it is the most frequently executed guardrail in the system and
-nothing measures it.
+including a 10,000-Node read, making it the most frequently executed guardrail; nothing measures
+it.
 
 ## Out of scope
 
-- **Job and Task cancellation** — `execution.md`. Cancel acts on one Job the engine created;
-  Freeze is a global valve on new dispatch. They are ADR-0013 siblings and are not the same
-  mechanism: a Freeze stops what has not started, a cancel asks about what has.
-- **Quarantine and revocation** — the other rungs of the incident ladder, and both label- and
-  identity-shaped rather than dispatch-shaped. See `selectors-and-labels.md` and `enrollment.md`.
+- **Job and Task cancellation** — `execution.md`. ADR-0013 siblings, not the same mechanism: a
+  Freeze stops what has not started; a cancel acts on one Job that has.
+- **Quarantine and revocation** — the other rungs of the incident ladder, label- and
+  identity-shaped rather than dispatch-shaped: `quarantine-node.md` and `enrollment.md`.
 - **Policy** — a Node refusing work locally is not a Freeze, and a Freeze is not a Policy change.
 - **Per-Account rate limits** — a decision still open, and a different control: rate limiting
   shapes normal traffic, Freeze stops abnormal traffic entirely.
 
 ## Future work
 
-Deliberately not in the first pass: the built capability should work end to end before anything is
-added to it.
+Deliberately not in the first pass: the built capability should work end to end first.
 
-- **Engaging from the Console** (#457).
+- **Engaging from the Console.**
 - **Approvals during a Freeze, stated as behaviour.** A pending request can still be decided while
   frozen, nothing dispatches until release, and an approved request still expires on its own clock
   and must be re-requested if the Freeze outlasts it. Settle once Plans and approvals are built.
 
 ## Open questions
 
-- **Nothing tests the human-Account requirement on API engage — a test is wanted in the first
-  pass** (ADR-0013's 2026-08-24
-  amendment). It is the clause that prevents an AI-agent switching off its own overseers, and it
-  is the least-covered statement in this capability.
-- **The local lever is a signal, which is a thin interface for an audited act.** `SIGUSR2` carries
-  a reason today through a side channel rather than in the signal itself. It works, and it is the
-  kind of thing that looks obvious in a post-incident review if the reason went missing.
+- **The local lever is a signal, a thin interface for an audited act.** `SIGUSR2` carries its
+  reason through a side channel (`RELAY_FREEZE_RELEASE_REASON`, with a default) rather than in
+  the signal itself. It works, and would look obvious in a post-incident review if the reason
+  went missing.

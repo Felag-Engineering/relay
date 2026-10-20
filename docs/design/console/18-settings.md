@@ -5,8 +5,8 @@ read-only. **Milestone v0.7.0.**
 
 **Governing:** ADR-0010 (amended 2026-09-15), ADR-0004 and ADR-0012 (amended 2026-09-15),
 ADR-0014, invariants #5, #10, #11, #14. Behaviour: `docs/specs/relay-configuration.md`.
-**Backend:** store-backed operator settings (unbuilt — today every value here is an environment
-variable read at startup); step-up (#428); audit.
+**Backend:** store-backed operator settings (unbuilt — today every value here is set in
+`relay.toml` on the host, ADR-0043); step-up; audit.
 
 Decided with the owner, 2026-09-16: gate rules are a separate page (spec 19); the confirm step
 shows old → new and nothing more; the screen keeps no change history.
@@ -35,10 +35,9 @@ disabled (ADR-0026, spec 11). Administer becomes Add Nodes · Accounts · Incide
 | Node cap | integer | "Enrollments beyond this are refused." |
 | Retention and page sizes | per setting | "Housekeeping." |
 
-Each row shows the current value and its default. **No history, no "last changed by"** — the
-owner decided against it. Every change is still an audit record (ADR-0010's amendment; R15's
-compensating control), so it is on the audit trail like any other act (Activity lists tool calls only, owner
-decision 2026-10-01, #829); this screen does not re-present it.
+Each row shows the current value and its default. **No history, no "last changed by"** (owner
+decision). Every change is still an audit record (ADR-0010's amendment; R15's compensating
+control) on the audit trail; neither this screen nor Activity re-presents it.
 
 Gate rules are not here — spec 19.
 
@@ -47,8 +46,8 @@ Gate rules are not here — spec 19.
 The non-secret floor values, rendered so an operator can see the terms the Relay runs on: listen
 addresses, certificate hostname, OAuth issuer, audience, claim, required scope and public URL,
 Console session maximum age and idle timeout, step-up window, `console_execution`, approval
-webhook URL and timeout. One line above the section: *"Set on the host. Change the environment
-file and send SIGHUP, or restart for listener, CA or store changes."*
+webhook URL and timeout. One line above the section: *"Set on the host. Change `relay.toml` and
+send SIGHUP, or restart for listener, CA or store changes."*
 
 **Never rendered:** file paths, the CA directory, the store path, or the contents of any secret
 file (`relay-configuration.md` §Visibility). No control of any kind in this section — not a
@@ -78,7 +77,7 @@ cannot work is refused with the reason.
 
 ## States
 
-- **Unbuilt backend** (today): the page is not mounted. Settings are environment variables.
+- **Unbuilt backend** (today): the page is not mounted. Settings are set in `relay.toml`.
 - **Step-up expired mid-edit:** the save re-prompts; the edited value is kept in the form.
 - **Refused value:** the row stays in edit with the capability layer's reason under it.
 

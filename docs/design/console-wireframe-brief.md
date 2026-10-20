@@ -1,32 +1,28 @@
 # Admin Console — wireframe brief (four key screens)
 
 > **Expanded by [docs/design/console/](console/) (2026-09-20).** The per-screen specifications
-> there are the live description of each Console screen and supersede the four prompts below
-> where they differ; this brief is kept as the designer-facing origin of the design language.
+> there are the live description of each Console screen and win where they differ. This brief
+> is kept as the designer-facing origin of the design language, in its 2026-08-07 wording.
 >
-> **"Plan" below usually means the Policy preflight.** ADR-0038 gave "Plan" to an approved
-> route of execution after this was written, and on 2026-09-20 the owner ruled (#575, D16 in
+> **"Plan" below usually means the Policy preflight.** The owner ruled (#575, D16 in
 > [docs/design/console/99-open-decisions.md](console/99-open-decisions.md)) that the
-> Console's composer says **Preflight**. D16 keeps the word where it means the approved
-> route — verbatim: *the approval object, the Job's Plan block and every "plan hash" keep
-> the word, and the shared Plan renderer keeps its name* — and the wire option is still
-> spelled `plan` until the code follows. So read a "Plan" that means the composer's
-> no-execution preview as **preflight**, and leave the rest. This brief keeps its 2026-08-07
-> wording as the pre-ADR record; the live vocabulary is [docs/design/console/](console/),
-> swept in #663.
+> Console's composer says **Preflight**, after ADR-0038 gave "Plan" to an approved route of
+> execution. D16 keeps the word where it means the approved route — *the approval object, the
+> Job's Plan block and every "plan hash" keep the word, and the shared Plan renderer keeps its
+> name* — and the wire option is still spelled `plan`. Read a "Plan" that means the composer's
+> no-execution preview as **preflight**, and leave the rest.
 >
 > **A screen prompt pasted into a mockup tool travels without this header:** substitute
 > "Preflight" for "Plan" in the prompt text first, and never ask for a button labelled
-> "Plan" (Screen 4's primary button, below, predates the ruling).
+> "Plan" (Screen 4's primary button predates the ruling).
 
-**Status:** designer-facing brief, 2026-08-07. Derived from `ui-advisory.md` (authoritative
-design plan) and ADR-0009/ADR-0020; written as paste-able prompts for mockup generation —
-prepend the global section to each screen prompt. Iterate mockups against this before any
-HTMX is written (ui-advisory deliverable #2).
+**Status:** designer-facing brief, 2026-08-07. Derived from `ui-advisory.md` and
+ADR-0009/ADR-0020, written as paste-able prompts for mockup generation: prepend the global
+section to each screen prompt (ui-advisory deliverable #2).
 
 The product: a fleet-administration control plane. The Console's job: **make the security
-boundary legible.** A skeptical operator watches the fleet, probes what's allowed, reads
-*why* something was denied, and only then trusts the system.
+boundary legible** to a skeptical operator who watches the fleet, probes what's allowed and
+reads *why* something was denied before trusting the system.
 
 ---
 
@@ -42,23 +38,23 @@ Rules that override normal dashboard instincts:
    accent for interactive elements). Color is *semantic and scarce*: amber means *attention
    now* (the control-plane banner, `state:offline`, `state:outdated`, `state:cert-expiring`,
    over-cap notes); indigo is the security lane (`relay:` labels, quarantine); one muted red
-   exists, on `failure` and `timeout` only (D5 in `console/99-open-decisions.md`). A **denied** result is
-   NOT an error — render it neutral/informative (slate chip, not red), because a deny is
-   the product working correctly.
+   exists, on `failure` and `timeout` and on the button of an act that lowers authority (D5
+   and D24 in `console/99-open-decisions.md`). A **denied** result is NOT an error — render
+   it neutral/informative (slate chip, not red), because a deny is the product working
+   correctly.
 2. **The UI computes what is interesting; the human only ever reads exceptions.** Fleets
    run 100–10,000 Nodes. A list is a bug: render the *mode* (the normal state) as one
    compressed calm line and spend pixels on deviations. Grouped counts with
    expand-on-demand ("10 allow · 1 deny · 1 offline") are the standard pattern; the
    disclosure ladder is count → segmented bar → groups → sampled members → full list only
    on explicit demand.
-3. **The user's taxonomy is the organizing axis.** The customer already named their world
-   in their own labels (`env=prod`, `role=web`, `team=payments`); screens organize by
-   *those* names first. The server's internal machinery (enrollment state, certificate
-   fingerprints, tokens) is data on the row and an available grouping — never the default
-   frame. Two boundaries keep this honest: show only what the server truthfully knows
-   (connectivity, versions, config drift, command history — no CPU/latency/app-health,
-   this is not a monitoring product), and render groups as *observations*, never as
-   desired-vs-actual (no "expected 40, found 39, fix it" affordances).
+3. **The user's taxonomy is the organizing axis.** Screens organize first by the customer's
+   own labels (`env=prod`, `role=web`, `team=payments`). Server machinery (enrollment state,
+   certificate fingerprints, tokens) is data on the row and an available grouping, never the
+   default frame. Show only what the server truthfully knows (connectivity, versions, config
+   drift, command history — no CPU/latency/app-health; this is not a monitoring product), and
+   render groups as *observations*, never desired-vs-actual (no "expected 40, found 39, fix
+   it" affordances).
 4. **One decision per screen.** Decision surfaces (approval, execution) contain exactly one
    primary action and nothing competing with it. No sidebars of stats, no secondary CTAs.
 5. **Two-lane identity grammar, used everywhere identically:** a **solid chip** = identity
@@ -75,7 +71,11 @@ Rules that override normal dashboard instincts:
    (amber, unmissable, present on every screen when the fleet freeze is engaged).
 9. **No settings pages exist, ever.** Server configuration (blast caps, listeners, gates)
    appears only as *effects in context* — a cap shown inside a plan line, an `outdated`
-   flag on a row — never as an inventory of editable values.
+   flag on a row — never as an inventory of editable values. *(Superseded: invariant 11 now
+   lets a human `admin` change reach-bounding settings with step-up; see
+   [console/18-settings.md](console/18-settings.md) and
+   [console/19-approval-rules.md](console/19-approval-rules.md). The security floor is
+   still never editable.)*
 
 ---
 
@@ -85,11 +85,10 @@ The user's whole fleet, organized by *their* names — group-by-first, not a raw
 table. Eyes-only in phase one: no action buttons on rows (phase two adds exactly one
 action: bulk-apply a `tag:` label to the current filter result).
 
-- **Top bar: view controls.** A search box whose query language is the same Selector
-  syntax used to target commands (browsing trains targeting) · a **"Group by"** control
-  accepting any label key (`env`, `role`, `team`…) · a **saved-views** switcher. Landing
-  is the signed-in user's default saved view (their filter + grouping — "my slice"), not
-  the global registry; the global everything-view is just another view.
+- **Top bar: view controls.** A search box whose query language is the Selector syntax used
+  to target commands (browsing trains targeting) · a **"Group by"** control accepting any
+  label key (`env`, `role`, `team`…) · a **saved-views** switcher. Landing is the signed-in
+  user's default saved view ("my slice"); the global everything-view is just another view.
 - **Grouped state (the default): rollup cards.** One calm card per value of the grouping
   key, headlined with the user's own name for it: "**prod** · 4,012 nodes · 3 offline ·
   12 outdated". Healthy groups compress to a single line; only deviating groups show
@@ -132,6 +131,10 @@ The record of one command run against many Nodes. Must be legible at 3 Nodes and
   informative-neutral, never as failure.
 
 ## Screen 3 — Approval object (the highest-stakes screen)
+
+> **Retired.** The Console decides no approvals (ADR-0044); see
+> [console/08-approval-object.md](console/08-approval-object.md). Kept as the origin of the
+> card's design language.
 
 One pending action awaiting human sign-off. A single centered card, generous whitespace,
 **mobile-first** (approvers arrive from a phone link). Nothing else on the page competes.
