@@ -10,14 +10,18 @@
 # Docker Desktop it arrives over virtiofs, 9p or FUSE.
 #
 # Inputs, mounted read-only: /src/relay.toml, /src/approval-gates.json and
-# /src/approval-gates.demo.json. Output: /stage, the volume root.
+# /src/approval-gates.demo.json. Output: /stage, the volume root. It also hands
+# init's two output volumes, /handoff/credential and /handoff/bootstrap, to the
+# Relay's uid.
 #   relay.toml                root:10001 0640, the layout the Relay accepts
 #   approval-gates*.json      root:root  0644, what the gate loader demands
 #
 # The container runs as root with only CAP_CHOWN (to group the file to 10001, a
-# group root is not in) and CAP_DAC_OVERRIDE (to read a checkout the
-# developer's umask made 0600; every path but /stage is read-only), with no network. Any failure exits non-zero, and
-# the Relay depends on this service's success, so the fleet stays down.
+# group root is not in, and to hand init's volumes to the Relay's uid) and
+# CAP_DAC_OVERRIDE (to read a checkout the developer's umask made 0600), with no
+# network; every path but /stage and /handoff is read-only. Any failure exits
+# non-zero, and the Relay depends on this service's success, so the fleet stays
+# down.
 set -eu
 
 relay_gid=10001
@@ -53,3 +57,19 @@ for entry in /stage/* /stage/.[!.]*; do
 done
 
 ls -ln /stage
+
+# init runs as the Relay's uid (relay init refuses root) and writes the admin and
+# approver credentials and the daemons' join string onto these two volumes. A
+# fresh named volume, or one left by an earlier root-run init, is root-owned, so
+# hand both to that uid here. The daemons run as root and read the join string.
+# Root takes each directory back before changing its mode: without CAP_FOWNER
+# it may chmod only what it owns, and a re-run finds them owned by that uid.
+relay_uid=10001
+handoff() {
+  # $1 directory, $2 mode.
+  chown 0:0 "$1"
+  chmod "$2" "$1"
+  chown -R "$relay_uid:$relay_gid" "$1"
+}
+handoff /handoff/credential 0700
+handoff /handoff/bootstrap 0755
