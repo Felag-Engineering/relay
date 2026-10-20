@@ -52,7 +52,7 @@ There are deliberately no unversioned or "latest" **binary** names: the binaries
 management installs, above all the daemon (ADR-0014), must be pinned to an explicit version,
 and an upgrade is an explicit pin change, gated Relay-side only by `reach.min_daemon_version`.
 The Relay **image** is the evaluation artifact (ADR-0033 §5), so a `:latest` tag exists as a
-convenience, and every documented deployment, `deploy/compose` included, pins the image by
+convenience, and every documented deployment, `deploy/production` included, pins the image by
 digest. There is no daemon image, ever (ADR-0033 §5).
 
 ## Verify, then install

@@ -56,7 +56,7 @@ die() { echo "init: $*" >&2; exit 1; }
 # The committed default is fine on loopback and nowhere else: it is in this
 # repository, so once the control plane is published beyond loopback
 # (RELAY_PUBLISH_ADDR) it is a known password in front of a fleet-execution
-# surface. Keep this literal in step with docker-compose.demo.yml's default.
+# surface. Keep this literal in step with the default in deploy/{test,demo}/docker-compose.yml.
 test -n "${PASSWORD}" || die "CONSOLE_ADMIN_PASSWORD is unset"
 case "${RELAY_PUBLISH_ADDR:-127.0.0.1}" in
     127.* | localhost | ::1 | "[::1]") ;;

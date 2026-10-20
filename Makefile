@@ -57,8 +57,8 @@ tool_bin = GOWORK=off go -C "$(CURDIR)/tools/$(1)" tool -n $(1)
         test-security-surface test-codex-review test-ci-changed-paths \
         test-check-docs test-smoke-test test-maintainer-check \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
-        demo-build demo-reset demo-reset-oauth demo-fault demo-up demo-up-oauth demo-down demo-creds \
-        relay-demo-owner test-release-image-guard test-compose-floor-check compose-floor-check test-license-change-date test-catalog-ledger catalog-ledger-check \
+        demo-build demo-reset demo-reset-oauth demo-fault demo-logs demo-up demo-up-oauth demo-down demo-creds \
+        fleet-owner test-release-image-guard test-compose-floor-check compose-floor-check test-license-change-date test-catalog-ledger catalog-ledger-check \
         test-dev-fleet-make \
         fuzz-relay fuzz-daemon \
         verify verify-proto proto-lint opschema-check openapi-check gen-apiclient apiclient-check \
@@ -392,7 +392,7 @@ test-maintainer-check:
 	bash scripts/maintainer-check-test.sh
 
 # Proves the Makefile's dev-fleet guards (#893): demo-fault's injection and glob defences,
-# the relay-demo-owner refusals, and the STATE_DIR/BASE scrub. Hermetic: a stub docker on
+# the fleet-owner refusals, and the STATE_DIR/BASE scrub. Hermetic: a stub docker on
 # PATH; no Docker engine, no python.
 test-dev-fleet-make:
 	bash scripts/dev-fleet-make-test.sh
@@ -850,61 +850,70 @@ fuzz-daemon:
 	$(if $(FUZZ_GROWN_CORPUS),mkdir -p $(addprefix $(FUZZ_GROWN_CORPUS)/,$(FUZZ_DAEMON_TARGETS)))
 	$(foreach t,$(FUZZ_DAEMON_TARGETS),cd daemon && cargo +nightly fuzz run $(t) $(call fuzz_corpus,$(t)) -- $(FUZZ_FLAGS)$(fuzz_daemon_newline))
 
-## --- local dev fleet (DEV-ONLY; Docker + Compose >= 2.18) ---
-# The laptop fleet (docs/dev-fleet.md) and its nine-Node demo (docs/operations/demo-fleet.md).
-# The fleet never runs in build/test/lint or CI. CI only renders the compose files with
-# `docker compose config` (no engine) for compose-floor-check.
-# - One fixed project, relay-demo: docker-compose.demo.yml names it, and -p pins it against
-#   a stray COMPOSE_PROJECT_NAME. Three Nodes by default, nine under --profile demo.
-# - The overlay is named on every down/logs, so an IdP from an OAuth run goes with the
-#   fleet; that is why even the plain targets need Compose >= 2.18 (`!reset`).
-# - The Relay's configuration file (and so its approval gate) is chosen per target here, not
-#   by the caller's shell or .env.
+## --- local fleets (DEV-ONLY; Docker + Compose >= 2.18) ---
+# The three-Node test fleet (deploy/test, docs/dev-fleet.md) and the nine-Node demo fleet
+# (deploy/demo, docs/operations/demo-fleet.md). Each folder holds its compose file and every
+# configuration file it loads. The fleets never run in build/test/lint or CI; CI only renders
+# the compose files with `docker compose config` (no engine) for compose-floor-check.
+# - Fixed projects: relay-test and relay-demo. Each compose file names its own, and -p pins it
+#   against a stray COMPOSE_PROJECT_NAME. Both publish the same host ports, so the up and
+#   reset targets refuse while the other fleet has containers.
+# - The demo's down/logs name the OAuth overlay, so an IdP from an OAuth run goes with the
+#   fleet; that is why even the plain demo targets need Compose >= 2.18 (`!reset`).
 # - Startup waits in two steps, so --wait never covers the relay-config and init one-shots (they
 #   exit, and older Compose fails `up --wait` on any exited container).
-RELAY_DEMO_COMPOSE := docker compose -p relay-demo -f docker-compose.demo.yml
-DEV_RELAY_CONFIG  := DEV_FLEET_RELAY_CONFIG=./docker/fixtures/relay.dev.toml
-DEMO_RELAY_CONFIG := DEV_FLEET_RELAY_CONFIG=./docker/fixtures/relay.demo.toml
-DEV_COMPOSE        := $(DEV_RELAY_CONFIG) $(RELAY_DEMO_COMPOSE)
-DEMO_COMPOSE       := $(DEMO_RELAY_CONFIG) $(RELAY_DEMO_COMPOSE) --profile demo
-DEMO_OAUTH_COMPOSE := $(DEMO_RELAY_CONFIG) $(RELAY_DEMO_COMPOSE) -f docker-compose.oauth.yml --profile demo
-ALL_COMPOSE        := $(RELAY_DEMO_COMPOSE) -f docker-compose.oauth.yml --profile demo
+TEST_COMPOSE       := docker compose -p relay-test -f deploy/test/docker-compose.yml
+DEMO_COMPOSE       := docker compose -p relay-demo -f deploy/demo/docker-compose.yml
+DEMO_OAUTH_COMPOSE := $(DEMO_COMPOSE) -f deploy/demo/oauth.yml
 DEMO_WAIT_SECONDS ?= 240
 # Must match ROSTER's role=web entries in daemon/tests/dev_fleet_fixtures.rs (a test checks).
 DEMO_WEB_NODES := daemon-1 daemon-2 daemon-4 daemon-5 daemon-6 daemon-9
 # DEMO_FAULT_NODES overrides the default fault targets; e.g.
-# `make demo-fault DEMO_FAULT_NODES="daemon-2 daemon-9"`. Exported, not spliced into the
+# `make demo-fault demo-logs DEMO_FAULT_NODES="daemon-2 daemon-9"`. Exported, not spliced into the
 # recipe text: Make hands it to the recipe's shell as a real environment variable, so a
 # value carrying a shell metacharacter (';', a backtick, '$(') reaches the recipe as an
-# opaque string, never as text a shell re-parses (#622 security review S2).
+# opaque string, never as text a shell re-parses.
 export DEMO_FAULT_NODES ?= daemon-4 daemon-6
 # dev-fleet-mcp.sh reads STATE_DIR and BASE from the environment; a leftover value would
 # redirect where credentials are written or which Relay they are sent to, so every call
-# from here scrubs both (#622 security review S4).
-DEV_FLEET_MCP := env -u STATE_DIR -u BASE bash scripts/dev-fleet-mcp.sh
+# from here scrubs both, and names the fleet explicitly.
+DEV_FLEET_MCP_TEST := env -u STATE_DIR -u BASE FLEET=test bash scripts/dev-fleet-mcp.sh
+DEV_FLEET_MCP_DEMO := env -u STATE_DIR -u BASE FLEET=demo bash scripts/dev-fleet-mcp.sh
 
-# relay-demo is one project per Docker engine, but this repo is checked out into many
+# Each fleet is one project per Docker engine, but this repo is checked out into many
 # worktrees. Refuse a non-local engine (DOCKER_HOST or the docker context), and any
-# relay-demo container brought up from a different checkout. Read-only `docker ps`, never
-# `docker compose`. Paths are compared physically (`pwd -P`): Compose records the logical cwd.
-# If that checkout is gone, `down` from here (docs/dev-fleet.md, Troubleshooting).
-relay-demo-owner:
+# relay-test or relay-demo container brought up from a different checkout. Read-only
+# `docker ps`, never `docker compose`. Paths are compared physically (`pwd -P`): Compose
+# records the logical cwd. If that checkout is gone, `down` from here (docs/dev-fleet.md,
+# Troubleshooting).
+fleet-owner:
 	@set -eu; here=$$(pwd -P); \
 	case "$${DOCKER_HOST:-unix://}" in unix://*) ;; \
 	  *) echo "refusing: DOCKER_HOST points at a non-local engine ('$$DOCKER_HOST')" >&2; exit 2;; esac; \
 	case "$$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)" in unix://*) ;; \
 	  *) echo "refusing: the current docker context is not a local engine" >&2; exit 2;; esac; \
-	dirs=$$(docker ps -a --filter label=com.docker.compose.project=relay-demo \
-	  --format '{{.Label "com.docker.compose.project.working_dir"}}') \
-	  || { echo "refusing: could not list relay-demo containers (docker ps failed)" >&2; exit 2; }; \
-	printf '%s\n' "$$dirs" | sort -u | while IFS= read -r d; do \
-	  [ -z "$$d" ] && continue; \
-	  [ "$$(cd "$$d" 2>/dev/null && pwd -P)" = "$$here" ] || { \
-	    echo "refusing: relay-demo is running from another checkout at '$$d' (this checkout is '$$here'); stop it there first, or run this from that checkout" >&2; exit 2; }; \
+	for p in relay-test relay-demo; do \
+	  dirs=$$(docker ps -a --filter label=com.docker.compose.project=$$p \
+	    --format '{{.Label "com.docker.compose.project.working_dir"}}') \
+	    || { echo "refusing: could not list $$p containers (docker ps failed)" >&2; exit 2; }; \
+	  printf '%s\n' "$$dirs" | sort -u | while IFS= read -r d; do \
+	    [ -z "$$d" ] && continue; \
+	    [ "$$(cd "$$d" 2>/dev/null && pwd -P)" = "$$here" ] || { \
+	      echo "refusing: $$p is running from another checkout at '$$d' (this checkout is '$$here'); stop it there first, or run this from that checkout" >&2; exit 2; }; \
+	  done; \
 	done
 
-# Refuse to `up` in the other mode: the plain and OAuth fleets put the Relay's ports on
-# different containers, so Compose would recreate relay and then fail to bind. $(1) is plain|oauth.
+# Refuse to start one fleet while the other has containers: both publish 7654 and 9443.
+# $(1) is the other project, $(2) the target that stops it.
+define fleet_exclusive
+	@set -eu; s=$$(docker ps -aq --filter label=com.docker.compose.project=$(1)) \
+	  || { echo "refusing: docker ps failed" >&2; exit 2; }; \
+	[ -z "$$s" ] || { echo "refusing: $(1) is up and holds the same host ports; run 'make $(2)' first" >&2; exit 2; }
+endef
+
+# Refuse to `up` the demo in the other mode: the plain and OAuth fleets put the Relay's ports
+# on different containers, so Compose would recreate relay and then fail to bind. $(1) is
+# plain|oauth.
 define relay_demo_mode
 	@set -eu; s=$$(docker ps -a --filter label=com.docker.compose.project=relay-demo \
 	  --format '{{.Label "com.docker.compose.service"}}') \
@@ -916,106 +925,113 @@ define relay_demo_mode
 endef
 
 # Step 2 waits for health on everything but the one-shots. $(1) is the compose command.
-define relay_demo_wait
+define fleet_wait
 	$(1) up -d --no-build --pull never --no-deps --no-recreate --wait --wait-timeout $(DEMO_WAIT_SECONDS) $$($(1) config --services | grep -vxE 'init|relay-config')
 endef
 
 # Step 1 runs init to completion (every daemon depends on it) and starts the daemons.
-define relay_demo_up
+define fleet_up
 	$(1) up -d --no-build --pull never
-	$(call relay_demo_wait,$(1))
+	$(call fleet_wait,$(1))
 endef
 
 define relay_demo_reset
 	@imgs=$$($(1) config --images) && [ -n "$$imgs" ] && docker image inspect $$imgs >/dev/null \
 	  || { echo "demo-reset: an image is missing; run 'make demo-build' (nothing was touched)" >&2; exit 1; }
-	$(ALL_COMPOSE) down -v --remove-orphans --timeout 5
-	$(call relay_demo_up,$(1))
-	$(DEV_FLEET_MCP) init
+	$(DEMO_OAUTH_COMPOSE) down -v --remove-orphans --timeout 5
+	$(call fleet_up,$(1))
+	$(DEV_FLEET_MCP_DEMO) init
 	@echo "demo-reset: reset complete — init exited 0, every service is healthy, .dev-fleet/ holds the fresh credentials."
 	@echo "demo-reset: the CA was regenerated, so a registered MCP client still holds the OLD bearer token AND the OLD CA (NODE_EXTRA_CA_CERTS is read only at process start). Restart it — .dev-fleet/ is already current, so there is no need to run 'make demo-creds' again first:"
 	@echo "demo-reset:   claude mcp remove relay"
 endef
 
-dev-fleet-up: relay-demo-owner
-	$(call relay_demo_mode,plain)
-	$(DEV_COMPOSE) up --build -d
-	$(call relay_demo_wait,$(DEV_COMPOSE))
+dev-fleet-up: fleet-owner
+	$(call fleet_exclusive,relay-demo,demo-down)
+	$(TEST_COMPOSE) up --build -d
+	$(call fleet_wait,$(TEST_COMPOSE))
 
-dev-fleet-down: relay-demo-owner
-	$(ALL_COMPOSE) down
+dev-fleet-down: fleet-owner
+	$(TEST_COMPOSE) down
 
 dev-fleet-logs:
-	$(ALL_COMPOSE) logs -f
+	$(TEST_COMPOSE) logs -f
 
-# Export the fleet's CA cert and BOTH control-plane credentials (the founding admin's and
+# Export the fleet's CA cert and BOTH control-plane credentials (the first admin's and
 # dev-approver's) to the gitignored ./.dev-fleet/ so a host-side MCP client or
 # scripts/dev-fleet-mcp.sh can reach the control plane over VERIFIED TLS. This mints
 # nothing: it is a `docker compose cp` read out of the exited `init` container. `init`
 # re-mints on every `compose up` (a stopped one-shot is started again), including a plain
-# `demo-up`; run this after either `demo-reset` or `demo-up` to pick up the latest.
-dev-fleet-creds: relay-demo-owner
-	$(DEV_FLEET_MCP) init
+# `demo-up`; run this after any up or reset to pick up the latest.
+dev-fleet-creds: fleet-owner
+	$(DEV_FLEET_MCP_TEST) init
 
-demo-creds: dev-fleet-creds
+demo-creds: fleet-owner
+	$(DEV_FLEET_MCP_DEMO) init
 
 # `demo-reset` NEVER builds — run `demo-build` first (and again after any code change).
-demo-build: relay-demo-owner
+demo-build: fleet-owner
 	$(DEMO_COMPOSE) build
 	$(DEMO_OAUTH_COMPOSE) pull --ignore-buildable --policy missing
 
-demo-reset: relay-demo-owner
+demo-reset: fleet-owner
+	$(call fleet_exclusive,relay-test,dev-fleet-down)
 	$(call relay_demo_reset,$(DEMO_COMPOSE))
 	@echo "demo-reset:   claude mcp add --transport http relay https://relay:9443/mcp --header \"Authorization: Bearer \$$(cat .dev-fleet/control-credential)\""
 
 # The registration that signs Claude Code in through the IdP instead of a bearer token
 # (docs/operations/demo-fleet.md, "Signing in as a human over OAuth"). The client id and
-# callback port are the realm fixture's (docker/fixtures/keycloak/relay-demo-realm.json).
+# callback port are the realm fixture's (deploy/demo/keycloak/relay-demo-realm.json).
 define oauth_hint
 	@echo "demo-reset:   claude mcp add --transport http --client-id relay-demo-claude-code --callback-port 33418 relay https://relay:9443/mcp"
 	@echo "demo-reset: then start Claude Code with NODE_EXTRA_CA_CERTS=\"\$$PWD/.dev-fleet/ca-cert.pem\", run /mcp, pick relay, Authenticate, and sign in as demo-user / dev-only-demo-user (DEV-ONLY)."
 endef
 
-demo-reset-oauth: relay-demo-owner
+demo-reset-oauth: fleet-owner
+	$(call fleet_exclusive,relay-test,dev-fleet-down)
 	$(call relay_demo_reset,$(DEMO_OAUTH_COMPOSE))
 	$(oauth_hint)
 
 # Bring the demo fleet back up after `demo-down` WITHOUT wiping any volume: no `-v`, no
 # build. With `--pull never` the only loud failure is a missing image — run `demo-build`
 # once first. This is NOT "no credential mint": `init` re-runs (see `dev-fleet-creds`).
-demo-up: relay-demo-owner
+demo-up: fleet-owner
+	$(call fleet_exclusive,relay-test,dev-fleet-down)
 	$(call relay_demo_mode,plain)
-	$(call relay_demo_up,$(DEMO_COMPOSE))
+	$(call fleet_up,$(DEMO_COMPOSE))
 	@echo "demo-up: relay-demo is up and healthy (no volume touched). init re-ran and re-minted; run 'make demo-creds' to refresh .dev-fleet/."
 
-# The same two, with the opt-in OAuth overlay (docker-compose.oauth.yml, #351): a
-# DEV-ONLY Keycloak identity provider, and the Relay's OAuth resource-server half turned
-# on, so an MCP client can sign in as a human. `demo-build`'s pull names the overlay, so it
-# fetches the IdP's image too.
-demo-up-oauth: relay-demo-owner
+# The same two, with the opt-in OAuth overlay (deploy/demo/oauth.yml): a DEV-ONLY Keycloak
+# identity provider, and the Relay's OAuth resource-server half turned on, so an MCP client
+# can sign in as a human. `demo-build`'s pull names the overlay, so it fetches the IdP's image
+# too.
+demo-up-oauth: fleet-owner
+	$(call fleet_exclusive,relay-test,dev-fleet-down)
 	$(call relay_demo_mode,oauth)
-	$(call relay_demo_up,$(DEMO_OAUTH_COMPOSE))
+	$(call fleet_up,$(DEMO_OAUTH_COMPOSE))
 	@echo "demo-up: relay-demo is up and healthy with OAuth (no volume touched). init re-ran and re-minted; run 'make demo-creds' to refresh .dev-fleet/."
 	@echo "demo-up: OAuth is on. A Claude Code already signed in stays signed in (the IdP's sessions survive down/up); to register one:"
 	$(oauth_hint)
 
-demo-down: relay-demo-owner
-	$(ALL_COMPOSE) down
+demo-down: fleet-owner
+	$(DEMO_OAUTH_COMPOSE) down
+
+demo-logs:
+	$(DEMO_OAUTH_COMPOSE) logs -f
 
 # Kill the demo service on each target Node (default daemon-4 and daemon-6: one env=prod
 # and one env=staging web Node). `-f` disables globbing of the exported value, which is
 # read as $$DEMO_FAULT_NODES and validated against the role=web Nodes before any exec.
-# Kill by pidof, not the pidfile: a stale pidfile cannot redirect the kill. `exec` names
-# --profile demo because daemon-4..9 are profile-gated, and no gate because it recreates
-# nothing.
-demo-fault: relay-demo-owner
+# Kill by pidof, not the pidfile: a stale pidfile cannot redirect the kill. No mode or
+# exclusivity check, because it recreates nothing.
+demo-fault: fleet-owner
 	@set -euf; \
 	[ -n "$$DEMO_FAULT_NODES" ] || { echo "demo-fault: DEMO_FAULT_NODES is empty" >&2; exit 2; }; \
 	for n in $$DEMO_FAULT_NODES; do case " $(DEMO_WEB_NODES) " in *" $$n "*) ;; \
 	  *) echo "demo-fault: refusing $$n: not a role=web Node, so it runs no demo service" >&2; exit 2;; esac; done; \
 	for n in $$DEMO_FAULT_NODES; do \
-	  $(RELAY_DEMO_COMPOSE) --profile demo exec -T $$n sh -c 'pids="$$(pidof httpd 2>/dev/null || true)"; [ -z "$$pids" ] || kill $$pids; exit 0'; \
-	  i=0; while :; do rc=0; $(RELAY_DEMO_COMPOSE) --profile demo exec -T $$n /usr/local/bin/dev-fleet-service status >/dev/null 2>&1 || rc=$$?; \
+	  $(DEMO_COMPOSE) exec -T $$n sh -c 'pids="$$(pidof httpd 2>/dev/null || true)"; [ -z "$$pids" ] || kill $$pids; exit 0'; \
+	  i=0; while :; do rc=0; $(DEMO_COMPOSE) exec -T $$n /usr/local/bin/dev-fleet-service status >/dev/null 2>&1 || rc=$$?; \
 	    [ $$rc -eq 3 ] && break; i=$$((i+1)); [ $$i -ge 5 ] && { echo "$$n: httpd still answering after kill" >&2; exit 1; }; sleep 1; done; \
 	  echo "$$n: dev-fleet demo service DOWN (dev-fleet-service status: exit 3)"; done
 

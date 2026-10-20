@@ -1,6 +1,7 @@
 # The demo fleet
 
-The nine-Node `demo` compose profile of the [local dev fleet](../dev-fleet.md), as a runbook:
+The nine-Node demo fleet, `deploy/demo/`, beside the [local test fleet](../dev-fleet.md), as a
+runbook:
 roster, beats, fault injection, resetting between takes, and resource usage. Read
 [dev-fleet.md](../dev-fleet.md) first: its **DEV-ONLY** banner, prerequisites, bring-up and MCP
 connection all apply here, with more force, since three times the Nodes sit behind the same
@@ -35,8 +36,10 @@ beat is still real: it comes from the same relay-daemon Policy engine that runs 
    $ grep -q 'relay$' /etc/hosts || echo '127.0.0.1 relay' | sudo tee -a /etc/hosts
    ```
 
-   Host ports `7654` and `9443` must be free, or `make demo-reset` fails at bind. The make
-   targets refuse a `relay-demo` fleet started from another checkout.
+   Host ports `7654` and `9443` must be free, or `make demo-reset` fails at bind. The test
+   fleet publishes the same two, so the demo targets refuse while `relay-test` has containers
+   (run `make dev-fleet-down` first), and they refuse a `relay-demo` fleet started from another
+   checkout.
 
 2. **`make demo-build`.** Run it the day before, not on stage, and again after any code
    change. It is the only demo target that builds: the relay, `init` and daemon images, plus a
@@ -241,17 +244,16 @@ off the laptop.
 ### The human approver
 
 **The demo fleet runs its own gate, and it is in-band.** `make demo-reset` and `make demo-up`
-start the Relay on `docker/fixtures/approval-gates.demo.json`, not the default fleet's
-`approval-gates.json` ([The approval gate](../dev-fleet.md#the-approval-gate)). The
-`make demo-*` targets set `DEV_FLEET_RELAY_CONFIG`, which the `relay-config` one-shot stages
-onto the read-only config volume as the Relay's `relay.toml`; its `approval.gate_rules_path`
-names the gate. A bare `docker compose -f docker-compose.demo.yml --profile demo up` sets
-nothing and gets the default fleet's out-of-band gate, so use the `make demo-*` targets. Both
-gate files are staged root-owned `0644`. No API writes them: changing a rule is a fixture edit
-and a Relay restart. (Invariant 11 would allow gate rules to become a runtime object, edited
-only by a human with step-up and audited; they are not one.) Rule names are not secret: a
-parked response lists them in `matched_rules`. The two rules match exactly what the default
-fleet's two match:
+start the Relay on `deploy/demo/approval-gates.json`, not the test fleet's out-of-band gate
+([The approval gate](../dev-fleet.md#the-approval-gate)). The `relay-config` one-shot stages
+the folder's `relay.toml` and `approval-gates.json` onto the read-only config volume, and
+`relay.toml`'s `approval.gate_rules_path` names the gate at `/etc/relay/approval-gates.json`,
+so any `up` of `deploy/demo/docker-compose.yml` gets this gate. The gate file is staged
+root-owned `0644`. No API writes it: changing a rule is an edit in `deploy/demo/` and another
+`up`, which re-stages the folder and restarts the Relay. (Invariant 11 would allow gate
+rules to become a runtime object, edited only by a human with step-up and audited; they are
+not one.) Rule names are not secret: a parked response lists them in `matched_rules`. The two
+rules match exactly what the test fleet's two match:
 
 | Rule | Matches | Requires |
 | --- | --- | --- |
@@ -259,7 +261,7 @@ fleet's two match:
 | `demo-raw-exec-always-needs-a-human` | every Raw Exec | 1 approval, `in-band`, `requester_allowed: true`, no audience, `ttl` 1h |
 
 They let an MCP client be **asked** the approval question in-band, or answer with
-`approve_request`. The default fleet's out-of-band gate permits neither: no question is
+`approve_request`. The test fleet's out-of-band gate permits neither: no question is
 emitted, and `approve_request` is refused as too weak a channel.
 
 **Who may decide** ([approval-gates.md](approval-gates.md#who-may-decide)):
@@ -295,7 +297,7 @@ call unchanged (on the asked-in-band path, the client's retry is that re-issue).
    ```
 
    `approver` names the human who decided: required, recorded as asserted, never verified.
-3. **Out-of-band**, as on the default fleet: the Control API as `dev-approver` *(predicted
+3. **Out-of-band**, as on the test fleet: the Control API as `dev-approver` *(predicted
    under this gate)*:
 
    ```console
@@ -305,7 +307,7 @@ call unchanged (on the asked-in-band path, the client's retry is that re-issue).
 
    The Console has no approval surface (ADR-0044).
 
-**What is structural, and what is not.** Much less than on the default fleet, deliberately: an
+**What is structural, and what is not.** Much less than on the test fleet, deliberately: an
 in-band answer is, by construction, the requesting session's word that a human agreed. What
 holds: no API changes the gate; nobody below `admin` releases a Raw Exec; a decision binds to
 the plan hash, and a retry whose Node set changed parks and asks again. What does not hold is
@@ -313,7 +315,7 @@ a second person, or even a verified first one: a human requester may approve its
 one presenter holds every credential in `.dev-fleet/`; and a machine Account's in-band answer
 needs only a name the client supplies (the accepted client-integrity assumption,
 [approval.md, Channel strength](../specs/approval.md#channel-strength); ADR-0029). Say so on
-stage rather than call this a two-person control; the default fleet's gate demonstrates that.
+stage rather than call this a two-person control; the test fleet's gate demonstrates that.
 
 `dev-approver` still exists here: the `init` one-shot (`docker/dev-fleet-init.sh`) creates it,
 a human admin, on every reset, and `make demo-reset` copies its token to
@@ -465,7 +467,7 @@ the result under [Verification honesty](#verification-honesty).
 
 ### Signing in as a human over OAuth
 
-**Opt-in.** `make demo-reset-oauth` and `make demo-up-oauth` layer `docker-compose.oauth.yml`
+**Opt-in.** `make demo-reset-oauth` and `make demo-up-oauth` layer `deploy/demo/oauth.yml`
 on top: a DEV-ONLY Keycloak identity provider, and the Relay's OAuth resource-server half
 turned on (ADR-0024;
 [Human sessions](control-plane-credential.md#human-sessions-oauth-21-through-your-idp)). Claude
@@ -473,14 +475,14 @@ Code then signs in through a browser and reaches `/mcp` as the human Account `de
 `human`, role `operator`) instead of on a shared API Token. On that session, an answer to an
 approval question given in Claude Code's UI is recorded as that human's **verified** decision
 ([approval.md](../specs/approval.md), AP-78 and AP-79). The plain targets bring up the plain
-fleet, but `make demo-down` and every reset's wipe also name `docker-compose.oauth.yml`, so a
-leftover IdP goes down too; even the plain targets therefore need that file to parse, and a
-recent enough Compose (see Bring-up). Read
+fleet, but `make demo-down`, `make demo-logs` and every reset's wipe also name
+`deploy/demo/oauth.yml`, so a leftover IdP goes down too; even the plain targets therefore
+need that file to parse, and a recent enough Compose (see Bring-up). Read
 [What an OAuth session proves](#what-an-oauth-session-proves-and-what-it-does-not) before
 saying anything about it on stage.
 
-Every name below is fixed in `docker-compose.oauth.yml` or its realm fixture,
-`docker/fixtures/keycloak/relay-demo-realm.json`:
+Every name below is fixed in `deploy/demo/oauth.yml` or its realm fixture,
+`deploy/demo/keycloak/relay-demo-realm.json`:
 
 | What | Value |
 | --- | --- |
@@ -587,13 +589,14 @@ flow): a quick way to tell which mode is up *(predicted from the Relay's code; t
 observed)*.
 
 **The Console and OAuth run together.** The Console is on in both modes, as
-`docker-compose.demo.yml` sets it. An unauthenticated request off the Console (`/mcp` and
-`/api/v1` included) gets the `401` challenge above, while a browser on `/console/` goes to the
-Console's own sign-in, where `admin` signs in as on the plain fleet. The founding admin's,
-`dev-approver`'s and `auto-incident-response`'s tokens work as before. Observed on 2026-09-29
-with OAuth on: unauthenticated `POST /mcp` got the challenge, `GET /console/` a `303` to
-`/console/login`, `admin` signed in, and both approval stories (the AI-agent's with responder
-`test_user`, and `demo-user`'s on the OAuth session) ran their Jobs as described here.
+`deploy/demo/relay.toml` and `relay.oauth.toml` set it. An unauthenticated request off the
+Console (`/mcp` and `/api/v1` included) gets the `401` challenge above, while a browser on
+`/console/` goes to the Console's own sign-in, where `admin` signs in as on the plain fleet.
+The founding admin's, `dev-approver`'s and `auto-incident-response`'s tokens work as before.
+Observed on 2026-09-29 with OAuth on: unauthenticated `POST /mcp` got the challenge,
+`GET /console/` a `303` to `/console/login`, `admin` signed in, and both approval stories (the
+AI-agent's with responder `test_user`, and `demo-user`'s on the OAuth session) ran their Jobs
+as described here.
 
 #### Between takes
 
@@ -700,13 +703,13 @@ to container loopback), so it stays open, and this is why the overlay is DEV-ONL
 
 ## The demo profile
 
-The `demo` compose profile is the [dev-fleet.md](../dev-fleet.md) fleet plus six daemons,
-`daemon-4..9`: nine Nodes with varied `node:` labels and a third, strictly narrower Policy
-fixture. Three Nodes do not read as a fleet on stage, and identical Policies produce no
-interesting refusal. It is purely additive: every added service carries
-`profiles: ["demo"]`, so a plain `docker compose -f docker-compose.demo.yml up` is unchanged and
-`daemon-1..3` are untouched (enforced by `demo_profile_is_additive`,
-`daemon/tests/dev_fleet_fixtures.rs`).
+`deploy/demo/docker-compose.yml` is the [dev-fleet.md](../dev-fleet.md) test fleet plus six
+daemons, `daemon-4..9`: nine Nodes with varied `node:` labels and a third, strictly narrower
+Policy fixture. Three Nodes do not read as a fleet on stage, and identical Policies produce no
+interesting refusal. It has no profiles: every `up` of the file is all nine. Its Relay, its
+one-shots and `daemon-1..3` are the test fleet's, service for service (enforced by
+`test_fleet_is_the_demo_fleets_first_three_nodes`, `daemon/tests/dev_fleet_fixtures.rs`); its
+`relay.toml` and gate are its own.
 
 ### Start from a clean registry
 
@@ -717,8 +720,9 @@ $ make demo-build   # first time, and again after any code change
 $ make demo-reset
 ```
 
-The demo and default fleets share one project, `relay-demo`, so they cannot run at once. The
-targets refuse a fleet another checkout owns.
+The demo fleet is project `relay-demo`, the test fleet `relay-test`. They publish the same host
+ports, so they cannot run at once: the demo targets refuse while `relay-test` has containers.
+The targets also refuse a fleet another checkout owns.
 
 `make demo-reset` = owner check → image check → `down -v` → `up -d` (`init` runs to
 completion) → health wait → copy credentials to `.dev-fleet/`. It never builds; a missing image
@@ -729,24 +733,20 @@ Node from an earlier experiment would still match Selectors and make `node:role=
 resolve to **two** Nodes, which parks the beat that should run straight through. `-v` also
 destroys the CA and every Node identity, so the fleet re-enrolls from scratch.
 
-`COMPOSE_PROFILES=demo make dev-fleet-up` reaches the same project but builds and starts the
-Relay on the default (out-of-band) gate; use `make demo-*`.
-
 Stop the demo fleet with `make demo-down` (no `-v`: identities and the store survive) and bring
 it back with `make demo-up` (no `-v`, no build). `demo-up` still re-mints credentials: `init`
 has `restart: no`, but `up` starts a stopped one-shot again, which mints fresh values into the
 persisted volume without copying them out; run `make demo-creds` after `demo-up`. There is no
 `down` to run before `make demo-reset`: it wipes first. `make demo-up` always brings back all
-nine daemons, because the project and profile are fixed in the Makefile.
+nine daemons, because the file holds nine. `make demo-logs` follows the fleet's logs.
 
 **Cleanup: stop it and leave it down.** `make demo-reset` brings the fleet straight back up. To
-stop it and wipe its volumes, run this from the checkout root, naming both files (the root has
-no `docker-compose.yml`, and the OAuth overlay is named so a leftover IdP goes too, as with
-`make demo-down`):
+stop it and wipe its volumes, run this from the checkout root, naming both files (the OAuth
+overlay is named so a leftover IdP goes too, as with `make demo-down`):
 
 ```console
-$ docker compose -p relay-demo -f docker-compose.demo.yml -f docker-compose.oauth.yml \
-    --profile demo down -v
+$ docker compose -p relay-demo -f deploy/demo/docker-compose.yml -f deploy/demo/oauth.yml \
+    down -v
 $ rm -rf ./.dev-fleet
 ```
 
@@ -896,7 +896,7 @@ fan-out 2 or more and parks.
 
 `min_fan_out: 2` is **unchanged**. At nine Nodes almost every interesting fan-out crosses it
 and parks, which is the right lesson: raising it to keep a straight-through beat would let a
-four-Node mutate run with no human. `node:role=db`, straight-through on the three-Node default
+four-Node mutate run with no human. `node:role=db`, straight-through on the three-Node test
 fleet, is **two** Nodes here and parks. The straight-through path stays reachable through beat
 (d)'s two fan-out-1 Selectors. Every Raw Exec parks at any fan-out under
 `demo-raw-exec-always-needs-a-human`, which is not retuned either.
@@ -975,7 +975,7 @@ shows the `0100007F:1F90 ... 0A` row again.
 **`make demo-reset`** is the reliable way back to the starting state: fault cleared,
 Jobs/approvals/audit/registry cleared (the store is on `relay-data`, wiped by `down -v`), the
 CA and every credential fresh, every Node healthy. Unlike a bare
-`docker compose -f docker-compose.demo.yml --profile demo down -v` / `up`, it never builds (run
+`docker compose -f deploy/demo/docker-compose.yml down -v` / `up`, it never builds (run
 `make demo-build` first) and it verifies rather than assumes:
 
 1. The ownership check: no `relay-demo` container may belong to another checkout.
@@ -1018,9 +1018,9 @@ table, in the same change that adjusts the roster if that turns out to be needed
 
 **Procedure:**
 
-1. `docker compose -f docker-compose.demo.yml down -v`, then
-   `docker compose -f docker-compose.demo.yml --profile demo up --build -d`; wait until
-   `docker compose -f docker-compose.demo.yml ps` shows all nine daemons `healthy`; let it
+1. `docker compose -f deploy/demo/docker-compose.yml down -v`, then
+   `docker compose -f deploy/demo/docker-compose.yml up --build -d`; wait until
+   `docker compose -f deploy/demo/docker-compose.yml ps` shows all nine daemons `healthy`; let it
    settle 60s.
 2. **Idle:** three samples 10s apart of
    `docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"`. Record

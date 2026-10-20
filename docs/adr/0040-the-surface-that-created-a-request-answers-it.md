@@ -291,7 +291,7 @@ with *"a human answers in the Console"* ends with *"wait for the TTL"*:
   not include the calling Account, `count: 2` — each is correctly *not* offered as an MRTR
   question (the askable predicate exists so a client is never asked something whose answer would
   be refused), and under separation each was also closed to the Console. Nobody could answer.
-- **The demo fixture hits three of those at once.** `docker/fixtures/approval-gates.json`'s rules
+- **The demo fixture hits three of those at once.** `deploy/test/approval-gates.json`'s rules
   are exactly the kind separation would strand.
 - **Every pointer in the product sends humans to a route that would refuse them.** The
   `DecisionPath` in the MCP park result, its JSON-schema text, and the webhook payload all direct

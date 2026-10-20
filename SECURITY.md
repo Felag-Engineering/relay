@@ -46,9 +46,9 @@ In scope:
 
 Out of scope:
 
-- the demo fleet (`docker-compose.demo.yml`, `docker-compose.oauth.yml`, `docker/` and its
-  fixtures, `make dev-fleet-up`, `make demo-up`, `make demo-up-oauth`): a local development
-  fixture with dev-only credentials, not a deployment;
+- the test and demo fleets (`deploy/test/`, `deploy/demo/`, `docker/` and its fixtures,
+  `make dev-fleet-up`, `make demo-up`, `make demo-up-oauth`): local development fixtures with
+  dev-only credentials, not a deployment;
 - vulnerabilities in third-party dependencies with no demonstrated path through Relay; report
   those upstream.
 

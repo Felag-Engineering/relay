@@ -1,21 +1,17 @@
-# The Relay's configuration for the local Docker fleet — DEV-ONLY (docs/dev-fleet.md).
+# The Relay's configuration for the demo fleet with the OAuth overlay (deploy/demo/oauth.yml) — DEV-ONLY.
 #
 # Staged root:10001 0640 onto the relay-etc volume by the relay-config one-shot
 # (docker/dev-fleet-config.sh); the Relay mounts that volume read-only at /etc/relay. It reads
-# every setting from this one file and nothing from its environment (ADR-0043, invariant 11),
-# so nothing a request can do reaches it.
+# every setting from this one file and nothing from its environment (ADR-0043, invariant 11).
+# Edit it here and bring the fleet up again: relay-config re-stages it and the Relay restarts.
 #
-# The approval gate (ADR-0027) is staged beside it, root-owned 0644. It is Relay
-# CONFIGURATION, not a runtime object, so no Account of any role can loosen it through the
-# API. The demo gate (docker/fixtures/approval-gates.demo.json) is the demo fleet's in-band
-# gate. Loading it is fail-closed: a malformed file fails startup rather than silently
-# meaning "nothing needs approval". `approval.gate_rules_path` names WHICH staged gate file;
-# the Makefile chooses the fixture (DEV_FLEET_RELAY_CONFIG) per target.
-
-# The Admin Console (ADR-0009) is served on the SAME control-plane listener as MCP and
-# /api/v1: no new listener and no new auth path (invariant 10). Both listeners share one
-# server certificate (ADR-0031), so the Console's reachability rides on that certificate
-# rotating.
+# The approval gate (ADR-0027) is approval-gates.json beside this file, staged root-owned
+# 0644. It is Relay configuration, not a runtime object, so no Account can loosen it through
+# the API, and loading it is fail-closed: a malformed file fails startup. The demo's in-band gate.
+#
+# tls.hostname, the ca and store paths and gate_rules_path are fixed by the compose file:
+# init and the daemons dial `relay`, /var/lib/relay is the Relay's only writable volume, and
+# relay-config stages the gate at /etc/relay/approval-gates.json.
 
 # Node-plane gRPC listener (relay-daemon dial-home).
 [node_plane]
@@ -42,10 +38,10 @@ path = "/var/lib/relay/store/relay.db"
 hostname = "relay"
 
 [approval]
-gate_rules_path = "/etc/relay/approval-gates.demo.json"
+gate_rules_path = "/etc/relay/approval-gates.json"
 
 # The OAuth resource-server half (ADR-0024), for `make demo-up-oauth`
-# (docker-compose.oauth.yml). The issuer and audience are Relay CONFIGURATION (invariant 11),
+# (oauth.yml beside this file). The issuer and audience are Relay CONFIGURATION (invariant 11),
 # set on the host and unreachable from any API.
 [oauth]
 issuer = "http://127.0.0.1:8180/realms/relay-demo"

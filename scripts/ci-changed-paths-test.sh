@@ -126,7 +126,7 @@ expect "mixed docs change with one test-read path" true false false
 
 # --- 3. Code, and paths the script has never heard of, are code.
 for p in relay/cmd/relay/main.go daemon/src/main.rs scripts/check-docs.sh \
-  docker-compose.demo.yml unknown-top-level-file daemon/fuzz/Cargo.lock; do
+  deploy/test/docker-compose.yml unknown-top-level-file daemon/fuzz/Cargo.lock; do
   classify "$ARGS" "" "$p"
   expect "code path $p" true false false
 done

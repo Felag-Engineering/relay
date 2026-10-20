@@ -32,9 +32,10 @@ cat >"$BIN/docker" <<STUB
 shift
 [ "\$1" = version ] && exit 0
 case " \$* " in
-  *docker-compose.oauth.yml*) stack=oauth ;;
-  *docker-compose.demo.yml*) stack=demo ;;
-  *) stack=deploy ;;
+  *deploy/demo/oauth.yml*) stack=oauth ;;
+  *deploy/demo/*) stack=demo ;;
+  *deploy/test/*) stack=test ;;
+  *) stack=production ;;
 esac
 [ -e "$JSON/fail-\$stack" ] && exit 1
 cat "$JSON/\$stack.json"
@@ -60,7 +61,8 @@ reset() {
     environment:{CONSOLE_ADMIN_PASSWORD:"x", RELAY_PUBLISH_ADDR:"127.0.0.1"}}'
   daemon='{build:{context:".",dockerfile:"docker/daemon.Dockerfile"}, environment:{RELAY_ADDR:"https://relay:7654"}}'
   netns='{image:"curlimages/curl", ports:[{target:7654,published:"7654"}]}'
-  jq -n "{services:{relay:$relay}}" >"$JSON/deploy.json"
+  jq -n "{services:{relay:$relay}}" >"$JSON/production.json"
+  jq -n "{services:{relay:$relay, init:$oneshot, \"daemon-1\":$daemon}}" >"$JSON/test.json"
   jq -n "{services:{relay:$relay, init:$oneshot, \"daemon-1\":$daemon}}" >"$JSON/demo.json"
   jq -n "{services:{relay:$relay, init:$oneshot, \"daemon-1\":$daemon, \"relay-netns\":$netns}}" >"$JSON/oauth.json"
 }
@@ -92,7 +94,7 @@ refuse() { run "$1" 1 "$2" "${3:-}"; } # refuse <name> <reason> [forbidden]
 reset
 run "1 positive control: three stacks and the real Dockerfile" 0 "ok: Dockerfile"
 out="$(env PATH="$BIN:$PATH" bash "$SCRIPT" 2>&1)"
-for s in deploy demo oauth; do
+for s in production test demo oauth; do
   grep -qF "ok: $s:" <<<"$out" || { echo "FAIL: 1: no ok line for $s"; fail=$((fail + 1)); }
 done
 

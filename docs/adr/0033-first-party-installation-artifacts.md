@@ -280,7 +280,7 @@ ADR-0022, ADR-0030, `GLOSSARY.md`, `docs/specs/daemon-installation.md`,
 binary path, and migrating a hand-built Node onto the package),
 `docs/operations/template-packs.md` (the catalog package), `docs/operations/approval-gates.md`
 (the webhook secret's ownership), `docs/design/self-serve-enrollment.md` (E7, E8, E9), the
-deploy/compose stack's comments, and the Relay's own help and error text that still says
+deploy/production stack's comments, and the Relay's own help and error text that still says
 "root-owned" (with #864).
 
 ## Amendment (2026-10-15): amended by ADR-0043 — one configuration file
