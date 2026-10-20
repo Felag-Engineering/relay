@@ -461,9 +461,10 @@ $ curl --cacert relay-ca-cert.pem \
 host once the control plane is published.
 
 **7. Point real relay-daemons at it**, one host at a time, following
-[relay-daemon-install.md](relay-daemon-install.md): `RELAY_ADDR` is
-`https://<tls.hostname>:7654`, `RELAY_CA_BUNDLE_PATH` is the `relay-ca-cert.pem` from step
-4, and the Enrollment Token from step 6 is used once, at first start. Each Node's Policy is
+[relay-daemon-install.md](relay-daemon-install.md): set `RELAY_JOIN` to the `join_string`
+from step 6's response. It carries the Relay's address, its CA fingerprint and the token, and
+is used once, at first start; no CA file is copied to the Node. A daemon started without it
+logs `nothing to enroll with` and exits 0, so check the env file if the unit is inactive. Each Node's Policy is
 its own and is authored on that Node; this stack ships none and can never write one
 (ADR-0002). Finish with `unset RELAY_TOKEN`.
 
@@ -493,6 +494,12 @@ Every command here takes `-f deploy/compose/docker-compose.yml`, shortened below
 - **Freeze** (ADR-0013): `docker compose … kill -s USR1 relay` engages it and
   `docker compose … kill -s USR2 relay` releases it, the same host-side lever as
   [section 5](#5-operational-levers-on-the-relay-host).
+- **Reload** (RC-21): edit `relay.toml` on the host, then `docker compose … kill -s HUP relay`.
+  A setting that needs a restart is refused by name and nothing changes. Edit the file **in
+  place** (or run `docker compose … restart relay` afterwards): `relay.toml` is a single-file
+  bind mount, so an editor that saves by writing a new file and renaming it over the old one
+  leaves the container reading the old file, and the reload then logs
+  `configuration reloaded changed=[]` having applied nothing.
 - **Back up the volume** `relay-data`: it holds the CA key and the store. Compose will not
   delete it; `docker volume rm relay-data` will, and every Node must then re-enroll.
 - **Upgrades** are a checkout of the next pinned commit and `docker compose … up -d --build`.

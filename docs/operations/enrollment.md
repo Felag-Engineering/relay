@@ -131,8 +131,9 @@ $ curl --cacert ca-cert.pem \
   hash). Put it straight into your secret store (e.g. Ansible Vault).
 - **`join_string`** — the same token wrapped with the Relay's advertised
   node-plane address and the SHA-256 fingerprint of its CA certificate. It is a
-  secret, returned once, here only. The daemon consumes a join string once its
-  half lands; until then enroll with `token` as below.
+  secret, returned once, here only. It is what a Node enrolls with: the daemon
+  reads it from `RELAY_JOIN`, pins the Relay's CA from the fingerprint before it
+  sends the token, and needs no CA file configured by hand.
 
 Revoke a token at any time — this also cascade-revokes every Node it enrolled:
 
@@ -145,18 +146,22 @@ $ curl --cacert ca-cert.pem \
 ## 2. Enroll one Node by hand
 
 Install the daemon per [relay-daemon-install.md](relay-daemon-install.md), with an
-env file carrying the token and the pinned bootstrap CA bundle (the Relay's
-`ca-cert.pem` — no secrets in it, but its *integrity* matters: it is what stops a
-MITM from impersonating the Relay to a first-boot Node):
+env file carrying the join string from step 1. It holds the Relay's address, the
+fingerprint of its CA and the token, so no CA file is copied to the Node: the
+fingerprint is what stops a MITM from impersonating the Relay to a first-boot
+Node.
 
 ```sh
 # /etc/relay-daemon/relay-daemon.env   (0600 root:root)
-RELAY_ADDR=https://relay.example.internal:7654
-RELAY_CA_BUNDLE_PATH=/etc/relay-daemon/ca-bundle.pem
+RELAY_JOIN=glp_join_…
 RELAY_POLICY_PATH=/etc/relay-daemon/policy.toml
 RELAY_NODE_LABELS=env=prod,role=web,site=us-east-1
-RELAY_ENROLLMENT_TOKEN=3f8a….K7m2…
 ```
+
+A daemon with no identity and no `RELAY_JOIN` logs `no identity and no RELAY_JOIN:
+nothing to enroll with` and exits 0, so systemd shows a clean stop, not a failure.
+If `systemctl status relay-daemon` says inactive after the first start, check the
+env file before anything else.
 
 ```console
 $ sudo systemctl enable --now relay-daemon
@@ -166,8 +171,8 @@ $ journalctl -u relay-daemon | tail
 ```
 
 Enrollment is idempotent: once an identity exists in the state dir, restarts skip
-enrollment entirely and the token in the env file is unused (it can be removed
-after the first success — the bulk playbook below leaves that to token expiry).
+enrollment entirely and `RELAY_JOIN` is unused (it can be removed after the first
+success — the bulk playbook below leaves that to token expiry).
 
 Note the two Label namespaces at work: `RELAY_NODE_LABELS` become node-space
 (`node:…`) Labels — node-rooted, Relay-immutable, for routine targeting — while
@@ -192,8 +197,7 @@ Vault):
 # group_vars/prod.yml
 relay_daemon_version: "X.Y.Z"   # the published tag without its leading `v`
 relay_daemon_sha256: "<digest copied from SHA256SUMS at pin time>"
-relay_addr: "https://relay.example.internal:7654"
-relay_enrollment_token: "{{ vault_relay_enrollment_token }}"
+relay_join: "{{ vault_relay_join }}"   # the join_string from the mint
 ```
 
 ```yaml
@@ -215,14 +219,6 @@ relay_enrollment_token: "{{ vault_relay_enrollment_token }}"
     dest: /etc/systemd/system/relay-daemon.service
     mode: "0644"
 
-- name: Install pinned bootstrap CA bundle
-  ansible.builtin.copy:
-    src: ca-cert.pem                 # the Relay CA's public certificate
-    dest: /etc/relay-daemon/ca-bundle.pem
-    owner: root
-    group: root
-    mode: "0644"
-
 - name: Install Policy (root-owned, never group/world-writable)
   ansible.builtin.copy:
     src: "{{ relay_policy_file }}"   # from the IaC repo; see policy-as-code.md
@@ -232,7 +228,7 @@ relay_enrollment_token: "{{ vault_relay_enrollment_token }}"
     mode: "0644"
   notify: restart relay-daemon
 
-- name: Write env file (carries the Enrollment Token — 0600, from Vault)
+- name: Write env file (carries the join string — 0600, from Vault)
   ansible.builtin.template:
     src: relay-daemon.env.j2
     dest: /etc/relay-daemon/relay-daemon.env
@@ -251,11 +247,9 @@ relay_enrollment_token: "{{ vault_relay_enrollment_token }}"
 
 ```jinja
 {# roles/relay_daemon/templates/relay-daemon.env.j2 #}
-RELAY_ADDR={{ relay_addr }}
-RELAY_CA_BUNDLE_PATH=/etc/relay-daemon/ca-bundle.pem
+RELAY_JOIN={{ relay_join }}
 RELAY_POLICY_PATH=/etc/relay-daemon/policy.toml
 RELAY_NODE_LABELS=env={{ relay_env }},role={{ relay_role }}
-RELAY_ENROLLMENT_TOKEN={{ relay_enrollment_token }}
 ```
 
 Run it across the fleet:
@@ -267,8 +261,8 @@ $ ansible-playbook -i inventory/prod site.yml --limit 'new_nodes'
 Each Node enrolls itself on first daemon start; already-enrolled Nodes are no-ops.
 The Relay rate-limits enrollment (per-IP and globally —
 [relay-install.md](relay-install.md)); for very large batches raise
-`RELAY_ENROLL_GLOBAL_RATE` for the window or let the daemons' retry/backoff spread
-the burst.
+`enrollment.global_rate_per_minute` in `relay.toml` for the window (a SIGHUP applies
+it) or let the daemons' retry/backoff spread the burst.
 
 ## 4. Verify the rollout
 

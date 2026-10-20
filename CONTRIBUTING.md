@@ -24,7 +24,10 @@ Read [AGENTS.md](AGENTS.md) first (the architecture invariants and conventions) 
   through GitHub's redirect; point it at the new name with
   `git remote set-url origin git@github.com:Felag-Engineering/relay.git` (or the HTTPS URL).
 - Toolchains: Go at the version `relay/go.mod` names (the `Makefile` pins it), and stable Rust
-  at or above `rust-version` in `daemon/Cargo.toml`.
+  at or above `rust-version` in `daemon/Cargo.toml`. `make lint` and `make verify` also lint
+  and build the daemon for musl, which needs the Rust target and a musl C compiler (`ring`
+  builds C): `rustup target add x86_64-unknown-linux-musl` and, on Debian or Ubuntu,
+  `sudo apt-get install musl-tools`. Without them both targets stop at `lint-daemon`.
 - `make tools` (optional) pre-builds the pinned Go tools; any target builds them on first use.
 - `make build test lint` is the inner loop.
 - **`make verify` before opening a PR.** It mirrors CI gate for gate. A skipped gate (for
