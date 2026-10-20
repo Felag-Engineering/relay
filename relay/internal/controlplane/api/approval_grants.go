@@ -205,8 +205,7 @@ func handleCreateGrant(d Deps) http.HandlerFunc {
 		}
 
 		var body createGrantRequest
-		if err := decodeJSON(w, r, &body); err != nil {
-			writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+		if !readJSONBody(w, r, &body) {
 			return
 		}
 
@@ -342,13 +341,10 @@ func handleRevokeGrant(d Deps) http.HandlerFunc {
 		}
 
 		var body revokeGrantRequest
-		if err := decodeJSON(w, r, &body); err != nil {
-			writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+		if !readJSONBody(w, r, &body) {
 			return
 		}
-		if len(body.Reason) > maxDecisionReasonLen {
-			writeProblem(w, http.StatusBadRequest, "reason too long",
-				"reason must be at most 1024 bytes")
+		if reasonTooLong(w, body.Reason) {
 			return
 		}
 

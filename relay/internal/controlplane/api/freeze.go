@@ -68,8 +68,7 @@ func handleFreezeRelease(d Deps) http.HandlerFunc {
 		}
 
 		var req freezeReleaseRequest
-		if err := decodeJSON(w, r, &req); err != nil {
-			writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+		if !readJSONBody(w, r, &req) {
 			return
 		}
 		reason := strings.TrimSpace(req.Reason)

@@ -210,8 +210,7 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 		}
 
 		var req createAccountRequest
-		if err := decodeJSON(w, r, &req); err != nil {
-			writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+		if !readJSONBody(w, r, &req) {
 			return
 		}
 
@@ -291,8 +290,7 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 		}
 
 		var req setRoleRequest
-		if err := decodeJSON(w, r, &req); err != nil {
-			writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+		if !readJSONBody(w, r, &req) {
 			return
 		}
 
@@ -374,8 +372,7 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 		}
 
 		var req mintAPITokenRequest
-		if err := decodeJSON(w, r, &req); err != nil {
-			writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+		if !readJSONBody(w, r, &req) {
 			return
 		}
 		if req.TTLSeconds == nil {

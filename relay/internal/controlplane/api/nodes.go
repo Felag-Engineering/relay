@@ -80,8 +80,7 @@ func handleRevokeNode(d Deps) http.HandlerFunc {
 		}
 
 		var req revokeNodeRequest
-		if err := decodeJSON(w, r, &req); err != nil {
-			writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+		if !readJSONBody(w, r, &req) {
 			return
 		}
 		reason, err := capability.ValidateRevokeReason(req.Reason)

@@ -67,8 +67,7 @@ func handleMintToken(d Deps) http.HandlerFunc {
 		}
 
 		var req mintTokenRequest
-		if err := decodeJSON(w, r, &req); err != nil {
-			writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+		if !readJSONBody(w, r, &req) {
 			return
 		}
 
