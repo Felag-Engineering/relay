@@ -10,7 +10,7 @@ name = "relay-daemon"
 # minimum-version gate, so it must always be valid semver. Bump it to the next
 # release immediately after a release tag is cut — see
 # docs/operations/version-stamping.md.
-version = "0.0.9"
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 description = "The Relay relay-daemon: the non-AI daemon that runs on each managed Node."

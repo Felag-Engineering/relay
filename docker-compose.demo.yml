@@ -80,6 +80,9 @@ services:
       - ./docker/fixtures/approval-gates.json:/src/approval-gates.json:ro
       - ./docker/fixtures/approval-gates.demo.json:/src/approval-gates.demo.json:ro
       - relay-etc:/stage
+      # init's two output volumes, handed to the Relay's uid (dev-fleet-config.sh).
+      - control-credential:/handoff/credential
+      - bootstrap-shared:/handoff/bootstrap
 
   relay:
     build:
@@ -170,18 +173,25 @@ services:
   # the IdP user under the OAuth overlay), mints the relay:-scoped Enrollment
   # Token and writes its join string for the daemons, then exits. Besides the
   # Relay it is the only service that mounts relay-data, and it mounts it
-  # READ-WRITE (`relay init` writes the store). It mounts the Relay's own
-  # relay.toml read-only, because `relay init` reads it through the same
-  # start-time check as the Relay and so, like the Relay, refuses to run as root.
-  # No daemon mounts control-credential or relay-data. A failure here keeps every
-  # daemon down.
+  # READ-WRITE (`relay init` writes the store). It runs as the Relay's uid and
+  # mounts the Relay's own staged configuration read-only, because `relay init`
+  # reads relay.toml through the same start-time check as the Relay and so, like
+  # the Relay, refuses root. relay-config hands it control-credential and
+  # bootstrap-shared owned by that uid. No daemon mounts control-credential or
+  # relay-data. A failure here keeps every daemon down.
   init:
     build:
       context: .
       dockerfile: docker/relay.Dockerfile
       target: dev-fleet
-    user: "0:0"
+    user: "10001:10001"
     restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - "no-new-privileges:true"
     depends_on:
       relay:
         condition: service_healthy
@@ -194,7 +204,10 @@ services:
     entrypoint: ["sh", "/dev-fleet-init.sh"]
     volumes:
       - ./docker/dev-fleet-init.sh:/dev-fleet-init.sh:ro
-      - ${DEV_FLEET_RELAY_CONFIG:-./docker/fixtures/relay.dev.toml}:/etc/relay/relay.toml:ro
+      - type: volume
+        source: relay-etc
+        target: /etc/relay
+        read_only: true
       - relay-data:/var/lib/relay
       - control-credential:/credential
       - bootstrap-shared:/bootstrap
