@@ -308,7 +308,7 @@ func TestAccounts_PolicyCeilingIsVisibleBesideTheRoles(t *testing.T) {
 	if create := strings.Index(content, "<summary>New account</summary>"); create < 0 || at > create {
 		t.Error("the Policy ceiling note does not render before New account")
 	}
-	mustBeSituational(t, body, "cannot sign in until a password is set")
+	mustBeSituational(t, body, "Console password; it signs in through OAuth, if configured")
 	for i := 0; ; {
 		j := strings.Index(body[i:], "agent call trail")
 		if j < 0 {

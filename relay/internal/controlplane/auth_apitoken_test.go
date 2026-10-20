@@ -67,10 +67,14 @@ func authRequest(t *testing.T, a *Authenticator, credential string) (int, capabi
 	return rec.Code, seen
 }
 
-func storedFoundingAdmin() accounts.Account {
+// testAdminName names the first admin in these tests. No name is reserved, so
+// it is an ordinary name.
+const testAdminName = "first-admin"
+
+func storedFirstAdmin() accounts.Account {
 	return accounts.Account{
-		ID:      "acct-founding",
-		Name:    accounts.FoundingAdminName,
+		ID:      "acct-first-admin",
+		Name:    testAdminName,
 		Kind:    accounts.KindHuman,
 		Role:    accounts.RoleAdmin,
 		Enabled: true,
@@ -110,14 +114,14 @@ func TestAuthenticator_APITokenResolvesToItsAccount(t *testing.T) {
 // The founding admin is an Account like any other on this path: its bootstrap
 // token resolves to the stored row, so audit attributes it by ID and current
 // role rather than as a special case.
-func TestAuthenticator_BootstrapTokenResolvesToStoredFoundingAdmin(t *testing.T) {
-	a := NewAuthenticator(&fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential})
+func TestAuthenticator_FirstAdminTokenResolvesToTheStoredAccount(t *testing.T) {
+	a := NewAuthenticator(&fakeVerifier{acct: storedFirstAdmin(), valid: testCredential})
 
 	code, seen := authRequest(t, a, testCredential)
 	if code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", code)
 	}
-	if seen.ID != "acct-founding" || seen.Name != accounts.FoundingAdminName || seen.Role != string(accounts.RoleAdmin) {
+	if seen.ID != "acct-first-admin" || seen.Name != testAdminName || seen.Role != string(accounts.RoleAdmin) {
 		t.Errorf("principal = %+v, want the stored founding admin as admin", seen)
 	}
 }
@@ -125,7 +129,7 @@ func TestAuthenticator_BootstrapTokenResolvesToStoredFoundingAdmin(t *testing.T)
 // A role change takes effect on the next request: the role is read through the
 // verifier at authentication time, never cached in the Authenticator.
 func TestAuthenticator_RoleChangeTakesEffectImmediately(t *testing.T) {
-	v := &fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential}
+	v := &fakeVerifier{acct: storedFirstAdmin(), valid: testCredential}
 	a := NewAuthenticator(v)
 
 	if _, seen := authRequest(t, a, testCredential); seen.Role != string(accounts.RoleAdmin) {
@@ -143,8 +147,8 @@ func TestAuthenticator_RoleChangeTakesEffectImmediately(t *testing.T) {
 // handler, so the boundary is not an oracle telling a caller which part of
 // their credential was wrong — or that it was ever real.
 func TestAuthenticator_EveryFailureIsTheSameGeneric401(t *testing.T) {
-	valid := &fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential}
-	disabledAcct := storedFoundingAdmin()
+	valid := &fakeVerifier{acct: storedFirstAdmin(), valid: testCredential}
+	disabledAcct := storedFirstAdmin()
 	disabledAcct.Enabled = false
 
 	cases := []struct {
@@ -156,7 +160,7 @@ func TestAuthenticator_EveryFailureIsTheSameGeneric401(t *testing.T) {
 		{"wrong credential", valid, accounts.TokenPrefix + "deadbeef.wrong"},
 		{"not token-shaped", valid, "not-a-token"},
 		{"disabled account", &fakeVerifier{acct: disabledAcct, valid: testCredential}, testCredential},
-		{"store unreadable", &fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential, err: errors.New("db down")}, testCredential},
+		{"store unreadable", &fakeVerifier{acct: storedFirstAdmin(), valid: testCredential, err: errors.New("db down")}, testCredential},
 	}
 
 	bodies := make(map[string]bool)
@@ -195,7 +199,7 @@ func TestAuthenticator_EveryFailureIsTheSameGeneric401(t *testing.T) {
 // is nothing to check, and consulting the store for it would let an
 // unauthenticated caller drive store reads.
 func TestAuthenticator_MalformedHeaderNeverReachesTheVerifier(t *testing.T) {
-	v := &fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential}
+	v := &fakeVerifier{acct: storedFirstAdmin(), valid: testCredential}
 	a := NewAuthenticator(v)
 
 	for _, header := range []string{"", "Basic dXNlcjpwYXNz", "Bearer", "Bearer ", "bearer " + testCredential} {

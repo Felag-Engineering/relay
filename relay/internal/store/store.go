@@ -138,9 +138,9 @@ const busyTimeoutMillis = 5000
 // SQLITE_BUSY at once (SQLITE_BUSY_SNAPSHOT in WAL mode) instead of invoking
 // the busy handler, so a Hello upsert racing another process would fail
 // fast. A read-only transaction must opt out with sql.TxOptions{ReadOnly:
-// true}. SetMaxOpenConns(1) serialises only this process; "relay
-// bootstrap-token" and "relay console-password" open the same file from
-// another process, so cross-process safety is busy_timeout plus IMMEDIATE.
+// true}. SetMaxOpenConns(1) serialises only this process; "relay init"
+// opens the same file from another process, so cross-process safety is
+// busy_timeout plus IMMEDIATE.
 //
 // sqliteDSN assumes a POSIX path (as does the rest of this package and its
 // production deployment target); it has not been exercised against a

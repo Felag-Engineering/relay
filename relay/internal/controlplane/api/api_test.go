@@ -261,12 +261,15 @@ const testCredential = accounts.TokenPrefix + "1234567890abcdef.test-secret" // 
 // the routes rather than on minting a credential first.
 const testTokenID = "tok-test"
 
-// testFoundingAdminAccountID is staticVerifier's stand-in for the Relay-
-// assigned stable identifier a real store.Accounts().EnsureFoundingAdmin
-// would mint. Given so tests can assert Attribution.Verified.AccountID is
+// testAdminName names the first admin staticVerifier authenticates as. No
+// name is reserved, so it is an ordinary name.
+const testAdminName = "first-admin"
+
+// testFirstAdminAccountID is staticVerifier's stand-in for the Relay-
+// assigned stable identifier a real store would mint for the first admin. Given so tests can assert Attribution.Verified.AccountID is
 // non-empty and identity-stable, mirroring what principalFromAccount does
 // with a real Account in production.
-const testFoundingAdminAccountID = "acct-founding-admin"
+const testFirstAdminAccountID = "acct-first-admin"
 
 type staticVerifier struct{ credential string }
 
@@ -275,20 +278,30 @@ func (v staticVerifier) Verify(_ context.Context, credential string) (accounts.A
 		return accounts.Account{}, accounts.APIToken{}, accounts.ErrTokenInvalid
 	}
 	return accounts.Account{
-		ID:      testFoundingAdminAccountID,
-		Name:    accounts.FoundingAdminName,
+		ID:      testFirstAdminAccountID,
+		Name:    testAdminName,
 		Kind:    accounts.KindHuman,
 		Role:    accounts.RoleAdmin,
 		Enabled: true,
 	}, accounts.APIToken{ID: testTokenID}, nil
 }
 
+// testAdmin is the name, role and kind of the first admin's Principal: what
+// principalFromAccount projects from staticVerifier's Account.
+func testAdmin() capability.Principal {
+	return capability.Principal{
+		Account: testAdminName,
+		Role:    string(accounts.RoleAdmin),
+		Kind:    string(accounts.KindHuman),
+	}
+}
+
 // testPrincipal is the acting identity staticVerifier produces, including the
 // TokenID the verified audit lane records (#300): which credential acted is
 // part of the identity, not decoration on it.
 func testPrincipal() capability.Principal {
-	p := controlplane.FoundingAdmin()
-	p.AccountID = testFoundingAdminAccountID
+	p := testAdmin()
+	p.AccountID = testFirstAdminAccountID
 	p.TokenID = testTokenID
 	p.AuthMethod = capability.AuthMethodAPIToken
 	// The authentication boundary now stamps the peer address into the
@@ -424,8 +437,8 @@ func TestHandleMintToken_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repo.ByID: %v", err)
 	}
-	if stored.CreatedBy != controlplane.FoundingAdmin().Attribution() {
-		t.Errorf("stored token CreatedBy = %q, want %q", stored.CreatedBy, controlplane.FoundingAdmin().Attribution())
+	if stored.CreatedBy != testAdmin().Attribution() {
+		t.Errorf("stored token CreatedBy = %q, want %q", stored.CreatedBy, testAdmin().Attribution())
 	}
 
 	// Exactly one KindTokenMint audit Record, attributed to the principal,
@@ -438,8 +451,8 @@ func TestHandleMintToken_Success(t *testing.T) {
 	if got.Kind != audit.KindTokenMint {
 		t.Errorf("audit Kind = %q, want %q", got.Kind, audit.KindTokenMint)
 	}
-	if got.Principal != controlplane.FoundingAdmin().Attribution() {
-		t.Errorf("audit Principal = %q, want %q", got.Principal, controlplane.FoundingAdmin().Attribution())
+	if got.Principal != testAdmin().Attribution() {
+		t.Errorf("audit Principal = %q, want %q", got.Principal, testAdmin().Attribution())
 	}
 	if got.ID == "" {
 		t.Error("audit Record.ID is empty")
@@ -532,8 +545,8 @@ func TestHandleRevokeToken(t *testing.T) {
 	if got.Kind != audit.KindTokenRevoke {
 		t.Errorf("audit Kind = %q, want %q", got.Kind, audit.KindTokenRevoke)
 	}
-	if got.Principal != controlplane.FoundingAdmin().Attribution() {
-		t.Errorf("audit Principal = %q, want %q", got.Principal, controlplane.FoundingAdmin().Attribution())
+	if got.Principal != testAdmin().Attribution() {
+		t.Errorf("audit Principal = %q, want %q", got.Principal, testAdmin().Attribution())
 	}
 	if got.ID == "" {
 		t.Error("audit Record.ID is empty")
@@ -593,7 +606,7 @@ func TestHandleRevokeToken_CascadeRecordsCarryPrincipalAndDerivedReason(t *testi
 		t.Fatalf("node_revoke rows = %v, want exactly node-a and node-b", nodeRows)
 	}
 
-	wantPrincipal := controlplane.FoundingAdmin().Attribution()
+	wantPrincipal := testAdmin().Attribution()
 	for _, nodeID := range []string{"node-a", "node-b"} {
 		row, ok := nodeRows[nodeID]
 		if !ok {
@@ -603,11 +616,11 @@ func TestHandleRevokeToken_CascadeRecordsCarryPrincipalAndDerivedReason(t *testi
 			t.Errorf("%s: Principal = %q, want %q", nodeID, row.Principal, wantPrincipal)
 		}
 		v := row.Attribution.Verified
-		if v.AccountID == "" || v.AccountID != testFoundingAdminAccountID {
-			t.Errorf("%s: Verified.AccountID = %q, want the founding admin's non-empty id %q", nodeID, v.AccountID, testFoundingAdminAccountID)
+		if v.AccountID == "" || v.AccountID != testFirstAdminAccountID {
+			t.Errorf("%s: Verified.AccountID = %q, want the founding admin's non-empty id %q", nodeID, v.AccountID, testFirstAdminAccountID)
 		}
-		if v.AccountName == "" || v.AccountName != accounts.FoundingAdminName {
-			t.Errorf("%s: Verified.AccountName = %q, want %q", nodeID, v.AccountName, accounts.FoundingAdminName)
+		if v.AccountName == "" || v.AccountName != testAdminName {
+			t.Errorf("%s: Verified.AccountName = %q, want %q", nodeID, v.AccountName, testAdminName)
 		}
 		if v.Role == "" || v.Role != string(accounts.RoleAdmin) {
 			t.Errorf("%s: Verified.Role = %q, want %q", nodeID, v.Role, accounts.RoleAdmin)
@@ -700,7 +713,7 @@ func TestHandleRevokeToken_IncompleteCascadeRecordsTheRevokeAndSaysNodesMayBeTru
 	if got, want := tokenRevokes[0].Reason, "token_id=tok-123 cascade=incomplete"; got != want {
 		t.Errorf("KindTokenRevoke Reason = %q, want %q", got, want)
 	}
-	if got, want := tokenRevokes[0].Principal, controlplane.FoundingAdmin().Attribution(); got != want {
+	if got, want := tokenRevokes[0].Principal, testAdmin().Attribution(); got != want {
 		t.Errorf("KindTokenRevoke Principal = %q, want %q", got, want)
 	}
 }
@@ -876,8 +889,8 @@ func TestHandleRevokeNode(t *testing.T) {
 	if got.NodeID != "node-abc" {
 		t.Errorf("audit NodeID = %q, want %q", got.NodeID, "node-abc")
 	}
-	if got.Principal != controlplane.FoundingAdmin().Attribution() {
-		t.Errorf("audit Principal = %q, want %q", got.Principal, controlplane.FoundingAdmin().Attribution())
+	if got.Principal != testAdmin().Attribution() {
+		t.Errorf("audit Principal = %q, want %q", got.Principal, testAdmin().Attribution())
 	}
 	// The point of #487: the record answers WHY, not just who and when.
 	if got.Reason != "compromised host, INC-4471" {

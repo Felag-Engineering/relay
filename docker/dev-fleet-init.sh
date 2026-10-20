@@ -1,17 +1,17 @@
 #!/bin/sh
 # Dev-fleet bootstrap one-shot (docs/dev-fleet.md). DEV-ONLY. Runs once per
 # `compose up`, as the `init` compose service, after the Relay is healthy, and
-# does everything the fleet needs before a relay-daemon may start: mints the
-# founding admin's credential, creates the dev Accounts (`dev-approver`, the
-# Console admin and, under the OAuth overlay, the IdP's user), sets the Console
-# password, and mints the Enrollment Token, handing the daemons its join string.
+# does everything the fleet needs before a relay-daemon may start: creates the
+# first admin with `relay init` (the Console admin, with its Console password and
+# first API Token), creates the other dev Accounts (`dev-approver` and, under the
+# OAuth overlay, the IdP's user), and mints the Enrollment Token, handing the
+# daemons its join string.
 #
-# ADR-0030 / ADR-0032 anchor. Steps c (bootstrap-token → founding admin) and i
-# (Enrollment Token + join string) are the bootstrap chain ADR-0030's falsifier
-# names, formerly docker/mint-credential.sh and docker/bootstrap.sh (folded here
-# by #893; `relay init` does not exist). That falsifier is met only when THESE
-# steps are deleted and the dev fleet uses `relay init`. Whatever replaces them
-# must keep minting the Enrollment Token through the real Control API (ADR-0032).
+# ADR-0030 / ADR-0032 anchor. Step c is `relay init`: the first admin and its
+# credentials come from the binary's one local act, against the Relay's own store,
+# through the same configuration check as the Relay. Everything after it is the
+# real Control API, the Enrollment Token included (ADR-0032); RC-28 leaves the
+# first Enrollment Token to enrollment.md.
 #
 # SECURITY notes:
 #   - Everything written here is a live DEV-ONLY credential on a laptop fleet
@@ -26,22 +26,22 @@
 #     `bootstrap-shared`): never CA material, which they pin from the join
 #     string's fingerprint, and an Enrollment Token the Relay accepts only if
 #     it is `relay:`-scoped — it can enroll Nodes and nothing else.
-#   - The Console password reaches `relay console-password` through a 0600 temp
-#     file, never argv. The value arrives from the environment, which is itself
-#     a process-listing exposure: acceptable on this fleet and nowhere else.
+#   - The Console password reaches `relay init` on its stdin, from the shell's
+#     printf builtin, never argv. The value arrives from the environment, which is
+#     itself a process-listing exposure: acceptable on this fleet and nowhere else.
+#   - `relay init` runs as the Relay's own uid and refuses root, exactly as the
+#     Relay does: it reads the same read-only relay.toml through the same check.
 #   - The committed default password is refused once the control plane is
 #     published beyond loopback.
 #   - The OAuth Account is human/operator and never mints a token: an OAuth
 #     session presents the IdP's token, so there is nothing to write out.
-#   - This one container holds both the store (read-write) and a bearer token.
-#     The old split across two containers (console-admin vs console-password) is
-#     deliberately given up on this laptop fleet; the old `credential` already
-#     held both, so no daemon-facing exposure is added.
+#   - This one container holds both the store (read-write) and a bearer token,
+#     deliberately, on this laptop fleet; no daemon-facing exposure is added.
 #   - Fail closed: any failure here exits non-zero, and every daemon
 #     `depends_on` this service, so the fleet does not start.
 set -eu
 
-STORE="/var/lib/relay/store/relay.db"
+CONFIG="/etc/relay/relay.toml"
 CA_CERT="/var/lib/relay/ca/ca-cert.pem"
 BASE="https://relay:9443"
 ADMIN_NAME="${CONSOLE_ADMIN_NAME:-admin}"
@@ -67,21 +67,28 @@ case "${RELAY_PUBLISH_ADDR:-127.0.0.1}" in
         ;;
 esac
 
-# c. Since #298 (ADR-0023) the control plane accepts only per-Account API
-# Tokens, so the first is minted locally against the Relay's own store, as a
-# real operator does. Stdout carries only the credential. It is regenerated on
-# every run; old tokens are not revoked and die with the volume.
-log "minting the founding admin's control-plane credential..."
-relay bootstrap-token -store-path "${STORE}" -name "dev-fleet" -ttl 24h > /credential/control-credential
+# c. The first admin, as a real operator creates it (RC-28): `relay init` makes
+# the human admin ${ADMIN_NAME}, sets its Console password from stdin and prints
+# its first API Token, and nothing else, to stdout. On a re-run the admin exists
+# on the volume, so init creates nothing and prints nothing, and
+# `relay init --recover` re-mints that admin's API Token instead. Each token
+# expires after 24h; old ones are not revoked and die with the volume. The Console password is set once, on the
+# first run: changing CONSOLE_ADMIN_PASSWORD afterwards needs a fresh volume.
+( umask 077
+  log "creating the first admin ${ADMIN_NAME} with relay init..."
+  printf '%s\n' "${PASSWORD}" | relay init --config "${CONFIG}" --ttl 24h --admin "${ADMIN_NAME}" > /credential/control-credential
+  if ! test -s /credential/control-credential; then
+      log "${ADMIN_NAME} exists already; re-minting its API Token with relay init --recover..."
+      relay init --config "${CONFIG}" --ttl 24h --recover "${ADMIN_NAME}" > /credential/control-credential
+  fi )
 chmod 0600 /credential/control-credential
-test -s /credential/control-credential
+test -s /credential/control-credential || die "relay init printed no credential"
 # The bearer header reaches curl through a 0600 file, never argv, so the token
 # is not visible in a process listing while a call runs.
 AUTH_FILE="$(mktemp)"
-PW_FILE="$(mktemp)"
-trap 'rm -f "${AUTH_FILE}" "${PW_FILE}"' EXIT
+trap 'rm -f "${AUTH_FILE}"' EXIT
 trap 'exit 1' INT TERM
-chmod 0600 "${AUTH_FILE}" "${PW_FILE}"
+chmod 0600 "${AUTH_FILE}"
 printf 'Authorization: Bearer %s\n' "$(cat /credential/control-credential)" > "${AUTH_FILE}"
 
 # d. The one Control API wrapper. We dial the in-fleet name `relay` so the
@@ -147,16 +154,10 @@ api POST "/api/v1/accounts/${ID}/tokens" '{"name":"dev-fleet-approver","ttl_seco
 chmod 0600 /credential/approver-credential
 test -s /credential/approver-credential || die "the approver's minted token was empty"
 
-# g. The Console admin is a HUMAN Account, distinct from dev-approver and the
-# founding admin: the Console is a per-human identity (ADR-0009). Its password
-# cannot be set through the Console (reaching it needs one), so
-# `relay console-password` roots it locally in the store — the same
-# chicken-and-egg and answer as `relay bootstrap-token` (ADR-0023) and
-# ADR-0002's locally-rooted Policy. The Relay refuses a password under 12 bytes.
-log "ensuring the ${ADMIN_NAME} Account and setting its Console password..."
+# g. The Console admin is the first admin step c created: a HUMAN Account,
+# distinct from dev-approver, because the Console is a per-human identity
+# (ADR-0009). Checked here like every other Account this script relies on.
 ensure_account "${ADMIN_NAME}" admin >/dev/null
-printf '%s' "${PASSWORD}" > "${PW_FILE}"
-relay console-password -store-path "${STORE}" -account "${ADMIN_NAME}" -password-file "${PW_FILE}"
 
 # h. Under the OAuth overlay only: the Relay never creates an Account from a
 # token claim (ADR-0024), so the IdP's user needs one created the audited way.

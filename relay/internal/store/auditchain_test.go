@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
@@ -422,7 +423,9 @@ func TestAuditChain_AppendedRecordVerifiesAfterReadBack(t *testing.T) {
 	if err := st.Audit().AppendAll(ctx, []audit.Record{awkward("a2"), empty, awkward("a3")}); err != nil {
 		t.Fatalf("AppendAll: %v", err)
 	}
-	admin, err := st.Accounts().EnsureFoundingAdmin(ctx)
+	admin, err := st.Accounts().Create(ctx, accounts.Account{
+		Name: "admin", Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

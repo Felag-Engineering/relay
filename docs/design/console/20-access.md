@@ -27,7 +27,7 @@ gives them to the person who acts on them, an admin, in one place.
 | `sign-in` | `login_succeeded`, `login_failed`, `login_throttled`, `logout` | the Account where the record names one, the outcome, the source address; on a failed or throttled attempt, the name typed **only where it is a real Account's name** |
 | `step-up` | `step_up`, `step_up_failed`, `step_up_throttled` | the session's Account, the outcome |
 | `account` | `account_create`, `account_role`, `account_enable`, `account_disable`, `password_set`, `password_clear` | who acted, on which Account, and the change (new role, enabled, disabled, password set or removed — never the password) |
-| `api-token` | `api_token_mint`, `api_token_revoke` | who acted, for which Account, the token's ID — never its value; a mint by `relay bootstrap-token` is the same kind |
+| `api-token` | `api_token_mint`, `api_token_revoke` | who acted, for which Account, the token's ID — never its value; a mint by `relay init` is the same kind |
 
 **A failed sign-in records the name typed only where it is a real Account's name** (owner
 decision, 2026-09-30, D19). A person who types their password into the username box has typed a
@@ -46,8 +46,8 @@ unaffected — it always runs against the session's own Account.
 **A throttled attempt is not a failed one.** It was refused before any credential was compared, so
 it is drawn as throttled and never counted as a guess.
 
-**Where a password is set, it is a row here.** Passwords are set or removed only by the host-side
-`relay console-password` command, and the first API Token is minted by `relay bootstrap-token`; each
+**Where a password is set, it is a row here.** The first admin's password and first API Token are
+set and minted by the host-side `relay init` command, which also re-mints a lost API Token; each
 writes its record in the same transaction as the change, so a change that cannot be recorded is not
 made (#782). Those rows are attributed to `local-host` (the host lever the freeze signal also
 records), not to any Account, and the screen draws them as the Relay host rather than as a verified
@@ -137,4 +137,4 @@ search the page and call it history. It follows the Refresh rules in `00-foundat
       typed text, and the name is absent from the stored record, not only from the page.
 - [ ] The sign-in response is still byte- and time-indistinguishable across every failure.
 - [ ] A throttled attempt is drawn as throttled and is not counted as a failure.
-- [ ] A password set or removed with `relay console-password`, and a token minted with `relay bootstrap-token`, is a row here attributed to `local-host`.
+- [ ] A password set, and a token minted, with `relay init` is a row here attributed to `local-host`.

@@ -290,7 +290,7 @@ func TestAccounts_AHumanAccountHasNoLastToolCallCell(t *testing.T) {
 func TestAccounts_APageViewRecordsExactlyOneReadRecord(t *testing.T) {
 	for _, path := range []string{
 		accountsPath,
-		accountsPath + "?account=" + accounts.FoundingAdminName,
+		accountsPath + "?account=" + testAdminName,
 	} {
 		trail := &recordingTrail{}
 		rec := get(t, newTestHandler(realLaneDeps(trail), accounts.RoleAdmin), path)
@@ -438,16 +438,16 @@ func TestAccounts_AboutNamesThePolicyCeiling(t *testing.T) {
 // Day one — the shape dayone_test.go's named skip hands over.
 // ---------------------------------------------------------------------------
 
-// TestAccounts_DayOneShowsTheFoundingAdmin is what makes the day-one exemption
+// TestAccounts_DayOneShowsTheFirstAdmin is what makes the day-one exemption
 // honest. The criterion dayone_test.go sweeps is about measuring a fleet that
 // does not exist yet; an Account table is not a fleet, and on a fresh Relay it
-// has exactly one true row — EnsureFoundingAdmin seeded it in the same startup
-// branch that mounts the Console.
+// has exactly one true row — the admin `relay init` created, without whom
+// nobody could have signed in to see it.
 //
 // The <thead> is EXPECTED here, not tolerated: one real row under column
 // headings is the honest first-boot shape, and it is the shape a real operator
 // sees the first time they open this screen.
-func TestAccounts_DayOneShowsTheFoundingAdmin(t *testing.T) {
+func TestAccounts_DayOneShowsTheFirstAdmin(t *testing.T) {
 	rec := get(t, newTestHandler(dayOneDeps(), accounts.RoleAdmin), accountsPath)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET %s on a fresh Relay = %d, want 200", accountsPath, rec.Code)
@@ -455,14 +455,14 @@ func TestAccounts_DayOneShowsTheFoundingAdmin(t *testing.T) {
 	body := contentOf(rec.Body.String())
 
 	if !strings.Contains(body, "<thead>") {
-		t.Error("the Account table renders without column headings — the founding admin's row is a " +
+		t.Error("the Account table renders without column headings — the first admin's row is a " +
 			"real row and belongs under them")
 	}
 	if got := tbodyRows(t, body); got != 1 {
-		t.Fatalf("a fresh Relay renders %d Account rows, want exactly 1 (the founding admin)", got)
+		t.Fatalf("a fresh Relay renders %d Account rows, want exactly 1 (the first admin)", got)
 	}
 
-	row := rowFor(t, body, accounts.FoundingAdminName)
+	row := rowFor(t, body, testAdminName)
 	for _, want := range []string{
 		string(accounts.KindHuman),
 		string(accounts.RoleAdmin),
@@ -475,15 +475,15 @@ func TestAccounts_DayOneShowsTheFoundingAdmin(t *testing.T) {
 		">—</td>",
 	} {
 		if !strings.Contains(row, want) {
-			t.Errorf("the founding admin's row does not render %q. Row:\n%s", want, row)
+			t.Errorf("the first admin's row does not render %q. Row:\n%s", want, row)
 		}
 	}
 	if strings.Contains(row, "0001-01-01") {
-		t.Error("the founding admin's never-authenticated row rendered a zero time")
+		t.Error("the first admin's never-authenticated row rendered a zero time")
 	}
 	// Human, so the machine-only column is empty for it.
 	if strings.Contains(row, "no tool call") || strings.Contains(row, "/console/activity?account=") {
-		t.Error("the founding admin is human and must have no last-tool-call cell")
+		t.Error("the first admin is human and must have no last-tool-call cell")
 	}
 }
 

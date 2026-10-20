@@ -101,7 +101,6 @@ func TestAccounts_CreateRejectsMalformed(t *testing.T) {
 		{"leading punctuation", accounts.Account{Name: "-alice", Kind: accounts.KindHuman, Role: accounts.RoleViewer}, accounts.ErrInvalidName},
 		{"unknown kind", accounts.Account{Name: "alice", Kind: accounts.Kind("robot"), Role: accounts.RoleViewer}, accounts.ErrInvalidKind},
 		{"unknown role", accounts.Account{Name: "alice", Kind: accounts.KindHuman, Role: accounts.Role("root")}, accounts.ErrInvalidRole},
-		{"reserved name", accounts.Account{Name: accounts.FoundingAdminName, Kind: accounts.KindHuman, Role: accounts.RoleAdmin}, accounts.ErrReservedName},
 	}
 	for _, c := range cases {
 		if _, err := repo.Create(ctx, c.in); !errors.Is(err, c.want) {
@@ -173,58 +172,17 @@ func TestAccounts_TouchLastSeen(t *testing.T) {
 	}
 }
 
-// Acceptance: "The seeded credential resolves to the founding admin Account" —
-// seeding is deterministic and idempotent, and never repairs an existing row.
-func TestAccounts_EnsureFoundingAdminIsIdempotent(t *testing.T) {
+// No Account name is reserved against any creation path (ADR-0030, amended
+// 2026-10-16): the name the Relay once seeded is an ordinary name.
+func TestAccounts_NoNameIsReserved(t *testing.T) {
 	st, _ := openTestStore(t)
-	repo := st.Accounts()
 	ctx := context.Background()
-
-	first, err := repo.EnsureFoundingAdmin(ctx)
-	if err != nil {
-		t.Fatalf("ensure: %v", err)
-	}
-	if first.Name != accounts.FoundingAdminName || first.Role != accounts.RoleAdmin || !first.Enabled {
-		t.Errorf("founding admin = %+v, want an enabled admin named %q", first, accounts.FoundingAdminName)
-	}
-	if !first.IsFoundingAdmin() {
-		t.Error("IsFoundingAdmin() = false for the seeded Account")
-	}
-
-	second, err := repo.EnsureFoundingAdmin(ctx)
-	if err != nil {
-		t.Fatalf("ensure (second call): %v", err)
-	}
-	if second.ID != first.ID {
-		t.Errorf("second ensure created a new Account (%q != %q); seeding must be idempotent", second.ID, first.ID)
-	}
-	list, _ := repo.List(ctx)
-	if len(list) != 1 {
-		t.Errorf("list = %+v, want exactly one Account after two ensures", list)
-	}
-
-	// A second enabled admin, so disabling/demoting the founding admin below
-	// does not trip the last-enabled-admin guard (#653) this test is not
-	// about.
-	if _, err := repo.Create(ctx, machine("other-admin", accounts.RoleAdmin)); err != nil {
-		t.Fatalf("create other admin: %v", err)
-	}
-
-	// An operator disabling or demoting the founding admin is a deliberate
-	// security act — retiring the seeded credential's authority. Seeding must
-	// never quietly undo it on the next boot.
-	if err := repo.SetEnabled(ctx, first.ID, false); err != nil {
-		t.Fatalf("disable founding admin: %v", err)
-	}
-	if err := repo.SetRole(ctx, first.ID, accounts.RoleAdmin, accounts.RoleViewer); err != nil {
-		t.Fatalf("demote founding admin: %v", err)
-	}
-	after, err := repo.EnsureFoundingAdmin(ctx)
-	if err != nil {
-		t.Fatalf("ensure after operator changes: %v", err)
-	}
-	if after.Enabled || after.Role != accounts.RoleViewer {
-		t.Errorf("ensure repaired an operator-modified founding admin: %+v", after)
+	for _, name := range []string{"founding-admin", "admin", "root"} {
+		if _, err := st.Accounts().Create(ctx, accounts.Account{
+			Name: name, Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+		}); err != nil {
+			t.Errorf("create %q: %v; no name is reserved", name, err)
+		}
 	}
 }
 
@@ -238,9 +196,11 @@ func TestAccounts_PersistAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	seeded, err := st.Accounts().EnsureFoundingAdmin(ctx)
+	seeded, err := st.Accounts().Create(ctx, accounts.Account{
+		Name: "alice", Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+	})
 	if err != nil {
-		t.Fatalf("ensure: %v", err)
+		t.Fatalf("create admin: %v", err)
 	}
 	created, err := st.Accounts().Create(ctx, machine("gleipnir", accounts.RoleOperator))
 	if err != nil {
@@ -257,12 +217,12 @@ func TestAccounts_PersistAcrossReopen(t *testing.T) {
 	}
 	t.Cleanup(func() { reopened.Close() })
 
-	again, err := reopened.Accounts().EnsureFoundingAdmin(ctx)
+	again, err := reopened.Accounts().GetByName(ctx, "alice")
 	if err != nil {
-		t.Fatalf("ensure after reopen: %v", err)
+		t.Fatalf("get admin after reopen: %v", err)
 	}
 	if again.ID != seeded.ID {
-		t.Errorf("founding admin ID changed across restart: %q → %q", seeded.ID, again.ID)
+		t.Errorf("admin ID changed across restart: %q → %q", seeded.ID, again.ID)
 	}
 
 	got, err := reopened.Accounts().Get(ctx, created.ID)

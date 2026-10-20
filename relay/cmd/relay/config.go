@@ -26,8 +26,7 @@ func parseArgs(args []string, stderr io.Writer) (string, error) {
 		_, _ = fmt.Fprint(stderr, `Usage:
   relay [--config PATH]
   relay --version
-  relay bootstrap-token …
-  relay console-password …
+  relay init [--config PATH] (--admin NAME | --recover NAME)
 
 Every setting is in the configuration file; the Relay reads none from flags or the environment.
 `)

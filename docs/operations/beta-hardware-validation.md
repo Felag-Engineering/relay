@@ -62,8 +62,8 @@ relay --version
 ```
 
 Then stand the Relay up **by following the v0.1.0-beta install/run docs only** (not
-this script, not memory): the founding admin's API Token minted with
-`relay bootstrap-token -store-path <path>` (there is no credential-hash file since
+this script, not memory): the first admin and its API Token created with
+`sudo -u relay relay init --admin <name>` (there is no credential-hash file since
 ADR-0023), `-control-enabled`, separate node-plane/control-plane listeners, `-hostname`
 set to the DNS name the Nodes and the workstation will dial (the server-cert SAN),
 production-shaped blast caps, and `-min-daemon-version ${VERSION}` — the release is

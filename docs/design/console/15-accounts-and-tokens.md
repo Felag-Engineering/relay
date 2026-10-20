@@ -28,8 +28,9 @@ row are decided there and re-decided nowhere on this screen. The step-up matrix,
 | Revoke an API Token | no |
 
 Owner decision, `2026-09-19` — see *The warning, restated* for the principle behind the split. A
-human Account created here cannot sign in until a password is set with `relay console-password` on
-the host: no capability seam can set one, and the screen says so rather than implying otherwise.
+human Account created here cannot sign in until a password is set, and only `relay init` on the host
+sets one, for the first admin: no capability seam can set one, and the screen says so rather than
+implying otherwise.
 
 ## The warning, restated
 

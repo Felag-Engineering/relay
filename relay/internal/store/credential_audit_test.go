@@ -26,9 +26,11 @@ func credentialRecord(id, kind string) audit.Record {
 func credentialFixture(t *testing.T) (*Store, accounts.Account) {
 	t.Helper()
 	st, _ := openTestStore(t)
-	admin, err := st.Accounts().EnsureFoundingAdmin(context.Background())
+	admin, err := st.Accounts().Create(context.Background(), accounts.Account{
+		Name: "admin", Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+	})
 	if err != nil {
-		t.Fatalf("EnsureFoundingAdmin: %v", err)
+		t.Fatalf("create admin: %v", err)
 	}
 	return st, admin
 }

@@ -53,7 +53,8 @@ func TestHostLeverAttribution_MatchesTheFreezeSignal(t *testing.T) {
 
 	set, _ := HostPasswordSetRecord("a", hostLeverNow, "acct", "admin")
 	mint, _ := HostAPITokenMintRecord("b", hostLeverNow, "acct", "tok")
-	for _, rec := range []audit.Record{set, mint} {
+	create, _ := HostAccountCreateRecord("c", hostLeverNow, "acct", "admin", "human", "admin")
+	for _, rec := range []audit.Record{set, mint, create} {
 		if rec.Principal != freeze[0].Principal || !reflect.DeepEqual(rec.Attribution, freeze[0].Attribution) {
 			t.Errorf("%s attributes as %q %+v, the freeze signal as %q %+v",
 				rec.Kind, rec.Principal, rec.Attribution, freeze[0].Principal, freeze[0].Attribution)
@@ -74,7 +75,30 @@ func TestHostAPITokenMintRecord_ReasonMatchesTheAPIMint(t *testing.T) {
 	}
 }
 
+func TestHostAccountCreateRecord_ReasonMatchesTheAPICreate(t *testing.T) {
+	rec, err := HostAccountCreateRecord("id-1", hostLeverNow, "acct-1", "alice", "human", "admin")
+	if err != nil {
+		t.Fatalf("HostAccountCreateRecord: %v", err)
+	}
+	want := accountAdminReason(capability.AccountAdminEvent{
+		Kind: capability.AccountAdminCreate, AccountID: "acct-1", AccountName: "alice",
+		AccountKind: "human", Role: "admin",
+	})
+	if rec.Kind != audit.KindAccountCreate || rec.Reason != want {
+		t.Errorf("Kind = %q, Reason = %q, want %q / %q", rec.Kind, rec.Reason, audit.KindAccountCreate, want)
+	}
+	if rec.Principal != audit.PrincipalLocalHost {
+		t.Errorf("Principal = %q, want %q", rec.Principal, audit.PrincipalLocalHost)
+	}
+}
+
 func TestHostLeverRecords_RefuseMissingIdentifiers(t *testing.T) {
+	if _, err := HostAccountCreateRecord("", hostLeverNow, "acct", "alice", "human", "admin"); err == nil {
+		t.Error("an empty audit id was accepted for a create")
+	}
+	if _, err := HostAccountCreateRecord("id", hostLeverNow, "acct", "", "human", "admin"); err == nil {
+		t.Error("an empty account name was accepted for a create")
+	}
 	if _, err := HostPasswordSetRecord("", hostLeverNow, "acct", "admin"); err == nil {
 		t.Error("an empty audit id was accepted")
 	}

@@ -58,7 +58,7 @@ func TestServer_RequestIDIsRelayMintedPerRequest(t *testing.T) {
 		}
 	}
 	for _, p := range principals {
-		if p != "founding-admin:admin" {
+		if p != testAdminName+":admin" {
 			t.Errorf("principal = %q, want the authenticated Account's attribution", p)
 		}
 	}

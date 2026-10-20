@@ -142,8 +142,8 @@ type Config struct {
 	//
 	// There is deliberately no credential field: the control plane
 	// authenticates per-Account API Tokens held in the store, not a shared
-	// secret configured here (ADR-0023). Bootstrap the first one with
-	// `relay bootstrap-token`.
+	// secret configured here (ADR-0023). The first one is minted by
+	// `relay init`.
 	ControlEnabled bool
 	ControlAddr    string
 
@@ -382,9 +382,8 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// is a diagnostic failure, never a startup refusal — logged and
 	// tolerated rather than returned, so the ABSENCE of the signal is itself
 	// visible instead of silently taking the whole Relay down with it. Not
-	// called from store.Open itself: two of Open's other callers are the
-	// `relay bootstrap-token` and `relay console-password` CLIs, and a
-	// fleet-wide warning dump in the middle of minting a token is noise in
+	// called from store.Open itself: Open's other caller is `relay init`, and
+	// a fleet-wide warning dump in the middle of minting a token is noise in
 	// the wrong place.
 	// Bounded, because the scan holds the process's ONLY SQLite connection
 	// (SetMaxOpenConns(1)) for O(total label rows) ahead of the listener, and
@@ -590,7 +589,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	freezeControl := capability.NewControl(rec, roleGate, st.Freeze())
 
 	// Account and API-Token administration: the same Accounts store and
-	// TokenService the authenticator and bootstrap-token use, so identity
+	// TokenService the authenticator and `relay init` use, so identity
 	// administration inherits one floor (invariant 10) instead of the Control
 	// API deciding role itself per handler. Built over the Control, so it
 	// shares its Authorizer and trail.
@@ -679,22 +678,8 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			// The event seam's Job-grained publisher.
 			eventsink.Jobs(eventBus))
 
-		// Seed the founding admin Account (ADR-0010). Idempotent and
-		// deterministic: it creates the row on first start and returns the
-		// existing one every time after, never repairing an operator's
-		// deliberate disable or demotion. Fail closed — if the identity
-		// substrate cannot be established, the control plane does not come up
-		// with a hardcoded identity instead.
-		foundingAdmin, err := st.Accounts().EnsureFoundingAdmin(context.Background())
-		if err != nil {
-			return nil, nil, fmt.Errorf("seed founding admin account: %w", err)
-		}
-		slog.Info("founding admin account ready",
-			"account_id", foundingAdmin.ID,
-			"account", foundingAdmin.Name,
-			"role", string(foundingAdmin.Role),
-			"enabled", foundingAdmin.Enabled,
-		)
+		// No Account is seeded: the first admin is created by `relay init`
+		// (ADR-0030, amended 2026-10-16).
 
 		// apiTokenSvc is constructed above, before the shared capability
 		// objects (NewAccountAdmin needs it), and reused here.
@@ -927,22 +912,19 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 }
 
 func main() {
-	// `relay bootstrap-token` is a standalone utility subcommand (see
-	// bootstrap_token.go), checked before argument parsing so it never
-	// touches Relay startup config. It mints the founding admin's first API
-	// Token against the local store and exits; it never starts a server.
-	if len(os.Args) > 1 && os.Args[1] == "bootstrap-token" {
-		os.Exit(runBootstrapTokenCommand(os.Args[2:], os.Stdout, os.Stderr))
-	}
-	// `relay console-password` is the same shape of local, host-only lever
-	// for the Console's first human credential: reaching the Console
-	// requires a password, so the first one cannot be set through it.
-	if len(os.Args) > 1 && os.Args[1] == "console-password" {
-		os.Exit(runConsolePasswordCommand(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	// Retired RELAY_* names are refused by the server and by init alike
+	// (ADR-0043). Read once, here; each path reports it in its own order.
+	envErr := relayconfig.RefuseRetiredEnv(os.Environ())
+
+	// `relay init` (init.go) is the binary's one local act (ADR-0030). It
+	// loads the configuration through the same check as the server below,
+	// acts on the store the Relay created, and never starts a server.
+	if len(os.Args) > 1 && os.Args[1] == "init" {
+		os.Exit(runInitCommand(os.Args[2:], envErr, os.Stdin, os.Stdout, os.Stderr))
 	}
 
 	// `relay --version` prints the build stamp and exits. Checked here,
-	// alongside bootstrap-token and before argument parsing, because the
+	// alongside init and before argument parsing, because the
 	// flag package would otherwise reject it as an unknown flag: an operator
 	// must be able to identify a binary without a valid startup config.
 	//
@@ -968,8 +950,8 @@ func main() {
 	// default action ends the process, and a signal sent during start is queued
 	// and served once the watcher starts (reload_signal.go).
 	hup := notifyReload()
-	if err := relayconfig.RefuseRetiredEnv(os.Environ()); err != nil {
-		fmt.Fprintf(os.Stderr, "relay: %v\n", err)
+	if envErr != nil {
+		fmt.Fprintf(os.Stderr, "relay: %v\n", envErr)
 		os.Exit(1)
 	}
 	sc, err := loadConfig(path)

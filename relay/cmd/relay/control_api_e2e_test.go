@@ -8,7 +8,7 @@
 //
 // Authentication is the founding admin's bootstrap credential, minted from the
 // running Relay's own store by bootstrapCredential (harness_test.go) — the
-// in-process equivalent of `relay bootstrap-token` (#298, ADR-0023).
+// in-process stand-in for `relay init` (ADR-0023, ADR-0030).
 package main
 
 import (
@@ -29,7 +29,6 @@ import (
 
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
-	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/events"
@@ -51,7 +50,7 @@ import (
 // URL, and an *http.Client trusting the Relay's own CA.
 //
 // The returned credential is the founding admin's bootstrap token — the same
-// thing `relay bootstrap-token` prints — since #298 left no shared credential
+// thing `relay init` prints — since #298 left no shared credential
 // to configure.
 func startControlAPIServer(t *testing.T) (*bufconn.Listener, *appDeps, string, *http.Client, string) {
 	t.Helper()
@@ -364,7 +363,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	// denies an unrecognized ActionKind for every role including admin, so a
 	// kind-less probe would be refused by authz and stop testing the Freeze.
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
-	// controlplane.FoundingAdmin() — not an unattributed/non-admin probe
+	// testAdmin() — not an unattributed/non-admin probe
 	// Principal — so these three calls keep verifying the Freeze gate itself
 	// (frozen -> FrozenError; released -> a genuine success), not an authz
 	// denial that would satisfy "err != nil" for the wrong reason (RB1, plan
@@ -372,7 +371,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	// authz.NewRoleGate Authorizer, and a non-admin Principal here would be
 	// denied with authz.ErrUnauthorized before ever reaching the Freeze
 	// check's dispatch outcome.
-	admin := controlplane.FoundingAdmin()
+	admin := testAdmin()
 	_, runErr := deps.execution.Run(ctx, admin, sel, act)
 	var frozenErr *capability.FrozenError
 	if !errors.As(runErr, &frozenErr) {
@@ -443,7 +442,7 @@ func TestControlAPI_DispatchPublishesItsJobOnTheEventBus(t *testing.T) {
 		t.Fatalf("seed registry: %v", err)
 	}
 
-	results, err := deps.execution.Run(ctx, controlplane.FoundingAdmin(), capability.Selector{},
+	results, err := deps.execution.Run(ctx, testAdmin(), capability.Selector{},
 		jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)

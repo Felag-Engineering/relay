@@ -88,9 +88,9 @@ func (f *fakeSessionResolver) CSRFToken(id consoleauth.SessionID) consoleauth.CS
 // and the browser lane (testSessionID), with predicates shaped like the ones
 // the composition root takes from package console.
 func testConsoleAuthenticator() (*Authenticator, *fakeSessionResolver) {
-	resolver := &fakeSessionResolver{acct: storedFoundingAdmin(), valid: testSessionID}
+	resolver := &fakeSessionResolver{acct: storedFirstAdmin(), valid: testSessionID}
 	a := NewAuthenticator(
-		&fakeVerifier{acct: storedFoundingAdmin(), valid: testToken},
+		&fakeVerifier{acct: storedFirstAdmin(), valid: testToken},
 		WithConsoleSessions(resolver, testConsoleSessionOptions()),
 	)
 	return a, resolver
@@ -192,8 +192,8 @@ func TestConsoleSession_AuthenticatesTheConsole(t *testing.T) {
 			if !reached {
 				t.Fatalf("a valid Console cookie was refused on %s: status = %d", c.target, status)
 			}
-			if p.Role != string(accounts.RoleAdmin) || p.Account != accounts.FoundingAdminName {
-				t.Errorf("principal = %s (%s), want %s (admin)", p.Account, p.Role, accounts.FoundingAdminName)
+			if p.Role != string(accounts.RoleAdmin) || p.Account != testAdminName {
+				t.Errorf("principal = %s (%s), want %s (admin)", p.Account, p.Role, testAdminName)
 			}
 			if p.AuthMethod != capability.AuthMethodConsoleSession {
 				t.Errorf("AuthMethod = %q, want %q", p.AuthMethod, capability.AuthMethodConsoleSession)
@@ -238,13 +238,13 @@ func testConsoleOAuthAuthenticator(t *testing.T) (*Authenticator, string) {
 	f := newIDP(t)
 	metadataURL := "https://relay.example.internal:9443" + ProtectedResourceMetadataPath
 	a := NewAuthenticator(
-		&fakeVerifier{acct: storedFoundingAdmin(), valid: testToken},
+		&fakeVerifier{acct: storedFirstAdmin(), valid: testToken},
 		WithOAuth(
 			OAuthConfig{Issuer: testIssuer, Audience: testAudience},
 			f.verifier, &fakeLookup{accts: map[string]accounts.Account{}}, metadataURL,
 		),
 		WithConsoleSessions(
-			&fakeSessionResolver{acct: storedFoundingAdmin(), valid: testSessionID},
+			&fakeSessionResolver{acct: storedFirstAdmin(), valid: testSessionID},
 			testConsoleSessionOptions(),
 		),
 	)
@@ -494,7 +494,7 @@ func TestWithConsoleSessions_PanicsWithoutAScope(t *testing.T) {
 		}
 	}()
 	NewAuthenticator(
-		&fakeVerifier{acct: storedFoundingAdmin(), valid: testToken},
+		&fakeVerifier{acct: storedFirstAdmin(), valid: testToken},
 		WithConsoleSessions(&fakeSessionResolver{}, ConsoleSessionOptions{
 			Public:       func(*http.Request) bool { return false },
 			Unauthorized: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
