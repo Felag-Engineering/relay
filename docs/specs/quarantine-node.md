@@ -6,20 +6,19 @@ of this draft. Describes intended behaviour, not the code (see the establishing 
 
 ## Purpose
 
-When an operator or an AI-agent stops trusting a Node — it looks compromised, it behaved in a way
+When an operator or an AI-agent stops trusting a Node — it looks compromised, or behaved in a way
 nobody can explain — Relay needs a response between *watching it* and *revoking it*. Quarantine is
-that middle rung. A quarantined Node receives nothing: no Task of any kind reaches it. It stays
-enrolled and connected, so lifting the quarantine restores it at once, without re-enrollment.
+that middle rung. No Task of any kind reaches a quarantined Node. It stays enrolled and
+connected, so lifting the quarantine restores it at once, without re-enrollment.
 
-Two properties make it worth having. **A compromised Node cannot lift its own quarantine**, because
-the quarantine lives in a `relay:` label that no Node can write, and it is enforced on the Relay,
-never by the Node. And **it is reversible**, which revocation is not: the incident ladder is
-quarantine, then revoke, then Freeze (`enrollment.md`, `freeze.md`), each a larger and harder-to-
-undo act than the one before.
+**A compromised Node cannot lift its own quarantine**: the quarantine lives in a `relay:` label no
+Node can write, and is enforced on the Relay, never by the Node. And **it is reversible**, which
+revocation is not: the incident ladder is quarantine, then revoke, then Freeze (`enrollment.md`,
+`freeze.md`), each larger and harder to undo than the one before.
 
-Quarantine is deliberately *not* a forensics channel. A Node distrusted enough to quarantine could
-lie in a read as easily as anywhere else, and a hostile Node's output is a prompt-injection path
-into the AI-agent that reads it. Investigation of a quarantined Node happens outside Relay.
+Quarantine is deliberately *not* a forensics channel. A distrusted Node could lie in a read, and a
+hostile Node's output is a prompt-injection path into the AI-agent reading it. Investigation
+happens outside Relay.
 
 ## Surfaces
 
@@ -48,22 +47,20 @@ decides who may do either (invariant 10).
 
 ### Engaging
 
-- **Who:** an Account of `operator` or above, on any surface, **machine Accounts included.** An
-  AI-agent may fence off a Node it caught misbehaving, because a quarantine only ever reduces what
-  can run.
+- **Who:** an Account of `operator` or above, on any surface, **machine Accounts included**: a
+  quarantine only ever reduces what can run.
 - **Target:** a Selector containing only `relay:` and `tag:` terms — for example
   `relay:node-id=a1b2`, `relay:enrollment-token=tok_7`, or `tag:incident=4412`.
   - `relay:` is allowed because only the Relay writes it.
   - `tag:` is allowed because no Node can write it.
-  - `node:` and `state:` are refused. A Node controls both, and a compromised Node that suspects
-    trouble could relabel itself out of the Selector at the very moment of engagement.
+  - `node:` and `state:` are refused. A Node controls both, so a compromised Node could relabel
+    itself out of the Selector at the moment of engagement.
 - **The Selector is resolved once, when the quarantine is engaged,** into concrete Nodes. Each
   receives `relay:quarantine=on`, and from then on only that label matters. The caller is shown
   the exact Nodes quarantined.
-- **One engage counts against the `mutate` blast cap** (invariant 5). An AI-agent therefore cannot
-  quarantine the fleet in one act — the same denial-of-service reasoning that keeps machine
-  Accounts from engaging a Freeze. Quarantining more than the cap takes several deliberate acts,
-  or a Freeze.
+- **One engage counts against the `mutate` blast cap** (invariant 5), so an AI-agent cannot
+  quarantine the fleet in one act — the denial-of-service reasoning that keeps machine Accounts
+  from engaging a Freeze. More than the cap takes several deliberate acts, or a Freeze.
 - Engaging a quarantine on a Node that is already quarantined leaves it quarantined and records
   the attempt; it does not replace the original reason or engager.
 
@@ -86,9 +83,8 @@ decides who may do either (invariant 10).
 ### What a quarantined Node still does
 
 - **It stays connected.** Its heartbeats, `Hello` and reload reports are still received and
-  recorded (`node-connection.md`) — and are exactly as untrusted as before.
-- **It is not told.** Nothing on the wire signals a quarantine, so an attacker on the Node gains no
-  signal from it.
+  recorded (`node-connection.md`), exactly as untrusted as before.
+- **It is not told.** Nothing on the wire signals a quarantine to an attacker on the Node.
 - Its certificate renews as usual. Quarantine is not revocation.
 
 ### Lifting
@@ -156,7 +152,7 @@ preflight because it is quarantined, never sent.
 
 ## Seams and proof
 
-Quarantine is unbuilt. Everything here is the backlog of its testing issue; the likely seams are the
+Quarantine is unbuilt; everything here is its testing issue's backlog. The likely seams are the
 capability layer (authorization, target validation, the cap) and Selector resolution (exclusion).
 
 ### What proves each claim
@@ -194,8 +190,8 @@ No claim here is proven yet. Claims with **no row**, and so nothing checking the
 ## Accepted residual risk
 
 - **A hostile Node's self-reports still flow in.** A quarantined Node stays connected, so its
-  heartbeats and reports are recorded. They are no more trusted than before, but a reader who
-  forgets that could be misled by them.
+  reports are recorded. They are no more trusted than before, but could mislead a reader who
+  forgets that.
 - **A re-enrolled identity escapes the quarantine.** A Node that enrolls again with a still-valid
   Enrollment Token is a new Node and is not quarantined. Revoking the token closes it.
 - **`tag:` edits before an engage shape who is caught.** An operator — or an AI-agent — who changes
@@ -207,9 +203,8 @@ No claim here is proven yet. Claims with **no row**, and so nothing checking the
 ## Future work
 
 - **Secret distribution** — delivering a replacement credential to affected Nodes during an
-  incident. Begins with research into whether it is in realm at all: it sits close to
-  configuration management and to invariant 11's rule that secrets never pass through the
-  environment or the command line.
+  incident. Starts with research into whether it is in realm at all: it sits close to
+  configuration management and to invariant 11's rule on secrets.
 - **An Admin Console incident screen** that brings quarantine, revocation and Freeze together
   (#431).
 

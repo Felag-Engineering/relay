@@ -1,21 +1,18 @@
 # Local dev fleet (`docker compose`)
 
-A one-command, laptop-scale fleet: one **Relay** container plus three
-**relay-daemon** containers that auto-enroll over
-CA-pinned mTLS and are drivable through the control plane (MCP + `/api/v1`).
-It exists to demo and dogfood the real control path end to end. The nine-Node `demo`
-compose profile built on top of it has its own runbook — see
-[The demo profile](#the-demo-profile).
+A one-command, laptop-scale fleet: one **Relay** container and three **relay-daemon**
+containers that auto-enroll over CA-pinned mTLS and are drivable through the control plane
+(MCP and `/api/v1`). It exists to demo and dogfood the real control path end to end. The
+nine-Node `demo` profile built on it has its own runbook ([The demo profile](#the-demo-profile)).
 
-Both fleets are `docker-compose.demo.yml` at the repository root, and every command below
-names it with `-f` (the `make dev-fleet-*` targets do it for you). Both are one compose
-project, `relay-demo`, fixed by the file's `name:`. One project per Docker engine: the make
-targets refuse a fleet another checkout started. There is deliberately no
-`docker-compose.yml` at the root, so a bare `docker compose up` there does nothing. The
-single-Relay deployment stack, with no relay-daemons and no fixtures, is
-`deploy/compose/docker-compose.yml`, documented in
-[Running it with Docker Compose](operations/relay-install.md#7-running-it-with-docker-compose)
-— and it must never run on a machine that holds a development checkout like this one.
+Both fleets are `docker-compose.demo.yml` at the repository root, named with `-f` in every
+command below (the `make dev-fleet-*` targets do it for you). Both are one compose project,
+`relay-demo`, fixed by the file's `name:`, and one per Docker engine: the make targets refuse a
+fleet another checkout started. There is deliberately no root `docker-compose.yml`, so a bare
+`docker compose up` does nothing. The single-Relay deployment stack is
+`deploy/compose/docker-compose.yml`
+([Running it with Docker Compose](operations/relay-install.md#7-running-it-with-docker-compose)),
+and it must never run on a machine that holds a development checkout like this one.
 
 > **DEV-ONLY — no production posture.** Committed credentials, a fixture Policy, one
 > host. Ports are bound to `127.0.0.1`; exposing `9443` (`RELAY_PUBLISH_ADDR`) is
@@ -23,27 +20,23 @@ single-Relay deployment stack, with no relay-daemons and no fixtures, is
 
 ## Prerequisites
 
-- A checkout of `Felag-Engineering/relay`. One cloned as `gleipnir-relay` works through
-  GitHub's redirect; `git remote set-url origin git@github.com:Felag-Engineering/relay.git`
-  points it at the new name.
-- Docker Engine with the Compose v2 plugin (`docker compose`, not the legacy
-  `docker-compose`), version 2.18 or later for every `make dev-fleet-*` target: `down` and
-  `logs` name the OAuth overlay, which uses `!reset`.
-- Network access to Docker Hub the first time (the Relay/daemon binaries are
-  compiled inside multi-stage images; nothing depends on a host Go or Rust
-  toolchain).
-- **The Relay's configuration comes from a Linux filesystem, and why.** The Relay refuses
-  `relay.toml`, its gate files and its state directory unless every component of the path sits
-  on a filesystem whose owner and mode the kernel reports itself (ext4, XFS, btrfs, tmpfs,
-  overlayfs). A checkout bind mount fails twice over: it carries your uid and mode `0644`, and on
-  Docker Desktop (macOS, Windows) it arrives over virtiofs, 9p or FUSE. So the `relay-config`
-  one-shot copies the selected fixture and the gates onto the `relay-etc` named volume, which
-  lives on the engine's own Linux filesystem (Docker Desktop's VM included), as `root:10001`
-  `0640` and `root:root` `0644`, and the Relay mounts that volume read-only at `/etc/relay`. A
-  Docker data root on ZFS or NFS is refused the same way, at whichever path crosses it.
+- A checkout of `Felag-Engineering/relay` (one cloned as `gleipnir-relay` works through
+  GitHub's redirect).
+- Docker Engine with the Compose v2 plugin (`docker compose`, not legacy `docker-compose`),
+  2.18 or later: `down` and `logs` name the OAuth overlay, which uses `!reset`.
+- Network access to Docker Hub the first time. The binaries are compiled inside multi-stage
+  images; no host Go or Rust toolchain is needed.
+- **A Docker data root on a Linux filesystem.** The Relay refuses `relay.toml`, its gate files
+  and its state directory unless every path component sits on a filesystem whose owner and
+  mode the kernel reports itself (ext4, XFS, btrfs, tmpfs, overlayfs). A checkout bind mount
+  fails twice over: it carries your uid and mode `0644`, and on Docker Desktop it arrives over
+  virtiofs, 9p or FUSE. So the `relay-config` one-shot copies the selected fixture and gates
+  onto the `relay-etc` named volume, on the engine's own Linux filesystem (Docker Desktop's VM
+  included), as `root:10001` `0640` and `root:root` `0644`, and the Relay mounts it read-only
+  at `/etc/relay`. A data root on ZFS or NFS is refused the same way.
 
-Docker is **not** required for `make build`, `make test`, or `make lint`, and CI
-never runs the fleet; it only renders these files with `docker compose config`.
+Docker is **not** required for `make build`, `make test` or `make lint`. CI never runs the
+fleet; it only renders these files with `docker compose config`.
 
 ## What is in the box
 
@@ -57,64 +50,51 @@ never runs the fleet; it only renders these files with `docker compose config`.
 
 Security-relevant choices, made explicit:
 
-- **Policy arrives with the image, never over the wire (ADR-0002).** The fixture
-  Policy is now **three** files, `docker/fixtures/policy.web.toml`,
-  `policy.db.toml`, and `policy.bastion.toml` (the narrowest of the three,
-  `demo` profile only), all `COPY`d into the daemon image root-owned `0644`,
-  passing the daemon's fail-closed loader (which refuses a group/world-writable
-  Policy, or one owned by a non-root user). The Relay can query a Node's Policy
-  fingerprint but can never change the Policy. The demo Template pack
-  (`docker/fixtures/templates.d/relay-demo/`) arrives the same way and under
-  the same rule — ADR-0002 applies to templates verbatim, and its loader is
-  fail-closed **whole-set**: a bad mode on one template file empties the
-  Node's entire template vocabulary and reports the `unloadable` fingerprint.
-- **No CA material reaches a daemon.** `ca-key.pem` lives only on the
-  `relay-data` volume, which the short-lived `init` helper mounts **read-write**
-  (it writes the store) and the long-lived daemon containers never mount. A
-  daemon receives only the join string, as `RELAY_JOIN`: it pins the Relay's CA
-  from the join string's fingerprint before sending the token, and writes the
-  CA into its own state volume.
-- **The Enrollment Token is `relay:`-scoped.** It can only join Nodes; it can
-  never call the API or run Operations. Enrollment stamps `relay:env=dev` and
-  `relay:fleet=dev` onto each Node — these `relay:` labels are what your Selectors
-  target.
-- **The control-plane credential is minted at runtime, not committed.** Since
-  ADR-0023 the control plane accepts only per-Account API Tokens, so the
-  `init` one-shot runs `relay init` against the Relay's own store, which
-  creates the first admin and prints its first API Token, and writes the result
-  to the shared volume. On a later `compose up` the admin already exists, so it
-  re-mints with `relay init --recover`
-  (`docker/dev-fleet-init.sh`). Read it with:
+- **Policy arrives with the image, never over the wire (ADR-0002).** The fixture Policy is
+  three files, `docker/fixtures/policy.web.toml`, `policy.db.toml` and `policy.bastion.toml`
+  (the narrowest, `demo` profile only), `COPY`d into the daemon image root-owned `0644`. The
+  daemon's fail-closed loader refuses a group- or world-writable Policy, or one not owned by
+  root. The demo Template pack (`docker/fixtures/templates.d/relay-demo/`) arrives the same way
+  under the same rule, and its loader is fail-closed **whole-set**: a bad mode on one template
+  file empties the Node's template vocabulary and reports the `unloadable` fingerprint.
+- **No CA material reaches a daemon.** `ca-key.pem` lives only on the `relay-data` volume,
+  which the short-lived `init` helper mounts **read-write** (it writes the store) and no daemon
+  mounts. A daemon receives only the join string, as `RELAY_JOIN`: it pins the Relay's CA from
+  the join string's fingerprint before sending the token, and writes the CA to its own state
+  volume.
+- **The Enrollment Token is `relay:`-scoped.** It can only join Nodes, never call the API or
+  run Operations. Enrollment stamps `relay:env=dev` and `relay:fleet=dev` onto each Node; these
+  are the labels your Selectors target.
+- **The control-plane credential is minted at runtime, not committed.** The control plane
+  accepts only per-Account API Tokens (ADR-0023), so the `init` one-shot runs `relay init`
+  against the Relay's store to create the first admin and its first API Token, and writes the
+  result to a shared volume. On a later `compose up` the admin exists, so it re-mints with
+  `relay init --recover` (`docker/dev-fleet-init.sh`). Read it with:
 
   ```console
   $ docker compose -p relay-demo -f docker-compose.demo.yml cp init:/credential/control-credential - | tar -xO
   ```
 
-  It lives on its own volume, which the daemons deliberately do not mount — an
-  admin credential readable by every Node is exactly what a compromised Node
-  would use to drive the whole fleet. It is a live 24h admin credential (`--ttl 24h`)
-  for the `admin` Account; keeping it on a volume at all is a dev-fleet
-  convenience only — in a real deployment the
-  credential goes from the operator's terminal straight into a secret store (see
-  [docs/operations/control-plane-credential.md](operations/control-plane-credential.md)).
+  It lives on its own volume, which the daemons do not mount: an admin credential readable
+  by every Node is exactly what a compromised Node would use to drive the fleet. It is a live
+  24h admin credential (`--ttl 24h`) for `admin`. Keeping it on a volume is a dev-fleet
+  convenience only; in a real deployment it goes from the operator's terminal straight into
+  a secret store ([control-plane-credential.md](operations/control-plane-credential.md)).
   Never copy this one out of the fleet.
 
 ## The Admin Console
 
 The Console (ADR-0009) is served on the **same** control-plane listener as MCP and
-`/api/v1` — no new listener and no new auth path (invariant 10). Browser sessions
-sit beside API Tokens and OAuth as one of the authenticator's credential lanes,
-rather than the Console authenticating its own requests, which would be a second
-control path and the first one to be forgotten.
+`/api/v1`, with no new auth path (invariant 10): browser sessions are one of the
+authenticator's credential lanes beside API Tokens and OAuth.
 
 ```
 https://127.0.0.1:9443/console/
 ```
 
-Your browser will warn about the certificate: the Relay signs its own server cert
-with the CA it created on first start, and nothing on your laptop trusts that CA.
-That is the correct behaviour and not a misconfiguration — accept it for the dev
-fleet, or add `ca-cert.pem` to your trust store if the warning gets tiresome.
+Your browser will warn about the certificate: the Relay signs its server cert with the CA
+it created on first start, which nothing on your laptop trusts. Accept it for the dev fleet, or
+add `ca-cert.pem` to your trust store.
 
 Sign in with:
 
@@ -123,37 +103,28 @@ Sign in with:
 | username | `admin` |
 | password | `admin1234567` |
 
-Override either with `CONSOLE_ADMIN_NAME` / `CONSOLE_ADMIN_PASSWORD` in the
-environment before the first `docker compose -f docker-compose.demo.yml up`: `relay init` sets
-the password once, when it creates the admin, so changing it later needs a fresh volume. With
-`RELAY_PUBLISH_ADDR` beyond loopback, `init` refuses the committed default password, and the
-fleet does not start.
+Override either with `CONSOLE_ADMIN_NAME` / `CONSOLE_ADMIN_PASSWORD` before the first
+`docker compose -f docker-compose.demo.yml up`. `relay init` sets the password once, when it
+creates the admin, so changing it later needs a fresh volume. With `RELAY_PUBLISH_ADDR` beyond
+loopback, `init` refuses the committed default password and the fleet does not start.
 
-**Why the password is not shorter.** The Relay refuses any Console password below
-12 bytes (`accounts.MinPasswordBytes`). The sign-in throttle deliberately has no
-hard lockout — a lockout is a denial-of-service lever pointed at your own
-operators — so an attacker gets slow, unlimited attempts, and length is the only
-thing that makes that safe. What sits behind the credential is the front half of a
+**Why the password is not shorter.** The Relay refuses any Console password below 12 bytes
+(`accounts.MinPasswordBytes`). The sign-in throttle has no hard lockout, which would be a
+denial-of-service lever against your own operators, so an attacker gets slow, unlimited
+attempts and length is what makes that safe. Behind the credential is the front half of a
 fleet-execution surface (ADR-0026).
 
-**Why the password is set locally.** Every other Account is created by a
-control-plane request carrying a bearer token. The first admin cannot be — reaching
-the API or the Console requires a credential, so the first one has nowhere to come
-from except the Relay's own store, written by `relay init` as the Relay's own uid
-(ADR-0030). That is the same answer ADR-0002 gives for Policy: root it in the
-filesystem. The dev fleet's single `init` holds both
-authorities, a bearer token and the store, on purpose: this is a laptop fleet, and the
-credential it holds was always minted by a container with store access.
+**Why the password is set locally.** Every other Account is created by a control-plane request
+carrying a bearer token. The first cannot be, so it comes from the Relay's own store, written
+by `relay init` as the Relay's own uid (ADR-0030): the same answer ADR-0002 gives for Policy,
+root it in the filesystem. The dev fleet's single `init` holds both authorities, a bearer token
+and the store, on purpose: this is a laptop fleet.
 
-**What you can do there today.** Everything and nothing: the v0.6.0 Console is
-**read-only by construction**. The read seams it is wired with have no write
-method on them at all, so "zero mutating routes" is a fact about the types rather
-than a property of the handlers. You can watch the fleet, open a Node, read its
-daemon-reported effective Policy, follow the activity trail, read what has been
-read. The Console renders approval records on Activity and Job detail; it decides
-none and lists none, and approvals are decided as in "Approving a parked
-dispatch". You cannot run anything or change a label — those arrive in v0.7.0
-behind step-up re-authentication.
+**What you can do there.** Watch the fleet, open a Node, read its daemon-reported effective
+Policy, follow the Activity trail, cancel a Job, and administer Accounts and API Tokens. The
+Console renders approval records on Activity and Job detail but decides and lists none;
+approvals are decided as in [Approving a parked dispatch](#approving-a-parked-dispatch). It
+cannot run anything or change a label (invariant 10 gap, #438).
 
 ## Bring the fleet up
 
@@ -161,17 +132,14 @@ behind step-up re-authentication.
 $ make dev-fleet-up
 ```
 
-The Relay starts and creates its CA and store; `init` runs `relay init` to create the
-first admin and its token, creates the other dev Accounts, then mints the Enrollment Token and exports the CA cert; then
-the daemons enroll and go healthy. `make dev-fleet-up` returns once every daemon is healthy.
+The Relay creates its CA and store; `init` runs `relay init` to create the first admin and
+its token, creates the other dev Accounts, mints the Enrollment Token and exports the CA cert;
+then the daemons enroll. `make dev-fleet-up` returns once every daemon is healthy, which each
+becomes only after it has persisted its identity:
 
 ```console
 $ docker compose -f docker-compose.demo.yml ps
 ```
-
-Wait until `daemon-1`, `daemon-2`, and `daemon-3` are `healthy` (each becomes
-healthy only after it has persisted its identity, i.e. after a successful
-enrollment).
 
 > **Troubleshooting.** The Relay healthcheck completes a TLS 1.3 handshake with
 > both listeners using `openssl s_client`, verified against the Relay's CA. If it
@@ -181,10 +149,10 @@ enrollment).
 > `docker compose -p relay-demo logs init`: no daemon starts until it exits 0.
 >
 > `hostfile: refusing <path>: <clause>` in `docker compose -p relay-demo logs relay` names the
-> file and the reason. A "filesystem" clause means the Docker data root, where the volume lives,
-> is on an unsupported filesystem. A relay-data volume written by the earlier root-run Relay is
-> refused too (the CA and store are not owned by 10001): run `make demo-reset` once, which wipes
-> the volumes. If `relay-config` exits non-zero, nothing else starts; read
+> file and the reason. A "filesystem" clause means the Docker data root is on an unsupported
+> filesystem. A `relay-data` volume left by an older root-run Relay is refused too (the CA and
+> store are not owned by 10001): run `make demo-reset` once, which wipes the volumes.
+> If `relay-config` exits non-zero, nothing else starts; read
 > `docker compose -p relay-demo logs relay-config`. A "cannot read /src/..." line there means the
 > checkout's file mode hides a fixture from the one-shot. (The one-shot holds `CAP_CHOWN` and
 > `CAP_DAC_OVERRIDE` only, so a `0600` fixture is still readable; the root filesystem and `/src`
@@ -202,27 +170,20 @@ enrollment).
 $ docker compose -f docker-compose.demo.yml logs relay
 ```
 
-You should see three `node enrolled` lines, one per Node, each with
-`relay_label_count=2` (the token's `relay:env=dev` and `relay:fleet=dev`; the log
-counts labels and does not print them — `list_nodes` below shows the values).
+You should see three `node enrolled` lines, each with `relay_label_count=2` (the token's
+`relay:env=dev` and `relay:fleet=dev`; the log counts labels and does not print them).
 
-**Richer check — list the fleet registry over MCP.** The `list_nodes` tool
-returns each Node's `node_labels`, `relay_labels`, and reported
-`policy_fingerprint` — the full registry view the quick log check doesn't show.
-Use the MCP client setup from [Connecting Claude Code](#connecting-claude-code)
-below (it exports the CA cert and credentials first), then call:
+**Richer check: list the fleet registry over MCP.** With the client set up as in
+[Connecting Claude Code](#connecting-claude-code), call:
 
 ```
 list_nodes()
 ```
 
-The result is a `nodes` array with three entries,
-each carrying its `node_id`, `node_labels`, `relay_labels` (including
-`relay:env=dev` / `relay:fleet=dev`), and `policy_fingerprint`. `node:` and
-`relay:` labels come back as separate maps
-— never merged — so you can always tell which namespace a label was set from
-(ADR-0006). Pass an optional `selector` to filter, e.g.
-`list_nodes(selector="relay:env=dev")`.
+The result is a `nodes` array of three, each with its `node_id`, `node_labels`,
+`relay_labels` and `policy_fingerprint`. `node:` and `relay:` labels come back as separate
+maps, never merged, so you can always tell which namespace set a label (ADR-0006). Pass an
+optional `selector` to filter, e.g. `list_nodes(selector="relay:env=dev")`.
 
 ## Drive the fleet over MCP
 
@@ -237,10 +198,9 @@ loopback once:
 $ grep -q 'relay$' /etc/hosts || echo '127.0.0.1 relay' | sudo tee -a /etc/hosts
 ```
 
-`make dev-fleet-creds` exports the CA cert and both control-plane credentials (the first
-admin, `admin`, and `dev-approver`) to the gitignored `./.dev-fleet/`, for MCP and `/api/v1` alike.
-Run it, then add the server. `NODE_EXTRA_CA_CERTS` is what makes Claude Code's Node TLS
-stack trust the fleet's private CA:
+`make dev-fleet-creds` exports the CA cert and both control-plane credentials (`admin` and
+`dev-approver`) to the gitignored `./.dev-fleet/`, for MCP and `/api/v1` alike. Run it, then
+add the server:
 
 ```console
 $ make dev-fleet-creds
@@ -248,21 +208,19 @@ $ claude mcp add --transport http relay https://relay:9443/mcp \
     --header "Authorization: Bearer $(cat .dev-fleet/control-credential)"
 ```
 
-An **http** transport is dialled by the `claude` process itself, not by a subprocess, so
-the CA has to be trusted by that process — `claude mcp add -e` would not help here. Start
-Claude Code with it:
+An **http** transport is dialled by the `claude` process itself, so that process must trust
+the CA (`claude mcp add -e` would not help). `NODE_EXTRA_CA_CERTS` does it:
 
 ```console
 $ NODE_EXTRA_CA_CERTS=$PWD/.dev-fleet/ca-cert.pem claude
 ```
 
-That connects as the first admin, **`admin`** — the requester. It deliberately **cannot** approve
-its own parked dispatches; use `dev-approver` for that (see
-[The approval gate](#the-approval-gate)).
+That connects as **`admin`**, the requester, which **cannot** approve its own parked
+dispatches; `dev-approver` does that ([The approval gate](#the-approval-gate)).
 
-Claude Code does not implement the MCP Tasks extension, so gated dispatches come back to it
-as `pending_approval` **results**, never as task handles. That is the universal path and the
-one that matters most; reach the Tasks path with
+Claude Code does not implement the MCP Tasks extension, so gated dispatches come back as
+`pending_approval` **results**, never task handles. That is the universal path; reach the
+Tasks path with
 [`scripts/dev-fleet-mcp.sh`](#driving-the-mcp-tasks-extension-scriptsdev-fleet-mcpsh).
 
 ### Any other MCP client
@@ -273,58 +231,53 @@ Point it at `https://relay:9443/mcp` with:
 - **TLS trust:** `.dev-fleet/ca-cert.pem`. Dial the host as `relay` so the SAN matches —
   never disable verification just to get a connection.
 
-`run_operation` takes a `selector`, an `operation`, and a named-argument **map**
-keyed by the Operation's argument names (the Relay maps those names to the
-daemon's positional Policy under the hood).
+`run_operation` takes a `selector`, an `operation`, and a named-argument **map** keyed by the
+Operation's argument names (the Relay maps them to the daemon's positional Policy).
 
-`run_operation` and `raw_exec` return as soon as the Job's Tasks are persisted, with
-`job_id` and `job_status: "running"`. To see per-Node results, either pass `wait_seconds`
-(up to 300) to wait for them in the same call, or poll `get_job` until `job_status` is
-`complete`. Every example below that shows per-Node results assumes one of the two. An
+`run_operation` and `raw_exec` return once the Job's Tasks are persisted, with `job_id` and
+`job_status: "running"`. For per-Node results, pass `wait_seconds` (up to 300) or poll
+`get_job` until `job_status` is `complete`; the examples below assume one of the two. An
 answered retry must re-send the call unchanged, `wait_seconds` included.
 
-Happy path — fan `system.facts` (a no-argument, `read`-class Operation) across
-every dev Node and get a per-Node result:
+Happy path: fan `system.facts` (no arguments, `read` class) across every dev Node:
 
 ```
 run_operation(selector="relay:env=dev", operation="system.facts")
 ```
 
-Read a file — the `file.read` example advertised by `list_operations`. The dev
-daemon image bakes in `/etc/os-release` (busybox has none), and the fixture Policy
-allows `file.read` on any path but `/etc/shadow`, so this succeeds verbatim per Node:
+Read a file, the `file.read` example from `list_operations`. The dev image bakes in
+`/etc/os-release` (busybox has none), and the fixture Policy allows `file.read` on any path but
+`/etc/shadow`, so this succeeds on every Node:
 
 ```
 run_operation(selector="relay:env=dev", operation="file.read", args={"path":"/etc/os-release"})
 ```
 
-Policy-denied path — `service.restart sshd`. The fixture Policy allows
-`service.restart` only for `nginx` and `php-fpm`, so the daemon's live Policy
-engine refuses it. Aim it at the one `role=db` Node: the same call on
-`relay:env=dev` reaches three Nodes, which is a fleet-wide mutate, so the
-[approval gate](#the-approval-gate) parks it for a human before any Node sees it.
+Policy-denied: `service.restart sshd`. The fixture Policy allows `service.restart` only for
+`nginx` and `php-fpm`, so the daemon refuses it. Aim it at the one `role=db` Node: on
+`relay:env=dev` it reaches three Nodes, a fleet-wide mutate, which the
+[approval gate](#the-approval-gate) parks for a human before any Node sees it.
 
 ```
 run_operation(selector="node:role=db", operation="service.restart", args={"unit":"sshd"})
 ```
 
-The Node returns `outcome=denied_by_policy` (the "denied-by-policy"
-result). The verdict is the daemon's, not the Relay's — the Relay never evaluates
-Policy (ADR-0002/0011).
+The Node returns `outcome=denied_by_policy`. The verdict is the daemon's; the Relay never
+evaluates Policy (ADR-0002, ADR-0011).
 
 ## The approval gate
 
 The fleet ships an **approval gate** (`docker/fixtures/approval-gates.json`, ADR-0027), so
-the parked-dispatch and MCP-task-handle surfaces are exercisable rather than theoretical.
-This section covers the dev fixture only; the operator-facing account of gates — rule
-schema, webhook, decision endpoint — is
+parked dispatches and MCP task handles can be exercised. This section covers the dev fixture;
+gates for operators (rule schema, webhook, decision endpoint) are in
 [docs/operations/approval-gates.md](operations/approval-gates.md). The nine-Node demo fleet
 runs a different, in-band gate (`docker/fixtures/approval-gates.demo.json`), selected by the
-`make demo-*` targets; see
-[The human approver](operations/demo-fleet.md#the-human-approver) in its runbook.
-`make dev-fleet-up` and `make demo-*` each set the selector, `DEV_FLEET_RELAY_CONFIG`, which
-names the `relay.toml` fixture, staged read-only for the Relay, whose `approval.gate_rules_path` names the staged gate,
-explicitly; only a bare `docker compose` reads it from the caller's shell or a repo-root `.env`.
+`make demo-*` targets ([The human approver](operations/demo-fleet.md#the-human-approver)).
+
+The make targets set `DEV_FLEET_RELAY_CONFIG` explicitly. It names the `relay.toml` fixture
+staged for the Relay, whose `approval.gate_rules_path` names the staged gate. Only a bare
+`docker compose` reads it from your shell or a repo-root `.env`.
+
 Two rules:
 
 | Rule | Matches | Requires |
@@ -332,38 +285,34 @@ Two rules:
 | `dev-fleet-wide-mutates-need-a-human` | `mutate` class, fan-out **≥ 2** | 1 approval from `dev-approver`, out-of-band |
 | `dev-raw-exec-always-needs-a-human` | every Raw Exec | 1 approval from `dev-approver`, out-of-band |
 
-The fan-out threshold is deliberate: it leaves **both** paths reachable in one fleet. A
-mutate that resolves to a single Node runs straight through; the same mutate aimed
-fleet-wide parks. In this three-Node fleet, `node:role=db` is one Node and runs straight
-through, while `relay:env=dev` (three) waits for a human. The counts differ under the
-`demo` profile, where `node:role=db` parks too; read its runbook before presenting (see
-[The demo profile](#the-demo-profile)).
+The fan-out threshold leaves **both** paths reachable: a mutate on one Node runs straight
+through; the same mutate fleet-wide parks. Here `node:role=db` is one Node and runs, while
+`relay:env=dev` (three) waits for a human. Under the `demo` profile `node:role=db` parks too;
+read [its runbook](#the-demo-profile) before presenting.
 
 Security-relevant choices, made explicit:
 
 - **The gate is Relay configuration, not a runtime object.** It is staged root-owned `0644`
-  onto the read-only config volume, and read from the path `approval.gate_rules_path` names in the mounted `relay.toml`.
-  A fixture edit takes effect on the next `make dev-fleet-up` plus a Relay restart
-  (`docker compose -p relay-demo -f docker-compose.demo.yml restart relay`), not an image rebuild. No Account of
-  any role can read or loosen it through the API (invariant 11) — a stolen credential that
-  could edit its own approval requirements would make the whole mechanism decorative.
-- **Loading it is fail-closed.** A malformed, missing, symlinked, or group/world-writable
-  gate file fails Relay startup. It never degrades to "nothing needs approval", so a
-  broken fixture crash-loops the container instead of quietly disarming the fleet. (If you
-  edit the fixture and the `relay` container stops going healthy, read
-  `docker compose -f docker-compose.demo.yml logs relay` — the loader says exactly what it objected to.)
-- **`requester_allowed` is unset, which is the strict default.** The Account that requested
-  a parked dispatch may **not** approve it. That is why `dev-approver` exists: with a
-  single Account the fleet could park a dispatch and never release it.
-- **`dev-approver`'s credential is on the `control-credential` volume**, which daemons
-  never mount. An approver credential readable by every Node would let a compromised Node
-  approve its own remediation.
+  onto the read-only config volume, at the path `approval.gate_rules_path` names. A fixture
+  edit takes effect on the next `make dev-fleet-up` plus a Relay restart
+  (`docker compose -p relay-demo -f docker-compose.demo.yml restart relay`), not a rebuild. No
+  Account of any role can read or loosen it through the API (invariant 11): a credential that
+  could edit its own approval requirements would make the mechanism decorative.
+- **Loading it is fail-closed.** A malformed, missing, symlinked, or group- or world-writable
+  gate file fails Relay startup, never degrading to "nothing needs approval": a broken fixture
+  crash-loops the container instead of disarming the fleet.
+  `docker compose -f docker-compose.demo.yml logs relay` says what the loader objected to.
+- **`requester_allowed` is unset, the strict default.** The requesting Account may **not**
+  approve its own dispatch, which is why `dev-approver` exists.
+- **`dev-approver`'s credential is on the `control-credential` volume**, which no daemon
+  mounts: an approver credential readable by every Node would let a compromised Node approve
+  its own remediation.
 
 ### Approving a parked dispatch
 
-With both credentials exported by `make dev-fleet-creds` (see
-[Connecting Claude Code](#connecting-claude-code)), a gated call comes back as a `pending_approval` **result** (not an error) carrying a
-`request_id`, a `plan_hash`, and a Relay-authored `summary`. Decide it as the approver:
+With both credentials exported by `make dev-fleet-creds`, a gated call comes back as a
+`pending_approval` **result** (not an error) carrying a `request_id`, a `plan_hash` and a
+Relay-authored `summary`. Decide it as the approver:
 
 ```console
 $ scripts/dev-fleet-mcp.sh api-approver POST \
@@ -374,49 +323,45 @@ $ scripts/dev-fleet-mcp.sh api-approver POST \
 Then **re-issue the original call unchanged** — approving releases a Plan, it does not
 itself dispatch.
 
-Two properties worth watching, because they are the point of the design:
+Two properties to watch:
 
-- The **admin** credential cannot decide its own request. It gets
-  `409 requester may not decide their own request`, even though it is an admin.
-- The decision arrives on a credential the requesting MCP session does not hold. That is
-  what `channel: out-of-band` records — evidence, not an assumption about the client.
+- The **admin** credential cannot decide its own request: it gets
+  `409 requester may not decide their own request`, even as an admin.
+- The decision arrives on a credential the requesting MCP session does not hold, which is
+  what `channel: out-of-band` records.
 
 ## Mutates that really run — and where they cannot
 
 ### The fixture limit, stated plainly
 
 There is no service manager and no package manager on `busybox:stable-musl`. `pkg.install`
-cannot complete on any Node, and `service.restart` cannot complete on any Node that does not
-run the demo service (the `role=db` and `role=bastion` Nodes): it terminates in
-`outcome=failure` with `stderr="spawn systemctl: No such file or directory"` and **no
-`exit_code` key** — the documented contract for a Task that never ran a process, not a
-defect (see [issue #389](https://github.com/Felag-Engineering/relay/issues/389)).
+cannot complete on any Node, and `service.restart` cannot complete on a Node without the demo
+service (`role=db`, `role=bastion`): it ends in `outcome=failure` with
+`stderr="spawn systemctl: No such file or directory"` and **no `exit_code` key**, the
+documented contract for a Task that never ran a process
+([#389](https://github.com/Felag-Engineering/relay/issues/389)).
 
-On the `role=web` Nodes, `service.restart` **does** run, through a DEV-ONLY `systemctl`
-shim (`docker/fixtures/systemctl-shim`). The image bakes it off the `PATH`, and
-`docker/daemon-entrypoint.sh` links it to `/usr/local/bin/systemctl` only on the Nodes that
-run the demo service, so the daemon's fixed `systemctl restart <unit>` argv reaches
-`/usr/local/bin/dev-fleet-service restart` there and nowhere else. The unit name is
-ignored — there is one service on these Nodes — and Policy still decides which units may be
-asked for (`nginx` and `php-fpm` on the web fixture). The shim fakes nothing about the
-outcome: the exit code is `dev-fleet-service`'s own, taken from a live HTTP probe of the
-restarted `httpd` ([The real service](#the-real-service), below), so a restart that fails
-still reports failure. What it stands in for is the service manager, not the result — the
-line the fixture has always drawn is that a dev fleet must never report success it did not
-observe. The Raw Exec `systemctl` allow in the web and db fixtures names
-`/usr/bin/systemctl`, which still does not exist, so that allow stays inert.
+On the `role=web` Nodes, `service.restart` **does** run, through a DEV-ONLY `systemctl` shim
+(`docker/fixtures/systemctl-shim`). The image bakes it off the `PATH`, and
+`docker/daemon-entrypoint.sh` links it to `/usr/local/bin/systemctl` only on Nodes running the
+demo service, so the daemon's fixed `systemctl restart <unit>` argv reaches
+`/usr/local/bin/dev-fleet-service restart` there and nowhere else. The unit name is ignored
+(there is one service), and Policy still decides which units may be asked for (`nginx` and
+`php-fpm` on the web fixture). The shim fakes nothing about the outcome: the exit code is
+`dev-fleet-service`'s own, from a live HTTP probe of the restarted `httpd`, so a failed restart
+reports failure. A dev fleet must never report success it did not observe. The Raw Exec
+`systemctl` allow in the web and db fixtures names `/usr/bin/systemctl`, which does not exist,
+so it stays inert.
 
-`service.restart sshd` remains the deterministic **deny** beat below and never needed
-`systemctl` to exist — the daemon refuses before it execs.
+`service.restart sshd` is the deterministic **deny**: the daemon refuses before it execs.
 
 ### The real service
 
 `busybox httpd` serves a real docroot on `127.0.0.1:8080`
-(`/srv/dev-fleet-service/www/index.html`), started by `docker/daemon-entrypoint.sh` on the
-Nodes labelled `node:role=web` (`daemon-1`, `daemon-2`), and managed by the root-owned
-`/usr/local/bin/dev-fleet-service`. It has three subcommands and no more — there is
-deliberately no `stop` (see [Why `start|restart|status` and not `stop`](#why-startrestartstatus-and-not-stop)
-below):
+(`/srv/dev-fleet-service/www/index.html`) on the `node:role=web` Nodes (`daemon-1`,
+`daemon-2`), started by `docker/daemon-entrypoint.sh` and managed by the root-owned
+`/usr/local/bin/dev-fleet-service`. It has three subcommands and deliberately no `stop`
+([why](#why-startrestartstatus-and-not-stop)):
 
 | Subcommand | Exit code | Meaning |
 | --- | --- | --- |
@@ -426,22 +371,18 @@ below):
 | `restart` | `0` / `1` | stopped and restarted successfully / could not act |
 | anything else | `2` | usage |
 
-Every one of those success-or-down exit codes comes from a live HTTP fetch of that file,
-never from an assumption (the usage exit `2` is the one exception — it is reached before any
-probe). State is recorded at `/var/lib/dev-fleet-service/state` (`pid=`, `port=`,
-`started_epoch=`) only after an observed successful probe, and stdout/stderr from `httpd`
-are captured at `/var/lib/dev-fleet-service/httpd.log`. There is deliberately no `state=` key
-in that file: it is never rewritten after a probe-verified start, so a stored `state=running`
-would go on claiming liveness after an out-of-band kill — `pid` and `started_epoch` are
-enough to prove a restart happened, and neither one can lie about the present.
+Every exit code but the usage `2` comes from a live HTTP fetch of that file. State is
+recorded at `/var/lib/dev-fleet-service/state` (`pid=`, `port=`, `started_epoch=`) only after a
+successful probe; `httpd`'s output goes to `/var/lib/dev-fleet-service/httpd.log`. The file has
+deliberately no `state=` key: it is not rewritten after a start, so a stored `state=running`
+would go on claiming liveness after an out-of-band kill. `pid` and `started_epoch` prove a
+restart happened without claiming anything about the present.
 
 ### The Raw Exec beat
 
-Use `raw_exec(selector=…, argv=[…])` for this beat — it is the Raw Exec demonstration. The
-typed route to the same repair is the Template pack's `svc.restart` (see
-[below](#the-template-pack--loaded-enforced-and-dispatchable)), and the one other structured
-mutate is `service.restart` on the web Nodes, through the shim described in
-[The fixture limit, stated plainly](#the-fixture-limit-stated-plainly).
+This beat demonstrates Raw Exec. The typed route to the same repair is the Template pack's
+`svc.restart` ([below](#the-template-pack--loaded-enforced-and-dispatchable)), and the other
+structured mutate is `service.restart` on the web Nodes, through the shim.
 
 Preflight without dispatching:
 
@@ -449,7 +390,7 @@ Preflight without dispatching:
 raw_exec(selector="relay:env=dev", argv=["/usr/local/bin/dev-fleet-service","status"], plan=true)
 ```
 
-returns per-Node verdicts allow/allow/deny — no parking, no execution.
+returns per-Node verdicts allow/allow/deny, with no parking and no execution.
 
 The repair:
 
@@ -459,16 +400,12 @@ raw_exec(selector="relay:env=dev", argv=["/usr/local/bin/dev-fleet-service","res
 
 returns a `pending_approval` result (every Raw Exec parks under
 `dev-raw-exec-always-needs-a-human`) carrying `request_id` and `plan_hash`. Approve it as
-`dev-approver` with the decision call in
-[Approving a parked dispatch](#approving-a-parked-dispatch) (a `reason` such as
-`"repair the dev-fleet demo service"`), then **re-issue the same `raw_exec` call
-unchanged** (pass `wait_seconds` on both calls, or poll `get_job` until `job_status` is
-`complete`). Expect **two Nodes** `outcome=success, exit_code: 0` and **daemon-3**
-`outcome=denied_by_policy`. The verdict is the daemon's, never the Relay's (ADR-0002 /
-ADR-0011).
+`dev-approver` ([Approving a parked dispatch](#approving-a-parked-dispatch)), then **re-issue
+the same `raw_exec` call unchanged**. Expect **two Nodes** `outcome=success, exit_code: 0` and
+**daemon-3** `outcome=denied_by_policy`.
 
-The independent read — proof that a mutate really happened, taken through a different
-Operation and a different tier — before and after the restart:
+An independent read, through a different Operation and tier, proves the mutate happened. Run
+it before and after the restart:
 
 ```
 run_operation(selector="relay:env=dev", operation="file.read", args={"path":"/var/lib/dev-fleet-service/state"})
@@ -479,10 +416,9 @@ never had.
 
 ### Why `start|restart|status` and not `stop`
 
-The AI-agent must be able to repair the fleet and never to break it; the fault is injected out
-of band (see [The fault, and resetting between takes](operations/demo-fleet.md#the-fault-and-resetting-between-takes)
-in the demo runbook). The script has no `stop` subcommand and the
-Policy has no allow for one, so both layers say the same thing.
+The AI-agent must be able to repair the fleet and never break it; the fault is injected out
+of band ([The fault, and resetting between takes](operations/demo-fleet.md#the-fault-and-resetting-between-takes)).
+The script has no `stop` and the Policy has no allow for one, so both layers agree.
 
 ### The template pack — loaded, enforced and dispatchable
 
@@ -498,28 +434,26 @@ Call them like any Operation (ADR-0042):
 run_operation(selector="relay:env=dev", operation="svc.status")
 ```
 
-returns `success` on the web Nodes and `denied_by_policy` on the db Node — it has the
-Template, and its own Policy refuses it. The dispatch is `read` because every Node that
-reports `svc.status` reports it `read`; `svc.restart` is `mutate`, so it takes the mutate cap
-and every approval rule that matches a `mutate`, exactly as `service.restart` does. A Node that
-does not report a Template at all is left out and comes back `unsupported` without being
-sent anything, and a preflight (`plan=true`) reports the same.
+returns `success` on the web Nodes and `denied_by_policy` on the db Node, which has the
+Template but whose Policy refuses it. The dispatch is `read` because every Node that reports
+`svc.status` reports it `read`; `svc.restart` is `mutate`, so it takes the mutate cap and every
+approval rule matching a `mutate`, as `service.restart` does. A Node that does not report a
+Template comes back `unsupported` without being sent anything; a preflight (`plan=true`)
+reports the same.
 
-After the rebuild, `list_nodes()` shows **two distinct `policy_fingerprint` values** across
-the fleet, because `daemon-3` now loads a different Policy file — the registry's
-drift signal, visible for real.
+`list_nodes()` shows **two distinct `policy_fingerprint` values**, because `daemon-3` loads a
+different Policy file: the registry's drift signal.
 
 ## Driving the MCP Tasks extension (`scripts/dev-fleet-mcp.sh`)
 
 Relay serves the MCP Tasks extension (SEP-2663, ADR-0028), but **no shipping MCP client
-implements it** — not the Go SDK ([go-sdk#626](https://github.com/modelcontextprotocol/go-sdk/issues/626)),
-not the TypeScript or Python ones. The capability that triggers it is advertised in a
-per-request `_meta` that no client sends, so pointing an ordinary client at the fleet can
-never reach `tasks/get`, `tasks/cancel`, or the `CreateTaskResult` shim.
+implements it**: not the Go SDK
+([go-sdk#626](https://github.com/modelcontextprotocol/go-sdk/issues/626)), TypeScript or
+Python. Its capability is advertised in a per-request `_meta` no client sends, so an ordinary
+client never reaches `tasks/get`, `tasks/cancel` or the `CreateTaskResult` shim.
 
-`scripts/dev-fleet-mcp.sh` speaks that wire by hand. It is a curl wrapper, deliberately not
-a client library: its value is showing exactly what goes over the wire, which is the only
-way to check Relay's reading of a spec nobody else has implemented yet.
+`scripts/dev-fleet-mcp.sh` speaks that wire by hand. It is a curl wrapper, not a client
+library, so it shows exactly what goes over the wire.
 
 ```console
 $ scripts/dev-fleet-mcp.sh init                 # export CA + both credentials
@@ -531,10 +465,8 @@ $ scripts/dev-fleet-mcp.sh raw tasks/update '{}' # served? it must not be
 ```
 
 The difference between `call` and `call-tasks` is the whole shim: the same gated dispatch
-returns a `pending_approval` result to an ordinary client and a `resultType: "task"` handle
-to a Tasks-capable one. Both mint the same `taskId`.
-
-These commands exercise the MCP Tasks extension end to end; `docs/specs/` carries what each capability is expected to do.
+returns a `pending_approval` result to an ordinary client and a `resultType: "task"` handle to
+a Tasks-capable one. Both mint the same `taskId`.
 
 ## Survive `down` / `up`
 
@@ -543,11 +475,9 @@ $ docker compose -f docker-compose.demo.yml down
 $ docker compose -f docker-compose.demo.yml up -d
 ```
 
-The CA and the SQLite store persist on `relay-data`, and each daemon's identity
-persists on its private `daemonN-state` volume, so the Nodes come back with the
-**same** `node_id`s and do not re-enroll (enrollment is idempotent — a daemon
-with a persisted identity reuses it). `docker compose -f docker-compose.demo.yml logs relay` after the
-restart shows reconnects, not a fresh enrollment storm.
+The CA and the SQLite store persist on `relay-data`, and each daemon's identity on its own
+`daemonN-state` volume, so the Nodes come back with the **same** `node_id`s and do not
+re-enroll. The Relay's logs show reconnects, not a fresh enrollment storm.
 
 To wipe everything (CA, identities, store) and start clean:
 
@@ -557,56 +487,47 @@ $ docker compose -f docker-compose.demo.yml down -v
 
 ## Where to read the audit trail
 
-Every dispatch, refusal, and Policy preflight is audited. Each such decision emits exactly
-one structured log line — carrying the principal, selector, operation/action
-kind, outcome counts, and job ID — to the Relay's logs:
+Every dispatch, refusal and Policy preflight emits exactly one structured log line, with the
+principal, selector, operation or action kind, outcome counts and job ID:
 
 ```console
 $ docker compose -f docker-compose.demo.yml logs -f relay
 ```
 
-The durable, full record — including per-Node output — lives only in the
-Relay's SQLite store on the `relay-data` volume; the log lines deliberately
-omit operation args, raw-exec argv, and captured Stdout/Stderr, so they are a
-summary, not a substitute for the store.
-
-A dedicated audit **read** surface (an API/MCP route to query the trail) does not
-exist yet — it is future work. For now the logs and the store are the trail.
+The full record, including per-Node output, lives in the Relay's SQLite store on the
+`relay-data` volume. The log lines deliberately omit operation args, Raw Exec argv and captured
+stdout/stderr; they are a summary, not a substitute for the store. The Console's Activity and
+Job pages read the store; there is no general audit-query route on the API or MCP.
 
 ## The demo profile
 
-The nine-Node `demo` compose profile — its roster, the four beats, the injected fault and
-`make demo-reset`, and resource usage — has a runbook of its own:
-[docs/operations/demo-fleet.md](operations/demo-fleet.md). Same project, `--profile demo`;
-use the runbook's `make demo-*` targets, which also pick the demo gate. After a demo reset,
-`make dev-fleet-up` recreates the Relay on the dev gate and leaves `daemon-4..9` running
-until `make dev-fleet-down` / `demo-down`. It is purely
-additive to the fleet above (`demo_profile_is_additive`, `daemon/tests/dev_fleet_fixtures.rs`,
-enforces this), and everything in this document's DEV-ONLY banner applies to it with more
-force, not less: three times the Nodes sit behind the same committed default Console password. That
-runbook's [Presenter runbook](operations/demo-fleet.md#presenter-runbook) section is what a
-presenter who has never run this fleet follows from cold to on stage, including
+The nine-Node `demo` profile (its roster, the four beats, the injected fault,
+`make demo-reset`, resource usage) has its own runbook,
+[docs/operations/demo-fleet.md](operations/demo-fleet.md). It is the same project with
+`--profile demo`; use the runbook's `make demo-*` targets, which also pick the demo gate. After
+a demo, `make dev-fleet-up` recreates the Relay on the dev gate and leaves `daemon-4..9`
+running until `make dev-fleet-down` / `demo-down`. The profile is purely additive
+(`demo_profile_is_additive`, `daemon/tests/dev_fleet_fixtures.rs`), and the DEV-ONLY banner
+applies with more force: three times the Nodes sit behind the same committed Console password.
+Its [Presenter runbook](operations/demo-fleet.md#presenter-runbook) takes a first-time
+presenter from cold to on stage, including
 [minting Gleipnir's credentials](operations/demo-fleet.md#credentials-for-gleipnir-copy-paste)
 and [the scripted bypass beat](operations/demo-fleet.md#the-bypass-beat-scripted-exactly).
 
 ## Scaling the fleet
 
-Each daemon needs its **own** state volume for a stable per-Node identity across
-restarts, so daemons are explicit services rather than replicas. To add a Node,
-copy a `daemon-N` service block (bump the name, `HOSTNAME`, and its
-`daemonN-state` volume, and register the new volume under `volumes:`). That copy
-silently inherits `RELAY_POLICY_PATH` and a `role=` label, both of which must
-be chosen deliberately — `policy.web.toml` + `role=web` to get the demo
-service and the repair allow, `policy.db.toml` + `role=db` to get neither,
-or `policy.bastion.toml` + `role=bastion` to get neither and nothing else
-either — see [The nine-Node roster](operations/demo-fleet.md#the-nine-node-roster) for the worked example of
-exactly this copy, done six times.
+Each daemon needs its **own** state volume for a stable identity, so daemons are explicit
+services rather than replicas. To add a Node, copy a `daemon-N` service block (bump the name,
+`HOSTNAME` and its `daemonN-state` volume, and register the volume under `volumes:`). The copy
+inherits `RELAY_POLICY_PATH` and a `role=` label; choose both deliberately: `policy.web.toml` +
+`role=web` for the demo service and the repair allow, `policy.db.toml` + `role=db` for
+neither, or `policy.bastion.toml` + `role=bastion` for neither and less besides.
+[The nine-Node roster](operations/demo-fleet.md#the-nine-node-roster) is this copy done six
+times.
 
-**A new service must declare `profiles: ["demo"]`** (or whichever profile is
-appropriate) **or it changes the default fleet** — a plain `docker compose -f docker-compose.demo.yml up`
-picks up every service that omits a `profiles:` key.
-`demo_profile_is_additive` (`daemon/tests/dev_fleet_fixtures.rs`) fails the
-build if a new service forgets it.
+**A new service must declare `profiles: ["demo"]`** (or another profile) **or it changes the
+default fleet**: a plain `up` picks up every service without a `profiles:` key.
+`demo_profile_is_additive` fails the build if a new service forgets it.
 
 ## Cleanup
 
@@ -615,6 +536,6 @@ $ docker compose -p relay-demo -f docker-compose.demo.yml -f docker-compose.oaut
 $ rm -rf ./.dev-fleet
 ```
 
-This cleans up either fleet, since they are one project. A checkout that ran the fleet before
-#893 has volumes under its old directory-named project; remove them once with
+This cleans up either fleet, since they are one project. Volumes from an older checkout may
+sit under a directory-named project; remove them once with
 `docker compose -p <old-dir-name> -f docker-compose.demo.yml down -v`.

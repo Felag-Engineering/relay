@@ -1,24 +1,21 @@
 # Admin Console — screen specifications
 
-**Status:** wireframe-backed specifications, 2026-08-24. Written from a design session with the
-owner, against low-fidelity wireframes drawn in a private design canvas (see below). These expand
-[`../console-wireframe-brief.md`](../console-wireframe-brief.md) — deliverable #2 of
+**Status:** wireframe-backed specifications, 2026-08-24, from a design session with the owner.
+They expand [`../console-wireframe-brief.md`](../console-wireframe-brief.md) — deliverable #2 of
 [`../ui-advisory.md`](../ui-advisory.md) — into per-screen, implementable units.
 
-**Wireframes:** eleven artboards plus a shared-grammar sheet, in a private design canvas that
-is not published with this repository. Each screen spec names its artboard.
+**Wireframes:** eleven artboards plus a shared-grammar sheet, in a private design canvas not
+published with this repository. Each screen spec names its artboard.
 
 ## How to use these
 
 One spec, one implementable unit, roughly one issue. Read in this order:
 
 1. [`00-foundations.md`](00-foundations.md) — the design language, the shared components, and the
-   rules that override normal dashboard instincts. **Every screen spec assumes it.** Read it once
-   before touching any screen.
+   rules that override normal dashboard instincts. **Every screen spec assumes it.**
 2. The screen spec you are implementing.
-3. [`99-open-decisions.md`](99-open-decisions.md) — **before you write code.** Several things
-   these specs describe are not yet decided and must not be settled by an implementation.
-   Building past an open decision is how a wireframe becomes an accidental architecture.
+3. [`99-open-decisions.md`](99-open-decisions.md) — **before you write code.** Some things these
+   specs describe are not decided and must not be settled by an implementation.
 
 ## Build order
 
@@ -36,20 +33,6 @@ Numbers are identifiers, not sequence. Build in this order:
    gate it depends on.
    [18](18-settings.md) and [19](19-approval-rules.md) follow step-up and store-backed settings
    (#590); neither mounts until its backend exists.
-
-**Two defects gate all of it, and both are already tracked — neither needs a specification:**
-
-- **[#397](https://github.com/Felag-Engineering/relay/issues/397)** — enrollment-token
-  mint, Node revoke and Freeze engage/release have **no role gate**, so a `viewer` can do all
-  three. Blocks specs [09](09-add-nodes.md) and [16](16-incident-ladder.md), whose controls state
-  role requirements the API does not enforce.
-- **[#403](https://github.com/Felag-Engineering/relay/issues/403)** — the Relay's server
-  certificate never rotates. Both listeners share it (ADR-0031), so the Console's own TLS rides on
-  the defect and breaks for every user fourteen days after the process starts.
-
-Their fixes are settled in ADR-0032 §5, ADR-0013 and ADR-0031 §5 respectively. See
-`99-open-decisions.md` D8 and D13. Both carry the `blocking` label and no milestone: they are
-landed by hand, ahead of the loop.
 
 ## Screens
 
@@ -70,25 +53,23 @@ landed by hand, ahead of the loop.
 | 7 | [Policy fix, from a deny](07-policy-fix-from-deny.md) | v0.7.0 | **no — generate-and-copy only** |
 | 5 | [Composer and Preflight](05-composer-and-preflight.md) | v0.7.0 | yes |
 
-[03](03-agent-sessions.md) is retired: it was folded into 04 on 2026-09-29 (D17).
-[14](14-approval-queue.md) and [08](08-approval-object.md) are retired: on 2026-10-18 the owner
-removed approval from the Console entirely (ADR-0044, D21). Both screens were removed from the
-code (`docs/specs/approval.md` AP-80).
-[17](17-read-egress.md) is retired: dropped on 2026-10-01 (owner decision, D11); Activity (04)
-carries read-class calls. Specs 11–20 have
-no artboard; the wireframes cover 1–10 plus the shared-grammar sheet.
+Retired: [03](03-agent-sessions.md), folded into 04 (D17);
+[08](08-approval-object.md) and [14](14-approval-queue.md), removed with the Console's approval
+surface (ADR-0044, D21; `docs/specs/approval.md` AP-80); [17](17-read-egress.md), dropped (D11) —
+Activity carries read-class calls. Specs 11–20 have no artboard; the wireframes cover 1–10 plus the
+shared-grammar sheet.
 
 ## Sequencing
 
-`../console-backend-coverage.md` holds the dependency map and it still governs: **Accounts →
-Approval Callout backend → Console monitoring (with the SSE seam) → Console admin (step-up) →
-Console execution composer.** Nothing here reorders that. The specs are written screen-first
-because that is how they are built, not because that is the order they land.
+`../console-backend-coverage.md` holds the dependency map, and it governs: **Accounts → Approval
+Callout backend → Console monitoring (with the SSE seam) → Console admin (step-up) → Console
+execution composer.** The specs are written screen-first because that is how they are built, not
+the order they land.
 
 ## Decisions taken in the session that produced these
 
-Recorded so an implementer knows which parts are settled and which are inherited. None of these
-are ADRs yet; several need to be — see [`99-open-decisions.md`](99-open-decisions.md).
+So an implementer knows which parts are settled. Where one has become an ADR, or is still open,
+[`99-open-decisions.md`](99-open-decisions.md) says so.
 
 | Decision | Where it bites |
 |---|---|
@@ -103,7 +84,7 @@ are ADRs yet; several need to be — see [`99-open-decisions.md`](99-open-decisi
 | Sign-ins, step-up, Account changes and API Tokens are **Access**, `admin` only in the Console (D17) | 20 |
 | **No hold-before-dispatch timer.** Interruption is cancellation (ADR-0013) | 03 |
 | **Plan editing resets quorum**; approvers do not amend | 05 |
-| Policy authoring is **generate-and-copy**; the Relay never transmits Policy. Since 2026-09-18, 06 arranges first-party catalog fragments (`docs/specs/policy-catalog.md`) and emits no allow rule | 06, 07 |
+| Policy authoring is **generate-and-copy**; the Relay never transmits Policy. 06 arranges first-party catalog fragments (`docs/specs/policy-catalog.md`) and emits no allow rule | 06, 07 |
 | `state:` labels are **Node-local and objective**; drift is an observation, not a label | 01, 02, 00 |
 | **`outdated`** matches the MCP wire field; `version-gated` was a synonym and is retired | all |
 | Stopping one agent: suspension **deferred** (ADR-0035 not adopted, #443); the instruments are token revoke and Freeze. There are no agent sessions to end — MCP is stateless | 03, 15, 16 |

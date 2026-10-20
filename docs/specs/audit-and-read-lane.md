@@ -5,15 +5,15 @@ alignments and gaps recorded below.
 
 ## Purpose
 
-The audit and read lane answers two related accountability questions without turning Relay
-into a durable store of sensitive read results: what happened in the control plane, and who
-read fleet or execution information. A `read` risk class means an Operation cannot change
-Node state; it does not make the information safe to disclose.
+The audit and read lane answers two accountability questions — what happened in the control
+plane, and who read fleet or execution information — without making Relay a durable store of
+sensitive read results. A `read` risk class means an Operation cannot change Node state, not
+that its output is safe to disclose.
 
-The audit trail records the decision and access metadata needed for incident review. It does
-not retain the content returned by a read-class Operation or non-dispatching read. Read output
-is delivered to the caller at the time of the read and remains in a Task only until that Task
-is removed; it is never recoverable from the audit trail.
+The audit trail records the decision and access metadata needed for incident review, never the
+content a read-class Operation or non-dispatching read returned. Read output is delivered to the
+caller and remains in a Task only until that Task is removed; it is never recoverable from the
+audit trail.
 
 ## Surfaces
 
@@ -29,14 +29,14 @@ is removed; it is never recoverable from the audit trail.
   surface-neutral read capability names (`describe_node` and `get_job`) before returning
   content. The Job route can return captured Task output while it exists.
 - **Admin Console:** authenticated viewers can reach the fleet, Node-detail, activity,
-  Job-detail, read-egress, and event-stream reads that are mounted today. The Console uses the
-  capability read lane for the audited routes; the event stream records one audited
-  subscription containing its validated kind set, not one record per delivered event. Console
-  screens do not render read-class Task output or a read-class denial explanation.
+  Job-detail, read-egress, and event-stream reads. The audited routes use the capability read
+  lane; the event stream records one audited subscription with its validated kind set, not one
+  record per delivered event. Console screens do not render read-class Task output or a
+  read-class denial explanation.
 
-The Control API has no general audit-query endpoint today. MCP and the Control API still have
-adapter-local read-audit calls for some existing reads; moving every read through the capability
-read lane is not a claim this draft makes.
+The Control API has no general audit-query endpoint. MCP and the Control API still make
+adapter-local read-audit calls for some reads; this draft does not claim every read goes through
+the capability read lane.
 
 ## Behaviour
 
@@ -48,10 +48,10 @@ read lane is not a claim this draft makes.
 - A non-dispatching read records `KindRead`: who read, which stable capability/tool name they
   used, what they aimed it at, and when. An attempted single-Node or Job read is recorded before
   Relay determines that the requested identifier exists.
-- Dispatch audit remains Task-grained: a dispatch with Node results writes a record for each
-  Node result; a zero-match dispatch has one Job-level record. Refusals, Policy preflights,
-  approval events, Freeze and cancellation have their own audit kinds and metadata as
-  applicable.
+- Dispatch audit is Task-grained: a dispatch with Node results writes a record for each Node
+  result; one whose dispatcher failed before producing any has one Job-level record; a
+  zero-match dispatch is audited as a refusal (`execution.md`). Refusals, Policy preflights,
+  approval events, Freeze and cancellation have their own audit kinds and metadata.
 - Audit queries return metadata projections, cursor-paginated newest first. An audit row has no
   stdout, stderr, or truncation field. Filters combine by intersection; the lane supports kind,
   verified and asserted attribution, action, Node, Job, approval/grant, outcome, time range,
@@ -72,30 +72,27 @@ read lane is not a claim this draft makes.
   stdout and stderr from every Task whose risk class is not explicitly `mutate`; an unspecified
   class therefore defaults to no output disclosure through this lane.
 - A read-class dispatch audit record retains neither stdout nor stderr nor its truncation flag.
-  A mutate-class dispatch audit record retains its captured output under the existing retention
-  posture. This difference is based on the Operation risk class, not on the surface that reads
-  the record.
-- The two retention decisions key on the risk class from opposite directions, deliberately and
-  not symmetrically. The audit sink retains unless the class is explicitly `read`; the query
-  lane strips unless the class is explicitly `mutate`. An unspecified class is therefore
-  retained by the sink and stripped by the lane. `risk_class` is non-null and written from the
-  Operation catalog, so an unspecified class is not reachable today, but the divergence is load
-  bearing: a schema or catalog change that made one reachable must not turn the query lane's
-  permissive default into a read-output disclosure.
-- A live event subscription records the subscription after validating and canonicalising the
-  requested event kinds and before subscribing. The one `KindRead` record describes the kinds
-  and resume request; it does not record events subsequently delivered by the stream. The event
-  vocabulary is structurally unable to carry result-shaped data.
+  A mutate-class one retains its captured output under the existing retention posture. The
+  difference follows the Operation risk class, not the surface that reads the record.
+- The two retention decisions key on the risk class from opposite directions, deliberately. The
+  audit sink retains unless the class is explicitly `read`; the query lane strips unless it is
+  explicitly `mutate`. An unspecified class is therefore retained by the sink and stripped by the
+  lane. `risk_class` is non-null and written from the Operation catalog, so an unspecified class
+  is not reachable today, but the divergence is load-bearing: a change that made one reachable
+  must not turn the query lane's default into a read-output disclosure.
+- A live event subscription is recorded after its requested event kinds are validated and
+  canonicalised, and before subscribing. The one `KindRead` record describes the kinds and resume
+  request, not the events the stream later delivers. The event vocabulary cannot carry
+  result-shaped data.
 
 ### Fail-closed accountability
 
-- A read that the capability read lane cannot record is refused before its query seam runs. The
-  caller receives a distinct unauditable-read failure, so an unavailable audit trail is not
-  presented as a missing Node, Job, or query result.
-- The existing MCP and Control API audited reads likewise record before returning their content
-  and fail their call if that audit write fails. Their composition roots supply the auditor in
-  production; a nil audit dependency remains a test/construction accommodation in adapter code,
-  not an authorised production posture.
+- A read that the capability read lane cannot record is refused before its query seam runs, with
+  a distinct unauditable-read failure, so an unavailable audit trail never looks like a missing
+  Node, Job, or query result.
+- The MCP and Control API audited reads likewise record before returning content and fail the
+  call if that write fails. Their composition roots supply the auditor in production; a nil
+  audit dependency in adapter code is a test accommodation, not a production posture.
 
 ### Decided with the owner
 
@@ -106,7 +103,6 @@ spec is rewritten:
   read-class Operation or a non-dispatching read — leaves a record of who read, through which
   capability, aimed at what, and when. Its output is delivered to the caller and is never kept in
   the audit trail (ADR-0025). A `mutate`'s captured output is kept with its audit record.
-- **A zero-match dispatch is audited as a refusal** (`execution.md`), not as a Job-level record.
 - **New audit events from other capabilities:** changes to a Node's security-relevant self-report
   (`node-connection.md`), and an idempotent repeat that returned an existing Job (`execution.md`).
 - **Any `viewer` or above reads all audit metadata** in the first pass.
@@ -116,8 +112,7 @@ spec is rewritten:
 ## Refusals
 
 - An unauthenticated request cannot use an authenticated control-plane read surface. Console
-  routes are also mounted with their declared role floor; its current read routes are viewer
-  reachable.
+  routes are mounted with their declared role floor; its read routes are viewer-reachable.
 - An invalid filter, malformed cursor, inverted time range, oversized bounded value, task query
   without a Job ID, or unbounded aggregate query is refused before it becomes a query or an
   audit-record payload.
@@ -135,9 +130,9 @@ spec is rewritten:
   `KindRead` records, removes read-class output and truncation from audit retention, leaves the
   mutate-class posture unchanged, and requires an unauditable read to fail. It also establishes
   that task-row lifetime, not the audit trail, bounds any surviving read output.
-- **Invariant 10, one capability layer:** Console read behaviour is exposed through the
-  capability read lane rather than a Console-to-store path. Surface adapters may narrow the
-  capability but cannot create a parallel decision path.
+- **Invariant 10, one capability layer:** Console reads go through the capability read lane, not
+  a Console-to-store path. Adapters may narrow the capability but never create a parallel
+  decision path.
 - **Invariant 13, Operation risk class:** the `read`/`mutate` distinction used by the retention
   rule is the risk class declared by the Operation contract. It is not a confidentiality label
   and does not substitute for Policy. *(Invariant 13 amended 2026-10-02, ADR-0042: a Template
@@ -154,13 +149,12 @@ The capability service is the primary seam for Console history and registry read
 Job/Task query interfaces keep caller-controlled filters out of store implementations and let
 tests prove order and redaction at the highest shared layer. The production audit sink and
 SQLite query repository prove persisted record shape and query behaviour; surface tests verify
-that adapters do not become unrecorded doors. Event-package structural tests are required
-because an event type capable of naming result data would defeat the retention rule by a new
-transport.
+adapters do not become unrecorded doors. Event-package structural tests are required because an
+event type able to name result data would defeat the retention rule by a new transport.
 
-`make verify` is the appropriate repository gate for a change here. A change to read behaviour
-across a mounted surface should also exercise its real surface tests; a change to a wire contract
-starts in `/proto` and requires the contract gates.
+`make verify` is the gate for a change here. A change to read behaviour on a mounted surface
+should also run its real surface tests; a wire-contract change starts in `/proto` and needs the
+contract gates.
 
 ### What proves each claim
 
@@ -194,7 +188,7 @@ Claims above with **no row**, and so nothing checking them:
 | Paged audit, Job, and Task reads | A caller receives at most the effective bounded page limit and a cursor for a later page | *(none)* |
 | Audit aggregates | A caller must supply a bounded time window; the lane floors the bucket to its minimum | *(none)* |
 | Read audit writes | One access record is written per non-dispatching read or capability query; one event-subscription record covers its whole subscription | *(none)* |
-| Large audit-write actions | The token-revocation cascade appends its per-Node audit records all-or-nothing, one transaction per bounded chunk of Nodes rather than one per Node (#563) | *(none)* |
+| Large audit-write actions | The token-revocation cascade appends its per-Node audit records all-or-nothing, one transaction per bounded chunk of Nodes rather than one per Node | *(none)* |
 
 ## Out of scope
 
@@ -204,13 +198,8 @@ Claims above with **no row**, and so nothing checking them:
 - **Dispatch, Task lifecycle, caps, cancellation, and Freeze:** `execution.md` and `freeze.md`.
 - **Approval decisions and their visibility policy:** `approval.md`. The audit trail records
   approval-related metadata but does not decide who may approve or view an approval.
-- **The Console's screen layout and product workflow:** `docs/design/console/` remains the
-  surface design. The current Console implementation does not make future screen concepts or
-  general audit export behaviour current capability behaviour.
-- **SIEM export, a general Control API audit-query endpoint, and changing audit retention:** no
-  such capability is made current by this specification.
-- **Solving token-cascade audit write latency:** #563 is a store change, not a change to the
-  requirement that the per-Node cascade remains auditable.
+- **The Console's screen layout and product workflow:** `docs/design/console/`.
+- **SIEM export, a general Control API audit-query endpoint, and changing audit retention.**
 
 ## Future work
 
@@ -223,4 +212,4 @@ Claims above with **no row**, and so nothing checking them:
 
 ## Open questions
 
-None open. Revocation audit batching (#563) belongs to `enrollment.md`.
+None open.

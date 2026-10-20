@@ -5,24 +5,22 @@
 
 **Governing:** ADR-0006, ADR-0030, ADR-0031, ADR-0032, ADR-0033, invariants #7, #11.
 **Backend:** `POST /api/v1/enrollment-tokens` with the `render` field and `renderings` response
-(ADR-0032); the pure renderer; `admin` gating, which **does** exist (`authz.go`'s
-`requiredControlRole` floors `ControlMintEnrollmentToken` at `admin`; #397 closed 2026-08-25 via
-PR #447).
+(ADR-0032); the pure renderer; `admin` gating (`requiredControlRole` floors
+`ControlMintEnrollmentToken` at `admin`).
 
-**None of the rest of that Backend line exists.** See *Backend prerequisites* below before
-planning this screen — it is the reason #434 is blocked rather than ready.
+**Only the `admin` gate exists.** Read *Backend prerequisites* below before planning this screen:
+they are why #434 is blocked.
 
 ## What this screen is for
 
-Getting the first Node — and the next fifty — into the fleet. It is also, on a fresh install, the
-second screen a new operator ever sees (spec 10 is the first).
+Getting the first Node — and the next fifty — into the fleet. On a fresh install it is the second
+screen a new operator sees (spec 10 is the first).
 
 ## The constraint that shapes everything
 
-**The Enrollment Token's plaintext is returned exactly once.** The Relay stores only its hash. So
+**The Enrollment Token's plaintext is returned exactly once.** The Relay stores only its hash, so
 an artifact that *contains* a token — a playbook, a shell one-liner, a join string — can only be
-produced at the moment of minting, and can never be reproduced afterwards by anyone, including the
-Relay.
+produced at the moment of minting, and never reproduced afterwards, by anyone.
 
 Consequences for this screen, all mandatory:
 
@@ -44,20 +42,14 @@ env file), each with copy and download. Below, "what happens on each machine".
 ## Scope is the security lane
 
 The labels a token stamps are `relay:` labels — Relay-set, Node-immutable, and the only valid
-target for quarantine and secret-distribution Selectors. A token that stamps `relay:env=prod` is
-therefore a privilege-granting act, which is why minting requires `admin`.
-
-**#397 established by probe that this gate did not exist**: `POST /api/v1/enrollment-tokens`
-authenticated the caller and never checked their role, so a `viewer` could mint a token that
-stamps `relay:` labels. Building this screen on an ungated mint would have wrapped a privilege
-escalation in a convenience. **Closed 2026-08-25 via PR #447** — `requiredControlRole` now floors
-`ControlMintEnrollmentToken` at `admin`, and `authz/control_test.go` pins it. This prerequisite is
-met; the ones below are not.
+target for quarantine and secret-distribution Selectors. Minting a token that stamps
+`relay:env=prod` is therefore a privilege-granting act, which is why it requires `admin`
+(`authz/control_test.go` pins the gate).
 
 ## The renderings
 
 Three formats at beta, all renderings of the same three fields (join string, scope, expiry), so a
-fourth is a template rather than an architectural change.
+fourth is a template, not an architectural change.
 
 - **`ansible`** — a playbook that installs the pinned daemon version by digest (`get_url` +
   `checksum`, so verify-then-install survives), writes the env file at mode `0600`, and enables the
@@ -86,11 +78,9 @@ Three steps, stated on screen because they are the trust story:
 
 ## Backend prerequisites
 
-**This screen is blocked, and the blockers are backend, not design.** Recorded here on 2026-09-20
-after a dev-loop attempt on #434 escalated, so the next attempt does not rediscover them. Each was
-verified in the tree, not inferred; the E-numbers are `docs/design/self-serve-enrollment.md`'s.
-
-ADR-0032 predicted this outcome and said what it would mean:
+**This screen is blocked, and the blockers are backend, not design.** Recorded on 2026-09-20 after
+a dev-loop attempt on #434 escalated; the E-numbers are `docs/design/self-serve-enrollment.md`'s.
+ADR-0032 said what this would mean:
 
 > *"The Console at v0.7.0 is a template and a copy button. … If the Console work turns out to need
 > backend changes, this ADR was implemented wrong."*
@@ -98,18 +88,18 @@ ADR-0032 predicted this outcome and said what it would mean:
 | | Blocker | Evidence |
 |---|---|---|
 | **B1** | **ADR-0032's renderer does not exist** (E3). `mintTokenRequest`/`mintTokenResponse` carry no `render` field and no `renderings`; there is no renderer package; there is no build-time daemon version + SHA-256 for ADR-0032 §6's `get_url`+`checksum` pair (`internal/version` carries the Relay's own build identity only, and says so). | `controlplane/api/tokens.go`; `internal/version` |
-| **B2** | **ADR-0031's join string does not exist anywhere** — no carrier in Go, Rust or proto, only prose saying it is unbuilt. All three renderings are renderings *of* the join string, and two also carry the Relay listen address, which invariant 11 reasoning already refused to render and which this doc's own *Must not appear* list forbids. A guard actively fails the build if the Console says "join string". | `console/dayone.go`, `console/seams.go`, `cmd/relay/main.go`; guard in `console/dayone_test.go` |
+| **B2** | **Partly cleared.** ADR-0031's join string is built (`relay.v1.JoinString`, minted by `enroll.Minter`, returned by the Control API mint as `join_string`, consumed by `relay-daemon join`). Still open: two of the three renderings also carry the Relay listen address, which invariant 11 reasoning refused to render on spec 10, and a guard fails the build if the Console says "join string". | `proto/relay/v1/relay.proto`; `internal/enroll/mint.go`; guard in `console/dayone_test.go` |
 | **B3** | **There is no capability-layer mint, and the Console may not build one.** No capability service has a mint method; there is only the `ControlMintEnrollmentToken` *action constant*. `internal/enroll` transitively imports `internal/relay/v1`, which is on the capability package's own **forbidden-import** list — so the obvious seam breaks that package's guard. The three alternatives are each a human decision: the Console consulting `authz` (blocked by `no_dispatch_test.go`, citing invariant 10), a composition-root adapter (a fourth decision site and a parallel control path — invariant 10 again), or a proto-free capability seam, which is its own issue sized like #653. | `capability/seams.go`; forbidden list in `capability/execution_test.go`; `go list -deps ./internal/enroll` |
 | **B4** | **No token-listing seam** for the outstanding-token inventory with revoke. `enroll.Repository` is Create/ByID/Save only; `store/tokens.go` has no List. | `internal/enroll/token.go`; `internal/store/tokens.go` |
-| **B5** | **One acceptance checkbox is Rust-side**, not Console-side (E5/E6, unbuilt) — the daemon refusing a wrong CA fingerprint. `docs/specs/enrollment.md`'s own "claims with no row" list already records this. | `docs/specs/enrollment.md` |
+| **B5** | **One acceptance checkbox is Rust-side**, not Console-side (E5/E6) — the daemon refusing a wrong CA fingerprint, which it checks against the join string's pin. | `docs/specs/enrollment.md`; `daemon/src/config.rs` |
 
 **Net: two of the six acceptance checkboxes are not Console-side at all**, and the other four
-depend on B2/B3/B4. B3 is the wall — there is no legitimate path for the Console to mint today.
+depend on B1–B4. B3 is the wall: there is no legitimate path for the Console to mint.
 
 ### Two findings worth keeping, from the same attempt
 
-**The route paths are forced, and were driven through a real `ServeMux`.** `Register` mounts a
-method pattern *plus* a bare `r.Path` for every route that constrains reach, so:
+**The route paths are forced** (driven through a real `ServeMux`). `Register` mounts a method
+pattern *plus* a bare `r.Path` for every route that constrains reach, so:
 
 - `GET /console/nodes/add` — the path this doc's layout implies — **panics at registration**
   against the existing `GET /console/nodes/{node_id}`: a constrained literal under a constrained
@@ -132,7 +122,7 @@ the replayed thing is a fleet join credential; and an adapter may be stricter th
 
 ## Acceptance
 
-- [ ] Minting requires `admin`; a `viewer` and an `operator` are refused. (#397 closed 2026-08-25.)
+- [ ] Minting requires `admin`; a `viewer` and an `operator` are refused.
 - [ ] Exactly one audit event per mint, recording what was rendered.
 - [ ] The renderer has **no store dependency** — assert it structurally.
 - [ ] Navigating away from the reveal and back does not show the artifacts again.

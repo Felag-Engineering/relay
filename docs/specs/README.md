@@ -3,15 +3,14 @@
 A capability is **an aspect of the system that should exist** — a coherent piece of what Relay
 does. Each spec describes what that aspect does **today**, across every surface that reaches it.
 
-A capability specification is **durable**. It is not a pre-implementation artifact that goes
-stale once a feature ships — it is maintained as the capability evolves, and it is the answer
-to "what does Relay actually do here?" for anyone, human or agent, who has to work on it.
+A capability specification is **durable**: maintained as the capability evolves, not left to
+go stale once a feature ships. It answers "what does Relay actually do here?" for anyone,
+human or agent, who has to work on it.
 
 **Reading these from outside.** A spec's Status banner (`aspirational`, `stub`,
 `designed, not built`, `current`) records how far that spec has migrated to the claim format
-described below — a migration artefact, not a measure of how much of the capability is built.
-For the product view — what each capability does today on MCP, the Control API and the Admin
-Console — read [`STATUS.md`](../STATUS.md).
+below — not how much of the capability is built. For the product view — what each capability
+does today on MCP, the Control API and the Admin Console — read [`STATUS.md`](../STATUS.md).
 
 ## The establishing phase — per spec, not per repo
 
@@ -21,44 +20,40 @@ what is true of `main` today, every claim carries an ID, and everything decided-
 under *Designed, not built* with a milestone. Migration happens one spec at a time, in an
 interactive session (`/spec-author --migrate <spec>`), using `/spec-drift` to sort the claims.
 
-Until a spec is migrated its status is `aspirational` (worked through with the owner, drift from
-the code expected) or `stub` (named, not yet worked through). Such a spec is **context, not a
-requirement**: an implementing agent works from its issue, the ADRs and the invariants — which
-bind exactly as they always have — and treats the spec as intent. A disagreement between an
-unmigrated spec and the code is not an escalation.
+Until then a spec is `aspirational` (worked through with the owner, drift from the code
+expected) or `stub` (named, not yet worked through). Such a spec is **context, not a
+requirement**: an implementing agent works from its issue, the ADRs and the invariants, which
+bind as always, and treats the spec as intent. A disagreement between an unmigrated spec and
+the code is not an escalation.
 
-The establishing phase ends for the repo when no spec carries either legacy status. Nothing
-else changes on that day: the rules below already apply to every migrated spec.
+The establishing phase ends when no spec carries either legacy status. Nothing else changes
+that day: the rules below already apply to every migrated spec.
 
 ## Who writes these
 
-**A human does, co-authored, in an interactive session.** A capability specification is never
-authored or edited by an unattended run. `/spec-author` is that session: an agent interrogates,
-drafts, argues and revises; the human decides, and the artifact is theirs, like an ADR and like
-the invariants. The same holds for ADRs, `GLOSSARY.md` and the invariants — co-authored, human-
-driven, never unattended.
+**A human does, co-authored, in an interactive session** — never an unattended run. The same
+holds for ADRs, `GLOSSARY.md` and the invariants. `/spec-author` is that session: an agent
+interrogates, drafts, argues and revises; the human decides, and the artifact is theirs.
 
 The loop that implements issues **reads** these and complies with them. If its work would make
-a claim here untrue, it stops and escalates so a human can update the spec first; it does not
-quietly edit the claim and it does not quietly proceed. That is the same rule as *When
-documents and the code disagree* in [`AGENTS.md`](../../AGENTS.md), applied one step earlier.
+a claim untrue, it stops and escalates so a human can update the spec first; it neither edits
+the claim nor proceeds. That is *When documents and the code disagree* in
+[`AGENTS.md`](../../AGENTS.md), applied one step earlier.
 
-The loop does maintain the parts of a spec that are *evidence* rather than intent: the proof
-rows, the Performance rows and the Status line, and it promotes a claim from
-*Designed, not built* into Behaviour when the PR that makes it true lands — same ID, same words.
-The authority table in [`docs/agents/workflow.md`](../agents/workflow.md) is the full split.
+The loop does maintain a spec's *evidence*: the proof rows, the Performance rows and the Status
+line. It also promotes a claim from *Designed, not built* into Behaviour when the PR that makes
+it true lands — same ID, same words. The authority table in
+[`docs/agents/workflow.md`](../agents/workflow.md) is the full split.
 
-The reason for the asymmetry: these are the most impactful artifacts in the repo. Milestones,
-issues, tests and benchmarks all decompose from them, so an error here propagates into
-everything downstream — and a document an unattended agent may rewrite to match its own change
-cannot also be the thing that constrains it.
+The reason for the asymmetry: milestones, issues, tests and benchmarks all decompose from these
+specs, so an error here propagates everywhere downstream — and a document an unattended agent
+may rewrite to match its own change cannot also constrain it.
 
 ## Claims and status
 
 A spec is a set of **claims** — single statements a test can be pointed at — each with a stable
 ID `<PREFIX>-<n>`. The prefix is declared in the spec's header and is unique across this
-directory; `n` is never reused. IDs are what let a design say which claims it delivers, an issue
-name the claims it implements, and a PR's proof rows cite them.
+directory; `n` is never reused. Designs, issues and PR proof rows cite claims by ID.
 
 A claim lives in one of two places, and status follows from which:
 
@@ -84,11 +79,10 @@ neither tier may contradict.
 
 ## Granularity is a judgement call
 
-**There is no hard rule about what earns its own file.** A capability may be a section inside a
-larger spec, or a spec of its own; the right answer is whichever reads better for the people and
-agents who have to use it. Nothing here is tied to a package boundary or an architectural layer
-— `enrollment` and `accounts-and-access` live outside the capability-layer package and still
-warrant specs, because they are aspects of the system that should exist.
+**No hard rule says what earns its own file.** A capability may be a section of a larger spec
+or a spec of its own, whichever reads better. Nothing here follows a package boundary or an
+architectural layer: `enrollment` and `accounts-and-access` live outside the capability-layer
+package and still warrant specs.
 
 Two decompositions are wrong, and only two:
 
@@ -98,11 +92,11 @@ Two decompositions are wrong, and only two:
   its own* — the Console's session, CSRF/CSP, step-up windows, the `console_execution` flag —
   is an aspect like any other and may have a file (`console.md`, decided 2026-09-20); what it
   exposes of another capability belongs in that capability's Surfaces table.
-- **Per milestone.** A document organised around when work shipped rots on the day that work
-  closes, which is exactly what a durable document must not do.
+- **Per milestone.** A document organised around when work shipped rots the day that work
+  closes.
 
-A useful signal: **if an aspect is referenced by three or more specs, it wants its own file.**
-That is why `selectors-and-labels.md` exists rather than being restated four times.
+A useful signal: **if three or more specs reference an aspect, it wants its own file** — which
+is why `selectors-and-labels.md` exists.
 
 ## The boundary against the other docs
 
@@ -123,21 +117,19 @@ That is why `selectors-and-labels.md` exists rather than being restated four tim
 - **The file is canonical; the issue is the work item.** An implementation issue links here,
   and any decision an issue comment changes is folded back into this file before the PR merges.
 - **Keep it current.** A change that alters what a capability does is not finished until its
-  capability spec says so. A spec that describes behaviour the code no longer has is worse
-  than no spec, because it is believed.
+  spec says so. A spec describing behaviour the code no longer has is worse than none, because
+  it is believed.
 - **If a migrated spec and the code disagree, stop and escalate** — do not resolve it in
-  either direction. The spec may be stale, or the code may have the bug the spec correctly
-  describes. See *When documents and the code disagree* in [`AGENTS.md`](../../AGENTS.md). That
-  governs a disagreement you *discover*; when you are *making* a change, the spec leads and the
-  code follows in the same PR — through the chain in
+  either direction (*When documents and the code disagree* in [`AGENTS.md`](../../AGENTS.md)).
+  That governs a disagreement you *discover*; when you are *making* a change, the spec leads
+  and the code follows in the same PR, through the chain in
   [`docs/agents/workflow.md`](../agents/workflow.md).
 - Name modules, interfaces, and contracts. **Never file paths or code snippets** — they go
   stale within a sprint. The one exception is a snippet that encodes a decision more precisely
-  than prose can (a state machine, a schema, a type shape); trim it to the decision, not a
-  working demo.
+  than prose can (a state machine, a schema, a type shape), trimmed to the decision.
 - Use `GLOSSARY.md` vocabulary throughout, including the `_Avoid_` rules.
-- Describe behaviour, not implementation. If the *how* is interesting enough to record, ask
-  whether it is an ADR.
+- Describe behaviour, not implementation. If the *how* is worth recording, ask whether it is
+  an ADR.
 
 ## Promote what outlives the change
 
@@ -156,16 +148,14 @@ authority, it is not yours to settle in a spec at all — see the escalation lis
 
 ## The capability set
 
-The list is expected to move as the shape becomes clearer — a capability may split or merge
-during the establishing phase — so treat it as the current decomposition rather than a closed
-set. Rows marked *stub* exist so the capability is named; their content comes from the
-interrogation.
+This is the current decomposition, not a closed set: a capability may still split or merge.
+Rows marked *stub* exist so the capability is named.
 
 | Spec | Covers |
 |---|---|
 | `execution.md` | Dispatch, fan-out, the blast-radius cap, at-most-once Tasks, the three Operation tiers, Raw Exec, cancellation |
 | `selectors-and-labels.md` | The four namespaces and who writes each, the closed `state:` vocabulary, resolution-time evaluation, what a compromised Node can forge |
-| `policy-preflight.md` | Daemon-evaluated hypotheticals and preflight-before-apply. Renamed from the plan-mode spec by ADR-0038 |
+| `policy-preflight.md` | Daemon-evaluated hypotheticals and preflight-before-apply (ADR-0038) |
 | `plan.md` | The approved route of execution: steps, the cursor, the derived requirement, the plan hash |
 | `approval.md` | Gate rules, callout, decisions and channels, approval Grants and scope |
 | `approval-assurance.md` *(stub)* | The approval assurance properties shelved by ADR-0040 pending the permissions rework: out-of-band as a rule requirement, a Relay-verified approver, the grant-issuance floor, second-person rules whose second person Relay authenticated |

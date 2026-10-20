@@ -1,15 +1,15 @@
 # Operations and Templates
 
-**Status:** aspirational — worked through with the owner on `2026-09-13`, Template language revised with the owner on `2026-10-14`, awaiting their review
-of this draft. Describes intended behaviour, not the code (see the establishing phase in
-`README.md`).
+**Status:** aspirational — worked through with the owner on `2026-09-13`, Template language
+revised with the owner on `2026-10-14`, awaiting their review of this draft. Describes intended
+behaviour, not the code (see the establishing phase in `README.md`).
 
 ## Purpose
 
 Operations are the typed vocabulary through which Relay acts on a Node: *restart this service*,
 *read this file*, *show disk usage*. They let an AI-agent administer a fleet without composing
-shell. Whoever authors an Operation fixes what runs; a caller only fills in values, and a value
-can never change which command runs.
+shell. An Operation's author fixes what runs; a caller only fills in values, which can never
+change which command runs.
 
 The vocabulary has two sources. **Native Operations** are built into the relay-daemon and frozen
 at four. **Template Operations** are named commands an operator defines in a Node's Policy, with
@@ -65,21 +65,21 @@ from those validators, so what a caller is told and what the daemon enforces can
 - A Template name may not shadow a Native Operation's name.
 - **The body runs through a shell.** Authors may use the full shell — pipes, fallbacks,
   redirection, here-documents, substitutions — because the text the shell parses is theirs alone.
-- **A slot value is never shell text** (ADR-0021, amended 2026-10-14; #974). Each placeholder must
-  stand alone as a whitespace-delimited token outside any quotes (kept, so a value is never glued
-  to the author's text) and becomes a quoted positional parameter (`"$1"`);
-  the values are passed to the shell as separate arguments. The parsed text is identical for every
-  call, so no value can add a word, an operator, a redirection or an expansion, in any POSIX shell. This
-  is the single point invariant 1 rests on for the Template tier.
+- **A slot value is never shell text** (ADR-0021, amended 2026-10-14). Each placeholder must stand
+  alone as a whitespace-delimited token outside any quotes, so a value is never glued to the
+  author's text, and becomes a quoted positional parameter (`"$1"`); the values are passed to the
+  shell as separate arguments. The parsed text is identical for every call, so no value can add a
+  word, an operator, a redirection or an expansion, in any POSIX shell. Invariant 1 rests on this
+  single point for the Template tier.
 - **A slot fills only a data position.** A placeholder standing where its value would be executed,
   where that is decidable from the body, is a Template compile error (the Node's template set is
   `unloadable`; Native Operations keep running): the command-name position, including the operand
   of `exec`/`command`/`builtin`; the operand of `eval`/`.`/`source`; the argument after a shell's or
   interpreter's `-c`/`-e`; and `let` (ADR-0021, amended 2026-10-15). Arithmetic contexts
-  (`(( ))`, `$(( ))`, `$[ ]`) cannot hold a slot at all, since a slot stands only at the top level. Code positions not reliably decidable (an `awk` or `sed` expression, `find -exec`,
+  (`(( ))`, `$(( ))`, `$[ ]`) cannot hold a slot at all, since a slot stands only at the top
+  level. Code positions not reliably decidable (an `awk` or `sed` expression, `find -exec`,
   `xargs` into a shell, an option that takes a command to run) are a `policy check` warning that
-  `--strict` fails. These two lists are the start of the Safe-Template hazard list (Future work)
-  and grow with it.
+  `--strict` fails. These two lists start the Safe-Template hazard list (Future work).
 - **No well-formed value is an option.** No daemon-owned slot type admits a value beginning with
   `-`; an `enum` value is a literal the author chose.
 - **Slot types are a closed set owned by the daemon:**
@@ -161,8 +161,10 @@ from those validators, so what a caller is told and what the daemon enforces can
 - **Invariant 1 / ADR-0001** — nothing on the wire can compose or escalate a command. For
   Templates this rests on slot values never being shell text (ADR-0021, amended 2026-10-14);
   the code-position refusals are defence in depth beside it. For Natives, on argv.
-- **Invariant 13 / ADR-0012** — every Operation declares a risk class, and it chooses the cap. *(Invariant 13 amended 2026-10-02, ADR-0042: a Template Operation's class is Node-reported, and a dispatch takes the most restrictive class the Nodes it reaches report.)*
-  Binds through the most-restrictive rule and the daemon's class check.
+- **Invariant 13 / ADR-0012** — every Operation declares a risk class, and it chooses the cap.
+  *(Amended 2026-10-02, ADR-0042: a Template Operation's class is Node-reported, and a dispatch
+  takes the most restrictive class the Nodes it reaches report.)* Binds through the
+  most-restrictive rule and the daemon's class check.
 - **Invariant 5 / ADR-0004** — the blast cap is enforced on the Relay before dispatch, over the
   Nodes remaining after exclusion.
 - **Invariant 8 / ADR-0007** — `/proto` is the single source of truth for the vocabulary.
@@ -208,8 +210,7 @@ _Not yet written._ This spec's claims are the backlog of its testing issue.
 
 ## Future work
 
-Wanted, deliberately not in the first pass. Named so each is neither re-litigated nor lost;
-none is a commitment to an order.
+Wanted, deliberately not in the first pass, and in no committed order.
 
 - **A stronger answer for a Template's risk class.** Candidates, none chosen: a class the Relay
   pins per Template name, set by an operator; pinning at first observation and treating a

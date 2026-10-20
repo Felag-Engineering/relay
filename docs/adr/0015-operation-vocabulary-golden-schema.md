@@ -6,101 +6,78 @@ The Operation vocabulary is represented three times: the `/proto` `OperationDesc
 comment (names+risk, the human-authored contract), the daemon's live validators +
 `descriptors()` (the enforcement truth, Rust), and the Relay's `opvocab` (names+risk
 plus model-facing arg-constraint prose shown to the AI-agent). These were kept in sync
-**by hand**, with no guard. A mismatch in the arg-constraint prose is a *safety*
-defect — it misleads the AI-agent about what argument is safe, the exact failure mode
-this product exists to prevent. Drift was already present: `InvalidPackageName` (and
-`InvalidUnitName`) understated the real validator rule, and a comment literally said
-"update all three together."
+**by hand**, with no guard. A mismatch in the arg-constraint prose is a *safety* defect: it
+misleads the AI-agent about what argument is safe, the failure this product exists to
+prevent. Drift was already present: `InvalidPackageName` (and `InvalidUnitName`) understated
+the real validator rule.
 
 ## Decisions
 
 - **The daemon is the single source of truth for what it enforces.** It exposes a
-  canonical, machine-readable Operation schema (`daemon/src/operations/schema.rs`) —
-  per Operation: name, risk class, and args (key, charset display string, whether the
-  validator requires the first/last character to be alphanumeric, whether it rejects a
-  leading `-`, required/optional). `file.read`'s `path` is first-class "unconstrained
-  data" (`charset: null`) — Operation-level charset does not apply; Policy
-  arg-constraints are the gate for which paths are readable.
+  canonical, machine-readable Operation schema
+  (`daemon/crates/relay-ops/src/operations/schema.rs`): per Operation, name, risk class, and
+  args (key, charset display string, whether the first/last character must be alphanumeric,
+  whether a leading `-` is rejected, required/optional). `file.read`'s `path` is first-class
+  "unconstrained data" (`charset: null`): no Operation-level charset applies, and Policy
+  arg-constraints decide which paths are readable.
 - **The schema's charsets are proven equal to the real validators by an exhaustive
   byte-space test, not by refactoring the validators.** `schema.rs`'s
   `charset_matches_real_validator_byte_space` calls each real `validate_*` function for
-  every byte `0x00..=0x7F` (padded `"a{c}a"` to isolate the interior charset) plus a
-  handful of multibyte samples, and asserts the result agrees with the schema's own,
-  independently-written charset predicate. A second test asserts the first/last-anchor
-  flags agree with the validator's actual leading-dash/alnum-anchor behavior. This is a
-  deliberate two-code-paths trade: the schema's charset predicates duplicate the
-  validators' match arms rather than sharing a const the validators consume, so the
-  ADR-0001 argv-injection gate itself is never touched by this work.
+  every byte `0x00..=0x7F` (padded `"a{c}a"` to isolate the interior charset) plus a few
+  multibyte samples, and asserts agreement with the schema's independently written charset
+  predicate. A second test checks the first/last-anchor flags against the validator's
+  leading-dash/alnum-anchor behaviour. The two-code-paths trade is deliberate: the schema's
+  predicates duplicate the validators' match arms rather than sharing a const, so the
+  ADR-0001 argv-injection gate is never touched.
 - **An offline `dump-operation-schema` subcommand emits the schema as canonical JSON,
   committed as a golden** (`relay/internal/opvocab/testdata/operations.schema.json`).
-  It uses the same pre-runtime-setup interception seam as `policy check`
-  (`main.rs`, before `tracing_subscriber::fmt().init()`), so it never dials the Relay
-  or touches identity/network state. `make gen-opschema` regenerates it from a fresh
-  daemon build; the `opschema-drift` CI job regenerates and `git diff --exit-code`s it,
-  mirroring the existing `proto-check`/`proto-drift` pattern — but built on the Rust
-  toolchain (Cargo cache, `cargo build`), since `dump-operation-schema` is a daemon
-  subcommand, not something Go/buf can produce.
-- **The golden lives inside `relay/internal/opvocab/testdata/`, not the repo root.**
-  `relay/internal/opvocab/opvocab_test.go` `//go:embed`s it directly; Go's `//go:embed`
-  cannot reach above the embedding package's own directory tree, so a repo-root
-  location would be unembeddable from there. One copy only.
+  It uses the same pre-runtime interception seam as `policy check` (before
+  `tracing_subscriber::fmt().init()`), so it never dials the Relay or touches identity or
+  network state. `make gen-opschema` regenerates it from a fresh daemon build; the
+  `opschema-drift` CI job regenerates and `git diff --exit-code`s it, like `proto-drift` but
+  on the Rust toolchain, since only the daemon can produce it.
+- **The golden lives inside `relay/internal/opvocab/testdata/`, not the repo root**, because
+  `opvocab_test.go` `//go:embed`s it and `//go:embed` cannot reach above the package's own
+  directory tree. One copy only.
 - **`opvocab_test.go`'s `TestOperations_MatchesGoldenSchema` cross-checks
   `opvocab.Operations()` against the embedded golden**: names, risk classes, and the
   exact arg-key set must match, and every documented arg's constraint prose must
   *contain* the golden's charset token plus its anchor phrases ("start and end
   alphanumeric" when `first_last_alnum`, "no leading '-'" when `no_leading_dash`).
-  This retires the hand-copied `want`/`wantArgKeys` maps that used to live in
-  `opvocab_test.go`; `mcp_test.go`'s `TestMCP_ListOperations` now derives its own
-  `want`/`wantArgKeys` from `opvocab.Operations()` rather than a fourth hand-copied
-  literal, so it rides the same golden transitively.
-- **The live-bug fix rides this PR**: `InvalidUnitName`, `InvalidPackageName`, and
-  `InvalidPackageVersion` (`daemon/src/operations/mod.rs`) now state the real rule
-  the proof test made explicit — the unit message gained "no leading '-'"; the
-  package name/version messages gained "must start and end alphanumeric" in place of
-  the incomplete "no leading '-'" they previously (wrongly) claimed.
-- **We do NOT put the arg schema in `/proto` yet** — it stays a display-schema
-  artifact, generated by the daemon and consumed only by this CI job and this Go test.
-  `/proto`'s `OperationDescriptor` field 3+ remains reserved, per #120's "no `/proto`
-  change" decision. **Escalation trigger:** the moment `list_operations` (or any
-  surface) must ship the arg schema *to clients over the wire*, the schema moves into
-  `OperationDescriptor` (contract-first), and the golden becomes generated-from-proto
-  instead of generated-from-daemon.
+  `mcp_test.go`'s `TestMCP_ListOperations` derives its expectations from
+  `opvocab.Operations()` rather than a hand-copied literal, so it rides the same golden.
+- **The live bug is fixed with it**: `InvalidUnitName`, `InvalidPackageName`, and
+  `InvalidPackageVersion` (`daemon/crates/relay-ops/src/operations/mod.rs`) state the real
+  rule the proof test made explicit: "no leading '-'" for the unit, "must start and end
+  alphanumeric" for the package name and version.
+- **The arg schema does NOT go in `/proto` yet.** It stays a display-schema artifact,
+  generated by the daemon and consumed only by this CI job and this Go test.
+  `OperationDescriptor` field 3+ remains reserved, per #120's "no `/proto` change" decision.
+  **Escalation trigger:** once any surface must ship the arg schema *to clients over the
+  wire*, the schema moves into `OperationDescriptor` (contract-first) and the golden is
+  generated from proto instead of from the daemon.
 
 ## Considered Options
 
 - **B-proto: fill `OperationDescriptor` field 3+ with an arg-schema, generate both
-  sides.** Structurally eliminates divergence, but reverses #120's explicit "no
-  `/proto` change" decision, escalates a legibility concern into the wire contract
-  before anything actually needs the schema over the wire, and proto codegen cannot
-  generate a Rust `matches!` validator anyway — the validator would still need its own
-  hand-written accept-set. Rejected for now; recorded above as the escalation trigger.
-- **Refactor the validators to consume a shared charset const** (one code path instead
-  of two, reconciled by construction rather than by test). Rejected: it edits the
-  ADR-0001 argv-injection gate to serve a legibility goal — the validator surface is
-  the last place we want incidental refactor risk. The exhaustive proof test achieves
-  the same guarantee (an emitted charset that provably matches the enforced one)
-  without touching that code.
-- **Keep hand-syncing (status quo).** Demonstrably rots — `InvalidPackageName` was
-  already wrong at the time of this ADR. Rejected.
+  sides.** Eliminates divergence structurally, but reverses #120's "no `/proto` change"
+  decision, pushes a legibility concern into the wire contract before anything needs it,
+  and proto codegen cannot generate a Rust `matches!` validator anyway. Rejected for now;
+  recorded above as the escalation trigger.
+- **Refactor the validators to consume a shared charset const.** Rejected: it edits the
+  ADR-0001 argv-injection gate for a legibility goal, the last place to take incidental
+  refactor risk. The exhaustive proof test gives the same guarantee without touching it.
+- **Keep hand-syncing (status quo).** Demonstrably rots: `InvalidPackageName` was already
+  wrong. Rejected.
 
 ## Consequences
 
 - The safety-critical hand-sync becomes three mechanical CI failures instead of a
   reviewer's attention: (a) the proof test (validator ↔ schema), (b) the
   `opschema-drift` job (schema ↔ golden), (c) `TestOperations_MatchesGoldenSchema`
-  (golden ↔ opvocab). The names+risk+arg-key hand-syncs (`opvocab_test.go`'s old
-  `TestOperations_DocumentedArgKeys`, `mcp_test.go`'s `want`/`wantArgKeys`) are retired
-  as free riders on the same golden.
-- A new "regenerate the golden" step (`make gen-opschema`) is required whenever a
-  validator's accept-set changes — mitigated by the loud, mechanical `opschema-drift`
-  CI failure if it's forgotten.
-- Two code paths express each charset (the validator's `matches!` arms and the
-  schema's predicate), reconciled by the proof test rather than unified into one. This
-  is a deliberate trade to avoid touching security-critical validation code for a
-  legibility goal; a future change to a validator's accept-set must update both the
-  validator and `schema.rs`, and the proof test will fail loudly if it updates only one.
-- `opvocab.go`'s `pkg.install` `version` charset display string changed order (from
-  `[A-Za-z0-9+._:~-]` to `[A-Za-z0-9+.:~_-]`) to literally match the validator's
-  `matches!` arm order that `schema.rs`'s display string now also uses — the character
-  *set* was already correct; only the display ordering drifted, and the golden
-  cross-check caught it immediately.
+  (golden ↔ opvocab). The hand-copied names, risk and arg-key lists are retired.
+- `make gen-opschema` must be run whenever a validator's accept-set changes; the
+  `opschema-drift` CI failure is loud if it is forgotten.
+- Each charset is expressed twice (the validator's `matches!` arms and the schema's
+  predicate), reconciled by the proof test. A change to a validator's accept-set must update
+  both the validator and `schema.rs`; the proof test fails if only one changes.

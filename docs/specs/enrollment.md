@@ -6,11 +6,10 @@ of this draft. Describes intended behaviour, not the code (see the establishing 
 
 ## Purpose
 
-Enrollment gives a new Node a Relay-assigned identity and a bounded credential with which to
-obtain it. It lets an operator or config-management system add Nodes without giving the Node a
-credential that can administer the fleet. It also provides the containment action for a leaked
-Enrollment Token: stop further enrollment and revoke every Node whose recorded provenance names
-that token.
+Enrollment gives a new Node a Relay-assigned identity, obtained with a bounded credential, so an
+operator or config-management system can add Nodes without handing them a credential that can
+administer the fleet. It also provides containment for a leaked Enrollment Token: stop further
+enrollment and revoke every Node whose recorded provenance names that token.
 
 Enrollment owns **first contact**: the join string, the first trust decision, and identity
 issuance, renewal and revocation. Every later connection of an enrolled Node is
@@ -47,8 +46,8 @@ issuance, renewal and revocation. Every later connection of an enrolled Node is
 ### The join string
 
 - One string carries everything first contact needs: the Relay address, the fingerprint of the
-  Relay's CA, and the Enrollment Token (ADR-0031). It replaces handing each Node a CA bundle file;
-  there is no second bootstrap path.
+  Relay's CA, and the Enrollment Token (ADR-0031). There is no CA bundle file to hand each Node
+  and no second bootstrap path.
 - On first contact the daemon **pins the CA fingerprint**: it proceeds only if the Relay presents a
   certificate chain rooting in a CA with that fingerprint, and sends nothing — token included —
   otherwise.
@@ -60,9 +59,8 @@ issuance, renewal and revocation. Every later connection of an enrolled Node is
 
 - `Enroll` is the sole certless Node-plane RPC. It uses server-authenticated TLS, while every
   subsequent Node-plane RPC requires the Node's client certificate.
-- Before token validation or CSR signing, the Relay applies per-source and global enrollment rate
-  limits. Rate limiting precedes token validation so a throttled request cannot reveal whether a
-  token is real.
+- The Relay applies per-source and global enrollment rate limits before token validation or CSR
+  signing, so a throttled request cannot reveal whether a token is real.
 - The Relay rejects an empty token or CSR. It also rejects the entire request if a declared Label is
   not a well-formed `node:` Label, or uses a reserved built-in `node:` key; it never lets a Node
   submit a `relay:` or `tag:` Label in this path.
@@ -73,9 +71,9 @@ issuance, renewal and revocation. Every later connection of an enrolled Node is
 - Certificate signing and registry writes occur only after token validation. A rejected enrollment
   creates neither certificate nor registry entry. A successful response carries the assigned ID,
   certificate, and CA bundle.
-- The daemon persists the returned key, certificate, CA bundle, Relay address and identity. Once it
-  has a valid persisted identity, it does not enroll again on restart; the join string and its token
-  are consequently inert for that Node.
+- The daemon persists the returned key, certificate, CA bundle, Relay address and identity. With a
+  valid persisted identity it does not enroll again on restart, so the join string is inert for
+  that Node.
 - After recording an enrollment, the Relay rechecks token revocation. If the token was revoked
   during enrollment, it denylists the fresh Node and returns the same token-rejection result used for
   other token failures.
@@ -136,17 +134,16 @@ issuance, renewal and revocation. Every later connection of an enrolled Node is
 - **ADR-0017** — `node:` Labels support routine targeting only; security-lane targeting uses the
   Relay-written `relay:` Labels.
 - **ADR-0031** — the fingerprint-pinned join string. In the first pass.
-- **ADR-0032** (rendered bundles) and **ADR-0030** (`relay init`) — approved, deferred to Future work
-  here. `relay-configuration.md` schedules `relay init` itself for v0.6.5 (owner decision,
-  2026-10-15); its trust-bootstrap contract below remains this spec's to settle.
-  ADR-0032's `admin` minting floor stands.
+- **ADR-0032** (rendered bundles) and **ADR-0030** (`relay init`) — approved. `relay init` creates
+  the first admin (`relay-configuration.md`); its enrollment acts — a first Enrollment Token and
+  its rendered bundle — are Future work here. ADR-0032's `admin` minting floor stands.
 
 ## Seams and proof
 
 The token service, enrollment RPC handler, Control API, and revocation service are the principal
-seams. `make verify` is sufficient for changes limited to the Relay side. Changes to the Node-plane
-protocol, TLS configuration, the join string, or the relay-daemon enrollment path also require
-real-daemon integration coverage.
+seams. `make verify` suffices for Relay-only changes. Changes to the Node-plane protocol, TLS
+configuration, the join string, or the relay-daemon enrollment path also need real-daemon
+integration coverage.
 
 ### What proves each claim
 
@@ -216,7 +213,7 @@ Claims above with **no row**, and so nothing checking them:
 
 ## Future work
 
-Wanted, deliberately not in the first pass. None is a commitment to an order.
+Wanted, deliberately not in the first pass, and in no committed order.
 
 - **Research: better enrollment at fleet scale.** How enrollment should work across tens of thousands of
   Nodes arriving through config management — token lifetimes and rotation, per-environment tokens,
@@ -224,11 +221,10 @@ Wanted, deliberately not in the first pass. None is a commitment to an order.
 - **Rendered enrollment bundles** (`join`, `ansible`, `shell`) returned in the same minting act as the
   token (ADR-0032; #404–#410). Blocked on the supported daemon artifact, version and digest source, and
   the migration to OS packages.
-- **`relay init`** as an idempotent trust-bootstrap transaction (ADR-0030; #400), including which
-  artifacts a rerun may reuse versus mint anew and its secret-output contract.
+- **`relay init`'s enrollment acts** as an idempotent trust-bootstrap transaction (ADR-0030):
+  minting a first Enrollment Token and its bundle, which artifacts a rerun may reuse versus mint
+  anew, and its secret-output contract.
 - **The Console Add Nodes screen** invoking the existing mint capability (#434).
-- **Batching revocation audit records** for large cascades without serialising one commit per Node,
-  while keeping honest per-Node shortfall reporting (#563).
 
 ## Open questions
 

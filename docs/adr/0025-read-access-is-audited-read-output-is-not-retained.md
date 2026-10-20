@@ -53,8 +53,8 @@ reading is exfiltration by construction.
 
 ## Why not retain read output
 
-The honest alternative was to keep #122 uniform and manage the volume elsewhere (caps,
-expiry, sampling). It was rejected on three grounds:
+The alternative was to keep #122 uniform and manage the volume elsewhere (caps, expiry,
+sampling). Rejected on three grounds:
 
 - **There is no use case yet.** Nothing in the product reads audit-stored read output. The
   caller already has the result — it was the tool response — and `get_job` re-reads it from
@@ -74,9 +74,8 @@ reverse is not true.
 ## Consequences
 
 - **Read output survives only as long as its Task row.** After Job/Task garbage collection,
-  the audit trail can say a read happened, by whom, of what, and when — but not what it
-  returned. That is the intended trade, and it is the one thing to reconsider first if a
-  real need appears.
+  the audit trail can say a read happened, by whom, of what, and when — not what it returned.
+  That is the intended trade, and the first thing to reconsider if a real need appears.
 - **This does not reduce exfiltration to the model provider.** The AI-agent still receives
   the output; it is the tool response. What changes is what the *Relay* keeps. Limiting what
   the model may reach is Policy's job (ADR-0022's deny-list), not the audit trail's.

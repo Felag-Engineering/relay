@@ -121,49 +121,45 @@ stops the fleet.
                                                                   ▼ execute Operation / Raw Exec
 ```
 
-Relay is two programs, and everything else in the system is one of them or a thin adapter
-over one.
+Relay is two programs.
 
-The **Relay** is a central server, written in Go. It holds the registry of known Nodes,
-resolves which of them a request targets, authorizes the caller, and caps how far a single
-action may reach. It dispatches the work and records what happened. It is also the private CA
-that mints each Node's identity at enrollment. It is the only thing that talks to the fleet,
-and the only thing an operator or an AI-agent talks to.
+The **Relay** is a central server, written in Go. It holds the registry of Nodes, resolves
+which ones a request targets, authorizes the caller, caps how far one action may reach,
+dispatches the work and records what happened. It is also the private CA that issues each
+Node's identity at enrollment. It is the only thing that talks to the fleet, and the only thing
+an operator or an AI-agent talks to.
 
-The **relay-daemon** is a small daemon, written in Rust, installed on every managed server. It
-dials out to the Relay and holds one persistent connection open, so no managed server needs an
-inbound port. It evaluates each Task against a Policy file on its own disk, owned by root, and
-executes only what that Policy permits. It is not an AI, does not reason, and never becomes
-either. Per-Node Policy restricting what may actually run, beneath a Relay that already
-authorizes and caps, is defense in depth.
+The **relay-daemon** is a small Rust daemon on every managed server. It dials out to the Relay
+and holds one persistent connection, so no server needs an inbound port. It checks each Task
+against a root-owned Policy file on its own disk and runs only what that Policy permits. It is
+not an AI and does not reason. Node Policy beneath a Relay that already authorizes and caps is
+defense in depth.
 
-Three surfaces reach the Relay: the MCP surface an AI-agent drives, the Control API that
-tooling calls, and the Admin Console a human uses. All three are adapters over one capability
-layer, so what may be done, who may do it, and how it is recorded are decided once rather than
-three times.
+Three surfaces reach the Relay: the MCP surface an AI-agent drives, the Control API for
+tooling, and the Admin Console for humans. All three are adapters over one capability layer,
+so what may be done, by whom, and how it is recorded is decided once.
 
-- **Typed Operations, not shell strings.** A fixed vocabulary of structured Operations is the
-  primary execution primitive; a regex-gated **Raw Exec** escape hatch covers the long tail.
-  Between them sit **Template Operations**: operator-authored, with the command structure
-  fixed in a root-owned local file and every parameter value passed to the shell as data,
-  never as shell text, so an argument can never change which command runs. New vocabulary is
-  Templates, never new Natives.
+- **Typed Operations, not shell strings.** Structured Operations are the primary primitive;
+  regex-gated **Raw Exec** covers the long tail. Between them, **Template Operations** are
+  operator-authored: the command structure is fixed in a root-owned local file and every
+  parameter reaches the shell as data, so an argument can never change which command runs.
+  New vocabulary is Templates, never new Natives.
   ([ADR-0001](docs/adr/0001-structured-operations-with-regex-gated-raw-exec.md),
   [ADR-0021](docs/adr/0021-local-template-tier-shipped-read-catalog-native-freeze.md))
 - **The Node distrusts the Relay.** Policy is locally-rooted and remotely-immutable, so a
   compromised Relay or jailbroken AI-agent still cannot exceed a Node's local limits.
   ([ADR-0002](docs/adr/0002-node-side-policy-is-locally-rooted-and-remotely-immutable.md))
 - **Selector fan-out.** The AI-agent targets Nodes by label Selector; one call fans out across
-  the fleet with a hard blast-radius cap.
+  the fleet under a hard blast-radius cap.
   ([ADR-0003](docs/adr/0003-mcp-meta-tool-surface-with-selector-fan-out.md),
   [ADR-0004](docs/adr/0004-async-job-execution-model.md))
 - **Outbound-only, mutually authenticated.** Daemons need no inbound ports; identity is an
   mTLS client cert issued at enrollment.
   ([ADR-0005](docs/adr/0005-grpc-bidi-over-mtls-transport.md),
   [ADR-0006](docs/adr/0006-node-enrollment-identity-and-label-authority.md))
-- **A System Model the AI maintains.** The Relay holds a git-backed semantic graph that links
-  Labels into Services and Dependencies, so the AI-agent understands the fleet as a connected
-  system rather than isolated Nodes. Advisory only; auditable and human-correctable via git.
+- **A System Model the AI maintains.** A git-backed graph links Labels into Services and
+  Dependencies, so the AI-agent sees the fleet as a connected system. It is advisory only, and
+  auditable and correctable by humans through git.
   ([ADR-0008](docs/adr/0008-system-model-git-backed-semantic-graph.md))
 
 ## MCP tools
@@ -199,62 +195,42 @@ architecture invariants in [AGENTS.md](AGENTS.md) encode, and what
 
 ### Why it is built this way
 
-Other tools answer "what if the operator goes rogue?" with procedure; Relay answers with
-architecture.
+Ansible, Salt and Chef were designed around a **trusted human operator**: the control plane
+amplifies whatever the operator says, and safety is procedure layered on top. That holds only
+while the operator is careful, honest and human. Relay assumes none of the three.
 
-Relay's purpose is to make a dangerous capability **bounded, attributed, previewable and
+Relay does not try to avoid remote code execution; it *is* remote code execution, offered
+deliberately. Its purpose is to make that capability **bounded, attributed, previewable and
 survivable**, so that granting it is a rational decision rather than an act of faith.
 
-The phrasing matters. Relay does not try to avoid remote code execution — it *is* remote
-code execution, offered deliberately, and a design that pretended otherwise would be a
-worse one.
+The core move: **the enforcement that matters lives on the machine being protected, not in the
+thing asking.** A control that lives only in the control plane evaporates the moment the
+control plane is owned. A control rooted on the Node does not. So the design question is never
+"how hard is this to break into" but **"what is still true after it has been broken into."**
 
-Fleet tools like Ansible, Salt, and Chef were designed around a **trusted human
-operator**: the control plane faithfully amplifies whatever the operator says, and safety
-is procedure layered on top. That holds exactly as long as the operator is careful,
-honest, and human. Relay assumes none of those three.
+Procedure is kept (approval, step-up re-authentication, an emergency Freeze), but never alone:
+each procedural control has a structural floor beneath it that holds when the person fails.
 
-The answer here rests on one move: **the enforcement that matters lives on the machine
-being protected, not in the thing asking.** Every managed Node holds its own root-owned
-Policy that nothing on the wire can widen. A control that lives only in the control plane
-is advisory, because it evaporates the moment the control plane is owned. A control rooted
-on the Node does not.
-
-Procedure is still kept — approval, step-up re-authentication, an emergency Freeze. What
-is rejected is procedure *standing alone*: every procedural control has a structural floor
-beneath it that holds when the person fails.
-
-That sets the design bar. The question is never "how hard is this to break into" but
-**"what is still true after it has been broken into."** A fully compromised Relay must
-still be unable to exceed what each Node already permits locally.
-
-The AI framing is not a separate concern. A jailbroken AI-agent is simply the most
-demanding instance of the general problem — untiring, fast, plausible, and wrong. A design
-that holds against it holds against a compromised human operator with stolen credentials,
-because the architecture never asked who was asking in the first place. Designing for the
-hostile AI-agent is what makes the ordinary case safe.
+A jailbroken AI-agent is the most demanding case of the general problem: untiring, fast,
+plausible and wrong. A design that holds against it also holds against a human with stolen
+credentials, because the architecture never asks who is asking.
 
 ## Status
 
-Pre-release. Relay is source-available under the [Business Source License 1.1](LICENSE). It
-is free for personal, non-commercial use by individuals. Use by or for an organization needs a
-commercial license. Each version converts to Apache-2.0 three years after its release, its
-Change Date. Relay is source-available, not open source: issues are welcome, code
-contributions from outside Felag Engineering are not accepted (see
-[CONTRIBUTING.md](CONTRIBUTING.md)). The repository was renamed from `gleipnir-relay`; GitHub
-redirects the old URL.
+Alpha: 0.1.0 is the first release. Relay is source-available under the
+[Business Source License 1.1](LICENSE): free for personal, non-commercial use by individuals;
+use by or for an organization needs a commercial license. Each version converts to Apache-2.0
+three years after its release (its Change Date). Issues are welcome; code contributions from
+outside Felag Engineering are not accepted (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
-**The GitHub milestones are the authority on what is in progress**, and the GitHub releases on
-what has shipped; read them with `gh` rather than inferring either from any file. Milestones
-were deliberately built out of order. The Template engine and shipped catalog, Accounts and
-access, the Control API, approval callout, and the MCP Tasks extension shipped ahead of a
-real-hardware proof. For what the code on `main` does today, capability by capability, see
-[docs/STATUS.md](docs/STATUS.md). Work agreed in principle but not yet specified is in
-[docs/deferred.md](docs/deferred.md).
+**GitHub milestones are the authority on what is in progress**, and GitHub releases on what has
+shipped. [docs/STATUS.md](docs/STATUS.md) says what `main` does today, capability by
+capability; [docs/deferred.md](docs/deferred.md) lists work agreed in principle but not yet
+specified.
 
-Gleipnir is the separate first-party AI-agent system that will drive Relay, as a consumer of its
-MCP and Control API surfaces with no special privileges; the repository is now
-`Felag-Engineering/relay`.
+Gleipnir is a separate first-party AI-agent system that drives Relay as an ordinary consumer of
+its MCP and Control API surfaces, with no special privileges. The repository was renamed from
+`gleipnir-relay`; GitHub redirects the old URL.
 
 ## Security
 

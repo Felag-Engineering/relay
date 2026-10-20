@@ -2,17 +2,17 @@
 
 **Status:** Accepted.
 
-Until now the control plane (MCP + `/api/v1`) was protected by a single **config-seeded
-bearer credential**: its SHA-256 hash in a root-owned file, its plaintext in the operator's
-vault, and every caller presenting the same string. That was the right staged choice while
-there were no Accounts to authenticate as (ADR-0010's staged authz). Accounts (#295), API
-Tokens (#296), and both on the wire (#297) have now landed, so this ADR records the
-retirement of the shared credential and the bootstrap path that replaces it.
+The control plane (MCP + `/api/v1`) was protected by a single **config-seeded bearer
+credential**: its SHA-256 hash in a root-owned file, its plaintext in the operator's vault,
+and every caller presenting the same string. That was the right staged choice while there
+were no Accounts to authenticate as (ADR-0010's staged authz). With Accounts (#295), API
+Tokens (#296), and both on the wire (#297), this ADR retires the shared credential and records
+the bootstrap path that replaces it.
 
 ## Why the shared credential has to go, not just be deprecated
 
-A shared secret is not a weaker version of per-Account credentials; it is a different thing
-that quietly defeats three properties the rest of the system now provides.
+A shared secret is not a weaker per-Account credential; it quietly defeats three properties
+the rest of the system now provides.
 
 - **It cannot attribute.** Every caller presenting it is the same principal. "Which
   orchestrator ran this?" has no answer, and the audit trail's attribution — the thing
@@ -24,8 +24,8 @@ that quietly defeats three properties the rest of the system now provides.
   A credential that resolves to one hardcoded admin identity can only ever be admin, so
   every caller holding it gets Raw Exec whether it needs it or not.
 
-Keeping it alongside Account tokens would preserve all three problems while adding a second
-authentication path to reason about — and the weaker path is the one an attacker chooses.
+Keeping it alongside Account tokens would keep all three problems and add a second
+authentication path — and the weaker path is the one an attacker chooses.
 
 ## Decisions
 
@@ -54,13 +54,13 @@ authentication path to reason about — and the weaker path is the one an attack
 Minting an Account's token requires authenticating, and authenticating requires a token.
 Something has to break the cycle from outside the wire protocol.
 
-This is the same shape as ADR-0002's answer for Node Policy, and it gets the same answer:
-**root the authority locally.** `bootstrap-token` requires read/write access to the Relay's
+ADR-0002 answers the same shape for Node Policy: **root the authority locally.**
+`bootstrap-token` requires read/write access to the Relay's
 store file, which is root-owned. Anyone who can run it can already edit that SQLite file
 directly — insert an Account, set a role, write a token hash. The subcommand therefore
-grants **no authority local root did not already have**; it only makes the intended path a
-documented one-liner instead of a hand-rolled SQL edit, which is the difference between an
-operator doing the safe thing and an operator improvising.
+grants **no authority local root did not already have**; it makes the intended path a
+documented one-liner instead of a hand-rolled SQL edit — the difference between an operator
+doing the safe thing and improvising.
 
 It is safe to run while the Relay is serving: the store is opened WAL-mode with a busy
 timeout, so a second process writes without stopping the first.
@@ -69,8 +69,8 @@ timeout, so a second process writes without stopping the first.
 
 - **Keep the seeded credential as a bootstrap-only fallback.** Rejected: it leaves the
   weaker authentication path permanently in place, and "bootstrap-only" is a convention, not
-  a mechanism — nothing would stop it becoming the credential everyone actually uses, which
-  is precisely what happened while it was the only option.
+  a mechanism — nothing would stop it becoming the credential everyone uses, as it was while
+  it was the only option.
 - **Seed a *token* from config instead of a credential** (the hash of an API Token in the
   config file). Rejected: it reproduces the shared secret with extra steps. The token would
   still live in configuration, still be un-revocable without a config change and restart,

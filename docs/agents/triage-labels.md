@@ -1,7 +1,6 @@
 # Triage Labels
 
-Agent skills speak in terms of five canonical triage roles. This file maps those roles to the
-label strings actually used in this repo's tracker.
+Agent skills speak in five canonical triage roles. This file maps them to this repo's labels.
 
 | Canonical role    | Label in our tracker | Meaning                                            |
 | ----------------- | -------------------- | -------------------------------------------------- |
@@ -16,13 +15,13 @@ the right-hand column.
 
 ## The `needs-triage` gap
 
-There is no `needs-triage` label. Untriaged today means "carries no `loop:*` label", which is
-indistinguishable from an issue that was triaged and deliberately parked. If triage becomes a
-real lane, add an explicit `needs-triage` label rather than continuing to infer it from absence.
+There is no `needs-triage` label. Untriaged means "carries no `loop:*` label", which looks the
+same as an issue triaged and deliberately parked. If triage becomes a real lane, add an
+explicit `needs-triage` label rather than inferring it from absence.
 
 ## Additional lanes this repo uses
 
-These have no canonical equivalent; skills should preserve them rather than overwrite:
+These have no canonical equivalent; skills preserve them rather than overwrite:
 
 - `loop:proposed` — created by `/decompose` from a merged design plan. Not eligible until a
   human flips it to `loop:ready`; that flip is a gate (`docs/agents/workflow.md`).

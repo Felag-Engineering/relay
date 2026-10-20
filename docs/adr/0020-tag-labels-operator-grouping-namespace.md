@@ -4,38 +4,36 @@
 
 Operators need to group Nodes ad hoc from the Relay side ("these 40 boxes are the
 Postgres-15 canary") without a config-management round-trip. Neither existing namespace
-(ADR-0006) can serve: `node:` is node-rooted and Relay-immutable by invariant, and
-`relay:` is reserved for the security-sensitive lane. This ADR adds a third namespace,
-and — closing a gap found in Console planning (`docs/design/console-backend-coverage.md`)
-— schedules post-enrollment `relay:` label management, without which quarantine was
-impossible after enrollment.
+(ADR-0006) can serve: `node:` is node-rooted and Relay-immutable, and `relay:` is reserved for
+the security-sensitive lane. This ADR adds a third namespace, and schedules post-enrollment
+`relay:` label management (a gap found in Console planning,
+`docs/design/console-backend-coverage.md`), without which quarantine was impossible after
+enrollment.
 
 ## Decisions
 
-- **A third label namespace, `tag:…`** — Relay-stored and Node-immutable (a Node can
-  neither set nor remove one; it shares `relay:`'s forge-resistance), created and removed
-  through the shared capability layer (Control API + Admin Console) by `operator`-or-above
-  with standard session auth — no step-up — and audited like every capability action.
-  Valid in Selectors for routine targeting exactly like `node:` labels.
+- **A third label namespace, `tag:…`**: Relay-stored and Node-immutable (sharing `relay:`'s
+  forge-resistance), created and removed through the capability layer (Control API + Admin
+  Console) by `operator`-or-above with standard session auth, no step-up, and audited like
+  every capability action. Valid in Selectors for routine targeting like `node:` labels.
 - **`tag:` is never a security-lane target.** Quarantine, remediation, and
-  secret-distribution Selectors must target `relay:` labels only, exactly as before —
-  ADR-0006's operating rules are unchanged. The lane keeps its small vocabulary and heavy
-  write ceremony; `tag:` absorbs the everyday traffic that would otherwise erode both.
-- **Post-enrollment `relay:` label management exists now.** Set/remove `relay:` labels on
-  a live Node via the capability layer, gated `admin` + step-up re-authentication. Until
-  now `relay:` labels could only be stamped at enrollment from Enrollment Token scope,
-  which made the flagship use case — quarantining a Node you have come to distrust —
-  impossible short of full revocation. The incident ladder becomes: quarantine
-  (`relay:`) < revoke < Freeze.
+  secret-distribution Selectors target `relay:` labels only; ADR-0006's operating rules are
+  unchanged. The lane keeps its small vocabulary and heavy write ceremony; `tag:` absorbs the
+  everyday traffic that would otherwise erode both.
+- **Post-enrollment `relay:` label management exists now.** Set/remove `relay:` labels on a
+  live Node via the capability layer, gated `admin` + step-up re-authentication. Stamping only
+  at enrollment made the flagship use case, quarantining a Node you have come to distrust,
+  impossible short of revocation. The incident ladder becomes: quarantine (`relay:`) < revoke
+  < Freeze.
 - **Namespaces cannot collide; the prefix is mandatory.** Unprefixed label keys remain
   invalid, so every label's authority is legible from its name.
 
 ## Considered Options
 
 - **Open `relay:` to everyday tagging.** Rejected: either every `tag`-grade write costs
-  `admin` + step-up (ceremony fatigue trains admins to rubber-stamp the same step-up that
-  guards quarantine and secret targeting) or the namespace's authz is relaxed (weakens the
-  lane itself). An auditor should read the `relay:` lane and see only security state.
+  `admin` + step-up (training admins to rubber-stamp the step-up that guards quarantine and
+  secret targeting) or the namespace's authz is relaxed (weakening the lane). An auditor
+  reading the `relay:` lane should see only security state.
 - **System Model Services as the grouping mechanism.** Rejected: the System Model is
   advisory by invariant #9 and never feeds Selectors; anything meant for targeting must be
   a real Label.
@@ -47,14 +45,12 @@ impossible after enrollment.
 - Amends ADR-0006's two-namespace model to three (its `node:`/`relay:` authority rules
   are unchanged; a pointer is added there) and AGENTS.md invariant #7 in the same
   change → human-merge lane.
-- A hijacked `operator` session can rewrite `tag:` labels and thereby redirect *routine*
-  Jobs — bounded, as ever, by Grants, Node Policy, and blast caps — but can never attract
-  a secret distribution or lift a quarantine: those live in `relay:`, behind `admin` +
-  step-up.
-- Backend (capability + `/api/v1` endpoints for both namespaces, one mechanism with two
+- A hijacked `operator` session can rewrite `tag:` labels and so redirect *routine* Jobs
+  (bounded by Grants, Node Policy, and blast caps), but can never attract a secret
+  distribution or lift a quarantine: those live in `relay:`, behind `admin` + step-up.
+- The backend (capability + `/api/v1` endpoints for both namespaces, one mechanism with two
   authz tiers) and Console surfaces (bulk tag-from-filter in the fleet view; `relay:`
-  set/remove on Node detail) are scheduled in v0.7.0
-  (`docs/design/console-backend-coverage.md`).
+  set/remove on Node detail) are scoped in `docs/design/console-backend-coverage.md`.
 - `tag:` labels persist in the registry alongside `relay:` labels and appear in
   `list_nodes`/`describe_node`, Selectors, and Console views like any Label.
 - GLOSSARY.md's **Label** entry is updated in the same change.
@@ -64,23 +60,18 @@ impossible after enrollment.
 This ADR's decision is unchanged. What changed is how AGENTS.md invariant 7 summarises it.
 
 The invariant read that `tag:` labels "are operator-set through the control plane … for
-ad-hoc grouping and routine targeting" — present tense, for a namespace this ADR decided on
-but which has no write path and no storage on the Node record until label management lands
-(#430). A `tag:` Selector therefore resolves to the empty set rather than an error, and the
-surfaces do not agree about that: the Admin Console refuses a `tag:` filter with an
-explanatory error, while the MCP `list_nodes` schema advertises `tag:` to an AI-agent with no
-caveat, so the agent receives a false negative rather than a refusal. Issue #347 recorded the
-documentation half of this.
+ad-hoc grouping and routine targeting", in the present tense, for a namespace with no write
+path and no storage on the Node record until label management lands (#430). At the time a
+`tag:` Selector resolved to the empty set, and the surfaces disagreed: the Admin Console
+refused a `tag:` filter, while the MCP `list_nodes` schema advertised `tag:` with no caveat, so
+an AI-agent got a false negative rather than a refusal (#347). That disagreement is a defect in
+its own right and is not resolved here.
 
-The invariant now states the property this ADR actually establishes — that each namespace has
-exactly one writer and is immutable from every other side — rather than asserting that any
-given namespace is populated. Write authority is a rule that holds before and after #430; a
-claim about what is settable today is not. The `relay:` clause lost its "(enrollment-stamped,
-or `admin` + step-up)" parenthetical for the same reason: how the Relay comes to write a
-`relay:` label is mechanism, and its second half is likewise unbuilt.
-
-The surface disagreement above is a defect in its own right, not a documentation problem, and
-is not resolved here.
+The invariant now states the property this ADR establishes, that each namespace has exactly one
+writer and is immutable from every other side, rather than asserting that any namespace is
+populated. The `relay:` clause lost its "(enrollment-stamped, or `admin` + step-up)"
+parenthetical for the same reason: how the Relay writes a `relay:` label is mechanism, and the
+second half was unbuilt.
 
 ## Amendment (2026-09-16): `tag:` may engage a quarantine, and no Account writes `relay:` directly
 
@@ -91,11 +82,11 @@ Owner decision, 2026-09-16 (#582). Two decisions above are superseded; the rest 
   reasoning and the accepted residual are in ADR-0006's amendment of the same date.
 - **"Post-enrollment `relay:` label management exists now … `admin` + step-up"** is superseded
   before it was built. No Account sets or removes a `relay:` label directly. Each `relay:` key is
-  defined together with the action that writes it, and roles, step-up and audit apply to that
-  action: a quarantine is engaged by `operator` or above (machine Accounts allowed, counted against
-  the `mutate` blast cap) and lifted only by a human `admin` with step-up. A generic `relay:` write
-  would make the namespace's meaning whatever its last editor intended; binding each key to an
-  action keeps it legible. The incident ladder is unchanged: quarantine < revoke < Freeze.
+  defined with the action that writes it, and roles, step-up and audit apply to that action: a
+  quarantine is engaged by `operator` or above (machine Accounts allowed, counted against the
+  `mutate` blast cap) and lifted only by a human `admin` with step-up. Binding each key to an
+  action keeps the namespace legible, where a generic write would make it mean whatever its last
+  editor intended. The incident ladder is unchanged: quarantine < revoke < Freeze.
 
 `tag:` storage and its write path are still unbuilt (#430); until they exist, a `tag:` term is
 refused at parse on every surface, quarantine included.

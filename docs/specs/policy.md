@@ -6,19 +6,18 @@ of this draft. Describes intended behaviour, not the code (see the establishing 
 
 ## Purpose
 
-Policy is a Node's own answer to *"what will I ever execute, no matter who asks?"* It is the
-single document that defines everything that can run on a Node: which Native Operations are
-allowed and with what arguments, the Template Operations the Node offers, and whether Raw Exec
-is permitted at all.
+Policy is a Node's own answer to *"what will I ever execute, no matter who asks?"* It defines
+everything that can run on a Node: which Native Operations are allowed and with what arguments,
+the Template Operations the Node offers, and whether Raw Exec is permitted at all.
 
-It is the last line of defence. The Relay can be fully compromised and the AI-agent fully
-jailbroken, and a Node still refuses everything its Policy does not allow. Policy is written by
-people, delivered by the customer's config management like any other host configuration, and
-never reachable from the wire. Relay can read it and ask it hypothetical questions; widening
-what a Node will do is always a deliberate human act done outside Relay.
+It is the last line of defence. With the Relay fully compromised and the AI-agent fully
+jailbroken, a Node still refuses everything its Policy does not allow. Policy is written by
+people, delivered by the customer's config management, and never reachable from the wire. Relay
+can read it and ask it hypothetical questions; widening what a Node will do is always a human
+act done outside Relay.
 
-Everything the Relay adds on its side — roles, the blast-radius cap, approval, Freeze — narrows
-what Policy allows. A Task can be allowed by Policy and refused by the Relay; never the reverse.
+Everything the Relay adds — roles, the blast-radius cap, approval, Freeze — only narrows what
+Policy allows. A Task can be allowed by Policy and refused by the Relay; never the reverse.
 
 ## Surfaces
 
@@ -153,24 +152,23 @@ canonical path:
   carrying, in its first pass, only:
   - a reason: `no_allow` (nothing permitted it) or `denied` (a deny rule vetoed it);
   - human-readable text. Caller-supplied text quoted into it is truncated to a fixed budget, on
-    the Raw Exec and Operation paths alike (#258 tracks the Operation path).
+    the Raw Exec and Operation paths alike.
 - **Malformed.** An unknown argument or slot name, or a value not well-formed for its type, gets
-  its own outcome for Native and Template Operations alike — so a typo never reads as a denial
-  and never sends an AI-agent into a retry loop.
+  its own outcome for Native and Template Operations alike, so a typo never reads as a denial.
 - **Invalid Policy.** Every Task on a Node whose Policy is `invalid` is denied, and the denial
   says the Policy is invalid rather than naming a rule.
 - **From the wire.** No message can add, remove, edit, deliver or reload a rule.
 - **Approval is not Policy's to check.** Policy never permits anything "with approval": a Node
-  cannot verify an approval claim without trusting the Relay that sends it, so Policy stays the
-  floor that holds even when an approval is forged. Gating is `approval.md`.
+  cannot verify an approval claim without trusting the Relay, so Policy stays the floor that
+  holds even against a forged approval. Gating is `approval.md`.
 
 ## Governing ADRs and invariants
 
-- **Invariant 2 / ADR-0002** — locally rooted and remotely immutable. Binds as written: Policy
-  reaches a Node only through the customer's config management, and nothing on the Relay can
-  deliver or sign it.
-- **Invariant 3 / ADR-0002** — deny-by-default, deny-beats-allow, argument-level granularity.
-  Binds as written; arguments are now matched by name.
+- **Invariant 2 / ADR-0002** — locally rooted and remotely immutable, as written: Policy reaches
+  a Node only through the customer's config management, and nothing on the Relay can deliver or
+  sign it.
+- **Invariant 3 / ADR-0002** — deny-by-default, deny-beats-allow, argument-level granularity, as
+  written; arguments are matched by name.
 - **Invariant 1 / ADR-0001** — nothing on the wire can compose or escalate a command. A
   Template's structure is fixed in a root-owned local file; Raw Exec is argv-only and gated here.
 - **Invariant 12 / ADR-0011** — only the daemon's live engine evaluates Policy, hypotheticals
@@ -211,13 +209,12 @@ _Not yet written._ This spec's claims are the backlog of its testing issue.
 ## Accepted residual risk
 
 - **Self-modification is a deployment concern.** That nothing a Task runs can write the Policy
-  directory or trigger a reload rests on the shipped unit's filesystem sandbox, documented as a
-  deployment requirement. That is why no
-  Alpine package ships yet (`daemon-installation.md`): without systemd there is no such sandbox.
-  The self-reference lint is a warning, not an error. Named so they are
-  not forgotten: the `pkg.install` profile relaxes that sandbox; the daemon-uid ownership
-  exception stands; an agentless tier (ADR-0037) would have no unit; and explicit reload makes
-  a writable Policy directory a live escalation rather than one that waits for a restart.
+  directory or trigger a reload rests on the shipped unit's filesystem sandbox, a documented
+  deployment requirement — which is why no Alpine package ships yet (`daemon-installation.md`):
+  without systemd there is no such sandbox. The self-reference lint is a warning, not an error.
+  Also carried: the `pkg.install` profile relaxes that sandbox; the daemon-uid ownership
+  exception stands; an agentless tier (ADR-0037) would have no unit; and explicit reload makes a
+  writable Policy directory a live escalation rather than one that waits for a restart.
 - **Secrets in read output.** The confidentiality deny-list cannot know every file that holds a
   credential; read auditing records that such a file was read, not what it said.
 - **Secrets in denial text reach the daemon log.** A denial's human-readable text quotes
@@ -226,22 +223,20 @@ _Not yet written._ This spec's claims are the backlog of its testing issue.
   the Task result and the daemon log, beyond the audit trail `execution.md` already accepts it
   reaching. Accepted by the owner on `2026-09-17`, so that execution works end to end before it is
   refined. Compensating control: `execution.md`'s contract that arguments are never secrets, and
-  the fixed budget on quoted text, which bounds how much of one is copied (Raw Exec today; the
-  Operation path is #258). Threat model R20; the
+  the fixed budget on quoted text, which bounds how much of one is copied. Threat model R20; the
   fix is under Future work.
 
 ## Future work
 
-Wanted, deliberately not in the first pass. Named so each is neither re-litigated nor lost;
-none is a commitment to an order.
+Wanted, deliberately not in the first pass, and in no committed order.
 
 - **Richer denial detail** — the deciding fragment and rule, the argument that decided it, the
   pattern that matched.
 - **No caller text in denials or the daemon log** — a denial names the form, the index and the
   rule that decided it and never quotes what the caller sent; the same holds for the daemon's
-  log of a refused or failed Task. Pulls against *richer denial detail* above, and needs
-  ADR-0019 amended for the Raw Exec path, where it chose quoting for diagnosability. Scoped, with the deny paths and log
-  lines that quote today, in #619.
+  log of a refused or failed Task. Pulls against *richer denial detail* above, and needs ADR-0019
+  amended for the Raw Exec path, where it chose quoting for diagnosability. Scoped, with the deny
+  paths and log lines that quote today, in #619.
 - **Shared Template definitions with separate allow rules** — one definition serving a fleet,
   with per-Node allowed values held apart from it.
 - **A daemon-verified guarantee against self-modification** — the daemon itself establishes that
@@ -253,9 +248,5 @@ none is a commitment to an order.
 
 ## Open questions
 
-1. **Does `invalid` become a `state:` label?** Targeting "every Node whose Policy is invalid"
-   wants one, which adds to the closed vocabulary. `selectors-and-labels.md`; forced when the
-   invalid state is built.
-
-Resolved elsewhere: how the Relay trusts a Template's risk class, and what remains of
-`operations-and-templates.md`, were settled in that spec on `2026-09-13`.
+None open. Resolved elsewhere: `invalid` is targetable as `state:policy-invalid`
+(`selectors-and-labels.md`); how the Relay trusts a Template's risk class is ADR-0042.

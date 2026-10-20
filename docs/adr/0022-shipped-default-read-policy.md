@@ -5,29 +5,26 @@ only secrets; the lint's read probes stop at secrets).
 
 A freshly enrolled Node should be fully interrogable with zero Policy authoring: the
 AI-agent's dominant workload is observation (ADR-0012), and a default that denies
-`system.facts` pushes every evaluation toward authoring friction or — worse — toward
-widening Raw Exec. This ADR records the posture of the **shipped default Policy file**
+`system.facts` pushes every evaluation toward authoring friction or, worse, toward widening
+Raw Exec. This ADR records the posture of the **shipped default Policy file**
 (`daemon/policy.default.toml`), the companion decision ADR-0021 deferred to issue #294.
 
-**Engine semantics are unchanged.** Deny-by-default and deny-beats-allow stand exactly as
-ADR-0002 defines them; this decision changes only the *file we ship*, which is an ordinary
-locally-rooted Policy the operator owns from the moment it lands on the Node. It *looks*
-like it touches invariant #3; it does not — the default is expressed entirely as ordinary
-allow and deny rules the engine already evaluates.
+**Engine semantics are unchanged.** Deny-by-default and deny-beats-allow stand as ADR-0002
+defines them; only the *file we ship* changes, an ordinary locally-rooted Policy the operator
+owns once it lands on the Node. It does not touch invariant #3: the default is expressed
+entirely as ordinary allow and deny rules.
 
 ## Decisions
 
 - **`read`-class Operations are pre-allowed out of the box.** The shipped file carries an
-  allow rule for every `read`-class name in the shipped vocabulary — today the two native
-  reads, `system.facts` (no args) and `file.read` (any canonical path). When the v0.2.0
-  shipped catalog (ADR-0021) lands, its `read`-class template names join this same file,
-  scoped by what they make *reachable* (paths/units/journals), per ADR-0021's data-egress
-  governance.
+  allow rule for every `read`-class name in the shipped vocabulary: at the time, the two native
+  reads, `system.facts` (no args) and `file.read` (any canonical path). The shipped catalog's
+  (ADR-0021) `read`-class template names join this file, scoped by what they make *reachable*
+  (paths/units/journals).
 - **A confidentiality deny-list is authoritative over the read pre-allowance.**
-  Deny-beats-allow makes the list win even against `file.read "*"`. Applying ADR-0021's
-  governance section — `read` means "cannot change Node state", **not** "safe for the AI
-  to see"; a read result flows to the model provider, so reading is exfiltration by
-  construction — the shipped file denies, in ADR-0018 canonical form:
+  Deny-beats-allow makes the list win even against `file.read "*"`. Because a read result flows
+  to the model provider (ADR-0021: `read` is **not** "safe for the AI to see"), the shipped file
+  denies, in ADR-0018 canonical form:
   - **local credential databases**: `/etc/shadow`, `/etc/gshadow`, and their
     shadow-utility backups `/etc/shadow-`, `/etc/gshadow-`;
   - **host key material**: the standard SSH host private keys
@@ -41,43 +38,40 @@ allow and deny rules the engine already evaluates.
   - **kernel/process memory and environment oracles**: `/proc/kcore`, `/dev/mem`,
     `/dev/kmem`, `/proc/self/mem`, `/proc/self/environ` (the daemon's environment
     carries the Enrollment Token on first boot).
-- **`mutate` and Raw Exec stay opt-in.** The shipped file carries no `mutate` allow rules
-  and no `[raw_exec]` allow patterns: deny-by-default leaves every state change exactly
-  where it was — behind a deliberate, local, human widening act (ADR-0002).
-- **The default is a starting point, not a floor.** It is the operator's file the moment
-  it is installed: locally-rooted, remotely-immutable, replaced or narrowed through the
-  same IaC pipeline as any Policy (docs/operations/policy-as-code.md). Nothing in the
-  Relay assumes its presence or shape.
+- **`mutate` and Raw Exec stay opt-in.** The shipped file carries no `mutate` allow rules and
+  no `[raw_exec]` allow patterns, so every state change stays behind a deliberate, local,
+  human widening act (ADR-0002).
+- **The default is a starting point, not a floor.** It is the operator's file once
+  installed: locally-rooted, remotely-immutable, replaced or narrowed through the same IaC
+  pipeline as any Policy (docs/operations/policy-as-code.md). Nothing in the Relay assumes its
+  presence or shape.
 
 ## Recorded residuals (why this list cannot be complete)
 
 Path denies are exact canonical strings (ADR-0018); there is no subtree or wildcard deny.
 The list therefore cannot cover unenumerable secrets: `/etc/ssl/private/*` and other
 site-specific key files, per-pid `/proc/<pid>/{mem,environ}` aliases, shell histories, or
-secrets that land in logs (reachable once the catalog's bounded log tail ships). Two
-directions are named, both deferred beyond v0.2.0: the **typed prefix/subtree path
-matcher** ADR-0018 already deferred, and **output classification in Policy** — rules
-about what results may contain, not only what may run (ADR-0021). Until then, the
-egress-conscious operator narrows `file.read`'s allow from `"*"` to an explicit path set;
-the default deliberately chooses interrogability with a curated deny-list over shipping a
-read posture nobody enables.
+secrets that land in logs (reachable through the catalog's bounded log tail). Two directions
+are named, both deferred beyond v0.2.0: the **typed prefix/subtree path matcher** ADR-0018
+deferred, and **output classification in Policy** (ADR-0021). Until then, the egress-conscious
+operator narrows `file.read`'s allow from `"*"` to an explicit path set; the default
+deliberately chooses interrogability with a curated deny-list over a read posture nobody
+enables.
 
 ## Considered options
 
-- **Ship deny-everything (status quo: no default file).** Rejected: every deployment
-  starts with authoring friction on the safe class, and the observed failure mode is
-  operators reaching for broad Raw Exec regexes instead — the most dangerous path
-  absorbing demand the typed read path should serve.
-- **Pre-allow reads by risk class in the engine** (a `class = "read"` allow rule).
-  Rejected: that *would* touch invariant #3 and ADR-0012's boundary (risk class is
-  blast-radius classification, never a trust classification), and it would make the
-  pre-allowance invisible to the exact-rule attribution in `Decision`. The file
-  enumerates names instead; the engine stays unchanged.
-- **A narrower `file.read` allow-list instead of `"*"` + deny-list.** More restrictive,
-  but a default allow-list either blocks the interrogation use case it exists for or
-  grows into a distro-specific curated catalog we cannot maintain. Chosen shape:
-  wildcard read + authoritative confidentiality deny-list, with the allow-list narrowing
-  documented as the operator's egress-hardening move.
+- **Ship deny-everything (no default file).** Rejected: every deployment starts with
+  authoring friction on the safe class, and operators reach for broad Raw Exec regexes
+  instead, the most dangerous path absorbing demand the typed read path should serve.
+- **Pre-allow reads by risk class in the engine** (a `class = "read"` allow rule). Rejected:
+  that *would* touch invariant #3 and ADR-0012's boundary (risk class is a blast-radius
+  classification, never a trust classification), and would hide the pre-allowance from the
+  exact-rule attribution in `Decision`. The file enumerates names instead.
+- **A narrower `file.read` allow-list instead of `"*"` + deny-list.** More restrictive, but a
+  default allow-list either blocks the interrogation it exists for or grows into a
+  distro-specific catalog we cannot maintain. Chosen: wildcard read + authoritative
+  confidentiality deny-list, with allow-list narrowing documented as the operator's
+  egress-hardening move.
 
 ## Consequences
 
@@ -86,52 +80,49 @@ read posture nobody enables.
   refused; any `mutate` Operation or Raw Exec is refused until explicitly allowed.
 - The file is validated in CI against the real engine: it must parse with the fail-closed
   loader, lint clean (`policy check` semantics), allow the read cases, and deny every
-  deny-listed path, all `mutate` natives, and Raw Exec (`daemon/src/policy.rs` tests).
-- `#288` (read auditing / output-retention) remains the interlock ADR-0021 named: this
-  posture makes reads ubiquitous, so the audit decision governs what those reads leave
-  behind.
-- The shipped catalog's template allowances (ADR-0021) land in this file with the
-  catalog, in the human-merge lane — the default Policy file is Policy surface, always
-  reviewed by a person.
+  deny-listed path, all `mutate` natives, and Raw Exec (tests in
+  `daemon/crates/relay-policy/src/lib.rs` and `daemon/tests/default_policy_strict.rs`).
+- `#288` (read auditing / output-retention) is the interlock ADR-0021 named: this posture
+  makes reads ubiquitous, so the audit decision governs what they leave behind.
+- The default Policy file is Policy surface: changes to it, including the catalog's template
+  allowances, are always reviewed by a person.
 
 ## Amendment (2026-08-10, issue #293): the shipped read catalog, and three more denied paths
 
-The shipped file now also allows the seven `read` Template Operations of the first-party
-catalog (ADR-0021, #293) and mirrors the confidentiality deny-list onto `file.checksum` — a
-digest is a content oracle, so every path denied to `file.read` must be denied to it. A
-Policy rule never creates vocabulary: on a Node without the pack these rules are inert and
-dispatch reports `unsupported`.
+The shipped file also allows the seven `read` Template Operations of the first-party catalog
+(ADR-0021, #293) and mirrors the confidentiality deny-list onto `file.checksum`: a digest is a
+content oracle, so every path denied to `file.read` is denied to it. A Policy rule never
+creates vocabulary: on a Node without the pack these rules are inert and dispatch reports
+`unsupported`.
 
-Pointing `policy check`'s own self-reference lint (#287) at this file also surfaced three
-paths the original list missed, now denied: `/var/lib/relay-daemon/cert.pem`,
-`/usr/local/bin/relay-daemon`, and `/etc/systemd/system/relay-daemon.service`.
+Pointing the self-reference lint (#287) at this file surfaced three paths the original list
+missed, now denied: `/var/lib/relay-daemon/cert.pem`, `/usr/local/bin/relay-daemon`, and
+`/etc/systemd/system/relay-daemon.service`.
 
 **Recorded residual, unchanged in kind:** the template files under
-`/etc/relay-daemon/templates.d/` cannot be denied by exact path — their names are whatever
-the installed packs use, and Policy still has no subtree deny. With `file.read`'s `"*"` allow
-in place, the AI-agent can read a Node's template files (disclosing its vocabulary; it can
-never change them, ADR-0002/0021). `policy check --strict` reports this truthfully rather
-than the file being tuned to silence its own linter, and the remedy is the one this ADR
-already names: replace `file.read`'s wildcard with an explicit path allow-list.
+`/etc/relay-daemon/templates.d/` cannot be denied by exact path (their names are whatever the
+installed packs use, and Policy has no subtree deny). With `file.read`'s `"*"` allow, the
+AI-agent can read a Node's template files, disclosing its vocabulary but never changing them
+(ADR-0002/0021). `policy check --strict` reports this rather than the file being tuned to
+silence its own linter; the remedy is an explicit `file.read` path allow-list.
 
 ## Amendment (2026-10-15): amended by ADR-0033 — the self-reference denies follow the packaged paths
 
-Owner decision, 2026-10-15, recorded in ADR-0033's amendment of that date. The relay-daemon now
+Owner decision, 2026-10-15, recorded in ADR-0033's amendment of that date. The relay-daemon
 installs from an OS package, and packaged and hand-built installs share one binary path,
 `/usr/bin/relay-daemon`, with the packaged unit under `/usr/lib/systemd/system/`. The shipped
-default's self-reference denies — and the self-reference lint that checks a Policy against them
-— cover the binary and unit at those paths, and keep covering
-`/etc/systemd/system/relay-daemon.service` and the drop-in `systemctl edit` writes,
-`/etc/systemd/system/relay-daemon.service.d/override.conf`, by exact path: that is where an
-override of the packaged unit lives, and writing one removes the hardening as surely as editing
-the unit. Policy has no subtree deny, so a drop-in under any other name in that directory is the
-same recorded residual as the Template directory's files.
+default's self-reference denies, and the lint that checks a Policy against them, cover the
+binary and unit at those paths, and keep covering `/etc/systemd/system/relay-daemon.service`
+and the drop-in `systemctl edit` writes,
+`/etc/systemd/system/relay-daemon.service.d/override.conf`, by exact path: an override of the
+packaged unit lives there, and writing one removes the hardening as surely as editing the unit.
+A drop-in under any other name is the same recorded residual as the Template directory's files.
 
 A Node moved from a hand-built install onto the package keeps its live Policy, which the package
-never rewrites, so its denies still name `/usr/local/bin`. The migration documented for that move
-removes the old binary and the old unit under `/etc/systemd/system/` — which would otherwise
-shadow the packaged one — and says to update the Policy's self-reference denies by hand. The
-reason for denying these paths, and everything else this ADR decides, is unchanged.
+never rewrites, so its denies still name `/usr/local/bin`. The documented migration removes the
+old binary and the old unit under `/etc/systemd/system/` (which would otherwise shadow the
+packaged one) and says to update the Policy's self-reference denies by hand. Everything else
+this ADR decides is unchanged.
 
 ## Amendment (2026-10-16): the default hides secrets; the lint's read probes stop at secrets
 
@@ -146,8 +137,7 @@ the unit's override files. The Decision's posture — read pre-allowed, a confid
 deny-list authoritative over it, `mutate` and Raw Exec opt-in — is unchanged, and so is the
 deny of every non-daemon secret the Decision lists.
 
-**What changed in the reasoning.** The deny-list's purpose is confidentiality: a read result
-flows to the model provider, so reading is exfiltration by construction (ADR-0021). That
+**What changed in the reasoning.** The deny-list's purpose is confidentiality (ADR-0021). That
 argument carries no weight for a file whose reader already holds it, and little for one that
 holds no secret. The daemon's binary and unit are public release artifacts, reproducible and
 listed in `SHA256SUMS`; its Policy is reported whole to the Relay in the Policy view
@@ -170,13 +160,11 @@ own strict check.
   the ADR-0021 amendment of this date holds the probe set. Reading a file that holds no secret
   is never a finding.
 - **`policy check --strict` passes on the shipped default**, with the shipped catalog loaded.
-  The 2026-08-10 stance was that the file must not be tuned to silence its linter; that stance
-  stands, and nothing is tuned: the template root stopped being a finding because reading a
-  Template is not something the lint objects to, not because the file or a probe was bent
-  around it. A shipped default that fails its own strict check trains operators to ignore the
-  check. With no template root supplied (`--templates`), the default's allows for the catalog's
-  names are unknown-name findings that `--strict` fails (ADR-0021, 2026-08-10, *Also decided*);
-  that rule is unchanged here, so the check is run with the catalog's template root.
+  The file is still not tuned to silence its linter: the template root stopped being a finding
+  because the lint does not object to reading a Template, not because a probe was bent around
+  it. A shipped default that fails its own strict check trains operators to ignore the check.
+  Without `--templates`, the catalog's names are unknown-name findings that `--strict` fails
+  (ADR-0021, 2026-08-10, *Also decided*), so the check runs with the catalog's template root.
 - **Operator-authored Template bodies are a recorded residual, not a secret.** They never
   travel as Template metadata: no RPC carries a body, and drift visibility stays
   fingerprint-only (ADR-0021). Whether a `file.read` Task may return one is a Policy question
@@ -184,24 +172,21 @@ own strict check.
   `docs/security/threat-model.md` **R37**; the remedy is the one this ADR has always named,
   an explicit `file.read` allow-list in place of the wildcard.
 
-**Residuals.** The lint's write probes are concrete actions against named paths, and the absence
-of a finding is not proof of unreachability (ADR-0021). A drop-in under any name but
-`override.conf`, a Policy fragment under any name in the Policy directory, a Template file under
-a name the probes do not try, or a file in the state directory under a name the probes do not
-try, is reachable by a Raw Exec allow the lint does not flag: **R38**; the operator's control is
-a Raw Exec deny pattern over those directories (ADR-0019). The hardened unit's mount namespace
-refuses the writes under `/etc` and `/usr` unless an operator drop-in relaxes it (`daemon-
-installation.md`, DI-3, DI-5); it does not refuse writes to the state directory, which the
-daemon owns, so the state-directory files the probes do name — the identity key and certificate,
-the CA bundle, the persisted address — are named precisely because a Raw Exec allow is the only
-thing between them and an overwrite that changes the Node's identity or trust root. The lint is
-defense-in-depth under that boundary, as it always was. The 2026-10-15 migration paragraph above
-now reads with one change: the hand update to a migrated Node's Policy is to remove the denies
-for the old binary and unit paths, which the shipped default no longer carries, not to re-point
-them.
+**Residuals.** The lint's write probes are concrete actions against named paths, and absence of
+a finding is not proof of unreachability (ADR-0021). A drop-in under any name but
+`override.conf`, a Policy fragment in the Policy directory, or a Template or state-directory
+file under a name the probes do not try, is reachable by a Raw Exec allow the lint does not
+flag: **R38**. The operator's control is a Raw Exec deny pattern over those directories
+(ADR-0019). The hardened unit's mount namespace refuses writes under `/etc` and `/usr` unless an
+operator drop-in relaxes it (`daemon-installation.md`, DI-3, DI-5), but not writes to the state
+directory, which the daemon owns. The state-directory files the probes name (identity key and
+certificate, CA bundle, persisted address) are named because a Raw Exec allow is the only thing
+between them and an overwrite that changes the Node's identity or trust root. The lint is
+defense-in-depth under that boundary. One change to the 2026-10-15 migration paragraph: the
+hand update to a migrated Node's Policy removes the denies for the old binary and unit paths,
+which the shipped default no longer carries, rather than re-pointing them.
 
-**Consumers.** `daemon-installation.md` (DI-28, DI-39, DI-40; DI-4 and DI-41 retire when the
-change lands); `query.md` QRY-10; `docs/security/threat-model.md` R37 and R38; the design plan
-for v0.6.5, step S12; `policy-as-code.md` and `template-packs.md` where they describe what the
-lint probes; the shipped `daemon/policy.default.toml` and its comments, in the implementing
-change.
+**Consumers.** `daemon-installation.md` (DI-28, DI-39, DI-40; DI-4 and DI-41 retired);
+`query.md` QRY-10; `docs/security/threat-model.md` R37 and R38; the v0.6.5 design plan, step
+S12; `policy-as-code.md` and `template-packs.md` where they describe what the lint probes; the
+shipped `daemon/policy.default.toml` and its comments.

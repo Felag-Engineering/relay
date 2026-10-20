@@ -5,18 +5,17 @@
 
 **Governing:** ADR-0027 (amended 2026-09-15 and 2026-09-16), ADR-0029, invariants #5, #10, #11.
 Behaviour: `docs/specs/approval.md`, `docs/specs/relay-configuration.md`.
-**Backend:** store-backed gate rules, seeded on first boot (#590); step-up (#428); audit.
+**Backend:** store-backed gate rules, seeded on first boot (#590); step-up; audit.
 
-Decided with the owner, 2026-09-16: its own page beside Approvals; the confirm step shows old →
-new and nothing more; no change history. *(2026-10-18: the Approvals page is gone — ADR-0044
-removed the Console's approval surface — so this page sits in **Act** on its own. Whether the
-owner's "cut approvals out of the UI completely" reaches this page too is not settled; see D21.)*
+Decided with the owner, 2026-09-16: its own page; the confirm step shows old → new and nothing
+more; no change history. The page sits in **Act** on its own, since ADR-0044 removed the Console's
+approval surface. Whether "cut approvals out of the UI completely" reaches this page is not
+settled (D21).
 
 ## What this screen is for
 
-Deciding where human attention is spent. This is where the rule that parks a dispatch lives; the
-parked request itself waits on the Control API or in the requesting client, never in the Console
-(ADR-0044).
+Deciding where human attention is spent. The rule that parks a dispatch lives here; the parked
+request waits on the Control API or in the requesting client, never in the Console (ADR-0044).
 
 ## Navigation
 

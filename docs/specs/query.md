@@ -12,12 +12,12 @@ a Node last reported; it does not make a Policy decision, change a Node, or infe
 state.
 
 It also holds one write, which only names what it reads: a **Policy alias**, a human-readable
-name a human `admin` gives a Policy fingerprint so that people can say which Policy they mean
-(*Designed, not built*). An alias changes how a fingerprint is displayed and nothing else.
+name a human `admin` gives a Policy fingerprint (*Designed, not built*). An alias changes how a
+fingerprint is displayed and nothing else.
 
-Read means that the call cannot change Node state, not that its contents are harmless to
-disclose. Registry data includes fleet shape, Labels, Facts, identity provenance, and Policy
-information, so access is attributable and auditable.
+Read means the call cannot change Node state, not that its contents are harmless to disclose.
+Registry data includes fleet shape, Labels, Facts, identity provenance and Policy information, so
+access is attributable and auditable.
 
 ## Surfaces
 
@@ -102,8 +102,8 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   as on the others. A record holds metadata about the read and never its result.
 - **QRY-28** Every registry, Policy-view and vocabulary read on MCP, the Control API and the
   Console goes through the capability read lane, is recorded before content is returned, and
-  fails closed; the adapters hold no reader of their own, MCP no longer resolves Selectors
-  itself, and the Compare screen's exemption is gone (#680).
+  fails closed; the adapters hold no reader of their own, MCP resolves no Selector itself, and
+  the Compare screen has no exemption.
 
 - **QRY-30** Every alias change is recorded on the audit trail with the actor, the fingerprint,
   and the old and new value, and is not made if the record cannot be written.
@@ -164,9 +164,9 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   reports and start in `/proto`.
 - **Invariant 10 and ADR-0009** — MCP, the Control API and the Console are adapters over the
   capability layer and may narrow only. Every registry, Policy-view and vocabulary read on all
-  three goes through the capability read lane; no adapter holds a reader of its own (QRY-28,
-  #680). An alias write is decided in the capability layer, and the Console only exposes it
-  (QRY-29, QRY-35).
+  three goes through the capability read lane; no adapter holds a reader of its own (QRY-28).
+  An alias write is decided in the capability layer, and the Console only exposes it (QRY-29,
+  QRY-35).
 - **Invariant 9 and ADR-0008** — an alias names a fingerprint and never records which Nodes
   should carry it (QRY-32). That is the line against `policy-catalog.md`'s rule that the Relay
   stores no cohort arrangement: an alias attaches to a fingerprint only, never to a Node, Label,
@@ -179,19 +179,17 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   vocabulary is local, per-Node and report-only (QRY-11, QRY-12). ADR-0021 decides that the
   template-set fingerprint travels and the templates do not (QRY-2, QRY-10); both *Future work*
   items below would amend it and land only after that amendment.
-- **ADR-0025** — query access is audited and fails closed when it cannot be recorded (QRY-16,
-  QRY-17). Both shortfalls against its "what they aimed it at" rule — the Compare screen's
-  unrecorded read and `list_operations` recording no Node ID — are closed (QRY-26, QRY-28, #680).
-  Retention and output rules are `audit-and-read-lane.md`'s.
+- **ADR-0025** — query access is audited, records what it was aimed at, and fails closed when it
+  cannot be recorded (QRY-16, QRY-17, QRY-26, QRY-28). Retention and output rules are
+  `audit-and-read-lane.md`'s.
 
 ## Seams and proof
 
 The capability read lane holds the registry-query methods for enumeration and the single-Node
-read, with their access-recording requirement; every surface reads through it and none holds a
-reader of its own (QRY-28). The Policy view and the Template vocabulary are
-read from caches the Tunnel handler fills; nothing else writes them. `make verify` is sufficient
-for every claim here; a change to what the daemon reports starts in `/proto` and needs the
-proto gates.
+read, with their access-recording requirement; every surface reads through it (QRY-28). The Policy
+view and the Template vocabulary are read from caches only the Tunnel handler fills. `make verify`
+is sufficient for every claim here; a change to what the daemon reports starts in `/proto` and
+needs the proto gates.
 
 ### What proves each claim
 
@@ -268,10 +266,9 @@ Claims with **no row**, and so nothing checking them:
 
 ## Future work
 
-The first two items the owner decided in principle on `2026-09-14` and `2026-09-21`, and they
-cannot be Designed here: each reverses a decision in ADR-0021 (and ADR-0034), so the amendment
-lands first, in the session that migrates `policy.md`, with the threat model and `GLOSSARY.md` as
-its consumers. The rest is ordinary Future work.
+The owner decided the first two in principle (`2026-09-14`, `2026-09-21`), but they cannot be
+Designed here: each reverses a decision in ADR-0021 (and ADR-0034), so that amendment lands first,
+when `policy.md` migrates, with the threat model and `GLOSSARY.md` as its consumers.
 
 - **Template command bodies cross the wire.** The relay-daemon reports each Template Operation's
   body with its descriptor, and the Policy view shows it verbatim: a Node tells the Relay what it
@@ -291,10 +288,9 @@ its consumers. The rest is ordinary Future work.
 - **Template vocabulary on the Console Node detail**, distinguishing "never reported" from "none
   installed".
 - **Policy aliases beyond the Console.** The alias on Control API and MCP reads, and a Control API
-  write. Both are held back for one reason: either would hand an AI-agent — a machine Account on
-  both surfaces (ADR-0010) — an `admin`'s prose name for a Policy, an assertion it could reason
-  from in place of the fingerprint it targets by. Exposing one is a decision about that, not an
-  adapter's to make alone.
+  write. Either would hand an AI-agent — a machine Account on both surfaces (ADR-0010) — an
+  `admin`'s prose name for a Policy, an assertion it could reason from in place of the
+  fingerprint it targets by. That is a decision, not an adapter's to make alone.
 - **Roles tighter than `viewer`** for sensitive fleet data, if a tenant, delegated-access or
   data-classification need appears.
 
@@ -313,9 +309,7 @@ adopt this spec at their migration: `operations-and-templates.md` (states Select
 `list_operations` as current; it is QRY-25), `policy.md` (states template bodies in the Policy view
 as current; see *Future work*), `audit-and-read-lane.md` (says MCP `describe_node` returns peer
 counts; QRY-5). `audit-and-read-lane.md` lists the audit kinds and does not yet name the
-alias-change record (QRY-30); it adopts it at its migration. `selectors-and-labels.md` and
-`audit-and-read-lane.md` no longer disagree about Selector resolution or MCP read records: #680 made
-both statements true (QRY-28).
+alias-change record (QRY-30); it adopts it at its migration.
 
 ## Retired
 

@@ -2,25 +2,25 @@
 
 > **Superseded (2026-09-20).** The Console execution surface this brief argued for is decided in
 > [ADR-0026](../adr/0026-admin-console-execution-surface.md), and the live per-screen
-> specification is [docs/design/console/](console/), cited from source; this file's own status
-> line below already records that move. It is kept as the pre-ADR design intent.
+> specification is [docs/design/console/](console/), cited from source. This file is kept as the
+> pre-ADR design intent, in its 2026-08-07 wording.
 >
-> **"Plan" below usually means the Policy preflight.** ADR-0038 gave "Plan" to an approved route
-> of execution after this was written, and on 2026-09-20 the owner ruled (#575, D16 in
+> **"Plan" below usually means the Policy preflight.** The owner ruled (#575, D16 in
 > [docs/design/console/99-open-decisions.md](console/99-open-decisions.md)) that the Console's
-> composer says **Preflight**. D16 keeps the word where it means the approved route — verbatim:
-> *the approval object, the Job's Plan block and every "plan hash" keep the word, and the shared
-> Plan renderer keeps its name* — and the wire option is still spelled `plan` until the code
-> follows. So read a "Plan" that means the composer's no-execution preview as **preflight**, and
-> leave the rest; this file keeps its 2026-08-07 wording; the live vocabulary is
-> [docs/design/console/](console/), swept in #663.
+> composer says **Preflight**, after ADR-0038 gave "Plan" to an approved route of execution.
+> D16 keeps the word where it means the approved route — *the approval object, the Job's Plan
+> block and every "plan hash" keep the word, and the shared Plan renderer keeps its name* — and
+> the wire option is still spelled `plan`. Read a "Plan" that means the composer's
+> no-execution preview as **preflight**, and leave the rest.
+>
+> **The Console decides no approvals**
+> ([ADR-0044](../adr/0044-the-console-does-not-decide-approvals.md)). The approval queue, the
+> approval object and the Approver journey below are retired; see
+> [console/08-approval-object.md](console/08-approval-object.md).
 
-**Status:** draft from the 2026-08-07 planning session, for owner ratification. **Amended
-2026-08-24:** the word `outdated` here originally covered Policy-fingerprint drift; it is pinned to
-ADR-0014's meaning (below the dispatch minimum) by ADR-0034, and drift is an observation rather
-than a flag. Per-screen specifications now live in `console/`. This is the
-design plan #264 references; it feeds the #264 ADR (Console execution surface), the
-v0.5.0 approval-record schema, and the v0.6.0/v0.7.0 Console milestones. Companions:
+**Status:** draft from the 2026-08-07 planning session. **Amended 2026-08-24:** `outdated`
+means ADR-0014's below-the-dispatch-minimum (ADR-0034); Policy-fingerprint drift is an
+observation, not a flag. This is the design plan #264 references. Companions:
 `console-backend-coverage.md` (what backend each screen needs),
 `approval-and-attribution.md` (the identity/approval model the screens render),
 `console-wireframe-brief.md` (designer-facing prompts for the four key screens).
@@ -29,34 +29,31 @@ v0.5.0 approval-record schema, and the v0.6.0/v0.7.0 Console milestones. Compani
 
 The Console is the **trust-building wedge**: a skeptical operator probes the boundary
 themselves — composer → Plan → deny with the rule that fired — and *then* hands the keys
-to the AI. The wall is the same wall. Every design decision serves one goal: **make the
-boundary legible.** The product's pitch ("distrust is the architecture") must be visible
-in the interface, not asserted in the README.
+to the AI-agent. The wall is the same wall. Every design decision serves one goal: **make the
+boundary legible**, in the interface rather than in the README.
 
 Two consequences run through every screen:
 
 1. **A deny is not an error.** It is the product working. Denies render calm and
    informative — the rule that fired, verbatim, linked to the Node's effective-Policy
    view — never as a red failure state.
-2. **Plan before apply, everywhere.** No mutating action without its Plan rendered first
-   (mirrors the CLI's `--apply` discipline; it *is* the confirmation ladder's
-   self-confirmation rung).
+2. **Plan before apply, everywhere.** No mutating action without its Plan rendered first; it
+   *is* the confirmation ladder's self-confirmation rung.
 
 ## Technical frame (ADR-0009, unchanged)
 
 Server-rendered Go + HTMX, internal-only, SSE for liveness. No SPA, no client build
 pipeline. Strict CSP (no inline script), CSRF tokens on every mutating route, SameSite
-session cookies — the execution phase (v0.7.0) inherits this hardening from the
-monitoring phase (v0.6.0), so it is built once, first.
+session cookies. The execution phase (v0.7.0) inherits this hardening from the monitoring
+phase (v0.6.0), so it is built once, first.
 
 ## Journeys
 
 - **Skeptical operator** (trust journey): watch the fleet live → probe the boundary in
   the composer → read the deny → widen Policy deliberately in their IaC → eventually
   delegate to the AI-agent. The Console's success metric is this journey completing.
-- **Approver** ("Mike"): notification (elicitation/webhook/link) → approval queue → one
-  approval object read in under a minute → decide with step-up. Fatigue-resistant by
-  design (see Approval object below).
+- **Approver** ("Mike") *(retired, ADR-0044)*: notification → one approval object read in
+  under a minute → decide with step-up.
 - **Auditor**: "who asked / for whom / who approved / what happened" in one query, with
   the verified/asserted distinction visible at a glance.
 - **Admin**: enrollment tokens, Node revocation, Accounts/tokens, Freeze — every
@@ -69,22 +66,21 @@ monitoring phase (v0.6.0), so it is built once, first.
 - Fleet view: live registry, **group-by-first** (see Organizing principle) — group by any
   label key with rollup cards; per-Account saved views (landing = the operator's slice);
   view-scoped delta lane; liveness, facts summary, `node:`/`tag:`/`relay:` labels (the
-  three namespaces visually distinct — `node:` and `tag:` quiet, `relay:` is the security
-  lane and must read as such), Policy + template-set fingerprints, `state:` labels (ADR-0034 — `outdated` means below the
-  dispatch minimum, never fingerprint divergence).
+  three namespaces visually distinct — `node:` and `tag:` quiet, `relay:` the security
+  lane), Policy + template-set fingerprints, `state:` labels (ADR-0034 — `outdated` means
+  below the dispatch minimum, never fingerprint divergence).
 - Node detail: facts, effective Policy (rendered from `policyview`), template
   vocabulary, cert/enrollment info, recent Tasks.
 - Jobs: list + detail — per-Node outcomes with the full outcome vocabulary
   (`success / denied(rule) / unreachable / unsupported / cancelled / timeout`) grouped,
   not listed; list filterable to "Jobs that touched my current fleet view".
 - Audit trail: filterable; verified/asserted lanes distinct (below).
-- Approval queue, **read-only**: pending approvals with their Plans and quorum state.
+- Approval queue, read-only *(retired, ADR-0044)*.
 - Enrollment Token inventory, CA/cert lifecycle, Freeze state (global banner on every
   screen when engaged).
 
 **v0.7.0 — Administration & Execution**
-- Approval queue, deciding: approve/deny with step-up; batch expansion; partial-quorum
-  display.
+- Approval queue, deciding *(retired, ADR-0044)*.
 - Composer: Operation picker driven by `list_operations` schemas (risk-class badge,
   argument constraints legible before submission — the ADR-0001 legibility bar applies
   to humans too), Selector input with live match-count vs blast cap, Plan rendering,
@@ -93,130 +89,111 @@ monitoring phase (v0.6.0), so it is built once, first.
   mint/revoke — all step-up.
 - Lifecycle: token mint/revoke, Node revoke, Freeze engage/release.
 - Labels (ADR-0020): bulk tag-from-filter in the fleet view (`tag:`, `operator`, no
-  step-up — the fleet view's one and only action); `relay:` set/remove on Node detail
-  (`admin` + step-up) — the quarantine lever, sitting beside Revoke and Freeze as the
-  incident ladder quarantine < revoke < Freeze.
+  step-up — the fleet view's one action); quarantine on Node detail (`admin` + step-up),
+  beside Revoke and Freeze as the incident ladder quarantine < revoke < Freeze. Who writes
+  `relay:` is invariant 7 as amended: only the quarantine act itself
+  (`docs/specs/quarantine-node.md`).
 
-## Key screen requirements (these shape backend schemas — read before v0.5.0 lands)
+## Key screen requirements
 
-**Plan rendering** (composer, approval queue, Job detail share one component):
-fan-out summary ("matches 12 Nodes, mutate-cap 100 ✓"), risk-class badge, per-Node
-verdicts *grouped* ("10 allow · 1 deny(rule R) · 1 unknown(offline)") with expansion,
-the plan-hash visible (it is what gets approved).
+**Plan rendering** (composer and Job detail share one component): fan-out summary
+("matches 12 Nodes, mutate-cap 100 ✓"), risk-class badge, per-Node verdicts *grouped*
+("10 allow · 1 deny(rule R) · 1 unknown(offline)") with expansion, the plan hash visible.
 
 **Deny legibility:** the failing rule verbatim + link to the Node's effective-Policy
 view. The operator must be able to go from "denied" to "I understand exactly why, and
 what file to change in my IaC" without leaving the Console.
 
-**The approval object** — the highest-stakes rendering in the system; the v0.5.0
-approval-record schema must store what this needs:
-- Requester (verified) and `on_behalf_of` (asserted) — visually distinct trust levels.
-- The Plan summary (above) — Relay-authored, never the agent's phrasing.
-- **Diff against the last approved similar action** (same op/selector shape): "same as
-  what you approved Tuesday, except: fan-out grew 3 → 12." Fatigue dies here or nowhere.
-- Quorum state ("1 of 2 — mike signed, 2h ago") and TTL countdown.
-- Batch grouping: a declared batch renders as one card with member expansion, one
-  decision; never forty cards.
-- Approve and Deny equally prominent; no default-focused Approve; batch approval
-  requires expanding the batch at least once. No dark patterns on the approval path —
-  the guarantee is only as good as the attention the UI extracts.
+**The approval object** *(retired, ADR-0044)*. Its requirements shaped the approval-record
+schema: verified requester and asserted `on_behalf_of` visually distinct; a Relay-authored
+Plan summary; a **diff against the last approved similar action** ("same as Tuesday, except:
+fan-out grew 3 → 12"), the anti-fatigue mechanism; quorum state and TTL; a batch as one card;
+Approve and Deny equally prominent, with no dark patterns.
 
-**Audit lanes:** one consistent visual grammar for verified vs asserted everywhere
-(e.g. solid chip = Relay-verified, outlined chip = caller-asserted). An asserted
-"ops-team" must never render with the same authority as a verified Account. This grammar
-is also the approval object's requester line.
+**Audit lanes:** one visual grammar for verified vs asserted everywhere (solid chip =
+Relay-verified, outlined chip = caller-asserted). An asserted "ops-team" must never render
+with the same authority as a verified Account.
 
 **Scale-ready results:** Job results must be legible at 3 Nodes and at 10k. Until the
 v0.9.0 aggregation primitive lands, group-by-outcome with counts + sampled expansion;
 the layout anticipates histogram-by-output so v0.9.0 slots into the same component.
 
 **Live-but-stable:** SSE updates must never reflow content under a cursor mid-decision.
-Approval cards and rendered Plans are pinned once open; liveness is for lists and
-counters, not for the thing being read.
+Rendered Plans are pinned once open; liveness is for lists and counters, not for the thing
+being read.
 
 ## Organizing principle: Relay-centric data, user-centric organization
 
 The Console shows the operator *their* fleet, not Relay's bookkeeping. The facts on
-screen are necessarily Relay's — liveness, versions, Policy drift, Job history — but the
-*structure* of every screen comes from the customer's own taxonomy: their `node:` labels
-(written in their IaC), their `tag:` labels (ADR-0020). Concretely:
+screen are Relay's — liveness, versions, Policy drift, Job history — but the *structure* of
+every screen comes from the customer's own taxonomy: their `node:` labels (written in their
+IaC) and their `tag:` labels (ADR-0020). Concretely:
 
 - **Group-by-first fleet view**: group by any label key; the user's names (`prod`,
   `payments`, `web`) become the headline structure as rollup cards ("prod · 4,012 nodes ·
-  3 offline · 12 on an older Policy fingerprint"); Relay's machinery view is just "group by nothing".
+  3 offline · 12 on an older Policy fingerprint"); Relay's machinery view is just "group by
+  nothing".
 - **Saved views per Account**: landing is the operator's slice (filter + grouping), not
   the global registry; the "since you last looked" delta lane scopes to the current view.
-- **Jobs mirror it**: the Jobs list filters to "Jobs that touched my view", not only the
-  global stream.
-- **System Model socket**: the rollup-card/group component is designed so a post-1.0
-  Service (ADR-0008, v1.1.0) is just a named, shared group with provenance — the semantic
-  layer arrives as a data upgrade, not a redesign.
+- **Jobs mirror it**: the Jobs list filters to "Jobs that touched my view".
+- **System Model socket**: the rollup card is designed so a post-1.0 Service (ADR-0008,
+  v1.1.0) is just a named, shared group with provenance — a data upgrade, not a redesign.
 
 Two boundaries keep this honest. (1) **No health theater**: rollups say
-offline/outdated/quarantined — connection and lifecycle truth Relay actually knows —
-never CPU, latency, or app health; the Console must not imitate a monitoring product.
-(2) **Observations, never desired state**: a group card never grows "expected N / found
-M / reconcile" affordances — Relay does not auto-reconcile (invariant #9).
+offline/outdated/quarantined — truth Relay actually knows — never CPU, latency or app
+health. (2) **Observations, never desired state**: a group card never grows "expected N /
+found M / reconcile" affordances — Relay does not auto-reconcile (invariant 9).
 
 ## Fleet-scale display patterns (legible at 10 and at 10,000 Nodes)
 
 The governing rule: **the UI computes what is interesting; the human only ever reads
-exceptions.** At fleet scale a list is a bug — every screen renders the *mode* (the normal
-state) as one compressed, calm line and spends its pixels on deviations. The patterns,
-shared across screens:
+exceptions.** At fleet scale a list is a bug: every screen renders the *mode* (the normal
+state) as one calm line and spends its pixels on deviations.
 
-- **Histogram-by-output** (the v0.9.0 aggregation primitive; grouped-outcomes-with-counts
-  until then): never show 9,800 results — cluster identical outputs and render "9,797
-  Nodes: identical output (view one) · 3 differ," outliers expanded by default. Same move
-  for facts and versions ("9,990 on daemon 1.4.2 · 10 on 1.3.9").
+- **Histogram-by-output** (the v0.9.0 aggregation primitive; grouped outcomes with counts
+  until then): cluster identical outputs — "9,797 Nodes: identical output (view one) · 3
+  differ," outliers expanded by default. Same for facts and versions ("9,990 on daemon 1.4.2
+  · 10 on 1.3.9").
 - **The pixel wall**: fleet liveness as a grid of tiny colored cells, one per Node —
-  10,000 fit on one screen and preattentive vision finds the single amber cell with zero
-  reading. The fleet view's at-a-glance layer above the table; click a cell to drill.
+  10,000 fit on one screen and the single amber cell is found with zero reading. Click a
+  cell to drill.
 - **Faceted filtering with counts**: a slim rail of facets (OS, daemon version, labels,
-  liveness), each showing its value distribution as counts. The facets *are* the summary
-  statistics; clicking one filters. Distribution anomalies are visible before reading a
-  single row.
-- **Selector-as-search**: the fleet view's filter box is literally the Selector language
-  used for targeting. Browsing trains operators in targeting, and "what would this Job
-  hit?" is answered by the filter already on screen — one mental model, and very much the
-  trust-building wedge.
+  liveness), each showing its value distribution as counts; clicking one filters.
+- **Selector-as-search**: the fleet view's filter box is the Selector language used for
+  targeting, so browsing trains targeting and "what would this Job hit?" is already on
+  screen.
 - **Anomaly-first ordering**: default sort is by deviation/rarity, never alphabetical.
-  The weird Node is row one.
 - **Deltas, not states**: the SSE seam feeds a "what changed" lane — since last look:
-  2 enrolled, 1 offline, 3 changed Policy fingerprint. The operator's daily question is "what's
-  different," not "what's everything."
+  2 enrolled, 1 offline, 3 changed Policy fingerprint.
 - **Progressive-disclosure ladder, uniformly**: count → segmented bar → groups → sampled
   members → full list only on explicit demand. Never skip a rung.
 - **Pin-and-compare**: select 2–3 Nodes for a side-by-side diff of facts / effective
   Policy — the "why did only this one deny" flow in one screen.
 
-Elegance falls out structurally: if the default render of 10,000 Nodes is one segmented
-bar, a pixel wall, and three interesting rows, the screen cannot get busy.
+If the default render of 10,000 Nodes is one segmented bar, a pixel wall and three
+interesting rows, the screen cannot get busy.
 
 ## What the Console never shows
 
-Relay config (blast caps, listeners, gate rules, `console_execution`) — no settings
-pages, per invariant #11. Policy editing — view/query only. `node:` label editing.
-With `console_execution = off`: the composer and every execution route are absent, not
-disabled — the strict tier is a smaller Console, not a greyed-out one.
+The security floor (listeners, `console_execution` and the rest of invariant 11's list) as
+anything but read-only; reach-bounding settings such as blast caps and gate rules are
+`admin`-editable with step-up (`console/18-settings.md`, `console/19-approval-rules.md`).
+Policy editing — view/query only. `node:` label editing. With `console_execution = off`,
+the composer and every execution route are absent, not disabled: the strict tier is a
+smaller Console, not a greyed-out one.
 
 ## Open design questions
 
-- Visual identity: parked behind #282 (naming diligence) — ship the phases on a plain,
-  fast, unbranded look; do not spend on identity yet.
-- **Approvals on a phone**: approvers arrive from links (elicitation/webhook). The
-  decision pages (approval object + step-up) must be responsive and self-contained even
-  though the Console is otherwise desktop-internal; on-call approval is a primary flow,
-  not an afterthought. Step-up mechanism on mobile (passkey?) needs a decision in the
-  v0.5.0/v0.7.0 seam.
 - OIDC login UX and IdP-group display (when federated teams land).
+
+Settled since: visual identity (#282 closed; `docs/brand/`), and approvals on a phone
+(the Console decides none, ADR-0044).
 
 ## Deliverable order
 
-1. This brief (owner ratifies / edits).
+1. This brief.
 2. HTML wireframes of the four key screens — fleet view, Job detail, approval object,
    composer-with-Plan — iterated before any HTMX is written.
 3. The #264 ADR — **written: [ADR-0026](../adr/0026-admin-console-execution-surface.md)**
-   (supersedes ADR-0009's execution clause, amends
-   invariant #10).
+   (supersedes ADR-0009's execution clause, amends invariant 10).
 4. v0.6.0 build per `console-backend-coverage.md` sequencing.

@@ -14,16 +14,14 @@ Policy preflight answers *"what would happen if I ran this?"* without running it
 the same Operation and the same Selector it would dispatch, and gets back a per-Node verdict —
 allow, deny, unsupported, or unknown — with the rule that decided each deny.
 
-It exists so that the preview and the execution cannot disagree. Anyone can build a preflight
-that guesses; the guess is worthless the moment it diverges, and worse than worthless if a caller
-trusts it. So the verdicts here come from **the same engine that will decide at execution time**,
-asked the same question, live.
+It exists so that the preview and the execution cannot disagree. A preflight that guesses is
+worse than useless once a caller trusts it, so the verdicts come from **the same engine that
+will decide at execution time**, asked the same question, live.
 
-That makes preflight the mechanism behind two things the product promises: preflight-before-apply
-as a guardrail — opt-in on MCP and the Control API, mandatory before every apply where a
-surface makes it so (the Console, PF-21) — and denials that teach: an AI-agent that can ask
-"would this be allowed?" and be told which rule says no does not need to discover Policy by
-tripping over it.
+That makes preflight the mechanism behind two product promises: preflight-before-apply as a
+guardrail — opt-in on MCP and the Control API, mandatory before every apply where a surface
+makes it so (the Console, PF-21) — and denials that teach: an AI-agent told which rule says no
+does not need to discover Policy by tripping over it.
 
 ## Surfaces
 
@@ -87,8 +85,8 @@ Seven differences from execution, each deliberate:
   carries no preview flag. A flag means one dropped or defaulted bit turns a preview into real
   execution; a separate message type **has no execution code path at all.**
 
-That is the same reasoning as the unexported dispatch constructor in `execution.md`: make the
-dangerous thing structurally unreachable rather than conditionally skipped.
+As with the unexported dispatch constructor in `execution.md`, the dangerous thing is
+structurally unreachable rather than conditionally skipped.
 
 ### The four verdicts, and why they are four
 
@@ -111,10 +109,9 @@ dangerous thing structurally unreachable rather than conditionally skipped.
   Either way a real dispatch to that Node reports `unsupported` with the same explanation.
   *(Amended 2026-10-02 for ADR-0042: the Relay-excluded form.)*
 
-`unsupported` and `unknown` are distinct from `deny` and from each other, and collapsing any pair
-would lose information a caller needs. A denial is a Policy decision to argue with; an
-unsupported Operation is a vocabulary gap to fill with a Template; an unknown is a Node to go
-look at.
+The verdicts stay distinct because each calls for a different response: a denial is a Policy
+decision to argue with, an unsupported Operation is a vocabulary gap to fill with a Template,
+and an unknown is a Node to go look at.
 
 ### Preflight/apply parity
 
@@ -184,13 +181,13 @@ A preflight refuses in fewer cases than a dispatch, and the difference is the po
 
 The Relay-side half lives in the capability layer beside dispatch and shares its seams; the query
 goes out over the same `Conduit` that sends Tasks, through a method that carries no Task ID.
-Tested at the capability seam and again through MCP, because preflight/apply parity is a claim
-about what a *caller* sees. The Relay's wire conversion (argv and query fields round-tripping
-into the proto message) is tested beside the dispatch router, and the daemon half in its
-dispatch module. `make verify` covers every row below.
+It is tested at the capability seam and again through MCP, because parity is a claim about what
+a *caller* sees. The Relay's wire conversion (argv and query fields round-tripping into the
+proto message) is tested beside the dispatch router, and the daemon half in its dispatch module.
+`make verify` covers every row below.
 
-Test names still say `Plan` — `TestMCP_Plan_PlanVsRealRunParity` and its neighbours — because
-they are the names in the tree. They are renamed by the PR that lands PF-19, not by this spec.
+Test names still say `Plan` (`TestMCP_Plan_PlanVsRealRunParity` and its neighbours); the PR
+that lands PF-19 renames them.
 
 ### What proves each claim
 
@@ -228,9 +225,8 @@ Claims with **no row**, and so nothing checking them:
 | Over-cap preflight | Queries **nothing**; reports the count and returns | *(none)* |
 | Offline Nodes | Never queried; resolved to `unknown` without a round trip | *(none)* |
 
-There are no benchmarks in this repository. A preflight at the read cap is the same sequential
-round-trip cost as a dispatch, which matters because preflighting before applying is meant to be
-cheap enough that a caller always does it.
+There are no benchmarks in this repository. A preflight at the read cap costs the same
+sequential round trips as a dispatch — cheap enough that a caller should always preflight.
 
 ## Designed, not built
 
@@ -281,16 +277,13 @@ cheap enough that a caller always does it.
 
 ## Open questions
 
-- **`execution.md` and `operations-and-templates.md` still say the Relay excludes Nodes that do
-  not report a Template at Selector resolution and reports `unsupported` itself.** The owner
-  decided on `2026-09-20` that the daemon answers `unsupported` after being queried (PF-11,
-  ADR-0021); both neighbours are still `aspirational` and must adopt this at their migration.
-  Until they do, PF-2's "same Selector resolution" is read with PF-11 winning.
 - **An empty Selector matches every Node on both paths and is refused by neither.**
-  `execution.md` says dispatch refuses an empty Selector; `selectors-and-labels.md` says it matches
-  every Node for reads and is refused for dispatch. The code refuses it on neither path. Settle in
-  the `selectors-and-labels.md` and `execution.md` migrations; this spec then follows whatever
-  dispatch does (PF-2).
+  `execution.md` and `selectors-and-labels.md` say dispatch refuses it; the code refuses it on
+  neither path. Settle in those two specs' migrations; this spec then follows whatever dispatch
+  does (PF-2).
+
+Who answers `unsupported` for a Node that does not report a Template is settled by ADR-0042
+(PF-11).
 
 ## Retired
 

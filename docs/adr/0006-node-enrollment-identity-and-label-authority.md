@@ -12,62 +12,57 @@ backed by passive certificate expiry.
 ## Enrollment at scale
 
 The Enrollment Token is the *enrollment* credential, distinct from the per-Node *identity*
-certificate. A single reusable token lets config-management (e.g. Ansible) register hundreds
-of Nodes in a loop while each Node still receives its own certificate. Reusable-token risk is
-bounded by short TTL, scoping, instant revocation, and the fact that the token can only enroll
-— never run Operations.
+certificate. One reusable token lets config management (e.g. Ansible) register hundreds of
+Nodes in a loop while each Node still gets its own certificate. The risk is bounded by short
+TTL, scoping, instant revocation, and the token's only power being to enroll, never to run
+Operations.
 
 ## Certless enrollment and Relay-generated identity
 
 The `Enrollment.Enroll` unary RPC is served over **server-authenticated TLS without a client
-certificate**. This is the only method in the certless allowlist
-(`Enrollment_Enroll_FullMethodName`); all other RPCs — including the Tunnel stream — remain
-strictly mTLS-required and are unaffected.
+certificate**. It is the only method in the certless allowlist
+(`Enrollment_Enroll_FullMethodName`); every other RPC, the Tunnel stream included, requires mTLS.
 
-The transport layer (`tls.VerifyClientCertIfGiven`) permits certless connections at the TLS
-level; the per-RPC interceptors enforce the default-deny rule and consult the allowlist to pass
-Enroll through without a verified client cert. Any presented (but unverified) client cert is
-still cryptographically rejected at the TLS layer.
+The transport layer (`tls.VerifyClientCertIfGiven`) admits certless connections; the per-RPC
+interceptors deny by default and consult the allowlist to pass Enroll through. A client cert
+that is presented but fails verification is still rejected at the TLS layer.
 
-The `node_id` assigned to an enrolling Node and the CN in the issued certificate are both
-**Relay-generated at enrollment time**. The CSR subject submitted by the daemon is discarded;
-`SignCSR` sets `CN = node_id` authoritatively. A daemon cannot choose or influence its own
-identity. This is a hard security invariant (ADR-0006) that must not be relaxed.
+The `node_id` and the CN in the issued certificate are **Relay-generated at enrollment**. The
+daemon's CSR subject is discarded and `SignCSR` sets `CN = node_id`. A daemon cannot choose or
+influence its own identity. This is a hard security invariant and must not be relaxed.
 
 ## Certificate renewal over mTLS
 
-Short-lived identity certificates (~14 days) are renewed before expiry over the Node's
-**existing mTLS connection** via a dedicated `Enrollment.Renew` unary RPC — no Enrollment
-Token, same `node_id`, same registry entry and provenance.
+Identity certificates are renewed before expiry over the Node's **existing mTLS connection**
+by a dedicated `Enrollment.Renew` unary RPC: no Enrollment Token, same `node_id`, same registry
+entry and provenance.
 
 ### Protocol
 
-`RenewRequest` carries only a PEM CSR. The CSR supplies **only the new public key**; `node_id`
-and the certificate CN are derived exclusively from the **verified TLS peer cert CN** (via
-`transport.NodeIDFromContext`) and never from the CSR subject. `SignCSR` sets `CN = node_id`
-authoritatively as it does at enrollment. The daemon cannot choose or influence its renewed
-identity.
+`RenewRequest` carries only a PEM CSR, which supplies **only the new public key**. `node_id`
+and the CN come exclusively from the **verified TLS peer cert CN** (via
+`transport.NodeIDFromContext`), never from the CSR subject, and `SignCSR` sets `CN = node_id` as
+at enrollment.
 
 `RenewResponse` echoes `node_id`, the new PEM certificate, and the CA bundle. The daemon
-asserts `resp.node_id == persisted node_id` and **refuses to persist** if they differ — the
+asserts `resp.node_id == persisted node_id` and **refuses to persist** if they differ, the
 more restrictive option on the privileged side.
 
 ### Auth model
 
-`Enrollment.Renew` is **not** in the certless allowlist (`certless` map in `main.go`). The
-per-RPC interceptor (`UnaryServerInterceptor`) therefore requires a verified client certificate,
-making Renew automatically mTLS-required with no interceptor changes. Enroll
-(token-authenticated, certless) and Renew (cert-authenticated over mTLS) are different auth
+`Enrollment.Renew` is **not** in the certless allowlist (`certless` map in `main.go`), so the
+per-RPC interceptor (`UnaryServerInterceptor`) requires a verified client certificate for it.
+Enroll (token-authenticated, certless) and Renew (cert-authenticated over mTLS) are two auth
 models sharing one service.
 
 ### Registry
 
-The registry is **not touched** by Renew: no `Upsert`, no label changes, no new
-`EnrollingTokenID`. This structurally preserves provenance and relay-space labels from initial
-enrollment. The registry's `CertFingerprint` reflects the renewed cert only after the daemon's
-**next Hello `Upsert`** (on reconnect). During the renewal margin (~3.5–7 days before expiry)
-the fingerprint is stale relative to the live client cert. **Operators must not treat the
-registry fingerprint as a liveness assertion of the current live client cert.**
+Renew does **not touch** the registry: no `Upsert`, no label changes, no new
+`EnrollingTokenID`, so provenance and relay-space labels from enrollment are preserved. The
+registry's `CertFingerprint` reflects the renewed cert only after the daemon's **next Hello
+`Upsert`** (on reconnect), and until then is stale relative to the live client cert.
+**Operators must not treat the registry fingerprint as a liveness assertion of the current live
+client cert.**
 
 ### Jittered scheduling
 
@@ -77,20 +72,19 @@ The daemon schedules renewal at a random fraction **[50%, 75%]** of the cert lif
 - This leaves [84 h, 168 h] (3.5–7 days) of margin for retries and failure recovery.
 - 100k+ Nodes spread their renewals over ~3.5 days rather than hitting the Relay simultaneously.
 
-On RPC failure, the daemon retries with bounded jittered backoff (up to ~1 hour cap). It never
-stops retrying while the cert is still valid — the large margin absorbs extended outages.
+On RPC failure the daemon retries with bounded jittered backoff (capped at ~1 hour), and never
+stops while the cert is still valid; the margin absorbs extended outages.
 
 ### Deferred: live-connection reconnect
 
-The renewed cert is adopted on the **next `connect_mtls`** (process restart or reconnect). The
-live mTLS session continues with the old cert until then. This is safe: TLS does not re-validate
-a cert mid-session, and the renewal fires with days of margin before expiry. Forcing an
-immediate reconnect to adopt the new cert on the live connection is **out of scope** for this
-milestone.
+The renewed cert is adopted on the **next `connect_mtls`** (process restart or reconnect); the
+live session keeps the old cert until then. This is safe: TLS does not re-validate a cert
+mid-session, and renewal fires days before expiry. Forcing an immediate reconnect to adopt the
+new cert was left **out of scope**.
 
 ## Label authority — two non-overlapping namespaces, each immutable from the other side
 
-Labels are the routing input for Operations (remote code execution), so authority over them is
+Labels are the routing input for remote code execution, so authority over them is
 security-critical. The two namespaces have **opposite ownership**, and neither side can touch
 the other's:
 
@@ -104,8 +98,7 @@ the other's:
   Node.** They are reserved for the **security-sensitive lane**: quarantine, emergency cohorts,
   and any targeting a compromised Node must not be able to attract-into or evade.
 
-Because the namespaces cannot collide, each side augments labels without overriding the other —
-the non-override rule is structural in both directions.
+Because the namespaces cannot collide, the non-override rule is structural in both directions.
 
 **2026-08-07 — third namespace added:** [ADR-0020](0020-tag-labels-operator-grouping-namespace.md)
 adds operator-set **`tag:…`** grouping labels (Relay-stored, Node-immutable, never a valid
@@ -124,12 +117,9 @@ quarantine lever). The authority rules above for `node:`/`relay:` are unchanged.
 - A token scoped to stamp `relay:env=prod` makes bulk-enrolled Nodes provably prod for the
   security lane, without per-Node human label assignment.
 - **Accepted limitation:** a compromised Node can forge its own `node:` labels. Routine
-  targeting accepts this; the security lane does not. Deeper hardening of node-origin label
-  trust (e.g. CM-signed node attributes) and the daemon's privilege model were deferred to a
-  pre-launch security pass. **Resolved (v0.0.8):** the node-origin label-trust question is
-  discharged by [ADR-0017](0017-node-origin-label-trust.md) — accepted for launch, with the
-  `relay:`-only security lane as the load-bearing control and CM-signed node attributes
-  shelved as a future option.
+  targeting accepts this; the security lane does not. Node-origin label trust was settled by
+  [ADR-0017](0017-node-origin-label-trust.md): accepted for launch, with the `relay:`-only
+  security lane as the load-bearing control and CM-signed node attributes shelved.
 
 ## History / superseded decisions
 
@@ -138,38 +128,31 @@ The entries below are historical. The body above is authoritative.
 - **Before 2026-06-30 — original label authority model:** `relay:` labels were the sole
   authority for security-sensitive Selectors; `node:` labels were treated as untrusted
   convenience tags.
-- **2026-06-30 — label authority moved to the two-namespace model** (now in the body above):
-  `node:` labels are node-rooted, Relay-immutable, and authoritative for routine targeting;
-  `relay:` labels are the Relay-set, Node-immutable security lane. Rationale: Nodes should own
-  their own routine identity out-of-band like Policy (ADR-0002), so a careless Relay edit can't
-  mislabel a Node and changes flow through reviewed config management, while security-sensitive
-  cases keep an un-evadable `relay:` lane.
-- **2026-06-30 — added the certless Enroll path** (now in the body under "Certless enrollment
-  and Relay-generated identity").
-- **2026-06-30 — added Certificate renewal over mTLS** (now in the body under "Certificate
-  renewal over mTLS").
+- **2026-06-30 — label authority moved to the two-namespace model** in the body, so a careless
+  Relay edit cannot mislabel a Node while the security lane keeps an un-evadable `relay:` lane.
+- **2026-06-30 — added the certless Enroll path and certificate renewal over mTLS** (both now
+  in the body).
 - **2026-08-07 — two namespaces extended to three:** ADR-0020 added the operator-set `tag:`
   grouping namespace and post-enrollment `relay:` label management (see note in the body).
 
 ## Amendment (2026-09-16): the security lane targets labels no Node can write; quarantine may engage by `tag:`
 
-Owner decision, 2026-09-16 (#582), settling what `docs/specs/selectors-and-labels.md` and
-`docs/specs/quarantine-node.md` had asserted ahead of any amendment. Invariant 7 is rewritten in
-`AGENTS.md`, keeping its number.
+Owner decision, 2026-09-16 (#582), ratifying what `docs/specs/selectors-and-labels.md` and
+`docs/specs/quarantine-node.md` already asserted. Invariant 7 is rewritten in `AGENTS.md`,
+keeping its number.
 
 **What changed.** The two operating rules in *Consequences* are narrowed for one act. Remediation
 and any Operation that distributes secrets or data still target `relay:` and only `relay:`, for
 the reasons given there. **Engaging a quarantine may target `relay:` or `tag:`.** Lifting one
 targets `relay:` only. `node:` and `state:` remain forbidden for every security-lane act.
 
-**Why the rule could be narrowed without losing what it protected.** The rule exists so that a
+**Why the rule could be narrowed without losing what it protected.** The rule exists so a
 compromised Node cannot attract itself into, or drop itself out of, an action aimed at it. That
-property is about *who can write the label*, and no Node can write `tag:` any more than `relay:`.
-What distinguishes the acts is direction: remediation and secret distribution *give* something to
-the Nodes they resolve to, so a mis-shaped target is a grant; a quarantine only ever *reduces*
-what may run, so a mis-shaped target over- or under-fences. `tag:` is what an operator reaches for
-mid-incident (`tag:incident=4412`), and requiring an enumeration of `relay:node-id` terms slows
-the containment act the lane exists for.
+is about *who can write the label*, and no Node can write `tag:` any more than `relay:`. The
+acts differ in direction: remediation and secret distribution *give* something to the Nodes
+they resolve to, so a mis-shaped target is a grant; a quarantine only *reduces* what may run, so
+a mis-shaped target over- or under-fences. `tag:` is what an operator reaches for mid-incident
+(`tag:incident=4412`); enumerating `relay:node-id` terms instead slows containment.
 
 **Why lifting stays `relay:`-only.** Lifting widens again. An edited tag must never release Nodes
 nobody meant to release.
@@ -185,12 +168,12 @@ prevents it. Recorded as **R17** in `docs/security/threat-model.md`.
 
 ## Amendment (2026-09-20): amended by ADR-0031 and ADR-0034
 
-Two amendments other ADRs made to this one were never recorded here.
+Two amendments other ADRs made to this one, recorded here late.
 
-- **ADR-0031** (2026-08-18): enrollment is bootstrapped by a **join string** — Enrollment Token
-  plus CA fingerprint in one pasteable value — and the daemon pins the Relay's CA from it.
-  Designed, not built (milestone v0.6.5). Token scope and identity issuance are unchanged.
-- **ADR-0034**: the label namespaces are **four** — `node:`, `relay:`, `tag:`, `state:` — not the
-  three the History section above stops at. `state:` is Relay-derived from the registry at
+- **ADR-0031** (2026-08-18): enrollment is bootstrapped by a **join string** (Enrollment Token
+  plus CA fingerprint in one pasteable value), and the daemon pins the Relay's CA from it. Token
+  scope and identity issuance are unchanged.
+- **ADR-0034**: the label namespaces are **four** (`node:`, `relay:`, `tag:`, `state:`), not the
+  three the History section stops at. `state:` is Relay-derived from the registry at
   Selector-resolution time, from a closed vocabulary, written by nobody. Invariant 7 as rewritten
-  on 2026-09-16 already names all four.
+  on 2026-09-16 names all four.

@@ -9,13 +9,12 @@
 ## What this screen is for
 
 Every principal in the system: the humans who log in, and the **machine Accounts the AI-agents
-authenticate as**. It is also the screen ADR-0009 warned about most directly.
+authenticate as**. It is the screen ADR-0009 warned about most directly.
 
-It reads and it writes. The read half lists every Account and the credentials that authenticate as
-one; the write half creates an Account, sets a role, enables or disables one, and mints or revokes
-an API Token. Every one of those goes through the same capability-layer method the Control API
-calls — the admin floor, the self-target refusal, the last-enabled-admin refusal and every audit
-row are decided there and re-decided nowhere on this screen. The step-up matrix, as built:
+It lists every Account and its credentials, and it creates an Account, sets a role, enables or
+disables one, and mints or revokes an API Token. Each write goes through the same capability-layer
+method the Control API calls: the admin floor, the self-target refusal, the last-enabled-admin
+refusal and every audit row are decided there, never on this screen. The step-up matrix:
 
 | Act | Step-up |
 |---|---|
@@ -27,57 +26,49 @@ row are decided there and re-decided nowhere on this screen. The step-up matrix,
 | **Lower** a role | no |
 | Revoke an API Token | no |
 
-Owner decision, `2026-09-19` — see *The warning, restated* for the principle behind the split. A
-human Account created here cannot sign in until a password is set, and only `relay init` on the host
-sets one, for the first admin: no capability seam can set one, and the screen says so rather than
-implying otherwise.
+Owner decision, `2026-09-19`; the principle is under *The warning, restated*. A human Account
+created here cannot sign in until a password is set, and only `relay init --admin` on the host sets
+one, for the first admin. No capability seam can set one, and the screen says so.
 
 ## The warning, restated
 
 > Once the Console manages Accounts and roles, a hijacked admin session can *indirectly* reach
 > execution by elevating a machine Account it controls.
 
-So **every action on this screen that could increase what a principal may do requires step-up**, and
-every action is audited: creating an Account (of any role or kind), **raising** a role, minting an
-API Token, re-enabling a disabled Account. Owner decision, `2026-09-19`: the privilege-granting
-principle governs — an act that can only *reduce* what a principal may do (disabling an Account,
-**lowering** a role, revoking a Token) does not take step-up, because an emergency brake that costs
-a password is one people route around. This is not a UI convention — it is the mitigation ADR-0009
-named for a consequence class it could not otherwise close.
+So **every action on this screen that could increase what a principal may do requires step-up**,
+and every action is audited. An act that can only *reduce* what a principal may do (disabling an
+Account, **lowering** a role, revoking a Token) takes no step-up, because an emergency brake that
+costs a password is one people route around. This is the mitigation ADR-0009 named for a
+consequence class it could not otherwise close, not a UI convention.
 
-Step-up here is a password on the granting form itself. Granting acts consult the recent-auth window
-(owner decision `2026-10-05`, #879): one password covers granting acts until the window lapses. A
-submitted password is always verified in the request, and a successful step-up rotates the
-session. The step-up matrix above — which acts take step-up — is unchanged.
+Step-up is a password on the granting form itself, consulting the recent-auth window (owner
+decision `2026-10-05`): one password covers granting acts until the window lapses. A submitted
+password is always verified in the request, and a successful step-up rotates the session.
 
 ## Rows
 
 Accounts listed with kind (**human** or **machine**), role (`viewer` / `operator` / `admin`),
 state, last authentication, and — for machine Accounts — the time of its last tool call, linking to
 Activity scoped to that Account ([04](04-activity.md), `?account=`). Its sign-ins and the changes
-made to it are on [20 — Access](20-access.md). There is no "connected" state to show: the MCP transport is stateless
-(ADR-0028), so an Account is *active recently* or not, never *connected*.
+made to it are on [20 — Access](20-access.md). There is no "connected" state: the MCP transport is
+stateless (ADR-0028), so an Account is *active recently* or not.
 
-The list is read-only. **Order on the page** (owner decision, 2026-10-18, D32): the selected
-Account's panel comes first, at the top of the screen; then the list; then the create form, which
-sits behind a **New account** button — a native `<details>`, closed by default and open when the
-create form is re-rendered with a refusal — so that creating an Account is a deliberate step and
-never what an admin who came to change one sees first. Selecting an Account opens its panel, which
-holds its role and state controls above its API Tokens, following the form-control rule in
-`00-foundations.md`. A role change is split by what it does to authority: **Raise role** (the roles
+The list is read-only. **Order on the page** (D32): the selected Account's panel first; then the
+list; then the create form behind a **New account** button — a native `<details>`, closed by
+default and open when re-rendered with a refusal — so creating an Account is a deliberate step,
+never what an admin who came to change one sees first. An Account's panel holds its role and state
+controls above its API Tokens, following the form-control rule in `00-foundations.md`. A role change is split by what it does to authority: **Raise role** (the roles
 above the current one, with the password, filled) and **Lower role** (the roles below it, no
 password, in the danger style). Each select shows the Account's current role, preselected and not
 submittable, so nothing changes without an explicit choice; the server refuses a missing or
 unchanged role. The **Lower role** button is never drawn dimmed or disabled while the current role
 is selected: a hint beside it says "choose a lower role", and pressing it with the current role
-selected is refused with the same words. The state change is as before: **Disable** takes the
-danger style; the password and **Enable** are filled. Granting buttons sit beside the password they
-spend.
+selected is refused with the same words. **Disable** takes the danger style; the password and
+**Enable** are filled. Granting buttons sit beside the password they spend.
 
 **Disable**, **Lower role** and **Revoke** take the danger style — outlined in the muted red — and
-each asks a confirmation that names its target and its consequence before it acts
-(`00-foundations.md`, "Form controls"; owner decision, 2026-10-18, D24). This replaced the rule
-that they were "outlined and quiet, never red". The confirmations read, for example:
+each asks a confirmation naming its target and consequence before it acts (`00-foundations.md`,
+"Form controls"; D24). For example:
 
 | Act | Confirmation |
 |---|---|
@@ -85,13 +76,11 @@ that they were "outlined and quiet, never red". The confirmations read, for exam
 | Disable an Account | "Disable `ci-agent`? It can no longer sign in or call the Relay; re-enabling takes a password." |
 | Lower a role | "Lower `ci-agent` from `admin` to `operator`? Its API Tokens carry the lower role from their next request." |
 
-The confirmation is a server-rendered step with no script, and it changes nothing about who may act
-or whether step-up applies: the matrix above is unchanged, and revocation still takes no password.
-Every control keeps its visible label.
+The confirmation is a server-rendered step with no script; it changes nothing about who may act or
+whether step-up applies. Every control keeps its visible label.
 
-Machine Accounts are first-class, not a footnote. On a fleet driven by an AI-agent, the busiest
-principal in the system is a machine Account, and treating it as an edge case is how it ends up
-over-privileged.
+Machine Accounts are first-class. On a fleet driven by an AI-agent the busiest principal is a
+machine Account, and treating it as an edge case is how it ends up over-privileged.
 
 ## Roles
 
@@ -99,13 +88,10 @@ over-privileged.
 `RoleGate`**. This screen assigns a role; it never interprets one. A Console that computed its own
 answer to "may this Account do X" would be a second control path, and the first to be forgotten.
 
-Show what a role means in terms of the boundary, not in terms of screens: `operator` may run
-Operations, `admin` may additionally use Raw Exec and set `relay:` labels. Never claim a role can do
-something Policy might still deny — **the ceiling is always what the fleet's own Policy permits.**
-Since #849 the screen draws no per-role lines: it states only that Policy ceiling, in one visible
-sentence beside the role controls (it had stood in an "About this screen" disclosure, which no
-screen carries since D31), and what each role may do is defined in ADR-0010 and GLOSSARY.md
-(*Account*).
+Never claim a role can do something Policy might still deny — **the ceiling is always what the
+fleet's own Policy permits.** The screen draws no per-role lines: it states that Policy ceiling in
+one visible sentence beside the role controls. What each role may do is defined in ADR-0010 and
+GLOSSARY.md (*Account*).
 
 ## API tokens
 
@@ -125,12 +111,10 @@ on this screen may reintroduce one, and there is no such thing as a token not bo
 
 ## Stopping one actor
 
-There is no suspension rung: ADR-0035 was drafted and **deferred, not adopted** (#443). The
-instruments are **revoking the Account's API Tokens** here — immediate, audited, `admin`, and
-deliberately **without** step-up — or Freeze (spec 16). Owner decision, `2026-09-19`: step-up
-guards acts that could increase what a principal may do; revocation only reduces, and an
-incident instrument that costs a password is one people route around. Disabling an Account (`Enabled`) is the durable off-switch: it
-authenticates nowhere; re-enabling is a privilege-granting act and takes step-up.
+There is no suspension rung: ADR-0035 is **deferred, not adopted** (#443). The instruments are
+**revoking the Account's API Tokens** here — immediate, audited, `admin`, deliberately **without**
+step-up — or Freeze (spec 16). Disabling an Account (`Enabled`) is the durable off-switch: it
+authenticates nowhere; re-enabling is privilege-granting and takes step-up.
 
 ## Must not appear
 
@@ -149,10 +133,9 @@ authenticates nowhere; re-enabling is a privilege-granting act and takes step-up
   change or self-disable, and would refuse a hand-built request too. Its API Tokens stay
   manageable.
 - **Last admin** — refuse to remove the final `admin`, explicitly.
-- **`viewer`** — does not see this screen at all. Owner decision, `2026-09-19`: a `viewer` sees
-  the fleet, not administrative settings. The route is not mounted below `admin`, so it answers
-  the same 404 as a path that was never mounted — a 403 would itself disclose that the screen
-  exists.
+- **`viewer`** — does not see this screen (owner decision, `2026-09-19`). The route is not
+  mounted below `admin`, so it answers the same 404 as any unmounted path — a 403 would disclose
+  that the screen exists.
 
 ## Acceptance
 

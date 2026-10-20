@@ -9,19 +9,17 @@ served as a parallel package for a deprecation window.
 
 ## Decisions
 
-- **The daemon never self-upgrades, and the Relay never pushes binaries.** A
-  self-upgrade channel is RCE-on-the-executor: the most privileged binary in the
-  system accepting new code over the very connection it is designed to distrust would
-  undo ADR-0002's premise in one feature. The daemon binary is a root-owned artifact
-  updated exactly like the Policy file: via the customer's reviewed IaC pipeline,
-  consuming the release artifacts CD publishes on tag.
+- **The daemon never self-upgrades, and the Relay never pushes binaries.** A self-upgrade
+  channel is RCE on the executor: the most privileged binary accepting new code over the
+  connection it is designed to distrust would undo ADR-0002 in one feature. The daemon binary
+  is a root-owned artifact updated like the Policy file, through the customer's reviewed IaC
+  pipeline, from the release artifacts CD publishes on tag.
 - **Minimum daemon version, enforced at dispatch.** `Hello` already reports
   `daemon_version`. A below-minimum Node still connects, heartbeats, and appears in
   the registry — flagged `outdated` — but the Job engine refuses to send it Tasks
-  (reported per-Task, like a per-Node freeze). Refusing the *connection* instead
-  would make stale daemons invisible mid-upgrade; the registry is the upgrade
-  dashboard. The minimum version is Relay config: file-only, like the blast caps —
-  the API cannot lower it.
+  (reported per-Task, like a per-Node freeze). Refusing the *connection* would make stale
+  daemons invisible mid-upgrade; the registry is the upgrade dashboard. The minimum version
+  is Relay config, file-only like the blast caps, so the API cannot lower it.
 - **Proto discipline: additive-only within `relay.v1`.** New fields and messages
   only; no renumbering, no semantic changes to existing fields. A breaking change
   means a `relay.v2` package served alongside `v1` for a deprecation window.
