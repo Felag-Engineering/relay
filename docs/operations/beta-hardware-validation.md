@@ -108,9 +108,9 @@ workflow, have config management:
 1. verify-then-install the **daemon** artifact on every Node
    ([relay-daemon-install.md](relay-daemon-install.md), musl build, digest checked before
    install);
-2. place the Relay's **public** CA cert and the daemon's environment
-   (`RELAY_ADDR`, `RELAY_ENROLLMENT_TOKEN`, `RELAY_CA_BUNDLE_PATH`,
-   `RELAY_STATE_DIR`, `RELAY_POLICY_PATH`, `RELAY_NODE_LABELS` — per-Node values, e.g.
+2. place the daemon's environment (`RELAY_JOIN`, the minted join string, which carries the
+   Relay's address and CA fingerprint; `RELAY_STATE_DIR`, `RELAY_POLICY_PATH`,
+   `RELAY_NODE_LABELS` — per-Node values, e.g.
    `role=web` / `role=db` / `role=cache`) via the packaged systemd unit
    (`daemon/packaging/relay-daemon.service`,
    [daemon-privilege-posture.md](../operations/daemon-privilege-posture.md));

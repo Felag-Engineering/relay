@@ -202,8 +202,9 @@ enrollment).
 $ docker compose -f docker-compose.demo.yml logs relay
 ```
 
-You should see three Nodes join, each stamped
-`relay:env=dev` / `relay:fleet=dev`.
+You should see three `node enrolled` lines, one per Node, each with
+`relay_label_count=2` (the token's `relay:env=dev` and `relay:fleet=dev`; the log
+counts labels and does not print them — `list_nodes` below shows the values).
 
 **Richer check — list the fleet registry over MCP.** The `list_nodes` tool
 returns each Node's `node_labels`, `relay_labels`, and reported
@@ -299,13 +300,15 @@ run_operation(selector="relay:env=dev", operation="file.read", args={"path":"/et
 
 Policy-denied path — `service.restart sshd`. The fixture Policy allows
 `service.restart` only for `nginx` and `php-fpm`, so the daemon's live Policy
-engine refuses it:
+engine refuses it. Aim it at the one `role=db` Node: the same call on
+`relay:env=dev` reaches three Nodes, which is a fleet-wide mutate, so the
+[approval gate](#the-approval-gate) parks it for a human before any Node sees it.
 
 ```
-run_operation(selector="relay:env=dev", operation="service.restart", args={"unit":"sshd"})
+run_operation(selector="node:role=db", operation="service.restart", args={"unit":"sshd"})
 ```
 
-Each matched Node returns `outcome=denied_by_policy` (the "denied-by-policy"
+The Node returns `outcome=denied_by_policy` (the "denied-by-policy"
 result). The verdict is the daemon's, not the Relay's — the Relay never evaluates
 Policy (ADR-0002/0011).
 

@@ -503,10 +503,10 @@ discovery, repair and verification in full; this beat does not restate them.
 
 ### Confirming the reset took
 
-`make demo-reset` already checks, by itself: every image present; `relay` and every daemon
-healthy; every one-shot exited `0`; the `dev-fleet-service status` probe exits `0` on every
-`role=web` Node; `GET /api/v1/approvals` is empty; and `list_nodes` reports the full compose
-roster, all connected. See the numbered list in
+`make demo-reset` checks, by itself: every image present; `relay` and every daemon healthy;
+every one-shot exited `0`. It does **not** probe `dev-fleet-service status`, read
+`GET /api/v1/approvals` or call `list_nodes` (the daemon healthcheck deliberately leaves the
+demo service out); run those yourself, as below. See the numbered list in
 [The fault, and resetting between takes](#the-fault-and-resetting-between-takes) below rather
 than a duplicate of it here.
 
