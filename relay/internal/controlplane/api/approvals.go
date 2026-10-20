@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/Felag-Engineering/relay/relay/internal/approval"
@@ -54,6 +55,17 @@ type ApprovalService interface {
 // maxDecisionReasonLen bounds the decider's free-text note. It is echoed into
 // an audit Record, so an unbounded one lets a caller size a row in the trail.
 const maxDecisionReasonLen = 1024
+
+// reasonTooLong writes the 400 problem and reports true when a decision or
+// revocation reason exceeds maxDecisionReasonLen.
+func reasonTooLong(w http.ResponseWriter, reason string) bool {
+	if len(reason) <= maxDecisionReasonLen {
+		return false
+	}
+	writeProblem(w, http.StatusBadRequest, "reason too long",
+		fmt.Sprintf("reason must be at most %d bytes", maxDecisionReasonLen))
+	return true
+}
 
 // -----------------------------------------------------------------------
 // Wire shapes
@@ -268,8 +280,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 		}
 
 		var req decideApprovalRequest
-		if err := decodeJSON(w, r, &req); err != nil {
-			writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+		if !readJSONBody(w, r, &req) {
 			return
 		}
 		if req.PlanHash == "" {
@@ -277,9 +288,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 				"a decision binds to the Plan it was shown (ADR-0027); cite the plan_hash from the approval request")
 			return
 		}
-		if len(req.Reason) > maxDecisionReasonLen {
-			writeProblem(w, http.StatusBadRequest, "reason too long",
-				"reason must be at most 1024 bytes")
+		if reasonTooLong(w, req.Reason) {
 			return
 		}
 

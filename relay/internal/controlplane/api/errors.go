@@ -72,6 +72,16 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	return dec.Decode(dst)
 }
 
+// readJSONBody decodes the request body into dst, writing the 400 problem
+// itself when it cannot. ok=false means the response is already written.
+func readJSONBody(w http.ResponseWriter, r *http.Request, dst any) (ok bool) {
+	if err := decodeJSON(w, r, dst); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+		return false
+	}
+	return true
+}
+
 // mediaType reduces a Content-Type header to its lower-cased type/subtype,
 // dropping any parameters (`; charset=utf-8`).
 //

@@ -117,3 +117,45 @@ func TestMediaType(t *testing.T) {
 		}
 	}
 }
+
+func TestReadJSONBody_WritesProblemOnBadBody(t *testing.T) {
+	var dst struct{ Name string }
+	for name, tc := range map[string]struct {
+		contentType string
+		body        string
+		wantOK      bool
+	}{
+		"valid":       {"application/json", `{"Name":"a"}`, true},
+		"wrong type":  {"text/plain", `{"Name":"a"}`, false},
+		"unknown key": {"application/json", `{"Other":1}`, false},
+		"malformed":   {"application/json", `{`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", tc.contentType)
+			if got := readJSONBody(rec, req, &dst); got != tc.wantOK {
+				t.Fatalf("readJSONBody = %v, want %v", got, tc.wantOK)
+			}
+			if wrote := rec.Body.Len() > 0; wrote == tc.wantOK {
+				t.Errorf("response written = %v, want %v", wrote, !tc.wantOK)
+			}
+			if !tc.wantOK && rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", rec.Code)
+			}
+		})
+	}
+}
+
+func TestReasonTooLong(t *testing.T) {
+	rec := httptest.NewRecorder()
+	if reasonTooLong(rec, strings.Repeat("a", maxDecisionReasonLen)) || rec.Body.Len() != 0 {
+		t.Fatal("a reason at the limit must pass without a response")
+	}
+	if !reasonTooLong(rec, strings.Repeat("a", maxDecisionReasonLen+1)) {
+		t.Fatal("a reason over the limit must be refused")
+	}
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "at most 1024 bytes") {
+		t.Errorf("got %d %q", rec.Code, rec.Body.String())
+	}
+}

@@ -224,8 +224,7 @@ func handleRunOperation(d Deps) http.HandlerFunc {
 		}
 
 		var req runOperationRequest
-		if err := decodeJSON(w, r, &req); err != nil {
-			writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+		if !readJSONBody(w, r, &req) {
 			return
 		}
 
@@ -266,8 +265,7 @@ func handleRawExec(d Deps) http.HandlerFunc {
 		}
 
 		var req rawExecRequest
-		if err := decodeJSON(w, r, &req); err != nil {
-			writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+		if !readJSONBody(w, r, &req) {
 			return
 		}
 		if len(req.Argv) == 0 {
