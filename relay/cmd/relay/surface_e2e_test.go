@@ -688,9 +688,9 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	// (8) audit_attribution (LAST — tears down beta's Tunnel, so it must not
 	// disrupt any earlier subtest): revoke beta, the one lifecycle action not
 	// yet exercised, then assert every Kind this run produced is present at
-	// least once, attributed to the single seeded principal
-	// ("founding-admin:admin" — the MCP Authenticator.Middleware and the API
-	// principal() helper inject the same FoundingAdmin, ADR-0009 invariant
+	// least once, attributed to the single test admin principal
+	// (testAdminName + ":admin" — the MCP Authenticator.Middleware and the API
+	// principal() helper inject the same Principal, ADR-0009 invariant
 	// 10: one capability layer, one Principal source), and that the
 	// successful freeze_release carries the reason this run supplied.
 	t.Run("audit_attribution", func(t *testing.T) {
@@ -711,7 +711,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			t.Fatal("deps.audit.List: got 0 records")
 		}
 
-		const wantPrincipal = "founding-admin:admin"
+		const wantPrincipal = testAdminName + ":admin"
 		wantKinds := []string{
 			audit.KindDispatch, audit.KindPlan, audit.KindTokenMint, audit.KindTokenRevoke,
 			audit.KindNodeRevoke, audit.KindFreezeEngage, audit.KindFreezeRelease,

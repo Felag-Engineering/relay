@@ -64,6 +64,34 @@ func (s *TokenService) Mint(ctx context.Context, accountID, name string, ttl tim
 		return APIToken{}, Plaintext{}, fmt.Errorf("%w: account is disabled", ErrTokenInvalid)
 	}
 
+	tok, plaintext, err := GenerateToken(acct.ID, name, ttl, s.now())
+	if err != nil {
+		return APIToken{}, Plaintext{}, err
+	}
+
+	if err := s.tokens.CreateToken(ctx, tok); err != nil {
+		return APIToken{}, Plaintext{}, err
+	}
+
+	return tok, plaintext, nil
+}
+
+// GenerateToken makes a new API Token for accountID, and its plaintext
+// credential, without storing either and without reading the Account. Mint is
+// the path every surface takes; this is for the one caller that stores the
+// token inside a transaction it opens itself, because the Account it is for is
+// created in that same transaction (the first admin, made by `relay init`).
+// It skips Mint's existence and enabled checks, so its call sites are
+// enumerated by TestGenerateToken_CallSitesAreEnumerated.
+//
+// ttl of 0 means no expiry. A negative ttl is ErrInvalidTTL.
+func GenerateToken(accountID, name string, ttl time.Duration, now time.Time) (APIToken, Plaintext, error) {
+	if ttl < 0 {
+		return APIToken{}, Plaintext{}, ErrInvalidTTL
+	}
+	if accountID == "" {
+		return APIToken{}, Plaintext{}, errors.New("accounts: a token needs an account id")
+	}
 	idBytes := make([]byte, tokenIDBytes)
 	if _, err := rand.Read(idBytes); err != nil {
 		return APIToken{}, Plaintext{}, fmt.Errorf("generate token id: %w", err)
@@ -77,20 +105,15 @@ func (s *TokenService) Mint(ctx context.Context, accountID, name string, ttl tim
 	secret := base64.RawURLEncoding.EncodeToString(secretBytes)
 	sum := sha256.Sum256([]byte(secret))
 
-	now := s.now()
 	tok := APIToken{
 		ID:         id,
-		AccountID:  acct.ID,
+		AccountID:  accountID,
 		Name:       name,
 		SecretHash: sum[:],
 		CreatedAt:  now,
 	}
 	if ttl > 0 {
 		tok.ExpiresAt = now.Add(ttl)
-	}
-
-	if err := s.tokens.CreateToken(ctx, tok); err != nil {
-		return APIToken{}, Plaintext{}, err
 	}
 
 	return tok, NewPlaintext(TokenPrefix + id + credentialSep + secret), nil

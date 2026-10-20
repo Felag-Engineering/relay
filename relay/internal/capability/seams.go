@@ -127,9 +127,8 @@ type PolicyAliasEvent struct {
 
 // AccountStore is the Account half of the collaborator accountadmin.go needs:
 // five methods narrowed from accounts.Repository. Deliberately not
-// accounts.Repository itself: EnsureFoundingAdmin is seeding, a startup act,
-// and GetByName/TouchLastSeen belong to the authentication boundary, not to
-// administering Accounts.
+// accounts.Repository itself: GetByName/TouchLastSeen belong to the
+// authentication boundary, not to administering Accounts.
 type AccountStore interface {
 	Create(ctx context.Context, a accounts.Account) (accounts.Account, error)
 	Get(ctx context.Context, id string) (accounts.Account, error)

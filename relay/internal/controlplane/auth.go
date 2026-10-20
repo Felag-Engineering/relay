@@ -34,26 +34,6 @@ const genericAuthError = "unauthorized"
 // with or forge this context key (standard Go context-key idiom).
 type principalContextKey struct{}
 
-// FoundingAdmin returns the founding admin's Principal shape: the identity the
-// bootstrap credential authenticates as.
-//
-// In production the acting Principal is always projected from the **stored**
-// Account, so it carries a real ID, the current role, and the Account's
-// off-switch. This function is the name/role shape that projection produces
-// for the founding admin, and exists so tests can state the expected audit
-// attribution without reaching into a store.
-func FoundingAdmin() capability.Principal {
-	return capability.Principal{
-		Account: accounts.FoundingAdminName,
-		Role:    string(accounts.RoleAdmin),
-		// The seeded founding admin is a HUMAN Account
-		// (store.EnsureFoundingAdmin), and this shape must agree with what that
-		// projection produces or the two would disagree about who may take
-		// ADR-0027's self-confirmation rung.
-		Kind: string(accounts.KindHuman),
-	}
-}
-
 // TokenVerifier authenticates a presented API Token credential and returns the
 // Account it authenticates as. *accounts.TokenService satisfies it.
 //

@@ -30,6 +30,7 @@ package relaytest
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -462,6 +463,87 @@ func (l *RelayLayout) Start(t *testing.T, bin string, env []string, args ...stri
 		}
 	})
 	return p, nil
+}
+
+// runTimeout bounds a one-shot command Run starts.
+const runTimeout = 60 * time.Second
+
+// Run runs bin (a path InstallBinary returned) with args to completion as TestUser, through
+// `sudo -n setpriv` exactly as Start does, in exactly the environment env, with stdin as its
+// standard input. It returns the command's stdout and stderr, kept apart, and its exit code:
+// how a test runs a one-shot Relay command such as `relay init`.
+func (l *RelayLayout) Run(t *testing.T, bin string, env []string, stdin string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	argv := append([]string{"-n"}, setprivArgs()...)
+	return runToCompletion(t, append(argv, l.envArgv(env, bin, args)...), stdin)
+}
+
+// RunAsRoot is Run as root rather than TestUser: how a test shows the Relay's start-time check
+// refuses to run as root. Nothing else in the harness runs a Relay binary as root.
+func (l *RelayLayout) RunAsRoot(t *testing.T, bin string, env []string, stdin string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	return runToCompletion(t, append([]string{"-n"}, l.envArgv(env, bin, args)...), stdin)
+}
+
+// envArgv is `env -i <env> bin <args>`.
+func (l *RelayLayout) envArgv(env []string, bin string, args []string) []string {
+	argv := append([]string{"env", "-i"}, env...)
+	argv = append(argv, bin)
+	return append(argv, args...)
+}
+
+// runToCompletion runs `sudo argv` with stdin and returns stdout, stderr and the exit code,
+// failing the test if it cannot be started or does not finish within runTimeout.
+func runToCompletion(t *testing.T, argv []string, stdin string) (string, string, int) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	cmd := exec.Command("sudo", argv...)
+	cmd.Stdin = strings.NewReader(stdin)
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start sudo %s: %v", strings.Join(argv, " "), err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(runTimeout):
+		// sudo runs as root, which the test may not signal itself.
+		_ = exec.Command("sudo", "-n", "kill", "-s", "9", strconv.Itoa(cmd.Process.Pid)).Run()
+		<-done
+		t.Fatalf("sudo %s did not finish within %v\nstderr: %s", strings.Join(argv, " "), runTimeout, errOut.String())
+	}
+	code := 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("run sudo %s: %v", strings.Join(argv, " "), err)
+		}
+		code = exitErr.ExitCode()
+	}
+	return out.String(), errOut.String(), code
+}
+
+// ExistsInState reports whether path, under StateDir, exists, asked as TestUser: the test
+// may not traverse the state directory itself.
+func (l *RelayLayout) ExistsInState(t *testing.T, path string) bool {
+	t.Helper()
+	if rel, err := filepath.Rel(l.stateDir, path); err != nil || strings.HasPrefix(rel, "..") {
+		t.Fatalf("ExistsInState %s: not under the state directory %s", path, l.stateDir)
+	}
+	err := exec.Command("sudo", "-n", "-u", TestUser, "test", "-e", path).Run()
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		return true
+	case errors.As(err, &exitErr) && exitErr.ExitCode() == 1:
+		return false
+	default:
+		t.Fatalf("sudo -n -u %s test -e %s: %v", TestUser, path, err)
+		return false
+	}
 }
 
 // RelayProcess is one running Relay under test.

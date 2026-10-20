@@ -62,13 +62,12 @@ func TestDayOne_NoScreenRendersAZeroedStatisticOnAFreshRelay(t *testing.T) {
 	// with a written reason rather than a bare continue, so the exclusion
 	// argues for itself in the diff that adds it.
 	dayOneExempt := map[string]string{
-		"/console/accounts": "EnsureFoundingAdmin (relay/cmd/relay/main.go, in the same " +
-			"ControlEnabled branch that mounts the Console) seeds an enabled human admin at " +
-			"startup, so a Relay with zero Accounts is unreachable and the founding admin's " +
-			"row IS the honest first-boot shape. This criterion is about measuring a fleet " +
+		"/console/accounts": "Reaching the Console takes a signed-in human Account, and " +
+			"the first one is the admin `relay init` creates, so a Console showing zero " +
+			"Accounts is unreachable and the first admin's row IS the honest first-boot shape. This criterion is about measuring a fleet " +
 			"that does not exist yet; an Account table is not a fleet, and hiding the one " +
 			"row a fresh Relay really has would be the fiction, not the table. The real " +
-			"day-one shape is pinned in TestAccounts_DayOneShowsTheFoundingAdmin.",
+			"day-one shape is pinned in TestAccounts_DayOneShowsTheFirstAdmin.",
 	}
 
 	// An exemption that stops being reached is an unexecuted paragraph that

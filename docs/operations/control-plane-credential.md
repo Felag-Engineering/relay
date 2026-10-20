@@ -24,53 +24,65 @@ Every token:
 ## Bootstrapping the first credential
 
 Minting an Account's token requires authenticating, and authenticating requires a token.
-`relay bootstrap-token` breaks that cycle from outside the wire, the same way Node Policy
-is rooted locally rather than pushed (ADR-0002): it writes directly to the Relay's own
-store file, which is root-owned.
+`relay init` breaks that cycle from outside the wire, the same way Node Policy is rooted
+locally rather than pushed (ADR-0002): it writes directly to the Relay's own store, as the
+Relay's own account (ADR-0030).
+
+Start the Relay once first: it creates its CA and store at its first start, and `init` acts
+only on that store. Then, on the Relay host:
 
 ```console
-# On the Relay host, as root:
-$ relay bootstrap-token -store-path /var/lib/relay/relay.db -ttl 24h
-Minted API Token 7f3c… for account founding-admin (acct-…).
-This token expires at 2026-08-12T09:00:00Z. Revoke it once your real Accounts have tokens:
-  DELETE /api/v1/api-tokens/7f3c…
-The credential below is shown once and cannot be recovered.
+$ sudo -u relay relay init --admin alice
+Console password for alice (not echoed):
+Again:
+Created alice (acct-…), a human admin, with its Console password and its first API Token 7f3c….
+Recorded on the audit trail as account_create, password_set and api_token_mint, attributed to local-host.
+The API Token below is shown once and cannot be recovered; a lost one is replaced with relay init --recover.
+Keep the Console password safe: no surface resets it, and relay init --recover does not.
 glp_7f3c….g7Kx…_Q
 ```
+
+The name is yours to choose; no Account name is reserved. `init` reads `/etc/relay/relay.toml`
+(or `--config <path>`) through the same start-time check as the Relay, so it refuses to run
+as root, and it creates neither the CA nor the store.
 
 Diagnostics go to stderr and **the credential alone goes to stdout**, so you can capture it
 straight into a secret store without parsing:
 
 ```console
-$ relay bootstrap-token -store-path /var/lib/relay/relay.db -ttl 24h \
-    | vault kv put secret/relay/bootstrap token=-
+$ sudo -u relay relay init --admin alice | vault kv put secret/relay/alice token=-
 ```
 
-Prefer that to letting the plaintext sit in your scrollback or a CI log.
-
-Flags:
-
-| Flag | Default | Meaning |
-|---|---|---|
-| `-store-path` | *(required)* | The Relay's store path — the same value the Relay runs with. |
-| `-name` | `bootstrap` | Operator-facing label, shown when listing the Account's tokens. |
-| `-ttl` | `0` (no expiry) | Token lifetime, e.g. `24h`. A bootstrap credential you intend to revoke promptly is better served by a short TTL. |
+Prefer that to letting the plaintext sit in your scrollback or a CI log. When stdin is not a
+terminal, the password is its first line; there is no flag that takes it.
 
 Notes:
 
+- **It creates the first admin once.** On a Relay that already has any human Account, `init`
+  creates nothing, prints no credential, and reports the human admins that exist. Every
+  further Account is created through the Control API or the Console.
 - **It is safe to run while the Relay is running.** The store is WAL-mode with a busy
   timeout, so a second writer does not disturb the server.
-- **It is additive.** Each run mints a *new* token and never revokes an existing one, so
-  recovering from a lost plaintext cannot silently break a credential still in use. Revoke
-  the old one deliberately.
-- **It refuses a disabled founding admin.** Disabling that Account retires its authority on
-  purpose; minting it a fresh credential would reverse that decision silently. Re-enable it
-  explicitly (as another admin) if that is what you want.
+- **Recovery is an explicit request.** `relay init --recover <name>` mints a new API Token for
+  an enabled human `admin` who has lost theirs, recorded as `api_token_mint` attributed to
+  `local-host`. It is additive: it never revokes an existing token, so revoke the old one
+  deliberately.
+- **Recovery refuses a disabled, non-admin or machine Account.** Disabling an Account retires
+  its authority on purpose; minting it a fresh credential would reverse that decision
+  silently. Re-enable it explicitly (as another admin) if that is what you want.
+- **Token lifetime.** `--ttl <duration>` (e.g. `24h`) sets the lifetime of the token either form
+  mints. Without it the token does not expire: use it to create the Accounts your callers need,
+  then mint yourself a token with a lifetime and revoke this one, as below.
+- **The Console password cannot be reset.** The password `--admin` sets is the only Console
+  password any surface sets, and nothing resets it: `--recover` mints an API Token and never
+  touches a password, and there is no other way to set one. A forgotten Console password is not
+  recoverable. Other human Accounts reach the Console only through OAuth, where it is configured.
 
 ## The intended flow
 
-The bootstrap credential is a *starting point*, not a service account. Use it once to
-establish real identities, then retire it:
+The first admin's credential from `relay init` (`$BOOTSTRAP` below) is a *starting point*,
+not a service account. Use it to establish real identities, then retire it once the admin
+holds a token with a lifetime:
 
 ```console
 # 1. Create the Account your orchestrator will be.
@@ -198,7 +210,7 @@ gating regardless of who authorized the session, and authority is still the role
 Account the session resolves to: a human authenticating through your IdP gets `operator`
 if their Account is an operator, and Raw Exec still requires `admin`.
 
-An IdP outage affects OAuth sessions only. API Tokens and the bootstrap credential are
+An IdP outage affects OAuth sessions only. API Tokens, the first admin's included, are
 verified entirely locally, so you are never locked out of your own control plane by
 someone else's downtime.
 
@@ -215,9 +227,12 @@ someone else's downtime.
   blast radii.
 - **Lost the plaintext?** There is no recovery, by design — only a hash is stored. Mint a
   replacement and revoke the old one.
-- **Locked out entirely** (no working admin token, founding admin disabled): recovery
-  requires local root on the Relay host, which is the same access `bootstrap-token` already
-  assumes. There is deliberately no `-force` flag; see ADR-0023's residual note.
+- **Locked out entirely** (no working admin token): `relay init --recover <name>` on the Relay
+  host re-mints an API Token for any enabled human admin; it does not reset a Console password,
+  which nothing does. With no enabled human admin left, an enabled admin of any kind re-enables
+  one through the Control API; with none, recovery requires local root on the Relay host acting
+  on the store directly. There is deliberately
+  no `--force` flag; see ADR-0023's residual note.
 
 ## Why SHA-256, not a password KDF
 
@@ -229,8 +244,8 @@ secret; slow KDFs like bcrypt/argon2 exist to defend against brute-forcing low-e
 secrets and are not needed here. The Relay's human-login credential — the Admin Console
 password a human Account signs in with — is exactly that other shape, and does make the
 other choice: it is stored as an argon2id hash (`relay/internal/accounts`), verified by the
-Console's session layer (`relay/internal/consoleauth`), and set on the Relay host with
-`relay console-password` ([relay-install.md](relay-install.md)). The two credential kinds
+Console's session layer (`relay/internal/consoleauth`), and set for the first admin by
+`relay init` ([relay-install.md](relay-install.md)). The two credential kinds
 never substitute for one another: a password cannot call the API, and an API Token cannot
 sign in to the Console.
 
@@ -239,9 +254,10 @@ sign in to the Console.
 1. Upgrade the Relay binary.
 2. Remove `-control-credential-hash-file` / `RELAY_CONTROL_CREDENTIAL_HASH_FILE` from your
    unit file, IaC, and any wrapper scripts. The Relay will not start with the flag present.
-3. Start the Relay. It seeds the founding admin Account automatically, as it already did.
-4. Run `relay bootstrap-token -store-path <path>` — the same store path the Relay runs with —
-   and switch your callers to the printed credential.
+3. Start the Relay. A store from an earlier Relay keeps the `founding-admin` Account it
+   seeded, now an ordinary Account; a new store holds none until `relay init --admin`.
+4. Run `sudo -u relay relay init --recover founding-admin` (or `--admin <name>` on a new
+   store) and switch your callers to the printed credential.
 5. Create per-caller Accounts, mint their tokens, and revoke the bootstrap one.
 6. Delete the old credential-hash file and the plaintext from your vault. Nothing reads
    them any more.

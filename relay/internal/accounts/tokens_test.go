@@ -113,7 +113,7 @@ func fileCallsPlaintextReveal(fset *token.FileSet, path string) (bool, error) {
 func TestPlaintext_RevealCallSitesAreEnumerated(t *testing.T) {
 	permitted := map[string]bool{
 		"internal/controlplane/api/accounts.go":           true,
-		"cmd/relay/bootstrap_token.go":                    true,
+		"cmd/relay/init.go":                               true,
 		"internal/controlplane/console/accounts_write.go": true,
 	}
 

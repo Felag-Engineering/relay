@@ -164,14 +164,17 @@ services:
       retries: 20
       start_period: 3s
 
-  # The dev fleet's one bootstrap one-shot (docker/dev-fleet-init.sh): mints the
-  # founding admin's credential, creates the dev-approver and Console admin
-  # Accounts (and the IdP user under the OAuth overlay), sets the Console
-  # password, mints the relay:-scoped Enrollment Token and writes its join
-  # string for the daemons, then exits. Besides the Relay it is the only service that mounts
-  # relay-data, and it mounts it READ-WRITE (minting and the password are store
-  # writes). No daemon mounts control-credential or relay-data. A failure here
-  # keeps every daemon down.
+  # The dev fleet's one bootstrap one-shot (docker/dev-fleet-init.sh): creates
+  # the first admin (the Console admin) with `relay init`, which sets its Console
+  # password and mints its first API Token, creates the dev-approver Account (and
+  # the IdP user under the OAuth overlay), mints the relay:-scoped Enrollment
+  # Token and writes its join string for the daemons, then exits. Besides the
+  # Relay it is the only service that mounts relay-data, and it mounts it
+  # READ-WRITE (`relay init` writes the store). It mounts the Relay's own
+  # relay.toml read-only, because `relay init` reads it through the same
+  # start-time check as the Relay and so, like the Relay, refuses to run as root.
+  # No daemon mounts control-credential or relay-data. A failure here keeps every
+  # daemon down.
   init:
     build:
       context: .
@@ -191,6 +194,7 @@ services:
     entrypoint: ["sh", "/dev-fleet-init.sh"]
     volumes:
       - ./docker/dev-fleet-init.sh:/dev-fleet-init.sh:ro
+      - ${DEV_FLEET_RELAY_CONFIG:-./docker/fixtures/relay.dev.toml}:/etc/relay/relay.toml:ro
       - relay-data:/var/lib/relay
       - control-credential:/credential
       - bootstrap-shared:/bootstrap

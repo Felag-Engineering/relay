@@ -57,17 +57,18 @@ $ systemctl status relay
 
 The control plane authenticates per-Account API Tokens held in the Relay's own
 store ([ADR-0023](../../docs/adr/0023-retire-the-shared-control-plane-credential.md)) — there is
-deliberately no shared secret in the config. Mint the first one after the Relay
-has started once, pointing `-store-path` at the same store the Relay runs with (`store.path` in
-`/etc/relay/relay.toml`). The flag is required: the subcommand does not read the
-configuration file.
+deliberately no shared secret in the config. After the Relay has started once and
+created its store, create the first admin as the Relay's own account. `relay init` reads
+`/etc/relay/relay.toml` through the same start-time check as the Relay, so it refuses root:
 
 ```console
-$ sudo -u relay relay bootstrap-token -store-path /var/lib/relay/relay.db
+$ sudo -u relay relay init --admin <your-name>
 ```
 
-The plaintext is printed **once** and never persisted. Put it in a vault at that
-moment.
+It prompts for that admin's Console password, not echoed, and prints its first API Token.
+The token is printed **once** and never persisted. Put it in a vault at that moment. A
+re-run creates nothing; `relay init --recover <name>` re-mints for an enabled human admin
+who has lost every token.
 
 ## What is configured here, and what is not
 
@@ -107,7 +108,7 @@ the Relay's own: owned by the service account, and refused if any other account
 can read them.
 
 API Tokens are not configuration at all: they live in the store as hashes, and
-the first is minted with `relay bootstrap-token` (above).
+the first is minted by `relay init` (above).
 
 ## The state directory
 

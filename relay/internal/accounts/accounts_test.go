@@ -119,10 +119,4 @@ func TestAttribution(t *testing.T) {
 	if got := (Account{Name: "x"}).Attribution(); got != "x" {
 		t.Errorf("Attribution() with no role = %q, want %q", got, "x")
 	}
-	if !(Account{Name: FoundingAdminName}).IsFoundingAdmin() {
-		t.Error("IsFoundingAdmin() = false for the founding admin name")
-	}
-	if (Account{Name: "alice"}).IsFoundingAdmin() {
-		t.Error("IsFoundingAdmin() = true for a normal Account")
-	}
 }

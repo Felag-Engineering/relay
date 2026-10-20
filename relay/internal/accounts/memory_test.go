@@ -42,9 +42,6 @@ func (m *memoryStore) Create(_ context.Context, a Account) (Account, error) {
 	if err := ValidateName(a.Name); err != nil {
 		return Account{}, err
 	}
-	if NormalizeName(a.Name) == FoundingAdminName {
-		return Account{}, ErrReservedName
-	}
 	if !a.Kind.Valid() {
 		return Account{}, ErrInvalidKind
 	}
@@ -164,24 +161,6 @@ func (m *memoryStore) TouchLastSeen(_ context.Context, id string, at time.Time) 
 	a.LastSeenAt = at
 	m.accounts[id] = a
 	return nil
-}
-
-func (m *memoryStore) EnsureFoundingAdmin(ctx context.Context) (Account, error) {
-	if a, err := m.GetByName(ctx, FoundingAdminName); err == nil {
-		return a, nil
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	a := Account{
-		ID:        m.nextID("acct-"),
-		Name:      FoundingAdminName,
-		Kind:      KindHuman,
-		Role:      RoleAdmin,
-		Enabled:   true,
-		CreatedAt: time.Now().UTC(),
-	}
-	m.accounts[a.ID] = a
-	return a, nil
 }
 
 // --- TokenRepository ---

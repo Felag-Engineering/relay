@@ -22,7 +22,7 @@ const testToken = accounts.TokenPrefix + "fedcba9876543210.control-plane-test" /
 // now drives the API Token path.
 func testAuthenticator() *Authenticator {
 	return NewAuthenticator(&fakeVerifier{
-		acct:  storedFoundingAdmin(),
+		acct:  storedFirstAdmin(),
 		valid: testToken,
 	})
 }
@@ -115,8 +115,8 @@ func TestMiddleware_CorrectToken(t *testing.T) {
 	}
 
 	body := readAll(t, resp.Body)
-	if body != "founding-admin:admin" {
-		t.Errorf("body = %q, want %q", body, "founding-admin:admin")
+	if body != testAdminName+":admin" {
+		t.Errorf("body = %q, want %q", body, testAdminName+":admin")
 	}
 }
 
@@ -228,13 +228,6 @@ func TestNewAuthenticator_PanicsOnNilVerifier(t *testing.T) {
 		}
 	}()
 	NewAuthenticator(nil)
-}
-
-func TestFoundingAdmin(t *testing.T) {
-	p := FoundingAdmin()
-	if p.Account != "founding-admin" || p.Role != "admin" {
-		t.Fatalf("FoundingAdmin = %+v, want Account=founding-admin Role=admin", p)
-	}
 }
 
 func readAll(t *testing.T, r io.Reader) string {

@@ -49,9 +49,6 @@ func validateForCreate(a accounts.Account) error {
 	if !a.Role.Valid() {
 		return accounts.ErrInvalidRole
 	}
-	if accounts.NormalizeName(a.Name) == accounts.FoundingAdminName {
-		return accounts.ErrReservedName
-	}
 	return nil
 }
 
@@ -60,12 +57,13 @@ func (r *sqliteAccounts) Create(ctx context.Context, a accounts.Account) (accoun
 	if err := validateForCreate(a); err != nil {
 		return accounts.Account{}, err
 	}
-	return r.insert(ctx, a)
+	return insertAccountExec(ctx, r.db, a)
 }
 
-// insert is Create without the reserved-name check, so seeding can create the
-// founding admin that Create deliberately refuses.
-func (r *sqliteAccounts) insert(ctx context.Context, a accounts.Account) (accounts.Account, error) {
+// insertAccountExec inserts a validated Account through ex, so the first
+// admin's insert can share a transaction with its password, token and audit
+// records.
+func insertAccountExec(ctx context.Context, ex execer, a accounts.Account) (accounts.Account, error) {
 	id, err := newAccountID()
 	if err != nil {
 		return accounts.Account{}, err
@@ -73,7 +71,7 @@ func (r *sqliteAccounts) insert(ctx context.Context, a accounts.Account) (accoun
 	now := roundTripTime(time.Now())
 	normalized := accounts.NormalizeName(a.Name)
 
-	_, err = r.db.ExecContext(ctx, `
+	_, err = ex.ExecContext(ctx, `
 		INSERT INTO accounts (id, name, name_normalized, kind, role, enabled, created_at, last_seen_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
 		id, a.Name, normalized, string(a.Kind), string(a.Role), boolToInt(a.Enabled), formatTime(now),
@@ -331,40 +329,6 @@ func roleRefusal(from accounts.Role) func(accounts.Account) error {
 func (r *sqliteAccounts) TouchLastSeen(ctx context.Context, id string, at time.Time) error {
 	return r.update(ctx, `UPDATE accounts SET last_seen_at = ? WHERE id = ?`,
 		formatTime(roundTripTime(at)), id)
-}
-
-// EnsureFoundingAdmin creates the founding admin Account if absent and returns
-// it either way — idempotent and deterministic across restarts.
-//
-// It never modifies an existing founding admin. If an operator has disabled it
-// or changed its role (both legitimate: that is how you retire the seeded
-// credential's authority once real Accounts exist), that decision survives
-// every subsequent start. A seeding routine that "repaired" the row on boot
-// would silently undo a deliberate security action.
-func (r *sqliteAccounts) EnsureFoundingAdmin(ctx context.Context) (accounts.Account, error) {
-	existing, err := r.GetByName(ctx, accounts.FoundingAdminName)
-	if err == nil {
-		return existing, nil
-	}
-	if !errors.Is(err, accounts.ErrNotFound) {
-		return accounts.Account{}, err
-	}
-
-	created, err := r.insert(ctx, accounts.Account{
-		Name:    accounts.FoundingAdminName,
-		Kind:    accounts.KindHuman,
-		Role:    accounts.RoleAdmin,
-		Enabled: true,
-	})
-	if errors.Is(err, accounts.ErrNameTaken) {
-		// Lost a race with another writer that seeded it first; the row now
-		// exists, which is exactly the desired end state.
-		return r.GetByName(ctx, accounts.FoundingAdminName)
-	}
-	if err != nil {
-		return accounts.Account{}, err
-	}
-	return created, nil
 }
 
 // isUniqueViolation reports whether err is a UNIQUE-constraint failure.

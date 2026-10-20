@@ -51,7 +51,7 @@ never runs the fleet; it only renders these files with `docker compose config`.
 | --- | --- |
 | `relay` | The Go Relay. Node-plane gRPC on `:7654`, control-plane HTTPS (MCP + `/api/v1`) on `:9443` — distinct listeners, distinct published ports. Runs as UID 10001 with no capabilities, a read-only root filesystem, `/tmp` on tmpfs and `relay-data` as its one writable volume, which holds the CA and the SQLite store. |
 | `relay-config` | A one-shot, on the Relay image, that stages the Relay's `relay.toml` and the gate files onto the `relay-etc` volume (see [Prerequisites](#prerequisites)), then exits. The Relay starts only after it exits 0. |
-| `init` | A one-shot, on the Relay image: mints the founding admin's token, creates `dev-approver` (with its token — the approval gate forbids self-approval, see [The approval gate](#the-approval-gate)) and the Console `admin` (with its password, see [The Admin Console](#the-admin-console)), mints a `relay:`-scoped Enrollment Token through `POST /api/v1/enrollment-tokens` and writes the response's join string for the daemons, then exits. If it fails, no daemon starts. |
+| `init` | A one-shot, on the Relay image: runs `relay init` to create the first admin, the Console `admin` (with its password and first API Token, see [The Admin Console](#the-admin-console)), creates `dev-approver` (with its token — the approval gate forbids self-approval, see [The approval gate](#the-approval-gate)), mints a `relay:`-scoped Enrollment Token through `POST /api/v1/enrollment-tokens` and writes the response's join string for the daemons, then exits. If it fails, no daemon starts. |
 | `daemon-1..3` | Three relay-daemons (Rust, musl static binary). Each has a baked, root-owned Policy fixture and a private state volume, enrolls on first start, and reports health once it has a persisted identity. The two `role=web` Nodes (`daemon-1`, `daemon-2`) also run the dev-fleet demo service; `daemon-3` (`role=db`) loads a different Policy fixture and runs no demo service. |
 | `daemon-4..9` (`demo` profile) | Six more relay-daemons, started only with `--profile demo`. See [The demo profile](#the-demo-profile). |
 
@@ -80,8 +80,10 @@ Security-relevant choices, made explicit:
   target.
 - **The control-plane credential is minted at runtime, not committed.** Since
   ADR-0023 the control plane accepts only per-Account API Tokens, so the
-  `init` one-shot runs `relay bootstrap-token` against the Relay's
-  own store and writes the result to the shared volume
+  `init` one-shot runs `relay init` against the Relay's own store, which
+  creates the first admin and prints its first API Token, and writes the result
+  to the shared volume. On a later `compose up` the admin already exists, so it
+  re-mints with `relay init --recover`
   (`docker/dev-fleet-init.sh`). Read it with:
 
   ```console
@@ -90,8 +92,8 @@ Security-relevant choices, made explicit:
 
   It lives on its own volume, which the daemons deliberately do not mount — an
   admin credential readable by every Node is exactly what a compromised Node
-  would use to drive the whole fleet. It is a live 24h admin credential for the
-  founding admin Account; keeping it on a volume at all is a dev-fleet
+  would use to drive the whole fleet. It is a live 24h admin credential (`--ttl 24h`)
+  for the `admin` Account; keeping it on a volume at all is a dev-fleet
   convenience only — in a real deployment the
   credential goes from the operator's terminal straight into a secret store (see
   [docs/operations/control-plane-credential.md](operations/control-plane-credential.md)).
@@ -122,7 +124,8 @@ Sign in with:
 | password | `admin1234567` |
 
 Override either with `CONSOLE_ADMIN_NAME` / `CONSOLE_ADMIN_PASSWORD` in the
-environment before `docker compose -f docker-compose.demo.yml up`. With
+environment before the first `docker compose -f docker-compose.demo.yml up`: `relay init` sets
+the password once, when it creates the admin, so changing it later needs a fresh volume. With
 `RELAY_PUBLISH_ADDR` beyond loopback, `init` refuses the committed default password, and the
 fleet does not start.
 
@@ -133,13 +136,12 @@ operators — so an attacker gets slow, unlimited attempts, and length is the on
 thing that makes that safe. What sits behind the credential is the front half of a
 fleet-execution surface (ADR-0026).
 
-**Why the password is set locally.** Creating the Account is a control-plane
-request: it goes through `POST /api/v1/accounts` carrying a bearer token, like any
-other administrative act. Setting its first Console password is not, and cannot
-be — reaching the Console requires a password, so the first one has nowhere to
-come from except local root on the Relay's own store. That is the same
-chicken-and-egg as `relay bootstrap-token` (ADR-0023) and the same answer ADR-0002
-gives for Policy: root it in the filesystem. The dev fleet's single `init` holds both
+**Why the password is set locally.** Every other Account is created by a
+control-plane request carrying a bearer token. The first admin cannot be — reaching
+the API or the Console requires a credential, so the first one has nowhere to come
+from except the Relay's own store, written by `relay init` as the Relay's own uid
+(ADR-0030). That is the same answer ADR-0002 gives for Policy: root it in the
+filesystem. The dev fleet's single `init` holds both
 authorities, a bearer token and the store, on purpose: this is a laptop fleet, and the
 credential it holds was always minted by a container with store access.
 
@@ -159,8 +161,8 @@ behind step-up re-authentication.
 $ make dev-fleet-up
 ```
 
-The Relay starts and creates its CA; `init` mints the founding admin's token,
-creates the dev Accounts, then mints the Enrollment Token and exports the CA cert; then
+The Relay starts and creates its CA and store; `init` runs `relay init` to create the
+first admin and its token, creates the other dev Accounts, then mints the Enrollment Token and exports the CA cert; then
 the daemons enroll and go healthy. `make dev-fleet-up` returns once every daemon is healthy.
 
 ```console
@@ -234,8 +236,8 @@ loopback once:
 $ grep -q 'relay$' /etc/hosts || echo '127.0.0.1 relay' | sudo tee -a /etc/hosts
 ```
 
-`make dev-fleet-creds` exports the CA cert and both control-plane credentials (founding
-admin and `dev-approver`) to the gitignored `./.dev-fleet/`, for MCP and `/api/v1` alike.
+`make dev-fleet-creds` exports the CA cert and both control-plane credentials (the first
+admin, `admin`, and `dev-approver`) to the gitignored `./.dev-fleet/`, for MCP and `/api/v1` alike.
 Run it, then add the server. `NODE_EXTRA_CA_CERTS` is what makes Claude Code's Node TLS
 stack trust the fleet's private CA:
 
@@ -253,7 +255,7 @@ Claude Code with it:
 $ NODE_EXTRA_CA_CERTS=$PWD/.dev-fleet/ca-cert.pem claude
 ```
 
-That connects as the **founding admin** — the requester. It deliberately **cannot** approve
+That connects as the first admin, **`admin`** — the requester. It deliberately **cannot** approve
 its own parked dispatches; use `dev-approver` for that (see
 [The approval gate](#the-approval-gate)).
 
