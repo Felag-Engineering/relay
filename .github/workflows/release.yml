@@ -116,11 +116,11 @@ jobs:
           - arch: x86_64
             runner: ubuntu-24.04
             daemon_triple: x86_64-unknown-linux-musl
-            relay_triple: x86_64-unknown-linux-gnu
+            platform: linux-amd64
           - arch: aarch64
             runner: ubuntu-24.04-arm
             daemon_triple: aarch64-unknown-linux-musl
-            relay_triple: aarch64-unknown-linux-gnu
+            platform: linux-arm64
     env:
       # The second pass builds from a different absolute path, which is what the diff
       # downstream proves the binaries do not depend on.
@@ -128,7 +128,9 @@ jobs:
       ARCH: ${{ matrix.arch }}
       PASS: ${{ matrix.pass }}
       DAEMON_TRIPLE: ${{ matrix.daemon_triple }}
-      RELAY_TRIPLE: ${{ matrix.relay_triple }}
+      # The published artifact suffix (linux-amd64, linux-arm64); DAEMON_TRIPLE is only the
+      # compiler target, never part of a published name (release-artifacts.md).
+      PLATFORM: ${{ matrix.platform }}
       IS_RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     steps:
       # A dispatch on a tag would take the dry-run path below, whose guard demands a -0.dev
@@ -339,13 +341,13 @@ jobs:
           set -euo pipefail
           version="${EXPECTED_TAG#v}"
           daemon_bin="$(cd "$SRC" && make -s print-release-daemon-bin RELEASE_DAEMON_TARGET="$DAEMON_TRIPLE")"
-          cp "${daemon_bin}" "dist/relay-daemon-${version}-${DAEMON_TRIPLE}"
-          cp "$SRC/relay/bin/relay" "dist/relay-${version}-${RELAY_TRIPLE}"
+          cp "${daemon_bin}" "dist/relay-daemon-${version}-${PLATFORM}"
+          cp "$SRC/relay/bin/relay" "dist/relay-${version}-${PLATFORM}"
           cd dist
           # Bare filenames in SHA256SUMS so `sha256sum --check` works from any
           # download directory.
-          sha256sum "relay-daemon-${version}-${DAEMON_TRIPLE}" \
-                    "relay-${version}-${RELAY_TRIPLE}" > "SHA256SUMS.${ARCH}"
+          sha256sum "relay-daemon-${version}-${PLATFORM}" \
+                    "relay-${version}-${PLATFORM}" > "SHA256SUMS.${ARCH}"
           cat "SHA256SUMS.${ARCH}"
 
       # The packages wrap the binaries staged above, byte for byte: packaging compiles, strips
@@ -360,8 +362,8 @@ jobs:
           catalog=()
           if [ "${ARCH}" = x86_64 ]; then catalog=(--catalog); fi
           bash "$SRC/scripts/build-packages.sh" "${version}" "${ARCH}" \
-            "dist/relay-daemon-${version}-${DAEMON_TRIPLE}" dist/packages "${catalog[@]}" \
-            --relay "dist/relay-${version}-${RELAY_TRIPLE}"
+            "dist/relay-daemon-${version}-${PLATFORM}" dist/packages "${catalog[@]}" \
+            --relay "dist/relay-${version}-${PLATFORM}"
           (cd dist/packages && sha256sum -- * > "../SHA256SUMS.packages.${ARCH}")
           cat "dist/SHA256SUMS.packages.${ARCH}"
 
@@ -454,9 +456,10 @@ jobs:
             cp bins/bin-"${arch}"-primary/relay-* dist/
           done
           ls -l dist
-          probe="$(basename dist/relay-*-x86_64-unknown-linux-gnu)"
+          # relay-[0-9]*: the Relay binary, never relay-daemon-*; a version starts with a digit.
+          probe="$(basename dist/relay-[0-9]*-linux-amd64)"
           version="${probe#relay-}"
-          version="${version%-x86_64-unknown-linux-gnu}"
+          version="${version%-linux-amd64}"
           if [ -z "${version}" ] || [ "${version}" = "${probe}" ]; then
             echo "::error::cannot derive the version from the artifact names"
             exit 1
@@ -544,11 +547,11 @@ jobs:
           set -euo pipefail
           mkdir -p packages
           guard=scripts/package-guard.sh
-          for p in x86_64:x86_64-unknown-linux-musl aarch64:aarch64-unknown-linux-musl; do
-            arch="${p%%:*}"; triple="${p##*:}"
-            bin="dist/relay-daemon-${VERSION}-${triple}"
+          for p in x86_64:linux-amd64 aarch64:linux-arm64; do
+            arch="${p%%:*}"; platform="${p##*:}"
+            bin="dist/relay-daemon-${VERSION}-${platform}"
             [ -f "${bin}" ] || { echo "::error::no release binary ${bin}"; exit 1; }
-            relay_bin="dist/relay-${VERSION}-${arch}-unknown-linux-gnu"
+            relay_bin="dist/relay-${VERSION}-${platform}"
             [ -f "${relay_bin}" ] || { echo "::error::no release binary ${relay_bin}"; exit 1; }
             for f in bins/bin-"${arch}"-primary/packages/*; do
               case "$(basename "${f}")" in
@@ -625,8 +628,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/image
-          cp "dist/relay-${VERSION}-x86_64-unknown-linux-gnu"  dist/image/relay-linux-amd64
-          cp "dist/relay-${VERSION}-aarch64-unknown-linux-gnu" dist/image/relay-linux-arm64
+          cp "dist/relay-${VERSION}-linux-amd64" dist/image/relay-linux-amd64
+          cp "dist/relay-${VERSION}-linux-arm64" dist/image/relay-linux-arm64
 
       # Both actions default to restoring tool images and binaries from the Actions cache,
       # which would put a cache into the chain that produces the signed image. Off. Their
@@ -671,7 +674,7 @@ jobs:
           set -euo pipefail
           for p in amd64:x86_64 arm64:aarch64; do
             goarch="${p%%:*}"; arch="${p##*:}"
-            sha="$(awk -v n="relay-${VERSION}-${arch}-unknown-linux-gnu" '$2 == n {print $1}' dist/SHA256SUMS)"
+            sha="$(awk -v n="relay-${VERSION}-linux-${goarch}" '$2 == n {print $1}' dist/SHA256SUMS)"
             [ -n "${sha}" ] || { echo "::error::no SHA256SUMS line for the ${arch} relay"; exit 1; }
             bash scripts/release-image-guard.sh relay-image.oci.tar "linux/${goarch}" "${sha}" "${VERSION}"
           done
@@ -752,7 +755,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          [ -e "dist/relay-${version}-x86_64-unknown-linux-gnu" ] \
+          [ -e "dist/relay-${version}-linux-amd64" ] \
             || { echo "::error::the built artifacts are not version ${version}"; exit 1; }
           (cd image && sha256sum --check relay-image.oci.tar.sha256)
           cp image/relay-image-*.spdx.json dist/
@@ -785,7 +788,7 @@ jobs:
             --certificate-identity "${id}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             dist/SHA256SUMS
-          for f in dist/relay-*-unknown-linux-*; do
+          for f in dist/relay-*-linux-amd64 dist/relay-*-linux-arm64; do
             case "${f}" in *.spdx.json) continue ;; esac
             gh attestation verify "${f}" --repo "${GITHUB_REPOSITORY}" \
               --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml" \

@@ -15,8 +15,8 @@ pipeline.
 ## The upgrade loop
 
 1. **A release is cut.** Pushing `v<version>` publishes
-   `relay-daemon-<version>-<arch>-unknown-linux-musl`,
-   `relay-<version>-<arch>-unknown-linux-gnu` (`<arch>` is `x86_64` or `aarch64`), `SHA256SUMS`
+   `relay-daemon-<version>-linux-<arch>`,
+   `relay-<version>-linux-<arch>` (`<arch>` is `amd64` or `arm64`), `SHA256SUMS`
    and its cosign bundle `SHA256SUMS.sigstore.json` ([release-artifacts.md](release-artifacts.md)).
 2. **The operator updates the pin** in config management: the version string *and* the expected
    sha256 line copied from `SHA256SUMS`. The operator's copy of the digest is the trust anchor:
@@ -56,7 +56,7 @@ relay_daemon_sha256: "<sha256 line for the new artifact, from SHA256SUMS>"
 - name: Fetch relay-daemon artifact (digest verified BEFORE install)
   ansible.builtin.get_url:
     url: "https://github.com/Felag-Engineering/relay/releases/download/\
-          v{{ relay_daemon_version }}/relay-daemon-{{ relay_daemon_version }}-x86_64-unknown-linux-musl"
+          v{{ relay_daemon_version }}/relay-daemon-{{ relay_daemon_version }}-linux-amd64"
     dest: /usr/bin/relay-daemon
     mode: "0755"
     checksum: "sha256:{{ relay_daemon_sha256 }}"

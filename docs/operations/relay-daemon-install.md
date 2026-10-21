@@ -10,15 +10,15 @@ and [release-artifacts.md](release-artifacts.md) (the artifact contract).
 
 ## 1. Obtain and verify the artifact
 
-Releases publish `relay-daemon-<version>-x86_64-unknown-linux-musl` and
-`relay-daemon-<version>-aarch64-unknown-linux-musl` (statically linked, musl, ADR-0007) plus a
+Releases publish `relay-daemon-<version>-linux-amd64` and
+`relay-daemon-<version>-linux-arm64` (statically linked, musl, ADR-0007) plus a
 `SHA256SUMS` signed by `SHA256SUMS.sigstore.json`; check the signature with `cosign
 verify-blob` first, as [release-artifacts.md](release-artifacts.md) shows. Then verify before
 you install; a mismatch aborts:
 
 ```sh
 VERSION="X.Y.Z"         # the release pinned by the operator, in config management
-ARTIFACT="relay-daemon-${VERSION}-x86_64-unknown-linux-musl"
+ARTIFACT="relay-daemon-${VERSION}-linux-amd64"
 BASE="https://github.com/Felag-Engineering/relay/releases/download/v${VERSION}"
 
 curl -fsSLO "${BASE}/${ARTIFACT}"
@@ -107,7 +107,7 @@ One subcommand changes the Node, and it too contacts no Relay:
 Per [`daemon/packaging/README.md`](../../daemon/packaging/README.md):
 
 ```console
-$ sudo install -m 0755 relay-daemon-${VERSION}-x86_64-unknown-linux-musl /usr/bin/relay-daemon
+$ sudo install -m 0755 relay-daemon-${VERSION}-linux-amd64 /usr/bin/relay-daemon
 $ sudo install -m 0644 relay-daemon.service /etc/systemd/system/relay-daemon.service
 $ sudo mkdir -p /etc/relay-daemon
 $ sudo install -m 0644 -o root -g root policy.toml /etc/relay-daemon/policy.toml

@@ -14,8 +14,8 @@ For tag `v<version>` (e.g. `v0.1.0`, `v0.1.0-beta`), the GitHub Release carries:
 
 | File | What it is |
 |---|---|
-| `relay-daemon-<version>-x86_64-unknown-linux-musl`, `relay-daemon-<version>-aarch64-unknown-linux-musl` | The relay-daemon, statically linked (musl, ADR-0007). No libc or distro expectations; drops onto any Linux Node of that architecture. |
-| `relay-<version>-x86_64-unknown-linux-gnu`, `relay-<version>-aarch64-unknown-linux-gnu` | The Relay server binary, statically linked (`CGO_ENABLED=0`). The `-unknown-linux-gnu` triple is kept so names do not change under anyone; the binary has no libc dependency. |
+| `relay-daemon-<version>-linux-amd64`, `relay-daemon-<version>-linux-arm64` | The relay-daemon, statically linked (musl, ADR-0007). No libc or distro expectations; drops onto any Linux Node of that architecture. |
+| `relay-<version>-linux-amd64`, `relay-<version>-linux-arm64` | The Relay server binary, statically linked (`CGO_ENABLED=0`). It has no libc dependency. |
 | `<artifact>.spdx.json` | An SPDX SBOM for each of the four binaries. The Relay's lists the exact Go modules in the binary. The daemon's is derived from `Cargo.lock` — a superset (every target, dev and build dependencies) — because a stripped Rust binary carries no dependency metadata to read. |
 | `relay-image-<version>-linux-<arch>.spdx.json` | An SPDX SBOM for each platform of the Relay image. |
 | `relay-daemon.service`, `relay-daemon.env.example` | The hardened systemd unit and the example environment file a hand-built install takes, byte-equal to the copies inside the daemon packages (DI-32). |
@@ -36,7 +36,7 @@ Tags with a major version of 0 or with any prerelease component (`v0.*`, `v*-bet
 ## Naming convention (the contract)
 
 ```
-<binary>-<version>-<target-triple>
+<binary>-<version>-<platform>
 ```
 
 - `<binary>` — `relay-daemon` or `relay` (GLOSSARY.md names; never "agent").
@@ -45,10 +45,11 @@ Tags with a major version of 0 or with any prerelease component (`v0.*`, `v*-bet
   output equals this exactly, so the filename, the git tag, and what the running binary
   reports are one string by construction. This is the value to pin, and the value the Relay's
   `reach.min_daemon_version` gate compares against (ADR-0014).
-- `<target-triple>` — the Rust-style target the binary was built for:
-  `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` (daemon), and
-  `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` (relay). New architectures
-  extend the set without changing the scheme.
+- `<platform>` — `linux-<arch>`, with the architecture spelled as Debian and OCI spell it:
+  `linux-amd64` and `linux-arm64`, for both binaries. The image's SBOMs use the same
+  spelling. The `.deb` and `.rpm` packages follow their own distribution's naming instead
+  (`relay_<version>-1_amd64.deb`, `relay-<version>-1.x86_64.rpm`). New architectures extend
+  the set without changing the scheme.
 
 There are deliberately no unversioned or "latest" **binary** names: the binaries config
 management installs, above all the daemon (ADR-0014), must be pinned to an explicit version,
@@ -66,7 +67,7 @@ executed. The IaC role that distributes the daemon should encode exactly this se
 ```sh
 # Pinned by the operator, in config management — not resolved at install time.
 VERSION="0.1.0"
-ARTIFACT="relay-daemon-${VERSION}-x86_64-unknown-linux-musl"
+ARTIFACT="relay-daemon-${VERSION}-linux-amd64"
 BASE="https://github.com/Felag-Engineering/relay/releases/download/v${VERSION}"
 
 # 1. Fetch the binary, the checksum file and its signature into a staging dir (not the
