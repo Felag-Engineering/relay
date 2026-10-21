@@ -269,9 +269,9 @@ func Routes(d Deps) []Route {
 		// mounts its own "/console/" catch-all (method-less) for every path
 		// this table does not claim; {$} is still required so an unclaimed
 		// path reaches THAT catch-all's styled 404 rather than this handler.
-		{"GET", "/console/{$}", NavEntry{NavObserve, "Fleet", 10}, accounts.RoleViewer, handleFleet},
+		{"GET", "/console/{$}", NavEntry{Group: NavObserve, Label: "Fleet", Order: 10, Under: []string{"/console/nodes", "/console/compare"}}, accounts.RoleViewer, handleFleet},
 		{"GET", "/console/nodes/{node_id}", NavEntry{}, accounts.RoleViewer, handleNode},
-		{"GET", "/console/activity", NavEntry{NavObserve, "Activity", 30}, accounts.RoleViewer, handleActivity},
+		{"GET", "/console/activity", NavEntry{Group: NavObserve, Label: "Activity", Order: 30, Under: []string{"/console/jobs"}}, accounts.RoleViewer, handleActivity},
 		{"GET", "/console/jobs/{job_id}", NavEntry{}, accounts.RoleViewer, handleJob},
 
 		// Compare is deliberately NOT /console/nodes/compare. Node ids are
@@ -280,8 +280,8 @@ func Routes(d Deps) []Route {
 		// whose id is that word. /console/nodes/add already carries that
 		// hazard; a second one is not worth a tidier URL.
 		//
-		// No Nav entry: it is reached from a pin bar, like node detail and Job
-		// detail, not from the menu.
+		// No Nav entry of its own: it is reached from a pin bar, not from the
+		// menu, and marks Fleet current (Fleet's Under).
 		{"GET", "/console/compare", NavEntry{}, accounts.RoleViewer, handleCompare},
 
 		// Policy Author (spec 06), Add Nodes (spec 09) and Incident (spec 16)
@@ -339,7 +339,7 @@ func Routes(d Deps) []Route {
 		// "/console/nodes/add" shape documented above — and the write half
 		// wants exactly such literals. Activity filters the same way
 		// (?account=), so it is also the idiom this Console has.
-		{"GET", "/console/accounts", NavEntry{NavAdminister, "Accounts", 20}, accounts.RoleAdmin, handleAccounts},
+		{"GET", "/console/accounts", NavEntry{Group: NavAdminister, Label: "Accounts", Order: 20, Under: []string{"/console/accounts", "/console/api-tokens"}}, accounts.RoleAdmin, handleAccounts},
 
 		// Access (spec 20, D17): who signed in, who failed to, and who
 		// changed an Account or minted it a credential — admin only. MinRole
@@ -352,7 +352,7 @@ func Routes(d Deps) []Route {
 		// which collides with nothing else in this table
 		// (TestConsole_RegisterMountsEveryRouteWithoutPatternConflict picks
 		// it up).
-		{"GET", "/console/access", NavEntry{NavAdminister, "Access", 30}, accounts.RoleAdmin, handleAccess},
+		{"GET", "/console/access", NavEntry{Group: NavAdminister, Label: "Access", Order: 30}, accounts.RoleAdmin, handleAccess},
 
 		// Accounts, write half (accounts_write.go): the Console's
 		// third, fourth, fifth, sixth and seventh write routes. All five at
@@ -453,7 +453,7 @@ func Routes(d Deps) []Route {
 	if d.Execution {
 		rs = append(rs, Route{
 			"GET", "/console/run",
-			NavEntry{NavAct, "Run", 10}, accounts.RoleOperator,
+			NavEntry{Group: NavAct, Label: "Run", Order: 10}, accounts.RoleOperator,
 			placeholder("Run", "05-composer-and-preflight.md"),
 		})
 	}
