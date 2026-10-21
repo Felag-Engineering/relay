@@ -98,7 +98,7 @@ type Authenticator interface {
 // surface: the sign-in page and the stylesheet it needs, and nothing else.
 //
 // This predicate is the ONLY hole punched in the control plane's auth wrapper
-// besides RFC 9728 metadata, so its extent is asserted exactly in
+// besides RFC 9728 metadata and the fixed GET / redirect, so its extent is asserted exactly in
 // login_test.go rather than described here and hoped for. It matches on the
 // cleaned path, so `/console/../console/login` and `/console/nodes/../login`
 // cannot smuggle a different route through it.

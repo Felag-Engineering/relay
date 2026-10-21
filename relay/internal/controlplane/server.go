@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/logctx"
@@ -60,6 +62,14 @@ type Config struct {
 	// longer than its leaf's lifetime came to serve a dead certificate.
 	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
+	// RootRedirect, when set, answers exactly GET / with a redirect to this local
+	// path, ahead of authentication: the composition root sets it to the Console's
+	// prefix when the Console is mounted, so a browser opened on the bare host
+	// lands on the sign-in page. Empty leaves / to the authenticated mux. The
+	// redirect reads no credential and its target is fixed, so it discloses no
+	// more than that path does.
+	RootRedirect string
+
 	// readHeaderTimeout and idleTimeout override the Default* bounds above; zero means
 	// the default. Unexported on purpose: they exist so this package's tests can
 	// shorten them, not as configuration — a listener bound is part of the security
@@ -75,6 +85,18 @@ type Config struct {
 type Server struct {
 	mux  *http.ServeMux
 	http *http.Server
+}
+
+// rootRedirect is the fixed GET / redirect (Config.RootRedirect). A target that is
+// not a local path is a composition-root bug, refused at construction rather than
+// served as an open redirect.
+func rootRedirect(target string) http.Handler {
+	if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") {
+		panic("controlplane: RootRedirect must be a local path, got " + strconv.Quote(target))
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target, http.StatusFound)
+	})
 }
 
 // New constructs a Server. It mounts one authenticated placeholder route so
@@ -101,10 +123,15 @@ func New(cfg Config, authn *Authenticator) *Server {
 	// authenticated mux rather than punched through it.
 	//
 	// It discloses an issuer URL and a resource identifier, both public by
-	// definition, and 404s when no IdP is configured. Everything else on this
-	// listener — every "/" — goes through Middleware.
+	// definition, and 404s when no IdP is configured. Besides it, only the fixed
+	// GET / redirect (Config.RootRedirect) answers before authentication, and it
+	// reads nothing from the request. Everything else on this listener — every
+	// other "/" — goes through Middleware.
 	public := http.NewServeMux()
 	public.Handle(ProtectedResourceMetadataPath, authn.MetadataHandler())
+	if cfg.RootRedirect != "" {
+		public.Handle("GET /{$}", rootRedirect(cfg.RootRedirect))
+	}
 	public.Handle("/", authn.Middleware(mux))
 
 	tlsCfg := &tls.Config{

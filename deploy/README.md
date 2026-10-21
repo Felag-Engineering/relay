@@ -43,7 +43,7 @@ Any tool that deploys a compose stack from a git checkout can run these files.
 - **A DNS name and port 443 (test and demo):** `FLEET_HOSTNAME=relay.example.lan` puts that
   name in the Relay's certificate (lowercase DNS name; default `relay`), and
   `RELAY_PUBLISH_PORT=443` publishes the control plane on host port 443 instead of 9443. Point
-  the name at the Docker host, then open `https://relay.example.lan/console/`. The certificate
+  the name at the Docker host, then open `https://relay.example.lan/`. The certificate
   is signed by the fleet's own CA: trust `ca-cert.pem` (below) on the machines that use the
   Console. A new name takes effect on the next deploy, with no wipe. The CA is new after every
   `down -v`, though, so a nightly wipe means re-trusting the CA each morning. The OAuth

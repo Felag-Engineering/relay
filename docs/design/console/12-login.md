@@ -76,7 +76,12 @@ link in the chain `ui-advisory.md` requires end-to-end: **login → action → a
 - [x] Wrong username and wrong password are indistinguishable in message and timing.
 - [x] The session identifier changes on successful login.
 - [x] Every attempt is audited with source and method.
-- [x] No route other than login, its assets and health is reachable unauthenticated.
+- [x] No route other than login, its assets and health is reachable unauthenticated. The one
+      exception is a fixed redirect: with the Console mounted, exactly `GET /` answers `302` to
+      `/console/` before authentication runs. It reads no credential and its target is
+      constant, so it reveals only that the Console is there, which `/console/` already does
+      (`TestRootRedirect_AnswersExactlyGetRoot`,
+      `TestE2E_RootRedirectsToTheConsoleOnlyWhenItIsMounted`).
 - [x] No persistent credential satisfies step-up.
 - [ ] A successful OIDC login for an unknown subject is refused, not auto-provisioned.
       **Not implemented.** The human OIDC browser flow is unbuilt, so this is untested rather
