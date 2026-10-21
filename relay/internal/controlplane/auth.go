@@ -145,7 +145,8 @@ func NewAuthenticator(tokens TokenVerifier, opts ...AuthOption) *Authenticator {
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The Console's sign-in page and its stylesheet are the only routes
-		// on this listener, besides RFC 9728 metadata, that may be reached
+		// on this listener, besides RFC 9728 metadata and the fixed GET /
+		// redirect (Config.RootRedirect), that may be reached
 		// without a credential — a sign-in page behind the authentication it
 		// establishes is a locked door with the key inside.
 		//

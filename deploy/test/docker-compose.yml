@@ -67,6 +67,12 @@ services:
     cap_add: [CHOWN, DAC_OVERRIDE]
     security_opt:
       - "no-new-privileges:true"
+    environment:
+      # The name the Relay's certificate carries. Default `relay`, the in-fleet
+      # name; set it to a DNS name that resolves to this host to reach the
+      # Console and the Control API by that name. dev-fleet-config.sh validates
+      # it and writes it into the staged relay.toml as tls.hostname.
+      FLEET_HOSTNAME: "${FLEET_HOSTNAME:-relay}"
     entrypoint: ["sh", "/dev-fleet-config.sh"]
     volumes:
       - ../../docker/dev-fleet-config.sh:/dev-fleet-config.sh:ro
@@ -116,7 +122,9 @@ services:
       # relay-daemon running outside this compose project. Leave it on loopback
       # unless you have one.
       - "${RELAY_NODE_PUBLISH_ADDR:-127.0.0.1}:7654:7654"
-      - "${RELAY_PUBLISH_ADDR:-127.0.0.1}:9443:9443"
+      # RELAY_PUBLISH_PORT moves only the host side, for example to 443; the
+      # Relay still listens on 9443 inside the container.
+      - "${RELAY_PUBLISH_ADDR:-127.0.0.1}:${RELAY_PUBLISH_PORT:-9443}:9443"
     volumes:
       # The Relay's configuration directory, read-only (ADR-0043): relay.toml and
       # the gate files staged by relay-config. Every setting lives in relay.toml,
@@ -194,6 +202,9 @@ services:
       # So the script can refuse the committed default password once the
       # control plane is published beyond loopback.
       RELAY_PUBLISH_ADDR: "${RELAY_PUBLISH_ADDR:-127.0.0.1}"
+      # init dials the Relay as `relay` but verifies its certificate as this.
+      FLEET_HOSTNAME: "${FLEET_HOSTNAME:-relay}"
+      RELAY_PUBLISH_PORT: "${RELAY_PUBLISH_PORT:-9443}"
     entrypoint: ["sh", "/dev-fleet-init.sh"]
     volumes:
       - ../../docker/dev-fleet-init.sh:/dev-fleet-init.sh:ro
@@ -219,7 +230,7 @@ services:
     hostname: "dev-node-1"
     environment:
       RELAY_ADDRESS: "https://relay:7654"
-      RELAY_SERVER_NAME: "relay"
+      RELAY_SERVER_NAME: "${FLEET_HOSTNAME:-relay}"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -236,7 +247,7 @@ services:
     hostname: "dev-node-2"
     environment:
       RELAY_ADDRESS: "https://relay:7654"
-      RELAY_SERVER_NAME: "relay"
+      RELAY_SERVER_NAME: "${FLEET_HOSTNAME:-relay}"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -255,7 +266,7 @@ services:
     hostname: "dev-node-3"
     environment:
       RELAY_ADDRESS: "https://relay:7654"
-      RELAY_SERVER_NAME: "relay"
+      RELAY_SERVER_NAME: "${FLEET_HOSTNAME:-relay}"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.db.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"

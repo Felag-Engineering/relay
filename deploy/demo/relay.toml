@@ -10,8 +10,8 @@
 # the API, and loading it is fail-closed: a malformed file fails startup. This one is the demo's in-band
 # gate: the same rules, answerable from an MCP client (docs/operations/demo-fleet.md).
 #
-# tls.hostname, the ca and store paths and gate_rules_path are fixed by the compose file:
-# init and the daemons dial `relay`, /var/lib/relay is the Relay's only writable volume, and
+# The ca and store paths and gate_rules_path are fixed by the compose file, and tls.hostname
+# by FLEET_HOSTNAME (default `relay`, the name init and the daemons dial): /var/lib/relay is the Relay's only writable volume, and
 # relay-config stages the gate at /etc/relay/approval-gates.json.
 
 # Node-plane gRPC listener (relay-daemon dial-home).
@@ -33,8 +33,8 @@ dir = "/var/lib/relay/ca"
 [store]
 path = "/var/lib/relay/store/relay.db"
 
-# Server certificate SAN = the in-fleet DNS name daemons and init dial, so mTLS
-# verification succeeds without any insecure flag inside the fleet.
+# Server certificate SAN, verified by the daemons and init. relay-config replaces this exact
+# line with FLEET_HOSTNAME when that is set (docker/dev-fleet-config.sh), so keep it as is.
 [tls]
 hostname = "relay"
 

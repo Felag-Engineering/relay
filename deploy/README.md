@@ -34,11 +34,20 @@ Any tool that deploys a compose stack from a git checkout can run these files.
   they resolve the same from anywhere; running from the root keeps the commands below as
   written.
 - **Build:** on. Every image is built from the checkout.
-- **Environment:** only `RELAY_PUBLISH_ADDR` and `CONSOLE_ADMIN_PASSWORD`.
+- **Environment:** `RELAY_PUBLISH_ADDR` and `CONSOLE_ADMIN_PASSWORD`, and optionally
+  `FLEET_HOSTNAME` and `RELAY_PUBLISH_PORT`.
   `CONSOLE_ADMIN_PASSWORD` must be 12 or more characters, and is required once
   `RELAY_PUBLISH_ADDR` is not loopback: `init` refuses the committed default then. For test
   and demo it reaches only the `init` one-shot. Publishing beyond loopback makes the control
   plane network-reachable remote code execution for whoever holds a credential.
+- **A DNS name and port 443 (test and demo):** `FLEET_HOSTNAME=relay.example.lan` puts that
+  name in the Relay's certificate (lowercase DNS name; default `relay`), and
+  `RELAY_PUBLISH_PORT=443` publishes the control plane on host port 443 instead of 9443. Point
+  the name at the Docker host, then open `https://relay.example.lan/`. The certificate
+  is signed by the fleet's own CA: trust `ca-cert.pem` (below) on the machines that use the
+  Console. A new name takes effect on the next deploy, with no wipe. The CA is new after every
+  `down -v`, though, so a nightly wipe means re-trusting the CA each morning. The OAuth
+  overlay assumes the name `relay`.
 - **Project name:** set by the file's `name:`; do not override it.
 - **Fresh fleet nightly:** a pre-deploy command of
   `docker compose -f deploy/test/docker-compose.yml down -v` wipes the CA, the store and every

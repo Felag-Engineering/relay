@@ -766,8 +766,14 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		}
 
 		authn := controlplane.NewAuthenticator(apiTokenSvc, authOpts...)
+		controlCfg := controlplane.Config{Addr: cfg.ControlAddr, GetCertificate: controlCert.GetCertificate}
+		if cfg.ConsoleEnabled {
+			// A browser opened on the bare host lands on the Console. Off with
+			// the Console, so / stays the authenticated mux's 401.
+			controlCfg.RootRedirect = console.HomePath
+		}
 		controlSrv = controlplane.New(
-			controlplane.Config{Addr: cfg.ControlAddr, GetCertificate: controlCert.GetCertificate},
+			controlCfg,
 			// Two credential kinds, routed by prefix: per-Account API Tokens
 			// verified against the store, and OAuth sessions verified against
 			// the IdP. No shared secret and no digest held in memory
