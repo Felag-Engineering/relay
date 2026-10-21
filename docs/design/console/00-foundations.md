@@ -251,28 +251,37 @@ card it may soft-wrap, because a card's value is read, not compared across colum
 
 ## Standing notes and situational messages
 
-Screens carry prose that says what they cannot do. Two kinds, told apart by one rule:
+**Show, don't tell** (D34). The Console carries meaning in its data, chips, controls and tooltips;
+prose is the exception. Screens carry two kinds of prose, told apart by one rule:
 
 - A note rendered **unconditionally on every view of the screen** — what the screen cannot show
-  yet, how it pages, why a filter it was asked for is absent — is a **standing note**.
+  yet, how it pages, why a filter it was asked for is absent, a property the product always has —
+  is a **standing note**.
 - A note rendered **because of this request, this caller or this record's state** — a part of the
   URL that could not be read, a read that failed, "you already signed this", "your role cannot
   decide this" — is a **situational message**.
 
+**A standing note is deleted unless the screen would be wrong without it.** "Wrong" means the
+screen would state or imply something untrue — not that it would leave a true property unsaid.
+Before a standing note survives, try to carry its meaning another way: in the data itself, a chip,
+a control's label, or a tooltip (`title`) on the thing it qualifies. A property the product always
+has — that the Relay never writes a Node's Policy, that every Console read is audited, how a page
+is sized — belongs in the docs and in what is said about the product, not on the screen. A
+standing note that does survive is one plain sentence of at most ~15 words beside what it
+qualifies.
+
 **No screen carries an "About this screen" disclosure** (D31): a closed box of caveats is read by
-nobody and makes every screen look unfinished. A standing note is either **visible**, as one
-sentence of at most ~15 words beside what it qualifies, or **deleted** — only when its substance is
-already in the docs or implied by the data beside it. Situational messages are never collapsed or
-hidden; the operator needs them for the thing in front of them. **When a note's class is in doubt,
-it is situational and stays visible.** A note stating a property the Console must be visibly bound
-by is never collapsed — Node detail's "there is no path from this screen to this Node's Policy"
-(invariant 2). A note that qualifies a claim the screen visibly makes ("every figure is exact",
-"this is the feed") is situational too, because hiding it makes the claim stronger than the truth.
+nobody and makes every screen look unfinished. Deleting a note is the answer, never collapsing it.
+
+**Situational messages stay visible.** They are never collapsed, hidden or moved into a tooltip;
+the operator needs them for the thing in front of them — "Part of this URL could not be read", a
+read that failed, a refusal. **When a note's class is in doubt, it is situational and stays
+visible.** A note that qualifies a claim the screen visibly makes ("every figure is exact", "this
+is the feed") is situational too, because hiding it makes the claim stronger than the truth.
 
 **Visible does not mean boxed.** A visible note is one plain sentence drawn as part of the control
-or figure it qualifies, in the quiet note style; its longer explanation lives in the docs. The
-dashed `gap` box is for a message about this request, caller or record that the operator must stop
-and read.
+or figure it qualifies, in the quiet note style. The dashed `gap` box is for a message about this
+request, caller or record that the operator must stop and read, never for a standing note.
 
 ## Refreshing a screen
 
@@ -282,9 +291,10 @@ a **Refresh** control.
 - **Where a screen offers a Refresh control, it reloads the page with the current query
   preserved.** It is a plain link to the same screen; it never splices rows into the page someone
   is reading (rule 6).
-- **A Refresh makes exactly the reads a page load makes**, and those reads are audited. Every
-  screen that offers the control says whether a Refresh is recorded in one visible sentence beside
-  it, and none claims a record the trail does not hold.
+- **A Refresh makes exactly the reads a page load makes**, and those reads are audited
+  (`docs/specs/audit-and-read-lane.md`). The control carries no sentence saying so (D34): that a
+  Console read is audited is a property of every read, and it lives in the docs. Nothing on a
+  screen claims a record the trail does not hold.
 - **A Refresh is a deliberate act by the operator.** The Console never reloads a screen on a
   timer: [README](README.md) records the owner decision "No scheduled or repeated reads. Every read
   is a deliberate, audited act."
