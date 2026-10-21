@@ -4,8 +4,9 @@
 # Remove keeps the Policy, the Policy directory, the environment file and the state directory
 # (DI-31). `.deb` purge deletes what the package created and nothing else: it reads only the
 # marker preinst and postinst wrote, acts only on the literal paths its fixed tokens name, and
-# never reads a path from any file an operator edits. A directory that holds anything the
-# package did not put there (a Policy fragment, an operator's Template) is left, and named.
+# never reads a path from any file an operator edits, nor a marker in a directory another
+# account could write. A directory that holds anything the package did not put there (a Policy
+# fragment, an operator's Template) is left, and named.
 # `.rpm` has no purge: removal deletes no state and prints the paths to delete by hand.
 set -eu
 
@@ -19,14 +20,33 @@ reload() { if systemd_running; then systemctl daemon-reload || true; fi; }
 exists() { [ -e "$1" ] || [ -L "$1" ]; }
 plain_dir() { [ -d "$1" ] && [ ! -L "$1" ]; }
 
+# root_only_dir DIR: DIR is a real directory owned by uid 0 with no group or other write bit.
+# Under a POSIX ACL the group bits are the ACL mask, so a named write grant reads as
+# group-writable and is refused. Only in such a directory is root the only account that can
+# create, unlink or rename an entry between two of this script's steps.
+root_only_dir() {
+  [ -d "$1" ] && [ ! -L "$1" ] || return 1
+  [ "$(stat -c %u "$1")" = 0 ] || return 1
+  mode="$(stat -c %A "$1")" || return 1
+  case "$mode" in
+    d????[!w]??[!w]*) return 0 ;;
+  esac
+  return 1
+}
+
+# marker_ok: the marker exists and nobody but root could have written or replaced it.
+marker_ok() { [ -f "$MARKER" ] && [ ! -L "$MARKER" ] && root_only_dir "$MARKER_DIR"; }
+
 # created NAME: the package made this path, and it did not exist before the first install.
 created() {
-  [ -f "$MARKER" ] && grep -qx "created $1" "$MARKER" && ! grep -qx "existed $1" "$MARKER"
+  marker_ok && grep -qx "created $1" "$MARKER" && ! grep -qx "existed $1" "$MARKER"
 }
 
 forget_marker() {
-  rm -f "$MARKER"
-  rmdir "$MARKER_DIR" 2>/dev/null || true
+  if root_only_dir "$MARKER_DIR"; then
+    rm -f "$MARKER"
+    rmdir "$MARKER_DIR" 2>/dev/null || true
+  fi
 }
 
 # leftovers: every fixed path that remains. The catalog's Template root is named too: on .rpm
@@ -44,8 +64,8 @@ leftovers() {
 }
 
 purge() {
-  if [ ! -f "$MARKER" ]; then
-    echo "relay-daemon: no package marker; purge deletes nothing. Remaining paths:"
+  if ! marker_ok; then
+    echo "relay-daemon: no package marker only root could have written; purge deletes nothing. Remaining paths:"
     leftovers
     return 0
   fi
