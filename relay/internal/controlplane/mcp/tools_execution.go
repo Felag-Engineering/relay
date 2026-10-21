@@ -115,11 +115,7 @@ func requirePrincipal(ctx context.Context) (capability.Principal, error) {
 // ordering of would_be_rejected is documented there.
 func renderPlan(pr capability.PlanResult) PlanOutput {
 	rp := controlplane.RenderPlan(pr)
-	verdicts := make([]PerNodeVerdict, 0, len(rp.Verdicts))
-	for _, v := range rp.Verdicts {
-		verdicts = append(verdicts, PerNodeVerdict(v))
-	}
-	out := PlanOutput{Matched: rp.Matched, Verdicts: verdicts, Advisory: rp.Advisory}
+	out := PlanOutput{Matched: rp.Matched, Verdicts: controlplane.MapSlice(rp.Verdicts, convertVerdict), Advisory: rp.Advisory}
 	if rp.WouldBeRejected != nil {
 		r := WouldBeRejected(*rp.WouldBeRejected)
 		out.WouldBeRejected = &r
@@ -144,7 +140,17 @@ func planAndRender(ctx context.Context, exec Executor, p capability.Principal, s
 // (controlplane.RenderTaskResult). ExitCode is omitted whenever no real
 // process exit status exists — see controlplane.ExitCode.
 func perNodeResultFromTask(task jobs.Task) PerNodeResult {
-	return PerNodeResult(controlplane.RenderTaskResult(task))
+	return perNodeResultFromRendered(controlplane.RenderTaskResult(task))
+}
+
+// perNodeResultFromRendered and convertVerdict are the field-for-field struct
+// conversions the Rendered* types exist for (see controlplane/render.go).
+func perNodeResultFromRendered(r controlplane.RenderedTaskResult) PerNodeResult {
+	return PerNodeResult(r)
+}
+
+func convertVerdict(v controlplane.RenderedVerdict) PerNodeVerdict {
+	return PerNodeVerdict(v)
 }
 
 // renderJob re-reads jobID via results (the injected JobResultReader) and
@@ -157,11 +163,7 @@ func renderJob(ctx context.Context, results JobResultReader, jobID string) (Exec
 	if err != nil {
 		return ExecutionOutput{}, err
 	}
-	items := make([]PerNodeResult, 0, len(rendered))
-	for _, r := range rendered {
-		items = append(items, PerNodeResult(r))
-	}
-	return ExecutionOutput{JobID: jobID, JobStatus: status, Results: items}, nil
+	return ExecutionOutput{JobID: jobID, JobStatus: status, Results: controlplane.MapSlice(rendered, perNodeResultFromRendered)}, nil
 }
 
 // renderRunError translates an error returned by Executor.Start into the tool

@@ -21,6 +21,16 @@ import (
 // struct conversion (tags are ignored by it). A field added to one side but
 // not the other stops compiling rather than silently drifting.
 
+// MapSlice renders each element of in through f, in order. The result is never
+// nil, so an empty input encodes as a JSON array rather than null.
+func MapSlice[In, Out any](in []In, f func(In) Out) []Out {
+	out := make([]Out, 0, len(in))
+	for _, v := range in {
+		out = append(out, f(v))
+	}
+	return out
+}
+
 // PlanAdvisory is the fixed point-in-time disclaimer every plan response
 // carries (ADR-0011): a Plan's verdicts are a snapshot, not a guarantee —
 // Policy may change between the Plan and a later real run.

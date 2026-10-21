@@ -279,11 +279,9 @@ func handleListGrants(d Deps) http.HandlerFunc {
 			return
 		}
 		now := d.Now()
-		out := make([]grantResponse, 0, len(grants))
-		for _, g := range grants {
-			out = append(out, renderGrant(g, now))
-		}
-		writeJSON(w, http.StatusOK, listGrantsResponse{Grants: out})
+		writeJSON(w, http.StatusOK, listGrantsResponse{Grants: controlplane.MapSlice(grants, func(g approval.Grant) grantResponse {
+			return renderGrant(g, now)
+		})})
 	}
 }
 

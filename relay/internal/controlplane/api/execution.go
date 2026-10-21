@@ -481,11 +481,7 @@ func writeExecError(w http.ResponseWriter, err error) {
 // the ordering of would_be_rejected is documented there.
 func renderPlan(pr capability.PlanResult) planResponse {
 	rp := controlplane.RenderPlan(pr)
-	verdicts := make([]perNodeVerdict, 0, len(rp.Verdicts))
-	for _, v := range rp.Verdicts {
-		verdicts = append(verdicts, perNodeVerdict(v))
-	}
-	out := planResponse{Matched: rp.Matched, Verdicts: verdicts, Advisory: rp.Advisory}
+	out := planResponse{Matched: rp.Matched, Verdicts: controlplane.MapSlice(rp.Verdicts, convertVerdict), Advisory: rp.Advisory}
 	if rp.WouldBeRejected != nil {
 		r := wouldBeRejected(*rp.WouldBeRejected)
 		out.WouldBeRejected = &r
@@ -500,18 +496,24 @@ func renderJob(ctx context.Context, results JobResultReader, jobID string) (exec
 	if err != nil {
 		return executionResponse{}, err
 	}
-	items := make([]perNodeResult, 0, len(rendered))
-	for _, r := range rendered {
-		items = append(items, perNodeResult(r))
-	}
-	return executionResponse{JobID: jobID, Results: items}, nil
+	return executionResponse{JobID: jobID, Results: controlplane.MapSlice(rendered, perNodeResultFromRendered)}, nil
 }
 
 // perNodeResultFromTask renders one jobs.Task (controlplane.RenderTaskResult).
 // ExitCode is nil whenever no real process exit status exists — see
 // perNodeResult.ExitCode for why the distinction is load-bearing.
 func perNodeResultFromTask(t jobs.Task) perNodeResult {
-	return perNodeResult(controlplane.RenderTaskResult(t))
+	return perNodeResultFromRendered(controlplane.RenderTaskResult(t))
+}
+
+// perNodeResultFromRendered and convertVerdict are the field-for-field struct
+// conversions the Rendered* types exist for (see controlplane/render.go).
+func perNodeResultFromRendered(r controlplane.RenderedTaskResult) perNodeResult {
+	return perNodeResult(r)
+}
+
+func convertVerdict(v controlplane.RenderedVerdict) perNodeVerdict {
+	return perNodeVerdict(v)
 }
 
 // nonNil renders a nil slice as an empty JSON array rather than null, so a

@@ -142,6 +142,21 @@ func requireAccountAdmin(w http.ResponseWriter, r *http.Request, d Deps) (capabi
 	return p, true
 }
 
+// requireAccountAdminAndID is requireAccountAdmin followed by pathID, the
+// prelude of every route that names one Account or API Token: the caller is
+// checked before the path is read.
+func requireAccountAdminAndID(w http.ResponseWriter, r *http.Request, d Deps, param, label string) (capability.Principal, string, bool) {
+	p, ok := requireAccountAdmin(w, r, d)
+	if !ok {
+		return capability.Principal{}, "", false
+	}
+	id, ok := pathID(w, r, param, label)
+	if !ok {
+		return capability.Principal{}, "", false
+	}
+	return p, id, true
+}
+
 // -----------------------------------------------------------------------
 // Error mapping
 // -----------------------------------------------------------------------
@@ -243,22 +258,14 @@ func handleListAccounts(d Deps) http.HandlerFunc {
 			return
 		}
 
-		out := make([]accountResponse, 0, len(list))
-		for _, a := range list {
-			out = append(out, renderAccount(a))
-		}
-		writeJSON(w, http.StatusOK, listAccountsResponse{Accounts: out})
+		writeJSON(w, http.StatusOK, listAccountsResponse{Accounts: controlplane.MapSlice(list, renderAccount)})
 	}
 }
 
 // handleGetAccount implements GET /api/v1/accounts/{id}.
 func handleGetAccount(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := requireAccountAdmin(w, r, d)
-		if !ok {
-			return
-		}
-		id, ok := pathID(w, r, "id", "account id")
+		p, id, ok := requireAccountAdminAndID(w, r, d, "id", "account id")
 		if !ok {
 			return
 		}
@@ -280,11 +287,7 @@ func handleGetAccount(d Deps) http.HandlerFunc {
 // beside an innocuous field.
 func handleSetAccountRole(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := requireAccountAdmin(w, r, d)
-		if !ok {
-			return
-		}
-		id, ok := pathID(w, r, "id", "account id")
+		p, id, ok := requireAccountAdminAndID(w, r, d, "id", "account id")
 		if !ok {
 			return
 		}
@@ -312,11 +315,7 @@ func handleSetAccountEnabled(d Deps, enabled bool) http.HandlerFunc {
 		verb = "disable"
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := requireAccountAdmin(w, r, d)
-		if !ok {
-			return
-		}
-		id, ok := pathID(w, r, "id", "account id")
+		p, id, ok := requireAccountAdminAndID(w, r, d, "id", "account id")
 		if !ok {
 			return
 		}
@@ -362,11 +361,7 @@ func writeUpdatedAccount(w http.ResponseWriter, r *http.Request, d Deps, p capab
 // same malformed body.
 func handleMintAPIToken(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := requireAccountAdmin(w, r, d)
-		if !ok {
-			return
-		}
-		accountID, ok := pathID(w, r, "id", "account id")
+		p, accountID, ok := requireAccountAdminAndID(w, r, d, "id", "account id")
 		if !ok {
 			return
 		}
@@ -431,11 +426,7 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 // presenting a bad credential.
 func handleListAPITokens(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := requireAccountAdmin(w, r, d)
-		if !ok {
-			return
-		}
-		accountID, ok := pathID(w, r, "id", "account id")
+		p, accountID, ok := requireAccountAdminAndID(w, r, d, "id", "account id")
 		if !ok {
 			return
 		}
@@ -450,11 +441,7 @@ func handleListAPITokens(d Deps) http.HandlerFunc {
 			return
 		}
 
-		out := make([]apiTokenResponse, 0, len(list))
-		for _, t := range list {
-			out = append(out, renderAPIToken(t))
-		}
-		writeJSON(w, http.StatusOK, listAPITokensResponse{Tokens: out})
+		writeJSON(w, http.StatusOK, listAPITokensResponse{Tokens: controlplane.MapSlice(list, renderAPIToken)})
 	}
 }
 
@@ -466,11 +453,7 @@ func handleListAPITokens(d Deps) http.HandlerFunc {
 // hear about while they still believe they revoked something.
 func handleRevokeAPIToken(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := requireAccountAdmin(w, r, d)
-		if !ok {
-			return
-		}
-		id, ok := pathID(w, r, "token_id", "api token id")
+		p, id, ok := requireAccountAdminAndID(w, r, d, "token_id", "api token id")
 		if !ok {
 			return
 		}

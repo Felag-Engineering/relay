@@ -215,11 +215,7 @@ func handleListApprovals(d Deps) http.HandlerFunc {
 			writeApprovalError(w, "", err)
 			return
 		}
-		out := make([]approvalResponse, 0, len(pending))
-		for _, req := range pending {
-			out = append(out, renderApproval(req))
-		}
-		writeJSON(w, http.StatusOK, listApprovalsResponse{Approvals: out})
+		writeJSON(w, http.StatusOK, listApprovalsResponse{Approvals: controlplane.MapSlice(pending, renderApproval)})
 	}
 }
 
