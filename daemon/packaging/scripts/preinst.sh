@@ -30,8 +30,8 @@ exists() { [ -e "$1" ] || [ -L "$1" ]; }
 root_only_dir() {
   [ -d "$1" ] && [ ! -L "$1" ] || return 1
   [ "$(stat -c %u "$1")" = 0 ] || return 1
-  mode="$(stat -c %A "$1")" || return 1
-  case "$mode" in
+  perms="$(stat -c %A "$1")" || return 1
+  case "$perms" in
     d????[!w]??[!w]*) return 0 ;;
   esac
   return 1

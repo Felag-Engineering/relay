@@ -8,8 +8,10 @@
 #     Policy directory did not exist before the install began (DI-26);
 #   - places the environment file, root 0600, only if none exists (DI-27);
 #   - writes nothing under /etc/relay-daemon, nor through the marker, unless the directory is
-#     one only root can write: it then says so on stderr, and the install still succeeds;
-#   - where systemd is running, enables the unit through the distribution's presets (DI-25).
+#     one only root can write; otherwise it says so on stderr, leaves the unit disabled, and
+#     the install still succeeds;
+#   - where systemd is running and /etc/relay-daemon is one only root can write, enables the
+#     unit through the distribution's presets (DI-25).
 # Upgrade or reinstall: `systemctl daemon-reload` only, where systemd is running.
 #
 # Nothing here ever starts or restarts the daemon, and nothing rewrites a file that exists:
@@ -54,8 +56,8 @@ exists() { [ -e "$1" ] || [ -L "$1" ]; }
 root_only_dir() {
   [ -d "$1" ] && [ ! -L "$1" ] || return 1
   [ "$(stat -c %u "$1")" = 0 ] || return 1
-  mode="$(stat -c %A "$1")" || return 1
-  case "$mode" in
+  perms="$(stat -c %A "$1")" || return 1
+  case "$perms" in
     d????[!w]??[!w]*) return 0 ;;
   esac
   return 1
@@ -115,9 +117,12 @@ if [ "$have_marker" = yes ] && ! marked "existed etc"; then
   record etc
 fi
 
-# An $ETC another account can write is left exactly as it is. The install still succeeds: with
-# no Policy file the daemon is deny-all (DI-20), and with no environment file it is unconfigured.
+# An $ETC another account can write is left exactly as it is, and the unit is not enabled: the
+# daemon's environment file, Policy and Templates live there, so whoever can write it could
+# configure a root daemon. The install still succeeds, with a daemon that never starts at boot.
+etc_ok=no
 if root_only_dir "$ETC"; then
+  etc_ok=yes
   # The Policy directory's prior existence is read from the marker preinst wrote before
   # anything was unpacked. With no marker the answer is unknown, and no Policy is placed: a
   # Node with no Policy file is deny-all, never wider (DI-20).
@@ -142,8 +147,9 @@ if root_only_dir "$ETC"; then
   fi
 else
   echo "relay-daemon: $ETC is a symlink, not a directory, not owned by root, or writable by" >&2
-  echo "group or others; nothing was placed in it, so the daemon has no Policy (deny-all) and" >&2
-  echo "no environment file until it is made root-owned 0755 and they are placed by hand" >&2
+  echo "group or others; nothing was placed in it and the unit was not enabled. Make it a" >&2
+  echo "root-owned directory no other account can write, check what is in it, then place the" >&2
+  echo "Policy and environment file and enable the unit by hand" >&2
 fi
 
 if ! exists "$STATE"; then
@@ -153,6 +159,8 @@ fi
 
 if systemd_running; then
   systemctl daemon-reload || true
-  systemctl preset "$UNIT" || true
+  if [ "$etc_ok" = yes ]; then
+    systemctl preset "$UNIT" || true
+  fi
 fi
 exit 0
