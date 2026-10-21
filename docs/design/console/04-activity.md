@@ -87,7 +87,7 @@ hours sits pages down.
 - **One audited read.** The section is one running-only Job read through the capability layer's
   read lane (ADR-0025).
 - **Empty is said plainly.** With nothing running it says "Nothing is running" (under `?account=`,
-  that Account has nothing running) — except on a trail with nothing recorded yet, where it folds
+  that Account has nothing running) — except on a trail with no calls other than reads recorded yet, where it folds
   into the one explanatory block below ("Nothing recorded yet").
 
 ## Identity on every row
@@ -128,8 +128,8 @@ list of active Accounts; `?account=` scopes the stream (Filtering and export).
 **With no kind filter, read records are left out.** Enumeration and polling — every Account's
 `list_nodes`, `describe_node` and `get_job` calls, and every read of the trail — would otherwise
 bury the calls that change something. While no kind filter is set, one plain sentence under the
-kind chips says read records are left out and links to them (the `read` chip, keeping the other
-filters). Activity is the only screen over these records ([17](17-read-egress.md) is retired).
+kind chips says read records are left out and links to them, reads made from this Console included (the `read` chip with `?console=show`,
+keeping the other filters), so following it never hides the reads this screen's own loads made. Activity is the only screen over these records ([17](17-read-egress.md) is retired).
 
 Read **calls** are audited — who, which tool, what they asked for, when — and an unauditable read
 fails closed (ADR-0025). Read **output** is never retained. A read row shows none and does not say
@@ -166,7 +166,8 @@ that its identity was established by a Console session AND that it was a read.**
   keeps the arithmetic visible.
 - **The method decides what is listed and is never displayed.**
 - **Empty states stay true.** Where the feed is empty only because every call on the
-  page was a read made from this Console, it says that, rather than that nobody called.
+  page was a read made from this Console, it says that, rather than that nobody called. An empty page reached by Older says only that nothing is older
+  than that point.
 
 ## Polling
 
@@ -232,6 +233,13 @@ explanatory block** in place of an empty feed and an empty Running now — "When
 operator dispatches a Task, or calls any tool, it appears here." — with the live region's state
 beside it, because whether the stream is connected is what someone watching an empty screen needs
 to know. The filters sit in a closed native `<details>` below: there is nothing yet to narrow.
+
+The heading names what the default leaves out because a trail with nothing on it is never what
+someone looking at it sees: every load of this screen is itself an audited read ("Reads made from
+this Console"). With no kind filter the feed leaves reads out, so the heading is true whenever it
+is drawn, and the read-records sentence beside the kind chips leads to the reads. An unfiltered
+first page with an empty feed says the same sentence wherever the block is not drawn. No read is
+added to tell an empty trail from one holding only reads.
 
 The condition is **no filter applied** — no kind chip, toggle, filter text, window or `?account=`
 other than the defaults. Where any filter is applied and nothing matches, the filters stay open and

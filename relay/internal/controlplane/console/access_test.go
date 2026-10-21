@@ -1322,3 +1322,13 @@ func TestAccess_TheRealWritersReasonsDrawTheirAccountIDAndName(t *testing.T) {
 		t.Errorf("the api_token_revoke article draws an Account ID:\n%s", a)
 	}
 }
+
+func TestAccess_EmptyPageNamesWhatItLists(t *testing.T) {
+	body := get(t, newTestHandler(accessDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/access").Body.String()
+	if !strings.Contains(body, "No sign-in, step-up, Account or API Token records yet.") {
+		t.Error("an empty Access page does not name the records it lists")
+	}
+	if strings.Contains(body, "Nothing has been recorded yet") {
+		t.Error("an empty Access page claims nothing has been recorded")
+	}
+}

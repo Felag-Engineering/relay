@@ -717,7 +717,7 @@ func (f activityFilter) query(job, audit lanePos) url.Values {
 }
 
 // narrowing reports whether anything at all was asked for. It is what decides
-// between "nothing matches" and "nothing has been recorded yet", which are
+// between "nothing matches" and "no calls other than reads have been recorded yet", which are
 // different claims: the first is about a filter and the second is about the
 // fleet, and making the first on a fresh Relay tells an operator their filter
 // is wrong when the trail is simply empty.
@@ -764,7 +764,7 @@ type activityView struct {
 	// activityFilter.narrowing.
 	Narrowing bool
 
-	// FirstRun says nothing is on this view and nothing was asked for, so the
+	// FirstRun says no call other than a read is on this view and nothing was asked for, so the
 	// screen draws one explanatory block and collapses the filters
 	// (04-activity.md, "Nothing recorded yet").
 	FirstRun bool
@@ -775,11 +775,13 @@ type activityView struct {
 
 	// ReadsLeftOutHref is set ONLY when no kind filter is set — the one case
 	// in which the feed leaves the `read` family out (activityLaneExcluded).
-	// It is the `read` chip's own href, so following it keeps every other
-	// filter (an Account, a window) in place. The template draws the visible
-	// read-records sentence beside the kind chips from it: a responder
-	// filtering to one Account must be told, where they are looking, that
-	// its enumeration is not in this feed.
+	// It is the `read` chip's target with `?console=show` added. Reads made
+	// from this Console are hidden by default, and every load of this screen
+	// is one, so the chip's own target can be a second empty feed; this link
+	// must always lead to the reads. It keeps every other filter (an Account,
+	// a window). The template draws the read-records sentence beside the kind
+	// chips from it: a responder filtering to one Account must be told, where
+	// they are looking, that its enumeration is not in this feed.
 	ReadsLeftOutHref string
 
 	Live Live
@@ -791,7 +793,8 @@ type activityView struct {
 	RunningNow runningNowView
 
 	// Scrolled says this page was reached by following Older; NewestHref is
-	// the way back.
+	// the way back. An empty scrolled page says only that nothing is older,
+	// never anything about the whole trail.
 	Scrolled   bool
 	NewestHref string
 
@@ -952,11 +955,9 @@ func newActivityView(f activityFilter, note, csrfToken string, known, ranJob, ra
 	v.CSRFToken = csrfToken
 	v.Refresh = newRefresh("/console/activity", f.query(f.Job, f.Audit))
 	if f.Kind == "" {
-		for _, c := range v.Kinds {
-			if c.Kind == rowRead {
-				v.ReadsLeftOutHref = c.Href
-			}
-		}
+		reads := f.withKind(rowRead)
+		reads.ShowConsole = true
+		v.ReadsLeftOutHref = reads.base()
 	}
 	return v
 }
@@ -1032,7 +1033,7 @@ func (v *activityView) fill(d Deps, caller capability.Principal, f activityFilte
 // Activity screen. The Note term is load-bearing: on first run the Note line
 // sits inside the closed filters disclosure, so a dropped URL value must keep
 // the filters open and the note visible. It is called only from fill, after
-// both reads succeed, so a failed or refused read never claims nothing was
+// both reads succeed, so a failed or refused read never claims no calls were
 // recorded. ShowConsole is not a term: without a kind filter it changes nothing
 // the page shows, and with one Narrowing is already set. ConsoleLeftOut is
 // always zero on an unfiltered page; it is kept as defence in depth.
@@ -1734,8 +1735,8 @@ var activityTmpl = newScreen("activity", `
 
 {{if .FirstRun}}
 <div class="empty">
-  <h2>Nothing has been recorded yet.</h2>
-  <p>When an AI-agent or an operator dispatches a Task, or calls any tool, it appears here.</p>
+  <h2>No calls other than reads have been recorded yet.</h2>
+  <p>Each Task an AI-agent or operator dispatches, and each tool call other than a read, appears here.</p>
   {{template "live-region" .Live}}
 </div>
 <details class="filters">
@@ -1888,7 +1889,8 @@ var activityTmpl = newScreen("activity", `
   {{else if .Exhausted}}<p class="dim">There is nothing older for this filter.
   <a href="{{.ResetHref}}">Start again</a>.</p>
   {{else if .Narrowing}}<p class="dim">Nothing matches.</p>
-  {{else}}<p class="dim">Nothing has been recorded yet.</p>{{end}}
+  {{else if .Scrolled}}<p class="dim">There is nothing older than this point.</p>
+  {{else}}<p class="dim">No calls other than reads have been recorded yet.</p>{{end}}
 {{end}}
 </div>
 {{end}}

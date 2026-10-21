@@ -418,8 +418,9 @@ func (f accessFilter) href(cursor string) string {
 func (f accessFilter) base() string { return f.href("") }
 
 // narrowing reports whether anything at all was asked for — the same
-// "nothing matches" versus "nothing has been recorded yet" split Activity's
-// own narrowing draws.
+// "nothing matches" versus "no records yet" split Activity's
+// own narrowing draws. The empty page names the four row kinds the screen
+// lists (20-access.md) rather than claiming nothing was recorded.
 func (f accessFilter) narrowing() bool {
 	return f.Kind != "" || f.Account != "" || f.Failures || !f.Since.IsZero() || !f.Until.IsZero()
 }
@@ -690,7 +691,7 @@ var accessTmpl = newScreen("access", `
   </article>
 {{else}}
   {{if .Narrowing}}<p class="dim">Nothing matches.</p>
-  {{else}}<p class="dim">Nothing has been recorded yet.</p>{{end}}
+  {{else}}<p class="dim">No sign-in, step-up, Account or API Token records yet.</p>{{end}}
 {{end}}
 </div>
 

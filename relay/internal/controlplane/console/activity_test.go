@@ -458,13 +458,13 @@ func TestActivity_DefaultFeedOmitsTheTrailsOwnReads(t *testing.T) {
 	if strings.Contains(body, "enumerated list_nodes") {
 		t.Error("the default feed rendered a read record")
 	}
-	if !strings.Contains(body, `href="/console/activity?kind=read"`) {
+	if !strings.Contains(body, `<p class="kindnote">Read records are left out of this feed: <a href="/console/activity?console=show&amp;kind=read">show them</a>.</p>`) {
 		t.Error("the screen does not link to the read records it left out — omitting them silently " +
 			"is hiding them")
 	}
 
 	one := &fakeQueries{rows: q.rows}
-	filtered := get(t, newTestHandler(activityDeps(one), accounts.RoleAdmin), "/console/activity?kind=read").Body.String()
+	filtered := get(t, newTestHandler(activityDeps(one), accounts.RoleAdmin), "/console/activity?console=show&kind=read").Body.String()
 	if !strings.Contains(filtered, "enumerated list_nodes") {
 		t.Error("?kind=read does not render the trail's read records")
 	}
@@ -1286,7 +1286,8 @@ func TestActivity_ExhaustedPositionSaysSoRatherThanNothingMatches(t *testing.T) 
 	if !strings.Contains(body, "There is nothing older for this filter.") {
 		t.Error("both lanes exhausted does not say so")
 	}
-	if strings.Contains(body, "Nothing matches") || strings.Contains(body, "Nothing has been recorded yet") {
+	if strings.Contains(body, "Nothing matches") || strings.Contains(body, "Nothing has been recorded yet") ||
+		strings.Contains(body, "No calls other than reads have been recorded yet") {
 		t.Error("an exhausted position is reported as an empty filter or an empty trail")
 	}
 	if len(q.jobCursors) != 0 || len(q.auditCursors) != 0 {
@@ -1294,7 +1295,7 @@ func TestActivity_ExhaustedPositionSaysSoRatherThanNothingMatches(t *testing.T) 
 	}
 }
 
-const firstRunSentence = "When an AI-agent or an operator dispatches a Task, or calls any tool, it appears here."
+const firstRunSentence = "Each Task an AI-agent or operator dispatches, and each tool call other than a read, appears here."
 
 // TestActivity_FirstRunIsOneBlockWithFiltersCollapsed: nothing recorded and
 // nothing asked for is one explanatory block with the filters closed, not
@@ -1304,7 +1305,7 @@ func TestActivity_FirstRunIsOneBlockWithFiltersCollapsed(t *testing.T) {
 	d.Events = newFakeEvents()
 	body := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity").Body.String())
 
-	for _, want := range []string{firstRunSentence, `<div class="empty">`, `<h2>Nothing has been recorded yet.</h2>`, `data-when="on">Live.`} {
+	for _, want := range []string{firstRunSentence, `<div class="empty">`, `<h2>No calls other than reads have been recorded yet.</h2>`, `data-when="on">Live.`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the first-run page lacks %q", want)
 		}
@@ -1622,5 +1623,97 @@ func TestActivity_RefreshLimitSentenceOnlyWhereSomethingIsQueried(t *testing.T) 
 	}
 	if strings.Contains(get(t, h, "/console/activity?kind=nosuchkind").Body.String(), sentence) {
 		t.Error("the unknown-kind view queries nothing yet claims Refresh is an audited read")
+	}
+}
+
+const noCallsOtherThanReads = "No calls other than reads have been recorded yet."
+
+// TestActivity_NoStateSaysNothingHasBeenRecorded: every load of Activity is an
+// audited read the default feed leaves out, so no empty state may claim the
+// whole trail is empty.
+func TestActivity_NoStateSaysNothingHasBeenRecorded(t *testing.T) {
+	heading := "<h2>" + noCallsOtherThanReads + "</h2>"
+	fallback := `<p class="dim">` + noCallsOtherThanReads + `</p>`
+	cases := []struct {
+		name    string
+		rows    []capability.AuditRow
+		path    string
+		want    []string
+		notWant []string
+	}{
+		{"fresh relay", nil, "/console/activity", []string{heading}, nil},
+		{"only reads recorded", consoleReadsOnly(3), "/console/activity", []string{heading}, nil},
+		{"dropped outcome", nil, "/console/activity?outcome=nonesuch", []string{fallback}, []string{`<div class="empty">`}},
+		{"no match", nil, "/console/activity?q=zz-nomatch", []string{"Nothing matches."}, nil},
+		{"exhausted", nil, "/console/activity?jdone=1&adone=1", []string{"There is nothing older for this filter."}, nil},
+		{"scrolled", nil, "/console/activity?jc=99&ac=99", []string{"There is nothing older than this point."}, nil},
+		{"only console reads", consoleReadsOnly(3), "/console/activity?kind=read", []string{"No calls on this page other than reads made from this Console."}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := contentOf(activityAs(t, &fakeQueries{rows: tc.rows}, tc.path))
+			if strings.Contains(body, "Nothing has been recorded yet") {
+				t.Error("the screen claims nothing has been recorded")
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(body, w) {
+					t.Errorf("body lacks %q", w)
+				}
+			}
+			for _, n := range tc.notWant {
+				if strings.Contains(body, n) {
+					t.Errorf("body carries %q", n)
+				}
+			}
+		})
+	}
+}
+
+// TestActivity_OnlyReadsRecordedLinksToAFeedThatShowsThem: the read-records
+// link must lead to rows, not to a second empty feed. Its old target,
+// ?kind=read, drew the all-Console-reads sentence (#1110).
+func TestActivity_OnlyReadsRecordedLinksToAFeedThatShowsThem(t *testing.T) {
+	rows := consoleReadsOnly(3)
+	body := contentOf(activityAs(t, &fakeQueries{rows: rows}, "/console/activity"))
+	for _, want := range []string{"<h2>" + noCallsOtherThanReads + "</h2>", firstRunSentence,
+		`href="/console/activity?console=show&amp;kind=read">show them</a>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the first-run page lacks %q", want)
+		}
+	}
+
+	followed := contentOf(activityAs(t, &fakeQueries{rows: rows}, "/console/activity?console=show&kind=read"))
+	if !strings.Contains(followed, `<article class="ev"`) {
+		t.Error("following the read-records link shows no rows")
+	}
+	for _, absent := range []string{"No calls on this page other than reads made from this Console.", `<div class="empty">`} {
+		if strings.Contains(followed, absent) {
+			t.Errorf("following the read-records link still carries %q", absent)
+		}
+	}
+
+	old := contentOf(activityAs(t, &fakeQueries{rows: rows}, "/console/activity?kind=read"))
+	if !strings.Contains(old, "No calls on this page other than reads made from this Console.") {
+		t.Error("the plain read chip target no longer draws the all-Console-reads sentence")
+	}
+}
+
+// TestActivity_ScrolledPastEveryRecordSaysNothingOlderNotNothingRecorded: a
+// hand-written cursor past every record is a fact about the position.
+func TestActivity_ScrolledPastEveryRecordSaysNothingOlderNotNothingRecorded(t *testing.T) {
+	body := activityAs(t, &fakeQueries{}, "/console/activity?jc=99&ac=99")
+	for _, want := range []string{`<p class="dim">There is nothing older than this point.</p>`, "These are not the most recent events."} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %q", want)
+		}
+	}
+	for _, absent := range []string{noCallsOtherThanReads, "Nothing has been recorded yet", `<div class="empty">`} {
+		if strings.Contains(body, absent) {
+			t.Errorf("body carries %q", absent)
+		}
+	}
+	narrowed := activityAs(t, &fakeQueries{}, "/console/activity?q=zz&jc=99&ac=99")
+	if !strings.Contains(narrowed, "Nothing matches.") {
+		t.Error("a narrowed scrolled page lost \"Nothing matches.\"")
 	}
 }
