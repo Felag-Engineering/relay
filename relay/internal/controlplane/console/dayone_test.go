@@ -118,10 +118,10 @@ func TestActivity_FreshRelaySaysNothingHappenedRatherThanNothingMatches(t *testi
 	if strings.Contains(body, "Nothing matches.") {
 		t.Error("an unfiltered, empty trail says \"Nothing matches.\" — nothing was filtered out")
 	}
-	if !strings.Contains(body, "Nothing has been recorded yet") {
+	if !strings.Contains(body, "No calls other than reads have been recorded yet") {
 		t.Error("an empty trail does not say so")
 	}
-	if !strings.Contains(body, "When an AI-agent or an operator dispatches a Task, or calls any tool, it appears here.") {
+	if !strings.Contains(body, firstRunSentence) {
 		t.Error("a fresh Relay's Activity does not carry the first-run explanation")
 	}
 

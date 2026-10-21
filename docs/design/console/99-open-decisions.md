@@ -368,6 +368,12 @@ into one block saying what will appear and how, the live-region sentence stays, 
 sit in a closed `<details>`. With a filter applied and nothing matching, the filters stay open
 (spec 04, "Nothing recorded yet").
 
+*Amended 2026-10-21 (owner):* every load of Activity is itself an audited read, so a trail with
+nothing recorded is never what anyone looking at it sees. The block is drawn on the same condition,
+now meaning no call other than a read recorded. It is headed "No calls other than reads have been
+recorded yet.", no read is added to tell the two apart, and the read-records link includes reads
+made from this Console (`?console=show`) (spec 04, "Nothing recorded yet").
+
 ### D30. Freshness in words, never on a timer — **RESOLVED 2026-10-18 (owner)**
 
 The Fleet view gets a Refresh link. Render times read relatively ("rendered 40s ago") with the
