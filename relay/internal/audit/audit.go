@@ -229,7 +229,7 @@ const (
 	// trail's only reader is an admin through Access (spec 20), who already
 	// sees every Account; the sign-in RESPONSE stays one refusal (spec 12).
 	// Any future surface that reads the trail must not return these records
-	// below admin. The verified lane still names no Account on a failure.
+	// below admin. The verified lane still names no Account on a sign-in failure.
 	//
 	// KindLoginThrottled is distinct from KindLoginFailed because nothing was
 	// checked: the attempt was refused before any credential was compared, so
@@ -261,8 +261,8 @@ const (
 	// consumer can tell "signed in" from "re-proved presence mid-session".
 	//
 	// KindStepUpFailed carries no indication of which half was wrong: a
-	// step-up runs against the session's own Account, so its verified lane is
-	// empty and its asserted name is that Account's, never typed text.
+	// step-up runs against the session's own Account, so its verified lane names
+	// that Account and its asserted lane is empty. It never carries typed text.
 	//
 	// KindStepUpThrottled is distinct from KindStepUpFailed because nothing
 	// was checked, for the same reason KindLoginThrottled is distinct from

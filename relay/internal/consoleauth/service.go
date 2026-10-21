@@ -117,10 +117,13 @@ type LoginEvent struct {
 	Kind string
 
 	// Account and AccountID identify the acting Account. Both are empty on a
-	// failure, ALWAYS — including a failure against an Account that exists:
-	// nobody proved anything, so the verified lane names nobody.
-	// SubmittedName below carries the claim, in the asserted lane, and on a
-	// failure only when it is a real Account's name (D19).
+	// failed or throttled SIGN-IN, ALWAYS — including a failure against an
+	// Account that exists: nobody proved anything, so the verified lane names
+	// nobody. SubmittedName below carries the claim, in the asserted lane, and
+	// on a sign-in failure only when it is a real Account's name (D19).
+	// On every step-up kind they name the session's own Account, which the
+	// session already authenticated: a refused step-up reveals nothing the
+	// session holder does not know, and says nothing about typed text.
 	Account   string
 	AccountID string
 	Role      string
@@ -129,7 +132,7 @@ type LoginEvent struct {
 	// typed. On a failed or throttled sign-in it is the name of the existing
 	// Account the typed text matched, or "" when it matched none (D19): a name
 	// box can hold a password, so text that is not an Account's name is never
-	// stored. On step-up it is the session's own Account.
+	// stored. On step-up it is empty: a step-up submits no name.
 	SubmittedName string
 
 	// Method is how the identity was established (MethodPassword, MethodOIDC).
@@ -466,6 +469,9 @@ func (s *Service) CSRFToken(id SessionID) CSRFToken {
 // it IS a login — the strongest one in the system. What it must never be is a
 // cheaper check than the one that established the session.
 //
+// Every step-up record, whether succeeded, failed or throttled, carries the
+// session's own Account in the verified lane.
+//
 // Every exit that CHECKED A CREDENTIAL is audited, deliberately under its OWN
 // kinds (KindStepUp/Failed/Throttled) rather than the sign-in ones: the step-up
 // door is reached only from an already-authenticated session, so "someone is
@@ -504,10 +510,12 @@ func (s *Service) StepUp(ctx context.Context, id SessionID, password accounts.Pa
 
 	if wait := s.throttle.Check(source, name); wait > 0 {
 		if err := s.recordLogin(ctx, LoginEvent{
-			Kind:          auditKindStepUpThrottled,
-			SubmittedName: sess.Account,
-			Method:        MethodPassword,
-			Source:        source,
+			Kind:      auditKindStepUpThrottled,
+			Account:   acct.Name,
+			AccountID: acct.ID,
+			Role:      string(acct.Role),
+			Method:    MethodPassword,
+			Source:    source,
 			Reason: fmt.Sprintf("step-up re-authentication refused before any credential "+
 				"was checked; next attempt accepted in %s", ceilSecond(wait)),
 		}); err != nil {
@@ -523,11 +531,13 @@ func (s *Service) StepUp(ctx context.Context, id SessionID, password accounts.Pa
 		}
 		s.throttle.Fail(source, name)
 		if err := s.recordLogin(ctx, LoginEvent{
-			Kind:          auditKindStepUpFailed,
-			SubmittedName: sess.Account,
-			Method:        MethodPassword,
-			Source:        source,
-			Reason:        "step-up re-authentication refused",
+			Kind:      auditKindStepUpFailed,
+			Account:   acct.Name,
+			AccountID: acct.ID,
+			Role:      string(acct.Role),
+			Method:    MethodPassword,
+			Source:    source,
+			Reason:    "step-up re-authentication refused",
 		}); err != nil {
 			return SessionID{}, err
 		}

@@ -14,7 +14,7 @@ package console
 // capability.ReadLane.QueryAudit with the caller unchanged, exactly as every
 // other screen on Deps.Queries does (invariant 10, ADR-0025).
 //
-// # Why a failed sign-in or step-up reconstructs nothing
+// # Why a failed sign-in reconstructs nothing
 //
 // A failed or throttled sign-in records the typed name only when it is a
 // real Account's (D19): a name box can hold a password. This screen draws
@@ -22,6 +22,9 @@ package console
 // record with no typed name is drawn as "a name that is not an Account".
 // accessAttempt still has exactly three answers (succeeded, failed,
 // throttled) and no fourth that says which half was wrong.
+//
+// A step-up row differs: its actor is the session's verified Account, as the
+// record carries it, and it is still never resolved against the registry.
 //
 // # Why there is no subject filter
 //
@@ -229,7 +232,8 @@ type accessRow struct {
 
 	// Actor is set ONLY when f.VerifiedAccountID != "" — principalText(f),
 	// drawn as a verified chip. A record with no verified Account (every
-	// failed or throttled sign-in and step-up, by design) leaves this empty
+	// failed or throttled sign-in, by design, and any step-up record that
+	// carries no verified Account) leaves this empty
 	// and the template draws a dim "no verified Account" instead: a bare
 	// Principal string is never promoted to a verified chip. There is no
 	// separate Verified flag — Actor != "" already means verified.
@@ -245,7 +249,7 @@ type accessRow struct {
 	// chip.
 	HostLever string
 
-	// Asserted is f.OnBehalfOf: what was typed on a sign-in or step-up,
+	// Asserted is f.OnBehalfOf: what was typed on a sign-in (or carried by an older step-up record),
 	// rendered as a separate, dashed chip. It is set only when the claim says
 	// something the verified chip does not: no verified Account, a failed or
 	// throttled attempt, or a name that differs (byte for byte) from the
