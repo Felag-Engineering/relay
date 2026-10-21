@@ -1,0 +1,28 @@
+# /etc/relay/relay.toml, written once by the relay package at its first install, only when no
+# file existed, and never rewritten by an upgrade. Edit it on this host, then restart the Relay.
+# Every other setting and its default is in /usr/share/relay/relay.toml.example.
+#
+# Keep this file owned by root and readable by the relay group only: it is the Relay's security
+# floor, and the Relay refuses to start if it could write it or another account could read it.
+
+[control_plane]
+enabled = true
+# Loopback only: nothing is reachable off this host until you widen it, which you should do
+# only after `relay init` has created the first admin.
+listen_address = "127.0.0.1:9443"
+
+[console]
+enabled = true
+
+[ca]
+dir = "/var/lib/relay/ca"
+
+[store]
+path = "/var/lib/relay/relay.db"
+
+[tls]
+# Nodes verify the Relay's certificate against this name. The package sets it from this
+# host's fully qualified name. If the line is commented out, none was found: set it to the
+# name the relay-daemons dial and uncomment it. Until then the Relay refuses to start,
+# naming tls.hostname.
+hostname = "@FQDN@"

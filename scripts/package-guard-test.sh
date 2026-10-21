@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # Proves scripts/build-packages.sh and scripts/package-guard.sh, the release's package build and
-# guards (DI-24, DI-32): two builds of the same inputs from different paths, umasks and source
-# mtimes are byte-identical; the payload binary is the input binary byte for byte; the guards
-# refuse a different binary, a missing or wrong SHA256SUMS line, and a package that declares
-# configuration files; the content guard accepts the real packages and refuses, each by the
-# check meant to catch it, a changed maintainer script, a setuid or non-root entry, an extra
-# payload file, a changed default Policy or LICENSE, an extra relationship and an added trigger
-# or scriptlet; the build refuses a missing SOURCE_DATE_EPOCH, a malformed version and an
-# unknown architecture; and the maintainer scripts, run under a fake root, write nothing through
-# a directory any account but root can write.
+# guards (DI-24, DI-32, RC-23), for the relay-daemon, catalog and Relay packages: two builds of
+# the same inputs from different paths, umasks and source mtimes are byte-identical; the payload
+# binary is the input binary byte for byte; the guards refuse a different binary, a missing or
+# wrong SHA256SUMS line, and a package that declares configuration files; the content guard
+# accepts the real packages and refuses, each by the check meant to catch it, a changed
+# maintainer script, a setuid or non-root entry, an extra payload file, a changed default Policy
+# or LICENSE, an extra relationship and an added trigger or scriptlet; the build refuses a
+# missing SOURCE_DATE_EPOCH, a malformed version and an unknown architecture; and the daemon's
+# maintainer scripts, run under a fake root, write nothing through a directory any account but
+# root can write.
 #
 # Builds the pinned nfpm with `go tool` and packages a stand-in binary; touches nothing in this
-# working tree. Needs dpkg-deb, rpm, rpm2cpio, cpio and dash: a missing one is a recorded skip
-# under `make verify` and a failure anywhere else, the convention for a missing tool.
+# working tree. The Relay's maintainer scripts are proved separately, by
+# scripts/relay-package-scripts-test.sh. Needs dpkg-deb, rpm, rpm2cpio, cpio and dash: a missing
+# one is a recorded skip under `make verify` and a failure anywhere else, the convention for a
+# missing tool.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -50,19 +53,21 @@ expect_refused() {
 # A stand-in for the guarded release binary: arbitrary bytes, which the package must carry as is.
 mkdir -p "$work/one" "$work/two/a/b/c"
 head -c 65536 /dev/urandom > "$work/one/relay-daemon"
-chmod 0755 "$work/one/relay-daemon"
+head -c 65536 /dev/urandom > "$work/one/relay"
+chmod 0755 "$work/one/relay-daemon" "$work/one/relay"
 cp "$work/one/relay-daemon" "$work/two/a/b/c/other-name"
-touch -d '2001-02-03' "$work/two/a/b/c/other-name"
+cp "$work/one/relay" "$work/two/a/b/c/other-relay"
+touch -d '2001-02-03' "$work/two/a/b/c/other-name" "$work/two/a/b/c/other-relay"
 
-if ! bash "$build" "$version" x86_64 "$work/one/relay-daemon" "$work/out1" --catalog >"$work/log1" 2>&1; then
+if ! bash "$build" "$version" x86_64 "$work/one/relay-daemon" "$work/out1" --catalog --relay "$work/one/relay" >"$work/log1" 2>&1; then
   cat "$work/log1"; bad "first build"; echo "package-guard-test: $pass passed, $fail failed"; exit 1
 fi
-(umask 077; bash "$build" "$version" x86_64 "$work/two/a/b/c/other-name" "$work/out2" --catalog >"$work/log2" 2>&1) \
+(umask 077; bash "$build" "$version" x86_64 "$work/two/a/b/c/other-name" "$work/out2" --catalog --relay "$work/two/a/b/c/other-relay" >"$work/log2" 2>&1) \
   || { cat "$work/log2"; bad "second build"; }
 
 shopt -s nullglob
 pkgs=("$work"/out1/*.deb "$work"/out1/*.rpm)
-if [ "${#pkgs[@]}" -eq 4 ]; then ok "four packages built"; else bad "four packages built (got ${#pkgs[@]})"; fi
+if [ "${#pkgs[@]}" -eq 6 ]; then ok "six packages built"; else bad "six packages built (got ${#pkgs[@]})"; fi
 for p in "${pkgs[@]}"; do
   n="$(basename "$p")"
   if cmp -s "$p" "$work/out2/$n"; then ok "reproducible: $n"; else bad "reproducible: $n"; fi
@@ -72,6 +77,8 @@ deb="$(echo "$work"/out1/relay-daemon_*_amd64.deb)"
 rpmf="$(echo "$work"/out1/relay-daemon-*.x86_64.rpm)"
 read_deb="$(echo "$work"/out1/relay-read_*_all.deb)"
 read_rpm="$(echo "$work"/out1/relay-read-*.noarch.rpm)"
+relay_deb="$(echo "$work"/out1/relay_*_amd64.deb)"
+relay_rpm="$(echo "$work"/out1/relay-[0-9]*.x86_64.rpm)"
 
 # DI-24: the payload binary is the input binary, byte for byte.
 expect_ok "deb payload equals the input binary" bash "$guard" same "$deb" /usr/bin/relay-daemon "$work/one/relay-daemon"
@@ -82,6 +89,20 @@ expect_refused "deb payload against a one-byte-different binary is refused" 1 ba
 expect_refused "rpm payload against a one-byte-different binary is refused" 1 bash "$guard" same "$rpmf" /usr/bin/relay-daemon "$work/tampered"
 expect_refused "a member the package lacks is refused" 1 bash "$guard" same "$deb" /usr/bin/not-there "$work/one/relay-daemon"
 expect_refused "an rpm member the package lacks is refused" 1 bash "$guard" same "$rpmf" /usr/bin/not-there "$work/one/relay-daemon"
+
+# RC-23: the Relay package's payload binary is the input binary, byte for byte.
+expect_ok "relay deb payload equals the input binary" bash "$guard" same "$relay_deb" /usr/bin/relay "$work/one/relay"
+expect_ok "relay rpm payload equals the input binary" bash "$guard" same "$relay_rpm" /usr/bin/relay "$work/one/relay"
+cp "$work/one/relay" "$work/tampered-relay"
+printf '\001' | dd of="$work/tampered-relay" bs=1 seek=100 conv=notrunc status=none
+expect_refused "relay deb payload against a one-byte-different binary is refused" 1 bash "$guard" same "$relay_deb" /usr/bin/relay "$work/tampered-relay"
+expect_refused "relay rpm payload against a one-byte-different binary is refused" 1 bash "$guard" same "$relay_rpm" /usr/bin/relay "$work/tampered-relay"
+for p in "$relay_deb" "$relay_rpm"; do
+  expect_ok "$(basename "$p"): unit equals the standalone unit" \
+    bash "$guard" same "$p" /usr/lib/systemd/system/relay.service "$root/relay/packaging/relay.service"
+  expect_ok "$(basename "$p"): example configuration equals the standalone example" \
+    bash "$guard" same "$p" /usr/share/relay/relay.toml.example "$root/relay/packaging/relay.toml.example"
+done
 
 # DI-32: the packaged unit and environment example are the standalone files.
 for p in "$deb" "$rpmf"; do
@@ -139,6 +160,12 @@ check "rpm binary root 0755" lists '^-rwxr-xr-x +1 root +root .* /usr/bin/relay-
 check "daemon rpm owns nothing under /etc" lacks ' /etc/' "$rlisting"
 check "catalog rpm requires relay-daemon" lists '^relay-daemon$' "$(rpm -qpR "$read_rpm" 2>/dev/null)"
 check "catalog deb depends on relay-daemon" lists '^relay-daemon$' "$(dpkg-deb -f "$read_deb" Depends)"
+relay_listing="$(dpkg-deb -c "$relay_deb")"
+check "relay deb binary root 0755" lists '^-rwxr-xr-x root/root .* \./usr/bin/relay$' "$relay_listing"
+check "relay deb owns nothing under /etc or /var" lacks '\./(etc|var)/' "$relay_listing"
+relay_rlisting="$(rpm -qlvp "$relay_rpm" 2>/dev/null)"
+check "relay rpm binary root 0755" lists '^-rwxr-xr-x +1 root +root .* /usr/bin/relay$' "$relay_rlisting"
+check "relay rpm owns nothing under /etc or /var" lacks ' /(etc|var)/' "$relay_rlisting"
 
 # The content guard reads every package with dpkg-deb and rpm, never nfpm, against the
 # repository's expected identity, listings, scripts and relationships.
@@ -148,7 +175,13 @@ done
 for p in "$read_deb" "$read_rpm"; do
   expect_ok "$(basename "$p"): content as expected" bash "$guard" content "$p" relay-read "$version" x86_64
 done
+for p in "$relay_deb" "$relay_rpm"; do
+  expect_ok "$(basename "$p"): content as expected" bash "$guard" content "$p" relay "$version" x86_64
+  expect_refused "$(basename "$p") checked as relay-daemon is refused" 1 bash "$guard" content "$p" relay-daemon "$version" x86_64
+done
 expect_refused "a daemon package checked as the catalog is refused" 1 bash "$guard" content "$deb" relay-read "$version" x86_64
+expect_refused "a daemon deb checked as the Relay is refused" 1 bash "$guard" content "$deb" relay "$version" x86_64
+expect_refused "a daemon rpm checked as the Relay is refused" 1 bash "$guard" content "$rpmf" relay "$version" x86_64
 expect_refused "a malformed expected version is a usage error" 2 bash "$guard" content "$deb" relay-daemon '1.2.3"x' x86_64
 
 # Tampered packages: each is built from a copy of the packaging inputs with one thing changed,
@@ -156,9 +189,10 @@ expect_refused "a malformed expected version is a usage error" 2 bash "$guard" c
 # capability cannot be expressed in an nfpm manifest, so it has no tampered case here; the
 # payload listing would show it as a changed caps= field, refused like any other difference.
 fake="$work/fake"
-mkdir -p "$fake/docs/operations" "$fake/daemon" "$fake/tools"
+mkdir -p "$fake/docs/operations" "$fake/daemon" "$fake/relay" "$fake/tools"
 cp -r "$root/scripts" "$fake/scripts"
 cp -r "$root/daemon/packaging" "$fake/daemon/packaging"
+cp -r "$root/relay/packaging" "$fake/relay/packaging"
 cp "$root/daemon/policy.default.toml" "$fake/daemon/"
 cp "$root/docs/operations/daemon-privilege-posture.md" "$fake/docs/operations/"
 cp "$root/LICENSE" "$fake/"
@@ -167,15 +201,16 @@ cp -r "$root/tools/nfpm" "$fake/tools/nfpm"
 # tampered NAME EDIT...: builds packages from the fake tree after running EDIT in it, then
 # restores the tree, and prints the output directory. T_VERSION and T_ARCH override the version
 # and architecture built (the guard is still told the real ones); T_CATALOG=1 builds the
-# catalog package too.
+# catalog package too, and T_RELAY=1 the Relay's packages.
 tampered() {
   local name="$1"; shift
   local out="$work/t-$name" extra=()
-  if [ -n "${T_CATALOG:-}" ]; then extra=(--catalog); fi
+  if [ -n "${T_CATALOG:-}" ]; then extra+=(--catalog); fi
+  if [ -n "${T_RELAY:-}" ]; then extra+=(--relay "$work/one/relay"); fi
   rm -rf "$fake.bak"; cp -r "$fake" "$fake.bak"
   (cd "$fake" && "$@") || { bad "tamper $name: edit failed"; return 1; }
   bash "$fake/scripts/build-packages.sh" "${T_VERSION:-$version}" "${T_ARCH:-x86_64}" \
-    "$work/one/relay-daemon" "$out" "${extra[@]}" >/dev/null 2>&1 || bad "tamper $name: build failed"
+    "$work/one/relay-daemon" "$out" ${extra[@]+"${extra[@]}"} >/dev/null 2>&1 || bad "tamper $name: build failed"
   rm -rf "$fake"; mv "$fake.bak" "$fake"
   printf '%s\n' "$out"
 }
@@ -245,6 +280,33 @@ refused_for "catalog deb with an extra payload file is refused" "payload listing
 refused_for "catalog rpm with an extra payload file is refused" "payload listing differs" \
   "$(echo "$work"/t-catextra/relay-read*.rpm)" relay-read
 
+# The Relay's packages, the same way. T_RELAY=1 builds them from the tampered tree.
+relay_manifest=relay/packaging/nfpm/relay.yaml
+refuses_both_relay() {
+  local what="$1" deb_reason="$2" rpm_reason="$3" out="$4"
+  refused_for "relay deb with $what is refused" "$deb_reason" "$(echo "$out"/relay_*_amd64.deb)" relay
+  refused_for "relay rpm with $what is refused" "$rpm_reason" "$(echo "$out"/relay-[0-9]*.x86_64.rpm)" relay
+}
+refuses_both_relay "a changed maintainer script" "postinst differs" "scriptlets and triggers differs" \
+  "$(T_RELAY=1 tampered relayscript sh -c 'echo "touch /tmp/x" >> relay/packaging/scripts/postinst.sh')"
+refuses_both_relay "a changed configuration template" "relay.toml.in differs" "relay.toml.in differs" \
+  "$(T_RELAY=1 tampered relaytemplate sh -c 'echo "# changed" >> relay/packaging/relay.toml.in')"
+refuses_both_relay "a changed configuration guide" "configuration-guide.txt differs" "configuration-guide.txt differs" \
+  "$(T_RELAY=1 tampered relayguide sh -c 'echo "changed" >> relay/packaging/configuration-guide.txt')"
+refuses_both_relay "a changed sysusers entry" "relay.conf differs" "relay.conf differs" \
+  "$(T_RELAY=1 tampered relaysysusers sh -c 'echo "g extra - -" >> relay/packaging/relay.sysusers.conf')"
+refuses_both_relay "a changed unit" "relay.service differs" "relay.service differs" \
+  "$(T_RELAY=1 tampered relayunit sh -c 'echo "# changed" >> relay/packaging/relay.service')"
+refuses_both_relay "a changed example configuration" "relay.toml.example differs" "relay.toml.example differs" \
+  "$(T_RELAY=1 tampered relayexample sh -c 'echo "# changed" >> relay/packaging/relay.toml.example')"
+refuses_both_relay "a payload file under /etc/relay" "payload listing differs" "payload listing differs" \
+  "$(T_RELAY=1 tampered relayextra sed -i 's|^contents:|contents:\n  - src: "@SRC@/LICENSE"\n    dst: /etc/relay/relay.toml\n    file_info: {mode: 0o640, owner: root, group: root}|' "$relay_manifest")"
+refuses_both_relay "a setuid binary" "payload listing differs" "payload listing differs" \
+  "$(T_RELAY=1 tampered relaysetuid sed -i 's/file_info: {mode: 0o755, owner: root, group: root}/file_info: {mode: 0o4755, owner: root, group: root}/' "$relay_manifest")"
+refuses_both_relay "a non-root owner" "payload listing differs" "payload listing differs" \
+  "$(T_RELAY=1 tampered relayowner sed -i '0,/owner: root, group: root/s//owner: nobody, group: root/' "$relay_manifest")"
+refuses_both_relay "an extra dependency" "control file differs" "relationships differs" \
+  "$(T_RELAY=1 tampered relayrelation sed -i 's|^mtime:|depends:\n  - other-daemon\nmtime:|' "$relay_manifest")"
 
 # A fake root for the maintainer scripts, first on PATH when they run. `stat -c %u` reports uid
 # 0 for every path the runner owns, or the uid $owners assigns to the path's inode. `chown`
@@ -493,6 +555,9 @@ expect_refused "no SOURCE_DATE_EPOCH is refused" 2 env -u SOURCE_DATE_EPOCH bash
 expect_refused "a non-integer SOURCE_DATE_EPOCH is refused" 2 env SOURCE_DATE_EPOCH=yesterday bash "$build" "$version" x86_64 "$work/one/relay-daemon" "$work/x"
 expect_refused "a malformed version is refused" 2 bash "$build" '1.2.3"; evil: x' x86_64 "$work/one/relay-daemon" "$work/x"
 expect_refused "an unknown architecture is refused" 2 bash "$build" "$version" riscv64 "$work/one/relay-daemon" "$work/x"
+expect_refused "a missing Relay binary is refused" 2 bash "$build" "$version" x86_64 "$work/one/relay-daemon" "$work/x" --relay "$work/none"
+expect_refused "--relay without a binary is refused" 2 bash "$build" "$version" x86_64 "$work/one/relay-daemon" "$work/x" --relay
+expect_refused "an unknown flag is refused" 2 bash "$build" "$version" x86_64 "$work/one/relay-daemon" "$work/x" --nope
 
 echo "package-guard-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

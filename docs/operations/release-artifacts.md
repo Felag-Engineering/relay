@@ -19,6 +19,7 @@ For tag `v<version>` (e.g. `v0.1.0`, `v0.1.0-beta`), the GitHub Release carries:
 | `<artifact>.spdx.json` | An SPDX SBOM for each of the four binaries. The Relay's lists the exact Go modules in the binary. The daemon's is derived from `Cargo.lock` — a superset (every target, dev and build dependencies) — because a stripped Rust binary carries no dependency metadata to read. |
 | `relay-image-<version>-linux-<arch>.spdx.json` | An SPDX SBOM for each platform of the Relay image. |
 | `relay-daemon.service`, `relay-daemon.env.example` | The hardened systemd unit and the example environment file a hand-built install takes, byte-equal to the copies inside the daemon packages (DI-32). |
+| `relay.service`, `relay.toml.example` | The Relay's hardened systemd unit and its example configuration file, which a hand-built install takes, byte-equal to the copies inside the Relay packages. |
 | `SHA256SUMS` | `sha256sum`-format digests of every file above, bare filenames. |
 | `SHA256SUMS.sigstore.json` | A keyless [cosign](https://docs.sigstore.dev/) bundle signing `SHA256SUMS`. |
 
@@ -199,13 +200,13 @@ image family recorded in the workflow, and set `SOURCE_DATE_EPOCH` to the tagged
 committer date. The daemon needs `musl-tools`; `make print-release-daemon-bin` prints where it
 lands.
 
-The daemon's `.deb` and `.rpm` packages are built in both passes from the binaries above, by
-the nfpm pinned under `tools/nfpm` with every manifest's `mtime` taken from
+The daemon's and the Relay's `.deb` and `.rpm` packages are built in both passes from the
+binaries above, by the nfpm pinned under `tools/nfpm` with every manifest's `mtime` taken from
 `SOURCE_DATE_EPOCH`. The workflow fails unless the two passes' packages are byte-identical and
-each package's `/usr/bin/relay-daemon` is the release binary byte for byte. Because both passes
-run the same nfpm, that proves determinism, not integrity. A separate check reads every
-package with `dpkg-deb` and `rpm` and compares it with a reviewed baseline in the repository
-(`daemon/packaging/expected/`):
+each package's `/usr/bin/relay-daemon` or `/usr/bin/relay` is the release binary byte for byte.
+Because both passes run the same nfpm, that proves determinism, not integrity. A separate check
+reads every package with `dpkg-deb` and `rpm` and compares it with a reviewed baseline in the
+repository (`daemon/packaging/expected/` and `relay/packaging/expected/`):
 
 - the package's identity, computed from the release version and architecture rather than read
   from the package: the whole `.deb` control file, and the `.rpm` name, epoch,
@@ -214,14 +215,15 @@ package with `dpkg-deb` and `rpm` and compares it with a reviewed baseline in th
   entry;
 - the maintainer scripts and triggers;
 - the declared relationships;
-- the files carried from the repository: default Policy, LICENSE, posture document, unit,
-  environment example and catalog.
+- the files carried from the repository: default Policy, LICENSE, posture document, units,
+  environment example, example configuration, the Relay's configuration template and guide,
+  and catalog.
 
 It does not check timestamps; the binary's bytes are checked separately. The packages are
 uploaded as the run's `packages` artifact and are **not yet attached to the Release**: that
 waits on the install matrix and on the unit's syscall filter being verified on a real systemd
 host (`daemon-installation.md`, DI-33 and DI-3). Until then nothing in `SHA256SUMS` names
-them. The standalone unit is attached already.
+them. The standalone units and example configuration are attached already.
 
 The **image is not byte-reproducible** (Alpine's package index and file timestamps float).
 What is guaranteed is that its `/usr/local/bin/relay` is the released, rebuild-verified

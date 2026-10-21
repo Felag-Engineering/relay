@@ -133,14 +133,24 @@ jobs:
         run: make test-license-change-date
 
       # The catalog ledger gate (DI-30), proved against fixture ledgers and a throwaway repo,
-      # then run against the real ledger and the tags fetched above. Without tags it fails.
+      # then run against the real ledger and the tags fetched above.
       - name: Catalog ledger gate self-test
         if: ${{ !cancelled() }}
         run: make test-catalog-ledger
 
+      # No visible v* tag (exit 3) means nothing has been released, so nothing is frozen yet: it
+      # warns here, and only a tag push in the release workflow fails on it.
       - name: Catalog ledger (DI-30)
         if: ${{ !cancelled() }}
-        run: make catalog-ledger-check
+        run: |
+          rc=0
+          out=$(bash scripts/catalog-ledger.sh check 2>&1) || rc=$?
+          if [ "$rc" -eq 3 ]; then
+            echo "::warning::catalog-ledger: no release tag visible; nothing is frozen until the first v* tag"
+            exit 0
+          fi
+          printf '%s\n' "$out"
+          exit "$rc"
 
       # scripts/codex-review.sh's structural verdict classifier, proved against a stubbed
       # companion (#694). Shell, git and node — the stub companion is a Node program and the
@@ -205,9 +215,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: make secrets-scan
 
-      # scripts/package-guard-test.sh: the release's package build and guards (DI-24, DI-32),
-      # proved against two builds, a stand-in binary and tampered packages. Needs Go for the
-      # pinned nfpm and the rpm tools to read the packages back.
+      # make test-packages: scripts/relay-package-scripts-test.sh, the Relay's maintainer
+      # scripts under a fake root (RC-24, RC-25, RC-26), then scripts/package-guard-test.sh,
+      # the release's package build and guards (DI-24, DI-32, RC-23), proved against two
+      # builds, stand-in binaries and tampered packages. Needs Go for the pinned nfpm and the
+      # rpm tools to read the packages back.
       - name: Package build and guard self-test
         if: ${{ !cancelled() }}
         run: |

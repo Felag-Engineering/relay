@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# The release workflow's package guards (DI-24, DI-32). Reads package bytes only; builds nothing.
+# The release workflow's package guards (DI-24, DI-32, RC-23). Reads package bytes only; builds
+# nothing.
 #
 #   package-guard.sh same <package> <path-in-package> <file>
 #       The member at <path-in-package> is byte-equal to <file>. Used for the payload binary
-#       against the release binary, and the packaged unit and environment example against the
-#       standalone copies the release attaches.
+#       against the release binary, and the packaged unit, environment example and example
+#       configuration against the standalone copies the release attaches.
 #   package-guard.sh listed <sums-file> <file>...
 #       Each file's basename has a line in <sums-file> carrying its own SHA-256.
 #   package-guard.sh no-config <package>
@@ -12,27 +13,30 @@
 #       (no dpkg conffiles, no rpm %config): the live Policy and environment file are placed by
 #       maintainer scripts, never package-owned (ADR-0033), and the catalog's Templates are
 #       package-owned plain files (DI-29).
-#   package-guard.sh content <package> <relay-daemon|relay-read> <version> <x86_64|aarch64>
+#   package-guard.sh content <package> <relay-daemon|relay-read|relay> <version> <x86_64|aarch64>
 #       The package's whole content, read with the distribution's own tools and never with
 #       nfpm, equals what the repository says it must be:
 #         - its identity is the expected one, computed from <version> and <arch> and never
 #           read from the package: on .deb the whole control file equals
-#           daemon/packaging/expected/<name>.deb.control with only Version, Architecture and
+#           <expected>/<name>.deb.control with only Version, Architecture and
 #           Installed-Size filled in (Package, epoch-free Version, amd64|arm64 or all); on .rpm
 #           NAME, EPOCHNUM (0), VERSION-RELEASE and ARCH (x86_64|aarch64 or noarch) are exact;
 #         - its payload listing (path, type, mode, owner; and on rpm, file capabilities) equals
-#           daemon/packaging/expected/<name>.<deb|rpm>.files, and no entry is setuid, setgid or
+#           <expected>/<name>.<deb|rpm>.files, and no entry is setuid, setgid or
 #           sticky or carries a file capability;
-#         - its maintainer scripts are byte-equal to daemon/packaging/scripts/*.sh (on .deb the
+#         - its maintainer scripts are byte-equal to <scripts>/*.sh (on .deb the
 #           control archive holds exactly the expected members; on .rpm the output of
 #           `rpm -qp --scripts --triggers --filetriggers` equals the source scripts, each under
 #           the one header line rpm itself prints, and declares no trigger);
 #         - its relationships and control fields equal
-#           daemon/packaging/expected/<name>.<deb|rpm>.relations, with the EXPECTED
+#           <expected>/<name>.<deb|rpm>.relations, with the EXPECTED
 #           version-release and rpm architecture tag written as placeholders;
 #         - every file it carries from the repository (default Policy, LICENSE, the privilege
-#           posture document, the unit, the environment example, the catalog) is byte-equal to
-#           its source.
+#           posture document, the units, the example configuration and environment example, the
+#           Relay's sysusers entry, configuration template and guide, the catalog) is
+#           byte-equal to its source.
+#       <expected> and <scripts> are daemon/packaging/{expected,scripts} for relay-daemon and
+#       relay-read, and relay/packaging/{expected,scripts} for relay.
 #       This is the check that does not trust the packager: both release passes run the same
 #       pinned nfpm, so their comparison proves determinism, not that nfpm put the right bytes
 #       in.
@@ -45,8 +49,11 @@ die() { echo "package-guard: $*" >&2; exit 2; }
 refuse() { echo "package-guard: REFUSED: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required"; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-EXPECTED="$ROOT/daemon/packaging/expected"
-SCRIPTS="$ROOT/daemon/packaging/scripts"
+# EXPECTED and SCRIPTS name the reviewed baseline and the maintainer scripts of the package
+# under check; content() sets them from the package name.
+EXPECTED=""
+SCRIPTS=""
+SCRIPTS_SRC=""
 
 # files_view PACKAGE: one line per payload entry, "<mode-string> <owner> <path>" (rpm adds
 # "caps=<capabilities>"). Symlinks and hard links keep their "-> target" / "link to" suffix, so
@@ -123,7 +130,7 @@ control_expected() {
 # interpreter, and one newline after it (its --scripts query format ends each body with "\n");
 # those two are the only normalisation. The scriptlet bytes themselves must be the source's.
 rpm_scripts_expected() {
-  [ "$1" = relay-daemon ] || return 0
+  [ "$1" = relay-read ] && return 0
   local label src
   for pair in preinstall:preinst postinstall:postinst preuninstall:prerm postuninstall:postrm; do
     label="${pair%%:*}"; src="${pair##*:}"
@@ -144,7 +151,11 @@ content() {
   local pkg="$1" name="$2" fmt
   case "$pkg" in *.deb) fmt=deb; need dpkg-deb ;; *.rpm) fmt=rpm; need rpm; need rpm2cpio; need cpio ;;
     *) die "not a .deb or .rpm: $pkg" ;; esac
-  case "$name" in relay-daemon | relay-read) ;; *) die "unknown package name: $name" ;; esac
+  case "$name" in
+    relay-daemon | relay-read) EXPECTED="$ROOT/daemon/packaging/expected"; SCRIPTS="$ROOT/daemon/packaging/scripts"; SCRIPTS_SRC=daemon/packaging/scripts ;;
+    relay) EXPECTED="$ROOT/relay/packaging/expected"; SCRIPTS="$ROOT/relay/packaging/scripts"; SCRIPTS_SRC=relay/packaging/scripts ;;
+    *) die "unknown package name: $name" ;;
+  esac
   [ -f "$pkg" ] || die "no package at $pkg"
   PKG_NAME="$(basename "$pkg")"
   identity "$name" "$3" "$4"
@@ -177,14 +188,14 @@ content() {
   if [ "$fmt" = deb ]; then
     dpkg-deb --ctrl-tarfile "$pkg" | tar -t | sort > "$work/ctrl"
     { echo ./control; echo ./md5sums
-      if [ "$name" = relay-daemon ]; then printf './%s\n' postinst postrm preinst prerm; fi
+      if [ "$name" != relay-read ]; then printf './%s\n' postinst postrm preinst prerm; fi
     } | sort > "$work/ctrl.want"
     compare_view "control archive members" "$work/ctrl.want" "$work/ctrl"
-    if [ "$name" = relay-daemon ]; then
+    if [ "$name" != relay-read ]; then
       mkdir "$work/c"
       dpkg-deb --ctrl-tarfile "$pkg" | tar -xf - -C "$work/c"
       for s in preinst postinst prerm postrm; do
-        cmp -s "$work/c/$s" "$SCRIPTS/$s.sh" || refuse "$PKG_NAME: $s differs from daemon/packaging/scripts/$s.sh"
+        cmp -s "$work/c/$s" "$SCRIPTS/$s.sh" || refuse "$PKG_NAME: $s differs from $SCRIPTS_SRC/$s.sh"
       done
     fi
   else
@@ -205,6 +216,14 @@ content() {
 /usr/share/doc/relay-daemon/daemon-privilege-posture.md:docs/operations/daemon-privilege-posture.md
 /usr/lib/systemd/system/relay-daemon.service:daemon/packaging/relay-daemon.service
 /usr/share/relay-daemon/relay-daemon.env.example:daemon/packaging/relay-daemon.env.example"
+  elif [ "$name" = relay ]; then
+    pairs="/usr/lib/systemd/system/relay.service:relay/packaging/relay.service
+/usr/lib/sysusers.d/relay.conf:relay/packaging/relay.sysusers.conf
+/usr/share/relay/relay.toml.in:relay/packaging/relay.toml.in
+/usr/share/relay/relay.toml.example:relay/packaging/relay.toml.example
+/usr/share/relay/configuration-guide.txt:relay/packaging/configuration-guide.txt
+/usr/share/doc/relay/configuration-guide.txt:relay/packaging/configuration-guide.txt
+/usr/share/doc/relay/LICENSE:LICENSE"
   else
     pairs="/etc/relay-daemon/templates.d/relay-read/catalog.toml:daemon/packaging/templates.d/relay-read/catalog.toml"
   fi
@@ -292,7 +311,7 @@ case "$cmd" in
     echo "package-guard: $(basename "$pkg") declares no configuration files"
     ;;
   content)
-    [ "$#" -eq 5 ] || die "usage: content <package> <relay-daemon|relay-read> <version> <x86_64|aarch64>"
+    [ "$#" -eq 5 ] || die "usage: content <package> <relay-daemon|relay-read|relay> <version> <x86_64|aarch64>"
     content "$(realpath "$2")" "$3" "$4" "$5"
     ;;
   *) die "usage: $0 same|listed|no-config|content ..." ;;
