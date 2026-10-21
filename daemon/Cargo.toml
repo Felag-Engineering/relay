@@ -44,8 +44,8 @@ edition = "2021"
 # constructs newer than it — a safe direction, but a real effect.
 rust-version = "1.96"
 license = "BUSL-1.1"
-# Never published to a registry. Also what lets cargo-deny skip the licence check for this
-# crate itself: its own licence (LICENSE) is not on the dependency allowlist (deny.toml).
+# Never published to a registry. Also what lets cargo-deny skip the license check for this
+# crate itself: its own license (LICENSE) is not on the dependency allowlist (deny.toml).
 publish = false
 
 [workspace.dependencies]

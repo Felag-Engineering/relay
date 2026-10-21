@@ -11,7 +11,7 @@ The shipped unit is a restricted-root posture: it removes every privilege the da
 exercise. Its `SystemCallFilter`, `SystemCallArchitectures` and `MemoryDenyWriteExecute`
 directives, and the capability sets below, are a **static derivation** from daemon source and
 `systemd-analyze` (see
-[Syscall and capability surface (v0.0.8 audit)](#syscall-and-capability-surface-v008-audit)),
+[Syscall and capability surface](#syscall-and-capability-surface)),
 not a guess. They have **not** been verified live on a real systemd host under load; that
 manual step is tracked by **#246** (see [Live tracing procedure](#live-tracing-procedure-real-systemd-host)).
 
@@ -78,7 +78,7 @@ From `daemon/packaging/relay-daemon.service`:
   that Operation. Every other family (e.g. `AF_PACKET`) is denied.
 - **`SystemCallFilter=@system-service`, `SystemCallArchitectures=native`,
   `MemoryDenyWriteExecute=yes`**: the derived allowlist from
-  [Syscall and capability surface (v0.0.8 audit)](#syscall-and-capability-surface-v008-audit).
+  [Syscall and capability surface](#syscall-and-capability-surface).
   The `pkg-install.conf` drop-in ([Documented exceptions](#documented-exceptions)) overrides
   `MemoryDenyWriteExecute` to `=no` for maintainer-script interpreters. Not yet validated
   live against `pkg.install` and a Policy-permitted Raw Exec command (#246); see
@@ -191,7 +191,7 @@ gate against running that command at all.
 **Operator tuning.** `ResourceLimits::DEFAULT` is a compile-time constant. The runtime lever is
 the unit: raise `TasksMax=` and/or add a scoped `MemoryMax=` in the `pkg-install.conf` drop-in.
 
-## Syscall and capability surface (v0.0.8 audit)
+## Syscall and capability surface
 
 ### Method and provenance
 

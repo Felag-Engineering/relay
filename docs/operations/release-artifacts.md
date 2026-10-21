@@ -130,7 +130,7 @@ private.
 
 ## Release-cutting discipline
 
-**Set the licence Change Date first.** Each release converts to Apache-2.0 on the
+**Set the license Change Date first.** Each release converts to Apache-2.0 on the
 `Change Date` in [LICENSE](../../LICENSE), so the tagged commit must carry a date three years
 after the day you cut it. The release workflow checks this before building and fails the
 release otherwise; on a pull request or a dispatch it only warns. Update `LICENSE` in the same

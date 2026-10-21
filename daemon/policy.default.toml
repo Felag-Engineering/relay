@@ -41,7 +41,7 @@ allowed_args = []
 name = "file.read"
 allowed_args = [["*"]]
 
-# --- The shipped read catalog (ADR-0021, issue #293) -----------------------
+# --- The shipped read catalog (ADR-0021) --------------------------------------
 # These names are Template Operations, not Native Operations: they exist only
 # on a Node that has the first-party pack installed
 # (/etc/relay-daemon/templates.d/relay-read/). On a Node without it, dispatch

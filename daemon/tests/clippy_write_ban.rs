@@ -1153,7 +1153,7 @@ fn test_support_is_dev_only_and_no_dependency_enables_test_only_features() {
             .and_then(|p| p.get("publish"))
             .and_then(Value::as_bool),
         Some(false),
-        "[workspace.package] publish must be false (deny.toml's private-crate licence ignore \
+        "[workspace.package] publish must be false (deny.toml's private-crate license ignore \
          relies on it)"
     );
     for (name, manifest) in manifests() {

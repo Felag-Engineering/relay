@@ -1,4 +1,4 @@
-# Relay — shipped first-party read catalog (ADR-0021, issue #293)
+# Relay — shipped first-party read catalog (ADR-0021)
 #
 # A template pack installed with the daemon package, trusted the way the binary
 # is: you installed it. Seven `read`-class Template Operations that make a fresh

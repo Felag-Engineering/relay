@@ -756,7 +756,7 @@ secrets-scan:
 secrets-scan-history:
 	@bin=$$($(call tool_bin,gitleaks)) && "$$bin" git . --config .gitleaks.toml --redact --no-banner
 
-# cargo-deny's offline policy for the daemon workspace (daemon/deny.toml): licences, banned crates
+# cargo-deny's offline policy for the daemon workspace (daemon/deny.toml): licenses, banned crates
 # (a second crypto stack), and allowed sources. Runs on every daemon change.
 deny-daemon:
 	$(call need_tool,cargo-deny,deny-daemon,make deny-tool)

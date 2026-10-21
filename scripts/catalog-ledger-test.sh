@@ -108,25 +108,13 @@ fresh_repo
 commit_state - "c1"
 git_in tag v0.0.5
 commit_state "$L/base.ledger" "c2"
-expect_in_repo "pre-boundary tag, no ledger" 0 "predates the ledger" -- check
-
-fresh_repo
-commit_state - "c1"
-git_in tag v0.0.9
-commit_state "$L/base.ledger" "c2"
-expect_in_repo "boundary tag, no ledger"  0 "predates the ledger" -- check
+expect_in_repo "a low tag without the ledger is refused" 1 "v0.0.5 has no ledger" -- check
 
 fresh_repo
 commit_state - "c1"
 git_in tag v0.1.0
 commit_state "$L/base.ledger" "c2"
-expect_in_repo "post-boundary tag, no ledger" 1 "v0.1.0 has no ledger" -- check
-
-fresh_repo
-commit_state - "c1"
-git_in tag v0.0.10
-commit_state "$L/base.ledger" "c2"
-expect_in_repo "version sort: v0.0.10 is past the boundary" 1 "v0.0.10 has no ledger" -- check
+expect_in_repo "a tag without the ledger is refused" 1 "v0.1.0 has no ledger" -- check
 
 fresh_repo
 commit_state "$L/base.ledger" "c1"

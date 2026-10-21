@@ -198,7 +198,7 @@ jobs:
       # one left over from an earlier release (scripts/license-change-date.sh). The release
       # date is the day the tag push runs. A dry run measures from today and only warns, so a
       # stale date is visible on a pull request without blocking it; a tag push fails.
-      - name: Check the licence Change Date
+      - name: Check the license Change Date
         run: |
           set -euo pipefail
           cd "$SRC"

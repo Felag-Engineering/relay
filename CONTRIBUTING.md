@@ -3,7 +3,7 @@
 **Relay is source-available, not open source, and does not accept code contributions from
 outside Felag Engineering.** A pull request from outside is closed unmerged, however good the
 change. The code is published under the Business Source License 1.1 ([LICENSE](LICENSE)) so it
-can be read, audited and run under that licence's terms. Selling commercial licences depends on
+can be read, audited and run under that license's terms. Selling commercial licenses depends on
 Felag holding the rights to every line.
 
 From outside, these are welcome:

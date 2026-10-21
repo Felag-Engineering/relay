@@ -53,7 +53,7 @@ Seven differences from execution, each deliberate:
 
 - **PF-3** **Freeze is advisory, never a gate.** A frozen Relay refuses all real dispatch and still
   answers preflights; the response reports that the Relay is frozen, and the verdicts still come
-  back. This is the one Freeze exemption — an approved **Plan** gets no such licence and every
+  back. This is the one Freeze exemption — an approved **Plan** gets no such license and every
   advance of one is refused while frozen (`plan.md`, ADR-0038).
 - **PF-4** **The blast cap is reported, never enforced as an error.** An over-cap preflight returns
   would-be-rejected data — the matched count, the cap, and the risk class — with no error, and
