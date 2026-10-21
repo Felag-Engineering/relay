@@ -210,12 +210,21 @@ jobs:
 
       # The release refuses a catalog Template name without an active ledger entry, and a
       # ledger changed other than by append or withdrawal since any release (DI-30, ADR-0021
-      # amendment 2026-10-15). A refusal fails dry runs and tag pushes alike.
+      # amendment 2026-10-15). A refusal fails dry runs and tag pushes alike. No visible v* tag
+      # (exit 3) means nothing has been released, so nothing is frozen: a dry run warns and goes
+      # on, and a tag push fails, because the tag being released is always visible to it.
       - name: Check the catalog ledger
         run: |
           set -euo pipefail
           cd "$SRC"
-          bash scripts/catalog-ledger.sh check
+          rc=0
+          out=$(bash scripts/catalog-ledger.sh check 2>&1) || rc=$?
+          if [ "$rc" -eq 3 ] && [ "$IS_RELEASE" != "true" ]; then
+            echo "::warning::catalog-ledger: no release tag visible; nothing is frozen until the first v* tag"
+            exit 0
+          fi
+          printf '%s\n' "$out"
+          exit "$rc"
 
       # The script above compares the ledger across releases; these tests compare the shipped
       # catalog's bodies and risk classes with the ledger, so a tag pushed on a commit that
