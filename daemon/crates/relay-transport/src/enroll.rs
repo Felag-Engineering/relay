@@ -62,7 +62,7 @@ pub struct EnrollConfig {
     /// (ADR-0031 decision 4); the Tunnel's dial target, not the enrollment endpoint.
     pub relay_addr: String,
     /// TLS SNI server name override for cert verification (optional).
-    pub relay_domain: Option<String>,
+    pub tls_server_name: Option<String>,
     /// Directory where key.pem, cert.pem, ca_bundle.pem, and node_id are persisted.
     pub state_dir: PathBuf,
     /// Node-space labels (bare `key=value`; `node:` prefix is added at send time).
@@ -141,7 +141,7 @@ async fn call_enroll_owned(
     endpoint: String,
     pin: [u8; 32],
     token: String,
-    relay_domain: Option<String>,
+    tls_server_name: Option<String>,
     node_labels: Vec<(String, String)>,
     facts: Facts,
     csr_pem: String,
@@ -149,9 +149,9 @@ async fn call_enroll_owned(
     // Defense-in-depth: re-validate even if the caller bypassed from_env.
     validate_endpoint_scheme(&endpoint)?;
 
-    let ca_der = fetch_pinned_ca(&endpoint, relay_domain.as_deref(), &pin).await?;
+    let ca_der = fetch_pinned_ca(&endpoint, tls_server_name.as_deref(), &pin).await?;
     let ca_pem = pem_encode_cert(&ca_der);
-    let channel = build_channel(endpoint, relay_domain, ca_pem.as_bytes(), None).await?;
+    let channel = build_channel(endpoint, tls_server_name, ca_pem.as_bytes(), None).await?;
 
     let self_labels = node_labels_to_proto(&node_labels);
 
@@ -257,7 +257,7 @@ pub async fn ensure_enrolled(cfg: &EnrollConfig) -> Result<Identity> {
     let endpoint = cfg.endpoint.clone();
     let pin = *cfg.join.ca_fingerprint();
     let token = cfg.join.enrollment_token().to_string();
-    let relay_domain = cfg.relay_domain.clone();
+    let tls_server_name = cfg.tls_server_name.clone();
     let node_labels = cfg.node_labels.clone();
     let facts = cfg.facts.clone();
 
@@ -271,7 +271,7 @@ pub async fn ensure_enrolled(cfg: &EnrollConfig) -> Result<Identity> {
                 endpoint,
                 pin,
                 token,
-                relay_domain,
+                tls_server_name,
                 node_labels,
                 facts,
                 csr_pem,
@@ -758,7 +758,7 @@ mod join_enroll {
             ),
             endpoint: endpoint.clone(),
             relay_addr: endpoint,
-            relay_domain: Some("localhost".to_string()),
+            tls_server_name: Some("localhost".to_string()),
             state_dir: state_dir.to_path_buf(),
             node_labels: vec![],
             facts: Facts {

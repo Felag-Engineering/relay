@@ -608,7 +608,7 @@ async fn reconnect_loop(
             _ = ctx.shutdown.requested_fut() => return Ok(()),
             res = tunnel::connect_mtls(
                 config.endpoint.clone(),
-                config.relay_domain.clone(),
+                config.tls_server_name.clone(),
                 &identity,
             ) => res,
         };

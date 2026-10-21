@@ -219,7 +219,7 @@ services:
     hostname: "dev-node-1"
     environment:
       RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "relay"
+      RELAY_SERVER_NAME: "relay"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -236,7 +236,7 @@ services:
     hostname: "dev-node-2"
     environment:
       RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "relay"
+      RELAY_SERVER_NAME: "relay"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -255,7 +255,7 @@ services:
     hostname: "dev-node-3"
     environment:
       RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "relay"
+      RELAY_SERVER_NAME: "relay"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.db.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"

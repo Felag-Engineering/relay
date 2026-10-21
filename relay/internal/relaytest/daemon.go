@@ -55,7 +55,7 @@ func StartDaemon(t *testing.T, cfg DaemonConfig) *DaemonHandle {
 		"RELAY_JOIN="+cfg.JoinString,
 		"RELAY_STATE_DIR="+cfg.StateDir,
 		"RELAY_POLICY_PATH="+cfg.PolicyPath,
-		"RELAY_DOMAIN=localhost",
+		"RELAY_SERVER_NAME=localhost",
 		"HOSTNAME="+cfg.Hostname,
 		// Disable rustls provider conflict on some environments.
 		"RUST_LOG=warn",

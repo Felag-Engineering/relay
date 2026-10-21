@@ -4,7 +4,7 @@
 //! identity and no `RELAY_JOIN` is the one clean exit; anything in between
 //! refuses. The Relay address resolves from `RELAY_ADDR` or `--relay` first, then
 //! from the join string while enrolling, then from the address persisted at
-//! enrollment, with no default. Also centralizes RELAY_DOMAIN and the http→https
+//! enrollment, with no default. Also centralizes RELAY_SERVER_NAME and the http→https
 //! scheme normalization.
 //!
 //! Also hosts daemon-local hard limits (e.g. [`MAX_OUTPUT_BYTES`]) that are
@@ -205,8 +205,8 @@ pub struct Config {
     pub relay_addr: String,
     /// `relay_addr` normalized to `https://` — the gRPC dial target.
     pub endpoint: String,
-    /// `RELAY_DOMAIN` TLS SNI override (optional).
-    pub relay_domain: Option<String>,
+    /// `RELAY_SERVER_NAME` TLS SNI override (optional).
+    pub tls_server_name: Option<String>,
     /// `RELAY_STATE_DIR` — where identity files are persisted.
     pub state_dir: PathBuf,
     /// `RELAY_POLICY_PATH` — path to the Node's Policy TOML file.
@@ -257,7 +257,7 @@ impl Config {
         let relay_addr =
             resolve_relay_addr(relay_addr_override_from_args_env(), join_addr, &state_dir)?;
         let endpoint = normalize_scheme(&relay_addr);
-        let relay_domain = std::env::var("RELAY_DOMAIN").ok();
+        let tls_server_name = std::env::var("RELAY_SERVER_NAME").ok();
         let node_labels = node_labels_from_env();
 
         // Facts.hostname is the human-readable descriptor, not the
@@ -274,7 +274,7 @@ impl Config {
         Ok(Config {
             relay_addr,
             endpoint,
-            relay_domain,
+            tls_server_name,
             state_dir,
             policy_path,
             template_dir: template_dir_from_env(),
@@ -309,7 +309,7 @@ pub const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB
 ///   target only; the address persisted for the Tunnel is `cfg.endpoint`. The
 ///   CA pin applies to whichever endpoint is dialled.
 ///
-/// All other values (`relay_domain`, `state_dir`, `node_labels`, `facts`)
+/// All other values (`tls_server_name`, `state_dir`, `node_labels`, `facts`)
 /// are taken from `cfg` — they are not re-read from the environment.
 pub fn enroll_config(cfg: &Config, join: JoinString) -> Result<EnrollConfig, EnrollError> {
     // cfg.endpoint is already normalized (http→https); the override is used
@@ -328,7 +328,7 @@ pub fn enroll_config(cfg: &Config, join: JoinString) -> Result<EnrollConfig, Enr
         join,
         endpoint,
         relay_addr: cfg.endpoint.clone(),
-        relay_domain: cfg.relay_domain.clone(),
+        tls_server_name: cfg.tls_server_name.clone(),
         state_dir: cfg.state_dir.clone(),
         node_labels: cfg.node_labels.clone(),
         facts: cfg.facts.clone(),
@@ -441,14 +441,14 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let _dir = isolated_state_dir("cfg-defaults");
         std::env::set_var("RELAY_ADDR", "https://relay:7654");
-        std::env::remove_var("RELAY_DOMAIN");
+        std::env::remove_var("RELAY_SERVER_NAME");
         // CI shells commonly set HOSTNAME; remove it so the default fires.
         std::env::remove_var("HOSTNAME");
         std::env::remove_var("RELAY_NODE_LABELS");
         std::env::remove_var("RELAY_POLICY_PATH");
 
         let cfg = Config::from_env().expect("from_env");
-        assert_eq!(cfg.relay_domain, None);
+        assert_eq!(cfg.tls_server_name, None);
         assert_eq!(
             cfg.policy_path,
             PathBuf::from("/etc/relay-daemon/policy.toml")
@@ -539,16 +539,16 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let _dir = isolated_state_dir("cfg-overrides");
         std::env::set_var("RELAY_ADDR", "https://relay:9000");
-        std::env::set_var("RELAY_DOMAIN", "relay.internal");
+        std::env::set_var("RELAY_SERVER_NAME", "relay.internal");
 
         let cfg = Config::from_env().expect("from_env");
         assert_eq!(cfg.relay_addr, "https://relay:9000");
         // https:// passes through normalize_scheme unchanged.
         assert_eq!(cfg.endpoint, "https://relay:9000");
-        assert_eq!(cfg.relay_domain, Some("relay.internal".to_string()));
+        assert_eq!(cfg.tls_server_name, Some("relay.internal".to_string()));
 
         std::env::remove_var("RELAY_ADDR");
-        std::env::remove_var("RELAY_DOMAIN");
+        std::env::remove_var("RELAY_SERVER_NAME");
     }
 
     #[test]
@@ -598,7 +598,7 @@ mod tests {
             template_dir: std::path::PathBuf::from("/nonexistent/templates.d"),
             relay_addr: "http://relay:7654".to_string(),
             endpoint: "https://relay:7654".to_string(),
-            relay_domain: None,
+            tls_server_name: None,
             state_dir: PathBuf::from("/var/lib/relay-daemon"),
             policy_path: PathBuf::from("/etc/relay-daemon/policy.toml"),
             node_labels: vec![],
