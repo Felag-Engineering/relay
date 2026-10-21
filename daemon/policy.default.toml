@@ -41,7 +41,7 @@ allowed_args = []
 name = "file.read"
 allowed_args = [["*"]]
 
-# --- The shipped read catalog (ADR-0021, issue #293) -----------------------
+# --- The shipped read catalog (ADR-0021) --------------------------------------
 # These names are Template Operations, not Native Operations: they exist only
 # on a Node that has the first-party pack installed
 # (/etc/relay-daemon/templates.d/relay-read/). On a Node without it, dispatch
@@ -129,6 +129,18 @@ args = [[
     "/root/.ssh/id_dsa",
 ]]
 
+# Distribution-default TLS private keys, at the fixed paths their packages
+# create: Debian and Ubuntu's ssl-cert snakeoil key, and the RHEL family's
+# mod_ssl localhost key. Per-site keys (/etc/letsencrypt/live/<name>/, other
+# /etc/ssl/private/ files) have no fixed path and are not covered: the
+# subtree residual above.
+[[deny]]
+name = "file.read"
+args = [[
+    "/etc/ssl/private/ssl-cert-snakeoil.key",
+    "/etc/pki/tls/private/localhost.key",
+]]
+
 # The daemon's own secret-bearing files: the environment file (it carries the
 # Enrollment Token or join string) and the Node's identity private key. Its
 # Policy, CA bundle, identity certificate, binary, unit and Template files hold
@@ -191,6 +203,13 @@ args = [[
     "/root/.ssh/id_ecdsa",
     "/root/.ssh/id_ed25519",
     "/root/.ssh/id_dsa",
+]]
+
+[[deny]]
+name = "file.checksum"
+args = [[
+    "/etc/ssl/private/ssl-cert-snakeoil.key",
+    "/etc/pki/tls/private/localhost.key",
 ]]
 
 [[deny]]

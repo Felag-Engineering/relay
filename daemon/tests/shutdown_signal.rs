@@ -69,7 +69,7 @@ fn seed_identity(dir: &Path) {
 /// immediately), with a pre-seeded identity so it never attempts enrollment.
 ///
 /// `env_clear()` isolates the child from the test runner's environment (in
-/// particular, a stray `RELAY_ADDR` would repoint the dial).
+/// particular, a stray `RELAY_ADDRESS` would repoint the dial).
 /// Its stdout is captured to `<state_dir>/daemon.log` rather than discarded,
 /// so `wait_for_signal_handlers` can observe readiness instead of guessing at
 /// a startup delay. Stdout, not stderr: `tracing_subscriber::fmt()` writes
@@ -81,7 +81,7 @@ fn spawn_idle_daemon(state_dir: &Path) -> std::process::Child {
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("RELAY_STATE_DIR", state_dir)
-        .env("RELAY_ADDR", "https://127.0.0.1:1")
+        .env("RELAY_ADDRESS", "https://127.0.0.1:1")
         .env("RELAY_POLICY_PATH", state_dir.join("no-such-policy.toml"))
         // info, not error: the readiness line below is emitted at info level.
         .env("RUST_LOG", "info")
@@ -164,7 +164,7 @@ fn sigterm_while_idle_reconnecting_exits_zero_immediately() {
     // after that point.
     wait_for_signal_handlers(state_dir.path(), Duration::from_secs(30));
 
-    // The daemon is idle/reconnecting by construction: RELAY_ADDR points at a
+    // The daemon is idle/reconnecting by construction: RELAY_ADDRESS points at a
     // port nothing listens on, so it can only ever be in the
     // connect/backoff-sleep cycle. No further wait is needed to establish
     // that.

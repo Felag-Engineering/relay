@@ -30,7 +30,7 @@
 
 [Unit]
 Description=Relay (fleet-administration control plane)
-Documentation=file:///usr/share/doc/relay/relay-install.md
+Documentation=file:///usr/share/relay/configuration-guide.txt
 After=network-online.target
 Wants=network-online.target
 

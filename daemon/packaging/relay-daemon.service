@@ -1,13 +1,12 @@
-# Hardened systemd unit for the relay-daemon (v0.0.7 groundwork).
+# Hardened systemd unit for the relay-daemon.
 #
 # This bounds everything the daemon does NOT need; it does not — and cannot
 # without breaking Operations — remove root, because service.restart commands
 # PID1 via systemctl and pkg.install writes the system package database. It
-# also carries a resource-containment stanza (v0.0.8 exec audit) — a
-# pids-cgroup `TasksMax` fork-bomb backstop that complements the per-Task
-# `setrlimit` bounds the daemon itself applies (relay-exec's `executor`) —
-# and, as of #224, a v0.0.8 syscall + W^X hardening stanza (SystemCallFilter/
-# SystemCallArchitectures/MemoryDenyWriteExecute).
+# also carries a resource-containment stanza — a pids-cgroup `TasksMax`
+# fork-bomb backstop that complements the per-Task `setrlimit` bounds the daemon
+# itself applies (relay-exec's `executor`) — and a syscall and W^X stanza
+# (SystemCallFilter/SystemCallArchitectures/MemoryDenyWriteExecute).
 # See docs/operations/daemon-privilege-posture.md for the per-Operation
 # privilege map, the rationale behind every directive below, and the
 # documented exception for Nodes running pkg.install / fs-mutating Raw Exec.
@@ -25,9 +24,9 @@ Type=exec
 User=root
 Group=root
 ExecStart=/usr/bin/relay-daemon
-# Optional: carries RELAY_JOIN/RELAY_ADDR/RELAY_DOMAIN/RELAY_POLICY_PATH/
-# RELAY_TEMPLATE_DIR/RELAY_NODE_LABELS. See relay-daemon.env.example. The
-# leading '-' means a missing file is not a startup failure.
+# Optional: every RELAY_* setting the daemon reads, documented in
+# relay-daemon.env.example. The leading '-' means a missing file is not a
+# startup failure.
 EnvironmentFile=-/etc/relay-daemon/relay-daemon.env
 Restart=on-failure
 RestartSec=5s
@@ -64,9 +63,8 @@ ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
-# "invisible" (not "yes"): system.facts reads /proc/sys/kernel/hostname and
-# /proc/sys/kernel/osrelease, which stay visible at this level.
-ProtectProc=invisible
+# No ProtectProc=: its hidepid mount exempts gid 0, so a root:root service sees every
+# process anyway, and proc.list and net.listening need the whole process table.
 RestrictRealtime=yes
 RestrictNamespaces=yes
 LockPersonality=yes
@@ -81,21 +79,20 @@ LockPersonality=yes
 # Operation or the daemon's own connection.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
-# Applied by #224 from the v0.0.8 audit's derived allowlist (docs/operations/
-# daemon-privilege-posture.md, "Syscall and capability surface (v0.0.8
-# audit)"). @system-service is systemd's recommended base and is shared by
+# Derived from the syscall audit (docs/operations/daemon-privilege-posture.md,
+# "Syscall and capability surface"). @system-service is systemd's recommended base and is shared by
 # BOTH profiles — the pkg-install drop-in below relaxes only ProtectSystem +
 # CapabilityBoundingSet, never the syscall filter. The drop-in overrides
 # MemoryDenyWriteExecute to =no for its maintainer-script interpreters (see
 # the posture doc's "Documented exceptions").
-# STATUS: applied by #224; offline exposure 3.7 -> 2.1; NOT YET live-verified
-# on a real systemd host — the enroll->connect->execute-all-Operations trace
-# remains a REQUIRED manual step (see the posture doc's Verification section).
+# STATUS: offline exposure 2.1; NOT YET live-verified on a real systemd host —
+# the enroll->connect->execute-all-Operations trace remains a REQUIRED manual
+# step (see the posture doc's Verification section).
 SystemCallFilter=@system-service
 SystemCallArchitectures=native
 MemoryDenyWriteExecute=yes
 
-# --- resource containment (v0.0.8 exec audit) ---
+# --- resource containment ---
 # pids cgroup controller: hard-caps total tasks (processes + threads) in this
 # service's cgroup. Defense-in-depth fork-bomb backstop. Under THIS hardened unit,
 # CapabilityBoundingSet=CAP_DAC_READ_SEARCH strips CAP_SYS_RESOURCE from the daemon

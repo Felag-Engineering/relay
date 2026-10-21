@@ -101,10 +101,10 @@ sending the token, and refuses a mismatch without fallback. `RELAY_CA_BUNDLE_PAT
 Still owed from the original acceptance: a fuzz target for the parser under `daemon/fuzz/`. It
 is pre-identity attack surface reachable by anyone who can hand a Node a config file.
 
-### E6 · Persisted address, `RELAY_ADDR` override
+### E6 · Persisted address, `RELAY_ADDRESS` override
 **ADR-0031 §4 · built**
 
-The daemon persists the Relay address at enrollment alongside its identity; `RELAY_ADDR`, when
+The daemon persists the Relay address at enrollment alongside its identity; `RELAY_ADDRESS`, when
 set, wins on every start.
 
 ---

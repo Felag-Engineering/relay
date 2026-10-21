@@ -12,9 +12,9 @@ home-lab host, `deploy/production/docker-compose.yml`, and states what it keeps 
 
 ## 1. Obtain and verify the artifact
 
-Releases publish `relay-<version>-x86_64-unknown-linux-gnu` and
-`relay-<version>-aarch64-unknown-linux-gnu` (statically linked; the `gnu` triple is kept for
-naming stability), plus a signed `SHA256SUMS`. Follow the **verify-then-install** sequence in
+Releases publish `relay-<version>-linux-amd64` and
+`relay-<version>-linux-arm64` (statically linked, no libc dependency), plus a signed
+`SHA256SUMS`. Follow the **verify-then-install** sequence in
 [release-artifacts.md](release-artifacts.md): the digest is checked **before** the binary is
 installed or run, and a mismatch aborts. That document has the full sequence, including
 `cosign verify-blob` on `SHA256SUMS` and the optional `gh attestation verify`; this is its
@@ -24,7 +24,7 @@ checksum core:
 # Pinned by the operator, never resolved at install time: the published tag without its
 # leading `v` (see release-artifacts.md).
 VERSION="X.Y.Z"
-ARTIFACT="relay-${VERSION}-x86_64-unknown-linux-gnu"
+ARTIFACT="relay-${VERSION}-linux-amd64"
 BASE="https://github.com/Felag-Engineering/relay/releases/download/v${VERSION}"
 
 curl -fsSLO "${BASE}/${ARTIFACT}"

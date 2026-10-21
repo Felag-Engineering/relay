@@ -32,7 +32,7 @@ step.
 ## Typeface
 
 The letterforms are JetBrains Mono ExtraBold, converted to outlines. JetBrains Mono is
-licensed under the SIL Open Font License 1.1; the licence travels with these files as
+licensed under the SIL Open Font License 1.1; the license travels with these files as
 `FONT-LICENSE-JetBrainsMono.txt`.
 
 ## Where it is used

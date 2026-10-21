@@ -10,15 +10,15 @@ and [release-artifacts.md](release-artifacts.md) (the artifact contract).
 
 ## 1. Obtain and verify the artifact
 
-Releases publish `relay-daemon-<version>-x86_64-unknown-linux-musl` and
-`relay-daemon-<version>-aarch64-unknown-linux-musl` (statically linked, musl, ADR-0007) plus a
+Releases publish `relay-daemon-<version>-linux-amd64` and
+`relay-daemon-<version>-linux-arm64` (statically linked, musl, ADR-0007) plus a
 `SHA256SUMS` signed by `SHA256SUMS.sigstore.json`; check the signature with `cosign
 verify-blob` first, as [release-artifacts.md](release-artifacts.md) shows. Then verify before
 you install; a mismatch aborts:
 
 ```sh
 VERSION="X.Y.Z"         # the release pinned by the operator, in config management
-ARTIFACT="relay-daemon-${VERSION}-x86_64-unknown-linux-musl"
+ARTIFACT="relay-daemon-${VERSION}-linux-amd64"
 BASE="https://github.com/Felag-Engineering/relay/releases/download/v${VERSION}"
 
 curl -fsSLO "${BASE}/${ARTIFACT}"
@@ -41,13 +41,13 @@ The daemon is configured entirely by environment variables, read once at startup
 | Variable | Default | Meaning |
 |---|---|---|
 | `RELAY_JOIN` | *(unset)* | The join string minted with the Enrollment Token: the Relay address, the SHA-256 fingerprint of the Relay's CA, and the token, in one value. Read only when no identity exists: the daemon pins the Relay's CA from the fingerprint before it sends the token, then writes `ca_bundle.pem` and `relay_addr` into its state directory, so no CA path is configured by hand. Inert afterwards; safe to remove once enrolled. Secret: never commit, never log. See [enrollment.md](enrollment.md). |
-| `RELAY_ADDR` | *(the join string's address to enroll; afterwards the address persisted at enrollment)* | Optional override of the Relay's Node-plane gRPC address. `http://` is normalized to `https://`; the connection is always mTLS (invariant #6). Overrides the persisted address on every start when set. Also settable as the `--relay <addr>` CLI argument. |
-| `RELAY_DOMAIN` | *(unset)* | Optional TLS SNI / server-name override when the Relay cert's SAN differs from the dialed host. |
+| `RELAY_ADDRESS` | *(the join string's address to enroll; afterwards the address persisted at enrollment)* | Optional override of the Relay's Node-plane gRPC address. `http://` is normalized to `https://`; the connection is always mTLS (invariant #6). Overrides the persisted address on every start when set. Also settable as the `--relay <addr>` CLI argument. |
+| `RELAY_SERVER_NAME` | *(unset)* | Optional: the name the daemon expects on the Relay's certificate, sent as TLS SNI and verified against its SAN, when it differs from the dialed host (a load-balanced or IP-addressed endpoint). |
 | `RELAY_STATE_DIR` | `/var/lib/relay-daemon` | Where the enrolled identity (`key.pem`, `cert.pem`, `ca_bundle.pem`, `node_id`, `relay_addr`) and the at-most-once dedup marker store (`seen-tasks/`) persist. |
 | `RELAY_POLICY_PATH` | `/etc/relay-daemon/policy.toml` | Path to this Node's Policy file (ADR-0002). See [policy-as-code.md](policy-as-code.md). |
 | `RELAY_TEMPLATE_DIR` | `/etc/relay-daemon/templates.d` | Root of this Node's Template Operation files, beside `policy.toml` and under the same root-owned trust root (ADR-0021). Absent = no templates installed. The shipped read catalog installs to `templates.d/relay-read/`. See [template-packs.md](template-packs.md). |
 | `RELAY_NODE_LABELS` | *(unset)* | Comma-separated bare `key=value` pairs reported as node-space Labels (the daemon adds the `node:` prefix; it can never emit `relay:` labels — ADR-0006). Example: `env=prod,role=web`. Each key and value must match `[A-Za-z0-9._-]+` (the empty value is accepted); anything else is refused at ingress, never sanitised. A malformed pair is REFUSED at enrollment — the Node does not join — and DROPPED at reconnect — the Node stays connected without that one label. |
-| `RELAY_ENROLL_ENDPOINT` | *(falls back to `RELAY_ADDR`, then the join string's address)* | Optional distinct endpoint for the enrollment RPC. Must be `https://` — anything else is refused (fail closed). The CA pin applies to whichever endpoint is dialled. |
+| `RELAY_ENROLL_ADDRESS` | *(falls back to `RELAY_ADDRESS`, then the join string's address)* | Optional distinct endpoint for the enrollment RPC. Must be `https://` — anything else is refused (fail closed). The CA pin applies to whichever endpoint is dialled. |
 | `RELAY_HEARTBEAT_INTERVAL_SECS` | `30` | Heartbeat base interval; each send is jittered ±20% so a bulk-restarted fleet spreads out. |
 | `RELAY_SHUTDOWN_GRACE_SECS` | `30` | Graceful-shutdown grace period: on SIGTERM/SIGINT the daemon stops accepting Tasks, drains in-flight ones up to this budget, then exits. |
 | `RUST_LOG` | `info` | Log filter (`tracing_subscriber` EnvFilter syntax). Keep Policy decision events on: see [section 6](#6-local-record-of-policy-decisions). |
@@ -61,9 +61,9 @@ Fail-closed behaviors to know about (all deliberate):
   (some but not all of `key.pem`, `cert.pem`, `ca_bundle.pem`, `node_id`), or a Relay CA that
   does not match the join string's fingerprint exits non-zero; on a pin mismatch the token is
   never sent.
-- **No Relay address → refuse to run.** An enrolled daemon with neither `RELAY_ADDR` nor a
-  persisted address exits non-zero, naming `RELAY_ADDR`; there is no localhost default. A
-  Node with no persisted address works only while `RELAY_ADDR` is set; nothing backfills it.
+- **No Relay address → refuse to run.** An enrolled daemon with neither `RELAY_ADDRESS` nor a
+  persisted address exits non-zero, naming `RELAY_ADDRESS`; there is no localhost default. A
+  Node with no persisted address works only while `RELAY_ADDRESS` is set; nothing backfills it.
 - **Policy missing or unreadable → deny-all.** The daemon starts, connects, and denies every
   Task rather than refusing to start or running open (ADR-0002). A group- or world-writable
   Policy file is likewise refused.
@@ -107,7 +107,7 @@ One subcommand changes the Node, and it too contacts no Relay:
 Per [`daemon/packaging/README.md`](../../daemon/packaging/README.md):
 
 ```console
-$ sudo install -m 0755 relay-daemon-${VERSION}-x86_64-unknown-linux-musl /usr/bin/relay-daemon
+$ sudo install -m 0755 relay-daemon-${VERSION}-linux-amd64 /usr/bin/relay-daemon
 $ sudo install -m 0644 relay-daemon.service /etc/systemd/system/relay-daemon.service
 $ sudo mkdir -p /etc/relay-daemon
 $ sudo install -m 0644 -o root -g root policy.toml /etc/relay-daemon/policy.toml

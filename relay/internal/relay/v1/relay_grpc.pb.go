@@ -9,8 +9,8 @@
 // Go Relay and the Rust relay-daemon generate their types from this file. See
 // ../../GLOSSARY.md for the meaning of every term and ../../docs/adr/ for the why.
 //
-// This is a DRAFT spine for v0.0.1. Expect it to evolve as milestones land; it
-// captures the shapes implied by ADRs 0001-0013, not a frozen API.
+// Deployed relay-daemons and Relays of different versions speak it to each other, so a
+// change within relay.v1 is additive: the breaking-change check runs on every change to it.
 
 package relayv1
 

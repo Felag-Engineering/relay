@@ -32,7 +32,7 @@
 [node_plane]
 
 # Listen address for the Node-plane gRPC listener.
-listen_address = ":7654"
+# listen_address = ":7654"
 
 # The address a join string tells a relay-daemon to dial. When unset it is
 # tls.hostname on the port of listen_address. If set, its host must be

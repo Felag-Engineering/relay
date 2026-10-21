@@ -16,8 +16,8 @@ unless marked otherwise; a laptop run discharges none of it.
 
 ### What you need
 
-- **A published `v0.1.0-beta` GitHub Release** (`relay-…-x86_64-unknown-linux-gnu`,
-  `relay-daemon-…-x86_64-unknown-linux-musl`, `SHA256SUMS`; see
+- **A published `v0.1.0-beta` GitHub Release** (`relay-…-linux-amd64`,
+  `relay-daemon-…-linux-amd64`, `SHA256SUMS`; see
   [release-artifacts.md](release-artifacts.md)).
 - **1 Relay host + ≥3 Nodes**: real (physical or cloud) x86_64 Linux machines, with network
   paths from every Node to the Relay's node-plane port and from the operator workstation to the
@@ -45,7 +45,7 @@ On the Relay host, follow the verify-then-install sequence of
 
 ```sh
 VERSION="0.1.0-beta"
-ARTIFACT="relay-${VERSION}-x86_64-unknown-linux-gnu"
+ARTIFACT="relay-${VERSION}-linux-amd64"
 BASE="https://github.com/Felag-Engineering/relay/releases/download/v${VERSION}"
 curl -fsSLO "${BASE}/${ARTIFACT}" && curl -fsSLO "${BASE}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS

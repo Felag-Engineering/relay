@@ -128,7 +128,7 @@ jobs:
         run: make compose-floor-check
 
       # The release workflow's BSL Change Date gate, proved against throwaway LICENSE files.
-      - name: Licence Change Date gate self-test
+      - name: License Change Date gate self-test
         if: ${{ !cancelled() }}
         run: make test-license-change-date
 
@@ -383,7 +383,7 @@ jobs:
           path: ~/.cargo/bin/cargo-deny
           key: ${{ steps.deny-cache.outputs.cache-primary-key }}
 
-      # daemon/deny.toml: licences, banned crates (a second crypto stack), sources.
+      # daemon/deny.toml: licenses, banned crates (a second crypto stack), sources.
       # Offline, so on every daemon change.
       - name: Dependency policy (cargo-deny)
         if: ${{ !cancelled() }}

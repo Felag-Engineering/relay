@@ -190,3 +190,22 @@ which the shipped default no longer carries, rather than re-pointing them.
 `query.md` QRY-10; `docs/security/threat-model.md` R37 and R38; the v0.6.5 design plan, step
 S12; `policy-as-code.md` and `template-packs.md` where they describe what the lint probes; the
 shipped `daemon/policy.default.toml` and its comments.
+
+## Amendment (2026-10-21): distribution-default TLS private keys
+
+Owner decision, 2026-10-21, made while reviewing what the first release freezes. The
+confidentiality deny-list adds the two TLS private keys that sit at a fixed path on a stock
+install: `/etc/ssl/private/ssl-cert-snakeoil.key`, which Debian and Ubuntu's `ssl-cert` package
+generates, and `/etc/pki/tls/private/localhost.key`, which the RHEL family's `mod_ssl` generates.
+Both are denied for `file.read` and, under the 2026-08-10 rule, for `file.checksum`. The
+Decision's posture is unchanged.
+
+**Residual, unchanged in kind.** A site's own keys (`/etc/letsencrypt/live/<name>/privkey.pem`,
+other files under `/etc/ssl/private/` or `/etc/pki/tls/private/`) have no fixed path, and Policy
+has no subtree deny, so the shipped default still cannot deny them. The remedies are the ones
+this ADR has always named: deny them by exact path, or narrow `file.read`'s `"*"` to an explicit
+path allow-list. A subtree deny is tracked as its own change.
+
+**Consumers.** The shipped `daemon/policy.default.toml` and the deny-list test in
+`relay-policy` that pins it to this ADR. No spec or threat-model row enumerates the list.
+

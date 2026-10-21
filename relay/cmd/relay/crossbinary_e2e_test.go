@@ -308,7 +308,7 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 		"RELAY_STATE_DIR="+stateDir,
 		"RELAY_POLICY_PATH="+policyPath,
 		"RELAY_TEMPLATE_DIR="+templateRoot,
-		"RELAY_DOMAIN=localhost",
+		"RELAY_SERVER_NAME=localhost",
 		"HOSTNAME=e2e-crossbinary-node",
 		// Disable rustls provider conflict on some environments (matches
 		// startDaemonNode in tunnel_dispatch_e2e_test.go).

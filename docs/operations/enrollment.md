@@ -173,7 +173,7 @@ relay_join: "{{ vault_relay_join }}"   # the join_string from the mint
 - name: Fetch relay-daemon artifact (digest verified BEFORE install)
   ansible.builtin.get_url:
     url: "https://github.com/Felag-Engineering/relay/releases/download/\
-          v{{ relay_daemon_version }}/relay-daemon-{{ relay_daemon_version }}-x86_64-unknown-linux-musl"
+          v{{ relay_daemon_version }}/relay-daemon-{{ relay_daemon_version }}-linux-amd64"
     dest: /usr/bin/relay-daemon
     mode: "0755"
     # Operator-pinned digest, not fetched at install time: a mismatch fails the

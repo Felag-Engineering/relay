@@ -20,10 +20,9 @@ set -euo pipefail
 
 DEFAULT_LEDGER=daemon/packaging/relay-read-catalog.ledger
 DEFAULT_TEMPLATES=daemon/packaging/templates.d
-# Tags version-sorted at or before this one predate the ledger and get an empty baseline. A later
-# tag whose tree lacks the ledger is refused, so moving the ledger cannot unfreeze every entry.
-# Deliberately not overridable from the environment: an override would be a bypass.
-LAST_LEDGERLESS_TAG=v0.0.9
+# Every v* tag's tree must hold the ledger: a tag without one is refused, so moving the ledger
+# cannot unfreeze every entry. Nothing here is overridable from the environment: an override
+# would be a bypass.
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -188,11 +187,6 @@ cmd_names() {
   echo "catalog-ledger: every catalog Template name has an active ledger entry ($(wc -l <"$TMP/names.catalog") names)"
 }
 
-# predates_ledger TAG: true when TAG sorts, as a version, at or before LAST_LEDGERLESS_TAG.
-predates_ledger() {
-  [ "$(printf '%s\n%s\n' "$1" "$LAST_LEDGERLESS_TAG" | sort -V | head -n1)" = "$1" ]
-}
-
 # cmd_check [LEDGER] [TEMPLATES_DIR]
 cmd_check() {
   local top ledger tags_raw tag listing worst=0 r n=0
@@ -224,11 +218,8 @@ cmd_check() {
     listing=$(git ls-tree --name-only "refs/tags/$tag" -- "$ledger") || { err "cannot list the tree of $tag"; return 2; }
     if [ -n "$listing" ]; then
       git show "refs/tags/$tag:$ledger" >"$TMP/tag.ledger" || { err "cannot read $ledger at $tag"; return 2; }
-    elif predates_ledger "$tag"; then
-      echo "::notice::catalog-ledger: $tag predates the ledger; using an empty baseline"
-      : >"$TMP/tag.ledger"
     else
-      err "$tag has no ledger at $ledger, and only tags up to $LAST_LEDGERLESS_TAG predate it"
+      err "$tag has no ledger at $ledger"
       [ "$worst" -lt 1 ] && worst=1
       continue
     fi

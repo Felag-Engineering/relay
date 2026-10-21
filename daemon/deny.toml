@@ -1,7 +1,7 @@
 # cargo-deny policy for relay-daemon: `make deny-daemon` (ci.yml: the daemon job).
 #
 # The daemon runs as root on every Node, so what it links is part of the security
-# surface. This file is the mechanical half of that review: which licences may ship,
+# surface. This file is the mechanical half of that review: which licenses may ship,
 # which registries code may come from, which crates must never enter the tree, and
 # (when the lockfile changes) whether a dependency has a known advisory. The nightly
 # security workflow still runs `cargo audit` over the whole tree every night.
@@ -25,7 +25,7 @@ yanked = "deny"
 ignore = []
 
 [licenses]
-# Permissive licences only. Adding one is a decision, not a fix-up: say why in the PR.
+# Permissive licenses only. Adding one is a decision, not a fix-up: say why in the PR.
 allow = [
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
