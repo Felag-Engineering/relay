@@ -30,6 +30,14 @@ type NavEntry struct {
 	Group NavGroup
 	Label string
 	Order int
+
+	// Under lists the path roots of screens reached from this destination
+	// rather than from the menu (node detail from a Fleet row, Job detail from
+	// an Activity row). A request at a root, or beneath it, marks this item
+	// current. Roots of different destinations must not overlap: exactly one
+	// item is current on any screen. The slice makes NavEntry, and so Route,
+	// non-comparable: never compare one with ==.
+	Under []string
 }
 
 // NavItem is one rendered navigation link.
@@ -53,7 +61,8 @@ type NavSection struct {
 func (s NavSection) Slug() string { return strings.ToLower(string(s.Group)) }
 
 // Nav projects the mounted route table into the navigation a principal with
-// role should see, marking currentPath.
+// role should see, marking the destination currentPath is, or was reached from
+// (NavEntry.Under).
 //
 // It is a PROJECTION, and that is the whole design. Both of the properties the
 // specification cares about fall out of it rather than being maintained by
@@ -92,10 +101,29 @@ func Nav(d Deps, role accounts.Role, currentPath string) []NavSection {
 			items = append(items, NavItem{
 				Label:   r.Nav.Label,
 				Path:    r.Link(),
-				Current: r.Link() == currentPath,
+				Current: navCurrent(r, currentPath),
 			})
 		}
 		out = append(out, NavSection{Group: g, Items: items})
 	}
 	return out
+}
+
+// navCurrent reports whether path is the screen r advertises or one reached from
+// it. The Link comparison is exact, never a prefix: Fleet's link is "/console/",
+// which prefixes every path. Under roots match on a segment boundary, so
+// "/console/accountsx" is not under "/console/accounts".
+func navCurrent(r Route, path string) bool {
+	if path == "" {
+		return false
+	}
+	if path == r.Link() {
+		return true
+	}
+	for _, root := range r.Nav.Under {
+		if path == root || strings.HasPrefix(path, root+"/") {
+			return true
+		}
+	}
+	return false
 }
