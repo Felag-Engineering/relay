@@ -1,30 +1,38 @@
 #!/usr/bin/env bash
-# Builds the relay-daemon .deb and .rpm, and optionally the relay-read catalog packages, from a
-# binary the release already built and guarded (DI-24, DI-29).
+# Builds the relay-daemon .deb and .rpm, optionally the relay-read catalog packages and the
+# Relay's own .deb and .rpm, from binaries the release already built and guarded (DI-24, DI-29,
+# RC-23).
 #
-#   scripts/build-packages.sh <version> <x86_64|aarch64> <relay-daemon-binary> <outdir> [--catalog]
+#   scripts/build-packages.sh <version> <x86_64|aarch64> <relay-daemon-binary> <outdir>
+#                             [--catalog] [--relay <relay-binary>]
 #
 # Packaging builds nothing: the binary is placed byte for byte, and nothing here compiles,
 # strips or rewrites it (ADR-0033). SOURCE_DATE_EPOCH must be set (the release sets it to the
 # commit time); every manifest's mtime is rendered from it, so two builds of one commit are
 # byte-identical, which the release checks by building twice.
 #
-# The manifests under daemon/packaging/nfpm/ are templates: this script substitutes their
-# @NAME@ placeholders and nothing else, then runs the nfpm pinned under tools/nfpm.
+# The manifests under daemon/packaging/nfpm/ and relay/packaging/nfpm/ are templates: this
+# script substitutes their @NAME@ placeholders and nothing else, then runs the nfpm pinned
+# under tools/nfpm.
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 <version> <x86_64|aarch64> <relay-daemon-binary> <outdir> [--catalog]" >&2
+  echo "usage: $0 <version> <x86_64|aarch64> <relay-daemon-binary> <outdir> [--catalog] [--relay <relay-binary>]" >&2
   exit 2
 }
 
-if [ "$#" -lt 4 ] || [ "$#" -gt 5 ]; then usage; fi
+if [ "$#" -lt 4 ]; then usage; fi
 version="$1" arch="$2" bin="$3" out="$4"
+shift 4
 catalog=no
-if [ "$#" -eq 5 ]; then
-  [ "$5" = --catalog ] || usage
-  catalog=yes
-fi
+relay_bin=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --catalog) catalog=yes; shift ;;
+    --relay) [ "$#" -ge 2 ] || usage; relay_bin="$2"; shift 2 ;;
+    *) usage ;;
+  esac
+done
 
 case "$arch" in
   x86_64) goarch=amd64 ;;
@@ -41,6 +49,10 @@ if ! [[ "${SOURCE_DATE_EPOCH:-}" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 [ -f "$bin" ] || { echo "build-packages: no binary at '$bin'" >&2; exit 2; }
+if [ -n "$relay_bin" ]; then
+  [ -f "$relay_bin" ] || { echo "build-packages: no Relay binary at '$relay_bin'" >&2; exit 2; }
+  relay_bin="$(cd "$(dirname "$relay_bin")" && pwd -P)/$(basename "$relay_bin")"
+fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 bin="$(cd "$(dirname "$bin")" && pwd -P)/$(basename "$bin")"
@@ -57,14 +69,16 @@ trap 'rm -rf "$work"' EXIT
 # render TEMPLATE: the manifest with its placeholders substituted. A placeholder left over
 # means the template and this script disagree, which is a failure, not a default.
 render() {
-  local tpl="$1" dst esc_bin esc_root
+  local tpl="$1" dst esc_bin esc_relay_bin esc_root
   dst="$work/$(basename "$1")"
   esc_bin="$(printf '%s' "$bin" | sed 's/[\\|&]/\\&/g')"
+  esc_relay_bin="$(printf '%s' "$relay_bin" | sed 's/[\\|&]/\\&/g')"
   esc_root="$(printf '%s' "$root" | sed 's/[\\|&]/\\&/g')"
   sed -e "s|@VERSION@|${version}|g" \
       -e "s|@ARCH@|${goarch}|g" \
       -e "s|@MTIME@|${mtime}|g" \
       -e "s|@DAEMON_BIN@|${esc_bin}|g" \
+      -e "s|@RELAY_BIN@|${esc_relay_bin}|g" \
       -e "s|@SRC@|${esc_root}|g" \
       "$tpl" > "$dst"
   if grep -v '^[[:space:]]*#' "$dst" | grep '@[A-Z_]*@' >&2; then
@@ -88,5 +102,10 @@ if [ "$catalog" = yes ]; then
   read_manifest="$(render "$root/daemon/packaging/nfpm/relay-read.yaml")"
   pkg "$read_manifest" deb
   pkg "$read_manifest" rpm
+fi
+if [ -n "$relay_bin" ]; then
+  relay_manifest="$(render "$root/relay/packaging/nfpm/relay.yaml")"
+  pkg "$relay_manifest" deb
+  pkg "$relay_manifest" rpm
 fi
 ls -1 "$out"

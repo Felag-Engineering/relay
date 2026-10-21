@@ -1,0 +1,30 @@
+The Relay is installed and has not been started.
+
+1. Check /etc/relay/relay.toml. It was written once from this host's fully qualified name
+   and is never rewritten. tls.hostname must be the name the relay-daemons dial: a wrong one
+   fails only on the Nodes. Every other setting is in /usr/share/relay/relay.toml.example.
+
+2. Start the Relay:
+
+       sudo systemctl start relay
+
+   It is enabled at boot only where this distribution's presets allow; run
+   `sudo systemctl enable relay` otherwise. Its first start creates the CA and the store in
+   /var/lib/relay.
+
+3. In a terminal on this host, create the first admin:
+
+       sudo -u relay relay init --admin <name>
+
+   It prompts for the admin's Console password and prints the first API Token once. The
+   package never runs it.
+
+4. The control plane and the Admin Console listen on 127.0.0.1:9443 only. Widen
+   control_plane.listen_address only after `relay init` has run, then restart the Relay.
+
+Never capture an image or snapshot of this host after the Relay has first started: the CA
+private key in /var/lib/relay travels with every copy, and every copy can impersonate this
+Relay to the whole fleet.
+
+This guide is also installed as documentation in /usr/share/doc/relay/, which minimised
+images leave out. The copy that is always kept is /usr/share/relay/configuration-guide.txt.

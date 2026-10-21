@@ -18,9 +18,11 @@
 #                                           + guards attestations  write a Release)
 #                                                       \-> latest (packages:write only)
 #
-# `build` also wraps each daemon binary in .deb and .rpm packages, and `reproducible` compares
-# both passes' packages and guards them against the release binary. They are uploaded as the
-# `packages` workflow artifact and are not attached to the Release (see that guard's comment).
+# `build` also wraps each daemon binary and each Relay binary in .deb and .rpm packages, and
+# `reproducible` compares both passes' packages and guards them against the release binaries.
+# They are uploaded as the `packages` workflow artifact and are not attached to the Release (see
+# that guard's comment). The standalone relay-daemon and Relay units and example configuration
+# are attached, under SHA256SUMS.
 #
 # The three privileged jobs never start on a dry run (job-level `if:`), so a pull request
 # or a dispatch never holds id-token, packages, attestations or contents:write. This file
@@ -72,7 +74,9 @@ on:
       - scripts/build-packages.sh
       - scripts/package-guard.sh
       - scripts/package-guard-test.sh
+      - scripts/relay-package-scripts-test.sh
       - daemon/packaging/**
+      - relay/packaging/**
       - daemon/policy.default.toml
       - docs/operations/daemon-privilege-posture.md
       - tools/nfpm/**
@@ -335,19 +339,20 @@ jobs:
                     "relay-${version}-${RELAY_TRIPLE}" > "SHA256SUMS.${ARCH}"
           cat "SHA256SUMS.${ARCH}"
 
-      # The packages wrap the binary staged above, byte for byte: packaging compiles, strips
-      # and rewrites nothing (DI-24, ADR-0033). nfpm is the one pinned under tools/nfpm, and
+      # The packages wrap the binaries staged above, byte for byte: packaging compiles, strips
+      # and rewrites nothing (DI-24, RC-23, ADR-0033). nfpm is the one pinned under tools/nfpm, and
       # every manifest's mtime comes from SOURCE_DATE_EPOCH, so the rebuild pass, from its
       # different checkout path, must produce the same bytes; `reproducible` compares them.
       # The catalog package is architecture-independent and built by the x86_64 passes only.
-      - name: Build the packages from the staged binary
+      - name: Build the packages from the staged binaries
         run: |
           set -euo pipefail
           version="${EXPECTED_TAG#v}"
           catalog=()
           if [ "${ARCH}" = x86_64 ]; then catalog=(--catalog); fi
           bash "$SRC/scripts/build-packages.sh" "${version}" "${ARCH}" \
-            "dist/relay-daemon-${version}-${DAEMON_TRIPLE}" dist/packages "${catalog[@]}"
+            "dist/relay-daemon-${version}-${DAEMON_TRIPLE}" dist/packages "${catalog[@]}" \
+            --relay "dist/relay-${version}-${RELAY_TRIPLE}"
           (cd dist/packages && sha256sum -- * > "../SHA256SUMS.packages.${ARCH}")
           cat "dist/SHA256SUMS.packages.${ARCH}"
 
@@ -359,6 +364,7 @@ jobs:
           set -euo pipefail
           sudo apt-get install -y rpm rpm2cpio cpio
           cd "$SRC"
+          bash scripts/relay-package-scripts-test.sh
           bash scripts/package-guard-test.sh
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -416,8 +422,8 @@ jobs:
               fail=1
               continue
             fi
-            want=2
-            if [ "${arch}" = x86_64 ]; then want=4; fi
+            want=4
+            if [ "${arch}" = x86_64 ]; then want=6; fi
             n="$(find "${a}/packages" -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' \) | wc -l)"
             if [ "${n}" -ne "${want}" ]; then
               echo "::error::${arch}: ${n} packages built, expected ${want}"
@@ -471,29 +477,35 @@ jobs:
             esac
           done
 
-      # A hand-built install verifies its unit and environment example like everything else
-      # (DI-32), so both are release attachments under SHA256SUMS. Staged after the SBOMs,
-      # which describe binaries only.
-      - name: Stage the standalone unit and environment example
+      # A hand-built install verifies its units and example configuration like everything else
+      # (DI-32), so they are release attachments under SHA256SUMS: the relay-daemon's unit and
+      # environment example, and the Relay's unit and example configuration. Staged after the
+      # SBOMs, which describe binaries only.
+      - name: Stage the standalone units and example configuration
         run: |
           set -euo pipefail
           cp daemon/packaging/relay-daemon.service dist/relay-daemon.service
           cp daemon/packaging/relay-daemon.env.example dist/relay-daemon.env.example
+          cp relay/packaging/relay.service dist/relay.service
+          cp relay/packaging/relay.toml.example dist/relay.toml.example
 
+      # `relay-*` does not match relay.service or relay.toml.example: they are named
+      # explicitly, or they would be attached without a SHA256SUMS line.
       - name: Generate SHA256SUMS
         run: |
           set -euo pipefail
           cd dist
-          sha256sum relay-* > SHA256SUMS
+          sha256sum relay-* relay.service relay.toml.example > SHA256SUMS
           cat SHA256SUMS
 
       - name: Install package inspection tools
         run: sudo apt-get update && sudo apt-get install -y rpm rpm2cpio cpio
 
       # The packages are guarded by reading their own bytes (scripts/package-guard.sh):
-      #   - each relay-daemon package's /usr/bin/relay-daemon is the release binary (DI-24);
-      #   - its unit and environment example are the attached standalone files, and both are in
-      #     SHA256SUMS (DI-32);
+      #   - each relay-daemon package's /usr/bin/relay-daemon and each Relay package's
+      #     /usr/bin/relay is the release binary (DI-24, RC-23);
+      #   - their units and the example configuration and environment example are the attached
+      #     standalone files, and all are in SHA256SUMS (DI-32);
       #   - the catalog package carries the shipped catalog, and no package declares
       #     configuration the package manager would preserve (ADR-0033, DI-29);
       #   - every package's identity -- name, epoch, version and architecture, computed from
@@ -511,8 +523,8 @@ jobs:
       # The packages are built, compared and guarded on every run, but they are NOT attached to
       # the Release. They are held until the install matrix (DI-33) proves them on every
       # supported platform, and until the unit's syscall filter is verified on a real systemd
-      # host (DI-3). The standalone unit and environment example ARE attached (DI-32), so the
-      # unit already ships as a hand-install artifact before that verification. The packages
+      # host (DI-3). The standalone units and example configuration ARE attached (DI-32), so
+      # the units already ship as hand-install artifacts before that verification. The packages
       # travel only as the `packages` workflow artifact, with their own sums file, which stays
       # out of the signed SHA256SUMS until they are attached: a SHA256SUMS naming files the
       # Release does not carry would fail every `sha256sum --check` of it.
@@ -527,6 +539,8 @@ jobs:
             arch="${p%%:*}"; triple="${p##*:}"
             bin="dist/relay-daemon-${VERSION}-${triple}"
             [ -f "${bin}" ] || { echo "::error::no release binary ${bin}"; exit 1; }
+            relay_bin="dist/relay-${VERSION}-${arch}-unknown-linux-gnu"
+            [ -f "${relay_bin}" ] || { echo "::error::no release binary ${relay_bin}"; exit 1; }
             for f in bins/bin-"${arch}"-primary/packages/*; do
               case "$(basename "${f}")" in
                 relay-daemon[_-]*)
@@ -538,6 +552,12 @@ jobs:
                 relay-read[_-]*)
                   bash "${guard}" content "${f}" relay-read "${VERSION}" "${arch}"
                   ;;
+                relay_*.deb | relay-[0-9]*.rpm)
+                  bash "${guard}" same "${f}" /usr/bin/relay "${relay_bin}"
+                  bash "${guard}" same "${f}" /usr/lib/systemd/system/relay.service dist/relay.service
+                  bash "${guard}" same "${f}" /usr/share/relay/relay.toml.example dist/relay.toml.example
+                  bash "${guard}" content "${f}" relay "${VERSION}" "${arch}"
+                  ;;
                 *) echo "::error::unexpected package $(basename "${f}")"; exit 1 ;;
               esac
               bash "${guard}" no-config "${f}"
@@ -547,7 +567,8 @@ jobs:
             done
             cat "bins/bin-${arch}-primary/SHA256SUMS.packages.${arch}" >> packages/SHA256SUMS.packages
           done
-          bash "${guard}" listed dist/SHA256SUMS dist/relay-daemon.service dist/relay-daemon.env.example
+          bash "${guard}" listed dist/SHA256SUMS dist/relay-daemon.service dist/relay-daemon.env.example \
+            dist/relay.service dist/relay.toml.example
           cat packages/SHA256SUMS.packages
           bash "${guard}" listed packages/SHA256SUMS.packages packages/*.deb packages/*.rpm
           # Nothing under dist/ is a package: dist/ is the release set.

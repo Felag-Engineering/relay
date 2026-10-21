@@ -329,13 +329,16 @@ test-license-change-date:
 test-catalog-ledger:
 	bash scripts/catalog-ledger-test.sh
 
-# Proves scripts/build-packages.sh and scripts/package-guard.sh, the release's package build and
-# guards (DI-24, DI-32): two builds from different paths are byte-identical, the payload is the
-# input binary, and the guards refuse a different binary, a missing SHA256SUMS line and a
-# package declaring configuration files. Builds the pinned nfpm; needs dpkg-deb, rpm, rpm2cpio
-# and cpio. The release workflow runs it on every dry run and tag push.
+# Proves the Relay package's maintainer scripts under a fake root (RC-24, RC-25, RC-26), then
+# scripts/build-packages.sh and scripts/package-guard.sh, the release's package build and
+# guards (DI-24, DI-32, RC-23): two builds from different paths are byte-identical, the payload
+# is the input binary, and the guards refuse a different binary, a missing SHA256SUMS line and a
+# package declaring configuration files. The script test needs no package tools and runs first,
+# so a missing one never hides it; the guard test builds the pinned nfpm and needs dpkg-deb,
+# rpm, rpm2cpio and cpio. The release workflow runs both on every dry run and tag push.
 .PHONY: test-packages
 test-packages:
+	bash scripts/relay-package-scripts-test.sh
 	bash scripts/package-guard-test.sh
 
 # DI-30 against the real ledger. No visible v* tag is a recorded skip under verify and a failure

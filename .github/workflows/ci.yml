@@ -205,9 +205,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: make secrets-scan
 
-      # scripts/package-guard-test.sh: the release's package build and guards (DI-24, DI-32),
-      # proved against two builds, a stand-in binary and tampered packages. Needs Go for the
-      # pinned nfpm and the rpm tools to read the packages back.
+      # make test-packages: scripts/relay-package-scripts-test.sh, the Relay's maintainer
+      # scripts under a fake root (RC-24, RC-25, RC-26), then scripts/package-guard-test.sh,
+      # the release's package build and guards (DI-24, DI-32, RC-23), proved against two
+      # builds, stand-in binaries and tampered packages. Needs Go for the pinned nfpm and the
+      # rpm tools to read the packages back.
       - name: Package build and guard self-test
         if: ${{ !cancelled() }}
         run: |

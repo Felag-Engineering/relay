@@ -19,6 +19,66 @@ own state directory. This is the architecture, not generic hardening advice: if 
 the Relay need a capability back, stop, because something privileged has moved to the wrong
 side of the tunnel.
 
+## Packages
+
+`nfpm/relay.yaml` is the manifest for the Relay's `.deb` and `.rpm`, built by
+`scripts/build-packages.sh` with the nfpm pinned under `tools/nfpm`; `scripts/` holds the
+package's maintainer scripts and `expected/` the baseline the release checks every package
+against. The release builds the packages twice and refuses unless the builds are byte-identical
+and `/usr/bin/relay` is the release binary. It reads each package with `dpkg-deb` and `rpm`
+and checks its whole content against `expected/` and `scripts/`.
+
+**The packages are not yet attached to a release.** They wait until the install matrix proves
+them on every supported platform. The standalone `relay.service` and `relay.toml.example` are
+release attachments, byte-equal to the copies in the packages; until the packages are, install
+by hand as below.
+
+The package installs `/usr/bin/relay`, the unit as `/usr/lib/systemd/system/relay.service`, a
+`sysusers.d` entry for the `relay` account, a configuration guide that carries no secret as
+`/usr/share/doc/relay/configuration-guide.txt` (and as `/usr/share/relay/configuration-guide.txt`,
+the copy the install prints, because minimised images leave `/usr/share/doc` out), and the
+example configuration and `relay.toml.in` under `/usr/share/relay/`. Nothing under `/etc` or
+`/var` is in the package: `relay.toml` is generated, never a package-owned file.
+
+On a first install only, the package:
+
+- creates the `relay` account and group (through `systemd-sysusers`, or `useradd` where it is
+  absent) and fails before creating anything else if either is missing afterwards;
+- creates `/etc/relay` (root, `0755`) and `/var/lib/relay` (`relay:relay`, `0700`), each if
+  absent;
+- generates `/etc/relay/relay.toml`, `root:relay 0640`, only if none exists. It sets the host's
+  fully qualified name as `tls.hostname`, the CA directory and the store path inside
+  `/var/lib/relay`, the control plane and the Admin Console enabled, and the control-plane
+  listener on `127.0.0.1:9443`. With no fully qualified name the hostname line is written
+  commented out, and the Relay refuses to start, naming `tls.hostname`, until it is set;
+- prints the configuration guide and the hostname it chose;
+- where systemd is running, runs `systemctl preset`.
+
+It never starts the Relay and never runs `relay init`, so the CA is never created inside an
+image the package is installed into. The guide says never to capture an image of the host after
+the Relay has first started. An upgrade runs `systemctl daemon-reload` only: it never rewrites
+the configuration, never changes enablement and never restarts the Relay.
+
+The package writes `relay.toml` only through a `/etc/relay` that is a real directory owned by
+root and not writable by group or other. Through any other it generates nothing, says why, and
+the install still succeeds; the Relay then refuses to start for want of a configuration file.
+
+Removing the package stops and disables the unit and removes the binary and the unit. It keeps
+the configuration, the state directory and the account. `apt purge` moves the state directory,
+the CA and the store together, aside to `/var/lib/relay.purged-<time>`, re-owned by root, mode
+`0700`, and prints where; it never deletes it and never deletes the account. The top directory
+is re-owned first, which shuts the `relay` account out; the files inside are then re-owned too,
+except any with another hard link outside the directory, which are named and left as found. If
+`/var/lib/relay` is a mount point it cannot be renamed, so the purge re-owns it in place the
+same way and says so. The purge then removes the `relay.toml` the package generated and
+`/etc/relay` if the package created it and it is empty, using a marker under
+`/var/lib/relay-package/` that records what existed before the first install; anything else is
+left and named. `.rpm` has no purge: removal prints the paths to delete by hand.
+
+A reinstall after a purge starts with an empty `/var/lib/relay`, so the Relay's first start
+creates a new CA and every enrolled relay-daemon must be enrolled again; the purged CA and store
+are in the sibling the purge printed.
+
 ## Install
 
 ```console

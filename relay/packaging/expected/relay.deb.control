@@ -1,0 +1,11 @@
+Package: relay
+Version: @VERSION@
+Section: admin
+Priority: optional
+Architecture: @ARCH@
+Maintainer: Felag Engineering <michael.rapp@gleipnir.dev>
+Installed-Size: @INSTALLED_SIZE@
+Homepage: https://github.com/Felag-Engineering/relay
+Description: Relay, the fleet-administration control plane.
+ The package installs the Relay, its Unix account and its hardened unit.
+ It never starts the Relay and never runs the first-boot command.
