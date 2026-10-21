@@ -65,7 +65,7 @@ package console
 // value", and a listen address is exactly that (invariant 11) — operator-set at
 // startup and unreachable from any API, which is a property seams.go states and
 // this screen must not be the first thing to weaken. The address a Node dials
-// is delivered by whatever installs the daemon (RELAY_ADDR, daemon/src/config.rs),
+// is delivered by whatever installs the daemon (RELAY_ADDRESS, daemon/src/config.rs),
 // and ADR-0031's join string will carry it once that lands.
 
 import (

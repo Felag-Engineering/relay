@@ -2,7 +2,7 @@
 //! threaded down. Startup follows one plan (ADR-0031 decision 4; DI-25's exit
 //! rule): a complete identity is used and the join string is never read; no
 //! identity and no `RELAY_JOIN` is the one clean exit; anything in between
-//! refuses. The Relay address resolves from `RELAY_ADDR` or `--relay` first, then
+//! refuses. The Relay address resolves from `RELAY_ADDRESS` or `--relay` first, then
 //! from the join string while enrolling, then from the address persisted at
 //! enrollment, with no default. Also centralizes RELAY_SERVER_NAME and the http→https
 //! scheme normalization.
@@ -33,7 +33,7 @@ pub const IDENTITY_FILES: [&str; 4] = ["key.pem", "cert.pem", "ca_bundle.pem", "
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error(
-        "no Relay address: set RELAY_ADDR (none was persisted at enrollment in {}); \
+        "no Relay address: set RELAY_ADDRESS (none was persisted at enrollment in {}); \
          there is no default address",
         state_dir.display()
     )]
@@ -199,7 +199,7 @@ pub fn validate_join_address(addr: &str) -> Result<(), ConfigError> {
 /// CLI arg). Constructed exactly once in `main` and threaded down to callers. No
 /// env-var is read elsewhere for these fields.
 pub struct Config {
-    /// Resolved Relay address: `--relay`/`RELAY_ADDR` when set, else (enrolling)
+    /// Resolved Relay address: `--relay`/`RELAY_ADDRESS` when set, else (enrolling)
     /// the join string's, else the one persisted at enrollment (may be `http://`
     /// when from the environment).
     pub relay_addr: String,
@@ -305,7 +305,7 @@ pub const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB
 /// Builds enrollment configuration from the shared `Config`, the decoded join
 /// string, and the one enroll-only env var:
 ///
-/// - `RELAY_ENROLL_ENDPOINT` — overrides `cfg.endpoint` as the enrollment dial
+/// - `RELAY_ENROLL_ADDRESS` — overrides `cfg.endpoint` as the enrollment dial
 ///   target only; the address persisted for the Tunnel is `cfg.endpoint`. The
 ///   CA pin applies to whichever endpoint is dialled.
 ///
@@ -314,7 +314,7 @@ pub const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB
 pub fn enroll_config(cfg: &Config, join: JoinString) -> Result<EnrollConfig, EnrollError> {
     // cfg.endpoint is already normalized (http→https); the override is used
     // raw so operators can specify a distinct enrollment endpoint if needed.
-    let endpoint = std::env::var("RELAY_ENROLL_ENDPOINT")
+    let endpoint = std::env::var("RELAY_ENROLL_ADDRESS")
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| cfg.endpoint.clone());
@@ -347,7 +347,7 @@ pub(crate) fn normalize_scheme(addr: &str) -> String {
 }
 
 /// Returns the Relay address override: the first `--relay <val>` in argv, else
-/// `RELAY_ADDR`. An empty value from either source counts as unset.
+/// `RELAY_ADDRESS`. An empty value from either source counts as unset.
 fn relay_addr_override_from_args_env() -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
     let from_args = args
@@ -355,7 +355,7 @@ fn relay_addr_override_from_args_env() -> Option<String> {
         .find(|w| w[0] == "--relay")
         .map(|w| w[1].clone());
     from_args
-        .or_else(|| std::env::var("RELAY_ADDR").ok())
+        .or_else(|| std::env::var("RELAY_ADDRESS").ok())
         .filter(|v| !v.is_empty())
 }
 
@@ -440,7 +440,7 @@ mod tests {
     fn config_from_env_defaults() {
         let _lock = ENV_LOCK.lock().unwrap();
         let _dir = isolated_state_dir("cfg-defaults");
-        std::env::set_var("RELAY_ADDR", "https://relay:7654");
+        std::env::set_var("RELAY_ADDRESS", "https://relay:7654");
         std::env::remove_var("RELAY_SERVER_NAME");
         // CI shells commonly set HOSTNAME; remove it so the default fires.
         std::env::remove_var("HOSTNAME");
@@ -455,7 +455,7 @@ mod tests {
         );
         assert!(cfg.node_labels.is_empty());
 
-        std::env::remove_var("RELAY_ADDR");
+        std::env::remove_var("RELAY_ADDRESS");
         std::env::remove_var("RELAY_STATE_DIR");
         assert_eq!(state_dir_from_env(), PathBuf::from("/var/lib/relay-daemon"));
     }
@@ -464,14 +464,14 @@ mod tests {
     fn config_policy_path_override() {
         let _lock = ENV_LOCK.lock().unwrap();
         let _dir = isolated_state_dir("cfg-policy");
-        std::env::set_var("RELAY_ADDR", "https://relay:7654");
+        std::env::set_var("RELAY_ADDRESS", "https://relay:7654");
         std::env::set_var("RELAY_POLICY_PATH", "/custom/policy.toml");
 
         let cfg = Config::from_env().expect("from_env");
         assert_eq!(cfg.policy_path, PathBuf::from("/custom/policy.toml"));
 
         std::env::remove_var("RELAY_POLICY_PATH");
-        std::env::remove_var("RELAY_ADDR");
+        std::env::remove_var("RELAY_ADDRESS");
     }
 
     // --- Relay address resolution -------------------------------------------
@@ -486,12 +486,12 @@ mod tests {
         )
         .unwrap();
 
-        std::env::set_var("RELAY_ADDR", "https://override:9000");
+        std::env::set_var("RELAY_ADDRESS", "https://override:9000");
         let cfg = Config::from_env().expect("from_env");
         assert_eq!(cfg.relay_addr, "https://override:9000");
         assert_eq!(cfg.endpoint, "https://override:9000");
 
-        std::env::remove_var("RELAY_ADDR");
+        std::env::remove_var("RELAY_ADDRESS");
         let cfg = Config::from_env().expect("from_env");
         assert_eq!(cfg.relay_addr, "https://persisted:7654");
         assert_eq!(cfg.endpoint, "https://persisted:7654");
@@ -502,17 +502,17 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let _dir = isolated_state_dir("cfg-no-addr");
 
-        std::env::remove_var("RELAY_ADDR");
+        std::env::remove_var("RELAY_ADDRESS");
         let err = Config::from_env().err().expect("must refuse");
         assert!(matches!(err, ConfigError::NoRelayAddr { .. }), "{err:?}");
-        assert!(err.to_string().contains("RELAY_ADDR"), "{err}");
+        assert!(err.to_string().contains("RELAY_ADDRESS"), "{err}");
 
-        // An empty RELAY_ADDR counts as unset.
-        std::env::set_var("RELAY_ADDR", "");
+        // An empty RELAY_ADDRESS counts as unset.
+        std::env::set_var("RELAY_ADDRESS", "");
         let err = Config::from_env().err().expect("must refuse");
         assert!(matches!(err, ConfigError::NoRelayAddr { .. }), "{err:?}");
 
-        std::env::remove_var("RELAY_ADDR");
+        std::env::remove_var("RELAY_ADDRESS");
     }
 
     #[test]
@@ -538,7 +538,7 @@ mod tests {
     fn config_from_env_overrides() {
         let _lock = ENV_LOCK.lock().unwrap();
         let _dir = isolated_state_dir("cfg-overrides");
-        std::env::set_var("RELAY_ADDR", "https://relay:9000");
+        std::env::set_var("RELAY_ADDRESS", "https://relay:9000");
         std::env::set_var("RELAY_SERVER_NAME", "relay.internal");
 
         let cfg = Config::from_env().expect("from_env");
@@ -547,7 +547,7 @@ mod tests {
         assert_eq!(cfg.endpoint, "https://relay:9000");
         assert_eq!(cfg.tls_server_name, Some("relay.internal".to_string()));
 
-        std::env::remove_var("RELAY_ADDR");
+        std::env::remove_var("RELAY_ADDRESS");
         std::env::remove_var("RELAY_SERVER_NAME");
     }
 
@@ -555,7 +555,7 @@ mod tests {
     fn config_from_env_facts_match_gather_facts() {
         let _lock = ENV_LOCK.lock().unwrap();
         let _dir = isolated_state_dir("cfg-facts");
-        std::env::set_var("RELAY_ADDR", "https://relay:7654");
+        std::env::set_var("RELAY_ADDRESS", "https://relay:7654");
 
         let cfg = Config::from_env().expect("from_env");
         let facts = crate::operations::system_facts::gather_facts();
@@ -570,7 +570,7 @@ mod tests {
         assert_eq!(cfg.facts.hostname, facts.hostname);
         assert_eq!(cfg.facts.kernel, facts.kernel);
 
-        std::env::remove_var("RELAY_ADDR");
+        std::env::remove_var("RELAY_ADDRESS");
     }
 
     // --- Config::from_env scheme normalization ------------------------------
@@ -579,14 +579,14 @@ mod tests {
     fn config_from_env_scheme_normalization() {
         let _lock = ENV_LOCK.lock().unwrap();
         let _dir = isolated_state_dir("cfg-scheme");
-        std::env::set_var("RELAY_ADDR", "http://relay:8080");
+        std::env::set_var("RELAY_ADDRESS", "http://relay:8080");
 
         let cfg = Config::from_env().expect("from_env");
         // relay_addr retains the raw value; endpoint is normalized.
         assert_eq!(cfg.relay_addr, "http://relay:8080");
         assert_eq!(cfg.endpoint, "https://relay:8080");
 
-        std::env::remove_var("RELAY_ADDR");
+        std::env::remove_var("RELAY_ADDRESS");
     }
 
     // --- enroll_config ------------------------------------------------------
@@ -627,26 +627,26 @@ mod tests {
     #[test]
     fn enroll_endpoint_override_does_not_change_persisted_address() {
         let _lock = ENV_LOCK.lock().unwrap();
-        std::env::set_var("RELAY_ENROLL_ENDPOINT", "https://override:9000");
+        std::env::set_var("RELAY_ENROLL_ADDRESS", "https://override:9000");
 
         let cfg = fake_config();
         let ec = enroll_config(&cfg, decoded("relay:7654")).expect("enroll_config");
 
         assert_eq!(
             ec.endpoint, "https://override:9000",
-            "RELAY_ENROLL_ENDPOINT must take precedence over cfg.endpoint"
+            "RELAY_ENROLL_ADDRESS must take precedence over cfg.endpoint"
         );
         // The persisted (Tunnel) address stays the Node-plane one.
         assert_eq!(ec.relay_addr, cfg.endpoint);
         assert_eq!(ec.join.enrollment_token(), "tok-test");
 
-        std::env::remove_var("RELAY_ENROLL_ENDPOINT");
+        std::env::remove_var("RELAY_ENROLL_ADDRESS");
     }
 
     #[test]
     fn enroll_endpoint_defaults_to_config_endpoint() {
         let _lock = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("RELAY_ENROLL_ENDPOINT");
+        std::env::remove_var("RELAY_ENROLL_ADDRESS");
         let cfg = fake_config();
         let ec = enroll_config(&cfg, decoded("relay:7654")).expect("enroll_config");
         assert_eq!(ec.endpoint, cfg.endpoint);
@@ -655,10 +655,10 @@ mod tests {
     #[test]
     fn http_enroll_endpoint_is_refused() {
         let _lock = ENV_LOCK.lock().unwrap();
-        std::env::set_var("RELAY_ENROLL_ENDPOINT", "http://relay:7654");
+        std::env::set_var("RELAY_ENROLL_ADDRESS", "http://relay:7654");
         let cfg = fake_config();
         assert!(enroll_config(&cfg, decoded("relay:7654")).is_err());
-        std::env::remove_var("RELAY_ENROLL_ENDPOINT");
+        std::env::remove_var("RELAY_ENROLL_ADDRESS");
     }
 
     // --- the join string and the address it carries ---------------------------
@@ -667,17 +667,17 @@ mod tests {
     fn join_address_is_the_enrollment_address_unless_overridden() {
         let _lock = ENV_LOCK.lock().unwrap();
         let _dir = isolated_state_dir("cfg-join-addr");
-        std::env::remove_var("RELAY_ADDR");
+        std::env::remove_var("RELAY_ADDRESS");
         let join = decoded("relay.example:7654");
 
         let cfg = Config::from_env_for(Some(&join)).expect("from_env_for");
         assert_eq!(cfg.relay_addr, "https://relay.example:7654");
         assert_eq!(cfg.endpoint, "https://relay.example:7654");
 
-        std::env::set_var("RELAY_ADDR", "https://override:9000");
+        std::env::set_var("RELAY_ADDRESS", "https://override:9000");
         let cfg = Config::from_env_for(Some(&join)).expect("from_env_for");
         assert_eq!(cfg.relay_addr, "https://override:9000");
-        std::env::remove_var("RELAY_ADDR");
+        std::env::remove_var("RELAY_ADDRESS");
     }
 
     #[test]

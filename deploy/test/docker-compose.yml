@@ -218,7 +218,7 @@ services:
     # below is now only an explicit fallback for an unreadable /proc.
     hostname: "dev-node-1"
     environment:
-      RELAY_ADDR: "https://relay:7654"
+      RELAY_ADDRESS: "https://relay:7654"
       RELAY_SERVER_NAME: "relay"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
@@ -235,7 +235,7 @@ services:
     <<: *daemon-base
     hostname: "dev-node-2"
     environment:
-      RELAY_ADDR: "https://relay:7654"
+      RELAY_ADDRESS: "https://relay:7654"
       RELAY_SERVER_NAME: "relay"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
@@ -254,7 +254,7 @@ services:
     <<: *daemon-base
     hostname: "dev-node-3"
     environment:
-      RELAY_ADDR: "https://relay:7654"
+      RELAY_ADDRESS: "https://relay:7654"
       RELAY_SERVER_NAME: "relay"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.db.toml"

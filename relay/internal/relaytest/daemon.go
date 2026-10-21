@@ -134,7 +134,7 @@ func (h *DaemonHandle) RelaunchWithoutJoinOrAddress() {
 // own environment cannot mask what the join string carries.
 func withoutDaemonAddressing(env []string) []string {
 	strip := []string{
-		"RELAY_ADDR=", "RELAY_ENROLL_ENDPOINT=", "RELAY_JOIN=",
+		"RELAY_ADDRESS=", "RELAY_ENROLL_ADDRESS=", "RELAY_JOIN=",
 		"RELAY_ENROLLMENT_TOKEN=", "RELAY_CA_BUNDLE_PATH=",
 	}
 	var out []string

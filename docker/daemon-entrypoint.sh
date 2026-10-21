@@ -12,7 +12,7 @@
 # say they run it — see the block below — BEFORE the join string export, for a
 # reason that matters (read that block's comment).
 #
-# Every other setting (RELAY_ADDR, RELAY_SERVER_NAME, RELAY_STATE_DIR,
+# Every other setting (RELAY_ADDRESS, RELAY_SERVER_NAME, RELAY_STATE_DIR,
 # RELAY_POLICY_PATH, HOSTNAME, RELAY_NODE_LABELS) comes from the compose
 # environment; no CA material does — the daemon pins the Relay's CA from the join
 # string. Enrollment is idempotent: once a Node has persisted its identity in

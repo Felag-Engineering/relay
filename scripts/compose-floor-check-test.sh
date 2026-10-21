@@ -59,7 +59,7 @@ reset() {
     ports:[{target:7654,published:"7654"},{target:9443,published:"9443"}]}'
   oneshot='{build:{context:".",dockerfile:"docker/relay.Dockerfile"}, entrypoint:["sh","/dev-fleet-init.sh"], user:"0:0",
     environment:{CONSOLE_ADMIN_PASSWORD:"x", RELAY_PUBLISH_ADDR:"127.0.0.1"}}'
-  daemon='{build:{context:".",dockerfile:"docker/daemon.Dockerfile"}, environment:{RELAY_ADDR:"https://relay:7654"}}'
+  daemon='{build:{context:".",dockerfile:"docker/daemon.Dockerfile"}, environment:{RELAY_ADDRESS:"https://relay:7654"}}'
   netns='{image:"curlimages/curl", ports:[{target:7654,published:"7654"}]}'
   jq -n "{services:{relay:$relay}}" >"$JSON/production.json"
   jq -n "{services:{relay:$relay, init:$oneshot, \"daemon-1\":$daemon}}" >"$JSON/test.json"
@@ -107,8 +107,8 @@ refuse "3 Relay environment sets a non-floor variable" "F1"
 reset; mut demo '.services.init.environment.RELAY_CA_DIR = "/x"'
 refuse "4 one-shot environment sets RELAY_CA_DIR" "F8: environment sets the floor name RELAY_CA_DIR"
 
-reset; mut demo '.services["daemon-1"].environment.RELAY_ADDR = "https://elsewhere:7654"'
-run "5 a daemon's RELAY_ADDR is exempt" 0 "ok: demo:"
+reset; mut demo '.services["daemon-1"].environment.RELAY_ADDRESS = "https://elsewhere:7654"'
+run "5 a daemon's RELAY_ADDRESS is exempt" 0 "ok: demo:"
 
 reset; mut_relay '.volumes[0].read_only = false'
 refuse "6 config mount not read_only" "F2"

@@ -119,7 +119,7 @@ fn malformed_join_exits_nonzero() {
 fn partial_identity_exits_nonzero() {
     let state = TempDir::new("exit-partial-identity");
     seed_identity(state.path(), Some(&["key.pem", "node_id"]));
-    let out = run(state.path(), &[("RELAY_ADDR", "https://127.0.0.1:1")]);
+    let out = run(state.path(), &[("RELAY_ADDRESS", "https://127.0.0.1:1")]);
     assert!(!out.status.success(), "got {:?}", out.status);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("partial identity"), "stderr: {stderr}");
@@ -133,7 +133,7 @@ fn partial_identity_exits_nonzero() {
 fn identity_without_address_exits_nonzero() {
     let state = TempDir::new("exit-no-address");
     seed_identity(state.path(), None);
-    // Neither RELAY_ADDR nor a persisted address. A valid join string is set
+    // Neither RELAY_ADDRESS nor a persisted address. A valid join string is set
     // and must stay inert: its address is never a fallback once enrolled.
     let join = valid_join();
     let out = run(state.path(), &[("RELAY_JOIN", join.as_str())]);
@@ -143,7 +143,7 @@ fn identity_without_address_exits_nonzero() {
         out.status
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("RELAY_ADDR"), "stderr: {stderr}");
+    assert!(stderr.contains("RELAY_ADDRESS"), "stderr: {stderr}");
 }
 
 #[test]
@@ -159,5 +159,5 @@ fn enrolled_node_never_reads_a_malformed_join() {
         !stderr.contains("RELAY_JOIN"),
         "the join string was read: {stderr}"
     );
-    assert!(stderr.contains("RELAY_ADDR"), "stderr: {stderr}");
+    assert!(stderr.contains("RELAY_ADDRESS"), "stderr: {stderr}");
 }

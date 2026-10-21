@@ -426,7 +426,7 @@ mod tests {
         move || Ok(Zeroizing::new(text))
     }
 
-    const ENV: &str = "# comment\n#RELAY_JOIN=old-commented\nRELAY_POLICY_PATH=/etc/relay-daemon/policy.toml\nRELAY_JOIN=replace-me\n#RELAY_ADDR=https://x:1\nRELAY_TEMPLATE_DIR=/etc/relay-daemon/templates.d\n";
+    const ENV: &str = "# comment\n#RELAY_JOIN=old-commented\nRELAY_POLICY_PATH=/etc/relay-daemon/policy.toml\nRELAY_JOIN=replace-me\n#RELAY_ADDRESS=https://x:1\nRELAY_TEMPLATE_DIR=/etc/relay-daemon/templates.d\n";
 
     struct Fixture {
         _dir: TempDir,
