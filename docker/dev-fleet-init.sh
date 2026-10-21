@@ -43,7 +43,10 @@ set -eu
 
 CONFIG="/etc/relay/relay.toml"
 CA_CERT="/var/lib/relay/ca/ca-cert.pem"
-BASE="https://relay:9443"
+# The certificate carries tls.hostname, FLEET_HOSTNAME as dev-fleet-config.sh
+# staged it; curl dials the compose name `relay` but verifies that name.
+HOST="${FLEET_HOSTNAME:-relay}"
+BASE="https://${HOST}:9443"
 ADMIN_NAME="${CONSOLE_ADMIN_NAME:-admin}"
 PASSWORD="${CONSOLE_ADMIN_PASSWORD:-}"
 OAUTH_ACCOUNT_NAME="${OAUTH_ACCOUNT_NAME:-}"
@@ -91,17 +94,17 @@ trap 'exit 1' INT TERM
 chmod 0600 "${AUTH_FILE}"
 printf 'Authorization: Bearer %s\n' "$(cat /credential/control-credential)" > "${AUTH_FILE}"
 
-# d. The one Control API wrapper. We dial the in-fleet name `relay` so the
-# server cert SAN (tls.hostname = "relay" in its relay.toml) matches: no insecure flag is needed.
+# d. The one Control API wrapper. --connect-to sends the request to the in-fleet
+# name `relay` while TLS verifies the certificate's own name: no insecure flag is needed.
 api() {
     _method="$1"; _path="$2"; _body="${3:-}"
     if [ -n "${_body}" ]; then
-        curl -fsS --cacert "${CA_CERT}" -X "${_method}" \
+        curl -fsS --cacert "${CA_CERT}" --connect-to "${HOST}:9443:relay:9443" -X "${_method}" \
             -H "@${AUTH_FILE}" \
             -H 'Content-Type: application/json' \
             -d "${_body}" "${BASE}${_path}"
     else
-        curl -fsS --cacert "${CA_CERT}" -X "${_method}" \
+        curl -fsS --cacert "${CA_CERT}" --connect-to "${HOST}:9443:relay:9443" -X "${_method}" \
             -H "@${AUTH_FILE}" \
             "${BASE}${_path}"
     fi
@@ -182,4 +185,9 @@ rm -f /bootstrap/enrollment-token /bootstrap/ca-cert.pem
 test -s /bootstrap/join-string || die "the mint response carried no join string"
 
 # j.
-log "done — sign in at https://127.0.0.1:9443/console/ as ${ADMIN_NAME}."
+if [ "${HOST}" = relay ]; then
+    CONSOLE_HOST="127.0.0.1"
+else
+    CONSOLE_HOST="${HOST}"
+fi
+log "done — sign in at https://${CONSOLE_HOST}:${RELAY_PUBLISH_PORT:-9443}/console/ as ${ADMIN_NAME}."

@@ -16,6 +16,11 @@
 #   relay.toml                root:10001 0640, the layout the Relay accepts
 #   approval-gates.json       root:root  0644, what the gate loader demands
 #
+# FLEET_HOSTNAME (default `relay`) replaces the committed tls.hostname line in the
+# staged relay.toml, so a fleet can carry a real DNS name in its certificate. It is
+# refused unless it is a plain DNS name, and the committed line must be there to
+# replace, so an edited relay.toml fails here rather than staging a name nobody set.
+#
 # The container runs as root with only CAP_CHOWN (to group the file to 10001, a
 # group root is not in, and to hand init's volumes to the Relay's uid) and
 # CAP_DAC_OVERRIDE (to read a checkout the developer's umask made 0600), with no
@@ -25,6 +30,25 @@
 set -eu
 
 relay_gid=10001
+hostname="${FLEET_HOSTNAME:-relay}"
+
+# Lowercase letters, digits, dots and hyphens; labels of 1 to 63 characters that
+# neither start nor end with a hyphen; 253 characters at most. Nothing else can
+# reach the TOML file or the sed expression below.
+valid_hostname() {
+  [ "${#1}" -le 253 ] || return 1
+  case "$1" in
+    "" | *[!a-z0-9.-]* | .* | *. | *..*) return 1 ;;
+  esac
+  for label in $(printf '%s\n' "$1" | tr '.' ' '); do
+    [ "${#label}" -le 63 ] || return 1
+    case "$label" in -* | *-) return 1 ;; esac
+  done
+}
+if ! valid_hostname "$hostname"; then
+  echo "dev-fleet-config: FLEET_HOSTNAME is not a lowercase DNS name: $hostname" >&2
+  exit 1
+fi
 
 for f in relay.toml approval-gates.json; do
   if ! [ -r "/src/$f" ]; then
@@ -44,6 +68,18 @@ stage() {
 }
 
 stage relay.toml "$relay_gid" 0640
+if [ "$hostname" != relay ]; then
+  if [ "$(grep -c '^hostname = "relay"$' /stage/relay.toml)" != 1 ]; then
+    echo "dev-fleet-config: relay.toml has no single 'hostname = \"relay\"' line for FLEET_HOSTNAME to replace" >&2
+    exit 1
+  fi
+  ( umask 077
+    sed "s/^hostname = \"relay\"\$/hostname = \"$hostname\"/" /stage/relay.toml > /stage/.relay.toml.tmp )
+  chown 0:"$relay_gid" /stage/.relay.toml.tmp
+  chmod 0640 /stage/.relay.toml.tmp
+  mv -f /stage/.relay.toml.tmp /stage/relay.toml
+  echo "dev-fleet-config: tls.hostname = \"$hostname\""
+fi
 stage approval-gates.json 0 0644
 
 # Nothing else stays: a file left by a previous fixture must not linger.
