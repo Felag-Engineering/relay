@@ -217,6 +217,11 @@ func TestFleet_NoHostMetricsNoteIsDeleted(t *testing.T) {
 	mustNotRender(t, body, "no host metrics")
 }
 
+func TestFleet_SituationalMessagesStayVisible(t *testing.T) {
+	mustBeSituational(t, get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin),
+		fleetPath+"?group=nonesuch").Body.String(), "Part of this URL could not be read:")
+}
+
 func TestFleet_NoMatchEmptyStateIsSituational(t *testing.T) {
 	h := newTestHandler(fleetFixture(), accounts.RoleAdmin)
 	const heading = "No Nodes match this Selector."

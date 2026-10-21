@@ -335,6 +335,10 @@ type fleetView struct {
 	GroupBy   string
 	GroupKeys []string
 
+	// Note carries a part of the URL this screen could not read: a group=
+	// naming no label key any Node carries.
+	Note string
+
 	// Now is when this page was rendered, stated relatively through Rendered.
 	//
 	// "Can I reach it?" is answered from a socket state read at render time,
@@ -656,6 +660,9 @@ func buildFleetView(d Deps, nodes []registry.Node, certExpiringWithin time.Durat
 
 	v.GroupKeys = groupKeys(nodes)
 	v.GroupBy = chooseGroupBy(groupBy, v.GroupKeys)
+	if groupBy != "" && groupBy != "-" && v.GroupBy != groupBy {
+		v.Note = "no Node carries the label key " + quoted(groupBy) + ", so it was ignored"
+	}
 
 	fns := make([]fleetNode, 0, len(matched))
 	for _, n := range matched {
@@ -1676,7 +1683,7 @@ var fleetTmpl = newScreen("fleet", `
   <div class="freshline">{{template "rendered-age" .Rendered}}{{template "refresh" .RefreshControl}}</div>
 </form>
 <p class="refreshlimit">Every Refresh is an audited read.</p>
-
+{{with .Note}}<p class="gap"><b>Part of this URL could not be read:</b> {{.}}.</p>{{end}}
 {{if .Pin.Any}}{{template "pin-bar" .Pin}}{{end}}
 
 {{if .NoMatch}}
