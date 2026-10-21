@@ -11,7 +11,7 @@ The shipped unit is a restricted-root posture: it removes every privilege the da
 exercise. Its `SystemCallFilter`, `SystemCallArchitectures` and `MemoryDenyWriteExecute`
 directives, and the capability sets below, are a **static derivation** from daemon source and
 `systemd-analyze` (see
-[Syscall and capability surface (v0.0.8 audit)](#syscall-and-capability-surface-v008-audit)),
+[Syscall and capability surface](#syscall-and-capability-surface)),
 not a guess. They have **not** been verified live on a real systemd host under load; that
 manual step is tracked by **#246** (see [Live tracing procedure](#live-tracing-procedure-real-systemd-host)).
 
@@ -66,8 +66,10 @@ From `daemon/packaging/relay-daemon.service`:
   `RestrictNamespaces`, `LockPersonality`**: no Operation touches devices, kernel
   tunables/modules/logs, cgroups, the clock, the hostname, realtime scheduling, namespaces or
   its execution-domain personality, so all are removed.
-- **`ProtectProc=invisible`**: hides other processes' `/proc/<pid>` entries. `/proc/sys/...`,
-  which `system.facts` reads, stays visible.
+- **No `ProtectProc=`**: systemd implements it as a `hidepid=` mount of `/proc`, and that mount
+  exempts its `gid=` group, 0 by default. The daemon runs as `root:root`, so the directive would
+  hide nothing, and running it under another group to make it bite would blind `proc.list` and
+  `net.listening`, whose job is the whole process table.
 - **`RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`**: `AF_INET`/`AF_INET6` carry
   the outbound mTLS connection to the Relay. `AF_UNIX` is **load-bearing for
   `service.restart`**: `systemctl` reaches PID 1 over D-Bus on an `AF_UNIX` socket, and the
@@ -76,7 +78,7 @@ From `daemon/packaging/relay-daemon.service`:
   that Operation. Every other family (e.g. `AF_PACKET`) is denied.
 - **`SystemCallFilter=@system-service`, `SystemCallArchitectures=native`,
   `MemoryDenyWriteExecute=yes`**: the derived allowlist from
-  [Syscall and capability surface (v0.0.8 audit)](#syscall-and-capability-surface-v008-audit).
+  [Syscall and capability surface](#syscall-and-capability-surface).
   The `pkg-install.conf` drop-in ([Documented exceptions](#documented-exceptions)) overrides
   `MemoryDenyWriteExecute` to `=no` for maintainer-script interpreters. Not yet validated
   live against `pkg.install` and a Policy-permitted Raw Exec command (#246); see
@@ -189,7 +191,7 @@ gate against running that command at all.
 **Operator tuning.** `ResourceLimits::DEFAULT` is a compile-time constant. The runtime lever is
 the unit: raise `TasksMax=` and/or add a scoped `MemoryMax=` in the `pkg-install.conf` drop-in.
 
-## Syscall and capability surface (v0.0.8 audit)
+## Syscall and capability surface
 
 ### Method and provenance
 
@@ -338,7 +340,7 @@ $ systemd-analyze security --offline=true daemon/packaging/relay-daemon.service
 ```
 
 This confirms the directives are active: `NoNewPrivileges=`, `RestrictRealtime=`,
-`ProtectSystem=` (strict), `ProtectProc=`, `PrivateTmp=`, `PrivateDevices=`, `ProtectClock=`,
+`ProtectSystem=` (strict), `PrivateTmp=`, `PrivateDevices=`, `ProtectClock=`,
 `ProtectKernelLogs=`, `ProtectControlGroups=`, `ProtectKernelModules=`,
 `ProtectKernelTunables=`, `ProtectHostname=`, `LockPersonality=` and every
 `RestrictNamespaces=` sub-check report `✓`. The retained `CAP_DAC_READ_SEARCH` and the

@@ -127,6 +127,56 @@ func TestFleet_NoFactAppearsOnARowOrInAFacet(t *testing.T) {
 	}
 }
 
+func TestFleet_UnreadableGroupIsNamedNotApplied(t *testing.T) {
+	d := fleetFixture()
+	def := buildFleetView(d, fleetNodes(d), 0, "", "")
+	bad := buildFleetView(d, fleetNodes(d), 0, "", "bogus")
+	if bad.GroupBy != def.GroupBy {
+		t.Errorf("GroupBy = %q, want the default %q", bad.GroupBy, def.GroupBy)
+	}
+	if !strings.Contains(bad.Note, `"bogus"`) {
+		t.Errorf("Note = %q, want it to name the unreadable value", bad.Note)
+	}
+
+	for _, tc := range []struct{ asked, want string }{
+		{"", def.GroupBy}, {"-", ""}, {"role", "role"}, {"env", "env"},
+	} {
+		v := buildFleetView(d, fleetNodes(d), 0, "", tc.asked)
+		if v.Note != "" || v.GroupBy != tc.want {
+			t.Errorf("group=%q: GroupBy = %q, Note = %q; want %q and no note", tc.asked, v.GroupBy, v.Note, tc.want)
+		}
+	}
+}
+
+func TestFleet_UnreadableGroupRendersMessageAndDefaultGrouping(t *testing.T) {
+	const msg = "Part of this URL could not be read:"
+	h := newTestHandler(fleetFixture(), accounts.RoleAdmin)
+	def := contentOf(get(t, h, fleetPath).Body.String())
+	bad := contentOf(get(t, h, fleetPath+"?group=bogus").Body.String())
+
+	if !strings.Contains(bad, msg) || !strings.Contains(bad, "bogus") {
+		t.Error("an unreadable group= is not named")
+	}
+	if !strings.Contains(bad, `<option value="env" selected>`) {
+		t.Error("the default grouping is not the selected option")
+	}
+	const card = `<details class="group"`
+	if strings.Count(bad, card) == 0 || strings.Count(bad, card) != strings.Count(def, card) {
+		t.Errorf("group cards = %d, want the default render's %d", strings.Count(bad, card), strings.Count(def, card))
+	}
+
+	for _, q := range []string{"", "?group=-", "?group=role"} {
+		if strings.Contains(get(t, h, fleetPath+q).Body.String(), msg) {
+			t.Errorf("%q draws the unreadable-URL message", q)
+		}
+	}
+
+	both := get(t, h, fleetPath+"?filter=node:role=nonesuch&group=bogus").Body.String()
+	if !strings.Contains(both, msg) || !strings.Contains(both, "No Nodes match this Selector.") {
+		t.Error("the note and the no-match empty state do not render together")
+	}
+}
+
 // TestFleet_DerivesStateAndBucketsTheWall covers the deviation model: offline
 // comes from connectedness, quarantine is a declaration rather than a derived
 // state, and the pixel wall has exactly four buckets.

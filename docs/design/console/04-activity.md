@@ -26,8 +26,9 @@ or filtered, it is the audit trail. One renderer serves both, so the two cannot 
 **What it can honestly show is the request, not the reasoning.** The Relay sees tool calls; it
 does not see the model's intent, and it must never pretend to. A verified record of what was asked
 beats a narrated account of why, which an agent under prompt injection would happily fabricate.
-The lede says the screen lists calls that reached the Relay, and never "every call an AI-agent
-makes": the screen cannot tell an AI-agent from a person using the same surface.
+The screen has **no lede** (D34): the heading and the rows say what it is. Nothing on it says
+"every call an AI-agent makes" — it lists calls that reached the Relay, and it cannot tell an
+AI-agent from a person using the same surface.
 
 ## Grain
 
@@ -49,7 +50,7 @@ step-up, Account changes and API Token mints and revokes are on [20 — Access](
 | `plan` | a Preflight: the arguments, the grouped verdicts and `would_be_rejected`, and a line saying nothing executed and each Node's own engine answered. Its badge is distinct, because it is the trust-critical case |
 | `approval` | what is parked, quorum state, TTL — and no link to decide, because the Console decides no approval (ADR-0044); an in-band elicitation (ADR-0029) with the deciding identity as a verified chip once decided |
 | `refusal` | the capability layer's refusal, rendered slate and informative, never as an error — the role gate refusing `raw_exec` to a non-`admin`, for one |
-| `read` | the arguments and a metadata-only result line that explicitly says the output is not retained |
+| `read` | the arguments and a metadata-only result line; no output, and no per-row sentence saying the output is not retained (D34) |
 | `cancel` | which Job, by whom |
 
 A record kind no family above claims is not drawn here; it stays on the audit trail.
@@ -131,8 +132,8 @@ kind chips says read records are left out and links to them, reads made from thi
 keeping the other filters), so following it never hides the reads this screen's own loads made. Activity is the only screen over these records ([17](17-read-egress.md) is retired).
 
 Read **calls** are audited — who, which tool, what they asked for, when — and an unauditable read
-fails closed (ADR-0025). Read **output** is never retained. A read row says so, and no detail view
-promises to show it later.
+fails closed (ADR-0025). Read **output** is never retained. A read row shows none and does not say
+so on every row (D34) — the property is the docs'; no detail view promises to show it later.
 
 ### Reads made from this Console
 
@@ -160,12 +161,9 @@ that its identity was established by a Console session AND that it was a read.**
   (`?console=show`). With that parameter set, the screen lists and counts exactly as it would
   without this rule, and the sentence offers the way back.
 - **It composes with every other filter.** Every link the screen draws — Older, Newest,
-  "Show every Account" and Refresh — carries `?account=` and `?console=` as it found them. The one
-  deliberate exception is the read-records link ("Reads" above): it sets `?console=show`, so it
-  never hides the reads this screen's own loads made, and it still carries `?account=` and every other filter.
-- **It is presentation over the fetched page.** No read is added or widened. The page note says
-  what the page holds, not what the feed shows, and the sentence's count keeps the arithmetic
-  visible.
+  "Show every Account" and Refresh — carries `?account=` and `?console=` as it found them.
+- **It is presentation over the fetched page.** No read is added or widened. The sentence's count
+  keeps the arithmetic visible.
 - **The method decides what is listed and is never displayed.**
 - **Empty states stay true.** Where the feed is empty only because every call on the
   page was a read made from this Console, it says that, rather than that nobody called. An empty page reached by Older says only that nothing is older
@@ -177,24 +175,29 @@ Consecutive calls that would render **identically** apart from their timestamp c
 row carrying their count. Equivalence is the whole rendered row: a poll of a different Job, a
 different outcome or risk class never joins a run, and a `raw_exec` between two runs of `get_job`
 polls stays its own row. Runs must be **consecutive**: collapsing non-adjacent calls would reorder
-the trail, which on an audit screen is worse than the crowding. The page note says how much was
-collapsed. Collapsing is presentation over the fetched page and never crosses a page boundary.
+the trail, which on an audit screen is worse than the crowding. Collapsing is presentation over the
+fetched page and never crosses a page boundary.
+
+**A collapsed run is a `×N` chip on its row** (D34), whose tooltip (`title`) gives the run's time
+range, first call to last. No sentence on the row or the page says how many calls were collapsed
+into how many rows, or that each call is still on the audit trail.
 
 ## Live but stable
 
-New events **queue behind an explicit click** ("3 new events — show") rather than pushing in.
-Nothing moves under what someone is reading (foundations rule 6, not negotiable here).
+New events **queue behind an explicit click** rather than pushing in. Nothing moves under what
+someone is reading (foundations rule 6, not negotiable here).
 
-**Where events have queued, the click is an obvious control**: a button, not small text, that
-reloads the page at its newest page with the current filter preserved. Beside it, one plain
-lower-case sentence says what the number counts: events on the stream, not rows that will appear,
-from a stream this page's filter does not narrow, where one Job announces itself more than once.
-It is a Refresh in the sense of `00-foundations.md` ("Refreshing a screen"), never a timer. One
-visible sentence beside the Refresh control says every reload is an audited read made from this
-Console; the kind chips' note says the default leaves such reads out.
+**Where events have queued, the live region becomes the control: "Live · 3 new"** (D34) — a
+button, not small text, that reloads the page at its newest page with the current filter
+preserved. No sentence beside it explains the number; its tooltip (`title`) says what it counts:
+events on the stream, not rows that will appear, from a stream this page's filter does not narrow,
+where one Job announces itself more than once. It is a Refresh in the sense of `00-foundations.md`
+("Refreshing a screen"), never a timer, and like every Refresh it carries no sentence saying it is
+an audited read. The kind chips' sentence still says the default leaves reads made from this
+Console out (Reads made from this Console, above).
 
-The live region states its condition in words alone ("Live.", "The live stream is not
-connected.", and the rest), with no pulsing dot or other animation.
+The live region states its condition in words alone — "Live", "Live · N new", "Not connected",
+and the rest — with no pulsing dot or other animation.
 
 ## Filtering and export
 
@@ -210,7 +213,8 @@ ID**, never a name: a name can later belong to a different Account. The Accounts
 last-call link uses it ([15](15-accounts-and-tokens.md)). The Principal box takes the Account's ID,
 and its placeholder says so. Lookup by name waits for an audited Account-read path (#659).
 
-What follows is recorded here rather than on the screen (D31). A page holds up to a fixed number of dispatches and, separately, of other events, merged by time;
+What follows is recorded here rather than on the screen (D31, D34); no page-size sentence is drawn.
+A page holds up to a fixed number of dispatches and, separately, of other events, merged by time;
 the two lanes page separately, so a page does not end at a single moment, and Older continues each
 lane from where it stopped (a filter that reads only one lane does end at a single moment). The
 filter box offers no Selector and no Node field yet: the Job query has a field for neither, a Job
@@ -224,10 +228,9 @@ filter does to the page, and the read sentences above.
 
 ## Nothing recorded yet
 
-On a Relay where no call other than a read has been recorded and no filter is applied (D29), the
-screen draws **one explanatory block** in place of an empty feed and an empty Running now, headed
-"No calls other than reads have been recorded yet." — "Each Task an AI-agent or operator
-dispatches, and each tool call other than a read, appears here." — with the live region's sentence
+On a Relay where nothing has been recorded and no filter is applied (D29), the screen draws **one
+explanatory block** in place of an empty feed and an empty Running now — "When an AI-agent or an
+operator dispatches a Task, or calls any tool, it appears here." — with the live region's state
 beside it, because whether the stream is connected is what someone watching an empty screen needs
 to know. The filters sit in a closed native `<details>` below: there is nothing yet to narrow.
 
@@ -280,7 +283,7 @@ Cancel sits in [Running now](#running-now), one per Job per page. Token revocati
       one query, with the verified/asserted distinction visible without hovering.
 - [ ] Live updates never reflow a row the user is reading.
 - [ ] Live tail and historical query use the same renderer.
-- [ ] A read row carries no output at any age, and states that.
+- [ ] A read row carries no output at any age, and no per-row sentence about it.
 - [x] Polling collapses; an Account making 200 `get_job` calls does not push everything else off.
 - [x] A `raw_exec` refused by the role gate renders informative-neutral, not as an error.
 - [x] Only tool-call rows appear: no freeze, Node revoke, Enrollment Token or other row, and no

@@ -3,7 +3,7 @@
 //!
 //! This test has a specific origin: the sample was missing FOUR environment
 //! variables that had been added to the daemon after it was written
-//! (`RELAY_STATE_DIR`, `RELAY_ENROLL_ENDPOINT`, `RELAY_HEARTBEAT_INTERVAL_SECS`,
+//! (`RELAY_STATE_DIR`, `RELAY_ENROLL_ADDRESS`, `RELAY_HEARTBEAT_INTERVAL_SECS`,
 //! `RELAY_SHUTDOWN_GRACE_SECS`), and nothing noticed for several milestones.
 //!
 //! That is the failure mode worth guarding. A sample config is the first thing

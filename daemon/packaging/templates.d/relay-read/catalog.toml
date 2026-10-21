@@ -1,4 +1,4 @@
-# Relay — shipped first-party read catalog (ADR-0021, issue #293)
+# Relay — shipped first-party read catalog (ADR-0021)
 #
 # A template pack installed with the daemon package, trusted the way the binary
 # is: you installed it. Seven `read`-class Template Operations that make a fresh
@@ -29,21 +29,23 @@
 # ---------------------------------------------------------------------------
 # No parameters: the whole process table, one line per process. Reveals command
 # lines, which routinely carry secrets passed as arguments — scope in Policy if
-# that matters on your fleet.
+# that matters on your fleet. `user:32` keeps long account names whole and
+# `etimes` is elapsed seconds, so both columns parse without guessing.
 [[template]]
 name = "proc.list"
 risk_class = "read"
-body = "ps -e -o pid,ppid,user,pcpu,pmem,etime,args --no-headers"
+body = "ps -e -o pid,ppid,user:32,pcpu,pmem,etimes,args --no-headers"
 
 # ---------------------------------------------------------------------------
 # service.status — one systemd unit's state, as structured key=value
 # ---------------------------------------------------------------------------
 # `show` rather than `status`: a fixed property list is parseable and, unlike
-# `status`, does not splice recent log lines into the result.
+# `status`, does not splice recent log lines into the result. `Result` and
+# `ExecMainStatus` say why a failed unit stopped and with what exit status.
 [[template]]
 name = "service.status"
 risk_class = "read"
-body = "systemctl show --no-pager --property=Id,LoadState,ActiveState,SubState,UnitFileState,MainPID,NRestarts,ExecMainStartTimestamp -- {{unit}}"
+body = "systemctl show --no-pager --property=Id,LoadState,ActiveState,SubState,Result,UnitFileState,MainPID,ExecMainStatus,NRestarts,ExecMainStartTimestamp -- {{unit}}"
 
 [[template.slots]]
 name = "unit"
@@ -69,15 +71,20 @@ risk_class = "read"
 body = "ss -H --listening --numeric --tcp --udp --processes"
 
 # ---------------------------------------------------------------------------
-# pkg.inventory — installed packages, name and version
+# pkg.inventory — packages: status, name, version and architecture
 # ---------------------------------------------------------------------------
-# dpkg first, then rpm; a Node with neither reports the error on stderr rather
-# than silently returning an empty inventory (an empty list would read as "no
-# packages", which is never true).
+# One tab-separated line per package, the same four columns on both families:
+# STATUS NAME VERSION ARCH. VERSION carries the epoch when there is one
+# (`1:2.3-4`), so versions compare across dpkg and rpm. STATUS is dpkg's own
+# (`installed`, `config-files`, ...), and always `installed` from rpm, which
+# lists nothing else; rpm's signing keys appear as `gpg-pubkey` with ARCH
+# `(none)`. dpkg first, then rpm; a Node with neither reports the error on
+# stderr rather than silently returning an empty inventory (an empty list would
+# read as "no packages", which is never true).
 [[template]]
 name = "pkg.inventory"
 risk_class = "read"
-body = "if command -v dpkg-query > /dev/null 2>&1; then dpkg-query -W -f '${Package}\\t${Version}\\n'; elif command -v rpm > /dev/null 2>&1; then rpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\n'; else echo 'no supported package manager (dpkg/rpm)' 1>&2; exit 1; fi"
+body = "if command -v dpkg-query > /dev/null 2>&1; then dpkg-query -W -f '${db:Status-Status}\\t${Package}\\t${Version}\\t${Architecture}\\n'; elif command -v rpm > /dev/null 2>&1; then rpm -qa --qf 'installed\\t%{NAME}\\t%|EPOCH?{%{EPOCH}:}|%{VERSION}-%{RELEASE}\\t%{ARCH}\\n'; else echo 'no supported package manager (dpkg/rpm)' 1>&2; exit 1; fi"
 
 # ---------------------------------------------------------------------------
 # log.tail — BOUNDED journal tail for one unit
@@ -85,11 +92,12 @@ body = "if command -v dpkg-query > /dev/null 2>&1; then dpkg-query -W -f '${Pack
 # The 200-line cap is fixed HERE, by the author, and is not a slot: a caller
 # can choose the unit, never the volume. Journals carry whatever secrets the
 # service logs — this is the catalog's widest egress surface, so scope the
-# allowed units in Policy rather than leaving it wildcard.
+# allowed units in Policy rather than leaving it wildcard. Timestamps are UTC
+# ISO 8601 with microseconds, so lines from a fleet in many time zones sort.
 [[template]]
 name = "log.tail"
 risk_class = "read"
-body = "journalctl --no-pager --quiet --lines=200 --unit {{unit}}"
+body = "journalctl --no-pager --quiet --output=short-iso-precise --utc --lines=200 --unit {{unit}}"
 
 [[template.slots]]
 name = "unit"

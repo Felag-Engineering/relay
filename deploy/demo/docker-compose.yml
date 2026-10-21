@@ -229,8 +229,8 @@ services:
     # below is now only an explicit fallback for an unreadable /proc.
     hostname: "dev-node-1"
     environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "${FLEET_HOSTNAME:-relay}"
+      RELAY_ADDRESS: "https://relay:7654"
+      RELAY_SERVER_NAME: "${FLEET_HOSTNAME:-relay}"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -246,8 +246,8 @@ services:
     <<: *daemon-base
     hostname: "dev-node-2"
     environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "${FLEET_HOSTNAME:-relay}"
+      RELAY_ADDRESS: "https://relay:7654"
+      RELAY_SERVER_NAME: "${FLEET_HOSTNAME:-relay}"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -265,8 +265,8 @@ services:
     <<: *daemon-base
     hostname: "dev-node-3"
     environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "${FLEET_HOSTNAME:-relay}"
+      RELAY_ADDRESS: "https://relay:7654"
+      RELAY_SERVER_NAME: "${FLEET_HOSTNAME:-relay}"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.db.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -282,8 +282,8 @@ services:
     <<: *daemon-base
     hostname: "dev-node-4"
     environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "${FLEET_HOSTNAME:-relay}"
+      RELAY_ADDRESS: "https://relay:7654"
+      RELAY_SERVER_NAME: "${FLEET_HOSTNAME:-relay}"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -299,8 +299,8 @@ services:
     <<: *daemon-base
     hostname: "dev-node-5"
     environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "${FLEET_HOSTNAME:-relay}"
+      RELAY_ADDRESS: "https://relay:7654"
+      RELAY_SERVER_NAME: "${FLEET_HOSTNAME:-relay}"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -317,8 +317,8 @@ services:
     <<: *daemon-base
     hostname: "dev-node-6"
     environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "${FLEET_HOSTNAME:-relay}"
+      RELAY_ADDRESS: "https://relay:7654"
+      RELAY_SERVER_NAME: "${FLEET_HOSTNAME:-relay}"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -334,8 +334,8 @@ services:
     <<: *daemon-base
     hostname: "dev-node-7"
     environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "${FLEET_HOSTNAME:-relay}"
+      RELAY_ADDRESS: "https://relay:7654"
+      RELAY_SERVER_NAME: "${FLEET_HOSTNAME:-relay}"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.db.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -353,8 +353,8 @@ services:
     <<: *daemon-base
     hostname: "dev-node-8"
     environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "${FLEET_HOSTNAME:-relay}"
+      RELAY_ADDRESS: "https://relay:7654"
+      RELAY_SERVER_NAME: "${FLEET_HOSTNAME:-relay}"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.bastion.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
@@ -370,8 +370,8 @@ services:
     <<: *daemon-base
     hostname: "dev-node-9"
     environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "${FLEET_HOSTNAME:-relay}"
+      RELAY_ADDRESS: "https://relay:7654"
+      RELAY_SERVER_NAME: "${FLEET_HOSTNAME:-relay}"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
       RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
       RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"

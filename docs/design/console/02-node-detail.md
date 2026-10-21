@@ -21,9 +21,9 @@ Fleet / prod / web-0442 ┄self-reported┄   node id 4e05a1c9-…(full ID, neve
                                           [Edit tag: labels] [Remove quarantine · admin+step-up]
 ─────────────────────────────────────────────────────────────────────────────────────────
 ┌ Identity & enrollment ─┐  ┌ Effective Policy ───────────────────────────────────────┐
-│ node id, cert sha256,  │  │ answered by this Node's own engine, 12s ago             │
-│ issued/expires,        │  │ [read-only, structurally]                                │
-│ renewals, enrolled via │  │   <verbatim policy.toml>                                 │
+│ node id, cert sha256,  │  │ reported by this Node's own engine · received 3h ago    │
+│ issued/expires,        │  │   <verbatim policy.toml>                                 │
+│ renewals, enrolled via │  │                                                          │
 │ token, daemon version  │  └──────────────────────────────────────────────────────────┘
 ├ Fingerprints ──────────┤  ┌ Recent Tasks ────────────────────────────────────────────┐
 │ policy (alias + hash,  │
@@ -51,7 +51,9 @@ Policy fingerprint follows `00-foundations.md` ("Policy fingerprint"), with the 
 control for a human `admin` as the Fleet view (spec 01, "Policy aliases"; D23). The alias names the
 fingerprint on this Relay; it is not this Node's Policy. Template set may read the literal
 `unloadable`: the Node's local template set failed to load and its template vocabulary is empty
-(fail closed).
+(fail closed). The panel draws the counts and nothing beside them: no sentence says the counts are
+observations rather than evidence of equal Policy or trust (D34). That is what a count is, and the
+docs say so.
 
 **Facts** — OS, kernel, arch, hostname, IP, package count. Self-reported. **In full on this page only.**
 The hostname alone also names the Node — the heading here, a fleet row, Compare's column heading —
@@ -63,14 +65,20 @@ one; adding it is a `/proto` and daemon change, contract-first and escalated. Th
 five Facts that exist.
 
 **Effective Policy** — rendered from `policyview`: the Node's own engine's report. Read-only
-*structurally*: there is no code path from this screen to a Node's Policy, and the panel says so.
-It links to the Policy Catalog (spec 06), which arranges first-party fragments and is never seeded
-from a Node's own file.
+*structurally*: there is no code path from this screen to a Node's Policy (invariant 2). **The
+panel does not say so** — no box, note or tag (owner decision, 2026-10-21; D34). That the Relay
+never writes a Node's Policy is a known property of the product: it belongs in the docs and in what
+is said about the product, and the screen shows it by offering no control that could. It links to
+the Policy Catalog (spec 06), which arranges first-party fragments and is never seeded from a Node's
+own file.
 
 The panel carries the instant the Relay **received** the report, stamped inside
 `policyview.Cache.Set` from the Relay's own clock, which no caller can inject. It is a receipt time,
-not a query time — a snapshot is captured when a Node connects — and the panel says "received",
-never "queried". **Not implemented: "ask a what-if".** A `PolicyQuery` is a live request through the
+not a query time — a snapshot is captured when a Node connects. The panel draws it as **"Received
+3h ago"**, relative, in a `<time>` element whose `datetime` and `title` carry the absolute UTC
+instant (`00-foundations.md`, "How old a page is"); it says "received", never "queried", and adds no
+sentence explaining the difference (D34).
+**Not implemented: "ask a what-if".** A `PolicyQuery` is a live request through the
 capability layer's dispatch path, so it belongs with the composer (spec 05, v0.7.0). The Policy
 Catalog link is role-gated to `operator`; it follows PC-8 (`viewer`) when spec 06 lands. Where no
 snapshot has been received since the Relay last started, the panel says so in one sentence and
@@ -78,13 +86,15 @@ renders nothing else: an answer remembered from before a restart could be out of
 saying so, and operators read this panel before deciding a Task is safe.
 
 **Recent Tasks** — time, Operation with arguments, outcome chip, Job link. Include denies; they
-are the most informative rows here. Read-class rows say "output not retained" (ADR-0025).
+are the most informative rows here. A read-class row carries no output and no sentence saying so
+(D34): read output is never retained (ADR-0025), which the docs say once, not every row.
 
 ## Labels
 
-All four namespaces on one row, visually distinct per `00-foundations.md`, with a one-line
-explainer of who sets each namespace a chip can carry here (`node:`, `relay:`, `state:`); `tag:` is
-not named while no `tag:` label can exist. Two actions, both v0.7.0:
+All four namespaces on one row, visually distinct per `00-foundations.md`. There is no legend of
+the namespaces (D34): each chip's tooltip (`title`) says who sets its namespace — the Node's own
+config management for `node:`, the Relay for `relay:`, derived by the Relay for `state:`. `tag:` is
+not described while no `tag:` label can exist. Two actions, both v0.7.0:
 
 - **Add and remove `tag:` labels on this Node** — `operator`, standard auth, no step-up, audited.
   The bulk form is on the Fleet view (spec 01).
@@ -117,7 +127,9 @@ column.
 only" checkbox, checked by default, sits in a GET form beside the pin bar and carries the pin set;
 unchecking it shows every row. It is a GET parameter, so the view is linkable and needs no script.
 When nothing differs, the screen says so in words — "These Nodes reported the same Policy and fingerprints." — rather than
-drawing an empty table. A differing row is emphasised by **weight and a border**, with no new hue,
+drawing an empty table. That sentence is situational and stays; nothing else is prose (D34): no
+caption restates the toggle ("Only rows that differ are shown"), and the table carries no
+footnotes. A differing row is emphasised by **weight and a border**, with no new hue,
 and the emphasis marks the **row**, never a cell: Compare says these differ and never which one is
 right (QRY-9). A column that has not reported still marks its row as differing, and is never read
 as agreement.
@@ -171,13 +183,14 @@ link here and a GET form on Fleet; neither writes anything.
       **Qualified.** It is the Relay's receipt time, stamped inside `policyview.Cache.Set` so no
       caller or Node can supply it, not a query time: the live half is `PolicyQuery`, v0.7.0 with
       the composer. The panel says "received", never "queried", and an offline Node's panel says it
-      cannot be refreshed.
+      cannot be refreshed. The panel draws no note that this screen has no path to the Node's
+      Policy (D34); the property is structural, not a sentence.
 - [ ] Setting `relay:quarantine` demands `admin` + step-up and is audited with a reason.
       **Not implemented (v0.7.0).** Label writes go through the capability layer with #430; v0.6.0
       is read-only, so there is no set/remove control on this screen at any role.
 - [ ] Editing a `tag:` label demands `operator` and no step-up.
       **Not implemented (#430).** `tag:` has no storage on `registry.Node`, so no chip renders and
-      no control exists, and the label explainer does not name it.
+      no control exists, and no chip tooltip describes it.
 - [x] No surface anywhere writes a `node:` or `state:` label.
 - [x] Facts appear on this page and no other. **Qualified:** the hostname names a fleet row, this
       page's heading and each Compare column, always beside the verified Node ID, never diffed,

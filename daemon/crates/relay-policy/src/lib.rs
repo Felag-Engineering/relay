@@ -5118,6 +5118,9 @@ mod default_policy_tests {
         "/root/.ssh/id_ecdsa",
         "/root/.ssh/id_ed25519",
         "/root/.ssh/id_dsa",
+        // Distribution-default TLS private keys (ADR-0022, amended 2026-10-21).
+        "/etc/ssl/private/ssl-cert-snakeoil.key",
+        "/etc/pki/tls/private/localhost.key",
         // The daemon's own secret-bearing files (ADR-0022, amended 2026-10-16).
         "/etc/relay-daemon/relay-daemon.env",
         "/var/lib/relay-daemon/key.pem",

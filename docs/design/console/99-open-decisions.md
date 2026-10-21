@@ -386,18 +386,87 @@ An external same-origin script may advance the relative text; nothing reloads on
 Dropped from every screen. A standing note is visible, as one sentence beside what it qualifies,
 or deleted when its substance is in the docs; a note the Console must be visibly bound by was
 never collapsed and still is not (`00-foundations.md`, "Standing notes and situational messages").
+*Tightened by D34 (2026-10-21):* a standing note is now deleted unless the screen would be wrong
+without it, and the exception for a note the Console must be visibly bound by is withdrawn.
 
 ### D32. Accounts: the selected panel first, creation behind a button — **RESOLVED 2026-10-18 (owner)**
 
 The selected Account's panel is at the top; the create form is behind **New account** in a native
 `<details>`. The role selects preselect the current role, not submittable; Lower role is never drawn
 dimmed with it selected — a hint says "choose a lower role" instead (spec 15).
+*Superseded by D35 (2026-10-21)* for layout: there is no selected-Account panel, and New account
+is a modal. The role-select rules stand.
 
 ### D33. Access draws an Account ID as an identifier — **RESOLVED 2026-10-18 (owner)**
 
 A subject Account ID a record carries is drawn in the identifier treatment, not as raw text, and a
 name only where the record carries one. Resolving IDs to current names stays deferred until #659
 (spec 20).
+
+### Owner review, "show, don't tell" — **RESOLVED 2026-10-21 (owner)**
+
+Taken with the owner on 2026-10-21, after a Playwright crawl of the running Console (#1106, #1109,
+#1107). Each is a ruling; where it overturned a written rule, that rule was amended in place.
+
+### D34. Show, don't tell — **RESOLVED 2026-10-21 (owner, #1106)**
+
+Tightens D31. Data, chips, controls and tooltips carry meaning; prose is the exception. A standing
+note is **deleted unless the screen would be wrong without it**; situational messages stay visible.
+A Refresh control carries no sentence saying a Refresh is audited — the reads still are
+(`docs/specs/audit-and-read-lane.md`); the screen just does not say so (`00-foundations.md`,
+"Refreshing a screen").
+
+On invariant 2: Node detail's dashed "There is no path from this screen to this Node's Policy" box
+is **deleted, with no replacement tag**. That the Relay never writes a Node's Policy is a known
+property of the product and belongs in the docs and marketing material, not on the screen. The
+property itself is unchanged; only the sentence goes. This withdraws D31's clause that such a note
+is never collapsed.
+
+The per-note dispositions, as amended into the screen specs:
+
+| Screen | Note | Disposition |
+|---|---|---|
+| every screen with Refresh | "Every Refresh is an audited read." | deleted |
+| Fleet | "every Node here is reachable, current and permitted — no state label…" | deleted |
+| Fleet | "Every Node in `web`, oddest first." caption | visually hidden (screen readers only) |
+| Node detail | label-namespace legend | deleted; each chip's tooltip says who sets it |
+| Node detail | "These counts are observations, never evidence of equal Policy or trust." | deleted |
+| Node detail | "Received at …, 3h ago: a receipt time, not a query time." | "Received 3h ago", the instant in the tooltip |
+| Node detail | invariant-2 box | deleted, no replacement (above) |
+| Node detail | "output not retained" on read-class Recent Tasks | deleted, as on Activity |
+| Compare | caption "Only rows that differ are shown", two footnotes | deleted |
+| Activity | lede, live-counter sentence, page-size sentence | deleted; the live control reads "Live · N new" |
+| Activity | "Output was not retained…" on every read row | deleted |
+| Activity | "N consecutive identical calls … on the audit trail", "N calls collapsed into M rows" | a `×N` chip, its time range in the tooltip |
+| Accounts | role-ceiling and OAuth-password notes | deleted |
+| Accounts | "The value is shown once…" | kept as "Shown once." |
+| Access | admins-only, no-subject-filter, older-failed-sign-in and page-size notes | deleted |
+| Access | "OAuth sign-ins happen at the identity provider…" | drawn only when OAuth is configured |
+
+### D35. Accounts is one list; New account and Edit are modals — **RESOLVED 2026-10-21 (owner, #1109)**
+
+Supersedes D32's layout. Modelled on Gleipnir's account-management screen, copying the pattern and
+not the code: one table (Name, Kind, Role, Status, Last authentication, Last tool call for machine
+Accounts, and Edit and Disable/Enable in the row); **New account** in the page header opens a modal
+with a live "what this role may do" panel beside the role radios; **Edit** opens the same modal in
+edit mode holding role, state and the Account's API Tokens. Modals are native `<dialog>` driven only
+by the external same-origin script; every act is a CSRF-bearing POST; without JavaScript each falls
+back to a page (`/console/accounts/<name>` for an Account) with **Back to Accounts**. Step-up, the
+self-target and last-admin refusals, reveal-once, and the named confirmation for destructive acts
+are unchanged (spec 15; [11](11-console-shell.md), "Modals").
+
+**Still open:** the model's badge colours (a hue per role; status green or red) against the colour
+budget (D5, D24), and whether an Active sessions list belongs beside the own-password form.
+
+### D36. An Account changes only its own password — **DECIDED 2026-10-21 (owner, #1107); ADR pending**
+
+A signed-in human Account may change only its **own** password, from a **your account** surface
+reached from the signed-in block. There is no admin reset of another Account's password. Spec 15
+records the design as *Designed, pending ADR*; nothing is built until the ADR merges. The ADR
+settles proof of the current password, session rotation and revocation, the Access record, how a
+Console-created human Account gets its first password, and that the change is reach, not security
+floor, under invariant 11. `docs/specs/accounts-and-access.md` still describes an admin reset as
+intended; it is an aspirational spec, and reconciling it is the ADR's change.
 
 ## Prerequisites that already exist as issues
 

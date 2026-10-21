@@ -131,7 +131,15 @@ pub async fn invoke(def: &TemplateDef, args: &[(&str, &str)], runner: &ShellRunn
             .collect::<HashMap<_, _>>(),
     };
     let positional = op.positional_args(&operation);
-    let policy = relay_policy::from_toml_str("").expect("an empty Policy parses");
+    // Allows the Template with any value in every slot, so a `path` slot's
+    // resolved-target re-check passes: these tests examine the shell boundary,
+    // not Policy.
+    let any_value = vec![r#"["*"]"#; def.slots.len()].join(", ");
+    let policy = relay_policy::from_toml_str(&format!(
+        "[[operation]]\nname = {:?}\nallowed_args = [{any_value}]\n",
+        def.name
+    ))
+    .expect("the any-value Policy parses");
     op.invoke(OpCtx {
         task_id: "t-shell".to_string(),
         positional,
@@ -142,6 +150,32 @@ pub async fn invoke(def: &TemplateDef, args: &[(&str, &str)], runner: &ShellRunn
         runner,
     })
     .await
+}
+
+/// A fresh, canonical temp root holding each of `paths` (absolute, beneath it)
+/// as a regular file, and the root. A Template `path` value must name one: the
+/// daemon opens it and re-checks its resolved target before the command runs
+/// (ADR-0018 layer 2), and a canonical path to a regular file resolves to
+/// itself.
+pub fn path_fixtures(label: &str, paths: &[&str]) -> (relay_test_support::TempDir, String) {
+    let dir = relay_test_support::TempDir::created(label);
+    let root = std::fs::canonicalize(dir.path())
+        .expect("canonicalize the fixture root")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        !root
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "$`\\\"';|&<>(){}[]*?!#~=".contains(c)),
+        "TMPDIR yields {root:?}, which a Path slot refuses; these fixtures need a plain one"
+    );
+    for p in paths {
+        let file = PathBuf::from(format!("{root}{p}"));
+        std::fs::create_dir_all(file.parent().expect("a fixture has a parent"))
+            .expect("create the fixture's parent");
+        std::fs::write(&file, "x").expect("write the fixture");
+    }
+    (dir, root)
 }
 
 /// Execute an arbitrary `/bin/sh -c`-shaped argv (`["/bin/sh", "-c", cmd, ..]`)

@@ -187,7 +187,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "%config.relay_addr",
         "Relay closed stream; reconnecting",
         1,
-        "operator-set relay address: RELAY_ADDR, or the value the daemon persisted from it at enrollment (validated https, no whitespace or control characters)",
+        "operator-set relay address: RELAY_ADDRESS, or the value the daemon persisted from it at enrollment (validated https, no whitespace or control characters)",
     ),
     (
         "src/main.rs",
@@ -195,7 +195,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "%config.relay_addr",
         "Relay rejected stream open; will retry",
         1,
-        "operator-set relay address: RELAY_ADDR, or the value the daemon persisted from it at enrollment (validated https, no whitespace or control characters)",
+        "operator-set relay address: RELAY_ADDRESS, or the value the daemon persisted from it at enrollment (validated https, no whitespace or control characters)",
     ),
     (
         "src/main.rs",
@@ -203,7 +203,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "%config.relay_addr",
         "relay-daemon starting",
         1,
-        "operator-set relay address: RELAY_ADDR, or the value the daemon persisted from it at enrollment (validated https, no whitespace or control characters)",
+        "operator-set relay address: RELAY_ADDRESS, or the value the daemon persisted from it at enrollment (validated https, no whitespace or control characters)",
     ),
     (
         "src/main.rs",
@@ -211,7 +211,7 @@ const LOCAL_FIELDS: &[LocalField] = &[
         "%config.relay_addr",
         "stream dropped mid-session; reconnecting",
         1,
-        "operator-set relay address: RELAY_ADDR, or the value the daemon persisted from it at enrollment (validated https, no whitespace or control characters)",
+        "operator-set relay address: RELAY_ADDRESS, or the value the daemon persisted from it at enrollment (validated https, no whitespace or control characters)",
     ),
     (
         "src/main.rs",

@@ -556,9 +556,10 @@ where
 
     let (positional, path_positions) = operation_inputs(entry, op);
 
-    // The digest covers the vector Policy evaluates (name + positional). For a
-    // Template that is the name and exactly the values its shell receives as
-    // positional parameters, never the script; none of it reaches a log as argv.
+    // The digest covers the vector Policy evaluates here (name + positional, as
+    // requested), never a Template's script; none of it reaches a log as argv.
+    // A Template `path` slot's shell argument is its resolved target (ADR-0018
+    // layer 2), which can be a different spelling than the one digested.
     let mut digest_parts = Vec::with_capacity(1 + positional.len());
     digest_parts.push(op.name.as_str());
     digest_parts.extend(positional.iter().map(String::as_str));
@@ -875,6 +876,15 @@ mod tests {
     // -----------------------------------------------------------------------
 
     const FIXTURE: &str = include_str!("../policy.example.toml");
+
+    /// `file`'s canonical path: what a Template `path` slot's layer-2
+    /// re-check resolves it to (ADR-0018).
+    fn canonical_path(file: &TempFile) -> String {
+        std::fs::canonicalize(file.path())
+            .expect("canonicalize a temp file")
+            .to_string_lossy()
+            .into_owned()
+    }
 
     fn fixture_policy() -> Policy {
         from_toml_str(FIXTURE).expect("policy.example.toml must parse cleanly")
@@ -2802,13 +2812,16 @@ allowed_args = []
             }],
         }]);
 
-        let policy = from_toml_str(
+        // A path slot names a regular file (ADR-0018 layer 2 opens it).
+        let file = TempFile::new("tmpl-loaded", b"x");
+        let path = canonical_path(&file);
+        let policy = from_toml_str(&format!(
             r#"
 [[operation]]
 name = "disk.usage"
-allowed_args = [["/var"]]
-"#,
-        )
+allowed_args = [["{path}"]]
+"#
+        ))
         .expect("policy parses");
 
         let recorded = Arc::new(Mutex::new(None::<Vec<String>>));
@@ -2830,7 +2843,7 @@ allowed_args = [["/var"]]
         };
 
         let mut args = std::collections::HashMap::new();
-        args.insert("path".to_string(), "/var".to_string());
+        args.insert("path".to_string(), path.clone());
         let op = crate::gen::Operation {
             name: "disk.usage".to_string(),
             args,
@@ -2856,7 +2869,7 @@ allowed_args = [["/var"]]
                 "-c".to_string(),
                 "df -PT \"$1\"".to_string(),
                 "relay-template".to_string(),
-                "/var".to_string(),
+                path,
             ],
         );
 
@@ -2987,11 +3000,12 @@ args = [["/etc/shadow"]]
 
         // A canonical, non-denied path still runs — the gate is a precondition,
         // not a blanket refusal.
+        let allowed = TempFile::new("checksum-ok", b"x");
         let ok = handle_operation_in(
             &REGISTRY,
             &templates,
             "t-checksum-ok".to_string(),
-            &checksum_of("/etc/os-release"),
+            &checksum_of(&canonical_path(&allowed)),
             Duration::from_secs(5),
             &policy,
             fake_run,
@@ -2999,6 +3013,97 @@ args = [["/etc/shadow"]]
         )
         .await;
         assert_eq!(ok.outcome, Outcome::Success as i32);
+    }
+
+    /// ADR-0018 layer 2 on a Template `path` slot, through the production
+    /// operation path: a `/proc/self/root` alias is canonical in form, so it
+    /// passes the gate's precondition and the exact-path deny's string compare,
+    /// and only the resolved-target re-check refuses it.
+    #[tokio::test]
+    async fn a_proc_self_root_alias_in_a_template_path_slot_is_denied_end_to_end() {
+        let templates = crate::templates::TemplateSet::for_test(&[TemplateDef {
+            name: "file.checksum".to_string(),
+            risk_class: crate::operations::template::RiskClassDef::Read,
+            body: "sha256sum -- {{path}}".to_string(),
+            slots: vec![SlotDef {
+                name: "path".to_string(),
+                ty: SlotType::Path,
+            }],
+        }]);
+        let denied = TempFile::new("checksum-denied", b"secret");
+        let denied_path = canonical_path(&denied);
+        let policy = from_toml_str(&format!(
+            r#"
+[[operation]]
+name = "file.checksum"
+allowed_args = [["*"]]
+
+[[deny]]
+name = "file.checksum"
+args = [["{denied_path}"]]
+"#
+        ))
+        .expect("policy parses");
+
+        let ran = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+        let rec = ran.clone();
+        let fake_run = move |req: ExecRequest| {
+            rec.lock().unwrap().push(req.argv.clone());
+            let task_id = req.task_id.clone();
+            async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    ..Default::default()
+                }
+            }
+        };
+        let checksum_of = |path: &str| {
+            let mut args = std::collections::HashMap::new();
+            args.insert("path".to_string(), path.to_string());
+            crate::gen::Operation {
+                name: "file.checksum".to_string(),
+                args,
+            }
+        };
+
+        let alias = handle_operation_in(
+            &REGISTRY,
+            &templates,
+            "t-checksum-alias".to_string(),
+            &checksum_of(&format!("/proc/self/root{denied_path}")),
+            Duration::from_secs(5),
+            &policy,
+            fake_run.clone(),
+            None,
+        )
+        .await;
+        assert_eq!(
+            alias.outcome,
+            Outcome::DeniedByPolicy as i32,
+            "stderr={:?}",
+            String::from_utf8_lossy(&alias.stderr)
+        );
+        assert!(
+            ran.lock().unwrap().is_empty(),
+            "a denied alias never reaches the runner"
+        );
+
+        // The same Policy still runs an allowed file.
+        let allowed = TempFile::new("checksum-allowed", b"x");
+        let ok = handle_operation_in(
+            &REGISTRY,
+            &templates,
+            "t-checksum-allowed".to_string(),
+            &checksum_of(&canonical_path(&allowed)),
+            Duration::from_secs(5),
+            &policy,
+            fake_run,
+            None,
+        )
+        .await;
+        assert_eq!(ok.outcome, Outcome::Success as i32);
+        assert_eq!(ran.lock().unwrap().len(), 1);
     }
 
     /// ADR-0011 parity for the ADR-0018 canonical-path precondition on a
@@ -4009,6 +4114,15 @@ mod decision_log_tests {
     use crate::test_support::trace_capture::{capture, CapturedEvent};
     use crate::test_support::{TempDir, TempFile};
 
+    /// `file`'s canonical path: what a Template `path` slot's layer-2
+    /// re-check resolves it to (ADR-0018).
+    fn canonical_path(file: &TempFile) -> String {
+        std::fs::canonicalize(file.path())
+            .expect("canonicalize a temp file")
+            .to_string_lossy()
+            .into_owned()
+    }
+
     const SHARED_FIELDS: [&str; 8] = [
         "argc",
         "argv_digest",
@@ -4152,11 +4266,9 @@ allowed_args = [["*"]]
         )
         .unwrap();
         let calls = Arc::new(AtomicUsize::new(0));
-        let task = operation_task(
-            "t-dl-template",
-            "disk.usage",
-            &[("path", "/var/sentinel-dir")],
-        );
+        let sentinel = TempFile::new("sentinel-file", b"x");
+        let path = canonical_path(&sentinel);
+        let task = operation_task("t-dl-template", "disk.usage", &[("path", &path)]);
 
         dispatch_with_runner(
             &task,
@@ -4173,14 +4285,16 @@ allowed_args = [["*"]]
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].fields["tier"], "template");
         assert_eq!(events[0].fields["risk_class"], "read");
-        assert!(!all_values(&events[0]).contains("sentinel-dir"));
+        assert!(!all_values(&events[0]).contains("sentinel-file"));
     }
 
-    /// ADR-0021 amendment item 4: the decision digest covers exactly the values
-    /// the Template's shell receives as positional parameters, and the values
-    /// still never appear in the event.
+    /// The Allow event's digest covers the Operation name and its positional
+    /// arguments as Policy evaluated them (`docs/operations/relay-daemon-install.md`),
+    /// never the script, and the values never appear in the event. A canonical
+    /// path to a regular file resolves to itself, so here that is also what
+    /// the Template's shell receives.
     #[tokio::test]
-    async fn template_decision_digest_covers_exactly_the_shell_arguments() {
+    async fn template_decision_digest_covers_the_policy_evaluated_vector() {
         let (captured, _guard) = capture();
         let (_dir, dedup) = dedup_in("dl-template-digest");
         let templates = disk_usage_templates();
@@ -4198,17 +4312,15 @@ allowed_args = [["*"]]
             *seen.lock().unwrap() = Some(req.argv.clone());
             std::future::ready(ok_result(&req))
         };
-        let task = operation_task(
-            "t-dl-template-digest",
-            "disk.usage",
-            &[("path", "/var/sentinel-dir")],
-        );
+        let sentinel = TempFile::new("sentinel-file", b"x");
+        let path = canonical_path(&sentinel);
+        let task = operation_task("t-dl-template-digest", "disk.usage", &[("path", &path)]);
 
         dispatch_with_runner(&task, &policy, &templates, &dedup, runner, None).await;
 
         let argv = argv_seen.lock().unwrap().clone().expect("runner must run");
         let shell_args: Vec<&str> = argv[4..].iter().map(String::as_str).collect();
-        assert_eq!(shell_args, ["/var/sentinel-dir"]);
+        assert_eq!(shell_args, [path.as_str()]);
 
         let events = captured.events_with_target(ALLOW_TARGET);
         assert_eq!(events.len(), 1);
@@ -4216,11 +4328,57 @@ allowed_args = [["*"]]
         assert_eq!(events[0].fields["argv_digest"], argv_digest(&digested));
         assert_eq!(events[0].fields["argc"], "2");
         let all = all_values(&events[0]);
-        assert!(!all.contains("sentinel-dir"));
+        assert!(!all.contains("sentinel-file"));
         assert!(
             !all.contains(&argv[2]),
             "the script never reaches the event"
         );
+    }
+
+    /// For an aliased `path` slot the digest covers the spelling Policy
+    /// evaluated at the gate, while the shell receives the resolved target the
+    /// layer-2 re-check cleared (ADR-0018). The divergence is deliberate: the
+    /// Allow event records the decision, not the run.
+    #[tokio::test]
+    async fn template_decision_digest_covers_the_requested_path_not_the_resolved_one() {
+        let (captured, _guard) = capture();
+        let (_dir, dedup) = dedup_in("dl-template-alias");
+        let templates = disk_usage_templates();
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "disk.usage"
+allowed_args = [["*"]]
+"#,
+        )
+        .unwrap();
+        let argv_seen = Arc::new(std::sync::Mutex::new(None::<Vec<String>>));
+        let seen = argv_seen.clone();
+        let runner = move |req: ExecRequest| {
+            *seen.lock().unwrap() = Some(req.argv.clone());
+            std::future::ready(ok_result(&req))
+        };
+        let sentinel = TempFile::new("sentinel-file", b"x");
+        let resolved = canonical_path(&sentinel);
+        let requested = format!("/proc/self/root{resolved}");
+        let task = operation_task("t-dl-template-alias", "disk.usage", &[("path", &requested)]);
+
+        dispatch_with_runner(&task, &policy, &templates, &dedup, runner, None).await;
+
+        let argv = argv_seen.lock().unwrap().clone().expect("runner must run");
+        assert_eq!(argv[4], resolved, "the shell receives the resolved target");
+
+        let events = captured.events_with_target(ALLOW_TARGET);
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].fields["argv_digest"],
+            argv_digest(&["disk.usage", requested.as_str()])
+        );
+        assert_ne!(
+            events[0].fields["argv_digest"],
+            argv_digest(&["disk.usage", resolved.as_str()])
+        );
+        assert!(!all_values(&events[0]).contains("sentinel-file"));
     }
 
     #[tokio::test]
@@ -4751,11 +4909,14 @@ allow = ["^/bin/echo hello$"]
 // recording runner. The only host contact is (i) `file.read`'s one read-only
 // `open(2)` of `/nonexistent/relay-plan-apply`, the single path the fixture
 // allows, which fails with ENOENT -> `Outcome::Failure` (the layer-2 recheck is
-// never reached), and (ii) `pkg.install`'s `detect_package_manager()`, three
+// never reached), (ii) `pkg.install`'s `detect_package_manager()`, three
 // read-only `Path::exists` probes; with no package manager it returns Failure
-// without calling the runner. No assertion depends on file contents, on which
-// package manager the host has, or on whether the runner was called for an
-// allowed case.
+// without calling the runner, and (iii) a `disk.usage` case's layer-2 read-only
+// open of its generated path. Plan and apply still agree there: `disk.usage`
+// has no deny, so the re-check of a resolved target cannot deny it, and a
+// failed open is a Failure, not a denial. No assertion depends on file
+// contents, on which package manager the host has, or on whether the runner
+// was called for an allowed case.
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]

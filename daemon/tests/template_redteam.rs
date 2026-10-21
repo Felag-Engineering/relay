@@ -21,8 +21,8 @@ mod shell_runner;
 
 use relay_ops::operations::template::{compile, TemplateError};
 use shell_runner::{
-    enum_template, invoke, path_template, retired_splice, run_sh_argv, shells, stderr, stdout,
-    ShellRunner,
+    enum_template, invoke, path_fixtures, path_template, retired_splice, run_sh_argv, shells,
+    stderr, stdout, ShellRunner,
 };
 
 /// Values a shell would act on if it ever saw them as text.
@@ -349,10 +349,12 @@ async fn a_path_slot_refuses_hostile_values_before_any_spawn() {
 
 #[tokio::test]
 async fn a_path_slot_passes_an_ordinary_path_verbatim() {
+    let ordinary = ["/var/log/syslog", "/home/josé/notes"];
+    let (_guard, root) = path_fixtures("redteam-paths", &ordinary);
     for shell in shells() {
         let runner = ShellRunner::new(&shell);
-        for value in ["/var/log/syslog", "/home/josé/notes"] {
-            let r = invoke(&path_template("echo {{p}}"), &[("p", value)], &runner).await;
+        for value in ordinary.map(|p| format!("{root}{p}")) {
+            let r = invoke(&path_template("echo {{p}}"), &[("p", &value)], &runner).await;
             assert_eq!(stdout(&r), format!("{value}\n"), "[{}]", shell.label);
         }
     }

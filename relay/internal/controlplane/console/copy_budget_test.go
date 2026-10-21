@@ -781,7 +781,7 @@ func noteSweepPages(t *testing.T) []sweepPage {
 	for _, q := range []string{"?window=fortnight", "?kind=nonesuch"} {
 		add("access", "/console/access"+q, sweep, accounts.RoleAdmin, http.StatusOK)
 	}
-	for _, q := range []string{"?filter=node:role=nonesuch", "?filter=foo", "?filter=tag:pci"} {
+	for _, q := range []string{"?filter=node:role=nonesuch", "?filter=foo", "?filter=tag:pci", "?group=nonesuch"} {
 		add("fleet", "/console/"+q, sweep, accounts.RoleAdmin, http.StatusOK)
 	}
 	add("fleet, no validity", "/console/", sweepFixture(), accounts.RoleAdmin, http.StatusOK)

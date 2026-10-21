@@ -70,11 +70,13 @@ pub struct OpCtx<'a> {
     pub timeout: Duration,
     /// Per-stream output byte cap (ADR-0004), decided at the dispatch layer.
     pub max_output_bytes: usize,
-    /// The loaded Policy — read-only (ADR-0002). Read only by `file.read`'s
-    /// resolved-path re-check (ADR-0018 layer 2).
+    /// The loaded Policy — read-only (ADR-0002). Read only by the resolved-path
+    /// re-checks (ADR-0018 layer 2): `file.read`'s, and a Template's `path`
+    /// slots'.
     pub policy: &'a Policy,
     /// In-flight cancel receiver (ADR-0013); handlers that spawn no process
-    /// drop it naturally.
+    /// drop it naturally. A Template with `path` slots also honours it while
+    /// resolving them, before anything is spawned.
     pub cancel: Option<oneshot::Receiver<()>>,
     /// The process-spawning seam: [`crate::executor::execute`] in production,
     /// a recording fake in tests (type-erased so handlers can live in a
@@ -183,8 +185,9 @@ pub trait ResolvedOp: Send + Sync {
     }
     /// Execute, AFTER the Policy gate has allowed the action. For a Native
     /// Operation this is its `fn`-pointer handler; for a Template Operation it
-    /// validates the values and runs the Template's fixed script with them as
-    /// positional parameters.
+    /// validates the values, resolves and re-checks each `path` slot's target
+    /// (ADR-0018 layer 2), and runs the Template's fixed script with the
+    /// resulting values as positional parameters.
     fn invoke<'a>(&'a self, ctx: OpCtx<'a>) -> OpFuture<'a>;
 }
 
@@ -310,7 +313,8 @@ pub fn lookup_in<'r>(entries: &'r [OpRegistration], name: &str) -> Option<&'r Op
 // a small gate (`BlockingGate`), never on a tokio worker thread the tunnel and
 // heartbeat share, and bound it by the Task's remaining wall-clock budget
 // (`within_task_timeout`, ADR-0004). Cancel is irrelevant to them: there is no
-// process group to kill, and the receiver drops with the context.
+// process group to kill, and the receiver drops with the context. A Template's
+// `path`-slot resolution runs behind the same gate.
 //
 // Each handler is a thin binding of a `*_via` function to the production gate,
 // so a test can drive the real handler body through a gate it controls.
@@ -395,12 +399,16 @@ pub const READ_CONCURRENCY: usize = 4;
 /// `spawn_blocking` in the process queues — DNS resolution on reconnect among
 /// them — and the Node falls off the fleet.
 ///
-/// Sized to [`READ_CONCURRENCY`]: both data-only Natives are `read`-class, so
-/// the read lane never runs more than that many at once, and a healthy Node
-/// never waits here — a call's permit is released before its Task finishes.
-/// It also restores the bound that held before this work moved off the async
-/// workers, when a stuck read kept its read-lane slot: at most four stuck
-/// calls, while the rest of the blocking pool stays free.
+/// Sized to [`READ_CONCURRENCY`]. Its callers are the two data-only Natives,
+/// both `read`-class, and a Template's `path`-slot resolution, which runs in
+/// whichever lane the Template's class takes. The read lane runs at most
+/// [`READ_CONCURRENCY`] Tasks and the mutate lane one, so on a healthy Node at
+/// most one caller waits here, and only for one open; a call's permit is
+/// released before its Task finishes. Stuck calls stay capped at this many
+/// whichever lane started them. It also restores the bound that held before
+/// this work moved off the async workers, when a stuck read kept its read-lane
+/// slot: at most four stuck calls, while the rest of the blocking pool stays
+/// free.
 pub(crate) const DATA_ONLY_BLOCKING_CAP: usize = READ_CONCURRENCY;
 
 static DATA_ONLY_BLOCKING: Semaphore = Semaphore::const_new(DATA_ONLY_BLOCKING_CAP);
@@ -416,9 +424,17 @@ static DATA_ONLY_BLOCKING: Semaphore = Semaphore::const_new(DATA_ONLY_BLOCKING_C
 pub(crate) struct BlockingGate(&'static Semaphore);
 
 impl BlockingGate {
-    /// The process-wide gate the data-only Natives share.
+    /// The process-wide gate the data-only Natives and a Template's `path`-slot
+    /// resolution share.
     pub(crate) fn data_only() -> Self {
         Self(&DATA_ONLY_BLOCKING)
+    }
+
+    /// A gate of `permits` that only its test uses, so filling it never stalls
+    /// another test's work on the process-wide gate.
+    #[cfg(test)]
+    pub(crate) fn leaked_for_test(permits: usize) -> Self {
+        Self(Box::leak(Box::new(Semaphore::new(permits))))
     }
 
     /// Runs `work` on the blocking pool once a permit is free, and returns its
@@ -466,15 +482,37 @@ async fn within_task_timeout(
     let started = tokio::time::Instant::now();
     match tokio::time::timeout(timeout, work).await {
         Ok(result) => result,
-        Err(_elapsed) => TaskResult {
-            task_id: task_id.to_string(),
-            outcome: Outcome::Timeout as i32,
-            exit_code: -1,
-            stdout: vec![],
-            stderr: vec![],
-            truncated: false,
-            duration_millis: started.elapsed().as_millis() as i64,
-        },
+        Err(_elapsed) => timeout_result(task_id, started),
+    }
+}
+
+/// Bounds blocking work that runs before a spawn by the Task's remaining
+/// wall-clock budget (ADR-0004), as [`within_task_timeout`] does for a
+/// data-only Native. `Err` is the Task's final result: the work's own refusal,
+/// or `OUTCOME_TIMEOUT` on expiry.
+pub(crate) async fn bounded_by_task_timeout<T>(
+    task_id: &str,
+    timeout: Duration,
+    work: impl Future<Output = Result<T, TaskResult>>,
+) -> Result<T, TaskResult> {
+    let started = tokio::time::Instant::now();
+    match tokio::time::timeout(timeout, work).await {
+        Ok(result) => result,
+        Err(_elapsed) => Err(timeout_result(task_id, started)),
+    }
+}
+
+/// The `OUTCOME_TIMEOUT` result a timed-out command reports: exit code `-1`,
+/// no output, the time spent since `started`.
+fn timeout_result(task_id: &str, started: tokio::time::Instant) -> TaskResult {
+    TaskResult {
+        task_id: task_id.to_string(),
+        outcome: Outcome::Timeout as i32,
+        exit_code: -1,
+        stdout: vec![],
+        stderr: vec![],
+        truncated: false,
+        duration_millis: started.elapsed().as_millis() as i64,
     }
 }
 
@@ -595,7 +633,7 @@ mod tests {
     /// A gate of `permits` that only this test uses, so filling it never stalls
     /// another test's data-only work on the process-wide gate.
     fn test_gate(permits: usize) -> BlockingGate {
-        BlockingGate(Box::leak(Box::new(Semaphore::new(permits))))
+        BlockingGate::leaked_for_test(permits)
     }
 
     /// Blocking work standing in for a syscall on a hung mount: it blocks its

@@ -97,6 +97,13 @@ The loader enforces these rules; each is a refusal at load time:
   A caller's value with a space or a quote is refused with a validation failure, not run. This
   is narrower than the Native `file.read` path check. For a path the type refuses, list the
   allowed values in an `enum` slot.
+- **A `path` value must name a regular file** (checked at run time, not load time). Before the
+  template runs, the daemon opens the value read-only without blocking, refuses anything that
+  is not a regular file (a directory, FIFO, socket or device fails before anything is
+  spawned), and evaluates Policy again on the file the path actually resolves to, so a symlink
+  or a `/proc/self/root/…` alias cannot reach a path a `[[deny]]` covers. The command receives
+  that resolved path. A template that takes a directory (`df {{path}}`, `ls -ld {{path}}`)
+  needs an `enum` slot instead.
 - **One bad template makes the whole set `unloadable`.** Run `policy check --templates` before
   deploying.
 - **A slot never stands where its value would be executed.** Positional parameters keep a
@@ -294,7 +301,7 @@ seven `read`-class templates, trusted the way the binary is (you installed it).
 | `proc.list` | — | Full process table incl. command lines (which routinely carry secrets). |
 | `disk.usage` | — | `df -P -T`. |
 | `net.listening` | — | Listening TCP/UDP sockets and their processes. |
-| `pkg.inventory` | — | dpkg, then rpm; a Node with neither errors rather than returning an empty list. |
+| `pkg.inventory` | — | dpkg, then rpm, as `STATUS NAME VERSION ARCH` with the epoch in VERSION; a Node with neither errors rather than returning an empty list. |
 | `service.status` | `unit` (identifier) | Fixed property list via `systemctl show` — parseable, and no spliced log lines. |
 | `log.tail` | `unit` (identifier) | **Bounded at 200 lines by the template**, never by the caller. The catalog's widest egress surface. |
 | `file.checksum` | `path` (path) | A digest is a content oracle; the shipped Policy denies it the same paths as `file.read`. |

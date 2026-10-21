@@ -54,11 +54,11 @@ A cell is also `partial` when a "Designed, not built" item on that surface is un
 
 There is no row for `console.md`: the specs index lists it as not yet written.
 
-## v0.0.9 and real hardware
+## Releases and real hardware
 
-`v0.0.9` (2026-08-09) is the only tagged version, with no published GitHub Release; `main` is
-prepared for 0.1.0, the first alpha. Templates, Accounts and access, the approval callout,
-Control API execution and the Admin Console all landed after `v0.0.9`. No real-hardware run is
+No version is tagged: the earlier `v0.0.9` tag was retired on 2026-10-21 so that delivery tags
+start fresh, and it never had a published GitHub Release. `main` is prepared for 0.1.0, the
+first alpha. No real-hardware run is
 recorded for any version: the sign-off table in
 [beta-hardware-validation.md](operations/beta-hardware-validation.md) is unfilled, so
 everything here is proven by the automated suites and the Docker dev fleet only.

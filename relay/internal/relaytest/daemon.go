@@ -55,7 +55,7 @@ func StartDaemon(t *testing.T, cfg DaemonConfig) *DaemonHandle {
 		"RELAY_JOIN="+cfg.JoinString,
 		"RELAY_STATE_DIR="+cfg.StateDir,
 		"RELAY_POLICY_PATH="+cfg.PolicyPath,
-		"RELAY_DOMAIN=localhost",
+		"RELAY_SERVER_NAME=localhost",
 		"HOSTNAME="+cfg.Hostname,
 		// Disable rustls provider conflict on some environments.
 		"RUST_LOG=warn",
@@ -134,7 +134,7 @@ func (h *DaemonHandle) RelaunchWithoutJoinOrAddress() {
 // own environment cannot mask what the join string carries.
 func withoutDaemonAddressing(env []string) []string {
 	strip := []string{
-		"RELAY_ADDR=", "RELAY_ENROLL_ENDPOINT=", "RELAY_JOIN=",
+		"RELAY_ADDRESS=", "RELAY_ENROLL_ADDRESS=", "RELAY_JOIN=",
 		"RELAY_ENROLLMENT_TOKEN=", "RELAY_CA_BUNDLE_PATH=",
 	}
 	var out []string

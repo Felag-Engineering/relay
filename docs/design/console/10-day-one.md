@@ -70,7 +70,7 @@ Five, each this specification's honesty rule beating its own illustrative prose.
 "any Relay configuration value", and a listen address is one — operator-set and unreachable from
 any API (invariant #11). The Console holds no address, and the seam it reads the fingerprints
 through (`console/seams.go`) states that absence as a property. A Node gets the address it dials
-from its join string, or from `RELAY_ADDR` (`daemon/src/config.rs`). The checkbox is authoritative
+from its join string, or from `RELAY_ADDRESS` (`daemon/src/config.rs`). The checkbox is authoritative
 over the prose.
 
 **The server certificate is labelled as rotating, not as a boot-time constant.** Criterion 2 asks

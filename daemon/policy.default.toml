@@ -41,7 +41,7 @@ allowed_args = []
 name = "file.read"
 allowed_args = [["*"]]
 
-# --- The shipped read catalog (ADR-0021, issue #293) -----------------------
+# --- The shipped read catalog (ADR-0021) --------------------------------------
 # These names are Template Operations, not Native Operations: they exist only
 # on a Node that has the first-party pack installed
 # (/etc/relay-daemon/templates.d/relay-read/). On a Node without it, dispatch
@@ -93,8 +93,9 @@ allowed_args = [["*"]]
 # governance)
 #
 # Exact canonical paths (ADR-0018): lexical evasions (/etc/../etc/shadow,
-# //etc/shadow, ...) are denied as non-canonical form, and the executor
-# re-checks the resolved target it actually opened, so symlink and
+# //etc/shadow, ...) are denied as non-canonical form, and the daemon
+# re-checks the resolved target it actually opened (file.read, and
+# file.checksum's path slot before the Template runs), so symlink and
 # /proc/self/root/... aliases to these paths are denied too.
 #
 # There is no subtree/wildcard deny (recorded residual, ADR-0022): this list
@@ -127,6 +128,18 @@ args = [[
     "/root/.ssh/id_ecdsa",
     "/root/.ssh/id_ed25519",
     "/root/.ssh/id_dsa",
+]]
+
+# Distribution-default TLS private keys, at the fixed paths their packages
+# create: Debian and Ubuntu's ssl-cert snakeoil key, and the RHEL family's
+# mod_ssl localhost key. Per-site keys (/etc/letsencrypt/live/<name>/, other
+# /etc/ssl/private/ files) have no fixed path and are not covered: the
+# subtree residual above.
+[[deny]]
+name = "file.read"
+args = [[
+    "/etc/ssl/private/ssl-cert-snakeoil.key",
+    "/etc/pki/tls/private/localhost.key",
 ]]
 
 # The daemon's own secret-bearing files: the environment file (it carries the
@@ -168,7 +181,11 @@ args = [[
 #
 # The dispatch gate holds a template's `path` slot to the same ADR-0018
 # canonical-form precondition as file.read's, so these exact-path denies also
-# refuse /etc/../etc/shadow and //etc/shadow.
+# refuse /etc/../etc/shadow and //etc/shadow. Before the template runs, the
+# daemon also re-checks the target the path resolves to, so a symlink or a
+# /proc/self/root/... alias to a denied path is refused as it is for
+# file.read. Residual: sha256sum then reopens the resolved path by name, so
+# whoever can rewrite a directory on that path can race a symlink in between.
 
 [[deny]]
 name = "file.checksum"
@@ -191,6 +208,13 @@ args = [[
     "/root/.ssh/id_ecdsa",
     "/root/.ssh/id_ed25519",
     "/root/.ssh/id_dsa",
+]]
+
+[[deny]]
+name = "file.checksum"
+args = [[
+    "/etc/ssl/private/ssl-cert-snakeoil.key",
+    "/etc/pki/tls/private/localhost.key",
 ]]
 
 [[deny]]

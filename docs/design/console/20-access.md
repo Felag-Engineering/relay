@@ -61,7 +61,8 @@ Activity does not draw them either.
 
 **Admin only, in the Console.** The route is not mounted below `admin`, so it answers the same 404
 as any unmounted path — a 403 would disclose that the screen exists. It is absent from a
-non-admin's nav ([11](11-console-shell.md)).
+non-admin's nav ([11](11-console-shell.md)). The screen draws no sentence saying it is limited
+to admins (D34): whoever can see it is an admin.
 
 **This narrows the Console only (owner decision, 2026-09-29).** Hiding a screen is a narrowing an
 adapter may make on its own (invariant 10). No Control API or MCP route reads the audit trail, so
@@ -93,8 +94,10 @@ trust chip: formatting an ID asserts nothing about who authenticated. A name is 
 only where the record itself carries one, and, until #659, never looked up.
 
 **OAuth sessions have no sign-in row.** An OAuth sign-in happens at the identity provider, not at
-the Relay, which sees only authenticated calls. This screen lists Console sign-ins, and one visible
-sentence says that OAuth sign-ins are not among them.
+the Relay, which sees only authenticated calls. This screen lists Console sign-ins. **Only where
+OAuth is configured on this Relay** does one visible sentence say that OAuth sign-ins are not among
+them (D34); with no OAuth configured the sentence is not drawn, because there is nothing it could
+be missing.
 
 ## Filtering and refresh
 
@@ -102,9 +105,13 @@ Kind chips, an Account filter over the **actor**, a failures-only toggle, and ti
 relative window and an explicit range. The Actor box takes the Account's ID (D18), and its
 placeholder says so; lookup by name waits for an audited Account-read path (#659). Rows are never
 read from the registry. There is no filter by **subject**: the subject is in the record's free-text
-reason, which the audit query seam cannot filter on. One visible sentence beside the filters says
-so, rather than offering a filter that would search the page and call it history. Refresh follows
-`00-foundations.md` ("Refreshing a screen").
+reason, which the audit query seam cannot filter on, so no subject filter is offered — rather than
+one that would search the page and call it history — and no sentence explains its absence (D34).
+Refresh follows `00-foundations.md` ("Refreshing a screen").
+
+**No other standing note** (D34). The screen draws no page-size sentence and no sentence about
+older failed sign-in records; how the trail pages and what an older record may hold are in the
+docs.
 
 ## Must not appear
 

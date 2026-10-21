@@ -187,3 +187,12 @@ residual is R16, widened by R36, and this amendment changes neither. Delivering 
 through systemd `LoadCredential=` or a fetch from the customer's secret store stays the named
 fix in that spec's Future work; choosing it later changes the mechanism, not this decision.
 Owner decision of 2026-10-16.
+
+## Amendment (2026-10-21): the daemon's address variables are renamed
+
+Owner decision, 2026-10-21, before the first release made the names a contract. The
+relay-daemon's `RELAY_ADDR` is now `RELAY_ADDRESS` and its `RELAY_ENROLL_ENDPOINT` is now
+`RELAY_ENROLL_ADDRESS`. Decision 4 is unchanged: the join string seeds steady state, and
+`RELAY_ADDRESS`, when set, overrides the persisted value on every start. The Relay's own retired
+`RELAY_ADDR` keeps its name in the refusal list, so the two no longer share one.
+

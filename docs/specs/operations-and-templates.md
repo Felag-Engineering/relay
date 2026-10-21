@@ -88,11 +88,18 @@ from those validators, so what a caller is told and what the daemon enforces can
   |---|---|---|
   | `identifier` | Letters, digits and a small safe punctuation set, bounded length, never beginning with `-` | Exact values |
   | `integer` | Decimal, bounded digits | Exact values |
-  | `path` | Strict canonical absolute path, no C0 control or DEL | Policy's glob dialect |
+  | `path` | Strict canonical absolute path naming a regular file, no C0 control or DEL | Policy's glob dialect |
   | `enum` | Exactly one of the author's listed values | — (the list is the constraint) |
 
   A slot with no `allow` accepts any well-formed value. Adding a type is a daemon release, a
   change to this spec, and a red-team case.
+- **A `path` value is checked against what it names, not only how it is spelled.** Before the
+  Template runs, the daemon opens each `path` value without blocking, refuses anything that is
+  not a regular file, reads back the file the descriptor actually names, and evaluates Policy
+  again with that resolved path in the slot's position. A deny there refuses the Task, and the
+  Template receives the resolved path. This is ADR-0018's second layer, the one `file.read`
+  already has: a `/proc/self/root/…` alias or a symlink cannot reach a path an exact deny
+  covers, and a FIFO or device cannot hang the Task.
 
 ### Risk class and the blast cap
 
@@ -195,6 +202,11 @@ _Not yet written._ This spec's claims are the backlog of its testing issue.
 
 ## Accepted residual risk
 
+- **A `path` slot is re-checked, then reopened by name.** The Template's command opens the
+  resolved path itself, a moment after the daemon checked it, so whoever can rewrite a directory
+  on that path can race a symlink into place between the two. `file.read` does not have this
+  gap, because it reads from the descriptor it checked; a Template cannot, without handing the
+  descriptor to the shell.
 - **A Template's risk class is Node-reported.** Most-restrictive-wins still trusts Nodes when
   every Node reporting a Template reports `read` — a dispatch to one compromised Node, or to a set
   of them.
