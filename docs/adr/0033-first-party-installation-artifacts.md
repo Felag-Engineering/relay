@@ -260,6 +260,8 @@ uid, whose owner could make it writable again; a Relay-generated key is owned by
 and readable by nobody else; the floor's configuration is root-owned. The packaged layout meets
 this; known-gap row 11 in `AGENTS.md` closes when the Relay enforces it (#864), not when the
 package ships (ADR-0010 records the rewording).
+*(Amended 2026-10-21: the Relay enforces it since ADR-0043's file check landed, and the row is
+deleted from `AGENTS.md`; see the 2026-10-21 amendment below.)*
 
 ### Consequences of the amendment
 
@@ -308,3 +310,11 @@ or standard input, never from its arguments, writes it root-owned and readable b
 and enables and starts the unit. It contacts no Relay; enrollment happens when the daemon
 starts. Config management may run it or write the same file itself. Specified as DI-25 and DI-37
 in `docs/specs/daemon-installation.md`.
+
+## Amendment (2026-10-21): known-gap row 11 is closed
+
+A note on two references, not a change to any decision here. The first 2026-10-15 amendment
+names known-gap row 11 in `AGENTS.md` as closing when the Relay enforces the ownership rule.
+It has: the Relay checks its configuration file and every secret file it reads at start and on
+reload (ADR-0043; `docs/specs/relay-configuration.md`), and the row is deleted. The consumer
+list's "known-gap row 11" is historical. Signposted in place, dated.

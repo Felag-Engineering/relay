@@ -1,6 +1,6 @@
 # Daemon installation
 
-**Status:** designed, not built, as of `2026-10-19`.
+**Status:** designed, not built, as of `2026-10-21`.
 **Claim prefix:** `DI`
 
 ## Purpose
@@ -78,8 +78,6 @@ artifacts they can verify before executing.
 
 ### A fresh Node's configuration
 
-- **DI-8** The daemon enrolls with an Enrollment Token and a CA bundle file named by path; the
-  token is used only when no identity is persisted, and is inert on every later start.
 - **DI-9** The daemon reads its declared `node:` Labels from its environment.
 - **DI-22** The daemon is configured by a join string — Relay address, CA fingerprint and
   Enrollment Token in one value (ADR-0031). It pins the Relay's CA from the fingerprint and writes
@@ -169,7 +167,6 @@ CI install jobs once they exist; `make verify` alone cannot prove them.
 | Claim | Proven by | Seam |
 |---|---|---|
 | DI-7 | `env_example_covers_the_config_surface`, `exemptions_are_real` | packaging |
-| DI-8 | `idempotency_no_op_when_identity_present` | daemon |
 | DI-9 | `parse_labels_skips_empty_and_garbage` | daemon |
 | DI-12 | `loader_rejects_group_or_world_writable`, `loader_accepts_secure_modes`, `group_or_world_writable_file_is_refused`, `secure_modes_are_accepted` | daemon |
 | DI-13 | `umask_tightened_dedup_directory_never_executes_unrecorded`, `marker_permissions_are_restrictive` | daemon |
@@ -183,7 +180,7 @@ CI install jobs once they exist; `make verify` alone cannot prove them.
 | DI-23 | `TestRevokedNode_DialAuditedThenThrottled`, `TestServerCredentials_ReportsRevokedBeforeRefusing` | e2e, transport |
 | DI-28 | `default_policy_denies_only_secret_bearing_own_files`, `deny_list_mirrors_adr_0022_exactly`, `default_policy_passes_strict_with_catalog` | daemon |
 | DI-37 | `join_refuses_argv_join_string`, `join_refuses_existing_identity_env_file_unchanged`, `join_writes_env_file_root_0600_atomically`, `join_spawn_argv_is_the_literal_constant`, `spawn_family_appears_only_at_the_sanctioned_sites`, `production_and_test_suppressions_are_pinned_apart` | daemon |
-| DI-38 | `TestCrossBinary_JoinStringEnrolls`, `TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState`, `relay_addr_overrides_persisted_address`, `identity_without_address_exits_nonzero` | e2e, daemon |
+| DI-38 | `TestCrossBinary_JoinStringEnrolls`, `TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState`, `relay_addr_overrides_persisted_address`, `identity_without_address_exits_nonzero`, `idempotency_no_op_when_identity_present` | e2e, daemon |
 | DI-39 | `lint_read_probes_stop_at_secrets`, `checksum_is_probed_without_templates`, `lint_write_probes_cover_packaged_trust_root`, `current_exe_is_a_write_probe_only`, `exe_equal_to_a_packaged_path_is_not_duplicated` | daemon |
 | DI-40 | `unit_execstart_is_usr_bin` | packaging |
 
@@ -312,6 +309,11 @@ broad allow (ADR-0019).
 
 ## Retired
 
+- **DI-8** (retired 2026-10-21) *The daemon enrolls with an Enrollment Token and a CA bundle
+  file named by path; the token is used only when no identity is persisted, and is inert on every later
+  start.* Untrue once the daemon enrolls only by join string, pinning the Relay's CA from its
+  fingerprint, and reads no CA bundle path (ADR-0031). DI-22 carries enrollment, and DI-38 the
+  join string's being inert once enrolled.
 - **DI-4** (retired 2026-10-18) *The shipped unit runs the binary from
   `/usr/local/bin/relay-daemon`.* Untrue once the shipped unit runs `/usr/bin/relay-daemon`, the
   path the package and a hand-built install share. DI-40 carries the binary path.

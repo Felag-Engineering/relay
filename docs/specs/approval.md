@@ -1,6 +1,6 @@
 # Approval
 
-**Status:** designed, not built, as of `2026-10-18`.
+**Status:** designed, not built, as of `2026-10-21`.
 **Claim prefix:** `AP`
 
 ## Purpose
@@ -53,8 +53,8 @@ spec owns everything the gate then does.
 
 ### Gate rules, and what ships
 
-- **AP-4** Gate rules are an **optional root-owned file loaded at Relay startup**; when no file
-  is configured there is no gate at all.
+- **AP-4** Gate rules are an **optional root-owned file loaded at Relay startup and re-read on
+  every successful configuration reload**; when no file is configured there is no gate at all.
 - **AP-5** No API Token and no MCP tool can write gate rules.
 - **AP-6** Gate rules **narrow only**: a rule can require approval, never waive a guardrail.
   Operators loosen or tighten what is gated by editing that file, and a rule no decision could
@@ -494,7 +494,7 @@ end-to-end rows also need `make test-integration`.
 |---|---|---|
 | AP-1 | `TestGatedDispatchParksAndSendsNothing` | capability |
 | AP-2 | `TestGatedDispatchParksAndSendsNothing` | capability |
-| AP-4 | `TestEmptyPathMeansNoGates`, `TestUngatedDispatchIsUntouched` | approval, capability |
+| AP-4 | `TestEmptyPathMeansNoGates`, `TestUngatedDispatchIsUntouched`, `TestReloader_SuccessSwapsSnapshotGateAndLog` | approval, capability, composition root |
 | AP-6 | `TestUnsatisfiableRuleIsRejectedAtLoad`, `TestEmptyGateGatesNothing` | approval |
 | AP-7 | `TestEmptyPathMeansNoGates`, `TestEmptyGateGatesNothing` | approval |
 | AP-8 | `TestLoadFailsClosed` | approval |

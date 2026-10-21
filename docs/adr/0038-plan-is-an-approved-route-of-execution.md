@@ -197,6 +197,11 @@ an itemised invoice.
   sees exactly which Nodes step 5 will touch. Rejected on the staleness argument in the
   elasticity decision above: over an agent-driven route's lifetime it silently excludes Nodes
   that became affected mid-route, the wrong failure direction for incident response.
+  *(Amended 2026-10-21: this bullet is left over from the ceiling draft and contradicts the
+  decision above, which **does** bind the resolved Node set. The option actually rejected is
+  binding a fan-out ceiling instead of the set: it walks only the exclusion direction, and in
+  the inclusion direction a Node forging its `node:` labels elects itself into an approved
+  route. See the 2026-10-21 amendment below.)*
 
 - **Extend the Approval grant instead of adding a Plan.** A grant already batches approvals and
   has walls. Rejected: a grant is *described* and a Plan *enumerated*, and that difference is
@@ -247,6 +252,10 @@ an itemised invoice.
   pinnable, so the elasticity rule's hard case does not arise, and widening later raises a value
   rather than re-specifying targeting. The aggregate-consent question below must be answered
   **before** the ceiling rises.
+  *(Amended 2026-10-21: read "ceiling" here as the one-Node bound, not a fan-out ceiling the
+  binding relies on. At one Node identity binding is node-equality; at N it is set-membership
+  over the approved set, where an addition re-parks and a shrinkage proceeds. Widening changes
+  how the check is written, never what it guarantees.)*
 
 - **Four ADRs and the Console's UI language carried the old spelling**, tracked rather than
   swept — [#574](https://github.com/Felag-Engineering/relay/issues/574) and
@@ -310,3 +319,13 @@ A note on one consequence, not a change to any decision here.
 surface, so *Consequences*' "the approval queue is where a Plan meets a person" no longer names
 a Console screen: a gated Plan is approved in-band by the requesting client or out-of-band on
 the Control API, and the Console renders it without deciding it. Signposted in place, dated.
+
+## Amendment (2026-10-21): two passages made consistent with identity binding
+
+A correction, not a change to any decision here. *Considered Options* rejected pinning the
+resolved Node set "on the staleness argument in the elasticity decision above", and
+*Consequences* called the first cut's one-Node bound "the fan-out ceiling". Both are left over
+from the earlier ceiling draft that *Decisions* records and rejects: the decision binds the
+approved Node set by identity, with no tolerance and no ceiling. Both passages are signposted in
+place, dated. `docs/specs/plan.md`'s *Out of scope* entry for multi-Node Plans, which carried
+the same wording, is corrected to match.

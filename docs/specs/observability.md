@@ -72,8 +72,8 @@ never feeds Policy, Selector resolution or the blast cap.
 ### Logs
 
 Relay logs are structured, on standard error, collected by the journal. JSON output and the log
-level are operator settings in the store (`relay-configuration.md`). The daemon's level follows a
-`RELAY_`-prefixed variable, like every other Node setting.
+level are the `[log]` table of `relay.toml`, applied on reload, and become operator settings in
+the store once `relay-configuration.md` RC-29 lands. The daemon's level follows `RUST_LOG`.
 
 One routing-only line accompanies each audited decision, written by the same call that writes the
 audit record so the two cannot disagree about whether a decision happened. It never carries

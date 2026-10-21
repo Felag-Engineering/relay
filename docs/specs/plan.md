@@ -66,8 +66,8 @@ reserved for ordered batches within a *single* Operation's fan-out.
 ### The ceiling is 1, enforced at proposal and again at every advance
 
 At proposal the Selector is resolved. If it matches anything but **exactly one connected Node**,
-the Plan is refused with the matched count. That refusal *is* ADR-0038's fan-out ceiling, set to
-1.
+the Plan is refused with the matched count. That refusal is the one-Node bound ADR-0038's
+*Consequences* name.
 
 The Plan hash binds the route **and** the resolved Node — by identity, never by count (ADR-0038).
 Every advance re-resolves and must yield that same Node. A Selector that now resolves to a
@@ -306,8 +306,9 @@ rather than rediscovered as a gap.
 
 - **Multi-Node Plans.** Raising the fan-out ceiling above 1. The hard part is not the ceiling but
   what replaces pinning: with more than one Node the resolved set moves between approval and a
-  later step, and ADR-0038 decides the answer — re-resolve against an approved ceiling, re-park
-  past it — which this cut does not have to exercise.
+  later step, and ADR-0038 decides the answer — re-resolve and check set-membership against the
+  approved set, re-park on any addition, proceed on a shrinkage — which this cut does not have
+  to exercise.
 - **Per-step Selectors**, and with them cross-Node orchestration ("drain A, then restart B"). A
   larger capability than a wider one; it wants its own ADR.
 - **Branches.** A candidate idea, not a commitment. ADR-0038 records two constraints: a predicate
