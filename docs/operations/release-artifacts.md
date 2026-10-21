@@ -26,8 +26,9 @@ For tag `v<version>` (e.g. `v0.1.0`, `v0.1.0-beta`), the GitHub Release carries:
 Plus generated release notes. Also published, not attached to the Release: the Relay image
 `ghcr.io/felag-engineering/relay:<version>` (linux/amd64 and linux/arm64), signed with cosign,
 and SLSA build-provenance attestations for the binaries and the image, in GitHub's attestation
-store (and, for the image, in the registry). `:latest` follows the highest non-prerelease tag
-only.
+store (and, for the image, in the registry). `:latest` follows the highest version tag,
+prereleases included (`v0.2.0-rc.1` sorts below `v0.2.0`); a tag pushed below the highest, such
+as a backport, does not move it.
 
 Tags with a major version of 0 or with any prerelease component (`v0.*`, `v*-beta`,
 `v*-rc.1`, …) publish as **GitHub pre-releases**.

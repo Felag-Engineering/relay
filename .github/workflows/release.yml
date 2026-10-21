@@ -895,8 +895,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # :latest follows the highest NON-prerelease tag, and only that. `sort -V` orders
-  # prereleases above their release, so tags with a hyphen are filtered out first. A job of
+  # :latest follows the highest version tag, prereleases included. Git's version sort, told
+  # that a `-` suffix is a prerelease, orders v0.2.0-rc.1 below v0.2.0 (plain `sort -V` does
+  # not); a tag pushed below the highest, such as a backport, leaves :latest where it is. A job of
   # its own, in its own concurrency group, so two tags cut close together cannot race on it;
   # a run superseded while pending loses only its :latest move, and the next run recomputes
   # the highest tag. It holds packages:write and nothing else, and only runs once the digest
@@ -904,7 +905,7 @@ jobs:
   latest:
     name: Move :latest
     needs: [sign-push, image]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     concurrency:
@@ -934,14 +935,14 @@ jobs:
       - name: Ensure skopeo
         run: command -v skopeo >/dev/null || { sudo apt-get update && sudo apt-get install -y skopeo; }
 
-      - name: Move :latest (highest release tag only)
+      - name: Move :latest (highest version tag only)
         run: |
           set -euo pipefail
           digest="$(cat image/relay-image.digest)"
           [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::malformed image digest '${digest}'"; exit 1; }
-          highest="$(git tag -l 'v*' | grep -v -- - | sort -V | tail -1)"
+          highest="$(git -c versionsort.suffix=- tag -l 'v*' --sort=v:refname | tail -1)"
           if [ "${highest}" != "${GITHUB_REF_NAME}" ]; then
-            echo "${GITHUB_REF_NAME} is not the highest release tag (${highest}): :latest not moved"
+            echo "${GITHUB_REF_NAME} is not the highest version tag (${highest}): :latest not moved"
             exit 0
           fi
           skopeo copy --all --preserve-digests "docker://${IMAGE}@${digest}" "docker://${IMAGE}:latest"
