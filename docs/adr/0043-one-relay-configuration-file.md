@@ -111,6 +111,15 @@ through its metadata.
 Known-gap row 11 (#864) becomes the work to build this: the loader, the one check, the state
 directory check, and removing the environment path. The Relay's help and error text that says
 "root-owned" goes with it.
+*(Amended 2026-10-21: built, and the row is deleted from `AGENTS.md`; see the 2026-10-21
+amendment below.)*
 
 The daemon is unchanged. Its configuration is config management's, and invariant 11 is the
 Relay's.
+
+## Amendment (2026-10-21): known-gap row 11 is closed
+
+A note on one reference, not a change to any decision here. *Consequences* names known-gap row
+11 in `AGENTS.md` as the work to build this decision. The loader, the file check and the
+removal of the environment path have landed, and the row is deleted; what is proven is recorded
+claim by claim in `docs/specs/relay-configuration.md`. Signposted in place, dated.

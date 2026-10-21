@@ -219,10 +219,11 @@ flag it.
 /daemon/             Rust: connection, Policy engine, Operation executors, exec.      (cd daemon)
 /daemon/packaging/   relay-daemon systemd unit, example EnvironmentFile, shipped Template catalog.
 /daemon/fuzz/        cargo-fuzz targets and corpus for the daemon.
-/docker/             Dockerfiles, entrypoints, and fixtures for the local Docker fleet;
-                     docker-compose.demo.yml at the root composes it (there is no root
-                     docker-compose.yml), with docker-compose.oauth.yml as the opt-in overlay.
-/deploy/compose/     the single-Relay deployment stack, split from the dev fleet (#783).
+/docker/             Dockerfiles, entrypoints, one-shots, and the daemon image's baked fixtures
+                     for the local Docker fleets (there is no root docker-compose.yml).
+/deploy/             one folder per environment, each its compose file and every config it
+                     loads: production/ (the single-Relay deployment stack), test/ (the
+                     three-Node fleet), demo/ (the nine-Node fleet and its OAuth overlay).
 /scripts/            CI gates and repo tooling (docs checks, spec coverage, security surface).
 /docs/adr/           architecture decision records — the *why*.
 /docs/agents/        per-repo configuration agent skills read (tracker, labels, domain rules).

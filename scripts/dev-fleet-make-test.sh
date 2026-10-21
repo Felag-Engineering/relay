@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Proves the Makefile's dev-fleet guards (#893, carried over from #622's security review):
+# Proves the Makefile's fleet guards (#893, carried over from #622's security review):
 # demo-fault refuses an injected or globbed DEMO_FAULT_NODES before any compose call; the
-# relay-demo-owner guard refuses a foreign checkout, a non-local engine and a failing
-# `docker ps` before any compose call; and STATE_DIR/BASE never reach dev-fleet-mcp.sh.
+# fleet-owner guard refuses a foreign checkout, a non-local engine and a failing `docker ps`
+# before any compose call; one fleet will not start while the other has containers; and
+# STATE_DIR/BASE never reach dev-fleet-mcp.sh.
 #
 # Hermetic: a stub `docker` on PATH, no Docker engine, no python. The stub appends every
 # invocation to a log and dumps its environment on `compose cp` (the call dev-fleet-mcp.sh
@@ -91,6 +92,15 @@ STUB_PS_FAIL=1 STUB_LOG="$LOG" STUB_PS_DIRS="" PATH="$WORK/bin:$PATH" \
     make -s -C "$REPO_ROOT" demo-down >"$WORK/out" 2>&1
 if [ $? -ne 0 ] && [ "$(compose_calls)" -eq 0 ]; then pass "owner guard refuses when docker ps fails"
 else fail "owner guard refuses when docker ps fails"; fi
+
+# One fleet at a time: both publish 7654 and 9443. The stub answers every `docker ps` with
+# STUB_PS_DIRS, so a non-empty value stands for "the other fleet has containers".
+expect_refusal "dev-fleet-up refuses while the demo fleet has containers" "$REPO_ROOT" dev-fleet-up
+expect_refusal "demo-up refuses while the test fleet has containers" "$REPO_ROOT" demo-up
+run_make "" dev-fleet-up
+if [ "$RC" -eq 0 ] && grep -q '^docker compose -p relay-test -f deploy/test/docker-compose.yml up --build -d' "$LOG"
+then pass "dev-fleet-up with no other fleet reaches compose on relay-test"
+else fail "dev-fleet-up with no other fleet reaches compose on relay-test (rc=$RC)"; fi
 
 # The scrub: BASE/STATE_DIR set by the caller must not reach dev-fleet-mcp.sh. The script
 # creates .dev-fleet/ before its first compose call; remove it if this run made it.

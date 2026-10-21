@@ -8,9 +8,9 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
-// The two DEV-ONLY approval-gate fixtures the dev fleet stages onto its read-only
-// config volume (docker/dev-fleet-config.sh): the default three-Node fleet's, and the
-// nine-Node demo fleet's, which the Makefile's demo-* targets select. The Relay's gate
+// The two DEV-ONLY approval-gate fixtures the fleets stage onto their read-only config
+// volume (docker/dev-fleet-config.sh): the three-Node test fleet's (deploy/test) and the
+// nine-Node demo fleet's (deploy/demo). The Relay's gate
 // loader is fail-closed, so a fixture this parser refuses crash-loops that
 // fleet's Relay; these tests catch it here instead, and pin the posture each
 // fleet's documentation describes (docs/dev-fleet.md, "The approval gate";
@@ -20,13 +20,13 @@ import (
 // do not exercise Load's file-mode checks, which the staged root-owned 0644
 // files satisfy and config_test.go covers.
 
-// fixturesDir is this package's directory walked back up to the repository
-// root (relay/internal/approval -> relay/internal -> relay -> .), then down.
-const fixturesDir = "../../../docker/fixtures"
+// deployDir is this package's directory walked back up to the repository root
+// (relay/internal/approval -> relay/internal -> relay -> .), then down.
+const deployDir = "../../../deploy"
 
 func parseFixture(t *testing.T, name string) *Gate {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(fixturesDir, name))
+	raw, err := os.ReadFile(filepath.Join(deployDir, name))
 	if err != nil {
 		t.Fatalf("read %s: %v", name, err)
 	}
@@ -51,7 +51,7 @@ var fixtureDispatches = []struct {
 }
 
 func TestDevFleetGateFixture_OutOfBandAndOnlyDevApprover(t *testing.T) {
-	g := parseFixture(t, "approval-gates.json")
+	g := parseFixture(t, "test/approval-gates.json")
 	for _, tc := range fixtureDispatches {
 		req, _, gated := g.Evaluate(tc.d)
 		if gated != tc.gated {
@@ -77,7 +77,7 @@ func TestDevFleetGateFixture_OutOfBandAndOnlyDevApprover(t *testing.T) {
 // excluding the requester, and with an audience that admits the caller (AP-61).
 // An empty audience means any Account whose role clears the decision floor.
 func TestDemoFleetGateFixture_InBandOpenAudienceRequesterAllowed(t *testing.T) {
-	g := parseFixture(t, "approval-gates.demo.json")
+	g := parseFixture(t, "demo/approval-gates.json")
 	for _, tc := range fixtureDispatches {
 		req, _, gated := g.Evaluate(tc.d)
 		if gated != tc.gated {

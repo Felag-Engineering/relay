@@ -1,0 +1,43 @@
+# The Relay's configuration for the test fleet (deploy/test) — DEV-ONLY.
+#
+# Staged root:10001 0640 onto the relay-etc volume by the relay-config one-shot
+# (docker/dev-fleet-config.sh); the Relay mounts that volume read-only at /etc/relay. It reads
+# every setting from this one file and nothing from its environment (ADR-0043, invariant 11).
+# Edit it here and bring the fleet up again: relay-config re-stages it and the Relay restarts.
+#
+# The approval gate (ADR-0027) is approval-gates.json beside this file, staged root-owned
+# 0644. It is Relay configuration, not a runtime object, so no Account can loosen it through
+# the API, and loading it is fail-closed: a malformed file fails startup. This one parks fleet-wide
+# mutates (fan-out >= 2) and every Raw Exec for `dev-approver`, out of band; a single-Node
+# mutate runs straight through, so both paths are exercised.
+#
+# tls.hostname, the ca and store paths and gate_rules_path are fixed by the compose file:
+# init and the daemons dial `relay`, /var/lib/relay is the Relay's only writable volume, and
+# relay-config stages the gate at /etc/relay/approval-gates.json.
+
+# Node-plane gRPC listener (relay-daemon dial-home).
+[node_plane]
+listen_address = ":7654"
+
+# Control-plane HTTPS listener (MCP + /api/v1), on a distinct port from the node plane:
+# listener separation. Enabled, so execution is on.
+[control_plane]
+enabled = true
+listen_address = ":9443"
+
+[console]
+enabled = true
+
+[ca]
+dir = "/var/lib/relay/ca"
+
+[store]
+path = "/var/lib/relay/store/relay.db"
+
+# Server certificate SAN = the in-fleet DNS name daemons and init dial, so mTLS
+# verification succeeds without any insecure flag inside the fleet.
+[tls]
+hostname = "relay"
+
+[approval]
+gate_rules_path = "/etc/relay/approval-gates.json"

@@ -9,12 +9,12 @@
 # checkout does not pass: it carries the developer's uid and mode 0644, and on
 # Docker Desktop it arrives over virtiofs, 9p or FUSE.
 #
-# Inputs, mounted read-only: /src/relay.toml, /src/approval-gates.json and
-# /src/approval-gates.demo.json. Output: /stage, the volume root. It also hands
+# Inputs, mounted read-only from the fleet's folder (deploy/test or deploy/demo):
+# /src/relay.toml and /src/approval-gates.json. Output: /stage, the volume root. It also hands
 # init's two output volumes, /handoff/credential and /handoff/bootstrap, to the
 # Relay's uid.
 #   relay.toml                root:10001 0640, the layout the Relay accepts
-#   approval-gates*.json      root:root  0644, what the gate loader demands
+#   approval-gates.json       root:root  0644, what the gate loader demands
 #
 # The container runs as root with only CAP_CHOWN (to group the file to 10001, a
 # group root is not in, and to hand init's volumes to the Relay's uid) and
@@ -26,7 +26,7 @@ set -eu
 
 relay_gid=10001
 
-for f in relay.toml approval-gates.json approval-gates.demo.json; do
+for f in relay.toml approval-gates.json; do
   if ! [ -r "/src/$f" ]; then
     echo "dev-fleet-config: cannot read /src/$f; check the checkout's file mode" >&2
     exit 1
@@ -45,13 +45,12 @@ stage() {
 
 stage relay.toml "$relay_gid" 0640
 stage approval-gates.json 0 0644
-stage approval-gates.demo.json 0 0644
 
 # Nothing else stays: a file left by a previous fixture must not linger.
 for entry in /stage/* /stage/.[!.]*; do
   [ -e "$entry" ] || continue
   case "${entry#/stage/}" in
-    relay.toml | approval-gates.json | approval-gates.demo.json) ;;
+    relay.toml | approval-gates.json) ;;
     *) rm -rf "$entry" ;;
   esac
 done

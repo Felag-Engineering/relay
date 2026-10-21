@@ -2,16 +2,15 @@
 # "Signing in as a human over OAuth").
 #
 # Opt-in. Nothing reads this file unless it is named with a second `-f`.
-# Named by `make demo-reset-oauth` / `demo-up-oauth`, and also by `make
-# demo-down`, `dev-fleet-down`, `dev-fleet-logs` and every reset's wipe, so the
-# IdP stops with the fleet. That is why those plain targets need Compose >=
-# 2.18.0 (`!reset` below) too. What a plain reset or up BRINGS UP is exactly what
-# docker-compose.demo.yml describes. It layers onto either fleet:
+# Named by `make demo-reset-oauth` / `demo-up-oauth`, and also by `make demo-down` and every
+# demo reset's wipe, so the IdP stops with the fleet. That is why those plain targets need
+# Compose >= 2.18.0 (`!reset` below) too. What a plain demo reset or up BRINGS UP is exactly
+# what docker-compose.yml beside this file describes. It layers onto the demo fleet:
 #
-#   docker compose -f docker-compose.demo.yml -f docker-compose.oauth.yml [--profile demo] ...
+#   docker compose -f deploy/demo/docker-compose.yml -f deploy/demo/oauth.yml ...
 #
 # What it adds: a real OpenID Connect identity provider (Keycloak, realm imported
-# from docker/fixtures/keycloak/relay-demo-realm.json) and turns on the Relay's
+# from keycloak/relay-demo-realm.json beside this file) and turns on the Relay's
 # OAuth resource-server half (ADR-0024; "Human sessions" in
 # docs/operations/control-plane-credential.md), so an MCP client signed in as a
 # human reaches /mcp on that human's own Account rather than a shared API Token.
@@ -36,7 +35,7 @@
 # third container that does nothing else (`relay-netns`, the pattern a Kubernetes
 # pod uses). That container carries the network alias `relay`, so every other
 # service still reaches the Relay at `relay:7654` / `relay:9443` exactly as in
-# docker-compose.demo.yml, and it publishes the ports — a container that shares
+# docker-compose.yml, and it publishes the ports — a container that shares
 # another's namespace cannot publish its own.
 #
 # Why a third container owns the namespace rather than one of the two: a
@@ -59,7 +58,7 @@
 #     (the published port arrives from the Docker bridge gateway).
 #   - Every credential here is DEV-ONLY and committed on purpose, like the rest
 #     of this fleet's: the realm's two users
-#     (docker/fixtures/keycloak/relay-demo-realm.json), one of which
+#     (keycloak/relay-demo-realm.json), one of which
 #     deliberately has no Relay Account. The IdP is published on host loopback
 #     only, whatever RELAY_PUBLISH_ADDR says.
 #   - RESIDUAL REACH, stated plainly: sharing a namespace puts the IdP on the
@@ -91,7 +90,7 @@ services:
         # The name every other service already dials the Relay by.
         aliases: ["relay"]
     ports:
-      # The Relay's two listeners, published exactly as docker-compose.demo.yml
+      # The Relay's two listeners, published exactly as docker-compose.yml
       # publishes them on the `relay` service.
       - "${RELAY_NODE_PUBLISH_ADDR:-127.0.0.1}:7654:7654"
       - "${RELAY_PUBLISH_ADDR:-127.0.0.1}:9443:9443"
@@ -113,7 +112,7 @@ services:
     environment:
       KC_HTTP_PORT: "8180"
       # Fixes the issuer to this exact URL, whichever address a request
-      # arrived on. The Relay's oauth.issuer (docker/fixtures/relay.demo-oauth.toml) must match it.
+      # arrived on. The Relay's oauth.issuer (relay.oauth.toml) must match it.
       KC_HOSTNAME: "http://127.0.0.1:8180"
       # No management interface (port 9000): it opens only for health or
       # metrics, and the healthcheck below does not need either.
@@ -122,7 +121,7 @@ services:
       # Deliberately NO KC_BOOTSTRAP_ADMIN_USERNAME / _PASSWORD: see the
       # SECURITY notes in the header. Do not add them back.
     volumes:
-      - ./docker/fixtures/keycloak/relay-demo-realm.json:/opt/keycloak/data/import/relay-demo-realm.json:ro
+      - ./keycloak/relay-demo-realm.json:/opt/keycloak/data/import/relay-demo-realm.json:ro
       # Keycloak's embedded database: realm keys and sign-in sessions survive
       # `demo-down` / `demo-up`, so a signed-in client stays signed in; `demo-reset`
       # (down -v) wipes it along with every other volume.
@@ -155,15 +154,11 @@ services:
         condition: service_healthy
 
   # Compose merges service volumes by container target, so this replaces the base
-  # file's /src/relay.toml. The overlay ALWAYS stages the demo-oauth fixture
-  # (docker/fixtures/relay.demo-oauth.toml), so it always uses the demo approval
-  # gate, and it ignores DEV_FLEET_RELAY_CONFIG: Compose cannot merge TOML, so the
-  # OAuth settings and the gate choice cannot be layered over a selected file. A
-  # bare `docker compose -f docker-compose.demo.yml -f docker-compose.oauth.yml`
-  # therefore no longer honours the gate selector.
+  # file's /src/relay.toml with relay.oauth.toml: the demo configuration plus the [oauth]
+  # table. Compose cannot merge TOML, so the OAuth settings live in a whole second file.
   relay-config:
     volumes:
-      - ./docker/fixtures/relay.demo-oauth.toml:/src/relay.toml:ro
+      - ./relay.oauth.toml:/src/relay.toml:ro
 
   # The fleet's `init` one-shot also creates the human Account the IdP's user
   # signs in as (docker/dev-fleet-init.sh); the Relay never creates an Account

@@ -156,7 +156,9 @@ is audited:
 - resetting another human Account's Console password.
 
 **Only an `admin` may reset another Account's password.** In the first pass the admin sets the new
-password directly; an emailed reset link is Future work. Setting another person's password is
+password directly; an emailed reset link is Future work. No surface does this yet: the only
+Console password set today is the first admin's, by `relay init`, and `relay init --recover`
+re-mints an API Token without touching it. Setting another person's password is
 an Account-takeover path, which is why it sits in this matrix.
 
 Acts that only reduce privilege — disabling an Account, lowering a role, revoking a Token — do not

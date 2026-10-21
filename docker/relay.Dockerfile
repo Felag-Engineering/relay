@@ -3,7 +3,7 @@
 # Three targets:
 #
 #   dev-fleet  DEV-ONLY, and only when named (`target: dev-fleet`, as every
-#              Relay build in docker-compose.demo.yml does): the runtime image
+#              Relay build in deploy/test and deploy/demo does): the runtime image
 #              plus curl (for the `init` one-shot). Unprivileged, like runtime;
 #              it carries no fixture, because the fleet's relay.toml and gate
 #              files arrive as a read-only mount (docs/dev-fleet.md).
@@ -13,7 +13,7 @@
 #              named build context `release-binary`. Unprivileged, like runtime.
 #   runtime    the LAST stage, so the default for a build that names no
 #              target: the Relay and nothing else, as an unprivileged user,
-#              compiled from this checkout. deploy/compose/docker-compose.yml
+#              compiled from this checkout. deploy/production/docker-compose.yml
 #              builds it until it pins the published image by digest — the
 #              single-host deployment in docs/operations/relay-install.md,
 #              section 7. No fixture, gate file or credential is baked into it.
@@ -87,7 +87,7 @@ COPY --from=build /out/relay /usr/local/bin/relay
 # ---- dev-fleet: DEV-ONLY, selected by name ---------------------------------
 # The dev and demo fleets run the Relay unprivileged, like runtime, because the
 # Relay's start-time check refuses root. A one-shot that needs root says so with
-# `user: "0:0"` in docker-compose.demo.yml (init and relay-config do).
+# `user: "0:0"` in the fleets' compose files (relay-config does).
 FROM base AS dev-fleet
 
 # The dev fleet's `init` one-shot calls the Control API over TLS 1.3, which

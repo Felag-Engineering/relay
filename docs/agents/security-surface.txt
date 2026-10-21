@@ -97,7 +97,7 @@ relay/internal/relaytest/protowalk/**
 # daemon/src/policy.rs and daemon/src/dispatch.rs into submodules.
 daemon/packaging/**
 docker/relay.Dockerfile
-deploy/compose/**
+deploy/production/**
 relay/internal/approvalnotify/**
 relay/cmd/relay/freeze_signal.go
 daemon/src/dispatch/**

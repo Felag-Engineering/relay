@@ -1,6 +1,6 @@
 # Relay configuration
 
-**Status:** designed, not built, as of `2026-10-19`.
+**Status:** designed, not built, as of `2026-10-21`.
 **Claim prefix:** `RC`
 
 ## Purpose
@@ -32,13 +32,10 @@ operator turns should let a stolen credential authenticate as somebody else.
 | **Admin Console** | Today nothing. Designed: every operator setting, read and changed by a human `admin` with step-up (RC-29), and the non-secret floor, read-only (RC-33) |
 | **Control API** | No configuration write route exists (RC-11), and none may be added (RC-32). Designed: reads the non-secret operator settings (RC-31) |
 | **MCP** | No configuration write tool (RC-11). Designed: reads the non-secret operator settings (RC-31) |
-| **The `relay` binary's local subcommands** | `bootstrap-token` and `console-password` (RC-1); designed, `relay init` replacing both (RC-28). First-boot acts that exist only because no credential can yet exist to perform them over the wire (ADR-0030) |
+| **The `relay` binary's local subcommands** | `relay init` (RC-28): first-boot acts that exist only because no credential can yet exist to perform them over the wire (ADR-0030) |
 
 ## Behaviour
 
-- **RC-1** The `relay` binary's local subcommands `bootstrap-token` and `console-password`
-  create the founding admin's first API Token and first Console credential, run on the Relay's
-  host.
 - **RC-4** With no optional setting given, the Relay comes up with the gRPC listener only: no
   control plane, no Console, no OAuth and no approval notification.
 - **RC-5** The approval-gate rules file and the approval webhook secret file are each opened
@@ -83,6 +80,17 @@ operator turns should let a stolen credential authenticate as somebody else.
   runs it unprivileged, with no capabilities, a read-only root filesystem, and the CA and store
   on one durable volume. Its documentation calls it production only once a human hardening
   review of that deployment has closed (ADR-0033).
+- **RC-28** `relay init`, run in a terminal on the Relay's host, creates the first admin: on a
+  store holding no human Account it creates one human `admin` Account with the name the operator
+  gives it, sets that Account's Console password from a prompt with no echo, and mints its first
+  API Token once. No Account name is reserved, since nothing about the first admin is fixed. With
+  any human Account present, `init` creates nothing and emits no secret, and a re-run reports
+  state. An explicit recovery request names an enabled human `admin` and re-mints that Account's
+  API Token, audited, refusing a disabled or non-admin Account; this takes over
+  `bootstrap-token`'s recovery role in `accounts-and-access.md`. `init` replaces
+  `relay bootstrap-token` and `relay console-password` (ADR-0030, amended 2026-10-16). Its other
+  first-boot acts in ADR-0030, a first Enrollment Token and its rendered enrollment bundle, are
+  `enrollment.md`'s.
 - **RC-36** An optional advertised address names the address Nodes are told to dial — the
   address a join string carries — when it differs from the gRPC listen address, as behind a
   container port mapping. Unset, the join string carries the certificate hostname and the gRPC
@@ -148,10 +156,11 @@ settings screens call that seam, and no other adapter holds a writer.
 | RC-21 | `TestReload_ValidChangeAppliedAndAudited`, `TestReload_InvalidValueRefusedConfigIntact`, `TestReload_BindTimeChangeRefusedRestartRequired`, `TestReload_FailedReloadProcessSurvives`, `TestReload_RechecksFileFirst` | composition root (shippable binary, separate uid, real signal) |
 | RC-22 | `TestDefaults_EachReachValueWhenAbsent`, `TestApprovalGatePathAbsentMeansNoGate`, `TestEveryKeyReachesConfig`, `TestValidate_InvalidValueRefusedNamingSetting`, `TestFromFile_CarriesEverySetting`, `TestNewLogHandler_FormatAndLevel` | relayconfig, composition root |
 | RC-27 | `scripts/compose-floor-check-test.sh`, `scripts/release-image-guard-test.sh`, and `scripts/compose-floor-check.sh` run by CI against the three committed stacks and `docker/relay.Dockerfile` | deployment stack, image |
+| RC-28 | `TestInit_CreatesNamedAdminAndMintsOnce`, `TestInit_NoReservedName`, `TestInit_RefusesWhenAHumanAccountExists`, `TestInit_RerunEmitsNothing`, `TestInit_RecoverReMintsAndAudits`, `TestInit_RecoverRefusesDisabledOrNonAdmin`, `TestInit_RefusesAbsentStore`, `TestInit_RefusesRoot`, `TestInit_TTLAppliesToTheFirstAndTheRecoveredToken`, `TestReadNoEcho_ThePasswordIsNotEchoedAndEchoIsRestored` | `relay init` (composition root) |
 | RC-35 | `TestStart_RefusesMalformedGateFile`, `TestStartup_RefusedGateRefusesBeforeTheCA` | composition root, startup |
 | RC-36 | `TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress` | Control API mint |
 
-Claims with **no row**, and so nothing checking them: RC-1, RC-4, RC-6, RC-7 (asserted by
+Claims with **no row**, and so nothing checking them: RC-4, RC-6, RC-7 (asserted by
 the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absence).
 
 ### Performance
@@ -170,10 +179,9 @@ the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absenc
 | RC-18 | No secret value, inline or in a file, and no approval webhook URL, appears on any surface, in any log or audit record, or in any refusal message. A parse or validation error names the key and the line, never the value; a reload's audit record names a changed secret setting, never its value. | v0.6.5 — Install Path: relay init, join string, packages |
 | RC-19 | The CA directory, store path and certificate hostname have no defaults: unset is a refusal naming the setting. Every value is validated at start and at reload, and an invalid one is a refusal naming the setting, never a warning and a fallback to a default. A missing or unreadable configuration file is a refusal. | v0.6.5 — Install Path: relay init, join string, packages |
 | RC-23 | The release publishes the Relay as `.deb` and `.rpm` packages for each architecture, on the platforms and under the CI rule `daemon-installation.md` sets for its packages, where the edited configuration an upgrade must preserve is the configuration file. A package wraps the release's guarded binary byte for byte, is reproducible, built twice and compared, is listed in the release `SHA256SUMS`, and carries no signature of its own before v1.0.0. | v0.6.5 — Install Path: relay init, join string, packages |
-| RC-24 | The Relay package installs the Relay's Unix account, the binary, the hardened unit, the configuration file and the state directory, and prints a configuration guide that carries no secret, also installed as documentation. It enables the Relay on a first install only, only where systemd is running, honouring the distribution's presets, and an upgrade never changes enablement. It never starts the Relay and never runs the first-boot command. The guide says never to capture an image of the host after the Relay has first started, since the CA private key would travel with it. | v0.6.5 — Install Path: relay init, join string, packages |
+| RC-24 | The Relay package installs the Relay's Unix account, the binary, the hardened unit, the configuration file and the state directory, and prints a configuration guide that carries no secret and names `relay init` (RC-28), also installed as documentation. It enables the Relay on a first install only, only where systemd is running, honouring the distribution's presets, and an upgrade never changes enablement. It never starts the Relay and never runs the first-boot command. The guide says never to capture an image of the host after the Relay has first started, since the CA private key would travel with it. | v0.6.5 — Install Path: relay init, join string, packages |
 | RC-25 | The Relay package writes the configuration file once, at first install, only if none exists, and never again: the host's fully qualified name as the certificate hostname, the CA directory and store path inside the state directory, the control plane and Admin Console enabled, and the control-plane listener bound to loopback. The file is generated, not package-owned configuration, so no upgrade rewrites it. | v0.6.5 — Install Path: relay init, join string, packages |
 | RC-26 | Removing the Relay package keeps configuration and state. `apt purge` removes configuration and moves the CA and the store aside together, re-owned by root and readable by nobody else, and prints where; it never deletes them, never splits them, and never deletes the Relay's Unix account. Purge deletes only paths the package itself created. `.rpm` removal never deletes state and prints the paths to delete by hand. | v0.6.5 — Install Path: relay init, join string, packages |
-| RC-28 | `relay init`, run in a terminal on the Relay's host, creates the first admin: on a store holding no human Account it creates one human `admin` Account with the name the operator gives it, sets that Account's Console password from a prompt with no echo, and mints its first API Token once. No Account name is reserved, since nothing about the first admin is fixed. With any human Account present, `init` creates nothing and emits no secret, and a re-run reports state. An explicit recovery request names an enabled human `admin` and re-mints that Account's API Token, audited, refusing a disabled or non-admin Account; this takes over `bootstrap-token`'s recovery role in `accounts-and-access.md`. `init` replaces `relay bootstrap-token` and `relay console-password` (ADR-0030, amended 2026-10-16). The package's guide names it. Its other first-boot acts in ADR-0030, a first Enrollment Token and its rendered enrollment bundle, are `enrollment.md`'s. | v0.6.5 — Install Path: relay init, join string, packages |
 | RC-29 | Operator settings — the blast caps, approval-gate rules, minimum daemon version, `state:cert-expiring` fraction, enrollment rate limits, Node cap, log level and format, audit and Job retention and page-size limits — are runtime objects in the store with built-in defaults (the approval-gate rules seeded once as `approval.md` describes), changed in the Console by a human `admin` with step-up on every change, audited with the setting, its old value, its new value and who changed it, and applied to the next request. | v0.7.0 — Admin Console: Administration & Execution |
 | RC-30 | Once RC-29 holds, an operator setting found in the configuration file refuses start rather than being silently ignored. | v0.7.0 — Admin Console: Administration & Execution |
 | RC-31 | Non-secret operator settings are readable by any authenticated Account on MCP, the Control API and the Console, so an AI-agent can name the cap it hit. | v0.7.0 — Admin Console: Administration & Execution |
@@ -240,6 +248,10 @@ policed.
 
 ## Retired
 
+- **RC-1** (retired 2026-10-21) *The `relay` binary's local subcommands `bootstrap-token` and
+  `console-password` create the founding admin's first API Token and first Console credential,
+  run on the Relay's host.* Untrue once `relay init` replaces both subcommands (ADR-0030, amended
+  2026-10-16). RC-28 carries the first admin and its recovery.
 - **RC-2** (retired 2026-10-18) *The Relay reads its settings from command-line flags and
   `RELAY_*` environment variables; where both set a value, the environment wins.* Untrue once the
   Relay reads its security floor from one configuration file and from nowhere else (ADR-0043).

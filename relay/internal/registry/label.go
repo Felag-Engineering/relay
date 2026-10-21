@@ -109,7 +109,7 @@ import "unicode/utf8"
 //
 // The legitimate alphabet was checked, not assumed, in BOTH namespaces.
 // Node-space: every RELAY_NODE_LABELS example this repo ships —
-// relay-daemon.env.example, docker-compose.demo.yml, the enrollment and install
+// relay-daemon.env.example, the dev fleets' compose files, the enrollment and install
 // docs, and the validation suites — uses only [A-Za-z0-9._-]. Relay-space:
 // every shipped scope example — docs/api/openapi.yaml, docs/operations/
 // enrollment.md, docs/dev-fleet.md, docker/dev-fleet-init.sh, the validation

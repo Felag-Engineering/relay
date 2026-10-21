@@ -21,9 +21,9 @@
 # the only thing it protects.)
 #
 # It lives here, not at the repo root, so that a bare `docker compose` at the
-# root errors instead of doing something surprising. The three-Node dev fleet
-# and the nine-Node demo fleet are docker-compose.demo.yml at the root
-# (DEV-ONLY; docs/dev-fleet.md).
+# root errors instead of doing something surprising. The three-Node test fleet
+# and the nine-Node demo fleet are deploy/test and deploy/demo (DEV-ONLY;
+# docs/dev-fleet.md).
 #
 # Needs Docker Compose v2.24 or newer (the bind-mount long form below, with
 # `create_host_path`) and Docker Engine 28 or newer (see the port notes).

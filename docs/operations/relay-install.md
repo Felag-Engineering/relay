@@ -8,7 +8,7 @@ Companions: [relay-daemon-install.md](relay-daemon-install.md) for the Node side
 
 Sections 1–6 are the recommended path: a verified binary under the hardened systemd unit.
 [Section 7](#7-running-it-with-docker-compose) is a second path for evaluation and a single
-home-lab host, `deploy/compose/docker-compose.yml`, and states what it keeps of that posture.
+home-lab host, `deploy/production/docker-compose.yml`, and states what it keeps of that posture.
 
 ## 1. Obtain and verify the artifact
 
@@ -212,7 +212,7 @@ blast caps, lower the minimum daemon version, or touch the listeners.
 
 ## 7. Running it with Docker Compose
 
-[`deploy/compose/docker-compose.yml`](../../deploy/compose/docker-compose.yml) runs the Relay
+[`deploy/production/docker-compose.yml`](../../deploy/production/docker-compose.yml) runs the Relay
 and nothing else: one service, one data volume, no relay-daemons, fixtures or credentials. It
 is deployed from a git checkout, by hand or by a tool that deploys compose stacks from git
 (Komodo, for example).
@@ -229,15 +229,16 @@ Read these first:
   re-enrolling the fleet ([ca-disaster-recovery.md](ca-disaster-recovery.md)).
 - **Never run it on a host that also holds a development checkout of this repository**, a
   clone or any of its git worktrees. Every checkout carries this file with the same project
-  name, `relay`, so a routine `docker compose -f deploy/compose/docker-compose.yml up --build`
+  name, `relay`, so a routine `docker compose -f deploy/production/docker-compose.yml up --build`
   in *any* of them replaces the running deployment with that checkout's work in progress. The
   external data volume (step 1) survives `down -v`, but nothing stops the replacement. The
   deployment host holds one checkout, at the pinned commit you deploy.
 
-It is not the dev fleet. The three-Node dev fleet and the nine-Node demo fleet are
-`docker-compose.demo.yml` at the repository root ([dev-fleet.md](../dev-fleet.md)); nothing in
-this stack refers to their fixtures, gates or committed dev credentials. There is deliberately
-no `docker-compose.yml` at the repository root.
+It is not a dev fleet. The three-Node test fleet and the nine-Node demo fleet are
+`deploy/test/` and `deploy/demo/` ([dev-fleet.md](../dev-fleet.md),
+[deploy/README.md](../../deploy/README.md)); nothing in this stack refers to their fixtures,
+gates or committed dev credentials. There is deliberately no `docker-compose.yml` at the
+repository root.
 
 ### What it keeps of the packaging posture, and what it does not
 
@@ -337,17 +338,17 @@ holding `relay-data` must be on one of those filesystems too.
 
 The file is **required**: if it is missing, `docker compose` refuses to start the stack rather
 than run the Relay on defaults. To keep it elsewhere, set `RELAY_CONFIG_FILE` to an
-**absolute** path (a relative one resolves against `deploy/compose/`).
+**absolute** path (a relative one resolves against `deploy/production/`).
 
 **3. Bring it up:**
 
 ```console
-$ docker compose -f deploy/compose/docker-compose.yml up -d --build
-$ docker compose -f deploy/compose/docker-compose.yml ps   # wait for relay to be (healthy)
+$ docker compose -f deploy/production/docker-compose.yml up -d --build
+$ docker compose -f deploy/production/docker-compose.yml ps   # wait for relay to be (healthy)
 ```
 
 The Relay creates its CA on first start and logs its fingerprint
-(`docker compose -f deploy/compose/docker-compose.yml logs relay`).
+(`docker compose -f deploy/production/docker-compose.yml logs relay`).
 
 **4. Create the first admin** with `relay init`, which runs as the Relay's own account inside
 the container: a human `admin` Account named as you choose, its Console password (prompted
@@ -357,14 +358,14 @@ once and never stored: put it in a vault now, and hold it in `RELAY_TOKEN` for t
 this procedure without echoing it:
 
 ```console
-$ docker compose -f deploy/compose/docker-compose.yml exec relay relay init --admin <your-name>
+$ docker compose -f deploy/production/docker-compose.yml exec relay relay init --admin <your-name>
 $ read -rs RELAY_TOKEN     # paste the token printed above
 ```
 
 Copy out the Relay's **public** CA certificate, which every client pins (never `ca-key.pem`):
 
 ```console
-$ docker compose -f deploy/compose/docker-compose.yml cp \
+$ docker compose -f deploy/production/docker-compose.yml cp \
     relay:/var/lib/relay/ca/ca-cert.pem ./relay-ca-cert.pem
 ```
 
@@ -404,7 +405,7 @@ Node's Policy is authored on that Node; this stack ships none and can never writ
 
 ### Operating it
 
-Every command here takes `-f deploy/compose/docker-compose.yml`, shortened to `…`.
+Every command here takes `-f deploy/production/docker-compose.yml`, shortened to `…`.
 
 - **Approval gates are off** until you add one. The stack ships no gate file, because a gate
   is configuration the operator writes on the host. To add one, write the rules

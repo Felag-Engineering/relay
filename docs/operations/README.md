@@ -29,4 +29,4 @@ local development fleet is a separate document, [docs/dev-fleet.md](../dev-fleet
 
 - **[ca-disaster-recovery.md](ca-disaster-recovery.md)** — CA key custody, backups, and the "burn it down" compromise runbook.
 - **[beta-hardware-validation.md](beta-hardware-validation.md)** — the one validation that cannot be automated: proving the vertical slice on real machines.
-- **[demo-fleet.md](demo-fleet.md)** — the nine-Node `demo` profile of the dev fleet as a presenter runbook: roster, beats, fault injection, reset.
+- **[demo-fleet.md](demo-fleet.md)** — the nine-Node demo fleet (`deploy/demo`) as a presenter runbook: roster, beats, fault injection, reset.

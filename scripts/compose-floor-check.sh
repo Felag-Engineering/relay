@@ -10,8 +10,8 @@
 # Each stack is rendered with no inherited environment and no .env, so no caller variable can
 # change a default.
 #
-# Stacks: deploy/compose, docker-compose.demo.yml (with its demo profile), and the demo file
-# with docker-compose.oauth.yml. Failures print variable and service NAMES, never values.
+# Stacks: deploy/production, deploy/test, deploy/demo, and deploy/demo with its OAuth overlay.
+# Failures print variable and service NAMES, never values.
 # Fails closed: a missing or empty floor-name list, a compose error and a stack with no Relay
 # service are failures, not passes.
 set -uo pipefail
@@ -116,9 +116,10 @@ check_stack() { # check_stack <name> <compose args>...
   echo "ok: $name: $count Relay service(s)"
 }
 
-check_stack deploy -f deploy/compose/docker-compose.yml
-check_stack demo -f docker-compose.demo.yml --profile demo
-check_stack oauth -f docker-compose.demo.yml -f docker-compose.oauth.yml --profile demo
+check_stack production -f deploy/production/docker-compose.yml
+check_stack test -f deploy/test/docker-compose.yml
+check_stack demo -f deploy/demo/docker-compose.yml
+check_stack oauth -f deploy/demo/docker-compose.yml -f deploy/demo/oauth.yml
 
 # Dockerfile: no stage names a RELAY_* variable in ENV or ARG, every stage a Relay can run from
 # ends as 10001:10001, and runtime is the last stage so a bare build gets it.

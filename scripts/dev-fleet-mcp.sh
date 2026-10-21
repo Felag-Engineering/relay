@@ -26,8 +26,22 @@ ADMIN_CRED="${STATE_DIR}/control-credential"
 APPROVER_CRED="${STATE_DIR}/approver-credential"
 BASE="${BASE:-https://localhost:9443}"
 
-# The fleet is the fixed `relay-demo` project (docker-compose.demo.yml names it).
-DC=(docker compose -p relay-demo -f "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/docker-compose.demo.yml")
+# Which fleet: FLEET=test (deploy/test, project relay-test) or FLEET=demo (deploy/demo,
+# project relay-demo). The Makefile always names it. Unset, it is whichever has containers;
+# both publish the same ports, so at most one can be up.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -z "${FLEET:-}" ]]; then
+    if [[ -n "$(docker ps -aq --filter label=com.docker.compose.project=relay-test 2>/dev/null)" ]]; then
+        FLEET="test"
+    else
+        FLEET="demo"
+    fi
+fi
+case "${FLEET}" in
+    test | demo) ;;
+    *) echo "dev-fleet-mcp: FLEET must be test or demo, not '${FLEET}'" >&2; exit 2 ;;
+esac
+DC=(docker compose -p "relay-${FLEET}" -f "${REPO_ROOT}/deploy/${FLEET}/docker-compose.yml")
 
 # The Relay's server cert SAN is `relay` (the in-fleet DNS name), not localhost.
 # --resolve maps the name to loopback so TLS is VERIFIED against the real CA

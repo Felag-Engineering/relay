@@ -1,29 +1,28 @@
-# Relay dev fleet — DEV-ONLY (docs/dev-fleet.md). NOT the deployment stack:
-# deploy/compose/docker-compose.yml is that.
+# Relay test fleet: the Relay and three relay-daemons, DEV-ONLY (docs/dev-fleet.md).
+# Not a deployment: deploy/production is that.
 #
-# The project is fixed by `name:` below, so any `docker compose -f
-# docker-compose.demo.yml` reaches `relay-demo`; the make targets also pass
-# `-p relay-demo`. One project per Docker engine: the Makefile refuses a
-# `relay-demo` fleet that another checkout owns. Every Relay build names
-# `target: dev-fleet`: the default (last) stage of docker/relay.Dockerfile is the
-# fixture-free `runtime` image. Three daemons by default, nine with `--profile
-# demo` (#452; docs/dev-fleet.md, "The demo profile"); daemon-4..9 carry
-# `profiles: ["demo"]`, so nothing above daemon-3 changes without it.
+# Everything this fleet loads is in this folder: relay.toml and approval-gates.json are staged
+# by the relay-config one-shot. `make dev-fleet-up` runs it; so can any compose tool pointed at
+# this file, Komodo included. The project is fixed by `name:` below. One fleet per Docker
+# engine: it publishes the same host ports as deploy/demo, and the Makefile refuses to start
+# one while the other is up.
 #
-# Startup order: relay-config (exit 0) -> relay (healthy) -> init (exit 0) ->
-# daemons. If relay-config or init fails, nothing after it starts.
-name: relay-demo
+# Every Relay build names `target: dev-fleet`; the default (last) stage of
+# docker/relay.Dockerfile is the fixture-free `runtime` image.
+#
+# Startup order: relay-config (exit 0) -> relay (healthy) -> init (exit 0) -> daemons. If
+# relay-config or init fails, nothing after it starts.
+name: relay-test
 
-# All nine daemon services are byte-identical except for their per-Node
-# environment, their private state volume, and — for `daemon-4..9`, the
-# `demo` profile's Nodes — their `profiles:` key. This anchor factors out
+# All three daemon services are byte-identical except for their per-Node
+# environment and their private state volume. This anchor factors out
 # ONLY the non-mapping fields they share. NOTE: the YAML merge key `<<`
 # REPLACES a mapping wholesale (it does not deep-merge), so each daemon's
 # `environment:` and `volumes:` are written inline below — they must never
 # live in this anchor.
 x-daemon-base: &daemon-base
   build:
-    context: .
+    context: ../..
     dockerfile: docker/daemon.Dockerfile
   restart: unless-stopped
   depends_on:
@@ -47,22 +46,17 @@ x-daemon-base: &daemon-base
     start_period: 5s
 
 services:
-  # The Relay's configuration, staged onto the relay-etc volume (see the volumes
-  # below) by docker/dev-fleet-config.sh: relay.toml root:10001 0640 and the gate
-  # files root:root 0644. A named volume is on the engine's own Linux filesystem,
-  # which the Relay's start-time check accepts; a bind mount from the checkout
-  # carries the developer's uid and mode and, on Docker Desktop, arrives over
-  # virtiofs, 9p or FUSE, which it refuses (docs/dev-fleet.md). So the checkout is
-  # mounted here, read-only, and the Relay mounts the staged copy.
-  # DEV_FLEET_RELAY_CONFIG still picks WHICH fixture: unset, it is the dev one
-  # (out-of-band gate, `dev-approver` only). The Makefile sets it, the dev fixture
-  # for `make dev-fleet-up` and the demo one for `make demo-*`. A bare `docker
-  # compose` of this file reads it from the caller's shell or a repo-root .env.
-  # Root with only CAP_CHOWN (to group the file to 10001) and CAP_DAC_OVERRIDE
-  # (to read a 0600 checkout), no network. Every path but /stage is read-only.
+  # The Relay's configuration, staged onto the relay-etc volume by
+  # docker/dev-fleet-config.sh: relay.toml root:10001 0640 and approval-gates.json root:root
+  # 0644, both from this folder. A named volume is on the engine's own Linux filesystem, which
+  # the Relay's start-time check accepts; a bind mount from the checkout carries the
+  # developer's uid and mode and, on Docker Desktop, arrives over virtiofs, 9p or FUSE, which
+  # it refuses (docs/dev-fleet.md). So the files are mounted here, read-only, and the Relay
+  # mounts the staged copy. Root with only CAP_CHOWN (to group the file to 10001 and hand
+  # init's volumes to that uid) and CAP_DAC_OVERRIDE (to read a 0600 checkout), no network.
   relay-config:
     build:
-      context: .
+      context: ../..
       dockerfile: docker/relay.Dockerfile
       target: dev-fleet
     user: "0:0"
@@ -75,10 +69,9 @@ services:
       - "no-new-privileges:true"
     entrypoint: ["sh", "/dev-fleet-config.sh"]
     volumes:
-      - ./docker/dev-fleet-config.sh:/dev-fleet-config.sh:ro
-      - ${DEV_FLEET_RELAY_CONFIG:-./docker/fixtures/relay.dev.toml}:/src/relay.toml:ro
-      - ./docker/fixtures/approval-gates.json:/src/approval-gates.json:ro
-      - ./docker/fixtures/approval-gates.demo.json:/src/approval-gates.demo.json:ro
+      - ../../docker/dev-fleet-config.sh:/dev-fleet-config.sh:ro
+      - ./relay.toml:/src/relay.toml:ro
+      - ./approval-gates.json:/src/approval-gates.json:ro
       - relay-etc:/stage
       # init's two output volumes, handed to the Relay's uid (dev-fleet-config.sh).
       - control-credential:/handoff/credential
@@ -86,7 +79,7 @@ services:
 
   relay:
     build:
-      context: .
+      context: ../..
       dockerfile: docker/relay.Dockerfile
       target: dev-fleet
     restart: unless-stopped
@@ -101,8 +94,8 @@ services:
       - "no-new-privileges:true"
     depends_on:
       relay-config:
-        # `restart: true` recreates the Relay when the one-shot is re-run, so
-        # switching fixtures on a running fleet reaches it.
+        # `restart: true` recreates the Relay when the one-shot is re-run, so an edited
+        # relay.toml reaches a running fleet on the next `up`.
         condition: service_completed_successfully
         restart: true
     ports:
@@ -181,7 +174,7 @@ services:
   # relay-data. A failure here keeps every daemon down.
   init:
     build:
-      context: .
+      context: ../..
       dockerfile: docker/relay.Dockerfile
       target: dev-fleet
     user: "10001:10001"
@@ -203,7 +196,7 @@ services:
       RELAY_PUBLISH_ADDR: "${RELAY_PUBLISH_ADDR:-127.0.0.1}"
     entrypoint: ["sh", "/dev-fleet-init.sh"]
     volumes:
-      - ./docker/dev-fleet-init.sh:/dev-fleet-init.sh:ro
+      - ../../docker/dev-fleet-init.sh:/dev-fleet-init.sh:ro
       - type: volume
         source: relay-etc
         target: /etc/relay
@@ -272,117 +265,6 @@ services:
       - bootstrap-shared:/bootstrap:ro
       - daemon3-state:/var/lib/relay-daemon
 
-  # `demo` profile only (#452). daemon-4 is `role=web, env=prod`: demo
-  # service + policy.web.toml, exactly like daemon-1/daemon-2.
-  daemon-4:
-    <<: *daemon-base
-    profiles: ["demo"]
-    hostname: "dev-node-4"
-    environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "relay"
-      RELAY_STATE_DIR: "/var/lib/relay-daemon"
-      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
-      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
-      HOSTNAME: "dev-node-4"
-      RELAY_NODE_LABELS: "role=web,env=prod"
-    volumes:
-      - bootstrap-shared:/bootstrap:ro
-      - daemon4-state:/var/lib/relay-daemon
-
-  # `demo` profile only (#452). daemon-5 is `role=web, env=prod`: demo
-  # service + policy.web.toml, exactly like daemon-1/daemon-2/daemon-4.
-  daemon-5:
-    <<: *daemon-base
-    profiles: ["demo"]
-    hostname: "dev-node-5"
-    environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "relay"
-      RELAY_STATE_DIR: "/var/lib/relay-daemon"
-      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
-      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
-      HOSTNAME: "dev-node-5"
-      RELAY_NODE_LABELS: "role=web,env=prod"
-    volumes:
-      - bootstrap-shared:/bootstrap:ro
-      - daemon5-state:/var/lib/relay-daemon
-
-  # `demo` profile only (#452). daemon-6 is `role=web, env=staging`: demo
-  # service + policy.web.toml, the same Policy as daemon-1/2/4/5 with a
-  # different `env` label.
-  daemon-6:
-    <<: *daemon-base
-    profiles: ["demo"]
-    hostname: "dev-node-6"
-    environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "relay"
-      RELAY_STATE_DIR: "/var/lib/relay-daemon"
-      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
-      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
-      HOSTNAME: "dev-node-6"
-      RELAY_NODE_LABELS: "role=web,env=staging"
-    volumes:
-      - bootstrap-shared:/bootstrap:ro
-      - daemon6-state:/var/lib/relay-daemon
-
-  # `demo` profile only (#452). daemon-7 is `role=db, env=prod`: no demo
-  # service, policy.db.toml, exactly like daemon-3 with an added `env` label.
-  daemon-7:
-    <<: *daemon-base
-    profiles: ["demo"]
-    hostname: "dev-node-7"
-    environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "relay"
-      RELAY_STATE_DIR: "/var/lib/relay-daemon"
-      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.db.toml"
-      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
-      HOSTNAME: "dev-node-7"
-      RELAY_NODE_LABELS: "role=db,env=prod"
-    volumes:
-      - bootstrap-shared:/bootstrap:ro
-      - daemon7-state:/var/lib/relay-daemon
-
-  # `demo` profile only (#452). daemon-8 is `role=bastion, env=prod` — THE
-  # NARROW NODE the demo's refusal beat depends on: no demo service, and
-  # policy.bastion.toml, the strictly-narrowest fixture (exactly one
-  # `file.read` path, no `service.restart`, no `[raw_exec]` section at all).
-  daemon-8:
-    <<: *daemon-base
-    profiles: ["demo"]
-    hostname: "dev-node-8"
-    environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "relay"
-      RELAY_STATE_DIR: "/var/lib/relay-daemon"
-      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.bastion.toml"
-      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
-      HOSTNAME: "dev-node-8"
-      RELAY_NODE_LABELS: "role=bastion,env=prod"
-    volumes:
-      - bootstrap-shared:/bootstrap:ro
-      - daemon8-state:/var/lib/relay-daemon
-
-  # `demo` profile only (#452). daemon-9 is `role=web, env=staging`: demo
-  # service + policy.web.toml, the same shape as daemon-6.
-  daemon-9:
-    <<: *daemon-base
-    profiles: ["demo"]
-    hostname: "dev-node-9"
-    environment:
-      RELAY_ADDR: "https://relay:7654"
-      RELAY_DOMAIN: "relay"
-      RELAY_STATE_DIR: "/var/lib/relay-daemon"
-      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
-      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
-      HOSTNAME: "dev-node-9"
-      RELAY_NODE_LABELS: "role=web,env=staging"
-    volumes:
-      - bootstrap-shared:/bootstrap:ro
-      - daemon9-state:/var/lib/relay-daemon
-
 # All named => persist across `compose down`; wiped only with `compose down -v`.
 volumes:
   relay-data:
@@ -396,10 +278,3 @@ volumes:
   daemon1-state:
   daemon2-state:
   daemon3-state:
-  # `demo` profile only (#452).
-  daemon4-state:
-  daemon5-state:
-  daemon6-state:
-  daemon7-state:
-  daemon8-state:
-  daemon9-state:
