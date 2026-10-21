@@ -294,7 +294,7 @@ seven `read`-class templates, trusted the way the binary is (you installed it).
 | `proc.list` | — | Full process table incl. command lines (which routinely carry secrets). |
 | `disk.usage` | — | `df -P -T`. |
 | `net.listening` | — | Listening TCP/UDP sockets and their processes. |
-| `pkg.inventory` | — | dpkg, then rpm; a Node with neither errors rather than returning an empty list. |
+| `pkg.inventory` | — | dpkg, then rpm, as `STATUS NAME VERSION ARCH` with the epoch in VERSION; a Node with neither errors rather than returning an empty list. |
 | `service.status` | `unit` (identifier) | Fixed property list via `systemctl show` — parseable, and no spliced log lines. |
 | `log.tail` | `unit` (identifier) | **Bounded at 200 lines by the template**, never by the caller. The catalog's widest egress surface. |
 | `file.checksum` | `path` (path) | A digest is a content oracle; the shipped Policy denies it the same paths as `file.read`. |

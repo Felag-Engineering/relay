@@ -20,10 +20,10 @@
 #
 # To get the line for a new Template, run `cargo test catalog_names_match_ledger` in daemon/;
 # its failure output prints it. Checked by that test and by scripts/catalog-ledger.sh.
-proc.list read 367904651b393c95fb1459eb4ec3a3a5ddcf8eec4bbb9cf7405f767cdc9488e4 active
-service.status read 0d7eb70b4fac2abbd1589fb531a032fba76c2bd55954875410712383449db7e2 active
+proc.list read bb19b0c05c93e38265e64dab1cfe5ac03d196dfb3a2021f65f40f26a69ea7c3d active
+service.status read 23e081250945b205486829c5f54a0f4459074e201e1383daeefec263ca86c023 active
 disk.usage read 0caa55b3fe9e93e360b2caa020ee5a35ebcab39699365fc436448243f8ec9845 active
 net.listening read 9643c99d9ee2eb324ea079769dc51966dada1bd3a0a9fc135a25197fc8c1c0f4 active
-pkg.inventory read e965fedf549368ee0c8791c02da7eca6ab41f8b39cb2b34895af6d82b1e4368a active
-log.tail read 21d54c38029fba6bf62f41d903fe788f35b4294c6676dc0fab29e4623b2ff930 active
+pkg.inventory read 852754d42d8ed75fe83db12951b16290a4ac2685802d459c50cffb18ad2504cc active
+log.tail read b5e7b2492b53f55d59c3c7803ff8b1650954eb706305ed959aa0af268601a9a5 active
 file.checksum read 9a5d5538c29cb52fd45596eb3892b3b6034b00d06327f24e05a5fe23fa9a4d3e active

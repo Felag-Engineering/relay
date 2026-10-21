@@ -127,9 +127,9 @@ fn catalog_scripts_are_fixed() {
         let op = compile(&def).expect("compiles");
         let want = match def.name.as_str() {
             "service.status" => {
-                "systemctl show --no-pager --property=Id,LoadState,ActiveState,SubState,UnitFileState,MainPID,NRestarts,ExecMainStartTimestamp -- \"$1\""
+                "systemctl show --no-pager --property=Id,LoadState,ActiveState,SubState,Result,UnitFileState,MainPID,ExecMainStatus,NRestarts,ExecMainStartTimestamp -- \"$1\""
             }
-            "log.tail" => "journalctl --no-pager --quiet --lines=200 --unit \"$1\"",
+            "log.tail" => "journalctl --no-pager --quiet --output=short-iso-precise --utc --lines=200 --unit \"$1\"",
             "file.checksum" => "sha256sum -- \"$1\"",
             _ => def.body.as_str(),
         };
