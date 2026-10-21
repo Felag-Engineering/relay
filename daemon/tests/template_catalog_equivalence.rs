@@ -5,7 +5,11 @@
 //! Each catalog program (`ps`, `systemctl`, `df`, `ss`, `dpkg-query`, `rpm`,
 //! `journalctl`, `sha256sum`) is a stub on a fixed `PATH` that prints its name and
 //! arguments NUL-separated, so the comparison is hermetic and byte-exact: the
-//! two renderings must hand every program the same arguments.
+//! two renderings must hand every program the same arguments. A `path` value
+//! names a real regular file under a temp root, because the daemon opens it and
+//! re-checks its resolved target before the command runs (ADR-0018 layer 2);
+//! a canonical path to a regular file resolves to itself, so both renderings
+//! still receive the same value.
 
 mod common;
 #[path = "common/shell_runner.rs"]
@@ -15,7 +19,9 @@ use std::os::unix::fs::PermissionsExt;
 
 use common::TempDir;
 use relay_ops::operations::template::{SlotType, TemplateDef};
-use shell_runner::{invoke, retired_splice, run_sh_argv, shells, stderr, stdout, ShellRunner};
+use shell_runner::{
+    invoke, path_fixtures, retired_splice, run_sh_argv, shells, stderr, stdout, ShellRunner,
+};
 
 const CATALOG: &str = include_str!("../packaging/templates.d/relay-read/catalog.toml");
 
@@ -58,11 +64,17 @@ fn stub_dir() -> (TempDir, std::path::PathBuf) {
     (dir, path)
 }
 
-fn inputs(def: &TemplateDef) -> Vec<Vec<(&'static str, &'static str)>> {
+fn inputs(def: &TemplateDef, root: &str) -> Vec<Vec<(&'static str, String)>> {
     match def.slots.first().map(|s| &s.ty) {
         None => vec![vec![]],
-        Some(SlotType::Identifier) => UNITS.iter().map(|u| vec![("unit", *u)]).collect(),
-        Some(SlotType::Path) => PATHS.iter().map(|p| vec![("path", *p)]).collect(),
+        Some(SlotType::Identifier) => UNITS
+            .iter()
+            .map(|u| vec![("unit", u.to_string())])
+            .collect(),
+        Some(SlotType::Path) => PATHS
+            .iter()
+            .map(|p| vec![("path", format!("{root}{p}"))])
+            .collect(),
         Some(other) => panic!("catalog slot type {other:?} has no inputs here"),
     }
 }
@@ -74,12 +86,14 @@ async fn catalog_output_is_unchanged_by_the_new_rendering() {
         .template;
     assert_eq!(defs.len(), 7);
     let (_guard, stubs) = stub_dir();
+    let (_paths, root) = path_fixtures("catalog-paths", &PATHS);
 
     let mut compared = 0;
     for shell in shells() {
         let runner = ShellRunner::with_path(&shell, &stubs);
         for def in &defs {
-            for args in inputs(def) {
+            for owned in inputs(def, &root) {
+                let args: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
                 let new = invoke(def, &args, &runner).await;
                 let retired = run_sh_argv(
                     &runner,
@@ -108,6 +122,7 @@ async fn catalog_output_is_unchanged_by_the_new_rendering() {
     let shell = &shells()[0];
     let runner = ShellRunner::with_path(shell, &stubs);
     let def = defs.iter().find(|d| d.name == "file.checksum").unwrap();
-    let r = invoke(def, &[("path", "/home/josé/notes")], &runner).await;
-    assert_eq!(stdout(&r), "sha256sum\0--\0/home/josé/notes\0");
+    let notes = format!("{root}/home/josé/notes");
+    let r = invoke(def, &[("path", &notes)], &runner).await;
+    assert_eq!(stdout(&r), format!("sha256sum\0--\0{notes}\0"));
 }

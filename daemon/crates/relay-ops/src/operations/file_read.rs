@@ -17,6 +17,9 @@
 //! rule for `file.read` with a path argument constraint is what limits access.
 //! A missing or unreadable file maps to `OUTCOME_FAILURE` (not
 //! `OUTCOME_DENIED_BY_POLICY`), which is a separate Policy-engine concern.
+//!
+//! The ADR-0018 layer-2 open and resolve ([`open_regular_and_resolve`]) is
+//! shared with a Template's `path` slots.
 
 use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
@@ -104,10 +107,39 @@ pub(crate) async fn file_read(
     gate.run(move || read_opened(&task_id, &path, f, cap)).await
 }
 
+/// Why [`open_regular_and_resolve`] refused a path, before any byte is read.
+#[derive(Debug)]
+pub(crate) enum OpenRefusal {
+    /// The open, or the `fstat` of the descriptor, failed.
+    Io(std::io::Error),
+    /// The path opened, but names a FIFO, socket, device or directory.
+    NotRegularFile,
+    /// The descriptor's target could not be read back; callers fail closed.
+    Unresolvable(std::io::Error),
+}
+
 /// Opens `path` and resolves the target the descriptor actually points at
 /// (ADR-0018 layer 2). Blocking. `Err` is the Task's final result: a failed
 /// open, a non-regular file, or an unresolvable target (denied, fail-closed).
 fn open_and_resolve(task_id: &str, path: &str) -> Result<(std::fs::File, String), TaskResult> {
+    open_regular_and_resolve(path).map_err(|refusal| match refusal {
+        OpenRefusal::Io(e) => read_failure(task_id, path, &e),
+        OpenRefusal::NotRegularFile => not_regular_file_failure(task_id, path),
+        OpenRefusal::Unresolvable(e) => denied_by_policy(
+            task_id,
+            &format!(
+                "cannot resolve opened path {path:?} for policy re-check (ADR-0018): {}",
+                crate::limits::clean_io_error(&e)
+            ),
+        ),
+    })
+}
+
+/// The ADR-0018 layer-2 open, shared by `file.read` and a Template's `path`
+/// slots: opens `path` read-only without blocking, refuses anything but a
+/// regular file, and returns the descriptor with the target it actually names.
+/// Blocking.
+pub(crate) fn open_regular_and_resolve(path: &str) -> Result<(std::fs::File, String), OpenRefusal> {
     // Open non-blocking so a FIFO with no writer (or any other file whose
     // `open(2)` would block) returns a descriptor immediately instead of
     // hanging a blocking-pool thread forever — the Task's timeout ends the
@@ -124,41 +156,31 @@ fn open_and_resolve(task_id: &str, path: &str) -> Result<(std::fs::File, String)
     // resolved-target recheck entirely.
     #[allow(
         clippy::disallowed_methods,
-        reason = "file.read's one read-only open (ADR-0018): .read(true) plus O_NONBLOCK|O_NOCTTY, never a write flag; chain pinned by clippy_write_ban.rs"
+        reason = "the one ADR-0018 layer-2 read-only open, shared by file.read and Template path slots: .read(true) plus O_NONBLOCK|O_NOCTTY, never a write flag; chain pinned by clippy_write_ban.rs"
     )]
     let opened = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
         .open(path);
-    let f = match opened {
-        Ok(f) => f,
-        Err(e) => return Err(read_failure(task_id, path, &e)),
-    };
+    let f = opened.map_err(OpenRefusal::Io)?;
 
-    // Refuse anything that is not a regular file. A FIFO/socket would make the
-    // subsequent read block (or return partial, writer-controlled data); a
+    // Refuse anything that is not a regular file. A FIFO/socket would make a
+    // read block (or return partial, writer-controlled data); a
     // character/block device could return unbounded bytes or have read side
-    // effects. `file.read` serves regular files only; everything else fails
-    // closed. `metadata()` here `fstat`s the already-open descriptor, so there
-    // is no second path lookup and no TOCTOU with the open above.
+    // effects. Only regular files are served; everything else fails closed.
+    // `metadata()` here `fstat`s the already-open descriptor, so there is no
+    // second path lookup and no TOCTOU with the open above.
     match f.metadata() {
         Ok(meta) if meta.is_file() => {}
-        Ok(_) => return Err(not_regular_file_failure(task_id, path)),
-        Err(e) => return Err(read_failure(task_id, path, &e)),
+        Ok(_) => return Err(OpenRefusal::NotRegularFile),
+        Err(e) => return Err(OpenRefusal::Io(e)),
     }
 
     // Resolve the path the descriptor actually points at, for the re-check.
-    match std::fs::read_link(format!("/proc/self/fd/{}", f.as_raw_fd())) {
-        Ok(p) => Ok((f, p.to_string_lossy().into_owned())),
-        // Fail closed: if the resolved target cannot be determined, refuse.
-        Err(e) => Err(denied_by_policy(
-            task_id,
-            &format!(
-                "cannot resolve opened path {path:?} for policy re-check (ADR-0018): {}",
-                crate::limits::clean_io_error(&e)
-            ),
-        )),
-    }
+    // A target that cannot be read back is refused by the caller, fail-closed.
+    std::fs::read_link(format!("/proc/self/fd/{}", f.as_raw_fd()))
+        .map(|p| (f, p.to_string_lossy().into_owned()))
+        .map_err(OpenRefusal::Unresolvable)
 }
 
 /// Reads up to `cap` bytes from `f`, the descriptor [`open_and_resolve`] opened

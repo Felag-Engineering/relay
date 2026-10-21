@@ -152,15 +152,16 @@ loop.
 The daemon keeps its own record of its Policy decisions, so a Node holds evidence of what it
 was asked to run even if the Relay is compromised. Each Policy gate decision (a Task's one pass
 through the Policy engine, or the canonical-path refusal just before it) is one structured log
-line, shipped by journald and your log pipeline. The `file.read` path re-check after an Allow
-is a second evaluation that is not logged at the deny target: a refusal there shows only as the
-Task's result, after the Allow line. The daemon writes no file of its own; retention is
-journald's (`SystemMaxUse=` / `MaxRetentionSec=` in `journald.conf`).
+line, shipped by journald and your log pipeline. The path re-check after an Allow, by
+`file.read` and for each Template `path` slot, is a second evaluation that is not logged at the
+deny target: a refusal there shows only as the Task's result, after the Allow line. The daemon
+writes no file of its own; retention is journald's (`SystemMaxUse=` / `MaxRetentionSec=` in
+`journald.conf`).
 
 - **Allow:** target `relay_daemon::allow`, one event per Policy Allow, emitted after the
   decision and before anything is invoked or spawned. It records the Allow, not a successful
-  run: a Template slot refused afterwards, or a `file.read` that fails its path re-check, still
-  logged an Allow.
+  run: a Template slot refused afterwards, or a `file.read` or Template `path` slot that fails
+  its path re-check, still logged an Allow.
 - **Deny:** target `relay_daemon::deny`, the same field names.
 
 Shared fields: `task_id`, `operation` (the Operation name, or `raw_exec`),
@@ -187,7 +188,9 @@ the Relay's audit trail.
 `argv_digest` is the SHA-256 of the elements joined by a NUL byte. For a typed
 Operation the first element is the Operation name, followed by its positional
 arguments in Policy order; for Raw Exec the elements are the argv. `argc` counts
-the elements. To reproduce one:
+the elements. For a Template `path` slot the argument is the path as the caller
+sent it; the command receives the resolved target the daemon re-checked, which can
+be a different spelling of the same file. To reproduce one:
 
 ```console
 $ printf "%s\0%s" /bin/echo hello | sha256sum
