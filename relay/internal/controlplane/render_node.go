@@ -73,9 +73,5 @@ func RenderCertificate(n registry.Node) RenderedCertificate {
 // a Node's rendered state can never disagree with whether it matched.
 func StateLabels(n registry.Node, ev capability.StateEval) []string {
 	states := nodestate.Labels(nodestate.Input{Node: n, Now: ev.Now, CertExpiringWithin: ev.CertExpiringWithin})
-	out := make([]string, 0, len(states))
-	for _, l := range states {
-		out = append(out, l.String())
-	}
-	return out
+	return MapSlice(states, nodestate.Label.String)
 }
