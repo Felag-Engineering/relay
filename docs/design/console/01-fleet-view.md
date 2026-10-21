@@ -86,11 +86,15 @@ facet sums to the group's Node count. That row is not a link: absence is not a l
 row one. Columns: liveness dot + name · **State** · Labels · Policy fingerprint · Last seen · Pin.
 The State column is omitted when no row in the group draws a state (revoked, quarantined, not
 reported, or a `state:` label). Names and fingerprints follow `00-foundations.md` ("Self-reported
-names", "Policy fingerprint"). Below it, the ladder: "*N* more deviate the same way — expand", then the mode as one calm line
+names", "Policy fingerprint"). The table's caption ("Every Node in `web`, oddest first") is
+**visually hidden** — present for screen readers, not drawn (D34): the sort order is visible in the
+rows. Below it, the ladder: "*N* more deviate the same way — expand", then the mode as one calm line
 ("3,993 Nodes carry no `state:` label at all — reachable, current, permitted"). The mode line never
 counts a "not reported" Node as reachable, current or permitted: it says how many Nodes have not
 reported and that they are not counted, and uses "other Nodes" for the rest. The card header shows
-the count in a neutral style ("1 not reported"), not amber.
+the count in a neutral style ("1 not reported"), not amber. **A group with no deviation draws no
+mode sentence** (D34): its one-line header ("612 nodes · no deviations") already says it, and a
+sentence restating that every Node is reachable, current and permitted is deleted.
 
 **Pin to compare.** Every listed row carries a Pin toggle that adds or removes that Node from the
 pin set (2–3 Nodes, spec 02): a button in a GET form, needing no script, that keeps the current
@@ -206,9 +210,9 @@ config management.
 - **Empty fleet** → the day-one screen, spec 10. Do not render an empty table.
 - **Refreshing** → a **Refresh** link beside the count reloads the screen with its filter, grouping
   and pin set preserved, and is an audited read like the page load (`00-foundations.md`,
-  "Refreshing a screen"). Beside it, the page says how old it is — "rendered 40s ago", the absolute
-  UTC time in its `title` — and an old page says so in words and weight, never in amber
-  (D30). The screen never reloads on a timer.
+  "Refreshing a screen"); no sentence beside it says so (D34). Beside it, the page says how old it
+  is — "rendered 40s ago", the absolute UTC time in its `title` — and an old page says so in words
+  and weight, never in amber (D30). The screen never reloads on a timer.
 - **Frozen** → the control-plane banner above content; the screen is otherwise unchanged (reads still work).
 - **Relay or CA certificate near expiry** → the same banner slot, per `00-foundations.md`.
 - **`viewer`** → identical, minus the two action buttons.

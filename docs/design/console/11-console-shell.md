@@ -40,6 +40,10 @@ One template, three regions.
 The banner slot sits **above** the topbar and is empty in the common case. See
 `00-foundations.md` for its three conditions.
 
+The **signed-in block** names the Account and its role. Once #1107's ADR lands it also links to the
+**your account** surface, where a signed-in human changes their own password
+([15](15-accounts-and-tokens.md), "Your own password"; designed, pending ADR).
+
 At 800px and below the nav and the signed-in block fold behind a **Menu** toggle, closed by
 default (`00-foundations.md`, "Narrow width"). The toggle is a checkbox and label, because the CSP
 admits no inline script.
@@ -70,6 +74,25 @@ acceptance criterion exists to catch it.
   JavaScript lives in an external file served from the Console's own origin.
 - **Every mutating request is POST/PUT/DELETE**, never GET. A GET that mutates is a CSRF hole
   regardless of tokens.
+
+## Modals
+
+Where a screen opens a modal (D35; [15](15-accounts-and-tokens.md) is the first), it is built one
+way:
+
+- **A native `<dialog>`**, opened with `showModal()` by the Console's external same-origin script.
+  No inline script, no `hx-on:`, no inline event handler (CSP, below).
+- **Every trigger is a real link** to a page holding the same form. Without JavaScript, following it
+  opens that page, which carries a **Back** link to the screen it came from; with JavaScript the
+  script opens the dialog instead. A modal is never the only way to an act.
+- **Every act is a form POST with its CSRF token**, exactly as on the page. The script opens and
+  closes dialogs; it never posts, never carries a secret, and never decides anything.
+- **Closing** — a × button, Esc, Cancel, or a click on the backdrop. Focus moves into the dialog on
+  open and returns to the trigger on close; the dialog is labelled by its heading.
+- **Errors** — a refusal re-renders the form with a banner above the dialog's footer and inline
+  field messages tied by `aria-describedby`.
+- **A destructive act inside a modal still goes to its named confirmation page**
+  (`00-foundations.md`, "Form controls"); a modal never replaces it with a `confirm()` or a script.
 
 ## CSP
 
