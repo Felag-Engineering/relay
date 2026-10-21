@@ -66,8 +66,10 @@ From `daemon/packaging/relay-daemon.service`:
   `RestrictNamespaces`, `LockPersonality`**: no Operation touches devices, kernel
   tunables/modules/logs, cgroups, the clock, the hostname, realtime scheduling, namespaces or
   its execution-domain personality, so all are removed.
-- **`ProtectProc=invisible`**: hides other processes' `/proc/<pid>` entries. `/proc/sys/...`,
-  which `system.facts` reads, stays visible.
+- **No `ProtectProc=`**: systemd implements it as a `hidepid=` mount of `/proc`, and that mount
+  exempts its `gid=` group, 0 by default. The daemon runs as `root:root`, so the directive would
+  hide nothing, and running it under another group to make it bite would blind `proc.list` and
+  `net.listening`, whose job is the whole process table.
 - **`RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`**: `AF_INET`/`AF_INET6` carry
   the outbound mTLS connection to the Relay. `AF_UNIX` is **load-bearing for
   `service.restart`**: `systemctl` reaches PID 1 over D-Bus on an `AF_UNIX` socket, and the
@@ -338,7 +340,7 @@ $ systemd-analyze security --offline=true daemon/packaging/relay-daemon.service
 ```
 
 This confirms the directives are active: `NoNewPrivileges=`, `RestrictRealtime=`,
-`ProtectSystem=` (strict), `ProtectProc=`, `PrivateTmp=`, `PrivateDevices=`, `ProtectClock=`,
+`ProtectSystem=` (strict), `PrivateTmp=`, `PrivateDevices=`, `ProtectClock=`,
 `ProtectKernelLogs=`, `ProtectControlGroups=`, `ProtectKernelModules=`,
 `ProtectKernelTunables=`, `ProtectHostname=`, `LockPersonality=` and every
 `RestrictNamespaces=` sub-check report `✓`. The retained `CAP_DAC_READ_SEARCH` and the

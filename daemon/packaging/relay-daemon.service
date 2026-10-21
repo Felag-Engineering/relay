@@ -64,9 +64,8 @@ ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
-# "invisible" (not "yes"): system.facts reads /proc/sys/kernel/hostname and
-# /proc/sys/kernel/osrelease, which stay visible at this level.
-ProtectProc=invisible
+# No ProtectProc=: its hidepid mount exempts gid 0, so a root:root service sees every
+# process anyway, and proc.list and net.listening need the whole process table.
 RestrictRealtime=yes
 RestrictNamespaces=yes
 LockPersonality=yes
