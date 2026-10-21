@@ -87,14 +87,20 @@ type Server struct {
 	http *http.Server
 }
 
-// rootRedirect is the fixed GET / redirect (Config.RootRedirect). A target that is
-// not a local path is a composition-root bug, refused at construction rather than
-// served as an open redirect.
-func rootRedirect(target string) http.Handler {
+// rootRedirect is the fixed GET / redirect (Config.RootRedirect). Every other
+// method on / goes to authenticated, exactly as it would with no redirect: the
+// pattern carries no method, so ServeMux's answer to an unmatched method is
+// unchanged too. A target that is not a local path is a composition-root bug,
+// refused at construction rather than served as an open redirect.
+func rootRedirect(target string, authenticated http.Handler) http.Handler {
 	if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") {
 		panic("controlplane: RootRedirect must be a local path, got " + strconv.Quote(target))
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			authenticated.ServeHTTP(w, r)
+			return
+		}
 		http.Redirect(w, r, target, http.StatusFound)
 	})
 }
@@ -127,12 +133,13 @@ func New(cfg Config, authn *Authenticator) *Server {
 	// GET / redirect (Config.RootRedirect) answers before authentication, and it
 	// reads nothing from the request. Everything else on this listener — every
 	// other "/" — goes through Middleware.
+	authenticated := authn.Middleware(mux)
 	public := http.NewServeMux()
 	public.Handle(ProtectedResourceMetadataPath, authn.MetadataHandler())
 	if cfg.RootRedirect != "" {
-		public.Handle("GET /{$}", rootRedirect(cfg.RootRedirect))
+		public.Handle("/{$}", rootRedirect(cfg.RootRedirect, authenticated))
 	}
-	public.Handle("/", authn.Middleware(mux))
+	public.Handle("/", authenticated)
 
 	tlsCfg := &tls.Config{
 		GetCertificate: cfg.GetCertificate,

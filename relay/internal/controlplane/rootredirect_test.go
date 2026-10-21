@@ -88,3 +88,40 @@ func TestRootRedirect_RefusesANonLocalTarget(t *testing.T) {
 		})
 	}
 }
+
+// Every method but GET and HEAD gets exactly the answer it got with no redirect,
+// ServeMux's own included (a method-scoped pattern would turn CONNECT's 404 into
+// a 405 that names the route).
+func TestRootRedirect_OtherMethodsAnswerAsWithout(t *testing.T) {
+	with := New(Config{Addr: "127.0.0.1:0", RootRedirect: "/console/"}, testAuthenticator())
+	without := New(Config{Addr: "127.0.0.1:0"}, testAuthenticator())
+
+	for _, method := range []string{
+		http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete,
+		http.MethodOptions, http.MethodConnect, http.MethodTrace,
+	} {
+		for _, token := range []string{"", testToken} {
+			got := serve(t, with, method, "/", token)
+			want := serve(t, without, method, "/", token)
+			sameAnswer(t, method+" /", got, want)
+		}
+	}
+
+	// CONNECT in authority form carries no path, which is where a method-scoped
+	// pattern changed the answer.
+	got := serve(t, with, http.MethodConnect, "evil.example:443", "")
+	want := serve(t, without, http.MethodConnect, "evil.example:443", "")
+	sameAnswer(t, "CONNECT evil.example:443", got, want)
+}
+
+func sameAnswer(t *testing.T, what string, got, want *httptest.ResponseRecorder) {
+	t.Helper()
+	for _, h := range []string{"Allow", "Location"} {
+		if got.Header().Get(h) != want.Header().Get(h) {
+			t.Errorf("%s: %s = %q, want %q", what, h, got.Header().Get(h), want.Header().Get(h))
+		}
+	}
+	if got.Code != want.Code {
+		t.Errorf("%s = %d, want %d", what, got.Code, want.Code)
+	}
+}
