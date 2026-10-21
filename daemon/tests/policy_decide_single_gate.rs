@@ -11,8 +11,9 @@
 //! # It proves
 //!
 //! * (a) `decide` has exactly one call site per entry path: apply (`policy_gate`),
-//!   plan (`decide_query`), the self-reference lint (`probe_allows`) and
-//!   `file.read`'s layer-2 recheck (`file_read_via`);
+//!   plan (`decide_query`), the self-reference lint (`probe_allows`),
+//!   `file.read`'s layer-2 recheck (`file_read_via`) and a Template `path`
+//!   slot's (`recheck_resolved_path`);
 //! * (b) nothing outside `Policy::decide` calls an `evaluate*` method, and
 //!   `decide` calls each of the eight private passes exactly once;
 //! * (c) a `RawExecPermit` is constructed in one place (`decide`), and
@@ -534,6 +535,7 @@ fn assert_counts(what: &str, got: Counts, want: Counts) {
 
 const POLICY_LIB: &str = "crates/relay-policy/src/lib.rs";
 const REGISTRY: &str = "crates/relay-ops/src/operations/registry.rs";
+const TEMPLATE: &str = "crates/relay-ops/src/operations/template.rs";
 
 // ---------------------------------------------------------------------------
 // (a) one `decide` call per entry path
@@ -550,6 +552,7 @@ fn decide_has_exactly_one_call_site_per_entry_path() {
             ("src/dispatch.rs", "decide_query", 1),
             ("src/selfref.rs", "probe_allows", 1),
             (REGISTRY, "file_read_via", 1),
+            (TEMPLATE, "recheck_resolved_path", 1),
         ]),
     );
 }
@@ -695,6 +698,7 @@ fn pinned_sites_exist() {
         ("src/dispatch.rs", "gate_and_invoke_raw_exec"),
         ("src/selfref.rs", "probe_allows"),
         (REGISTRY, "file_read_via"),
+        (TEMPLATE, "recheck_resolved_path"),
         (REGISTRY, "invoke"),
         (POLICY_LIB, "decide"),
     ] {

@@ -93,8 +93,9 @@ allowed_args = [["*"]]
 # governance)
 #
 # Exact canonical paths (ADR-0018): lexical evasions (/etc/../etc/shadow,
-# //etc/shadow, ...) are denied as non-canonical form, and the executor
-# re-checks the resolved target it actually opened, so symlink and
+# //etc/shadow, ...) are denied as non-canonical form, and the daemon
+# re-checks the resolved target it actually opened (file.read, and
+# file.checksum's path slot before the Template runs), so symlink and
 # /proc/self/root/... aliases to these paths are denied too.
 #
 # There is no subtree/wildcard deny (recorded residual, ADR-0022): this list
@@ -180,7 +181,11 @@ args = [[
 #
 # The dispatch gate holds a template's `path` slot to the same ADR-0018
 # canonical-form precondition as file.read's, so these exact-path denies also
-# refuse /etc/../etc/shadow and //etc/shadow.
+# refuse /etc/../etc/shadow and //etc/shadow. Before the template runs, the
+# daemon also re-checks the target the path resolves to, so a symlink or a
+# /proc/self/root/... alias to a denied path is refused as it is for
+# file.read. Residual: sha256sum then reopens the resolved path by name, so
+# whoever can rewrite a directory on that path can race a symlink in between.
 
 [[deny]]
 name = "file.checksum"

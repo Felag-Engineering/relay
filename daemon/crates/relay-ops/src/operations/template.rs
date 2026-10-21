@@ -58,6 +58,16 @@
 //! engine is name-agnostic; the template's name simply enters the same
 //! vocabulary. There is no second evaluator (ADR-0011).
 //!
+//! # Path slots
+//!
+//! Policy evaluates the requested vector. Before the command runs, each `path`
+//! slot's value is opened without blocking, refused unless it is a regular
+//! file, and replaced by the target its descriptor actually names, which Policy
+//! evaluates again at that slot's position (ADR-0018 layer 2). The command
+//! receives the resolved path and reopens it by name, so a directory on that
+//! path that someone can rewrite can still race a symlink in between: the
+//! spec's accepted residual, since a Template has no descriptor to read from.
+//!
 //! # Scope
 //!
 //! This module is the engine: definitions, compilation, typed
@@ -68,13 +78,16 @@
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
 
 use crate::executor::ExecRequest;
-use crate::gen::{Operation, Outcome, RiskClass};
-use crate::limits::ResourceLimits;
-use crate::not_executed::not_executed;
+use crate::gen::{Operation, Outcome, RiskClass, TaskResult};
+use crate::limits::{clean_io_error, ResourceLimits};
+use crate::not_executed::{denied_by_policy_result, not_executed, not_executed_after};
+use crate::policy::{Decision, Policy, Request};
 
-use super::registry::{OpCtx, OpFuture, ResolvedOp};
+use super::file_read::{open_regular_and_resolve, OpenRefusal, PathCheck};
+use super::registry::{bounded_by_task_timeout, BlockingGate, OpCtx, OpFuture, ResolvedOp};
 use super::template_body::{self, BodyAnalysis};
 pub use super::template_code::{BodyWarning, CodePosition, WarningKind};
 
@@ -155,6 +168,8 @@ pub enum SlotType {
     /// characters, no Unicode whitespace, and none of ``$ ` \\ " ' ; | & < > ( ) { }
     /// [ ] * ? ! # ~ =``. Letters of any script, digits and `- _ . , + @ % : ^`
     /// are permitted. This is narrower than Native `file.read`'s path check.
+    /// The value must name a regular file: its resolved target is re-checked
+    /// by Policy before the command runs (ADR-0018 layer 2).
     Path,
     /// The value must be exactly one of a fixed author-supplied allow-list. The
     /// safest slot type: the value space is finite and author-controlled.
@@ -340,7 +355,8 @@ impl TemplateOp {
     /// canonical-form precondition to a template's path arguments BEFORE Policy
     /// evaluates them — so an exact-path `[[deny]]` on a template cannot be
     /// evaded by a non-canonical spelling like `/etc/../etc/shadow`, exactly as
-    /// it cannot be for `file.read`.
+    /// it cannot be for `file.read`. The layer-2 re-check of each slot's
+    /// resolved target reads the same positions.
     pub fn path_slot_positions(&self) -> Vec<usize> {
         self.slots
             .iter()
@@ -365,11 +381,9 @@ impl TemplateOp {
     /// Map a caller `Operation`'s named args to the positional vector the Policy
     /// engine evaluates, in slot-declaration order — the identical contract as
     /// [`super::registry::OpRegistration::positional_args`]. A missing key maps
-    /// to `""` (matched only by a Policy `"*"` wildcard). This is the SAME
-    /// vector [`render`] validates and passes to the shell, so what Policy
-    /// evaluated is exactly what the command receives.
-    ///
-    /// [`render`]: TemplateOp::render
+    /// to `""` (matched only by a Policy `"*"` wildcard). The command receives
+    /// this vector unchanged except at `path` slots, which carry the resolved
+    /// target Policy re-checked there (ADR-0018 layer 2).
     fn positional_args(&self, op: &Operation) -> Vec<String> {
         self.slots
             .iter()
@@ -379,15 +393,30 @@ impl TemplateOp {
 
     /// Validate the values and produce the argv to execute.
     ///
-    /// `positional[i]` is the raw value for `slots[i]` — the very vector Policy
-    /// evaluated (see [`positional_args`]). Each value is validated against its
-    /// slot type (fail closed on the first violation — no spawn) and then
-    /// passed untouched as a positional parameter. The result is
+    /// `positional[i]` is the value for `slots[i]`: the vector Policy evaluated
+    /// (see [`positional_args`]), with each `path` slot replaced by its
+    /// resolved, re-checked target. Each value is validated against its slot
+    /// type (fail closed on the first violation — no spawn) and then passed
+    /// untouched as a positional parameter. The result is
     /// `["/bin/sh", "-c", <script>, "relay-template", v1, …, vN]`: the script is
     /// fixed at compile time and `v1…vN` are byte-identical to `positional`.
     ///
     /// [`positional_args`]: TemplateOp::positional_args
     fn render(&self, positional: &[String]) -> Result<Vec<String>, TemplateError> {
+        self.validate_values(positional)?;
+
+        let mut argv = Vec::with_capacity(4 + positional.len());
+        argv.push("/bin/sh".to_string());
+        argv.push("-c".to_string());
+        argv.push(self.script.clone());
+        argv.push(TEMPLATE_ARGV0.to_string());
+        argv.extend(positional.iter().cloned());
+        Ok(argv)
+    }
+
+    /// Checks the arity and each value against its slot type, failing closed on
+    /// the first violation.
+    fn validate_values(&self, positional: &[String]) -> Result<(), TemplateError> {
         if positional.len() != self.slots.len() {
             return Err(TemplateError::ArityMismatch {
                 got: positional.len(),
@@ -405,15 +434,201 @@ impl TemplateOp {
                     reason,
                 })?;
         }
-
-        let mut argv = Vec::with_capacity(4 + positional.len());
-        argv.push("/bin/sh".to_string());
-        argv.push("-c".to_string());
-        argv.push(self.script.clone());
-        argv.push(TEMPLATE_ARGV0.to_string());
-        argv.extend(positional.iter().cloned());
-        Ok(argv)
+        Ok(())
     }
+
+    /// ADR-0018 layer 2 for `path` slots: opens each slot's value, refuses
+    /// anything but a regular file, substitutes the target the descriptor
+    /// names, and asks Policy again. Blocking work runs behind `gate`. `Err` is
+    /// the Task's final result, and nothing has been spawned.
+    ///
+    /// Substitution accumulates in slot order, so each re-check sees the slots
+    /// before it resolved and the ones after it as requested. The last one
+    /// evaluates exactly the vector the command receives; an earlier one can
+    /// only add a deny.
+    async fn resolve_path_slots(
+        &self,
+        gate: BlockingGate,
+        task_id: &str,
+        policy: &Policy,
+        mut positional: Vec<String>,
+    ) -> Result<Vec<String>, TaskResult> {
+        let path_positions = self.path_slot_positions();
+        for &i in &path_positions {
+            let requested = positional[i].clone();
+            // The descriptor is closed on the blocking pool too: the command
+            // reopens the path by name, and a close can stall like an open.
+            let opened = gate
+                .run(move || {
+                    open_regular_and_resolve(&requested).map(|(file, resolved)| {
+                        drop(file);
+                        resolved
+                    })
+                })
+                .await;
+            positional[i] =
+                opened.map_err(|r| path_refusal_result(task_id, &self.slots[i].name, r))?;
+            if let PathCheck::Denied(reason) =
+                recheck_resolved_path(policy, &self.name, &positional, &path_positions)
+            {
+                return Err(denied_by_policy_result(task_id.to_string(), &reason));
+            }
+        }
+        Ok(positional)
+    }
+
+    /// Runs the Template behind `gate` — the body of [`ResolvedOp::invoke`],
+    /// with the gate a parameter so a test can drive it through one it controls.
+    pub(crate) fn invoke_via<'a>(&'a self, gate: BlockingGate, ctx: OpCtx<'a>) -> OpFuture<'a> {
+        Box::pin(async move {
+            let OpCtx {
+                task_id,
+                positional,
+                timeout,
+                max_output_bytes,
+                mut cancel,
+                runner,
+                policy,
+            } = ctx;
+
+            // Validate the requested values before anything is opened, so a
+            // hostile value is never opened; `render` validates the resolved
+            // vector again. A validation failure fails closed — OUTCOME_FAILURE,
+            // never a spawn, never DENIED_BY_POLICY (Policy already allowed;
+            // this is the template's own stricter typed gate, like an invalid
+            // unit name in service.restart).
+            if let Err(e) = self.validate_values(&positional) {
+                return not_executed(task_id, Outcome::Failure, e.to_string());
+            }
+
+            let (positional, timeout) = if self.path_slot_positions().is_empty() {
+                (positional, timeout)
+            } else {
+                let started = tokio::time::Instant::now();
+                // Resolution can wait on the gate for the whole budget, so it
+                // races the Task's cancel (ADR-0013): a cancel seen here never
+                // reaches a spawn. Biased so a cancel beats a simultaneous end.
+                let resolved = tokio::select! {
+                    biased;
+                    () = cancel_requested(&mut cancel) => {
+                        return not_executed_after(
+                            task_id,
+                            Outcome::Cancelled,
+                            Vec::new(),
+                            started.elapsed(),
+                        );
+                    }
+                    resolved = bounded_by_task_timeout(
+                        &task_id,
+                        timeout,
+                        self.resolve_path_slots(gate, &task_id, policy, positional),
+                    ) => resolved,
+                };
+                let resolved = match resolved {
+                    Ok(resolved) => resolved,
+                    Err(result) => return result,
+                };
+                // One clock from receipt (ADR-0004): the command gets the
+                // budget that is left, and is never spawned with none left.
+                let remaining = timeout.saturating_sub(started.elapsed());
+                if remaining.is_zero() {
+                    return not_executed_after(
+                        task_id,
+                        Outcome::Timeout,
+                        Vec::new(),
+                        started.elapsed(),
+                    );
+                }
+                (resolved, remaining)
+            };
+
+            match self.render(&positional) {
+                Ok(argv) => {
+                    runner
+                        .run(ExecRequest {
+                            task_id,
+                            argv,
+                            timeout,
+                            max_output_bytes,
+                            cancel,
+                            limits: ResourceLimits::DEFAULT,
+                        })
+                        .await
+                }
+                Err(e) => {
+                    // `cancel` is moved into ExecRequest only on the Ok arm; on
+                    // this no-spawn path it is simply dropped here — never a
+                    // spurious cancel.
+                    not_executed(task_id, Outcome::Failure, e.to_string())
+                }
+            }
+        })
+    }
+}
+
+/// The layer-2 Policy re-check of a Template's `path` slots (ADR-0018): the
+/// Template's own name and full vector, with the resolved targets substituted,
+/// held to the same canonical-form precondition at the same positions.
+fn recheck_resolved_path(
+    policy: &Policy,
+    name: &str,
+    positional: &[String],
+    path_positions: &[usize],
+) -> PathCheck {
+    let request = Request::Operation {
+        name,
+        positional,
+        path_positions,
+    };
+    match policy.decide(&request).decision {
+        Decision::Deny { reason, .. } => PathCheck::Denied(reason),
+        Decision::Allow(_) => PathCheck::Allowed,
+    }
+}
+
+/// The result for a `path` slot whose value cannot be checked against what it
+/// names. It names the slot and never the value, as [`TemplateError`] does. An
+/// unresolvable target is denied, fail-closed, as `file.read`'s is.
+fn path_refusal_result(task_id: &str, slot: &str, refusal: OpenRefusal) -> TaskResult {
+    let task_id = task_id.to_string();
+    match refusal {
+        OpenRefusal::Io(e) => not_executed(
+            task_id,
+            Outcome::Failure,
+            format!(
+                "slot {slot:?}: cannot open the path: {}",
+                clean_io_error(&e)
+            ),
+        ),
+        OpenRefusal::NotRegularFile => not_executed(
+            task_id,
+            Outcome::Failure,
+            format!("slot {slot:?}: not a regular file"),
+        ),
+        OpenRefusal::Unresolvable(e) => denied_by_policy_result(
+            task_id,
+            &format!(
+                "slot {slot:?}: cannot resolve the opened path for policy re-check (ADR-0018): {}",
+                clean_io_error(&e)
+            ),
+        ),
+    }
+}
+
+/// Resolves when the Task's cancel fires (ADR-0013); otherwise never.
+///
+/// Borrow-only, so when resolution wins the receiver still goes to the
+/// executor for the in-flight cancel path. A dropped sender means the Task can
+/// no longer be cancelled, so the spent receiver is cleared rather than handed
+/// on.
+async fn cancel_requested(cancel: &mut Option<oneshot::Receiver<()>>) {
+    if let Some(rx) = cancel.as_mut() {
+        if rx.await.is_ok() {
+            return;
+        }
+        *cancel = None;
+    }
+    std::future::pending::<()>().await
 }
 
 // ---------------------------------------------------------------------------
@@ -445,43 +660,7 @@ impl ResolvedOp for TemplateOp {
     }
 
     fn invoke<'a>(&'a self, ctx: OpCtx<'a>) -> OpFuture<'a> {
-        Box::pin(async move {
-            let OpCtx {
-                task_id,
-                positional,
-                timeout,
-                max_output_bytes,
-                cancel,
-                runner,
-                policy: _,
-            } = ctx;
-
-            // Validate the exact vector Policy evaluated and pass it on. A
-            // validation failure fails closed — OUTCOME_FAILURE, never a spawn,
-            // never DENIED_BY_POLICY (Policy already allowed; this is the
-            // template's own stricter typed gate, like an invalid unit name in
-            // service.restart).
-            match self.render(&positional) {
-                Ok(argv) => {
-                    runner
-                        .run(ExecRequest {
-                            task_id,
-                            argv,
-                            timeout,
-                            max_output_bytes,
-                            cancel,
-                            limits: ResourceLimits::DEFAULT,
-                        })
-                        .await
-                }
-                Err(e) => {
-                    // `cancel` is moved into ExecRequest only on the Ok arm; on
-                    // this no-spawn path it is simply dropped here — never a
-                    // spurious cancel.
-                    not_executed(task_id, Outcome::Failure, e.to_string())
-                }
-            }
-        })
+        self.invoke_via(BlockingGate::data_only(), ctx)
     }
 }
 
@@ -725,7 +904,12 @@ pub(super) fn is_valid_slot_name(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use super::super::registry::Runner;
     use super::*;
+    use crate::test_support::TempFile;
 
     // -- construction helpers -------------------------------------------------
 
@@ -1456,6 +1640,425 @@ values = ["ActiveState", "LoadState"]
                 row.note
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // ADR-0018 layer 2 on `path` slots: open, refuse a non-regular file,
+    // re-check the resolved target, hand the command that target. Symlink and
+    // FIFO fixtures live in the bin's `tests/template_path_recheck.rs`.
+    // -----------------------------------------------------------------------
+
+    /// What a [`Recording`] runner saw of one request.
+    #[derive(Clone)]
+    struct Seen {
+        argv: Vec<String>,
+        timeout: Duration,
+        cancel_forwarded: bool,
+    }
+
+    /// Records every request and reports success without spawning.
+    #[derive(Default)]
+    struct Recording(Mutex<Vec<Seen>>);
+
+    impl Recording {
+        fn seen(&self) -> Vec<Seen> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    impl Runner for Recording {
+        fn run(&self, req: ExecRequest) -> OpFuture<'static> {
+            self.0.lock().unwrap().push(Seen {
+                argv: req.argv.clone(),
+                timeout: req.timeout,
+                cancel_forwarded: req.cancel.is_some(),
+            });
+            let task_id = req.task_id;
+            Box::pin(async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    ..Default::default()
+                }
+            })
+        }
+    }
+
+    /// `file`'s canonical path, which must itself be a well-formed `path`
+    /// value: a TMPDIR the type refuses would fail the fixture, not the
+    /// behaviour under test.
+    fn canonical(file: &TempFile) -> String {
+        let p = std::fs::canonicalize(file.path())
+            .expect("canonicalize a temp file")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            SlotType::Path.validate(&p).is_ok(),
+            "TMPDIR yields a path a Path slot refuses: {p:?}"
+        );
+        p
+    }
+
+    fn path_op(slots: &[&str]) -> TemplateOp {
+        let body = std::iter::once("sha256sum --".to_string())
+            .chain(slots.iter().map(|s| format!("{{{{{s}}}}}")))
+            .collect::<Vec<_>>()
+            .join(" ");
+        compile(&def(
+            "t",
+            &body,
+            slots.iter().map(|s| slot(s, SlotType::Path)).collect(),
+        ))
+        .unwrap()
+    }
+
+    fn policy(toml: &str) -> Policy {
+        crate::policy::from_toml_str(toml).expect("the policy parses")
+    }
+
+    /// Any value at every position of a one-slot Template named `t`.
+    fn allow_any() -> Policy {
+        policy("[[operation]]\nname = \"t\"\nallowed_args = [[\"*\"]]\n")
+    }
+
+    async fn run_via(
+        t: &TemplateOp,
+        gate: BlockingGate,
+        policy: &Policy,
+        positional: Vec<String>,
+        timeout: Duration,
+        cancel: Option<oneshot::Receiver<()>>,
+        runner: &Recording,
+    ) -> TaskResult {
+        t.invoke_via(
+            gate,
+            OpCtx {
+                task_id: "t-path".to_string(),
+                positional,
+                timeout,
+                max_output_bytes: 1024,
+                policy,
+                cancel,
+                runner,
+            },
+        )
+        .await
+    }
+
+    fn stderr_of(r: &TaskResult) -> String {
+        String::from_utf8_lossy(&r.stderr).into_owned()
+    }
+
+    #[tokio::test]
+    async fn path_slot_resolution_waits_on_the_blocking_gate() {
+        let file = TempFile::new("tmpl-gate", b"x");
+        let t = path_op(&["p"]);
+        let policy = allow_any();
+        let runner = Recording::default();
+
+        let closed = run_via(
+            &t,
+            BlockingGate::leaked_for_test(0),
+            &policy,
+            vec![canonical(&file)],
+            Duration::from_millis(100),
+            None,
+            &runner,
+        )
+        .await;
+        assert_eq!(closed.outcome, Outcome::Timeout as i32);
+        assert!(
+            runner.seen().is_empty(),
+            "a timed-out resolution never spawns"
+        );
+
+        let open = run_via(
+            &t,
+            BlockingGate::leaked_for_test(1),
+            &policy,
+            vec![canonical(&file)],
+            Duration::from_secs(5),
+            None,
+            &runner,
+        )
+        .await;
+        assert_eq!(
+            open.outcome,
+            Outcome::Success as i32,
+            "{}",
+            stderr_of(&open)
+        );
+    }
+
+    #[tokio::test]
+    async fn slot_values_are_validated_before_any_path_is_opened() {
+        let t = path_op(&["p"]);
+        let runner = Recording::default();
+        // A closed gate: reaching the open would time out instead.
+        let r = run_via(
+            &t,
+            BlockingGate::leaked_for_test(0),
+            &allow_any(),
+            vec!["/tmp/a b".to_string()],
+            Duration::from_secs(5),
+            None,
+            &runner,
+        )
+        .await;
+        assert_eq!(r.outcome, Outcome::Failure as i32);
+        assert!(
+            stderr_of(&r).contains("failed path validation"),
+            "{}",
+            stderr_of(&r)
+        );
+        assert!(runner.seen().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_template_without_path_slots_never_waits_on_the_gate() {
+        let t = compile(&def(
+            "t",
+            "systemctl status -- {{unit}}",
+            vec![slot("unit", SlotType::Identifier)],
+        ))
+        .unwrap();
+        let runner = Recording::default();
+        let r = run_via(
+            &t,
+            BlockingGate::leaked_for_test(0),
+            &allow_any(),
+            vec!["nginx".to_string()],
+            Duration::from_secs(5),
+            None,
+            &runner,
+        )
+        .await;
+        assert_eq!(r.outcome, Outcome::Success as i32, "{}", stderr_of(&r));
+        assert_eq!(runner.seen()[0].timeout, Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn a_proc_self_root_alias_of_a_denied_path_is_denied() {
+        let file = TempFile::new("tmpl-denied", b"secret");
+        let denied = canonical(&file);
+        let policy = policy(&format!(
+            "[[operation]]\nname = \"t\"\nallowed_args = [[\"*\"]]\n\n\
+             [[deny]]\nname = \"t\"\nargs = [[\"{denied}\"]]\n"
+        ));
+        let runner = Recording::default();
+        let r = run_via(
+            &path_op(&["p"]),
+            BlockingGate::leaked_for_test(1),
+            &policy,
+            vec![format!("/proc/self/root{denied}")],
+            Duration::from_secs(5),
+            None,
+            &runner,
+        )
+        .await;
+        assert_eq!(
+            r.outcome,
+            Outcome::DeniedByPolicy as i32,
+            "{}",
+            stderr_of(&r)
+        );
+        assert!(runner.seen().is_empty(), "a denied Task never spawns");
+    }
+
+    #[tokio::test]
+    async fn a_character_device_is_refused() {
+        let runner = Recording::default();
+        let r = run_via(
+            &path_op(&["p"]),
+            BlockingGate::leaked_for_test(1),
+            &allow_any(),
+            vec!["/dev/null".to_string()],
+            Duration::from_secs(5),
+            None,
+            &runner,
+        )
+        .await;
+        assert_eq!(r.outcome, Outcome::Failure as i32);
+        assert_eq!(stderr_of(&r), "slot \"p\": not a regular file");
+        assert!(runner.seen().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_missing_path_fails_naming_the_slot_not_the_value() {
+        let missing = "/nonexistent/relay-template-path-slot";
+        let runner = Recording::default();
+        let r = run_via(
+            &path_op(&["p"]),
+            BlockingGate::leaked_for_test(1),
+            &allow_any(),
+            vec![missing.to_string()],
+            Duration::from_secs(5),
+            None,
+            &runner,
+        )
+        .await;
+        assert_eq!(r.outcome, Outcome::Failure as i32);
+        let stderr = stderr_of(&r);
+        assert!(stderr.contains("slot \"p\""), "{stderr}");
+        assert!(stderr.contains("No such file or directory"), "{stderr}");
+        assert!(
+            !stderr.contains(missing),
+            "the value never reaches the result: {stderr}"
+        );
+        assert!(runner.seen().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_runner_receives_the_resolved_path_and_the_remaining_budget() {
+        let file = TempFile::new("tmpl-resolved", b"x");
+        let resolved = canonical(&file);
+        let runner = Recording::default();
+        let budget = Duration::from_secs(5);
+        let r = run_via(
+            &path_op(&["p"]),
+            BlockingGate::leaked_for_test(1),
+            &allow_any(),
+            vec![format!("/proc/self/root{resolved}")],
+            budget,
+            None,
+            &runner,
+        )
+        .await;
+        assert_eq!(r.outcome, Outcome::Success as i32, "{}", stderr_of(&r));
+        let seen = runner.seen();
+        assert_eq!(seen[0].argv[4], resolved);
+        assert!(seen[0].timeout <= budget, "the command gets what is left");
+    }
+
+    /// A deny on the pair `(A, B)`: an exact match at both positions.
+    fn deny_pair(a: &str, b: &str) -> Policy {
+        policy(&format!(
+            "[[operation]]\nname = \"t\"\nallowed_args = [[\"*\"], [\"*\"]]\n\n\
+             [[deny]]\nname = \"t\"\nargs = [[\"{a}\"], [\"{b}\"]]\n"
+        ))
+    }
+
+    #[tokio::test]
+    async fn each_path_slot_is_rechecked_at_its_own_position() {
+        let (fa, fb) = (TempFile::new("tmpl-a", b"a"), TempFile::new("tmpl-b", b"b"));
+        let (a, b) = (canonical(&fa), canonical(&fb));
+        let runner = Recording::default();
+        // Layer 1 sees `(A, alias of B)`, which the deny does not match.
+        let r = run_via(
+            &path_op(&["p", "q"]),
+            BlockingGate::leaked_for_test(1),
+            &deny_pair(&a, &b),
+            vec![a.clone(), format!("/proc/self/root{b}")],
+            Duration::from_secs(5),
+            None,
+            &runner,
+        )
+        .await;
+        assert_eq!(
+            r.outcome,
+            Outcome::DeniedByPolicy as i32,
+            "{}",
+            stderr_of(&r)
+        );
+        assert!(runner.seen().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_path_slot_alias_is_substituted_at_its_own_index() {
+        let (fa, fb) = (TempFile::new("tmpl-a", b"a"), TempFile::new("tmpl-b", b"b"));
+        let (a, b) = (canonical(&fa), canonical(&fb));
+        let runner = Recording::default();
+        // Substituting slot 0's target anywhere but index 0 would leave the
+        // deny unmatched.
+        let r = run_via(
+            &path_op(&["p", "q"]),
+            BlockingGate::leaked_for_test(1),
+            &deny_pair(&a, &b),
+            vec![format!("/proc/self/root{a}"), b.clone()],
+            Duration::from_secs(5),
+            None,
+            &runner,
+        )
+        .await;
+        assert_eq!(
+            r.outcome,
+            Outcome::DeniedByPolicy as i32,
+            "{}",
+            stderr_of(&r)
+        );
+        assert!(runner.seen().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_cancel_during_path_resolution_never_spawns() {
+        let file = TempFile::new("tmpl-cancel", b"x");
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = tx.send(());
+        });
+        let runner = Recording::default();
+        // A closed gate holds resolution until the Task's minute is up; the
+        // outer bound fails the test fast if the cancel is not honoured.
+        let r = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_via(
+                &path_op(&["p"]),
+                BlockingGate::leaked_for_test(0),
+                &allow_any(),
+                vec![canonical(&file)],
+                Duration::from_secs(60),
+                Some(rx),
+                &runner,
+            ),
+        )
+        .await
+        .expect("a cancel during resolution must end the Task promptly");
+        assert_eq!(r.outcome, Outcome::Cancelled as i32);
+        assert_eq!(r.exit_code, -1);
+        assert!(runner.seen().is_empty(), "a cancelled Task never spawns");
+    }
+
+    #[tokio::test]
+    async fn a_dropped_cancel_sender_never_cancels_path_resolution() {
+        let file = TempFile::new("tmpl-dropped", b"x");
+        let (tx, rx) = oneshot::channel::<()>();
+        drop(tx);
+        let runner = Recording::default();
+        let r = run_via(
+            &path_op(&["p"]),
+            BlockingGate::leaked_for_test(1),
+            &allow_any(),
+            vec![canonical(&file)],
+            Duration::from_secs(5),
+            Some(rx),
+            &runner,
+        )
+        .await;
+        assert_eq!(r.outcome, Outcome::Success as i32, "{}", stderr_of(&r));
+        assert!(
+            !runner.seen()[0].cancel_forwarded,
+            "a spent receiver is not handed to the executor"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_cancel_receiver_reaches_the_executor_after_resolution() {
+        let file = TempFile::new("tmpl-forward", b"x");
+        let (_tx, rx) = oneshot::channel::<()>();
+        let runner = Recording::default();
+        let r = run_via(
+            &path_op(&["p"]),
+            BlockingGate::leaked_for_test(1),
+            &allow_any(),
+            vec![canonical(&file)],
+            Duration::from_secs(5),
+            Some(rx),
+            &runner,
+        )
+        .await;
+        assert_eq!(r.outcome, Outcome::Success as i32, "{}", stderr_of(&r));
+        assert!(runner.seen()[0].cancel_forwarded);
     }
 }
 

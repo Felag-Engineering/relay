@@ -60,9 +60,12 @@ name = "path"
 # path: absolute and canonical (starts "/", no "." / ".." / empty / trailing
 # segment), max 4096 bytes, plain filenames only: no control characters, no
 # whitespace, and none of $ ` \ " ' ; | & < > ( ) { } [ ] * ? ! # ~ = (use an
-# enum slot for a value the type refuses). Passed to the shell as data, never
-# as shell text. WHICH paths are readable is decided by this Node's Policy,
-# not by this slot: constrain it there (allowed_args / [[deny]]).
+# enum slot for a value the type refuses). The value must name a regular file:
+# before the template runs the daemon opens it without blocking, refuses a
+# directory, FIFO, socket or device, and re-checks Policy on the file it
+# resolves to, then passes that resolved path. Passed to the shell as data,
+# never as shell text. WHICH paths are readable is decided by this Node's
+# Policy, not by this slot: constrain it there (allowed_args / [[deny]]).
 type = "path"
 
 # ---------------------------------------------------------------------------
