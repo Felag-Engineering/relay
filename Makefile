@@ -10,7 +10,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 # relay/go.mod's `go` directive is a FLOOR: under GOTOOLCHAIN=auto the go
 # command upgrades to it and never downgrades to it, so a developer with Go
 # 1.27 installed runs every gate under 1.27 while CI (actions/setup-go, reading
-# the same `go` line) runs 1.26.9 — a red `make verify` CI cannot reproduce
+# the same `go` line) runs 1.26.10 — a red `make verify` CI cannot reproduce
 # (#572's ServeMux 301-vs-307 is the known symptom). Exporting the exact
 # toolchain makes the floor a ceiling too. A `toolchain` directive would not
 # have done this, and go.mod cannot even hold one equal to its own `go` line:

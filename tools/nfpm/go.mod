@@ -1,6 +1,6 @@
 module github.com/Felag-Engineering/relay/tools/nfpm
 
-go 1.26.9
+go 1.26.10
 
 tool github.com/goreleaser/nfpm/v2/cmd/nfpm
 
