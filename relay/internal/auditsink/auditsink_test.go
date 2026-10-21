@@ -17,6 +17,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/approval"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
+	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/store"
 )
@@ -811,6 +812,57 @@ func TestSink_RecordAccountAdminMapsEveryKind(t *testing.T) {
 		if rec.Reason != tc.wantReason {
 			t.Errorf("record %d: Reason = %q, want %q", i, rec.Reason, tc.wantReason)
 		}
+	}
+}
+
+// TestSink_RecordLoginStepUpFailuresFillTheVerifiedLane pins the lane split
+// between the two doors: a failed or throttled step-up runs inside an
+// authenticated session, so its record names that session's Account in the
+// verified lane and asserts nothing, while a failed sign-in keeps the verified
+// lane empty and carries only the asserted claim.
+func TestSink_RecordLoginStepUpFailuresFillTheVerifiedLane(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))
+
+	events := []consoleauth.LoginEvent{
+		{Kind: audit.KindStepUpFailed, Account: "mike", AccountID: "acct-1", Role: "admin",
+			Method: consoleauth.MethodPassword, Source: "198.51.100.7", Reason: "step-up re-authentication refused"},
+		{Kind: audit.KindStepUpThrottled, Account: "mike", AccountID: "acct-1", Role: "admin",
+			Method: consoleauth.MethodPassword, Source: "198.51.100.7", Reason: "step-up re-authentication refused before any credential was checked"},
+		{Kind: audit.KindLoginFailed, SubmittedName: "mike",
+			Method: consoleauth.MethodPassword, Source: "198.51.100.7", Reason: "invalid credentials"},
+	}
+	for _, e := range events {
+		if err := sink.RecordLogin(context.Background(), e); err != nil {
+			t.Fatalf("RecordLogin(%s): %v", e.Kind, err)
+		}
+	}
+
+	records, err := repo.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(records) != len(events) {
+		t.Fatalf("List returned %d records, want %d", len(records), len(events))
+	}
+	for _, rec := range records[:2] {
+		v := rec.Attribution.Verified
+		if v.AccountID != "acct-1" || v.AccountName != "mike" || v.Role != "admin" {
+			t.Errorf("%s verified lane = %+v, want the session's Account", rec.Kind, v)
+		}
+		if rec.Principal != "mike:admin" {
+			t.Errorf("%s Principal = %q, want mike:admin", rec.Kind, rec.Principal)
+		}
+		if got := rec.Attribution.Asserted.OnBehalfOf; got != "" {
+			t.Errorf("%s asserted OnBehalfOf = %q, want empty", rec.Kind, got)
+		}
+	}
+	signIn := records[2]
+	if signIn.Attribution.Verified.AccountID != "" {
+		t.Errorf("a failed sign-in filled the verified lane: %+v", signIn.Attribution.Verified)
+	}
+	if signIn.Attribution.Asserted.OnBehalfOf != "mike" {
+		t.Errorf("a failed sign-in asserted %q, want mike", signIn.Attribution.Asserted.OnBehalfOf)
 	}
 }
 

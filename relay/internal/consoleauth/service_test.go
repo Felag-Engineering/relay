@@ -1016,13 +1016,13 @@ func TestStepUp_ARefusedStepUpIsNotASignInFailure(t *testing.T) {
 	}
 }
 
-// TestStepUp_RefusedAndThrottledStepUpsNameNoAccount holds LoginEvent's
-// anti-enumeration rule (the verified lane is empty on every non-success
-// record, ALWAYS) across the step-up door too. A step-up runs against an
-// Account the Relay already knows, which makes filling the verified lane
-// tempting — but doing so would break the very rule the pooling cost in the
-// amendment's rationale depends on.
-func TestStepUp_RefusedAndThrottledStepUpsNameNoAccount(t *testing.T) {
+// TestStepUp_RefusedAndThrottledStepUpsNameTheSessionsAccount holds that a
+// refused or throttled step-up fills the verified lane with the session's own
+// Account, as a successful one does: step-up runs only inside an authenticated
+// session, so the Account is already proven and naming it reveals nothing the
+// session holder does not know. The no-enumeration rule is a sign-in rule
+// (TestLogin_EveryFailureIsIndistinguishable). No typed name is recorded.
+func TestStepUp_RefusedAndThrottledStepUpsNameTheSessionsAccount(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	ctx := context.Background()
@@ -1032,23 +1032,33 @@ func TestStepUp_RefusedAndThrottledStepUpsNameNoAccount(t *testing.T) {
 		t.Fatalf("Login: %v", err)
 	}
 
+	check := func(label string, e consoleauth.LoginEvent, kind string) {
+		t.Helper()
+		if e.Kind != kind {
+			t.Errorf("%s: kind = %q, want %q", label, e.Kind, kind)
+		}
+		if e.Account != "mike" || e.AccountID != f.mike.ID || e.Role != string(accounts.RoleAdmin) {
+			t.Errorf("%s did not name the session's Account: %+v", label, e)
+		}
+		if e.SubmittedName != "" {
+			t.Errorf("%s recorded a submitted name %q; a step-up submits none", label, e.SubmittedName)
+		}
+		if e.Method != consoleauth.MethodPassword || e.Source != "198.51.100.7" {
+			t.Errorf("%s method/source = %q/%q", label, e.Method, e.Source)
+		}
+	}
+
 	if _, err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
 		t.Fatalf("StepUp: %v", err)
 	}
-	refused := f.audit.last()
-	if refused.Account != "" || refused.AccountID != "" {
-		t.Errorf("a refused step-up named an Account: %+v", refused)
-	}
+	check("a refused step-up", f.audit.last(), audit.KindStepUpFailed)
 
 	// The immediate retry lands inside the delay the refusal above earned.
 	_, err = f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
 	if _, throttled := consoleauth.Throttled(err); !throttled {
 		t.Fatalf("StepUp inside the delay window = %v, want a ThrottledError", err)
 	}
-	throttledEvent := f.audit.last()
-	if throttledEvent.Account != "" || throttledEvent.AccountID != "" {
-		t.Errorf("a throttled step-up named an Account: %+v", throttledEvent)
-	}
+	check("a throttled step-up", f.audit.last(), audit.KindStepUpThrottled)
 }
 
 func TestLogout_EndsTheSessionAndRecordsIt(t *testing.T) {

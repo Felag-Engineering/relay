@@ -744,14 +744,16 @@ func (s *Sink) append(ctx context.Context, rec audit.Record) error {
 // # Which lane each field lands in
 //
 // A SUCCESSFUL sign-in has a verified identity, so it fills the verified lane
-// exactly as any other authenticated act does. A FAILED one has no verified
-// identity at all — that is what failing means — so the verified lane carries
-// only the source, and what the caller claimed goes in the ASSERTED lane, where
-// unauthenticated claims belong.
+// exactly as any other authenticated act does. A FAILED or throttled SIGN-IN
+// has no verified identity at all — that is what failing means — so the
+// verified lane carries only the source, and what the caller claimed goes in
+// the ASSERTED lane, where unauthenticated claims belong. A step-up of any
+// outcome runs inside an authenticated session and fills the verified lane
+// with that session's Account.
 //
 // The asserted lane carries what consoleauth hands it. On a failed or
 // throttled sign-in that is the matched Account's name or nothing (D19),
-// decided in consoleauth when the attempt is recorded. Nothing a failure
+// decided in consoleauth when the attempt is recorded. Nothing a failed sign-in
 // carries lands in the verified lane.
 func (s *Sink) RecordLogin(ctx context.Context, e consoleauth.LoginEvent) error {
 	rec := audit.Record{

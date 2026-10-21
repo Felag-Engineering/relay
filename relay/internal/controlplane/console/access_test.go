@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -123,11 +124,13 @@ func seedAccessTrail(t *testing.T, sink *auditsink.Sink, st *store.Store, actor 
 			Method: consoleauth.MethodPassword, Source: accessFixtureSource, Reason: "step-up re-authentication",
 		},
 		{
-			Kind: audit.KindStepUpFailed, SubmittedName: actor.Account, Method: consoleauth.MethodPassword,
+			Kind: audit.KindStepUpFailed, Account: actor.Account, AccountID: actor.AccountID, Role: actor.Role,
+			Method: consoleauth.MethodPassword,
 			Source: accessFixtureSource, Reason: "step-up re-authentication refused",
 		},
 		{
-			Kind: audit.KindStepUpThrottled, SubmittedName: actor.Account, Method: consoleauth.MethodPassword,
+			Kind: audit.KindStepUpThrottled, Account: actor.Account, AccountID: actor.AccountID, Role: actor.Role,
+			Method: consoleauth.MethodPassword,
 			Source: accessFixtureSource,
 			Reason: "step-up re-authentication refused before any credential was checked; " +
 				"next attempt accepted in 5s",
@@ -354,6 +357,17 @@ func TestAccess_AnAdminAnswersWhoSignedInFailedAndChangedAnAccount(t *testing.T)
 	}
 	if hostRows != 2 {
 		t.Errorf("%d host-lever account rows rendered, want the 2 password rows", hostRows)
+	}
+	for _, a := range accessArticlesOfKind(content, accessStepUp) {
+		if !strings.Contains(a, `data-trust="verified"`) {
+			t.Errorf("a step-up row does not carry a verified Actor chip:\n%s", a)
+		}
+		if !strings.Contains(a, "account="+url.QueryEscape(actor.AccountID)) {
+			t.Errorf("a step-up row does not link to the Actor filter for the session's Account:\n%s", a)
+		}
+		if strings.Contains(a, "no verified Account") {
+			t.Errorf("a step-up row says \"no verified Account\":\n%s", a)
+		}
 	}
 	for _, a := range accessArticlesOfKind(content, accessAPIToken) {
 		if !strings.Contains(a, `data-trust="verified"`) {
@@ -711,12 +725,48 @@ func TestAccess_AFailedSignInShowsTheNameOnlyWhenItIsARealAccounts(t *testing.T)
 			}
 		}
 	}
+}
 
-	// Step-up half: byte-identity is not possible there, because
-	// step_up_failed always carries SubmittedName = sess.Account
-	// (consoleauth/service.go), so there is no "unknown Account" counterpart
-	// to compare against. Drive a real step-up failure instead and check
-	// what the article contains.
+// TestAccess_AFailedOrThrottledStepUpDrawsTheSessionsVerifiedAccount drives a
+// REAL consoleauth.Service, sink and SQLite store through a failed and a
+// throttled step-up. A step-up runs inside an authenticated session, so its
+// record names the session's verified Account and carries no typed name;
+// there is no "unknown Account" counterpart to compare against.
+func TestAccess_AFailedOrThrottledStepUpDrawsTheSessionsVerifiedAccount(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	ctx := context.Background()
+	mike, err := st.Accounts().Create(ctx, accounts.Account{
+		Name: "mike", Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	hash, err := accounts.HashPassword(accounts.NewPassword("correct horse battery staple"))
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if err := st.Passwords().SetPassword(ctx, mike.ID, hash); err != nil {
+		t.Fatalf("set password: %v", err)
+	}
+
+	sink := auditsink.New(st.Audit(), auditsink.WithClock(func() time.Time { return testNow }))
+	// The testClock is never advanced, so the retry below lands inside the
+	// delay the failure earned.
+	clk := &testClock{t: testNow}
+	svc := consoleauth.NewService(st.Accounts(), st.Passwords(), consoleauth.NewStore(),
+		consoleauth.NewThrottle(consoleauth.WithThrottleClock(clk.now)), sink)
+
+	q := auditquery.New(st.AuditQueries(), st.JobQueries())
+	svcCap := newCapService(capSeams{reg: registry.NewInMemory(), audit: sink, auditQ: q, jobQ: q})
+	d := renderableDeps()
+	d.Queries = svcCap.ReadLane
+	d.Now = func() time.Time { return testNow }
+
 	id, _, err := svc.Login(ctx, consoleauth.Attempt{
 		Name: "mike", Password: accounts.NewPassword("correct horse battery staple"), Source: accessFixtureSource,
 	})
@@ -732,10 +782,19 @@ func TestAccess_AFailedSignInShowsTheNameOnlyWhenItIsARealAccounts(t *testing.T)
 	if !strings.Contains(failedStepUp, `<span class="evkind">`+audit.KindStepUpFailed+`<`) {
 		t.Errorf("the step-up failure article does not carry its evkind:\n%s", failedStepUp)
 	}
-	if !strings.Contains(failedStepUp, `data-trust="asserted" title="The caller claimed this. Nothing checked it.">mike<`) {
-		t.Errorf("the step-up failure article does not carry the asserted chip for the session's "+
-			"Account:\n%s", failedStepUp)
+	assertSessionsVerifiedChip := func(label, article string) {
+		t.Helper()
+		if !regexp.MustCompile(`data-trust="verified"[^>]*>mike<`).MatchString(article) {
+			t.Errorf("%s does not carry the verified chip for the session's Account:\n%s", label, article)
+		}
+		if !strings.Contains(article, `href="/console/access?account=`+url.QueryEscape(mike.ID)) {
+			t.Errorf("%s does not link to the Actor filter for the session's Account:\n%s", label, article)
+		}
+		if strings.Contains(article, `data-trust="asserted"`) || strings.Contains(article, "no verified Account") {
+			t.Errorf("%s draws the session's Account as unverified:\n%s", label, article)
+		}
 	}
+	assertSessionsVerifiedChip("the step-up failure article", failedStepUp)
 	if !strings.Contains(failedStepUp, `data-attempt="failed"`) {
 		t.Errorf("the step-up failure article is not marked data-attempt=\"failed\":\n%s", failedStepUp)
 	}
@@ -747,6 +806,19 @@ func TestAccess_AFailedSignInShowsTheNameOnlyWhenItIsARealAccounts(t *testing.T)
 		if strings.Contains(lower, word) {
 			t.Errorf("the step-up failure article contains the banned word %q:\n%s", word, failedStepUp)
 		}
+	}
+
+	// The correct password, immediately: refused as throttled before any
+	// credential is compared.
+	_, err = svc.StepUp(ctx, id, accounts.NewPassword("correct horse battery staple"), accessFixtureSource)
+	if _, ok := consoleauth.Throttled(err); !ok {
+		t.Fatalf("StepUp retried at once = %v, want a ThrottledError", err)
+	}
+	throttledBody := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/access?kind=step-up").Body.String())
+	throttledStepUp := accessArticleContaining(t, throttledBody, "was throttled re-authenticating for a step-up")
+	assertSessionsVerifiedChip("the step-up throttle article", throttledStepUp)
+	if !strings.Contains(throttledStepUp, `data-attempt="throttled"`) {
+		t.Errorf("the step-up throttle article is not marked data-attempt=\"throttled\":\n%s", throttledStepUp)
 	}
 }
 
