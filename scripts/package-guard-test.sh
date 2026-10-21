@@ -6,19 +6,20 @@
 # configuration files; the content guard accepts the real packages and refuses, each by the
 # check meant to catch it, a changed maintainer script, a setuid or non-root entry, an extra
 # payload file, a changed default Policy or LICENSE, an extra relationship and an added trigger
-# or scriptlet; and the build refuses a missing SOURCE_DATE_EPOCH, a malformed version
-# and an unknown architecture.
+# or scriptlet; the build refuses a missing SOURCE_DATE_EPOCH, a malformed version and an
+# unknown architecture; and the maintainer scripts, run under a fake root, write nothing through
+# a directory any account but root can write.
 #
 # Builds the pinned nfpm with `go tool` and packages a stand-in binary; touches nothing in this
-# working tree. Needs dpkg-deb, rpm, rpm2cpio and cpio: a missing one is a recorded skip under
-# `make verify` and a failure anywhere else, the convention for a missing tool.
+# working tree. Needs dpkg-deb, rpm, rpm2cpio, cpio and dash: a missing one is a recorded skip
+# under `make verify` and a failure anywhere else, the convention for a missing tool.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 build="$root/scripts/build-packages.sh"
 guard="$root/scripts/package-guard.sh"
 
-for t in dpkg-deb rpm rpm2cpio cpio go; do
+for t in dpkg-deb rpm rpm2cpio cpio dash go; do
   if ! command -v "$t" >/dev/null 2>&1; then
     if [ -n "${RELAY_VERIFY_SKIPS:-}" ]; then
       echo "verify: SKIPPING test-packages - $t not installed (CI runs it)"
@@ -245,6 +246,45 @@ refused_for "catalog rpm with an extra payload file is refused" "payload listing
   "$(echo "$work"/t-catextra/relay-read*.rpm)" relay-read
 
 
+# A fake root for the maintainer scripts, first on PATH when they run. `stat -c %u` reports uid
+# 0 for every path the runner owns, or the uid $owners assigns to the path's inode. `chown`
+# changes nothing: it logs, per file operand, the inode it would act on (the operand itself
+# under -h, its target otherwise) with its flag and owner, so a chown aimed at the wrong file
+# shows as the wrong inode. `systemctl` changes nothing and logs its arguments.
+fakebin="$work/fakebin" owners="$work/owners" chowns="$work/chowns" systemctls="$work/systemctls"
+mkdir -p "$fakebin"
+real_stat="$(command -v stat)"
+cat > "$fakebin/stat" <<EOF
+#!/bin/sh
+if [ "\$#" -eq 3 ] && [ "\$1" = -c ] && [ "\$2" = %u ]; then
+  ino="\$("$real_stat" -c %i -- "\$3")" || exit 1
+  uid="\$(awk -v i="\$ino" '\$1 == i { print \$2 }' "$owners")"
+  if [ -z "\$uid" ]; then
+    uid="\$("$real_stat" -c %u -- "\$3")" || exit 1
+    if [ "\$uid" = "$(id -u)" ]; then uid=0; fi
+  fi
+  echo "\$uid"
+  exit 0
+fi
+exec "$real_stat" "\$@"
+EOF
+cat > "$fakebin/chown" <<EOF
+#!/bin/sh
+follow=-L flag=follow spec=
+for a; do
+  case "\$a" in
+    -h) follow= flag=-h ;;
+    -*) ;;
+    *) if [ -z "\$spec" ]; then spec="\$a"
+       else echo "\$("$real_stat" \$follow -c %i -- "\$a") \$flag \$spec" >> "$chowns"; fi ;;
+  esac
+done
+EOF
+printf '#!/bin/sh\necho "$*" >> "%s"\n' "$systemctls" > "$fakebin/systemctl"
+chmod 0755 "$fakebin/stat" "$fakebin/chown" "$fakebin/systemctl"
+: > "$owners"
+in_fake_root() { PATH="$fakebin:$PATH" "$@"; }
+
 # postrm's purge and removal listing, run unprivileged on a copy whose fixed paths are moved
 # under a temporary root (and whose systemd probe is off). Only the four path constants and the
 # probe are rewritten; every line of logic runs as shipped.
@@ -269,7 +309,7 @@ pt="$work/postrm"
 if purge_fixture "$pt"; then
   mkdir -p "$pt/etc/relay-daemon/policy.d"
   echo p > "$pt/etc/relay-daemon/policy.toml"; echo e > "$pt/etc/relay-daemon/relay-daemon.env"
-  sh "$pt/postrm.sh" purge >/dev/null 2>&1
+  in_fake_root sh "$pt/postrm.sh" purge >/dev/null 2>&1
   check "purge deletes what the package created, state included" \
     test ! -e "$pt/etc/relay-daemon" -a ! -e "$pt/var/lib/relay-daemon" -a ! -e "$pt/var/lib/relay-daemon-package"
 else bad "postrm relocates for the test"; fi
@@ -278,7 +318,7 @@ else bad "postrm relocates for the test"; fi
 if purge_fixture "$pt"; then
   echo p > "$pt/operator/policy.toml"; echo e > "$pt/operator/relay-daemon.env"
   ln -s "$pt/operator" "$pt/etc-link"; mkdir -p "$pt/etc"; mv "$pt/etc-link" "$pt/etc/relay-daemon"
-  out="$(sh "$pt/postrm.sh" purge 2>&1)"
+  out="$(in_fake_root sh "$pt/postrm.sh" purge 2>&1)"
   check "purge through a symlinked /etc/relay-daemon deletes nothing there" \
     test -f "$pt/operator/policy.toml" -a -f "$pt/operator/relay-daemon.env"
   check "purge names a symlinked /etc/relay-daemon" lists "$pt/etc/relay-daemon is not a plain directory" "$out"
@@ -287,7 +327,7 @@ else bad "postrm relocates for the test"; fi
 # /etc/relay-daemon as a regular file: purge neither fails nor deletes it, and names it.
 if purge_fixture "$pt"; then
   mkdir -p "$pt/etc"; echo x > "$pt/etc/relay-daemon"
-  rc=0; out="$(sh "$pt/postrm.sh" purge 2>&1)" || rc=$?
+  rc=0; out="$(in_fake_root sh "$pt/postrm.sh" purge 2>&1)" || rc=$?
   check "purge over a non-directory /etc/relay-daemon succeeds and keeps it" test "$rc" -eq 0 -a -f "$pt/etc/relay-daemon"
   check "purge names a non-directory /etc/relay-daemon" lists "not a plain directory" "$out"
 else bad "postrm relocates for the test"; fi
@@ -296,12 +336,157 @@ else bad "postrm relocates for the test"; fi
 if purge_fixture "$pt"; then
   mkdir -p "$pt/etc/relay-daemon/policy.d" "$pt/etc/relay-daemon/templates.d"
   echo p > "$pt/etc/relay-daemon/policy.toml"
-  out="$(sh "$pt/postrm.sh" 0 2>&1)"
+  out="$(in_fake_root sh "$pt/postrm.sh" 0 2>&1)"
   check "rpm removal names the leftover templates.d" lists "$pt/etc/relay-daemon/templates.d\$" "$out"
   check "rpm removal names the state directory" lists "$pt/var/lib/relay-daemon\$" "$out"
   check "rpm removal deletes no configuration or state" \
     test -f "$pt/etc/relay-daemon/policy.toml" -a -f "$pt/var/lib/relay-daemon/node_id"
 else bad "postrm relocates for the test"; fi
+
+# A marker directory another account can write: purge believes no marker there, deletes
+# nothing, and leaves the directory.
+if purge_fixture "$pt"; then
+  mkdir -p "$pt/etc/relay-daemon"; echo p > "$pt/etc/relay-daemon/policy.toml"
+  chmod 0757 "$pt/var/lib/relay-daemon-package"
+  in_fake_root sh "$pt/postrm.sh" purge >/dev/null 2>&1
+  check "purge believes no marker in a world-writable marker directory" \
+    test -f "$pt/etc/relay-daemon/policy.toml" -a -f "$pt/var/lib/relay-daemon/node_id" \
+      -a -f "$pt/var/lib/relay-daemon-package/marker"
+else bad "postrm relocates for the test"; fi
+
+# The three copies of the directory check are one function: a weakened copy fails here even
+# where no case below exercises it.
+helper_body() { sed -n '/^root_only_dir() {$/,/^}$/p' "$root/daemon/packaging/scripts/$1.sh"; }
+check "preinst, postinst and postrm carry the same root_only_dir" \
+  test -n "$(helper_body postinst)" -a "$(helper_body preinst)" = "$(helper_body postinst)" \
+    -a "$(helper_body postrm)" = "$(helper_body postinst)"
+
+# preinst and postinst, relocated the same way and run by dash under the fake root, postinst
+# with systemd reported running so that its systemctl calls reach the fake.
+relocated_preinst() {
+  local t="$1" copy="$1/preinst.sh"
+  sed -e "s|^MARKER_DIR=/var/lib/relay-daemon-package\$|MARKER_DIR=$t/var/lib/relay-daemon-package|" \
+      "$root/daemon/packaging/scripts/preinst.sh" > "$copy"
+  [ "$(grep -c "$t" "$copy")" -eq 1 ]
+}
+relocated_postinst() {
+  local t="$1" copy="$1/postinst.sh"
+  sed -e "s|^MARKER_DIR=/var/lib/relay-daemon-package\$|MARKER_DIR=$t/var/lib/relay-daemon-package|" \
+      -e "s|^SHARE=/usr/share/relay-daemon\$|SHARE=$t/usr/share/relay-daemon|" \
+      -e "s|^ETC=/etc/relay-daemon\$|ETC=$t/etc/relay-daemon|" \
+      -e "s|^STATE=/var/lib/relay-daemon\$|STATE=$t/var/lib/relay-daemon|" \
+      -e 's|^systemd_running() { \[ -d /run/systemd/system \]; }$|systemd_running() { true; }|' \
+      "$root/daemon/packaging/scripts/postinst.sh" > "$copy"
+  [ "$(grep -c "$t" "$copy")" -eq 4 ] && grep -q '^systemd_running() { true; }$' "$copy"
+}
+# install_fixture T: a first install where nothing existed before, per a root-only marker.
+install_fixture() {
+  local t="$1"
+  rm -rf "$t"; mkdir -p "$t/var/lib/relay-daemon-package" "$t/usr/share/relay-daemon" "$t/etc" "$t/operator"
+  chmod 0700 "$t/var/lib/relay-daemon-package"
+  printf '# marker\n' > "$t/var/lib/relay-daemon-package/marker"
+  cp "$root/daemon/policy.default.toml" "$root/daemon/packaging/relay-daemon.env.example" "$t/usr/share/relay-daemon/"
+  : > "$owners"; : > "$chowns"; : > "$systemctls"
+  relocated_postinst "$t"
+}
+run_postinst() { in_fake_root dash "$1/postinst.sh" configure; }
+ino() { "$real_stat" -c %i -- "$1"; }
+mode_of() { "$real_stat" -c %a -- "$1"; }
+it="$work/postinst"
+
+# A first install places the Policy and the environment file, and every chown lands, without
+# following a link, on exactly the two inodes it placed.
+for pre in absent 0755; do
+  if install_fixture "$it"; then
+    if [ "$pre" = 0755 ]; then mkdir -m 0755 "$it/etc/relay-daemon"; fi
+    rc=0; run_postinst "$it" >/dev/null 2>&1 || rc=$?
+    e="$it/etc/relay-daemon"
+    check "postinst ($pre /etc/relay-daemon) succeeds" test "$rc" -eq 0
+    check "postinst ($pre /etc/relay-daemon) places the Policy 0644 and the env file 0600" \
+      test -f "$e/policy.toml" -a "$(mode_of "$e/policy.toml")" = 644 \
+        -a -f "$e/relay-daemon.env" -a "$(mode_of "$e/relay-daemon.env")" = 600 -a -d "$e/policy.d"
+    want="$(printf '%s -h root:root\n' "$(ino "$e/policy.toml")" "$(ino "$e/relay-daemon.env")" | sort)"
+    check "postinst ($pre /etc/relay-daemon) chowns exactly the placed inodes, with -h" \
+      test "$(sort "$chowns")" = "$want"
+    check "postinst ($pre /etc/relay-daemon) leaves no temporary file" \
+      test -z "$(find "$e" -name '.relay-daemon-pkg.*')"
+    check "postinst ($pre /etc/relay-daemon) enables the unit through presets" \
+      grep -qx 'preset relay-daemon.service' "$systemctls"
+  else bad "postinst relocates for the test"; fi
+done
+
+# unsafe_etc NAME: postinst wrote nothing under, or through, the prepared /etc/relay-daemon,
+# chowned nothing, left the unit disabled, said why, and still succeeded.
+unsafe_etc() {
+  local name="$1" rc=0 err
+  err="$(run_postinst "$it" 2>&1 >/dev/null)" || rc=$?
+  check "postinst with $name succeeds" test "$rc" -eq 0
+  check "postinst writes nothing through $name" \
+    test -z "$(ls -A "$it/operator")" -a -z "$(ls -A "$it/etc/relay-daemon/")"
+  check "postinst chowns nothing through $name" test ! -s "$chowns"
+  check "postinst leaves the unit disabled with $name" \
+    test "$(cat "$systemctls")" = daemon-reload
+  check "postinst names $name" lists "$it/etc/relay-daemon is a symlink, not a directory, not owned by root, or writable" "$err"
+}
+for m in 0775 0757 1777; do
+  if install_fixture "$it"; then
+    mkdir "$it/etc/relay-daemon"; chmod "$m" "$it/etc/relay-daemon"
+    unsafe_etc "a mode $m /etc/relay-daemon"
+  else bad "postinst relocates for the test"; fi
+done
+if install_fixture "$it"; then
+  mkdir -m 0755 "$it/etc/relay-daemon"
+  echo "$(ino "$it/etc/relay-daemon") 1000" > "$owners"
+  unsafe_etc "a non-root-owned /etc/relay-daemon"
+else bad "postinst relocates for the test"; fi
+if install_fixture "$it"; then
+  chmod 0755 "$it/operator"; ln -s "$it/operator" "$it/etc/relay-daemon"
+  unsafe_etc "a symlinked /etc/relay-daemon"
+else bad "postinst relocates for the test"; fi
+# A named ACL write grant raises the mask, which stat shows as the group bits. No setfacl is a
+# recorded skip under `make verify` and a failure anywhere else, the convention for a missing
+# tool.
+if ! command -v setfacl >/dev/null 2>&1; then
+  if [ -n "${RELAY_VERIFY_SKIPS:-}" ]; then
+    echo "verify: SKIPPING test-packages ACL case - setfacl not installed (CI runs it)"
+    echo "test-packages ACL case (setfacl not installed)" >> "$RELAY_VERIFY_SKIPS"
+  else bad "postinst ACL case needs setfacl"; fi
+elif install_fixture "$it" && mkdir -m 0755 "$it/etc/relay-daemon" \
+    && setfacl -m u:65534:rwx "$it/etc/relay-daemon"; then
+  unsafe_etc "an ACL write grant on /etc/relay-daemon"
+else bad "postinst ACL case: setfacl failed (no ACL support on the work directory?)"; fi
+
+# A marker directory another account can write: postinst neither believes nor appends to the
+# marker, so no Policy is placed, while the environment file still is.
+if install_fixture "$it"; then
+  chmod 0757 "$it/var/lib/relay-daemon-package"
+  run_postinst "$it" >/dev/null 2>&1
+  check "postinst with a world-writable marker directory places no Policy" test ! -e "$it/etc/relay-daemon/policy.toml"
+  check "postinst with a world-writable marker directory appends nothing to the marker" \
+    test "$(cat "$it/var/lib/relay-daemon-package/marker")" = "# marker"
+  check "postinst with a world-writable marker directory still places the env file" test -f "$it/etc/relay-daemon/relay-daemon.env"
+else bad "postinst relocates for the test"; fi
+
+# preinst refuses a marker directory another account can write, and writes nothing into it.
+for m in 0775 0757 1777 non-root; do
+  rm -rf "$it"; mkdir -p "$it/var/lib/relay-daemon-package"; : > "$owners"
+  if [ "$m" = non-root ]; then
+    chmod 0700 "$it/var/lib/relay-daemon-package"
+    echo "$(ino "$it/var/lib/relay-daemon-package") 1000" > "$owners"
+  else chmod "$m" "$it/var/lib/relay-daemon-package"; fi
+  if relocated_preinst "$it"; then
+    rc=0; in_fake_root dash "$it/preinst.sh" install >/dev/null 2>&1 || rc=$?
+    check "preinst refuses a $m marker directory and writes nothing into it" \
+      test "$rc" -eq 1 -a -z "$(ls -A "$it/var/lib/relay-daemon-package")"
+  else bad "preinst relocates for the test"; fi
+done
+rm -rf "$it"; mkdir -p "$it/var/lib"; : > "$owners"
+if relocated_preinst "$it"; then
+  rc=0; in_fake_root dash "$it/preinst.sh" install >/dev/null 2>&1 || rc=$?
+  check "preinst writes the marker 0600 into a marker directory it creates 0700" \
+    test "$rc" -eq 0 -a "$(mode_of "$it/var/lib/relay-daemon-package")" = 700 \
+      -a "$(mode_of "$it/var/lib/relay-daemon-package/marker")" = 600
+else bad "preinst relocates for the test"; fi
 
 # The build refuses what it cannot make reproducible or does not recognise.
 expect_refused "no SOURCE_DATE_EPOCH is refused" 2 env -u SOURCE_DATE_EPOCH bash "$build" "$version" x86_64 "$work/one/relay-daemon" "$work/x"
