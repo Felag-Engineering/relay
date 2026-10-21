@@ -150,6 +150,9 @@ func TestMuxRegistrationsAreTheKnownSites(t *testing.T) {
 		want := []string{
 			`server.go New: mux.HandleFunc("GET /api/v1/ping")`,
 			`server.go New: public.Handle("/")`,
+			// The fixed root redirect: it writes nothing and reads nothing from
+			// the request, and every method but GET and HEAD goes on to "/".
+			`server.go New: public.Handle("/{$}")`,
 			`server.go New: public.Handle(ProtectedResourceMetadataPath)`,
 		}
 		if !slices.Equal(got, want) {

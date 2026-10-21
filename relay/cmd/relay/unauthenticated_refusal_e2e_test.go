@@ -151,3 +151,40 @@ func TestE2E_UnauthenticatedRefusalShapeWithConsoleAndOAuth(t *testing.T) {
 		}
 	})
 }
+
+// With the Console mounted, a browser opened on the bare host is sent to it:
+// the real composition root sets the control plane's root redirect, and only
+// then. Without the Console, / stays a 401 like every other unauthenticated
+// path.
+func TestE2E_RootRedirectsToTheConsoleOnlyWhenItIsMounted(t *testing.T) {
+	get := func(t *testing.T, f *relayFixture) *http.Response {
+		t.Helper()
+		client := f.ClientFor("")
+		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		resp, err := client.Get(f.ControlBase + "/")
+		if err != nil {
+			t.Fatalf("GET /: %v", err)
+		}
+		t.Cleanup(func() { resp.Body.Close() })
+		return resp
+	}
+
+	t.Run("console mounted", func(t *testing.T) {
+		f := startRelay(t, WithControlPlane(), WithConfig(func(c *Config) { c.ConsoleEnabled = true }))
+		resp := get(t, f)
+		if resp.StatusCode != http.StatusFound {
+			t.Fatalf("GET / = %d, want %d", resp.StatusCode, http.StatusFound)
+		}
+		if loc := resp.Header.Get("Location"); loc != console.HomePath {
+			t.Errorf("Location = %q, want %q", loc, console.HomePath)
+		}
+	})
+
+	t.Run("console off", func(t *testing.T) {
+		f := startRelay(t, WithControlPlane())
+		resp := get(t, f)
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("GET / = %d (Location %q), want %d", resp.StatusCode, resp.Header.Get("Location"), http.StatusUnauthorized)
+		}
+	})
+}
