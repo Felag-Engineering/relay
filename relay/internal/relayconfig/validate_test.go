@@ -166,11 +166,33 @@ func TestValidate_OAuthWithoutIssuerRefused(t *testing.T) {
 }
 
 func TestValidate_OAuthIssuerNeedsAudienceAndPublicURL(t *testing.T) {
-	got := loadErr(t, minimal+controlOn+"[oauth]\nissuer = \"https://idp.example.com\"\n")
-	for _, want := range []string{"oauth.audience", "oauth.public_url"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("error does not name %s: %q", want, got)
-		}
+	const issuer = "[oauth]\nissuer = \"https://idp.example.com\"\n"
+	// Each missing key is refused on its own, and the error names only that key.
+	for _, tc := range []struct {
+		name, tail   string
+		wantNamed    []string
+		wantNotNamed []string
+	}{
+		{"no audience", "public_url = \"https://relay.example.internal:9443\"\n",
+			[]string{"oauth.audience: must be set when oauth.issuer is set"}, []string{"oauth.public_url"}},
+		{"no public URL", "audience = \"relay\"\n",
+			[]string{"oauth.public_url: must be set when oauth.issuer is set"}, []string{"oauth.audience"}},
+		{"neither", "",
+			[]string{"oauth.audience", "oauth.public_url"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := loadErr(t, minimal+controlOn+issuer+tc.tail)
+			for _, want := range tc.wantNamed {
+				if !strings.Contains(got, want) {
+					t.Errorf("error does not name %s: %q", want, got)
+				}
+			}
+			for _, not := range tc.wantNotNamed {
+				if strings.Contains(got, not) {
+					t.Errorf("error names %s, which is set: %q", not, got)
+				}
+			}
+		})
 	}
 	cfg := mustLoad(t, minimal+controlOn+"[oauth]\nissuer = \"https://idp.example.com\"\naudience = \"relay\"\npublic_url = \"https://relay.example.internal:9443\"\n")
 	if cfg.OAuth.Issuer == "" || cfg.OAuth.AccountClaim != "email" {

@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"path/filepath"
+	"slices"
+	"sort"
 	"testing"
 	"time"
 
@@ -14,6 +18,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/relay/relay/internal/registry"
+	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
 
@@ -99,6 +104,66 @@ func TestNewServer_Smoke(t *testing.T) {
 
 	// Not started, so Stop is a safe no-op cleanup.
 	t.Cleanup(srv.Stop)
+}
+
+// TestNewServer_MinimalConfigIsGRPCOnly is RC-4: a configuration file holding
+// only the settings with no default brings up the gRPC listener only, with no
+// control plane, no Console, no OAuth and no approval notification.
+//
+// The file goes through parseConfig, the path main takes after the host-file
+// check, and the Config it yields through newServer. The step from
+// deps.control == nil to "nothing else listens" rests on main.go's structure,
+// not on this test: main opens exactly two listeners, and the second is gated
+// on deps.control != nil. MCP, /api/v1, /metrics, the Console and OAuth are
+// mounted only on that control-plane server.
+func TestNewServer_MinimalConfigIsGRPCOnly(t *testing.T) {
+	src := fmt.Sprintf("[ca]\ndir = %q\n[store]\npath = %q\n[tls]\nhostname = \"localhost\"\n",
+		t.TempDir(), filepath.Join(t.TempDir(), "relay.db"))
+	sc, err := parseConfig([]byte(src), func(p string) ([]byte, error) {
+		t.Errorf("read secret file %s: a minimal configuration names none", p)
+		return nil, errors.New("unexpected")
+	})
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	cfg := sc.Config
+	if cfg.ControlEnabled || cfg.ConsoleEnabled || cfg.OAuthIssuer != "" ||
+		cfg.ApprovalWebhookURL.IsSet() || cfg.ApprovalGatePath != "" {
+		t.Fatalf("a minimal file enabled something: control=%v console=%v oauth issuer=%q webhook set=%v gate path=%q",
+			cfg.ControlEnabled, cfg.ConsoleEnabled, cfg.OAuthIssuer, cfg.ApprovalWebhookURL.IsSet(), cfg.ApprovalGatePath)
+	}
+
+	srv, deps, err := newServer(cfg, testStartupFiles(t, cfg))
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { deps.store.Close() })
+	t.Cleanup(srv.Stop)
+
+	if deps.control != nil {
+		t.Error("deps.control is set: the control-plane listener (MCP, Control API, Console, OAuth) would open")
+	}
+	if deps.execution != nil || deps.dispatch != nil || deps.tunnel.sink != nil {
+		t.Errorf("execution wiring is present without the control plane: execution=%v dispatch=%v sink=%v",
+			deps.execution != nil, deps.dispatch != nil, deps.tunnel.sink != nil)
+	}
+	if deps.live.notifier() != nil {
+		t.Error("an approval notifier is wired with no webhook configured")
+	}
+	if n := len(deps.gate.rules()); n != 0 {
+		t.Errorf("the approval gate holds %d rules, want none", n)
+	}
+
+	var got []string
+	for name := range srv.GetServiceInfo() {
+		got = append(got, name)
+	}
+	sort.Strings(got)
+	want := []string{relayv1.Enrollment_ServiceDesc.ServiceName, relayv1.Tunnel_ServiceDesc.ServiceName}
+	sort.Strings(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("gRPC services = %v, want exactly %v", got, want)
+	}
 }
 
 // TestNewServer_ControlEnabled_SeedsNoAccount verifies that enabling the

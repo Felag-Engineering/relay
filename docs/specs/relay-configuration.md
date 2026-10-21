@@ -147,8 +147,14 @@ settings screens call that seam, and no other adapter holds a writer.
 
 | Claim | Proven by | Seam |
 |---|---|---|
+| RC-4 | `TestNewServer_MinimalConfigIsGRPCOnly` | composition root |
 | RC-5 | `TestLoadFailsClosed`, `TestLoadRefusesSymlink`, `TestLoadRefusesDirectory` | approval |
+| RC-6 | `TestRelayUnit_UnprivilegedNoCapsReadOnly` | packaging (unit file, static parse) |
+| RC-7 | Partial. `scripts/release-workflow-guard.sh`, self-tested by the release-workflow cases of `scripts/release-image-guard-test.sh`, as a regression guard over the committed shapes of the release workflow's image, sign-push and latest jobs (push of the guarded archive by digest, keyless signing and verification at that digest, a version tag or `:latest` written only from the verified digest and only after the verify), not a proof against an edited workflow; `scripts/release-image-guard.sh` and its self-test for the unprivileged image uid; `scripts/compose-floor-check.sh` and `scripts/compose-floor-check-test.sh` for the deployment stack's read-only root filesystem, dropped capabilities and one durable volume. The clause that the deployment stack pins the image by digest has no proof | release workflow, image, deployment stack |
+| RC-8 | `TestLoadFailsClosed`, `TestDecide_Table` | approval, hostfile |
 | RC-9 | `TestSecretFilePermissionsAreEnforced` | approval notify |
+| RC-10 | `TestValidate_OAuthIssuerNeedsAudienceAndPublicURL` | relayconfig |
+| RC-11 | `TestNoRouteWritesConfiguration`, `TestNoToolWritesConfiguration`, `TestMuxRegistrationsAreTheKnownSites`, `TestDeps_HasNoConfigField` | Control API, MCP, composition root (structural) |
 | RC-12 | `TestMain_ConfigFlagHonoured`, `TestMain_OtherFlagsRefused`, `TestParseArgs` | composition root |
 | RC-13 | `TestMain_RetiredEnvNameRefusesNamingKey`, `TestMain_OtherFlagsRefused`, `TestFreezeReleaseReason_IsTheOnlyEnvironmentRead`, `TestRefuseRetiredEnv_NamesKeyNotValue`, `TestRetiredEnvMap_CoversEveryRetiredName` | composition root, relayconfig |
 | RC-14 | `TestSecret_InlineAndFileLoad`, `TestLoadConfig_FileSecretsResolved`, `TestStartupLog_CarriesNoWebhookURLOrSecret`, `TestMain_RetiredEnvNameRefusesNamingKey`, `TestMain_OtherFlagsRefused` | relayconfig, composition root |
@@ -160,8 +166,10 @@ settings screens call that seam, and no other adapter holds a writer.
 | RC-35 | `TestStart_RefusesMalformedGateFile`, `TestStartup_RefusedGateRefusesBeforeTheCA` | composition root, startup |
 | RC-36 | `TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress` | Control API mint |
 
-Claims with **no row**, and so nothing checking them: RC-4, RC-6, RC-7 (asserted by
-the release workflow and image guard, not a test), RC-8, RC-10, RC-11 (an absence).
+One clause with **no proof**, and so nothing checking it: RC-7's "the deployment stack pins it by
+digest". Every other Behaviour and Refusal claim has a row. RC-7's row is partial, and RC-11's
+structural checks do not see a mux handed to a registrar as a call expression, such as
+`x.Register(controlSrv.Mux())`, so a registrar in another package is not covered by them.
 
 ### Performance
 
