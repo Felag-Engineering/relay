@@ -128,3 +128,15 @@ stands: "only until first use" is a race, not a boundary.
 
 Specified as RC-28 in `docs/specs/relay-configuration.md`. The boundary around the `relay`
 binary is unchanged.
+
+## Note (2026-10-22): later Console passwords are set on a credentialed surface (ADR-0045)
+
+Owner decision, 2026-10-22 (#1107). The Admin Console issues a temporary password to a human
+Account an `admin` creates there, and a signed-in human changes their own password there
+([ADR-0045](0045-console-passwords-temporary-at-creation-and-self-service-change.md)). This
+note records that neither act touches this ADR's line. The founding admin's password is still
+set only by `init`, because it is the first credential and nothing else exists to root it in;
+every later password is set over a credentialed surface, behind an authenticated session and
+step-up, which is where *Decision* puts everything that is not the first credential. The
+`relay` binary gains no verb, and `init --recover` still re-mints an API Token and never
+touches a password.
