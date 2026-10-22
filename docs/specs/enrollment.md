@@ -231,12 +231,14 @@ amendment of 2026-10-22.
 | Claim | Statement | Milestone |
 |---|---|---|
 | EN-30 | One join string carries everything first contact needs: the Relay address, the fingerprint of the Relay's CA and the Enrollment Token (ADR-0031). It is read by `relay-daemon join` from a prompt or standard input and consumed by the enrollment `join` performs in that same process (`daemon-installation.md`); it is persisted nowhere on a Node, and the unit start reads no join string. The daemon takes no CA bundle path and no bare token by any other setting; a Relay address set in its environment overrides only the address, and the pin still applies to whatever it dials. Replaces EN-6 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
-| EN-31 | A token has a positive TTL of at most one year. A mint request names a positive `max_uses` or asks explicitly for unlimited use; one that does neither is refused. A surface that offers a mint form defaults to one use and a TTL measured in hours (ADR-0030); the Control API takes explicit values and has no default. Replaces EN-2 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
+| EN-31 | A token has a positive TTL of at most one year. A mint request names a positive `max_uses` or asks explicitly for unlimited use; one that does neither is refused. A surface that offers a mint form asks how many Nodes the token is for, sets the use limit to that number and the TTL to two hours by default, so a used-up or expired token needs no revoke (ADR-0048); the Control API takes explicit values and has no default. Replaces EN-2 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
 | EN-32 | The daemon persists the key, certificate, CA bundle, Relay address and identity that an enrollment returns, and the unit start never enrolls: with a persisted identity it connects, and without one it exits as EN-33 says. Replaces EN-14 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
 | EN-33 | A unit start with no persisted identity exits cleanly with nothing written; the daemon never opens a plaintext Node-plane connection. A failed enrollment in `relay-daemon join` persists no partial identity and exits non-zero. Replaces EN-28 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
-| EN-34 | A mint may ask for the token's join string rendered as an **Enrollment Bundle** in one or more named formats, returned in the same minting response and never re-rendered (ADR-0032). A bundle pins the daemon artifact as `daemon-installation.md` says. | v0.7.0 — Admin Console: Administration & Execution |
 | EN-35 | A mint refuses a scope key that any Relay action owns, Enrollment's own included: every key in the closed `relay:` set's table in `selectors-and-labels.md`, and any key the Relay derives. The refusal names the key and the action that owns it. Extends EN-24 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
-| EN-36 | The Console mints an Enrollment Token and renders its Enrollment Bundle in one act, through the same capability action and `admin` floor as the Control API, offering one use and a TTL measured in hours as its defaults (ADR-0032; #434). | v0.7.0 — Admin Console: Administration & Execution |
+| EN-36 | The Console mints an Enrollment Token through the same capability action and `admin` floor as the Control API, asking how many Nodes it is for (EN-31), and shows the join string once, inside the command that joins a Node (EN-39) (ADR-0048; #434). | v0.7.0 — Admin Console: Administration & Execution |
+| EN-37 | A token's scope is zero or more well-formed `relay:` Labels: a mint may name none. Replaces EN-3 when promoted (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
+| EN-38 | Every enrollment stamps `relay:node-id` with the Node's Relay-assigned ID on the Node it records. Only the enrollment action writes it, a scope may not name it (EN-35), and the Node cannot change it (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
+| EN-39 | Wherever a person is shown a freshly minted join string, on the Console's mint and in `relay init`'s output, it is shown once, inside the one command that joins a Node: the string piped into `sudo relay-daemon join` (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
 
 ## Out of scope
 
@@ -303,11 +305,8 @@ Wanted, deliberately not in a milestone here, and in no committed order.
   Enrollment Token with a TTL measured in hours, and `relay-configuration.md` assigns the claim
   here. Which artifacts a rerun may reuse versus mint anew, and the secret-output contract, are
   undecided, and the claim waits on them. Forced by the first-admin flow needing a first token.
-- **Whether `relay:enrollment-token` and `relay:node-id` become Labels.** `selectors-and-labels.md`
-  lists them in its closed `relay:` set and `quarantine-node.md` targets them, but enrollment
-  records provenance as a registry column and writes neither today. Forced by the first
-  quarantine issue, or by the enrollment-approval ADR.
 
 ## Retired
 
-None.
+- **EN-34** — `2026-10-22` — retired unbuilt: Relay renders no Enrollment Bundle; the join
+  command is shown instead (EN-39) and the release ships static install files (ADR-0048).

@@ -71,16 +71,16 @@ un-revoke itself.
 
   | Key | Written by | Value |
   |---|---|---|
-  | `relay:enrollment-token` | Enrollment (proposed; not written today, provenance is a registry column, and whether it becomes a Label is an open question in `enrollment.md`) | The ID of the Enrollment Token the Node joined through |
-  | `relay:node-id` | Enrollment (proposed, as above) | The Relay-assigned Node ID, bound to the Node's certificate |
+  | `relay:enrollment-token` | Not stamped (ADR-0048): revoking the token cuts its Nodes off together; quarantining those Nodes together waits in the roadmap | The ID of the Enrollment Token the Node joined through |
+  | `relay:node-id` | Enrollment, on every Node (designed: `enrollment.md` EN-38, ADR-0048) | The Relay-assigned Node ID, bound to the Node's certificate |
   | `relay:quarantine` | Engaging a quarantine, by a `relay:` or `tag:` Selector resolved once to concrete Nodes; cleared only by lifting it (`quarantine-node.md`) | `on` while quarantined |
 
-- `relay:node-id` is proposed as the way to address one specific Node without trusting it, a
-  valid security-lane target; a value set would address a handful.
-- `relay:enrollment-token` is proposed to keep a leaked token's Nodes targetable by the security
+- `relay:node-id` is how the security lane addresses one specific Node without trusting it; every
+  enrollment is to stamp it (ADR-0048). A value set would address a handful.
+- `relay:enrollment-token` is not stamped (ADR-0048); the proposal was to keep a leaked token's Nodes targetable by the security
   lane; today the same containment is the revocation cascade over recorded provenance
   (`enrollment.md`).
-- An Enrollment Token carries a scope of `relay:` labels, chosen by the `admin` who mints it and
+- An Enrollment Token carries a scope of `relay:` labels, optional by ADR-0048, chosen by the `admin` who mints it and
   stamped on each Node that enrolls with it (ADR-0006, `enrollment.md` EN-3, EN-12). The
   2026-09-14 draft that carried `tag:` labels on a token in place of that scope was retired
   unbuilt on 2026-10-21; whether a token may also carry `tag:` labels once `tag:` has storage is
@@ -224,9 +224,9 @@ disclosed residual (threat-model register R13) with operator-facing remediation.
   Selector itself.
 - **ADR-0006, amended 2026-10-22.** Enrollment stamps the token's scope as `relay:` labels; the
   scope is the enrollment action's key set, defined at mint, and a mint refuses a key an action
-  in the table owns. The `relay:enrollment-token` and `relay:node-id` keys are not written today:
-  provenance is a registry column, and whether those keys become labels is an open question in
-  `enrollment.md`.
+  in the table owns. Neither `relay:enrollment-token` nor `relay:node-id` is written today;
+  ADR-0048 decides that every enrollment stamps `relay:node-id` and that `relay:enrollment-token`
+  is not stamped.
 - **ADR-0020 — amended 2026-09-16.** Its direct post-enrollment `relay:` label management (`admin` +
   step-up) is superseded: `relay:` labels are written only by defined actions. Its `tag:` design
   stands, extended to MCP.

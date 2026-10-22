@@ -1,6 +1,7 @@
 # `relay init` and the boundary of the `relay` binary
 
-**Status:** Accepted; amended by ADR-0033 and twice on 2026-10-16 (`init` adopts the running Relay's CA and store; the first admin is named at `init` and no Account name is reserved).
+**Status:** Accepted; amended by ADR-0033 and twice on 2026-10-16 (`init` adopts the running Relay's CA and store; the first admin is named at `init` and no Account name is reserved). Its rendered enrollment playbook is superseded by ADR-0048:
+`init` shows the join command instead.
 
 Standing up a Relay and joining five Nodes took roughly fifty discrete acts, and the
 Relay-side share was choreography rather than decisions: edit the env file, start the service,
