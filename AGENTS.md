@@ -233,8 +233,8 @@ flag it.
 /docs/design/        console/ is the Console's live per-screen specification, cited from source;
                      the rest is pre-ADR design for work not yet decided.
 /docs/operations/    operator-facing runbooks: install, enrollment, upgrades, recovery, demo fleet.
-/docs/proposals/     ideas with a lifecycle: the problem, the objections and their answers, the
-                     outcome. Never binding; the reasoning an ADR links instead of restating.
+/docs/proposals/     decision records: the problem, the objections and their answers, the outcome.
+                     Never binding; the reasoning an ADR links. Undecided ideas are private.
 /docs/security/      threat model — maps all fourteen invariants to the boundaries they defend,
                      and the one register of accepted residual risk.
 /docs/specs/         capability specifications — what each capability does today, every surface.
@@ -374,11 +374,11 @@ documents still outside it, and the PR that touches one brings it into shape.
 **Promote before the issue closes.** A closed issue is not a record. Before the PR merges, lift
 everything that outlives the change: behaviour now true of the system → the **capability
 specification**; a decision meeting all three tests above → an **ADR**, cited by number rather
-than re-argued; the reasoning, objections and alternatives behind it → the **proposal** in
-`docs/proposals/`; a shift in domain language → **GLOSSARY.md**; a change to what must always
+than re-argued; the reasoning, objections and alternatives behind it → the decided
+**proposal** in `docs/proposals/`; a shift in domain language → **GLOSSARY.md**; a change to what must always
 be true → **an invariant above**, which is a conversation with a human and an ADR amendment,
-never a quiet edit. Work agreed in principle but not decided is a proposal or an issue
-labelled `idea`; an open question is an issue labelled `decision`. This is the most common
+never a quiet edit. Work agreed in principle but not decided is a proposal in the private
+roadmap (`roadmap: relay/<slug>`) or an issue labelled `idea`; an open question is an issue labelled `decision`. This is the most common
 way a repo loses its own reasoning.
 
 **8. Update GLOSSARY.md** in the same change whenever the domain language shifts.

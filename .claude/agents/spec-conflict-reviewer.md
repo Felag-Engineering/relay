@@ -53,7 +53,8 @@ agrees with itself and with the rest of the documentation.
    glossary or another spec, where a link would do. Quote the passage and name its home. Two
    copies that agree today are still a finding; they will not agree later.
 
-When the coordinator hands you a **proposal** (`docs/proposals/`) instead of a spec, run
+When the coordinator hands you a **proposal** (a file in the private roadmap, or a decision
+record in `docs/proposals/`) instead of a spec, run
 checks 1, 2, 5 and 7 against its *Proposal* and *Changes* sections, and check that *Changes*
 names every spec and ADR the text actually touches. A proposal binds nothing, so nothing in
 it is BLOCKING; report everything as REVISE.

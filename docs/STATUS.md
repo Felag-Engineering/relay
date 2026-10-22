@@ -22,7 +22,7 @@ Legend:
 - **designed** — the spec describes it on this surface (Behaviour, Surfaces, or a "Designed, not
   built" row) and the surface code does not register it.
 - **deferred** — the spec places it under Future work or the first-pass exclusions, a
-  proposal in [docs/proposals/](proposals/) holds it, or an ADR shelved it.
+  proposal in the private roadmap holds it, or an ADR shelved it.
 - **n/a** — the spec says this surface deliberately does not expose the capability: an absence
   that is the design (invariants 2 and 14, or an adapter offering less under invariant 10).
 

@@ -204,12 +204,14 @@ assert_rc "ratchet-stale-path" 1; assert_contains "ratchet-stale-path" "which do
 # ---- proposals ---------------------------------------------------------------------------------
 reset_fixture
 write_proposal "$FIX/docs/proposals/p.md" '**Status:** idea (`2026-10-22`). Origin: #1.'; run_check
-assert_rc "proposal-idea-passes" 0
+assert_rc "proposal-undecided-is-private" 1; assert_contains "proposal-undecided-is-private" "belongs in the private roadmap"
+write_proposal "$FIX/docs/proposals/p.md" '**Status:** shaping (`2026-10-22`). Origin: #1.'; run_check
+assert_rc "proposal-shaping-is-private" 1
 
 write_proposal "$FIX/docs/proposals/p.md" '**Status:** draft (`2026-10-22`).'; run_check
 assert_rc "proposal-bad-status" 1; assert_contains "proposal-bad-status" "line 3 must be"
 
-write_proposal "$FIX/docs/proposals/p.md" '**Status:** idea (`2026-10-22`).' Objections; run_check
+write_proposal "$FIX/docs/proposals/p.md" '**Status:** accepted (`2026-10-22`).' Objections "Became ADR-0001."; run_check
 assert_rc "proposal-missing-section" 1; assert_contains "proposal-missing-section" "missing section '## Objections'"
 
 write_proposal "$FIX/docs/proposals/p.md" '**Status:** accepted (`2026-10-22`).'; run_check

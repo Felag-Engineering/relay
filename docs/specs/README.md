@@ -52,7 +52,7 @@ A spec is written for two readers at once (ADR-0046). Its *Purpose* is plain pro
 it refuses to be. Everything below binds the loop. The shape is `TEMPLATE.md`, exactly:
 Purpose, Surfaces, Behaviour, Refusals, Designed when any, Out of scope, a Proof block that
 `make spec-proof` generates from the tests, and a Retired list. Nothing else: residual risk
-lives in the threat model's register, future work in `docs/proposals/` or an issue labelled
+lives in the threat model's register, future work in the private roadmap or an issue labelled
 `idea`, an open question in an issue labelled `decision`, and the governing ADRs on one
 `**Governed by:**` line. A spec stays under 250 lines outside its Proof block. A spec still in
 the earlier shape is listed in `docs/agents/docs-ratchet.txt`; the PR that next touches it
@@ -119,7 +119,7 @@ is why `selectors-and-labels.md` exists.
 | How do we work, and what must always be true? | `AGENTS.md` |
 | What do we call things? | `GLOSSARY.md` |
 | Why is the system shaped this way? | `docs/adr/`, one page each |
-| What was argued, and what was decided against? | `docs/proposals/` |
+| What was argued, and what was decided against? | `docs/proposals/`, for decided proposals |
 | What risk was accepted, by whom? | the register in `docs/security/threat-model.md` |
 | What does capability X do today? | here |
 | What are we building, in what order, and when is it done? | GitHub milestones and issues |
@@ -155,7 +155,7 @@ not a record. Before the PR merges, lift everything in it that outlives the chan
 - A decision that is hard to reverse **and** surprising without context **and** the result of a
   real trade-off → an **ADR**, cited by number rather than re-argued here; the argument itself
   → the **proposal** the ADR links.
-- Work agreed in principle but not decided → a **proposal** in `docs/proposals/`, or an issue
+- Work agreed in principle but not decided → a **proposal** in the private roadmap, or an issue
   labelled `idea`; an open question → an issue labelled `decision`.
 - A shift in domain language → **`GLOSSARY.md`**, in the same change.
 - A change to an architecture invariant → **`AGENTS.md`** plus an amendment recorded in its

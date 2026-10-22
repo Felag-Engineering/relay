@@ -225,8 +225,7 @@ outside Felag Engineering are not accepted (see [CONTRIBUTING.md](CONTRIBUTING.m
 
 **GitHub milestones are the authority on what is in progress**, and GitHub releases on what has
 shipped. [docs/STATUS.md](docs/STATUS.md) says what `main` does today, capability by
-capability; [docs/proposals/](docs/proposals/) holds work agreed in principle but not yet
-decided, and the reasoning behind what was. [docs/how-relay-works.md](docs/how-relay-works.md)
+capability; [docs/proposals/](docs/proposals/) holds the reasoning behind decisions already made. [docs/how-relay-works.md](docs/how-relay-works.md)
 is the whole system in plain words.
 
 Gleipnir is a separate first-party AI-agent system that drives Relay as an ordinary consumer of

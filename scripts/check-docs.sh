@@ -18,10 +18,12 @@
 #      be listed in docs/agents/docs-ratchet.txt with `shape`. Every ADR opens with
 #      `## Decision` of at most 120 words, runs at most 150 lines and carries at most one
 #      `## Amendment`; each rule is waived per file by `decision`, `budget` or `amendments` in
-#      the ratchet. A superseded ADR (Status `Superseded …`) is history and exempt. Every path the ratchet lists exists.
-#   5. Proposals (docs/proposals/) have the shape docs/proposals/TEMPLATE.md describes: a Status
-#      of idea/shaping/accepted/rejected on line 3, the four sections, Outcome once decided,
-#      at most 120 lines. No spec claim and no Go or Rust comment cites a proposal.
+#      the ratchet. A superseded ADR (Status `Superseded …`) is history and exempt. Every path the
+#      ratchet lists exists.
+#   5. Proposals (docs/proposals/) are decision records with the shape docs/proposals/TEMPLATE.md
+#      describes: a Status of accepted or rejected on line 3 (undecided ideas are private, in
+#      the roadmap repository; ADR-0046 amended 2026-10-22), the five sections, at most 120
+#      lines. No spec claim and no Go or Rust comment cites a proposal.
 #
 # Legacy specs (Status aspirational/stub) get checks 1 and 2 only — they are unmigrated intent,
 # see "The establishing phase" in docs/specs/README.md. SPEC_DIR, ADR_DIR, PROPOSAL_DIR and
@@ -243,6 +245,10 @@ for p in "$PROPOSAL_DIR"/*.md; do
   for sec in Problem Proposal Changes Objections; do
     grep -qxF "## $sec" "$p" || err "$pn: missing section '## $sec'"
   done
+  case "$st" in
+    idea|shaping)
+      err "$pn: status is $st; an undecided proposal belongs in the private roadmap, not the public repository (ADR-0046)" ;;
+  esac
   case "$st" in
     accepted|rejected)
       grep -qxF "## Outcome" "$p" || err "$pn: status is $st and there is no '## Outcome'"

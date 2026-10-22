@@ -1,6 +1,6 @@
 ---
 name: proposal-grill
-description: "Adversarial reader for a proposal under docs/proposals/. Attacks the idea against the invariants, the ADRs, the out-of-realm list, the other specs and the threat model, and asks what an attacker gains. Produces numbered objections and nothing else. Reads only docs; never relay/, daemon/ or proto/."
+description: "Adversarial reader for a proposal in the private roadmap. Attacks the idea against the invariants, the ADRs, the out-of-realm list, the other specs and the threat model, and asks what an attacker gains. Produces numbered objections and nothing else. Reads only docs; never relay/, daemon/ or proto/."
 tools: Read, Grep, Glob, Bash
 model: opus
 ---
@@ -24,8 +24,8 @@ thing is built is `/spec-drift`'s question, not yours.
 5. The specs the proposal's *Changes* section names, their Behaviour, Refusals and Out of
    scope sections, and any other spec that shares a term with the proposal.
 6. `docs/security/threat-model.md`: the adversary catalogue and the residual-risk register.
-7. The other proposals in `docs/proposals/`, so a rejected idea is not re-argued and an
-   overlapping one is named.
+7. The other proposals in the roadmap's project folder, and the decision records in
+   `docs/proposals/`, so a rejected idea is not re-argued and an overlapping one is named.
 
 ## Attack, in this order
 

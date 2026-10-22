@@ -1,7 +1,8 @@
 # Two-layer documents: a plain top, a bound body, and proposals for the reasoning
 
-**Status:** Accepted (owner decision 2026-10-22). Governs how every ADR, capability
-specification and proposal is written from this date. Amends no earlier ADR.
+**Status:** Accepted (owner decision 2026-10-22); amended the same day (undecided proposals are
+private). Governs how every ADR, capability specification and proposal is written from this
+date. Amends no earlier ADR.
 
 ## Decision
 
@@ -79,3 +80,14 @@ amendment chains and five-way duplication as churn, not care.
   the IDs are the machine interface the loop, the issues and the tests are built on.
 - **A big-bang rewrite of every document.** Rejected for the ratchet: it would land one
   unreviewable PR, and the rules would regrow the corpus in two months without the lint.
+
+## Amendment (2026-10-22): undecided proposals are private
+
+Owner decision. Relay's repository is public and its proposals had become a readable roadmap,
+including research into competitors. Ideas not yet decided, and the research behind them, now
+live in Felag Engineering's private roadmap repository, one folder per product. The public
+`docs/proposals/` keeps decision records only, status `accepted` or `rejected`, so the reasoning
+behind a shipped decision stays where an auditor can read it. A public document refers to a
+private proposal as plain text, `roadmap: <project>/<slug>`, never as a link. `/propose` grills
+an idea in the roadmap; the decided proposal is copied here in the same PR as its ADR. The lint
+refuses a public proposal whose status is `idea` or `shaping`.

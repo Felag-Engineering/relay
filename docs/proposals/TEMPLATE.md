@@ -1,9 +1,9 @@
 # <Title: the idea in a few words>
 
-**Status:** idea (`<YYYY-MM-DD>`). Origin: #NNN.
+**Status:** accepted (`<YYYY-MM-DD>`). Origin: <issue, discussion or decision it came from>.
 
-The third line is the status: `idea`, `shaping`, `accepted` or `rejected`, with the date it
-last changed and the issue or discussion the idea came from. At most 120 lines in total.
+The third line is the status: `accepted` or `rejected`, with the date it was decided. Ideas not
+yet decided live in the private roadmap, not here (`README.md`). At most 120 lines in total.
 
 ## Problem
 
