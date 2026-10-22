@@ -1,6 +1,7 @@
 # Control API: a REST control-plane surface with a unified Account model
 
-**Status:** Accepted; amended by ADR-0033 and ADR-0043.
+**Status:** Accepted; amended by ADR-0033 and ADR-0043. Its 2026-09-15 amendment's store-backed,
+Console-edited gate rules are superseded by ADR-0047: gate rules stay in the configuration file.
 
 The Relay exposes **three user-facing surfaces**, all thin adapters over the single
 control-plane capability layer (ADR-0009): the **MCP surface** (ADR-0003 — the AI-agent's

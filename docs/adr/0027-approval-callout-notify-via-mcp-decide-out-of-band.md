@@ -54,19 +54,12 @@ says who asked, for whom, who approved, and over which channel.
    still traverses Selector, Policy and blast cap unchanged. Rules match on risk class, blast
    size, Selector namespace, principal and Operation, and require a window; ADR-0047 superseded
    their count, audience, requester exclusion and channel.
-   - **Where rules live.** Rules are runtime objects in the store, written only by a human
-     `admin` in the Console with step-up, audited with old and new values, and in effect from
-     the next dispatch. No MCP tool or Control API route writes them, and none may be added:
-     an AI-agent must never be able to edit the gate that gates it (invariant 11, ADR-0010).
-     The store is the only source; no rule file is read.
-   - **The seeded default.** A Relay whose store holds no rules at first start seeds, once, as
-     an audited system act: `read` ungated, `mutate` and Raw Exec at in-band self-confirmation,
-     with second-person and out-of-band available to raise any rule to. It never re-seeds, even
-     after an `admin` deletes every rule (R15).
+   - *Superseded by ADR-0047:* rules are a section of the Relay configuration file, and the
+     package ships one that gates `mutate` and Raw Exec. No MCP tool or Control API route
+     writes them: an AI-agent must never be able to edit the gate that gates it (invariant 11,
+     ADR-0010).
    - **The webhook's URL, secret and timeout stay security floor**: repointing them hides
      every request from the humans who should answer.
-   - **Overlapping rules** take the strictest requirement, but their audiences union and a rule
-     naming no audience leaves it unrestricted: accepted as R18 (`docs/security/threat-model.md`).
 7. *Superseded by ADR-0047: one decision ends a request.* **Quorum.** A requirement is checked
    against a set of decisions, so N-of-M needs no migration; rules expose `count: 1 | 2`,
    partial state is visible, and each decision is its own audit record.

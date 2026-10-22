@@ -5,19 +5,21 @@
 Reasoning and objections: `docs/proposals/approval-answered-in-the-requesting-client.md`.
 Behaviour: `docs/specs/approval.md`. This ADR supersedes ADR-0027 decisions 4 (in part), 7 and
 12, the second-person rung of decision 5, and decision 6's count, audience, requester exclusion,
-channel and audience union; ADR-0029 decisions 1, 4 and 5; ADR-0040 where it keeps the channel
+channel, audience union, store-backed rules and seeded default; ADR-0010's 2026-09-15 amendment
+where it makes gate rules a store-backed, Console-edited setting; ADR-0028 in full; ADR-0029 decisions 1, 4 and 5; ADR-0040 where it keeps the channel
 mechanism and second-person rules; ADR-0044 decisions 2 and 3 where they keep approval grants,
 quorum and channel strength; and ADR-0026 decision 7's second-person option.
 
 ## Decision
 
-This ADR cuts Relay's approval mechanism to one answer per request. A gate rule says only which
-dispatches wait for a human and how long a parked request lives. One answer releases or denies
-it. Over MCP that answer comes only through elicitation: Relay writes the question, the
-requesting client puts it to a person, and the answer returns with the retried call. The
-`approve_request` tool, which let the AI-agent send a decision itself, is retired. Relay does
-not decide who is asked; the client routes the question. Multi-person approval, approver lists,
-channel requirements and standing approval windows are cut until each is designed.
+Relay's approval is cut to one answer per request. A gate rule says only which dispatches wait
+for a human and how long a parked request lives. One answer releases or denies it. Over MCP that
+answer comes only through elicitation: Relay writes the question, the requesting client puts it
+to a person, and the answer returns with the retried call. The `approve_request` tool, which let
+the AI-agent send a decision itself, is retired. Relay does not decide who is asked; the client
+routes the question. Multi-person approval, approver lists, channel requirements and standing
+approval windows are cut until each is designed. Gate rules are a section of the Relay's
+configuration file, and the package ships one that gates mutations.
 
 ## The decisions
 
@@ -44,6 +46,14 @@ channel requirements and standing approval windows are cut until each is designe
 6. **No approval grants.** Every gated dispatch parks and is answered on its own. An approval
    window needs someone other than its requester to open it, which is multi-person approval, so
    approval grants wait with it.
+7. **Gate rules are a section of the Relay configuration file**, read at startup and on every
+   successful reload, so whoever administers the Relay's host sets them and nothing on the wire
+   can (invariant 11 allows a runtime object; the file is the simpler and stricter choice). The
+   package ships a section that gates `mutate` and Raw Exec, so a fresh install is gated.
+   Editing rules in the Console, and seeding a store, wait in a proposal.
+8. **No MCP task handle, and no shape key.** ADR-0028's shim existed to give a parked request a
+   handle; elicitation answers parks, and a client that cannot be asked gets `pending_approval`.
+   The shape key existed for a diff shown to approvers, which is a proposal.
 
 ADR-0027's other decisions stand.
 
@@ -61,9 +71,12 @@ narrowed here by removing the tool.
 ## What changes
 
 - **Cut from code:** the `approve_request` tool; a rule's count, audience, requester exclusion
-  and channel; channel-strength checks; approval grants and their API.
+  and channel; channel-strength checks; approval grants and their API; the MCP Tasks shim; the
+  shape key. The separate gate-rule file becomes a section of `relay.toml`.
 - **Proposals:** `n-party-approval.md` (more than one approver, a Relay-held audience, approval
-  grants, a Slack approval) and `out-of-band-approval.md` (a channel Relay verifies).
+  grants, a Slack approval); `out-of-band-approval.md` (a channel Relay verifies);
+  `gate-rules-in-the-console.md`; `mcp-tasks-for-long-running-jobs.md`;
+  `approval-for-more-clients-and-always-on-agents.md`; `approval-diff-against-last-similar.md`.
 - **Threat model:** R18 and R25 close with the code; R21 and R27 lose `approve_request`.
 - **The approval spec** is rewritten in the two-layer shape (ADR-0046) in the same change as
   the code cut, so it never describes a system that does not exist.
