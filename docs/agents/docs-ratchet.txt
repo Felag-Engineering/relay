@@ -49,7 +49,6 @@ docs/adr/0041-gleipnir-rooted-identity-grants-and-a-verified-approver.md decisio
 docs/adr/0042-template-dispatch-resolves-its-risk-class-over-the-reporting-nodes.md budget decision
 docs/adr/0043-one-relay-configuration-file.md decision
 docs/adr/0045-console-passwords-temporary-at-creation-and-self-service-change.md budget decision
-docs/specs/approval.md shape
 docs/specs/daemon-installation.md shape
 docs/specs/enrollment.md shape
 docs/specs/policy-catalog.md shape
