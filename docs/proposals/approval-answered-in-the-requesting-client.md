@@ -12,6 +12,9 @@ approver name it typed, gated only by the harness's tool-confirmation prompt.
 
 ## Proposal
 
+**Narrowed 2026-10-22:** ADR-0047 retires `approve_request` now; making elicitation the only
+path, and shelving out-of-band, wait for the identity work (objections 10 and 11).
+
 An approval is answered by a human, in the requesting client, through MCP elicitation: Relay
 writes the question, the harness routes it to a person and never to the model, and the answer
 returns on the retried call. That is the product's approval path, permanently. The
@@ -63,18 +66,23 @@ Grill, 2026-10-22 (`proposal-grill`); open until the owner answers.
    an answer on a human's OAuth session names a verified approver. — open.
 7. **Machine self-confirmation.** The seeded default works for Gleipnir only through ADR-0029's
    relaxation, an in-band answer with an asserted approver counted as self-confirmation. Keep
-   it for elicitation, or drop it and send every seeded mutation to rung 3? — open.
+   it for elicitation, or drop it and send every seeded mutation to rung 3? — Keep it. Later,
+   Relay should state who may approve and deny an answer when neither the guiding human nor
+   the Gleipnir agent is on that list. Owner ruling 2026-10-22.
 8. **Second-person, `count: 2` and grants cannot be answered over MCP.** The requester and the
    second person arrive as one Account, and a grant has no tool call to elicit on. All of them
-   land on the Control API, which then carries far more than recovery. — open.
+   land on the Control API, which then carries far more than recovery. — Two-person approval
+   is not supported yet and moves to `two-person-approval.md`. Owner ruling 2026-10-22.
 9. **Flipping AP-14's default to `in-band`** silently weakens rules operators already wrote,
    with no human act or audit; the flip is not needed, since out-of-band is met on the Control
    API. — open; recommendation: drop it.
 10. **Prior rejections.** ADR-0044 rejected MCP as the only path until R27 is closed and a
     verified approver exists over MCP; ADR-0040 calls itself interim pending the permissions
-    rework (ADR-0041). Declaring the posture permanent re-argues both. — open.
+    rework (ADR-0041). Declaring the posture permanent re-argues both. — Agreed: deferred to
+    the identity work. Owner ruling 2026-10-22.
 11. **Scope.** This is three decisions: retire the tool, make ADR-0040 permanent, shelve
-    out-of-band. The smaller alternative is the first alone, by an ADR-0029 amendment. — open.
+    out-of-band. The smaller alternative is the first alone. — Agreed: ADR-0047 retires the
+    tool now; the rest waits. Owner ruling 2026-10-22.
 12. **Unnamed consumers:** ADR-0026, 0028, 0044; R25, R26, R27; `GLOSSARY.md`, `plan.md`,
     `how-relay-works.md`, `approval-assurance.md`, `approval-gates.md`, the test fleet's gate
     rules, `STATUS.md`.
