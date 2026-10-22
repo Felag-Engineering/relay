@@ -36,7 +36,6 @@ docs/adr/0023-retire-the-shared-control-plane-credential.md decision
 docs/adr/0024-oauth-resource-server-delegated-idp.md decision
 docs/adr/0025-read-access-is-audited-read-output-is-not-retained.md decision
 docs/adr/0026-admin-console-execution-surface.md budget amendments decision
-docs/adr/0027-approval-callout-notify-via-mcp-decide-out-of-band.md budget amendments decision
 docs/adr/0028-mcp-tasks-extension-transport-layer-shim.md budget amendments decision
 docs/adr/0029-in-band-approval-through-the-tool-surface.md budget amendments decision
 docs/adr/0030-relay-init-and-the-boundary-of-the-relay-binary.md amendments decision

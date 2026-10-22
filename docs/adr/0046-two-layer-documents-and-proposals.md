@@ -47,9 +47,13 @@ amendment chains and five-way duplication as churn, not care.
   consumers stands: the invariants are a public interface and the threat model maps them.
   Nothing else is mirrored.
 - **Amend once, then rewrite.** A second change to an ADR rewrites it as one text that says
-  what is true now, keeping its number and title and noting the rewrite date in its Status
-  line. A rewrite is a PR a human merges, the same sign-off the original had. A changed
-  decision is never slipped into a rewrite: it is the one amendment, or a superseding ADR.
+  what is true now, keeping its number and title. A rewrite is a PR a human merges, the same
+  sign-off the original had. A changed decision is never slipped into a rewrite: it is the one
+  amendment, or a superseding ADR.
+- **Status is status, not provenance.** A Status line says Accepted, Proposed, Deferred or
+  Superseded, and nothing about which ADRs amended it. Who amends whom lives in the generated
+  index, computed from each amending ADR's own "amends ADR-NNNN"; an ADR that cites another
+  where it constrains a decision says so in the body. Git keeps the history.
 - **Proof is generated.** A test cites the claim it proves in its leading comment. The spec's
   Proof block is produced by `scripts/spec-proof.sh`, `make docs-check` fails on drift, and
   the block lists the claims nothing proves, so nobody maintains that list by hand.
