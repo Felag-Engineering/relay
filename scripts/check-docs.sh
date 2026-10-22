@@ -205,9 +205,10 @@ for spec in "$SPEC_DIR"/*.md; do
     grep -qx "$id" <<<"$live_ids" && err "$name: $id is listed under ## Retired but still defined"
   done
 
-  # 3g. Every `<name>.md` mentioned resolves to a spec or a known root doc
+  # 3g. Every `<name>.md` mentioned resolves to a spec, a known root doc or a proposal
   for ref in $(grep -oE '`[a-z0-9-]+\.md`' "$spec" | tr -d '`' | sort -u); do
-    [ -f "$SPEC_DIR/$ref" ] || [ -f "$ref" ] || [ -f "docs/$ref" ] || err "$name: mentions $ref, which does not exist"
+    [ -f "$SPEC_DIR/$ref" ] || [ -f "$ref" ] || [ -f "docs/$ref" ] || [ -f "$PROPOSAL_DIR/$ref" ] \
+      || err "$name: mentions $ref, which does not exist"
   done
 done
 
