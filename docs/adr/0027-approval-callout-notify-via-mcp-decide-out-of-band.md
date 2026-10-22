@@ -1,7 +1,6 @@
 # Approval callout: notify via MCP, decide out-of-band
 
-**Status:** Accepted; amended by ADR-0010, ADR-0029, ADR-0038, ADR-0040 and ADR-0044; rewritten
-2026-10-22 (ADR-0046).
+**Status:** Accepted.
 
 Behaviour: `docs/specs/approval.md`; shelved properties: `approval-assurance.md`. Decisions keep
 their numbers, which code cites; the eleven dated amendments are in git, mapped at the end.
