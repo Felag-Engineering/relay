@@ -149,7 +149,7 @@ impl From<RiskClassDef> for RiskClass {
 /// positional parameters whatever the type.
 ///
 /// No daemon-owned type admits a value that begins with `-` (ADR-0021 decision
-/// 3), so a slot value can never be read as an option. A new variant must keep
+/// 8), so a slot value can never be read as an option. A new variant must keep
 /// that property or say why not.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case", tag = "type", content = "values")]
@@ -2275,7 +2275,7 @@ mod proptests {
             prop_assert_eq!(accepted, expected);
         }
 
-        // ADR-0021 decision 3: no daemon-owned slot type admits a value that
+        // ADR-0021 decision 8: no daemon-owned slot type admits a value that
         // begins with '-', so a slot value is never read as an option.
         #[test]
         fn no_daemon_owned_slot_type_admits_a_leading_dash(

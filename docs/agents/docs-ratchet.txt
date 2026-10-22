@@ -30,7 +30,6 @@ docs/adr/0017-node-origin-label-trust.md decision
 docs/adr/0018-canonical-path-matching-for-file-read.md decision
 docs/adr/0019-canonical-argv-matching-for-raw-exec-deny.md budget decision
 docs/adr/0020-tag-labels-operator-grouping-namespace.md amendments decision
-docs/adr/0021-local-template-tier-shipped-read-catalog-native-freeze.md budget amendments decision
 docs/adr/0022-shipped-default-read-policy.md budget amendments decision
 docs/adr/0023-retire-the-shared-control-plane-credential.md decision
 docs/adr/0024-oauth-resource-server-delegated-idp.md decision
