@@ -133,7 +133,7 @@ the conformant form (ADR-0029).
 - **The Plan a decision releases:** `plan.md`. A Plan's gated steps park through this gate.
 - **Who is asked:** the requesting client's routing. Gleipnir routes by its own audiences and
   channels.
-- **Future work** waits in the private roadmap, under `roadmap: relay/`: more than one approver,
+- **Future work** waits in the private roadmap, in its Relay folder: more than one approver,
   a Relay-held audience and approval grants; a channel Relay verifies; editing rules in the
   Console; a diff against the last similar approval, with the shape key; asking more clients and
   always-on agents; MCP Tasks for long-running Jobs.
