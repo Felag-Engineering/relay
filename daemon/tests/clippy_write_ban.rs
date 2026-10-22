@@ -2274,7 +2274,7 @@ fn pinned_unsafe() -> BTreeMap<&'static str, usize> {
         // Test `mkfifo`.
         ("crates/relay-ops/src/templates.rs", 1),
         // Test `mkfifo`.
-        ("crates/relay-policy/src/lib.rs", 1),
+        ("crates/relay-policy/src/loader_hardening_tests.rs", 1),
         // Test `mkfifo`.
         ("crates/relay-policy/src/hardened_open.rs", 1),
     ])
