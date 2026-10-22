@@ -2,8 +2,7 @@
 
 **Status:** current as of `2026-10-22`.
 **Claim prefix:** `AP`
-**Governed by:** ADR-0047, ADR-0027, ADR-0029, ADR-0044, ADR-0038, ADR-0043; invariants 5, 10, 11,
-13.
+**Governed by:** ADR-0047, ADR-0027, ADR-0029, ADR-0038, ADR-0043; invariants 5, 10, 11, 13.
 
 ## Purpose
 
