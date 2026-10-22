@@ -1,9 +1,10 @@
 # The surface that created a request is the surface that answers it
 
-**Status:** Accepted (2026-09-24); amended 2026-09-25 — **strict separation withdrawn before any
-of it was built**; amended by ADR-0044 (2026-10-18) — **the Console no longer decides approvals**.
-**Explicitly interim** — see *What is interim, and what reopens it*. Where it keeps the channel
-mechanism and second-person rules, it is superseded by ADR-0047.
+**Status:** Superseded by ADR-0047 (2026-10-22).
+
+What still held, that MCP is the approval path and the Control API decides any parked request
+without being featured, is ADR-0047 decisions 3 and 5; the restart risk it recorded is
+threat-model R27. Kept as history.
 
 > **Read the amendment of 2026-09-25 first.** The title and the decision below describe strict
 > separation, which the owner withdrew one day later. What stands is narrower: MCP is the

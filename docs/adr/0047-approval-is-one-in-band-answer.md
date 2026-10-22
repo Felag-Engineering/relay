@@ -6,9 +6,8 @@ Reasoning and objections: `docs/proposals/approval-answered-in-the-requesting-cl
 Behaviour: `docs/specs/approval.md`. This ADR supersedes ADR-0027 decisions 4 (in part), 7 and
 12, the second-person rung of decision 5, and decision 6's count, audience, requester exclusion,
 channel, audience union, store-backed rules and seeded default; ADR-0010's 2026-09-15 amendment
-where it makes gate rules a store-backed, Console-edited setting; ADR-0028 in full; ADR-0029 decisions 1, 4 and 5; ADR-0040 where it keeps the channel
-mechanism and second-person rules; ADR-0044 decisions 2 and 3 where they keep approval grants,
-quorum and channel strength; and ADR-0026 decision 7's second-person option.
+where it makes gate rules a store-backed, Console-edited setting; ADR-0028, ADR-0040 and ADR-0044 in full, keeping what still holds of the last two as decisions
+5 and 9; ADR-0029 decisions 1, 4 and 5; and ADR-0026 decision 7's second-person option.
 
 ## Decision
 
@@ -42,7 +41,8 @@ configuration file, and the package ships one that gates mutations.
 5. **The Control API decision endpoint is the rescue.** It decides any parked request on a
    verified Account, for a client that cannot be asked or a question a restart stranded. It is
    specified, and kept out of the getting-started material. Every decision records the surface
-   it came from; no rule demands one surface over another.
+   it came from; no rule demands one surface over another. It stays until a question a restart
+   stranded can be answered another way, because it is what makes that risk tolerable (R27).
 6. **No approval grants.** Every gated dispatch parks and is answered on its own. An approval
    window needs someone other than its requester to open it, which is multi-person approval, so
    approval grants wait with it.
@@ -54,6 +54,10 @@ configuration file, and the package ships one that gates mutations.
 8. **No MCP task handle, and no shape key.** ADR-0028's shim existed to give a parked request a
    handle; elicitation answers parks, and a client that cannot be asked gets `pending_approval`.
    The shape key existed for a diff shown to approvers, which is a proposal.
+9. **The Console decides no approval.** It has no queue, request screen or decide action, and
+   renders only what an approval left on another record, such as a Job's approver. A dispatch
+   from the Console's execution surface is confirmed by its own step-up apply (ADR-0026), which
+   is that dispatch's self-confirmation; nothing asks a second time.
 
 ADR-0027's other decisions stand.
 

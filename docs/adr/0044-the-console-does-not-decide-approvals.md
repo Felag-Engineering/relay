@@ -1,8 +1,10 @@
 # The Console does not decide approvals; the Control API is the out-of-band path
 
-**Status:** Accepted (owner decision 2026-10-18). Amends ADR-0040, ADR-0027, ADR-0026, ADR-0029
-and ADR-0038. Decisions 2 and 3, where they keep approval grants, quorum and channel strength,
-are superseded by ADR-0047.
+**Status:** Superseded by ADR-0047 (2026-10-22).
+
+What still holds, that the Console decides no approval and a Console dispatch is confirmed by
+its step-up apply, is ADR-0047 decision 9; the Control API endpoint is ADR-0047 decision 5. Kept
+as history.
 
 Approval had three places a decision could be made. **In-band**, through the requesting MCP
 client — `approve_request`, or an answer to an MRTR elicitation question — which ADR-0040 made
