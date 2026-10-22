@@ -27,9 +27,8 @@
 // construction rather than by discipline. A restart, or a retry landing on a
 // replica with a different key, invalidates every outstanding state; Open
 // refuses it with ErrTampered, fail-closed. That cost is accepted, not
-// solved, here: docs/specs/approval-assurance.md "Restarts strand an
-// in-flight approval" and threat-model R27 record it, with two candidate
-// fixes and neither chosen.
+// solved, here: threat-model R27 records it, with two candidate fixes and
+// neither chosen.
 //
 // # Replay is by design
 //

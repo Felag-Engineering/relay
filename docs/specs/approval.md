@@ -102,7 +102,7 @@ The three rungs are ADR-0027 decision 5's, named as `GLOSSARY.md` defines them: 
 machinery below (AP-12, AP-13, AP-14 and the weak-channel refusal AP-47) is present, correct and
 **unexercised**: an operator who writes a rule reaches all of it; nothing Relay ships does. That
 is an interim decision about the shipped configuration (ADR-0040), not about the code; what it
-gives up is `approval-assurance.md`.
+gives up waits in the private roadmap (`roadmap: relay/out-of-band-approval`).
 
 - **AP-9** A gate rule selects one of three rungs: **no gate** — below thresholds, runs
   immediately; **self-confirmation** — the request is confirmed by the requester's side; and
@@ -357,7 +357,7 @@ deliberately small and conspicuous.
 AP-30 and AP-31 are today's truth, not the intent: ADR-0027's amendment of `2026-09-24` makes
 them AP-56 and AP-57, which retire them. **AP-32 has no Designed counterpart.** The third bound —
 grant issuance only by second-person, out-of-band approval — was AP-58 until ADR-0040 shelved it
-in `approval-assurance.md`; AP-32 is expected to stay true for the interim.
+in the private roadmap; AP-32 is expected to stay true for the interim.
 
 **A Scope is not a Match.** A gate rule's `Match` says *when approval is required*; a grant's
 Scope says *what standing authorization covers*. Reusing one for the other inverts the mechanism.
@@ -443,7 +443,7 @@ nothing is asserted, even when the client sent a responder assertion.
   the permissions rework (#716). Its strict separation by origin was withdrawn unbuilt, and its
   three claims are retired. What the relied-on path gives up — a Relay-verified approver for
   agent-originated work — is in *Accepted residual risk* and threat model R21 and R26; what is
-  shelved is `approval-assurance.md`.
+  shelved waits in the private roadmap.
 - **ADR-0027, as amended 2026-08-14 through 2026-09-24.** The callout, the ladder, channel
   strength, plan-hash binding, expiry, quorum, the attribution triple and approval grants are its
   decisions. Amendments the code does not yet carry are Designed claims here: store-backed gate
@@ -622,7 +622,8 @@ lookup.
 - **The Freeze** — a global stop, not a per-request judgement (`freeze.md`).
 - **Loading and validating the gate file at startup** — `relay-configuration.md`.
 - **Querying the approval audit trail after the fact** — `audit-and-read-lane.md`.
-- **The assurance properties shelved on `2026-09-24`** — `approval-assurance.md`, a `stub`:
+- **The assurance properties shelved on `2026-09-24`** — the private roadmap
+  (`roadmap: relay/out-of-band-approval`):
   out-of-band as a rule *requirement*, an approver Relay verifies rather than one a client
   asserts, the grant-issuance floor that AP-58 was, and second-person rules whose second
   person Relay authenticated. None of it is a claim or has a milestone, and none may be cited
@@ -665,7 +666,7 @@ lookup.
   on a human Account's OAuth session a verified approver over MCP (`2026-09-28`, `2026-09-29`),
   but OAuth has never run live against a real identity provider (#351), so that path is
   unexercised in the shipped posture; on every other session this entry stands. Threat model
-  **R21** and **R26**; what is shelved is `approval-assurance.md`.
+  **R21** and **R26**; what is shelved waits in the private roadmap.
 - **An in-band approval is only as honest as the client's path to the human.** Behind a firewall,
   in-band is expected to be the everyday path, so for `in-band` rules the guarantee that a human
   decided rests on the client — Gleipnir's HIL router, or an operator's harness — keeping
@@ -780,7 +781,7 @@ the Control API decision endpoint too while threat model R27 is open.
 
 ## Retired
 
-- **AP-58** — `2026-09-24` — moved to the `approval-assurance.md` stub when ADR-0040 shelved
+- **AP-58** — `2026-09-24` — moved out of this spec when ADR-0040 shelved
   second-person grant issuance.
 - **AP-74**, **AP-75**, **AP-76** — `2026-09-25` — retired unbuilt when ADR-0040's strict
   separation by origin was withdrawn (ADR-0040 amendment).
