@@ -64,19 +64,27 @@ un-revoke itself.
 
 - **No user ever writes a `relay:` label directly.** Each `relay:` key is defined together with
   the action that sets and clears it; roles, step-up and audit apply to that action.
-- The set of `relay:` keys is **closed, and grows only when an action is built.** Defined today:
+- The set of `relay:` keys is **closed, and grows only when an action is built.** Two kinds of
+  key are in it: keys an action defines, in the table, and the keys of an Enrollment Token's
+  scope, which the minting `admin` defines for the enrollment action (ADR-0006, amended
+  2026-10-22) and which may never name a key from the table. Defined by an action:
 
   | Key | Written by | Value |
   |---|---|---|
-  | `relay:enrollment-token` | Enrollment | The ID of the Enrollment Token the Node joined through |
-  | `relay:node-id` | Enrollment | The Relay-assigned Node ID, bound to the Node's certificate |
+  | `relay:enrollment-token` | Enrollment (proposed; not written today, provenance is a registry column, and whether it becomes a Label is an open question in `enrollment.md`) | The ID of the Enrollment Token the Node joined through |
+  | `relay:node-id` | Enrollment (proposed, as above) | The Relay-assigned Node ID, bound to the Node's certificate |
   | `relay:quarantine` | Engaging a quarantine, by a `relay:` or `tag:` Selector resolved once to concrete Nodes; cleared only by lifting it (`quarantine-node.md`) | `on` while quarantined |
 
-- `relay:node-id` is the way to address one specific Node without trusting it, and is a valid
-  security-lane target; a value set addresses a handful.
-- `relay:enrollment-token` keeps a leaked token's Nodes targetable by the security lane.
-- An Enrollment Token may carry `tag:` labels, applied to each Node that enrolls with it. Token
-  scope as a list of operator-chosen `relay:` labels is retired.
+- `relay:node-id` is proposed as the way to address one specific Node without trusting it, a
+  valid security-lane target; a value set would address a handful.
+- `relay:enrollment-token` is proposed to keep a leaked token's Nodes targetable by the security
+  lane; today the same containment is the revocation cascade over recorded provenance
+  (`enrollment.md`).
+- An Enrollment Token carries a scope of `relay:` labels, chosen by the `admin` who mints it and
+  stamped on each Node that enrolls with it (ADR-0006, `enrollment.md` EN-3, EN-12). The
+  2026-09-14 draft that carried `tag:` labels on a token in place of that scope was retired
+  unbuilt on 2026-10-21; whether a token may also carry `tag:` labels once `tag:` has storage is
+  an open question in `enrollment.md`.
 
 ### `node:` — declared and built-in
 
@@ -214,9 +222,11 @@ disclosed residual (threat-model register R13) with operator-facing remediation.
 - **Invariant 5** (ADR-0004) — the cap is checked against the *resolved* count.
 - **Invariant 10** — one parser and one resolver in the capability layer; no surface evaluates a
   Selector itself.
-- **ADR-0006 — needs amending.** Enrollment no longer stamps operator-chosen token scope as
-  `relay:` labels; it writes `relay:enrollment-token` and `relay:node-id`, and a token carries
-  `tag:` labels instead.
+- **ADR-0006, amended 2026-10-22.** Enrollment stamps the token's scope as `relay:` labels; the
+  scope is the enrollment action's key set, defined at mint, and a mint refuses a key an action
+  in the table owns. The `relay:enrollment-token` and `relay:node-id` keys are not written today:
+  provenance is a registry column, and whether those keys become labels is an open question in
+  `enrollment.md`.
 - **ADR-0020 — amended 2026-09-16.** Its direct post-enrollment `relay:` label management (`admin` +
   step-up) is superseded: `relay:` labels are written only by defined actions. Its `tag:` design
   stands, extended to MCP.
@@ -254,8 +264,8 @@ not at a surface.
 Claims above with **no row**, and so nothing checking them:
 
 - **Everything decided on `2026-09-13`** has no test yet: `relay:` labels written only by their
-  defining action, the `relay:enrollment-token` and `relay:node-id` stamps, tags carried on a
-  token, declared versus built-in `node:` labels and reserved keys, the declared-labels file's
+  defining action, declared versus built-in `node:` labels and reserved keys, the
+  declared-labels file's
   all-or-nothing load and `labels-invalid`, `tag:` writes on every surface and bulk tagging
   audited as one action, the per-Node limits, the new `state:` markers, value sets, value globs,
   negation and the negated-`relay:` refusal, and the empty-Selector refusal on dispatch.
@@ -282,9 +292,9 @@ path of every dispatch, including a read at the 10,000-Node cap; nothing measure
 
 - **The blast-radius cap itself** — `execution.md`. This spec produces the count; that one
   enforces the limit.
-- **Enrollment mechanics** — `enrollment.md`, which must follow this spec: tokens carry `tag:`
-  labels, enrollment writes `relay:enrollment-token` and `relay:node-id`, and token scope as
-  `relay:` labels is retired.
+- **Enrollment mechanics** — `enrollment.md`: a token's `relay:` scope, what enrollment stamps,
+  and provenance. This spec defines the namespaces and their writers; that one defines the
+  enrollment action.
 - **What quarantine does, and who may quarantine** — `quarantine-node.md`. This spec defines only
   that the action writes `relay:quarantine`.
 - **The incident ladder** (quarantine, revoke, Freeze) — `quarantine-node.md`, `freeze.md` and

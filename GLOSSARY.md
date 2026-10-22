@@ -254,10 +254,12 @@ The one pasteable artifact that enrolls a Node: `glp_join_` followed by the unpa
 of the versioned `JoinString` message in `/proto`, which carries the Relay address Nodes dial,
 the **CA fingerprint** the daemon pins, and an **Enrollment Token** (ADR-0031, decision 3,
 amended 2026-10-16). It replaces supplying a CA bundle path and a token separately, and carries
-the `glp_` prefix so a leak is greppable. Minting an Enrollment Token returns one, and the
-daemon enrolls by it (`RELAY_JOIN`), pinning the CA fingerprint before it sends the token.
-A join string contains a live Enrollment Token and is handled as a secret: on a Node it lives
-only in the daemon's root-owned environment file, and is inert once the Node holds an identity.
+the `glp_` prefix so a leak is greppable. Minting an Enrollment Token returns one, and a Node
+enrolls by it, pinning the CA fingerprint before it sends the token. A join string contains a
+live Enrollment Token and is handled as a secret. Where it reaches a Node it is consumed by
+`relay-daemon join`, which enrolls in the process that read it, and is persisted nowhere
+(ADR-0031 and ADR-0033, amended 2026-10-21); until that lands the daemon reads it from
+`RELAY_JOIN` in its root-owned environment file, inert once the Node holds an identity.
 _Avoid_: join token, enrollment string, bootstrap string
 
 **CA fingerprint**:

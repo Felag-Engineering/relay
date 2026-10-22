@@ -1,6 +1,6 @@
 # One server certificate, multi-SAN, and the fingerprint-pinned join string
 
-**Status:** Accepted; amended 2026-10-16 (the wire form is a `/proto` message; `RELAY_JOIN` lives in the daemon's environment file).
+**Status:** Accepted; amended 2026-10-16 (the wire form is a `/proto` message; `RELAY_JOIN` lives in the daemon's environment file); amended 2026-10-21 (a join string is consumed, never persisted on a Node; a mint names its use limit).
 
 Three facts about the Relay's TLS surface, each defensible alone, together made enrollment
 harder than it needed to be:
@@ -187,6 +187,36 @@ residual is R16, widened by R36, and this amendment changes neither. Delivering 
 through systemd `LoadCredential=` or a fetch from the customer's secret store stays the named
 fix in that spec's Future work; choosing it later changes the mechanism, not this decision.
 Owner decision of 2026-10-16.
+
+## Amendment (2026-10-21): a join string is consumed, never persisted on a Node
+
+Owner decision, 2026-10-21, while migrating `docs/specs/enrollment.md` (EN-30, EN-31) and
+amending `docs/specs/daemon-installation.md` (DI-42, DI-43). The 2026-10-16 amendment above
+places `RELAY_JOIN` in the daemon's environment file, read by the daemon at start. That
+placement is withdrawn.
+
+**Decided.** Where a join string reaches a Node, it is consumed by the act that enrolls and is
+written nowhere: `relay-daemon join` reads it from a prompt or standard input, enrolls in that
+same process, persists only the identity and the Relay address, and starts the unit. The daemon
+reads no join string at start, and `RELAY_JOIN` ceases to be a setting. A Node therefore holds
+an Enrollment Token for the seconds an enrollment takes and at no other time, in memory only.
+
+**Why.** The environment file left the token readable by the daemon's own `file.read` through
+`/proc/<pid>/environ` and its per-pid and `thread-self` aliases under the shipped default
+Policy (ADR-0022's recorded residuals), and in every backup or image of the Node taken after
+first start (threat model R16, R36). A Policy deny cannot close that without naming paths no
+operator should have to know, and a daemon-side floor that beats Policy was rejected by
+ADR-0021. Removing the secret closes it; denying the path only bounds it.
+
+**Also decided.** A mint names a positive `max_uses` or asks explicitly for unlimited use, and
+is refused if it does neither; a surface that offers a mint form defaults to one use and a TTL
+measured in hours (ADR-0030), while the Control API takes explicit values. This narrows
+ADR-0006's "reusable" token to reusable-by-choice. A leaked token then enrolls one Node for
+hours, not a fleet for a year.
+
+The join string's wire form and the fingerprint pin are unchanged. `docs/specs/enrollment.md`
+and `docs/specs/daemon-installation.md` carry the claims; the threat model's R16 and R36 close
+when they are promoted.
 
 ## Amendment (2026-10-21): the daemon's address variables are renamed
 
