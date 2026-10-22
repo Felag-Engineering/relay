@@ -31,7 +31,9 @@ func TestNav_ChildScreenMarksItsParentCurrent(t *testing.T) {
 		"/console/jobs/job-1":                                "Activity",
 		"/console/jobs/job-1/cancel":                         "Activity",
 		"/console/accounts":                                  "Accounts",
-		"/console/accounts/create":                           "Accounts",
+		"/console/new-account":                               "Accounts",
+		"/console/new-account/create":                        "Accounts",
+		"/console/accounts/gleipnir-prod":                    "Accounts",
 		"/console/accounts/acct-mike/disable":                "Accounts",
 		"/console/accounts/acct-mike/lower":                  "Accounts",
 		"/console/accounts/acct-mike/tokens/tok-live/revoke": "Accounts",
@@ -41,12 +43,13 @@ func TestNav_ChildScreenMarksItsParentCurrent(t *testing.T) {
 
 		// Nothing current: the empty path (the 404 shell), unknown paths, a
 		// near-miss of a root, and a Link, which is exact and never a prefix.
-		"":                   "",
-		"/console/nonesuch":  "",
-		"/console/accountsx": "",
-		"/console/compare-x": "",
-		"/console/jobsx/1":   "",
-		"/console/run/x":     "",
+		"":                      "",
+		"/console/nonesuch":     "",
+		"/console/accountsx":    "",
+		"/console/new-accountx": "",
+		"/console/compare-x":    "",
+		"/console/jobsx/1":      "",
+		"/console/run/x":        "",
 	}
 	for path, want := range cases {
 		got := currentLabels(Nav(d, accounts.RoleAdmin, path))
@@ -98,6 +101,8 @@ func TestNav_EveryMountedScreenMarksExactlyOneItemCurrent(t *testing.T) {
 		"/console/activity":                                       "Activity",
 		"/console/jobs/{job_id}":                                  "Activity",
 		"/console/accounts":                                       "Accounts",
+		"/console/accounts/{account_name}":                        "Accounts",
+		"/console/new-account":                                    "Accounts",
 		"/console/accounts/{account_id}/disable":                  "Accounts",
 		"/console/accounts/{account_id}/lower":                    "Accounts",
 		"/console/accounts/{account_id}/tokens/{token_id}/revoke": "Accounts",

@@ -68,11 +68,14 @@ func TestDayOne_NoScreenRendersAZeroedStatisticOnAFreshRelay(t *testing.T) {
 			"that does not exist yet; an Account table is not a fleet, and hiding the one " +
 			"row a fresh Relay really has would be the fiction, not the table. The real " +
 			"day-one shape is pinned in TestAccounts_DayOneShowsTheFirstAdmin.",
+		"/console/new-account": "A form for creating an Account, which measures nothing. This " +
+			"fixture wires no Account administration, so the page honestly answers that it is " +
+			"not wired; its form is drawn by the Accounts write tests.",
 	}
 
 	// An exemption that stops being reached is an unexecuted paragraph that
 	// outlives its reason — the failure this package answers elsewhere with a
-	// vacuity assert (no_dispatch_test.go). If /console/accounts ever leaves
+	// vacuity assert (no_dispatch_test.go). If an exempt path ever leaves
 	// walkableScreens, the reason above must be re-argued, not inherited.
 	exemptHit := map[string]bool{}
 

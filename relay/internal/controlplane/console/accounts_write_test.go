@@ -824,7 +824,7 @@ func TestAccountsWrite_MintedViewRedactsItsTokenWhenLogged(t *testing.T) {
 		TokenID:     sweepMintedTokenID,
 		TokenName:   "ci-deploy",
 		Token:       sweepMintedPlaintext,
-		BackHref:    "/console/accounts",
+		Back:        backLink{Href: "/console/accounts", Label: "Back to Accounts"},
 	}
 	logger.Info("minted", slog.Any("view", v))
 
@@ -1038,11 +1038,12 @@ func reducingActs() []writeAct {
 // skipped it.
 //
 // THE SCOPE LIMIT, said out loud: this derivation is by PATH PREFIX, so a
-// write route belonging to this screen but mounted on some third path would
-// escape it — and nothing forces the prefix. A third path registers cleanly
-// (only two shapes panic, and console.go records both); what the prefix rests
-// on is that choosing one is a deliberate act, and the person taking it owns
-// widening this filter with it. The METHOD dimension is closed above; the
+// write route belonging to this screen but mounted on a fourth path would
+// escape it — and nothing forces the prefix. Create lives on a third prefix
+// (/console/new-account), which this filter includes. A further path registers
+// cleanly (only two shapes panic, and console.go records both); what the
+// prefix rests on is that choosing one is a deliberate act, and the person
+// taking it owns widening this filter with it. The METHOD dimension is closed above; the
 // PATH dimension is not, and this paragraph is the whole of what stands in
 // for it.
 func consoleWriteRoutePatterns() []string {
@@ -1054,7 +1055,8 @@ func consoleWriteRoutePatterns() []string {
 		if isSafeMethod(r.Method) {
 			continue
 		}
-		if !strings.HasPrefix(r.Path, "/console/accounts") && !strings.HasPrefix(r.Path, "/console/api-tokens") {
+		if !strings.HasPrefix(r.Path, "/console/accounts") && !strings.HasPrefix(r.Path, "/console/api-tokens") &&
+			!strings.HasPrefix(r.Path, "/console/new-account") {
 			continue
 		}
 		out = append(out, r.Pattern())
@@ -1083,7 +1085,7 @@ func consoleWriteRoutePatterns() []string {
 func TestAccountsWrite_EveryWriteRouteIsClassifiedAsGrantingOrReducing(t *testing.T) {
 	mounted := consoleWriteRoutePatterns()
 	if len(mounted) == 0 {
-		t.Fatal("Routes mounts no write routes under /console/accounts or /console/api-tokens — " +
+		t.Fatal("Routes mounts no write routes under /console/accounts, /console/new-account or /console/api-tokens — " +
 			"the derivation is not running, so this guard is asserting nothing")
 	}
 
@@ -1673,10 +1675,15 @@ func TestAccountsWrite_TheMintedPlaintextIsAbsentFromEveryLaterRender(t *testing
 	}
 
 	later := x.f.do(t, httptest.NewRequest(http.MethodGet,
-		"/console/accounts?account=gleipnir-prod", nil), x.session)
+		accountPagePath("gleipnir-prod"), nil), x.session)
 	body := later.Body.String()
 	if later.Code != http.StatusOK {
 		t.Fatalf("the later render = %d, want 200", later.Code)
+	}
+	// Non-vacuity: the page that lists this Account's tokens rendered, so the
+	// absences below are absences from a page that could have carried them.
+	if !strings.Contains(body, targetLiveToken) {
+		t.Fatalf("the later render does not list the live token %s, so the absence checks prove nothing", targetLiveToken)
 	}
 	if strings.Contains(body, sweepMintedPlaintext) {
 		t.Error("the minted plaintext reached a later render of the Accounts screen")
@@ -1885,15 +1892,15 @@ func TestAccountsWrite_MissingConsoleSessionFailsClosed(t *testing.T) {
 // Rendering and copy
 // ---------------------------------------------------------------------------
 
-// accountsWriteBody renders the Accounts screen with the write half wired.
-func accountsWriteBody(t *testing.T, query string) string {
+// accountsWriteBody renders an Accounts page with the write half wired.
+func accountsWriteBody(t *testing.T, path string) string {
 	t.Helper()
 	d := sweepFixture()
 	d.AccountAdmin = &fakeAccountAdmin{}
 	d.Auth = &fakeAuth{}
-	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/accounts"+query)
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), path)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /console/accounts%s = %d, want 200", query, rec.Code)
+		t.Fatalf("GET %s = %d, want 200", path, rec.Code)
 	}
 	return rec.Body.String()
 }
@@ -1905,7 +1912,7 @@ func TestAccountsWrite_TheStateControlAsymmetryIsInTheMarkup(t *testing.T) {
 	// The controls render only in the selected Account's panel (#830). The
 	// reducing controls GET their confirmation page; the POST form, and the
 	// enabled=false it submits, are on that page.
-	disable := formWithAction(t, accountsWriteBody(t, "?account=ana"), confirmDisableAction(targetViewerID))
+	disable := formWithAction(t, accountsWriteBody(t, accountPagePath("ana")), confirmDisableAction(targetViewerID))
 	if strings.Contains(disable, `type="password"`) {
 		t.Errorf("the Disable control carries a password field — disabling is the durable "+
 			"off-switch and can only reduce:\n%s", disable)
@@ -1921,7 +1928,7 @@ func TestAccountsWrite_TheStateControlAsymmetryIsInTheMarkup(t *testing.T) {
 		t.Errorf("the Disable confirmation does not submit enabled=false:\n%s", confirm)
 	}
 
-	enable := formWithAction(t, accountsWriteBody(t, "?account=retired-ci"), setAccountEnabledAction(targetDisabledID))
+	enable := formWithAction(t, accountsWriteBody(t, accountPagePath("retired-ci")), setAccountEnabledAction(targetDisabledID))
 	if !strings.Contains(enable, `type="password"`) {
 		t.Errorf("the Enable form carries no password field — re-enabling a disabled Account "+
 			"is privilege-granting:\n%s", enable)
@@ -1931,7 +1938,7 @@ func TestAccountsWrite_TheStateControlAsymmetryIsInTheMarkup(t *testing.T) {
 	}
 
 	// And the revoke control, which is also a reducing act.
-	revoke := formWithAction(t, accountsWriteBody(t, "?account=gleipnir-prod"),
+	revoke := formWithAction(t, accountsWriteBody(t, accountPagePath("gleipnir-prod")),
 		confirmRevokeAction(targetOperatorID, targetLiveToken))
 	if strings.Contains(revoke, `type="password"`) {
 		t.Errorf("the Revoke control carries a password field — revocation is the incident "+
@@ -1942,32 +1949,43 @@ func TestAccountsWrite_TheStateControlAsymmetryIsInTheMarkup(t *testing.T) {
 	}
 }
 
-// TestAccountsWrite_TheAccountListIsReadOnly: no Account's role or state
-// control renders on the list; they live in the selected Account's panel (#830).
-func TestAccountsWrite_TheAccountListIsReadOnly(t *testing.T) {
-	body := accountsWriteBody(t, "")
+// TestAccountsWrite_TheListPostsNothing: the list carries no POST form, no
+// role form and no Enable POST. Its only forms are Disable GETs to the
+// confirmation page, marked from=list. Create lives on the New account page.
+func TestAccountsWrite_TheListPostsNothing(t *testing.T) {
+	body := accountsWriteBody(t, accountsScreenPath)
+	content := contentOf(body)
+	if len(formsWithMethod(content, "post")) != 0 {
+		t.Errorf("the list carries a POST form:\n%s", content)
+	}
 	for _, a := range sweepAccounts().accounts {
 		for _, action := range []string{
-			setAccountRoleAction(a.ID), setAccountEnabledAction(a.ID),
-			confirmLowerRoleAction(a.ID), confirmDisableAction(a.ID),
+			setAccountRoleAction(a.ID), setAccountEnabledAction(a.ID), confirmLowerRoleAction(a.ID),
 		} {
 			if strings.Contains(body, `action="`+action+`"`) {
-				t.Errorf("the list carries a form posting to %s — the list is read-only", action)
+				t.Errorf("the list carries a form posting to %s", action)
 			}
 		}
 	}
-	if strings.Contains(body, `<th scope="col">Change</th>`) {
-		t.Error("the list still carries a Change column")
+	disables := 0
+	for _, form := range formsWithMethod(content, "get") {
+		disables++
+		if !strings.Contains(form, `<input type="hidden" name="from" value="list">`) ||
+			!strings.Contains(form, `aria-label="Disable `) || !strings.Contains(form, `/disable"`) {
+			t.Errorf("a form on the list is not a row's Disable carrying from=list:\n%s", form)
+		}
 	}
-	if !strings.Contains(body, `action="`+createAccountAction()+`"`) {
-		t.Error("the create form is gone from the screen")
+	if disables == 0 {
+		t.Error("the list offers no Disable at all")
 	}
-	at := strings.Index(body, `<details class="panel newaccount" id="new-account">`)
-	if at < 0 {
-		t.Fatal("the create form is not behind a closed New account details")
+	if strings.Contains(body, `action="`+createAccountAction()+`"`) {
+		t.Error("the create form is on the list; it belongs to the New account page")
 	}
-	if form := strings.Index(body, `action="`+createAccountAction()+`"`); form < at {
-		t.Error("the create form sits outside the New account details")
+	if !strings.Contains(body, `href="`+newAccountPath+`"`) {
+		t.Error("the list does not link to the New account page")
+	}
+	if !strings.Contains(accountsWriteBody(t, newAccountPath), `action="`+createAccountAction()+`"`) {
+		t.Error("the create form is not on the New account page")
 	}
 }
 
@@ -1980,9 +1998,9 @@ func TestAccountsWrite_EveryRoleSelectPreselectsTheCurrentRoleAndCannotSubmitIt(
 		query, id, role string
 		raise, lower    bool
 	}{
-		{"?account=ana", targetViewerID, "viewer", true, false},
-		{"?account=mike", targetAdminID, "admin", false, true},
-		{"?account=gleipnir-prod", targetOperatorID, "operator", true, true},
+		{accountPagePath("ana"), targetViewerID, "viewer", true, false},
+		{accountPagePath("mike"), targetAdminID, "admin", false, true},
+		{accountPagePath("gleipnir-prod"), targetOperatorID, "operator", true, true},
 	}
 	for _, tc := range cases {
 		body := accountsWriteBody(t, tc.query)
@@ -2030,8 +2048,8 @@ func TestAccountsWrite_EveryRoleSelectPreselectsTheCurrentRoleAndCannotSubmitIt(
 }
 
 // TestAccountsWrite_TheSignedInAccountsPanelSaysWhyItCannotChange: the
-// signed-in Account's own panel offers no role or state control and states the
-// capability layer's refusal instead; its API Tokens stay manageable (#830).
+// signed-in Account's own page offers no role or state control and states the
+// capability layer's refusal instead; its API Tokens stay manageable.
 func TestAccountsWrite_TheSignedInAccountsPanelSaysWhyItCannotChange(t *testing.T) {
 	d := sweepFixture()
 	fa := sweepAccounts()
@@ -2044,7 +2062,7 @@ func TestAccountsWrite_TheSignedInAccountsPanelSaysWhyItCannotChange(t *testing.
 	d.Auth = &fakeAuth{}
 
 	self := testAccountID(accounts.RoleAdmin)
-	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/accounts?account="+testAccountName(accounts.RoleAdmin))
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), accountPagePath(testAccountName(accounts.RoleAdmin)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -2085,7 +2103,7 @@ func formWithAction(t *testing.T, body, action string) string {
 }
 
 func TestAccountsWrite_TheMintFormOffersNoFreeFormTTL(t *testing.T) {
-	body := accountsWriteBody(t, "?account=gleipnir-prod")
+	body := accountsWriteBody(t, accountPagePath("gleipnir-prod"))
 	form := formWithAction(t, body, mintAPITokenAction(targetOperatorID))
 
 	if !strings.Contains(form, `<select id="mint-ttl" name="ttl">`) {
@@ -2122,15 +2140,15 @@ func TestAccountsWrite_TheMintFormOffersNoFreeFormTTL(t *testing.T) {
 	}
 }
 
-func TestAccountsWrite_TheCreateFormSaysAHumanAccountCannotYetSignIn(t *testing.T) {
-	body := contentOf(accountsWriteBody(t, ""))
-	if !strings.Contains(body, "No surface sets a") || !strings.Contains(body, "Console password; it signs in through OAuth, if configured") {
-		t.Errorf("the create panel does not say no surface sets a Console password for the Account it "+
-			"creates. No capability seam can set one, and relay init sets one only for the first admin, "+
-			"so the screen must not imply a human Account it creates can sign in with a password:\n%s", body)
-	}
-	if strings.Contains(body, "relay init</code> sets one") {
-		t.Error("the create panel claims relay init sets a password for the Account it creates; it never does")
+// TestAccountsWrite_TheNewAccountPageSaysNothingAboutPasswords: the OAuth
+// sentence the create panel once carried is deleted, and no surface that sets
+// a Console password is offered here.
+func TestAccountsWrite_TheNewAccountPageSaysNothingAboutPasswords(t *testing.T) {
+	for _, path := range []string{accountsScreenPath, newAccountPath} {
+		body := contentOf(accountsWriteBody(t, path))
+		if strings.Contains(body, "Console password") || strings.Contains(body, "OAuth") {
+			t.Errorf("%s still speaks of a Console password or OAuth:\n%s", path, body)
+		}
 	}
 }
 

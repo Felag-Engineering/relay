@@ -1813,12 +1813,26 @@ dl.kv dd { min-width: 0; }
 .confirm .confirmq { font-size: var(--text-base); margin: 0 0 var(--space-3); }
 .confirm .ctlrow { align-items: center; }
 
-/* "New account": a <details> does not inherit section.panel's spacing. The
- * summary is the only control that opens the form, so it keeps the 44px
- * target; list-item keeps the native disclosure marker. */
-.newaccount { margin-top: var(--space-4); }
-.newaccount > summary { display: list-item; min-height: 44px; line-height: 44px; cursor: pointer; font-weight: var(--weight-medium); }
-.newaccount[open] > summary { margin-bottom: var(--space-2); }
+/* The list's header row: the result line on the left, "New account" on the
+ * right. The result line takes no new hue. */
+.pagehead { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
+.done { margin: 0; font-weight: var(--weight-normal); }
+.accthead { margin: 0 0 var(--space-3); }
+
+/* A row's actions sit on a DIV inside the cell, never on the cell itself, which
+ * must stay a table cell. */
+.rowacts { display: flex; justify-content: flex-end; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.rowacts form { margin: 0; }
+
+/* New account: a fieldset of radios carries Kind and Role, and the role panel
+ * says what each role may do. */
+fieldset.fld { border: 0; padding: 0; margin: 0; min-width: 0; }
+.ctlform fieldset.fld { flex-direction: row; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
+.ctlform fieldset.fld input[type="radio"] { width: auto; min-height: 0; padding: 0; margin: 0; }
+/* The label is the tap target (44px); the radio itself stays its native size. */
+fieldset.fld label { display: inline-flex; align-items: center; min-height: 44px; margin-right: var(--space-3); }
+.rolepanel dt { font-weight: var(--weight-medium); }
+.rolepanel dd { margin: 0 0 var(--space-2) var(--space-4); }
 
 /* A standalone form: fields flow left to right and wrap WHOLE, never mid-field,
  * with the submit button on the same baseline as the last field. */

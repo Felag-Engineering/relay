@@ -19,29 +19,34 @@ var (
 	idAttr        = regexp.MustCompile(`\bid="([^"]+)"`)
 )
 
-// accountsFormsBodies renders the screen's content twice with the write half
-// wired: once with the machine Account that holds a live token selected (role,
-// Raise, Lower, Disable, create, mint and Revoke forms) and once with the disabled Account
-// selected (its Enable form), so every write form is covered between them.
+// accountsFormsBodies renders the Accounts pages' content with the write half
+// wired: the Account page of the machine Account that holds a live token (Raise,
+// Lower, Disable, mint and Revoke forms), the Account page of the disabled
+// Account (its Enable form), the New account page (create) and the list (the
+// row Disable), so every write form is covered between them.
 func accountsFormsBodies(t *testing.T) []string {
 	t.Helper()
 	return []string{
-		contentOf(accountsWriteBody(t, "?account=gleipnir-prod")),
-		contentOf(accountsWriteBody(t, "?account=retired-ci")),
+		contentOf(accountsWriteBody(t, accountPagePath("gleipnir-prod"))),
+		contentOf(accountsWriteBody(t, accountPagePath("retired-ci"))),
+		contentOf(accountsWriteBody(t, newAccountPath)),
+		contentOf(accountsWriteBody(t, accountsScreenPath)),
 	}
 }
 
 func TestAccountsForms_EveryWriteFormTakesTheSharedControlStyle(t *testing.T) {
+	total := 0
 	for _, body := range accountsFormsBodies(t) {
 		forms := formOpenTag.FindAllString(body, -1)
-		if len(forms) < 5 {
-			t.Fatalf("found %d forms, want the role, state, create, mint and revoke forms", len(forms))
-		}
+		total += len(forms)
 		for _, f := range forms {
 			if !strings.Contains(f, `class="ctlform`) {
-				t.Errorf("a form on the Accounts screen does not opt into the shared control style: %s", f)
+				t.Errorf("a form on the Accounts screens does not opt into the shared control style: %s", f)
 			}
 		}
+	}
+	if total < 10 {
+		t.Fatalf("found %d forms, want the role, state, create, mint, revoke and row Disable forms", total)
 	}
 }
 
@@ -55,7 +60,7 @@ func TestAccountsForms_ButtonWeightFollowsWhatTheActDoesToAuthority(t *testing.T
 		"Raise role":     "btn grant",
 		"Lower role":     "btn danger",
 		"Enable":         "btn grant",
-		"Create Account": "btn grant",
+		"Create account": "btn grant",
 		"Mint API Token": "btn grant",
 		"Disable":        "btn danger",
 		"Revoke":         "btn danger",
@@ -77,7 +82,7 @@ func TestAccountsForms_ButtonWeightFollowsWhatTheActDoesToAuthority(t *testing.T
 	}
 	for label := range want {
 		if !seen[label] {
-			t.Errorf("the %q button did not render in either fixture", label)
+			t.Errorf("the %q button did not render in any fixture", label)
 		}
 	}
 }
@@ -119,12 +124,14 @@ func TestAccountsForms_EveryControlKeepsAVisibleLabel(t *testing.T) {
 // and nowhere else — `style-src 'self'` would drop an inline style silently,
 // and the strict CSP admits no inline script.
 func TestAccountsForms_NoInlineStyleOrScript(t *testing.T) {
-	for _, q := range []string{"", "?account=gleipnir-prod", "?account=retired-ci"} {
-		body := accountsWriteBody(t, q)
-		assertNoInlineScript(t, "/console/accounts"+q, body)
-		assertCSPClean(t, "/console/accounts"+q, body)
+	for _, path := range []string{
+		accountsScreenPath, accountPagePath("gleipnir-prod"), accountPagePath("retired-ci"), newAccountPath,
+	} {
+		body := accountsWriteBody(t, path)
+		assertNoInlineScript(t, path, body)
+		assertCSPClean(t, path, body)
 		if strings.Contains(strings.ToLower(contentOf(body)), " style=") {
-			t.Errorf("/console/accounts%s carries an inline style attribute", q)
+			t.Errorf("%s carries an inline style attribute", path)
 		}
 	}
 }
@@ -189,8 +196,8 @@ func TestAccountsForms_TheStylesheetWeighsGrantAgainstDanger(t *testing.T) {
 			t.Errorf("%q dims the danger button", sel)
 		}
 	}
-	if d := decls(".newaccount > summary"); !strings.Contains(d, "min-height: 44px") {
-		t.Errorf("the New account summary is the only control that opens the form and is under the 44px target: %q", d)
+	if d := decls(".rowacts"); !strings.Contains(d, "flex-wrap: wrap") {
+		t.Errorf("the row actions do not wrap on a narrow card: %q", d)
 	}
 	focus := decls(".ctlform input:focus, .ctlform select:focus")
 	if !strings.Contains(focus, "outline: 2px solid var(--color-accent)") {

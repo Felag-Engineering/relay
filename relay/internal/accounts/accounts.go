@@ -145,6 +145,24 @@ func (r Role) AtLeast(want Role) bool {
 	return r.rank() >= want.rank()
 }
 
+// Description is the one plain-language statement of what a role may do, shared
+// by the Console and the docs. It describes and never decides: authorization is
+// the capability layer's RoleGate, and no permission code reads this
+// (invariant 10, ADR-0010). It says what an Account may ask the Relay for,
+// never what runs on a Node. An invalid role describes nothing.
+func (r Role) Description() string {
+	switch r {
+	case RoleViewer:
+		return "may read but dispatch nothing"
+	case RoleOperator:
+		return "may additionally run structured Operations"
+	case RoleAdmin:
+		return "may additionally use Raw Exec and administer the control plane"
+	default:
+		return ""
+	}
+}
+
 // Account is a stored identity on the control plane.
 //
 // Enabled is the durable off-switch, distinct from revoking a credential: a

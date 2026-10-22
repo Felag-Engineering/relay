@@ -189,8 +189,13 @@ func TestConsoleServesNoSeparatePreflightRoute(t *testing.T) {
 		// get in, admin-only. A read screen over the audit trail, not a
 		// preflight route — reviewed against PF-1 in the same PR that added
 		// it.
-		"GET /console/access":                         true,
-		"POST /console/accounts/create":               true,
+		"GET /console/access":              true,
+		"POST /console/new-account/create": true,
+		// The Account page and the New account page render forms that post to
+		// the routes above; they evaluate no Policy and dispatch or preview
+		// nothing. Reviewed against PF-1.
+		"GET /console/accounts/{account_name}":        true,
+		"GET /console/new-account":                    true,
 		"POST /console/accounts/{account_id}/role":    true,
 		"POST /console/accounts/{account_id}/enabled": true,
 		"POST /console/accounts/{account_id}/tokens":  true,

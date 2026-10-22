@@ -261,13 +261,14 @@ func TestConsole_KindLabelIsNotAChip(t *testing.T) {
 
 // registryKindFiles are the only non-test files in this package allowed to
 // hold the Account registry seam or read an Account's registry kind: the
-// Accounts screen and its write routes, whose subject IS the Account as it is
-// now (00-foundations.md, "Kind label"). The confirmation pages are Accounts
+// Accounts list, the Account page and the write routes, whose subject IS the
+// Account as it is now (00-foundations.md, "Kind label"). The confirmation pages are Accounts
 // screens too: they hold the seam only to name their target, and never read
 // `.Kind` (TestAccountsConfirm_NoCallerRoleComparisonLivesInTheConfirmationPages
 // pins that).
 var registryKindFiles = map[string]bool{
 	"accounts.go":         true,
+	"accounts_page.go":    true,
 	"accounts_write.go":   true,
 	"accounts_confirm.go": true,
 }

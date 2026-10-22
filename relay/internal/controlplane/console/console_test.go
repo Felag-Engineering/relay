@@ -913,7 +913,9 @@ var fixtureIDs = map[string]string{
 	// capability.ErrSelfTargeted or the last-enabled-admin guard and come back
 	// refused for a reason that has nothing to do with reach.
 	"{account_id}": "acct-mike",
-	"{token_id}":   "tok-live",
+	// The Account page resolves an Account by name.
+	"{account_name}": "gleipnir-prod",
+	"{token_id}":     "tok-live",
 }
 
 // fixtureLinks are the routes whose fixture link needs more than id
@@ -925,11 +927,11 @@ var fixtureLinks = map[string]string{
 	"/console/accounts/{account_id}/tokens/{token_id}/revoke": "/console/accounts/" + sweepMachineAccountID + "/tokens/tok-live/revoke",
 }
 
-// selectedAccountsScreen is the Accounts screen with an Account selected, the
-// only page that draws the three danger buttons. gleipnir-prod is the
+// selectedAccountsScreen is the Account page, a walkable route and the
+// page that draws the three danger buttons. gleipnir-prod is the
 // sweepAccounts operator and is not the bearer-lane session's Account, so
 // Lower, Disable, Raise and a live-token Revoke all draw.
-const selectedAccountsScreen = "/console/accounts?account=gleipnir-prod"
+const selectedAccountsScreen = "/console/accounts/gleipnir-prod"
 
 // fixturePath is the walkable link for r: the fixtureLinks override when subs
 // is non-nil and one exists, otherwise Link() with subs substituted. ok is
@@ -1064,7 +1066,7 @@ func TestConsole_EveryRenderedFormCarriesACSRFToken(t *testing.T) {
 	formsChecked := 0
 	for _, role := range sessionRoles {
 		h := newTestHandler(d, role)
-		paths := append(walkableScreens(routesFor(d, role), fixtureIDs), selectedAccountsScreen)
+		paths := walkableScreens(routesFor(d, role), fixtureIDs)
 		for _, path := range paths {
 			rec := get(t, h, path)
 			if rec.Code != http.StatusOK {
@@ -1170,7 +1172,7 @@ func TestConsole_NoGetFormCarriesACSRFToken(t *testing.T) {
 	formsChecked, selectedChecked := 0, 0
 	for _, role := range sessionRoles {
 		h := newTestHandler(d, role)
-		paths := append(walkableScreens(routesFor(d, role), fixtureIDs), selectedAccountsScreen)
+		paths := walkableScreens(routesFor(d, role), fixtureIDs)
 		for _, path := range paths {
 			rec := get(t, h, path)
 			if rec.Code != http.StatusOK {

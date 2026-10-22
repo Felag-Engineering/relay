@@ -67,7 +67,7 @@ func formFields(form string) url.Values {
 }
 
 func TestAccountsConfirm_EachDestructiveButtonIsDangerAndOpensItsConfirmationByGet(t *testing.T) {
-	body := accountsWriteBody(t, "?account=gleipnir-prod")
+	body := accountsWriteBody(t, accountPagePath("gleipnir-prod"))
 	for _, tc := range []struct{ button, action string }{
 		{"Lower role", confirmLowerRoleAction(targetOperatorID)},
 		{"Disable", confirmDisableAction(targetOperatorID)},
@@ -105,7 +105,7 @@ func TestAccountsConfirm_RevokePageNamesTheTokenAndTheConsequence(t *testing.T) 
 	if strings.Contains(form, `type="password"`) {
 		t.Errorf("revocation takes no password:\n%s", form)
 	}
-	if !strings.Contains(content, `<a href="/console/accounts?account=gleipnir-prod">Back to Accounts</a>`) {
+	if !strings.Contains(content, `<a href="`+accountPagePath("gleipnir-prod")+`">Back to gleipnir-prod</a>`) {
 		t.Errorf("no plain link back:\n%s", content)
 	}
 }
@@ -127,7 +127,7 @@ func TestAccountsConfirm_DisablePageNamesTheAccountAndTheConsequence(t *testing.
 	if strings.Contains(form, `type="password"`) {
 		t.Errorf("disabling takes no password:\n%s", form)
 	}
-	if !strings.Contains(content, `<a href="/console/accounts?account=ana">Back to Accounts</a>`) {
+	if !strings.Contains(content, `<a href="`+accountPagePath("ana")+`">Back to ana</a>`) {
 		t.Errorf("no plain link back:\n%s", content)
 	}
 }
@@ -150,7 +150,7 @@ func TestAccountsConfirm_LowerPageNamesFromToAndTheConsequence(t *testing.T) {
 	if strings.Contains(form, `type="password"`) {
 		t.Errorf("lowering takes no password:\n%s", form)
 	}
-	if !strings.Contains(content, `<a href="/console/accounts?account=mike">Back to Accounts</a>`) {
+	if !strings.Contains(content, `<a href="`+accountPagePath("mike")+`">Back to mike</a>`) {
 		t.Errorf("no plain link back:\n%s", content)
 	}
 }
@@ -228,15 +228,16 @@ func TestAccountsConfirm_PagesOfferNoFormWhereTheScreenDrawsNoButton(t *testing.
 
 	for _, tc := range []struct {
 		name, path, sentence string
+		back                 string // the link's label: the Account page's name, or the list
 		status               int
 	}{
-		{"self disable", confirmDisableAction(self), selfTargetRefusal, http.StatusConflict},
-		{"self lower", confirmLowerRoleAction(self) + "?role=operator", selfTargetRefusal, http.StatusConflict},
-		{"already disabled", confirmDisableAction(targetDisabledID), "is already disabled", http.StatusConflict},
-		{"already revoked", confirmRevokeAction(targetOperatorID, "tok-revoked"), "is already revoked", http.StatusConflict},
+		{"self disable", confirmDisableAction(self), selfTargetRefusal, "Back to " + testAccountName(accounts.RoleAdmin), http.StatusConflict},
+		{"self lower", confirmLowerRoleAction(self) + "?role=operator", selfTargetRefusal, "Back to " + testAccountName(accounts.RoleAdmin), http.StatusConflict},
+		{"already disabled", confirmDisableAction(targetDisabledID), "is already disabled", "Back to retired-ci", http.StatusConflict},
+		{"already revoked", confirmRevokeAction(targetOperatorID, "tok-revoked"), "is already revoked", "Back to gleipnir-prod", http.StatusConflict},
 		{"token on another Account", confirmRevokeAction(targetAdminID, targetLiveToken),
-			"No API Token matching", http.StatusNotFound},
-		{"unknown Account", confirmDisableAction("acct-nope"), "No Account matching", http.StatusNotFound},
+			"No API Token matching", "Back to mike", http.StatusNotFound},
+		{"unknown Account", confirmDisableAction("acct-nope"), "No Account matching", "Back to Accounts", http.StatusNotFound},
 	} {
 		rec := accountsConfirmGet(t, d, tc.path)
 		content := contentOf(rec.Body.String())
@@ -249,7 +250,7 @@ func TestAccountsConfirm_PagesOfferNoFormWhereTheScreenDrawsNoButton(t *testing.
 		if strings.Contains(content, "<form") {
 			t.Errorf("%s: a refusal offers a form:\n%s", tc.name, content)
 		}
-		if !strings.Contains(content, "Back to Accounts") {
+		if !strings.Contains(content, tc.back+".") {
 			t.Errorf("%s: no link back:\n%s", tc.name, content)
 		}
 	}

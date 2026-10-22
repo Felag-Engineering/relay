@@ -56,29 +56,23 @@ package console
 // configuration of any kind (invariant 11): the role block is prose about
 // where the boundary falls, never an inventory of editable values.
 //
-// The screen draws the selected Account's panel first, then the read-only
-// list, then the create form behind "New account" (design spec 15, D32).
-//
-// The write half lives in accounts_write.go, and this file renders forms as
-// well as rows. The three acts that reduce authority open their confirmation
-// pages (accounts_confirm.go) instead of posting; this screen posts only the
-// granting forms. The forms for an existing Account render only in the
-// SELECTED Account's panel; the list is read-only. What stays absent is
-// a role or PERMISSION editor of any kind — the three roles are ADR-0010's
-// closed set and a custom-permission builder is a second authorization model —
-// and any Relay configuration whatsoever. The one place a minted credential appears is
+// This file is the list (D35): one table, and each row carries Edit (a link to
+// the Account page, accounts_page.go) and either Disable (a GET to its
+// confirmation page, marked from=list so the act returns to the list) or Enable
+// (a link to the Account page's state section). No row control posts. The
+// forms for an existing Account live on its page. What stays absent is a role
+// or PERMISSION editor of any kind — the three roles are ADR-0010's closed set
+// and a custom-permission builder is a second authorization model — and any
+// Relay configuration whatsoever. The one place a minted credential appears is
 // accounts_write.go's mint response, never this screen.
 
 import (
-	"errors"
-	"html/template"
 	"net/http"
 	"net/url"
 	"time"
 
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
-	"github.com/Felag-Engineering/relay/relay/internal/authz"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 )
 
@@ -88,54 +82,27 @@ import (
 // one.
 const accountsCallPage = 200
 
-// policyCeilingNote is the sentence the screen must not lose: a role is a
-// ceiling on what the RELAY will ask for, and every Node's own Policy is the
-// ceiling on what actually runs (ADR-0002, invariant 2). What each role may do
-// is ADR-0010's and GLOSSARY.md's, not this screen's.
-const policyCeilingNote = "A role bounds what this Relay will ask of a Node; each Node's own Policy is the real ceiling."
-
 // selfPanelNote is why the signed-in Account's own panel carries no control.
 // The refusal page's fuller sentence, selfTargetRefusal, is the capability
 // layer's refusal; this is the panel's one-line rendering of the same rule.
 const selfPanelNote = "This is your own Account; another admin must change its role or state."
 
-// accountsView is the whole screen.
+// accountsView is the list.
 type accountsView struct {
 	Accounts []accountRow
 
-	// Selected is the raw ?account= value, echoed only in the note that says
-	// no such Account exists. SelectedName is the resolved Account's own name,
-	// which is what the token panel is headed with.
-	Selected      string
-	SelectedName  string
-	SelectedFound bool
-
-	Tokens           []tokenRow
-	TokensUnreadable bool
-
-	// Change is the selected Account's role and state controls. Nil
-	// when nothing is selected or the write half is not wired.
-	Change *accountChange
-
-	// SelectedMintAction is the selected Account's mint form action,
-	// empty when nothing is selected or the write half is not wired. The
-	// mint form lives in the token panel because minting is about ONE
-	// Account, and the panel is the only part of this screen that is.
-	SelectedMintAction string
-
 	CallPage int
-	Ceiling  string
+
+	// Done is the fixed result sentence for a done= key (doneSentence), or "".
+	Done string
 
 	// Write is nil when the write half is not wired (accounts_write.go):
-	// no form of any kind renders, which is the honest-absence posture every
+	// no control of any kind renders, which is the honest-absence posture every
 	// other seam on this Deps takes. accountsOffered decides it.
 	Write *accountsWriteControls
 
-	// Create is the "New account" form; nil exactly when Write is.
-	Create *accountCreateForm
-
-	// LowerHint is drawn inside the Lower role form (lowerRoleHint).
-	LowerHint string
+	// NewAccountHref is the New account page; empty exactly when Write is nil.
+	NewAccountHref string
 }
 
 // accountsWriteControls is everything the row and token forms need
@@ -150,11 +117,11 @@ type accountsWriteControls struct {
 	TTLs        []ttlOption
 }
 
-// accountCreateForm is the "New account" form. One type serves the screen
-// (Open false, no echo) and the refused re-render, which draws the same
-// definition open with the caller's own submission echoed back. The echoes are
-// bounded by handleCreateAccount and escaped by html/template. There is no
-// password field, so a password cannot be echoed.
+// accountCreateForm is the New account page's form. The same definition serves
+// the plain page (no echo) and the refused re-render, which carries the caller's
+// own submission back. The echoes are bounded by handleCreateAccount and
+// escaped by html/template. handleCreateAccount never copies the password into
+// the form.
 //
 // The option lists are built from accounts.RoleViewer/Operator/Admin and
 // accounts.KindHuman/KindMachine rather than hand-typed strings, so a screen
@@ -166,11 +133,12 @@ type accountCreateForm struct {
 	StepUpFresh bool
 	Roles       []string
 	Kinds       []string
-	Open        bool
-	Refusal     string
-	Name        string
-	Kind        string
-	Role        string
+	// RoleLines is the "What this role may do" panel's text, one per role.
+	RoleLines []roleLine
+	Refusal   string
+	Name      string
+	Kind      string
+	Role      string
 }
 
 // ttlOption is one entry in the mint form's closed lifetime select. The
@@ -198,21 +166,31 @@ type accountRow struct {
 	LastCallAt time.Time
 
 	// LastCallHref points at Activity scoped to this Account by its verified
-	// ID (spec 15 Rows; spec 04 ?account=; D18: an ID, never a name). Href
-	// selects this Account on this screen.
+	// ID (spec 15 Rows; spec 04 ?account=; D18: an ID, never a name).
 	LastCallHref string
-	Href         string
+
+	// EditHref is the Account page. EnableHref is its state section, set only
+	// for a disabled Account when the write half is wired: Enable never acts
+	// from the row, because it takes a password. DisableAction is the
+	// confirmation page, set for an enabled Account that is not the caller's
+	// own, when the write half is wired.
+	EditHref      string
+	EnableHref    string
+	DisableAction string
+	Self          bool
+
+	// The accessible names of the three actions; each begins with the visible
+	// text, so the name and the label agree.
+	EditLabel, DisableLabel, EnableLabel string
 
 	// Machine scopes the last-tool-call cell: spec 15 asks for it on machine
 	// Accounts, and a human Account's empty cell is correct rather than
-	// missing. Current marks the Account the token panel is about.
+	// missing.
 	Machine bool
-	Current bool
 }
 
-// accountChange is the selected Account's role and state controls. Built
-// only for the SELECTED Account when the write half is wired; the list carries
-// none.
+// accountChange is the Account page's role and state controls. Built when the
+// write half is wired; the list carries none.
 //
 // The ACTIONS, not the raw id, so an Account id never lands in a rendered form
 // VALUE — the id is in the path, escaped once by the builder that made it.
@@ -238,7 +216,7 @@ type accountChange struct {
 	RaiseRoles []string
 	LowerRoles []string
 
-	// Self is capability.SelfTargeted(caller, selected.ID): the capability layer
+	// Self is capability.SelfTargeted(caller, the Account's ID): the capability layer
 	// would refuse every change here, so no control renders and SelfNote says
 	// why (spec 15 States, "Say why"). Narrowing only: the refusal stays the
 	// capability layer's, and a hand-built POST is still refused there.
@@ -344,129 +322,55 @@ func handleAccounts(d Deps) http.HandlerFunc {
 		}
 
 		accts, err := d.Accounts.Accounts(r.Context(), caller)
-		switch {
-		case err == nil:
-		case errors.Is(err, authz.ErrUnauthorized):
-			// The capability layer decided this, and this screen renders what
-			// it decided — it does not restate the rule, re-derive the floor,
-			// or translate the sentence (invariant 10).
-			w.WriteHeader(http.StatusForbidden)
-			renderScreen(w, p, accountsRefusedTmpl, cancelResultView{
-				Heading: "The Relay refused this read: " + err.Error() + ".",
-			})
-			return
-		case errors.Is(err, capability.ErrAccountsUnavailable):
-			unavailable(w, "Account administration")
-			return
-		default:
-			unreadable(w, "the Account registry")
+		if err != nil {
+			accountsReadFailed(w, p, err)
 			return
 		}
 
 		v := accountsView{
-			Selected: r.URL.Query().Get("account"),
 			CallPage: accountsCallPage,
-			Ceiling:  policyCeilingNote,
+			Done:     doneSentence(r.URL.Query().Get("done")),
 		}
 		if accountsOffered(d) {
-			fresh := stepUpFresh(d, r)
 			v.Write = &accountsWriteControls{
 				CSRFToken:   p.CSRFToken,
-				StepUpFresh: fresh,
+				StepUpFresh: stepUpFresh(d, r),
 				TTLs:        ttlOptions(),
 			}
-			v.Create = &accountCreateForm{
-				CSRFToken:    p.CSRFToken,
-				CreateAction: createAccountAction(),
-				StepUpFresh:  fresh,
-				Roles:        allRoleNames(),
-				Kinds:        accountKinds(),
-			}
-			v.LowerHint = lowerRoleHint
+			v.NewAccountHref = newAccountPath
 		}
 
-		var selected accounts.Account
 		for _, a := range accts {
 			row := accountRow{
 				Name: a.Name,
 				Kind: string(a.Kind),
 				Role: string(a.Role),
-				// In words, never a bare boolean: "false" in a State column is
+				// In words, never a bare boolean: "false" in a Status column is
 				// a sentence nobody can read at a glance during an incident.
 				State:      accountState(a.Enabled),
 				LastAuthAt: a.LastSeenAt,
 				Machine:    a.Kind == accounts.KindMachine,
-				Current:    a.Name == v.Selected,
-				// url.Values, never concatenation: an Account name is not
-				// constrained by this package, and "bob&co" concatenated
-				// links to the wrong Account.
-				Href:         "/console/accounts?" + url.Values{"account": {a.Name}}.Encode(),
+				Self:       capability.SelfTargeted(caller, a.ID),
+				// PathEscape, never concatenation: an Account name is not
+				// constrained to be URL-safe by this package.
+				EditHref:     accountPagePath(a.Name),
+				EditLabel:    "Edit " + a.Name,
+				DisableLabel: "Disable " + a.Name,
+				EnableLabel:  "Enable " + a.Name,
 				LastCallHref: "/console/activity?" + url.Values{"account": {a.ID}}.Encode(),
+			}
+			if v.Write != nil {
+				switch {
+				case !a.Enabled:
+					row.EnableHref = row.EditHref + "#state"
+				case !row.Self:
+					row.DisableAction = confirmDisableAction(a.ID)
+				}
 			}
 			if row.Machine {
 				row.LastCallAt = lastCallByAccountID[a.ID]
 			}
 			v.Accounts = append(v.Accounts, row)
-
-			if a.Name == v.Selected {
-				selected, v.SelectedFound, v.SelectedName = a, true, a.Name
-			}
-		}
-
-		if v.SelectedFound {
-			if v.Write != nil {
-				v.SelectedMintAction = mintAPITokenAction(selected.ID)
-				raise, lower := roleTargets(selected.Role)
-				v.Change = &accountChange{
-					Role:          string(selected.Role),
-					State:         accountState(selected.Enabled),
-					Enabled:       selected.Enabled,
-					RoleAction:    setAccountRoleAction(selected.ID),
-					EnabledAction: setAccountEnabledAction(selected.ID),
-					LowerAction:   confirmLowerRoleAction(selected.ID),
-					DisableAction: confirmDisableAction(selected.ID),
-					RaiseRoles:    raise,
-					LowerRoles:    lower,
-					Self:          capability.SelfTargeted(caller, selected.ID),
-					SelfNote:      selfPanelNote,
-				}
-			}
-			tokens, tokErr := d.Accounts.APITokens(r.Context(), caller, selected.ID)
-			switch {
-			case tokErr == nil:
-				for _, t := range tokens {
-					row := tokenRow{
-						ID:         t.ID,
-						Name:       t.Name,
-						CreatedAt:  t.CreatedAt,
-						LastUsedAt: t.LastUsedAt,
-						ExpiresAt:  t.ExpiresAt,
-						Revoked:    t.Revoked(),
-					}
-					// Revoke is offered for any token not ALREADY revoked,
-					// including an expired one: revoking an expired token is
-					// harmless and idempotent (capability's RevokeAPIToken),
-					// and refusing it would be a second opinion about token
-					// state this screen must not hold.
-					if v.Write != nil && !row.Revoked {
-						row.RevokeAction = confirmRevokeAction(selected.ID, t.ID)
-					}
-					v.Tokens = append(v.Tokens, row)
-				}
-			case errors.Is(tokErr, authz.ErrUnauthorized):
-				w.WriteHeader(http.StatusForbidden)
-				renderScreen(w, p, accountsRefusedTmpl, cancelResultView{
-					Heading: "The Relay refused this read: " + tokErr.Error() + ".",
-				})
-				return
-			default:
-				// A store that failed degrades one panel rather than refusing
-				// the page: the Account table beside it IS readable, and
-				// pretending otherwise would hide what this operator can
-				// still see. An UNAUDITABLE read is the other case and is
-				// handled above, where it refuses everything.
-				v.TokensUnreadable = true
-			}
 		}
 
 		renderScreen(w, p, accountsTmpl, v)
@@ -533,187 +437,39 @@ var accountsRefusedTmpl = newScreen("accounts-refused", `
 </div>
 `)
 
-// accountsCreateRefusedTmpl is the create form alone, open, with the refusal.
-// It is parsed on a clone of accountsTmpl so it draws the one "account-create"
-// definition the screen draws and the two cannot drift.
-var accountsCreateRefusedTmpl = template.Must(template.Must(accountsTmpl.Clone()).New("accounts-create-refused").Parse(`
-{{template "account-create" .}}
-<p class="back"><a href="/console/accounts">Back to Accounts</a></p>
-`))
-
 var accountsTmpl = newScreen("accounts", `
-{{define "account-create"}}
-<details class="panel newaccount" id="new-account"{{if .Open}} open{{end}}>
-  <summary>New account</summary>
-  {{with .Refusal}}<p class="fielderr" role="alert">{{.}}</p>{{end}}
-  <form class="ctlform ctlgrid" method="post" action="{{.CreateAction}}">
-    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-    <div class="fld">
-      <label class="fldlabel" for="create-name">Name</label>
-      <input id="create-name" name="name" maxlength="64" required autocomplete="off"{{with .Name}} value="{{.}}"{{end}}>
-    </div>
-    <div class="fld">
-      <label class="fldlabel" for="create-kind">Kind</label>
-      <select id="create-kind" name="kind">
-        {{range .Kinds}}<option value="{{.}}"{{if eq . $.Kind}} selected{{end}}>{{.}}</option>{{end}}
-      </select>
-    </div>
-    <div class="fld">
-      <label class="fldlabel" for="create-role">Role</label>
-      <select id="create-role" name="role">
-        {{range .Roles}}<option value="{{.}}"{{if eq . $.Role}} selected{{end}}>{{.}}</option>{{end}}
-      </select>
-    </div>
-    <div class="fld">
-      <label class="fldlabel" for="create-password">{{if .StepUpFresh}}Your password to create an Account &mdash; optional, you confirmed it recently{{else}}Your password &mdash; required to create an Account{{end}}</label>
-      <input id="create-password" name="password" type="password" autocomplete="current-password"{{if not .StepUpFresh}} required{{end}}>
-    </div>
-    <button class="btn grant" type="submit">Create Account</button>
-  </form>
-  <p class="note">No surface sets a <b>human</b> Account's Console password; it signs in through OAuth, if configured.</p>
-</details>
-{{end}}
+<div class="pagehead">
+  {{with .Done}}<p class="done" role="status">{{.}}</p>{{end}}
+  {{with .NewAccountHref}}<a class="btn grant" href="{{.}}">New account</a>{{end}}
+</div>
 
 {{if not .Write}}<p class="note">Account and token changes are not wired into this Relay&#39;s Console.</p>{{end}}
 
-{{if .Selected}}
-{{with .Change}}{{$c := .}}
-<section class="panel">
-  <h3>Role and state &mdash; <span class="ident">{{$.SelectedName}}</span></h3>
-  <p class="rolestate">Role <b>{{.Role}}</b>, {{.State}}.</p>
-  {{if .Self}}
-  <p class="note">{{.SelfNote}}</p>
-  {{else}}
-  <div class="acctchange">
-    {{with .RaiseRoles}}
-    <form class="ctlform ctlrow rolechange" method="post" action="{{$c.RoleAction}}" autocomplete="off">
-      <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
-      <label class="fld"><span class="fldlabel">Raise role to</span>
-        <select name="role" required>
-          <option value="" selected disabled>{{$c.Role}} (current)</option>
-          {{range .}}<option value="{{.}}">{{.}}</option>{{end}}
-        </select>
-      </label>
-      <label class="fld"><span class="fldlabel">{{if $.Write.StepUpFresh}}Your password to raise a role &mdash; optional, you confirmed it recently{{else}}Your password &mdash; required to raise a role{{end}}</span>
-        <input name="password" type="password" autocomplete="current-password"{{if not $.Write.StepUpFresh}} required{{end}}>
-      </label>
-      <button class="btn grant" type="submit">Raise role</button>
-    </form>
-    {{end}}
-    {{with .LowerRoles}}
-    <form class="ctlform ctlrow rolechange" method="get" action="{{$c.LowerAction}}" autocomplete="off">
-      <label class="fld"><span class="fldlabel">Lower role to</span>
-        <select name="role" aria-describedby="lower-role-hint">
-          <option value="" selected disabled>{{$c.Role}} (current)</option>
-          {{range .}}<option value="{{.}}">{{.}}</option>{{end}}
-        </select>
-      </label>
-      <button class="btn danger" type="submit">Lower role</button>
-      <span class="note" id="lower-role-hint">{{$.LowerHint}}</span>
-    </form>
-    {{end}}
-    {{if $c.Enabled}}
-    <form class="ctlform ctlrow" method="get" action="{{$c.DisableAction}}">
-      <button class="btn danger" type="submit">Disable</button>
-    </form>
-    {{else}}
-    <form class="ctlform ctlrow" method="post" action="{{$c.EnabledAction}}">
-      <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
-      <input type="hidden" name="enabled" value="true">
-      <label class="fld"><span class="fldlabel">{{if $.Write.StepUpFresh}}Password to re-enable &mdash; optional, you confirmed it recently{{else}}Password &mdash; required to re-enable{{end}}</span>
-        <input name="password" type="password" autocomplete="current-password"{{if not $.Write.StepUpFresh}} required{{end}}>
-      </label>
-      <button class="btn grant" type="submit">Enable</button>
-    </form>
-    {{end}}
-  </div>
-  {{end}}
-</section>
-{{end}}
-<section class="panel">
-  {{if .SelectedFound}}
-  <h3>API Tokens &mdash; <span class="ident">{{.SelectedName}}</span></h3>
-  {{if .TokensUnreadable}}
-  <p class="note">This Account&#39;s API Tokens could not be read; the Account list below is unaffected.</p>
-  {{else if .Tokens}}
-  <div class="tablescroll">
-  <table class="rows">
-    <thead><tr><th scope="col">Token</th><th scope="col">Name</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Expires</th><th scope="col">State</th>{{if $.Write}}<th scope="col">Revoke</th>{{end}}</tr></thead>
-    <tbody>
-    {{range .Tokens}}
-      <tr>
-        <td><code>{{.ID}}</code></td>
-        <td>{{.Name}}</td>
-        <td>{{stamp .CreatedAt}}</td>
-        <td>{{stamp .LastUsedAt}}</td>
-        <td>{{if .ExpiresAt.IsZero}}<span class="dim">does not expire</span>{{else}}{{stamp .ExpiresAt}}{{end}}</td>
-        <td>{{if .Revoked}}revoked{{else}}live{{end}}</td>
-        {{if $.Write}}
-        <td>{{with .RevokeAction}}
-          <form class="ctlform" method="get" action="{{.}}">
-            <button class="btn danger" type="submit">Revoke</button>
-          </form>
-        {{end}}</td>
-        {{end}}
-      </tr>
-    {{end}}
-    </tbody>
-  </table>
-  </div>
-  <p class="note">Revocation is immediate and permanent; there is no un-revoke.</p>
-  {{else}}
-  <p class="dim">This Account has no API Tokens.</p>
-  {{end}}
-  {{if and .Write .SelectedMintAction}}
-  <form class="ctlform ctlgrid" method="post" action="{{.SelectedMintAction}}">
-    <input type="hidden" name="csrf_token" value="{{.Write.CSRFToken}}">
-    <div class="fld">
-      <label class="fldlabel" for="mint-name">Token name</label>
-      <input id="mint-name" name="name" maxlength="128" required autocomplete="off">
-    </div>
-    <div class="fld">
-      <label class="fldlabel" for="mint-ttl">Lifetime</label>
-      <select id="mint-ttl" name="ttl">
-        {{range .Write.TTLs}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
-      </select>
-    </div>
-    <div class="fld">
-      <label class="fldlabel" for="mint-password">{{if .Write.StepUpFresh}}Your password to mint a token &mdash; optional, you confirmed it recently{{else}}Your password &mdash; required to mint a token{{end}}</label>
-      <input id="mint-password" name="password" type="password" autocomplete="current-password"{{if not .Write.StepUpFresh}} required{{end}}>
-    </div>
-    <button class="btn grant" type="submit">Mint API Token</button>
-  </form>
-  <p class="note">The value is shown once, on the response to this form, and never again.</p>
-  {{end}}
-  {{else}}
-  <div class="placeholder">
-    <p>No Account on this Relay is named <code>{{.Selected}}</code>.</p>
-    <p><a href="/console/accounts">Show every Account</a>.</p>
-  </div>
-  {{end}}
-</section>
-{{end}}
-
 <div class="tablescroll">
 <table class="rows cards">
-  <thead><tr><th scope="col">Account</th><th scope="col">Kind</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">Last authentication</th><th scope="col">Last tool call</th></tr></thead>
+  <thead><tr><th scope="col">Name</th><th scope="col">Kind</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Last authentication</th><th scope="col">Last tool call</th><th scope="col"><span class="vh">Actions</span></th></tr></thead>
   <tbody>
   {{range .Accounts}}
     <tr>
-      <td data-label="Account">{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{.Href}}">{{.Name}}</a>{{end}}</td>
+      <td data-label="Name">{{.Name}}</td>
       <td data-label="Kind"><span class="kind" data-kind="{{.Kind}}">{{.Kind}}</span></td>
       <td data-label="Role">{{.Role}}</td>
-      <td data-label="State">{{.State}}</td>
+      <td data-label="Status">{{.State}}</td>
       <td data-label="Last authentication">{{stamp .LastAuthAt}}</td>
       <td data-label="Last tool call">{{if .Machine}}{{if .LastCallAt.IsZero}}<span class="dim">no tool call in the last {{$.CallPage}} recorded calls</span>{{else}}<a href="{{.LastCallHref}}">{{stamp .LastCallAt}}</a>{{end}}{{end}}</td>
+      <td data-label="Actions"><div class="rowacts">
+        <a class="btn" href="{{.EditHref}}" aria-label="{{.EditLabel}}">Edit</a>
+        {{if .DisableAction}}<form class="ctlform" method="get" action="{{.DisableAction}}">
+          <input type="hidden" name="from" value="list">
+          <button class="btn danger" type="submit" aria-label="{{.DisableLabel}}">Disable</button>
+        </form>{{end}}
+        {{if .EnableHref}}<a class="btn" href="{{.EnableHref}}" aria-label="{{.EnableLabel}}">Enable</a>{{end}}
+      </div></td>
     </tr>
   {{end}}
   </tbody>
 </table>
 </div>
-<p class="note">{{.Ceiling}}</p>
-
-{{with .Create}}{{template "account-create" .}}{{end}}
 `)
 
 // isAgentCallKind reports whether an audit Kind describes a call somebody

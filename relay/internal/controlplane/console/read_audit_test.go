@@ -225,6 +225,18 @@ var consoleReadAudit = map[string]readAuditRule{
 	// GET /console/accounts documents, tracked in #659 against
 	// internal/capability. The write itself is recorded by the POST route's
 	// entry below.
+	// The Account page makes the same unconditional trail read the list does
+	// and refuses to render when it cannot be recorded. Its Account and
+	// API-Token reads are the unrecorded ones the list's entry describes.
+	"GET /console/accounts/{account_name}": {
+		path: "/console/accounts/" + testAdminName,
+		tool: "query_audit",
+	},
+	"GET /console/new-account": {
+		path: "",
+		why: "renders the create form and reads no fleet, trail or Account data; " +
+			"POST /console/new-account/create records the create",
+	},
 	"GET /console/accounts/{account_id}/disable": {
 		path: "",
 		why: "a confirmation step for an Account write that performs nothing: it reads the target " +
@@ -268,7 +280,7 @@ var consoleReadAudit = map[string]readAuditRule{
 	// and the step-up clauses by
 	// TestAccountsWrite_AGrantingActAlsoWritesAStepUpEvent — which the two
 	// write exemptions above have no equivalent of.
-	"POST /console/accounts/create": {
+	"POST /console/new-account/create": {
 		path: "",
 		why: "a write, not a read (#655): the capability layer records the create as " +
 			"account_create with its Principal, and consoleauth records its own step_up " +
