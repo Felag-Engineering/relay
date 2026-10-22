@@ -44,6 +44,10 @@ Removed:  <ID> — <statement>
 **Use the `spec-conflict-reviewer` agent.** Pass it the spec path and the base ref. It reads
 only docs; it must never open `relay/`, `daemon/` or `proto/`. Take its report as-is.
 
+**Then the `reader-reviewer` agent**, same inputs, in parallel with the first. It reads the
+spec as the human it is for and says whether the plain top can be followed, whether a fact is
+restated that has a home elsewhere, and whether the file is inside its budget (ADR-0046).
+
 ## Stage 4 — Report
 
 ```
@@ -51,8 +55,11 @@ SPEC CHECK  <spec>
 Mechanical: pass | fail (<n> findings)
 Claims diff: +<a> ~<c> ↔<m> −<r>   (.spec-check/claims-diff.md)
 Semantic:  CLEAN | REVISE | BLOCKED
-<the reviewer's report>
+Reader:    READS | REVISE
+<the reviewers' reports>
 ```
+
+A reader verdict of `REVISE` is `REVISE` for the whole check.
 
 `BLOCKED` means an invariant, ADR or gap-table issue must land first. Say which, and stop; the
 owner takes it to `/spec-author`. `REVISE` lists what to fix in the spec. `CLEAN` means the

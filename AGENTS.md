@@ -13,7 +13,8 @@ The product is **Relay**. **Gleipnir** is the separate first-party AI-agent syst
 it — a consumer of Relay, never a component of it. The repo was formerly `gleipnir-relay`
 (GLOSSARY.md, ADR-0016).
 
-Orient in this order: the invariants below for what must always be true,
+Orient in this order: [docs/how-relay-works.md](docs/how-relay-works.md) for the product in
+plain words, the invariants below for what must always be true,
 [GLOSSARY.md](GLOSSARY.md) for the language, [docs/specs/](docs/specs/) for the capability
 you're touching, then the [ADRs](docs/adr/) governing it — each invariant names the ADR that
 governs it. [README.md](README.md) is the outside view: what Relay is, and why.
@@ -232,9 +233,13 @@ flag it.
 /docs/design/        console/ is the Console's live per-screen specification, cited from source;
                      the rest is pre-ADR design for work not yet decided.
 /docs/operations/    operator-facing runbooks: install, enrollment, upgrades, recovery, demo fleet.
-/docs/security/      threat model — maps all fourteen invariants to the boundaries they defend.
+/docs/proposals/     ideas with a lifecycle: the problem, the objections and their answers, the
+                     outcome. Never binding; the reasoning an ADR links instead of restating.
+/docs/security/      threat model — maps all fourteen invariants to the boundaries they defend,
+                     and the one register of accepted residual risk.
 /docs/specs/         capability specifications — what each capability does today, every surface.
-/docs/deferred.md    work agreed in principle, not yet specified; ADR at pickup.
+/docs/how-relay-works.md  the product in plain words: the parts, one request end to end,
+                     what cannot happen.
 /docs/dev-fleet.md   the local Docker fleet: how to run Relay + real daemons.
 /.claude/            the workflow's commands and agents, committed so unattended routines have them.
 /.github/            CI workflows and the pull request template.
@@ -358,15 +363,23 @@ skipped, say so in the PR body.
 
 **7. Write an ADR** when a decision is hard to reverse, surprising without context, *and* the
 result of a real trade-off — all three, not any one. Number it sequentially in `docs/adr/`.
-Match the surrounding style: ADRs here are longer than the usual one-paragraph form because
-they encode invariants agents are expected to check themselves against.
+An ADR has two layers (ADR-0046): it opens with a `## Decision` of at most 120 words a
+stranger can read, then *Why*, *What changes* and *Alternatives*, at most 150 lines, and it
+links the proposal that holds the argument rather than re-arguing it. It is amended at most
+once; the next change rewrites it to say what is true now, and git keeps the history. One
+fact has one home: an ADR links the spec, the threat model and the glossary instead of
+restating them. `make docs-check` holds all of this; `docs/agents/docs-ratchet.txt` lists the
+documents still outside it, and the PR that touches one brings it into shape.
 
 **Promote before the issue closes.** A closed issue is not a record. Before the PR merges, lift
 everything that outlives the change: behaviour now true of the system → the **capability
 specification**; a decision meeting all three tests above → an **ADR**, cited by number rather
-than re-argued; a shift in domain language → **GLOSSARY.md**; a change to what must always be
-true → **an invariant above**, which is a conversation with a human and an ADR amendment,
-never a quiet edit. This is the most common way a repo loses its own reasoning.
+than re-argued; the reasoning, objections and alternatives behind it → the **proposal** in
+`docs/proposals/`; a shift in domain language → **GLOSSARY.md**; a change to what must always
+be true → **an invariant above**, which is a conversation with a human and an ADR amendment,
+never a quiet edit. Work agreed in principle but not decided is a proposal or an issue
+labelled `idea`; an open question is an issue labelled `decision`. This is the most common
+way a repo loses its own reasoning.
 
 **8. Update GLOSSARY.md** in the same change whenever the domain language shifts.
 

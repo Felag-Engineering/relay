@@ -11,15 +11,39 @@
 #      once; proof rows cite defined Behaviour/Refusals claims; Designed rows carry a milestone;
 #      Status agrees with whether Designed has rows; the required sections exist; every
 #      `<name>.md` a spec mentions resolves.
+#   4. The two-layer shape (ADR-0046). A migrated spec with a `## Proof` section has exactly the
+#      sections docs/specs/TEMPLATE.md names, a `**Governed by:**` line, a Purpose of at most
+#      120 words, at most 250 lines outside the generated Proof block, and a Proof block equal
+#      to what scripts/spec-proof.sh generates. A migrated spec still in the earlier shape must
+#      be listed in docs/agents/docs-ratchet.txt with `shape`. Every ADR opens with
+#      `## Decision` of at most 120 words, runs at most 150 lines and carries at most one
+#      `## Amendment`; each rule is waived per file by `decision`, `budget` or `amendments` in
+#      the ratchet. Every path the ratchet lists exists.
+#   5. Proposals (docs/proposals/) have the shape docs/proposals/TEMPLATE.md describes: a Status
+#      of idea/shaping/accepted/rejected on line 3, the four sections, Outcome once decided,
+#      at most 120 lines. No spec claim and no Go or Rust comment cites a proposal.
 #
 # Legacy specs (Status aspirational/stub) get checks 1 and 2 only — they are unmigrated intent,
-# see "The establishing phase" in docs/specs/README.md. SPEC_DIR overrides the directory for
-# self-tests.
+# see "The establishing phase" in docs/specs/README.md. SPEC_DIR, ADR_DIR, PROPOSAL_DIR and
+# RATCHET override the paths for self-tests.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 SPEC_DIR=${SPEC_DIR:-docs/specs}
+ADR_DIR=${ADR_DIR:-docs/adr}
+PROPOSAL_DIR=${PROPOSAL_DIR:-docs/proposals}
+RATCHET=${RATCHET:-docs/agents/docs-ratchet.txt}
 fail=0
 err() { echo "check-docs: $*" >&2; fail=1; }
+
+# The ratchet: `<path> <rule>…` per line, `#` comments. exempt <path> <rule> is true when the
+# file is listed with that rule. A listed file is the visible backlog; the PR that touches it
+# brings it into shape and drops its line (ADR-0046).
+exempt() {
+  [ -f "$RATCHET" ] || return 1
+  awk -v p="$1" -v r="$2" '$1==p { for (i = 2; i <= NF; i++) if ($i == r) found = 1 } END { exit !found }' \
+    <(sed -E 's/#.*//' "$RATCHET")
+}
+words() { tr -s '[:space:]' '\n' | grep -c .; }
 
 # 1. ADR numbers unique
 dupes=$(find docs/adr -name '[0-9][0-9][0-9][0-9]-*.md' -printf '%f\n' | cut -c1-4 | sort | uniq -d)
@@ -27,13 +51,22 @@ for n in $dupes; do err "duplicate ADR number $n: $(ls docs/adr/"$n"-* | tr '\n'
 
 required_sections=("Purpose" "Surfaces" "Behaviour" "Refusals" "Governing ADRs and invariants" \
                    "Seams and proof" "Out of scope" "Open questions" "Retired")
+# The two-layer shape: these sections, in this order, and no others except Designed.
+v2_sections=("Purpose" "Surfaces" "Behaviour" "Refusals" "Out of scope" "Proof" "Retired")
 declare -A prefix_owner=()
 
 # Print the body of one "## Heading" section (up to the next "## ").
 section() { awk -v h="## $2" '$0==h{f=1;next} /^## /{f=0} f' "$1"; }
 
-# Print the table rows of a spec's "### What proves each claim" (up to the next ## or ###).
-proof_rows() { awk '/^### What proves each claim/{f=1;next} /^###? /{f=0} f && /^\|/' "$1"; }
+# Print a spec's proof rows: the "### What proves each claim" table in the earlier shape, or
+# the generated block between the proof markers in the two-layer shape.
+proof_rows() {
+  awk '/^### What proves each claim/{f=1;next} /^###? /{f=0} f && /^\|/' "$1"
+  awk '/^<!-- proof:begin -->$/{f=1;next} /^<!-- proof:end -->$/{f=0} f && /^\|/' "$1"
+}
+v2_shape() { grep -qxF '## Proof' "$1"; }
+# Lines outside the generated Proof block.
+own_lines() { awk '/^<!-- proof:begin -->$/{s=1} !s{n++} /^<!-- proof:end -->$/{s=0} END{print n+0}' "$1"; }
 
 # The names a proof row may cite as Rust evidence, computed once: every fn declared under a
 # #[test] or #[tokio::test] attribute in daemon/ (other attributes, doc comments and blank lines
@@ -88,10 +121,37 @@ for spec in "$SPEC_DIR"/*.md; do
   if [ -n "${prefix_owner[$prefix]:-}" ]; then err "$name: claim prefix $prefix already used by ${prefix_owner[$prefix]}"; fi
   prefix_owner[$prefix]=$name
 
-  # 3b. Required sections
-  for sec in "${required_sections[@]}"; do
-    grep -qxF "## $sec" "$spec" || err "$name: missing section '## $sec'"
-  done
+  # 3b / 4. Required sections, by shape. A spec with a `## Proof` section is in the two-layer
+  # shape (ADR-0046): the template's sections and nothing else, a Governed by line, a short
+  # Purpose, a length budget, and a Proof block that matches the generator. Anything else is
+  # the earlier shape, allowed only while the ratchet lists it.
+  if v2_shape "$spec"; then
+    for sec in "${v2_sections[@]}"; do
+      grep -qxF "## $sec" "$spec" || err "$name: missing section '## $sec'"
+    done
+    while IFS= read -r sec; do
+      case "$sec" in Purpose|Surfaces|Behaviour|Refusals|"Designed, not built"|"Out of scope"|Proof|Retired) ;;
+        *) err "$name: section '## $sec' has no place in the two-layer shape (docs/specs/TEMPLATE.md)";; esac
+    done < <(grep -oE '^## .*' "$spec" | sed 's/^## //')
+    grep -qE '^\*\*Governed by:\*\* ' "$spec" || err "$name: no **Governed by:** line naming its ADRs and invariants"
+    pw=$(section "$spec" Purpose | words)
+    [ "$pw" -le 120 ] || err "$name: Purpose is $pw words; the plain top is at most 120"
+    ol=$(own_lines "$spec")
+    [ "$ol" -le 250 ] || exempt "$spec" budget || err "$name: $ol lines outside the Proof block; the budget is 250"
+    if grep -qxF '<!-- proof:begin -->' "$spec" && grep -qxF '<!-- proof:end -->' "$spec"; then
+      if ! diff -q <(awk '/^<!-- proof:begin -->$/{f=1} f; /^<!-- proof:end -->$/{f=0}' "$spec") \
+                   <(scripts/spec-proof.sh "$spec") >/dev/null; then
+        err "$name: the Proof block is stale; run make spec-proof"
+      fi
+    else
+      err "$name: ## Proof has no <!-- proof:begin --> / <!-- proof:end --> markers"
+    fi
+  else
+    for sec in "${required_sections[@]}"; do
+      grep -qxF "## $sec" "$spec" || err "$name: missing section '## $sec'"
+    done
+    exempt "$spec" shape || err "$name: is in the earlier spec shape and not listed with 'shape' in $RATCHET; migrate it to docs/specs/TEMPLATE.md or list it"
+  fi
 
   # 3c. Every ID in the file uses the declared prefix
   # ADR-NNNN, SHA-256, RFC-NNNN and MCP SEP-NNNN are citations, not claim IDs.
@@ -149,5 +209,64 @@ for spec in "$SPEC_DIR"/*.md; do
   done
 done
 
-[ "$fail" -eq 0 ] && echo "check-docs: ADR numbers unique; every cited test exists; migrated specs are well-formed."
+# 4. ADRs: a plain top, a length budget, at most one amendment (ADR-0046). Each rule is waived
+# per file by the ratchet, which is the visible backlog of ADRs still in the earlier shape.
+for f in "$ADR_DIR"/[0-9][0-9][0-9][0-9]-*.md; do
+  [ -f "$f" ] || continue
+  n=$(wc -l < "$f")
+  [ "$n" -le 150 ] || exempt "$f" budget || err "$f: $n lines; an ADR is at most 150 (rewrite it, or list it with 'budget' in $RATCHET)"
+  a=$(grep -c '^## Amendment' "$f")
+  [ "$a" -le 1 ] || exempt "$f" amendments || err "$f: $a amendment sections; an ADR is amended at most once and then rewritten"
+  if ! exempt "$f" decision; then
+    first=$(grep -m1 -E '^## ' "$f")
+    [ "$first" = "## Decision" ] || err "$f: the first section must be '## Decision' (got: ${first:-none})"
+    dw=$(section "$f" Decision | words)
+    [ "$dw" -le 120 ] || err "$f: Decision is $dw words; the plain top is at most 120"
+  fi
+done
+# Every path the ratchet names exists, so a line does not outlive its file.
+if [ -f "$RATCHET" ]; then
+  for p in $(sed -E 's/#.*//' "$RATCHET" | awk 'NF {print $1}'); do
+    [ -e "$p" ] || err "$RATCHET lists $p, which does not exist; drop the line"
+  done
+fi
+
+# 5. Proposals: the shape docs/proposals/TEMPLATE.md describes, and never cited as authority.
+for p in "$PROPOSAL_DIR"/*.md; do
+  [ -f "$p" ] || continue
+  case "$p" in */README.md|*/TEMPLATE.md) continue;; esac
+  pn=$(basename "$p")
+  st=$(awk 'NR==3' "$p" | grep -oE '^\*\*Status:\*\* (idea|shaping|accepted|rejected)\b' | awk '{print $2}')
+  [ -n "$st" ] || err "$pn: line 3 must be '**Status:** idea|shaping|accepted|rejected (<date>). Origin: …'"
+  for sec in Problem Proposal Changes Objections; do
+    grep -qxF "## $sec" "$p" || err "$pn: missing section '## $sec'"
+  done
+  case "$st" in
+    accepted|rejected)
+      grep -qxF "## Outcome" "$p" || err "$pn: status is $st and there is no '## Outcome'"
+      if [ "$st" = accepted ]; then
+        section "$p" Outcome | grep -qE 'ADR-[0-9]{4}|\b[A-Z]{2,3}-[0-9]+\b' \
+          || err "$pn: accepted, and Outcome names neither an ADR nor a claim ID"
+      fi ;;
+  esac
+  n=$(wc -l < "$p")
+  [ "$n" -le 120 ] || err "$pn: $n lines; a proposal is at most 120"
+done
+# A claim never cites a proposal: a bullet claim or a Designed row that mentions the directory.
+# (Process substitution, not a pipe into `while`: err must set fail in this shell.)
+for spec in "$SPEC_DIR"/*.md; do
+  case "$spec" in */README.md|*/TEMPLATE.md) continue;; esac
+  while IFS=: read -r ln _; do
+    err "$(basename "$spec"):$ln: a claim cites a proposal, which never binds (ADR-0046)"
+  done < <(grep -nE '^(- \*\*[A-Z]{2,3}-[0-9]+\*\*|\| *[A-Z]{2,3}-[0-9]+ *\|).*proposals/' "$spec")
+done
+# Nor does shipped code: a proposal is not a reason.
+for d in relay daemon; do
+  [ -d "$d" ] || continue
+  while IFS=: read -r file ln _; do
+    err "$file:$ln: cites docs/proposals/, which never binds; cite the ADR or the spec claim"
+  done < <(grep -rnIE 'docs/proposals' "$d" --include='*.go' --include='*.rs' --exclude='*.pb.go' --exclude-dir=target 2>/dev/null)
+done
+
+[ "$fail" -eq 0 ] && echo "check-docs: ADR numbers unique; every cited test exists; migrated specs, ADRs and proposals are well-formed."
 exit "$fail"

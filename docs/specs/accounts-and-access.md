@@ -300,7 +300,7 @@ Wanted, deliberately not in the first pass, and in no committed order.
   Token — and on which engine (#285 proposes Cedar, evaluated jointly with the approval-rule
   grammar). Any answer must keep a configured AI-agent connected without routine human
   re-authentication, and a Grant used as a security boundary is narrows-only and `relay:`-scoped
-  (`docs/deferred.md`). Unrelated to an approval grant despite the name.
+  (`docs/proposals/multi-principal-rbac-and-grants.md`). Unrelated to an approval grant despite the name.
 - **Console OIDC sign-in.** An external browser identity flow beside local passwords;
   `console_oidc` is reserved and unimplemented.
 - **Emailed password reset.** A reset link sent to the Account holder instead of an admin setting
@@ -308,7 +308,7 @@ Wanted, deliberately not in the first pass, and in no committed order.
 - **Per-Account rate limits (#279).** Bounding a runaway AI-agent loop in time as well as in blast
   radius.
 - **IdP group claims for approval audiences** and `on_behalf_of`, joined to the existing-Account
-  OAuth mapping. `docs/deferred.md` names IdP-federated teams as the direction and rules out a
+  OAuth mapping. `docs/proposals/idp-federated-teams-and-audiences.md` names IdP-federated teams as the direction and rules out a
   native Relay org chart.
 
 ## Open questions

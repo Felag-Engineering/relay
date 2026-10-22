@@ -262,20 +262,27 @@ console-snapshots:
 	  go test ./internal/controlplane/console -run TestConsole_WriteScreenSnapshots -count=1 -v 2>&1 | grep -E 'wrote|FAIL|ok ' || true
 	@ls relay/console-snapshots
 
-.PHONY: docs-check adr-index
-# Documentation gates: ADR numbers are unique, and every test a capability spec
-# names in its proof table still exists. Both catch drift that has happened here —
-# two files once claimed ADR-0015, and a spec citing tests by name breaks silently
-# when one is renamed. Cheap, hermetic, no network.
+.PHONY: docs-check adr-index spec-proof
+# Documentation gates: ADR numbers are unique, every test a capability spec names in its
+# proof table still exists, and every ADR, spec and proposal has the two-layer shape ADR-0046
+# sets or is listed in docs/agents/docs-ratchet.txt. The first two catch drift that has
+# happened here — two files once claimed ADR-0015, and a spec citing tests by name breaks
+# silently when one is renamed. Cheap, hermetic, no network.
 #
 # Both run so a PR sees every finding at once; the target fails if either does. check-crosslinks
-# includes the docs/adr/README.md drift gate (same pattern as opschema-check: regenerate, compare).
+# includes the docs/adr/README.md drift gate (same pattern as opschema-check: regenerate, compare);
+# check-docs includes the same gate for each spec's generated Proof block.
 docs-check:
 	@./scripts/check-docs.sh; a=$$?; ./scripts/check-crosslinks.sh; b=$$?; exit $$((a | b))
 
 # Regenerate the ADR index from the ADR files. Commit the result; docs-check fails on drift.
 adr-index:
 	@./scripts/adr-index.sh > docs/adr/README.md && echo "adr-index: wrote docs/adr/README.md"
+
+# Regenerate every two-layer spec's Proof block from the tests that cite its claims. Commit the
+# result; docs-check fails on drift.
+spec-proof:
+	@./scripts/spec-proof.sh --write
 
 # Proves scripts/security-surface.sh sees what its header claims — untracked files, both halves
 # of a rename, and an unresolvable base ref, the three ways it used to report "clean" (#634).
@@ -369,10 +376,12 @@ test-ci-changed-paths:
 
 # Proves scripts/check-docs.sh's cited-test check covers Go Test/Benchmark/Fuzz names and, in
 # proof rows, Rust test fns and cargo-fuzz targets — failing on a name that does not exist, a
-# Rust fn that is not a test, or a test only under target/. Hermetic: a throwaway fixture repo
-# holding the real script; no Go or Rust toolchain.
+# Rust fn that is not a test, or a test only under target/ — and that its two-layer checks and
+# scripts/spec-proof.sh hold the shape ADR-0046 sets. Hermetic: throwaway fixture repos holding
+# the real scripts; no Go or Rust toolchain.
 test-check-docs:
 	bash scripts/check-docs-test.sh
+	bash scripts/check-docs-shape-test.sh
 
 # Proves scripts/smoke-test.sh's mTLS verdict is not vacuous: it passes only when a certless
 # Enroll reaches its handler (positive control) AND certless Renew and Tunnel/Open are refused

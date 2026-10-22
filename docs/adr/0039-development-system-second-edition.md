@@ -52,7 +52,7 @@ for a team with a compliance function. The cost falls on the owner and the benef
    surfaces, the security model, the Principles); the ADR log; `docs/specs/`; `GLOSSARY.md`;
    and the threat register (the R-rows of today's threat model, kept; the boundary map is
    folded into the architecture document). `docs/design/*` retires — the console screens into
-   the console spec, the rest to history. `docs/deferred.md` becomes issues. `AGENTS.md`
+   the console spec, the rest to history. `docs/deferred.md` becomes issues (it became `docs/proposals/` on 2026-10-22). `AGENTS.md`
    shrinks to orientation, language, out-of-realm and the merge rule.
 
 6. **One loop command, one reviewer per gate.** `/dev-loop` takes flags for queue, parallel

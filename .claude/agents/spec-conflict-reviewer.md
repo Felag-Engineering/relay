@@ -39,12 +39,24 @@ agrees with itself and with the rest of the documentation.
    proof rows that prove a claim the file says is retired; a Designed row with no milestone;
    a Behaviour claim written in the future tense.
 4. **Against the template.** Missing or renamed sections; claims without IDs or with a foreign
-   prefix; measured numbers in Performance; file paths or code beyond the state-machine
-   exception; a Future work item that is really a decided claim, or vice versa.
+   prefix; file paths or code beyond the state-machine exception. A spec in the two-layer
+   shape (one with a `## Proof` section) has exactly the sections `TEMPLATE.md` names: a
+   *Future work*, *Open questions*, *Accepted residual risk* or *Seams and proof* section
+   there is a finding, and so is a Purpose over 120 words. A spec still in the earlier shape
+   is held to the earlier template and to its ratchet line.
 5. **Against the glossary.** An `_Avoid_` term used; a new term with no glossary entry;
    "agent" used for the relay-daemon.
 6. **Against the threat model.** A residual risk accepted in the spec with no R-row, or an
-   R-row the spec's text no longer matches.
+   R-row the spec's text no longer matches. In a two-layer spec, residual-risk prose is itself
+   the finding: the register is its one home and the spec cites the row.
+7. **Duplication (ADR-0046).** A fact restated from an ADR's Decision, the threat model, the
+   glossary or another spec, where a link would do. Quote the passage and name its home. Two
+   copies that agree today are still a finding; they will not agree later.
+
+When the coordinator hands you a **proposal** (`docs/proposals/`) instead of a spec, run
+checks 1, 2, 5 and 7 against its *Proposal* and *Changes* sections, and check that *Changes*
+names every spec and ADR the text actually touches. A proposal binds nothing, so nothing in
+it is BLOCKING; report everything as REVISE.
 
 Do not review the design or the wisdom of the behaviour. The owner decided it. You review
 whether it is stated once, consistently, in the right place, and without silently changing
