@@ -72,7 +72,7 @@ Grill, 2026-10-22 (`proposal-grill`); open until the owner answers.
 8. **Second-person, `count: 2` and grants cannot be answered over MCP.** The requester and the
    second person arrive as one Account, and a grant has no tool call to elicit on. All of them
    land on the Control API, which then carries far more than recovery. — Two-person approval
-   is not supported yet and moves to `two-person-approval.md`. Owner ruling 2026-10-22.
+   is not supported yet and moves to `n-party-approval.md`. Owner ruling 2026-10-22.
 9. **Flipping AP-14's default to `in-band`** silently weakens rules operators already wrote,
    with no human act or audit; the flip is not needed, since out-of-band is met on the Control
    API. — open; recommendation: drop it.

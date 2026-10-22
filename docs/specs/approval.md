@@ -434,6 +434,10 @@ nothing is asserted, even when the client sent a responder assertion.
 
 ## Governing ADRs and invariants
 
+- **ADR-0047** — approval is one in-band answer. A rule gates and nothing more; one decision
+  ends a request; over MCP the answer is elicited and `approve_request` is retired; the Control
+  API endpoint is the recovery path; n-party approval, a Relay-held audience, out-of-band
+  channels and approval grants are cut, each to a proposal (AP-81 … AP-84).
 - **ADR-0044** — the Console does not decide approvals; the Control API decision endpoint is the
   one out-of-band path, kept as the manual rescue and the only place a rule needing a
   Relay-verified approver can be satisfied, so rescue has no UI. Retires AP-59, AP-16 and AP-19;
@@ -601,13 +605,18 @@ lookup.
 
 | Claim | Statement | Milestone |
 |---|---|---|
-| AP-55 | A Relay whose store holds no gate rules at first start **seeds the shipped default** — `read` ungated, `mutate` and Raw Exec at self-confirmation in-band, with second-person and out-of-band available to raise any rule to — as one audited act attributed to the system and not to an Account. After that the store is the only source: no file is read, and the Relay does not re-seed on a later start. Retires AP-7; depends on AP-72. (ADR-0027 §Amendment 2026-09-16, which declined a root-owned file seeding the store as two sources for one setting; #590.) | v0.7.0 — Admin Console: Administration & Execution |
-| AP-56 | An approval grant never covers Raw Exec: every Raw Exec needs its own decision, and a Scope naming Raw Exec is refused. Retires AP-30. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
-| AP-57 | An approval grant's window is capped at 4 hours, and a longer one is refused. Retires AP-31 and narrows AP-53. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
+| AP-55 | A Relay whose store holds no gate rules at first start **seeds the shipped default** — `read` ungated, `mutate` and Raw Exec at confirmation — as one audited act attributed to the system and not to an Account. After that the store is the only source: no file is read, and the Relay does not re-seed on a later start. Retires AP-7; depends on AP-72. (ADR-0027 §Amendment 2026-09-16, which declined a root-owned file seeding the store as two sources for one setting; #590.) | v0.7.0 — Admin Console: Administration & Execution |
 | AP-72 | Gate rules are runtime objects in the Relay's store, edited only by a human `admin` in the Admin Console with step-up re-authentication, audited per rule with old and new values, and taking effect on the next dispatch; no MCP tool and no Control API route writes them, and none may be added. Retires AP-4, AP-8 and AP-54 — the store is the only source, no file is read, and there is nothing left to fail to load. (ADR-0027 §Amendment 2026-09-15; #590, #596.) | v0.7.0 — Admin Console: Administration & Execution |
+| AP-81 | A gate rule names only what it matches and how long a request it parks lives. A rule file naming a count, an audience, a requester exclusion or a channel is refused at load, naming the field, so no rule changes meaning silently. The ladder has two rungs: no gate, and confirmation. Retires AP-9, AP-13, AP-14, AP-43, AP-44, AP-45, AP-47, AP-69 and AP-73; narrows AP-17, AP-61 and AP-80. (ADR-0047.) | v0.6.5 — Install Path: relay init, join string, packages |
+| AP-82 | A parked request is ended by its first decision that clears AP-42, AP-46, AP-48 and AP-49: an approval releases it, and a denial is terminal. Retires AP-26. (ADR-0047.) | v0.6.5 — Install Path: relay init, join string, packages |
+| AP-83 | `approve_request` is not an MCP tool. Over MCP a parked request is answered only on the retried call of an elicited question, and a client Relay does not ask gets `pending_approval`. Retires AP-15; narrows AP-10, AP-17 and AP-70. (ADR-0047.) | v0.6.5 — Install Path: relay init, join string, packages |
+| AP-84 | Relay has no approval grants: no grant request, no Scope and no claim on any surface, and every gated dispatch parks and is answered on its own. Retires AP-29 … AP-37 and AP-50 … AP-53; narrows AP-24 and AP-77. (ADR-0047.) | v0.6.5 — Install Path: relay init, join string, packages |
 
 ## Out of scope
 
+- **More than one approver, a Relay-held audience, and approval grants** — cut by ADR-0047;
+  `docs/proposals/n-party-approval.md`. **A channel Relay verifies** — cut by ADR-0047;
+  `docs/proposals/out-of-band-approval.md`.
 - **Where the gate sits in the dispatch pipeline, and what a park leaves behind** —
   `execution.md`.
 - **The Plan a decision releases** — `plan.md`: the ordered steps, the cursor, the payload-free
@@ -780,6 +789,8 @@ the Control API decision endpoint too while threat model R27 is open.
 
 ## Retired
 
+- **AP-56**, **AP-57** — `2026-10-22` — retired unbuilt: ADR-0047 cuts approval grants, so
+  their two bounds have nothing to bound (AP-84).
 - **AP-58** — `2026-09-24` — moved to the `approval-assurance.md` stub when ADR-0040 shelved
   second-person grant issuance.
 - **AP-74**, **AP-75**, **AP-76** — `2026-09-25` — retired unbuilt when ADR-0040's strict

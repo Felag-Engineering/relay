@@ -34,20 +34,21 @@ says who asked, for whom, who approved, and over which channel.
    approval is required and what the human sees: the Operation, its arguments, the resolved
    fan-out, per-Node preflight verdicts, the blast size and the requester. The AI-agent supplies
    none of the words. The envelope decides only how the human is reached.
-4. **Channel strength is per rule, checked, and stamped by the receiving surface.** `in-band`
-   trusts the requesting client; `out-of-band` is evidence, a decision on a credential the
-   session does not hold. The self-confirmation rung defaults to `in-band`. The Control API
+4. *Superseded by ADR-0047: no rule demands a channel.* **Channel strength is per rule.**
+   `in-band` trusts the requesting client; `out-of-band` is evidence, a decision on a credential
+   the session does not hold. The self-confirmation rung defaults to `in-band`. The Control API
    stamps `out-of-band` because of what it is, and no request body carries a channel. A
    decision, approve or deny, must arrive on a channel at least as strong as its rule demands,
    because a denial is terminal too. Out-of-band as a rule *requirement* is shelved: the
    mechanism stands, and the shipped default does not demand it (ADR-0040).
 5. **The confirmation ladder.** Rung 1, no gate. Rung 2, self-confirmation: the requester sees
-   the Relay-authored preflight and confirms; **human requesters only**, so a machine
-   requester's lowest gated rung is 3. The Console's step-up apply (ADR-0026) is rung 2 fused
-   into execution. Rung 3, second-person: the audience excludes the requester. Every request
-   made over MCP is agent-grade, whoever's OAuth identity authorizes the session, because the
-   calls are model-generated and steerable by injected content. An in-band MRTR *answer* on a
-   human Account's OAuth session is that human's verified decision (ADR-0029).
+   the Relay-authored preflight and confirms; **human requesters only**; a machine requester
+   confirms only through an elicited answer's asserted responder (ADR-0047). The Console's
+   step-up apply (ADR-0026) is rung 2 fused into execution. Rung 3, second-person, is superseded
+   by ADR-0047. Every request made over MCP is agent-grade, whoever's OAuth identity authorizes
+   the session, because the calls are model-generated and steerable by injected content. An
+   in-band MRTR *answer* on a human Account's OAuth session is that human's verified decision
+   (ADR-0029).
 6. **Gate rules narrow only, and approval is not authorization.** A rule may require approval
    where none was required; it never grants what Policy would refuse, and an approved dispatch
    still traverses Selector, Policy and blast cap unchanged. Rules match on risk class, blast
@@ -66,9 +67,9 @@ says who asked, for whom, who approved, and over which channel.
      every request from the humans who should answer.
    - **Overlapping rules** take the strictest requirement, but their audiences union and a rule
      naming no audience leaves it unrestricted: accepted as R18 (`docs/security/threat-model.md`).
-7. **Quorum: store the general shape.** A requirement is checked against a set of decisions, so
-   N-of-M needs no migration; rules expose `count: 1 | 2`, partial state is visible, and each
-   decision is its own audit record.
+7. *Superseded by ADR-0047: one decision ends a request.* **Quorum.** A requirement is checked
+   against a set of decisions, so N-of-M needs no migration; rules expose `count: 1 | 2`,
+   partial state is visible, and each decision is its own audit record.
 8. **An approval binds to a hash of the rendered preflight, and drift re-parks.** The hash
    covers the Operation, its arguments and the resolved fan-out; a dispatch that no longer
    matches at release parks again. Every rendering of a request, the composer's preflight, the
@@ -83,10 +84,10 @@ says who asked, for whom, who approved, and over which channel.
 11. **The request and every decision are first-class audit records**, carrying `approval_id`
     and, where a window released the work, `grant_id`, so who asked, for whom, who approved
     and what happened is one query.
-12. **Batch and window approvals, because fatigue is a security property.** A rubber-stamped
-    approval is worse than none: it manufactures evidence of consideration. An approval grant
-    covers a declared Scope for a bounded time and number of uses, and every Job it releases
-    audits back to it.
+12. *Superseded by ADR-0047: no approval grants.* **Batch and window approvals.** A
+    rubber-stamped approval is worse than none: it manufactures evidence of consideration. An
+    approval grant covers a declared Scope for a bounded time and number of uses, and every Job
+    it releases audits back to it.
     - A **Scope is not a Match**: an omitted field in a Match gates more, in a Scope it would
       pre-approve more. Every bound is mandatory, an empty Operation list covers nothing, and a
       Scope over work nothing gates is refused. A Scope has no namespace term, and a stored
