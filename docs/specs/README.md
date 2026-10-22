@@ -180,7 +180,7 @@ Rows marked *stub* exist so the capability is named.
 | `freeze.md` | Emergency Freeze — engage, release, and its survival across a restart |
 | `query.md` | Node, registry, Policy and vocabulary reads; `describe_node`; Policy aliases |
 | `audit-and-read-lane.md` | The audited read lane, audit records, the retention posture |
-| `enrollment.md` | Enrollment Tokens, join strings, bundles, identity issuance and revocation |
+| `enrollment.md` | Enrollment Tokens, join strings, identity issuance and revocation |
 | `accounts-and-access.md` | Accounts, roles, Grants, API tokens, OAuth sessions, attribution |
 | `policy-catalog.md` | First-party opt-in catalog fragments, their release digests, and the Console screen that arranges them into cohorts and exports them; never applied over the wire |
 | `policy.md` | The daemon's Policy itself: the local file, deny-by-default and deny-beats-allow, argument-level and canonical matching, the shipped default read Policy |

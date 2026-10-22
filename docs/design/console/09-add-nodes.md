@@ -1,6 +1,11 @@
 # 09 — Add Nodes
 
 **Artboard 7.** Mint an Enrollment Token and render what the machines need, in one act.
+
+> **Superseded in part by ADR-0048.** Nothing is rendered: the form asks how many Nodes the token is
+> for, Labels are optional, and the reveal shows `sudo relay-daemon join` and the join string to
+> paste at its prompt, apart. The rendering sections below are history until v0.7.0 redesigns the
+> screen.
 **Milestone v0.7.0.**
 
 **Governing:** ADR-0006, ADR-0030, ADR-0031, ADR-0032, ADR-0033, invariants #7, #11.

@@ -22,7 +22,6 @@ artifacts they can verify before executing.
 | **Release artifacts** | The statically linked `relay-daemon` binary for each architecture under the release `SHA256SUMS` (DI-1). Packages are designed (DI-24). The Policy Catalog is published beside them; `policy-catalog.md` owns it |
 | **The customer's config management** | The only installer, configurer and upgrader |
 | **relay-daemon subcommands** | `--version`, `policy check` (`policy.md`), `dump-operation-schema` (`operations-and-templates.md`); `join` (DI-37) contacts no Relay today; DI-42 makes it the act that enrolls. No other subcommand contacts a Relay |
-| **Enrollment bundles** | A rendered artifact for config management, minted with its Enrollment Token (`enrollment.md` owns minting and rendering; DI-35) |
 | **Relay, MCP, Control API, Console** | Nothing. The Relay never installs, configures or upgrades a daemon, and its only lever over versions is the dispatch-level minimum-version gate. The absence is the invariant (invariant 14), not a gap (DI-18) |
 
 ## Behaviour
@@ -147,8 +146,8 @@ Relay never pushes a binary (invariant 14).
   package-owned. Amended 2026-10-16: the self-reference lint's read probes stop at secrets and
   its write probes name the packaged trust root (DI-39).
 - **ADR-0036** — a declared file mode is a ceiling; Node code never widens what the umask removed.
-- **ADR-0032** — the rendered bundle pins a daemon version and digest built into the Relay
-  (DI-35).
+- **ADR-0048** — joining is one command; Relay renders no Bundle, and each release ships an
+  Ansible role that feeds the join string from the operator's side (DI-45).
 - **ADR-0031**, amended 2026-10-21 — the join string: address, CA fingerprint and Enrollment
   Token in one value; consumed by `relay-daemon join` and persisted nowhere on a Node (DI-42,
   DI-43).
@@ -210,17 +209,16 @@ until it is done.
 | DI-42 | `relay-daemon join` enrolls in the process that read the join string: it reads the string from a prompt or standard input, never from its arguments, pins the Relay's CA from the fingerprint, enrolls, persists the identity and the Relay address, and then enables and starts the unit. It writes the join string nowhere. On a Node that already holds an identity it changes nothing and exits zero, so config management may rerun it; a failed enrollment leaves nothing on disk and exits non-zero. Replaces DI-37 when promoted; `enrollment.md` carries the join string's contract. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-43 | The daemon is configured by a join string given to `relay-daemon join` — Relay address, CA fingerprint and Enrollment Token in one value (ADR-0031). `join` pins the Relay's CA from the fingerprint and writes the CA bundle into the state directory, so no CA path is configured by hand. The unit start reads no join string: `RELAY_JOIN` is not a setting, the shipped example environment file carries no join line, and the environment file holds no secret, so DI-28's deny of it and DI-39's probe of it stay as defence in depth and no longer guard a secret. A unit start with no persisted identity exits cleanly as DI-25 says. Replaces DI-22 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-44 | The daemon persists the Relay address with its identity at enrollment and uses it on every later start; a Relay address set in its environment overrides the persisted one. A Node holding an identity with neither refuses to start: there is no default address. Replaces DI-38 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-45 | Each release attaches an Ansible role and a cloud-init config that install the daemon package and pipe a join string the caller supplies into `relay-daemon join`. Neither carries or stores a token, and rerunning either on an enrolled Node changes nothing (DI-42; ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
+| DI-45 | Each release attaches an Ansible role, listed in `SHA256SUMS` and installed by download, verify, install like every release artifact, that installs that release's daemon package and passes a join string from the operator's vault to `relay-daemon join` on standard input. It writes the string to no file and no command line on the Node, places no Policy fragment, and changes nothing on an enrolled Node (DI-42; ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-29 | The shipped read catalog ships as its own optional `.deb` and `.rpm` package, depending on the daemon package. Its files are package-owned: replaced on upgrade, removed with the package, and never installed as configuration the package manager would preserve. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-31 | Removing the daemon package removes the binary, the unit and the catalog package, and leaves the Policy, the Policy directory, the environment file and the state directory. `apt purge` removes everything the package created, the Node's identity included; `.rpm` removal never deletes state and prints the paths to delete by hand. Purge deletes only paths the package itself created, never a path read from an operator-edited file. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-33 | A platform is supported only where CI installs the package, upgrades it over the operator's edited configuration and finds the edit intact, and removes it: Debian 13; Ubuntu 26.04 LTS and 24.04 LTS; RHEL, Rocky Linux and AlmaLinux 10; Fedora's current release; Amazon Linux 2023 — each on `x86_64` and `aarch64`. A platform whose package manager refuses an unsigned local package by default is not supported. This list also governs the Relay packages (`relay-configuration.md`). | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-34 | A documented migration moves a hand-built Node onto the package: it removes the old binary and the old unit under `/etc/systemd/system/`, which would otherwise shadow the packaged one, and says to remove by hand the Policy's self-reference denies for the old binary and unit paths, which the shipped default no longer carries (DI-28). | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-35 | A rendered enrollment bundle pins a daemon version and digest (ADR-0032); which artifact it pins once packages exist is an open question below. Moved from v0.6.5 on 2026-10-16: nothing renders a bundle until v0.7.0. | v0.7.0 — Admin Console: Administration & Execution |
 | DI-36 | Beside the Policy file, `/etc/relay-daemon/policy.toml`, sits the Policy directory, `/etc/relay-daemon/policy.d`, which the install creates empty and never writes into again. The daemon composes the Policy file and every fragment in it into one Policy with one Policy fingerprint, deny beating allow across all of them; a fragment that is a symlink, not a regular file, or group- or world-writable refuses start, and one fragment that cannot be read or parsed leaves the whole Policy deny-all. | v0.7.0 — Admin Console: Administration & Execution |
 
 ## Out of scope
 
-- Minting Enrollment Tokens, rendering bundles, identity issuance and revocation —
+- Minting Enrollment Tokens, identity issuance and revocation —
   `enrollment.md`. DI-21 and DI-23 state only what a revoked Node's daemon meets.
 - The connection a running daemon holds — `node-connection.md`, which owns reconnect and the
   minimum-version gate. DI-16, DI-17 and DI-21 restate only what an install, upgrade or removal
@@ -298,9 +296,9 @@ broad allow (ADR-0019).
 - **OS packages carrying Policy Catalog fragments** (`policy-catalog.md`), alongside the Ansible
   role below. The shipped read catalog's package is not one: it is a template pack, not a
   catalog fragment.
-- **A first-party Ansible role** that installs the daemon and places catalog fragments named in a
-  group's variables. Until one exists, `policy-catalog.md`'s exported install task stands alone;
-  reviving the thin role once closed as superseded is a decision, not a chore.
+- **Catalog fragments in the Ansible role.** DI-45's role installs and joins only; placing catalog
+  fragments named in a group's variables is a further step. Until then, `policy-catalog.md`'s
+  exported install task stands alone.
 - **Delivering the join string to `relay-daemon join` from a secret store** or a systemd
   credential, for shops that want no interactive step; DI-42 already keeps it off disk, so this
   is a delivery convenience and not a second place the token rests.
@@ -317,15 +315,14 @@ broad allow (ADR-0019).
   (DI-9); `selectors-and-labels.md` describes a separate root-owned declared-labels file read at
   start and on reload. One home has to be chosen in both specs, with what remove and purge do to
   it.
-- **Which artifact does a rendered bundle pin once packages exist?** ADR-0032 pins one daemon
-  version and digest and calls the package the end state. With two package formats on two
-  architectures, the bundle needs either a digest per platform or a different pin (DI-35).
 - **Does a Task stopped at the end of the shutdown grace get a distinct outcome?** Today it is
   reported as cancelled (DI-14). A distinct interrupted outcome is a `/proto` contract, decided
   before it is built.
 
 ## Retired
 
+- **DI-35** (retired 2026-10-22) — retired unbuilt: Relay renders no Enrollment Bundle, so nothing
+  pins a version through one (ADR-0048).
 - **DI-8** (retired 2026-10-21) *The daemon enrolls with an Enrollment Token and a CA bundle
   file named by path; the token is used only when no identity is persisted, and is inert on every later
   start.* Untrue once the daemon enrolls only by join string, pinning the Relay's CA from its

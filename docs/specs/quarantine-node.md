@@ -50,7 +50,7 @@ decides who may do either (invariant 10).
 - **Who:** an Account of `operator` or above, on any surface, **machine Accounts included**: a
   quarantine only ever reduces what can run.
 - **Target:** a Selector containing only `relay:` and `tag:` terms — for example
-  `relay:node-id=a1b2`, `relay:enrollment-token=tok_7`, or `tag:incident=4412`.
+  `relay:node-id=a1b2` or `tag:incident=4412`.
   - `relay:` is allowed because only the Relay writes it.
   - `tag:` is allowed because no Node can write it.
   - `node:` and `state:` are refused. A Node controls both, so a compromised Node could relabel

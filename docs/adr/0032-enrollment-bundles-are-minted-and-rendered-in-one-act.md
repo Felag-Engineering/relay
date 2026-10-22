@@ -1,6 +1,9 @@
 # Enrollment bundles are minted and rendered in one act
 
-**Status:** Accepted; decisions 1 to 4 superseded by ADR-0048 (Relay renders no Enrollment Bundle).
+**Status:** Accepted.
+
+Decisions 1 to 4 and 6 are superseded by ADR-0048: Relay renders no Enrollment Bundle. Decision 5,
+the `admin` floor on a mint, stands.
 
 Three surfaces need to hand an operator something that joins Nodes to a fleet: `relay init` at
 first boot (ADR-0030), `/api/v1` for config management, and the Console from v0.7.0. Invariant
