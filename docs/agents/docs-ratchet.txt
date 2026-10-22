@@ -1,0 +1,64 @@
+# The docs ratchet (ADR-0046): documents outside the two-layer rules on 2026-10-22, each with the
+# rule it fails. scripts/check-docs.sh waives exactly that rule for exactly that file.
+#
+#   decision    the ADR does not open with a `## Decision` of at most 120 words
+#   budget      an ADR over 150 lines, or a spec over 250 lines outside its Proof block
+#   amendments  an ADR with more than one `## Amendment`
+#   shape       a migrated spec still in the earlier template (hand-kept proof table, the
+#               Seams, Future work, Open questions and residual-risk sections)
+#
+# A line is removed by the PR that touches its file: that PR brings the document into shape,
+# the rule the invariant gap table in AGENTS.md already uses. A listed path that no longer
+# exists fails the lint. Never add a line for a new document.
+docs/adr/0001-structured-operations-with-regex-gated-raw-exec.md decision
+docs/adr/0002-node-side-policy-is-locally-rooted-and-remotely-immutable.md decision
+docs/adr/0003-mcp-meta-tool-surface-with-selector-fan-out.md decision
+docs/adr/0004-async-job-execution-model.md decision
+docs/adr/0005-grpc-bidi-over-mtls-transport.md decision
+docs/adr/0006-node-enrollment-identity-and-label-authority.md budget amendments decision
+docs/adr/0007-polyglot-rust-daemon-go-relay.md decision
+docs/adr/0008-system-model-git-backed-semantic-graph.md decision
+docs/adr/0009-admin-console-web-ui.md decision
+docs/adr/0010-control-api-and-account-model.md budget amendments decision
+docs/adr/0011-plan-mode-daemon-evaluated-policy-queries.md decision
+docs/adr/0012-operation-risk-classes-and-split-blast-cap.md amendments decision
+docs/adr/0013-cancellation-and-emergency-freeze.md decision
+docs/adr/0014-daemon-lifecycle-iac-upgrades-version-gate.md decision
+docs/adr/0015-operation-vocabulary-golden-schema.md decision
+docs/adr/0016-internal-naming-relay-not-gleipnir.md decision
+docs/adr/0017-node-origin-label-trust.md decision
+docs/adr/0018-canonical-path-matching-for-file-read.md decision
+docs/adr/0019-canonical-argv-matching-for-raw-exec-deny.md budget decision
+docs/adr/0020-tag-labels-operator-grouping-namespace.md amendments decision
+docs/adr/0021-local-template-tier-shipped-read-catalog-native-freeze.md budget amendments decision
+docs/adr/0022-shipped-default-read-policy.md budget amendments decision
+docs/adr/0023-retire-the-shared-control-plane-credential.md decision
+docs/adr/0024-oauth-resource-server-delegated-idp.md decision
+docs/adr/0025-read-access-is-audited-read-output-is-not-retained.md decision
+docs/adr/0026-admin-console-execution-surface.md budget amendments decision
+docs/adr/0027-approval-callout-notify-via-mcp-decide-out-of-band.md budget amendments decision
+docs/adr/0028-mcp-tasks-extension-transport-layer-shim.md budget amendments decision
+docs/adr/0029-in-band-approval-through-the-tool-surface.md budget amendments decision
+docs/adr/0030-relay-init-and-the-boundary-of-the-relay-binary.md amendments decision
+docs/adr/0031-one-server-certificate-and-the-fingerprint-pinned-join-string.md budget amendments decision
+docs/adr/0032-enrollment-bundles-are-minted-and-rendered-in-one-act.md decision
+docs/adr/0033-first-party-installation-artifacts.md budget amendments decision
+docs/adr/0034-state-labels-relay-derived-namespace.md budget decision
+docs/adr/0035-account-suspension.md decision
+docs/adr/0036-node-code-never-overrides-the-operator-s-umask.md budget decision
+docs/adr/0037-agentless-ssh-executor-low-assurance-tier.md decision
+docs/adr/0038-plan-is-an-approved-route-of-execution.md budget amendments decision
+docs/adr/0039-development-system-second-edition.md decision
+docs/adr/0040-the-surface-that-created-a-request-answers-it.md budget amendments decision
+docs/adr/0041-gleipnir-rooted-identity-grants-and-a-verified-approver.md decision
+docs/adr/0042-template-dispatch-resolves-its-risk-class-over-the-reporting-nodes.md budget decision
+docs/adr/0043-one-relay-configuration-file.md decision
+docs/adr/0044-the-console-does-not-decide-approvals.md budget decision
+docs/adr/0045-console-passwords-temporary-at-creation-and-self-service-change.md budget decision
+docs/specs/approval.md shape
+docs/specs/daemon-installation.md shape
+docs/specs/enrollment.md shape
+docs/specs/policy-catalog.md shape
+docs/specs/policy-preflight.md shape
+docs/specs/query.md shape
+docs/specs/relay-configuration.md shape

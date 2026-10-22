@@ -80,7 +80,7 @@ _Not yet written._
 - Node reads and the registry — `query.md`.
 - Desired-state reconciliation, drift remediation, and convergence toward a spec — out of realm
   permanently (`AGENTS.md`, ADR-0008).
-- Scheduled health checks (Expectations) — deferred work in `docs/deferred.md`, not this spec.
+- Scheduled health checks (Expectations) — deferred work in `docs/proposals/expectations-runtime-health-checks.md`, not this spec.
 - Incident memory and long-horizon reasoning that belongs to an AI-agent harness rather than
   to Relay.
 
@@ -107,7 +107,7 @@ _Not yet written._
 3. **May a Service be used as a target?** ADR-0008 says a Service desugars to a Selector;
    ADR-0020 says the model never feeds Selectors. One of those has to give.
 4. **Git-backed YAML or the Relay's store?** ADR-0008 chose git for free diff, blame and revert.
-   The Relay otherwise persists to its store, HA wants Postgres (`docs/deferred.md`), and a git
+   The Relay otherwise persists to its store, HA wants Postgres (`docs/proposals/postgres-store.md`), and a git
    working tree is a second persistence mechanism with its own backup, locking and HA story.
 5. **One audit trail or two?** Git commits carry provenance, and every capability action is also
    audited. Is a model change an audit record, a commit, or both — and which is authoritative?

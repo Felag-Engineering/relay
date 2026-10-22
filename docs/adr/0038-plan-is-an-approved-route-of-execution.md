@@ -46,7 +46,7 @@ an itemised invoice.
   bound to the Plan's ID.
 
   **`Stage` is untouched and keeps its reserved meaning** — ordered batches of Tasks within a
-  single Operation's fan-out, for the staged rollout in `docs/deferred.md` (canary → gate →
+  single Operation's fan-out, for the staged rollout in `docs/proposals/staged-rollout-and-approval.md` (canary → gate →
   remainder). The two are orthogonal and compose: a Plan of N steps, each a Job, each Job one
   day possibly multi-stage. A Plan step is not a Stage, and the two must never be merged.
 

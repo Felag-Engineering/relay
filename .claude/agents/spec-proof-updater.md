@@ -22,14 +22,22 @@ shapes, and the spec in full.
 1. **Legacy check.** If the spec's Status begins `aspirational` or `stub`, do not promote or
    edit claims — the spec is unmigrated. Change nothing, and report
    `LEGACY SPEC: proof not recorded`.
-2. **For each claim ID the issue named**, find it in *Designed, not built*. Confirm the diff
+2. **Shape check.** A spec with a `## Proof` section is in the two-layer shape (ADR-0046): its
+   proof is generated. Run `make spec-proof` and read the block. A test that proves a claim
+   names the ID in the comment directly above it; if the diff's test asserts a claim and does
+   not name it, that is the developer's omission: report it as a finding and do not promote.
+   The block's last line, *Designed claims a test already cites*, is the list to promote. In a
+   spec still in the earlier shape, keep the hand-kept table as steps 3 and 4 describe.
+3. **For each claim ID the issue named**, find it in *Designed, not built*. Confirm the diff
    adds or changes a test that asserts it — read the test. If it does: move the row's statement
    into Behaviour (or Refusals, if it is a refusal) as `- **ID** <statement, verbatim>`, delete
-   the Designed row, and add a proof row `| ID | \`TestName\` | <seam> |`. If the diff has no
-   test for it, do **not** promote it; list it under *claims with no row* and report it.
-3. **Claims the diff proves that the issue did not name** — a test that plainly asserts an
-   existing Behaviour claim with no row: add the proof row. Do not promote anything unnamed.
-4. **Performance rows.** If the diff adds a `Benchmark`, replace the matching *(none)*.
+   the Designed row, and (earlier shape only) add a proof row `| ID | \`TestName\` | <seam> |`;
+   in the two-layer shape, run `make spec-proof` again so the block moves it. If the diff has
+   no test for it, do **not** promote it; report it under *not promoted*.
+4. **Claims the diff proves that the issue did not name** — a test that plainly asserts an
+   existing Behaviour claim with no row: add the proof row (earlier shape) or confirm the
+   generated block shows it. Do not promote anything unnamed. Earlier shape only: if the diff
+   adds a `Benchmark`, replace the matching *(none)* in Performance.
 5. **Status.** If *Designed, not built* is now empty, delete the section and set Status to
    `current as of <today>`. If rows remain and Status is `current`, set it to `designed, not
    built, as of <today>` — that is a finding, report it. Otherwise move the date.
@@ -37,10 +45,11 @@ shapes, and the spec in full.
 
 ## Never
 
-- Reword a claim, renumber a claim, delete a claim, add a claim, delete a proof row, or edit
-  *Retired*. Any of those is the human's.
+- Reword a claim, renumber a claim, delete a claim, add a claim, delete a proof row, hand-edit
+  a generated Proof block, or edit *Retired*. Any of those is the human's.
 - Promote a claim the diff does not test. "Implemented" is not "proven".
-- Touch Purpose, Surfaces, Out of scope, Accepted residual risk, Future work, Open questions.
+- Touch Purpose, Surfaces, Out of scope, or (earlier shape) Accepted residual risk, Future
+  work, Open questions.
 - Edit a second spec unless the issue named claims in it.
 
 ## Output

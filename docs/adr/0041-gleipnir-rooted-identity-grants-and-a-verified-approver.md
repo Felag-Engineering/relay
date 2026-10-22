@@ -121,7 +121,7 @@ in the capability specifications this ADR names under *Consequences*.
   approver. Its firewall argument stands; its "no Relay-verified approver exists in the default
   path" no longer does. **ADR-0024** is amended by decision 4 only. Both amendments are recorded
   in those files when this ADR is accepted, per the crosslink gate.
-- `docs/deferred.md` loses its *IdP-federated teams/audiences* and *multi-principal RBAC and
+- `docs/proposals/` (then `docs/deferred.md`) loses its *IdP-federated teams/audiences* and *multi-principal RBAC and
   Grants* entries; both are now this milestone. The direction "Relay never grows a native org
   chart" is kept and satisfied: the org chart is Gleipnir's, and Relay holds a copy.
 - `docs/specs/accounts-and-access.md` migrates to the claim format and gains the directory,

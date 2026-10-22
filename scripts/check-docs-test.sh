@@ -34,7 +34,7 @@ mkdir -p "$FIX/scripts" "$FIX/docs/adr" "$FIX/docs/specs" "$FIX/relay/internal/t
          "$FIX/daemon/src" "$FIX/daemon/tests" "$FIX/daemon/fuzz" "$FIX/daemon/target/debug/build"
 cp "$REPO_ROOT/scripts/check-docs.sh" "$FIX/scripts/check-docs.sh"
 chmod +x "$FIX/scripts/check-docs.sh"
-echo "# ADR-0001: fixture" > "$FIX/docs/adr/0001-fixture.md"
+printf '# ADR-0001: fixture\n\n**Status:** Accepted\n\n## Decision\n\nShort.\n' > "$FIX/docs/adr/0001-fixture.md"
 
 cat > "$FIX/relay/internal/thing/thing_test.go" <<'GO'
 package thing

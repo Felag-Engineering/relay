@@ -55,20 +55,42 @@ designed, give every one an ID, and leave the owner with a spec `check-docs` acc
    work* if there is no milestone. Unclear → ask, or delegate one narrow `Explore` probe.
    Rewrite any "aligned with" or "decided with the owner" trailer into the body; the body is
    the truth and there is no override section.
-4. Rebuild the proof table keyed by ID from the existing rows; list the claims with no row.
+4. Put the spec in the two-layer shape (`docs/specs/TEMPLATE.md`): a Purpose of at most 120
+   words, a `**Governed by:**` line, and only the template's sections. Residual-risk prose
+   moves to the threat model's register, cited by row; Future work becomes a proposal or an
+   `idea` issue; Open questions become `decision` issues; the hand-kept proof table is
+   replaced by the Proof markers. Tests that prove a claim name its ID in the comment above
+   them, so `make spec-proof` fills the block; where an existing row's test does not yet, the
+   claim is listed as unproven until the testing issue adds the citation.
 5. Set Status to `current as of <today>` or `designed, not built, as of <today>`, add the
-   prefix line, and run `make docs-check` until it passes.
+   prefix line, drop the spec's line from `docs/agents/docs-ratchet.txt`, and run
+   `make spec-proof` then `make docs-check` until both pass.
 6. `/spec-check`, then hand off as above.
 
 ## For an ADR
 
-Match the surrounding style (`docs/adr/` — long-form, encoding constraints agents check
-themselves against). Number sequentially. An amendment is a dated `## Amendment` section in the
-existing ADR, never an edit to its Decision. Write the constraint, not the mechanism; write
-"where X happens, it happens thus", never "X happens". If the ADR amends an invariant, draft the
-`AGENTS.md` edit in the same session, keep the number, and list every consumer the invariant
-section names — the threat model, the specs that cite it, `GLOSSARY.md` — as a checklist for the
-owner. Never renumber or drop an invariant.
+Two layers (ADR-0046, which is the model). Open with `## Decision`: at most 120 words a
+stranger can read. Then *Why*, *What changes*, *Alternatives*; at most 150 lines. Link the
+proposal that holds the argument instead of re-arguing it, and link the spec, the threat
+model and the glossary instead of restating them. Number sequentially. Write the constraint,
+not the mechanism; write "where X happens, it happens thus", never "X happens".
+
+A change to an existing ADR is **one** dated `## Amendment` section, never an edit to its
+Decision. If the ADR already carries an amendment, rewrite it instead: one text that says
+what is true now, same number and title, the rewrite date in its Status line, the previous
+text in git. A rewrite restates; a changed decision is the amendment or a superseding ADR.
+Either way the owner's merge is the sign-off. A rewritten ADR drops its line from
+`docs/agents/docs-ratchet.txt`.
+
+If the ADR amends an invariant, draft the `AGENTS.md` edit in the same session, keep the
+number, and list every consumer the invariant section names — the threat model, the specs
+that cite it, `GLOSSARY.md` — as a checklist for the owner. Never renumber or drop an
+invariant. Before handing off, run the `reader-reviewer` on the ADR and fix a `REVISE`.
+
+## For a proposal
+
+That is `/propose`, before this session. If the owner arrives here with an idea that touches an
+invariant, an ADR or more than one spec and no proposal exists, say so and offer to start there.
 
 ## For a glossary entry
 
