@@ -35,10 +35,9 @@ The two are different roots of authority, and the difference is visible at the c
 **Stops:** all new Task dispatch, every risk class. A frozen Relay refuses before Selector
 resolution and before authorization — the outermost gate in the pipeline.
 
-That includes **every advance of an approved Plan.** An advance is new dispatch, so it meets the
-same outermost gate, and a Plan approved before the Freeze is no way past one (`plan.md`,
-ADR-0038). "A human already approved this" is a statement about authorization, and a Freeze is
-not an authorization check.
+That includes a dispatch whose approval was given before the Freeze, and every step of a
+harness's sequence: each is new dispatch and meets the same outermost gate. "A human already
+approved this" is a statement about authorization, and a Freeze is not an authorization check.
 
 **Does not stop:**
 
@@ -158,8 +157,6 @@ Claims above with **no row**, and so nothing checking them:
   — the gate is on new dispatch only — but not asserted.
 - That the host lever is unreachable from any surface. True by the interface the API holds, and
   argued at the call site, but there is no structural test like `no_dispatch`.
-- That a Freeze stops the next **advance** of an approved Plan. Unbuilt rather than untested: Plans
-  do not exist yet (`plan.md`).
 
 ### Performance
 

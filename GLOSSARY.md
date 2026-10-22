@@ -313,33 +313,26 @@ Freeze, which halts *all* new dispatch (ADR-0013).
 _Avoid_: abort, kill, stop, interrupt
 
 **Plan**:
-An **approved route of execution**: an ordered list of steps an AI-agent proposes, a human
-approves once, and the agent walks one step at a time. Relay stores the route and a monotonic
-**step cursor**; the agent advances by naming the Plan and the step it believes is next, and
-**nothing else**, so the advance call carries nothing to tamper with.
-The agent decides *whether* and *when* to continue; Relay
-decides *what* runs (ADR-0038). One step is one **Job**, never a **Stage**. A Plan composes
-nothing: each step is an independently Policy-evaluated, independently capped dispatch, and
-the daemon never learns a Plan exists.
-_Avoid_: script, program, workflow, runbook, playbook, batch, procedure; **plan mode** and
-**dry-run** (the preview is **Policy preflight**, below)
+Not a Relay concept (ADR-0049). Sequencing several actions, and showing a person the whole route
+first, is the harness's job; each step it takes reaches Relay as an ordinary dispatch. ADR-0038's
+Relay-held route is withdrawn unbuilt.
+_Avoid_: script, program, workflow, runbook, playbook, batch, procedure (for a Relay object);
+**plan mode** and **dry-run** (the preview is **Policy preflight**, below)
 
 **Policy preflight**:
 The no-execution preview of a dispatch: the Relay resolves the Selector, checks
 authorization and the blast-radius cap, and each matched daemon's live Policy engine answers
 whether it *would* allow the action (ADR-0011). Advisory and point-in-time, never a
-reservation or a substitute for enforcement. Formerly **plan mode**, until ADR-0038 gave that
-word to the Plan; the option is still spelled `plan` on the wire.
-_Avoid_: plan, plan mode (both now mean the route); dry-run, simulation, check mode — a
-preflight never reaches an executor, it asks Policy a question
+reservation or a substitute for enforcement. Formerly **plan mode**, renamed by ADR-0038, a
+rename ADR-0049 keeps; the option is still spelled `plan` on the wire.
+_Avoid_: plan, plan mode; dry-run, simulation, check mode — a preflight never reaches an
+executor, it asks Policy a question
 
 **Plan hash**:
-The content address of a Plan: a hash over the ordered steps, their Operations and
-arguments, and the *resolved fan-out*. It is what an Approval commits to (ADR-0027): dispatch
-proceeds only if the Plan still hashes the same, and material drift re-parks for re-approval.
-The fan-out is bound **by identity, never by count**: any Node not in the approved set
-re-parks, while a Node that has left it is shrinkage, dropped and recorded (ADR-0038). A
-single gated dispatch is the **one-step** case.
+The content address of one gated dispatch: a hash over its rendered preflight, the Operation, its
+arguments and the *resolved fan-out*. It is what an Approval commits to (ADR-0027 decision 8):
+the dispatch proceeds only if it still hashes the same, and drift parks it again. The fan-out is
+bound **by identity, never by count**: any Node not in the approved set parks it again.
 _Avoid_: job hash, checksum, fingerprint (reserved for the Policy, template-set and CA fingerprints)
 
 **Shape key**:
@@ -461,8 +454,7 @@ _Avoid_: approval policy (collides with **Policy**), approval rule, gate config 
 single rule)
 
 **Approval grant**:
-One human Approval covering a **described, bounded set of future dispatches**, where a
-**Plan** covers an *enumerated* one; that is the whole distinction. It is decision 12's
+One human Approval covering a **described, bounded set of future dispatches**. It is decision 12's
 time-boxed narrowing grant (ADR-0027). Always written in full: an unqualified **Grant** is the
 authorization rule below, an unrelated mechanism.
 

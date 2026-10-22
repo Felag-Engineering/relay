@@ -182,7 +182,8 @@ No claim here is proven yet. Claims with **no row**, and so nothing checking the
 - Revoking a Node's identity — `enrollment.md`.
 - The fleet-wide stop — `freeze.md`.
 - Dispatch, fan-out, cancellation and the blast-radius cap — `execution.md`.
-- Repairing Nodes — ordinary Operations and Plans (`execution.md`, `plan.md`).
+- Repairing Nodes — ordinary Operations (`execution.md`), sequenced by the harness where there are
+  several.
 - Investigating a quarantined Node — outside Relay by design.
 - Converging a Node toward a desired configuration, and distributing configuration content.
   Both are configuration management, which is out of realm (`AGENTS.md`).

@@ -1,6 +1,9 @@
 # Plan is an approved route of execution; Policy preflight is its own capability
 
-**Status:** Accepted; amended by ADR-0044.
+**Status:** Superseded by ADR-0049 (2026-10-22).
+
+The Plan is withdrawn unbuilt: sequencing belongs to the harness. The rename of plan mode to Policy
+preflight stands, carried by ADR-0049 decision 3. Kept as history.
 
 "Plan" has meant two things since ADR-0011, whose own opening describes the capability as
 "`terraform plan` / Ansible check-mode for the fleet". Those differ. Ansible's check-mode is a

@@ -53,8 +53,7 @@ Seven differences from execution, each deliberate:
 
 - **PF-3** **Freeze is advisory, never a gate.** A frozen Relay refuses all real dispatch and still
   answers preflights; the response reports that the Relay is frozen, and the verdicts still come
-  back. This is the one Freeze exemption — an approved **Plan** gets no such license and every
-  advance of one is refused while frozen (`plan.md`, ADR-0038).
+  back. This is the one Freeze exemption.
 - **PF-4** **The blast cap is reported, never enforced as an error.** An over-cap preflight returns
   would-be-rejected data — the matched count, the cap, and the risk class — with no error, and
   queries **nothing**: a real dispatch would touch no Node over cap, so neither does the preflight.
@@ -241,9 +240,8 @@ sequential round trips as a dispatch — cheap enough that a caller should alway
 - **Dispatch, the cap's enforcement, and at-most-once** — `execution.md`.
 - **Policy itself** — the rules, their syntax, and how the daemon evaluates them. The Relay reads
   Policy and may never write it (invariant 2); what a rule *means* is the daemon's (`policy.md`).
-- **The Plan — an approved route of execution** — `plan.md`. A Plan preflights every one of its
-  steps at proposal, which is this capability being used by that one; the route, the cursor and
-  the approval it parks through are not this capability.
+- **Sequencing several dispatches** — the harness's job (ADR-0049). A harness may preflight each
+  step it intends before taking any; that is this capability used one dispatch at a time.
 - **The plan hash and approval binding** — `approval.md`. An approval commits to a content
   address over the act the caller intends — a Plan's ordered steps, their Operations and
   arguments, and the resolved fan-out, a single gated dispatch being the one-step case (ADR-0038)

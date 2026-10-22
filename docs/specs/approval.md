@@ -16,7 +16,7 @@ the act.
 Its second job is to stay useful under load. A gate that asks too often trains people to
 approve without reading, and an approval nobody reads is worse than none: it launders an
 AI-agent's intent through a human who did not exercise judgement. Narrow approval grants, the
-shape key and the anti-fatigue diff exist for that reason, and so will the Plan (`plan.md`).
+shape key and the anti-fatigue diff exist for that reason.
 
 ## Surfaces
 
@@ -280,8 +280,8 @@ approver Relay verifies.
 ADR-0038 generalises that address to a route: a **Plan** whose hash covers ordered steps as well
 as the resolved set. A single gated dispatch is the one-step case, and the only one that exists —
 a Job carries exactly one Stage and one Action. The rest — each `mutate` step parking at advance,
-and a Node that has *left* the set recorded as shrinkage rather than drift — is `plan.md`'s and
-unbuilt (*Future work*).
+and a Node that has *left* the set recorded as shrinkage rather than drift — was ADR-0038's, now
+withdrawn: sequencing is the harness's (ADR-0049).
 
 - **AP-23** The **shape key** is a different address from the plan hash: it addresses *what* an
   approval is for, deliberately excluding the resolved fan-out, so that the queue can answer "what
@@ -332,7 +332,8 @@ unbuilt (*Future work*).
 ### Plans first; approval grants as the narrow exception
 
 **Plans are the default tool for work that can be enumerated in advance** — the human sees every
-step and the exact Nodes, and nothing runs that was not shown (`plan.md`).
+step and the exact Nodes, and nothing runs that was not shown; sequencing them is the harness's
+(ADR-0049).
 
 An **approval grant** is standing authorization over a bounded **Scope**, for open-ended work that
 cannot be enumerated — *"keep restarting whatever falls over on the web tier for the next hour."*
@@ -610,7 +611,7 @@ lookup.
 
 - **Where the gate sits in the dispatch pipeline, and what a park leaves behind** —
   `execution.md`.
-- **The Plan a decision releases** — `plan.md`: the ordered steps, the cursor, the payload-free
+- **The Plan a decision releases** — withdrawn by ADR-0049, which gives sequencing to the harness: the ordered steps, the cursor, the payload-free
   advance, and the walls on an approved-but-incomplete route. A Plan, and each of its `mutate`
   steps, parks through *this* gate and is answered by an ordinary Approval, as a request for an
   approval grant is; it is not a second decision surface. None of it exists in code.
@@ -715,8 +716,8 @@ lookup.
 
 Named, not decided, and in no order.
 
-- **Multi-step Plan routes, and everything that follows from them** — `plan.md`, which states that
-  none of it exists in code. A Plan whose hash covers an ordered route rather than a single
+- **Multi-step Plan routes, and everything that follows from them** — withdrawn by ADR-0049;
+  none of it was built. A Plan whose hash covers an ordered route rather than a single
   dispatch; **each `mutate` step parking at advance for its own approval**, bound to the Plan hash
   and that step, so that approving a Plan releases its route as context and not its mutations;
   **shrinkage recorded** — a Node that has *left* the approved set dropped from that step and

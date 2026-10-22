@@ -424,9 +424,9 @@ multiply.
   `/proto` as the source of truth (invariant 8).
 - **Policy preflight and hypotheticals** — `policy-preflight.md`. A preflight carries no Task ID,
   sends no Task, and cannot be deduped into execution.
-- **The Plan — an approved route of execution** — `plan.md`. A Plan is the object *above* a Job:
-  each step is an ordinary Job created by this dispatch path, with its own cap check,
-  at-most-once Tasks and audit identity. A Plan step is not a **Stage** (ADR-0038).
+- **Sequencing several dispatches** — the harness's job, not Relay's (ADR-0049). Each step it
+  takes is an ordinary Job created by this dispatch path, with its own cap check, at-most-once
+  Tasks and audit identity.
 - **Approval decisions, grants and scope** — `approval.md`. This spec covers only the gate's
   position and the park.
 - **Engaging and releasing the Freeze** — `freeze.md`; this spec covers only the Freeze gate as
