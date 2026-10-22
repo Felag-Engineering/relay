@@ -73,7 +73,7 @@ Grill, 2026-10-22 (`proposal-grill`), with the owner's answers.
     out-of-band. The smaller alternative is the first alone. — Agreed: ADR-0047 retires the
     tool now; the rest waits. Owner ruling 2026-10-22.
 12. **Unnamed consumers** — named in *Changes* and updated with the code cut: ADR-0026, 0028, 0044; R25, R26, R27; `GLOSSARY.md`, `plan.md`,
-    `how-relay-works.md`, `approval-assurance.md`, `approval-gates.md`, the test fleet's gate
+    `how-relay-works.md`, the `approval-assurance` stub (moved to the roadmap), `approval-gates.md`, the test fleet's gate
     rules, `STATUS.md`.
 
 ## Outcome

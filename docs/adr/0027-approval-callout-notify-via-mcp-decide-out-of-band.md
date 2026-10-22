@@ -2,7 +2,7 @@
 
 **Status:** Accepted.
 
-Behaviour: `docs/specs/approval.md`; shelved properties: `approval-assurance.md`. Decisions keep
+Behaviour: `docs/specs/approval.md`; shelved properties: `roadmap: relay/out-of-band-approval`. Decisions keep
 their numbers, which code cites; the eleven dated amendments are in git, mapped at the end.
 
 ## Decision
@@ -88,7 +88,7 @@ says who asked, for whom, who approved, and over which channel.
       the same path under the same quorum, audience, requester exclusion, machine-self-decision
       rule and channel strength. Its requirement is **derived** from the Scope's worst case
       under the live gate, never declared by the requester. A floor of second-person,
-      out-of-band issuance is shelved with decision 4's requirement (`approval-assurance.md`).
+      out-of-band issuance is shelved with decision 4's requirement.
     - A grant's window is at most **4 hours**, so it stays inside one shift, and its uses at
       most 1000; both maxima hold in code as well as in the request (AP-57 for the window). A
       grant **never covers Raw Exec** (AP-56): an arbitrary command has no allow-list for an
