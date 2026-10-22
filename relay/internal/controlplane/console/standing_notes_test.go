@@ -7,7 +7,6 @@ package console
 // this caller or this record's state stays visible where it renders.
 
 import (
-	"html/template"
 	"strings"
 	"testing"
 	"time"
@@ -299,21 +298,25 @@ func TestNode_MandatedNotesStayVisible(t *testing.T) {
 	}
 }
 
-func TestAccounts_PolicyCeilingIsVisibleBesideTheRoles(t *testing.T) {
-	note := `<p class="note">` + template.HTMLEscapeString(policyCeilingNote) + `</p>`
-	body := get(t, newTestHandler(accountsFixture(), accounts.RoleAdmin), accountsPath).Body.String()
-	content := contentOf(body)
-	at := strings.Index(content, note)
-	if at < 0 {
-		t.Fatalf("the Policy ceiling note is not rendered as a visible note:\n%s", content)
+// TestAccounts_TheD34NotesAreGone: the three Accounts notes design 00 (D34)
+// deletes appear on no Accounts screen, and the trail is never called a bare
+// "agent call trail".
+func TestAccounts_TheD34NotesAreGone(t *testing.T) {
+	h := newTestHandler(accountsFixture(), accounts.RoleAdmin)
+	for _, path := range []string{accountsPath, accountPagePath("gleipnir-prod"), newAccountPath} {
+		body := get(t, h, path).Body.String()
+		for _, gone := range []string{
+			"own Policy is the real ceiling",
+			"Console password; it signs in through OAuth",
+			"on the response to this form, and never again",
+		} {
+			if strings.Contains(body, gone) {
+				t.Errorf("%s still renders the deleted note %q", path, gone)
+			}
+		}
 	}
-	if end := strings.Index(content, "</table>"); end < 0 || at < end {
-		t.Error("the Policy ceiling note renders before the accounts table ends")
-	}
-	if create := strings.Index(content, "<summary>New account</summary>"); create < 0 || at > create {
-		t.Error("the Policy ceiling note does not render before New account")
-	}
-	mustBeSituational(t, body, "Console password; it signs in through OAuth, if configured")
+
+	body := get(t, h, accountsPath).Body.String()
 	for i := 0; ; {
 		j := strings.Index(body[i:], "agent call trail")
 		if j < 0 {
@@ -324,14 +327,6 @@ func TestAccounts_PolicyCeilingIsVisibleBesideTheRoles(t *testing.T) {
 			t.Errorf("a bare %q is rendered", "agent call trail")
 		}
 		i = at + 1
-	}
-
-	// The note does not depend on the Create panel: it renders unwired too.
-	d := accountsFixture()
-	d.AccountAdmin = nil
-	unwired := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), accountsPath).Body.String())
-	if !strings.Contains(unwired, note) {
-		t.Error("the Policy ceiling note is not rendered when account changes are not wired")
 	}
 }
 

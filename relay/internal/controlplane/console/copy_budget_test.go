@@ -652,15 +652,17 @@ func copyBudgetFixture() Deps {
 // it is a ruled or spec-bound qualifier, and reaching 60 means dropping one.
 var copyBudgets = map[string]int{
 	// The six-word sentence beside Fleet's Refresh, which 00 "Refreshing a screen" requires.
-	"/console/{$}":             6,
-	"/console/nodes/{node_id}": 75,
-	"/console/activity":        60,
-	"/console/jobs/{job_id}":   60,
-	"/console/compare":         40,
-	"/console/accounts":        34,
-	"/console/access":          65,
-	"/console/run":             10,
-	"day one":                  75,
+	"/console/{$}":                     6,
+	"/console/nodes/{node_id}":         75,
+	"/console/activity":                60,
+	"/console/jobs/{job_id}":           60,
+	"/console/compare":                 40,
+	"/console/accounts":                0,
+	"/console/accounts/{account_name}": 20,
+	"/console/new-account":             5,
+	"/console/access":                  65,
+	"/console/run":                     10,
+	"day one":                          75,
 
 	"/console/accounts/{account_id}/disable":                  20,
 	"/console/accounts/{account_id}/lower":                    20,
@@ -801,7 +803,7 @@ func noteSweepPages(t *testing.T) []sweepPage {
 	revoked.Audit = fakeAudit{records: []audit.Record{{Kind: audit.KindNodeRevoke, NodeID: "node-gone", Principal: "alice:admin", Timestamp: testNow.Add(-time.Hour)}}}
 	add("node revoked, no reason", "/console/nodes/node-gone", revoked, accounts.RoleAdmin, http.StatusOK)
 
-	add("accounts, another", "/console/accounts?account=mike", sweep, accounts.RoleAdmin, http.StatusOK)
+	add("accounts, another", accountPagePath("mike"), sweep, accounts.RoleAdmin, http.StatusOK)
 	self := sweepFixture()
 	fa := sweepAccounts()
 	fa.accounts = append(fa.accounts, accounts.Account{
@@ -809,7 +811,7 @@ func noteSweepPages(t *testing.T) []sweepPage {
 		Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
 	})
 	self.Accounts = fa
-	add("accounts, self", "/console/accounts?account="+testAccountName(accounts.RoleAdmin), self, accounts.RoleAdmin, http.StatusOK)
+	add("accounts, self", accountPagePath(testAccountName(accounts.RoleAdmin)), self, accounts.RoleAdmin, http.StatusOK)
 
 	cancelled := oneJob(nil, jobs.RiskClassMutate)
 	cancelled.Total, cancelled.Unresolved, cancelled.State = 2, 1, jobs.JobStateRunning
@@ -1282,8 +1284,9 @@ func TestCopyBudget_GoStringNotesAreShort(t *testing.T) {
 		{"facetRefusalHint", facetRefusalHint, maxGoNoteWords},
 		{"tagFilterRefusal", tagFilterRefusal, maxGoNoteWords},
 		{"filterTermExample", filterTermExample, maxGoNoteWords},
-		{"policyCeilingNote", policyCeilingNote, maxGoNoteWords},
 		{"selfPanelNote", selfPanelNote, maxGoNoteWords},
+		{"doneSentence(role)", doneSentence(string(doneRole)), maxGoNoteWords},
+		{"Role.Description(admin)", accounts.RoleAdmin.Description(), maxGoNoteWords},
 		{"liveCountNote", liveCountNote, maxGoNoteWords},
 		{"collapseNote(2, 1)", collapseNote(2, 1), maxGoNoteWords},
 		{"collapseNote(200, 12)", collapseNote(200, 12), maxGoNoteWords},

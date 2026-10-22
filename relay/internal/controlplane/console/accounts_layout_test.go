@@ -1,8 +1,8 @@
 package console
 
-// The Accounts screen's layout and the create form's refusal path (design spec
-// 15, D32): the selected Account's panel first, then the list, then the create
-// form behind "New account", reopened by a refusal; Lower role never dimmed.
+// The Account page's layout and the New account page's refusal path (design
+// spec 15): Role, State, then API Tokens; a refused create re-renders the New
+// account page; Lower role never dimmed.
 
 import (
 	"errors"
@@ -19,16 +19,14 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
 )
 
-const collapsedNewAccount = `<details class="panel newaccount" id="new-account">`
-
-func TestAccountsWrite_TheSelectedPanelComesBeforeTheListAndTheListBeforeNewAccount(t *testing.T) {
-	body := accountsWriteBody(t, "?account=gleipnir-prod")
+func TestAccounts_TheAccountPageOrdersRoleStateTokens(t *testing.T) {
+	body := accountsWriteBody(t, accountPagePath("gleipnir-prod"))
 	last := -1
 	for _, marker := range []string{
-		"Role and state &mdash;",
-		"API Tokens &mdash;",
-		`<table class="rows cards">`,
-		"<summary>New account</summary>",
+		"Back to Accounts",
+		"<h2>Role</h2>",
+		"<h2>State</h2>",
+		"<h2>API Tokens</h2>",
 	} {
 		at := strings.Index(body, marker)
 		if at < 0 || at < last {
@@ -36,20 +34,9 @@ func TestAccountsWrite_TheSelectedPanelComesBeforeTheListAndTheListBeforeNewAcco
 		}
 		last = at
 	}
-
-	unknown := accountsWriteBody(t, "?account=nobody")
-	placeholder := strings.Index(unknown, "No Account on this Relay is named")
-	list := strings.Index(unknown, `<table class="rows cards">`)
-	if placeholder < 0 || list < 0 || placeholder > list {
-		t.Errorf("the unknown-selection placeholder (at %d) does not precede the list (at %d)", placeholder, list)
-	}
 }
 
-func TestAccountsWrite_NewAccountIsCollapsedUntilACreateIsRefused(t *testing.T) {
-	if body := accountsWriteBody(t, ""); !strings.Contains(body, collapsedNewAccount) {
-		t.Fatalf("a GET does not carry a closed New account details:\n%s", contentOf(body))
-	}
-
+func TestAccountsWrite_ARefusedCreateRendersTheNewAccountPage(t *testing.T) {
 	valid := url.Values{"name": {"newbie"}, "kind": {"human"}, "role": {"viewer"}, "password": {"p"}}
 	with := func(k, v string) url.Values {
 		f := url.Values{}
@@ -93,14 +80,18 @@ func TestAccountsWrite_NewAccountIsCollapsedUntilACreateIsRefused(t *testing.T) 
 			if rec.Code != tc.status {
 				t.Fatalf("status = %d, want %d; body %s", rec.Code, tc.status, contentOf(body))
 			}
-			if !strings.Contains(body, `id="new-account" open`) {
-				t.Errorf("the refusal did not reopen New account:\n%s", contentOf(body))
-			}
-			if !strings.Contains(body, `<p class="fielderr" role="alert">`) || !strings.Contains(body, tc.sentence) {
+			alert := strings.Index(body, `<p class="fielderr" role="alert">`)
+			if alert < 0 || !strings.Contains(body, tc.sentence) {
 				t.Errorf("the refusal does not say %q in its alert:\n%s", tc.sentence, contentOf(body))
 			}
+			if submit := strings.Index(body, `type="submit">Create account</button>`); submit < alert {
+				t.Errorf("the alert (at %d) is not above the submit button (at %d)", alert, submit)
+			}
 			if !strings.Contains(body, `action="`+createAccountAction()+`"`) {
-				t.Error("the reopened form does not post to the create action")
+				t.Error("the re-rendered form does not post to the create action")
+			}
+			if !strings.Contains(body, `<a href="/console/accounts">Back to Accounts</a>`) {
+				t.Error("the refusal page has no Back to Accounts")
 			}
 			if got := rec.Header().Get("Retry-After"); got != tc.retryAfter {
 				t.Errorf("Retry-After = %q, want %q", got, tc.retryAfter)
@@ -115,7 +106,7 @@ func TestAccountsWrite_NewAccountIsCollapsedUntilACreateIsRefused(t *testing.T) 
 	}
 }
 
-// createFormOf returns the "New account" form's markup alone: the layout's
+// createFormOf returns the New account form's markup alone: the layout's
 // Sign-out form carries a csrf_token too, and comes first on the page.
 func createFormOf(t *testing.T, body string) string {
 	t.Helper()
@@ -135,12 +126,12 @@ func TestAccountsWrite_ARefusedCreateAfterStepUpCarriesTheRotatedCSRFToken(t *te
 		"name": {"newbie"}, "kind": {"human"}, "role": {"viewer"}, "password": {"p"},
 	})
 	body := rec.Body.String()
-	if rec.Code != http.StatusConflict || !strings.Contains(body, `id="new-account" open`) {
-		t.Fatalf("status = %d, want a 409 with the form reopened:\n%s", rec.Code, contentOf(body))
+	if rec.Code != http.StatusConflict || !strings.Contains(body, `action="`+createAccountAction()+`"`) {
+		t.Fatalf("status = %d, want a 409 with the form re-rendered:\n%s", rec.Code, contentOf(body))
 	}
 	want := "fake-csrf-" + x.auth.stepUpID.Reveal()
 	if got := renderedCSRFToken(createFormOf(t, body)); got != want || got == x.csrf {
-		t.Errorf("the reopened form carries %q, want the rotated session's %q (not the pre-rotation %q)", got, want, x.csrf)
+		t.Errorf("the re-rendered form carries %q, want the rotated session's %q (not the pre-rotation %q)", got, want, x.csrf)
 	}
 	if !strings.Contains(body, "optional, you confirmed it recently") {
 		t.Errorf("after a successful step-up the password is not drawn as optional:\n%s", contentOf(body))
@@ -165,8 +156,8 @@ func TestAccountsWrite_ARefusedCreateEchoesNameKindAndRoleButNeverThePassword(t 
 	}).Body.String()
 	for _, want := range []string{
 		`value="ci-agent"`,
-		`<option value="machine" selected>`,
-		`<option value="operator" selected>`,
+		`value="machine" required checked>`,
+		`value="operator" required checked>`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the refused form does not echo %q:\n%s", want, contentOf(body))
@@ -176,11 +167,11 @@ func TestAccountsWrite_ARefusedCreateEchoesNameKindAndRoleButNeverThePassword(t 
 		t.Error("the refused form echoes the password")
 	}
 
-	// A refused name does not reset kind and role to the first option.
+	// A refused name does not clear kind and role.
 	body = newWriteFix(t, nil).post(t, createAccountAction(), url.Values{
 		"name": {""}, "kind": {"machine"}, "role": {"operator"},
 	}).Body.String()
-	if !strings.Contains(body, `<option value="machine" selected>`) || !strings.Contains(body, `<option value="operator" selected>`) {
+	if !strings.Contains(body, `value="machine" required checked>`) || !strings.Contains(body, `value="operator" required checked>`) {
 		t.Errorf("a refused name reset kind or role:\n%s", contentOf(body))
 	}
 
@@ -193,7 +184,7 @@ func TestAccountsWrite_ARefusedCreateEchoesNameKindAndRoleButNeverThePassword(t 
 	}
 }
 
-func TestAccountsWrite_ACreateRefusalTheFormCannotAnswerDoesNotReopenIt(t *testing.T) {
+func TestAccountsWrite_ACreateRefusalTheFormCannotAnswerDoesNotRerenderIt(t *testing.T) {
 	valid := url.Values{"name": {"newbie"}, "kind": {"human"}, "role": {"viewer"}, "password": {"p"}}
 	for _, tc := range []struct {
 		name     string
@@ -213,8 +204,8 @@ func TestAccountsWrite_ACreateRefusalTheFormCannotAnswerDoesNotReopenIt(t *testi
 			if rec.Code != tc.status || !strings.Contains(body, tc.sentence) {
 				t.Fatalf("status = %d, want %d with %q:\n%s", rec.Code, tc.status, tc.sentence, contentOf(body))
 			}
-			if strings.Contains(body, "newaccount") {
-				t.Errorf("the refusal reopened a form it cannot help with:\n%s", contentOf(body))
+			if strings.Contains(body, createAccountAction()) {
+				t.Errorf("the refusal re-rendered a form it cannot help with:\n%s", contentOf(body))
 			}
 		})
 	}
@@ -222,7 +213,7 @@ func TestAccountsWrite_ACreateRefusalTheFormCannotAnswerDoesNotReopenIt(t *testi
 
 func TestAccountsWrite_LowerRoleIsNeverDimmedAndCarriesTheHint(t *testing.T) {
 	forms := regexp.MustCompile(`(?s)<form class="ctlform ctlrow rolechange".*?</form>`)
-	for _, q := range []string{"?account=mike", "?account=gleipnir-prod"} {
+	for _, q := range []string{accountPagePath("mike"), accountPagePath("gleipnir-prod")} {
 		body := accountsWriteBody(t, q)
 		var lower string
 		for _, f := range forms.FindAllString(body, -1) {
@@ -252,8 +243,11 @@ func TestAccountsWrite_LowerRoleIsNeverDimmedAndCarriesTheHint(t *testing.T) {
 }
 
 func TestAccountsWrite_AutocompleteIsOffOnTheCreateAndMintNames(t *testing.T) {
-	body := accountsWriteBody(t, "?account=gleipnir-prod")
-	for _, id := range []string{"create-name", "mint-name"} {
+	for id, path := range map[string]string{
+		"create-name": newAccountPath,
+		"mint-name":   accountPagePath("gleipnir-prod"),
+	} {
+		body := accountsWriteBody(t, path)
 		tag := regexp.MustCompile(`<input id="` + id + `"[^>]*>`).FindString(body)
 		if tag == "" {
 			t.Fatalf("no input %s", id)
@@ -307,12 +301,12 @@ func TestAccountsWrite_ARealRefusedCreateCarriesATokenThatStillValidates(t *test
 	rec := x.post(t, createAccountAction(), url.Values{
 		"name": {"second-admin"}, "kind": {"human"}, "role": {"viewer"}, "password": {realWritePassword},
 	})
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `id="new-account" open`) {
-		t.Fatalf("status = %d, want a 409 with the form reopened:\n%s", rec.Code, contentOf(rec.Body.String()))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `action="`+createAccountAction()+`"`) {
+		t.Fatalf("status = %d, want a 409 with the form re-rendered:\n%s", rec.Code, contentOf(rec.Body.String()))
 	}
 	rendered := renderedCSRFToken(createFormOf(t, rec.Body.String()))
 	if rendered != x.csrf || rendered == before {
-		t.Fatalf("the reopened form carries %q, want the rotated session's %q (not %q)", rendered, x.csrf, before)
+		t.Fatalf("the re-rendered form carries %q, want the rotated session's %q (not %q)", rendered, x.csrf, before)
 	}
 
 	rec = x.post(t, createAccountAction(), url.Values{
@@ -320,7 +314,7 @@ func TestAccountsWrite_ARealRefusedCreateCarriesATokenThatStillValidates(t *test
 		"name":       {"third-admin"}, "kind": {"machine"}, "role": {"viewer"},
 	})
 	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("resubmitting the reopened form = %d, want 303; body %s", rec.Code, contentOf(rec.Body.String()))
+		t.Fatalf("resubmitting the re-rendered form = %d, want 303; body %s", rec.Code, contentOf(rec.Body.String()))
 	}
 	if _, err := x.trail.Accounts().GetByName(t.Context(), "third-admin"); err != nil {
 		t.Errorf("the resubmitted Account was not created: %v", err)

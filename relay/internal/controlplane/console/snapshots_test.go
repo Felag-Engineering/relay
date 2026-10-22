@@ -32,8 +32,8 @@ func TestConsole_WriteScreenSnapshots(t *testing.T) {
 	role := accounts.RoleAdmin
 	h := newTestHandler(d, role)
 	written := 0
-	// The selected-Account screen is the one that draws the danger buttons.
-	paths := append(walkableScreens(routesFor(d, role), fixtureIDs), selectedAccountsScreen)
+	// The Account page is a walkable route and draws the danger buttons.
+	paths := walkableScreens(routesFor(d, role), fixtureIDs)
 	for _, path := range paths {
 		rec := get(t, h, path)
 		if rec.Code != 200 {

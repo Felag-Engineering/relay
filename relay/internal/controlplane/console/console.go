@@ -329,17 +329,15 @@ func Routes(d Deps) []Route {
 		// write half used the distinct literals this comment predicted —
 		// /console/accounts/create and so on — and they are below.
 		//
-		// The selected Account is "?account=<name>", not a
-		// /console/accounts/{account_id} detail page, and the reason is a
-		// FORWARD hazard rather than a present one: verified empirically,
-		// GET /console/accounts and GET /console/accounts/{account_id}
-		// register together perfectly well, but a constrained
-		// {account_id} route would make every constrained LITERAL under
-		// /console/accounts/ a registration-time panic — the
-		// "/console/nodes/add" shape documented above — and the write half
-		// wants exactly such literals. Activity filters the same way
-		// (?account=), so it is also the idiom this Console has.
-		{"GET", "/console/accounts", NavEntry{Group: NavAdminister, Label: "Accounts", Order: 20, Under: []string{"/console/accounts", "/console/api-tokens"}}, accounts.RoleAdmin, handleAccounts},
+		// The Account page, GET /console/accounts/{account_name}, is mounted
+		// below. It owns the two-segment shape under /console/accounts/: a
+		// constrained {account_name} route makes Register also mount the
+		// method-less "/console/accounts/{account_name}", so a two-segment
+		// LITERAL beside it panics at registration. Nothing may be added in that
+		// shape; use a path outside /console/accounts/ instead.
+		{"GET", "/console/accounts", NavEntry{Group: NavAdminister, Label: "Accounts", Order: 20, Under: []string{"/console/accounts", "/console/new-account", "/console/api-tokens"}}, accounts.RoleAdmin, handleAccounts},
+		{"GET", "/console/accounts/{account_name}", NavEntry{}, accounts.RoleAdmin, handleAccount},
+		{"GET", "/console/new-account", NavEntry{}, accounts.RoleAdmin, handleNewAccount},
 
 		// Access (spec 20, D17): who signed in, who failed to, and who
 		// changed an Account or minted it a credential — admin only. MinRole
@@ -370,23 +368,24 @@ func Routes(d Deps) []Route {
 		// THESE FIVE PATHS ARE FORCED, and were driven through a real
 		// net/http.ServeMux — with the bare-path second registration Register
 		// mounts for every constrainsReach() route — rather than reasoned
-		// about. They register clean. Two shapes do not, and both panic at
-		// registration, which in production is a process that does not start:
+		// about. Two shapes panic at registration, which in production is a
+		// process that does not start:
 		//
-		//   - a constrained "POST /console/accounts" — `pattern
-		//     "/console/accounts" … conflicts with pattern
-		//     "/console/accounts": /console/accounts matches the same
-		//     requests as /console/accounts`, because the GET route above
-		//     already owns that bare path;
-		//   - a constrained "GET /console/accounts/{account_id}" — `GET
-		//     /console/accounts/{account_id} matches fewer methods than
-		//     /console/accounts/create, but has a more general path pattern`,
-		//     which is why the read half selects with ?account= and why no
-		//     Account detail page may be added beside these literals.
+		//   - a constrained "POST /console/accounts", because the GET route
+		//     above already owns that bare path;
+		//   - a two-segment literal under /console/accounts/, because the
+		//     Account page's {account_name} route is more general than it.
+		//
+		// Create therefore lives at /console/new-account/create, which also
+		// keeps an Account named "new" or "create" reachable. The old
+		// /console/accounts/create now belongs to the Account page's
+		// method-less twin and may never be re-added as a literal: an admin's
+		// POST there is a 405 (Allow: GET, HEAD) and a lower role's is the
+		// unmounted 404.
 		//
 		// TestConsole_RegisterMountsEveryRouteWithoutPatternConflict is the
 		// standing guard and picks these rows up automatically.
-		{"POST", "/console/accounts/create", NavEntry{}, accounts.RoleAdmin, handleCreateAccount},
+		{"POST", "/console/new-account/create", NavEntry{}, accounts.RoleAdmin, handleCreateAccount},
 		{"POST", "/console/accounts/{account_id}/role", NavEntry{}, accounts.RoleAdmin, handleSetAccountRole},
 		{"POST", "/console/accounts/{account_id}/enabled", NavEntry{}, accounts.RoleAdmin, handleSetAccountEnabled},
 		{"POST", "/console/accounts/{account_id}/tokens", NavEntry{}, accounts.RoleAdmin, handleMintAPIToken},

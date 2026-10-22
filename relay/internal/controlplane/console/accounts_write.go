@@ -5,6 +5,11 @@ package console
 // file, as that one does, so
 // seams.go's "every seam here is read-only" claim stays true unqualified.
 //
+// A successful act returns to the screen it was made from, with a fixed
+// one-line result chosen by a closed done= key. The destination is built here
+// from an Account ID read through the registry, never from anything the request
+// names.
+//
 // # What this file decides: nothing
 //
 // The admin floor on all eight account ControlActions, the self-target rule
@@ -117,11 +122,11 @@ type AccountAdministrator interface {
 // None of these is "POST /console/accounts", and that is a constraint rather
 // than a style choice: Register mounts a SECOND, bare-path registration for
 // every route that constrains reach, and GET /console/accounts already owns
-// the bare "/console/accounts" — a second one panics at registration. See
-// console.go's route rows for the two panic texts, reproduced from a real
-// ServeMux.
+// the bare "/console/accounts" — a second one panics at registration. Create
+// lives outside /console/accounts/ because the Account page owns the
+// two-segment shape there (console.go).
 const (
-	createAccountPattern     = "POST /console/accounts/create"
+	createAccountPattern     = "POST /console/new-account/create"
 	setAccountRolePattern    = "POST /console/accounts/{account_id}/role"
 	setAccountEnabledPattern = "POST /console/accounts/{account_id}/enabled"
 	mintAPITokenPattern      = "POST /console/accounts/{account_id}/tokens"
@@ -130,7 +135,16 @@ const (
 
 // The form-action builders. Each escapes its id, because an
 // Account id and a token id are not constrained by this package.
-func createAccountAction() string { return "/console/accounts/create" }
+func createAccountAction() string { return "/console/new-account/create" }
+
+// newAccountPath is the New account page.
+const newAccountPath = "/console/new-account"
+
+// accountPagePath is an Account's page. The name only locates the page; every
+// form on it posts by Account ID.
+func accountPagePath(name string) string {
+	return "/console/accounts/" + url.PathEscape(name)
+}
 
 func setAccountRoleAction(accountID string) string {
 	return "/console/accounts/" + url.PathEscape(accountID) + "/role"
@@ -174,7 +188,7 @@ const (
 // These are OUR wording. Spec 15 asks for explicitness, not for particular
 // sentences; nothing here is a quotation from it. They are consts so the tests
 // compare against the const rather than a copy of the prose — the idiom
-// policyCeilingNote already uses.
+// selfPanelNote uses.
 const (
 	selfTargetRefusal = "An Account cannot change its own role or disable itself. Another admin " +
 		"must do it: a control plane whose last admin can switch itself off has no way back in."
@@ -240,19 +254,19 @@ func renderWriteResult(w http.ResponseWriter, pg Page, status int, heading, href
 	})
 }
 
-// createRefusal draws a refused create as the "New account" form, open, with
-// the refusal above it (design spec 15, D32). form is captured by value, so
-// the caller sets StepUpFresh before building the closure.
+// createRefusal draws a refused create as the New account page, with the
+// refusal above the submit button (spec 15). form is captured by value, so the
+// caller sets StepUpFresh before building the closure.
 //
-// The form reopens for a refusal the caller can answer by editing or retrying
-// it, and only when the refusal carries no link. It does not reopen for:
+// The form re-renders for a refusal the caller can answer by editing or
+// retrying it, and only when the refusal carries no link. It does not for:
 //   - authz.ErrUnauthorized (403): the capability layer refused the caller and
 //     no edit to the form changes that, so the plain page renders it
 //     (invariant 10);
 //   - a refusal with a link: a session that ended, and "could not confirm",
-//     where the Account may exist and reopening would invite a duplicate;
+//     where the Account may exist and a re-render would invite a duplicate;
 //   - 404 and the accounts.IsInvalidToken 409, which have no link and so would
-//     reopen, but create cannot return either.
+//     re-render, but create cannot return either.
 //
 // The CSRF token comes from the pg passed in, never from anything captured
 // earlier: after a successful step-up pg holds the rotated session's token.
@@ -268,10 +282,9 @@ func createRefusal(form accountCreateForm) writeRefusalRender {
 			return
 		}
 		w.WriteHeader(status)
-		form.Open = true
 		form.Refusal = heading
 		form.CSRFToken = pg.CSRFToken
-		renderScreen(w, pg, accountsCreateRefusedTmpl, form)
+		renderScreen(w, pg, newAccountTmpl, form)
 	}
 }
 
@@ -314,18 +327,78 @@ var accountsWriteResultTmpl = newScreen("accounts-write-result", `
 </div>
 `)
 
-// accountsScreenPath is the Accounts screen itself — where every successful
-// write but mint redirects back to.
+// accountsScreenPath is the Accounts list.
 const accountsScreenPath = "/console/accounts"
 
-// accountsHrefFor builds the Accounts screen's link with one Account
-// selected, through url.Values rather than concatenation — an Account name is
-// not constrained by this package.
-func accountsHrefFor(name string) string {
-	if name == "" {
-		return accountsScreenPath
+// doneKey names the one-line result a successful act shows on the screen it
+// returns to. The set is closed: a page renders only accountsDone's sentence,
+// never the query value.
+type doneKey string
+
+const (
+	doneCreated  doneKey = "created"
+	doneRole     doneKey = "role"
+	doneEnabled  doneKey = "enabled"
+	doneDisabled doneKey = "disabled"
+	doneRevoked  doneKey = "revoked"
+)
+
+var accountsDone = map[doneKey]string{
+	doneCreated:  "Account created.",
+	doneRole:     "Role changed.",
+	doneEnabled:  "Account enabled.",
+	doneDisabled: "Account disabled.",
+	doneRevoked:  "API Token revoked.",
+}
+
+// doneSentence maps a raw done= query value to its fixed sentence. A pure map
+// lookup: an unknown or hostile value yields "" and is never rendered.
+func doneSentence(raw string) string { return accountsDone[doneKey(raw)] }
+
+// doneHref is base with the done key. base is only ever accountsScreenPath or
+// accountPagePath, both built here under the fixed /console/accounts prefix, so
+// a Location can never become protocol-relative or leave the Console.
+func doneHref(base string, key doneKey) string {
+	return base + "?" + url.Values{"done": {string(key)}}.Encode()
+}
+
+// accountReturnHref chooses where the browser lands after a write that already
+// happened, and decides nothing: it reads the Account's current name and links
+// to its page, or to the list when that read fails. A failed read costs the
+// destination, never the act.
+func accountReturnHref(ctx context.Context, d Deps, caller capability.Principal, accountID string, key doneKey) string {
+	a, err := d.Accounts.Account(ctx, caller, accountID)
+	if err != nil || a.Name == "" {
+		return doneHref(accountsScreenPath, key)
 	}
-	return accountsScreenPath + "?" + url.Values{"account": {name}}.Encode()
+	return doneHref(accountPagePath(a.Name), key)
+}
+
+// The origin of a Disable made from the list's row: a closed token carried
+// through the confirmation page into the POST body, never a URL.
+const (
+	fromField = "from"
+	fromList  = "list"
+)
+
+// cameFromList reports whether v is the one recognised origin. Anything else
+// means the Account page.
+func cameFromList(v string) bool { return v == fromList }
+
+// backLink is a link back to the screen an act was made from.
+type backLink struct {
+	Href  string
+	Label string
+}
+
+// accountBack links to the list, or, when toList is false and name is known, to
+// that Account's page. A link to an Account page is labelled with the
+// Account's name; only a link to the list says "Back to Accounts".
+func accountBack(name string, toList bool) backLink {
+	if toList || name == "" {
+		return backLink{Href: accountsScreenPath, Label: "Back to Accounts"}
+	}
+	return backLink{Href: accountPagePath(name), Label: "Back to " + name}
 }
 
 // writeFailedWith renders, through render, a refusal the capability layer (or the domain) made.
@@ -464,7 +537,7 @@ func badRequest(w http.ResponseWriter, pg Page, heading string) {
 	renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{Heading: heading})
 }
 
-// handleCreateAccount implements POST /console/accounts/create.
+// handleCreateAccount implements POST /console/new-account/create.
 //
 // ALWAYS step-up. Creating an Account of ANY role and ANY kind brings a new
 // principal into existence, and creating an `operator` machine Account is
@@ -476,6 +549,7 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		pg.Banner = banner(d, r)
 
 		// What the operator typed is echoed into a refused re-render, each
 		// field only when it passes its own check, so a refusal of one never
@@ -483,11 +557,7 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 		name := r.PostFormValue("name")
 		kind := accounts.Kind(r.PostFormValue("kind"))
 		role := accounts.Role(r.PostFormValue("role"))
-		form := accountCreateForm{
-			CreateAction: createAccountAction(),
-			Roles:        allRoleNames(),
-			Kinds:        accountKinds(),
-		}
+		form := newAccountForm("", false)
 		if name != "" && len(name) <= maxAccountNameBytes {
 			form.Name = name
 		}
@@ -534,14 +604,14 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 		// Presentation only; the next act re-decides.
 		form.StepUpFresh = true
 
-		created, err := d.AccountAdmin.CreateAccount(r.Context(), caller, accounts.Account{
+		_, err := d.AccountAdmin.CreateAccount(r.Context(), caller, accounts.Account{
 			Name: name, Kind: kind, Role: role, Enabled: true,
 		})
 		if err != nil {
 			writeFailedWith(w, pg, err, createAccountPattern, name, "Nothing was created.", "Account", createRefusal(form))
 			return
 		}
-		http.Redirect(w, r, accountsHrefFor(created.Name), http.StatusSeeOther)
+		http.Redirect(w, r, doneHref(accountsScreenPath, doneCreated), http.StatusSeeOther)
 	}
 }
 
@@ -623,14 +693,24 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 			writeFailed(w, pg, err, setAccountRolePattern, id, "The role was not changed.", "Account")
 			return
 		}
-		http.Redirect(w, r, accountsScreenPath, http.StatusSeeOther)
+		if readErr == nil {
+			// The read above already named the Account; no second read.
+			http.Redirect(w, r, doneHref(accountPagePath(target.Name), doneRole), http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, accountReturnHref(r.Context(), d, caller, id, doneRole), http.StatusSeeOther)
 	}
 }
 
 // handleSetAccountEnabled implements POST /console/accounts/{account_id}/enabled.
 //
-// Step-up iff the act is an ENABLE. Decided from the request alone — no read,
-// so this route has no TOCTOU at all, unlike the role route above.
+// Step-up iff the act is an ENABLE. Decided from the request alone, before any
+// read, so this route has no TOCTOU, unlike the role route above. Its one read
+// comes after a successful write and only picks the destination.
+//
+// A Disable made from the list's row posts from=list (the confirmation page
+// carries it) and returns to the list; anything else returns to the Account
+// page. PostFormValue reads the body only, so a query-string from is ignored.
 func handleSetAccountEnabled(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		caller, pg, ok := writePrelude(d, w, r, "Accounts")
@@ -661,7 +741,15 @@ func handleSetAccountEnabled(d Deps) http.HandlerFunc {
 			writeFailed(w, pg, err, setAccountEnabledPattern, id, undone, "Account")
 			return
 		}
-		http.Redirect(w, r, accountsScreenPath, http.StatusSeeOther)
+		key := doneDisabled
+		if enabled {
+			key = doneEnabled
+		}
+		if !enabled && cameFromList(r.PostFormValue(fromField)) {
+			http.Redirect(w, r, doneHref(accountsScreenPath, key), http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, accountReturnHref(r.Context(), d, caller, id, key), http.StatusSeeOther)
 	}
 }
 
@@ -711,7 +799,7 @@ type mintedView struct {
 	TokenName   string
 	Expires     time.Time
 	Token       string // the plaintext, revealed once (accounts.Plaintext.Reveal)
-	BackHref    string
+	Back        backLink
 }
 
 // LogValue implements slog.LogValuer, omitting Token entirely.
@@ -796,12 +884,11 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 		// this response is the one that must not sit in a shared cache or come
 		// back on a back button.
 		// The Account's NAME, for the heading and the back link, comes from a
-		// read rather than from a hidden form field: the name is what selects
-		// an Account on the read screen, and echoing a caller-supplied one
-		// back would let the page name an Account that is not the one the
-		// credential belongs to. Best-effort — a failed read costs the
-		// selection on the back link, never the render of the secret, which
-		// is the one thing this response exists to do.
+		// read rather than from a hidden form field: echoing a caller-supplied
+		// one back would let the page name an Account that is not the one the
+		// credential belongs to. Best-effort — a failed read costs the link
+		// to the Account page (it falls back to the list), never the render of
+		// the secret, which is the one thing this response exists to do.
 		//
 		// It is not free, and the cost is named rather than discovered: this
 		// is a SECOND ControlAccountRead authorization on the mint path, and a
@@ -822,8 +909,8 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 			// The single Reveal() call in this package, and the third in the
 			// whole Relay — enumerated on Plaintext.Reveal's own doc comment
 			// and checked by TestPlaintext_RevealCallSitesAreEnumerated.
-			Token:    plaintext.Reveal(),
-			BackHref: accountsHrefFor(accountName),
+			Token: plaintext.Reveal(),
+			Back:  accountBack(accountName, false),
 		})
 	}
 }
@@ -851,6 +938,13 @@ func isMintRefusal(err error) bool {
 // nothing — it is the incident instrument, and an emergency brake that costs a
 // password is one people route around at exactly the wrong moment (owner
 // decision, 2026-09-19).
+//
+// The route carries only a token ID, so the confirmation page posts the owning
+// Account's ID as a hidden hint that says only where to land. It is accepted
+// only if the registry lists this token on that Account; an empty, overlong or
+// mismatched hint, or a failed read, falls back to the list. A hand-built form
+// therefore cannot make the result line name an Account the token is not on.
+// The write itself never reads the hint.
 func handleRevokeAPIToken(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		caller, pg, ok := writePrelude(d, w, r, "Accounts")
@@ -866,8 +960,29 @@ func handleRevokeAPIToken(d Deps) http.HandlerFunc {
 			writeFailed(w, pg, err, revokeAPITokenPattern, id, "The token was not revoked.", "API Token")
 			return
 		}
-		http.Redirect(w, r, accountsScreenPath, http.StatusSeeOther)
+		http.Redirect(w, r, revokeReturnHref(r.Context(), d, caller, r.PostFormValue("account"), id), http.StatusSeeOther)
 	}
+}
+
+// revokeReturnHref is the landing for a revoked token: the owner's page when
+// the registry lists tokenID on the Account the hint names, the list otherwise.
+// A hint naming an Account the token is not on, an overlong one, and a failed
+// read all land on the list (tested).
+func revokeReturnHref(ctx context.Context, d Deps, caller capability.Principal, owner, tokenID string) string {
+	list := doneHref(accountsScreenPath, doneRevoked)
+	if owner == "" || len(owner) > maxAccountIDBytes {
+		return list
+	}
+	toks, err := d.Accounts.APITokens(ctx, caller, owner)
+	if err != nil {
+		return list
+	}
+	for _, t := range toks {
+		if t.ID == tokenID {
+			return accountReturnHref(ctx, d, caller, owner, doneRevoked)
+		}
+	}
+	return list
 }
 
 // accountsMintedTmpl is the reveal-once response: the plaintext, escaped by
@@ -876,10 +991,9 @@ func handleRevokeAPIToken(d Deps) http.HandlerFunc {
 var accountsMintedTmpl = newScreen("accounts-minted", `
 <section class="panel minted">
   <h3>API Token minted &mdash; <span class="ident">{{.TokenName}}</span>{{with .AccountName}} for <span class="ident">{{.}}</span>{{end}}</h3>
-  <p><b>Copy this now.</b> This is the only time this Relay will show it. It is stored as a hash and
-  cannot be recovered &mdash; if it is lost, revoke this token and mint another.</p>
   <p><code>{{.Token}}</code></p>
-  <p class="note">Token id <code>{{.TokenID}}</code>{{if .Expires.IsZero}}, which does not expire{{else}}, expiring {{stamp .Expires}}{{end}}; record the id, never the value above.</p>
-  <p><a href="{{.BackHref}}">Back to Accounts</a></p>
+  <p class="note">Shown once.</p>
+  <p class="note">Token id <code>{{.TokenID}}</code>{{if .Expires.IsZero}}, which does not expire{{else}}, expiring {{stamp .Expires}}{{end}}.</p>
+  <p><a href="{{.Back.Href}}">{{.Back.Label}}</a></p>
 </section>
 `)

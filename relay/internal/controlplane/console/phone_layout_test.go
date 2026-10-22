@@ -95,15 +95,15 @@ func TestFleet_PhoneCardsLabelEveryCell(t *testing.T) {
 }
 
 func TestAccounts_PhoneCardsLabelEveryCell(t *testing.T) {
-	body := accountsWriteBody(t, "?account=gleipnir-prod")
+	body := accountsWriteBody(t, accountsScreenPath)
 	table := cardTable(t, body, "rows cards")
 	for _, td := range tdOpenPattern.FindAllString(table, -1) {
 		if !strings.Contains(td, "data-label=") {
 			t.Errorf("an Accounts cell is unlabelled: %s", td)
 		}
 	}
-	if got := labelsOf(table); !got["Account"] || !got["State"] {
-		t.Errorf("Accounts cells lack the Account and State labels; labels: %v", got)
+	if got := labelsOf(table); !got["Name"] || !got["Status"] {
+		t.Errorf("Accounts cells lack the Name and Status labels; labels: %v", got)
 	}
 	// The API-token table is a different table and is not reflowed here.
 	if strings.Count(body, `class="rows cards"`) != 1 {

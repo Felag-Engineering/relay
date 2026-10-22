@@ -64,9 +64,9 @@ func TestStepUp_AnAccountActInsideTheWindowProceedsWithoutAPassword(t *testing.T
 		t.Fatalf("first create = %d; body %s", rec.Code, contentOf(rec.Body.String()))
 	}
 
-	// The screen no longer demands the password, and carries the rotated
+	// The New account page no longer demands the password, and carries the rotated
 	// session's token.
-	rec := x.get(t, "/console/accounts")
+	rec := x.get(t, newAccountPath)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET accounts = %d", rec.Code)
 	}
@@ -106,7 +106,7 @@ func TestStepUp_AnAccountActAfterTheWindowPrompts(t *testing.T) {
 	if accountExists(t, x, "second") {
 		t.Error("the Account was created after the window lapsed")
 	}
-	if !passwordInputRequired(t, x.get(t, "/console/accounts").Body.String()) {
+	if !passwordInputRequired(t, x.get(t, newAccountPath).Body.String()) {
 		t.Error("after the window the create form no longer marks the password input required")
 	}
 }

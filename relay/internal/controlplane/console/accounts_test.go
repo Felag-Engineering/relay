@@ -10,17 +10,17 @@ package console
 // and a NAMED pin for each acceptance line so a failure says which criterion
 // broke rather than which sweep noticed.
 //
-// The "?account=" cases matter more than they look. walkableScreens emits BARE
-// paths only, so the token panel, the unknown-Account note and the failed
-// token read are reached by NO structural guard in this package — not the
-// inline-script sweep, not the CSRF sweep, not the day-one sweep. Every
-// assertion about them has to be written here explicitly.
+// The Account page cases matter more than they look. walkableScreens reaches
+// the page only for the one fixture name, so the token section, the
+// unknown-Account note and the failed token read are reached by no structural
+// guard in this package. Every assertion about them has to be written here
+// explicitly.
 
 import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"html"
+	"html/template"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -144,7 +144,7 @@ func TestAccounts_ARefusedTokenReadIsAlsoTheLayersRefusal(t *testing.T) {
 	f.tokensErr = authz.ErrUnauthorized
 	d.Accounts = f
 
-	rec := get(t, newTestHandler(d, accounts.RoleAdmin), accountsPath+"?account=gleipnir-prod")
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), accountPagePath("gleipnir-prod"))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("a refused API-Token read = %d, want 403", rec.Code)
 	}
@@ -159,9 +159,16 @@ func TestAccounts_ARefusedTokenReadIsAlsoTheLayersRefusal(t *testing.T) {
 // AuthorizeControl are the only two places a role is compared for this screen,
 // and neither is here.
 func TestAccounts_NoRoleComparisonLivesInThisScreen(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join(".", "accounts.go"))
+	for _, file := range []string{"accounts.go", "accounts_page.go"} {
+		assertNoRoleComparison(t, file)
+	}
+}
+
+func assertNoRoleComparison(t *testing.T, file string) {
+	t.Helper()
+	src, err := os.ReadFile(filepath.Join(".", file))
 	if err != nil {
-		t.Fatalf("read accounts.go: %v", err)
+		t.Fatalf("read %s: %v", file, err)
 	}
 	// The COMPARISON shapes, not every mention of a role: this file
 	// legitimately renders a role name in a table cell and names the three
@@ -179,9 +186,9 @@ func TestAccounts_NoRoleComparisonLivesInThisScreen(t *testing.T) {
 		"RoleGate", "requiredRole", "caller.Role",
 	} {
 		if strings.Contains(string(src), banned) {
-			t.Errorf("accounts.go contains %q — this screen must interpret no role. The route's "+
+			t.Errorf("%s contains %q — this screen must interpret no role. The route's "+
 				"MinRole subtracts reach at mount time and the capability layer authorizes; a "+
-				"comparison here would be a third, unreviewed answer (invariant 10).", banned)
+				"comparison here would be a third, unreviewed answer (invariant 10).", file, banned)
 		}
 	}
 }
@@ -231,8 +238,8 @@ func TestAccounts_AMachineAccountsLastCallLinksToActivityScopedToItsID(t *testin
 }
 
 // TestAccounts_AnAccountNameIsURLEncodedInEveryLink is the #467 regression, on
-// this screen's two links. An Account name or id is a string this package
-// does not constrain, and "bob&co" concatenated into a query yields a link to
+// this screen's links. An Account name or id is a string this package
+// does not constrain, and "bob&co" concatenated into a link yields a link to
 // a different Account entirely.
 func TestAccounts_AnAccountNameIsURLEncodedInEveryLink(t *testing.T) {
 	d := accountsFixture()
@@ -249,12 +256,12 @@ func TestAccounts_AnAccountNameIsURLEncodedInEveryLink(t *testing.T) {
 
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), accountsPath).Body.String()
 	for _, want := range []string{
-		"/console/accounts?account=bob%26co",
+		`href="` + template.HTMLEscapeString(accountPagePath("bob&co")) + `"`,
 		"/console/activity?account=acct%26co",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("a name containing & is not URL-encoded in %q — the link reaches the wrong "+
-				"Account (#467):\n%s", want, contentOf(body))
+				"Account:\n%s", want, contentOf(body))
 		}
 	}
 }
@@ -280,17 +287,18 @@ func TestAccounts_AHumanAccountHasNoLastToolCallCell(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestAccounts_APageViewRecordsExactlyOneReadRecord drives the real lane over
-// the real sink, twice: the bare path and a selected Account.
+// the real sink for each Accounts screen that reads: the list and an
+// Account's page.
 //
-// The second run is the load-bearing one. The Account and API-Token reads
-// record NOTHING on success (capability/accountadmin.go), so selecting an
-// Account must not change the count — if it ever did, something in this
-// package started auditing on its own, which invariant 10 and
-// read_audit_test.go both forbid.
+// Each records exactly one query_audit, the same trail read. The Account and
+// API-Token reads record NOTHING on success (capability/accountadmin.go), so
+// the Account page's one record is its own trail read and not those; if either
+// count changed, something in this package started auditing on its own, which
+// invariant 10 and read_audit_test.go both forbid.
 func TestAccounts_APageViewRecordsExactlyOneReadRecord(t *testing.T) {
 	for _, path := range []string{
 		accountsPath,
-		accountsPath + "?account=" + testAdminName,
+		accountPagePath(testAdminName),
 	} {
 		trail := &recordingTrail{}
 		rec := get(t, newTestHandler(realLaneDeps(trail), accounts.RoleAdmin), path)
@@ -342,7 +350,7 @@ func TestAccounts_ATokenRowHasNoFieldASecretCouldOccupy(t *testing.T) {
 // nothing.
 func TestAccounts_NoSecretHashReachesTheRenderedPage(t *testing.T) {
 	body := get(t, newTestHandler(accountsFixture(), accounts.RoleAdmin),
-		accountsPath+"?account=gleipnir-prod").Body.String()
+		accountPagePath("gleipnir-prod")).Body.String()
 
 	// The panel must have rendered, or the assertion below is vacuous.
 	if !strings.Contains(body, "tok-live") {
@@ -408,28 +416,20 @@ func TestAccounts_NoConsoleFileNamesSecretHash(t *testing.T) {
 	}
 }
 
-// TestAccounts_AboutNamesThePolicyCeiling: spec 15 asks for the sentence that
-// the ceiling is always the fleet's own Policy. Since #849 the screen draws no
-// per-role lines — what each role may do is ADR-0010's and GLOSSARY.md's — so
-// the ceiling is what remains. It must not become a permission matrix, and it
-// must not become Relay configuration (invariant 11, foundations rule 7).
-func TestAccounts_AboutNamesThePolicyCeiling(t *testing.T) {
-	body := contentOf(get(t, newTestHandler(accountsFixture(), accounts.RoleAdmin), accountsPath).Body.String())
-
-	// Compared against the const rather than a copy of the prose, so the
-	// sentence and this assertion cannot drift. Unescaped first: html/template
-	// turns the apostrophe in "Node's" into &#39;, which is correct output and
-	// would make a raw comparison fail for the wrong reason.
-	if !strings.Contains(html.UnescapeString(body), policyCeilingNote) {
-		t.Errorf("the screen does not state that a Node's own Policy is the ceiling:\n%s", body)
-	}
-	// Not configuration, and not a fleet inventory: this screen is about
-	// identity, and a Node id, Selector or Operation name here would be the
-	// start of a settings page.
-	for _, banned := range []string{"node-web-1", "blast", "selector", "console_execution"} {
-		if strings.Contains(strings.ToLower(body), strings.ToLower(banned)) {
-			t.Errorf("the Accounts screen renders %q — it must carry no Relay configuration and no "+
-				"fleet detail (spec 15 'Must not appear', invariant 11)", banned)
+// TestAccounts_CarriesNoRelayConfiguration: the screens are about identity,
+// and must not become a permission matrix or Relay configuration (invariant 11,
+// foundations rule 7).
+func TestAccounts_CarriesNoRelayConfiguration(t *testing.T) {
+	h := newTestHandler(accountsFixture(), accounts.RoleAdmin)
+	for _, path := range []string{accountsPath, accountPagePath("gleipnir-prod")} {
+		body := contentOf(get(t, h, path).Body.String())
+		// Not configuration, and not a fleet inventory: a Node id, Selector or
+		// Operation name here would be the start of a settings page.
+		for _, banned := range []string{"node-web-1", "blast", "selector", "console_execution"} {
+			if strings.Contains(strings.ToLower(body), strings.ToLower(banned)) {
+				t.Errorf("%s renders %q — it must carry no Relay configuration and no "+
+					"fleet detail (spec 15 'Must not appear', invariant 11)", path, banned)
+			}
 		}
 	}
 }
@@ -488,23 +488,23 @@ func TestAccounts_DayOneShowsTheFirstAdmin(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// "?account=" — swept by NO structural guard, so every case is written here.
+// The list and the Account page — swept by no structural guard, so every case is written here.
 // ---------------------------------------------------------------------------
 
-// TestAccounts_TheTokenPanelRendersOnlyForTheSelectedAccount, with every
-// column spec 15 asks for.
-func TestAccounts_TheTokenPanelRendersOnlyForTheSelectedAccount(t *testing.T) {
+// TestAccounts_TheListCarriesNoTokenAndTheAccountPageDoes, with every column
+// spec 15 asks for.
+func TestAccounts_TheListCarriesNoTokenAndTheAccountPageDoes(t *testing.T) {
 	h := newTestHandler(accountsFixture(), accounts.RoleAdmin)
 
-	bare := get(t, h, accountsPath).Body.String()
-	if strings.Contains(bare, "tok-live") {
-		t.Error("the bare Accounts path rendered a token panel — tokens are per selected Account")
+	list := get(t, h, accountsPath).Body.String()
+	if strings.Contains(list, "tok-live") {
+		t.Error("the list rendered a token — tokens belong to an Account's page")
 	}
-	if strings.Contains(bare, "Role and state") || strings.Contains(bare, "API Tokens &mdash;") {
-		t.Error("the bare Accounts path rendered a selected Account's panel")
+	if strings.Contains(list, "API Tokens") {
+		t.Error("the list rendered an API Tokens section")
 	}
 
-	selected := get(t, h, accountsPath+"?account=gleipnir-prod").Body.String()
+	page := get(t, h, accountPagePath("gleipnir-prod")).Body.String()
 	for _, want := range []string{
 		"tok-live",             // id
 		"ci-deploy",            // name
@@ -514,21 +514,25 @@ func TestAccounts_TheTokenPanelRendersOnlyForTheSelectedAccount(t *testing.T) {
 		"revoked",              // the revoked token's state
 		"2026-08-26 12:00:00Z", // the revoked token's expiry
 	} {
-		if !strings.Contains(selected, want) {
-			t.Errorf("the token panel does not render %q:\n%s", want, contentOf(selected))
+		if !strings.Contains(page, want) {
+			t.Errorf("the token section does not render %q:\n%s", want, contentOf(page))
 		}
 	}
-	panel, list := strings.Index(selected, "API Tokens &mdash;"), strings.Index(selected, `<table class="rows cards">`)
-	if panel < 0 || list < 0 || panel > list {
-		t.Errorf("the token panel (at %d) does not come before the Account list (at %d)", panel, list)
+	if strings.Contains(page, `<table class="rows cards">`) {
+		t.Error("the Account page carries the Account list")
+	}
+
+	// A stale ?account= is not read: the list renders.
+	stale := get(t, h, accountsPath+"?account=gleipnir-prod")
+	if stale.Code != http.StatusOK || strings.Contains(stale.Body.String(), "tok-live") {
+		t.Errorf("?account= is still read by the list (status %d)", stale.Code)
 	}
 }
 
 // TestAccounts_ASelectedAccountsPageCarriesNoInlineScript is the sweep that
-// does not exist: walkableScreens emits bare paths, so the inline-script and
-// banned-attribute guards never see this body.
+// does not exist for a name in the path.
 func TestAccounts_ASelectedAccountsPageCarriesNoInlineScript(t *testing.T) {
-	path := accountsPath + "?account=gleipnir-prod"
+	path := accountPagePath("gleipnir-prod")
 	body := get(t, newTestHandler(accountsFixture(), accounts.RoleAdmin), path).Body.String()
 
 	assertCSPClean(t, path, body)
@@ -538,20 +542,20 @@ func TestAccounts_ASelectedAccountsPageCarriesNoInlineScript(t *testing.T) {
 // panel reads as "this Account has no tokens", which is a claim about an
 // Account that does not exist.
 func TestAccounts_AnUnknownSelectionSaysSoRatherThanRenderingABlankPanel(t *testing.T) {
-	rec := get(t, newTestHandler(accountsFixture(), accounts.RoleAdmin), accountsPath+"?account=nobody")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("an unknown ?account= = %d, want 200 — the list is still readable", rec.Code)
+	rec := get(t, newTestHandler(accountsFixture(), accounts.RoleAdmin), accountPagePath("nobody"))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("an unknown Account page = %d, want 404", rec.Code)
 	}
 	body := contentOf(rec.Body.String())
 
 	if !strings.Contains(body, "No Account on this Relay is named") {
-		t.Errorf("an unknown ?account= does not say so:\n%s", body)
+		t.Errorf("an unknown Account page does not say so:\n%s", body)
 	}
-	if !strings.Contains(body, "gleipnir-prod") {
-		t.Error("an unknown ?account= dropped the Account table — the list is a separate read and is fine")
+	if !strings.Contains(body, `<a href="/console/accounts">Back to Accounts</a>`) {
+		t.Errorf("an unknown Account page has no way back:\n%s", body)
 	}
 	if strings.Contains(body, "has no API Tokens") {
-		t.Error("an unknown ?account= rendered the empty-token-panel copy, which claims the Account exists")
+		t.Error("an unknown Account page rendered the empty-token copy, which claims the Account exists")
 	}
 }
 
@@ -566,7 +570,7 @@ func TestAccounts_AFailedTokenReadDegradesOnePanel(t *testing.T) {
 	f.tokensErr = errQueryFailed
 	d.Accounts = f
 
-	rec := get(t, newTestHandler(d, accounts.RoleAdmin), accountsPath+"?account=gleipnir-prod")
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), accountPagePath("gleipnir-prod"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("a failed token read = %d, want 200 with one degraded panel", rec.Code)
 	}
@@ -575,11 +579,8 @@ func TestAccounts_AFailedTokenReadDegradesOnePanel(t *testing.T) {
 	if !strings.Contains(body, "could not be read") {
 		t.Errorf("the token panel does not say it could not be read:\n%s", body)
 	}
-	if !strings.Contains(body, "mike") {
-		t.Error("a failed token read took the Account table down with it")
-	}
-	if !strings.Contains(body, "the Account list below is unaffected") {
-		t.Errorf("the degraded panel does not say the list below is unaffected:\n%s", body)
+	if !strings.Contains(body, "<h2>Role</h2>") || !strings.Contains(body, "<h2>State</h2>") {
+		t.Error("a failed token read took the rest of the Account page down with it")
 	}
 }
 
