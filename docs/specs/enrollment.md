@@ -1,184 +1,217 @@
 # Enrollment
 
-**Status:** aspirational — worked through with the owner on `2026-09-14`, awaiting their review
-of this draft. Describes intended behaviour, not the code (see the establishing phase in
-`README.md`).
+**Status:** designed, not built, as of `2026-10-21`.
+**Claim prefix:** `EN`
 
 ## Purpose
 
-Enrollment gives a new Node a Relay-assigned identity, obtained with a bounded credential, so an
-operator or config-management system can add Nodes without handing them a credential that can
-administer the fleet. It also provides containment for a leaked Enrollment Token: stop further
-enrollment and revoke every Node whose recorded provenance names that token.
+Enrollment gives a new Node a Relay-assigned identity without handing the Node a credential
+that can administer the fleet. An operator or a config-management system adds Nodes; the
+Relay's private CA issues each one a client certificate; from then on the Node's identity is
+that certificate and nothing else.
 
-Enrollment owns **first contact**: the join string, the first trust decision, and identity
-issuance, renewal and revocation. Every later connection of an enrolled Node is
-`node-connection.md`.
+Enrollment owns **first contact**: what a Node needs to reach the Relay, the first trust
+decision in each direction, identity issuance, renewal and revocation, and the containment of a
+leaked enrollment credential. Every later connection of an enrolled Node is `node-connection.md`.
+
+"The daemon" below names the relay-daemon binary in whichever form runs it: the process its
+unit starts, or a subcommand such as `relay-daemon join`. Where a claim means the unit start
+alone, it says so.
 
 ## Surfaces
 
 | Surface | Behaviour |
 |---|---|
 | Control API | An `admin` mints a token with `POST /api/v1/enrollment-tokens`, receiving the plaintext token and its **join string** once, and revokes one with `DELETE /api/v1/enrollment-tokens/{id}`. |
-| Node plane | The certless `Enrollment.Enroll` RPC accepts a token, CSR, and declared `node:` Labels; `Enrollment.Renew` is mTLS-authenticated. |
-| relay-daemon | On first start with no persisted identity, it reads the join string, pins the Relay CA fingerprint it carries, enrolls, then persists its identity and the Relay address. A later start reuses that identity. |
-| Console | Shows enrollment attempts and Node enrollment provenance. It does not mint tokens or add Nodes (Future work). |
-| MCP | No enrollment-token mint or revoke tool is exposed. |
+| Node plane | The certless `Enrollment.Enroll` RPC accepts a token, a CSR and declared `node:` Labels; `Enrollment.Renew` is mTLS-authenticated. |
+| relay-daemon | Enrolls by a join string on first start with no persisted identity: it pins the Relay's CA fingerprint, enrolls, persists its identity and the Relay address, and reuses that identity on every later start. Where the join string lives on a Node and how `relay-daemon join` delivers it is `daemon-installation.md`; EN-30 (designed) moves the enrollment into `join`. |
+| Console | Shows enrollment attempts and each Node's enrollment provenance. It does not mint tokens today; EN-36 (designed) gives it a mint. |
+| MCP | No enrollment tool is exposed: no mint and no revoke. An AI-agent may read a Node's provenance through `query.md` and nothing more. |
 
 ## Behaviour
 
 ### Minting
 
-- The Control API authenticates and authorizes the caller as `admin` before it reads the request
-  body. Minting is audited with the actor's attribution and the public token ID.
-- A token has a positive TTL of at most one year and an optional positive `max_uses`; a missing or
-  non-positive `max_uses` is unlimited.
-- A token **may carry `tag:` Labels**, applied to every Node that enrolls with it. Each must be a
-  well-formed `tag:` Label within the per-Node tag limits (`selectors-and-labels.md`); a malformed
-  one refuses the mint and is never rewritten. A token carries no operator-chosen `relay:` Labels —
-  token scope as a list of `relay:` Labels is retired.
-- The Relay returns the plaintext `id.secret` credential, and the join string built from it, only
-  in the successful mint response. It stores a hash of the secret, never the plaintext; logs and
-  lifecycle audit records contain only the public ID and non-secret metadata.
-- A valid token is reusable until its expiry, revocation, or use limit. Validation serializes the
-  check and use increment, so concurrent enrollment cannot exceed `max_uses`.
+- **EN-1** The Control API authorizes the caller as `admin` for a mint before it reads the
+  request body. A mint is audited with the actor's attribution and the public token ID.
+- **EN-2** A token has a positive TTL of at most one year and an optional positive `max_uses`.
+  A missing or non-positive `max_uses` is unlimited.
+- **EN-3** A token carries a scope: one or more well-formed `relay:` Labels, each rendering
+  as exactly one Selector term. A scope entry that is not such a Label refuses the mint and is
+  never rewritten.
+- **EN-4** The Relay returns the plaintext `id.secret` credential, and the join string built
+  from it, only in the successful mint response. It stores a hash of the secret, never the
+  plaintext; logs and lifecycle audit records carry only the public ID and non-secret metadata.
+- **EN-5** A valid token is reusable until its expiry, its revocation or its use limit.
+  Validation serializes the check and the use increment, so concurrent enrollment cannot
+  exceed `max_uses`.
 
 ### The join string
 
-- One string carries everything first contact needs: the Relay address, the fingerprint of the
-  Relay's CA, and the Enrollment Token (ADR-0031). There is no CA bundle file to hand each Node
-  and no second bootstrap path.
-- On first contact the daemon **pins the CA fingerprint**: it proceeds only if the Relay presents a
-  certificate chain rooting in a CA with that fingerprint, and sends nothing — token included —
-  otherwise.
-- The daemon persists the Relay address and CA with its identity. From then on the join string is
-  not needed; every later connect checks the pinned CA and uses the persisted address
-  (`node-connection.md`).
+- **EN-6** One join string carries everything first contact needs: the Relay address, the
+  fingerprint of the Relay's CA and the Enrollment Token (ADR-0031). The daemon takes no CA
+  bundle path and no bare token by any other setting; a Relay address set in its environment
+  overrides only the address, and the pin still applies to whatever it dials.
+- **EN-7** On first contact the daemon pins the CA fingerprint: it proceeds only if the Relay
+  presents a certificate chain rooting in a CA with that fingerprint, and sends nothing, token
+  included, otherwise.
+- **EN-8** The daemon persists the Relay address and the CA bundle with its identity. Every
+  later start uses the persisted address, or a Relay address set in its environment, which
+  overrides the persisted one on every start (ADR-0031), and checks the pinned CA; the join
+  string is not needed again (`node-connection.md`).
 
 ### First enrollment and identity
 
-- `Enroll` is the sole certless Node-plane RPC. It uses server-authenticated TLS, while every
-  subsequent Node-plane RPC requires the Node's client certificate.
-- The Relay applies per-source and global enrollment rate limits before token validation or CSR
-  signing, so a throttled request cannot reveal whether a token is real.
-- The Relay rejects an empty token or CSR. It also rejects the entire request if a declared Label is
-  not a well-formed `node:` Label, or uses a reserved built-in `node:` key; it never lets a Node
-  submit a `relay:` or `tag:` Label in this path.
-- After a valid token is accepted, the Relay generates the `node_id`, signs the CSR under that
-  identity, and creates the registry record. It then writes the enrollment action's `relay:` Labels —
-  **`relay:enrollment-token=<token ID>`** and **`relay:node-id=<node ID>`** — and applies the token's
-  `tag:` Labels. The CSR subject does not select the Node identity.
-- Certificate signing and registry writes occur only after token validation. A rejected enrollment
-  creates neither certificate nor registry entry. A successful response carries the assigned ID,
-  certificate, and CA bundle.
-- The daemon persists the returned key, certificate, CA bundle, Relay address and identity. With a
-  valid persisted identity it does not enroll again on restart, so the join string is inert for
-  that Node.
-- After recording an enrollment, the Relay rechecks token revocation. If the token was revoked
-  during enrollment, it denylists the fresh Node and returns the same token-rejection result used for
-  other token failures.
+- **EN-9** `Enroll` is the sole certless Node-plane RPC. It uses server-authenticated TLS;
+  every other Node-plane RPC requires the Node's client certificate.
+- **EN-10** The Relay applies per-source and global enrollment rate limits before token
+  validation or CSR signing, so a throttled request cannot reveal whether a token is real.
+- **EN-11** The Relay rejects an empty token or an empty CSR. It rejects the whole request if a
+  declared Label is not a well-formed `node:` Label; it never accepts a `relay:` or `tag:`
+  Label submitted by a Node.
+- **EN-12** After a valid token is accepted, the Relay generates the `node_id`, signs the CSR
+  under that identity, creates the registry record, stamps the token's scope as the Node's
+  `relay:` Labels, and records the token ID and the time as the Node's enrollment provenance.
+  The CSR subject never selects the identity.
+- **EN-13** Certificate signing and registry writes occur only after token validation. A
+  rejected enrollment creates neither a certificate nor a registry record. A successful
+  response carries the assigned ID, the certificate and the CA bundle.
+- **EN-14** The daemon persists the returned key, certificate, CA bundle, Relay address and
+  identity. With a valid persisted identity it does not enroll again on restart, so the join
+  string is inert for that Node.
+- **EN-15** After recording an enrollment the Relay rechecks the token's revocation. If the
+  token was revoked during enrollment it denylists the fresh Node and returns the same
+  token-rejection result used for every other token failure.
 
-### Re-enrollment
+### A second enrollment
 
-- A Node that enrolls again — for example after its certificate expired while the Relay was
-  unreachable (`node-connection.md`) — receives a **new Node ID and a new registry record**. The old
-  record stays revoked or offline and is never merged into the new one. Tags applied to the old record
-  do not carry over; the new record receives only the enrolling token's tags.
+- **EN-16** A Node that enrolls a second time under a token, whether because it was revoked or
+  because its certificate expired while the Relay was unreachable (`node-connection.md`),
+  receives a new Node ID and a new registry record. The old record stays revoked or offline and
+  is never merged into the new one.
 
-### Renewal, provenance, and revocation
+### Renewal, provenance and revocation
 
-- Renewal requires an mTLS-authenticated Node identity. The Relay derives `node_id` from the verified
-  certificate, signs a new CSR under that ID, and returns a new certificate and CA bundle. It never
-  uses an Enrollment Token and never changes Labels or initial-enrollment provenance.
-- The registry records initial enrollment time and token ID separately from renewal certificate
-  provenance. Recording a certificate's provenance is non-fatal after a certificate has been issued; a
-  valid issued identity is never withdrawn because bookkeeping failed.
-- Revoking a token first prevents further use of it, then cascade-revokes every Node whose
-  `relay:enrollment-token` names it. Each matching Node is denylisted, disconnected if live, and
-  persistently marked revoked; the scan is repeated to cover a Node recorded while revocation was in
-  progress.
-- Token revocation is idempotent, including for an unknown token ID. The Control API records the
-  token revocation and one attributed Node-revocation record per cascaded Node. If per-Node recording
-  fails, revocation still completes and the API reports the audit-record shortfall rather than
-  leaving a Node live.
+- **EN-17** Renewal requires an mTLS-authenticated Node identity. The Relay derives `node_id`
+  from the verified certificate, signs a new CSR under that ID, and returns a new certificate
+  and CA bundle. It never uses an Enrollment Token and never changes Labels or
+  initial-enrollment provenance.
+- **EN-18** The registry records the initial enrollment time and token ID apart from renewal
+  provenance. Recording provenance is non-fatal once a certificate has been issued: a valid
+  issued identity is never withdrawn because bookkeeping failed.
+- **EN-19** Revoking a token first prevents further use of it, then cascade-revokes every Node
+  whose recorded enrollment provenance names it: each is denylisted, disconnected if live and
+  persistently marked revoked, and the scan repeats to cover a Node recorded while revocation
+  was in progress.
+- **EN-20** Token revocation is idempotent, including for an unknown token ID. The Control API
+  records the token revocation and one attributed Node-revocation record per cascaded Node. If
+  per-Node recording fails, revocation still completes and the Control API reports the
+  shortfall rather than leaving a Node live.
+
+### Surfaces today
+
+- **EN-21** The Console shows enrollment attempts, accepted and rejected, and each Node's
+  enrollment provenance. It mints nothing and adds no Node. Attempts are an in-memory event
+  feed, not durable records.
+- **EN-22** MCP registers no enrollment tool: no mint and no revoke.
 
 ## Refusals
 
-- A non-`admin` Control API caller cannot mint or revoke an Enrollment Token.
-- A mint request with a malformed or over-limit `tag:` Label, an invalid TTL, malformed JSON, or
-  unknown request fields is refused; nothing is sanitized into another Label.
-- An enrollment request with no token or CSR, a malformed or reserved-key `node:` Label, a `relay:` or
-  `tag:` Label, an invalid CSR, a full registry, or a rate-limit excess is refused. Rate-limit refusal
-  is `ResourceExhausted`; missing inputs and malformed Node data are `InvalidArgument`.
-- Invalid, unknown, expired, revoked, exhausted, and legacy scope-carrying tokens all return the same
-  `PermissionDenied` token-rejection response. This prevents the certless endpoint from becoming a
-  token-state oracle.
-- A daemon whose join string names a CA fingerprint the Relay does not present does not enroll and
-  sends no token.
-- A daemon with neither a persisted identity nor a join string fails closed; it never opens a
-  plaintext Node-plane connection. A failed enrollment persists no partial identity.
-- A revoked Node cannot reconnect or renew. Re-enrollment creates a new identity, which is why token
-  revocation must revoke both the token and its recorded Nodes.
+- **EN-23** A non-`admin` Control API caller cannot mint or revoke an Enrollment Token.
+- **EN-24** A mint request with a scope entry that is not a well-formed `relay:` Label, an
+  invalid TTL, malformed JSON or an unknown request field is refused; nothing is sanitized into
+  another Label.
+- **EN-25** An enrollment request with no token or no CSR, a malformed or non-`node:` declared
+  Label, an invalid CSR, a full registry, or a rate-limit excess is refused. Rate-limit and
+  capacity refusals are `ResourceExhausted`; missing inputs and malformed Node data are
+  `InvalidArgument`.
+- **EN-26** Invalid, unknown, expired, revoked, exhausted and malformed-scope tokens all
+  return the same `PermissionDenied` token-rejection response, so the certless endpoint is
+  never a token-state oracle.
+- **EN-27** A daemon whose join string names a CA fingerprint the Relay does not present does
+  not enroll and sends no token.
+- **EN-28** A daemon with neither a persisted identity nor a join string exits cleanly with
+  nothing written; it never opens a plaintext Node-plane connection. A failed enrollment
+  persists no partial identity.
+- **EN-29** A revoked Node cannot reconnect or renew. Re-enrollment creates a new identity,
+  which is why revoking a token revokes both the token and the Nodes it enrolled.
 
 ## Governing ADRs and invariants
 
 - **Invariant 6 / ADR-0005** — mTLS for the Node plane. `Enroll` is the narrowly bounded
-  first-identity exception; renewal and the Tunnel are not.
-- **Invariant 7 / ADR-0006** — the Relay, never a Node, writes `relay:` Labels, and only as the side
-  effect of a Relay action; enrollment is such an action, writing `relay:enrollment-token` and
-  `relay:node-id`. Enrollment-submitted Labels are `node:` only.
-- **ADR-0006 — needs amending.** Token scope as operator-chosen `relay:` Labels stamped at enrollment
-  is retired.
-- **ADR-0020 — needs amending.** A token may now carry `tag:` Labels applied at join; post-enrollment
-  `relay:` management by direct `admin` write is superseded (`selectors-and-labels.md`).
-- **ADR-0017** — `node:` Labels support routine targeting only; security-lane targeting uses the
-  Relay-written `relay:` Labels.
-- **ADR-0031** — the fingerprint-pinned join string. In the first pass.
-- **ADR-0032** (rendered bundles) and **ADR-0030** (`relay init`) — approved. `relay init` creates
-  the first admin (`relay-configuration.md`); its enrollment acts — a first Enrollment Token and
-  its rendered bundle — are Future work here. ADR-0032's `admin` minting floor stands.
+  certless exception; renewal and the Tunnel are not.
+- **Invariant 7 / ADR-0006**, amended 2026-10-22 — the Relay, never a Node, writes `relay:`
+  Labels, and only as the side effect of a Relay action. Enrollment is that action, and its key
+  set is the token's scope, defined by the `admin` at mint; a mint refuses a key that another
+  Relay action owns (EN-35). Node-submitted Labels are `node:` only. The 2026-09-14 draft
+  decision to carry `tag:` Labels on a token in place of a `relay:` scope was retired unbuilt on
+  2026-10-21.
+- **ADR-0020**, amended 2026-09-16, **/ ADR-0034** — the four Label namespaces, and the rule
+  that each `relay:` key belongs to the action that writes it. Enrollment writes `relay:` and
+  reads `node:`; it writes no `tag:` and no `state:`.
+- **Invariant 10** — the Control API's mint and revoke are role-gated by the capability layer's
+  control actions; the Console and MCP offer less, not more.
+- **Invariant 11 / ADR-0010** — enrollment rate limits and the registry cap are reach-bounding
+  settings; the CA the Relay issues from is the Relay's own key material.
+- **ADR-0017** — `node:` Labels support routine targeting only; security-lane targeting uses
+  the Relay-written `relay:` Labels.
+- **ADR-0031**, amended 2026-10-21 — the fingerprint-pinned join string, and the decision that
+  a join string is consumed by the act that enrolls and persisted nowhere on a Node (EN-30,
+  EN-31).
+- **ADR-0033**, amended 2026-10-21 — `relay-daemon join` enrolls in the process that read the
+  join string (`daemon-installation.md`, its `join` claims).
+- **ADR-0022** — the shipped default Policy's deny-list names the environment file and the
+  daemon's environment oracle; EN-30 is why that deny stops being load-bearing.
+- **ADR-0030 / ADR-0032** — `relay init` and rendered bundles. The `admin` minting floor stands.
 
 ## Seams and proof
 
-The token service, enrollment RPC handler, Control API, and revocation service are the principal
-seams. `make verify` suffices for Relay-only changes. Changes to the Node-plane protocol, TLS
-configuration, the join string, or the relay-daemon enrollment path also need real-daemon
-integration coverage.
+The token service, the enrollment RPC handler, the Control API and the revocation service are
+the Relay seams; the daemon's enrollment and pin modules are the Node seams. `make verify`
+suffices for Relay-only changes. A change to the Node-plane protocol, the TLS configuration,
+the join string or the daemon's enrollment path also needs the cross-binary suite.
 
 ### What proves each claim
 
-| Behaviour | Proven by | Seam |
+| Claim | Proven by | Seam |
 |---|---|---|
-| Plaintext is returned once and only its hash is stored | `TestCreate_StoresHashedReturnsPlaintextOnce` | capability |
-| A token is reusable until bounded by max uses | `TestReusable_ValidatesRepeatedly`, `TestMaxUses_Concurrent` | capability |
-| Mint and revoke require `admin` | `TestMintToken_RequiresAdmin`, `TestRevokeToken_RequiresAdmin` | API |
-| Mint is audited without recording plaintext | `TestHandleMintToken_Success` | API |
-| Relay assigns identity independently of the CSR subject | `TestEnroll_IdentityNotFromCSR` | Node plane |
-| Invalid token enrollment has no successful identity outcome | `TestEnroll_InvalidToken` | Node plane |
-| Enrollment refuses non-`node:` Labels | `TestEnroll_NonNodeSelfLabel` | Node plane |
-| Rate limiting happens without a token oracle | `TestEnroll_RateLimited_NoTokenOracle` | Node plane |
-| In-flight enrollment is contained by token revocation | `TestEnroll_PostUpsertRevocationCheck_ClosesRaceWindow` | Node plane |
-| Renewal preserves the mTLS-derived identity | `TestRenew_IgnoresCSRSubject`, `TestRenew_MissingNodeID` | Node plane |
-| A token cascade records each Node and catches a late record | `TestService_RevokeToken_RecordsEveryCascadedNode`, `TestService_RevokeToken_RecordsNodeFoundOnRescan` | capability |
-| Audit failure does not leave cascaded Nodes live | `TestService_RevokeToken_RecordFailureDoesNotStopTheCascade` | capability |
-| The Control API records mint and revoke lifecycle events | `TestMintThenRevokeToken_BothProduceAuditRows` | API |
+| EN-1 | `TestMintToken_RequiresAdmin`, `TestHandleMintToken_Success` | API |
+| EN-2 | `TestHandleMintToken_InvalidScopeOrTTL` | API |
+| EN-3 | `TestCreate_InvalidScope`, `TestCreate_WellFormedScopeAccepted` | capability |
+| EN-4 | `TestCreate_StoresHashedReturnsPlaintextOnce`, `TestHandleMintToken_Success` | capability · API |
+| EN-5 | `TestReusable_ValidatesRepeatedly`, `TestMaxUses_Concurrent` | capability |
+| EN-7 | `pin_match_enrolls`, `pin_mismatch_sends_no_token`, `pin_match_with_wrong_server_name_sends_no_token` | daemon |
+| EN-8 | `TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState`, `persisted_address_written_at_enrollment` | e2e · daemon |
+| EN-9 | `TestUnaryInterceptor_CertlessEnroll_PassesWithoutIdentity`, `TestUnaryInterceptor_RenewWithoutPeerCert_Refused` | transport |
+| EN-10 | `TestEnroll_RateLimited_NoTokenOracle`, `TestEnroll_RateLimited_PerIP`, `TestEnroll_RateLimited_Global` | Node plane |
+| EN-11 | `TestEnroll_EmptyTokenOrCSR`, `TestEnroll_NonNodeSelfLabel` | Node plane |
+| EN-12 | `TestEnroll_IdentityNotFromCSR`, `TestEnroll_Success` | Node plane |
+| EN-13 | `TestEnroll_InvalidToken`, `TestEnroll_Success` | Node plane |
+| EN-14 | `fresh_enroll_persists_identity`, `idempotency_no_op_when_identity_present`, `plan_never_reads_the_join_once_enrolled` | daemon |
+| EN-15 | `TestEnroll_PostUpsertRevocationCheck_ClosesRaceWindow` | Node plane |
+| EN-17 | `TestRenew_IgnoresCSRSubject`, `TestRenew_MissingNodeID` | Node plane |
+| EN-18 | `TestSQLiteRegistry_ProvenanceSurvivesARestart` | store |
+| EN-19 | `TestService_RevokeToken_RecordsEveryCascadedNode`, `TestService_RevokeToken_RecordsNodeFoundOnRescan` | capability |
+| EN-20 | `TestService_RevokeToken_ToleratesUnknownToken`, `TestService_RevokeToken_RecordFailureDoesNotStopTheCascade`, `TestRevokeTokenCascade_PersistsOneRowPerNode` | capability · API |
+| EN-23 | `TestMintToken_RequiresAdmin`, `TestRevokeToken_RequiresAdmin` | API |
+| EN-24 | `TestHandleMintToken_MalformedOrUnknownField`, `TestHandleMintToken_InvalidScopeOrTTL` | API |
+| EN-25 | `TestEnroll_EmptyTokenOrCSR`, `TestEnroll_NonNodeSelfLabel`, `TestEnroll_BadCSR`, `TestEnroll_RegistryAtCapacity` | Node plane |
+| EN-26 | `TestEnroll_LegacyMalformedScopeIsRefusedBeforeAnySideEffect`, `TestEnroll_ExpiredToken`, `TestEnroll_RevokedToken`, `TestEnroll_ExhaustedToken` | Node plane |
+| EN-27 | `pin_mismatch_sends_no_token` | daemon |
+| EN-28 | `unconfigured_node_exits_zero`, `fresh_enroll_fails_closed_on_key_cert_mismatch` | daemon |
+| EN-29 | `TestUnaryInterceptor_RevokedAfterConnect_RenewRefused` | transport |
 
-Superseded: `TestCreate_InvalidScope` and `TestCreate_WellFormedScopeAccepted` prove the retired
-`relay:` token scope and no longer describe intended behaviour.
+Claims with **no row**, and so nothing checking them:
 
-Claims above with **no row**, and so nothing checking them:
+- **EN-6** — that the daemon accepts no CA path and no bare token by another setting.
+- **EN-16** — nothing enrolls twice and asserts a second record.
+- **EN-21**, **EN-22** — the Console's provenance view and MCP's absent tools rest on
+  structure, not a test.
 
-- Everything about the join string: that it carries address, fingerprint and token; that the daemon
-  pins the fingerprint and sends nothing on a mismatch; that the address is persisted.
-- That enrollment writes `relay:enrollment-token` and `relay:node-id`, and applies a token's `tag:`
-  Labels; that a mint with a malformed or over-limit tag is refused.
-- That a reserved built-in `node:` key or a `tag:` Label in an enrollment request is refused.
-- That re-enrollment creates a new record and carries no tags.
-- That a persisted daemon identity prevents a second enrollment, and that a failed enrollment persists
-  no partial identity. Both are daemon-side and would need a Rust seam.
-- That a daemon with neither a persisted identity nor a join string fails closed.
-- That the one-year TTL ceiling holds. It is a Control API bound, not a token-service one, so a second
-  minting path would not inherit it.
+Rows worth strengthening, for the testing issue: `TestHandleMintToken_Success` does not assert
+the token ID is in the audit record (EN-1); EN-17's tests do not assert Labels and provenance
+untouched; EN-18's non-fatal renewal record has no test; EN-28's failed-enrollment tests check
+three files, not an empty state directory.
 
 ### Performance
 
@@ -188,44 +221,93 @@ Claims above with **no row**, and so nothing checking them:
 | Token-revocation cascade | Every recorded matching Node is considered, including bounded re-scans for concurrent enrollment | *(none)* |
 | Certless enrollment pressure | Per-source and global limits bound admission before token validation | *(none)* |
 
+## Designed, not built
+
+EN-30 to EN-33 end the join string's life on a Node and bound a token; each replaces the
+Behaviour claim it names, and the promoting PR, with the owner retiring the old ID and its
+proof rows, lands them together. EN-34 and EN-36 carry ADR-0032; EN-35 carries ADR-0006's
+amendment of 2026-10-22.
+
+| Claim | Statement | Milestone |
+|---|---|---|
+| EN-30 | One join string carries everything first contact needs: the Relay address, the fingerprint of the Relay's CA and the Enrollment Token (ADR-0031). It is read by `relay-daemon join` from a prompt or standard input and consumed by the enrollment `join` performs in that same process (`daemon-installation.md`); it is persisted nowhere on a Node, and the unit start reads no join string. The daemon takes no CA bundle path and no bare token by any other setting; a Relay address set in its environment overrides only the address, and the pin still applies to whatever it dials. Replaces EN-6 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
+| EN-31 | A token has a positive TTL of at most one year. A mint request names a positive `max_uses` or asks explicitly for unlimited use; one that does neither is refused. A surface that offers a mint form defaults to one use and a TTL measured in hours (ADR-0030); the Control API takes explicit values and has no default. Replaces EN-2 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
+| EN-32 | The daemon persists the key, certificate, CA bundle, Relay address and identity that an enrollment returns, and the unit start never enrolls: with a persisted identity it connects, and without one it exits as EN-33 says. Replaces EN-14 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
+| EN-33 | A unit start with no persisted identity exits cleanly with nothing written; the daemon never opens a plaintext Node-plane connection. A failed enrollment in `relay-daemon join` persists no partial identity and exits non-zero. Replaces EN-28 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
+| EN-34 | A mint may ask for the token's join string rendered as an **Enrollment Bundle** in one or more named formats, returned in the same minting response and never re-rendered (ADR-0032). A bundle pins the daemon artifact as `daemon-installation.md` says. | v0.7.0 — Admin Console: Administration & Execution |
+| EN-35 | A mint refuses a scope key that any Relay action owns, Enrollment's own included: every key in the closed `relay:` set's table in `selectors-and-labels.md`, and any key the Relay derives. The refusal names the key and the action that owns it. Extends EN-24 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
+| EN-36 | The Console mints an Enrollment Token and renders its Enrollment Bundle in one act, through the same capability action and `admin` floor as the Control API, offering one use and a TTL measured in hours as its defaults (ADR-0032; #434). | v0.7.0 — Admin Console: Administration & Execution |
+
 ## Out of scope
 
 - **Every later connection of an enrolled Node** — the pinned-CA check on reconnect, liveness,
   heartbeats: `node-connection.md`.
-- **Where the join string or token is stored on a Node**, and how config management delivers it:
-  `daemon-installation.md`.
-- **Tag management after enrollment**, and the Label namespaces themselves: `selectors-and-labels.md`.
-- **The Console's enrollment-attempt view** as durable history: `audit-and-read-lane.md`.
+- **Where a join string lives on a Node, and how `relay-daemon join` and config management
+  deliver it**: `daemon-installation.md`.
+- **Label management after enrollment**, and the Label namespaces themselves:
+  `selectors-and-labels.md`.
+- **Durable audit records**: `audit-and-read-lane.md`. Enrollment attempts are not durable
+  (EN-21).
+- **Dispatch approvals, approval gates and grants**: `approval.md`.
 - Relay does not centrally author or distribute a Node's Policy (invariant 2).
-- Enrollment does not make a Node an administrator, execute an Operation, bypass a Selector, or alter
-  the blast-radius cap.
-- Daemon installation, software distribution, and config management. Enrollment consumes a configured
-  daemon; it does not push one.
+- Enrollment does not make a Node an administrator, execute an Operation, bypass a Selector or
+  alter the blast-radius cap.
+- Daemon installation, software distribution and config management. Enrollment consumes a
+  configured daemon; it does not push one.
 - Reissuing or recovering the CA private key is disaster recovery, not enrollment.
 
 ## Accepted residual risk
 
-- **A join string is a bearer credential until used or expired.** Anyone holding it can enroll a Node
-  within the token's limits. Containment is token revocation, which also revokes every Node it
-  enrolled.
-- **Re-enrollment leaves a stale record** beside the new one, and loses the old record's tags; an
-  operator reconciles by hand.
+- **A join string is a bearer credential until used or expired.** Anyone holding it can enroll
+  a Node within the token's limits, carrying the token's scope. Accepted by the owner on
+  2026-09-14. Containment is token revocation, which also revokes every Node it enrolled; EN-31
+  bounds it further. `docs/security/threat-model.md` R41.
+- **Where a join string rests on a Node today** (`docs/security/threat-model.md` R16, R36) is
+  accepted in `daemon-installation.md` and closes when EN-30 and that spec's `join` claims
+  are promoted.
+- **`relay-daemon join` enrolls as root outside the hardened unit's sandbox** for the seconds an
+  enrollment takes, with the same binary, the same pinned handshake and the same code the
+  daemon runs. Accepted by the owner on 2026-10-21 (ADR-0033 amendment); R40.
+- **A second enrollment leaves a stale record** beside the new one; an operator reconciles by
+  hand. Accepted by the owner on 2026-09-14. `docs/security/threat-model.md` R42.
 
 ## Future work
 
-Wanted, deliberately not in the first pass, and in no committed order.
+Wanted, deliberately not in a milestone here, and in no committed order.
 
-- **Research: better enrollment at fleet scale.** How enrollment should work across tens of thousands of
-  Nodes arriving through config management — token lifetimes and rotation, per-environment tokens,
-  unattended bootstrap, and whether the join string remains the right unit.
-- **Rendered enrollment bundles** (`join`, `ansible`, `shell`) returned in the same minting act as the
-  token (ADR-0032; #404–#410). Blocked on the supported daemon artifact, version and digest source, and
-  the migration to OS packages.
-- **`relay init`'s enrollment acts** as an idempotent trust-bootstrap transaction (ADR-0030):
-  minting a first Enrollment Token and its bundle, which artifacts a rerun may reuse versus mint
-  anew, and its secret-output contract.
-- **The Console Add Nodes screen** invoking the existing mint capability (#434).
+- **Enrollment as an approval.** A direction the owner wants worked into an ADR: a Node
+  arrives pending with only the Relay address and the CA fingerprint, which are not secrets;
+  one Relay action, an enrollment approval, assigns the identity and records as provenance the
+  proof presented and who approved. A human `admin` approves a Node with no proof, matching a
+  code derived from the Node's key that the daemon prints on the Node; a bounded Enrollment
+  Token releases in the same request with its scope; a platform attestation is a proof shape
+  for later. The ADR has to settle the Console's part against ADR-0044, how the certless
+  exception widens under invariant 6, and what an approval may stamp under invariant 7; its
+  consumers are `selectors-and-labels.md`, `approval.md`, `audit-and-read-lane.md`,
+  `query.md`, `quarantine-node.md`, the glossary and the threat model's enrollment boundary.
+- **Attestation verifiers**, one decision each: the AWS instance identity document, GCP and
+  Azure signed instance identity, a TPM quote for bare metal. Each argues invariant 11's
+  identity-provider clause for itself.
+- **A pipeline-driven approval**: config management starts the daemon, reads the code from the
+  Node it installed, and approves through the Control API, so no secret ever travels to the
+  Node. Whether a machine Account may approve is the approval ADR's question.
+- **Replacing a Node in place**: a second enrollment that names the revoked or offline record it
+  succeeds, so provenance and history carry over.
 
 ## Open questions
 
-None open.
+- **Whether a token may also carry `tag:` Labels** once `tag:` has storage (#430). The
+  2026-09-14 draft carried `tag:` Labels on a token in place of a `relay:` scope; that was
+  retired on 2026-10-21 and a token's scope stays `relay:`. Forced by #430.
+- **`relay init`'s enrollment acts.** ADR-0030 decides that `relay init` mints a first
+  Enrollment Token with a TTL measured in hours, and `relay-configuration.md` assigns the claim
+  here. Which artifacts a rerun may reuse versus mint anew, and the secret-output contract, are
+  undecided, and the claim waits on them. Forced by the first-admin flow needing a first token.
+- **Whether `relay:enrollment-token` and `relay:node-id` become Labels.** `selectors-and-labels.md`
+  lists them in its closed `relay:` set and `quarantine-node.md` targets them, but enrollment
+  records provenance as a registry column and writes neither today. Forced by the first
+  quarantine issue, or by the enrollment-approval ADR.
+
+## Retired
+
+None.

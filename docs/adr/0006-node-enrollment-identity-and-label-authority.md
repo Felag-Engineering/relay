@@ -1,6 +1,6 @@
 # Node enrollment, identity, and label authority
 
-**Status:** Accepted; amended by ADR-0020, ADR-0031 and ADR-0034.
+**Status:** Accepted; amended by ADR-0020, ADR-0031 and ADR-0034; amended 2026-10-22 (token scope is the enrollment action's key set; reserved keys refused at mint; the use limit is named at mint).
 
 A Node enrolls using a **reusable, scoped, expiring, revocable Enrollment Token**. On first
 boot the daemon presents the token over server-authenticated TLS (no client certificate yet)
@@ -177,3 +177,28 @@ Two amendments other ADRs made to this one, recorded here late.
   three the History section stops at. `state:` is Relay-derived from the registry at
   Selector-resolution time, from a closed vocabulary, written by nobody. Invariant 7 as rewritten
   on 2026-09-16 names all four.
+
+## Amendment (2026-10-22): token scope is the enrollment action's key set
+
+Owner decision, 2026-10-22, while migrating `docs/specs/enrollment.md`. ADR-0020's amendment
+of 2026-09-16 holds that each `relay:` key is defined with the action that writes it, so that no
+Account writes a `relay:` label directly (invariant 7). This ADR predates that rule and lets the
+`admin` who mints an Enrollment Token choose the `relay:` scope the enrollment stamps. The
+2026-09-14 draft of `enrollment.md` reconciled the two by moving a token's labels to `tag:`;
+that draft was retired unbuilt on 2026-10-21, and this amendment records the reconciliation
+that stands instead.
+
+**Decided.** Where enrollment writes `relay:` Labels, the key set it writes is the token's
+scope, and the minting `admin` defines that set for the enrollment action at mint, under the
+same role floor and audit as the mint. The scope is therefore not a generic write to an existing
+Node: it is fixed before any Node exists, applies only to Nodes the token enrolls, and is on the
+record with the token. **A mint refuses a scope key that any Relay action owns, Enrollment's own
+included** — every key in the closed `relay:` set's table in
+`docs/specs/selectors-and-labels.md`, and any key the Relay derives — naming the key and its
+owning action.
+Invariant 7's text is unchanged. `enrollment.md` carries the claims (EN-3 today; the refusal as
+EN-35, *Designed, not built*).
+
+**Also recorded.** ADR-0031's amendment of 2026-10-21 narrows this ADR's "reusable" token: a
+mint names a positive use limit or asks explicitly for unlimited use, and is refused if it does
+neither.

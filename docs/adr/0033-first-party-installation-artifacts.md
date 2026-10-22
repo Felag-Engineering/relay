@@ -2,7 +2,7 @@
 
 **Status:** Accepted; amended 2026-10-15 (the Relay ships as OS packages; the image is a
 production path; place-if-absent Policy; remove and purge; no Alpine package yet); amended by
-ADR-0043.
+ADR-0043; amended 2026-10-21 (`relay-daemon join` enrolls).
 
 "As automated as possible" pulls hard toward `curl -sfL https://get.relay.sh | sh`. It is what
 k3s does, what Docker does, what almost everything does, and the fastest path from a bare host
@@ -310,6 +310,25 @@ or standard input, never from its arguments, writes it root-owned and readable b
 and enables and starts the unit. It contacts no Relay; enrollment happens when the daemon
 starts. Config management may run it or write the same file itself. Specified as DI-25 and DI-37
 in `docs/specs/daemon-installation.md`.
+
+## Amendment (2026-10-21): `relay-daemon join` enrolls
+
+Owner decision, 2026-10-21. The 2026-10-16 amendment above says `relay-daemon join` writes the
+join string where the daemon reads it and contacts no Relay, with enrollment happening when the
+daemon starts. That is withdrawn: `join` is the act that enrolls. It reads the join string from a
+prompt or standard input, never from its arguments; pins the Relay's CA from the fingerprint;
+enrolls in the same process; persists only the identity and the Relay address; and then enables
+and starts the unit. It writes the join string nowhere, and the daemon's unit reads none
+(ADR-0031, amendment of this date). On a Node that already holds an identity it changes nothing
+and exits zero, so config management may rerun it; a failed enrollment leaves nothing on disk
+and exits non-zero, and config management reruns it. Config management delivers the string by
+piping it to `join`; writing the environment file directly is no longer a path. Specified as
+DI-42 and DI-43 in `docs/specs/daemon-installation.md`.
+
+The cost accepted: enrollment traffic now originates from a root process outside the hardened
+unit's sandbox for the seconds an enrollment takes, using the same binary, the same pinned
+handshake and the same code the daemon runs. The benefit is that the only secret a Node ever
+holds is in memory, briefly, and the operator's feedback is immediate rather than in the journal.
 
 ## Amendment (2026-10-21): known-gap row 11 is closed
 

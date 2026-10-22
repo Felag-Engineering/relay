@@ -21,7 +21,7 @@ artifacts they can verify before executing.
 |---|---|
 | **Release artifacts** | The statically linked `relay-daemon` binary for each architecture under the release `SHA256SUMS` (DI-1). Packages are designed (DI-24). The Policy Catalog is published beside them; `policy-catalog.md` owns it |
 | **The customer's config management** | The only installer, configurer and upgrader |
-| **relay-daemon subcommands** | `--version`, `policy check` (`policy.md`), `dump-operation-schema` (`operations-and-templates.md`); `join` is designed (DI-37). None contacts a Relay |
+| **relay-daemon subcommands** | `--version`, `policy check` (`policy.md`), `dump-operation-schema` (`operations-and-templates.md`); `join` (DI-37) contacts no Relay today; DI-42 makes it the act that enrolls. No other subcommand contacts a Relay |
 | **Enrollment bundles** | A rendered artifact for config management, minted with its Enrollment Token (`enrollment.md` owns minting and rendering; DI-35) |
 | **Relay, MCP, Control API, Console** | Nothing. The Relay never installs, configures or upgrades a daemon, and its only lever over versions is the dispatch-level minimum-version gate. The absence is the invariant (invariant 14), not a gap (DI-18) |
 
@@ -138,7 +138,8 @@ Relay never pushes a binary (invariant 14).
   Policy. Policy reaches a Node only through the customer's config management.
 - **Invariant 4** — the state directory's modes protect at-most-once, and the umask interaction
   fails closed.
-- **ADR-0033** — no `curl | sh`; the daemon ships as `.deb` and `.rpm`, not yet `.apk`; the
+- **ADR-0033**, amended 2026-10-21 (`relay-daemon join` enrolls, DI-42) — no `curl | sh`; the
+  daemon ships as `.deb` and `.rpm`, not yet `.apk`; the
   default Policy is placed on first install only and never rewritten; no hosted repository and
   no package signing key before v1.0.0; no daemon image; one binary path, `/usr/bin` (DI-40).
   Amended 2026-10-15.
@@ -148,7 +149,9 @@ Relay never pushes a binary (invariant 14).
 - **ADR-0036** — a declared file mode is a ceiling; Node code never widens what the umask removed.
 - **ADR-0032** — the rendered bundle pins a daemon version and digest built into the Relay
   (DI-35).
-- **ADR-0031** — the join string: address, CA fingerprint and Enrollment Token in one value.
+- **ADR-0031**, amended 2026-10-21 — the join string: address, CA fingerprint and Enrollment
+  Token in one value; consumed by `relay-daemon join` and persisted nowhere on a Node (DI-42,
+  DI-43).
 - **ADR-0022** — the shipped default Policy allows reads with a confidentiality deny-list.
   Amended 2026-10-16: of its own files the default hides only secrets, and `--strict` passes on
   the shipped default (DI-28).
@@ -201,9 +204,12 @@ until it is done.
 | Claim | Statement | Milestone |
 |---|---|---|
 | DI-24 | The release publishes the daemon as `.deb` and `.rpm` packages for each architecture. A package wraps the release's guarded binary byte for byte — packaging compiles, strips and rewrites nothing — is itself reproducible, built twice and compared, and is listed in the release `SHA256SUMS`. Packages carry no signature of their own before v1.0.0. | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-25 | The daemon package installs the binary at `/usr/bin/relay-daemon` and the hardened unit as a system unit, the same binary path a hand-built install uses, and never starts the daemon. It enables the unit on a first install only, only where systemd is running, honouring the distribution's presets; an upgrade never changes whether it is enabled. An enabled unit on a Node that holds neither a persisted identity nor a join string stays inactive at boot without failing or retrying; it starts at the next boot after one is present, or when `relay-daemon join` (DI-37) or config management starts it. Nothing watches for the join string to appear. | v0.6.5 — Install Path: relay init, join string, packages |
+| DI-25 | The daemon package installs the binary at `/usr/bin/relay-daemon` and the hardened unit as a system unit, the same binary path a hand-built install uses, and never starts the daemon. It enables the unit on a first install only, only where systemd is running, honouring the distribution's presets; an upgrade never changes whether it is enabled. An enabled unit on a Node that holds no persisted identity stays inactive at boot without failing or retrying; it starts at the next boot after an identity is present, or when `relay-daemon join` (DI-42) or config management starts it. Nothing watches for an identity to appear. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-26 | The daemon package places the shipped default Policy as the live Policy only on a first install, only if no Policy file exists and no Policy directory existed before the install began; never on an upgrade or a reinstall. On `.rpm` platforms, where a reinstall after removal is indistinguishable from a first install, those absence checks are the whole guard. No install, upgrade or remove rewrites or re-creates the live Policy. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-27 | The daemon package places the environment file on a first install only, if none exists, owned by root and mode `0600`, and never rewrites it. | v0.6.5 — Install Path: relay init, join string, packages |
+| DI-42 | `relay-daemon join` enrolls in the process that read the join string: it reads the string from a prompt or standard input, never from its arguments, pins the Relay's CA from the fingerprint, enrolls, persists the identity and the Relay address, and then enables and starts the unit. It writes the join string nowhere. On a Node that already holds an identity it changes nothing and exits zero, so config management may rerun it; a failed enrollment leaves nothing on disk and exits non-zero. Replaces DI-37 when promoted; `enrollment.md` carries the join string's contract. | v0.6.5 — Install Path: relay init, join string, packages |
+| DI-43 | The daemon is configured by a join string given to `relay-daemon join` — Relay address, CA fingerprint and Enrollment Token in one value (ADR-0031). `join` pins the Relay's CA from the fingerprint and writes the CA bundle into the state directory, so no CA path is configured by hand. The unit start reads no join string: `RELAY_JOIN` is not a setting, the shipped example environment file carries no join line, and the environment file holds no secret, so DI-28's deny of it and DI-39's probe of it stay as defence in depth and no longer guard a secret. A unit start with no persisted identity exits cleanly as DI-25 says. Replaces DI-22 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
+| DI-44 | The daemon persists the Relay address with its identity at enrollment and uses it on every later start; a Relay address set in its environment overrides the persisted one. A Node holding an identity with neither refuses to start: there is no default address. Replaces DI-38 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-29 | The shipped read catalog ships as its own optional `.deb` and `.rpm` package, depending on the daemon package. Its files are package-owned: replaced on upgrade, removed with the package, and never installed as configuration the package manager would preserve. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-31 | Removing the daemon package removes the binary, the unit and the catalog package, and leaves the Policy, the Policy directory, the environment file and the state directory. `apt purge` removes everything the package created, the Node's identity included; `.rpm` removal never deletes state and prints the paths to delete by hand. Purge deletes only paths the package itself created, never a path read from an operator-edited file. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-33 | A platform is supported only where CI installs the package, upgrades it over the operator's edited configuration and finds the edit intact, and removes it: Debian 13; Ubuntu 26.04 LTS and 24.04 LTS; RHEL, Rocky Linux and AlmaLinux 10; Fedora's current release; Amazon Linux 2023 — each on `x86_64` and `aarch64`. A platform whose package manager refuses an unsigned local package by default is not supported. This list also governs the Relay packages (`relay-configuration.md`). | v0.6.5 — Install Path: relay init, join string, packages |
@@ -236,8 +242,9 @@ lands in backups and images taken before first start. It is short-lived, scoped 
 Node holds its certificate, but nothing enforces its removal, and a golden image built from an
 enrolled Node would carry a live token.
 
-Delivering it through `systemd LoadCredential=` or the customer's secret store would remove this,
-at the cost of a second supported path (*Future work*). Accepted by the owner on 2026-09-15 as
+DI-42 and DI-43 remove it: the join string is consumed by `relay-daemon join` in the process
+that read it and persisted nowhere (ADR-0031 and ADR-0033, amended 2026-10-21), so this
+residual closes when they are promoted. Accepted by the owner on 2026-09-15 as
 **R16** in `docs/security/threat-model.md`. The compensating controls are a short token TTL and use
 limit, and config management removing the join string after first start. **Revoking the token is
 not the cleanup step**: revocation is the containment cascade (`enrollment.md`) and disconnects
@@ -247,7 +254,14 @@ every Node the token enrolled; reserve it for a token believed leaked.
 file, as it leaves the Policy, so a join string config management never cleared survives
 decommissioning, and its token stays usable until it expires or is revoked. Accepted by the owner
 on 2026-10-15 as **R36**, widening R16. The controls are R16's, plus purging (`.deb`) or deleting
-the printed path (`.rpm`) when a Node leaves for good.
+the printed path (`.rpm`) when a Node leaves for good. Closes with DI-42 and DI-43, as R16 does.
+
+**`relay-daemon join` enrolls as root outside the hardened unit's sandbox** for the seconds an
+enrollment takes (DI-42): the same binary, the same fingerprint-pinned handshake and the same
+enrollment code, without the unit's `ProtectSystem=`, seccomp and capability bounds. Accepted by
+the owner on 2026-10-21 (ADR-0033 amendment) as **R40**. Bounded by the pin before any secret is
+sent, by `join` taking no argv input and changing nothing on a Node that holds an identity, and
+by the window: `join` exits once the identity is persisted and the sandboxed unit takes over.
 
 **An operator-authored Template body is readable under the shipped default.** The default's
 `file.read` wildcard reaches the template root, which no exact-path deny can cover, so a read
@@ -286,7 +300,9 @@ broad allow (ADR-0019).
 - **A first-party Ansible role** that installs the daemon and places catalog fragments named in a
   group's variables. Until one exists, `policy-catalog.md`'s exported install task stands alone;
   reviving the thin role once closed as superseded is a decision, not a chore.
-- **`LoadCredential=` for the Enrollment Token**, closing the residual risk above.
+- **Delivering the join string to `relay-daemon join` from a secret store** or a systemd
+  credential, for shops that want no interactive step; DI-42 already keeps it off disk, so this
+  is a delivery convenience and not a second place the token rests.
 - **In-place Policy and Template reload**, so tightening Policy across a fleet costs no restarts.
   Deliberately not first-pass: it is a second path by which the privileged side's authority
   changes.
