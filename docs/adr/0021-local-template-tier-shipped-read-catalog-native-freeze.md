@@ -1,6 +1,6 @@
 # A local Template tier, a shipped read catalog, and a frozen native vocabulary
 
-**Status:** Accepted; amended by ADR-0042 and ADR-0033; rewritten 2026-10-22 (ADR-0046).
+**Status:** Accepted.
 
 Behaviour: `operations-and-templates.md`, `policy.md`. Numbers are stable; code cites them.
 
