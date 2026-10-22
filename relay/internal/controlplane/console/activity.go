@@ -1586,13 +1586,13 @@ func summarize(f trailFacts) string {
 		// Read-egress screen's enumeration panel. The trail had the fact and
 		// this surface, which is billed as the trail, declined to say it.
 		//
-		// readTargetOf is reused rather than reimplemented, and that is the
+		// readSentence (verb + readTargetOf) is reused rather than reimplemented, and that is the
 		// point: the first attempt here read ActionKind, which is empty on
 		// these records — the tool name lives in OperationName — so Activity
 		// said "the registry" while the Read-egress screen, retired
 		// 2026-10-01, said "list_nodes" about the same audit row. Two screens
 		// naming one thing two ways is how an operator stops trusting either.
-		return "enumerated " + readTargetOf(f)
+		return readSentence(f)
 	default:
 		return f.Kind
 	}

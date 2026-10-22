@@ -1245,6 +1245,8 @@ a.cmpname:hover { text-decoration: none; }
 .cmp tr[data-diff="1"] { background: var(--bg-elevated); }
 .cmp tr[data-diff="1"] th.cmpkey { color: var(--text-primary); font-weight: var(--weight-semibold); border-left: 3px solid var(--text-second); }
 .cmp tr[data-diff="1"] td pre, .cmp tr[data-diff="1"] td code { color: var(--text-primary); font-weight: var(--weight-semibold); }
+/* The row header is a th, which the global last-row td rule does not reach, so it alone drew a bottom edge under the last row. */
+.cmp tbody tr:last-child th { border-bottom: 0; }
 
 .cmpview { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin: 0 0 var(--space-4); }
 .cmpdiffonly {
@@ -1287,8 +1289,10 @@ dl.kv + dl.kv { margin-top: var(--space-2); }
  * container moves (.devtable, .tablescroll, the event-row backstop, .planhash); in a CARD
  * a value is read, not compared column against column, and a scroller would hide most of
  * the one identifier the card exists to show. A soft wrap inserts no character, so
- * double-click, select and copy still yield the whole token. */
-dl.wrapid dd code { overflow-wrap: anywhere; }
+ * double-click, select and copy still yield the whole token. The hyphen in node-HEX is
+ * itself a wrap opportunity, so overflow-wrap alone breaks after the prefix; break-all lets
+ * the line fill and the break land inside the hex. It applies to every value in the card. */
+dl.wrapid dd code { overflow-wrap: anywhere; word-break: break-all; }
 
 .polblock { border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg-canvas); }
 .polrow { display: flex; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border-subtle); font-size: var(--text-sm); }

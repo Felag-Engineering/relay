@@ -1203,7 +1203,8 @@ func TestNode_IdentityValuesWrapInsideTheirCard(t *testing.T) {
 	for _, want := range []string{
 		".nodehead .nodeid { white-space: normal; overflow-wrap: anywhere;",
 		"letter-spacing: -0.02em; margin: 0;\n  overflow-wrap: anywhere; min-width: 0;",
-		"dl.wrapid dd code { overflow-wrap: anywhere; }",
+		// break-all keeps the break off the hyphen after "node-".
+		"dl.wrapid dd code { overflow-wrap: anywhere; word-break: break-all; }",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("console.css does not contain %q", want)
