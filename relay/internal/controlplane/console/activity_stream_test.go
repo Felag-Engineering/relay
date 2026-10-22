@@ -346,11 +346,11 @@ func TestActivity_ARoleGateRefusalIsNeutral(t *testing.T) {
 	}
 }
 
-func TestActivity_TheLedeClaimsCallsThatReachedTheRelay(t *testing.T) {
+func TestActivity_HasNoLede(t *testing.T) {
 	body := activityAs(t, &fakeQueries{}, "/console/activity")
 
-	if !strings.Contains(body, "Calls the Relay received") {
-		t.Error("the lede does not say the calls are as the Relay received them")
+	if strings.Contains(body, `class="lede"`) || strings.Contains(body, "Calls the Relay received") {
+		t.Error("Activity draws a lede")
 	}
 	for _, banned := range []string{"every call an AI-agent makes", "connected"} {
 		if strings.Contains(contentOf(body), banned) {

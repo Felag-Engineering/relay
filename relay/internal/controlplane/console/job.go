@@ -1227,7 +1227,6 @@ var jobTmpl = newScreen("job", `
     <span class="chip outcome" data-outcome="{{.Label}}">{{.Label}}</span>
     <b>{{.Count}}</b> {{plural .Count "Node" "Nodes"}}
     {{if .Elided}}<span class="dim">{{if .Listed}}{{.Listed}} of {{.Count}} listed{{else}}none listed{{end}}</span>{{end}}
-    {{if eq .Label "success"}}<span class="dim">the usual result, folded so the exceptions stand out</span>{{end}}
   </summary>
 
   {{if .RowsError}}

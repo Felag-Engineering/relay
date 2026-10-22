@@ -69,11 +69,8 @@ func TestNode_PolicyPanelCarriesTheReceiptTime(t *testing.T) {
 		t.Fatal("no effective-Policy panel rendered")
 	}
 
-	if !strings.Contains(panel, "2026-08-25 11:58:30Z") {
-		t.Error("the Policy panel does not carry the absolute receipt time")
-	}
-	if !strings.Contains(panel, "1m ago") {
-		t.Error("the Policy panel does not say how long ago the report was received")
+	if !strings.Contains(panel, `Received <time datetime="2026-08-25 11:58:30Z" title="2026-08-25 11:58:30Z">1m ago</time>`) {
+		t.Errorf("the Policy panel does not carry the receipt time as a time element reading \"1m ago\":\n%s", panel)
 	}
 	// The Node was last seen four seconds ago and its Policy was reported
 	// ninety. If the panel carried the heartbeat, this is what it would say.
@@ -81,10 +78,10 @@ func TestNode_PolicyPanelCarriesTheReceiptTime(t *testing.T) {
 		t.Error("the Policy panel rendered the Node's last-seen time as the Policy timestamp — " +
 			"LastSeen moves with every heartbeat and the snapshot does not")
 	}
-	// And it says which kind of time it is. "Queried at" would be a claim the
-	// Relay cannot make: nothing re-asked the Node.
-	if !strings.Contains(panel, "receipt time, not a query time") {
-		t.Error("the Policy panel does not distinguish the receipt time from a query time")
+	// "Received" is the claim the Relay can make; "queried" is not: nothing
+	// re-asked the Node. The panel does not explain the difference in a sentence.
+	if strings.Contains(panel, "receipt time, not a query time") || strings.Contains(strings.ToLower(panel), "queried") {
+		t.Error("the Policy panel explains the receipt time in a sentence, or claims a query")
 	}
 }
 
@@ -253,24 +250,32 @@ func TestNode_FingerprintLinksTargetTheSameValueAsASelector(t *testing.T) {
 	}
 }
 
-// TestNode_LabelRowNamesEveryNamespaceAChipCanCarry: invariant 7's grammar is
-// four namespaces with four different writers. The explainer names the three a
-// chip on this screen can carry, and says relay: is never the Node's to write.
-// It does not name tag:, because no tag: label can exist yet and a key for a
-// namespace that cannot appear is copy without data (02, "Labels"; #849).
-func TestNode_LabelRowNamesEveryNamespaceAChipCanCarry(t *testing.T) {
+// TestNode_LabelChipTooltipsNameEachNamespacesWriter: invariant 7's grammar is
+// four namespaces with four different writers. Each chip's title names its
+// namespace's writer, and relay: says it is never the Node's to write; there is
+// no legend. tag: is not described, because no tag: label can exist yet (02,
+// "Labels").
+func TestNode_LabelChipTooltipsNameEachNamespacesWriter(t *testing.T) {
 	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/nodes/node-db-1").Body.String()
 
-	for _, ns := range []string{"<b>node:</b>", "<b>relay:</b>", "<b>state:</b>"} {
-		if !strings.Contains(body, ns) {
-			t.Errorf("the label explainer does not name %s", ns)
+	for ns, writer := range map[string]string{
+		"node":  "config management",
+		"relay": "set by the Relay, never the Node",
+		"state": "derived by the Relay",
+	} {
+		m := regexp.MustCompile(`data-ns="` + ns + `"[^>]*title="([^"]*)"`).FindStringSubmatch(body)
+		if m == nil {
+			t.Errorf("no %s: chip with a title", ns)
+			continue
+		}
+		if !strings.Contains(html.UnescapeString(m[1]), writer) {
+			t.Errorf("the %s: chip's title %q does not name its writer (%q)", ns, m[1], writer)
 		}
 	}
-	if !strings.Contains(body, "<b>relay:</b> by the Relay, never the Node") {
-		t.Error("the label explainer does not say relay: labels are never the Node's to write (invariant 7)")
-	}
-	if strings.Contains(body, "<b>tag:</b>") {
-		t.Error("the label explainer names tag:, a namespace no chip on this screen can carry yet")
+	for _, gone := range []string{`class="labelnote"`, "<b>node:</b>", "<b>relay:</b>", "<b>state:</b>", "<b>tag:</b>"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("the page still draws the label legend (%s)", gone)
+		}
 	}
 	// The security lane is `relay:` and only `relay:`. A tag rendered into it
 	// is the one confusion the grammar exists to prevent.
@@ -999,11 +1004,8 @@ func TestNode_RecentTasksListsTasksNotControlPlaneReads(t *testing.T) {
 			"control-plane reads are still filling the window, so the filter is not running " +
 			"before windowing")
 	}
-	if !strings.Contains(panel, "read — output not retained") {
-		t.Error(`the read-class Task (file.read) does not carry the "output not retained" note`)
-	}
-	if n := strings.Count(panel, "read — output not retained"); n != 1 {
-		t.Errorf("%d rows carry the read-class note, want 1 (file.read only, not service.restart)", n)
+	if strings.Contains(panel, "output not retained") {
+		t.Error("a Recent Tasks row says in a sentence that its output was not retained")
 	}
 
 	// The audit record is unchanged: item 3 filters what this panel QUERIES,
@@ -1267,8 +1269,11 @@ func TestCompare_DefaultHidesIdenticalRows(t *testing.T) {
 	if marked, keys := strings.Count(body, `data-diff="1"`), strings.Count(body, `class="cmpkey"`); marked != keys {
 		t.Errorf("%d rows are marked but %d are shown — only differing rows belong here", marked, keys)
 	}
-	if !strings.Contains(body, "Only rows that differ are shown.") {
-		t.Error("the caption does not say the identical rows are hidden")
+	if !strings.Contains(body, `<caption class="tcap">What 2 Nodes reported.</caption>`) {
+		t.Error("the caption is not the bare \"What 2 Nodes reported.\"")
+	}
+	if strings.Contains(body, "Only rows that differ are shown") {
+		t.Error("the caption restates the toggle")
 	}
 }
 
@@ -1290,8 +1295,11 @@ func TestCompare_RowsAllShowsEveryRow(t *testing.T) {
 	if !diffRawExecRow.MatchString(body) {
 		t.Error("the differing Raw Exec row is not marked under rows=all")
 	}
-	if !strings.Contains(body, "Rows that differ are marked.") {
-		t.Error("the caption does not say the differing rows are marked")
+	if !strings.Contains(body, `<caption class="tcap">What 2 Nodes reported.</caption>`) || strings.Contains(body, "Rows that differ are marked") {
+		t.Error("the caption is not the bare \"What 2 Nodes reported.\"")
+	}
+	if strings.Contains(body, "Each cell is what that Node") || strings.Contains(body, "hostname is self-reported; no other Fact") {
+		t.Error("rows=all draws a footnote under the table")
 	}
 	// An unpin returns to the default view, and the column links are the same
 	// in both views.
@@ -1359,7 +1367,7 @@ func TestCompare_NothingDiffersSaysSoInWords(t *testing.T) {
 	}
 
 	all := comparePair(t, nodes, snaps, "&rows=all")
-	for _, want := range []string{`<table class="cmp">`, "Each cell is what that Node", sameSentence} {
+	for _, want := range []string{`<table class="cmp">`, sameSentence} {
 		if !strings.Contains(all, want) {
 			t.Errorf("rows=all lacks %q", want)
 		}
@@ -1388,8 +1396,8 @@ func TestCompare_IdenticalPolicyWithNoFingerprintIsNotAgreement(t *testing.T) {
 		if !strings.Contains(body, "not reported") {
 			t.Errorf("query %q: the not reported cells are not visible", query)
 		}
-		if !strings.Contains(body, "Rows that differ are marked.") {
-			t.Errorf("query %q: the caption does not describe the unfiltered table", query)
+		if !strings.Contains(body, "What 2 Nodes reported.") || strings.Contains(body, "Rows that differ are marked") {
+			t.Errorf("query %q: the caption is not the bare \"What 2 Nodes reported.\"", query)
 		}
 	}
 	// The checkbox reflects the request, not what was filtered.
@@ -1413,6 +1421,12 @@ func TestCompare_NotReportedColumnStillDiffersByDefault(t *testing.T) {
 	}
 	if !strings.Contains(body, "not reported") {
 		t.Error("the not reported cell is not shown")
+	}
+	if !strings.Contains(body, "Policy not reported") {
+		t.Error("the not-reported column's header does not say so")
+	}
+	if strings.Contains(body, "never read as agreement") {
+		t.Error("the screen carries a footnote about not-reported columns")
 	}
 	if strings.Contains(body, sameSentence) {
 		t.Error("a not-reported column is presented as agreement")

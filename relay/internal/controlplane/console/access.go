@@ -554,7 +554,10 @@ type accessView struct {
 	UnknownKind string
 
 	Narrowing bool
-	PageSize  int
+
+	// OAuthConfigured draws the sentence saying OAuth sign-ins are not listed,
+	// only where this Relay can have any (20-access.md, D34).
+	OAuthConfigured bool
 
 	OlderHref string
 	ResetHref string
@@ -584,14 +587,14 @@ func handleAccess(d Deps) http.HandlerFunc {
 		kinds, known := accessLaneKinds(f)
 
 		v := accessView{
-			Filter:       f,
-			Note:         note,
-			PageSize:     accessPageSize,
-			ResetHref:    "/console/access",
-			Narrowing:    f.narrowing(),
-			Windows:      windowChoices(f.Window),
-			Kinds:        accessKindChips(f),
-			FailuresChip: accessFailuresChip{Current: f.Failures, Href: f.withFailures().base()},
+			Filter:          f,
+			Note:            note,
+			OAuthConfigured: d.OAuthConfigured,
+			ResetHref:       "/console/access",
+			Narrowing:       f.narrowing(),
+			Windows:         windowChoices(f.Window),
+			Kinds:           accessKindChips(f),
+			FailuresChip:    accessFailuresChip{Current: f.Failures, Href: f.withFailures().base()},
 		}
 		if !known {
 			v.UnknownKind = f.Kind
@@ -631,8 +634,6 @@ func handleAccess(d Deps) http.HandlerFunc {
 }
 
 var accessTmpl = newScreen("access", `
-<p class="note">This screen is limited to admins, in this Console only.</p>
-
 <form class="viewbar" method="get" action="/console/access">
   {{with .Filter.Kind}}<input type="hidden" name="kind" value="{{.}}">{{end}}
   {{if .Filter.Failures}}<input type="hidden" name="failures" value="1">{{end}}
@@ -658,7 +659,6 @@ var accessTmpl = newScreen("access", `
   <button type="submit">Apply</button>
   <a class="act" href="{{.ResetHref}}">Clear</a>
 </form>
-<p class="note">There is no filter by the changed Account; Actor filters who acted.</p>
 
 {{with .Note}}<p class="gap"><b>Part of this URL could not be read:</b> {{.}}.</p>{{end}}
 
@@ -666,15 +666,13 @@ var accessTmpl = newScreen("access", `
   {{range .Kinds}}<a class="kchip{{if .Current}} on{{end}}" href="{{.Href}}">{{.Kind}}</a>{{end}}
   <a class="kchip{{if .FailuresChip.Current}} on{{end}}" href="{{.FailuresChip.Href}}">failures only</a>
 </div>
-<p class="note">OAuth sign-ins happen at the identity provider and are not listed.</p>
-<p class="note">An older failed sign-in may show text typed into the wrong box, not an Account&#39;s name.</p>
+{{if .OAuthConfigured}}<p class="note">OAuth sign-ins happen at the identity provider and are not listed.</p>{{end}}
 
 {{if .UnknownKind}}
 <p class="gap"><b>There is no row kind called &ldquo;{{.UnknownKind}}&rdquo;</b>, so nothing was queried: <a href="{{.ResetHref}}">clear the filter</a>.</p>
 {{else}}
 
 {{template "refresh" .Refresh}}
-<p class="refreshlimit">Every Refresh is an audited read.</p>
 
 <div class="feed">
 {{range .Rows}}
@@ -702,7 +700,6 @@ var accessTmpl = newScreen("access", `
 <div class="pager">
   {{with .OlderHref}}<a class="act" href="{{.}}">Older</a>{{end}}
 </div>
-<p class="note">Each page holds up to {{.PageSize}} records, newest first.</p>
 
 {{end}}
 `)
