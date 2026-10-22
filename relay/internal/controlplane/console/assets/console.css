@@ -256,6 +256,7 @@
    * wall's contrast floor against the dark ground. */
   --wall-unreported: #5ec2e8;
   --ok-bg: rgba(74, 222, 106, 0.10);
+  --scrim: rgba(0, 0, 0, 0.6);
 }
 
 /* --- Tokens: light parchment, from Gleipnir ------------------------------ */
@@ -299,6 +300,7 @@
     --failure-bg: rgba(212, 58, 42, 0.08);
     --danger-text: #b02e20;
     --ok-bg: rgba(26, 150, 64, 0.09);
+    --scrim: rgba(44, 42, 36, 0.45);
     /* Same reasoning as the dark theme above. Normal was 2.02:1 here.
      *
      * Attention needs its own light value too, which the dark theme does not.
@@ -1833,6 +1835,37 @@ fieldset.fld { border: 0; padding: 0; margin: 0; min-width: 0; }
 fieldset.fld label { display: inline-flex; align-items: center; min-height: 44px; margin-right: var(--space-3); }
 .rolepanel dt { font-weight: var(--weight-medium); }
 .rolepanel dd { margin: 0 0 var(--space-2) var(--space-4); }
+.roleline[hidden] { display: none; }
+
+/* --- Modals (11-console-shell.md, "Modals") ----------------------------------
+ * A native <dialog>. No display is set on an open dialog.modal, and a closed
+ * one is explicitly not drawn (an engine without <dialog> would draw it), so
+ * the no-script list looks as it did without one. The
+ * padding is 0 and .modalbox fills the dialog, so a click on the backdrop is
+ * the only click that targets the dialog element. */
+dialog.modal {
+  padding: 0; overflow: hidden;
+  border: 1px solid var(--border-mid); border-radius: var(--radius-section);
+  background: var(--bg-surface); color: var(--text-primary);
+  width: min(760px, calc(100vw - 2 * var(--space-4)));
+  max-height: calc(100vh - 2 * var(--space-8));
+}
+dialog.modal:not([open]) { display: none; }
+/* The fallback is for engines where ::backdrop does not inherit custom
+ * properties from its dialog. */
+dialog.modal::backdrop { background: var(--scrim, rgba(0, 0, 0, 0.6)); }
+.modalbox {
+  box-sizing: border-box; max-height: inherit; padding: var(--space-5);
+  display: flex; flex-direction: column; gap: var(--space-4);
+}
+.modalhead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.modalhead h2 { margin: 0; font-size: var(--text-lg); font-weight: var(--weight-semibold); }
+.modalx {
+  min-width: 44px; min-height: 44px; border: 0; background: transparent;
+  color: var(--text-second); font: inherit; font-size: var(--text-lg); cursor: pointer;
+}
+.modalbody { overflow: auto; min-height: 0; }
+.modalfoot { display: flex; justify-content: flex-end; }
 
 /* A standalone form: fields flow left to right and wrap WHOLE, never mid-field,
  * with the submit button on the same baseline as the last field. */
@@ -1862,6 +1895,9 @@ fieldset.fld label { display: inline-flex; align-items: center; min-height: 44px
  * (that rule applies at every width, so it is repeated here for thead). */
 @media (max-width: 600px) {
   .vfield, .vfield.wide { flex-basis: 100%; }
+  dialog.modal {
+    box-sizing: border-box; width: 100vw; max-width: 100vw; max-height: 100vh; margin: 0; border-radius: 0;
+  }
   table.cards, table.cards tbody, table.cards tr, table.cards td { display: block; }
   table.cards caption:not(.vh), .cmp caption { display: block; width: 100%; text-align: left; padding: var(--space-1) var(--space-3); }
   table.cards thead {

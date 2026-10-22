@@ -38,10 +38,10 @@ import (
 func TestAssets_JavaScriptBehavesUnderADOM(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("node is not installed; assets/*.js is asserted at the text level by dayone_test.go")
+		t.Skip("node is not installed; assets/*.js is asserted at the text level by dayone_test.go and, for accounts.js, accounts_modal_test.go")
 	}
 
-	for _, script := range []string{"testdata/check_activity.js", "testdata/check_dayone.js"} {
+	for _, script := range []string{"testdata/check_activity.js", "testdata/check_dayone.js", "testdata/check_accounts.js"} {
 		t.Run(strings.TrimSuffix(strings.TrimPrefix(script, "testdata/check_"), ".js"), func(t *testing.T) {
 			out, err := exec.Command(node, script).CombinedOutput()
 			if err != nil {

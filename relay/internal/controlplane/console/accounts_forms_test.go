@@ -23,7 +23,8 @@ var (
 // wired: the Account page of the machine Account that holds a live token (Raise,
 // Lower, Disable, mint and Revoke forms), the Account page of the disabled
 // Account (its Enable form), the New account page (create) and the list (the
-// row Disable), so every write form is covered between them.
+// row Disable), so every write form is covered between them. The list also
+// carries the dialog shell's two close controls.
 func accountsFormsBodies(t *testing.T) []string {
 	t.Helper()
 	return []string{
@@ -66,9 +67,20 @@ func TestAccountsForms_ButtonWeightFollowsWhatTheActDoesToAuthority(t *testing.T
 		"Revoke":         "btn danger",
 	}
 	seen := map[string]bool{}
+	closeControls := 0
 	for _, body := range accountsFormsBodies(t) {
 		for _, m := range buttonElement.FindAllStringSubmatch(body, -1) {
 			attrs, label := m[1], strings.TrimSpace(m[2])
+			// The Accounts dialog's close and Cancel controls perform no act and
+			// change no authority, so the form-control weight rule does not apply
+			// to them. Any other button placed in the shell is still swept.
+			if strings.Contains(attrs, "data-modal-close") {
+				closeControls++
+				if !strings.Contains(attrs, `type="button"`) {
+					t.Errorf("a dialog close control is not type=button, so it could submit: <button%s>", attrs)
+				}
+				continue
+			}
 			class, ok := want[label]
 			if !ok {
 				t.Errorf("an Accounts button %q has no weight assigned by the form-control rule", label)
@@ -84,6 +96,10 @@ func TestAccountsForms_ButtonWeightFollowsWhatTheActDoesToAuthority(t *testing.T
 		if !seen[label] {
 			t.Errorf("the %q button did not render in any fixture", label)
 		}
+	}
+	// The list draws the dialog shell once; the other three bodies draw none.
+	if closeControls != 2 {
+		t.Errorf("found %d dialog close controls, want exactly 2 (the close button and Cancel)", closeControls)
 	}
 }
 
