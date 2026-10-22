@@ -133,12 +133,10 @@ the conformant form (ADR-0029).
 - **The Plan a decision releases:** `plan.md`. A Plan's gated steps park through this gate.
 - **Who is asked:** the requesting client's routing. Gleipnir routes by its own audiences and
   channels.
-- **Future work, in `docs/proposals/`:** more than one approver, a Relay-held audience and
-  approval grants (`n-party-approval.md`); a channel Relay verifies (`out-of-band-approval.md`);
-  editing rules in the Console (`gate-rules-in-the-console.md`); a diff against the last similar
-  approval, with the shape key (`approval-diff-against-last-similar.md`); asking more clients and
-  always-on agents (`approval-for-more-clients-and-always-on-agents.md`); MCP Tasks for long Jobs
-  (`mcp-tasks-for-long-running-jobs.md`).
+- **Future work** waits in the private roadmap, under `roadmap: relay/`: more than one approver,
+  a Relay-held audience and approval grants; a channel Relay verifies; editing rules in the
+  Console; a diff against the last similar approval, with the shape key; asking more clients and
+  always-on agents; MCP Tasks for long-running Jobs.
 - **Residual risk:** the threat model's register, R21 (an answer is only as honest as the
   client), R23, R24, R26, R27 and R43.
 - **The Freeze:** a global stop, not a per-request judgement (`freeze.md`).
