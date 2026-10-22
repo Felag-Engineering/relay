@@ -422,3 +422,27 @@ func TestRunningFor(t *testing.T) {
 		}
 	}
 }
+
+// Running now follows ?account= and nothing else, so the page says it is not
+// narrowed only when a kind chip or a time bound narrows the stream (D34).
+func TestActivity_RunningNowSaysItIsUnnarrowedOnlyWhenTheStreamIsNarrowed(t *testing.T) {
+	q := &fakeQueries{jobs: runningFleet(2, "acct-1")}
+	h := newTestHandler(cancelDeps(q, &fakeCanceller{}), accounts.RoleAdmin)
+
+	for path, want := range map[string]bool{
+		"/console/activity":                false,
+		"/console/activity?account=acct-1": false,
+		"/console/activity?kind=dispatch":  true,
+		"/console/activity?window=1h":      true,
+		"/console/activity?kind=refusal":   true,
+	} {
+		body := get(t, h, path).Body.String()
+		section, _ := splitRunningNow(t, body)
+		if got := strings.Contains(section, "not narrowed by the kind chips or the time window"); got != want {
+			t.Errorf("%s: hint drawn = %v, want %v", path, got, want)
+		}
+		if strings.Contains(body, "Longest-running first;") {
+			t.Errorf("%s: the hint restates the sort", path)
+		}
+	}
+}

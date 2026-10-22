@@ -3,7 +3,7 @@
 **No artboard.** Who got into the control plane, and who changed who can get in. **Admin only.**
 **Milestone v0.6.0.**
 
-**Governing:** ADR-0010, ADR-0025, ADR-0026, invariants #10, #11, `12-login.md`,
+**Governing:** ADR-0010, ADR-0025, ADR-0026, ADR-0045, invariants #10, #11, `12-login.md`,
 `15-accounts-and-tokens.md`.
 **Backend:** the audit query seam through the **capability layer's read lane** (#441, never
 Console→store), filtered to the identity and authentication record kinds.
@@ -24,7 +24,7 @@ place.
 |---|---|---|
 | `sign-in` | `login_succeeded`, `login_failed`, `login_throttled`, `logout` | the Account where the record names one, the outcome, the source address; on a failed or throttled attempt, the name typed **only where it is a real Account's name** |
 | `step-up` | `step_up`, `step_up_failed`, `step_up_throttled` | the session's Account, the outcome |
-| `account` | `account_create`, `account_role`, `account_enable`, `account_disable`, `password_set`, `password_clear` | who acted, on which Account, and the change (new role, enabled, disabled, password set or removed — never the password) |
+| `account` | `account_create`, `account_role`, `account_enable`, `account_disable`, `password_set`, `password_clear`, `password_temporary_set`, `password_change` | who acted, on which Account, and the change (new role, enabled, disabled, password set or removed, temporary password issued, own password changed — never a password or a hash); a temporary-password issue and a change also carry the source address |
 | `api-token` | `api_token_mint`, `api_token_revoke` | who acted, for which Account, the token's ID — never its value; a mint by `relay init` is the same kind |
 
 **A failed sign-in records the name typed only where it is a real Account's name** (D19). A
@@ -52,6 +52,16 @@ records), not to any Account, and the screen draws them as the Relay host rather
 or asserted chip. A `password_clear` on an Account that had no password is still a row; its record
 says `removed=false` and the screen says none was set, so the trail never claims a removal that did
 not happen.
+
+**A Console password act is a row here** (ADR-0045; designed, not built). An `admin` issuing a
+temporary password — at a human Account's create, or by re-issue while its human has never set
+one — writes `password_temporary_set`: the admin is the verified actor, the new Account the
+subject. A human changing their own password writes `password_change`, actor and subject the same
+Account, `forced=true` when it redeemed a temporary password and `forced=false` otherwise, with
+how many other sessions it ended. Each is written in the transaction that makes the change. The current password the change proved is a
+`step-up` row beside it, and a wrong one is a `step_up_failed` row, never an `account` row: no
+password was changed. `password_set` stays the host-side `relay init` record, so a row says by its
+kind alone whether the Relay host or an Account set the password.
 
 **Enrollment Tokens are not here.** They join Nodes rather than authenticate callers, and one list
 would mix fleet growth with credential issuance. Their mints and revokes stay on the audit trail;
@@ -134,3 +144,6 @@ docs.
 - [ ] The sign-in response is still byte- and time-indistinguishable across every failure.
 - [ ] A throttled attempt is drawn as throttled and is not counted as a failure.
 - [ ] A password set, and a token minted, with `relay init` is a row here attributed to `local-host`.
+- [ ] A temporary password issued in the Console, and a human's change of their own password, are
+      each an `account` row naming the verified actor, the subject Account and the source address,
+      and carrying no password or hash. **Designed, not built** (ADR-0045).

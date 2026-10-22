@@ -560,3 +560,23 @@ func TestComponents_ContainNoInlineScript(t *testing.T) {
 		ShowCompare: true,
 	}))
 }
+
+// TestLabel_TooltipNamesTheNamespacesWriter: a chip's title is its term plus the
+// one writer its namespace has, so a Node's labels need no legend. tag: is the
+// bare term because no tag: label can exist yet (02-node-detail.md "Labels").
+func TestLabel_TooltipNamesTheNamespacesWriter(t *testing.T) {
+	for ns, want := range map[Namespace]string{
+		NamespaceNode:  "node:k=v · set by the Node's own config management",
+		NamespaceRelay: "relay:k=v · set by the Relay, never the Node",
+		NamespaceState: "state:k=v · derived by the Relay",
+		NamespaceTag:   "tag:k=v",
+	} {
+		l := Label{Namespace: ns, Key: "k", Value: "v"}
+		if got := l.Tooltip(); got != want {
+			t.Errorf("%s: Tooltip() = %q, want %q", ns, got, want)
+		}
+		if out := render(t, "label-chip", l); !strings.Contains(out, `title="`+template.HTMLEscapeString(l.Tooltip())+`"`) {
+			t.Errorf("%s: the chip's title is not its Tooltip: %s", ns, out)
+		}
+	}
+}

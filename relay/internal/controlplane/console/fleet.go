@@ -268,9 +268,18 @@ type fleetGroup struct {
 	ShowState bool
 
 	// ModeLine is the calm sentence beneath the deviations: how many Nodes
-	// carry nothing at all. It is deliberately the last thing on the card —
-	// most Nodes are normal, and normal is not what anyone came to read.
+	// carry nothing at all. It is drawn only for a group with some deviation
+	// and is deliberately the last thing on the card — most Nodes are normal,
+	// and normal is not what anyone came to read. A group with no deviation
+	// has an empty ModeLine and says so with NoDeviation instead.
 	ModeLine string
+
+	// NoDeviation is true when no Node in the group carries a state,
+	// quarantine, revocation or not-reported mark and none is off the group's
+	// Policy fingerprint. It draws the header's "no deviations" chip whether
+	// the card is open or closed: a healthy group says so in one chip, never
+	// in a sentence (01-fleet-view.md, D34).
+	NoDeviation bool
 
 	// ListsWholeFleet is true when the table below is every Node in the group
 	// rather than only its deviations. It changes what the table MEANS, so the
@@ -1227,7 +1236,8 @@ func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext)
 	normal := len(nodes) - deviating
 	switch {
 	case deviating == 0:
-		g.ModeLine = "every Node here is reachable, current and permitted — no state label anywhere in this group."
+		// Nothing deviates, so there is no mode line to draw.
+		g.ModeLine = ""
 	case normal == 0 && g.Unreported > 0:
 		g.ModeLine = "no Node in this group can be called reachable, current and permitted: " +
 			countOf(g.Unreported, "Node has", "Nodes have") + " not reported a daemon version or Policy fingerprint."
@@ -1251,6 +1261,10 @@ func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext)
 	// LARGE, uniformly healthy group compresses to one line — which is the case
 	// the compression was for.
 	g.Open = deviating > 0 || g.OffMode > 0 || g.ListsWholeFleet
+	// The state-derived header counts are all part of the signature, so
+	// deviating == 0 already excludes them; drift is the one header chip that
+	// is not.
+	g.NoDeviation = deviating == 0 && g.OffMode == 0
 	return g
 }
 
@@ -1682,7 +1696,6 @@ var fleetTmpl = newScreen("fleet", `
   submits nothing, and the wrapper keeps the age and Refresh from joining the count's text. */}}
   <div class="freshline">{{template "rendered-age" .Rendered}}{{template "refresh" .RefreshControl}}</div>
 </form>
-<p class="refreshlimit">Every Refresh is an audited read.</p>
 {{with .Note}}<p class="gap"><b>Part of this URL could not be read:</b> {{.}}.</p>{{end}}
 {{if .Pin.Any}}{{template "pin-bar" .Pin}}{{end}}
 
@@ -1740,7 +1753,7 @@ var fleetTmpl = newScreen("fleet", `
     {{if .Revoked}}<span class="gdev quar">{{.Revoked}} revoked</span>{{end}}
     {{if .Unreported}}<span class="gdev">{{.Unreported}} not reported</span>{{end}}
     {{if .OffMode}}<span class="gdev drift">{{.Fingerprinted}} {{plural .Fingerprinted "Node" "Nodes"}} on {{.Fingerprints}} Policy {{plural .Fingerprints "fingerprint" "fingerprints"}}</span>{{end}}
-    {{if not .Open}}<span class="gdev calm">no deviations</span>{{end}}
+    {{if .NoDeviation}}<span class="gdev calm">no deviations</span>{{end}}
   </summary>
 
   <div class="gbody">
@@ -1764,7 +1777,7 @@ var fleetTmpl = newScreen("fleet", `
     <div class="devtable">
       {{if .Deviations}}
       <table class="cards">
-        <caption class="tcap">{{if .ListsWholeFleet}}Every Node in <span class="ident">{{.Key}}</span>, oddest first.{{else}}Deviating Nodes in <span class="ident">{{.Key}}</span>, rarest first.{{end}}</caption>
+        <caption class="tcap vh">{{if .ListsWholeFleet}}Every Node in <span class="ident">{{.Key}}</span>, oddest first.{{else}}Deviating Nodes in <span class="ident">{{.Key}}</span>, rarest first.{{end}}</caption>
         <thead><tr>
           <th scope="col"><span class="vh">Reachable</span></th>
           <th scope="col">Node <span class="selfreptag">hostname self-reported</span></th>{{if .ShowState}}<th scope="col">State</th>{{end}}<th scope="col">Labels</th>
@@ -1796,7 +1809,7 @@ var fleetTmpl = newScreen("fleet", `
       </table>
       {{if .Elided}}<p class="mode">{{.Elided}} more {{plural .Elided "Node deviates" "Nodes deviate"}} and are not listed.</p>{{end}}
       {{end}}
-      <p class="mode">{{.ModeLine}}</p>
+      {{with .ModeLine}}<p class="mode">{{.}}</p>{{end}}
     </div>
   </div>
 </details>

@@ -423,9 +423,6 @@ type activityRow struct {
 	PlanHash        string
 
 	Reason string
-
-	// ReadClass marks a row whose output was never retained.
-	ReadClass bool
 }
 
 // activityFilter is this screen's LINKABLE STATE, parsed from the URL and
@@ -757,9 +754,6 @@ type activityView struct {
 	// Exhausted says both lanes have already been paged to their end.
 	Exhausted bool
 
-	JobPageSize   int
-	AuditPageSize int
-
 	// Narrowing says the operator asked for something. See
 	// activityFilter.narrowing.
 	Narrowing bool
@@ -821,10 +815,15 @@ type activityView struct {
 	AllConsoleReads   bool
 	ConsoleToggleHref string
 
-	// CollapseNote says what the collapse did to the page; EventCount is the
-	// calls the rendered rows stand for, which is what the viewbar counts.
-	CollapseNote string
-	EventCount   int
+	// EventCount is the calls the rendered rows stand for, which is what the
+	// viewbar counts.
+	EventCount int
+
+	// StreamNarrowedBeyondRunningNow is set when a kind filter or a time bound
+	// narrows the stream. Running now follows ?account= and nothing else
+	// (04-activity.md, "Running now"), so only then does the page say it is not
+	// narrowed; unfiltered, there is nothing to contrast (D34).
+	StreamNarrowedBeyondRunningNow bool
 }
 
 // kindChip is one family link. It carries NO COUNT, deliberately: a count is
@@ -934,10 +933,11 @@ func handleActivity(d Deps) http.HandlerFunc {
 // choices, links and lane-position flags, before any row is fetched.
 func newActivityView(f activityFilter, note, csrfToken string, known, ranJob, ranTrail bool) activityView {
 	v := activityView{
-		Filter:        f,
-		Note:          note,
-		JobPageSize:   jobPageSize,
-		AuditPageSize: auditPageSize,
+		Filter: f,
+		Note:   note,
+		// Deliberately not f.narrowing(): that includes ?account=, which does
+		// narrow Running now, and op/outcome/q, which the hint does not name.
+		StreamNarrowedBeyondRunningNow: f.Kind != "" || !f.Since.IsZero() || !f.Until.IsZero(),
 		// Both lanes finished. Only reachable by hand-editing the URL —
 		// the "Older" link is not drawn in this state — but "nothing
 		// matches" would be a lie about the filter rather than about the
@@ -992,8 +992,6 @@ func (v *activityView) fill(d Deps, caller capability.Principal, f activityFilte
 	}
 
 	v.Rows = collapseActivityRows(v.Rows)
-	fc, fr := foldedSummary(v.Rows, func(r activityRow) int { return r.Calls })
-	v.CollapseNote = collapseNote(fc, fr)
 	for _, r := range v.Rows {
 		v.EventCount += r.Calls
 	}
@@ -1078,14 +1076,15 @@ func activityLive(d Deps, f activityFilter, ranJob bool, rn runningNowView) (Liv
 		Endpoint:    "/console/events?kinds=job",
 		LastEventID: newestJobEventID(d.Events),
 		ShowHref:    f.base(),
-		CountNote:   liveCountNote,
+		CountTitle:  liveCountTitle,
 	}, []string{"/console/assets/stream.js", "/console/assets/activity.js"}
 }
 
-// liveCountNote qualifies the live region's counter (04-activity.md, "Live but
-// stable"): it counts the kinds=job stream, which this page's filter does not
-// narrow and on which one Job appears more than once.
-const liveCountNote = "Counts job events, not rows; this page's filter does not narrow them, and a Job announces itself more than once."
+// liveCountTitle is the live control's title (04-activity.md, "Live but
+// stable"): the counter counts the kinds=job stream, which this page's filter
+// does not narrow and on which one Job appears more than once. A title, so the
+// page carries no sentence about it.
+const liveCountTitle = "Job events, not rows: unfiltered by this page, and one Job can announce itself repeatedly."
 
 // activityCollapseKey is the collapse's key for one row, and whether the row
 // may fold at all.
@@ -1396,7 +1395,6 @@ func dispatchRowFromJob(sum capability.JobSummary) activityRow {
 		// The DECLARED class, from tasks.risk_class — never this package's
 		// name inference. A Template Operation the Console has never heard of
 		// is still classified by the catalog that dispatched it.
-		ReadClass:         sum.RiskClass == jobs.RiskClassRead,
 		Selector:          sum.Selector,
 		FanOut:            sum.Total,
 		InFlight:          sum.Unresolved,
@@ -1522,7 +1520,6 @@ func eventRowFromTrail(f trailFacts) activityRow {
 	case rowDispatch, rowRead, rowRefusal, rowApproval, rowPlan, rowCancel:
 		row.Risk = jobs.RiskClassName(risk)
 	}
-	row.ReadClass = risk == jobs.RiskClassRead
 	if f.NodeID != "" {
 		row.NodeHref = "/console/nodes/" + f.NodeID
 	}
@@ -1728,10 +1725,7 @@ func csvSafe(v string) string {
 }
 
 var activityTmpl = newScreen("activity", `
-<p class="lede">Calls the Relay received, and what they did to the fleet.</p>
-
 {{template "refresh" .Refresh}}
-{{if not .UnknownKind}}<p class="refreshlimit">Every Refresh is an audited read made from this Console.</p>{{end}}
 
 {{if .FirstRun}}
 <div class="empty">
@@ -1803,7 +1797,7 @@ var activityTmpl = newScreen("activity", `
 
 {{if not .FirstRun}}
 <section class="runningnow" id="running-now" aria-label="Running now">
-  <div class="ftitle">Running now <span class="phint">Longest-running first; not narrowed by the kind chips or the time window.</span></div>
+  <div class="ftitle">Running now{{if .StreamNarrowedBeyondRunningNow}} <span class="phint">not narrowed by the kind chips or the time window</span>{{end}}</div>
   {{with .RunningNow}}
   {{if .Entries}}<p class="rncount">{{.Matching}} running{{if .From}} &middot; {{.From}}&ndash;{{.To}}{{end}}</p>
   <ol class="rnlist">
@@ -1859,7 +1853,7 @@ var activityTmpl = newScreen("activity", `
         {{if .State}}<span class="chip state" data-state="{{.State}}">{{.State}}</span>{{else}}{{with .Outcome}}<span class="chip outcome" data-outcome="{{.}}">{{.}}</span>{{end}}{{end}}
         {{if .Running}}<span class="chip" data-state="running" title="This Job has Tasks not yet resolved.">running</span>{{end}}
         {{if .OutcomeUnrecorded}}{{if .OutcomePartial}}<span class="chip outcomeunk" data-state="outcome-unknown">outcome partly unknown</span>{{else}}<span class="chip outcomeunk" data-state="outcome-unknown">intent recorded · outcome unknown</span>{{end}}{{end}}
-        {{if gt .Calls 1}}<span class="chip calls" title="Consecutive identical calls, collapsed for display. Each one is on the audit trail.">x{{.Calls}}</span>{{end}}
+        {{if gt .Calls 1}}<span class="chip calls" title="{{.FirstWhen}} to {{.When}}">×{{.Calls}}</span>{{end}}
       </div>
       {{with .Args}}<div class="evargs mono">{{.}}</div>{{end}}
       <div class="evmeta">
@@ -1880,8 +1874,6 @@ var activityTmpl = newScreen("activity", `
         <span class="evlive" data-when="cancelled">cancelled after this page was rendered &mdash; reload to see its outcomes</span>
       </div>{{end}}
       {{with .Reason}}<div class="evreason">{{.}}</div>{{end}}
-      {{if .ReadClass}}<div class="evnote">Output was not retained; nothing here will show it later.</div>{{end}}
-      {{if gt .Calls 1}}<div class="evnote">{{.Calls}} consecutive identical calls, {{.FirstWhen}} to {{.When}}; each one is on the audit trail.</div>{{end}}
     </div>
   </article>
 {{else}}
@@ -1895,15 +1887,12 @@ var activityTmpl = newScreen("activity", `
 </div>
 {{end}}
 
-{{with .CollapseNote}}<p class="gap">{{.}}</p>{{end}}
-
 {{if .Scrolled}}<p class="gap">These are not the most recent events. <a href="{{.NewestHref}}">Newest</a>.</p>{{end}}
 
 <div class="pager">
   {{with .OlderHref}}<a class="act" href="{{.}}">Older</a>{{end}}
   {{with .ExportHref}}<a href="{{.}}">Export this filter as CSV</a>{{end}}
 </div>
-<p class="note">Each page holds up to {{.JobPageSize}} dispatches and {{.AuditPageSize}} other events, paged separately.</p>
 
 {{if .Filter.Q}}
 <p class="gap"><b>Refine</b> matches text within the rows already on this page; it does not search the trail.</p>

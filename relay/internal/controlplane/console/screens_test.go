@@ -1879,8 +1879,10 @@ func TestNode_ReportedPolicyComesFromTheDaemonsOwnEngine(t *testing.T) {
 	if !strings.Contains(body, "this Node's own engine") {
 		t.Error("the panel does not say the answer came from the Node's own engine")
 	}
-	if !strings.Contains(body, "the Relay never writes it") {
-		t.Error("the panel does not state that the Relay cannot write Policy (ADR-0002, invariant 2)")
+	// The sentence saying the Relay never writes Policy is retired (D34); the
+	// property holds because no Policy write path or edit control exists.
+	if strings.Contains(body, "the Relay never writes it") || strings.Contains(body, "no path from this screen") {
+		t.Error("the panel states in a sentence that the Relay cannot write Policy")
 	}
 	// The rules render verbatim. A paraphrased rule is a rule an operator has
 	// to go and check.
@@ -3532,5 +3534,27 @@ func TestFleet_RoleFacetTitleRendersAsCode(t *testing.T) {
 	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
 	if !strings.Contains(body, `<div class="ftitle"><code>node:role</code></div>`) {
 		t.Error("the node:role facet title is not rendered as code")
+	}
+}
+
+// TestBuildGroup_NoDeviationDrawsTheChipNotASentence: a group with no deviation
+// says so in the header chip (NoDeviation) and carries no mode line; drift is
+// the one header chip that is not part of the deviation signature (D34).
+func TestBuildGroup_NoDeviationDrawsTheChipNotASentence(t *testing.T) {
+	plain := func(fp string) fleetNode { return fleetNode{PolicyFingerprint: fp} }
+
+	healthy := buildGroup("g", []fleetNode{plain("a"), plain("a")}, true, linkContext{})
+	if healthy.ModeLine != "" || !healthy.NoDeviation {
+		t.Errorf("healthy group: ModeLine = %q, NoDeviation = %v; want no sentence and the chip", healthy.ModeLine, healthy.NoDeviation)
+	}
+
+	drifting := buildGroup("g", []fleetNode{plain("a"), plain("a"), plain("b")}, true, linkContext{})
+	if drifting.OffMode == 0 || drifting.NoDeviation {
+		t.Errorf("drifting group: OffMode = %d, NoDeviation = %v; want drift and no calm chip", drifting.OffMode, drifting.NoDeviation)
+	}
+
+	deviating := buildGroup("g", []fleetNode{plain("a"), {PolicyFingerprint: "a", signature: "offline"}}, true, linkContext{})
+	if deviating.NoDeviation || deviating.ModeLine == "" {
+		t.Errorf("deviating group: NoDeviation = %v, ModeLine = %q; want a mode line and no calm chip", deviating.NoDeviation, deviating.ModeLine)
 	}
 }

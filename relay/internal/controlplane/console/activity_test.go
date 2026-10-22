@@ -492,8 +492,8 @@ func TestActivity_ReadRowCarriesNoOutputAtAnyAge(t *testing.T) {
 		t.Error("a read-class Job did not render the read chip — the class must come from " +
 			"sum.RiskClass, never from inferring it by Operation name")
 	}
-	if !strings.Contains(body, "Output was not retained") {
-		t.Error("a read row does not say its output was never kept")
+	if strings.Contains(body, "Output was not retained") {
+		t.Error("a read row says in a sentence that its output was never kept")
 	}
 }
 
@@ -563,15 +563,14 @@ func TestActivity_OlderLinkCarriesBothLaneCursors(t *testing.T) {
 	}
 }
 
-// TestActivity_PageStatesItsTwoLaneBoundary. The merge is never truncated, so
-// the page cannot claim to be an instant — and it must say so rather than let
-// an operator infer it. The page note says the two lanes are paged separately; what
-// that does to a page's boundary, and the single-lane case, are recorded in
+// TestActivity_PageStatesNoPageSizeSentence pins that the page draws no
+// sentence about its page size or its two lanes being paged separately. How the
+// two lanes page, and what that does to a page's boundary, is recorded in
 // 04-activity.md (TestAbout_DeletedStandingNotesLiveInTheDocs).
-func TestActivity_PageStatesItsTwoLaneBoundary(t *testing.T) {
+func TestActivity_PageStatesNoPageSizeSentence(t *testing.T) {
 	both := get(t, newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/activity").Body.String()
-	if !strings.Contains(both, "other events, paged separately.") {
-		t.Error("the two-lane feed does not state that its two lanes are paged separately")
+	if strings.Contains(both, "paged separately") || strings.Contains(both, "Each page holds up to") {
+		t.Error("the two-lane feed states its page size in a sentence")
 	}
 }
 
@@ -659,7 +658,7 @@ func TestActivity_LiveRegionOnlyWhereTheViewRendersDispatchRows(t *testing.T) {
 		if strings.Contains(body, `class="pulse"`) {
 			t.Errorf("%s draws a pulsing dot in the live region", path)
 		}
-		if !strings.Contains(body, `data-when="on">Live.`) {
+		if !strings.Contains(body, `data-when="on">Live<`) {
 			t.Errorf("%s does not state its live condition in words", path)
 		}
 	}
@@ -684,24 +683,21 @@ func TestActivity_LiveRegionOnlyWhereTheViewRendersDispatchRows(t *testing.T) {
 	}
 }
 
-// TestActivity_LiveCounterSaysWhatItCounts is R14. sseJob carries only a Job
+// TestActivity_LiveCounterNamesWhatItCountsInItsTitle. sseJob carries only a Job
 // id, a transition and a time, so the client cannot tell whether an incoming
 // event matches the page's filter — and one Job announces itself twice
 // (created, then completed). The counter is therefore filter-blind and
-// double-counts, and the copy beside it must say what it actually counts.
-func TestActivity_LiveCounterSaysWhatItCounts(t *testing.T) {
+// double-counts, so the control's title says what it actually counts.
+func TestActivity_LiveCounterNamesWhatItCountsInItsTitle(t *testing.T) {
 	d := activityDeps(&fakeQueries{})
 	d.Events = newFakeEvents()
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity").Body.String()
 
-	if !strings.Contains(body, "Counts job events, not rows") {
-		t.Error("the live counter does not say that it counts stream events rather than rows")
+	if !strings.Contains(body, `title="`+liveCountTitle+`"`) {
+		t.Error("the live control's title does not say what the counter counts")
 	}
-	if !strings.Contains(body, "does not narrow them") {
-		t.Error("the live counter does not say this page's filter does not narrow it")
-	}
-	if !strings.Contains(body, "a Job announces itself more than once") {
-		t.Error("the live counter does not admit that it double-counts")
+	if strings.Contains(body, `class="livenote"`) || strings.Contains(body, "Counts job events") {
+		t.Error("the live counter explains itself in a standing sentence")
 	}
 	if !strings.Contains(body, `id="live-new-count"`) {
 		t.Error("there is no counter element for the client to write into")
@@ -1305,7 +1301,7 @@ func TestActivity_FirstRunIsOneBlockWithFiltersCollapsed(t *testing.T) {
 	d.Events = newFakeEvents()
 	body := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity").Body.String())
 
-	for _, want := range []string{firstRunSentence, `<div class="empty">`, `<h2>No calls other than reads have been recorded yet.</h2>`, `data-when="on">Live.`} {
+	for _, want := range []string{firstRunSentence, `<div class="empty">`, `<h2>No calls other than reads have been recorded yet.</h2>`, `data-when="on">Live<`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the first-run page lacks %q", want)
 		}
@@ -1612,17 +1608,6 @@ func TestSummarize_ApprovalDecisionNamesWhichWayItWent(t *testing.T) {
 	if got, want := summarize(both), "revoked an Approval grant"; got != want {
 		t.Errorf("summarize(revocation carrying an answer) = %q, want %q — GrantID is "+
 			"the structural discriminator and must be checked before the answer", got, want)
-	}
-}
-
-func TestActivity_RefreshLimitSentenceOnlyWhereSomethingIsQueried(t *testing.T) {
-	h := newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin)
-	const sentence = "Every Refresh is an audited read"
-	if !strings.Contains(get(t, h, "/console/activity").Body.String(), sentence) {
-		t.Error("the Activity view does not say Refresh is an audited read")
-	}
-	if strings.Contains(get(t, h, "/console/activity?kind=nosuchkind").Body.String(), sentence) {
-		t.Error("the unknown-kind view queries nothing yet claims Refresh is an audited read")
 	}
 }
 

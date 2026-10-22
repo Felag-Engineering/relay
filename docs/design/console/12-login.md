@@ -2,7 +2,7 @@
 
 **No artboard.** The only unauthenticated surface in the Console. **Milestone v0.6.0.**
 
-**Governing:** ADR-0009, ADR-0010, ADR-0024.
+**Governing:** ADR-0009, ADR-0010, ADR-0024, ADR-0045.
 **Backend:** the Account model — local password hashed at rest, optional OIDC; session issuance;
 audit.
 
@@ -32,6 +32,27 @@ password hashes).
   the Console during the incident they are causing, which is worse than the brute force it
   prevents. Every throttled attempt is audited.
 
+## Temporary password
+
+**Designed** ([ADR-0045](../../adr/0045-console-passwords-temporary-at-creation-and-self-service-change.md),
+owner decision `2026-10-22`, #1107); not built. A human Account created in the Console is issued a
+temporary password by the `admin` who creates it ([15](15-accounts-and-tokens.md), "New account").
+
+- **It is entered here like any password.** The sign-in form does not change, and every refusal —
+  including an expired temporary password, 72 hours after issue — is the same one message in the
+  same time.
+- **A sign-in with it is forced to change it, before anything else.** It opens a **restricted
+  session** that reaches the change-password form and sign-out only: any other Console route
+  answers a `GET` with a redirect to the form and refuses every other method. It can take no granting
+  act — its only step-up is the form's own current-password proof — and ends on the ordinary
+  session lifetimes.
+- **The form is the self-service change form** ([15](15-accounts-and-tokens.md), "Your own
+  password"): the temporary password as the current one, proved in the request, then the new
+  password and its confirmation. A stolen restricted session alone cannot set the password.
+- **On success** the session identifier rotates, the session becomes an ordinary one, and the
+  temporary password stops being accepted. The person lands on the view they asked for.
+- **The admin never knows the password the person keeps**; that is the point of the forced change.
+
 ## Sessions
 
 Issue the session per `11-console-shell.md`. **Rotate the session identifier on login** — a fixed
@@ -59,8 +80,11 @@ link in the chain `ui-advisory.md` requires end-to-end: **login → action → a
 - Any hint of whether a username exists.
 - Any fleet or deployment information before authentication.
 - A password field that is not `type="password"` with autocomplete hints set appropriately.
-- A "reset password" flow weaker than the login it protects. If self-service reset is not designed,
-  the answer is an admin-mediated reset, not a mail-a-link stopgap.
+- A "reset password" flow of any kind: no mail-a-link, and no admin reset of a password the
+  Account's human set (ADR-0045). A forgotten password is answered by disabling the Account and
+  creating a new one, until OIDC sign-in exists.
+- Any route but the change-password form and sign-out in a session opened with a temporary
+  password.
 
 ## States
 
@@ -70,6 +94,8 @@ link in the chain `ui-advisory.md` requires end-to-end: **login → action → a
 - **Slowed down** → say so plainly, and when the next attempt is accepted; do not pretend the
   password was wrong.
 - **OIDC configured** → both methods offered; neither is presented as the "insecure" one.
+- **Signed in with a temporary password** → the change-password form, and nothing else, until it
+  succeeds.
 
 ## Acceptance
 
@@ -86,4 +112,6 @@ link in the chain `ui-advisory.md` requires end-to-end: **login → action → a
 - [ ] A successful OIDC login for an unknown subject is refused, not auto-provisioned.
       **Not implemented.** The human OIDC browser flow is unbuilt, so this is untested rather
       than met. ADR-0024's resource-server half (machine callers) exists.
+- [ ] A sign-in with a temporary password reaches only the change-password form and sign-out, and
+      an expired one is refused like any other failure. **Designed, not built** (ADR-0045).
 - [x] Repeated failures slow an Account down and never lock it out; the delay is visible and audited.

@@ -88,18 +88,22 @@ func TestRefresh_ControlsPreserveTheQuery(t *testing.T) {
 }
 
 // TestRefresh_ActivityReloadControlKeepsTheFilter: Activity's control reloads
-// the current filter at its newest page, and says what it counts in plain
-// lower-case words.
+// the current filter at its newest page, and reads "Live · N new" with what it
+// counts in its title.
 func TestRefresh_ActivityReloadControlKeepsTheFilter(t *testing.T) {
 	d := activityDeps(&fakeQueries{})
 	d.Events = newFakeEvents()
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity?kind=dispatch&op=service.restart&jc=c9").Body.String()
 
-	if !strings.Contains(body, `<a class="newq" href="/console/activity?kind=dispatch&amp;op=service.restart" aria-live="polite">Reload to see new events`) {
-		t.Errorf("the reload control does not keep the filter, or keeps the page position:\n%s", body)
+	const control = `<a class="newq" href="/console/activity?kind=dispatch&amp;op=service.restart" aria-live="polite" title="`
+	if !strings.Contains(body, control) {
+		t.Errorf("the reload control does not keep the filter, keeps the page position, or has no title:\n%s", body)
 	}
-	if strings.Contains(body, "JOB EVENTS") {
-		t.Error("the counter's caveat still shouts")
+	if !strings.Contains(body, `<span class="newqlive">Live · </span><b id="live-new-count">0</b> new</a>`) {
+		t.Errorf("the reload control does not read \"Live · N new\":\n%s", body)
+	}
+	if strings.Contains(body, `class="livenote"`) || strings.Contains(body, "JOB EVENTS") {
+		t.Error("the counter explains itself in a standing sentence")
 	}
 }
 
@@ -123,36 +127,31 @@ func TestRefresh_NoScriptNoStyleCSPUnchanged(t *testing.T) {
 	}
 }
 
-// TestRefresh_EachScreenSaysBesideRefreshWhetherAReloadIsAudited: one visible
-// sentence beside the control, true to what each screen's reads actually
-// record (00-foundations.md, "Refreshing a screen").
-func TestRefresh_EachScreenSaysBesideRefreshWhetherAReloadIsAudited(t *testing.T) {
+// TestRefresh_NoScreenSaysThatARefreshIsAudited: the Refresh control is drawn
+// and no sentence beside it says what a reload records (00-foundations.md,
+// "Refreshing a screen"). The reads are still audited; the page does not say so.
+func TestRefresh_NoScreenSaysThatARefreshIsAudited(t *testing.T) {
 	d, _ := refreshScreens()
 	d.Events = newFakeEvents()
 	h := newTestHandler(d, accounts.RoleAdmin)
 	fh := newTestHandler(fleetFixture(), accounts.RoleAdmin)
-	for path, note := range map[string]string{
-		"/console/":         "Every Refresh is an audited read.",
-		"/console/activity": "Every Refresh is an audited read made from this Console.",
-		"/console/access":   "Every Refresh is an audited read.",
-	} {
+	for _, path := range []string{"/console/", "/console/activity", "/console/access"} {
 		handler := h
 		if path == "/console/" {
 			handler = fh
 		}
 		body := get(t, handler, path).Body.String()
-		mustBeSituational(t, body, note)
-		content := contentOf(body)
-		at := strings.Index(content, `<p class="refreshlimit">`+note)
-		btn := strings.Index(content, "refreshbtn")
-		if at < 0 || btn < 0 || at < btn || at-btn > 300 {
-			t.Errorf("%s: the sentence is not a refreshlimit beside the Refresh control", path)
+		if !strings.Contains(body, "refreshbtn") {
+			t.Errorf("%s: the Refresh control is not drawn", path)
+		}
+		if strings.Contains(body, "Every Refresh is an audited read") || strings.Contains(body, `class="refreshlimit"`) {
+			t.Errorf("%s: a sentence beside Refresh says a reload is audited", path)
 		}
 	}
 }
 
-// TestRefresh_ActivityReloadIsAnAuditedRead backs Activity's sentence beside
-// Refresh with the reads the screen actually makes.
+// TestRefresh_ActivityReloadIsAnAuditedRead: an Activity reload still reads
+// through the audited lane, whether or not the page says so.
 func TestRefresh_ActivityReloadIsAnAuditedRead(t *testing.T) {
 	q := &fakeQueries{}
 	get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin), "/console/activity")

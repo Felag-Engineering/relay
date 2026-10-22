@@ -326,12 +326,11 @@ type compareView struct {
 	Unknown         []string
 	Truncated       bool
 
-	// AnyPolicyMissing and AllPolicyMissing distinguish the two shapes of
-	// absence. "Some column has not reported" is a difference and marks its
-	// rows; "no column has reported" marks nothing at all, because every cell
-	// holds the same absence — and an unmarked table that means "the Relay has
-	// not been told" must not be read as "these Nodes agree".
-	AnyPolicyMissing bool
+	// AllPolicyMissing is true when no column has reported. A column that has
+	// not reported is a difference and marks its rows, and its header says
+	// "Policy not reported". When no column has reported, every cell holds the
+	// same absence and nothing is marked, and an unmarked table must not be
+	// read as "these Nodes agree", so the screen says so.
 	AllPolicyMissing bool
 
 	// ShowAll is true when the request asked for every row; it drives the
@@ -343,8 +342,6 @@ type compareView struct {
 	// "not reported". An agreement on an absence is never agreement, so this is
 	// the only condition under which the page says the Nodes reported the same.
 	SameReported bool
-	// Filtered is true when the identical rows were removed from the view.
-	Filtered bool
 }
 
 // applyRowView settles which rows the page draws.
@@ -352,8 +349,7 @@ func (v *compareView) applyRowView(all bool) {
 	v.ShowAll = all
 	v.AnyDiffers = anyDiffers(v.FingerprintRows) || anyDiffers(v.PolicyRows)
 	v.SameReported = !v.AnyDiffers && !agreesOnNotReported(v.FingerprintRows) && !agreesOnNotReported(v.PolicyRows)
-	v.Filtered = !all && v.AnyDiffers
-	if v.Filtered {
+	if !all && v.AnyDiffers {
 		v.FingerprintRows = onlyDiffering(v.FingerprintRows)
 		v.PolicyRows = onlyDiffering(v.PolicyRows)
 	}
@@ -484,9 +480,6 @@ func buildCompareView(ctx context.Context, d Deps, caller capability.Principal, 
 			if !s.ReportedAt.IsZero() {
 				col.PolicyReportedAt = utcStamp(s.ReportedAt)
 			}
-		}
-		if snap == nil {
-			v.AnyPolicyMissing = true
 		}
 		snaps = append(snaps, snap)
 		v.Columns = append(v.Columns, col)
@@ -694,7 +687,7 @@ var compareTmpl = newScreen("compare", `
 {{if or .ShowAll (not .SameReported)}}
 <div class="tablescroll">
 <table class="cmp">
-  <caption class="tcap">{{if .Filtered}}What {{len .Columns}} Nodes reported. Only rows that differ are shown.{{else}}What {{len .Columns}} Nodes reported. Rows that differ are marked.{{end}}</caption>
+  <caption class="tcap">What {{len .Columns}} Nodes reported.</caption>
   <thead>
     <tr>
       <th scope="col"><span class="vh">Dimension</span></th>
@@ -719,15 +712,10 @@ var compareTmpl = newScreen("compare", `
 </table>
 </div>
 
-<p class="note">Each cell is what that Node's daemon <b>reported</b>; this screen never predicts what will run.</p>
 {{end}}
 
 {{if .AllPolicyMissing}}
 <p class="gap"><b>Neither Node has reported its Policy since the Relay last started</b>, so identical Policy rows mean nothing.</p>
-{{else if .AnyPolicyMissing}}
-<p class="note">A <b>not reported</b> column is marked as a difference, never read as agreement.</p>
 {{end}}
-
-<p class="note">Each column's hostname is self-reported; no other Fact is compared here.</p>
 {{end}}
 `)

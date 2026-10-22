@@ -89,6 +89,22 @@ func (l Label) String() string {
 	return term
 }
 
+// Tooltip is the term plus the namespace's one writer, shown as the chip's
+// title so a Node's labels name who wrote them without a legend
+// (02-node-detail.md "Labels"). `tag:` is the bare term: no `tag:` label can
+// exist yet, so there is no writer to describe.
+func (l Label) Tooltip() string {
+	switch l.Namespace {
+	case NamespaceNode:
+		return l.String() + " · set by the Node's own config management"
+	case NamespaceRelay:
+		return l.String() + " · set by the Relay, never the Node"
+	case NamespaceState:
+		return l.String() + " · derived by the Relay"
+	}
+	return l.String()
+}
+
 // SecurityLane reports whether this namespace may be targeted by the
 // security lane (quarantine, remediation, secret distribution).
 //
@@ -622,12 +638,13 @@ type Live struct {
 	// building one is not something this component lets it do.
 	ShowHref string
 
-	// CountNote says what the counter actually counts. It is a parameter and
-	// not fixed copy because the honest sentence is screen-specific, and the
-	// honest sentence matters: the live lane is NOT filtered by the view's
-	// filter and one Job announces itself more than once, so a counter
-	// presented as "rows that will appear" would be wrong twice over.
-	CountNote string
+	// CountTitle says what the queued counter counts, rendered as the
+	// control's title and never as a sentence (04-activity.md "Live but
+	// stable"). It is a parameter because the honest wording is
+	// screen-specific: the live lane is NOT filtered by the view's filter and
+	// one Job announces itself more than once, so a counter presented as
+	// "rows that will appear" would be wrong twice over.
+	CountTitle string
 }
 
 // componentsTmpl holds every shared component as a named template. Screens
@@ -656,7 +673,7 @@ primaryHostname; an empty one leaves the ID alone as the label
 (00-foundations, "Self-reported names"). */}}
 {{define "node-name"}}{{if .Hostname}}<span class="selfrep" title="{{selfReportedTitle}}">{{.Hostname}}<span class="vh"> (self-reported)</span></span> {{end}}<code class="nodeid">{{.ID}}</code>{{end}}
 
-{{define "label-chip"}}<span class="chip lbl" data-ns="{{.Namespace}}"{{if .SecurityLane}} data-lane="security"{{end}}{{if .Attention}} data-sev="attention"{{end}} title="{{.}}"><span class="ns">{{.Namespace}}:</span>{{.Key}}{{if .Value}}<span class="eq">=</span>{{.Value}}{{end}}</span>{{end}}
+{{define "label-chip"}}<span class="chip lbl" data-ns="{{.Namespace}}"{{if .SecurityLane}} data-lane="security"{{end}}{{if .Attention}} data-sev="attention"{{end}} title="{{.Tooltip}}"><span class="ns">{{.Namespace}}:</span>{{.Key}}{{if .Value}}<span class="eq">=</span>{{.Value}}{{end}}</span>{{end}}
 
 {{/* kind-label is the word human or machine drawn after a trust chip
      (00-foundations.md, "Kind label"). It is NOT a chip: no pill, no fill, no
@@ -707,15 +724,13 @@ primaryHostname; an empty one leaves the ID alone as the label
 {{define "live-region"}}{{if .Wired}}<section class="live" data-live-region data-live="down"
          data-events="{{.Endpoint}}" data-last-event-id="{{.LastEventID}}">
   <div class="livehead">
-    <span class="wmsg" data-when="on">Live.</span>
-    <span class="wmsg" data-when="down">The live stream is not connected.</span>
+    <span class="wmsg" data-when="on">Live</span>
+    <span class="wmsg" data-when="down">Not connected</span>
     <span class="wmsg" data-when="gap">The live stream fell behind &mdash; reloading.</span>
     <span class="wmsg" data-when="ended">The live stream has stopped. Your session may have ended;
     reload the page to sign in again.</span>
-    <a class="newq" href="{{.ShowHref}}" aria-live="polite">Reload to see new events
-    <span class="newqcount">(<b id="live-new-count">0</b> on the stream)</span></a>
+    <a class="newq" href="{{.ShowHref}}" aria-live="polite"{{with .CountTitle}} title="{{.}}"{{end}}><span class="newqlive">Live · </span><b id="live-new-count">0</b> new</a>
   </div>
-  {{with .CountNote}}<p class="livenote">{{.}}</p>{{end}}
 </section>{{end}}{{end}}
 
 {{/* refresh: 00-foundations.md, "Refreshing a screen". An anchor, never a timer. */}}

@@ -92,9 +92,9 @@ const (
 // too — an unknown paragraph is presumed to be prose until classified.
 var measuredClasses = map[string]bool{
 	"p.note": true, "p.gap": true, "p.lede": true, "p.kindnote": true,
-	"p.refreshlimit": true, "p.livenote": true, "p.scoped": true,
+	"p.scoped":  true,
 	"p.lanekey": true,
-	"span.note": true, "span.gap": true, "span.labelnote": true,
+	"span.note": true, "span.gap": true,
 	"span.jcnote": true, "span.phint": true,
 	"div.evnote": true, "p.fielderr": true, "p.unfilterednote": true, "div.fhint": true,
 	"p.confirmq": true,
@@ -473,7 +473,7 @@ func TestCopyBudget_CounterMeasuresWhatItShould(t *testing.T) {
 	content := `<p class="note">One two three.</p>` +
 		`<p class="newthing">four five</p>` +
 		`<p class="mode">12 Nodes · 3 groups</p>` +
-		`<div class="labelrow"><span class="labelnote"><b>node:</b> set · <b>state:</b> derived</span></div>` +
+		`<span class="note"><b>node:</b> set · <b>state:</b> derived</span>` +
 		`<span class="dim">an annotation</span>` +
 		`<p class="denynote">` + html.EscapeString(deny) + `</p>` +
 		`<p class="denynote">Shown to the first 2 KB.</p>` +
@@ -648,19 +648,20 @@ func copyBudgetFixture() Deps {
 // four words of slack. A count over its budget is a copy problem: cut, do not
 // raise.
 //
-// Node detail's 75 is above the "under ~60" #849 aimed for: every element on
-// it is a ruled or spec-bound qualifier, and reaching 60 means dropping one.
+// Fleet, Compare and Access carry no standing prose, so their budget is zero:
+// the guard still fails on any note that appears (00-foundations.md, D34).
+// Access draws its OAuth sentence only when OAuth is configured; the fixture
+// leaves it off.
 var copyBudgets = map[string]int{
-	// The six-word sentence beside Fleet's Refresh, which 00 "Refreshing a screen" requires.
-	"/console/{$}":                     6,
-	"/console/nodes/{node_id}":         75,
-	"/console/activity":                60,
+	"/console/{$}":                     0,
+	"/console/nodes/{node_id}":         20,
+	"/console/activity":                10,
 	"/console/jobs/{job_id}":           60,
-	"/console/compare":                 40,
+	"/console/compare":                 0,
 	"/console/accounts":                0,
 	"/console/accounts/{account_name}": 20,
 	"/console/new-account":             5,
-	"/console/access":                  65,
+	"/console/access":                  0,
 	"/console/run":                     10,
 	"day one":                          75,
 
@@ -1287,9 +1288,7 @@ func TestCopyBudget_GoStringNotesAreShort(t *testing.T) {
 		{"selfPanelNote", selfPanelNote, maxGoNoteWords},
 		{"doneSentence(role)", doneSentence(string(doneRole)), maxGoNoteWords},
 		{"Role.Description(admin)", accounts.RoleAdmin.Description(), maxGoNoteWords},
-		{"liveCountNote", liveCountNote, maxGoNoteWords},
-		{"collapseNote(2, 1)", collapseNote(2, 1), maxGoNoteWords},
-		{"collapseNote(200, 12)", collapseNote(200, 12), maxGoNoteWords},
+		{"liveCountTitle", liveCountTitle, maxTitleWords},
 		{"freezeEngagedDetail", freezeEngagedDetail, maxGoNoteWords},
 		{"freezeUnreadableDetail", freezeUnreadableDetail, maxGoNoteWords},
 		{"selfReportedTitle", selfReportedTitle, maxTitleWords},
@@ -1298,8 +1297,8 @@ func TestCopyBudget_GoStringNotesAreShort(t *testing.T) {
 		{"throttleMessage(1s)", throttleMessage(time.Second), maxHeadingWords},
 		{"throttleMessage(30s)", throttleMessage(30 * time.Second), maxHeadingWords},
 	}
-	if len(rows) < 15 {
-		t.Fatalf("%d rows, want at least 15", len(rows))
+	if len(rows) < 13 {
+		t.Fatalf("%d rows, want at least 13", len(rows))
 	}
 	for _, r := range rows {
 		if r.text == "" {
@@ -1457,14 +1456,9 @@ func TestCopyBudget_RuledQualifiersStillRender(t *testing.T) {
 		why, path, want string
 		h               http.Handler
 	}{
-		{"QRY-9: a Policy view never predicts what will run", "/console/compare?nodes=node-web-1,node-web-3",
-			"this screen never predicts what will run", h},
-		{"QRY-5: a fingerprint count is not evidence of trust", "/console/nodes/node-web-1",
-			"never evidence of equal Policy or trust", h},
-		{"invariant 7: relay: is never the Node's", "/console/nodes/node-web-1",
-			"<b>relay:</b> by the Relay, never the Node", h},
-		{"invariant 2: the Relay never writes Policy", "/console/nodes/node-web-1",
-			"There is no path from this screen to this Node's Policy; the Relay never writes it.", h},
+		// node-db-1 is the fixture Node that carries a relay: label.
+		{"invariant 7: relay: is never the Node's", "/console/nodes/node-db-1",
+			"set by the Relay, never the Node", h},
 		{"invariant 12: Policy comes from the Node's own engine", "/console/nodes/node-web-1",
 			"from this Node's own engine, never the Relay", h},
 		{"invariant 6: why a daemon trusts this CA", "/console/",
