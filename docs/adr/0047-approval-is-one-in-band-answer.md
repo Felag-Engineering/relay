@@ -73,10 +73,10 @@ narrowed here by removing the tool.
 - **Cut from code:** the `approve_request` tool; a rule's count, audience, requester exclusion
   and channel; channel-strength checks; approval grants and their API; the MCP Tasks shim; the
   shape key. The separate gate-rule file becomes a section of `relay.toml`.
-- **Proposals:** `n-party-approval.md` (more than one approver, a Relay-held audience, approval
-  grants, a Slack approval); `out-of-band-approval.md` (a channel Relay verifies);
-  `gate-rules-in-the-console.md`; `mcp-tasks-for-long-running-jobs.md`;
-  `approval-for-more-clients-and-always-on-agents.md`; `approval-diff-against-last-similar.md`.
+- **Future work** waits in the private roadmap, under `roadmap: relay/`: more than one approver,
+  a Relay-held audience and approval grants; a channel Relay verifies; rules edited in the
+  Console; MCP Tasks for long-running Jobs; asking more clients and always-on agents; a diff
+  against the last similar approval.
 - **Threat model:** R18 and R25 close with the code; R21 and R27 lose `approve_request`.
 - **The approval spec** is rewritten in the two-layer shape (ADR-0046) in the same change as
   the code cut, so it never describes a system that does not exist.

@@ -61,7 +61,7 @@ Grill, 2026-10-22 (`proposal-grill`), with the owner's answers.
 8. **Second-person, `count: 2` and grants cannot be answered over MCP.** The requester and the
    second person arrive as one Account, and a grant has no tool call to elicit on. All of them
    land on the Control API, which then carries far more than recovery. — Two-person approval
-   is not supported yet and moves to `n-party-approval.md`. Owner ruling 2026-10-22.
+   is not supported yet and waits in the roadmap (`roadmap: relay/n-party-approval`). Owner ruling 2026-10-22.
 9. **Flipping AP-14's default to `in-band`** silently weakens rules operators already wrote,
    with no human act or audit; the flip is not needed, since out-of-band is met on the Control
    API. — Moot: ADR-0047 cuts the channel field. Owner ruling 2026-10-22.
@@ -79,5 +79,4 @@ Grill, 2026-10-22 (`proposal-grill`), with the owner's answers.
 ## Outcome
 
 Accepted 2026-10-22 as ADR-0047, which cuts approval to one in-band answer. The code cut and the
-rewritten `approval.md` land together; `n-party-approval.md` and `out-of-band-approval.md` hold
-what was cut.
+rewritten `approval.md` land together; what was cut waits in the private roadmap.

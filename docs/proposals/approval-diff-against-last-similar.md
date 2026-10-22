@@ -15,15 +15,9 @@ Each approval question carries a Relay-authored diff against the last approved a
 same shape: "same as Tuesday, except fan-out grew from 3 to 12". It changes what an approver is
 shown, never what an approval covers or how it is decided.
 
-Finding "the last approved action of the same shape" needs an address for *what* an approval is
-for that leaves out the fan-out, so it is stable across runs. Relay built one, the shape key, and
-ADR-0047 cut it because nothing used it; the code is in git history. It must never authorize or
-release anything: only a matching plan hash does.
-
 ## Changes
 
-`approval.md` (what a decider is given, and the shape key's return); the shared rendering
-contract in ADR-0027 decision 8,
+`approval.md` (what a decider is given); the shared rendering contract in ADR-0027 decision 8,
 which every rendering of a request must keep. No ADR change unless "similar" needs a decision.
 
 ## Objections
