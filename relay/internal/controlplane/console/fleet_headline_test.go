@@ -270,8 +270,11 @@ func TestFleet_ClosedHealthyGroupIsOneLineAndExpandsWithoutScript(t *testing.T) 
 	if !strings.Contains(summary, "no deviations") {
 		t.Error("the closed card's one line does not say there are no deviations")
 	}
-	if !strings.Contains(card, `class="gbody"`) || !strings.Contains(card, "every Node here is reachable") {
+	if !strings.Contains(card, `class="gbody"`) || !strings.Contains(card, `class="facets"`) {
 		t.Error("the closed card does not carry its body, so it cannot expand with scripts off")
+	}
+	if strings.Contains(card, "every Node here is reachable") || strings.Contains(card, `<p class="mode">`) {
+		t.Error("the closed healthy card says its health in a sentence")
 	}
 	if strings.Contains(card, "<table") {
 		t.Error("a closed healthy card renders an empty table")
@@ -294,6 +297,42 @@ func TestFleet_SmallFleetGroupOpensAndIsTheFleet(t *testing.T) {
 		if !strings.Contains(card, want) {
 			t.Errorf("the open card lacks %q", want)
 		}
+	}
+	// The header chip carries "no deviations" for an open card as well, and the
+	// card holds no sentence saying so. The caption is kept for screen readers
+	// only: the order is visible in the rows.
+	summary := card[:strings.Index(card, "</summary>")]
+	if !strings.Contains(summary, `class="gdev calm">no deviations`) {
+		t.Error("the open healthy card's header does not say there are no deviations")
+	}
+	if strings.Contains(card, `<p class="mode">`) {
+		t.Error("the open healthy card draws a mode line")
+	}
+	if !strings.Contains(card, `<caption class="tcap vh">`) {
+		t.Error("the table's caption is not visually hidden")
+	}
+}
+
+// An open card whose Nodes are on different Policy fingerprints draws the drift
+// chip and never the calm one.
+func TestFleet_OpenGroupWithDriftDrawsNoCalmChip(t *testing.T) {
+	node := func(id, fp string) registry.Node {
+		return registry.Node{NodeID: id, NodeLabels: map[string]string{"role": "web"}, DaemonVersion: "0.6.0", PolicyFingerprint: fp, Connected: true}
+	}
+	d := withFleet(renderableDeps(), node("node-a", hexFP("a")), node("node-b", hexFP("a")), node("node-c", hexFP("b")))
+	body := contentOf(fleetBody(t, d, "?group=role"))
+
+	i := strings.Index(body, `<details class="group" open>`)
+	if i < 0 {
+		t.Fatal("a drifting group does not render open")
+	}
+	card := body[i : i+strings.Index(body[i:], "</details>")]
+	summary := card[:strings.Index(card, "</summary>")]
+	if !strings.Contains(summary, `class="gdev drift"`) {
+		t.Errorf("the header does not carry the drift chip:\n%s", summary)
+	}
+	if strings.Contains(summary, "no deviations") {
+		t.Error("a group with Policy drift says it has no deviations")
 	}
 }
 

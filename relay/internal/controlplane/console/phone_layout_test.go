@@ -192,7 +192,7 @@ func TestConsole_PhoneLayoutRulesLiveInTheirBreakpoints(t *testing.T) {
 	for _, want := range []string{
 		"table.cards td[data-label]::before", "content: attr(data-label)",
 		".vfield, .vfield.wide { flex-basis: 100%; }",
-		"table.cards caption, .cmp caption { display: block;",
+		"table.cards caption:not(.vh), .cmp caption { display: block;",
 		"table.cards td.pincell .pinbtn",
 	} {
 		if !strings.Contains(phone, want) {

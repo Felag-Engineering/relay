@@ -56,10 +56,10 @@ import (
 // Deps is everything the Console needs from the rest of the Relay.
 //
 // As with the Control API's Deps, every field here is a purpose-built seam over
-// runtime-object machinery — never Relay configuration. The one field that
-// looks like configuration, Execution, is not settable from here or from any
-// API: it mirrors a startup value the composition root sets, and this
-// package can only be told what it is.
+// runtime-object machinery — never Relay configuration. The two fields that
+// look like configuration, Execution and OAuthConfigured, are not settable
+// from here or from any API: each mirrors a startup value the composition
+// root sets, and this package can only be told what it is.
 type Deps struct {
 	// Logger is where the Console's operational errors go; nil means
 	// slog.Default(). Wiring, not configuration.
@@ -73,6 +73,11 @@ type Deps struct {
 	// greyed-out composer gives away the exact property the flag exists to
 	// preserve. ADR-0009's insight was that absent beats forbidden.
 	Execution bool
+
+	// OAuthConfigured mirrors whether this Relay accepts OAuth bearer tokens
+	// (ADR-0024). It is presentation only: Access says OAuth sign-ins are not
+	// listed only where there can be some (20-access.md, D34).
+	OAuthConfigured bool
 
 	// Auth is the Console's sign-in service. It can start a session,
 	// end one, and re-prove human presence for step-up; it cannot RESOLVE

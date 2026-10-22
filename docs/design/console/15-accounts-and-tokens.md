@@ -3,7 +3,7 @@
 **No artboard.** Human and machine identities, roles, and the credentials that carry them.
 **Milestone v0.7.0.**
 
-**Governing:** ADR-0009, ADR-0010, ADR-0023, ADR-0024, ADR-0026, invariants #10, #11.
+**Governing:** ADR-0009, ADR-0010, ADR-0023, ADR-0024, ADR-0026, ADR-0045, invariants #10, #11.
 **Backend:** the Account model; API Token mint and revoke; step-up; audit.
 
 ## What this screen is for
@@ -19,6 +19,7 @@ refusal and every audit row are decided there, never on this screen. The step-up
 | Act | Step-up |
 |---|---|
 | Create an Account (any role, any kind) | yes |
+| Re-issue a temporary password | yes |
 | **Raise** a role | yes |
 | Re-enable a disabled Account | yes |
 | Mint an API Token | yes |
@@ -26,11 +27,11 @@ refusal and every audit row are decided there, never on this screen. The step-up
 | **Lower** a role | no |
 | Revoke an API Token | no |
 
-Owner decision, `2026-09-19`; the principle is under *The warning, restated*. A human Account
-created here cannot sign in with a password until one is set, and only `relay init --admin` on the
-host sets one, for the first admin. No capability seam can set one today. Any change to that is
-governed by the open decision #1107, recorded so far under [Your own password](#your-own-password);
-the screen draws no sentence about it (D34).
+Owner decision, `2026-09-19`; the principle is under *The warning, restated*. Creating a human
+Account issues it a **temporary password**, and the create's step-up covers it; re-issuing one is
+the same granting act (ADR-0045). Changing your own password is not on this screen and not in this
+matrix: it proves the current password on every change, and the recent-auth window never stands in
+for it ([Your own password](#your-own-password)).
 
 ## The warning, restated
 
@@ -110,6 +111,19 @@ A primary **New account** button in the page header opens a modal (D35; the moda
 - **Your password**, the step-up field, beside the primary **Create account** button that spends it
   (`00-foundations.md`, "Form controls").
 
+There is no password field for the new Account. **Creating a human Account issues it a temporary
+password**, which the Relay generates (ADR-0045 decision 1): the admin takes the act and never
+chooses the value. A machine Account gets none.
+
+The create of a human Account is, like a token mint, a write that does **not** post-redirect-get:
+its response shows the Account and its temporary password **once**, in the response body, with
+`Cache-Control: no-store`, never in a URL, a `Location` header or a browser history entry (see
+[API tokens](#api-tokens)). The only words beside the revealed value are **"Shown once."** and its
+expiry, drawn as data — "expires in 72 hours", the absolute UTC instant in the `title` — not as a
+note (D34). A machine Account's create redirects as before. The admin passes it to the person out of band. The person's first sign-in with it is
+forced to set their own password before anything else ([12](12-login.md), "Temporary password"),
+so the admin never knows the password the person keeps.
+
 A refused create keeps the modal open with the operator's input, except the password: a **banner
 above the modal's footer** gives the capability layer's refusal, and a field the refusal names is
 marked invalid, its message tied to the field by `aria-describedby`. These are situational messages
@@ -122,7 +136,8 @@ Accounts**. Its path cannot collide with an Account's page: an Account may be na
 
 **Edit** opens the same modal in edit mode (D35), headed by the Account's name and kind label. The
 modal is the Account's view: there is no separate detail screen to work in. It holds three
-sections, following the form-control rule in `00-foundations.md`.
+sections, and a fourth on a human Account that has not yet set its own password, following the
+form-control rule in `00-foundations.md`.
 
 **Role.** A role change is split by what it does to authority: **Raise role** (the roles above the
 current one, with the step-up password on the form, filled) and **Lower role** (the roles below it,
@@ -139,8 +154,15 @@ beside the step-up password.
 **Revoke** button in the danger style; and a mint form — token name, lifetime, the step-up
 password, and a filled **Mint token** button ([API tokens](#api-tokens)).
 
+**Temporary password**, on a human Account **whose human has never set their own password**
+only. It says whether the temporary password is live, with its expiry, or has expired, and offers
+**Issue new temporary password** beside the step-up password, filled (ADR-0045 decision 4). The
+response reveals the new value once, exactly as at creation, and the previous one stops being
+accepted. Once the Account's human has set a password, the section is not drawn: no control on any
+screen sets it again.
+
 **Without JavaScript**, Edit is a link to the Account's page, `/console/accounts/<name>`, which
-holds the same three sections and a **Back to Accounts** link. The name in the path only locates
+holds the same sections and a **Back to Accounts** link. The name in the path only locates
 the page; every form on it posts by Account ID, as the Control API does, so a renamed or reused
 name never redirects an act.
 
@@ -195,8 +217,8 @@ time, which is what makes "a token inherits its Account's role changes" true by 
 reveal-once discipline as spec 09, for the same reason. The only words beside the revealed value
 are **"Shown once."** (D34).
 
-The mint is the one write on this screen that does **not** post-redirect-get: a plaintext must
-never enter a URL, a `Location` header or a browser history entry, so it renders in the response
+The mint, and a temporary password's issue (at a human Account's create or by re-issue), are the
+writes on this screen that do **not** post-redirect-get: a plaintext must never enter a URL, a `Location` header or a browser history entry, so it renders in the response
 body, once, with `Cache-Control: no-store`. A mint made from the modal is an ordinary form post, so
 its response is that page; no script carries the value, and the modal is never re-opened onto it
 from a URL. A lifetime is a closed choice with no default — a forgotten field must never silently
@@ -207,25 +229,35 @@ on this screen may reintroduce one, and there is no such thing as a token not bo
 
 ## Your own password
 
-**Designed, pending ADR (#1107).** Nothing in this section is built, and no ADR for it exists yet.
-Until one merges, the statement under *What this screen is for* holds: only `relay init --admin`
-sets a Console password.
+**Designed** ([ADR-0045](../../adr/0045-console-passwords-temporary-at-creation-and-self-service-change.md),
+owner decisions `2026-10-21` and `2026-10-22`, #1107). Nothing in this section is built yet.
 
-Owner decision, `2026-10-21` (#1107): **a signed-in human Account may change only its own
-password.** There is no admin reset: no role, on this screen or any other, sets another
-Account's password.
+**A signed-in human Account changes only its own password.** There is no admin reset: no role, on
+this screen or any other, sets another Account's password, beyond the temporary password issued
+at creation and re-issued while it is unredeemed ([New account](#new-account),
+[Editing an Account](#editing-an-account)).
 
 - **Where.** A **your account** surface, reached from the signed-in block of the shell
-  ([11](11-console-shell.md)), not from the Accounts list, so it is not an `admin`-only act.
+  ([11](11-console-shell.md)), not from the Accounts list, so it is not an `admin`-only act. Any
+  signed-in human Account reaches it; a machine Account cannot hold a Console session.
 - **The form.** Current password, new password, and confirm new password, with a filled **Change
   password** button, and a hidden username field carrying the signed-in Account's name so password
   managers file the change against the right entry. A refusal is a banner above the button and an
   inline message on the field it names, as in [New account](#new-account).
-- **Left to the ADR:** whether proving the current password is the step-up or sits beside it;
-  rotating this session and revoking the Account's other sessions on change; the Access record it
-  writes ([20](20-access.md)); how a human Account created on this screen gets its *first* password
-  (host-only through `relay init`, or OAuth-only); and confirming under invariant 11 that changing
-  one's own password is reach, not security floor.
+- **The current password is the step-up, every time.** It is verified in the request on every
+  change and the recent-auth window never satisfies it: inside the window a hijacked session could
+  otherwise take the Account from its owner with no password at all. It is throttled and recorded
+  as a step-up (`step_up`, `step_up_failed`, `step_up_throttled`), with the same progressive delay
+  and no hard lockout ([12](12-login.md)).
+- **The new password** is 12 to 4096 bytes, differs from the current one, and matches its
+  confirmation. There are no composition rules.
+- **On success** this session's identifier rotates and **every other Console session of the
+  Account ends**. API Tokens are untouched. The screen returns with a one-line result.
+- **The forced change** is this same form. A sign-in with a temporary password opens a restricted
+  session that reaches only this form and sign-out ([12](12-login.md), "Temporary password"); the
+  current password it proves is the temporary one, and the change leaves an ordinary session.
+- **Recorded** on [20 — Access](20-access.md) as `password_change` — time, Account, source address,
+  whether it redeemed a temporary password — and never the password or its hash.
 
 ## Stopping one actor
 
@@ -242,9 +274,10 @@ authenticates nowhere; re-enabling is privilege-granting and takes step-up.
 - A token value after its mint response.
 - Any way to grant an Account something Node Policy would not permit — that is not expressible, and
   the UI must not imply it is.
-- A control that sets another Account's password (#1107).
-- A standing note restating the Policy ceiling, or saying how a Console-created Account gets a
-  password (D34).
+- A control that sets another Account's password, other than issuing a temporary password to a
+  human Account that has never set its own (ADR-0045).
+- A temporary password, or an API Token's value, after the response that reveals it.
+- A standing note restating the Policy ceiling, or explaining temporary passwords (D34).
 - Inline script, or any act a script performs instead of a form post ([11](11-console-shell.md)).
 
 ## States
@@ -276,4 +309,11 @@ authenticates nowhere; re-enabling is privilege-granting and takes step-up.
       the Console's external script, and every act in them is a CSRF-bearing POST.
 - [ ] With scripts off, New account and Edit reach pages that hold the same forms and a Back to
       Accounts link, and every act still works.
-- [ ] No control on any screen sets another Account's password.
+- [ ] No control on any screen sets another Account's password, except issuing a temporary
+      password to a human Account that has never set its own; that act takes step-up.
+- [ ] A temporary password is generated by the Relay, appears in exactly one response, expires
+      72 hours after issue, and stops being accepted when it is redeemed or re-issued.
+- [ ] A human changes their own password only by proving the current one in the same request; the
+      recent-auth window never satisfies it, and a change ends the Account's other sessions.
+- [ ] Every temporary-password issue and every change is a row on Access, carrying neither the
+      password nor its hash.

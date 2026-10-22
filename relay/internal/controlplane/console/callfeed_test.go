@@ -32,19 +32,6 @@ func TestConsoleRead_ARowThatCannotTellIsNotARead(t *testing.T) {
 	}
 }
 
-// TestCollapseNote_SpeaksWhenThereIsSomethingToSay: "" when nothing folded,
-// otherwise the counts of calls and the rows they fold into.
-func TestCollapseNote_SpeaksWhenThereIsSomethingToSay(t *testing.T) {
-	if got := collapseNote(0, 0); got != "" {
-		t.Errorf("collapseNote with nothing folded = %q, want empty", got)
-	}
-	got := collapseNote(7, 2)
-	want := "7 calls on this page are collapsed into 2 rows."
-	if got != want {
-		t.Errorf("collapseNote = %q, want %q", got, want)
-	}
-}
-
 // TestFoldRuns_ConsecutiveOnly: A, A, B, A folds to A(2), B, A — a match is
 // only ever sought against the last row already kept — and a row whose key
 // says it may not fold never does.
@@ -65,16 +52,5 @@ func TestFoldRuns_ConsecutiveOnly(t *testing.T) {
 	}
 	if got := foldRuns([]row(nil), key, fold); len(got) != 0 {
 		t.Errorf("foldRuns over nothing = %+v", got)
-	}
-}
-
-func TestFoldedSummary_CountsOnlyRowsThatFoldedSomething(t *testing.T) {
-	calls := func(n int) int { return n }
-	fc, fr := foldedSummary([]int{1, 4, 1, 3}, calls)
-	if fc != 7 || fr != 2 {
-		t.Errorf("foldedSummary = (%d, %d), want (7, 2)", fc, fr)
-	}
-	if fc, fr := foldedSummary([]int{1, 1}, calls); fc != 0 || fr != 0 {
-		t.Errorf("foldedSummary over unfolded rows = (%d, %d), want (0, 0)", fc, fr)
 	}
 }
