@@ -1,6 +1,7 @@
 # The Admin Console gains an execution surface
 
-**Status:** Accepted (2026-08-03); amended by ADR-0044.
+**Status:** Accepted (2026-08-03); amended by ADR-0044. Decision 7's second-person option is
+superseded by ADR-0047.
 
 Decision on issue #264, taken by the owner 2026-08-03. It **supersedes the no-execution clause
 of [ADR-0009](0009-admin-console-web-ui.md)** and amends AGENTS.md invariant #10. The rest of

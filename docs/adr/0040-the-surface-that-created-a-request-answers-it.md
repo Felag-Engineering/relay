@@ -2,7 +2,8 @@
 
 **Status:** Accepted (2026-09-24); amended 2026-09-25 — **strict separation withdrawn before any
 of it was built**; amended by ADR-0044 (2026-10-18) — **the Console no longer decides approvals**.
-**Explicitly interim** — see *What is interim, and what reopens it*.
+**Explicitly interim** — see *What is interim, and what reopens it*. Where it keeps the channel
+mechanism and second-person rules, it is superseded by ADR-0047.
 
 > **Read the amendment of 2026-09-25 first.** The title and the decision below describe strict
 > separation, which the owner withdrew one day later. What stands is narrower: MCP is the

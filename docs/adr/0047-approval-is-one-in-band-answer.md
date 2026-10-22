@@ -1,74 +1,70 @@
 # Approval is one in-band answer
 
-**Status:** Accepted (owner decision 2026-10-22). Supersedes ADR-0027 decisions 4, 7 and 12 and
-the second-person rung of its decision 5; supersedes ADR-0029 decisions 1 and 5 in part.
+**Status:** Accepted (owner decision 2026-10-22).
 
 Reasoning and objections: `docs/proposals/approval-answered-in-the-requesting-client.md`.
-Behaviour: `docs/specs/approval.md`.
+Behaviour: `docs/specs/approval.md`. This ADR supersedes ADR-0027 decisions 4 (in part), 7 and
+12, the second-person rung of decision 5, and decision 6's count, audience, requester exclusion,
+channel and audience union; ADR-0029 decisions 1, 4 and 5; ADR-0040 where it keeps the channel
+mechanism and second-person rules; ADR-0044 decisions 2 and 3 where they keep approval grants,
+quorum and channel strength; and ADR-0026 decision 7's second-person option.
 
 ## Decision
 
-Approval is as simple as it can be and still be honest. A gate rule says only which dispatches
-wait for a human and how long a parked request lives. One answer releases or denies it. Over
-MCP that answer comes only through elicitation: Relay writes the question, the harness puts it
-to a person, and the answer returns on the retried call. The `approve_request` tool, which let
-the AI-agent send a decision itself, is retired. Two-person approval, a Relay-held list of who
-may approve, out-of-band channel requirements and approval grants are cut from the product and
-its code; each waits in a proposal until it is designed. Who to ask is the client's routing.
+This ADR cuts Relay's approval mechanism to one answer per request. A gate rule says only which
+dispatches wait for a human and how long a parked request lives. One answer releases or denies
+it. Over MCP that answer comes only through elicitation: Relay writes the question, the
+requesting client puts it to a person, and the answer returns with the retried call. The
+`approve_request` tool, which let the AI-agent send a decision itself, is retired. Relay does
+not decide who is asked; the client routes the question. Multi-person approval, approver lists,
+channel requirements and standing approval windows are cut until each is designed.
 
 ## The decisions
 
 1. **A rule gates, and nothing more.** A gate rule names what it matches and how long a parked
-   request lives. It names no count, no audience, no requester exclusion and no channel; a rule
-   file naming any of them is refused at load, by field, so no existing rule changes meaning
-   silently. The ladder has two rungs: no gate, and confirmation.
+   request lives. It names no count, audience, requester exclusion or channel, and a rule that
+   names one is refused rather than reinterpreted. The ladder has two rungs: no gate, and
+   self-confirmation.
 2. **One decision ends a request.** The first decision that clears the remaining refusals
-   (pending and unexpired, the cited plan hash, the role floor of the request) releases it or
-   denies it. A denial is terminal.
-3. **Over MCP, the answer is elicited.** A gated call from a client Relay recognises returns a
-   Relay-written question, and the answer rides the retried call (ADR-0029's MRTR decisions,
-   unchanged). An answer on a human Account's OAuth session is that human's verified decision;
-   elsewhere it carries a responder assertion, recorded as asserted. A machine requester's own
-   request may be confirmed this way, which keeps Gleipnir's mutations answerable.
-4. **`approve_request` is retired.** A tool call is the model's own output, and harnesses often
-   allow tools without asking, so an approval sent that way can be the AI-agent approving
-   itself. A client Relay does not ask gets `pending_approval`.
-5. **The Control API decision endpoint is the recovery path.** It decides any parked request on
-   a verified Account, for a client that cannot be asked or a question stranded by a restart.
-   It is specified and kept out of the getting-started material. Its decisions record the
-   surface they came from, as every decision does; no rule demands one surface over another.
-6. **No approval grants.** Every gated dispatch parks and is answered on its own. A window
-   needs someone other than its requester to open it, which is n-party approval, so grants
-   wait with it.
-7. **Unchanged:** the gate's position before dispatch, the Relay-written content, the plan-hash
-   binding and re-park on drift, expiry, one approval releasing one Job, the two attribution
-   lanes, first-class audit records, and the webhook as an unfeatured best-effort notice (R43).
+   releases or denies it; a denial is terminal. Those refusals are: the request is pending and
+   unexpired, the cited plan hash is the request's, the decider clears the request's role floor,
+   and a machine Account deciding its own request does so only through decision 3's form.
+3. **Over MCP, the answer is elicited**, under ADR-0029's MRTR decisions, which stand. A machine
+   requester's own request may be confirmed by an elicited answer carrying a responder
+   assertion, recorded as asserted; that keeps Gleipnir's mutations answerable. Gleipnir is the
+   first-party AI-agent system that drives Relay.
+4. **`approve_request` is retired**, and so is ADR-0029 decision 5's exception that let its one
+   file in the MCP package name a decision identifier. A tool call is the model's own output,
+   and harnesses often allow tools without asking, so an approval sent that way can be the
+   AI-agent approving itself.
+5. **The Control API decision endpoint is the rescue.** It decides any parked request on a
+   verified Account, for a client that cannot be asked or a question a restart stranded. It is
+   specified, and kept out of the getting-started material. Every decision records the surface
+   it came from; no rule demands one surface over another.
+6. **No approval grants.** Every gated dispatch parks and is answered on its own. An approval
+   window needs someone other than its requester to open it, which is multi-person approval, so
+   approval grants wait with it.
+
+ADR-0027's other decisions stand.
 
 ## Why
 
-The product's users answer approvals through Gleipnir, which already routes a question to the
-right person and the right channel, including Slack. Relay holding a second copy of who should
-answer, and enforcing quorums and channels no surface lets a human meet, was machinery with no
+People answer Relay's approvals through Gleipnir, which already routes a question to the right
+person on the right channel, Slack included. Relay holding its own copy of who should answer,
+and enforcing quorums and channels that no surface lets a person meet, was machinery with no
 workflow behind it: a rule that left those fields out silently demanded a second person on a
-path nobody was told to use. Cutting it leaves a small mechanism whose every part is reachable.
+path nobody was told to use. What remains is small, and every part of it is reachable.
 
-Elicitation is not proof against everything. A client that controls the harness, or holds a
-stolen machine credential, can declare itself Gleipnir and answer its own question; only an
-answer on a human's own OAuth session names a verified approver. That residual is R21, narrowed
-here by removing the tool, the likeliest way a prompt-injected model approves its own work.
+Elicitation is not proof against a client that controls its own harness. That residual is R21,
+narrowed here by removing the tool.
 
 ## What changes
 
 - **Cut from code:** the `approve_request` tool; a rule's count, audience, requester exclusion
   and channel; channel-strength checks; approval grants and their API.
-- **Proposals:** `n-party-approval.md` (more than one approver, a Relay-held audience, grants, a
-  Slack approval with two presses) and `out-of-band-approval.md` (a channel requirement Relay
-  verifies, and the shelved assurance in `approval-assurance.md`).
-- **Threat model:** R18 (audience union) and R25 (grant bounds) close with the code; R21 loses
-  its `approve_request` half and its "raise the rule to out-of-band" mitigation; R27 loses the
-  `approve_request` workaround.
-- **Docs:** the README tool table, the approval and demo-fleet runbooks, the glossary, `plan.md`,
-  `how-relay-works.md`, and the test fleet's gate rules.
+- **Proposals:** `n-party-approval.md` (more than one approver, a Relay-held audience, approval
+  grants, a Slack approval) and `out-of-band-approval.md` (a channel Relay verifies).
+- **Threat model:** R18 and R25 close with the code; R21 and R27 lose `approve_request`.
 
 ## Alternatives
 
@@ -76,6 +72,5 @@ here by removing the tool, the likeliest way a prompt-injected model approves it
   in an approval system are what an auditor distrusts first.
 - **Keep the tool for clients Relay cannot ask.** Those are the clients with no human-routing
   standard behind them.
-- **Make elicitation the only path permanently, and drop the Control API.** Deferred to the
-  identity work (ADR-0041): a verified approver over MCP does not exist yet in the shipped
-  posture, which ADR-0044 named as the condition.
+- **Make elicitation the only path and drop the Control API.** Not until an MCP answer can name
+  a verified approver on every client, which is the identity work (ADR-0041).
