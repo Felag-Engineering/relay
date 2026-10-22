@@ -1,8 +1,9 @@
 # Approval
 
-**Status:** designed, not built, as of `2026-10-22`.
+**Status:** current as of `2026-10-22`.
 **Claim prefix:** `AP`
-**Governed by:** ADR-0047, ADR-0027, ADR-0029, ADR-0044, ADR-0038; invariants 5, 10, 11, 13.
+**Governed by:** ADR-0047, ADR-0027, ADR-0029, ADR-0044, ADR-0038, ADR-0043; invariants 5, 10, 11,
+13.
 
 ## Purpose
 
@@ -17,7 +18,7 @@ says what waits, one answer releases or denies it, and Relay does not decide who
 
 | Surface | How it is reached |
 |---|---|
-| **MCP** | **MRTR elicitation.** A gated `tools/call` answers with an input-required result carrying a Relay-written question; the client puts it to a person and retries the call carrying the answer (AP-60 … AP-79). No MCP tool records a decision (AP-83). |
+| **MCP** | **MRTR elicitation.** A gated `tools/call` answers with an input-required result carrying a Relay-written question; the client puts it to a person and retries the call carrying the answer (AP-60 … AP-79). No MCP tool records a decision (AP-83), and a park is never an MCP task handle (AP-85). |
 | **Control API** | `GET /api/v1/approvals`, `GET /api/v1/approvals/{id}`, `POST /api/v1/approvals/{id}/decision`: the rescue, for a client that cannot be asked or a question a restart stranded (AP-80). Specified here, and not featured in getting-started material. |
 | **Admin Console** | None (AP-80): no queue, no request screen, no decision. It renders what an approval left on other records. |
 
@@ -36,15 +37,16 @@ the conformant form (ADR-0029).
 
 **Gate rules**
 
-- **AP-4** Gate rules are an optional root-owned file loaded at Relay startup and re-read on
-  every successful configuration reload; with no file configured there is no gate.
-- **AP-5** No API Token and no MCP tool can write gate rules.
+- **AP-4** Gate rules are a section of the Relay configuration file (`relay-configuration.md`),
+  read at startup and on every successful reload; a configuration with no rules gates nothing.
+- **AP-5** No API route and no MCP tool can write gate rules.
 - **AP-6** A gate rule only adds a gate; it never waives a guardrail.
-- **AP-7** Packaging ships no gate-rule file, so a fresh install is ungated.
-- **AP-8** A configured gate-rule file that cannot be loaded refuses Relay startup.
+- **AP-7** The package ships a configuration whose rules gate every `mutate` and every Raw Exec,
+  so a fresh install is gated; `read` is not.
+- **AP-8** A gate rule that cannot be parsed refuses Relay startup, like any configuration error.
 - **AP-81** A gate rule names what it matches and how long a request it parks lives, and nothing
   else. A rule naming a count, an audience, a requester exclusion or a channel is refused when
-  the file loads, naming the field.
+  the configuration loads, naming the field.
 
 **Answering**
 
@@ -73,7 +75,6 @@ the conformant form (ADR-0029).
 - **AP-67** A retry whose decision already released a Job re-attaches to it and mints no second.
 - **AP-68** A denial on the retry is terminal and audited, and nothing is dispatched.
 - **AP-70** A client that cannot be asked gets `pending_approval`; the Control API is its path.
-- **AP-71** A park that emitted a question emits no MCP task envelope.
 - **AP-80** The Control API decision endpoint decides any parked request on a per-person or
   machine Account, recording the channel `out-of-band`. The Admin Console has no approval
   surface and renders approval records only where another record shows them.
@@ -97,9 +98,6 @@ the conformant form (ADR-0029).
   arguments and the resolved fan-out.
 - **AP-21** A dispatch whose plan no longer matches parks again rather than running.
 - **AP-22** The binding is by identity, never by count: any Node not in the approved set parks.
-- **AP-23** A shape key addresses what an approval is for, excluding the fan-out, and is stable
-  across runs.
-- **AP-24** The shape key never authorizes or releases anything; only a matching plan hash does.
 - **AP-25** A parked request expires after an operator-set time, 4 hours by default, and is
   swept; the work must be requested again.
 
@@ -124,16 +122,10 @@ the conformant form (ADR-0029).
 | **AP-46** | Plan changed | The cited plan hash is not the request's |
 | **AP-48** | Machine self-decision | A machine Account deciding its own request other than under AP-64 |
 | **AP-49** | Role floor | The decider is below the floor the Action needed to be requested |
-| **AP-54** | Approvals unavailable | A configured gate file could not be loaded |
+| **AP-54** | Approvals unavailable | The configuration's gate rules could not be parsed |
 | **AP-83** | No decision tool | No MCP tool records a decision; `approve_request` does not exist |
 | **AP-84** | No approval grants | No surface requests, issues or claims an approval grant |
-
-## Designed, not built
-
-| Claim | Statement | Milestone |
-|---|---|---|
-| AP-72 | Gate rules are runtime objects in the Relay's store, edited only by a human `admin` in the Admin Console with step-up re-authentication, audited per rule with old and new values, and in effect from the next dispatch; no MCP tool and no Control API route writes them, and none may be added. Retires AP-4, AP-8 and AP-54. | v0.7.0 — Admin Console: Administration & Execution |
-| AP-55 | A Relay whose store holds no gate rules at first start seeds, once, as an audited act of the system: `read` ungated, `mutate` and Raw Exec gated. It never re-seeds. Retires AP-7; depends on AP-72. | v0.7.0 — Admin Console: Administration & Execution |
+| **AP-85** | No task handle | A parked request is never rendered as an MCP task handle |
 
 ## Out of scope
 
@@ -141,10 +133,12 @@ the conformant form (ADR-0029).
 - **The Plan a decision releases:** `plan.md`. A Plan's gated steps park through this gate.
 - **Who is asked:** the requesting client's routing. Gleipnir routes by its own audiences and
   channels.
-- **More than one approver, a Relay-held audience, and approval grants:**
-  `docs/proposals/n-party-approval.md`. **A channel Relay verifies:**
-  `docs/proposals/out-of-band-approval.md`. **A diff against the last similar approval:**
-  `docs/proposals/approval-diff-against-last-similar.md`.
+- **Future work, in `docs/proposals/`:** more than one approver, a Relay-held audience and
+  approval grants (`n-party-approval.md`); a channel Relay verifies (`out-of-band-approval.md`);
+  editing rules in the Console (`gate-rules-in-the-console.md`); a diff against the last similar
+  approval, with the shape key (`approval-diff-against-last-similar.md`); asking more clients and
+  always-on agents (`approval-for-more-clients-and-always-on-agents.md`); MCP Tasks for long Jobs
+  (`mcp-tasks-for-long-running-jobs.md`).
 - **Residual risk:** the threat model's register, R21 (an answer is only as honest as the
   client), R23, R24, R26, R27 and R43.
 - **The Freeze:** a global stop, not a per-request judgement (`freeze.md`).
@@ -168,13 +162,12 @@ Generated by `make spec-proof` from tests whose leading comment names the claim.
 | AP-67 | `TestAnsweredRetry_BoundJobReAttaches`, `TestMCPElicitation_DuplicateRetryReAttaches`, `TestRun_ReAttachThatCannotBeAuditedReturnsNothing` | Relay, capability |
 | AP-68 | `TestAnsweredRetry_DeclineIsTerminalAndDispatchesNothing`, `TestMCPElicitation_DeclineIsTerminalAndAudited` | Relay |
 | AP-70 | `TestAnsweredRetry_ClientThatCannotBeAskedIgnoresRetryFields`, `TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange`, `TestElicit_ClaudeCodeRetryOnAnAPITokenSessionIsAnOrdinaryCall`, `TestElicit_OptionOffChangesNothing`, `TestElicit_UnrecognisedClientsRetryFieldsAreIgnored`, `TestMCPElicitation_ClientThatCannotBeAskedSeesNoChange`, `TestPlanPreflightNeverEmitsAQuestion` | MCP, Relay |
-| AP-71 | `TestElicit_ElicitedParkEmitsNoTaskEnvelope`, `TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E`, `TestMCPElicitation_ElicitedParkEmitsNoTaskEnvelope` | MCP, Relay |
 | AP-77 | `TestApprovalRelease_DifferentAccountReAttachesAndRunsNothing`, `TestApprovalRelease_ReDriveOnAnySurfaceReAttaches`, `TestBindJob_BindsOnceAndReportsTheBoundJob`, `TestBindJob_ConcurrentClaimsExactlyOneWins`, `TestJobEngine_RunUsesTheReservedJobID`, `TestMCPElicitation_DuplicateRetryReAttaches`, `TestRun_ConcurrentReDrivesDispatchExactlyOneJob`, `TestRun_DifferentRequesterReAttachesToTheReleasedJob`, `TestRun_ReDriveOfAReleasedApprovalReAttachesAndDispatchesNothing`, `TestRun_ReleasedApprovalPastItsDeadlineParksAfresh`, `TestRun_ReleasedApprovalReAttachesEvenWhenAGrantCoversThePlan`, `TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch` | Relay, capability, store |
 | AP-78 | `TestConnectOptions_ClientNameTravelsInClientInfo`, `TestElicit_ClaudeCodeOnAnAPITokenSessionIsNotAsked`, `TestElicit_UnrecognisedMRTRClientGetsPendingApproval`, `TestElicit_WhoIsAskedByNameAndSession`, `TestElicitedAnswer_OAuthHumanSessionAnswerIsTheHumansVerifiedDecision`, `TestElicitedAnswer_ResponderOnAnOAuthHumanSessionIsIgnored`, `TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName`, `TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals`, `TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsNotAskedAndNotAccepted`, `TestMCPElicitation_ClaudeCodeOnAnAPITokenSessionIsNotAsked`, `TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestMCPElicitation_SpoofedClaudeCodeOnANonOAuthSessionEarnsNothing`, `TestMCPElicitation_UnrecognisedMRTRClientGetsPendingApproval` | MCP, Relay, e2e |
 | AP-79 | `TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified`, `TestE2EOAuth_ApproveRequestOnAHumanSessionStillRecordsAnAssertion`, `TestElicitedAnswer_FailureAfterAVerifiedDecisionMayHaveBeenRecorded`, `TestElicitedAnswer_OAuthHumanSessionAnswerIsTheHumansVerifiedDecision`, `TestElicitedAnswer_OAuthHumanSessionDeclineIsADenial`, `TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts`, `TestElicitedAnswer_ResponderOnAnOAuthHumanSessionIsIgnored`, `TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName`, `TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals`, `TestMCPElicitation_ClaudeCodeHumanAnswerMeetsTheSameRefusals`, `TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsNotAskedAndNotAccepted`, `TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestMCPElicitation_HumanAPITokenSessionStillNeedsAResponder`, `TestMCPElicitation_MachineOAuthSessionNeverTakesTheVerifiedPath`, `TestMCPElicitation_ResponderOnAnOAuthHumanSessionIsIgnored`, `TestMCPElicitation_SpoofedClaudeCodeOnANonOAuthSessionEarnsNothing` | MCP, Relay, capability |
 | AP-80 | `TestApprovalCallout_PartialQuorumIsReadFromTheControlAPI`, `TestApprovalCallout_TheConsoleHasNoApprovalSurface`, `TestApprovalReader_ReadsOneRecordAndCannotListOrDecide`, `TestConsole_ADecisionPostOnARealSessionFindsNothing`, `TestConsole_HasNoApprovalSurface` | Console, Relay |
 
-Unproven: AP-1, AP-3, AP-4, AP-5, AP-6, AP-7, AP-8, AP-10, AP-11, AP-12, AP-18, AP-20, AP-22, AP-23, AP-24, AP-27, AP-28, AP-38, AP-39, AP-40, AP-41, AP-42, AP-46, AP-48, AP-49, AP-54, AP-81, AP-82, AP-83, AP-84.
+Unproven: AP-1, AP-3, AP-4, AP-5, AP-6, AP-7, AP-8, AP-10, AP-11, AP-12, AP-18, AP-20, AP-22, AP-27, AP-28, AP-38, AP-39, AP-40, AP-41, AP-42, AP-46, AP-48, AP-49, AP-54, AP-81, AP-82, AP-83, AP-84, AP-85.
 <!-- proof:end -->
 
 ## Retired
@@ -184,6 +177,10 @@ Unproven: AP-1, AP-3, AP-4, AP-5, AP-6, AP-7, AP-8, AP-10, AP-11, AP-12, AP-18, 
   second-person rung, channel strength, quorum, audiences and requester exclusion are cut
   (ADR-0047; AP-81, AP-82).
 - **AP-15** — `2026-10-22` — `approve_request` is retired (ADR-0047; AP-83).
+- **AP-23**, **AP-24** — `2026-10-22` — the shape key is cut (ADR-0047).
+- **AP-55**, **AP-72** — `2026-10-22` — retired unbuilt: rules stay in the configuration file, and
+  the package ships the default (ADR-0047; AP-4, AP-7).
+- **AP-71** — `2026-10-22` — the MCP Tasks shim is removed (ADR-0047; AP-85).
 - **AP-29**, **AP-30**, **AP-31**, **AP-32**, **AP-33**, **AP-34**, **AP-35**, **AP-36**,
   **AP-37**, **AP-50**, **AP-51**, **AP-52**, **AP-53**, **AP-56**, **AP-57** — `2026-10-22` —
   approval grants are cut (ADR-0047; AP-84).
