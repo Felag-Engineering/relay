@@ -1000,11 +1000,7 @@ func main() {
 	go watchFreezeSignals(context.Background(), deps.freezeControl)
 	// SIGHUP reloads the configuration file (reload_signal.go).
 	go watchReload(context.Background(), hup, newReloader(path, sc, deps, logs, os.Stderr))
-	lis, err := net.Listen("tcp", cfg.Addr) //nolint:noctx // process-lifetime listener opened at startup; there is no context to bound it
-	if err != nil {
-		slog.Error("listen failed", "addr", cfg.Addr, "err", err)
-		os.Exit(1)
-	}
+	lis := mustListen(cfg.Addr, "listen failed")
 	slog.Info("relay listening",
 		"version", version.Version,
 		"commit", version.Commit,
@@ -1032,58 +1028,75 @@ func main() {
 	// goroutine, its own lifecycle. deps.control is nil unless
 	// cfg.ControlEnabled, so this is a no-op on the default (disabled) path.
 	if deps.control != nil {
-		controlLis, err := net.Listen("tcp", cfg.ControlAddr) //nolint:noctx // process-lifetime listener opened at startup; there is no context to bound it
-		if err != nil {
-			slog.Error("control-plane listen failed", "addr", cfg.ControlAddr, "err", err)
-			os.Exit(1)
-		}
-		slog.Info("control-plane listening",
-			"addr", cfg.ControlAddr,
-			"credential_configured", true,
-		)
-		go func() {
-			if err := deps.control.Serve(controlLis); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				slog.Error("control-plane serve failed", "err", err)
-				os.Exit(1)
-			}
-		}()
+		listenAndServeControl(deps.control, cfg.ControlAddr)
 	}
-
-	// The approval expiry sweeper (ADR-0027): retire parked Requests
-	// whose TTL has passed, so the queue does not fill with zombies.
-	//
-	// The sweeper is HOUSEKEEPING, not the expiry guarantee. A lapsed Request
-	// is already undecidable and unredeemable by the clock alone
-	// (approval.Request.PastDeadline), so a sweeper that stalls cannot make a
-	// stale approval usable — it only leaves the stored state looking live for
-	// longer than it is. That is why a sweep error logs and continues rather
-	// than taking the process down.
 	if deps.store != nil {
-		sweeper := approval.NewSweeper(deps.store.Approvals(), approval.DefaultSweepInterval, nil,
-			func(ctx context.Context, r approval.Request) {
-				slog.Info("approval request expired",
-					"request_id", r.ID, "requested_by", r.RequestedBy,
-					"plan_hash", r.PlanHash, "expires_at", r.ExpiresAt)
-				if err := auditExpiry(ctx, deps, r); err != nil {
-					slog.Error("record approval expiry in audit", "request_id", r.ID, "err", err)
-				}
-			})
-		go sweeper.Run(context.Background(), func(err error) {
-			slog.Error("approval sweep failed", "err", err)
-		})
-
-		// The audit chain checkpoint: a metadata-only log line an
-		// operator keeps as an anchor for relay-audit-verify -expect.
-		go auditsink.NewCheckpointer(deps.store.AuditChain(), auditsink.DefaultCheckpointInterval, deps.logger).
-			Run(context.Background(), func(err error) {
-				slog.Error("audit chain checkpoint failed", "err", err)
-			})
+		startHousekeeping(deps)
 	}
 
 	if err := srv.Serve(lis); err != nil {
 		slog.Error("serve failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+// mustListen opens a process-lifetime TCP listener, logging failMsg and
+// exiting when the address cannot be bound.
+func mustListen(addr, failMsg string) net.Listener {
+	lis, err := net.Listen("tcp", addr) //nolint:noctx // process-lifetime listener opened at startup; there is no context to bound it
+	if err != nil {
+		slog.Error(failMsg, "addr", addr, "err", err)
+		os.Exit(1)
+	}
+	return lis
+}
+
+// listenAndServeControl binds the control-plane listener and serves it in its own
+// goroutine; a serve failure other than a clean close ends the process.
+func listenAndServeControl(control *controlplane.Server, addr string) {
+	lis := mustListen(addr, "control-plane listen failed")
+	slog.Info("control-plane listening",
+		"addr", addr,
+		"credential_configured", true,
+	)
+	go func() {
+		if err := control.Serve(lis); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("control-plane serve failed", "err", err)
+			os.Exit(1)
+		}
+	}()
+}
+
+// startHousekeeping starts the background loops that read the store.
+//
+// The approval expiry sweeper (ADR-0027) retires parked Requests whose TTL has
+// passed, so the queue does not fill with zombies. It is HOUSEKEEPING, not the
+// expiry guarantee. A lapsed Request is already undecidable and unredeemable
+// by the clock alone (approval.Request.PastDeadline), so a sweeper that stalls
+// cannot make a stale approval usable — it only leaves the stored state
+// looking live for longer than it is. That is why a sweep error logs and
+// continues rather than taking the process down.
+//
+// The audit chain checkpointer logs a metadata-only line an operator keeps as
+// an anchor for relay-audit-verify -expect.
+func startHousekeeping(deps *appDeps) {
+	sweeper := approval.NewSweeper(deps.store.Approvals(), approval.DefaultSweepInterval, nil,
+		func(ctx context.Context, r approval.Request) {
+			slog.Info("approval request expired",
+				"request_id", r.ID, "requested_by", r.RequestedBy,
+				"plan_hash", r.PlanHash, "expires_at", r.ExpiresAt)
+			if err := auditExpiry(ctx, deps, r); err != nil {
+				slog.Error("record approval expiry in audit", "request_id", r.ID, "err", err)
+			}
+		})
+	go sweeper.Run(context.Background(), func(err error) {
+		slog.Error("approval sweep failed", "err", err)
+	})
+
+	go auditsink.NewCheckpointer(deps.store.AuditChain(), auditsink.DefaultCheckpointInterval, deps.logger).
+		Run(context.Background(), func(err error) {
+			slog.Error("audit chain checkpoint failed", "err", err)
+		})
 }
 
 // auditExpiry records a lapsed approval Request in the audit trail. An approval
