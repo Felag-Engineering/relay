@@ -40,9 +40,11 @@ are in [`AGENTS.md`](../AGENTS.md).
    group the security lane targets, and the AI-agent cannot relabel the fleet.
 4. **Relay bounds the blast radius.** A hard cap on how many Nodes one call may reach is
    enforced before anything is sent. Mutating Operations have a tighter cap than reads.
-5. **A human may have to say yes.** Approval rules make chosen dispatches wait for a human,
-   who answers out of band after proving who they are. The AI-agent cannot approve its own
-   request, and the surface that created a request never decides it.
+5. **A human may have to say yes.** Approval rules make chosen dispatches wait for a human.
+   Relay writes the question, the AI-agent's harness is expected to put it to a person and never
+   to the model, and the answer binds to exactly what that person was shown. Routing the
+   question honestly is the harness's job, and the record says which approvals Relay verified
+   and which a client asserted.
 6. **Each Node decides for itself.** The daemon receives a Task for exactly this Operation and
    these arguments, checks its own Policy, and refuses or runs. Policy is deny by default, a
    deny always beats an allow, and it can be as specific as a single argument value.
