@@ -16,12 +16,12 @@ This ADR supersedes in part ADR-0032, ADR-0030, ADR-0031 and ADR-0006, and amend
 ## Decision
 
 Adding Nodes is two pastes and nothing to clean up, and no secret lands on a Node. An admin says
-how many Nodes a token is for; it is good for exactly that many joins and expires in two hours,
-so nobody has to revoke it. Relay shows the command, `sudo relay-daemon join`, and the join string
-to paste at its prompt; the string is never part of a command line, a file or a shell history on
-the Node. Fleets run the same command through an SSH loop or the Ansible role each release ships.
-Labels at mint are optional, because every Node gets `relay:node-id`. Cloud VMs wait for
-attestation rather than carry a token in user data.
+how many Nodes a token is for; it is good for exactly that many joins and expires in two hours
+by default, so nobody has to revoke it. Relay shows the command, `sudo relay-daemon join`, and
+the join string to paste at its prompt; the string is never part of a command line, a file or a
+shell history on the Node. Fleets use an SSH loop or the release's Ansible role. Labels at mint
+are optional, because every Node gets `relay:node-id`. Cloud VMs wait for attestation rather
+than carry a token in user data.
 
 ## The decisions
 
@@ -70,7 +70,9 @@ tokens, at the cost of one extra paste.
   work reconciled. `relay-configuration.md` RC-28 and `selectors-and-labels.md` follow.
 - `GLOSSARY.md`: *Enrollment Bundle* retired; *Enrollment Token* updated.
 - The threat model: the enrollment boundary row, R16 and R36, and R44 for decision 5.
-- `docs/design/console/09-add-nodes.md` is redesigned when v0.7.0 builds the screen.
+- `quarantine-node.md`, the spec index, and the Console's incident-ladder screen drop
+  `relay:enrollment-token`; `docs/design/console/09-add-nodes.md` is redesigned at v0.7.0.
+- ADR-0006, 0030, 0031, 0032 and 0033 each carry a note pointing here.
 
 ## Alternatives
 

@@ -65,9 +65,9 @@ un-revoke itself.
 - **No user ever writes a `relay:` label directly.** Each `relay:` key is defined together with
   the action that sets and clears it; roles, step-up and audit apply to that action.
 - The set of `relay:` keys is **closed, and grows only when an action is built.** Two kinds of
-  key are in it: keys an action defines, in the table, and the keys of an Enrollment Token's
-  scope, which the minting `admin` defines for the enrollment action (ADR-0006, amended
-  2026-10-22) and which may never name a key from the table. Defined by an action:
+  key are in it: keys an action defines or reserves, in the table, and the keys of an Enrollment
+  Token's scope, which the minting `admin` defines for the enrollment action (ADR-0006, amended
+  2026-10-22) and which may never name a key from the table. Defined or reserved by an action:
 
   | Key | Written by | Value |
   |---|---|---|
@@ -79,8 +79,9 @@ un-revoke itself.
   (`enrollment.md` EN-38). A value set would address a handful.
 - `relay:enrollment-token` has no writer; a leaked token's Nodes are contained by revoking it
   (`enrollment.md`).
-- An Enrollment Token carries a scope of `relay:` labels, optional (`enrollment.md` EN-37), chosen by the `admin` who mints it and
-  stamped on each Node that enrolls with it (ADR-0006, `enrollment.md` EN-3, EN-12). The
+- An Enrollment Token carries an optional scope of `relay:` labels, chosen by the `admin` who
+  mints it and stamped on each Node that enrolls with it (ADR-0006, `enrollment.md` EN-12,
+  EN-37). The
   2026-09-14 draft that carried `tag:` labels on a token in place of that scope was retired
   unbuilt on 2026-10-21; whether a token may also carry `tag:` labels once `tag:` has storage is
   an open question in `enrollment.md`.
@@ -221,10 +222,9 @@ disclosed residual (threat-model register R13) with operator-facing remediation.
 - **Invariant 5** (ADR-0004) — the cap is checked against the *resolved* count.
 - **Invariant 10** — one parser and one resolver in the capability layer; no surface evaluates a
   Selector itself.
-- **ADR-0006, amended 2026-10-22.** Enrollment stamps the token's scope as `relay:` labels; the
-  scope is the enrollment action's key set, defined at mint, and a mint refuses a key an action
-  in the table owns. Neither `relay:enrollment-token` nor `relay:node-id` is written today
-  (ADR-0048).
+- **ADR-0006, amended 2026-10-22, and ADR-0048.** Enrollment's key set is the token's optional
+  scope plus `relay:node-id`, and a mint refuses a key the table owns or reserves. Neither
+  `relay:node-id` nor `relay:enrollment-token` is written today.
 - **ADR-0020 — amended 2026-09-16.** Its direct post-enrollment `relay:` label management (`admin` +
   step-up) is superseded: `relay:` labels are written only by defined actions. Its `tag:` design
   stands, extended to MCP.
