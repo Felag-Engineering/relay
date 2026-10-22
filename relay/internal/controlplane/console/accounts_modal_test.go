@@ -34,10 +34,10 @@ func TestAccounts_TheListLoadsTheAccountsScriptAndNothingInline(t *testing.T) {
 	h, body, _ := accountsWriteRecorder(t, accountsScreenPath)
 
 	srcs := scriptSources(body)
-	if len(srcs) != 1 || srcs[0] != "/console/assets/accounts.js" {
-		t.Fatalf("the list loads scripts %v, want exactly /console/assets/accounts.js", srcs)
+	if len(srcs) != 1 || srcs[0] != accountsScript {
+		t.Fatalf("the list loads scripts %v, want exactly %s", srcs, accountsScript)
 	}
-	if !strings.Contains(body, `<script src="/console/assets/accounts.js" defer></script>`) {
+	if !strings.Contains(body, `<script src="`+accountsScript+`" defer></script>`) {
 		t.Errorf("the script tag is not the layout's external src+defer shape")
 	}
 

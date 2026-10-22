@@ -383,7 +383,7 @@ func handleAccounts(d Deps) http.HandlerFunc {
 }
 
 // accountsScript opens New account and Edit in a dialog; see accounts.js.
-const accountsScript = "/console/assets/accounts.js"
+var accountsScript = assetURL("accounts.js")
 
 // accountKinds is the closed Account kind set, from the domain's constants.
 func accountKinds() []string {

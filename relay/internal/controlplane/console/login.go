@@ -47,8 +47,9 @@ const (
 	// arguing about.
 	LogoutPath = "/console/logout"
 
-	// AssetsPrefix is the stylesheet the sign-in page needs. Static CSS,
-	// served from this origin, disclosing nothing.
+	// AssetsPrefix is the Console's static assets: the stylesheet, fonts,
+	// brand SVGs and scripts, hashed and unhashed. Static files served from
+	// this origin, disclosing nothing.
 	AssetsPrefix = "/console/assets/"
 
 	// HomePath is where a signed-in operator lands.
@@ -95,7 +96,8 @@ type Authenticator interface {
 }
 
 // Unauthenticated reports whether r targets the Console's unauthenticated
-// surface: the sign-in page and the stylesheet it needs, and nothing else.
+// surface: the sign-in page and the static assets under AssetsPrefix, and
+// nothing else.
 //
 // This predicate is the ONLY hole punched in the control plane's auth wrapper
 // besides RFC 9728 metadata and the fixed GET / redirect, so its extent is asserted exactly in
@@ -300,18 +302,18 @@ type loginView struct {
 	Interrupted bool
 }
 
-var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html>
+var loginTmpl = template.Must(template.New("login").Funcs(template.FuncMap{"asset": assetURL}).Parse(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign in &mdash; Relay Console</title>
-<link rel="stylesheet" href="/console/assets/console.css">
-<link rel="icon" type="image/svg+xml" href="/console/assets/brand/relay-icon.svg">
+<link rel="stylesheet" href="{{asset "console.css"}}">
+<link rel="icon" type="image/svg+xml" href="{{asset "brand/relay-icon.svg"}}">
 </head>
 <body class="loginpage">
 <main class="loginbox">
-  <div class="brand"><picture><source media="(prefers-color-scheme: light)" srcset="/console/assets/brand/relay-wordmark-light.svg"><img src="/console/assets/brand/relay-wordmark-dark.svg" alt="Relay"></picture> <span>console</span></div>
+  <div class="brand"><picture><source media="(prefers-color-scheme: light)" srcset="{{asset "brand/relay-wordmark-light.svg"}}"><img src="{{asset "brand/relay-wordmark-dark.svg"}}" alt="Relay"></picture> <span>console</span></div>
   {{if .Interrupted}}<p class="loginnote">Your session ended before that action completed. Sign in to pick it back up.</p>{{end}}
   {{if .Message}}<p class="loginmsg{{if .Throttled}} slow{{end}}" role="alert">{{.Message}}</p>{{end}}
   <form method="post" action="/console/login" autocomplete="on">

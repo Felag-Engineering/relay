@@ -43,8 +43,9 @@ import (
 )
 
 // assetPath is the only src a Console page may load: one plain file directly
-// under /console/assets/. No traversal, no directory, no origin.
-var assetPath = regexp.MustCompile(`^/console/assets/[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`)
+// under /console/assets/HASH/, HASH being the current content hash. No
+// traversal, no directory, no origin.
+var assetPath = regexp.MustCompile(`^` + regexp.QuoteMeta(AssetsPrefix+assetHash+"/") + `[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`)
 
 // inlineHandler matches an on*= event-handler attribute in any of three
 // shapes: immediately preceded by whitespace or a quote (`<button
@@ -270,7 +271,7 @@ func assertNoInlineScript(t *testing.T, path, body string) {
 				"external file from this origin", path, openTag)
 		} else if !assetPath.MatchString(src) {
 			t.Errorf("%s: a <script> element loads %q — the only permitted shape is one plain file "+
-				"under /console/assets/", path, src)
+				"under /console/assets/HASH/", path, src)
 		}
 
 		// An event-handler attribute on the tag IS inline script, and it

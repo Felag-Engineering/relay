@@ -592,7 +592,7 @@ func handleFleet(d Deps) http.HandlerFunc {
 
 // freshnessScript advances the page's "rendered ... ago" words; see
 // assets/freshness.js.
-const freshnessScript = "/console/assets/freshness.js"
+var freshnessScript = assetURL("freshness.js")
 
 // Rendered is how old this page is, at render (00-foundations.md, "How old a
 // page is").

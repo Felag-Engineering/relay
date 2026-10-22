@@ -223,7 +223,7 @@ func TestActivity_RunningNowEntryIsMarkedFinishedInPlace(t *testing.T) {
 	// Under a kind with no live rows the section is still live while
 	// something is running, and nothing mounts when nothing is.
 	refusal := get(t, h, "/console/activity?kind=refusal").Body.String()
-	if !strings.Contains(refusal, "data-live-region") || !strings.Contains(refusal, `src="/console/assets/activity.js"`) {
+	if !strings.Contains(refusal, "data-live-region") || !strings.Contains(refusal, `src="`+assetURL("activity.js")+`"`) {
 		t.Error("?kind=refusal with a running Job does not mount the live region for Running now")
 	}
 	idle := cancelDeps(&fakeQueries{}, &fakeCanceller{})

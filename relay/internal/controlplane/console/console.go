@@ -405,9 +405,10 @@ func Routes(d Deps) []Route {
 		{"GET", "/console/accounts/{account_id}/lower", NavEntry{}, accounts.RoleAdmin, handleConfirmLowerRole},
 		{"GET", "/console/accounts/{account_id}/tokens/{token_id}/revoke", NavEntry{}, accounts.RoleAdmin, handleConfirmRevokeAPIToken},
 
-		// Not a destination: the stylesheet the content security policy forces
-		// out of the layout, since style-src admits this origin and nothing
-		// inline, and the one external script file for the same reason.
+		// Not a destination: the stylesheet, fonts, brand SVGs and external
+		// script files the content security policy forces out of the layout,
+		// since it admits this origin and nothing inline. Serves both the
+		// hashed, immutable URLs and the unhashed, no-store ones.
 		{"GET", "/console/assets/{path...}", NavEntry{}, accounts.RoleViewer, assetHandler},
 
 		// Not a destination either: the Console's ONE live-read path (spec

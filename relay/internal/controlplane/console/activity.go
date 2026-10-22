@@ -1077,7 +1077,7 @@ func activityLive(d Deps, f activityFilter, ranJob bool, rn runningNowView) (Liv
 		LastEventID: newestJobEventID(d.Events),
 		ShowHref:    f.base(),
 		CountTitle:  liveCountTitle,
-	}, []string{"/console/assets/stream.js", "/console/assets/activity.js"}
+	}, []string{assetURL("stream.js"), assetURL("activity.js")}
 }
 
 // liveCountTitle is the live control's title (04-activity.md, "Live but
