@@ -458,7 +458,7 @@ are unchanged (spec 15; [11](11-console-shell.md), "Modals").
 **Still open:** the model's badge colours (a hue per role; status green or red) against the colour
 budget (D5, D24), and whether an Active sessions list belongs beside the own-password form.
 
-### D36. An Account changes only its own password — **DECIDED 2026-10-21 (owner, #1107); ADR pending**
+### D36. An Account changes only its own password — **DECIDED 2026-10-21 (owner, #1107); amended by D37 (2026-10-22)**
 
 A signed-in human Account may change only its **own** password, from a **your account** surface
 reached from the signed-in block. There is no admin reset of another Account's password. Spec 15
@@ -467,6 +467,29 @@ settles proof of the current password, session rotation and revocation, the Acce
 Console-created human Account gets its first password, and that the change is reach, not security
 floor, under invariant 11. `docs/specs/accounts-and-access.md` still describes an admin reset as
 intended; it is an aspirational spec, and reconciling it is the ADR's change.
+*Amended by D37 (2026-10-22):* the self-service change stands; a Console-created human Account
+gets its first password as a temporary one from the admin who creates it, which D36 left open.
+
+### D37. A temporary password at creation, and a forced change — **RESOLVED 2026-10-22 (owner, #1107), [ADR-0045](../../adr/0045-console-passwords-temporary-at-creation-and-self-service-change.md)**
+
+Amends D36. Password sign-in stays because OAuth/OIDC is not working yet, and without a Console
+password path every human Account created in the Console can never sign in.
+
+1. The first admin sets their password through `relay init` (unchanged).
+2. The `admin` creating a human Account issues it a **temporary password** in the create flow.
+3. The first sign-in with a temporary password goes straight to the change-password form; the
+   admin never knows the person's real password.
+4. A signed-in human changes only their **own** password, proving the current one. No admin reset
+   beyond the temporary password at creation.
+5. Each issue and change is recorded on Access — time, actor, subject Account, source address —
+   never the password or its hash.
+6. Invariant 11 is **clarified, not amended**: issuing a temporary password and a self-service
+   change are credential issuance, like minting an API Token, not a change to the terms on which
+   credentials are accepted. First-admin bootstrap stays host-side.
+
+ADR-0045 settles the specifics (a generated value shown once, a 72-hour lifetime, a re-issue
+while unredeemed, the current password proved per act, other sessions ended on change); the PR
+that merged it named each as a proposal for the owner. Specs 11, 12, 15 and 20 carry the design.
 
 ## Prerequisites that already exist as issues
 

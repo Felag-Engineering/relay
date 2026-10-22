@@ -96,4 +96,5 @@ So an implementer knows which parts are settled. Where one has become an ADR, or
 | v0.6.0 **mutating** means reaching the capability layer's write or dispatch path; **Cancel is v0.7.0** | 03, 13 |
 | `console_execution` lands with the composer (v0.7.0), not the shell | 05, 11 |
 | Owner review of the running Console, 2026-10-18 (D22–D33): hostname first everywhere, **Policy aliases**, destructive acts drawn red behind a named confirmation, no "About this screen" disclosure | 00, 01, 02, 04, 15, 20 |
-| Owner review, 2026-10-21 (D34–D36): **show, don't tell** — a standing note is deleted unless the screen would be wrong without it, Node detail's invariant-2 note included; Accounts is **one list with modals**; an Account changes only its **own password** (ADR pending, #1107) | 00, 01, 02, 04, 11, 15, 20 |
+| Owner review, 2026-10-21 (D34–D36): **show, don't tell** — a standing note is deleted unless the screen would be wrong without it, Node detail's invariant-2 note included; Accounts is **one list with modals**; an Account changes only its **own password** | 00, 01, 02, 04, 11, 15, 20 |
+| Console passwords, 2026-10-22 (D37, ADR-0045): a human Account created in the Console gets a **temporary password**, a first sign-in with it is **forced to change it**, and a human changes **only their own** password, proving the current one | 11, 12, 15, 20 |

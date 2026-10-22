@@ -40,9 +40,11 @@ One template, three regions.
 The banner slot sits **above** the topbar and is empty in the common case. See
 `00-foundations.md` for its three conditions.
 
-The **signed-in block** names the Account and its role. Once #1107's ADR lands it also links to the
-**your account** surface, where a signed-in human changes their own password
-([15](15-accounts-and-tokens.md), "Your own password"; designed, pending ADR).
+The **signed-in block** names the Account and its role, and links to the **your account**
+surface, where a signed-in human changes their own password ([15](15-accounts-and-tokens.md),
+"Your own password"; ADR-0045, designed, not built). In a session opened with a temporary
+password the shell draws no nav; the change-password form and sign-out are all it reaches
+([12](12-login.md), "Temporary password").
 
 At 800px and below the nav and the signed-in block fold behind a **Menu** toggle, closed by
 default (`00-foundations.md`, "Narrow width"). The toggle is a checkbox and label, because the CSP

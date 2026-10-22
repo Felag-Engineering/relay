@@ -161,6 +161,14 @@ Console password set today is the first admin's, by `relay init`, and `relay ini
 re-mints an API Token without touching it. Setting another person's password is
 an Account-takeover path, which is why it sits in this matrix.
 
+> **Superseded on 2026-10-22 by
+> [ADR-0045](../adr/0045-console-passwords-temporary-at-creation-and-self-service-change.md).**
+> The owner rejected an admin reset (#1107). An `admin` issues a temporary password only at a
+> human Account's creation, and re-issues one only while its human has never set their own; a
+> signed-in human changes only their own password, proving the current one. The admin-reset
+> text above and its step-up bullet are left as they were for the migration of this spec to
+> reconcile (`/spec-author --migrate`); where they disagree with ADR-0045, the ADR binds.
+
 Acts that only reduce privilege — disabling an Account, lowering a role, revoking a Token — do not
 require step-up.
 
