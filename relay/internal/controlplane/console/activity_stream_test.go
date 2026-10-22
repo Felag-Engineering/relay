@@ -235,7 +235,7 @@ func TestActivity_EveryToolRendersARequestAndAResult(t *testing.T) {
 		},
 	}
 	reads := activityAs(t, q, "/console/activity?kind=read")
-	for _, tool := range []string{"enumerated list_nodes", "enumerated describe_node", "enumerated list_operations", "<code>get_job</code>"} {
+	for _, tool := range []string{"enumerated list_nodes", "read describe_node", "enumerated list_operations", "<code>get_job</code>"} {
 		row := activityRowContaining(t, reads, tool)
 		if !strings.Contains(row, `data-outcome="audited"`) {
 			t.Errorf("the read row %q has no audited result:\n%s", tool, row)

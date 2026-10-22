@@ -2322,10 +2322,13 @@ func TestActivity_ControlPlaneReadsSayWhatWasRead(t *testing.T) {
 	}}
 
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity?kind=read").Body.String()
-	for _, want := range []string{"enumerated list_nodes", "enumerated list_operations", "enumerated describe_node"} {
+	for _, want := range []string{"enumerated list_nodes", "enumerated list_operations", "read describe_node"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the activity trail does not say %q — the row renders as the bare word \"read\"", want)
 		}
+	}
+	if strings.Contains(body, "enumerated describe_node") {
+		t.Error("a read of one named Node is drawn with the listing verb")
 	}
 	if strings.Contains(body, "enumerated registry read") {
 		t.Error("a read fell back to the generic name although the record names its tool")
@@ -2337,8 +2340,8 @@ func TestActivity_ControlPlaneReadsSayWhatWasRead(t *testing.T) {
 	// The cross-check is against the shared naming core every screen goes
 	// through rather than against another screen's view.
 	for _, rec := range recs {
-		want := readTargetOf(factsOfRecord(rec))
-		if !strings.Contains(body, "enumerated "+want) {
+		want := readSentence(factsOfRecord(rec))
+		if !strings.Contains(body, want) {
 			t.Errorf("the shared naming core names this record %q and Activity does not", want)
 		}
 	}

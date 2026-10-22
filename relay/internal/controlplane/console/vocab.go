@@ -190,6 +190,31 @@ func principalText(f trailFacts) string {
 	return "unattributed"
 }
 
+// describeNodeTool is the read-lane tool that reads ONE named Node. It must
+// match the capability package's tool name for describe_node.
+const describeNodeTool = "describe_node"
+
+// readSentence is the one sentence every screen uses for a metadata-only read
+// record: the verb, then what was read.
+func readSentence(f trailFacts) string {
+	return readVerbOf(f) + " " + readTargetOf(f)
+}
+
+// readVerbOf chooses the verb by tool name. "enumerated" is the listing verb
+// (list_nodes, list_operations, the trail and Job queries); a read of one named
+// Node is "read". A NodeID alone does not decide it: list_operations and
+// node-filtered trail queries carry one and are still listings.
+func readVerbOf(f trailFacts) string {
+	tool := f.OperationName
+	if tool == "" {
+		tool = f.ActionKind // the older record shape readTargetName also accepts
+	}
+	if tool == describeNodeTool {
+		return "read"
+	}
+	return "enumerated"
+}
+
 // readTargetOf names WHAT was read, in the terms an operator would search for.
 //
 // The naming itself lives in readTargetName, below, which iterates
