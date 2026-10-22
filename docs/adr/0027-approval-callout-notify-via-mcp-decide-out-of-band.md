@@ -100,7 +100,7 @@ says who asked, for whom, who approved, and over which channel.
       and a second revocation is a conflict.
     - The approver is to be shown a diff against the last approved similar action, which is
       where fatigue is actually beaten; that half is deferred
-      (`docs/proposals/approval-diff-against-last-similar.md`).
+      (`roadmap: relay/approval-diff-against-last-similar`).
 13. **An MCP task handle is not a Relay Task** (`GLOSSARY.md`).
 
 **For decisions 4 and 5, who may decide.** A decision's role floor is its request's, from the
