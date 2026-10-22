@@ -65,6 +65,10 @@ package console
 // and a custom-permission builder is a second authorization model — and any
 // Relay configuration whatsoever. The one place a minted credential appears is
 // accounts_write.go's mint response, never this screen.
+//
+// Edit, Enable and New account are links; with the Console's external script
+// (accounts.js) they open the linked page's content in a dialog instead, and
+// nothing else about them changes.
 
 import (
 	"net/http"
@@ -373,9 +377,13 @@ func handleAccounts(d Deps) http.HandlerFunc {
 			v.Accounts = append(v.Accounts, row)
 		}
 
+		p.Scripts = []string{accountsScript}
 		renderScreen(w, p, accountsTmpl, v)
 	}
 }
+
+// accountsScript opens New account and Edit in a dialog; see accounts.js.
+const accountsScript = "/console/assets/accounts.js"
 
 // accountKinds is the closed Account kind set, from the domain's constants.
 func accountKinds() []string {
@@ -440,7 +448,7 @@ var accountsRefusedTmpl = newScreen("accounts-refused", `
 var accountsTmpl = newScreen("accounts", `
 <div class="pagehead">
   {{with .Done}}<p class="done" role="status">{{.}}</p>{{end}}
-  {{with .NewAccountHref}}<a class="btn grant" href="{{.}}">New account</a>{{end}}
+  {{with .NewAccountHref}}<a class="btn grant" href="{{.}}" data-modal-trigger data-modal-title="New account">New account</a>{{end}}
 </div>
 
 {{if not .Write}}<p class="note">Account and token changes are not wired into this Relay&#39;s Console.</p>{{end}}
@@ -458,18 +466,29 @@ var accountsTmpl = newScreen("accounts", `
       <td data-label="Last authentication">{{stamp .LastAuthAt}}</td>
       <td data-label="Last tool call">{{if .Machine}}{{if .LastCallAt.IsZero}}<span class="dim">no tool call in the last {{$.CallPage}} recorded calls</span>{{else}}<a href="{{.LastCallHref}}">{{stamp .LastCallAt}}</a>{{end}}{{end}}</td>
       <td data-label="Actions"><div class="rowacts">
-        <a class="btn" href="{{.EditHref}}" aria-label="{{.EditLabel}}">Edit</a>
+        <a class="btn" href="{{.EditHref}}" aria-label="{{.EditLabel}}" data-modal-trigger data-modal-title="{{.Name}}">Edit</a>
         {{if .DisableAction}}<form class="ctlform" method="get" action="{{.DisableAction}}">
           <input type="hidden" name="from" value="list">
           <button class="btn danger" type="submit" aria-label="{{.DisableLabel}}">Disable</button>
         </form>{{end}}
-        {{if .EnableHref}}<a class="btn" href="{{.EnableHref}}" aria-label="{{.EnableLabel}}">Enable</a>{{end}}
+        {{if .EnableHref}}<a class="btn" href="{{.EnableHref}}" aria-label="{{.EnableLabel}}" data-modal-trigger data-modal-title="{{.Name}}">Enable</a>{{end}}
       </div></td>
     </tr>
   {{end}}
   </tbody>
 </table>
 </div>
+
+<dialog id="acctdlg" class="modal" aria-labelledby="acctdlg-title">
+  <div class="modalbox">
+    <div class="modalhead">
+      <h2 id="acctdlg-title" data-modal-title></h2>
+      <button type="button" class="modalx" data-modal-close aria-label="Close">&times;</button>
+    </div>
+    <div class="modalbody" data-modal-body></div>
+    <div class="modalfoot"><button type="button" class="btn" data-modal-close>Cancel</button></div>
+  </div>
+</dialog>
 `)
 
 // isAgentCallKind reports whether an audit Kind describes a call somebody

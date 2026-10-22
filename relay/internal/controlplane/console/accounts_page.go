@@ -423,7 +423,7 @@ var newAccountTmpl = newScreen("new-account", `
   <div class="rolepanel" id="role-descriptions">
     <h2>What this role may do</h2>
     <dl>
-      {{range .RoleLines}}<dt>{{.Role}}</dt><dd>{{.Description}}</dd>
+      {{range .RoleLines}}<div class="roleline" data-role-line="{{.Role}}"><dt>{{.Role}}</dt><dd>{{.Description}}</dd></div>
       {{end}}
     </dl>
   </div>
