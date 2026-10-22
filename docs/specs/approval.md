@@ -2,7 +2,7 @@
 
 **Status:** current as of `2026-10-22`.
 **Claim prefix:** `AP`
-**Governed by:** ADR-0047, ADR-0027, ADR-0029, ADR-0038, ADR-0043; invariants 5, 10, 11, 13.
+**Governed by:** ADR-0047, ADR-0027, ADR-0029, ADR-0049, ADR-0043; invariants 5, 10, 11, 13.
 
 ## Purpose
 
@@ -129,7 +129,8 @@ the conformant form (ADR-0029).
 ## Out of scope
 
 - **Where the gate sits, and what a park leaves behind:** `execution.md`.
-- **The Plan a decision releases:** `plan.md`. A Plan's gated steps park through this gate.
+- **Sequencing several dispatches:** the harness's job (ADR-0049). Each gated step it takes parks
+  through this gate on its own.
 - **Who is asked:** the requesting client's routing. Gleipnir routes by its own audiences and
   channels.
 - **Future work** waits in the private roadmap, in its Relay folder: more than one approver,
