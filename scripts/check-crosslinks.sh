@@ -25,7 +25,8 @@
 #   7. A migrated spec (Status current/designed) names no file path (`relay/`, `daemon/`, `.go`,
 #      `.rs`, `.proto`) and has no code fence, except a fence introduced by a line that says
 #      "state machine" or "schema" — the TEMPLATE's one exception.
-#   8. Prose lines over 100 characters in a migrated spec, table rows and fenced blocks excluded.
+#   8. Prose lines over 100 characters in a migrated spec, table rows, fenced blocks and the
+#      generated Proof block excluded.
 #
 # The amendment vocabulary the checks read is in scripts/adr-links.sh, shared with the generator.
 set -uo pipefail
@@ -199,10 +200,12 @@ for spec in docs/specs/*.md; do
     { prev[NR]=$0 }' "$spec")
   # 8. prose width
   while IFS=: read -r line len; do
-    warn "$spec:$line: prose line is $len characters (limit 100; table rows exempt)"
+    warn "$spec:$line: prose line is $len characters (limit 100; table rows and the generated Proof block exempt)"
   done < <(awk '
+    /^<!-- proof:begin -->$/ { gen=1; next }
+    /^<!-- proof:end -->$/   { gen=0; next }
     /^ *```/ { open=!open; next }
-    !open && $0 !~ /^\|/ && length($0) > 100 { print NR ":" length($0) }' "$spec")
+    !open && !gen && $0 !~ /^\|/ && length($0) > 100 { print NR ":" length($0) }' "$spec")
 done
 
 # ---- 9. the ADR index is generated, not hand-kept --------------------------------------------
