@@ -193,6 +193,11 @@ echo "docs/adr/0002-fixture.md budget" > "$FIX/docs/agents/docs-ratchet.txt"; ru
 assert_rc "adr-over-budget-waived" 0
 
 reset_fixture
+write_adr "$FIX/docs/adr/0002-fixture.md" "Context" 3 200
+sed -i '3s/.*/**Status:** Superseded by ADR-0001./' "$FIX/docs/adr/0002-fixture.md"; run_check
+assert_rc "adr-superseded-is-exempt" 0
+
+reset_fixture
 echo "docs/adr/0099-gone.md budget" > "$FIX/docs/agents/docs-ratchet.txt"; run_check
 assert_rc "ratchet-stale-path" 1; assert_contains "ratchet-stale-path" "which does not exist"
 

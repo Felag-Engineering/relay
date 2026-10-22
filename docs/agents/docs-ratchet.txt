@@ -35,7 +35,6 @@ docs/adr/0023-retire-the-shared-control-plane-credential.md decision
 docs/adr/0024-oauth-resource-server-delegated-idp.md decision
 docs/adr/0025-read-access-is-audited-read-output-is-not-retained.md decision
 docs/adr/0026-admin-console-execution-surface.md budget amendments decision
-docs/adr/0028-mcp-tasks-extension-transport-layer-shim.md budget amendments decision
 docs/adr/0029-in-band-approval-through-the-tool-surface.md budget amendments decision
 docs/adr/0030-relay-init-and-the-boundary-of-the-relay-binary.md amendments decision
 docs/adr/0031-one-server-certificate-and-the-fingerprint-pinned-join-string.md budget amendments decision
@@ -47,11 +46,9 @@ docs/adr/0036-node-code-never-overrides-the-operator-s-umask.md budget decision
 docs/adr/0037-agentless-ssh-executor-low-assurance-tier.md decision
 docs/adr/0038-plan-is-an-approved-route-of-execution.md budget amendments decision
 docs/adr/0039-development-system-second-edition.md decision
-docs/adr/0040-the-surface-that-created-a-request-answers-it.md budget amendments decision
 docs/adr/0041-gleipnir-rooted-identity-grants-and-a-verified-approver.md decision
 docs/adr/0042-template-dispatch-resolves-its-risk-class-over-the-reporting-nodes.md budget decision
 docs/adr/0043-one-relay-configuration-file.md decision
-docs/adr/0044-the-console-does-not-decide-approvals.md budget decision
 docs/adr/0045-console-passwords-temporary-at-creation-and-self-service-change.md budget decision
 docs/specs/approval.md shape
 docs/specs/daemon-installation.md shape
