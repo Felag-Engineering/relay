@@ -63,7 +63,10 @@ import (
 // cannot reach a method it was not given.
 type surfaceDeps struct {
 	logger *slog.Logger // the process logger (main.go); nil means slog.Default()
-	ops    mcp.OperationLister
+	// oauthConfigured is whether this Relay accepts OAuth bearer tokens; the
+	// console mirrors it as presentation only.
+	oauthConfigured bool
+	ops             mcp.OperationLister
 	// execution is Execution: mcp Executor and TaskResolver; api Exec; console
 	// Cancel.
 	execution *capability.Execution
@@ -297,7 +300,8 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// Execution is v0.7.0 (spec 05). Until it lands there is
 		// no execution route for console_execution to gate, and shipping the
 		// flag ahead of the surface would be a knob that turns nothing off.
-		Execution: false,
+		Execution:       false,
+		OAuthConfigured: d.oauthConfigured,
 		// Every registry and Policy-view read is Deps.Queries (QRY-28) —
 		// there is no separate Fleet/Policy seam. There is
 		// also no separate Liveness seam: registry.Node.Connected is

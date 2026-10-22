@@ -102,14 +102,14 @@ func TestActivity_PollingCollapsesWithinThePage(t *testing.T) {
 	if got := rowCalls(t, body); got[0] != 1 || got[1] != 49 {
 		t.Errorf("data-calls = %v, want [1 49]", got)
 	}
-	if !strings.Contains(blocks[1], `<span class="chip calls"`) || !strings.Contains(blocks[1], ">x49<") {
-		t.Errorf("the folded row has no x49 chip:\n%s", blocks[1])
+	if !strings.Contains(blocks[1], `<span class="chip calls"`) || !strings.Contains(blocks[1], ">×49<") {
+		t.Errorf("the folded row has no ×49 chip:\n%s", blocks[1])
 	}
 	if !strings.Contains(body, `class="vcount">50 events<`) {
 		t.Errorf("the viewbar does not count the 50 calls:\n%s", body)
 	}
-	if !strings.Contains(body, "49 calls on this page are collapsed into 1 row.") {
-		t.Errorf("the collapse note is missing or wrong:\n%s", body)
+	if strings.Contains(body, "collapsed into") {
+		t.Errorf("the page says in a sentence what the collapse did:\n%s", body)
 	}
 	assertEveryAuditLimitIs(t, q, auditPageSize)
 	if strings.Contains(body, ">Older<") {
@@ -226,7 +226,7 @@ func TestActivity_JobRowsNeverCollapse(t *testing.T) {
 	}
 }
 
-func TestActivity_ACollapsedRowSaysHowManyCallsAndOverWhatSpan(t *testing.T) {
+func TestActivity_ACollapsedRowCarriesACountChipWhoseTitleIsItsSpan(t *testing.T) {
 	who := apiIdentity("acct-1", "alice", "operator")
 	q := &fakeQueries{rows: []capability.AuditRow{
 		refusalBy(who, time.Second, "same"), refusalBy(who, 2*time.Second, "same"), refusalBy(who, 3*time.Second, "same"),
@@ -236,29 +236,31 @@ func TestActivity_ACollapsedRowSaysHowManyCallsAndOverWhatSpan(t *testing.T) {
 		t.Fatalf("rows = %d, want 1", len(blocks))
 	}
 	b := blocks[0]
-	if callsOfRow(t, b) != 3 || !strings.Contains(b, ">x3<") {
+	if callsOfRow(t, b) != 3 || !strings.Contains(b, ">×3<") {
 		t.Errorf("the row does not say it stands for 3 calls:\n%s", b)
 	}
-	if !strings.Contains(b, "3 consecutive identical calls, 2026-08-25 11:59:57Z to 2026-08-25 11:59:59Z;") {
-		t.Errorf("the row does not give its absolute span:\n%s", b)
+	if !strings.Contains(b, `title="2026-08-25 11:59:57Z to 2026-08-25 11:59:59Z"`) {
+		t.Errorf("the chip does not give the run's absolute span:\n%s", b)
+	}
+	if strings.Contains(b, "consecutive identical calls") {
+		t.Error("the row restates the collapse in a sentence")
 	}
 	if strings.Contains(b, "ago") {
 		t.Error("the row gives a relative time")
 	}
 }
 
-func TestActivity_TheCollapseNoteSaysWhatTheCollapseDid(t *testing.T) {
+func TestActivity_ACollapsedRunIsAChipNotASentence(t *testing.T) {
 	who := apiIdentity("acct-1", "alice", "operator")
 	q := &fakeQueries{rows: []capability.AuditRow{refusalBy(who, time.Second, "same"), refusalBy(who, 2*time.Second, "same")}}
 	body := activityAs(t, q, "/console/activity")
-	if !strings.Contains(body, "2 calls on this page are collapsed into 1 row.") {
-		t.Errorf("the collapse note is missing:\n%s", body)
+	if !strings.Contains(body, `class="chip calls"`) || !strings.Contains(body, ">×2<") {
+		t.Errorf("the folded refusals have no ×2 chip:\n%s", body)
 	}
-	if strings.Contains(body, "The strip still counts every call") {
-		t.Error("the collapse note names a strip that no longer exists")
-	}
-	if body := activityAs(t, &fakeQueries{rows: q.rows[:1]}, "/console/activity"); strings.Contains(body, "are collapsed into") {
-		t.Error("a page that collapsed nothing says it collapsed something")
+	for _, gone := range []string{"collapsed into", "on the audit trail"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("the page says %q in a sentence", gone)
+		}
 	}
 }
 

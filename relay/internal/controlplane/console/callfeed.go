@@ -85,29 +85,3 @@ func foldRuns[T any, K comparable](rows []T, key func(T) (K, bool), fold func(ru
 	}
 	return out
 }
-
-// foldedSummary reports how much of a rendered feed foldRuns folded:
-// foldedCalls is the sum of calls(row) over every row that stands for more than
-// one, and foldedRows is how many such rows there are. A row that collapsed
-// nothing (one call, the common case) contributes to neither — so foldedCalls
-// is always 0 or >= 2, never 1, which collapseNote's grammar ("are collapsed")
-// depends on.
-func foldedSummary[T any](rows []T, calls func(T) int) (foldedCalls, foldedRows int) {
-	for _, r := range rows {
-		if n := calls(r); n > 1 {
-			foldedCalls += n
-			foldedRows++
-		}
-	}
-	return foldedCalls, foldedRows
-}
-
-// collapseNote is the sentence saying what the collapse did to the page, or ""
-// when it folded nothing.
-func collapseNote(foldedCalls, foldedRows int) string {
-	if foldedRows == 0 {
-		return ""
-	}
-	return countOf(foldedCalls, "call", "calls") + " on this page are collapsed into " +
-		countOf(foldedRows, "row", "rows") + "."
-}

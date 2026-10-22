@@ -121,11 +121,13 @@ func TestStandingNotes_NoScreenRendersAnAboutDisclosure(t *testing.T) {
 
 // --- Activity ---------------------------------------------------------------
 
-func TestActivity_StandingNotesAreInline(t *testing.T) {
+// TestActivity_DrawsNoStandingNote: Activity carries no explanatory sentence
+// beside its controls or rows (00-foundations.md, D34).
+func TestActivity_DrawsNoStandingNote(t *testing.T) {
 	body := get(t, newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/activity").Body.String()
-	mustBeInline(t, body, "Every Refresh is an audited read made from this Console.", "refreshbtn", 300)
-	mustBeInline(t, body, "Each page holds up to 25 dispatches and 50 other events, paged separately.", `<div class="pager">`, 300)
-	mustNotRender(t, body, "are on the audit trail, not here")
+	mustNotRender(t, body, "are on the audit trail, not here", `class="lede"`, "Calls the Relay received",
+		"Every Refresh is an audited read", "Each page holds up to", "Counts job events",
+		"Output was not retained", "consecutive identical calls", "collapsed into", "Longest-running first;")
 }
 
 func TestActivity_SituationalMessagesStayVisible(t *testing.T) {
@@ -153,22 +155,12 @@ func TestActivity_SituationalMessagesStayVisible(t *testing.T) {
 
 // --- Access -------------------------------------------------------------
 
-func TestAccess_StandingNotesAreInline(t *testing.T) {
+// TestAccess_DrawsNoStandingNote: Access carries only the one sentence the
+// spec names, and only where OAuth is configured (20-access.md, D34).
+func TestAccess_DrawsNoStandingNote(t *testing.T) {
 	body := get(t, newTestHandler(accessDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/access").Body.String()
-	mustBeSituational(t, body, "This screen is limited to admins, in this Console only.")
-	c := contentOf(body)
-	form := strings.Index(c, `<form class="viewbar"`)
-	if form < 0 {
-		t.Fatal("the Access filter form is missing")
-	}
-	if strings.Index(c, "limited to admins") > form {
-		t.Error("the admin-only note does not lead the screen")
-	}
-	mustBeInline(t, body, "There is no filter by the changed Account;", "</form>", 80)
-	mustBeInline(t, body, "OAuth sign-ins happen at the identity provider and are not listed.", "failures only</a>", 80)
-	mustBeInline(t, body, "An older failed sign-in may show text typed into the wrong box, not an Account&#39;s name.", "failures only</a>", 200)
-	mustBeInline(t, body, "Every Refresh is an audited read.", "refreshbtn", 300)
-	mustBeInline(t, body, "Each page holds up to", `<div class="pager">`, 80)
+	mustNotRender(t, body, "limited to admins", "There is no filter by the changed Account", "An older failed sign-in",
+		"Every Refresh is an audited read", "Each page holds up to", "OAuth sign-ins happen")
 	if strings.Contains(body, "not on the trail") {
 		t.Error("the Access screen still says something is not on the trail")
 	}
@@ -178,6 +170,15 @@ func TestAccess_StandingNotesAreInline(t *testing.T) {
 	if strings.Contains(body, "readable through the Control API") {
 		t.Error("the Access screen says its records are readable through the Control API, which has no audit-read route")
 	}
+}
+
+func TestAccess_OAuthSentenceOnlyWhereOAuthIsConfigured(t *testing.T) {
+	const sentence = "OAuth sign-ins happen at the identity provider and are not listed."
+	d := accessDeps(&fakeQueries{})
+	d.OAuthConfigured = true
+	mustBeInline(t, get(t, newTestHandler(d, accounts.RoleAdmin), "/console/access").Body.String(), sentence, "failures only</a>", 80)
+	d.OAuthConfigured = false
+	mustNotRender(t, get(t, newTestHandler(d, accounts.RoleAdmin), "/console/access").Body.String(), sentence)
 }
 
 func TestAccess_SituationalMessagesStayVisible(t *testing.T) {
@@ -251,6 +252,78 @@ func TestFleet_NoMatchEmptyStateIsSituational(t *testing.T) {
 	}
 }
 
+// retiredNotes are the sentences the show-don't-tell amendment (D34) deleted
+// from Fleet, Node detail, Compare, Activity, Access and Job detail. Only the
+// strings this change deleted are listed, so another screen's own notes are not
+// judged here.
+var retiredNotes = []string{
+	"Every Refresh is an audited read",
+	"every Node here is reachable, current and permitted",
+	`class="labelnote"`,
+	"These counts are observations",
+	"receipt time, not a query time",
+	"There is no path from this screen",
+	"output not retained",
+	"Only rows that differ are shown",
+	"Rows that differ are marked",
+	"Each cell is what that Node",
+	"hostname is self-reported; no other Fact",
+	"never read as agreement",
+	"Calls the Relay received",
+	"Each page holds up to",
+	"Output was not retained",
+	"consecutive identical calls",
+	"collapsed into",
+	"Longest-running first;",
+	"Counts job events",
+	"limited to admins",
+	"There is no filter by the changed Account",
+	"An older failed sign-in",
+	"the usual result, folded",
+	"Reload to see new events",
+}
+
+// TestShowDontTell_RetiredNotesAreAbsent renders every walkable screen for every
+// role, plus the states that drew a retired note (Compare with an unreported
+// Node, Activity with a collapsed run and with a kind filter), and asserts none
+// of the retired sentences returns (D34; the issue's acceptance).
+func TestShowDontTell_RetiredNotesAreAbsent(t *testing.T) {
+	check := func(name, body string) {
+		content := contentOf(body)
+		for _, note := range retiredNotes {
+			if strings.Contains(content, note) {
+				t.Errorf("%s renders the retired %q", name, note)
+			}
+		}
+	}
+	d := copyBudgetFixture()
+	pages := 0
+	for _, role := range sessionRoles {
+		h := newTestHandler(d, role)
+		for _, path := range walkableScreens(routesFor(d, role), fixtureIDs) {
+			check(string(role)+" "+path, get(t, h, path).Body.String())
+			pages++
+		}
+	}
+	if pages == 0 {
+		t.Fatal("no screen was rendered, so nothing was checked")
+	}
+	h := newTestHandler(d, accounts.RoleAdmin)
+	for _, path := range []string{
+		"/console/compare?nodes=node-web-1,node-web-3",
+		"/console/compare?nodes=node-web-1,node-web-3&rows=all",
+		"/console/activity?kind=dispatch",
+		"/console/activity?window=1h",
+	} {
+		check(path, get(t, h, path).Body.String())
+	}
+	who := apiIdentity("acct-1", "alice", "operator")
+	q := &fakeQueries{rows: []capability.AuditRow{
+		refusalBy(who, time.Second, "same"), refusalBy(who, 2*time.Second, "same"), refusalBy(who, 3*time.Second, "same"),
+	}}
+	check("a collapsed run", activityAs(t, q, "/console/activity"))
+}
+
 // TestNode_HasNoAboutDisclosure: every note Node detail carries qualifies a
 // value beside it, so each one is visible and the screen has no standing note
 // left to collapse (00-foundations.md as amended for #849). An About
@@ -274,24 +347,15 @@ func TestNode_MandatedNotesStayVisible(t *testing.T) {
 	}, testNow.Add(-90*time.Second))})
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
 	for _, msg := range []string{
-		"There is no path from this screen to this Node's Policy",
-		"receipt time, not a query time",
 		"self-reported · this page only · never targeted",
 		"reported by the daemon",
-		"These counts are observations",
-		"never the Node",
 	} {
 		mustBeSituational(t, body, msg)
 	}
-	content := contentOf(body)
-	for _, ns := range []string{"<b>node:</b>", "<b>relay:</b>", "<b>state:</b>"} {
-		if !strings.Contains(content, ns) {
-			t.Errorf("the visible legend does not name %s", ns)
-		}
-	}
-	if strings.Contains(content, "<b>tag:</b>") {
-		t.Error("the visible legend names tag:, a namespace no chip on this screen can carry yet")
-	}
+	// The relay: chip's tooltip contains "never the Node", so only the retired
+	// legend's markup is asserted absent, not that phrase.
+	mustNotRender(t, body, `class="labelnote"`, "<b>node:</b>", "<b>relay:</b>", "<b>state:</b>",
+		"There is no path from this screen", "receipt time, not a query time", "These counts are observations")
 	for _, claim := range []string{"security-lane", "security lane"} {
 		if strings.Contains(body, claim) {
 			t.Errorf("the Node detail page makes a security-lane claim (%q)", claim)

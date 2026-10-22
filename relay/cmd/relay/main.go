@@ -791,6 +791,8 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			logger:    logger,
 			ops:       opvocabLister{},
 			execution: execution,
+			// The predicate that gates WithOAuth above.
+			oauthConfigured: cfg.OAuthIssuer != "",
 			// The leaf capability services (invariant 10): each surface is
 			// handed the narrow one it uses, not the Execution — see
 			// surfaceDeps. A field forgotten here is a nil pointer behind a

@@ -67,11 +67,6 @@ type nodeTask struct {
 	// dropped.
 	RepeatDeny bool
 
-	// ReadClass marks a row whose output was deliberately not retained
-	// (ADR-0025). Said on the row, because an operator looking for output that
-	// is not there needs to know it was never kept rather than lost.
-	ReadClass bool
-
 	// RawExecTier is set only by trailRowName, from the record's ActionKind or
 	// RawExecArgv — never from the Operation's name (D18).
 	RawExecTier bool
@@ -587,12 +582,6 @@ func nodeTaskFrom(rec audit.Record) (nodeTask, bool) {
 		JobID:     rec.JobID,
 		Principal: principalText(f),
 		Verified:  rec.Attribution.Verified.AccountID != "",
-		// The Node's own dispatches carry no declared risk class, so this
-		// infers one the same way Activity does (activity.go), rather than
-		// keying off rec.Kind == audit.KindRead — that kind was filtered out
-		// above, but a read-class DISPATCH (file.read, log.tail ...) still
-		// deserves the "output not retained" note (ADR-0025).
-		ReadClass: riskOf(f) == jobs.RiskClassRead,
 	}
 	t.Operation, t.RawExecTier = trailRowName(f)
 	if rec.JobID != "" {
@@ -642,7 +631,6 @@ var nodeTmpl = newScreen("node", `
 <div class="labelrow">
   {{range .Labels}}{{template "label-chip" .}}{{end}}
   {{range .States}}{{template "label-chip" .}}{{end}}
-  <span class="labelnote"><b>node:</b> set by the Node · <b>relay:</b> by the Relay, never the Node · <b>state:</b> derived</span>
 </div>
 
 <div class="panels">
@@ -690,7 +678,6 @@ var nodeTmpl = newScreen("node", `
           <span class="dim">{{.TemplateShared}} {{plural .TemplateShared "Node reports" "Nodes report"}} this</span>
         {{else}}<span class="dim">no templates installed</span>{{end}}</dd>
       </dl>
-      <p class="note">These counts are observations, never evidence of equal Policy or trust.</p>
     </section>
 
     <section class="panel">
@@ -712,7 +699,8 @@ var nodeTmpl = newScreen("node", `
         {{if .FingerprintUnrecorded}}<p class="note">It cannot be cross-checked, and the Console does not count this Node as current or permitted.</p>
         {{else}}<p class="note">The Console does not count this Node as current or permitted.</p>{{end}}
         {{end}}
-        <p class="note">Received {{if .PolicyReportedAt}}at <b>{{.PolicyReportedAt}}</b>, {{.PolicyReportedAgo}} ago{{else}}at <b>a time that was not recorded</b>{{end}}: a receipt time, not a query time.</p>
+        {{if .PolicyReportedAt}}<p class="dim">Received <time datetime="{{.PolicyReportedAt}}" title="{{.PolicyReportedAt}}">{{.PolicyReportedAgo}} ago</time></p>
+        {{else}}<p class="dim">Received at a time that was not recorded.</p>{{end}}
         <div class="polblock">
           <div class="polrow"><span class="pk">raw exec</span>
             {{if .Policy.RawExecEnabled}}<span class="chip risk" data-risk="mutate">enabled</span>{{else}}<span class="chip risk">disabled</span>{{end}}</div>
@@ -730,7 +718,6 @@ var nodeTmpl = newScreen("node", `
         {{if .PolicyStale}}
         <p class="gap"><b>This Node is offline, so this panel cannot be refreshed.</b></p>
         {{end}}
-        <p class="gap">There is no path from this screen to this Node's Policy; the Relay never writes it.</p>
       {{else}}
         <p class="dim">This Node has not reported its Policy since the Relay last started.</p>
       {{end}}
@@ -746,8 +733,7 @@ var nodeTmpl = newScreen("node", `
         {{range .Tasks}}
           <tr>
             <td class="num">{{.When}}</td>
-            <td>{{if .RawExecTier}}<span class="chip" data-tier="raw_exec">Raw Exec</span>{{end}}<code>{{.Operation}}</code>{{with .Args}}<div class="sub mono">{{.}}</div>{{end}}
-              {{if .ReadClass}}<div class="sub">read — output not retained</div>{{end}}</td>
+            <td>{{if .RawExecTier}}<span class="chip" data-tier="raw_exec">Raw Exec</span>{{end}}<code>{{.Operation}}</code>{{with .Args}}<div class="sub mono">{{.}}</div>{{end}}</td>
             <td>{{template "trust-chip" (trust .Principal .Verified)}}</td>
             <td><span class="chip outcome" data-outcome="{{.Outcome}}">{{.Outcome}}</span></td>
             <td>{{if .JobHref}}<a href="{{.JobHref}}"><code>{{short .JobID}}</code></a>{{end}}</td>

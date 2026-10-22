@@ -28,8 +28,8 @@ func TestPluralFamiliesKeepOppositeContracts(t *testing.T) {
 			t.Errorf("countOf(1) = %q, want %q", got, want)
 		}
 		// Zero is the boundary no call site reaches TODAY -- every one of them
-		// sits behind a guard that has already excluded it (collapseNote's
-		// foldedRows == 0 return and buildGroup's switch arms). It is
+		// sits behind a guard that has already excluded it (buildGroup's
+		// switch arms). It is
 		// pinned anyway because that reachability is the call sites' property,
 		// not countOf's: the natural off-by-one here is `n <= 1`, which is
 		// invisible at n of 1 and 3 and would render "1 Nodes" -- the exact
@@ -59,12 +59,13 @@ func TestPluralFamiliesKeepOppositeContracts(t *testing.T) {
 	// failure #550 documents is arithmetic that reads fine in isolation, so
 	// "contains the count" is not enough — "3 3 calls" contains it too.
 	t.Run("a Go call site renders one count", func(t *testing.T) {
-		got := collapseNote(3, 2)
-		if !strings.Contains(got, "3 calls") {
-			t.Errorf("collapseNote lost its count: %q", got)
+		nodes := []fleetNode{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d", signature: "offline"}}
+		got := buildGroup("g", nodes, false, linkContext{}).ModeLine
+		if !strings.Contains(got, "3 Nodes carry") {
+			t.Errorf("the group's mode line lost its count: %q", got)
 		}
 		if strings.Contains(got, "3 3") {
-			t.Errorf("collapseNote doubled its count: %q", got)
+			t.Errorf("the group's mode line doubled its count: %q", got)
 		}
 	})
 

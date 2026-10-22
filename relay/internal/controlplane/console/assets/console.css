@@ -1008,6 +1008,7 @@ details.filters[open] > summary::before { transform: rotate(45deg); }
   font-size: var(--text-2xs); letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--text-second); margin-bottom: var(--space-2); text-align: left;
 }
+.tcap.vh { margin: -1px; }
 /* Any table that can outgrow its panel scrolls INSIDE that panel rather than
  * pushing the document sideways. Without this the Recent Tasks table on Node
  * detail made the whole page scroll horizontally at every viewport, 1600px
@@ -1180,8 +1181,6 @@ a.chiplink:hover .chip.trust { box-shadow: 0 0 0 1px var(--color-accent); }
   padding: var(--space-3) var(--space-4); background: var(--bg-surface);
   border: 1px solid var(--border-subtle); border-radius: var(--radius-section); margin-bottom: var(--space-5);
 }
-.labelnote { flex-basis: 100%; font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-2); line-height: 1.7; }
-.labelnote b { color: var(--text-second); font-family: var(--font-mono); font-weight: var(--weight-medium); }
 
 /* A header action. The accent, because it is interactive and never semantic — the
  * colour budget spends this hue on "you can click it" and on nothing else. */
@@ -1363,7 +1362,6 @@ dl.wrapid dd code { overflow-wrap: anywhere; word-break: break-all; }
   border: 1px solid var(--border-subtle); border-radius: var(--radius-section);
 }
 .livehead { display: flex; gap: var(--space-3); align-items: baseline; flex-wrap: wrap; }
-.livenote { margin: var(--space-1) 0 0; font-size: var(--text-xs); color: var(--text-muted); }
 
 /* The completion slot. It is RESERVED — the row keeps the line box whether or
  * not a sentence is showing — so revealing one cannot reflow the row someone
@@ -1715,9 +1713,6 @@ dl.kv dd { min-width: 0; }
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 .refreshbtn:hover { text-decoration: none; border-color: var(--color-accent); }
-/* The one visible sentence beside Refresh saying whether a reload is audited.
- * It qualifies the control above it, so it is quiet note text. */
-.refreshlimit { font-size: var(--text-xs); color: var(--text-muted); margin: calc(-1 * var(--space-3)) 0 var(--space-4); max-width: 64em; }
 
 /* How old a page is (00-foundations.md): relative, with the UTC instant in its title,
  * and beside the count inside the view bar, as 01-fleet-view.md draws it. An old page
@@ -1738,7 +1733,13 @@ dl.kv dd { min-width: 0; }
   background: var(--bg-canvas);
 }
 [data-live-region][data-queued="yes"] .newq:hover { text-decoration: none; border-color: var(--accent-hover); color: var(--accent-hover); }
-.newqcount { font-weight: var(--weight-normal); color: var(--text-second); }
+/* Activity's control reads "Live · N new" while connected and "N new" beside
+ * "Not connected" otherwise; the "Live" word of the connected state is the
+ * control's own while something is queued. It sits where the "Live" message was. */
+.live .newq { margin-left: 0; }
+.live .newqlive { display: none; }
+.live[data-live="on"] .newqlive { display: inline; }
+.live[data-queued="yes"][data-live="on"] .wmsg[data-when="on"] { display: none; }
 
 /* The Agents screen's one sentence about reads made from this Console. It
  * qualifies the feed below it, so it is quiet note text, not a dashed box. */
@@ -1848,7 +1849,7 @@ dl.kv dd { min-width: 0; }
 @media (max-width: 600px) {
   .vfield, .vfield.wide { flex-basis: 100%; }
   table.cards, table.cards tbody, table.cards tr, table.cards td { display: block; }
-  table.cards caption, .cmp caption { display: block; width: 100%; text-align: left; padding: var(--space-1) var(--space-3); }
+  table.cards caption:not(.vh), .cmp caption { display: block; width: 100%; text-align: left; padding: var(--space-1) var(--space-3); }
   table.cards thead {
     position: absolute; width: 1px; height: 1px;
     padding: 0; margin: -1px; overflow: hidden;
