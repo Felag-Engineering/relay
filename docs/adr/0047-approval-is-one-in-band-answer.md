@@ -65,6 +65,8 @@ narrowed here by removing the tool.
 - **Proposals:** `n-party-approval.md` (more than one approver, a Relay-held audience, approval
   grants, a Slack approval) and `out-of-band-approval.md` (a channel Relay verifies).
 - **Threat model:** R18 and R25 close with the code; R21 and R27 lose `approve_request`.
+- **The approval spec** is rewritten in the two-layer shape (ADR-0046) in the same change as
+  the code cut, so it never describes a system that does not exist.
 
 ## Alternatives
 
