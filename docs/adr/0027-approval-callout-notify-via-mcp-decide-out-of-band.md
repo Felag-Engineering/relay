@@ -112,7 +112,8 @@ says who asked, for whom, who approved, and over which channel.
 
 **For decisions 4 and 5, who may decide.** A decision's role floor is its request's, from the
 role table in `accounts-and-access.md`: `operator` for an Operation, `admin` for Raw Exec. A
-machine Account never decides its own request, under any configuration; its kind travels on the
+machine Account never decides its own request on its own authority, under any configuration,
+except through ADR-0029's in-band answer carrying an asserted approver. Its kind travels on the
 authenticated Principal, and an unknown kind is a machine. A park answers `202 Accepted` with
 `pending_approval` on the Control API.
 
