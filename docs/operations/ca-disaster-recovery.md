@@ -70,12 +70,12 @@ enrollment playbook you already ran.**
    untrusted and the whole fleet disconnects, which is the *point*: nothing signed by the old
    key works anywhere. Keeping the existing store preserves the audit trail; old registry
    entries go stale and can be revoked or left to be superseded.
-5. **Mint a fresh Enrollment Token** with the same scopes as the original rollout
-   ([enrollment.md](enrollment.md)). Its join string carries the new CA's fingerprint. Rotate
-   the Vault entry.
-6. **Re-run the enrollment playbook** against the whole fleet with the new join string in the
-   env file, **plus one extra task**: clear each Node's persisted identity so the daemon
-   re-enrolls instead of retrying its now-worthless cert:
+5. **Mint a fresh Enrollment Token** for the size of the fleet, with the same initial tags as
+   the original rollout ([enrollment.md](enrollment.md)). Its join string carries the new CA's
+   fingerprint. Rotate the Vault entry.
+6. **Re-join the whole fleet** with the new join string, **after one extra task**: clear each
+   Node's persisted identity, so the daemon joins again instead of retrying its now-worthless
+   cert:
 
    ```yaml
    - name: Clear old identity (forces re-enrollment against the new CA)
@@ -86,11 +86,14 @@ enrollment playbook you already ran.**
      notify: restart relay-daemon
    ```
 
-   Binary, unit and Policy are already in place and untouched. Each Node enrolls as a new
-   `node_id` with fresh relay-space Labels from the token scope; Policy never left the Nodes
-   (ADR-0002), so enforcement is identical the moment they reconnect.
+   Then run `sudo relay-daemon join` on every Node with the new join string fed from the
+   operator's side, by the SSH loop or the release's Ansible role; the string never goes in a
+   file on the Node ([enrollment.md](enrollment.md), ADR-0048). Binary, unit and Policy are
+   already in place and untouched. Each Node enrolls as a new `node_id`, with a new
+   `relay:node-id` and the token's initial tags; Policy never left the Nodes (ADR-0002), so
+   enforcement is identical the moment they reconnect.
 7. **Verify and thaw.** Confirm the fleet with `list_nodes` (expected count, fresh `last_seen`,
-   correct `relay:` labels, uniform Policy fingerprints;
+   correct tags, uniform Policy fingerprints;
    [policy-as-code.md](policy-as-code.md)), then release the Freeze with an audited reason
    (`kill -USR2`, or `POST /api/v1/freeze/release` with a `reason`).
 

@@ -17,6 +17,14 @@
 > ([ADR-0044](../adr/0044-the-console-does-not-decide-approvals.md)). The approval queue, the
 > approval object and the Approver journey below are retired; see
 > [console/08-approval-object.md](console/08-approval-object.md).
+>
+> **Cut from the MVP (2026-10-23, D38 in
+> [docs/design/console/99-open-decisions.md](console/99-open-decisions.md)).** The Console
+> watches and does not execute ([ADR-0052](../adr/0052-the-console-watches.md)): the composer,
+> the Preflight screen and `console_execution` are gone. Quarantine, the Policy author, the
+> System Model socket and the settings screens are cut too, and wait in the private roadmap.
+> Tags are built ([ADR-0050](../adr/0050-tags-are-the-operators-labels.md)). Read every
+> mention of those below as history.
 
 **Status:** draft from the 2026-08-07 planning session. **Amended 2026-08-24:** `outdated`
 means ADR-0014's below-the-dispatch-minimum (ADR-0034); Policy-fingerprint drift is an
@@ -92,7 +100,7 @@ phase (v0.6.0), so it is built once, first.
   step-up — the fleet view's one action); quarantine on Node detail (`admin` + step-up),
   beside Revoke and Freeze as the incident ladder quarantine < revoke < Freeze. Who writes
   `relay:` is invariant 7 as amended: only the quarantine act itself
-  (`docs/specs/quarantine-node.md`).
+  (the quarantine spec, now roadmap: relay/quarantine).
 
 ## Key screen requirements
 
@@ -177,7 +185,8 @@ interesting rows, the screen cannot get busy.
 
 The security floor (listeners, `console_execution` and the rest of invariant 11's list) as
 anything but read-only; reach-bounding settings such as blast caps and gate rules are
-`admin`-editable with step-up (`console/18-settings.md`, `console/19-approval-rules.md`).
+`admin`-editable with step-up (the settings screens this cited are cut from the MVP;
+roadmap: relay/settings-in-the-console).
 Policy editing — view/query only. `node:` label editing. With `console_execution = off`,
 the composer and every execution route are absent, not disabled: the strict tier is a
 smaller Console, not a greyed-out one.

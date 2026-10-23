@@ -1,9 +1,9 @@
 # 01 — Fleet view
 
-**Artboard 1.** The landing screen. **Milestone v0.6.0** (read-only); the one action arrives in
-v0.7.0.
+**Artboard 1.** The landing screen. **Milestone v0.6.0** (read-only); the one action, bulk tag
+editing, arrives in the MVP (ADR-0050).
 
-**Governing:** ADR-0006, ADR-0014, ADR-0020, invariants #7, #9, #11.
+**Governing:** ADR-0006, ADR-0014, ADR-0020, ADR-0050, ADR-0052, invariants #7, #9, #11.
 **Backend:** registry read seams (`relay/internal/registry`, already consumed by MCP
 `list_nodes`/`describe_node`); the SSE seam; per-Account view persistence (#442 — a preference,
 not a runtime object). Group-by itself is a pure read over existing labels.
@@ -12,8 +12,7 @@ not a runtime object). Group-by itself is a pure read over existing labels.
 
 The operator's first question is not "how is my Relay doing" but **"can I act on my fleet right
 now, and what is in the way?"** Everything in the way is Relay-status truth expressed about the
-fleet: unreachable Nodes, Nodes that will refuse work, Nodes whose Policy will deny, Nodes
-deliberately fenced.
+fleet: unreachable Nodes, Nodes that will refuse work, Nodes whose Policy will deny.
 
 Scope is the four questions in `00-foundations.md`. No collected metrics.
 
@@ -30,9 +29,9 @@ Scope is the four questions in `00-foundations.md`. No collected metrics.
       │ [pixel wall, the whole matched set]                       [key: 4 buckets, counts]
       ├──────────────────────────────────────────────────────────────────────────────────
       │ Since you last looked (2h)  2 enrolled · 1 offline · 3 changed Policy fingerprint
-      │                                    [Tag these 4,012]  [▷ Run against these 4,012]
+      │                                                            [Tag these 4,012]
       ├──────────────────────────────────────────────────────────────────────────────────
-      │ ┌ prod   4,012 nodes · 3 offline · 2 outdated · 12 on Policy fingerprint B · 1 quarantined
+      │ ┌ prod   4,012 nodes · 3 offline · 2 outdated · 12 on Policy fingerprint B
       │ │  [pixel wall — one cell per Node]
       │ │  ┌────────────┬──────────────────────────────────────────────┐
       │ │  │ facet rail │ deviation table, anomaly-first                │
@@ -66,12 +65,13 @@ it. Healthy groups compress to a single line. Only deviating groups show detail.
 native `<details>`, open when its group deviates and closed when it does not, so collapsing and
 expanding needs no script.
 
-**Pixel wall**, inside an opened group: one tiny cell per Node. Four colour buckets only — normal,
-drift, needs attention, quarantined — because preattentive vision handles about four. A Node with
+**Pixel wall**, inside an opened group: one tiny cell per Node. Three colour buckets only — normal,
+drift, needs attention — because preattentive vision handles about four. (A fourth,
+quarantined, waits with quarantine: roadmap: relay/quarantine.) A Node with
 no recorded Hello (no daemon version or no Policy fingerprint) is a **hollow "not reported" cell**:
 an outline with no fill, on the fill-versus-outline channel rather than a fifth hue. Drawing it as
 a filled "normal" cell would be false reassurance. A cell takes the first bucket that applies:
-quarantined, needs attention, not reported, drift, normal — so an offline or cert-expiring Node
+needs attention, not reported, drift, normal — so an offline or cert-expiring Node
 stays amber even when also unreported. Click a cell to open that Node.
 
 **Facet rail**, showing value distributions as counts. The facets *are* the summary statistics.
@@ -84,7 +84,7 @@ facet sums to the group's Node count. That row is not a link: absence is not a l
 
 **Deviation table**, sorted **anomaly-first by rarity, never alphabetically**. The weird Node is
 row one. Columns: liveness dot + name · **State** · Labels · Policy fingerprint · Last seen · Pin.
-The State column is omitted when no row in the group draws a state (revoked, quarantined, not
+The State column is omitted when no row in the group draws a state (revoked, not
 reported, or a `state:` label). Names and fingerprints follow `00-foundations.md` ("Self-reported
 names", "Policy fingerprint"). The table's caption ("Every Node in `web`, oddest first") is
 **visually hidden** — present for screen readers, not drawn (D34): the sort order is visible in the
@@ -107,8 +107,8 @@ compare" until two are pinned. Pinning writes nothing: the set lives in the quer
 ## Filtering and targeting
 
 **Filter and group freely on anything; target only on labels.** Those are the same set: everything
-filterable is a label in one of four namespaces, so "Run against these" can never be handed a set
-it cannot express.
+filterable is a label in one of four namespaces, so the filter on screen is always a Selector an
+AI-agent or the Control API could target. The Console itself runs nothing (ADR-0052).
 
 Facts (OS, kernel, hostname, IP, packages) are **not** filterable, and none is on the row except
 the hostname, drawn as the self-reported primary name (`00-foundations.md`, "Self-reported names").
@@ -118,7 +118,7 @@ rule (AGENTS.md, *Out of realm*): *what Ansible could check in check-mode is out
 
 ### A refused filter
 
-A filter the Selector parser refuses — an unprefixed term, a `tag:` term, a malformed one — is
+A filter the Selector parser refuses — an unprefixed term, a malformed one — is
 said where it was typed (D26):
 
 - **The count reads "filter not applied"**, never "*N* of *M* Nodes": a count beside a filter that
@@ -152,19 +152,19 @@ D23; the capability is `docs/specs/query.md`.
   the hash, and nothing about a Node, its Policy or what may run on it changes. It is metadata the
   Relay holds about a fingerprint, never Policy (invariant 2).
 
-### Tagging a selection (v0.7.0)
+### Tagging a selection (MVP)
 
-From a filtered view an `operator` can **add or remove one `tag:` label on every Node in the current
-selection** — the bulk form of Node detail's per-Node tag control (spec 02). This is what makes a
-tag-based quarantine fast mid-incident: filter, tag `incident=4412`, then engage by that tag from
-spec 16.
+From a filtered view a human Account at `operator` or above can **add or remove one `tag:` label
+on every Node the current Selector matches**, the bulk form of Node detail's per-Node tag control
+(spec 02). ADR-0050 is the decision; `docs/specs/selectors-and-labels.md` holds the behaviour.
 
-- The Console resolves the filter to Node IDs and sends **the IDs, never the filter**, so the set
-  tagged is the set on screen even if labels change between render and click.
-- The confirm step names the count and the tag; the result lists the Nodes changed. Audited per
-  Node, with actor.
-- Standard auth, no step-up (ADR-0020). A `node:` or `state:` label has no edit affordance, here or
-  anywhere.
+- The confirm step lists the matched Nodes, names the count and the tag, and writes nothing until
+  confirmed. The Console resolves the filter to Node IDs and sends **the IDs, never the filter**,
+  so the set tagged is the set confirmed even if labels change between render and click. The
+  result lists the Nodes changed.
+- Each change is one audit record with the Account, the Node and the old and new values.
+- Standard auth, no step-up (ADR-0020, ADR-0050): a tag gates nothing. A machine Account is
+  refused. A `node:`, `relay:` or `state:` label has no edit affordance, here or anywhere.
 
 ## Deviation states
 
@@ -176,7 +176,6 @@ Rendered in the State column and counted on the rollup card.
 | `state:outdated` | daemon below the dispatch minimum; every dispatch returns `version_refused` | amber |
 | `state:template-unloadable` | template set failed to load; vocabulary empty, fail closed | grey |
 | `state:cert-expiring` | identity certificate near expiry and not renewed; the Node drops off silently if ignored | amber |
-| `relay:quarantine` | deliberately fenced; a declared label, not derived | indigo |
 | not reported | no recorded Hello: no daemon version or no Policy fingerprint. A Console presentation bucket, not a `state:` label, and not targetable (owner decision on #833) | hollow cell, neutral chip |
 
 **Drift is not among them** (`99-open-decisions.md` D1): "behind the fleet" is fleet-relative and
@@ -215,7 +214,7 @@ config management.
   and weight, never in amber (D30). The screen never reloads on a timer.
 - **Frozen** → the control-plane banner above content; the screen is otherwise unchanged (reads still work).
 - **Relay or CA certificate near expiry** → the same banner slot, per `00-foundations.md`.
-- **`viewer`** → identical, minus the two action buttons.
+- **`viewer`** → identical, minus the tag action and the alias control.
 - **Single-Node and small fleets** → the pixel wall becomes a short strip, group cards collapse to
   one row, and the deviation table simply is the fleet. Nothing special-cased.
 
@@ -223,22 +222,25 @@ config management.
 
 - [ ] An operator lands on their saved view, not the global registry.
 - [ ] The filter box accepts Selector syntax across all four namespaces and the resulting match
-      count is the same number the composer would resolve.
+      count is the same number a dispatch to that Selector would resolve.
 - [ ] A fleet of 10,000 Nodes renders without a scrollable list of rows: one segmented summary,
       one pixel wall, and the deviating rows.
       **Partially met.** `TestFleet_TenThousandNodesRenderWithoutAList` bounds the rendered page by
       `groupCards` and `deviationRows`, with an absolute literal beside each derived bound. The box
       stays unticked: those constants permit 40 cards of 25 deviating rows — 1,040 table rows — a
       scrollable list by any ordinary reading. Whether that is intended is an open owner question.
-- [ ] The single quarantined Node in a 4,000-Node group is findable without reading any text.
+- [ ] The single offline Node in a 4,000-Node group is findable without reading any text.
 - [ ] No Fact appears on a row or in a facet.
-- [ ] No route on this screen mutates anything in v0.6.0 except the Policy alias write (D23), which
-      reaches the capability layer's alias write and nothing that reaches a Node or a label.
+- [ ] No route on this screen mutates anything except the Policy alias write (D23) and the bulk
+      tag write (MVP, ADR-0050). Neither reaches a Node; neither writes a `node:`, `relay:` or
+      `state:` label.
+- [ ] The bulk tag confirmation lists the matched Nodes before anything is written, and a machine
+      Account is refused.
 - [ ] A refused filter shows "filter not applied", its refusal under the field, and the whole
       fleet de-emphasised beneath; nothing parses the filter in the browser.
 - [ ] Every Policy fingerprint drawn on this screen shows its full hash beside its alias or letter.
 
 ## Open
 
-- Bulk `tag:` from the current filter (v0.7.0, `operator`, no step-up) is the fleet view's one and
-  only action. Confirm nothing else creeps in.
+- Bulk `tag:` from the current filter (MVP, human `operator`+, no step-up) is the fleet view's one
+  action beside the alias write. Confirm nothing else creeps in.

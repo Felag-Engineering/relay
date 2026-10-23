@@ -13,7 +13,7 @@ local development fleet is a separate document, [docs/dev-fleet.md](../dev-fleet
 
 ## Joining Nodes and shaping what they run
 
-- **[enrollment.md](enrollment.md)** — joining Nodes to the fleet: scoped Enrollment Tokens, single-Node and bulk (Ansible) enrollment.
+- **[enrollment.md](enrollment.md)** — joining Nodes to the fleet: `sudo relay-daemon join`, Enrollment Tokens and their initial tags, one Node and a fleet.
 - **[policy-as-code.md](policy-as-code.md)** — Policy files in the IaC repo: `policy check` in CI, config-management distribution, fingerprint-verified rollout.
 - **[template-packs.md](template-packs.md)** — Template Operations: authoring typed parameter slots, the template-pack convention, fingerprint-verified rollout, and the `unsupported` outcome.
 - **[iac-upgrades.md](iac-upgrades.md)** — daemon upgrades through config management, consuming the CD artifacts, observed by the `min-daemon-version` gate (ADR-0014).
@@ -28,5 +28,5 @@ local development fleet is a separate document, [docs/dev-fleet.md](../dev-fleet
 ## Recovery and validation
 
 - **[ca-disaster-recovery.md](ca-disaster-recovery.md)** — CA key custody, backups, and the "burn it down" compromise runbook.
-- **[beta-hardware-validation.md](beta-hardware-validation.md)** — the one validation that cannot be automated: proving the vertical slice on real machines.
+- **[beta-hardware-validation.md](beta-hardware-validation.md)** — the one validation that cannot be automated: proving a release on real machines.
 - **[demo-fleet.md](demo-fleet.md)** — the nine-Node demo fleet (`deploy/demo`) as a presenter runbook: roster, beats, fault injection, reset.

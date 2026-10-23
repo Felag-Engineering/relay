@@ -118,8 +118,8 @@ To reach the fleet by a DNS name, or on port 443, set `FLEET_HOSTNAME` and
 **Why the password is not shorter.** The Relay refuses any Console password below 12 bytes
 (`accounts.MinPasswordBytes`). The sign-in throttle has no hard lockout, which would be a
 denial-of-service lever against your own operators, so an attacker gets slow, unlimited
-attempts and length is what makes that safe. Behind the credential is the front half of a
-fleet-execution surface (ADR-0026).
+attempts and length is what makes that safe. Behind the credential is the fleet's
+administration: Accounts, API Tokens and Enrollment Tokens (ADR-0026).
 
 **Why the password is set locally.** Every other Account is created by a control-plane request
 carrying a bearer token. The first cannot be, so it comes from the Relay's own store, written
@@ -131,7 +131,8 @@ and the store, on purpose: this is a laptop fleet.
 Policy, follow the Activity trail, cancel a Job, and administer Accounts and API Tokens. The
 Console renders approval records on Activity and Job detail but decides and lists none;
 approvals are decided as in [Approving a parked dispatch](#approving-a-parked-dispatch). It
-cannot run anything or change a label (invariant 10 gap, #438).
+runs nothing, by design: the Console watches and does not execute (ADR-0052). It cannot
+change a label yet; editing tags on a Node and in bulk is MVP work (ADR-0050).
 
 ## Bring the fleet up
 

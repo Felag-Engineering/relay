@@ -263,7 +263,7 @@ at creation and re-issued while it is unredeemed ([New account](#new-account),
 
 There is no suspension rung: ADR-0035 is **deferred, not adopted** (#443). The instruments are
 **revoking the Account's API Tokens** here — immediate, audited, `admin`, deliberately **without**
-step-up — or Freeze (spec 16). Disabling an Account (`Enabled`) is the durable off-switch: it
+step-up — or Freeze (`docs/specs/freeze.md`). Disabling an Account (`Enabled`) is the durable off-switch: it
 authenticates nowhere; re-enabling is privilege-granting and takes step-up.
 
 ## Must not appear

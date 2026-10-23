@@ -15,6 +15,14 @@
 > **A screen prompt pasted into a mockup tool travels without this header:** substitute
 > "Preflight" for "Plan" in the prompt text first, and never ask for a button labelled
 > "Plan" (Screen 4's primary button predates the ruling).
+>
+> **Cut from the MVP (2026-10-23, D38 in
+> [docs/design/console/99-open-decisions.md](console/99-open-decisions.md)).** The Console
+> watches and does not execute ([ADR-0052](../adr/0052-the-console-watches.md)): the composer,
+> the Preflight screen and `console_execution` are gone. Quarantine, the Policy author, the
+> System Model socket and the settings screens are cut too, and wait in the private roadmap.
+> Screen 4 is cut with it. Tags are built ([ADR-0050](../adr/0050-tags-are-the-operators-labels.md)). Read every
+> mention of those below as history.
 
 **Status:** designer-facing brief, 2026-08-07. Derived from `ui-advisory.md` and
 ADR-0009/ADR-0020, written as paste-able prompts for mockup generation: prepend the global
@@ -72,10 +80,9 @@ Rules that override normal dashboard instincts:
 9. **No settings pages exist, ever.** Server configuration (blast caps, listeners, gates)
    appears only as *effects in context* — a cap shown inside a plan line, an `outdated`
    flag on a row — never as an inventory of editable values. *(Superseded: invariant 11 now
-   lets a human `admin` change reach-bounding settings with step-up; see
-   [console/18-settings.md](console/18-settings.md) and
-   [console/19-approval-rules.md](console/19-approval-rules.md). The security floor is
-   still never editable.)*
+   lets a human `admin` change reach-bounding settings with step-up. The settings screens that
+   did so are cut from the MVP (roadmap: relay/settings-in-the-console), and the configuration
+   file is the one source. The security floor is still never editable.)*
 
 ---
 
