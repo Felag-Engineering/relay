@@ -7,7 +7,7 @@ whether daemons should push host statistics through the Relay to an aggregator.
 
 Customers want metrics, logs and traces from their servers in one pipeline. Every Node already
 holds a connection to the Relay, so the Relay could relay host telemetry too, and spare a second
-agent and a second network path.
+monitoring tool and a second network path.
 
 ## Proposal
 

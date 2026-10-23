@@ -1,6 +1,7 @@
 # Approval is one in-band answer
 
-**Status:** Accepted (owner decision 2026-10-22).
+**Status:** Accepted (owner decision 2026-10-22); amended 2026-10-23 (answers on API-token
+sessions).
 
 Reasoning and objections: `docs/proposals/approval-answered-in-the-requesting-client.md`.
 Behaviour: `docs/specs/approval.md`. This ADR supersedes ADR-0027 decisions 4 (in part), 7 and

@@ -89,9 +89,9 @@ catalog**, which is a template pack.
 _Avoid_: Policy Author (the screen's former name), policy editor, policy store
 
 **Cohort** (Policy Catalog):
-A named group of Nodes that should run the same catalog fragments — in practice, one
-config-management group. Exists only on the Policy Catalog screen and in its export; the Relay
-stores none and it is never a Selector or a Label. Unrelated to the "emergency cohorts" of
+Cut with the **Policy Catalog** (`roadmap: relay/policy-catalog-and-live-reload`): a named group
+of Nodes that would run the same catalog fragments. It would be held by no Relay record and never
+be a Selector or a Label. Unrelated to the "emergency cohorts" of
 ADR-0006, a security-lane idea nothing yet defines.
 _Avoid_: group (unqualified), fleet segment, tier
 
@@ -427,8 +427,9 @@ one. Relay checks only that it is present and that the answer's sealed state is 
 caller, request, plan and call; it cannot check that the claim is true. It is not the only way
 an in-band answer is accepted: any answer on a human Account's **OAuth session** needs none, and
 is that human's verified decision whatever the client calls itself; on such a session a responder
-assertion, if sent, is ignored and not recorded (`docs/specs/approval.md` AP-79). Any other answer
-carrying none is refused exactly as an `approve_request` carrying no approver is.
+assertion, if sent, is ignored and not recorded (`docs/specs/approval.md` AP-79). From the MVP
+an answer on an **API Token** session needs none either, and counts as that session's Account's
+decision (ADR-0047, amended 2026-10-23; threat model R45); the assertion, if sent, is recorded.
 Recorded in the **asserted** lane, never the verified one (see *Attribution*): "a client told
 us a human answered", never "a human authenticated to Relay". The in-band honesty residual
 rests on it (`docs/specs/approval.md`; threat model R21).
@@ -569,8 +570,8 @@ _Avoid_: user, principal, service account (say "machine Account")
 
 **API Token**:
 A bearer credential bound to an Account, used by machines (and the AI-agent via MCP) to
-call the Control API. Named, revocable, optionally expiring, stored only as a hash, and
-inheriting its Account's role. Its fixed prefix **`glp_`** is a security feature, not branding:
+call the Control API. Named, revocable, optionally expiring (a human Account's defaults to seven
+days, designed for the MVP), stored only as a hash, and inheriting its Account's role. Its fixed prefix **`glp_`** is a security feature, not branding:
 it makes a leaked token greppable and is what secret scanners key on. The plaintext is shown
 once, at mint; there is no recovery, only re-mint plus revoke. Distinct from an
 **Enrollment Token**, which joins Nodes to the fleet and can never call the API, and from
@@ -647,6 +648,13 @@ AI-agent could rewrite. What daemons observe and what people declare about the f
 Relay's later work (`roadmap: relay/fleet-topology`); an AI-agent's beliefs are agent memory.
 Invariant 9 constrains any fleet model Relay keeps.
 _Avoid_: topology, CMDB, knowledge base, map
+
+**Fleet model**:
+Any record Relay keeps of how the fleet fits together. Invariant 9 constrains it: advisory, never
+a desired-state spec, what Relay observed distinguishable from what anyone wrote, and no AI-agent
+writes its grounding facts (ADR-0051). Relay keeps none in the MVP; observed topology and
+declared meaning are later work (`roadmap: relay/fleet-topology`).
+_Avoid_: CMDB, inventory model
 
 **Service**, **Dependency**, **Annotation**:
 Retired with the System Model (ADR-0051).

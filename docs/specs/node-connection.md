@@ -47,7 +47,7 @@ it died, and that holds at fleet scale without flooding the network.
   registry's certificate fingerprint updates when the Node next connects, and that change is
   audited (below).
 - A Node is `state:cert-expiring` once its certificate is inside the last quarter of its lifetime.
-  The fraction is fixed at 0.25, not a setting (`selectors-and-labels.md`).
+  The fraction is built in (`relay-configuration.md`).
 
 ### What "connected" means
 

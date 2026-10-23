@@ -1,4 +1,4 @@
-# The fleet model is split: facts in Relay, beliefs in the agent
+# The fleet model is split: facts in Relay, beliefs in the AI-agent
 
 **Status:** Accepted (owner decision 2026-10-23).
 
@@ -21,8 +21,8 @@ memory. Whatever Relay keeps, it stays advisory and never becomes a desired stat
 2. **Observed topology and declared meaning are Relay's, later.** Facts reported by daemons
    through read Operations, under Policy and audit, and meaning written by people through the
    capability layer. Designed in the roadmap, not here.
-3. **An AI-agent's beliefs are agent memory**, kept by the harness, never a store every Relay
-   consumer reads as fact. One agent's guess must never become the next agent's ground truth.
+3. **An AI-agent's beliefs are its own memory**, kept by the harness, never a store every Relay
+   consumer reads as fact. One AI-agent's guess must never become the next AI-agent's ground truth.
 4. **Invariant 9 is a constraint on any fleet model Relay keeps.** Where Relay keeps one, it is
    advisory and never a desired-state spec: Relay never reconciles. What Relay observed is
    always distinguishable from what anyone wrote. No AI-agent writes its grounding facts: Nodes,
@@ -32,7 +32,7 @@ memory. Whatever Relay keeps, it stays advisory and never becomes a desired stat
 
 ADR-0008 let any AI-agent rewrite a map every other AI-agent trusted, which made it a route for
 one compromised session to steer the next. The parts worth sharing are facts Relay can observe
-first-hand and meaning people write; the rest is reasoning, which the agent keeps better. Nothing
+first-hand and meaning people write; the rest is reasoning, which the AI-agent keeps better. Nothing
 was built, so withdrawing it costs only documents.
 
 ## What changes

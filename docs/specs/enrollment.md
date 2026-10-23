@@ -158,7 +158,7 @@ EN-43 fixes the rate limits.
 | EN-42 | A mint request naming an initial tag that is not a well-formed `tag:` label, an invalid TTL, malformed JSON or an unknown request field is refused; nothing is sanitized into another label (ADR-0050). Replaces EN-24 when promoted. | MVP |
 | EN-43 | The per-source and global enrollment rate limits are fixed constants, not settings. The per-source limit admits about 60 enrollments a minute from one address, so some 200 Nodes behind one NAT address join in minutes; the global limit stays the guard against a flood. Both still apply before token validation (EN-10). Extends EN-10 when promoted. | MVP |
 | EN-44 | A mint by a machine Account that names any initial tag is refused, and the refusal says only a human Account writes tags (ADR-0050). A machine Account's mint naming no tag is unaffected. | MVP |
-| EN-45 | On upgrade, every `relay:` label other than `relay:node-id` that an earlier release wrote from a token's scope is copied to a `tag:` label of the same key and value, and an unused token minted with a scope writes that scope as initial tags. Each copy is audited as an act of the system (ADR-0050). | MVP |
+| EN-45 | On upgrade, every `relay:` label other than `relay:node-id` that an earlier release wrote from a token's scope is copied to a `tag:` label of the same key and value, and an unused token minted with a scope writes that scope as initial tags. Each copy is attributed to the human Account that minted the token, as EN-41 attributes initial tags; labels from a token a machine Account minted are not copied, and the upgrade lists their Nodes for a person to tag (ADR-0050). | MVP |
 
 ## Out of scope
 
@@ -173,9 +173,6 @@ EN-43 fixes the rate limits.
 - **Durable audit records**: `audit-and-read-lane.md`. Enrollment attempts are not durable
   (EN-21).
 - **Dispatch approvals and approval gates**: `approval.md`.
-- **Testing:** `make verify` suffices for Relay-only changes. A change to the Node-plane
-  protocol, the TLS configuration, the join string or the daemon's enrollment path also needs the
-  cross-binary suite.
 - **Fencing off a token's Nodes without revoking them**: `roadmap: relay/quarantine`.
   Containment today is revoking the token (EN-19); each Node stays addressable by
   `relay:node-id` (EN-38).

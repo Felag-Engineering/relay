@@ -158,30 +158,6 @@ Relay never pushes a binary (invariant 14).
 
 ## Out of scope
 
-- **Evidence outside the Proof block:** DI-1 is asserted by the release workflow, not a test;
-  DI-11 by the write-ban lint; DI-18 is an absence; DI-30's ledger rule and DI-32 are held by the
-  catalog-ledger and package-guard scripts CI runs. Packaging claims are proven by the CI install
-  jobs once they exist; `make verify` alone cannot prove them.
-- Minting Enrollment Tokens, identity issuance and revocation: `enrollment.md`. DI-21 and DI-23
-  state only what a revoked Node's daemon meets.
-- The connection a running daemon holds: `node-connection.md`, which owns reconnect and the
-  minimum-version gate. DI-16, DI-17 and DI-21 restate only what an install, upgrade or removal
-  relies on.
-- What Policy may say and how it is evaluated: `policy.md`. What a Template may define:
-  `operations-and-templates.md`. Built-in `node:` labels and Selector matching:
-  `selectors-and-labels.md`.
-- The Relay host's own installation and configuration: `relay-configuration.md`, except the
-  shared platform list in DI-33.
-- Authoring Policy for a customer. Policy authoring stops at the clipboard (invariant 2). The
-  package installs no Policy fragment of its own.
-- Package-owned Policy fragments, a Policy Catalog, reloading Policy, Templates or labels without
-  a restart, a reported `invalid` Policy state, and a declared-labels file: roadmap:
-  relay/policy-catalog-and-live-reload.
-- A hosted package repository, ruled out before v1.0.0 (ADR-0033).
-- Init systems other than systemd, Nodes that are not Linux, containers as Nodes, and platforms
-  outside DI-33: unaddressed, not promised.
-- An agentless SSH tier (ADR-0037, proposed): a Node with no daemon has no local Policy engine,
-  so it would need its own capability spec and ADR.
 - **Residual risk:** the threat model's register, R16 and R36 (a join string on disk, closed when
   DI-42 and DI-43 are promoted), R37, R38 and R40.
 

@@ -157,8 +157,8 @@ so what may be done, by whom, and how it is recorded is decided once.
   mTLS client cert issued at enrollment.
   ([ADR-0005](docs/adr/0005-grpc-bidi-over-mtls-transport.md),
   [ADR-0006](docs/adr/0006-node-enrollment-identity-and-label-authority.md))
-- **Tags people control.** Operators group Nodes with `tag:` labels, set at enrollment or
-  later in the Console. No AI-agent and no Node can write one.
+- **Tags people control** (designed for the MVP). Operators group Nodes with `tag:` labels, set
+  at enrollment or later in the Console. No AI-agent and no Node can write one.
   ([ADR-0050](docs/adr/0050-tags-are-the-operators-labels.md))
 
 ## MCP tools

@@ -140,10 +140,6 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 - **Residual risk:** the threat model's register, R34 (a purged host keeps its CA private key).
   R35 is closed by RC-27. R15 is closed while reach settings stay in the file, and returns if
   they move into the Console.
-- **Evidence outside the Proof block:** RC-7 and RC-27 are held by the release, image and Compose
-  guard scripts CI runs; that the deployment stack pins the image by digest has no proof. RC-11's
-  structural check does not see a mux handed to a registrar as a call expression, so a registrar
-  in another package is not covered.
 
 ## Proof
 

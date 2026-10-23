@@ -148,15 +148,16 @@ this spec.
 
 | Kind | Terms |
 |---|---|
-| Markers (boolean) | `offline`, `outdated`, `cert-expiring`, `policy-invalid`, `raw-exec-enabled` |
+| Markers (boolean) | `offline`, `outdated`, `cert-expiring`, `raw-exec-enabled` |
 | Facts (key=value) | `daemon-version`, `policy-fingerprint` |
 
 - `outdated` means below the ADR-0014 dispatch minimum and nothing else.
-- `cert-expiring` fires within a fixed fraction, a quarter, of the certificate's lifetime, and stays
-  quiet when the provenance needed to compute it is unknown.
-- `policy-invalid` means the Node reports its Policy `invalid` (`policy.md`); `raw-exec-enabled`
-  means the Node's Policy enables Raw Exec.
-- `policy-fingerprint` covers the whole evaluated Policy, Template definitions included.
+- `cert-expiring` fires within the built-in fraction of the certificate's lifetime
+  (`relay-configuration.md`), and stays quiet when the provenance needed to compute it is unknown.
+- `raw-exec-enabled` means the Node's Policy enables Raw Exec. A `policy-invalid` marker waits with
+  a reported `invalid` Policy state (`roadmap: relay/policy-catalog-and-live-reload`).
+- `policy-fingerprint` covers the evaluated Policy; the Template set carries its own fingerprint
+  (ADR-0021).
 - **Terms derived from a Node's own report find Nodes; they guarantee nothing.** A compromised
   Node can hide any of them.
 - A marker written with a value, or a fact written bare, is a parse error rather than a silently
@@ -242,8 +243,8 @@ which is a disclosed residual (threat-model register R13) with operator-facing r
 - **ADR-0020 — amended 2026-09-16, and by ADR-0050.** Its direct post-enrollment `relay:` label
   management (`admin` + step-up) is superseded: `relay:` labels are written only by defined
   actions. Its `tag:` design stands as ADR-0050 narrows it: human Accounts only, no MCP.
-- **ADR-0034 — needs amending.** The `state:` vocabulary gains `policy-invalid` and
-  `raw-exec-enabled`, and retires `template-unloadable` and `template-fingerprint`.
+- **ADR-0034 — needs amending** if `raw-exec-enabled` is added to the `state:` vocabulary. The
+  Template markers stand (ADR-0021).
 - **ADR-0017** — unchanged: `node:` labels are trusted exactly as much as the Node.
 - **GLOSSARY.md — needs updating** for Label (the `relay:` writing rule, the `tag:` writer,
   `node:` built-ins) and the `state:` vocabulary.

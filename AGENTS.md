@@ -200,7 +200,7 @@ flag it.
 - **Desired-state reconciliation.** A fleet model is advisory. Relay does not converge a
   fleet toward a spec, ever. (Invariant 9)
 - **Host telemetry.** Relay reports telemetry about itself and the fleet's relationship to it.
-  It never collects or forwards metrics, logs or traces from Nodes; monitoring agents are the
+  It never collects or forwards metrics, logs or traces from Nodes; monitoring software is the
   customer's, and an AI-agent reads host state on demand through read Operations. (Settled
   2026-10-23; `docs/proposals/relay-does-not-carry-host-telemetry.md`.)
 - **Software distribution.** The Relay never pushes binaries and the daemon never

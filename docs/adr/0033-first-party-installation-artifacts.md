@@ -1,11 +1,11 @@
 # First-party installation artifacts
 
 **Status:** Accepted; amended 2026-10-15 (the Relay ships as OS packages; the image is a
+production path; place-if-absent Policy; remove and purge; no Alpine package yet); amended by
+ADR-0043; amended 2026-10-21 (`relay-daemon join` enrolls).
 
 ADR-0053 (2026-10-23) supersedes the 2026-10-15 amendment's optional read-catalog package: the
 catalog ships inside the `relay-daemon` package.
-production path; place-if-absent Policy; remove and purge; no Alpine package yet); amended by
-ADR-0043; amended 2026-10-21 (`relay-daemon join` enrolls).
 
 ADR-0048 adds a static Ansible role to the release artifacts.
 

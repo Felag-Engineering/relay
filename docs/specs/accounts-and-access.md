@@ -104,10 +104,11 @@ authorizer and a real audit trail for Account administration refuses to start.
 An API Token belongs to exactly one Account and has a non-secret ID, name, creation time,
 optional expiry, last-use time, and revocation state. At mint the caller must choose a TTL
 explicitly; zero means no expiry, so a configured AI-agent can stay connected without routine
-human re-authentication. Designed for the MVP: for a human Account the Console's mint form
-offers seven days as its default, because an approval answered on a human's token session counts
-as that human (ADR-0047, amended 2026-10-23), and a copied interactive token should stop working
-on its own. The plaintext `glp_…` credential is returned in the mint response
+human re-authentication. Designed for the MVP: a human Account's API Token defaults to seven
+days on every mint path (the Console's form, the Control API and `relay init`), decided once in
+the capability layer, because an approval answered on a human's token session counts as that
+human (ADR-0047, amended 2026-10-23) and a copied interactive token should stop working on its
+own. A longer life is an explicit choice. The plaintext `glp_…` credential is returned in the mint response
 exactly once. Relay stores a hash of the secret component and never the plaintext, and no
 read, list, or audit surface returns either.
 

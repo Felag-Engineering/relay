@@ -31,9 +31,11 @@ be regrouped later without re-enrolling. `relay:` keeps only the keys Relay itse
    enrollment writes them on each Node it enrolls, as the minting admin's act, and afterwards they
    are ordinary tags. A mint naming any `relay:` label is refused, naming it. A machine Account
    may mint, as ADR-0032 allows an `admin` to, but its mint may name no initial tag: a tag is
-   always a person's act. On upgrade, the `relay:` labels earlier releases wrote from a token's
-   scope are copied to tags of the same key and value, and a token minted before the change
-   writes its scope as initial tags; `relay:node-id` is untouched.
+   always a person's act. On upgrade, the `relay:` labels earlier releases wrote from a token a
+   human Account minted are copied to tags of the same key and value, attributed to that Account,
+   and such a token not yet used writes its scope as initial tags; labels from a machine Account's
+   token are not copied, and their Nodes are listed for a person to tag. `relay:node-id` is
+   untouched.
 4. **`relay:` holds only keys a Relay action defines.** Today that is `relay:node-id`, written by
    enrollment (ADR-0048). The security lane, remediation and secret distribution, targets `relay:`
    only, so it addresses Nodes by `relay:node-id` until a later action defines a group key.

@@ -218,10 +218,7 @@ _Not yet written._ This spec's claims are the backlog of its testing issue.
   directory waits for a restart to take effect; explicit reload, if built, would make it live.
 - **Secrets in read output.** The confidentiality deny-list cannot know every file that holds a
   credential; read auditing records that such a file was read, not what it said.
-- **Logs reach the model provider by default.** The shipped default allows `log.tail`, so
-  whatever reaches a Node's journal, secrets included, can flow to the AI-agent and its model
-  provider. Accepted by the owner on `2026-10-23` (ADR-0053); an operator narrows or denies
-  `log.tail` with a fragment.
+- **Logs reach the model provider by default:** threat model R46 (ADR-0053).
 - **Secrets in denial text reach the daemon log.** A denial's human-readable text quotes
   caller-supplied text — a deny pattern's matched text and a refused `argv[0]` on the Raw Exec
   path, the arguments on the Operation path — and so copies a secret passed as an argument into
