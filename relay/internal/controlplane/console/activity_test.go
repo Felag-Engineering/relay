@@ -648,8 +648,8 @@ func TestActivity_LiveRegionOnlyWhereTheViewRendersDispatchRows(t *testing.T) {
 		if !strings.Contains(body, "data-live-region") {
 			t.Errorf("%s renders no live region", path)
 		}
-		if !strings.Contains(body, `src="/console/assets/stream.js"`) ||
-			!strings.Contains(body, `src="/console/assets/activity.js"`) {
+		if !strings.Contains(body, `src="`+assetURL("stream.js")+`"`) ||
+			!strings.Contains(body, `src="`+assetURL("activity.js")+`"`) {
 			t.Errorf("%s does not load the live scripts", path)
 		}
 		if !strings.Contains(body, `data-events="/console/events?kinds=job"`) {

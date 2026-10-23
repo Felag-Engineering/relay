@@ -1,7 +1,6 @@
 package console
 
 import (
-	"embed"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -9,9 +8,6 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/logctx"
 )
-
-//go:embed assets/*
-var assetsFS embed.FS
 
 // BannerKind is a condition about THE CONTROL PLANE ITSELF.
 //
@@ -81,8 +77,8 @@ type Page struct {
 	// slog.Default()). Unexported, so a template cannot reach it.
 	log *slog.Logger
 
-	// Scripts are external script files this page loads, each an absolute
-	// path under /console/assets/.
+	// Scripts are external script files this page loads, each an assetURL
+	// value: one plain file under /console/assets/HASH/.
 	//
 	// This is the shell's ONLY script hook, and its shape is the whole
 	// point: a src from this origin, deferred, with an EMPTY element body.
@@ -107,14 +103,14 @@ type Page struct {
 	Content template.HTML
 }
 
-var layoutTmpl = template.Must(template.New("layout").Funcs(template.FuncMap{"selfReportedTitle": func() string { return selfReportedTitle }}).Parse(`<!doctype html>
+var layoutTmpl = template.Must(template.New("layout").Funcs(template.FuncMap{"selfReportedTitle": func() string { return selfReportedTitle }, "asset": assetURL}).Parse(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}}{{if .TitleSelfReported}} (self-reported){{end}} &mdash; Relay Console</title>
-<link rel="stylesheet" href="/console/assets/console.css">
-<link rel="icon" type="image/svg+xml" href="/console/assets/brand/relay-icon.svg">
+<link rel="stylesheet" href="{{asset "console.css"}}">
+<link rel="icon" type="image/svg+xml" href="{{asset "brand/relay-icon.svg"}}">
 </head>
 <body hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'>
 <a class="skiplink" href="#content">Skip to content</a>
@@ -124,7 +120,7 @@ var layoutTmpl = template.Must(template.New("layout").Funcs(template.FuncMap{"se
        every <form> and submits nothing. */}}
   <aside class="nav">
     <input type="checkbox" id="navtoggle" class="navtoggle" autocomplete="off">
-    <div class="navtop"><div class="brand"><picture><source media="(prefers-color-scheme: light)" srcset="/console/assets/brand/relay-wordmark-light.svg"><img src="/console/assets/brand/relay-wordmark-dark.svg" alt="Relay"></picture> <span>console</span></div><label for="navtoggle" class="navbtn">Menu</label></div>
+    <div class="navtop"><div class="brand"><picture><source media="(prefers-color-scheme: light)" srcset="{{asset "brand/relay-wordmark-light.svg"}}"><img src="{{asset "brand/relay-wordmark-dark.svg"}}" alt="Relay"></picture> <span>console</span></div><label for="navtoggle" class="navbtn">Menu</label></div>
     <div class="navbody">
     <nav class="navgroups" aria-label="Console">
     {{range .Nav}}
@@ -216,25 +212,5 @@ func placeholder(title, spec string) func(Deps) http.HandlerFunc {
 				template.HTMLEscapeString(spec) + `</code>.</p></div>`)
 			Render(w, p)
 		}
-	}
-}
-
-// assetHandler serves the Console's own static assets. It exists because the
-// content security policy admits styles only from this origin and nothing
-// inline, so the stylesheet cannot live in the layout.
-//
-// StripPrefix is load-bearing rather than tidy: the embedded FS is rooted at
-// "assets/", and a FileServer handed the request path unmodified looks for
-// "console/assets/console.css" and 404s, and every Console page renders
-// completely unstyled.
-//
-// TestConsole_StylesheetIsActuallyServed is the regression guard, and it
-// asserts the BODY rather than the status, because a 404 page is also a 200-
-// shaped thing to a careless assertion.
-func assetHandler(Deps) http.HandlerFunc {
-	fs := http.StripPrefix("/console/", http.FileServer(http.FS(assetsFS)))
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		fs.ServeHTTP(w, r)
 	}
 }

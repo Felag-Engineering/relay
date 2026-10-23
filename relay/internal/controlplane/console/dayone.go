@@ -109,7 +109,7 @@ func renderDayOne(w http.ResponseWriter, p Page, d Deps) {
 		// A screen with no live seam must not load a script that would sit
 		// there failing to connect. stream.js FIRST: it defines
 		// window.RelayLive, which dayone.js reads at load time.
-		p.Scripts = []string{"/console/assets/stream.js", "/console/assets/dayone.js"}
+		p.Scripts = []string{assetURL("stream.js"), assetURL("dayone.js")}
 	}
 
 	renderScreen(w, p, dayOneTmpl, v)

@@ -78,7 +78,7 @@ func TestFleet_ReadsCorrectlyWithScriptsOff(t *testing.T) {
 	if !strings.Contains(content, "rendered just now</time>") {
 		t.Error("the server-rendered text does not state the page's age")
 	}
-	if tags := scriptTag.FindAllString(body, -1); len(tags) != 1 || tags[0] != `<script src="/console/assets/freshness.js" defer>` {
+	if tags := scriptTag.FindAllString(body, -1); len(tags) != 1 || tags[0] != `<script src="`+freshnessScript+`" defer>` {
 		t.Errorf("Fleet's scripts = %q, want only freshness.js", tags)
 	}
 	if !strings.Contains(content, `<a class="refreshbtn"`) {

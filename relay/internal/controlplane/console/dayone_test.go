@@ -434,8 +434,8 @@ func TestDayOne_ScriptIsActuallyServed(t *testing.T) {
 	// BOTH files, and stream.js FIRST: it defines window.RelayLive, which
 	// dayone.js reads at load time. Deferred scripts run in document order, so
 	// the order in this list is load-bearing rather than cosmetic.
-	stream := `<script src="/console/assets/stream.js" defer></script>`
-	screen := `<script src="/console/assets/dayone.js" defer></script>`
+	stream := `<script src="` + assetURL("stream.js") + `" defer></script>`
+	screen := `<script src="` + assetURL("dayone.js") + `" defer></script>`
 	if !strings.Contains(body, stream) || !strings.Contains(body, screen) {
 		t.Fatal("day one does not load the shared transport and its own handler")
 	}
@@ -446,14 +446,14 @@ func TestDayOne_ScriptIsActuallyServed(t *testing.T) {
 	for _, asset := range []struct{ path, sentinel string }{
 		// A 404 page is also a 200-shaped thing to a careless assertion, so
 		// each check names something only that file contains.
-		{"/console/assets/stream.js", "EventSource"},
-		{"/console/assets/dayone.js", "addRejection"},
+		{assetURL("stream.js"), "EventSource"},
+		{assetURL("dayone.js"), "addRejection"},
 		// Activity's handler is fetched here too. It is mounted by a
 		// different screen, but nothing else in the suite ever asks the asset
 		// route for it — so a typo in Activity's p.Scripts would 404 in
 		// production with every Go test green, which is the exact failure
 		// this test was written for.
-		{"/console/assets/activity.js", "data-jobstate"},
+		{assetURL("activity.js"), "data-jobstate"},
 	} {
 		rec := get(t, h, asset.path)
 		if rec.Code != http.StatusOK {

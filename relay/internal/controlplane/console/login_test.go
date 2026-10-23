@@ -239,6 +239,7 @@ func TestConsole_OnlyLoginAndItsAssetsAreReachableUnauthenticated(t *testing.T) 
 	public := []string{
 		LoginPath,
 		"/console/assets/console.css",
+		assetURL("console.css"),
 	}
 	private := []string{
 		"/console/",
@@ -901,9 +902,15 @@ func TestConsole_StylesheetIsActuallyServed(t *testing.T) {
 		t.Errorf("the response is not the Console stylesheet: %.200s", body)
 	}
 
+	hashed := f.do(t, httptest.NewRequest(http.MethodGet, assetURL("console.css"), nil))
+	if hashed.Code != http.StatusOK || hashed.Body.String() != body {
+		t.Errorf("the hashed stylesheet URL: status = %d, body is the stylesheet = %v",
+			hashed.Code, hashed.Body.String() == body)
+	}
+
 	// And the page that needs it actually points at it.
 	page := f.do(t, httptest.NewRequest(http.MethodGet, LoginPath, nil)).Body.String()
-	if !strings.Contains(page, `href="/console/assets/console.css"`) {
+	if !strings.Contains(page, `href="`+assetURL("console.css")+`"`) {
 		t.Error("the sign-in page does not link the stylesheet")
 	}
 }
@@ -921,7 +928,7 @@ func TestConsole_BrandAssetsAreServedAndCurrent(t *testing.T) {
 	f := newLoginFixture(t)
 
 	for _, name := range []string{"relay-icon.svg", "relay-wordmark-light.svg", "relay-wordmark-dark.svg"} {
-		rec := f.do(t, httptest.NewRequest(http.MethodGet, "/console/assets/brand/"+name, nil))
+		rec := f.do(t, httptest.NewRequest(http.MethodGet, assetURL("brand/"+name), nil))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: status = %d, want 200", name, rec.Code)
 		}
@@ -940,9 +947,9 @@ func TestConsole_BrandAssetsAreServedAndCurrent(t *testing.T) {
 	Render(shell, Page{Title: "t"})
 	for where, body := range map[string]string{"sign-in page": page, "layout": shell.Body.String()} {
 		for _, ref := range []string{
-			`rel="icon" type="image/svg+xml" href="/console/assets/brand/relay-icon.svg"`,
-			`srcset="/console/assets/brand/relay-wordmark-light.svg"`,
-			`src="/console/assets/brand/relay-wordmark-dark.svg" alt="Relay"`,
+			`rel="icon" type="image/svg+xml" href="` + assetURL("brand/relay-icon.svg") + `"`,
+			`srcset="` + assetURL("brand/relay-wordmark-light.svg") + `"`,
+			`src="` + assetURL("brand/relay-wordmark-dark.svg") + `" alt="Relay"`,
 		} {
 			if !strings.Contains(body, ref) {
 				t.Errorf("the %s does not carry %s", where, ref)
