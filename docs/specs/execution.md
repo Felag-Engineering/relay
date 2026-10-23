@@ -18,14 +18,17 @@ engine, after everything here has passed (invariant 12).
 
 ## Surfaces
 
-All three surfaces adapt the same capability-layer entry point and decide nothing. A parallel
-path fails to compile: the dispatch type and its constructor are unexported.
+Both surfaces adapt the same capability-layer entry point and decide nothing. A parallel path
+fails to compile: the dispatch type and its constructor are unexported.
 
 | Surface | How it is reached |
 |---|---|
-| **MCP** | The execution meta-tools: `run_operation` (typed Operation), `raw_exec` (arbitrary argv), `get_job`, `cancel_job`. Where the client declares the Tasks extension (SEP-2663), a dispatch returns a task handle and the Job is also reached through `tasks/get` and `tasks/cancel`. Every dispatch tool accepts an optional idempotency key argument. |
+| **MCP** | The execution meta-tools: `run_operation` (typed Operation), `raw_exec` (arbitrary argv), `get_job`, `cancel_job`. Every dispatch tool accepts an optional idempotency key argument. |
 | **Control API** | `POST /api/v1/operations`, `POST /api/v1/raw-exec`, `GET /api/v1/jobs/{id}`, `POST /api/v1/jobs/{id}/cancel`. Dispatch accepts the `Idempotency-Key` header. |
-| **Admin Console** | The execution composer — preflight-by-default, step-up re-auth on a mutate apply, behind the root-owned `console_execution` flag (ADR-0026). **Designed, not built** (v0.7.0). |
+
+The Admin Console is not an execution surface: it watches and does not execute (ADR-0052). It
+shows Jobs and their results through `query.md` and `audit-and-read-lane.md`. Executing from the
+Console is later work (`roadmap: relay/console-execution-for-skills`).
 
 Raw Exec is deliberately *not* a separate path: it is this pipeline carrying an argv instead of
 a typed Operation, always at the mutate risk class. Its own route would be the parallel control
@@ -55,9 +58,8 @@ One call, in this order. Each stage can only refuse; none can widen what a later
      **excludes matched Nodes that do not report it** before anything below is decided. Excluded
      Nodes appear in the result as `unsupported` and are never dispatched
      (`operations-and-templates.md`);
-   - **excludes every quarantined Node**, whatever namespace matched it, `relay:` included.
-     Excluded Nodes appear in the result as `quarantined` and are never dispatched; a dispatch
-     whose every matched Node is quarantined sends nothing (`quarantine-node.md`).
+   - is where quarantine would exclude a Node, whatever namespace matched it. Quarantine is not
+     in the MVP (`roadmap: relay/quarantine`).
 4. **Authorization.** The Principal is checked against the requested Action and Selector.
    **Caller-asserted attribution is stripped from the context first** — an authorization
    decision must never be able to read a value the caller supplied about itself. Raw Exec
@@ -102,15 +104,19 @@ on the Node, none shipped by default (ADR-0022).
 Operation arguments and Raw Exec argv are **the record of what was done**, audited verbatim. By
 contract a caller never passes a secret through one; this spec and `list_operations` say so, and
 there is no secret slot type. Getting a secret onto a Node is secret distribution, not yet
-designed (Future work in `quarantine-node.md`), and it must never make a secret an audited
-argument.
+designed and not in the MVP, and it must never make a secret an audited argument.
 
 ### Fan-out, ordering and timeouts
 
-**Fan-out is sequential.** One Job produces one Task per resolved Node, dispatched one at a
-time, each blocking on its result. A Job's wall-clock is the *sum* of its Tasks, so a read Job at
-the default cap of 10,000 is ten thousand sequential round-trips: the cap is generous because
-reads are cheap per Node, not because fan-out is parallel. Concurrent fan-out is Future work.
+**Fan-out is concurrent.** One Job produces one Task per resolved Node, and **at most 16 Tasks
+of one Job are in flight at once**. The limit is a built-in constant, not a setting. A read Job
+at the default cap of 10,000 is about 625 rounds of 16 round-trips. The code already dispatches
+concurrently at this bound, read today from the `reach.dispatch_concurrency` setting; the MVP fixes
+it as a constant.
+
+A configurable failure tolerance, a configurable in-flight limit and retries are later work
+(`roadmap: relay/failure-policy-and-retries`). A retry there would be a new Task with a new ID,
+never a re-send of the old one (invariant 4).
 
 Task order within a Job is the Selector's resolution order and is not a contract; nothing may
 depend on one Node running before another.
@@ -121,15 +127,17 @@ outcome recorded against that Node, not a Relay-side abandonment. There is no Jo
 
 ### Halting a failing mutation
 
-**A `mutate` Job halts on its first failure.** Once one Task resolves `failure`, `timeout` or
-`unacknowledged`, no further Task is sent — `unacknowledged` because a Node that may or may not
-have applied the change is exactly the uncertainty a rollout must stop on. Every unsent Task
-resolves `cancelled`, and the Job's result says it halted, on which Node, and why.
+**A `mutate` Job halts on its first failure** (MVP; the code today sends every Task whatever the
+outcomes). Once one Task resolves `failure` or `timeout`, no
+further Task is sent. Every unsent Task resolves `cancelled` with the halt as its reason, and the
+Job's result says it halted, on which Node, and why. Tasks already in flight when the halt happens
+finish and report their real outcomes.
 
 - `denied_by_policy`, `unsupported` and `unreachable` **do not halt** a Job. They describe that
   Node, not the change being made.
 - **`read` Jobs never halt.** One Node failing a read says nothing about the others.
-- There is no configurable failure threshold in the first pass.
+- There is no configurable failure threshold in the MVP
+  (`roadmap: relay/failure-policy-and-retries`).
 
 ### The blast-radius cap
 
@@ -140,9 +148,9 @@ reporting Nodes report (`operations-and-templates.md`). The cap is an inclusive 
 
 Both are operator settings in the Relay's configuration file, read at start and re-read on
 `SIGHUP` (`relay-configuration.md`); a non-positive value is clamped to the built-in default,
-never treated as unlimited. They are *reach-bounding* under invariant 11 — never reachable from
-an API Token or an MCP tool — and designed to become store-backed settings edited only by a human
-`admin` with step-up, audited (ADR-0004 and ADR-0012 amendments).
+never treated as unlimited. They are *reach-bounding* under invariant 11, never reachable from an
+API Token or an MCP tool. Editing them in the Console, by a human `admin` with step-up, audited
+(ADR-0004 and ADR-0012 amendments), is not in the MVP (`roadmap: relay/settings-in-the-console`).
 
 ### At-most-once execution (invariant 4, ADR-0004)
 
@@ -161,7 +169,7 @@ logic:
   relay-daemon dedups by Task ID.** Never because the Relay trusts its own retry to be novel.
 - **Pending survivors are not auto-run.** There is no store-and-forward. Resuming a stalled Job
   is the caller's re-target decision, never an automatic behaviour.
-- **Unreachable, unacknowledged and version-refused Tasks are already terminal** and never enter
+- **Unreachable and version-refused Tasks are already terminal** and never enter
   reconciliation.
 - **A re-issued request does not create a second Job.** Task-ID dedup cannot catch a re-sent
   dispatch, which would mint new Tasks; the idempotency key catches it one level up and returns
@@ -169,24 +177,21 @@ logic:
 
 A disconnected Node's Task is **never sent, queued or retried**: it fails fast with
 `unreachable`, and a reconnecting Node never runs a Task it missed. A Node that died silently is
-caught at send: a dispatched Task the relay-daemon does not acknowledge within the deadline
-resolves **`unacknowledged`** and the Node is marked offline at once (`node-connection.md`). It
-may or may not have run, so it is **never re-sent**; the caller checks before retrying.
+noticed by its missed heartbeats, after about 3 minutes, not at send (`node-connection.md`).
+Catching it at send, with an acknowledgement deadline and an `unacknowledged` outcome, is not in
+the MVP (`roadmap: relay/fast-failure-and-fleet-admission`).
 
 ### Handing back the Job
 
 A dispatch returns its Job before the Job finishes, so a broken connection never costs the
 caller its handle.
 
-- **MCP, with the Tasks extension.** Where the client declares SEP-2663, a dispatch returns a task
-  handle at once. **A Relay Job is the MCP task**: its status and results are read with
-  `tasks/get`, it is cancelled with `tasks/cancel`, and it survives the connection that created
-  it. The shim that provides this is ADR-0028.
-- **MCP without it, and the Control API.** The Job ID is returned in the result after a short
-  bounded wait — so a quick read still reads as synchronous — and the caller polls `get_job`
-  (or the Jobs route) for the rest.
-- **Idempotency key.** Every dispatch accepts an optional key: a tool argument on MCP, since
-  SEP-2663 defines no deduplication, and the `Idempotency-Key` header on the Control API. A repeat
+- **MCP and the Control API.** The Job ID is returned in the result after a short bounded wait,
+  so a quick read still reads as synchronous, and the caller polls `get_job` (or the Jobs route)
+  for the rest. There is no MCP task handle: ADR-0047 removed the Tasks extension shim, and MCP
+  Tasks for long-running Jobs is later work (`roadmap: relay/mcp-tasks-for-long-running-jobs`).
+- **Idempotency key.** Every dispatch accepts an optional key: a tool argument on MCP, and the
+  `Idempotency-Key` header on the Control API. A repeat
   of the same key by the same Account within an operator-set window returns the existing Job; the
   same key with different arguments is refused. A client re-issuing after a broken stream re-sends
   the key with identical arguments, so the repeat is caught for free. The Relay never infers a
@@ -209,8 +214,8 @@ left unsent when a `mutate` Job halts.
 
 ### Cancellation
 
-`cancel_job` (and MCP `tasks/cancel`) acts on a Job, and what it does depends on where each Task
-has got to:
+`cancel_job` (and the Control API's cancel route) acts on a Job, and what it does depends on
+where each Task has got to:
 
 - **Pending** — marked cancelled and **never sent**.
 - **Dispatched** — asked to cancel over its Tunnel, best-effort.
@@ -251,8 +256,10 @@ came back, because *"data not written cannot leak."* Nothing should imply the au
 reproduce a read's content, and widening it is a one-way door.
 
 Outcomes: `success`, `failure`, `timeout`, `denied_by_policy`, `cancelled`, `unreachable`,
-`unacknowledged`, `version_refused`, `unsupported`, `quarantined`. The zero value means *not yet
-resolved*: a Pending or Dispatched Task has no outcome.
+`version_refused`, `unsupported`. The zero value means *not yet resolved*: a Pending or
+Dispatched Task has no outcome. Two outcomes are not in the MVP: `unacknowledged`
+(`roadmap: relay/fast-failure-and-fleet-admission`) and `quarantined`
+(`roadmap: relay/quarantine`).
 
 Several never involved the Node running anything:
 
@@ -262,12 +269,7 @@ Several never involved the Node running anything:
 - `unsupported` is daemon-reported when the Operation is not in that Node's vocabulary (nothing
   ran, Policy was not consulted), or Relay-reported for a Node excluded at resolution because it
   does not report the Template. Neither is a failure or a denial.
-- `quarantined` is Relay-reported for a Node excluded at resolution because it carries
-  `relay:quarantine=on` (`quarantine-node.md`).
 - `cancelled` on a Task left unsent by a halt carries the halt as its reason.
-
-`unacknowledged` is the one outcome that does not know whether the Node ran anything: the Task
-was sent, and the relay-daemon's receipt did not arrive in time (`node-connection.md`).
 
 ## Refusals
 
@@ -280,8 +282,7 @@ a per-Node **outcome**, where a Job did run and individual Nodes failed.
 | Frozen | An emergency Freeze is engaged (ADR-0013) | The Relay is frozen; cite the ADR and say what to do |
 | Empty Selector | A dispatch with no Selector | Name the Nodes; the whole fleet must be written deliberately |
 | `no_nodes_matched` | The Selector resolved to zero Nodes | The Selector as written, so a typo is visible |
-| Unknown Operation | No matched Node reports this Template | Point at `list_operations` |
-| All matched Nodes quarantined | Every Node the Selector resolved to is quarantined | Each Node reported `quarantined`; nothing is sent (`quarantine-node.md`) |
+| Template not reported | No matched Node reports this Template | Point at `list_operations` |
 | Unauthorized | The Principal may not request this Action on this Selector; Raw Exec without `admin` | Denied |
 | Blast cap | Resolved Node count exceeds the cap for the risk class | The class, the matched count, and the cap |
 | Pending approval | The Action requires approval and none covers it | A parked dispatch with its request ID and plan hash |
@@ -305,9 +306,10 @@ for Raw Exec.
   re-issued request by the idempotency key.
 - **Invariant 5** (ADR-0004) — the cap is enforced **here, on the Relay, before dispatch**, on
   the Nodes remaining after exclusion. Not on the Node, not by the caller.
-- **Invariant 10** (ADR-0009/0010/0026) — every interface is an adapter over this one layer,
-  narrowing only. The unexported dispatch constructor is the compile-enforced half; `no_dispatch`
-  covers the Console. Who may cancel a Job is decided here too, not per surface.
+- **Invariant 10** (ADR-0009/0010/0026, ADR-0052) — every interface is an adapter over this one
+  layer, narrowing only. The unexported dispatch constructor is the compile-enforced half;
+  `no_dispatch` covers the Console, which does not execute. Who may cancel a Job is decided here
+  too, not per surface.
 - **Invariant 12** (ADR-0011) — this pipeline **never evaluates Policy.** Not for real
   dispatch, not for hypotheticals. A matched-but-disconnected Node yields a Relay-side
   `unknown(offline)` conclusion rather than a guess.
@@ -315,20 +317,22 @@ for Raw Exec.
   selects the cap; Raw Exec always takes the mutate cap. A Template Operation's class is
   Node-reported, and a dispatch takes the most restrictive class the Nodes it reaches report
   (amended 2026-10-02).
-- **Invariant 7** (ADR-0006/0020/0034) — binds through Selector resolution: the security lane
-  targets `relay:` and only `relay:`.
-- **ADR-0004 — needs amending.** Halt-on-first-failure for `mutate` Jobs, and client-level
-  idempotency above Task-ID dedup, are not in it.
+- **Invariant 7** (ADR-0006/0020/0034, ADR-0050) — binds through Selector resolution: the
+  security lane targets `relay:` and only `relay:`.
+- **ADR-0004 — needs amending.** Concurrent fan-out at a fixed limit, halt-on-first-failure for
+  `mutate` Jobs, and client-level idempotency above Task-ID dedup, are not in it.
 - **ADR-0013** — cancellation's contract: cancel only ever asks, and the Freeze is the
   outermost gate on this path.
 - **ADR-0014** — the minimum-version gate refuses a Task to an outdated Node before it is sent.
 - **ADR-0025** — read output is not retained.
 - **ADR-0027** — the approval gate's position in the pipeline.
-- **ADR-0028** — the MCP Tasks extension shim, through which a Relay Job is an MCP task.
+- **ADR-0047** — removed the MCP Tasks extension shim (ADR-0028, superseded), so a Job is handed
+  back by ID and polled.
+- **ADR-0049** — Relay runs one dispatch at a time and has no Plan of its own.
 
 Referenced above but governing elsewhere: ADR-0005 (transport), ADR-0018 (canonical path
 matching, inside `file.read`), ADR-0022 (the shipped default Policy, which is why Raw Exec is
-off out of the box), ADR-0026 (the Console's execution surface).
+off out of the box), ADR-0052 (the Console watches and does not execute).
 
 ## Seams and proof
 
@@ -371,26 +375,23 @@ also need `make test-integration`; changes to the daemon-facing contract need th
 | A Task that wins the cancel race keeps its true outcome | `TestEngineDispatchOneTreatsConcurrentCancelAsTerminal` | capability |
 | No surface can dispatch outside this layer | `TestNoDispatchConstruction`, `TestDispatchSymbolsUnexported` | compile-time |
 | The layer imports nothing but registry and jobs | `.golangci.yml` depguard rule `capability-imports` | lint |
-| Plan and apply agree on an unchanged fleet | `TestMCP_Plan_PlanVsRealRunParity` | MCP |
+| Policy preflight and apply agree on an unchanged fleet | `TestMCP_Plan_PlanVsRealRunParity` | MCP |
 | A fan-out returns one result per Node | `TestMCP_RunOperation_PerNodeResults` | MCP |
 | A park is a result, not an error | `TestDispatch_ParkIsAResultNotAnError` | MCP |
 
 Claims above with **no row**, and so nothing checking them:
 
-- Fan-out is sequential.
+- At most 16 Tasks of one Job are in flight at once.
 - A `read`'s output is not retained while a `mutate`'s is.
 - Caller-asserted attribution is stripped before the authorization decision. Nothing references
   `withoutAssertions` from a test, and this one guards an authorization input.
 - A zero-match dispatch is refused as `no_nodes_matched` with no Job.
 - An empty Selector is refused for dispatch.
 - Nodes not reporting a Template are excluded before the cap and reported `unsupported`.
-- A `mutate` Job halts on its first `failure`, `timeout` or `unacknowledged`; unsent Tasks
-  resolve `cancelled`; a `read` Job never halts; `denied_by_policy`, `unsupported` and
-  `unreachable` do not halt.
-- A dispatched Task not acknowledged within the deadline resolves `unacknowledged`, is never
-  re-sent, and marks the Node offline.
-- A dispatch hands back its Job before finishing; a Relay Job is an MCP task where the client
-  supports SEP-2663.
+- A `mutate` Job halts on its first `failure` or `timeout`; unsent Tasks resolve `cancelled`
+  with the halt as their reason; Tasks in flight finish and report; a `read` Job never halts;
+  `denied_by_policy`, `unsupported` and `unreachable` do not halt.
+- A dispatch hands back its Job before finishing.
 - A repeated idempotency key returns the existing Job; the same key with different arguments is
   refused.
 - Only `operator` or above may cancel a Job; a `viewer` is refused. A human at that floor may
@@ -405,7 +406,7 @@ cited test exists, never that the list is complete.
 
 | Characteristic | Contract | Measured by |
 |---|---|---|
-| Fan-out | Sequential — one Node at a time, blocking; a Job's wall-clock is the sum of its Tasks | *(none)* |
+| Fan-out | Concurrent, at most 16 Tasks of one Job in flight, a built-in constant | *(none)* |
 | Read blast cap | 10,000 Nodes by default, operator-set at startup, inclusive maximum | *(none)* |
 | Mutate blast cap | 100 Nodes by default; Raw Exec always takes this lane | *(none)* |
 | Task timeout | Per-Operation, declared and sent on the wire; a caller may only shorten it; no Job-level timeout | *(none)* |
@@ -413,8 +414,7 @@ cited test exists, never that the list is complete.
 | Handing back the Job | The Job ID is returned before the Job finishes, within a short bounded wait | *(none)* |
 
 There are **no benchmarks in this repository**, Go or Rust: nothing measures any row above,
-most conspicuously fan-out, where the sequential contract and the 10,000-Node read cap
-multiply.
+most conspicuously fan-out, where the in-flight limit and the 10,000-Node read cap multiply.
 
 ## Out of scope
 
@@ -433,11 +433,12 @@ multiply.
   a refusal. Job cancellation *is* in scope: it acts on a Job this capability created.
 - **Label namespaces, the Selector grammar and `state:` derivation** —
   `selectors-and-labels.md`. This spec consumes a resolved Node set.
-- **Getting a secret onto a Node** — secret distribution, not yet designed (Future work in
-  `quarantine-node.md`).
+- **Getting a secret onto a Node** — secret distribution, not yet designed.
 - **Querying Jobs, Tasks and the audit trail after the fact** — `audit-and-read-lane.md`.
 - **Retry, scheduling, store-and-forward** — deliberately absent; re-targeting is the caller's
-  decision.
+  decision. Configurable failure tolerance, a configurable in-flight limit and retries are
+  `roadmap: relay/failure-policy-and-retries`.
+- **Executing from the Admin Console** — the Console watches and does not execute (ADR-0052).
 
 ## Accepted residual risk
 
@@ -447,20 +448,18 @@ multiply.
 - **A careless caller can still put a secret into the audit trail.** The contract that
   arguments are never secrets is only a contract; nothing detects a credential passed as an
   argument or in Raw Exec argv, and it is recorded verbatim.
-- **Sequential fan-out is slow at scale.** A fleet-wide read is the sum of its round-trips.
+- **A fleet-wide read is slow at scale.** With 16 Tasks in flight, a 10,000-Node read is about
+  625 rounds of round-trips.
+- **A halt is not instant.** Up to 15 other Tasks of a halting `mutate` Job may already be in
+  flight, and they run to completion.
 
 ## Future work
 
-Named, not decided, and in no order.
-
-- **Concurrent fan-out.** A Job's Tasks dispatched concurrently up to an operator-set limit,
-  with a smaller limit for `mutate` than for `read`, so a fleet-wide read is not the sum of
-  thousands of round-trips. At-most-once ordering is unchanged by it: every Task is still
-  persisted before any is sent.
-- **Protecting secrets a caller passes by mistake.** Candidates, none chosen: a `secret` slot
-  type audited as a redaction plus a hash (and its process-list exposure on the Node); detection
-  that refuses or flags a dispatch whose arguments look like credentials; and how either relates
-  to secret distribution, once designed.
+Waits in the private roadmap: failure tolerance, the in-flight limit and retries
+(`roadmap: relay/failure-policy-and-retries`); the acknowledgement deadline and `unacknowledged`
+(`roadmap: relay/fast-failure-and-fleet-admission`); MCP Tasks for long-running Jobs
+(`roadmap: relay/mcp-tasks-for-long-running-jobs`); protecting secrets a caller passes by mistake
+(`roadmap: relay/research/spec-future-work/execution`).
 
 ## Open questions
 

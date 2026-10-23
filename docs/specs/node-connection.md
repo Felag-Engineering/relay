@@ -7,7 +7,7 @@ of this draft. Describes intended behaviour, not the code (see the establishing 
 ## Purpose
 
 An enrolled Node needs one lasting, trusted link to the Relay. The Relay sends Tasks down it; the
-relay-daemon sends back acknowledgements, results, heartbeats and its view of itself. This
+relay-daemon sends back results, heartbeats and its view of itself. This
 capability is that link: how a relay-daemon dials home, how each side proves who it is, what the
 Node says about itself, how the link survives drops and restarts, and how the Relay knows whether
 a Node is reachable now.
@@ -21,11 +21,11 @@ it died, and that holds at fleet scale without flooding the network.
 
 | Surface | How it is reached |
 |---|---|
-| **Node plane** | One mTLS stream per Node, always opened by the relay-daemon. The daemon sends `Hello`, heartbeats, Task acknowledgements, Task results, and a fresh self-report after a Policy or label reload. The Relay sends Tasks, cancellations, and admission refusals carrying a retry-after hint. |
+| **Node plane** | One mTLS stream per Node, always opened by the relay-daemon. The daemon sends `Hello`, heartbeats and Task results. The Relay sends Tasks and cancellations. |
 | **relay-daemon** | Dials the Relay address persisted at enrollment, checks the Relay against the pinned CA on every connect, holds the stream, and reconnects with bounded, jittered backoff. |
 | **Registry reads** | Connected state, last heartbeat, daemon version, `outdated`, clock skew and the other self-reported facts appear through `list_nodes`, `describe_node`, the Control API's Node routes and the Console fleet view. How they read is `query.md`. |
 | **Audit trail** | Changes to a Node's security-relevant self-report, and repeated stream replacement, are audit events. Querying them is `audit-and-read-lane.md`. |
-| **Relay configuration** | The heartbeat interval, the missed-heartbeat allowance, the acknowledgement deadline, the admission rate, the minimum daemon version and the server certificate. All operator-set at startup today (`relay-configuration.md`). The server certificate and listeners are security floor (invariant 11); the admission rate and the minimum daemon version are reach-bounding settings designed to become store-backed operator settings (ADR-0010 amendment 2026-09-15; #596). |
+| **Relay configuration** | The minimum daemon version and the server certificate, set in the configuration file (`relay-configuration.md`). The heartbeat interval (60 seconds) and the missed-heartbeat allowance (3) are built-in constants. The server certificate and listeners are security floor (invariant 11); the minimum daemon version is a reach-bounding setting. Store-backed settings edited in the Console are not in the MVP (`roadmap: relay/settings-in-the-console`). |
 | **MCP / Control API / Console** | No surface opens, closes or reshapes a connection. Revocation disconnects a live Node, but `enrollment.md` owns that. |
 
 ## Behaviour
@@ -46,31 +46,28 @@ it died, and that holds at fleet scale without flooding the network.
 - **A renewed Node certificate is used from the next connect.** There is no forced reconnect; the
   registry's certificate fingerprint updates when the Node next connects, and that change is
   audited (below).
+- A Node is `state:cert-expiring` once its certificate is inside the last quarter of its lifetime.
+  The fraction is fixed at 0.25, not a setting (`selectors-and-labels.md`).
 
 ### What "connected" means
 
 - **A Node is connected while its heartbeats arrive within the deadline** — not merely while a
   stream has not closed.
 - The relay-daemon sends a heartbeat every **60 seconds**, jittered, so a fleet restarted at once
-  does not arrive in lockstep.
+  does not arrive in lockstep. This is built.
 - The Relay marks a Node **offline after 3 missed heartbeats** (about 3 minutes) and closes its
-  stream. The interval and the allowance are operator-set at startup.
+  stream. The interval and the allowance are built-in constants, not settings. This is MVP work, not yet
+  built.
 - **gRPC keepalive runs on both sides**, so a dead link underneath is noticed by the daemon too, and
-  it reconnects rather than sitting on a broken stream.
+  it reconnects rather than sitting on a broken stream. This is MVP work, not yet built.
 - `last_seen` is a record of the last heartbeat, never a proxy for connected.
 
 ### Acknowledging a Task
 
-- **Every dispatched Task must be acknowledged by the relay-daemon within a deadline** — 10
-  seconds by default, operator-set. The acknowledgement confirms receipt; the result follows
-  separately.
-- A Task not acknowledged in time resolves **`unacknowledged`**, and the Node is marked offline at
-  once. A dispatch to a silently dead Node therefore fails in seconds, while the heartbeat stays
-  infrequent.
-- **`unacknowledged` means "may or may not have run"**: the daemon may have received and executed it
-  with only the acknowledgement lost. It is never re-sent, and the caller checks before retrying.
-  It is distinct from `unreachable`, where the Node was already offline and nothing was sent
-  (`execution.md`).
+There is no Task acknowledgement in the MVP. A dispatch to a silently dead Node is caught by the
+missed-heartbeat allowance above, not in seconds. An acknowledgement deadline, the
+`unacknowledged` outcome it would produce, and marking a Node offline at once on a missed one are
+later work (`roadmap: relay/fast-failure-and-fleet-admission`).
 
 ### One current stream per Node
 
@@ -84,23 +81,22 @@ it died, and that holds at fleet scale without flooding the network.
 - **Repeated replacement for one Node is audited.** Two parties presenting the same certificate
   keep replacing each other; that churn makes a stolen certificate in use visible.
 
-### Reconnecting, and admission at fleet scale
+### Reconnecting
 
 - The relay-daemon reconnects with **bounded, jittered exponential backoff**, and resets the
   backoff only after a session that actually opened.
-- **The Relay paces session admission.** It admits new sessions up to an operator-set rate. Above
-  that rate it refuses with a **retry-after hint**, and the daemon honours the hint, with jitter,
-  in place of its own backoff.
-- A fleet reconnecting after a Relay restart is admitted within a time bounded by the admission
-  rate, without overwhelming the Relay. A Node waiting for admission is `state:offline`.
+- A fleet reconnecting after a Relay restart is spread only by that jitter. The Relay does not
+  pace admission in the MVP; pacing with a retry-after hint is later work
+  (`roadmap: relay/fast-failure-and-fleet-admission`).
 
 ### What a Node reports about itself
 
 - On connect, `Hello` carries the daemon version, Facts, the declared and built-in `node:` labels
   (`selectors-and-labels.md`), the Policy fingerprint and its validity, and whether Raw Exec is
   enabled (`policy.md`).
-- **After a Policy or declared-label reload, the daemon sends a fresh self-report without
-  reconnecting.**
+- **A Policy or declared-label change takes effect when the relay-daemon restarts**, and the new
+  self-report arrives in that connection's `Hello`. A fresh self-report without reconnecting
+  comes with live reload (`roadmap: relay/policy-catalog-and-live-reload`).
 - **Clock skew** is measured from heartbeats and recorded as a Fact. It never blocks anything.
 - **Nothing a Node reports can write `relay:` or `tag:` labels, Policy, or anything on the Relay
   beyond the Node's own self-report.** A self-report is trusted exactly as much as the Node
@@ -126,7 +122,7 @@ blocked by any of these** — this is visibility, not a gate.
   version problem.
 - **An older but compatible daemon connects** and appears in the registry flagged `outdated`. It is
   refused Tasks by the minimum-version gate, never the connection (ADR-0014), so the registry
-  doubles as the upgrade dashboard.
+  doubles as the upgrade view.
 - The connection is never a path for pushing binaries (invariant 14).
 
 ### When the Relay is unreachable for a long time
@@ -138,7 +134,7 @@ blocked by any of these** — this is visibility, not a gate.
 ### Scale
 
 This spec carries the Node plane's scale contract: **10,000 sessions held today, 100,000 as the
-design ceiling**, with full-fleet readmission bounded by the admission rate.
+design ceiling**. Full-fleet readmission is not bounded by a Relay-side rate in the MVP.
 
 ## Refusals
 
@@ -148,7 +144,6 @@ design ceiling**, with full-fleet readmission bounded by the admission rate.
 | Revoked identity | Refused before any stream opens (`enrollment.md` owns revocation) |
 | Untrusted Relay | The relay-daemon does not connect and sends no `Hello` |
 | Protocol too old | The daemon cannot speak the protocol; refused at connect with a version error |
-| Admission paced | The admission rate is exceeded; refused with a retry-after hint the daemon honours |
 | `outdated` Node's Task | Resolves `version_refused` and is never sent (`execution.md`) |
 | A `relay:` or `tag:` label in a self-report | Never recorded as authoritative |
 
@@ -160,23 +155,24 @@ Node offline.
 - **Invariant 6** (ADR-0005, ADR-0006) — mTLS everywhere, and the relay-daemon refuses an
   untrusted Relay. Binds on every connect, not only first contact.
 - **Invariant 4** (ADR-0004) — at-most-once survives reconnects and stream replacement because the
-  daemon dedups by Task ID; `unacknowledged` is never re-sent for the same reason.
+  daemon dedups by Task ID.
 - **Invariant 14** (ADR-0014) — the version gate refuses dispatch, not the connection, and the link
   never carries binaries.
 - **Invariant 7** (ADR-0006, ADR-0017) — a self-report can carry `node:` labels and influence
   `state:`, but never write `relay:` or `tag:`.
-- **Invariant 11** — the listeners and the server certificate are security floor; the admission
-  rate and the minimum daemon version only bound reach and may become runtime operator settings.
+- **Invariant 11** — the listeners and the server certificate are security floor; the minimum
+  daemon version only bounds reach and may become a runtime operator setting.
 - **ADR-0005 — needs amending.** It names keepalive tuning at scale as a consequence; this spec
-  decides the specifics: the heartbeat deadline, the Task acknowledgement, admission pacing, and
-  one current stream per Node.
+  decides the specifics: the heartbeat deadline, keepalive on both sides, and one current stream
+  per Node.
 - **ADR-0006** — renewal over the live link, adopted on the next connect; forcing a reconnect stays
   out.
 - **ADR-0031** — one server certificate rotated in-process, and the pinned CA the daemon checks.
   First contact is `enrollment.md`.
 - **ADR-0017** — a Node's self-report is trusted only as much as the Node.
-- **`/proto` additions needed** (invariant 8): the Task acknowledgement, the admission refusal's
-  retry-after hint, and a self-report sent on reload without reconnecting.
+- **`/proto`** (invariant 8): the MVP needs no addition here. The Task acknowledgement, an
+  admission refusal's retry-after hint and a self-report sent on reload would each need one when
+  their roadmap work is taken up.
 
 ## Seams and proof
 
@@ -192,12 +188,9 @@ Claims with **no row**, and so nothing checking them:
 
 - Connected means a heartbeat within the deadline; offline after 3 missed heartbeats; gRPC
   keepalive on both sides.
-- A Task not acknowledged within the deadline resolves `unacknowledged`, marks the Node offline,
-  and is never re-sent.
 - A new stream replaces the old; closing a replaced stream never marks the Node offline; Tasks go
   only to the current stream; repeated replacement is audited.
-- Admission is paced with a retry-after hint that the daemon honours.
-- A self-report is sent on reload without reconnecting.
+- A Policy or label change reaches the registry in the `Hello` after a daemon restart.
 - The four self-report changes are audited with before and after; Facts and label changes are not.
 - A daemon too old for the protocol is refused at connect; a compatible outdated one connects.
 - The daemon checks the pinned CA and uses the persisted address on every connect.
@@ -208,10 +201,9 @@ Claims with **no row**, and so nothing checking them:
 | Characteristic | Contract | Measured by |
 |---|---|---|
 | Sessions held | 10,000 today; 100,000 design ceiling | *(none)* |
-| Full-fleet readmission | Bounded by the operator-set admission rate | *(none)* |
+| Full-fleet readmission | Spread by the daemon's jittered backoff; no Relay-side pacing in the MVP | *(none)* |
 | Heartbeat load | One heartbeat per Node per interval (60 seconds by default) | *(none)* |
-| Dead-Node detection for dispatch | Within the acknowledgement deadline (10 seconds by default) | *(none)* |
-| Dead-Node detection for the fleet view | Within the missed-heartbeat allowance (about 3 minutes by default) | *(none)* |
+| Dead-Node detection, for dispatch and the fleet view | Within the missed-heartbeat allowance (about 3 minutes by default) | *(none)* |
 
 ## Out of scope
 
@@ -225,8 +217,9 @@ Claims with **no row**, and so nothing checking them:
 - **How registry state and audit events read on each surface**: `query.md` and
   `audit-and-read-lane.md`.
 - **Installing the relay-daemon and its local configuration**: `daemon-installation.md`.
-- **Where timing values, the admission rate and the minimum daemon version are set**:
-  `relay-configuration.md`.
+- **Where timing values and the minimum daemon version are set**: `relay-configuration.md`.
+- **A Task acknowledgement deadline and admission pacing**: not in the MVP
+  (`roadmap: relay/fast-failure-and-fleet-admission`).
 - **Metrics for the server certificate and connection health**: `observability.md`.
 - **High availability across multiple Relays**: deferred by ADR-0005 to a future ADR.
 
@@ -236,11 +229,12 @@ Claims with **no row**, and so nothing checking them:
   labels, Policy fingerprint and Raw Exec state. Auditing changes makes a lie visible only when it
   changes; it never makes a report true.
 - **A dead Node can show connected for about 3 minutes.** The missed-heartbeat allowance bounds the
-  fleet view. Dispatch is protected by the acknowledgement deadline, not by the heartbeat.
+  fleet view, and in the MVP it bounds dispatch too: a Task sent to a dead Node in that window gets
+  no answer until the Node is marked offline.
+- **A fleet reconnecting at once is not paced.** After a Relay restart only the daemons' jittered
+  backoff spreads the load.
 - **A stolen certificate is detected, not prevented.** Repeated stream replacement surfaces
   duplicate use; stopping it is revocation (`enrollment.md`).
-- **`unacknowledged` leaves the caller uncertain.** A Task may have run with only its
-  acknowledgement lost, and the caller must check before retrying.
 
 ## Open questions
 
