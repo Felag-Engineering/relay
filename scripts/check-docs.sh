@@ -18,7 +18,7 @@
 #      be listed in docs/agents/docs-ratchet.txt with `shape`. Every ADR opens with
 #      `## Decision` of at most 120 words, runs at most 150 lines and carries at most one
 #      `## Amendment`; each rule is waived per file by `decision`, `budget` or `amendments` in
-#      the ratchet. Every path the ratchet lists exists.
+#      the ratchet. A superseded ADR (Status `Superseded …`) is history and exempt. Every path the ratchet lists exists.
 #   5. Proposals (docs/proposals/) have the shape docs/proposals/TEMPLATE.md describes: a Status
 #      of idea/shaping/accepted/rejected on line 3, the four sections, Outcome once decided,
 #      at most 120 lines. No spec claim and no Go or Rust comment cites a proposal.
@@ -213,6 +213,8 @@ done
 # per file by the ratchet, which is the visible backlog of ADRs still in the earlier shape.
 for f in "$ADR_DIR"/[0-9][0-9][0-9][0-9]-*.md; do
   [ -f "$f" ] || continue
+  # A superseded ADR is history, not a binding rule: it is never rewritten to the shape.
+  awk 'NR==3' "$f" | grep -qE '^\*\*Status:\*\* Superseded' && continue
   n=$(wc -l < "$f")
   [ "$n" -le 150 ] || exempt "$f" budget || err "$f: $n lines; an ADR is at most 150 (rewrite it, or list it with 'budget' in $RATCHET)"
   a=$(grep -c '^## Amendment' "$f")

@@ -183,10 +183,12 @@ for spec in docs/specs/*.md; do
   case "$spec" in */README.md|*/TEMPLATE.md) continue;; esac
   status=$(grep -m1 -E '^\*\*Status:\*\*' "$spec" | sed -E 's/^\*\*Status:\*\* *//')
   case "$status" in "current as of "*|"designed, not built, as of "*) ;; *) continue ;; esac
-  # 7a. path-shaped tokens; `Felag-Engineering/relay/…` (the repo URL) is not a path into relay/.
+  # 7a. path-shaped tokens; `Felag-Engineering/relay/…` (the repo URL) is not a path into relay/,
+  # and neither is a private-roadmap reference, `roadmap: relay/<slug>` (ADR-0046).
   while IFS=: read -r line _; do
     warn "$spec:$line: names a file path or source file (relay/, daemon/, .go, .rs, .proto); specs name modules and contracts"
-  done < <(grep -nE '(^|[^A-Za-z0-9_/-])(relay|daemon)/|\.(go|rs|proto)\b' "$spec")
+  done < <(sed -E 's/roadmap: [a-z0-9-]+\/[a-z0-9-]+//g' "$spec" \
+             | grep -nE '(^|[^A-Za-z0-9_/-])(relay|daemon)/|\.(go|rs|proto)\b')
   # 7b. code fences, unless introduced by "state machine" or "schema" within the three lines above.
   while read -r line; do
     warn "$spec:$line: code fence in a migrated spec (allowed only for a state machine or a schema, said on the line above)"

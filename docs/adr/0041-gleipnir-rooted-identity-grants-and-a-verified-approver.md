@@ -126,7 +126,7 @@ in the capability specifications this ADR names under *Consequences*.
   chart" is kept and satisfied: the org chart is Gleipnir's, and Relay holds a copy.
 - `docs/specs/accounts-and-access.md` migrates to the claim format and gains the directory,
   agent-credential and Grant claims. `docs/specs/approval.md` gains the verified-approver claims;
-  `docs/specs/approval-assurance.md` is retired into it. All new claims are *Designed, not built*
+  `approval-assurance.md` is retired into it (moved to the private roadmap on 2026-10-22). All new claims are *Designed, not built*
   until proven.
 - `docs/security/threat-model.md` rows R21, R23 and R26 are rewritten; invariant 7's text is
   unchanged, and the Grant distinction in decision 7 is recorded in the spec, not the invariant.

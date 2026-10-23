@@ -1,6 +1,9 @@
 # Relay implements the MCP Tasks extension as a transport-layer shim
 
-**Status:** Accepted.
+**Status:** Superseded by ADR-0047 (2026-10-22).
+
+The shim is removed. MCP Tasks for long-running Jobs waits in the roadmap
+(`roadmap: relay/mcp-tasks-for-long-running-jobs`).
 
 A parked dispatch is rendered as a `pending_approval` tool *result* (#371): honest,
 poll-by-re-driving, and universal. The MCP Tasks extension

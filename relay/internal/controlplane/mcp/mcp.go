@@ -284,7 +284,7 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 	// crypto/rand) is process-lifetime and never configuration (invariant 11
 	// by construction) — minted here, once per New, once per process in
 	// production; the restart/replica cost that follows is recorded as
-	// threat-model R27 and docs/specs/approval-assurance.md.
+	// threat-model R27.
 	var ask *questioner
 	if cfg.elicitApprovals && cfg.approvals != nil {
 		ask = newQuestioner(cfg.log)
