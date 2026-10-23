@@ -1,6 +1,6 @@
 # Approval
 
-**Status:** current as of `2026-10-22`.
+**Status:** designed, not built, as of `2026-10-23`.
 **Claim prefix:** `AP`
 **Governed by:** ADR-0047, ADR-0027, ADR-0029, ADR-0049, ADR-0043; invariants 5, 10, 11, 13.
 
@@ -126,6 +126,18 @@ the conformant form (ADR-0029).
 | **AP-84** | No approval grants | No surface requests, issues or claims an approval grant |
 | **AP-85** | No task handle | A parked request is never rendered as an MCP task handle |
 
+## Designed, not built
+
+Owner decision of 2026-10-23 (ADR-0047, amended): ordinary clients answer approvals on an
+API-token session, so the MVP needs no identity provider. When AP-86 and AP-87 are promoted,
+AP-10 and AP-11 read them alongside AP-79 and AP-64.
+
+| Claim | Statement | Milestone |
+|---|---|---|
+| AP-86 | A question is emitted to any client that advertises elicitation, on any session. The declared name no longer decides whether Relay asks. Replaces AP-78 when promoted. | MVP |
+| AP-87 | An elicited answer on an API-token session is accepted as that session's Account's decision without a responder assertion. On a human Account's token the human is the decider, recorded as a token-session answer, distinct from the verified OAuth lane (AP-79). On a machine Account's token the decision is machine self-confirmation, and any responder assertion is recorded as asserted. Replaces AP-64 when promoted. | MVP |
+| AP-88 | Every elicited decision records how its decider was identified: an OAuth session, an API-token session, or a responder assertion, so an auditor can tell them apart (threat model R45). | MVP |
+
 ## Out of scope
 
 - **Where the gate sits, and what a park leaves behind:** `execution.md`.
@@ -136,9 +148,11 @@ the conformant form (ADR-0029).
 - **Future work** waits in the private roadmap, in its Relay folder: more than one approver,
   a Relay-held audience and approval grants; a channel Relay verifies; editing rules in the
   Console; a diff against the last similar approval, with the shape key; asking more clients and
-  always-on agents; MCP Tasks for long-running Jobs.
+  always-on agents; MCP Tasks for long-running Jobs; an approval page the person signs in to
+  (`roadmap: relay/approval-by-link`); OAuth tested against the common identity providers
+  (`roadmap: relay/oauth-against-common-providers`).
 - **Residual risk:** the threat model's register, R21 (an answer is only as honest as the
-  client), R23, R24, R26, R27 and R43.
+  client), R23, R24, R26, R27, R43 and R45 (an answer on a token session proves only the session).
 - **The Freeze:** a global stop, not a per-request judgement (`freeze.md`).
 
 ## Proof
