@@ -89,7 +89,7 @@ operator turns should let a stolen credential authenticate as somebody else.
   API Token, audited, refusing a disabled or non-admin Account; this takes over
   `bootstrap-token`'s recovery role in `accounts-and-access.md`. `init` replaces
   `relay bootstrap-token` and `relay console-password` (ADR-0030, amended 2026-10-16). Its other
-  first-boot acts in ADR-0030, a first Enrollment Token and its rendered enrollment bundle, are
+  first-boot acts in ADR-0030, a first Enrollment Token and how it is shown, are
   `enrollment.md`'s.
 - **RC-36** An optional advertised address names the address Nodes are told to dial — the
   address a join string carries — when it differs from the gRPC listen address, as behind a
@@ -201,7 +201,7 @@ structural checks do not see a mux handed to a registrar as a call expression, s
 
 - The founding admin Account, Token minting, step-up and OAuth session semantics —
   `accounts-and-access.md`. This spec owns only where their bounds are set.
-- Enrollment Tokens, join strings and bundles — `enrollment.md`.
+- Enrollment Tokens and join strings — `enrollment.md`.
 - What the blast caps, approval gates and Freeze *do* — `execution.md`, `approval.md`,
   `freeze.md`.
 - Configuring the relay-daemon on a Node, which is flags and environment from the customer's

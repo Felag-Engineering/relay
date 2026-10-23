@@ -62,7 +62,7 @@ writes a `relay:` label directly; `relay:quarantine=on` is written only by engag
 and cleared only by lifting one.
 
 - **Engage:** `operator` or above, machine Accounts included, with a required reason. Targets a
-  Selector of only `relay:` and `tag:` terms — explicit Node IDs, `relay:enrollment-token=…`, or
+  Selector of only `relay:` and `tag:` terms — explicit Node IDs, `relay:node-id=…`, or
   `tag:incident=4412`. A `node:` or `state:` term is refused. From a filtered Fleet view the
   Console sends the resolved Node IDs, never the filter. The Selector resolves once; the confirm
   step shows the exact Nodes before anything is written, and the result shows them again. One

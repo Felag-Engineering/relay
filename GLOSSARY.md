@@ -237,16 +237,15 @@ and so is never sent a Task (ADR-0042). A Policy preflight reports the same for 
 _Avoid_: unknown operation, not found, unimplemented
 
 **Enrollment Bundle**:
-Everything a Node needs to enroll, minted and rendered in one act (ADR-0032): the join string
-and the per-config-management rendering of it (playbook, shell). Minted by an operator through
-the control plane; never re-rendered later, because the token inside it is shown once.
+Retired by ADR-0048: Relay renders no install artifact. A minted join string is shown once, apart
+from the command that consumes it, and each release ships an Ansible role.
 _Avoid_: enrollment kit, onboarding package
 
 **Enrollment Token**:
-The reusable, scoped, expiring, revocable credential a daemon presents to join the fleet.
-Distinct from a Node's identity certificate: the token authorizes *enrollment* and stamps
-relay-space Labels; the certificate is the resulting *identity*. Can only enroll, never run
-Operations.
+The expiring, use-limited, revocable credential a daemon presents to join the fleet. Distinct
+from a Node's identity certificate: the token authorizes *enrollment* and stamps any relay-space
+Labels its optional scope names, beside the `relay:node-id` every enrollment stamps; the
+certificate is the resulting *identity*. Can only enroll, never run Operations.
 _Avoid_: API key, secret, join key
 
 **Join string**:

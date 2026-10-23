@@ -2,6 +2,9 @@
 
 **Status:** Accepted.
 
+Decisions 1 to 4 and 6 are superseded by ADR-0048: Relay renders no Enrollment Bundle. Decision 5,
+the `admin` floor on a mint, stands.
+
 Three surfaces need to hand an operator something that joins Nodes to a fleet: `relay init` at
 first boot (ADR-0030), `/api/v1` for config management, and the Console from v0.7.0. Invariant
 10 says they adapt one capability layer and never build a parallel path. The question is what

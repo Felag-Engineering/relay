@@ -4,6 +4,8 @@
 production path; place-if-absent Policy; remove and purge; no Alpine package yet); amended by
 ADR-0043; amended 2026-10-21 (`relay-daemon join` enrolls).
 
+ADR-0048 adds a static Ansible role to the release artifacts.
+
 "As automated as possible" pulls hard toward `curl -sfL https://get.relay.sh | sh`. It is what
 k3s does, what Docker does, what almost everything does, and the fastest path from a bare host
 to a running service.

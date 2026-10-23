@@ -2,6 +2,9 @@
 
 **Status:** Accepted; amended 2026-10-16 (the wire form is a `/proto` message; `RELAY_JOIN` lives in the daemon's environment file); amended 2026-10-21 (a join string is consumed, never persisted on a Node; a mint names its use limit).
 
+ADR-0048 supersedes the 2026-10-21 amendment where a mint form defaults to one use: the form asks
+how many Nodes the token is for.
+
 Three facts about the Relay's TLS surface, each defensible alone, together made enrollment
 harder than it needed to be:
 

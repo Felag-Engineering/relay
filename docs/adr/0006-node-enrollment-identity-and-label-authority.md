@@ -2,6 +2,9 @@
 
 **Status:** Accepted; amended by ADR-0020, ADR-0031 and ADR-0034; amended 2026-10-22 (token scope is the enrollment action's key set; reserved keys refused at mint; the use limit is named at mint).
 
+ADR-0048 supersedes the 2026-10-22 amendment where enrollment's `relay:` key set is the token's
+scope alone: the scope is optional, and every enrollment also stamps `relay:node-id`.
+
 A Node enrolls using a **reusable, scoped, expiring, revocable Enrollment Token**. On first
 boot the daemon presents the token over server-authenticated TLS (no client certificate yet)
 and submits a CSR; the Relay's private CA signs a per-Node client certificate that becomes the
