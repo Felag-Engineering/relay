@@ -1,9 +1,9 @@
 # Relay configuration
 
-**Status:** designed, not built, as of `2026-10-21`.
+**Status:** designed, not built, as of `2026-10-23`.
 **Claim prefix:** `RC`
 **Governed by:** ADR-0043, ADR-0010, ADR-0033, ADR-0030, ADR-0047, ADR-0052, ADR-0027, ADR-0024,
-ADR-0023, ADR-0014, ADR-0004, ADR-0012; invariants 5, 10, 11, 14.
+ADR-0023, ADR-0014, ADR-0004, ADR-0012, ADR-0009, ADR-0021; invariants 5, 10, 11, 14.
 
 ## Purpose
 
@@ -38,8 +38,8 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 - **RC-7** The release publishes a Relay container image to the registry, signed keylessly at its
   digest, running as an unprivileged uid; the deployment stack pins it by digest and runs it with a
   read-only root filesystem, every capability dropped and one durable volume.
-- **RC-12** Every setting lives in one TOML configuration file the Relay reads itself: a fixed
-  default path on a packaged host, or the path one command-line flag, `--config`, names. That
+- **RC-12** Every setting lives in one TOML configuration file the Relay reads itself:
+  `/etc/relay/relay.toml` by default, or the path one command-line flag, `--config`, names. That
   path is the only configuration the Relay accepts from outside the file; the binary otherwise
   accepts `--version`, `--help` and its subcommands (ADR-0043).
 - **RC-13** No setting is read from the environment or the command line. A `RELAY_*` variable
@@ -60,9 +60,11 @@ a reload or restart. The Relay installs from an OS package or as a container ima
   provider. A failed reload never exits the process. Every reload is audited, attributed to the
   Relay's host rather than to any Account, the way the Freeze signal's host lever is, listing
   what changed.
-- **RC-22** The read and mutate blast caps, the minimum daemon version, the Node cap and the log
-  level are values in the configuration file, validated like every other value, with built-in
-  defaults where absent. Leaving out the approval-gate rules means no gate (`approval.md`).
+- **RC-22** The read and mutate blast caps, the minimum daemon version, the `state:cert-expiring`
+  fraction, the enrollment rate limits, burst and tracked-IP ceiling, the Node cap, and the log
+  level and format are values in the configuration file, validated like every other value, with
+  built-in defaults where absent. The approval-gate rules file's path is one too, with no
+  default: leaving it out means no gate (`approval.md`).
 - **RC-27** The Relay container image takes its configuration file, and any secret files it
   names, as a read-only mount: nothing about the floor is in the container's environment, so
   inspecting the container shows a mount path, not settings or secrets. The deployment stack
@@ -91,10 +93,10 @@ a reload or restart. The Relay installs from an OS package or as a container ima
   naming the mode.
 - **RC-10** OAuth configured with an issuer but without an audience or a public URL refuses
   start.
-- **RC-11** No MCP tool and no Control API route writes any configuration. There is no endpoint
-  to refuse it.
-- **RC-35** Configured approval-gate rules that cannot be loaded refuse start; the Relay never
-  runs ungated because the rules are unreadable or malformed (`approval.md`).
+- **RC-11** No MCP tool and no Control API route writes any configuration, and none may be
+  added. There is no endpoint to refuse it.
+- **RC-35** A configured approval-gate rules file that cannot be loaded refuses start; the
+  Relay never runs ungated because a file is unreadable or malformed (`approval.md`).
 
 ## Designed, not built
 
@@ -105,17 +107,17 @@ a reload or restart. The Relay installs from an OS package or as a container ima
 | RC-17 | Everything the Relay generates, its CA private key and its store, lives in its state directory, owned by the Relay's uid. The Relay refuses to start if that directory or the key is readable by any other account. | MVP |
 | RC-18 | No secret value, inline or in a file, and no approval webhook URL, appears on any surface, in any log or audit record, or in any refusal message. A parse or validation error names the key and the line, never the value; a reload's audit record names a changed secret setting, never its value. | MVP |
 | RC-19 | The CA directory, store path and certificate hostname have no defaults: unset is a refusal naming the setting. Every value is validated at start and at reload, and an invalid one is a refusal naming the setting, never a warning and a fallback to a default. A missing or unreadable configuration file is a refusal. | MVP |
-| RC-23 | The release publishes the Relay as `.deb` and `.rpm` packages for each architecture, on the platforms and under the CI rule `daemon-installation.md` sets for its own packages: Ubuntu 24.04 LTS and 26.04 LTS, Debian 13, RHEL-compatible 10 tested on Rocky Linux 10, and Amazon Linux 2023, each on `x86_64` and `aarch64`. The edited configuration an upgrade must preserve is the configuration file. A package wraps the release's guarded binary byte for byte, is reproducible, built twice and compared, is listed in the release `SHA256SUMS`, and carries no signature of its own before v1.0.0. | MVP |
+| RC-23 | The release publishes the Relay as `.deb` and `.rpm` packages for each architecture, on the platforms and under the platform list and CI rule `daemon-installation.md` sets for its own packages. The edited configuration an upgrade must preserve is the configuration file. A package wraps the release's guarded binary byte for byte, is reproducible, built twice and compared, is listed in the release `SHA256SUMS`, and carries no signature of its own before v1.0.0. | MVP |
 | RC-24 | The Relay package installs the Relay's Unix account, the binary, the hardened unit, the configuration file and the state directory, and prints a configuration guide that carries no secret and names `relay init` (RC-28), also installed as documentation. It enables the Relay on a first install only, only where systemd is running, honouring the distribution's presets, and an upgrade never changes enablement. It never starts the Relay and never runs the first-boot command. The guide says never to capture an image of the host after the Relay has first started, since the CA private key would travel with it. | MVP |
 | RC-25 | The Relay package writes the configuration file once, at first install, only if none exists, and never again: the host's fully qualified name as the certificate hostname, the CA directory and store path inside the state directory, the control plane and Admin Console enabled, and the control-plane listener bound to loopback. The file is generated, not package-owned configuration, so no upgrade rewrites it. | MVP |
 | RC-26 | Removing the Relay package keeps configuration and state. `apt purge` removes configuration and moves the CA and the store aside together, re-owned by root and readable by nobody else, and prints where; it never deletes them, never splits them, and never deletes the Relay's Unix account. Purge deletes only paths the package itself created. `.rpm` removal never deletes state and prints the paths to delete by hand. | MVP |
 | RC-34 | Per-Account Console preferences are stored per Account, not fleet-wide. | v0.7.0 — Admin Console: Administration & Execution |
-| RC-37 | Gate rules are a section of the configuration file, checked, read and reloaded with it (RC-15, RC-16, RC-21), so whoever administers the Relay's host sets them and nothing on the wire can (ADR-0047). The separate gate-rules file goes, and with it its own load checks in RC-5 and RC-8. A configuration with no rules gates nothing; the one the package writes (RC-25) carries rules that gate every `mutate` and every Raw Exec (`approval.md`). | MVP |
-| RC-38 | Enrollment rate limiting is built in, not configured: a per-source-address limit of about 60 joins a minute with a burst, so some 200 Nodes behind one NAT address join within minutes; a ceiling on how many source addresses are tracked; and a global limit, with its burst, that stays the flood guard (`enrollment.md`). | MVP |
-| RC-39 | `state:cert-expiring` uses a built-in fraction: it holds for a Node whose certificate has less than a quarter of its lifetime left (`selectors-and-labels.md`). | MVP |
+| RC-37 | Gate rules are a section of the configuration file, checked, read and reloaded with it (RC-15, RC-16, RC-21), so whoever administers the Relay's host sets them and nothing on the wire can (ADR-0047). The separate gate-rules file goes, and with it its own load checks in RC-5 and RC-8. A configuration with no rules gates nothing; the one the package writes (RC-25) carries rules that gate every `mutate` and every Raw Exec (`approval.md`). Replaces RC-35, and the gate-file parts of RC-5, RC-8 and RC-22, when promoted. | MVP |
+| RC-38 | Enrollment rate limiting is built in, not configured: the per-source and global limits, their bursts and the tracked-address ceiling are constants, at the values `enrollment.md` sets. Replaces that part of RC-22 when promoted. | MVP |
+| RC-39 | `state:cert-expiring` uses a built-in fraction: it holds for a Node whose certificate has less than a quarter of its lifetime left (`selectors-and-labels.md`). Replaces that part of RC-22 when promoted. | MVP |
 | RC-40 | The dispatch concurrency is built in at 16. A `mutate` Job is sent 16 Tasks at a time, which bounds how much of it is already sent when it stops on a failure (`execution.md`). | MVP |
-| RC-41 | The approval webhook URL and its secret are each read only from a file the configuration names; neither may be written inline. The webhook's request timeout is built in. | MVP |
-| RC-42 | The Relay's logs are always JSON. The log level stays a setting (RC-22). | MVP |
+| RC-41 | The approval webhook URL and its secret are each read only from a file the configuration names; neither may be written inline. The webhook's request timeout is built in. Narrows RC-14 for the webhook when promoted. | MVP |
+| RC-42 | The Relay's logs are always JSON. The log level stays a setting (RC-22). Replaces that part of RC-22 when promoted. | MVP |
 | RC-43 | A Console session's maximum age is built in at 12 hours and the step-up window at 5 minutes. The Console session's idle timeout stays a setting. | MVP |
 | RC-44 | A key the configuration file no longer accepts refuses start, and refuses a reload, naming the key and never its value. The removed keys are `enrollment.ip_rate_per_minute`, `enrollment.ip_burst`, `enrollment.global_rate_per_minute`, `enrollment.global_burst`, `enrollment.max_tracked_ips`, `enrollment.cert_expiring_fraction`, `reach.dispatch_concurrency`, `approval.webhook_timeout`, `approval.webhook_url`, `approval.webhook_secret`, `approval.gate_rules_path`, `log.format`, `console.session_max_age` and `console.step_up_window`. | MVP |
 | RC-45 | The quickstart installs the Relay from its OS package. The container image with its deployment stack (RC-7, RC-27) stays a supported install, as built. | MVP |
@@ -136,7 +138,12 @@ a reload or restart. The Relay installs from an OS package or as a container ima
   change them, reading them over MCP and the Control API, and configuration history wait in
   roadmap: relay/settings-in-the-console. Live reload of TLS material waits there too.
 - **Residual risk:** the threat model's register, R34 (a purged host keeps its CA private key).
-  R35 is closed by RC-27. R15 applies only once reach settings move into the Console.
+  R35 is closed by RC-27. R15 is closed while reach settings stay in the file, and returns if
+  they move into the Console.
+- **Evidence outside the Proof block:** RC-7 and RC-27 are held by the release, image and Compose
+  guard scripts CI runs; that the deployment stack pins the image by digest has no proof. RC-11's
+  structural check does not see a mux handed to a registrar as a call expression, so a registrar
+  in another package is not covered.
 
 ## Proof
 

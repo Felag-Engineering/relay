@@ -3,7 +3,7 @@
 **Status:** designed, not built, as of `2026-10-23`.
 **Claim prefix:** `EN`
 **Governed by:** ADR-0005, ADR-0006, ADR-0010, ADR-0017, ADR-0020, ADR-0030, ADR-0031,
-ADR-0032, ADR-0033, ADR-0034, ADR-0048, ADR-0050; invariants 6, 7, 10, 11.
+ADR-0022, ADR-0032, ADR-0033, ADR-0034, ADR-0048, ADR-0050; invariants 6, 7, 10, 11.
 
 ## Purpose
 
@@ -138,8 +138,8 @@ alone, it says so.
 ## Designed, not built
 
 EN-30 to EN-33 end the join string's life on a Node and bound a token; each replaces the
-Behaviour claim it names, and the promoting PR lands the replacement and retires the old ID and
-its proof together. EN-36, EN-38 and EN-39 carry ADR-0048. EN-35 and EN-40 to EN-42 carry
+Behaviour claim it names, and the promoting PR lands the replacement, with the owner retiring the
+old ID and its proof rows, together. EN-36, EN-38 and EN-39 carry ADR-0048. EN-35 and EN-40 to EN-42 carry
 ADR-0050: a token names initial tags, and `relay:` holds only keys a Relay action defines.
 EN-43 fixes the rate limits.
 
@@ -151,14 +151,14 @@ EN-43 fixes the rate limits.
 | EN-33 | A unit start with no persisted identity exits cleanly with nothing written; the daemon never opens a plaintext Node-plane connection. A failed enrollment in `relay-daemon join` persists no partial identity and exits non-zero. Replaces EN-28 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
 | EN-35 | A mint that names any `relay:` label is refused, and the refusal names the label. A mint takes only initial tags (EN-40); `relay:node-id` is written by the enrollment itself (EN-38) and never named at mint (ADR-0050). Extends EN-42 when promoted. | MVP |
 | EN-36 | The Console mints an Enrollment Token through the same capability action and `admin` floor as the Control API, asking how many Nodes it is for (EN-31), and shows the join string once, apart from the command that consumes it (EN-39) (ADR-0048; #434). | v0.7.0 — Admin Console: Administration & Execution |
-| EN-38 | Every enrollment stamps `relay:node-id` with the Node's Relay-assigned ID on the Node it records. Only the enrollment action writes it, no mint may name it (EN-35), and the Node cannot change it. Extends EN-12 when promoted (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
+| EN-38 | Every enrollment stamps `relay:node-id` with the Node's Relay-assigned ID on the Node it records. Only the enrollment action writes it, no mint may name it (EN-35), and the Node cannot change it. Becomes part of EN-41 when promoted (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
 | EN-39 | `relay init` shows a freshly minted join string once, apart from the command that consumes it: the command is `sudo relay-daemon join`, and the string is pasted at its prompt, so it is never part of a command line (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
 | EN-40 | A mint names zero or more **initial tags**, each a well-formed `tag:` label rendering as exactly one Selector term; a mint may name none. An entry that is not such a label refuses the mint and is never rewritten (ADR-0050). Replaces EN-3 when promoted. | MVP |
 | EN-41 | After a valid token is accepted, the Relay generates the `node_id`, signs the CSR under that identity, creates the registry record, stamps `relay:node-id` (EN-38), writes the token's initial tags on the Node, and records the token ID and the time as the Node's enrollment provenance. It writes no other `relay:` label, and the CSR subject never selects the identity. Once written, an initial tag is an ordinary tag: how it is written, audited and later changed is `selectors-and-labels.md` (ADR-0050). Replaces EN-12 when promoted. | MVP |
 | EN-42 | A mint request naming an initial tag that is not a well-formed `tag:` label, an invalid TTL, malformed JSON or an unknown request field is refused; nothing is sanitized into another label (ADR-0050). Replaces EN-24 when promoted. | MVP |
+| EN-43 | The per-source and global enrollment rate limits are fixed constants, not settings. The per-source limit admits about 60 enrollments a minute from one address, so some 200 Nodes behind one NAT address join in minutes; the global limit stays the guard against a flood. Both still apply before token validation (EN-10). Extends EN-10 when promoted. | MVP |
 | EN-44 | A mint by a machine Account that names any initial tag is refused, and the refusal says only a human Account writes tags (ADR-0050). A machine Account's mint naming no tag is unaffected. | MVP |
 | EN-45 | On upgrade, every `relay:` label other than `relay:node-id` that an earlier release wrote from a token's scope is copied to a `tag:` label of the same key and value, and an unused token minted with a scope writes that scope as initial tags. Each copy is audited as an act of the system (ADR-0050). | MVP |
-| EN-43 | The per-source and global enrollment rate limits are fixed constants, not settings. The per-source limit admits about 60 enrollments a minute from one address, so some 200 Nodes behind one NAT address join in minutes; the global limit stays the guard against a flood. Both still apply before token validation (EN-10). Extends EN-10 when promoted. | MVP |
 
 ## Out of scope
 
@@ -173,6 +173,9 @@ EN-43 fixes the rate limits.
 - **Durable audit records**: `audit-and-read-lane.md`. Enrollment attempts are not durable
   (EN-21).
 - **Dispatch approvals and approval gates**: `approval.md`.
+- **Testing:** `make verify` suffices for Relay-only changes. A change to the Node-plane
+  protocol, the TLS configuration, the join string or the daemon's enrollment path also needs the
+  cross-binary suite.
 - **Fencing off a token's Nodes without revoking them**: `roadmap: relay/quarantine`.
   Containment today is revoking the token (EN-19); each Node stays addressable by
   `relay:node-id` (EN-38).

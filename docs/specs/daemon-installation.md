@@ -3,7 +3,7 @@
 **Status:** designed, not built, as of `2026-10-23`.
 **Claim prefix:** `DI`
 **Governed by:** ADR-0014, ADR-0002, ADR-0033, ADR-0021, ADR-0022, ADR-0031, ADR-0036,
-ADR-0048; invariants 2, 4, 14.
+ADR-0048, ADR-0053; invariants 2, 4, 14.
 
 ## Purpose
 
@@ -49,7 +49,7 @@ unit ships until that check is done.
   in a file on that Node.
 - **DI-6** The shipped default Policy permits read Operations behind a confidentiality deny-list,
   every Template of the shipped read catalog included, `log.tail` among them. It allows no
-  `mutate` Operation and does not enable Raw Exec (ADR-0022, ADR-0021).
+  `mutate` Operation and does not enable Raw Exec (ADR-0022, ADR-0021, ADR-0053).
 - **DI-28** Of the daemon's own files, the shipped default Policy denies reading and checksumming
   only those that carry a secret: the Node's identity private key and the environment file, with
   the daemon's environment oracle beside them. It does not deny its Policy, CA bundle, identity
@@ -145,7 +145,7 @@ Relay never pushes a binary (invariant 14).
 | DI-25 | The daemon package installs the binary at `/usr/bin/relay-daemon` and the hardened unit as a system unit, and never starts the daemon. It enables the unit on a first install only, only where systemd is running, honouring the distribution's presets; an upgrade never changes whether it is enabled. An enabled unit on a Node that holds no persisted identity stays inactive at boot without failing or retrying; it starts at the next boot after an identity is present, or when `relay-daemon join` (DI-42) or config management starts it. Nothing watches for an identity to appear. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-26 | The daemon package places the shipped default Policy as the live Policy only on a first install, only if no Policy file exists and no Policy directory existed before the install began; never on an upgrade or a reinstall. On `.rpm` platforms, where a reinstall after removal is indistinguishable from a first install, those absence checks are the whole guard. No install, upgrade or remove rewrites or re-creates the live Policy. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-27 | The daemon package places the environment file on a first install only, if none exists, owned by root and mode `0600`, and never rewrites it. | v0.6.5 — Install Path: relay init, join string, packages |
-| DI-29 | The daemon package carries the shipped read Template catalog (`proc.list`, `service.status`, `disk.usage`, `net.listening`, `pkg.inventory`, `log.tail`, `file.checksum`) as package-owned files: replaced on upgrade, removed with the package, and never installed as configuration the package manager would preserve. There is no separate catalog package (ADR-0021). | v0.6.5 — Install Path: relay init, join string, packages |
+| DI-29 | The daemon package carries the shipped read Template catalog (`proc.list`, `service.status`, `disk.usage`, `net.listening`, `pkg.inventory`, `log.tail`, `file.checksum`) as package-owned files: replaced on upgrade, removed with the package, and never installed as configuration the package manager would preserve. There is no separate catalog package (ADR-0053, ADR-0021). | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-31 | Removing the daemon package removes the binary, the unit and the shipped catalog's Templates, and leaves the Policy, the Policy directory, the environment file and the state directory. `apt purge` removes everything the package created, the Node's identity included; `.rpm` removal never deletes state and prints the paths to delete by hand. Purge deletes only paths the package itself created, never a path read from an operator-edited file. | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-33 | A platform is supported only where CI installs the package, upgrades it over the operator's edited configuration and finds the edit intact, and removes it: Ubuntu 24.04 LTS and 26.04 LTS; Debian 13; RHEL-compatible 10, tested on Rocky Linux 10; Amazon Linux 2023. Each is supported on `x86_64` and `aarch64`. A platform whose package manager refuses an unsigned local package by default is not supported. This list also governs the Relay packages (`relay-configuration.md`). | v0.6.5 — Install Path: relay init, join string, packages |
 | DI-42 | `relay-daemon join` enrolls in the process that read the join string: it reads the string from a prompt or standard input, never from its arguments, pins the Relay's CA from the fingerprint, enrolls, persists the identity and the Relay address, and then enables and starts the unit. It writes the join string nowhere. On a Node that already holds an identity it changes nothing and exits zero, so config management may rerun it; a failed enrollment leaves nothing on disk and exits non-zero. Replaces DI-37 when promoted; `enrollment.md` carries the join string's contract. | v0.6.5 — Install Path: relay init, join string, packages |
@@ -158,6 +158,10 @@ Relay never pushes a binary (invariant 14).
 
 ## Out of scope
 
+- **Evidence outside the Proof block:** DI-1 is asserted by the release workflow, not a test;
+  DI-11 by the write-ban lint; DI-18 is an absence; DI-30's ledger rule and DI-32 are held by the
+  catalog-ledger and package-guard scripts CI runs. Packaging claims are proven by the CI install
+  jobs once they exist; `make verify` alone cannot prove them.
 - Minting Enrollment Tokens, identity issuance and revocation: `enrollment.md`. DI-21 and DI-23
   state only what a revoked Node's daemon meets.
 - The connection a running daemon holds: `node-connection.md`, which owns reconnect and the
@@ -210,8 +214,8 @@ Unproven: DI-1, DI-2, DI-3, DI-5, DI-6, DI-11, DI-15, DI-18, DI-19, DI-20, DI-32
 
 ## Retired
 
-- **DI-34** — `2026-10-23` — retired unbuilt: the package is the only install, so there is no
-  hand-built Node to migrate.
+- **DI-34** — `2026-10-23` — retired unbuilt: the package is the only supported install, and
+  no migration off a hand-built Node is documented or supported.
 - **DI-35** — `2026-10-22` — retired unbuilt: Relay renders no Enrollment Bundle, so nothing pins
   a version through one (ADR-0048).
 - **DI-8** — `2026-10-21` — the daemon enrolls only by join string, pinning the Relay's CA from
