@@ -2,6 +2,9 @@
 
 **Status:** Accepted; amended by ADR-0034.
 
+ADR-0050 (2026-10-23) builds `tag:` for the MVP and narrows its writer to a human Account at
+`operator` or above; a join token's labels become initial tags.
+
 Operators need to group Nodes ad hoc from the Relay side ("these 40 boxes are the
 Postgres-15 canary") without a config-management round-trip. Neither existing namespace
 (ADR-0006) can serve: `node:` is node-rooted and Relay-immutable, and `relay:` is reserved for

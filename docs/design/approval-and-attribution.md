@@ -7,6 +7,11 @@
 > through the tool surface), and the built behaviour is in the capability specs in
 > [docs/specs/](../specs/). This file keeps the pre-ADR reasoning, not the rule. Where it and
 > an ADR disagree, the ADR wins.
+>
+> **Cut further by [ADR-0047](../adr/0047-approval-is-one-in-band-answer.md) (2026-10-22).** An
+> approval is one in-band answer: no quorum, approver lists, channels, approval Grants or
+> `approve_request`, and gate rules are a section of the Relay configuration file, not
+> store-backed. The ladder, gate grammar and worked example below are history.
 
 **Status:** planning-session output (owner + AI-agent, 2026-08-07), pre-ADR. It was the
 grounding brief for the approval-callout ADR (#268).

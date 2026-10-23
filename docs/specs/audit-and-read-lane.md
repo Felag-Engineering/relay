@@ -203,12 +203,7 @@ Claims above with **no row**, and so nothing checking them:
 
 ## Future work
 
-- **Audit visibility scoped by role or audience**, including the approval-record scoping gap (#469).
-- **Retention periods and a durable export** for operational and SIEM use. Retaining read output
-  stays out: it would need a new human decision against ADR-0025.
-- **A per-Account activity model**, if the Console's agent-activity view (#424) needs more than
-  the audit trail. MCP is stateless.
-- **Tamper-evident audit** — hash-chained records, so a deleted or altered row is detectable.
+Future work is in the private roadmap: roadmap: relay/research/spec-future-work/audit-and-read-lane.
 
 ## Open questions
 

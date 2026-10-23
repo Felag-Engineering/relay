@@ -112,6 +112,7 @@ func wantInOutput(t *testing.T, out string, wants ...string) {
 	}
 }
 
+// Proves RC-12.
 func TestMain_ConfigFlagHonoured(t *testing.T) {
 	for _, form := range []string{"--config", "-config="} {
 		t.Run(form, func(t *testing.T) {
@@ -131,6 +132,7 @@ func TestMain_ConfigFlagHonoured(t *testing.T) {
 	}
 }
 
+// Proves RC-20.
 func TestMain_CoherentButSuspectConfigStartsWithWarning(t *testing.T) {
 	bin, layout := shippableLayout(t)
 	cfg := layout.WriteConfig(t, layoutTOML(layout, freeAddr(t), "\n[reach]\nread_blast_cap = 2\nmutate_blast_cap = 5\n"))
@@ -171,6 +173,7 @@ func wantNoSecret(t *testing.T, out string) {
 	}
 }
 
+// Proves RC-14.
 func TestStartupLog_CarriesNoWebhookURLOrSecret(t *testing.T) {
 	run := func(t *testing.T, approval func(layout *relaytest.RelayLayout) string) string {
 		t.Helper()

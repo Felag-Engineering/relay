@@ -260,6 +260,7 @@ func TestMCP_RunOperation_PerNodeResults(t *testing.T) {
 // with a minimum of 1.2.0 configured, the outdated Node's result renders
 // outcome=version_refused and is never sent to the Conduit, while the current
 // Node executes normally.
+// Proves DI-17.
 func TestMCP_RunOperation_OutdatedNodeVersionRefused(t *testing.T) {
 	ts := newTestServerWithConfig(t, 0, 0, "1.2.0")
 	ts.conduit.connect(ts.nodeA, ts.nodeB) // nodeA (1.1.0, outdated) stays connected: the gate is connectivity-independent

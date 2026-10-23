@@ -125,6 +125,7 @@ func TestMain_DefaultConfigPathNamedWhenAbsent(t *testing.T) {
 	}
 }
 
+// Proves RC-12, RC-13, RC-14.
 func TestMain_OtherFlagsRefused(t *testing.T) {
 	path := writeRelayTOML(t, minimalTOML(t, "127.0.0.1:0"))
 	for _, extra := range [][]string{
@@ -162,6 +163,7 @@ func TestMain_OtherFlagsRefused(t *testing.T) {
 	})
 }
 
+// Proves RC-13, RC-14.
 func TestMain_RetiredEnvNameRefusesNamingKey(t *testing.T) {
 	path := writeRelayTOML(t, minimalTOML(t, "127.0.0.1:0"))
 

@@ -53,11 +53,11 @@ role's reach reads in one place.
 | Act | Floor | Settled in |
 |---|---|---|
 | Read the registry, vocabulary and audit metadata | `viewer` | `query.md`, `audit-and-read-lane.md` |
-| Request an Operation | `operator` | `execution.md` |
+| Request an Operation, over MCP or the Control API | `operator` | `execution.md` |
 | Request Raw Exec | `admin` | `execution.md` |
 | Cancel any Job, not only one's own | `operator`, **human Account only** | `execution.md` |
 | Cancel a Job it requested | `operator`, machine Account | `execution.md` |
-| Add and remove `tag:` labels, on every surface including MCP | `operator` | `selectors-and-labels.md` |
+| Add and remove `tag:` labels, on the Console and the Control API | `operator`, **human Account only** | `selectors-and-labels.md` |
 | Engage a Freeze over the Control API | `operator`, **human Account only** | `freeze.md` |
 | Release a Freeze over the Control API | `admin`, with a reason | `freeze.md` |
 | Decide an approval | the role floor the Action required | `approval.md` |
@@ -65,6 +65,13 @@ role's reach reads in one place.
 | Mint an Enrollment Token | `admin` | `enrollment.md` |
 | Set, rename or clear a Policy alias (designed, not built) | `admin`, **human Account only** | `query.md` |
 | Administer Accounts and API Tokens | `admin` | this spec |
+
+The Console requests no Operation and no Raw Exec: it watches and does not execute (ADR-0052).
+
+**Tag writes are a human act** (ADR-0050). A human Account at `operator` or above adds and
+removes `tag:` labels on the Console and the Control API. A machine Account may not, whatever
+its role, and no MCP tool writes a tag. The capability layer decides this once for both
+surfaces (invariant 10).
 
 ### Account administration
 
@@ -97,7 +104,11 @@ authorizer and a real audit trail for Account administration refuses to start.
 An API Token belongs to exactly one Account and has a non-secret ID, name, creation time,
 optional expiry, last-use time, and revocation state. At mint the caller must choose a TTL
 explicitly; zero means no expiry, so a configured AI-agent can stay connected without routine
-human re-authentication. The plaintext `glp_…` credential is returned in the mint response
+human re-authentication. Designed for the MVP: a human Account's API Token defaults to seven
+days on every mint path (the Console's form, the Control API and `relay init`), decided once in
+the capability layer, because an approval answered on a human's token session counts as that
+human (ADR-0047, amended 2026-10-23) and a copied interactive token should stop working on its
+own. A longer life is an explicit choice. The plaintext `glp_…` credential is returned in the mint response
 exactly once. Relay stores a hash of the secret component and never the plaintext, and no
 read, list, or audit surface returns either.
 
@@ -125,7 +136,9 @@ of the same input. An OAuth principal is marked as OAuth in the verified audit l
 API Token ID. API Tokens stay locally verifiable when an IdP is unavailable.
 
 An OAuth session on MCP proves a human authorized that *session*, not any individual
-model-generated call, so MCP calls stay agent-grade for approval.
+model-generated call, so MCP calls stay agent-grade for approval. Who an elicited approval
+answer is recorded as, on an OAuth or an API-token session, is `approval.md`'s (ADR-0047,
+amended 2026-10-23).
 
 ### Console authentication
 
@@ -197,8 +210,12 @@ require step-up.
 - **ADR-0024** — makes Relay an OAuth protected resource only, requires existing-Account
   mapping, and preserves API Token authentication for headless callers.
 - **ADR-0009** and **ADR-0026** — bind the Console to the shared capability layer and require
-  step-up for Console privilege grants and mutate applies respectively. The step-up matrix above
-  is what the privilege-grant half means for Account administration.
+  step-up for Console privilege grants. The step-up matrix above is what that means for Account
+  administration.
+- **ADR-0050** — only a human Account at `operator` or above writes a tag, on the Console and
+  the Control API; no MCP tool writes one.
+- **ADR-0052** — the Console watches and does not execute, so no role reaches a dispatch through
+  it.
 - **ADR-0027** — OAuth/MCP session attribution does not make individual MCP calls
   human-grade for approval.
 - **ADR-0028** — MCP is stateless; a machine Account has recent activity, never a
@@ -307,6 +324,8 @@ Wanted, deliberately not in the first pass, and in no committed order.
   the password directly.
 - **Per-Account rate limits (#279).** Bounding a runaway AI-agent loop in time as well as in blast
   radius.
+- **OAuth tested against common identity providers** —
+  `roadmap: relay/oauth-against-common-providers`.
 - **IdP group claims for approval audiences** and `on_behalf_of`, joined to the existing-Account
   OAuth mapping. The roadmap (`roadmap: relay/idp-federated-teams-and-audiences`) names IdP-federated teams as the direction and rules out a
   native Relay org chart.

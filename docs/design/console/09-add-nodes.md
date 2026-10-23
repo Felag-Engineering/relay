@@ -2,10 +2,12 @@
 
 **Artboard 7.** Mint an Enrollment Token and render what the machines need, in one act.
 
-> **Superseded in part by ADR-0048.** Nothing is rendered: the form asks how many Nodes the token is
-> for, Labels are optional, and the reveal shows `sudo relay-daemon join` and the join string to
-> paste at its prompt, apart. The rendering sections below are history until v0.7.0 redesigns the
-> screen.
+> **Superseded in part by ADR-0048 and ADR-0050.** Nothing is rendered: the form asks how many
+> Nodes the token is for, Labels are optional, and the reveal shows `sudo relay-daemon join` and
+> the join string to paste at its prompt, apart. No join string goes in an environment file. The
+> Labels a mint names are **initial tags** (`tag:` labels, editable afterwards), not `relay:`
+> labels; a mint naming a `relay:` label is refused. The rendering sections below are history
+> until the screen is redesigned.
 
 **Milestone v0.7.0.**
 
@@ -39,18 +41,19 @@ Consequences for this screen, all mandatory:
 
 ## Layout
 
-**Left — the mint form.** The `relay:` labels this token will stamp, max uses, expiry, and the
-render formats. Then "Mint and render". Below it, the outstanding-token inventory with revoke.
+**Left — the mint form.** The initial tags this token will write (ADR-0050), max uses, expiry,
+and the render formats. Then "Mint and render". Below it, the outstanding-token inventory with revoke.
 
 **Right — the reveal.** A once-only banner, then the rendered artifacts in tabs (`ansible`, `join`,
 env file), each with copy and download. Below, "what happens on each machine".
 
-## Scope is the security lane
+## Initial tags, not the security lane
 
-The labels a token stamps are `relay:` labels — Relay-set, Node-immutable, and the only valid
-target for quarantine and secret-distribution Selectors. Minting a token that stamps
-`relay:env=prod` is therefore a privilege-granting act, which is why it requires `admin`
-(`authz/control_test.go` pins the gate).
+The labels a token names are written as each joining Node's first `tag:` labels, as the minting
+`admin`'s act, and are ordinary tags afterwards (ADR-0050). They are not `relay:` labels: `relay:`
+holds only keys a Relay action defines, and enrollment writes `relay:node-id` and nothing else.
+Minting is still a privilege-granting act, because it admits Nodes to the fleet, which is why it
+requires `admin` (ADR-0032 decision 5).
 
 ## The renderings
 
@@ -62,7 +65,7 @@ fourth is a template, not an architectural change.
   unit. Carries the token inline, and its expiry in a header comment.
 - **`join`** — the bare `glp_join_…` string: one opaque, `glp_`-prefixed token that is greppable by
   secret scanners and safe unquoted in a shell.
-- **env file** — `RELAY_JOIN` plus `RELAY_NODE_LABELS`, the two lines a Node needs.
+- **env file** — *removed by ADR-0048.* A join string never goes in a file on the Node.
 
 ## What happens on each machine
 
@@ -70,8 +73,8 @@ Three steps, stated on screen because they are the trust story:
 
 1. The daemon verifies the certificate the Relay presents against the **fingerprint pinned inside
    the join string**, before anything else. Wrong fingerprint and it exits — there is no fallback.
-2. It presents the token once, receives its own identity certificate, and the Relay stamps the
-   `relay:` labels on it.
+2. It presents the token once, receives its own identity certificate, and the Relay writes
+   `relay:node-id` and the token's initial tags on it.
 3. It loads its Policy and comes up **read-only** per ADR-0022 — interrogable, unable to change
    anything, until the operator widens Policy themselves.
 
@@ -120,8 +123,8 @@ pattern *plus* a bare `r.Path` for every route that constrains reach, so:
 the `StepUp` component models a *standalone* confirmation with its own `FormAction`, and the mint
 form must carry scope/TTL/max-uses/render-format in the same submission because the format is
 chosen *before* minting (a nested `<form>` is invalid HTML, which `components.go` already records);
-a freshness window lets one password buy a burst of `relay:`-stamping grants, and minting is
-privilege-granting under invariant 7; a window invites refuse → prompt → replay, which would make
+a freshness window lets one password buy a burst of fleet-admitting grants, and minting is
+privilege-granting; a window invites refuse → prompt → replay, which would make
 a *pending mint* cross a request boundary — the artefact `decide.go` already rejected, except here
 the replayed thing is a fleet join credential; and an adapter may be stricter than the layer
 (invariant 10), never looser.

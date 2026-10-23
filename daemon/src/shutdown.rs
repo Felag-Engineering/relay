@@ -481,6 +481,7 @@ mod tests {
         assert_eq!(summary.killed, 0);
     }
 
+    // Proves DI-14.
     #[tokio::test]
     async fn drain_grace_expiry_kills_remaining() {
         let inflight = Inflight::default();

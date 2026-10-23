@@ -94,6 +94,7 @@ func parseCert(t *testing.T, certPEM []byte) *x509.Certificate {
 // registry.WellFormedLabel's allowlist for both halves (pinned by
 // TestCreate_InvalidScope's "two equals signs" row). With zero or one `=`,
 // first and last are the same character.
+// Proves EN-12, EN-13.
 func TestEnroll_Success(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg, realCA := newEnrollServer(t, svc)
@@ -183,6 +184,7 @@ func TestEnroll_Success(t *testing.T) {
 
 // TestEnroll_IdentityNotFromCSR proves that the issued cert CN is the Relay-assigned
 // node_id and not the CN the daemon placed in the CSR (ADR-0006).
+// Proves EN-12.
 func TestEnroll_IdentityNotFromCSR(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, _, _ := newEnrollServer(t, svc)
@@ -208,6 +210,7 @@ func TestEnroll_IdentityNotFromCSR(t *testing.T) {
 
 // TestEnroll_InvalidToken verifies that a garbage credential returns PermissionDenied
 // and leaves no registry entry.
+// Proves EN-13.
 func TestEnroll_InvalidToken(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg, _ := newEnrollServer(t, svc)
@@ -228,6 +231,7 @@ func TestEnroll_InvalidToken(t *testing.T) {
 
 // TestEnroll_ExpiredToken verifies that an expired token returns PermissionDenied
 // and leaves no registry entry.
+// Proves EN-26.
 func TestEnroll_ExpiredToken(t *testing.T) {
 	svc, clk := newTestService(t) // fakeNow defined in token_test.go
 	srv, reg, _ := newEnrollServer(t, svc)
@@ -251,6 +255,7 @@ func TestEnroll_ExpiredToken(t *testing.T) {
 
 // TestEnroll_RevokedToken verifies that a revoked token returns PermissionDenied
 // and leaves no registry entry.
+// Proves EN-26.
 func TestEnroll_RevokedToken(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg, _ := newEnrollServer(t, svc)
@@ -276,6 +281,7 @@ func TestEnroll_RevokedToken(t *testing.T) {
 
 // TestEnroll_ExhaustedToken verifies that a single-use token can enroll exactly once.
 // The second Enroll returns PermissionDenied and must not add a new registry entry.
+// Proves EN-26.
 func TestEnroll_ExhaustedToken(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg, _ := newEnrollServer(t, svc)
@@ -312,6 +318,7 @@ func TestEnroll_ExhaustedToken(t *testing.T) {
 
 // TestEnroll_BadCSR verifies that a malformed CSR returns InvalidArgument
 // and leaves no registry entry.
+// Proves EN-25.
 func TestEnroll_BadCSR(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg, _ := newEnrollServer(t, svc)
@@ -337,6 +344,7 @@ func TestEnroll_BadCSR(t *testing.T) {
 // gate (registry.WellFormedLabel, #504), are rejected with InvalidArgument,
 // and the registry and relay space remain untouched (D2: enrollment REJECTS
 // where Hello DROPS — the fail-closed property this test pins).
+// Proves EN-11, EN-25.
 func TestEnroll_NonNodeSelfLabel(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -416,6 +424,8 @@ func buildRaceServer(t *testing.T, svc *Service) (*Server, *registry.InMemory, *
 //     real Denylist.
 //   - The Node IS present in the registry (Upsert ran before the post-check),
 //     confirming the bounded cascade scan would have missed it.
+//
+// Proves EN-15.
 func TestEnroll_PostUpsertRevocationCheck_ClosesRaceWindow(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg, den := buildRaceServer(t, svc)
@@ -518,6 +528,7 @@ func newLimitedServer(t *testing.T, svc *Service, cfg ratelimit.Config, regOpts 
 // TestEnroll_RateLimited_PerIP verifies that the per-IP gate fires independently:
 // two enrolls from one IP succeed (burst=2), the third is denied, while a fresh
 // IP is still allowed.
+// Proves EN-10.
 func TestEnroll_RateLimited_PerIP(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg := newLimitedServer(t, svc, ratelimit.Config{
@@ -573,6 +584,7 @@ func TestEnroll_RateLimited_PerIP(t *testing.T) {
 // per-IP bucket is empty (PerIPBurst=0), BOTH a call with a valid Enrollment Token
 // and a call with a garbage token return codes.ResourceExhausted with identical
 // error codes. Neither should add a registry entry.
+// Proves EN-10.
 func TestEnroll_RateLimited_NoTokenOracle(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	// PerIPBurst=0: the very first call from any IP is denied — no drain phase needed.
@@ -614,6 +626,7 @@ func TestEnroll_RateLimited_NoTokenOracle(t *testing.T) {
 // TestEnroll_RateLimited_Global verifies that the global gate fires independently
 // of the per-IP gate: GlobalBurst=1 means the second enroll from a fresh IP is
 // denied even though that IP's per-IP bucket is full.
+// Proves EN-10.
 func TestEnroll_RateLimited_Global(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, _ := newLimitedServer(t, svc, ratelimit.Config{
@@ -645,6 +658,7 @@ func TestEnroll_RateLimited_Global(t *testing.T) {
 
 // TestEnroll_RegistryAtCapacity verifies that when the registry is full the
 // handler returns codes.ResourceExhausted and the registry size stays unchanged.
+// Proves EN-25.
 func TestEnroll_RegistryAtCapacity(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	// Generous limiter so the rate-limit gate never fires.
@@ -683,6 +697,7 @@ func TestEnroll_RegistryAtCapacity(t *testing.T) {
 }
 
 // TestEnroll_EmptyTokenOrCSR verifies that missing token or CSR returns InvalidArgument.
+// Proves EN-11, EN-25.
 func TestEnroll_EmptyTokenOrCSR(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, _, _ := newEnrollServer(t, svc)
@@ -716,6 +731,7 @@ func TestEnroll_EmptyTokenOrCSR(t *testing.T) {
 //
 // The legacy token is written straight into the Repository, bypassing
 // Create, which now refuses this scope itself.
+// Proves EN-26.
 func TestEnroll_LegacyMalformedScopeIsRefusedBeforeAnySideEffect(t *testing.T) {
 	repo := NewMemoryRepository()
 	svc := NewService(repo)

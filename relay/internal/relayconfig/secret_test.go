@@ -15,6 +15,7 @@ const secretValueText = "s3cr3t-VALUE-9f2"
 
 const webhookSecretFile = minimal + "[approval]\nwebhook_url = \"https://hooks.example.internal/x\"\nwebhook_secret_file = \"/etc/relay/hook.secret\"\n"
 
+// Proves RC-14.
 func TestSecret_InlineAndFileLoad(t *testing.T) {
 	inline := mustLoad(t, minimal+"[approval]\nwebhook_url = \"https://hooks.example.internal/x\"\nwebhook_secret = \""+secretValueText+"\"\n")
 	if v, ok := inline.Approval.WebhookSecret.Reveal(); !ok || v != secretValueText {

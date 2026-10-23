@@ -306,9 +306,16 @@ seven `read`-class templates, trusted the way the binary is (you installed it).
 | `log.tail` | `unit` (identifier) | **Bounded at 200 lines by the template**, never by the caller. The catalog's widest egress surface. |
 | `file.checksum` | `path` (path) | A digest is a content oracle; the shipped Policy denies it the same paths as `file.read`. |
 
-The shipped default Policy (ADR-0022) allows exactly these names, so a freshly enrolled Node
-answers the whole catalog with no local authoring. Narrowing `service.status`/`log.tail` from
-`"*"` to your real unit list is the highest-value edit you can make to it.
+The pack is part of the daemon package, not a package of its own: it is replaced on upgrade and
+removed with the daemon.
+
+The shipped default Policy (ADR-0022) allows exactly these names, `log.tail` included, so a
+freshly enrolled Node answers the whole catalog with no local authoring. A journal carries
+whatever a service logs, and a read result leaves the fleet for the model provider. Narrowing
+`service.status`/`log.tail` from `"*"` to your real unit list is the highest-value edit you can
+make to it, for example `allowed_args = [["nginx.service", "sshd.service"]]`. To turn
+`log.tail` off, delete its `[[operation]]` block: Policy is deny-by-default, so a name with no
+allow is denied.
 
 ## Security notes before you author
 

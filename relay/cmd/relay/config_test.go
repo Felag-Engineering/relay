@@ -54,6 +54,7 @@ path = "/var/lib/relay/relay.db"
 hostname = "relay.example.test"
 `
 
+// Proves RC-22.
 func TestFromFile_CarriesEverySetting(t *testing.T) {
 	sc, err := parseConfig([]byte(`
 [node_plane]
@@ -176,6 +177,7 @@ func TestLoadConfig_InvalidValueNamesKeyAndLineNotValue(t *testing.T) {
 	}
 }
 
+// Proves RC-14.
 func TestLoadConfig_FileSecretsResolved(t *testing.T) {
 	dir := t.TempDir()
 	urlFile, secretFile := filepath.Join(dir, "url"), filepath.Join(dir, "secret")
@@ -237,6 +239,7 @@ func TestLoadConfig_MissingSecretFileReasonIsPrecise(t *testing.T) {
 	}
 }
 
+// Proves RC-12.
 func TestParseArgs(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -277,6 +280,7 @@ func TestParseArgs(t *testing.T) {
 	})
 }
 
+// Proves RC-22.
 func TestNewLogHandler_FormatAndLevel(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(newLogHandler(&buf, relayconfig.Log{Level: slog.LevelWarn, Format: relayconfig.LogJSON}))

@@ -667,6 +667,7 @@ func signedClientCert(t *testing.T, ts *testSetup, cn string) *tls.Certificate {
 	return &c
 }
 
+// Proves DI-23.
 func TestServerCredentials_ReportsRevokedBeforeRefusing(t *testing.T) {
 	ts := newTestSetup(t)
 	obs := &revokedDialObserver{told: make(chan string, 1), gate: make(chan struct{})}

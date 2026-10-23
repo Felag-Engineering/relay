@@ -62,24 +62,24 @@ it needs an ADR, not a quiet workaround.
    (ADR-0005, 0006)
 7. **Labels are namespaced, and each namespace has exactly one writer.** Four namespaces, each
    immutable from every side but its own author: `node:` is written by the Node's own config
-   management and never by the Relay; `relay:` by the Relay and never by the Node; `tag:` by an
-   operator through the control plane and never by the Node; `state:` by nobody at all — it is
+   management and never by the Relay; `relay:` by the Relay and never by the Node; `tag:` by a
+   human Account through the control plane, never by an AI-agent or the Node; `state:` by nobody at all — it is
    Relay-derived from the registry, evaluated at Selector-resolution time from a closed
    vocabulary. No Account writes a `relay:` label directly: each `relay:` key is written only as
    the side effect of the Relay action that defines it. **The security lane targets only labels
    no Node can write.** Remediation and secret distribution target `relay:` and only `relay:`.
-   Engaging a quarantine — which only ever reduces what may run — may target `relay:` or `tag:`;
-   lifting one targets `relay:` only. `node:` and `state:` are for routine targeting and are
+   Where a quarantine is engaged — which only ever reduces what may run — it may target `relay:`
+   or `tag:`; lifting one targets `relay:` only. `node:` and `state:` are for routine targeting and are
    never a security-lane target. A compromised Node can forge its own `node:` labels, and can
    influence `state:` by lying in `Hello`, but never `relay:` or `tag:`.
-   (ADR-0006, ADR-0020, ADR-0034; amended 2026-09-16)
+   (ADR-0006, ADR-0020, ADR-0034, ADR-0050; amended 2026-09-16 and 2026-10-23)
 8. **`/proto` is the single source of truth** for the wire protocol and Operation vocabulary.
    Change the contract there; regenerate both sides. Don't hand-edit generated code. (ADR-0007)
-9. **The System Model is advisory; its grounding facts are AI-immutable.** The AI-agent may
-   freely create/update/delete Services, Dependencies, and Annotations (with provenance,
-   audited via git commits), but may never edit Nodes or `relay:` labels through it, and the
-   model never bypasses Selectors → Policy → blast cap. It is never a desired-state spec:
-   Relay does not auto-reconcile, ever. (ADR-0008)
+9. **A fleet model is advisory; its grounding facts are AI-immutable.** Where Relay keeps a
+   model of the fleet, it is never a desired-state spec: Relay does not auto-reconcile, ever.
+   What Relay observed is always distinguishable from what anyone wrote; no AI-agent writes its
+   grounding facts (Nodes, their identity, `relay:` labels); and the model never bypasses
+   Selectors → Policy → blast cap. (ADR-0008, ADR-0051; reworded 2026-10-23)
 10. **One capability layer; every interface is an adapter over it.** Ports and adapters: the
     capability layer is the single implementation of what may be done, who may do it, and how it
     is recorded, decided there and never per interface. An adapter exposes that layer and
@@ -87,16 +87,14 @@ it needs an ADR, not a quiet workaround.
     reimplement any part of it, or decide anything itself. Which surface exposes what is in the
     capability specifications, not here. Reaching a Node any other way is a parallel control
     path, and there is never a reason to build one; the `no_dispatch` structural guard covers
-    each adapter. The Console is **not** read-only by design (ADR-0026 superseded
-    ADR-0009's no-execution scope): where it executes, it does so preflight-by-default, with
-    step-up re-authentication on a mutate apply, role-gated by the capability layer, and behind
-    the root-owned `console_execution` flag. (ADR-0009, ADR-0010, ADR-0026; wording amended
-    2026-09-20 for ADR-0038)
+    each adapter. Where the Console executes, it does so preflight-by-default, with step-up
+    re-authentication on a mutate apply, role-gated by the capability layer, and behind a switch
+    set by whoever administers the Relay's host. (ADR-0009, ADR-0010, ADR-0026, ADR-0052;
+    wording amended 2026-09-20 for ADR-0038 and 2026-10-23 for ADR-0052)
 11. **Neither a credential nor the Relay itself can change the terms on which credentials
     are accepted.** The configuration that bounds *who may authenticate, and how recently they
     proved it* — listeners, which CA and TLS material are used, auth bootstrap, the identity
-    provider Relay believes, session and step-up windows, `console_execution`, and the approval
-    notification path — is the **security floor**. It is set by whoever administers the
+    provider Relay believes, session and step-up windows, and the approval notification path — is the **security floor**. It is set by whoever administers the
     Relay's host, outside Relay, and nothing Relay runs or accepts can write it: no API, no
     request, and not the Relay process. Key material the Relay generates — its CA key, the
     certificates it issues — is the Relay's own, not floor. Configuration that
@@ -105,7 +103,7 @@ it needs an ADR, not a quiet workaround.
     step-up re-authentication, and audited. Secrets never pass through the environment or
     the command line; the Relay can read them and cannot rewrite them, except key material
     it generates itself. (ADR-0010, amended 2026-09-15; ADR-0004, ADR-0012, ADR-0027;
-    reworded 2026-10-15, ADR-0033, ADR-0043)
+    reworded 2026-10-15, ADR-0033, ADR-0043; `console_execution` dropped 2026-10-23, ADR-0052)
 12. **Policy is evaluated only by the daemon's live engine** — including hypotheticals
     (`PolicyQuery`, the Policy preflight). Never reimplement Policy evaluation on the Relay side.
     (ADR-0011; wording amended 2026-09-20 for ADR-0038)
@@ -119,8 +117,8 @@ it needs an ADR, not a quiet workaround.
     dispatch-level minimum-version gate. (ADR-0014)
 
 **The numbering is a public interface.** `docs/security/threat-model.md` maps all fourteen to
-the boundaries they defend; ADR-0006, ADR-0010, ADR-0020, ADR-0026 and ADR-0034 each record
-amending a numbered invariant; the glossary, the threat model and Go source comments cite them
+the boundaries they defend; ADR-0006, ADR-0010, ADR-0020, ADR-0026, ADR-0034, ADR-0050, ADR-0051
+and ADR-0052 each record amending a numbered invariant; the glossary, the threat model and Go source comments cite them
 by number. Amend an invariant in place and record the amendment in its ADR. **Never renumber
 or drop one.**
 
@@ -144,8 +142,8 @@ and that rule is the only thing keeping it honest.
 
 | # | The clause | What is actually true today | Tracked |
 |---|---|---|---|
-| 7 | `tag:`'s writer, and `relay:`'s | `tag:` has **no storage on the Node record and no write path**, so nothing can be written to the namespace the invariant says an operator writes. Since #561 a `tag:` term is **refused at parse** with a recognisable sentinel rather than silently matching nothing, identically on every surface — so the gap is now an honest refusal instead of a false negative. `relay:` labels are stamped at enrollment today; the Relay actions that write them afterwards (quarantine engage and lift, `quarantine-node.md`) are unbuilt, so quarantine by either `relay:` or `tag:` does not exist yet. Behaviour detail in `docs/specs/selectors-and-labels.md`. | #430 |
-| 10 | Console execution | The Console does **not** execute yet. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today. | #438 |
+| 7 | `tag:`'s writer, and `relay:`'s | `tag:` has **no storage on the Node record and no write path**, so nothing can be written to the namespace the invariant says a human Account writes. Since #561 a `tag:` term is **refused at parse** with a recognisable sentinel rather than silently matching nothing, identically on every surface — so the gap is now an honest refusal instead of a false negative. `relay:` labels are stamped at enrollment today; quarantine, the one later action that would write them, is cut from the MVP (`roadmap: relay/quarantine`). Tags, initial tags included, land with #430 and #1158 (ADR-0050). Behaviour detail in `docs/specs/selectors-and-labels.md`. | #430, #1158 |
+| 10 | Console execution | The Console does not execute, and ADR-0052 makes that the design; what remains is dead code. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today. | #1156 |
 
 ### Writing or amending an invariant
 
@@ -199,8 +197,12 @@ flag it.
 
 - **Configuration management.** Relay is response and fleet administration. *If Ansible could
   check it in check-mode, it is out of realm.* (Settled 2026-07-08.)
-- **Desired-state reconciliation.** The System Model is advisory. Relay does not converge a
+- **Desired-state reconciliation.** A fleet model is advisory. Relay does not converge a
   fleet toward a spec, ever. (Invariant 9)
+- **Host telemetry.** Relay reports telemetry about itself and the fleet's relationship to it.
+  It never collects or forwards metrics, logs or traces from Nodes; monitoring software is the
+  customer's, and an AI-agent reads host state on demand through read Operations. (Settled
+  2026-10-23; `docs/proposals/relay-does-not-carry-host-telemetry.md`.)
 - **Software distribution.** The Relay never pushes binaries and the daemon never
   self-upgrades; upgrades are the customer's config management. (Invariant 14)
 - **Central Policy authorship.** The Relay may read a Node's Policy and may never write it.

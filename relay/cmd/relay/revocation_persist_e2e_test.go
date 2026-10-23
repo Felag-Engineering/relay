@@ -68,6 +68,7 @@ func bootServer(t *testing.T, cfg Config) (*bufconn.Listener, *appDeps, *grpc.Se
 // the registry Upsert), revokes the Node, restarts the Relay, and asserts the
 // revoked cert is refused on reconnect — the denylist was rehydrated from the
 // persisted registry (issue #133).
+// Proves DI-21.
 func TestRevokedNode_RefusedAfterRestart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

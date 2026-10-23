@@ -1,8 +1,9 @@
 # Operations and Templates
 
 **Status:** aspirational — worked through with the owner on `2026-09-13`, Template language
-revised with the owner on `2026-10-14`, awaiting their review of this draft. Describes intended
-behaviour, not the code (see the establishing phase in `README.md`).
+revised with the owner on `2026-10-14`, brought in line with the owner's MVP decisions on
+`2026-10-23`, awaiting their review of this draft. Describes intended behaviour, not the code
+(see the establishing phase in `README.md`).
 
 ## Purpose
 
@@ -12,12 +13,13 @@ shell. An Operation's author fixes what runs; a caller only fills in values, whi
 change which command runs.
 
 The vocabulary has two sources. **Native Operations** are built into the relay-daemon and frozen
-at four. **Template Operations** are named commands an operator defines in a Node's Policy, with
-typed slots a caller fills. Templates are how the vocabulary grows.
+at four. **Template Operations** are named commands an operator defines in root-owned files on a
+Node, with typed slots a caller fills, and that Node's Policy permits. Templates are how the
+vocabulary grows.
 
 This spec owns what an Operation is, the risk-class contract, the Native vocabulary, the Template
 language, and how callers see and call the vocabulary — including when targeted Nodes do not
-share it. Where a Template is defined and which values a Node allows is `policy.md`.
+share it. Which Templates and which slot values a Node allows is `policy.md`.
 
 ## Surfaces
 
@@ -59,9 +61,10 @@ from those validators, so what a caller is told and what the daemon enforces can
 
 ### The Template language
 
-- A Template is defined in Policy with a name, a `description`, a risk class, a body, optional
-  timeout, and slots, each with a type, a one-line description and an optional `allow` list. A
-  Template without a description, or a slot without one, is a Policy error.
+- A Template is defined in a root-owned file in the Node's template root (ADR-0021), with a
+  name, a `description`, a risk class, a body, optional timeout, and slots, each with a type, a
+  one-line description and an optional `allow` list. A Template without a description, or a
+  slot without one, fails to load.
 - A Template name may not shadow a Native Operation's name.
 - **The body runs through a shell.** Authors may use the full shell — pipes, fallbacks,
   redirection, here-documents, substitutions — because the text the shell parses is theirs alone.
@@ -104,13 +107,13 @@ from those validators, so what a caller is told and what the daemon enforces can
 ### Risk class and the blast cap
 
 - A Native's risk class is fixed in the daemon.
-- A Template's risk class is declared in each Node's Policy and reported by that Node.
+- A Template's risk class is declared in each Node's own definition and reported by that Node.
 - **A Template dispatch takes the most restrictive class reported by the Nodes that report the
   Template:** `read` only if every one of them reports `read`; otherwise `mutate`. The blast cap
   follows that class (invariants 5 and 13).
-- The Task carries the class the Relay used. A daemon whose own Policy declares that Template
-  `mutate` refuses a Task dispatched as `read` — which also covers a reload between resolution
-  and execution.
+- The Task carries the class the Relay used. A daemon whose own definition declares that
+  Template `mutate` refuses a Task dispatched as `read`, which also covers a definition changed
+  between resolution and execution.
 
 ### Calling the vocabulary
 
@@ -132,21 +135,21 @@ from those validators, so what a caller is told and what the daemon enforces can
   Nodes disagree about the slot set, the call is refused as a vocabulary disagreement rather than
   sent to some of them (ADR-0042).
 - The capability layer resolves a Template's class; an adapter never does (invariant 10).
-- A Node whose report is stale — the Template removed on reload after it was reported — answers
+- A Node whose report is stale, the Template removed after it was reported, answers
   `unsupported` from its own daemon. `unsupported` is neither a failure nor a Policy denial.
 
 ### The shipped read catalog
 
-- > **Not yet reconciled** — as in `policy.md`: until Templates move into Policy, the catalog is a
-  > template pack (ADR-0021, ADR-0022), not a Policy fragment, and installing it permits nothing
-  > a Node's Policy does not already allow.
-- A package-owned Policy fragment (`policy.md`) of first-party `read` Templates: process list,
-  service status, disk usage, listening ports, package inventory, a bounded log tail, and file
-  checksum. Bounds such as the log tail's line count are fixed by the body, not by a slot.
-- It grows through normal review. Every change is a Policy change and lands in front of a human.
-- It ships as its own optional package beside the daemon package, so a Node offers it only where
-  the operator chose to install it; its files are package-owned and replaced on upgrade
-  (ADR-0033, amended 2026-10-15; `daemon-installation.md`).
+- Seven first-party `read` Templates: process list, service status, disk usage, listening
+  ports, package inventory, a bounded log tail (`log.tail`), and file checksum. Bounds such as
+  the log tail's line count are fixed by the body, not by a slot.
+- It ships inside the `relay-daemon` package, in the template root. There is no separate
+  package for it. Its files are package-owned and replaced on upgrade (ADR-0053;
+  `daemon-installation.md`).
+- The shipped default Policy allows all seven, `log.tail` included (`policy.md`). A Policy
+  without such an allow permits none of them.
+- It grows through normal review. Every change is exec-path security surface and lands in front
+  of a human; a changed body or class ships under a new name (ADR-0021).
 
 ## Refusals
 
@@ -155,11 +158,10 @@ from those validators, so what a caller is told and what the daemon enforces can
 - **Malformed call.** Unknown or missing argument names and ill-formed values get their own
   outcome, never `denied_by_policy`, so a typo never reads as a denial.
 - **Class mismatch.** A daemon refuses a Task dispatched under a lower risk class than its own
-  Policy declares.
-- **Policy errors in a Template definition** — a missing description, a slot not standing alone,
-  an unknown slot type, a name shadowing a Native — make the whole Policy `invalid` (`policy.md`).
-  A slot in a decidable code-running position is a Template compile error: the Node's template set
-  is `unloadable` and Native Operations keep running (ADR-0021, amended 2026-10-15).
+  definition of the Template declares.
+- **Errors in a Template definition** — a missing description, a slot not standing alone, an
+  unknown slot type, a name shadowing a Native, a slot in a decidable code-running position —
+  make the Node's template set `unloadable`, and Native Operations keep running (ADR-0021).
 - **From the wire.** Nothing adds, changes or removes an Operation on a Node. The Relay never
   renders or substitutes a Template body.
 
@@ -179,12 +181,14 @@ from those validators, so what a caller is told and what the daemon enforces can
   one.
 - **ADR-0042** — the class rule, exclusion, slot agreement, and where each is decided. Amends
   ADR-0021 and ADR-0012.
-- **ADR-0021 — needs amending.** Template definitions move into Policy; template packs and the
-  template-set fingerprint are retired; the Native freeze stands.
+- **ADR-0021** — Templates load from the template root beside Policy, with their own
+  template-set fingerprint. The Native freeze stands.
+- **ADR-0053** — the read catalog ships inside the `relay-daemon` package and the shipped
+  default Policy allows all of it, `log.tail` included; supersedes in part ADR-0021 decision 11.
 - **ADR-0015 — needs amending.** Its trigger has fired: argument schemas move into `/proto` for
   every Operation, generated from the daemon's validators.
-- **GLOSSARY.md — needs updating.** Template Operation, template pack (retired), template-set
-  fingerprint (retired), slot types.
+- **GLOSSARY.md — needs updating.** Template Operation (the catalog ships inside the daemon
+  package), slot types.
 
 ## Seams and proof
 
@@ -192,7 +196,8 @@ _Not yet written._ This spec's claims are the backlog of its testing issue.
 
 ## Out of scope
 
-- **Where Templates are defined, allowed values, fragments, reload and `invalid`**: `policy.md`.
+- **Which Templates and slot values a Node allows, Policy fragments, and loading Policy**:
+  `policy.md`.
 - **Dispatch, fan-out mechanics, cancellation, Raw Exec and the per-tier mechanism table**:
   `execution.md`.
 - **The shape of `list_operations` and `describe_node`**: `query.md`.
@@ -237,10 +242,13 @@ Wanted, deliberately not in the first pass, and in no committed order.
   every known way a Template can exceed its author's intent, each tagged mechanical or judgement,
   extended by research into shell tricks, environment and `PATH`, locale, symlink-following,
   privilege-changing and writing commands, and check-to-use races. Every mechanical entry becomes
-  a `policy check` rule that makes the Policy `invalid`, each with a red-team case; an authoring
-  guide shows safe and unsafe forms side by side.
+  a `policy check` rule that makes the template set `unloadable`, each with a red-team case;
+  an authoring guide shows safe and unsafe forms side by side.
 - **Per-Operation output bounds** tighter than the daemon-wide cap.
 - **Shape and scale declarations on Template slots**, for finer approval grouping.
+- **Template definitions inside Policy fragments**: roadmap: relay/policy-catalog-and-live-reload.
+- **A read Template for established connections**, as part of what Relay observes about the
+  fleet: roadmap: relay/fleet-topology. Not in the MVP.
 
 ## Open questions
 
