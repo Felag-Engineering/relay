@@ -173,7 +173,7 @@ Rows marked *stub* exist so the capability is named.
 |---|---|
 | `execution.md` | Dispatch, fan-out, the blast-radius cap, at-most-once Tasks, the three Operation tiers, Raw Exec, cancellation |
 | `selectors-and-labels.md` | The four namespaces and who writes each, the closed `state:` vocabulary, resolution-time evaluation, what a compromised Node can forge |
-| `policy-preflight.md` | Daemon-evaluated hypotheticals and preflight-before-apply (ADR-0038) |
+| `policy-preflight.md` | Daemon-evaluated hypotheticals and preflight-before-apply (ADR-0011, ADR-0049) |
 | `approval.md` | Gate rules, callout, decisions and channels, approval Grants and scope |
 | `freeze.md` | Emergency Freeze — engage, release, and its survival across a restart |
 | `query.md` | Node, registry, Policy and vocabulary reads; `describe_node`; Policy aliases |

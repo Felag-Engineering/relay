@@ -1,60 +1,62 @@
-# Plans belong to the harness, not Relay
+# Plans belong to Gleipnir and the harness, not Relay
 
 **Status:** Accepted (owner decision 2026-10-22).
 
-This ADR supersedes ADR-0038 in full. It keeps the one part of it that is built: the name Policy
-preflight. Behaviour: `docs/specs/policy-preflight.md` and `docs/specs/execution.md`. The
-reasoning, and ADR-0038's design as the harness's starting point, wait in the private roadmap
-(`roadmap: runtime/plans-in-the-harness`).
+This ADR supersedes ADR-0038 in full. ADR-0038's amendments of ADR-0011, ADR-0013 and ADR-0027
+stand as renames only: the no-execution check is Policy preflight, it answers while frozen, and a
+plan hash addresses one dispatch. Behaviour: `docs/specs/policy-preflight.md` and
+`docs/specs/execution.md`. ADR-0038's design, as the harness's starting point, waits in the
+private roadmap (`roadmap: runtime/plans-in-the-harness`).
 
 ## Decision
 
-Relay runs one dispatch at a time and has no notion of a multi-step plan. Sequencing several
-actions, deciding what comes next, and showing a person the whole route first are the harness's
-job, because the harness can combine Relay actions with others, branch on what it sees, and talk
-to the person directly. Every step it takes reaches Relay as an ordinary dispatch, meeting the
-Selector, authorization, the blast cap, the gate and each Node's Policy on its own. The Plan
-capability ADR-0038 designed, never built, is withdrawn. Its renaming of plan mode to Policy
-preflight stands.
+Relay runs one dispatch at a time and has no plan of its own. A **Plan** is Gleipnir's: a series
+of tool calls, with branches, that Gleipnir determines and submits to the harness, which carries
+it out one call at a time. Every call that reaches Relay is an ordinary dispatch, meeting the
+Selector, authorization, the blast cap, the gate and each Node's Policy on its own. Relay's
+**Policy preflight** is something else: the check that one tool call would be permitted, made
+before it runs. ADR-0038's Relay-held Plan, never built, is withdrawn, and Relay stops using the
+word for its own check.
 
 ## The decisions
 
 1. **No Plan, no step cursor, no route on the Relay.** Relay stores no ordered list of steps and
    offers no tool, route or screen to propose, approve or advance one. A Job stays one dispatch of
    one Operation or Raw Exec, and `Stage` keeps its reserved meaning for batches within one Job.
-2. **The harness sequences.** It proposes the steps, shows the person the route, and issues each
-   step as a dispatch. Relay cannot tell that two dispatches belong to one route, and enforces
-   nothing about their order: each is decided alone.
-3. **Policy preflight keeps its name and every ADR-0011 decision.** It is the no-execution
-   preview of one dispatch: the daemon's live engine answers a hypothetical, an offline Node is
-   `unknown(offline)`, and a preflight reports guardrails rather than failing on them. "Plan mode"
-   and "dry run" stay refused names for it.
-4. **A plan hash addresses one dispatch.** The approval of a gated dispatch binds to the hash of
-   that dispatch's rendered preflight, its Operation, arguments and resolved fan-out (ADR-0027
-   decision 8). The term no longer has a multi-step reading.
+2. **Gleipnir plans; the harness carries the plan out.** Relay cannot tell that two dispatches
+   belong to one Plan, and enforces nothing about their order: each is decided alone. Whether the
+   route a person saw is the route run is the harness's integrity, the same trust threat-model
+   R21 records for approvals.
+3. **Policy preflight keeps its name, and the wire follows it.** ADR-0011's decisions stand. The
+   option the MCP tools and the Control API spell `plan` is renamed `preflight`
+   (`policy-preflight.md` PF-19), because "plan" is Gleipnir's word for something else.
+4. **The plan hash keeps its wire name and addresses one dispatch.** `plan_hash` is the content
+   address ADR-0027 decision 8 defines for one gated dispatch; it has no multi-step reading.
 
 ## Why
 
 A route held by Relay, with a payload-free cursor, was the strongest way to make an approved
 sequence the sequence that runs. It was also a second execution model inside Relay, with its own
-storage, lifecycle, half-finished state and Console screens, built for a harness that is better
-placed to plan: it sees the whole task, including the parts Relay never touches. Relay's job is
-to make each action safe; the harness's is to choose the actions.
+storage, lifecycle, half-finished state and Console screens, for work Gleipnir plans better: it
+sees the whole task, including the parts Relay never touches, and it can branch. Relay's job is to
+make each action safe; Gleipnir's is to choose the actions.
 
 ## What changes
 
-- `docs/specs/plan.md` is removed; its design waits in the roadmap. `execution.md`,
-  `policy-preflight.md`, `approval.md`, `freeze.md` and `quarantine-node.md` stop citing it.
-- `GLOSSARY.md`: *Plan* is retired as a Relay term; *Policy preflight* and *Plan hash* are
-  reworded for one dispatch.
-- The threat model: R14, nothing evaluates a sequence as a whole, now describes the harness's
-  routes; the jailbroken-agent narrative no longer points at a Relay Plan.
-- ADR-0038 carries a note pointing here.
+- `docs/specs/plan.md` is removed. `execution.md`, `policy-preflight.md`, `approval.md`,
+  `freeze.md` and `quarantine-node.md` stop describing a Relay Plan; the spec index and `STATUS`
+  lose its rows.
+- `GLOSSARY.md`: *Plan* is Gleipnir's; *Harness* is new; *Policy preflight*, *Plan hash*,
+  *Stage*, *Freeze*, *Shape key*, *Approval* and *Approval grant* stop describing a Relay Plan.
+- The threat model: R14 describes Gleipnir's Plans; the jailbroken-AI-agent narrative, *Kept
+  current* and the invariant map cite this ADR.
+- ADR-0006, ADR-0011, ADR-0013 and ADR-0042 lose their Relay-Plan wording; ADR-0038 carries a note
+  pointing here. The OpenAPI description, the operations runbooks, the Console open-decisions page
+  and the glossary allowlist follow.
 
 ## Alternatives
 
 - **Build ADR-0038's Plan.** Strongest enforcement of an approved route, at the cost of a second
-  execution model in Relay for work the harness plans better.
-- **Keep a thin route on the Relay for audit only.** A grouping field on each dispatch, recorded as
-  an assertion, gives an auditor the grouping without Relay owning the route; it waits in the
-  roadmap proposal if it is wanted.
+  execution model in Relay for work Gleipnir plans better.
+- **Keep the `plan` wire option.** No breaking change, but Relay's check would share a name with
+  Gleipnir's Plan, a confusion this decision exists to end.

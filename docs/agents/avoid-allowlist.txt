@@ -15,7 +15,7 @@
 # --- ordinary English, or a canonical sense the _Avoid_ qualifier excludes ---------------------
 operator          # the human operator (operator settings, operator-set) is canonical; rejected only for the AI-agent role
 execution         # the capability's own name (execution.md, "route of execution"); rejected only as a synonym for Job
-step              # a Plan's step is canonical (the qualifier says so); rejected only for Stage
+step              # ordinary English and a Gleipnir Plan's step; rejected only for Stage
 rule              # "gate rule" is a headword and "rule" is English; rejected only for Grant
 caller            # "the caller is told" is TEMPLATE.md's own phrasing; rejected only for the verified identity
 tag               # nearly every hit is the `tag:` namespace, which the qualifier permits
@@ -69,7 +69,7 @@ pack              # every hit is "template pack", which the qualifier names as a
 runbook           # docs/operations/ holds operator-facing runbooks; rejected only for Plan
 
 # --- historical notes that name the old word to record the rename -------------------------------
-plan mode         # "called plan mode until ADR-0038" (execution.md, plan.md, GLOSSARY.md)
+plan mode         # "called plan mode until ADR-0038" (execution.md, GLOSSARY.md)
 
 # --- per-file: another sense in that file ----------------------------------------------------------
 agent @ AGENTS.md                                 # the file is addressed to Claude agents; it also states the rule itself

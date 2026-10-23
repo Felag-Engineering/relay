@@ -3,8 +3,8 @@
 **Status:** Accepted; amended by ADR-0038.
 
 > **Amended by ADR-0038 (2026-09-12; recorded here 2026-09-20).** The mechanism this ADR
-> decides is now called the **Policy preflight**; **Plan** names an approved route of
-> execution. Read the body's "plan" and "the Plan" as *preflight*. ADR-0038 withdraws the
+> decides is now called the **Policy preflight**; **Plan** is Gleipnir's word for a series of
+> tool calls (ADR-0049). Read the body's "plan" and "the Plan" as *preflight*. ADR-0038 withdraws the
 > `terraform plan` / check-mode framing: a preflight asks Policy a question and never reaches
 > an executor, so it is not a dry run. The wire option is still spelled `plan`.
 

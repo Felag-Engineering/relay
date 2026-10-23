@@ -112,7 +112,7 @@ decides who may do either (invariant 10).
 
 ### Remediation is not a separate capability
 
-- Repairing a distrusted set of Nodes is ordinary Operations and Plans whose Selector targets
+- Repairing a distrusted set of Nodes is ordinary Operations whose Selector targets
   `relay:` — `selectors-and-labels.md` and `execution.md` govern it. A Node cannot be repaired
   through Relay *while* quarantined; lift the quarantine first, or revoke the Node.
 

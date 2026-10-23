@@ -1032,8 +1032,7 @@ components:
     Frozen:
       description: |
         The Relay-wide Freeze is engaged, so all new dispatch is refused
-        (ADR-0013). A Policy preflight still answers while frozen; an approved
-        Plan does not advance.
+        (ADR-0013). A Policy preflight still answers while frozen.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }

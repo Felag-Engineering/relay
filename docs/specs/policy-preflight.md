@@ -3,10 +3,11 @@
 **Status:** designed, not built, as of `2026-10-19`.
 **Claim prefix:** `PF`
 
-> **The capability is Policy preflight; the option is still spelled `plan` on the wire.** ADR-0038
-> renamed the capability and reassigned **Plan** to the approved route of execution. Every decision
-> in ADR-0011 stands. The option rename is **PF-19** under *Designed, not built*; until it lands,
-> every surface below takes `plan`, and this spec says so wherever it names the option.
+> **The capability is Policy preflight; the option is still spelled `plan` on the wire.**
+> ADR-0038 renamed the capability, a rename ADR-0049 keeps; **Plan** is Gleipnir's word for a
+> series of tool calls. Every decision in ADR-0011 stands. The option rename is **PF-19** under
+> *Designed, not built*; until it lands, every surface below takes `plan`, and this spec says so
+> wherever it names the option.
 
 ## Purpose
 
@@ -158,7 +159,8 @@ A preflight refuses in fewer cases than a dispatch, and the difference is the po
 - **Invariant 12** (ADR-0011) — the load-bearing one. Policy is evaluated **only** by the
   daemon's live engine, including hypotheticals. The Relay never computes a verdict (PF-7), and a
   matched-but-disconnected Node yields `unknown` rather than a guess from cached state (PF-6).
-- **ADR-0038** — the rename, and the reassignment of **Plan** to the approved-route capability.
+- **ADR-0049** — the name Policy preflight, and the wire option's rename to `preflight` (PF-19),
+  because "plan" is Gleipnir's word for a series of tool calls.
   Every decision in ADR-0011 is re-affirmed there unchanged; the option rename is PF-19.
 - **Invariant 1** — a preflight carries the same typed Operation or verbatim argv as the dispatch
   would (PF-15); the three tiers are unchanged by previewing.
@@ -243,9 +245,8 @@ sequential round trips as a dispatch — cheap enough that a caller should alway
 - **Sequencing several dispatches** — the harness's job (ADR-0049). A harness may preflight each
   step it intends before taking any; that is this capability used one dispatch at a time.
 - **The plan hash and approval binding** — `approval.md`. An approval commits to a content
-  address over the act the caller intends — a Plan's ordered steps, their Operations and
-  arguments, and the resolved fan-out, a single gated dispatch being the one-step case (ADR-0038)
-  — never over a preview; minting that address is not this capability.
+  address for one gated dispatch (ADR-0027 decision 8), never over a preview; minting that address
+  is not this capability.
 - **The Console's composer** — the surface's shape is ADR-0026's and the Console's per-screen
   specification's; the verdicts it renders are this capability's (PF-21).
 - **Quarantine** — `quarantine-node.md`. It defines the quarantined Node's preflight conclusion

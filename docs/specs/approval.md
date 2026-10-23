@@ -195,7 +195,7 @@ approver Relay verifies.
   pending requests, no approval request screen, no decision on any request — singly or several
   at once — and no step-up taken for one, and its navigation carries no Approvals destination
   and no pending count. It may still render what an approval left on another record — an
-  `approval` row in Activity, approver chips on a Job, a Plan's state on its own detail screen
+  `approval` row in Activity, approver chips on a Job
   — with no control that decides. A request's partial quorum (AP-73) is read from the Control
   API's read of that request. Retires AP-16 and AP-19, and narrows AP-73's queue to the
   Control API. (ADR-0044, owner decision 2026-10-18.)
@@ -268,20 +268,13 @@ approver Relay verifies.
 
 - **AP-20** An approval binds to a **plan hash** — a content address over the **rendered
   preflight of the request being approved**: its Operation, its arguments and the *resolved
-  fan-out* — never to "the Job" in the abstract. (ADR-0027's amendment of `2026-09-20` is what
-  gives the word *Plan* in its decision 8 this reading, after ADR-0038 reassigned it.)
-- **AP-21** If the Plan no longer matches at dispatch time it **re-parks for re-approval** rather
-  than running. That closes park-something-innocuous-then-mutate-the-world.
+  fan-out* — never to "the Job" in the abstract (ADR-0027 decision 8; ADR-0049).
+- **AP-21** If the dispatch no longer matches its plan hash at dispatch time it **re-parks for
+  re-approval** rather than running. That closes park-something-innocuous-then-mutate-the-world.
 - **AP-22** The binding is **by identity, never by count**: any Node not in the approved resolved
   set re-parks. A ceiling would bind a number and no identity, which is what a compromised Node
   forging its own `node:` labels (invariant 7) would need in order to elect itself into work
   approved for other hosts.
-
-ADR-0038 generalises that address to a route: a **Plan** whose hash covers ordered steps as well
-as the resolved set. A single gated dispatch is the one-step case, and the only one that exists —
-a Job carries exactly one Stage and one Action. The rest — each `mutate` step parking at advance,
-and a Node that has *left* the set recorded as shrinkage rather than drift — was ADR-0038's, now
-withdrawn: sequencing is the harness's (ADR-0049).
 
 - **AP-23** The **shape key** is a different address from the plan hash: it addresses *what* an
   approval is for, deliberately excluding the resolved fan-out, so that the queue can answer "what
@@ -329,11 +322,7 @@ withdrawn: sequencing is the harness's (ADR-0049).
   already readable; scoping an unbound release to its requester is tracked for the permissions
   rework (#716). Generalises AP-67 beyond an answered retry (owner decision 2026-09-27).
 
-### Plans first; approval grants as the narrow exception
-
-**Plans are the default tool for work that can be enumerated in advance** — the human sees every
-step and the exact Nodes, and nothing runs that was not shown; sequencing them is the harness's
-(ADR-0049).
+### Approval grants as the narrow exception
 
 An **approval grant** is standing authorization over a bounded **Scope**, for open-ended work that
 cannot be enumerated — *"keep restarting whatever falls over on the web tier for the next hour."*
@@ -368,10 +357,7 @@ And **requesting a grant is not being granted one**:
   derived from the Scope's worst case, and the requester cannot approve their own window.
 - **AP-35** **What a grant costs is derived, never declared.** The requirement comes from
   evaluating the live gate at the Scope's widest admissible dispatch — never from anything the
-  requester says — and the strictest requirement it triggers governs. ADR-0038 extends the same
-  rule to a multi-step **Plan**, priced over every step at the approved resolved set so that one
-  Raw Exec step prices the whole route at Raw Exec's floor; that half is moot today, because a Job
-  carries exactly one Stage and one Action and no route object exists.
+  requester says — and the strictest requirement it triggers governs.
 - **AP-36** **The bound is enforced inside the claiming transaction**, or it is not a bound.
 - **AP-37** A grant is consulted **only after** the gate has decided approval is required — never
   as a way to skip the gate — and it **never bypasses the blast cap**. An exhausted, revoked or
@@ -423,7 +409,7 @@ nothing is asserted, even when the client sent a responder assertion.
 | **AP-43** | Requester excluded | The rule demands a second person |
 | **AP-44** | Not in audience | The decider is outside the audience the rule requires |
 | **AP-45** | Duplicate decider | This Account has already decided this request |
-| **AP-46** | Plan changed | The cited plan hash is not the request's |
+| **AP-46** | Plan hash changed | The cited plan hash is not the request's |
 | **AP-47** | Weak channel | The decision's channel is weaker than the rule demands — enforced for denials too |
 | **AP-48** | Machine self-decision | A machine Account deciding its own request without the in-band asserted-approver form, or at a rung above self-confirmation |
 | **AP-49** | Role floor | The decider is below the floor the Action needed to be requested — an `operator` cannot release a Raw Exec |
@@ -451,16 +437,16 @@ nothing is asserted, even when the client sent a responder assertion.
   rules (2026-09-15, AP-72), the seeded default (2026-09-16, AP-55), and two of the three grant
   bounds (2026-09-24, AP-56 and AP-57; the third is shelved by ADR-0040). The `2026-09-16`
   amendment has AP-4, AP-8 and AP-54 describe the file as current until AP-72. It sets no figure
-  for pending-request expiry; AP-25 states the 4 hours the code applies. Its decision 8's *Plan*
-  reads through the `2026-09-20` amendment as the rendered preflight (AP-20), and decision 1's "a
+  for pending-request expiry; AP-25 states the 4 hours the code applies. Its decision 8 binds an
+  approval to one dispatch's rendered preflight (AP-20), and decision 1's "a
   gated Job parks" through ADR-0028's `2026-08-17` amendment and the `2026-09-24` correction:
   parking creates no Job (AP-2).
 - **ADR-0029** — in-band approval as a tool call, the asserted approver, the single guarded
   decision seam (decision 5), and MRTR elicitation as the second envelope over it (decision 6,
   AP-60 … AP-71). Under AP-55 the in-band relaxation becomes the default path for MCP mutations,
   the case ADR-0029 flagged as worth revisiting; the owner accepted it knowingly.
-- **ADR-0038** — the plan hash covers a route; the derived requirement is priced over every step.
-  Both halves are ahead of the code (AP-22, AP-35), because no route object exists.
+- **ADR-0049** — Relay has no Plan: a Gleipnir Plan reaches Relay as separate dispatches, each
+  gated on its own, and the plan hash addresses one dispatch.
 - **ADR-0028** — the MCP task handle and the `tasks/update` boundary. AP-60 and AP-71 stand on
   its amendment of `2026-09-24`: the precedence decision replaces the old premise that Relay emits
   no `inputRequests`, and the result rewrite gains the carve-out AP-71 needs.
@@ -611,10 +597,8 @@ lookup.
 
 - **Where the gate sits in the dispatch pipeline, and what a park leaves behind** —
   `execution.md`.
-- **The Plan a decision releases** — withdrawn by ADR-0049, which gives sequencing to the harness: the ordered steps, the cursor, the payload-free
-  advance, and the walls on an approved-but-incomplete route. A Plan, and each of its `mutate`
-  steps, parks through *this* gate and is answered by an ordinary Approval, as a request for an
-  approval grant is; it is not a second decision surface. None of it exists in code.
+- **Sequencing several dispatches** — a Gleipnir Plan, carried out by the harness (ADR-0049). Each
+  gated step parks through this gate on its own.
 - **Policy** — a Node's own engine decides what may run; approval decides whether a caller may
   ask. Policy never says "allow with approval" (`policy.md`).
 - **Grants (authorization)** — the Relay-side rule for which Account may request which
@@ -716,15 +700,6 @@ lookup.
 
 Named, not decided, and in no order.
 
-- **Multi-step Plan routes, and everything that follows from them** — withdrawn by ADR-0049;
-  none of it was built. A Plan whose hash covers an ordered route rather than a single
-  dispatch; **each `mutate` step parking at advance for its own approval**, bound to the Plan hash
-  and that step, so that approving a Plan releases its route as context and not its mutations;
-  **shrinkage recorded** — a Node that has *left* the approved set dropped from that step and
-  recorded, rather than treated as drift; and **an approval grant never releasing a route**,
-  because a grant is described and a Plan is enumerated, and letting the first release the second
-  would amplify a grant's use limit N-fold while ensuring no human ever saw the route. No
-  milestone, no issues.
 - **Approver audiences that cannot be widened by overlap.** Replace the union of matching rules'
   audiences (*Accepted residual risk*) with one of two models, decided at pickup: **intersection**,
   refusing a dispatch or grant whose intersection is empty and naming the conflicting rules; or a

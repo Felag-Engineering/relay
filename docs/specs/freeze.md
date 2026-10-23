@@ -44,8 +44,6 @@ approved this" is a statement about authorization, and a Freeze is not an author
 - **Policy preflights.** Observation is what an incident needs, so a preflight answers while
   frozen and reports the frozen state advisorily (ADR-0011, ADR-0013). This is the only
   exemption: a preflight sends no Task.
-- **In-flight steps of an approved Plan.** The step already dispatched keeps running, on the same
-  reasoning as any in-flight Task below. **Advancing** that Plan does not — see *Stops*.
 - **In-flight Tasks.** They keep running unless separately cancelled. Indiscriminately killing
   half-finished package installs creates the second incident.
 - **Reads of the control plane.** The registry, the audit trail and the pending approval requests
@@ -116,7 +114,7 @@ the Freeze state untouched.
   deliberate exemption of Policy preflights.
 - **ADR-0011** — preflights answer while frozen, which is a decision about Freeze as much as
   about the preflight.
-- **ADR-0038** — a Plan is an approved route, and every advance of one is new dispatch. The Freeze
+- **ADR-0049** — every step of a Gleipnir Plan is new dispatch, so the Freeze stops it; the
   exemption covers preflights and stops at them.
 - **Invariant 5** — Freeze is not the blast cap and does not substitute for it; it sits outside
   and above.
@@ -186,7 +184,7 @@ Deliberately not in the first pass: the built capability should work end to end 
 - **Engaging from the Console.**
 - **Approvals during a Freeze, stated as behaviour.** A pending request can still be decided while
   frozen, nothing dispatches until release, and an approved request still expires on its own clock
-  and must be re-requested if the Freeze outlasts it. Settle once Plans and approvals are built.
+  and must be re-requested if the Freeze outlasts it. Settle once approvals are built.
 
 ## Open questions
 
