@@ -51,8 +51,8 @@ ADR-0021). The author fixes the command structure; substitution can never alter 
 risk class; governed by Policy exactly like a Native Operation. Loaded from root-owned local
 files beside the Policy file (same trust root, ADR-0002); the daemon reports a **template-set
 fingerprint** beside the Policy fingerprint. A directory of templates installed and versioned
-as a unit is a **template pack**; the first-party **shipped read catalog** is one, shipped as
-its own optional package with package-owned files (ADR-0033, amended 2026-10-15). A Node
+as a unit is a **template pack**; the first-party **shipped read catalog** is one, shipped inside
+the `relay-daemon` package as package-owned files and allowed by the default Policy (ADR-0053). A Node
 without a given template reports the distinct `unsupported` outcome.
 _Avoid_: script, macro, custom command, snippet
 
@@ -76,19 +76,16 @@ Written by config management, never over the wire.
 _Avoid_: policy file (for a single fragment), policy module, snippet, include
 
 **Catalog fragment**:
-A first-party, opt-in Policy fragment published in the **Policy Catalog**: named, versioned
-with the release under its `SHA256SUMS`, never edited downstream, and never widened in place — a
-fragment that permits more ships under a new name. Live on a Node only once config management
-places it in the Policy directory. Declares its **required daemon release**, the earliest
-relay-daemon that can load it — not the Relay's minimum-version gate (ADR-0014). The shipped
-default Policy is not a catalog fragment (ADR-0022).
+Cut from the MVP with the **Policy Catalog** (`roadmap: relay/policy-catalog-and-live-reload`):
+a first-party, opt-in Policy fragment an operator would pick by name and hand to config
+management. The MVP's fragments are the operator's own files in the Policy directory.
 _Avoid_: preset, profile, playbook, role, pack (a **template pack** is a different thing)
 
 **Policy Catalog**:
-The set of catalog fragments, and the Console screen that arranges them into cohorts and exports
-the files and config-management variables to install them (`docs/specs/policy-catalog.md`).
-Ends at the clipboard: the Relay never applies Policy (invariant 2) and stores no arrangement.
-Unrelated to the **shipped read catalog**, which is a template pack.
+Cut from the MVP (`roadmap: relay/policy-catalog-and-live-reload`): a library of catalog
+fragments and a Console screen to arrange and export them. Would end at the clipboard: the Relay
+never writes, sends or signs a Node's Policy (invariant 2). Unrelated to the **shipped read
+catalog**, which is a template pack.
 _Avoid_: Policy Author (the screen's former name), policy editor, policy store
 
 **Cohort** (Policy Catalog):
@@ -149,11 +146,12 @@ non-overlapping namespaces, each immutable from the other sides: **node-space** 
 rooted on the Node and set out-of-band via config management; the Relay records but never
 modifies or removes them; authoritative for routine targeting, trusted only as much as the
 Node), **relay-space** (`relay:…`, set by the Relay — stamped at enrollment, or written as the
-side effect of a defined Relay action such as a quarantine, never by an Account directly — and
-immutable to the Node; reserved for the security-sensitive lane), or **tag-space** (`tag:…`, set
-by operators through the control plane with standard auth; immutable to the Node; grouping and
-routine targeting, and a valid target for *engaging* a quarantine only — ADR-0020, amended
-2026-09-16), or **state-space** (`state:…`, derived by the Relay
+side effect of a defined Relay action, today only enrollment's `relay:node-id`, never by an
+Account directly — and
+immutable to the Node; reserved for the security-sensitive lane), or **tag-space** (`tag:…`, a
+**Tag**, set by a human Account at `operator` or above through the Console or the Control API,
+never by an AI-agent or the Node; grouping and routine targeting, and a valid target for
+*engaging* a quarantine only — ADR-0020, ADR-0050), or **state-space** (`state:…`, derived by the Relay
 from the registry, set by nobody — not the Node, not an operator, not an `admin` — evaluated at
 Selector-resolution time, closed vocabulary, for routine targeting only and never a valid
 security-lane target — ADR-0034). Remediation and secret-distribution Selectors target
@@ -162,13 +160,23 @@ only (ADR-0006, amended 2026-09-16). A stored Label must render as exactly one S
 term, enforced as an allowlist: the key is non-empty and every byte of key and value is in
 `[A-Za-z0-9._-]`. A violating Label is refused at ingress, never sanitised, since sanitising
 would let the Relay manufacture a value matching a Selector nobody wrote. Node-space is refused
-at Hello/Enroll ingress; relay-space at Enrollment Token mint and again when a minted token's
-scope enrolls a Node. The allowlist is deliberately narrower than the Selector parser (which
+at Hello/Enroll ingress; tag-space when a Tag is written, at Enrollment Token mint, and again
+when a minted token's initial tags enroll a Node. The allowlist is deliberately narrower than the
+Selector parser (which
 accepts `relay:tier=pci/1`): it guards against a term re-rendering into two. A Label stored
 before the gate is declined on read-back (threat model R13), reported once per Relay startup
 and counted on /metrics, per namespace.
 _Avoid_: tag (for the general concept — `tag:` names only the operator namespace), attribute,
 annotation
+
+**Tag**:
+A `tag:key=value` **Label** a person puts on a Node to group it, such as `tag:env=prod`
+(ADR-0050). Written only by a human Account at `operator` or above, on the Console's Node page,
+in bulk over the Nodes a Selector matches, or through the Control API; never by an AI-agent, a
+machine Account or the Node, and audited with old and new values. An **initial tag** is one a
+join token's mint names, written on each Node the token enrolls and editable afterwards. A tag
+never changes what a gate rule matches.
+_Avoid_: operator label, custom label, Node tag
 
 **Facts**:
 Descriptive properties a daemon self-reports about its Node (OS, kernel, hostname, IP,
@@ -205,7 +213,7 @@ _Avoid_: policy name, policy label (a Label is something else), policy version
 **Template root**:
 The directory on a Node from which the relay-daemon loads its Template Operations,
 `/etc/relay-daemon/templates.d/`, root-owned and never written by the daemon or the Relay
-(ADR-0021). The shipped read catalog installs into it as a package; an operator's own Templates
+(ADR-0021). The shipped read catalog installs into it with the daemon package; an operator's own Templates
 sit beside them.
 _Avoid_: templates dir, template directory, the templates.d (as a noun)
 
@@ -242,9 +250,9 @@ _Avoid_: enrollment kit, onboarding package
 
 **Enrollment Token**:
 The expiring, use-limited, revocable credential a daemon presents to join the fleet. Distinct
-from a Node's identity certificate: the token authorizes *enrollment* and stamps any relay-space
-Labels its optional scope names, beside the `relay:node-id` every enrollment stamps; the
-certificate is the resulting *identity*. Can only enroll, never run Operations.
+from a Node's identity certificate: the token authorizes *enrollment* and writes any **initial
+tags** its mint names on each Node it enrolls (ADR-0050), beside the `relay:node-id` every
+enrollment stamps; the certificate is the resulting *identity*. Can only enroll, never run Operations.
 _Avoid_: API key, secret, join key
 
 **Join string**:
@@ -288,8 +296,8 @@ _Avoid_: server cert renewal, cert refresh
 **Quarantine**:
 Fencing a distrusted Node off from routine work. Engaging one only ever *reduces* what may
 run and may target `relay:` or `tag:` labels; lifting one targets `relay:` only (invariant 7).
-The `state:quarantined` label is Relay-derived and read-only. Engage and lift are unbuilt
-(#430); the derived state and the Console wall exist.
+Cut from the MVP (`roadmap: relay/quarantine`): revoking a Node and the Freeze cover the
+urgent case. The `state:quarantined` marker is Relay-derived and read-only.
 _Avoid_: isolate, cordon, drain (Kubernetes senses), blacklist
 
 **Freeze**:
@@ -438,8 +446,8 @@ OAuth and CSP sense elsewhere and is not reserved here)
 
 **Security floor**:
 The configuration that bounds *who may authenticate and how recently they proved it*:
-listeners, CA/TLS, auth bootstrap, the identity provider, session and step-up windows,
-`console_execution`, the approval notification path. Set by whoever administers the Relay's
+listeners, CA/TLS, auth bootstrap, the identity provider, session and step-up windows, the
+approval notification path. Set by whoever administers the Relay's
 host, outside Relay, in one configuration file the Relay reads itself (ADR-0043); nothing Relay
 runs or accepts can write it — no API, no request, and not the Relay process (invariant 11). Contrast
 **operator settings**, which merely bound reach and may live in the store.
@@ -634,32 +642,21 @@ values (`docs/specs/relay-configuration.md`, designed for v0.7.0).
 _Avoid_: REST API (unqualified), admin API, "the API" (in docs; fine in speech)
 
 **System Model**:
-The Relay-maintained graph that links Nodes and Labels into higher-order Services,
-Dependencies, and Annotations, giving the AI-agent a persistent, shared understanding of the
-fleet. Stored as git-backed YAML; advisory to execution, never authoritative.
+Retired by ADR-0051, unbuilt: a shared map of Services, Dependencies and Annotations any
+AI-agent could rewrite. What daemons observe and what people declare about the fleet are
+Relay's later work (`roadmap: relay/fleet-topology`); an AI-agent's beliefs are agent memory.
+Invariant 9 constrains any fleet model Relay keeps.
 _Avoid_: topology, CMDB, knowledge base, map
 
-**Service**:
-A named grouping in the System Model defined by a Selector over Labels — how related Labels
-are linked into a meaningful unit (e.g. "payments"). Desugars to a Selector for execution.
-_Avoid_: app, group, cluster
-
-**Dependency**:
-A directed relationship in the System Model between Services (e.g. "payments depends on
-postgres-primary"), letting the AI-agent reason about ripple effects and impact.
-_Avoid_: link, edge, relation
-
-**Annotation**:
-Free-text notes attached to any System Model entity by the AI-agent or a human, carrying
-provenance. Descriptive context only, never used for targeting.
-_Avoid_: comment, note, tag
+**Service**, **Dependency**, **Annotation**:
+Retired with the System Model (ADR-0051).
+_Avoid_: app, group, cluster (use a **Tag** to group Nodes)
 
 **Admin Console**:
-The human-facing web UI for operators to observe the fleet, administer the control plane
-(enrollment lifecycle, revocation, registry and audit views), and execute: where it runs
-Operations and Raw Exec, it does so preflight-by-default, with step-up re-auth on a mutate
-apply, behind the root-owned `console_execution` flag (ADR-0026, superseding ADR-0009's
-no-execution scope; execution is unbuilt, AGENTS.md gap table). A thin adapter over the same
+The human-facing web UI for operators to observe the fleet and administer the control plane
+(enrollment lifecycle, revocation, Accounts and tokens, tags, Policy aliases, registry and audit
+views). It runs no command on any Node (ADR-0052); people run commands through their AI-agent
+client or the Control API. A thin adapter over the same
 capability layer as the MCP surface (ADR-0003, ADR-0009); it renders decisions, never makes
 them. It has no approval surface: an **Approval** is decided in-band or on the Control API
 (ADR-0044). Distinct from the **AI-agent**, which drives the Relay over MCP.
@@ -667,9 +664,7 @@ _Avoid_: dashboard, portal, admin panel, "the UI"
 
 **Step-up re-authentication**:
 Re-proving human presence by re-entering a credential against the session's own Account,
-without ending the session. Gates privilege-granting actions (ADR-0009) and every `mutate`
-apply on the Admin Console (ADR-0026 decision 3) and `relay:`-label management (invariant
-7). Changing one's own Console password proves the current one as a step-up on every change,
+without ending the session. Gates privilege-granting actions (ADR-0009). Changing one's own Console password proves the current one as a step-up on every change,
 which the recent-authentication window never satisfies (ADR-0045). Its window is file-only Relay configuration no Account may widen over the wire
 (invariant 11). Recorded as its own event, distinct from a sign-in, and so is a refused or
 throttled step-up: a hijacked session grinding at the step-up prompt is a different incident
