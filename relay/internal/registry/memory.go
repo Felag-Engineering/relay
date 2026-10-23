@@ -90,52 +90,42 @@ func (r *InMemory) Upsert(rep Report) (Node, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	existing, ok := r.nodes[rep.NodeID]
-	if !ok {
-		// Insert path. Check the cap before allocating anything.
-		if r.maxNodes > 0 && len(r.nodes) >= r.maxNodes {
-			return Node{}, ErrAtCapacity
-		}
-		nl := maps.Clone(rep.nodeLabels)
-		if nl == nil {
-			nl = map[string]string{}
-		}
-		n := &Node{
-			NodeID:                 rep.NodeID,
-			CertFingerprint:        rep.CertFingerprint,
-			Facts:                  cloneFacts(rep.Facts),
-			NodeLabels:             nl,
-			RelayLabels:            map[string]string{},
-			LastSeen:               r.now(),
-			EnrollingTokenID:       rep.EnrollingTokenID,
-			PolicyFingerprint:      rep.PolicyFingerprint,
-			DaemonVersion:          rep.DaemonVersion,
-			TemplateSetFingerprint: rep.TemplateSetFingerprint,
-		}
-		r.nodes[rep.NodeID] = n
-		return r.copyNode(n), nil
+	if existing, ok := r.nodes[rep.NodeID]; ok {
+		r.updateFromReport(existing, rep)
+		return r.copyNode(existing), nil
 	}
 
-	// Update path: overwrite node-rooted fields; leave relay-space untouched.
-	nl := maps.Clone(rep.nodeLabels)
-	if nl == nil {
-		nl = map[string]string{}
+	// Insert path. Check the cap before allocating anything.
+	if r.maxNodes > 0 && len(r.nodes) >= r.maxNodes {
+		return Node{}, ErrAtCapacity
 	}
-	existing.CertFingerprint = rep.CertFingerprint
-	existing.Facts = cloneFacts(rep.Facts)
-	existing.NodeLabels = nl
-	existing.LastSeen = r.now()
-	existing.PolicyFingerprint = rep.PolicyFingerprint
-	existing.DaemonVersion = rep.DaemonVersion
-	existing.TemplateSetFingerprint = rep.TemplateSetFingerprint
-	// existing.RelayLabels: unchanged — node report cannot overwrite relay space.
-	// existing.EnrollingTokenID: unchanged — provenance is set once at first enrollment.
-	return r.copyNode(existing), nil
+	n := &Node{
+		NodeID:           rep.NodeID,
+		RelayLabels:      map[string]string{},
+		EnrollingTokenID: rep.EnrollingTokenID,
+	}
+	r.updateFromReport(n, rep)
+	r.nodes[rep.NodeID] = n
+	return r.copyNode(n), nil
 }
 
-// UpdateLastSeen records the most recent contact time for nodeID. Returns
-// ErrNotFound if the Node is not in the registry.
-func (r *InMemory) UpdateLastSeen(nodeID string, at time.Time) error {
+// updateFromReport overwrites the node-rooted fields of n from rep. It never
+// touches RelayLabels (the node side cannot reach relay space) or
+// EnrollingTokenID (provenance is set once, at first enrollment). Callers hold
+// the write lock.
+func (r *InMemory) updateFromReport(n *Node, rep Report) {
+	n.CertFingerprint = rep.CertFingerprint
+	n.Facts = cloneFacts(rep.Facts)
+	n.NodeLabels = cloneLabels(rep.nodeLabels)
+	n.LastSeen = r.now()
+	n.PolicyFingerprint = rep.PolicyFingerprint
+	n.DaemonVersion = rep.DaemonVersion
+	n.TemplateSetFingerprint = rep.TemplateSetFingerprint
+}
+
+// withNode runs fn on the stored record for nodeID under the write lock.
+// Returns ErrNotFound, without calling fn, if the Node is not in the registry.
+func (r *InMemory) withNode(nodeID string, fn func(n *Node)) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -143,41 +133,27 @@ func (r *InMemory) UpdateLastSeen(nodeID string, at time.Time) error {
 	if !ok {
 		return ErrNotFound
 	}
-	n.LastSeen = at
+	fn(n)
 	return nil
+}
+
+// UpdateLastSeen records the most recent contact time for nodeID. Returns
+// ErrNotFound if the Node is not in the registry.
+func (r *InMemory) UpdateLastSeen(nodeID string, at time.Time) error {
+	return r.withNode(nodeID, func(n *Node) { n.LastSeen = at })
 }
 
 // SetRelayLabels replaces the relay-space label set for nodeID. Facts and
 // NodeLabels are never touched. Returns ErrNotFound if the Node is not in the
 // registry.
 func (r *InMemory) SetRelayLabels(nodeID string, labels map[string]string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	n, ok := r.nodes[nodeID]
-	if !ok {
-		return ErrNotFound
-	}
-	rl := maps.Clone(labels)
-	if rl == nil {
-		rl = map[string]string{}
-	}
-	n.RelayLabels = rl
-	return nil
+	return r.withNode(nodeID, func(n *Node) { n.RelayLabels = cloneLabels(labels) })
 }
 
 // SetRevoked records that nodeID is revoked as of at. Returns ErrNotFound if
 // the Node is not in the registry.
 func (r *InMemory) SetRevoked(nodeID string, at time.Time) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	n, ok := r.nodes[nodeID]
-	if !ok {
-		return ErrNotFound
-	}
-	n.RevokedAt = at
-	return nil
+	return r.withNode(nodeID, func(n *Node) { n.RevokedAt = at })
 }
 
 // SetRevokedAll is SetRevoked's chunked twin: it revokes every id in nodeIDs
@@ -208,36 +184,24 @@ func (r *InMemory) SetRevokedAll(nodeIDs []string, at time.Time) ([]string, erro
 
 // RecordEnrollment persists first-enrollment certificate provenance.
 func (r *InMemory) RecordEnrollment(nodeID string, cert Certificate, at time.Time) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	n, ok := r.nodes[nodeID]
-	if !ok {
-		return ErrNotFound
-	}
-	n.CertNotAfter = cert.NotAfter
-	// Written only if unset. Re-enrolling an existing node_id must not rewrite
-	// the join date — the provenance chain is the point, and a Node that
-	// re-enrolls after a daemon reinstall has not joined the fleet twice.
-	if n.EnrolledAt.IsZero() {
-		n.EnrolledAt = at
-	}
-	return nil
+	return r.withNode(nodeID, func(n *Node) {
+		n.CertNotAfter = cert.NotAfter
+		// Written only if unset. Re-enrolling an existing node_id must not rewrite
+		// the join date — the provenance chain is the point, and a Node that
+		// re-enrolls after a daemon reinstall has not joined the fleet twice.
+		if n.EnrolledAt.IsZero() {
+			n.EnrolledAt = at
+		}
+	})
 }
 
 // RecordRenewal persists a reissued certificate. It never writes EnrolledAt.
 func (r *InMemory) RecordRenewal(nodeID string, cert Certificate, at time.Time) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	n, ok := r.nodes[nodeID]
-	if !ok {
-		return ErrNotFound
-	}
-	n.CertNotAfter = cert.NotAfter
-	n.RenewalCount++
-	n.LastRenewedAt = at
-	return nil
+	return r.withNode(nodeID, func(n *Node) {
+		n.CertNotAfter = cert.NotAfter
+		n.RenewalCount++
+		n.LastRenewedAt = at
+	})
 }
 
 // SetConnected records a Tunnel opening or closing. Never persisted.
@@ -374,6 +338,15 @@ func wellFormedLabels(labels map[string]string) map[string]string {
 func (r *InMemory) isConnected(nodeID string) bool {
 	_, ok := r.connected[nodeID]
 	return ok
+}
+
+// cloneLabels returns a new, non-nil copy of labels.
+func cloneLabels(labels map[string]string) map[string]string {
+	out := maps.Clone(labels)
+	if out == nil {
+		out = map[string]string{}
+	}
+	return out
 }
 
 // cloneFacts returns a value copy of f with a cloned IPAddresses slice.
