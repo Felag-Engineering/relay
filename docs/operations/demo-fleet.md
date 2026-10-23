@@ -278,7 +278,7 @@ emitted, and `approve_request` is refused as too weak a channel.
 - **In-band is the floor, not the only way.** An out-of-band decision also satisfies an in-band
   rule.
 
-Three ways to answer. Approving releases the Plan but does not dispatch: re-issue the original
+Three ways to answer. Approving releases the request but does not dispatch: re-issue the original
 call unchanged (on the asked-in-band path, the client's retry is that re-issue).
 
 1. **Asked in-band.** A client declaring the name `gleipnir` gets a Relay-authored approval

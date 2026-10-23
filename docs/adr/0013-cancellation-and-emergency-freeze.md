@@ -19,8 +19,8 @@ regain control.
 - **Freeze halts all new Task dispatch, every risk class.** "I don't trust what's
   driving this" applies to reads (exfiltration) as much as mutations. **Plans
   (ADR-0011) still work while frozen** — observation is wanted during an incident.
-  **Amended by [ADR-0038](0038-plan-is-an-approved-route-of-execution.md) (2026-09-12):
-  read that clause as "Policy preflights (ADR-0011) still work while frozen."** The
+  **Amended by [ADR-0038](0038-plan-is-an-approved-route-of-execution.md) (2026-09-12), worded
+  by ADR-0049 (2026-10-22): read that clause as "Policy preflights (ADR-0011) still work while frozen."** The
   no-execution preview is now **Policy preflight** (ADR-0049 keeps that rename). Every step of
   a Gleipnir Plan reaches Relay as new dispatch, so it meets this clause's halt, not its
   exemption: the exemption was always about observation. "A human already approved this" is about authorization, and a

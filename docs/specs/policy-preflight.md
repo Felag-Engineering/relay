@@ -161,7 +161,6 @@ A preflight refuses in fewer cases than a dispatch, and the difference is the po
   matched-but-disconnected Node yields `unknown` rather than a guess from cached state (PF-6).
 - **ADR-0049** — the name Policy preflight, and the wire option's rename to `preflight` (PF-19),
   because "plan" is Gleipnir's word for a series of tool calls.
-  Every decision in ADR-0011 is re-affirmed there unchanged; the option rename is PF-19.
 - **Invariant 1** — a preflight carries the same typed Operation or verbatim argv as the dispatch
   would (PF-15); the three tiers are unchanged by previewing.
 - **Invariant 5** — the cap is computed the same way, then reported instead of enforced (PF-4).

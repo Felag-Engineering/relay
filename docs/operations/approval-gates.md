@@ -300,7 +300,7 @@ What it does **not** change:
 
 ## What approval is not
 
-**Approval is not authorization.** A satisfied requirement lets one already-legal Plan
+**Approval is not authorization.** A satisfied requirement lets one already-legal dispatch
 proceed. It never widens what a Node's Policy allows
 ([ADR-0002](../adr/0002-node-side-policy-is-locally-rooted-and-remotely-immutable.md)), and an
 approved Job still traverses Selector → authz → blast cap → Policy unchanged.

@@ -316,16 +316,17 @@ Gleipnir's word: a series of tool calls, with branches, that Gleipnir determines
 the **Harness**, which carries it out one call at a time. Not a Relay object (ADR-0049): each call
 that reaches Relay is an ordinary dispatch, decided alone, and Relay cannot tell that calls belong
 to one Plan. Relay's own check before a call runs is the **Policy preflight**.
-_Avoid_ (for anything Relay stores or runs): script, program, workflow, runbook, playbook, batch,
-procedure, route
+_Avoid_: script, program, workflow, runbook, playbook, batch, procedure (each for anything Relay
+stores or runs)
 
 **Harness**:
 The program an **AI-agent** runs in, such as Gleipnir's runtime, Claude Code or Codex: it holds
 the MCP session and its credential, sends the AI-agent's tool calls to Relay, puts Relay's approval
-questions in front of a person, and carries out a Gleipnir **Plan** one call at a time. Relay
+questions in front of a person, and, for Gleipnir, carries out its **Plan** one call at a time. Relay
 trusts it to route questions to a person and to run the route that person saw, and cannot verify
 either (threat-model R21, R14).
-_Avoid_: client (unqualified, for this role), wrapper
+Approval text calls it the *requesting client*, which is accepted for this role.
+_Avoid_: wrapper
 
 **Policy preflight**:
 The no-execution preview of a dispatch: the Relay resolves the Selector, checks
