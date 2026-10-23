@@ -74,7 +74,7 @@ pass under every rule keyed on `mutate`.
   refusals → blast cap → approval gate → dispatch. Template resolution computes; it refuses
   nothing until after authorization, so a caller who may not ask learns nothing about which
   Nodes carry which Templates. Policy preflight follows the same order and reports where a run
-  refuses (ADR-0011, ADR-0038), with one exception: an unknown or malformed Template call cannot
+  refuses (ADR-0011), with one exception: an unknown or malformed Template call cannot
   be asked at all, so a preflight refuses it as a run would.
 
 - **Policy preflight excludes exactly as a run does.** A matched Node excluded from a Template

@@ -35,18 +35,15 @@ The two are different roots of authority, and the difference is visible at the c
 **Stops:** all new Task dispatch, every risk class. A frozen Relay refuses before Selector
 resolution and before authorization — the outermost gate in the pipeline.
 
-That includes **every advance of an approved Plan.** An advance is new dispatch, so it meets the
-same outermost gate, and a Plan approved before the Freeze is no way past one (`plan.md`,
-ADR-0038). "A human already approved this" is a statement about authorization, and a Freeze is
-not an authorization check.
+That includes a dispatch whose approval was given before the Freeze, and every step of a
+harness's sequence: each is new dispatch and meets the same outermost gate. "A human already
+approved this" is a statement about authorization, and a Freeze is not an authorization check.
 
 **Does not stop:**
 
 - **Policy preflights.** Observation is what an incident needs, so a preflight answers while
   frozen and reports the frozen state advisorily (ADR-0011, ADR-0013). This is the only
   exemption: a preflight sends no Task.
-- **In-flight steps of an approved Plan.** The step already dispatched keeps running, on the same
-  reasoning as any in-flight Task below. **Advancing** that Plan does not — see *Stops*.
 - **In-flight Tasks.** They keep running unless separately cancelled. Indiscriminately killing
   half-finished package installs creates the second incident.
 - **Reads of the control plane.** The registry, the audit trail and the pending approval requests
@@ -117,7 +114,7 @@ the Freeze state untouched.
   deliberate exemption of Policy preflights.
 - **ADR-0011** — preflights answer while frozen, which is a decision about Freeze as much as
   about the preflight.
-- **ADR-0038** — a Plan is an approved route, and every advance of one is new dispatch. The Freeze
+- **ADR-0049** — every step of a Gleipnir Plan is new dispatch, so the Freeze stops it; the
   exemption covers preflights and stops at them.
 - **Invariant 5** — Freeze is not the blast cap and does not substitute for it; it sits outside
   and above.
@@ -158,8 +155,6 @@ Claims above with **no row**, and so nothing checking them:
   — the gate is on new dispatch only — but not asserted.
 - That the host lever is unreachable from any surface. True by the interface the API holds, and
   argued at the call site, but there is no structural test like `no_dispatch`.
-- That a Freeze stops the next **advance** of an approved Plan. Unbuilt rather than untested: Plans
-  do not exist yet (`plan.md`).
 
 ### Performance
 
@@ -189,7 +184,7 @@ Deliberately not in the first pass: the built capability should work end to end 
 - **Engaging from the Console.**
 - **Approvals during a Freeze, stated as behaviour.** A pending request can still be decided while
   frozen, nothing dispatches until release, and an approved request still expires on its own clock
-  and must be re-requested if the Freeze outlasts it. Settle once Plans and approvals are built.
+  and must be re-requested if the Freeze outlasts it. Settle once approvals are built.
 
 ## Open questions
 

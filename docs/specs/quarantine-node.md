@@ -112,7 +112,7 @@ decides who may do either (invariant 10).
 
 ### Remediation is not a separate capability
 
-- Repairing a distrusted set of Nodes is ordinary Operations and Plans whose Selector targets
+- Repairing a distrusted set of Nodes is ordinary Operations whose Selector targets
   `relay:` — `selectors-and-labels.md` and `execution.md` govern it. A Node cannot be repaired
   through Relay *while* quarantined; lift the quarantine first, or revoke the Node.
 
@@ -182,7 +182,8 @@ No claim here is proven yet. Claims with **no row**, and so nothing checking the
 - Revoking a Node's identity — `enrollment.md`.
 - The fleet-wide stop — `freeze.md`.
 - Dispatch, fan-out, cancellation and the blast-radius cap — `execution.md`.
-- Repairing Nodes — ordinary Operations and Plans (`execution.md`, `plan.md`).
+- Repairing Nodes — ordinary Operations (`execution.md`), sequenced by the harness where there are
+  several.
 - Investigating a quarantined Node — outside Relay by design.
 - Converging a Node toward a desired configuration, and distributing configuration content.
   Both are configuration management, which is out of realm (`AGENTS.md`).

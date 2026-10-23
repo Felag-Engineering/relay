@@ -125,10 +125,9 @@ ordered stages, each a batch of Tasks. **In v1 a Job always has exactly one stag
 (enforced in code and schema), so post-1.0 staged rollout lands without a data migration. Not
 operator-facing.
 
-A Stage is **not** a **Plan** step and the two are never merged: a Stage orders batches
-*within one Operation's fan-out* (canary → remainder), where a Plan step is a whole Job
-running a different Operation. They are orthogonal axes and compose (ADR-0038).
-_Avoid_: phase, wave; step (that is a Plan's)
+A Stage is **not** a step of a Gleipnir **Plan**: a Stage orders batches *within one
+Operation's fan-out* (canary → remainder), where each Plan step is its own dispatch.
+_Avoid_: phase, wave, step
 
 **Task**:
 The execution of one Operation or Raw Exec on a single Node, as part of a Job (within a
@@ -295,9 +294,9 @@ _Avoid_: isolate, cordon, drain (Kubernetes senses), blacklist
 
 **Freeze**:
 The Relay-wide emergency stop: halts all new Task dispatch (every risk class) while
-leaving in-flight Tasks running and **Policy preflights** answerable. An approved **Plan**
-gets no exemption: every advance is new dispatch, so a Freeze stops the next step and leaves
-the current one running (ADR-0038). Cheap to engage (a **human** `operator`+ Account via the
+leaving in-flight Tasks running and **Policy preflights** answerable. Every step of a
+Gleipnir **Plan** is new dispatch, so a Freeze stops the next one and leaves the current one
+running. Cheap to engage (a **human** `operator`+ Account via the
 Control API, or root on the Relay host) and deliberate to release (`admin`, with an audited
 reason). Engaging is the one act gated on an Account being human rather than on its role: a
 machine Account is refused at every role, because an AI-agent halting the plane that
@@ -313,40 +312,42 @@ Freeze, which halts *all* new dispatch (ADR-0013).
 _Avoid_: abort, kill, stop, interrupt
 
 **Plan**:
-An **approved route of execution**: an ordered list of steps an AI-agent proposes, a human
-approves once, and the agent walks one step at a time. Relay stores the route and a monotonic
-**step cursor**; the agent advances by naming the Plan and the step it believes is next, and
-**nothing else**, so the advance call carries nothing to tamper with.
-The agent decides *whether* and *when* to continue; Relay
-decides *what* runs (ADR-0038). One step is one **Job**, never a **Stage**. A Plan composes
-nothing: each step is an independently Policy-evaluated, independently capped dispatch, and
-the daemon never learns a Plan exists.
-_Avoid_: script, program, workflow, runbook, playbook, batch, procedure; **plan mode** and
-**dry-run** (the preview is **Policy preflight**, below)
+Gleipnir's word: a series of tool calls, with branches, that Gleipnir determines and submits to
+the **Harness**, which carries it out one call at a time. Not a Relay object (ADR-0049): each call
+that reaches Relay is an ordinary dispatch, decided alone, and Relay cannot tell that calls belong
+to one Plan. Relay's own check before a call runs is the **Policy preflight**.
+_Avoid_: script, program, workflow, runbook, playbook, batch, procedure (each for anything Relay
+stores or runs)
+
+**Harness**:
+The program an **AI-agent** runs in, such as Gleipnir's runtime, Claude Code or Codex: it holds
+the MCP session and its credential, sends the AI-agent's tool calls to Relay, puts Relay's approval
+questions in front of a person, and, for Gleipnir, carries out its **Plan** one call at a time. Relay
+trusts it to route questions to a person and to run the route that person saw, and cannot verify
+either (threat-model R21, R14).
+Approval text calls it the *requesting client*, which is accepted for this role.
+_Avoid_: wrapper
 
 **Policy preflight**:
 The no-execution preview of a dispatch: the Relay resolves the Selector, checks
 authorization and the blast-radius cap, and each matched daemon's live Policy engine answers
 whether it *would* allow the action (ADR-0011). Advisory and point-in-time, never a
-reservation or a substitute for enforcement. Formerly **plan mode**, until ADR-0038 gave that
-word to the Plan; the option is still spelled `plan` on the wire.
-_Avoid_: plan, plan mode (both now mean the route); dry-run, simulation, check mode — a
-preflight never reaches an executor, it asks Policy a question
+reservation or a substitute for enforcement. Formerly **plan mode**, renamed by ADR-0038, a
+rename ADR-0049 keeps; the option is still spelled `plan` on the wire.
+_Avoid_: plan, plan mode; dry-run, simulation, check mode — a preflight never reaches an
+executor, it asks Policy a question
 
 **Plan hash**:
-The content address of a Plan: a hash over the ordered steps, their Operations and
-arguments, and the *resolved fan-out*. It is what an Approval commits to (ADR-0027): dispatch
-proceeds only if the Plan still hashes the same, and material drift re-parks for re-approval.
-The fan-out is bound **by identity, never by count**: any Node not in the approved set
-re-parks, while a Node that has left it is shrinkage, dropped and recorded (ADR-0038). A
-single gated dispatch is the **one-step** case.
+The content address of one gated dispatch, defined by ADR-0027 decision 8: what an Approval
+commits to, so a dispatch that no longer hashes the same parks again (`approval.md` AP-20 to
+AP-22). Spelled `plan_hash` on the wire; the word *plan* in it is historical and has no
+multi-step reading (ADR-0049).
 _Avoid_: job hash, checksum, fingerprint (reserved for the Policy, template-set and CA fingerprints)
 
 **Shape key**:
 The content address of *what* an approval is for, as opposed to *how much of it*: a hash
 over the Operation, its risk class, its **shape arguments**, and the **normalised
-Selector**, never the resolved fan-out or an argument declared to be scale. Over a
-multi-step **Plan** it addresses the route the same way. For **Raw Exec** every argv element is
+Selector**, never the resolved fan-out or an argument declared to be scale. For **Raw Exec** every argv element is
 shape: nothing is declared for the arbitrary-command path, and "scale" is never guessed. For an
 **Approval grant** it hashes the **Scope** minus the window, the use limit and the fan-out
 ceiling. It exists so "the last approved action of the same shape" is a lookup, which the
@@ -358,7 +359,7 @@ a value.
 _Avoid_: plan hash (that is the fan-out-bearing one), fingerprint, similarity hash, group key
 
 **Approval**:
-A human decision that a specific parked **Request** may proceed, recorded against its Plan
+A human decision that a specific parked **Request** may proceed, recorded against its plan
 hash. **Parking creates no Job**: the gate sits before the dispatcher, so the Request waits,
 and a Job is minted only if a decision releases one (ADR-0027 decision 1 as amended
 2026-09-24; ADR-0028 §Amendment 2026-08-17). The Request waits in **`pending-approval`** until
@@ -368,7 +369,7 @@ sees, so the requesting AI-agent can neither truncate nor spin it. The decision 
 verified (the Admin Console has no approval surface, ADR-0044); or **in-band**, through the
 requesting client's MCP session (`approve_request`, or an MRTR answer), where the approver is
 asserted and only as honest as the client (ADR-0027, ADR-0029). An Approval **narrows**: it
-permits one already-Policy-legal Plan to run, and can never widen what a Node's Policy allows.
+permits one already-Policy-legal dispatch to run, and can never widen what a Node's Policy allows.
 _Avoid_: authorization, permission, sign-off, confirmation (unqualified — name the rung)
 
 **Decision**:
@@ -461,8 +462,7 @@ _Avoid_: approval policy (collides with **Policy**), approval rule, gate config 
 single rule)
 
 **Approval grant**:
-One human Approval covering a **described, bounded set of future dispatches**, where a
-**Plan** covers an *enumerated* one; that is the whole distinction. It is decision 12's
+One human Approval covering a **described, bounded set of future dispatches**. It is decision 12's
 time-boxed narrowing grant (ADR-0027). Always written in full: an unqualified **Grant** is the
 authorization rule below, an unrelated mechanism.
 
@@ -485,9 +485,7 @@ lenient the Gate rules are (ADR-0027 §Amendment 2026-09-24). What it costs to a
 the Scope's widest admissible dispatch, so it is never a cheaper path than the work it
 replaces. Every dispatch it releases audits to the same approval ID. **The ask is its own
 audit record**, separate from a single dispatch parking for approval: the two are answered the
-same way but their blast radii are not comparable. (Both are standing authority once
-answered; a Grant's walls are described and a Plan's contents are listed, which is why a Grant
-never releases a Plan, ADR-0038.)
+same way but their blast radii are not comparable.
 _Avoid_: Grant (unqualified), batch approval / blanket approval (a grant is neither
 blanket nor unbounded), standing approval, pre-authorization
 

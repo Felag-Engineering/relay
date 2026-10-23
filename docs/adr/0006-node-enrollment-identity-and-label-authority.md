@@ -162,7 +162,7 @@ nobody meant to release.
 
 **The pairing of quarantine with remediation and secret distribution as one lane** is loosened
 accordingly: quarantine is its own act (`quarantine-node.md`); remediation is ordinary Operations
-and Plans on `relay:` targets; secret distribution is Future work there.
+on `relay:` targets; secret distribution is Future work there.
 
 **What is given up, and accepted.** Whoever can write tags before an engage decides which Nodes
 that engage resolves to — an `operator` or an AI-agent holding an `operator` machine Account. The

@@ -188,7 +188,7 @@ satisfies an `out-of-band` rule, and an unstamped channel satisfies nothing.
 
 ### Deciding does not dispatch
 
-A satisfied requirement lets the **same Plan** proceed the next time it is driven. The caller
+A satisfied requirement lets the **same dispatch** proceed the next time it is driven. The caller
 re-issues the request; the Relay finds the approval by plan hash and lets it through. Nothing
 runs at the moment of approval, so fleet drift between the answer and the run re-parks rather
 than widening what was approved.
@@ -241,7 +241,7 @@ Parked requests and granted approvals stop being redeemable at their deadline. T
 enforces expiry at read time, so it holds even if the background sweeper is not running; the
 sweeper retires lapsed requests from the queue and records an `approval_expired` audit entry.
 
-An approved single-Plan request releases exactly one execution (AP-77). Re-driving the same
+An approved request releases exactly one execution (AP-77). Re-driving the same
 call once it has been released (including while it is still running), on any surface and by
 any caller, returns the Job it already released and runs nothing, up to the approval's
 deadline. That holds even if an Approval grant covering the same plan is issued afterward: a
@@ -284,7 +284,7 @@ What it does **not** change:
   the in-band one (`approve_request`, ADR-0029), through the same capability-layer seam as
   every other decision.
 - **What `tasks/cancel` reaches.** It marks the *handle* cancelled. A still-parked approval
-  request stays pending, queued and decidable, and a re-drive of the same Plan re-attaches to
+  request stays pending, queued and decidable, and a re-drive of the same dispatch re-attaches to
   it. A cancel arrives over the AI's own session; if it could withdraw a pending request, an
   AI-agent could pull one back the moment it sensed a denial coming. If a Job already exists,
   cancelling goes through the ordinary Job-cancel path.
@@ -300,7 +300,7 @@ What it does **not** change:
 
 ## What approval is not
 
-**Approval is not authorization.** A satisfied requirement lets one already-legal Plan
+**Approval is not authorization.** A satisfied requirement lets one already-legal dispatch
 proceed. It never widens what a Node's Policy allows
 ([ADR-0002](../adr/0002-node-side-policy-is-locally-rooted-and-remotely-immutable.md)), and an
 approved Job still traverses Selector → authz → blast cap → Policy unchanged.

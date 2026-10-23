@@ -87,7 +87,7 @@ tags:
   - name: Approval grants
     description: |
       Batch and window approvals (ADR-0027 decision 12): one human decision
-      covering a **bounded set** of future dispatches instead of one Plan.
+      covering a **bounded set** of future dispatches instead of one dispatch.
 
       These exist because fatigue is a security property. Forty elicitations
       produce forty rubber stamps, and a rubber-stamped approval is worse than
@@ -95,8 +95,8 @@ tags:
       did not.
 
       What a grant gives up, stated plainly: a single approval binds to a
-      content-addressed Plan, and that binding *is* the anti-drift property. A
-      grant covers Plans that do not exist yet, so it cannot bind that way.
+      content-addressed dispatch (its plan hash), and that binding *is* the anti-drift
+      property. A grant covers dispatches that do not exist yet, so it cannot bind that way.
       What replaces the hash is a **scope** plus a **window**, and those walls
       are the entire security argument — which is why every bound is mandatory
       and why `max_fan_out` is a *ceiling* (unlike a gate rule's `min_fan_out`
@@ -335,13 +335,13 @@ paths:
       summary: Approve or deny a parked dispatch
       description: |
         The authenticated out-of-band decision. `plan_hash` is **required**: an
-        approval binds to the content-addressed Plan (Operation, arguments, and
+        approval binds to the content-addressed dispatch (Operation, arguments, and
         resolved fan-out) the decider was shown, so a client working from a
         stale queue entry is told its view moved rather than silently approving
         today's version.
 
         **Deciding does not dispatch.** A satisfied requirement lets the *same*
-        Plan proceed the next time it is driven. If the fleet drifted in the
+        dispatch proceed the next time it is driven. If the fleet drifted in the
         meantime the resolved fan-out differs, the hash differs, and the
         dispatch parks again for re-approval.
 
@@ -1032,8 +1032,7 @@ components:
     Frozen:
       description: |
         The Relay-wide Freeze is engaged, so all new dispatch is refused
-        (ADR-0013). A Policy preflight still answers while frozen; an approved
-        Plan does not advance.
+        (ADR-0013). A Policy preflight still answers while frozen.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -1849,7 +1848,7 @@ components:
           type: string
           description: |
             The plan hash from the approval request. Required — a decision binds
-            to the Plan it was shown, never to "the request" in the abstract.
+            to the dispatch it was shown, never to "the request" in the abstract.
         reason:
           type: string
           maxLength: 1024

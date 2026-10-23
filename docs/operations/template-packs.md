@@ -281,7 +281,7 @@ or a moved file all change it, and it can never collide with a Policy fingerprin
 Dispatching a template to a Node that has not loaded it reports `unsupported`: **not**
 `failure`, and **not** `denied_by_policy`. Nothing executed and Policy was never consulted,
 because the Node has no such Operation. A Policy preflight reports the same for the same Node
-(`verdict: "unsupported"`), so a Plan never promises a run a dispatch will refuse.
+(`verdict: "unsupported"`), so a preflight never promises a run a dispatch will refuse.
 
 `unsupported` across a cohort means the pack did not land there: check the fingerprint, then
 config management. It never means Policy is too tight.

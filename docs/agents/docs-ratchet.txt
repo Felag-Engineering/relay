@@ -44,7 +44,6 @@ docs/adr/0034-state-labels-relay-derived-namespace.md budget decision
 docs/adr/0035-account-suspension.md decision
 docs/adr/0036-node-code-never-overrides-the-operator-s-umask.md budget decision
 docs/adr/0037-agentless-ssh-executor-low-assurance-tier.md decision
-docs/adr/0038-plan-is-an-approved-route-of-execution.md budget amendments decision
 docs/adr/0039-development-system-second-edition.md decision
 docs/adr/0041-gleipnir-rooted-identity-grants-and-a-verified-approver.md decision
 docs/adr/0042-template-dispatch-resolves-its-risk-class-over-the-reporting-nodes.md budget decision

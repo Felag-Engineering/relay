@@ -335,8 +335,8 @@ $ scripts/dev-fleet-mcp.sh api-approver POST \
     '{"approve":true,"plan_hash":"<plan_hash>","reason":"looks right"}'
 ```
 
-Then **re-issue the original call unchanged** — approving releases a Plan, it does not
-itself dispatch.
+Then **re-issue the original call unchanged** — approving releases that dispatch, it
+does not itself dispatch.
 
 Two properties to watch:
 

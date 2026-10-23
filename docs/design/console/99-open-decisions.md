@@ -198,8 +198,8 @@ no-execution preview **Policy preflight**. On the Console both meanings could ap
 control labelled "Plan" would be ambiguous.
 
 **Ruling (owner, 2026-09-20):** the Console says **Preflight**: the composer's primary action, the
-rendered verdict, and the outcome chip for a preflight call. **Plan** is reserved for the approved
-route (ADR-0038) and the plan hash an approval commits to (ADR-0027): the Job's Plan block and every
+rendered verdict, and the outcome chip for a preflight call. **Plan** is Gleipnir's word for a series
+of tool calls (ADR-0049); the plan hash an approval commits to (ADR-0027) keeps its name: the Job's Plan block and every
 "plan hash" keep the word, and the shared Plan renderer keeps its name (00). The wire still spells
 the option `plan` (GLOSSARY.md): the spelling is contract, the label is copy.
 

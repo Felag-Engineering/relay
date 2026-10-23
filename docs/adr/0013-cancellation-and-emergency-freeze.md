@@ -19,12 +19,11 @@ regain control.
 - **Freeze halts all new Task dispatch, every risk class.** "I don't trust what's
   driving this" applies to reads (exfiltration) as much as mutations. **Plans
   (ADR-0011) still work while frozen** — observation is wanted during an incident.
-  **Amended by [ADR-0038](0038-plan-is-an-approved-route-of-execution.md) (2026-09-12):
-  read that clause as "Policy preflights (ADR-0011) still work while frozen; every
-  advance of a Plan does not."** ADR-0038 moved the word *Plan* from the no-execution
-  preview (now **Policy preflight**) to an approved route of execution. An advance of a Plan
-  is new Task dispatch, so it meets this clause's halt, not its exemption: the exemption was
-  always about observation. "A human already approved this" is about authorization, and a
+  **Amended by [ADR-0038](0038-plan-is-an-approved-route-of-execution.md) (2026-09-12), worded
+  by ADR-0049 (2026-10-22): read that clause as "Policy preflights (ADR-0011) still work while frozen."** The
+  no-execution preview is now **Policy preflight** (ADR-0049 keeps that rename). Every step of
+  a Gleipnir Plan reaches Relay as new dispatch, so it meets this clause's halt, not its
+  exemption: the exemption was always about observation. "A human already approved this" is about authorization, and a
   Freeze is not an authorization check.
   In-flight Tasks keep running unless separately cancelled: killing half-finished installs
   creates the second incident.
