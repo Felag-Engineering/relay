@@ -1,6 +1,9 @@
 # The Admin Console gains an execution surface
 
 **Status:** Accepted (2026-08-03); amended by ADR-0044. Decision 7's second-person option is
+
+ADR-0052 (2026-10-23) supersedes the Console's execution surface for the MVP: the Console runs
+no command, and the `console_execution` flag is deleted.
 superseded by ADR-0047.
 
 Decision on issue #264, taken by the owner 2026-08-03. It **supersedes the no-execution clause
