@@ -326,6 +326,7 @@ mod tests {
         assert_eq!(labels, vec![("role".to_string(), "web".to_string())]);
     }
 
+    // Proves DI-9.
     #[test]
     fn parse_labels_skips_empty_and_garbage() {
         // "=bad" has empty key → skipped; empty comma entries → skipped.
@@ -337,6 +338,7 @@ mod tests {
     // Idempotency: pre-written identity → enroller is NOT called
     // -----------------------------------------------------------------------
 
+    // Proves DI-38, EN-14.
     #[tokio::test]
     async fn idempotency_no_op_when_identity_present() {
         let dir = TempDir::new("idempotent");
@@ -366,6 +368,7 @@ mod tests {
     // Fresh enroll: empty dir + mock enroller → files persisted correctly
     // -----------------------------------------------------------------------
 
+    // Proves EN-14.
     #[tokio::test]
     async fn fresh_enroll_persists_identity() {
         let dir = TempDir::new("fresh");
@@ -419,6 +422,7 @@ mod tests {
         assert_eq!(loaded.node_id, canned_node_id);
     }
 
+    // Proves EN-8.
     #[tokio::test]
     async fn persisted_address_written_at_enrollment() {
         let dir = TempDir::new("fresh-addr");
@@ -494,6 +498,7 @@ mod tests {
         assert_eq!(load_relay_addr(dir.path()).expect("load_relay_addr"), None);
     }
 
+    // Proves EN-28.
     #[tokio::test]
     async fn fresh_enroll_fails_closed_on_key_cert_mismatch() {
         let dir = TempDir::new("fresh-mismatch");
@@ -774,6 +779,7 @@ mod join_enroll {
             .expect("enrollment did not finish within the timeout")
     }
 
+    // Proves DI-22, EN-7.
     #[tokio::test]
     async fn pin_match_enrolls() {
         let server = pki("localhost");
@@ -800,6 +806,7 @@ mod join_enroll {
         );
     }
 
+    // Proves DI-22, EN-7, EN-27.
     #[tokio::test]
     async fn pin_mismatch_sends_no_token() {
         let server = pki("localhost");
@@ -829,6 +836,7 @@ mod join_enroll {
         assert_eq!(load_relay_addr(dir.path()).unwrap(), None);
     }
 
+    // Proves EN-7.
     #[tokio::test]
     async fn pin_match_with_wrong_server_name_sends_no_token() {
         let server = pki("some-other-host");
@@ -840,6 +848,7 @@ mod join_enroll {
         assert_eq!(seen.enroll_calls.load(Ordering::SeqCst), 0);
     }
 
+    // Proves DI-22.
     #[tokio::test]
     async fn ca_bundle_mismatch_refused() {
         let server = pki("localhost");

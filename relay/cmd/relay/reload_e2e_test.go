@@ -198,6 +198,7 @@ func (r *reloadRelay) records(kind string) []audit.Record {
 	return out
 }
 
+// Proves RC-21.
 func TestReload_ValidChangeAppliedAndAudited(t *testing.T) {
 	r := startReloadable(t, "[reach]\nmutate_blast_cap = 5\n\n[log]\nformat = \"text\"\n")
 
@@ -229,6 +230,7 @@ func TestReload_ValidChangeAppliedAndAudited(t *testing.T) {
 	}
 }
 
+// Proves RC-21.
 func TestReload_InvalidValueRefusedConfigIntact(t *testing.T) {
 	r := startReloadable(t, "[reach]\nmutate_blast_cap = 5\n\n[log]\nformat = \"text\"\n")
 
@@ -266,6 +268,7 @@ func TestReload_InvalidValueRefusedConfigIntact(t *testing.T) {
 	}
 }
 
+// Proves RC-21.
 func TestReload_BindTimeChangeRefusedRestartRequired(t *testing.T) {
 	r := startReloadable(t, "")
 	state := r.layout.StateDir()
@@ -313,6 +316,7 @@ func TestReload_BindTimeChangeRefusedRestartRequired(t *testing.T) {
 	}
 }
 
+// Proves RC-21.
 func TestReload_FailedReloadProcessSurvives(t *testing.T) {
 	r := startReloadable(t, "")
 
@@ -341,6 +345,7 @@ func TestReload_FailedReloadProcessSurvives(t *testing.T) {
 	r.requireAlive()
 }
 
+// Proves RC-21.
 func TestReload_RechecksFileFirst(t *testing.T) {
 	r := startReloadable(t, "")
 	gate := r.layout.WriteFile(t, "gates.json", `{"rules": [`, "root", relaytest.TestUser, "0640")

@@ -384,6 +384,7 @@ func newTestMinter(t *testing.T, svc *enroll.Service) *enroll.Minter {
 	return m
 }
 
+// Proves EN-1, EN-4.
 func TestHandleMintToken_Success(t *testing.T) {
 	repo := enroll.NewMemoryRepository()
 	tokenSvc := enroll.NewService(repo)
@@ -462,6 +463,7 @@ func TestHandleMintToken_Success(t *testing.T) {
 	}
 }
 
+// Proves EN-2, EN-24.
 func TestHandleMintToken_InvalidScopeOrTTL(t *testing.T) {
 	cases := []struct {
 		name string
@@ -498,6 +500,7 @@ func TestHandleMintToken_InvalidScopeOrTTL(t *testing.T) {
 	}
 }
 
+// Proves EN-24.
 func TestHandleMintToken_MalformedOrUnknownField(t *testing.T) {
 	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
 	d := Deps{Tokens: newTestMinter(t, tokenSvc), Audit: &fakeAuditor{}, Now: fixedNow}
@@ -819,6 +822,7 @@ func TestHandleRevokeToken_RejectsUnrenderableTokenID(t *testing.T) {
 // one request actually INSERT and read back, against the live audit table and
 // its audit_id PRIMARY KEY, rather than accumulating in a slice. That is a
 // weaker claim than "only SQLite can catch this", and it is the true one.
+// Proves EN-20.
 func TestRevokeTokenCascade_PersistsOneRowPerNode(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
 	if err != nil {

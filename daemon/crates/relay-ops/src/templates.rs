@@ -1155,6 +1155,7 @@ body = "df -PT"
     /// each case here trips **one** named bit; a mode that trips both at once
     /// (`0o666` on its own, as this test once was) proves nothing about either,
     /// and a mask narrowed to `0o002` or `0o020` would still pass it.
+    // Proves DI-12.
     #[test]
     fn group_or_world_writable_file_is_refused() {
         for (mode, bit) in [
@@ -1198,6 +1199,7 @@ body = "df -PT"
     /// is ever legitimately executable. They pin the *shape* of the mask — it
     /// gates write bits and only write bits, so an execute bit must never on
     /// its own refuse a file.
+    // Proves DI-12.
     #[test]
     fn secure_modes_are_accepted() {
         for (mode, why) in [

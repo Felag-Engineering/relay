@@ -125,6 +125,7 @@ func TestCrossBinary_JoinStringEnrolls(t *testing.T) {
 // string is inert once enrolled: a later start with RELAY_JOIN removed and no
 // RELAY_ADDRESS or --relay connects using the CA and address persisted at
 // enrollment (DI-38, ADR-0031 decision 4).
+// Proves EN-8.
 func TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState(t *testing.T) {
 	n := enrollWithJoinStringOnly(t, "persisted-state-node")
 

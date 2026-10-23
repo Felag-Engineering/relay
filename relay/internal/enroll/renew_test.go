@@ -59,6 +59,7 @@ func TestRenew_Success(t *testing.T) {
 
 // TestRenew_IgnoresCSRSubject proves that the issued cert CN is derived from
 // the context node_id, not from the CN the daemon placed in the CSR.
+// Proves EN-17.
 func TestRenew_IgnoresCSRSubject(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, _, _ := newEnrollServer(t, svc)
@@ -85,6 +86,7 @@ func TestRenew_IgnoresCSRSubject(t *testing.T) {
 
 // TestRenew_MissingNodeID verifies that a context without a node_id (i.e. no
 // verified mTLS client cert) returns codes.Unauthenticated — fail closed.
+// Proves EN-17.
 func TestRenew_MissingNodeID(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, _, _ := newEnrollServer(t, svc)

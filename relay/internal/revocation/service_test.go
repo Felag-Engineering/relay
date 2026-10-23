@@ -254,6 +254,7 @@ func TestService_RevokeNode_PersistsToRegistry(t *testing.T) {
 // enrolled by a different token is untouched, and a Node already revoked
 // before the cascade reaches it (node-d) gets no second record — the
 // IsRevoked skip must still hold (#545/#487's causative-record rule).
+// Proves EN-19.
 func TestService_RevokeToken_RecordsEveryCascadedNode(t *testing.T) {
 	svc, d, c, reg, tokenSvc := newServiceFixture(t)
 	ctx := context.Background()
@@ -328,6 +329,7 @@ func TestService_RevokeToken_RecordsEveryCascadedNode(t *testing.T) {
 // TestService_RevokeToken_ToleratesUnknownToken verifies that RevokeToken does
 // not error when the token_id is unknown in the store, and still denylists
 // matching Nodes (cascade remains valid; the token may have been deleted).
+// Proves EN-20.
 func TestService_RevokeToken_ToleratesUnknownToken(t *testing.T) {
 	svc, d, _, reg, _ := newServiceFixture(t)
 	ctx := context.Background()
@@ -352,6 +354,7 @@ func TestService_RevokeToken_ToleratesUnknownToken(t *testing.T) {
 // first scan. The bounded re-scan in RevokeToken must denylist AND record it
 // — this reddens if recording is ever hoisted out of the pass loop to run
 // only against the first ListChecked() snapshot.
+// Proves EN-19.
 func TestService_RevokeToken_RecordsNodeFoundOnRescan(t *testing.T) {
 	d := revocation.NewDenylist()
 	c := revocation.NewConnections()
@@ -459,6 +462,7 @@ func TestService_RevokeToken_RegistryReadFailureFailsLoudly(t *testing.T) {
 // sizes — makes "count calls", "count total", and "count only the first
 // failure" mutations of the shortfall count all go red: only "sum the sizes
 // of the failed calls" survives.
+// Proves EN-20.
 func TestService_RevokeToken_RecordFailureDoesNotStopTheCascade(t *testing.T) {
 	silenceLogs(t)
 	svc, d, _, reg, tokenSvc := newServiceFixture(t)

@@ -573,6 +573,7 @@ type = "identifier"
         ));
     }
 
+    // Proves DI-30.
     #[test]
     fn ledger_check_refuses_a_changed_body() {
         let ledger = format!("t.one read {DIGEST_A} active\n");
@@ -581,6 +582,7 @@ type = "identifier"
         assert!(m[0].contains("body digest"), "{m:?}");
     }
 
+    // Proves DI-30.
     #[test]
     fn ledger_check_refuses_a_changed_risk_class() {
         let ledger = format!("t.one mutate {} active\n", digest(T));
@@ -589,6 +591,7 @@ type = "identifier"
         assert!(m[0].contains("risk class"), "{m:?}");
     }
 
+    // Proves DI-30.
     #[test]
     fn ledger_check_accepts_a_withdrawn_name_absent_from_the_catalog() {
         let ledger = format!(
@@ -598,6 +601,7 @@ type = "identifier"
         assert!(ledger_mismatches(&[one(T)], &ledger).is_empty());
     }
 
+    // Proves DI-30.
     #[test]
     fn ledger_check_refuses_a_withdrawn_name_back_in_the_catalog() {
         let ledger = format!("t.one read {} withdrawn\n", digest(T));

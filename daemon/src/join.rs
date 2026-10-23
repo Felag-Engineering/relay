@@ -493,6 +493,7 @@ mod tests {
         }
     }
 
+    // Proves DI-37.
     #[test]
     fn join_refuses_argv_join_string() {
         let secret = join_text("relay.example:7654");
@@ -507,6 +508,7 @@ mod tests {
         assert_eq!(run(&["--token".to_string(), "x".to_string()]), 2);
     }
 
+    // Proves DI-37.
     #[test]
     fn join_refuses_existing_identity_env_file_unchanged() {
         for name in config::IDENTITY_FILES {
@@ -568,6 +570,7 @@ mod tests {
         assert_eq!(prod.env_file, PathBuf::from(ENV_FILE));
     }
 
+    // Proves DI-37.
     #[test]
     fn join_writes_env_file_root_0600_atomically() {
         let f = fixture("join-write", Some(ENV.as_bytes()));

@@ -27,6 +27,7 @@ func TestFreezeReleaseReason_DefaultsWhenUnset(t *testing.T) {
 // in the untagged build the Relay reads its environment in exactly two places,
 // and neither reads a setting — the Freeze lever's operator note, and the
 // retired-name refusal, which only refuses.
+// Proves RC-13.
 func TestFreezeReleaseReason_IsTheOnlyEnvironmentRead(t *testing.T) {
 	envCalls := map[string]map[string]bool{
 		"os":      {"Getenv": true, "LookupEnv": true, "Environ": true, "ExpandEnv": true},

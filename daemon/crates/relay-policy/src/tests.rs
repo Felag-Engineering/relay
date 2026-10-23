@@ -651,6 +651,7 @@ fn lint_invalid_allow_gets_error_not_anchoring_warning() {
 /// assertion fails loudly if the file ever lands short of the bits asked
 /// for. Mirrors `templates::tests::group_or_world_writable_file_is_refused`
 /// — the two loaders share a trust root and must not drift apart again.
+// Proves DI-12.
 #[test]
 fn loader_rejects_group_or_world_writable() {
     for (mode, bit) in [
@@ -671,6 +672,7 @@ fn loader_rejects_group_or_world_writable() {
     }
 }
 
+// Proves DI-12.
 #[test]
 fn loader_accepts_secure_modes() {
     // Secure modes: no group- or world-write bit; owned by the test

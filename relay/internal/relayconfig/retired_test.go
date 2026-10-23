@@ -30,6 +30,7 @@ func fileExists(p string) bool {
 	return err == nil
 }
 
+// Proves RC-13.
 func TestRetiredEnvMap_CoversEveryRetiredName(t *testing.T) {
 	keys := schemaKeys()
 	for name, key := range retiredEnv {
@@ -76,6 +77,7 @@ func TestRetiredEnvMap_CoversEveryRetiredName(t *testing.T) {
 	}
 }
 
+// Proves RC-13.
 func TestRefuseRetiredEnv_NamesKeyNotValue(t *testing.T) {
 	err := RefuseRetiredEnv([]string{"PATH=/bin", "RELAY_CONTROL_ADDR=hunter2"})
 	if err == nil {

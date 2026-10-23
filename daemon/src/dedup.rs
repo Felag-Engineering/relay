@@ -660,6 +660,7 @@ mod tests {
     /// Dedup survives a simulated reconnect: dropping the in-memory store and reloading
     /// from disk must still recognize the previously-seen task_id.
     /// [AC: dedup across reconnect]
+    // Proves DI-16.
     #[tokio::test]
     async fn dedup_survives_reconnect_reload() {
         let state_dir = TempDir::new("reconnect");
@@ -838,6 +839,7 @@ mod tests {
     /// The ceilings below are **literals, not `DIR_MODE`/`FILE_MODE`**. Deriving them
     /// from the production constants would make the ceiling rise in lockstep with any
     /// edit to those constants, so the check could never fail on a widened one (#509).
+    // Proves DI-13.
     #[test]
     fn marker_permissions_are_restrictive() {
         let state_dir = TempDir::new("perms");
@@ -913,6 +915,7 @@ mod tests {
     /// There is no third outcome, and in particular no outcome where a Task executes
     /// without a marker behind it. That is the whole safety argument for removing the
     /// forced `set_permissions`.
+    // Proves DI-13.
     #[tokio::test]
     async fn umask_tightened_dedup_directory_never_executes_unrecorded() {
         let state_dir = TempDir::new("no-exec-bit");

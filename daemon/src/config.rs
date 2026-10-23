@@ -476,6 +476,7 @@ mod tests {
 
     // --- Relay address resolution -------------------------------------------
 
+    // Proves DI-38.
     #[test]
     fn relay_addr_overrides_persisted_address() {
         let _lock = ENV_LOCK.lock().unwrap();
@@ -808,6 +809,7 @@ mod tests {
         }
     }
 
+    // Proves EN-14.
     #[test]
     fn plan_never_reads_the_join_once_enrolled() {
         let dir = crate::test_support::TempDir::created("plan-enrolled-unread");

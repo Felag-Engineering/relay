@@ -92,6 +92,7 @@ func runCases(t *testing.T, cases []decideCase) {
 
 // TestDecide_Table is RC-15's proof: every could-write and could-read clause, the ACL
 // cases, each filesystem, capability and root slot, and the sticky rule, one group per subtest.
+// Proves RC-8.
 func TestDecide_Table(t *testing.T) {
 	groups := []struct {
 		name string

@@ -275,6 +275,7 @@ func TestEmitCredential_AFailedWriteFailsAndNamesTheToken(t *testing.T) {
 
 // --ttl sets the lifetime of the token either path mints; without it the token
 // does not expire.
+// Proves RC-28.
 func TestInit_TTLAppliesToTheFirstAndTheRecoveredToken(t *testing.T) {
 	st := openInitStore(t)
 	ctx := context.Background()

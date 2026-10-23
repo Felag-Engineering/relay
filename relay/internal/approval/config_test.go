@@ -96,6 +96,7 @@ func loadPlain(path string) (*Gate, error) {
 	return loadOpened(f, path)
 }
 
+// Proves RC-5, RC-8.
 func TestLoadFailsClosed(t *testing.T) {
 	tests := []struct {
 		name string
@@ -204,6 +205,7 @@ func TestLoadFailsClosed(t *testing.T) {
 // TestLoadRefusesSymlink: the gate file decides what needs human approval, so
 // it must be a real file rather than a link someone else controls; the file
 // check refuses the link before anything reads it.
+// Proves RC-5.
 func TestLoadRefusesSymlink(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real.json")
@@ -224,6 +226,7 @@ func TestLoadRefusesSymlink(t *testing.T) {
 
 // TestLoadRefusesDirectory covers the non-regular-file case on the open
 // descriptor rather than on the path.
+// Proves RC-5.
 func TestLoadRefusesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := Load(dir); err == nil {
