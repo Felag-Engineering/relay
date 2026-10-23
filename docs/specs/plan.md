@@ -323,7 +323,7 @@ rather than rediscovered as a gap.
 - **A Relay-internal driver** for unattended routes. Same advance path, no new privilege.
 - **Composing a Plan from the Console.** Console execution is behind the root-owned
   `console_execution` flag and unbuilt (#438).
-- **Staged rollout.** `Stage` is a different axis (`docs/proposals/staged-rollout-and-approval.md`) and the two compose rather
+- **Staged rollout.** `Stage` is a different axis (`roadmap: relay/staged-rollout-and-approval`) and the two compose rather
   than compete.
 - **Policy preflight itself** — the verdicts, the four values, and the query that obtains them:
   `policy-preflight.md`.

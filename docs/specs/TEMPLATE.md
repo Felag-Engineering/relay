@@ -67,7 +67,7 @@ empty.
 ## Out of scope
 
 What this capability deliberately does not do, and where that work lives instead: another
-spec, a proposal under `docs/proposals/`, or an issue. A reviewer checks a diff against this
+spec, a proposal in the private roadmap (named as `roadmap: relay/<slug>`), or an issue. A reviewer checks a diff against this
 section, and it stops an issue quietly widening the capability. Residual risk is not recorded
 here: it lives in the register in `docs/security/threat-model.md`, cited by row where a claim
 depends on it.

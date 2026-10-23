@@ -13,7 +13,7 @@ most of the work.
 
 ```
 an idea (an issue labelled idea, or a sentence)  /propose
-  └─ grill, refine, validate; a proposal under docs/proposals/
+  └─ grill, refine, validate; a proposal in the private roadmap
   └─ you accept or reject ──────────────────────► GATE 0  you decide
 you edit a spec (co-authored, human-driven)      /spec-author
   └─ /spec-check <spec>       docs-only conflict check; a claims diff; the reader review
@@ -84,7 +84,7 @@ dead weight for a human to decide. It reports and never fails.
 | Artifact | Written by | The loop may |
 |---|---|---|
 | An invariant, an ADR, `GLOSSARY.md` | You, co-authored in `/spec-author` | Never touch; escalate |
-| A proposal (`docs/proposals/`) | You, co-authored in `/propose` | Read as context; never cite as authority, never edit |
+| A proposal (private roadmap; decided ones copied to `docs/proposals/`) | You, co-authored in `/propose` | Read as context; never cite as authority, never edit |
 | Spec: Purpose, Surfaces, Behaviour, Refusals, Designed, Out of scope, Retired | You, co-authored in `/spec-author` | Never edit claim text; promote a claim from Designed to Behaviour when its PR lands |
 | Spec: the Proof block, the Status line | The loop, in the implementing PR | Regenerate the block with `make spec-proof`; move the Status date. In a spec still in the earlier shape, add proof rows and never delete one |
 | Design doc (`docs/design/plans/`) | `/design`, by PR | Read; `/milestone-close` deletes it |

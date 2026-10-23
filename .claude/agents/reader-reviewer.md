@@ -13,7 +13,8 @@ design or the code, and you never open `relay/`, `daemon/` or `proto/`.
 ## Read
 
 `docs/adr/0046-two-layer-documents-and-proposals.md`, the template the document follows
-(`docs/specs/TEMPLATE.md` or `docs/proposals/TEMPLATE.md`; for an ADR, ADR-0046 itself is the
+(`docs/specs/TEMPLATE.md`, or for a proposal the roadmap's `TEMPLATE.md` or
+`docs/proposals/TEMPLATE.md`; for an ADR, ADR-0046 itself is the
 model), then the changed document in full, then `git diff` for it if the coordinator names a
 base.
 

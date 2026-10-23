@@ -82,7 +82,7 @@ each is a deliberate no, recorded in `AGENTS.md`.
 - A capability, today, on every surface: the spec in [`docs/specs/`](specs/).
 - The adversaries and the boundaries that hold against them:
   [`docs/security/threat-model.md`](security/threat-model.md).
-- A decision and its reasons: the ADR in [`docs/adr/`](adr/), and the proposal it came from
-  in [`docs/proposals/`](proposals/).
+- A decision and its reasons: the ADR in [`docs/adr/`](adr/), and the decision record behind
+  it in [`docs/proposals/`](proposals/).
 - Running it: [`docs/operations/`](operations/) for a real deployment,
   [`dev-fleet.md`](dev-fleet.md) for a local one.
