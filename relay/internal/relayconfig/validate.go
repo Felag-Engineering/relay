@@ -24,9 +24,17 @@ const (
 	keyWebhookSecFile = "approval.webhook_secret_file"
 	keyWebhookTimeout = "approval.webhook_timeout"
 	keyOAuthIssuer    = "oauth.issuer"
+	keyOAuthAudience  = "oauth.audience"
+	keyOAuthClaim     = "oauth.account_claim"
+	keyOAuthScope     = "oauth.required_scope"
+	keyOAuthPublicURL = "oauth.public_url"
+	keyReadBlastCap   = "reach.read_blast_cap"
+	keyMutateBlastCap = "reach.mutate_blast_cap"
 
 	reasonEmpty = "must not be empty; omit the key instead"
 )
+
+var logLevels = map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
 
 // validator builds a Config from a decoded document, collecting every refusal
 // and warning. A Reason is written from schema facts only: it never includes a
@@ -97,6 +105,16 @@ func (v *validator) text(key string, p *string) (string, bool) {
 	return *p, true
 }
 
+// requiredText is text for a setting that must be present: an absent key is
+// reported with reason, an empty one by text.
+func (v *validator) requiredText(key string, p *string, reason string) (string, bool) {
+	if p == nil {
+		v.failAbsent(key, reason)
+		return "", false
+	}
+	return v.text(key, p)
+}
+
 func (v *validator) requiredPath(key string, p *string) string {
 	if p == nil {
 		v.failAbsent(key, "must be set; it has no default")
@@ -137,11 +155,7 @@ func (v *validator) address(key string, p *string, def string, needHost bool) st
 }
 
 func (v *validator) hostname(p *string) string {
-	s, ok := v.text(keyHostname, p)
-	if p == nil {
-		v.failAbsent(keyHostname, "must be set; it has no default")
-		return ""
-	}
+	s, ok := v.requiredText(keyHostname, p, "must be set; it has no default")
 	if !ok {
 		return ""
 	}
@@ -205,10 +219,10 @@ func (v *validator) buildOAuth(c *Config, d oauthDoc) {
 		key string
 		p   *string
 	}{
-		{"oauth.audience", d.Audience},
-		{"oauth.account_claim", d.AccountClaim},
-		{"oauth.required_scope", d.RequiredScope},
-		{"oauth.public_url", d.PublicURL},
+		{keyOAuthAudience, d.Audience},
+		{keyOAuthClaim, d.AccountClaim},
+		{keyOAuthScope, d.RequiredScope},
+		{keyOAuthPublicURL, d.PublicURL},
 	}
 
 	if issuer, ok := v.text(keyOAuthIssuer, d.Issuer); ok {
@@ -227,22 +241,19 @@ func (v *validator) buildOAuth(c *Config, d oauthDoc) {
 	}
 
 	c.OAuth.AccountClaim = defaultAccountClaim
-	if s, ok := v.text("oauth.account_claim", d.AccountClaim); ok {
+	if s, ok := v.text(keyOAuthClaim, d.AccountClaim); ok {
 		c.OAuth.AccountClaim = s
 	}
-	if s, ok := v.text("oauth.audience", d.Audience); ok {
+	const setWithIssuer = "must be set when oauth.issuer is set"
+	if s, ok := v.requiredText(keyOAuthAudience, d.Audience, setWithIssuer); ok {
 		c.OAuth.Audience = s
-	} else if d.Audience == nil {
-		v.failAbsent("oauth.audience", "must be set when oauth.issuer is set")
 	}
-	if s, ok := v.text("oauth.public_url", d.PublicURL); ok {
-		c.OAuth.PublicURL = v.httpURL("oauth.public_url", s)
-	} else if d.PublicURL == nil {
-		v.failAbsent("oauth.public_url", "must be set when oauth.issuer is set")
+	if s, ok := v.requiredText(keyOAuthPublicURL, d.PublicURL, setWithIssuer); ok {
+		c.OAuth.PublicURL = v.httpURL(keyOAuthPublicURL, s)
 	}
-	if s, ok := v.text("oauth.required_scope", d.RequiredScope); ok {
+	if s, ok := v.text(keyOAuthScope, d.RequiredScope); ok {
 		if strings.ContainsAny(s, " \t\r\n") {
-			v.fail("oauth.required_scope", "must be one scope, with no whitespace")
+			v.fail(keyOAuthScope, "must be one scope, with no whitespace")
 		} else {
 			c.OAuth.RequiredScope = s
 		}
@@ -294,10 +305,6 @@ func httpURLProblem(s string) string {
 	return ""
 }
 
-// webhookURLProblem checks only the shape. The https-unless-loopback rule is
-// approvalnotify's, which still runs when the notifier is built.
-func webhookURLProblem(s string) string { return httpURLProblem(s) }
-
 func (v *validator) buildApproval(c *Config, d approvalDoc) {
 	c.Approval.GateRulesPath = v.path("approval.gate_rules_path", d.GateRulesPath)
 	c.Approval.WebhookURL = v.secret(keyWebhookURL, keyWebhookURLFile, d.WebhookURL, d.WebhookURLFile, true)
@@ -339,7 +346,7 @@ func (v *validator) secret(key, fileKey string, inline, file *string, isURL bool
 			v.fail(key, reasonEmpty)
 			return Secret{}
 		}
-		if isURL && webhookURLProblem(s) != "" {
+		if isURL && httpURLProblem(s) != "" { // shape only; approvalnotify owns https-unless-loopback
 			v.fail(key, "must be "+absoluteHTTPURL)
 			return Secret{}
 		}
@@ -355,8 +362,7 @@ func (v *validator) secret(key, fileKey string, inline, file *string, isURL bool
 func (v *validator) buildLog(c *Config, d logDoc) {
 	c.Log.Level, c.Log.Format = defaultLogLevel, defaultLogFormat
 	if s, ok := v.text("log.level", d.Level); ok {
-		levels := map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
-		if l, known := levels[s]; known {
+		if l, known := logLevels[s]; known {
 			c.Log.Level = l
 		} else {
 			v.fail("log.level", "must be one of debug, info, warn, error")
@@ -373,8 +379,8 @@ func (v *validator) buildLog(c *Config, d logDoc) {
 }
 
 func (v *validator) buildReach(c *Config, d reachDoc) {
-	c.Reach.ReadBlastCap = v.integer("reach.read_blast_cap", d.ReadBlastCap, capability.DefaultReadCap, 1)
-	c.Reach.MutateBlastCap = v.integer("reach.mutate_blast_cap", d.MutateBlastCap, capability.DefaultMutateCap, 1)
+	c.Reach.ReadBlastCap = v.integer(keyReadBlastCap, d.ReadBlastCap, capability.DefaultReadCap, 1)
+	c.Reach.MutateBlastCap = v.integer(keyMutateBlastCap, d.MutateBlastCap, capability.DefaultMutateCap, 1)
 	c.Reach.DispatchConcurrency = v.integer("reach.dispatch_concurrency", d.DispatchConcurrency, capability.DefaultDispatchConcurrency, 1)
 	if s, ok := v.text("reach.min_daemon_version", d.MinDaemonVersion); ok {
 		if registry.ValidVersion(s) {
@@ -385,9 +391,9 @@ func (v *validator) buildReach(c *Config, d reachDoc) {
 	}
 
 	if c.Reach.MutateBlastCap > c.Reach.ReadBlastCap {
-		key := "reach.read_blast_cap"
+		key := keyReadBlastCap
 		if d.MutateBlastCap != nil {
-			key = "reach.mutate_blast_cap"
+			key = keyMutateBlastCap
 		}
 		v.warns = append(v.warns, Warning{Key: key, Line: v.idx.of(key),
 			Reason: "the mutate cap is above the read cap; a mutate normally reaches fewer Nodes than a read"})

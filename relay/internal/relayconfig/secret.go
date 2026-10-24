@@ -106,7 +106,7 @@ func (s *Secret) resolve(read func(path string) ([]byte, error)) *Error {
 		return &Error{Key: old.key, Line: old.line, Reason: "the file is empty"}
 	}
 	if old.key == keyWebhookURLFile {
-		if reason := webhookURLProblem(value); reason != "" {
+		if reason := httpURLProblem(value); reason != "" {
 			return &Error{Key: old.key, Line: old.line, Reason: "the file does not hold " + reason}
 		}
 	}
