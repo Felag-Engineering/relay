@@ -339,8 +339,9 @@ type Deny struct {
 	// daemon's engine (never re-evaluated on the Relay, invariant 12).
 	PolicyHref string
 
-	// DraftRuleHref links to the Policy-fix screen (spec 07) pre-loaded with
-	// this deny — one deny in, one minimal rule out.
+	// DraftRuleHref links to the Policy-fix screen, cut from the MVP
+	// (docs/design/console/README.md), pre-loaded with this deny — one deny in,
+	// one minimal rule out.
 	DraftRuleHref string
 
 	// Boundary selects the capability layer's framing for this deny. It has no
@@ -366,7 +367,7 @@ func (d Deny) Location() string {
 // and adds nothing: a Console-specific sentence would be the third spelling
 // the shared mapping exists to prevent, and the Console's real advantage over
 // an MCP caller is expressed as affordances — PolicyHref, and DraftRuleHref
-// once spec 07 is built — not as prose.
+// if the Policy-fix screen is ever built — not as prose.
 //
 // It returns an error rather than "" so an unset Boundary aborts the render:
 // renderScreen buffers and returns a 500 without a body byte, and logs the
@@ -484,8 +485,7 @@ func (p Plan) countVerdicts(allowed bool) int {
 // StepUp is a re-authentication prompt.
 //
 // A session proves a human authorised the SESSION; step-up proves a human
-// intended THIS ACTION. It is the reason ADR-0026 could give a browser an
-// execution surface at all.
+// intended THIS ACTION.
 //
 // Action is required and is the whole point: "confirm it is you" with no
 // object is how people are trained to type their password into anything. The

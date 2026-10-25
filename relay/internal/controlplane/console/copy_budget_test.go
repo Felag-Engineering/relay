@@ -627,12 +627,12 @@ func longAttributes(content string) []string {
 
 // --- T2: every screen is within its budget ----------------------------------
 
-// copyBudgetFixture is the sweep fixture with execution on, every Node's
+// copyBudgetFixture is the sweep fixture with every Node's
 // certificate validity recorded and node-web-1's Policy reported: the state a
 // healthy Relay is in, so each screen's budget is its standing copy and not a
 // situational message the fixture happened to provoke.
 func copyBudgetFixture() Deps {
-	d := withExecution(sweepFixture(), true)
+	d := sweepFixture()
 	nodes := append([]registry.Node(nil), fleetNodes(d)...)
 	for i := range nodes {
 		nodes[i].CertNotAfter = testNow.Add(30 * 24 * time.Hour)
@@ -662,7 +662,6 @@ var copyBudgets = map[string]int{
 	"/console/accounts/{account_name}": 20,
 	"/console/new-account":             5,
 	"/console/access":                  0,
-	"/console/run":                     10,
 	"day one":                          75,
 
 	"/console/accounts/{account_id}/disable":                  20,
@@ -762,7 +761,7 @@ func noteSweepPages(t *testing.T) []sweepPage {
 	for _, fixture := range []struct {
 		name string
 		d    Deps
-	}{{"sweep", withExecution(sweepFixture(), true)}, {"budget", copyBudgetFixture()}} {
+	}{{"sweep", sweepFixture()}, {"budget", copyBudgetFixture()}} {
 		for _, role := range []accounts.Role{accounts.RoleAdmin, accounts.RoleOperator, accounts.RoleViewer} {
 			h := newTestHandler(fixture.d, role)
 			for _, path := range walkableScreens(routesFor(fixture.d, role), fixtureIDs) {
@@ -773,7 +772,7 @@ func noteSweepPages(t *testing.T) []sweepPage {
 	add := func(name, path string, d Deps, role accounts.Role, status int) {
 		pages = append(pages, sweepPage{name, path, newTestHandler(d, role), status})
 	}
-	sweep := withExecution(sweepFixture(), true)
+	sweep := sweepFixture()
 	for _, q := range []string{"?window=fortnight", "?kind=nonesuch", "?q=nginx", "?outcome=failure", "?ac=0"} {
 		add("activity", "/console/activity"+q, sweep, accounts.RoleAdmin, http.StatusOK)
 	}

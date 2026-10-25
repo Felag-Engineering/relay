@@ -1026,9 +1026,6 @@ func reducingActs() []writeAct {
 // whole package go green. Routes is the thing a request actually reaches, so
 // it is the thing the classification has to be checked against.
 //
-// Execution is forced on because Routes returns a SMALLER slice when it is
-// off; a future write route gated behind that flag must still be classified.
-//
 // "Write" is isSafeMethod's complement, deliberately: that is the same
 // predicate Secure (security.go) uses to decide what needs a CSRF token, so
 // this guard and the middleware cannot drift apart on what counts as a write.
@@ -1048,7 +1045,6 @@ func reducingActs() []writeAct {
 // for it.
 func consoleWriteRoutePatterns() []string {
 	d := sweepFixture()
-	d.Execution = true
 
 	var out []string
 	for _, r := range Routes(d) {

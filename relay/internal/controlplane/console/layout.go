@@ -190,27 +190,3 @@ func page(d Deps, w http.ResponseWriter, r *http.Request, title string) (Page, b
 }
 
 func (p Page) logger() *slog.Logger { return logctx.Or(p.log) }
-
-// placeholder renders the shell around a screen that has not been built yet,
-// naming the specification that will replace it.
-//
-// This is deliberate rather than a stub left lying around: it makes the shell —
-// the navigation projection, the security headers, the layout — real and
-// reviewable now, and it turns every subsequent screen issue into "replace one
-// placeholder", which is a much smaller diff to review than "add a screen and
-// the plumbing it needs".
-func placeholder(title, spec string) func(Deps) http.HandlerFunc {
-	return func(d Deps) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			p, ok := page(d, w, r, title)
-			if !ok {
-				return
-			}
-			p.Content = template.HTML(`<div class="placeholder">` + //nolint:gosec // G203: a constant fragment; the one variable part is HTMLEscapeString'd
-				`<p>This screen is not built yet.</p>` +
-				`<p>Its specification is <code>docs/design/console/` +
-				template.HTMLEscapeString(spec) + `</code>.</p></div>`)
-			Render(w, p)
-		}
-	}
-}

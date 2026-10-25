@@ -483,14 +483,14 @@ func TestPlan_ADispatchedPlanPredictsNothing(t *testing.T) {
 // password into anything.
 func TestStepUp_NamesWhatItAuthorises(t *testing.T) {
 	out := render(t, "step-up", StepUp{
-		Action:     "Restart nginx on 412 Nodes",
-		Detail:     "sha256:4b18c02",
-		FormAction: "/console/run/apply",
+		Action:     "Raise acct-mike to admin",
+		Detail:     "operator to admin",
+		FormAction: "/console/accounts/acct-mike/role",
 		CSRFToken:  "token-value",
 		WindowText: "This confirmation lasts 5 minutes.",
 	})
 
-	if !strings.Contains(out, "Restart nginx on 412 Nodes") {
+	if !strings.Contains(out, "Raise acct-mike to admin") {
 		t.Errorf("the step-up prompt does not name the action: %s", out)
 	}
 	if !strings.Contains(out, `type="password"`) {

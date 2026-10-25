@@ -1015,9 +1015,9 @@ func newTaskRow(t capability.TaskRow, jobReadClass bool, operation string) taskR
 			RuleClipped: clipped,
 			PolicyHref:  "/console/nodes/" + t.NodeID,
 			// DraftRuleHref is deliberately empty: it targets the Policy fix
-			// screen (spec 07), which is not built in v0.6.0, and a link to a
-			// screen that does not exist is worse than no link. See spec 13's
-			// annotation.
+			// screen, which is cut from the MVP (docs/design/console/README.md),
+			// and a link to a screen that does not exist is worse than no link.
+			// See spec 13's annotation.
 			Boundary: DenyBoundaryApply,
 		}
 		return row

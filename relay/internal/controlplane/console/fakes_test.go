@@ -962,14 +962,6 @@ func fleetNodes(d Deps) []registry.Node {
 	return q.nodes
 }
 
-// withExecution returns d with the console_execution mirror set, so a test
-// reads as "this Relay has execution on" rather than as a struct literal that
-// has to repeat every seam.
-func withExecution(d Deps, on bool) Deps {
-	d.Execution = on
-	return d
-}
-
 // sweepFixture is fleetFixture (screens_test.go) wired with the objects the
 // parameterised routes name in fixtureIDs: job-1 and ap-1. Node detail already
 // resolves against fleetFixture's node-web-1.

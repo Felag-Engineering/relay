@@ -28,7 +28,7 @@ func TestConsole_WriteScreenSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d := withExecution(sweepFixture(), true)
+	d := sweepFixture()
 	role := accounts.RoleAdmin
 	h := newTestHandler(d, role)
 	written := 0

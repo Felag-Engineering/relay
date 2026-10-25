@@ -178,6 +178,58 @@ func TestConsoleSurface_UnwiredSeamsCrossTheBoundaryAsNil(t *testing.T) {
 	}
 }
 
+// TestConsoleSurface_MountsNoRunRoute proves ADR-0052 decision 2 at the
+// composition root, which builds the Console's Deps: the mounted Console serves
+// no run route, and a request for one is the ordinary 404.
+//
+// Served requests only. The outer mux holds the Console as one "/console/"
+// subtree, so a pattern lookup resolves a mounted inner route and an absent
+// one identically and could not fail.
+func TestConsoleSurface_MountsNoRunRoute(t *testing.T) {
+	mux := http.NewServeMux()
+	consoleSurface{}.Mount(mux, surfaceDeps{now: func() time.Time { return time.Time{} }})
+	handler := controlplane.NewAuthenticator(stubVerifier{}).Middleware(mux)
+
+	serve := func(method, path string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer "+stubCredential)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Positive control: a request reaches the inner mux and is answered by a
+	// Console route, so the 404s below are the Console's own.
+	if rec := serve(http.MethodGet, "/console/events?kinds=enrollment"); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /console/events with no event seam wired = %d, want 503", rec.Code)
+	}
+
+	wantGet := serve(http.MethodGet, "/console/nonesuch")
+	wantOptions := serve(http.MethodOptions, "/console/nonesuch")
+	if wantGet.Code != http.StatusNotFound || wantOptions.Code != http.StatusNotFound {
+		t.Fatalf("/console/nonesuch = %d, OPTIONS = %d, want 404 for both", wantGet.Code, wantOptions.Code)
+	}
+
+	for _, c := range []struct {
+		method, path string
+		want         *httptest.ResponseRecorder
+	}{
+		{http.MethodGet, "/console/run", wantGet},
+		{http.MethodGet, "/console/run/", wantGet},
+		{http.MethodOptions, "/console/run", wantOptions},
+	} {
+		got := serve(c.method, c.path)
+		if got.Code != http.StatusNotFound {
+			t.Errorf("%s %s = %d, want 404 — the Console mounts no run route", c.method, c.path, got.Code)
+			continue
+		}
+		if got.Body.String() != c.want.Body.String() {
+			t.Errorf("%s %s is not the Console's ordinary 404 page", c.method, c.path)
+		}
+	}
+}
+
 // stubVerifier authenticates one credential, so a test can drive a mounted
 // surface through the REAL authentication boundary without standing up an
 // Account store.

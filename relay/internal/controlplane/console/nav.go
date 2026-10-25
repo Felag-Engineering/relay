@@ -7,21 +7,21 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 )
 
-// NavGroup is one of the navigation's three headings. The grouping is
+// NavGroup is one of the navigation's two headings. The grouping is
 // load-bearing rather than decorative: it makes the model legible (observe,
-// then act, then administer) and it makes the ABSENCE of a settings section
-// visible, which invariant 11 depends on nobody quietly adding.
+// then administer) and it makes the ABSENCE of a settings section, and of any
+// execution surface, visible (00-foundations.md "Navigation"). Invariant 11
+// depends on nobody quietly adding a settings section.
 type NavGroup string
 
 const (
 	NavObserve    NavGroup = "Observe"
-	NavAct        NavGroup = "Act"
 	NavAdminister NavGroup = "Administer"
 )
 
 // navGroupOrder fixes the order the headings render in. It is not alphabetical
 // and must not become alphabetical: the sequence is the teaching.
-var navGroupOrder = []NavGroup{NavObserve, NavAct, NavAdminister}
+var navGroupOrder = []NavGroup{NavObserve, NavAdminister}
 
 // NavEntry describes a route's place in the navigation. The zero value means
 // the route is reachable but not advertised — node detail and job detail are
@@ -55,8 +55,8 @@ type NavSection struct {
 }
 
 // Slug is the section's id-safe name, used to point each list's
-// aria-labelledby at its own heading. Without it the three lists are announced
-// as three anonymous lists, and the grouping — which nav.go calls the teaching
+// aria-labelledby at its own heading. Without it the two lists are announced
+// as two anonymous lists, and the grouping — which nav.go calls the teaching
 // — reaches a sighted operator and nobody else.
 func (s NavSection) Slug() string { return strings.ToLower(string(s.Group)) }
 
@@ -68,8 +68,8 @@ func (s NavSection) Slug() string { return strings.ToLower(string(s.Group)) }
 // specification cares about fall out of it rather than being maintained by
 // hand:
 //
-//   - With console_execution off, Routes never returns the execution routes, so
-//     Run cannot appear here. Absent, not disabled (ADR-0026 decision 5).
+//   - No route in the table executes, so no Run item can be projected
+//     (ADR-0052).
 //   - A viewer's navigation is structurally smaller, because a route whose
 //     MinRole they do not meet is not projected.
 //

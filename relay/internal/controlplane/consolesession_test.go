@@ -171,19 +171,16 @@ func TestConsoleSession_DoesNotAuthenticateTheControlAPI(t *testing.T) {
 	}
 }
 
-// The other half, and the one that must not regress when v0.7.0 adds the
-// execution composer: the cookie still authenticates the Console itself,
-// including the routes ADR-0026 will mount under the same prefix.
+// The other half: the cookie still authenticates every Console route.
 func TestConsoleSession_AuthenticatesTheConsole(t *testing.T) {
 	onConsole := []struct{ method, target string }{
 		{http.MethodGet, "/console/"},
 		{http.MethodGet, "/console"}, // net/http redirects this to /console/
 		{http.MethodGet, "/console/nodes/node-1"},
 		{http.MethodPost, "/console/logout"},
-		// v0.7.0's execution surface (ADR-0026): mounted under the same
-		// prefix, so a path-scoped cookie still reaches it.
-		{http.MethodGet, "/console/run"},
-		{http.MethodPost, "/console/run/apply"},
+		// a read and a write route under the same prefix
+		{http.MethodGet, "/console/accounts"},
+		{http.MethodPost, "/console/jobs/job-1/cancel"},
 	}
 	for _, c := range onConsole {
 		t.Run(c.target, func(t *testing.T) {

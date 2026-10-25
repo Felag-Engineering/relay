@@ -112,24 +112,23 @@ func request(t *testing.T, h http.Handler, method, path string) *httptest.Respon
 // implementation is most likely to pass while getting wrong: a greyed-out
 // control also "cannot be used", and reads to a reviewer as compliant.
 //
-// ADR-0009's insight, which ADR-0026 preserved as the reason the flag exists at
-// all, is that ABSENT BEATS FORBIDDEN. So the assertion is about what is not
-// drawn, not about what refuses.
+// ADR-0009's insight is that ABSENT BEATS FORBIDDEN. So the assertion is about
+// what is not drawn, not about what refuses.
 //
-// Two of the four items in the `absent` list (Policy, Add Nodes) still hold
-// for EVERY role, not only a viewer, because #464 unmounted them — for those
-// this test still holds, but it is not the only thing keeping the property
-// true.
+// Three of the six items in the `absent` list still hold for EVERY role, not
+// only a viewer: Run, because the Console has no execution route (ADR-0052),
+// and Policy and Add Nodes, which #464 unmounted. For those this test still
+// holds, but it is not the only thing keeping the property true.
 //
 // Accounts is now the first item here that is absent FOR THE REASON THIS TEST
 // IS ABOUT. #654 mounted GET /console/accounts at admin, so the screen exists
 // and an admin's nav draws it; a viewer's does not, because
 // [Route.ReachableBy] excludes the route from [routesFor] and Nav is a
-// projection of that. When #438/#448/#475 re-add the rest with a real MinRole
-// they will join it, and this test would fail first if the mount-time gate
-// stopped being what keeps a viewer's Console structurally smaller.
+// projection of that. When #448/#475 re-add the rest with a real MinRole they
+// will join it, and this test would fail first if the mount-time gate stopped
+// being what keeps a viewer's Console structurally smaller.
 func TestConsole_ViewerNavigationIsStructurallySmaller(t *testing.T) {
-	h := newTestHandler(withExecution(renderableDeps(), true), accounts.RoleViewer)
+	h := newTestHandler(renderableDeps(), accounts.RoleViewer)
 	// Scoped to the navigation, not the whole page. The assertion is about what
 	// is DRAWN IN THE NAV, and a screen is free to use the same words for its
 	// own purposes — the fleet view's fingerprint column is headed "Policy",
@@ -152,7 +151,7 @@ func TestConsole_ViewerNavigationIsStructurallySmaller(t *testing.T) {
 	// Observe lists exactly Fleet and Activity: Agents (#787) and Read egress
 	// (#828) were both retired into Activity. Derived from Nav, not from HTML.
 	observe := map[string]bool{}
-	for _, section := range Nav(withExecution(renderableDeps(), true), accounts.RoleViewer, "") {
+	for _, section := range Nav(renderableDeps(), accounts.RoleViewer, "") {
 		if section.Group != NavObserve {
 			continue
 		}
@@ -181,29 +180,27 @@ func TestConsole_ViewerNavigationIsStructurallySmaller(t *testing.T) {
 func TestConsole_AgentsScreenIsNotMounted(t *testing.T) {
 	const retired = "/console/agents"
 	for _, role := range []accounts.Role{accounts.RoleViewer, accounts.RoleOperator, accounts.RoleAdmin} {
-		for _, execution := range []bool{false, true} {
-			d := withExecution(sweepFixture(), execution)
-			for _, r := range append(routesFor(d, role), Routes(d)...) {
-				if r.Path == retired {
-					t.Errorf("%s/execution=%v: a route is mounted at %s", role, execution, retired)
-				}
+		d := sweepFixture()
+		for _, r := range append(routesFor(d, role), Routes(d)...) {
+			if r.Path == retired {
+				t.Errorf("%s: a route is mounted at %s", role, retired)
 			}
+		}
 
-			h := newTestHandler(d, role)
-			for _, path := range []string{retired, retired + "?account=" + sweepMachineAccountID} {
-				if got := get(t, h, path).Code; got != http.StatusNotFound {
-					t.Errorf("%s/execution=%v: GET %s = %d, want 404 and never a redirect", role, execution, path, got)
-				}
+		h := newTestHandler(d, role)
+		for _, path := range []string{retired, retired + "?account=" + sweepMachineAccountID} {
+			if got := get(t, h, path).Code; got != http.StatusNotFound {
+				t.Errorf("%s: GET %s = %d, want 404 and never a redirect", role, path, got)
 			}
+		}
 
-			nav := navOf(get(t, h, "/console/").Body.String())
-			if strings.Contains(nav, ">Agents<") {
-				t.Errorf("%s/execution=%v: the navigation still names Agents", role, execution)
-			}
-			for _, present := range []string{">Fleet<", ">Activity<"} {
-				if !strings.Contains(nav, present) {
-					t.Errorf("%s/execution=%v: the navigation is missing %s", role, execution, present)
-				}
+		nav := navOf(get(t, h, "/console/").Body.String())
+		if strings.Contains(nav, ">Agents<") {
+			t.Errorf("%s: the navigation still names Agents", role)
+		}
+		for _, present := range []string{">Fleet<", ">Activity<"} {
+			if !strings.Contains(nav, present) {
+				t.Errorf("%s: the navigation is missing %s", role, present)
 			}
 		}
 	}
@@ -215,7 +212,7 @@ func TestConsole_AgentsScreenIsNotMounted(t *testing.T) {
 // is covered. The 404 page is walked too, since it renders the navigation.
 func TestConsole_NoRenderedScreenLinksToTheRetiredAgentsScreen(t *testing.T) {
 	const retired = "/console/agents"
-	d := withExecution(sweepFixture(), true)
+	d := sweepFixture()
 	ok := 0
 	for _, role := range sessionRoles {
 		h := newTestHandler(d, role)
@@ -242,25 +239,98 @@ func TestConsole_NoRenderedScreenLinksToTheRetiredAgentsScreen(t *testing.T) {
 	}
 }
 
-// TestConsole_ExecutionOffMakesTheComposerAbsent is ADR-0026 decision 5: when
-// console_execution is off "the execution routes are not mounted and the
-// composer is not rendered — an absent capability, not an RBAC refusal,
-// preserving ADR-0009's original property verbatim for deployments that want
-// it."
-//
-// 404 rather than 403 is the whole point. A 403 would confirm the route exists.
-func TestConsole_ExecutionOffMakesTheComposerAbsent(t *testing.T) {
-	off := newTestHandler(withExecution(renderableDeps(), false), accounts.RoleAdmin)
-	if got := get(t, off, "/console/run").Code; got != http.StatusNotFound {
-		t.Errorf("GET /console/run with console_execution off = %d, want 404 — the route must be unmounted, not refused", got)
+// TestConsole_HasNoExecutionSurface is ADR-0052 decision 2 at the route table:
+// the Console runs no command, so no session at any role has a Run item or a
+// mounted execution route (11-console-shell.md). A request for /console/run is
+// the ordinary 404, byte-identical to a path that was never mounted, for every
+// method; a 403 would confirm the route exists.
+func TestConsole_HasNoExecutionSurface(t *testing.T) {
+	if _, ok := reflect.TypeOf(Deps{}).FieldByName("Execution"); ok {
+		t.Fatal("Deps has an Execution field — the Console has no execution switch to mirror")
 	}
-	if body := get(t, off, "/console/").Body.String(); strings.Contains(body, ">Run<") {
-		t.Error("navigation advertises Run with console_execution off")
+	// OAuthConfigured is the one bool on Deps (seams.go); a switch restored
+	// under another name would add a second.
+	depsType := reflect.TypeOf(Deps{})
+	for i := 0; i < depsType.NumField(); i++ {
+		if f := depsType.Field(i); f.Type.Kind() == reflect.Bool && f.Name != "OAuthConfigured" {
+			t.Errorf("Deps.%s is a bool; OAuthConfigured is the only switch-shaped field the Console takes", f.Name)
+		}
 	}
 
-	on := newTestHandler(withExecution(renderableDeps(), true), accounts.RoleAdmin)
-	if got := get(t, on, "/console/run").Code; got != http.StatusOK {
-		t.Errorf("GET /console/run with console_execution on = %d, want 200", got)
+	isRun := func(path string) bool {
+		return path == "/console/run" || strings.HasPrefix(path, "/console/run/")
+	}
+	d := sweepFixture()
+	for _, r := range Routes(d) {
+		if isRun(r.Path) {
+			t.Errorf("Routes mounts %s", r.Pattern())
+		}
+	}
+	for _, role := range sessionRoles {
+		for _, r := range routesFor(d, role) {
+			if isRun(r.Path) {
+				t.Errorf("role %s: routesFor reaches %s", role, r.Pattern())
+			}
+		}
+
+		h := newTestHandler(d, role)
+		want := get(t, h, "/console/nonesuch")
+		wantOptions := request(t, h, http.MethodOptions, "/console/nonesuch")
+		if want.Code != http.StatusNotFound || wantOptions.Code != http.StatusNotFound {
+			t.Fatalf("role %s: /console/nonesuch = %d, OPTIONS = %d, want 404 for both", role, want.Code, wantOptions.Code)
+		}
+		for _, c := range []struct {
+			method, path string
+			baseline     *httptest.ResponseRecorder
+		}{
+			{http.MethodGet, "/console/run", want},
+			{http.MethodGet, "/console/run/", want},
+			{http.MethodGet, "/console/run/apply", want},
+			{http.MethodOptions, "/console/run", wantOptions},
+		} {
+			got := request(t, h, c.method, c.path)
+			if got.Code != http.StatusNotFound {
+				t.Errorf("role %s: %s %s = %d, want 404 — the route must be unmounted, not refused", role, c.method, c.path, got.Code)
+				continue
+			}
+			if !bytes.Equal(got.Body.Bytes(), c.baseline.Body.Bytes()) {
+				t.Errorf("role %s: %s %s is not the Console's ordinary 404 page", role, c.method, c.path)
+			}
+		}
+
+		// A POST under newTestHandler is refused by Secure's CSRF check
+		// before routing, which would prove nothing; see
+		// TestConsole_ARouteAboveTheSessionRoleIsAbsent.
+		unchecked := newTestHandlerSkippingCSRF(d, role)
+		wantPost := postSkippingCSRF(t, unchecked, "/console/no-such-route")
+		if wantPost.Code != http.StatusNotFound {
+			t.Fatalf("role %s: POST /console/no-such-route = %d, want 404", role, wantPost.Code)
+		}
+		for _, path := range []string{"/console/run", "/console/run/apply"} {
+			got := postSkippingCSRF(t, unchecked, path)
+			if got.Code != http.StatusNotFound {
+				t.Errorf("role %s: POST %s = %d, want 404", role, path, got.Code)
+				continue
+			}
+			if !bytes.Equal(got.Body.Bytes(), wantPost.Body.Bytes()) {
+				t.Errorf("role %s: POST %s is not the Console's ordinary 404 page", role, path)
+			}
+		}
+
+		for _, sec := range Nav(d, role, "") {
+			if sec.Group == NavGroup("Act") {
+				t.Errorf("role %s: Nav draws an Act group", role)
+			}
+			for _, item := range sec.Items {
+				if item.Label == "Run" {
+					t.Errorf("role %s: Nav carries a Run item", role)
+				}
+			}
+		}
+		nav := navOf(get(t, h, "/console/").Body.String())
+		if strings.Contains(nav, ">Run<") || strings.Contains(nav, ">Act<") {
+			t.Errorf("role %s: the navigation draws Run or an Act heading", role)
+		}
 	}
 }
 
@@ -272,10 +342,10 @@ func TestConsole_ExecutionOffMakesTheComposerAbsent(t *testing.T) {
 // The whole ban list — the <script> shape rule, hx-on:, javascript:, every
 // inline handler attribute, and an inline style in either quote form — now
 // lives in assertCSPClean (no_inline_script_test.go); this test keeps its
-// name and its purpose, the shell rendered as admin with execution on, and
-// simply stops carrying its own copy of the list.
+// name and its purpose, the shell rendered as admin, and simply stops carrying
+// its own copy of the list.
 func TestConsole_NoInlineScript(t *testing.T) {
-	h := newTestHandler(withExecution(renderableDeps(), true), accounts.RoleAdmin)
+	h := newTestHandler(renderableDeps(), accounts.RoleAdmin)
 	body := get(t, h, "/console/").Body.String()
 
 	assertCSPClean(t, "/console/", body)
@@ -337,7 +407,7 @@ func TestConsole_CSRFRefusesUnsafeMethodWithoutToken(t *testing.T) {
 // Navigation destinations are pages, so they are GET by definition; this fails
 // the day someone gives a nav entry a mutating method.
 func TestConsole_NoMutatingGet(t *testing.T) {
-	for _, r := range Routes(withExecution(renderableDeps(), true)) {
+	for _, r := range Routes(renderableDeps()) {
 		if r.Nav.Label != "" && r.Method != http.MethodGet {
 			t.Errorf("navigation destination %q uses %s — a destination is a page and must be GET", r.Nav.Label, r.Method)
 		}
@@ -374,54 +444,49 @@ func TestConsole_UnauthenticatedIsRefused(t *testing.T) {
 //   - a constrained LITERAL segment beneath a constrained "{id}" pattern of
 //     the same shape, the "/console/nodes/add" hazard console.go documents.
 //
-// A route-table edit is therefore not a test-time nit, and nothing else in
-// this package calls Register with both Execution settings. This does.
+// A route-table edit is therefore not a test-time nit.
 func TestConsole_RegisterMountsEveryRouteWithoutPatternConflict(t *testing.T) {
-	for _, execution := range []bool{true, false} {
-		d := withExecution(sweepFixture(), execution)
+	d := sweepFixture()
 
-		// The shared-path hazard, checked FIRST and by hand, because it is
-		// the one this test can name better than net/http can: a failure here
-		// prints both colliding routes. Register panics on it too, and a
-		// panic ends the test before anything else runs.
-		owner := map[string]Route{}
-		constrained := 0
-		for _, r := range Routes(d) {
-			if !r.constrainsReach() {
-				continue
-			}
-			constrained++
-			if prior, taken := owner[r.Path]; taken {
-				t.Errorf("execution=%v: %q and %q both constrain reach and share the path %q — "+
-					"Register mounts methodMismatch on that BARE path once per route, so it would "+
-					"register the pattern twice and net/http panics at registration",
-					execution, prior.Pattern(), r.Pattern(), r.Path)
-			}
-			owner[r.Path] = r
+	// The shared-path hazard, checked FIRST and by hand, because it is
+	// the one this test can name better than net/http can: a failure here
+	// prints both colliding routes. Register panics on it too, and a
+	// panic ends the test before anything else runs.
+	owner := map[string]Route{}
+	constrained := 0
+	for _, r := range Routes(d) {
+		if !r.constrainsReach() {
+			continue
 		}
-		if constrained == 0 {
-			t.Fatalf("execution=%v: no route constrains reach — this check is inspecting nothing", execution)
+		constrained++
+		if prior, taken := owner[r.Path]; taken {
+			t.Errorf("%q and %q both constrain reach and share the path %q — "+
+				"Register mounts methodMismatch on that BARE path once per route, so it would "+
+				"register the pattern twice and net/http panics at registration",
+				prior.Pattern(), r.Pattern(), r.Path)
 		}
-
-		// And the whole table through the real Register, which is the only
-		// thing that catches the OTHER hazard: a constrained literal segment
-		// beneath a constrained "{id}" pattern of the same shape — the
-		// "/console/nodes/add" case console.go documents, which no
-		// path-equality check can see.
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					t.Errorf("Register(execution=%v) panicked: %v\n"+
-						"net/http refuses conflicting patterns at registration, so this is a Relay "+
-						"that does not START — not a test-time nit. Register mounts methodMismatch "+
-						"on the BARE r.Path for every route constrainsReach() is true for; a "+
-						"constrained literal may not sit under a constrained {id} of the same "+
-						"shape (console.go).", execution, r)
-				}
-			}()
-			Register(http.NewServeMux(), d)
-		}()
+		owner[r.Path] = r
 	}
+	if constrained == 0 {
+		t.Fatal("no route constrains reach — this check is inspecting nothing")
+	}
+
+	// And the whole table through the real Register, which is the only
+	// thing that catches the OTHER hazard: a constrained literal segment
+	// beneath a constrained "{id}" pattern of the same shape — the
+	// "/console/nodes/add" case console.go documents, which no
+	// path-equality check can see.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("Register panicked: %v\n"+
+				"net/http refuses conflicting patterns at registration, so this is a Relay "+
+				"that does not START — not a test-time nit. Register mounts methodMismatch "+
+				"on the BARE r.Path for every route constrainsReach() is true for; a "+
+				"constrained literal may not sit under a constrained {id} of the same "+
+				"shape (console.go).", r)
+		}
+	}()
+	Register(http.NewServeMux(), d)
 }
 
 // TestConsole_ARouteAboveTheSessionRoleIsAbsent is the mount-time half of
@@ -429,15 +494,12 @@ func TestConsole_RegisterMountsEveryRouteWithoutPatternConflict(t *testing.T) {
 // exactly the 404 a route that was never mounted would give, and it must
 // never refuse a request that meets MinRole — this gate is subtractive only.
 //
-// Iterates Routes(withExecution(sweepFixture(), true)) rather than a
-// hand-written path list, so a route added later is swept without anyone
-// remembering to add it here. sweepFixture (not the bare renderableDeps)
-// because a parameterised route's object has to actually exist, or a missing
+// Iterates Routes(sweepFixture()) rather than a hand-written path list, so a
+// route added later is swept without anyone remembering to add it here.
+// sweepFixture (not the bare renderableDeps) because a parameterised route's object has to actually exist, or a missing
 // fixture 404s for every role and is indistinguishable from a role refusal.
-// Execution stays ON so /console/run (MinRole RoleOperator) is in the table as
-// a real fixture above RoleViewer — the four v0.7.0 placeholders that used to
-// supply that shape are gone as of this change
-// (TestConsole_V060MountsNoUnbuiltScreen pins their removal).
+// POST /console/jobs/{job_id}/cancel (MinRole RoleOperator) is in the table as
+// a real fixture above RoleViewer.
 //
 // GET is not the only method a session can probe with, and the property has
 // to hold for all of them: net/http's ServeMux answers a method mismatch on a
@@ -465,7 +527,7 @@ func TestConsole_RegisterMountsEveryRouteWithoutPatternConflict(t *testing.T) {
 //     probe would be 403 for every role, and the absent-not-forbidden
 //     assertion would be uniformly vacuous. Do not "unify" the two handlers.
 func TestConsole_ARouteAboveTheSessionRoleIsAbsent(t *testing.T) {
-	d := withExecution(sweepFixture(), true)
+	d := sweepFixture()
 	routes := Routes(d)
 
 	checked, methodChecked, postChecked := 0, 0, 0
@@ -640,7 +702,7 @@ var navHrefPattern = regexp.MustCompile(`class="navitem[^"]*" href="([^"]+)"`)
 // actually appear in the rendered navigation — so the projection (Nav) and the
 // gate (Register) cannot drift apart from each other.
 func TestConsole_NavDrawsNoLinkTheSessionCannotReach(t *testing.T) {
-	d := withExecution(sweepFixture(), true)
+	d := sweepFixture()
 
 	walked, navItems := 0, 0
 	for _, role := range sessionRoles {
@@ -691,7 +753,7 @@ var retiredReadsLink = regexp.MustCompile(`/console/reads(["'?/#&]|$)`)
 // traffic. /console/reads answers the Console's ORDINARY 404 for every role,
 // the nav no longer offers it, and no rendered screen links to it.
 func TestConsole_ReadEgressIsRetired(t *testing.T) {
-	d := withExecution(sweepFixture(), true)
+	d := sweepFixture()
 
 	walked := 0
 	for _, role := range sessionRoles {
@@ -742,84 +804,66 @@ func TestConsole_ReadEgressIsRetired(t *testing.T) {
 
 // TestConsole_HasNoApprovalSurface proves AP-80 at the route table: the
 // Console mounts no approvals queue, no request screen and no decision route
-// for any role, with console_execution off or on; the ordinary 404 answers
-// every such path; and the navigation carries no Approvals destination, no
-// pending count and no orphaned Act heading.
+// for any role; the ordinary 404 answers every such path; and the navigation
+// carries no Approvals destination and no pending count.
 func TestConsole_HasNoApprovalSurface(t *testing.T) {
 	walked := 0
-	for _, execution := range []bool{false, true} {
-		d := withExecution(sweepFixture(), execution)
-		for _, role := range sessionRoles {
-			h := newTestHandler(d, role)
+	d := sweepFixture()
+	for _, role := range sessionRoles {
+		h := newTestHandler(d, role)
 
-			for _, r := range Routes(d) {
-				if strings.HasPrefix(r.Path, "/console/approvals") {
-					t.Errorf("execution=%v: Routes mounts %s %s", execution, r.Method, r.Path)
-				}
+		for _, r := range Routes(d) {
+			if strings.HasPrefix(r.Path, "/console/approvals") {
+				t.Errorf("Routes mounts %s %s", r.Method, r.Path)
 			}
-			for _, r := range routesFor(d, role) {
-				if strings.HasPrefix(r.Path, "/console/approvals") {
-					t.Errorf("execution=%v role %s: routesFor reaches %s %s", execution, role, r.Method, r.Path)
-				}
+		}
+		for _, r := range routesFor(d, role) {
+			if strings.HasPrefix(r.Path, "/console/approvals") {
+				t.Errorf("role %s: routesFor reaches %s %s", role, r.Method, r.Path)
 			}
+		}
 
-			want := get(t, h, "/console/nonesuch")
-			if want.Code != http.StatusNotFound {
-				t.Fatalf("role %s: /console/nonesuch = %d, want 404", role, want.Code)
+		want := get(t, h, "/console/nonesuch")
+		if want.Code != http.StatusNotFound {
+			t.Fatalf("role %s: /console/nonesuch = %d, want 404", role, want.Code)
+		}
+		for _, c := range []struct{ method, path string }{
+			{http.MethodGet, "/console/approvals"},
+			{http.MethodGet, "/console/approvals/"},
+			{http.MethodGet, "/console/approvals?waiting=all"},
+			{http.MethodGet, "/console/approvals/ap-1"},
+			{http.MethodGet, "/console/approvals/ap-1/decision"},
+			{http.MethodOptions, "/console/approvals/ap-1/decision"},
+		} {
+			got := request(t, h, c.method, c.path)
+			if got.Code != http.StatusNotFound {
+				t.Errorf("role %s: %s %s = %d, want 404", role, c.method, c.path, got.Code)
+				continue
 			}
-			for _, c := range []struct{ method, path string }{
-				{http.MethodGet, "/console/approvals"},
-				{http.MethodGet, "/console/approvals/"},
-				{http.MethodGet, "/console/approvals?waiting=all"},
-				{http.MethodGet, "/console/approvals/ap-1"},
-				{http.MethodGet, "/console/approvals/ap-1/decision"},
-				{http.MethodOptions, "/console/approvals/ap-1/decision"},
-			} {
-				got := request(t, h, c.method, c.path)
-				if got.Code != http.StatusNotFound {
-					t.Errorf("execution=%v role %s: %s %s = %d, want 404", execution, role, c.method, c.path, got.Code)
-					continue
-				}
-				if !bytes.Equal(got.Body.Bytes(), want.Body.Bytes()) {
-					t.Errorf("execution=%v role %s: %s %s is not the Console's ordinary 404 page", execution, role, c.method, c.path)
-				}
+			if !bytes.Equal(got.Body.Bytes(), want.Body.Bytes()) {
+				t.Errorf("role %s: %s %s is not the Console's ordinary 404 page", role, c.method, c.path)
 			}
+		}
 
-			nav := navOf(get(t, h, "/console/").Body.String())
-			if strings.Contains(nav, ">Approvals<") || strings.Contains(nav, "/console/approvals") {
-				t.Errorf("execution=%v role %s: the navigation still offers Approvals", execution, role)
-			}
-			for _, sec := range Nav(d, role, "") {
-				for _, item := range sec.Items {
-					if item.Label == "Approvals" {
-						t.Errorf("execution=%v role %s: Nav carries an Approvals item", execution, role)
-					}
-				}
-				// Run was the Act group's only other entry; with no Run for
-				// this role the group must not render empty.
-				if sec.Group == NavAct && (len(sec.Items) != 1 || sec.Items[0].Label != "Run") {
-					t.Errorf("execution=%v role %s: the Act group holds %+v, want Run alone or no group", execution, role, sec.Items)
+		nav := navOf(get(t, h, "/console/").Body.String())
+		if strings.Contains(nav, ">Approvals<") || strings.Contains(nav, "/console/approvals") {
+			t.Errorf("role %s: the navigation still offers Approvals", role)
+		}
+		for _, sec := range Nav(d, role, "") {
+			for _, item := range sec.Items {
+				if item.Label == "Approvals" {
+					t.Errorf("role %s: Nav carries an Approvals item", role)
 				}
 			}
-			if !execution {
-				for _, sec := range Nav(d, role, "") {
-					if sec.Group == NavAct {
-						t.Errorf("role %s: execution is off, yet Nav draws an Act group", role)
-					}
-				}
-				if strings.Contains(nav, ">Act<") {
-					t.Errorf("role %s: execution is off, yet the navigation draws an Act heading", role)
-				}
-			}
+		}
 
-			for _, path := range walkableScreens(routesFor(d, role), fixtureIDs) {
-				rec := get(t, h, path)
-				if rec.Code == http.StatusOK {
-					walked++
-				}
-				if strings.Contains(rec.Body.String(), `href="/console/approvals`) {
-					t.Errorf("execution=%v role %s: %s links to the approvals surface", execution, role, path)
-				}
+		for _, path := range walkableScreens(routesFor(d, role), fixtureIDs) {
+			rec := get(t, h, path)
+			if rec.Code == http.StatusOK {
+				walked++
+			}
+			if strings.Contains(rec.Body.String(), `href="/console/approvals`) {
+				t.Errorf("role %s: %s links to the approvals surface", role, path)
 			}
 		}
 	}
@@ -877,9 +921,10 @@ func TestApprovalReader_ReadsOneRecordAndCannotListOrDecide(t *testing.T) {
 }
 
 // TestConsole_V060MountsNoUnbuiltScreen is a regression pin for the exact
-// defect #464 fixed, not a derived property: these specific v0.7.0 screens
-// (console/06, 09, 16) must not be reachable in v0.6.0, however the route
-// table changes around them. A hand-written list is correct here.
+// defect #464 fixed, not a derived property: these specific screens must not
+// be reachable, however the route table changes around them: Policy Author
+// (06) and Incident (16), cut from the MVP, and Add Nodes (09), not built. A
+// hand-written list is correct here.
 //
 // Spec 15 (Accounts) was the fourth entry until #654 mounted its read half at
 // GET /console/accounts. It leaves this list because the screen now EXISTS —
@@ -888,14 +933,14 @@ func TestApprovalReader_ReadsOneRecordAndCannotListOrDecide(t *testing.T) {
 // TestConsole_ARouteAboveTheSessionRoleIsAbsent and pinned by name in
 // TestAccounts_AViewerFindsTheScreenAbsentNotForbidden.
 func TestConsole_V060MountsNoUnbuiltScreen(t *testing.T) {
-	h := newTestHandler(withExecution(renderableDeps(), false), accounts.RoleAdmin)
+	h := newTestHandler(renderableDeps(), accounts.RoleAdmin)
 	for _, path := range []string{
 		"/console/policy",
 		"/console/nodes/add",
 		"/console/incident",
 	} {
 		if got := get(t, h, path).Code; got != http.StatusNotFound {
-			t.Errorf("GET %s = %d, want 404 — this v0.7.0 screen must not be mounted in v0.6.0", path, got)
+			t.Errorf("GET %s = %d, want 404 — this unbuilt or cut screen must not be mounted", path, got)
 		}
 	}
 }
@@ -1061,7 +1106,7 @@ func min(a, b int) int {
 // a list that silently stops covering the package. The layout's own sign-out
 // form is swept too, which is correct — it is a form on every page.
 func TestConsole_EveryRenderedFormCarriesACSRFToken(t *testing.T) {
-	d := withExecution(sweepFixture(), true)
+	d := sweepFixture()
 
 	formsChecked := 0
 	for _, role := range sessionRoles {
@@ -1167,7 +1212,7 @@ func TestFormsWithMethod_ClassifiesByTheMethodAttribute(t *testing.T) {
 // the URL, so the session's CSRF secret in one would land in the address bar,
 // the history and a Referer. The token belongs only to a POST form.
 func TestConsole_NoGetFormCarriesACSRFToken(t *testing.T) {
-	d := withExecution(sweepFixture(), true)
+	d := sweepFixture()
 
 	formsChecked, selectedChecked := 0, 0
 	for _, role := range sessionRoles {

@@ -5,9 +5,9 @@
 // by the original requester or a different Account — re-attaches to the Job
 // it already released rather than dispatching a second one.
 //
-// The Console is not exercised here: it does not execute yet (invariant 10's
-// gap table, #438), so it is covered by construction through Execution.Run and
-// needs no screen test of its own.
+// The Console is not exercised here: it runs no command (ADR-0052), so it is
+// covered by construction through Execution.Run and needs no screen test of
+// its own.
 package main
 
 import (

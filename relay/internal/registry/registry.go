@@ -146,7 +146,7 @@ type Node struct {
 }
 
 // The quarantine label, pinned as constants because the Console READS it today
-// and the label-management surface will WRITE it in v0.7.0 (ADR-0020) —
+// and a quarantine writer, when one is built, must WRITE exactly this —
 // and those two must agree exactly.
 //
 // # Why the value is pinned and not just the key
@@ -160,7 +160,7 @@ type Node struct {
 //
 // Decided 2026-08-26, before any writer exists, which is the cheap moment: after
 // a writer ships, changing the value is a fleet-wide migration of a
-// security-lane label. Recorded in docs/design/console/16-incident-ladder.md.
+// security-lane label. These constants are the record of that decision.
 //
 // They live in this package because it owns the label maps and is imported by
 // both sides; neither the reader nor the writer may spell the string itself.

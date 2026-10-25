@@ -16,12 +16,12 @@ import (
 
 // Browser security for the Console is not hygiene.
 //
-// ADR-0009 kept execution out of the browser because that ELIMINATED the
-// "session hijack / XSS / CSRF -> fleet-wide RCE" consequence class. ADR-0026
-// gave the surface back, deliberately, and named what that costs: the class
-// returns, mitigated rather than eliminated, and CSP and CSRF stop being
-// hygiene and become controls with a fleet blast radius. A forged click here
-// would counterfeit the strongest per-action credential in the system.
+// The Console runs no command (ADR-0052), so the "session hijack / XSS / CSRF
+// -> fleet-wide RCE" consequence class that ADR-0009 eliminated stays
+// eliminated. CSP and CSRF are still controls, not hygiene: the Console grants
+// roles and mints API Tokens, and an API Token minted for an admin Account
+// reaches the Control API, Raw Exec included. Script injection or a forged
+// click here is one hop from fleet execution.
 //
 // Everything in this file is therefore a security control. Weakening one is an
 // ADR-level decision, not a convenience.

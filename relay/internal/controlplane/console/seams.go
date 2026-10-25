@@ -29,8 +29,8 @@ package console
 //
 // There is no Relay configuration of any kind: no blast cap, no listener, no CA,
 // no session lifetime (invariant 11). The one field on Deps that looks like
-// configuration — Execution — is a mirror the composition root sets, not a value
-// this package can read from anywhere.
+// configuration, OAuthConfigured, mirrors a startup value the composition root
+// sets. This package cannot read it from anywhere.
 //
 // There are TWO write seams on Deps — JobCanceller (cancel.go) and
 // AccountAdministrator (accounts_write.go) — and neither lives in this file,

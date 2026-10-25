@@ -16,12 +16,13 @@ import (
 // no_dispatch_test.go is the Console's structural half of invariant 10,
 // mirroring api/no_dispatch_test.go and mcp/no_dispatch_test.go.
 //
-// ADR-0026 decision 1 requires it in those words: "The `no_dispatch`-style
-// structural guard extends to the Console package: a Console file that holds a
-// `*capability.Service`, calls `capability.New`, or reaches capability's
-// internal dispatch fails to compile the test suite. The guard is extended,
-// never dropped — a new execution surface is exactly when the temptation to
-// shortcut appears."
+// ADR-0052 decision 1 is the current authority: no Console route dispatches,
+// and the structural guard covers the Console like every adapter, with no
+// exception. ADR-0026 decision 1 gave the original wording: "The
+// `no_dispatch`-style structural guard extends to the Console package: a
+// Console file that holds a `*capability.Service`, calls `capability.New`, or
+// reaches capability's internal dispatch fails to compile the test suite. The
+// guard is extended, never dropped ..."
 //
 // The concrete capability services and their constructors (the retired
 // Service and New included), the display-only caches and registry.Repository
@@ -33,11 +34,10 @@ import (
 // write's argument type, a write seam recovered by assertion, alias or
 // anonymous interface, and the shape of a seam this package declares.
 //
-// The guard exists at package creation rather than arriving with the composer
-// (issue #438). Adding it later would mean the window in which the shortcut is
-// cheapest is the window in which nothing is watching, and a guard that arrives
-// after the code it guards has only ever proved that the code passing it today
-// passes it today.
+// The guard exists at package creation rather than arriving later. Adding it
+// later would mean the window in which the shortcut is cheapest is the window
+// in which nothing is watching, and a guard that arrives after the code it
+// guards has only ever proved that the code passing it today passes it today.
 //
 // Like the Control API's guard and unlike the MCP surface's, there is no
 // read/exec partition: every file here legitimately handles

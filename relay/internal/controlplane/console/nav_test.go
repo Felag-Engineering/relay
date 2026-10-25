@@ -21,7 +21,7 @@ func currentLabels(sections []NavSection) []string {
 }
 
 func TestNav_ChildScreenMarksItsParentCurrent(t *testing.T) {
-	d := withExecution(renderableDeps(), true)
+	d := renderableDeps()
 	cases := map[string]string{
 		"/console/":                                          "Fleet",
 		"/console/nodes":                                     "Fleet",
@@ -39,7 +39,6 @@ func TestNav_ChildScreenMarksItsParentCurrent(t *testing.T) {
 		"/console/accounts/acct-mike/tokens/tok-live/revoke": "Accounts",
 		"/console/api-tokens/tok-live/revoke":                "Accounts",
 		"/console/access":                                    "Access",
-		"/console/run":                                       "Run",
 
 		// Nothing current: the empty path (the 404 shell), unknown paths, a
 		// near-miss of a root, and a Link, which is exact and never a prefix.
@@ -49,6 +48,7 @@ func TestNav_ChildScreenMarksItsParentCurrent(t *testing.T) {
 		"/console/new-accountx": "",
 		"/console/compare-x":    "",
 		"/console/jobsx/1":      "",
+		"/console/run":          "",
 		"/console/run/x":        "",
 	}
 	for path, want := range cases {
@@ -70,7 +70,7 @@ func TestNav_ChildScreenMarksItsParentCurrent(t *testing.T) {
 func TestNav_UnderRootsDoNotOverlap(t *testing.T) {
 	type claim struct{ label, path string }
 	var claims []claim
-	for _, r := range Routes(withExecution(renderableDeps(), true)) {
+	for _, r := range Routes(renderableDeps()) {
 		if r.Nav.Label == "" {
 			continue
 		}
@@ -107,9 +107,8 @@ func TestNav_EveryMountedScreenMarksExactlyOneItemCurrent(t *testing.T) {
 		"/console/accounts/{account_id}/lower":                    "Accounts",
 		"/console/accounts/{account_id}/tokens/{token_id}/revoke": "Accounts",
 		"/console/access":                                         "Access",
-		"/console/run":                                            "Run",
 	}
-	d := withExecution(sweepFixture(), true)
+	d := sweepFixture()
 	walked := map[string]bool{}
 	for _, role := range sessionRoles {
 		h := newTestHandler(d, role)

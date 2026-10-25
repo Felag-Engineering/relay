@@ -205,11 +205,6 @@ var consoleReadAudit = map[string]readAuditRule{
 		path: "",
 		why:  "sign-out; consoleauth records its own audit event",
 	},
-	"GET /console/run": {
-		path: "",
-		why: "the v0.7.0 composer placeholder (#438). It renders no data at all today; " +
-			"the screen that replaces it dispatches, and dispatch is audited by Execution.Run",
-	},
 	"POST /console/jobs/{job_id}/cancel": {
 		path: "",
 		why: "a write, not a read (#595): the capability layer records the cancel as " +
@@ -328,10 +323,7 @@ const (
 // auditing nobody decided about; a classification with no route is a stale
 // entry, and a table full of those is one nobody trusts enough to read.
 func TestConsole_EveryRouteIsClassifiedForReadAuditing(t *testing.T) {
-	// Execution on, so the route only a flagged Relay mounts is classified
-	// too — the guard must not have a blind spot exactly where the execution
-	// surface appears.
-	routes := Routes(withExecution(renderableDeps(), true))
+	routes := Routes(renderableDeps())
 	if len(routes) == 0 {
 		t.Fatal("the route table is empty — this guard is inspecting nothing")
 	}
