@@ -25,8 +25,9 @@ User=root
 Group=root
 ExecStart=/usr/bin/relay-daemon
 # Optional: every RELAY_* setting the daemon reads, documented in
-# relay-daemon.env.example. The leading '-' means a missing file is not a
-# startup failure.
+# relay-daemon.env.example, and no secret. The join string never goes there:
+# relay-daemon join reads it from standard input, and a set RELAY_JOIN fails the
+# start. The leading '-' means a missing file is not a startup failure.
 EnvironmentFile=-/etc/relay-daemon/relay-daemon.env
 Restart=on-failure
 RestartSec=5s

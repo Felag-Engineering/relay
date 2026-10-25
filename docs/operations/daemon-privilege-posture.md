@@ -348,8 +348,8 @@ This confirms the directives are active: `NoNewPrivileges=`, `RestrictRealtime=`
 tool cannot know they are load-bearing. `User=root` is always flagged.
 
 **Still pending (#246), and only a human on a real systemd host can do it:** run the daemon
-under `relay-daemon.service` with `policy.toml` and a join string in place, confirm it
-enrolls, connects and executes `system.facts`, then run the tracing procedure below against
+under `relay-daemon.service` with `policy.toml` in place and the Node enrolled with
+`relay-daemon join`, confirm it connects and executes `system.facts`, then run the tracing procedure below against
 `system.facts`, `file.read`, `service.restart`, `pkg.install` and a permitted Raw Exec. Confirm
 none break (especially `pkg.install` maintainer scripts and Raw Exec), confirm or revise the
 drop-in's `MemoryDenyWriteExecute=no`, and record the run here.
@@ -359,7 +359,7 @@ drop-in's `MemoryDenyWriteExecute=no`, and record the run here.
 The same procedure is a commented, never-executed block in `scripts/daemon-privilege-audit.sh`.
 
 **Environment:** a real systemd host, `relay-daemon` installed at `/usr/bin/relay-daemon` under
-`relay-daemon.service`, `policy.toml` and a join string in place, `strace`/`auditctl` (or
+`relay-daemon.service`, `policy.toml` in place and the Node enrolled with `relay-daemon join`, `strace`/`auditctl` (or
 equivalent) available.
 
 1. **Syscall union including children.** Seccomp is inherited across `execve`, so the trace

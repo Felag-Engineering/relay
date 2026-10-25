@@ -1,22 +1,27 @@
 #!/bin/sh
 # relay-daemon container entrypoint (dev fleet, docs/dev-fleet.md).
 #
-# The daemon reads its join string from the RELAY_JOIN env var, but in the dev
-# fleet it does not exist until runtime: the one-shot `init` service mints the
-# Enrollment Token through the Relay's Control API and drops the join string from
-# the mint response on a shared volume (see docker/dev-fleet-init.sh). This
-# wrapper lifts that file into the env var, then execs the daemon so it becomes
-# PID 1 (clean signal handling).
+# The daemon reads no join string: `relay-daemon join` enrolls, in its own process,
+# from the join string on standard input. In the dev fleet the string does not
+# exist until runtime: the one-shot `init` service mints the Enrollment Token
+# through the Relay's Control API and drops the join string from the mint response
+# on a shared volume (see docker/dev-fleet-init.sh). This wrapper pipes that file
+# to `relay-daemon join`, so the string enters no process environment and is
+# written nowhere, then execs the daemon so it becomes PID 1 (clean signal
+# handling).
+#
+# The container has no environment file and no running systemd, so the compose
+# environment governs `join`, which enrolls into RELAY_STATE_DIR and starts no
+# unit. On a restart over an enrolled volume `join` finds the identity, changes
+# nothing and exits 0.
 #
 # It also starts the dev-fleet demo service (#389) on the Nodes whose labels
-# say they run it — see the block below — BEFORE the join string export, for a
-# reason that matters (read that block's comment).
+# say they run it, see the block below.
 #
 # Every other setting (RELAY_ADDRESS, RELAY_SERVER_NAME, RELAY_STATE_DIR,
 # RELAY_POLICY_PATH, HOSTNAME, RELAY_NODE_LABELS) comes from the compose
-# environment; no CA material does — the daemon pins the Relay's CA from the join
-# string. Enrollment is idempotent: once a Node has persisted its identity in
-# RELAY_STATE_DIR it reuses it and never reads the join string again.
+# environment; no CA material does: `join` pins the Relay's CA from the join
+# string.
 set -eu
 
 # Start the dev-fleet demo service on the Nodes whose node: labels say they run
@@ -25,14 +30,8 @@ set -eu
 # identical to, the daemon's own parse (which trims each entry rather than
 # deleting every space) — equivalent for every label this fleet uses.
 #
-# This runs BEFORE the RELAY_JOIN export, and that ordering is the
-# whole point: httpd is long-lived, and if it started after the export it
-# would hold the Enrollment Token in /proc/<httpd-pid>/environ for the life of
-# the container, where the fixture's file.read "*" allow could read it. The
-# executor's env_clear() exists precisely to close that leak for Task-spawned
-# processes; this entrypoint must not reopen it for a process that outlives
-# every Task. (PID 1 itself already holds the token, so this is not a
-# regression either way — the fix is simply free.)
+# The join string enters no process environment, so this block's ordering does
+# not matter for the token: httpd, a long-lived process, never holds it.
 #
 # A demo-fixture failure must never stop a Node enrolling, so this is
 # non-fatal: the fleet's core enrollment and dispatch paths must not depend on
@@ -61,7 +60,7 @@ case ",$labels," in
         ;;
 esac
 
-RELAY_JOIN="$(cat "${RELAY_JOIN_FILE:-/bootstrap/join-string}")"
-export RELAY_JOIN
+# An input redirect, not cat: the string is never an argument and never a variable.
+/usr/local/bin/relay-daemon join < "${RELAY_JOIN_FILE:-/bootstrap/join-string}"
 
 exec /usr/local/bin/relay-daemon

@@ -9,8 +9,8 @@
 //	(b) service.restart sshd → DENIED_BY_POLICY (fixture policy only allows nginx).
 //
 // The test stands up a real TCP listener (not bufconn) so the daemon subprocess
-// can dial it. It uses the live enrollment flow: the daemon self-enrolls on first
-// connect with only a RELAY_JOIN join string minted for it.
+// can dial it. It uses the live enrollment flow: the Node enrolls with
+// `relay-daemon join`, given only the join string minted for it on standard input.
 //
 // startDaemonNode below is the shared harness for this file and
 // tunnel_control_e2e_test.go's v0.0.4 acceptance tests: it boots the Relay,

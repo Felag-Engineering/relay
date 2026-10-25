@@ -28,6 +28,9 @@ base64 = { workspace = true }
 # SHA-256 over the presented CA's DER, matched against the join string's pin
 # (ADR-0031). Already a workspace dependency of the bin.
 ring = { workspace = true }
+# Wipes the Enrollment Token a decoded join string holds, and the buffers that
+# carried it, when they are dropped (DI-42). No new crate: it is already in the tree.
+zeroize = { workspace = true }
 
 [dev-dependencies]
 relay-test-support = { workspace = true }
@@ -38,16 +41,8 @@ tokio-rustls = { workspace = true }
 # Used by renew.rs tests to construct rcgen certs with specific validity windows.
 # (rcgen's not_before/not_after fields are time::OffsetDateTime.)
 time = { workspace = true }
-# Test-only CSR parsing and self-signature check for the enroll/renew tests'
-# test CA (identity::test_ca). It is the same 0.18 as the runtime dependency,
-# so there is no second ASN.1 stack. The verify feature uses ring, which is
-# already in the tree. It is dev-only (resolver 2) and does not reach the
-# production binary.
-x509-parser = { workspace = true, features = ["verify"] }
-# The enroll tests' fake Enrollment server: tonic's server half and the prost
-# codec its hand-written service names. Dev-only; the daemon stays a gRPC client.
-tonic = { workspace = true, features = ["codegen", "transport", "tls-ring"] }
-tonic-prost = { workspace = true }
+# The tunnel tests' raw listener. The fake Enrollment server the enroll tests use
+# lives in relay-test-support.
 tokio = { workspace = true, features = ["net"] }
 
 [lints]

@@ -72,6 +72,28 @@ relay_daemon_sha256: "<sha256 line for the new artifact, from SHA256SUMS>"
 Roll in batches with `serial:` for a canary wave; the version gate (below) makes mixed-version
 fleets legible rather than dangerous.
 
+## Before upgrading a Node that ran v0.1.0
+
+The pre-release v0.1.0 kept the join string in the environment file: its package placed an empty
+`RELAY_JOIN=` line there, and its `relay-daemon join` wrote the string to it. The current daemon
+reads no join string and **refuses to start while `RELAY_JOIN` is set**, empty included, so a
+Node upgraded with the line still in place restarts every 5 s and never reconnects. Remove the
+line **before** the new artifact and the restart land, in the same play:
+
+```yaml
+- name: Remove RELAY_JOIN from the environment file (required before the v0.1.0 upgrade)
+  ansible.builtin.lineinfile:
+    path: /etc/relay-daemon/relay-daemon.env
+    regexp: '^RELAY_JOIN='
+    state: absent
+```
+
+An enrolled Node does not need the line: it reconnects from its persisted identity. A line that
+held a live join string also held a live Enrollment Token, and removing the line does not
+invalidate it. Let it expire, or revoke it if it is believed leaked, knowing that revocation
+cascades to every Node enrolled under it ([enrollment.md](enrollment.md)). Backups and images of
+the Node taken before the upgrade still carry the line.
+
 ## The minimum-version gate (the Relay's side)
 
 `reach.min_daemon_version` in `relay.toml` ([relay-install.md](relay-install.md)) sets the

@@ -34,7 +34,7 @@ mod tests {
 
     /// The spawn is `Command::new(SYSTEMCTL).args(SYSTEMCTL_ARGS)` and nothing else
     /// (pinned by `clippy_write_ban.rs`), so these two constants are its whole argv.
-    // Proves DI-37.
+    // Proves DI-42.
     #[test]
     fn join_spawn_argv_is_the_literal_constant() {
         assert_eq!(SYSTEMCTL, "/usr/bin/systemctl");

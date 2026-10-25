@@ -27,7 +27,7 @@ are, install by hand as below.
   `/etc/relay-daemon/policy.d` and `/var/lib/relay-daemon` (`0700`), each if absent; places the
   default as `/etc/relay-daemon/policy.toml` only if no Policy file exists and the Policy
   directory did not exist before the install; places `/etc/relay-daemon/relay-daemon.env`
-  (root `0600`, with an empty `RELAY_JOIN`) only if none exists; and, where systemd is running,
+  (root `0600`) only if none exists; and, where systemd is running,
   runs `systemctl preset`. It never starts or restarts the daemon, and never rewrites the
   Policy or the environment file. An upgrade runs `systemctl daemon-reload` only.
 - **`relay-read`** is the shipped read catalog, optional, depending on `relay-daemon`. Its
@@ -52,6 +52,9 @@ $ sudo install -m 0600 -o root -g root relay-daemon.env.example /etc/relay-daemo
 $ sudo "$EDITOR" /etc/relay-daemon/relay-daemon.env   # fill in RELAY_* values, see below
 ```
 
+The environment file holds no secret and no join string. The install ends by enrolling the
+Node, under Enroll below.
+
 Without a Policy of your own, install the shipped default
 ([`../policy.default.toml`](../policy.default.toml), ADR-0022): `read` pre-allowed with a
 confidentiality deny-list; `mutate` and Raw Exec opt-in.
@@ -69,9 +72,12 @@ daemon restart, not an API call.
 
 ```console
 $ sudo systemctl daemon-reload
-$ sudo systemctl enable --now relay-daemon
+$ sudo relay-daemon join          # paste the join string; it enrolls and starts the unit
 $ systemctl status relay-daemon
 ```
+
+`relay-daemon join` reads the join string from a prompt with echo off, or from standard input,
+pins the Relay's CA from it, enrolls, persists the identity, and enables and starts the unit.
 
 ## Upgrades
 
@@ -80,9 +86,9 @@ The daemon never self-upgrades and the Relay never pushes a binary (ADR-0014). U
 new artifact, then `systemctl restart relay-daemon`. The Relay's only lever is refusing to
 *dispatch* Tasks to an out-of-date Node.
 
-## The join string lives in the env file
+## No join string is ever on disk
 
-`relay-daemon.env` carries `RELAY_JOIN`, and with it the Enrollment Token, in plaintext on disk
-(`0600 root:root`). That is decided, not interim (ADR-0031, amended 2026-10-16): the daemon
-reads the join string only when no identity exists, pins the Relay's CA from it before sending
-the token, and ignores it on every later start. Remove the line once the Node has enrolled.
+`relay-daemon join` enrolls in the process that read the join string (ADR-0031, ADR-0033), so
+the join string, and with it the Enrollment Token, is written nowhere and never sits in the
+daemon's environment. `relay-daemon.env` holds no secret. The daemon reads no join string, and
+refuses to start while `RELAY_JOIN` is set, so a stale line is noticed rather than ignored.

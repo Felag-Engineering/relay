@@ -396,10 +396,11 @@ $ curl --cacert relay-ca-cert.pem \
 once the control plane is published.
 
 **7. Point real relay-daemons at it**, one host at a time, per
-[relay-daemon-install.md](relay-daemon-install.md): set `RELAY_JOIN` to the `join_string` from
-step 6's response. It carries the Relay's address, its CA fingerprint and the token, and is
-used once, at first start; no CA file is copied to the Node. A daemon started without it logs
-`nothing to enroll with` and exits 0, so check the env file if the unit is inactive. Each
+[relay-daemon-install.md](relay-daemon-install.md): pipe the `join_string` from
+step 6's response to `sudo relay-daemon join`. It carries the Relay's address, its CA
+fingerprint and the token, and is used once, by `join`, which writes it nowhere; no CA file is
+copied to the Node. A daemon with no identity logs `no identity: nothing to connect with` and
+exits 0, so enroll with `relay-daemon join` if the unit is inactive. Each
 Node's Policy is authored on that Node; this stack ships none and can never write one
 (ADR-0002). Finish with `unset RELAY_TOKEN`.
 

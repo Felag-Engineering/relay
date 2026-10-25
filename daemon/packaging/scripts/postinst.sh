@@ -75,11 +75,10 @@ fi
 marked() { [ "$have_marker" = yes ] && grep -qx "$1" "$MARKER"; }
 record() { if [ "$have_marker" = yes ]; then echo "created $1" >> "$MARKER"; fi; return 0; }
 
-# place DST MODE SRC [empty-join]: DST becomes a root-owned copy of SRC, unless DST exists.
-# Called only once $ETC is a directory only root can write.
-# With empty-join, the copy's RELAY_JOIN value is emptied. Called as an `if` condition, where
-# `set -e` does not apply, so every step is checked by hand: a half-written or wrongly owned
-# file is never linked into place.
+# place DST MODE SRC: DST becomes a root-owned copy of SRC, unless DST exists.
+# Called only once $ETC is a directory only root can write. Called as an `if` condition,
+# where `set -e` does not apply, so every step is checked by hand: a half-written or wrongly
+# owned file is never linked into place.
 place() {
   dst="$1"; mode="$2"; src="$3"
   if [ ! -f "$src" ]; then
@@ -87,11 +86,7 @@ place() {
     return 1
   fi
   tmp="$(mktemp "$ETC/.relay-daemon-pkg.XXXXXX")" || return 1
-  if [ "${4:-}" = empty-join ]; then
-    sed 's/^RELAY_JOIN=.*/RELAY_JOIN=/' "$src" > "$tmp" || { rm -f "$tmp"; return 1; }
-  else
-    cat "$src" > "$tmp" || { rm -f "$tmp"; return 1; }
-  fi
+  cat "$src" > "$tmp" || { rm -f "$tmp"; return 1; }
   if ! { chown -h root:root "$tmp" && chmod "$mode" "$tmp"; }; then
     rm -f "$tmp"
     return 1
@@ -137,11 +132,12 @@ if root_only_dir "$ETC"; then
     record policy-dir
   fi
 
-  # The placed file is the shipped example with RELAY_JOIN emptied: an empty join string on a
-  # Node with no identity is the daemon's clean unconfigured exit, so an enabled unit stays
-  # inactive at boot instead of failing on the example's placeholder (DI-25).
+  # The placed file is the shipped example, which holds no join line: a Node with no identity
+  # is the daemon's clean unconfigured exit, so an enabled unit stays inactive at boot until
+  # `relay-daemon join` enrols it (DI-25). It is placed on every first install because join
+  # reads its settings from it.
   if ! exists "$ENV_FILE"; then
-    if place "$ENV_FILE" 0600 "$SHARE/relay-daemon.env.example" empty-join; then
+    if place "$ENV_FILE" 0600 "$SHARE/relay-daemon.env.example"; then
       record env
     fi
   fi
