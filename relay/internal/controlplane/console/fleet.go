@@ -1134,7 +1134,45 @@ func groupNodes(nodes []fleetNode, key string) []namedGroup {
 // anomaly-first deviation table.
 func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext) fleetGroup {
 	g := fleetGroup{Key: key, Count: len(nodes)}
+	tallyGroup(&g, nodes)
+	g.Facets = buildFacets(nodes, link)
 
+	deviating := 0
+	for _, n := range nodes {
+		if n.signature != "" {
+			deviating++
+		}
+	}
+	g.ListsWholeFleet = listWhole
+	g.Deviations = deviationTable(nodes, listWhole)
+	if len(g.Deviations) > deviationRows {
+		g.Elided = len(g.Deviations) - deviationRows
+		g.Deviations = g.Deviations[:deviationRows]
+	}
+	for _, n := range g.Deviations {
+		if n.hasStateCell() {
+			g.ShowState = true
+			break
+		}
+	}
+
+	g.ModeLine = groupModeLine(deviating, len(nodes)-deviating, g.Unreported)
+
+	// A group opens when it has something to show: a deviation, drift, or few
+	// enough Nodes that the fleet itself is the thing worth showing. Only a
+	// LARGE, uniformly healthy group compresses to one line — which is the case
+	// the compression was for.
+	g.Open = deviating > 0 || g.OffMode > 0 || g.ListsWholeFleet
+	// The state-derived header counts are all part of the signature, so
+	// deviating == 0 already excludes them; drift is the one header chip that
+	// is not.
+	g.NoDeviation = deviating == 0 && g.OffMode == 0
+	return g
+}
+
+// tallyGroup fills g's header counts from nodes and stamps each Node's rarity
+// (how many Nodes in the group share its signature).
+func tallyGroup(g *fleetGroup, nodes []fleetNode) {
 	modeFingerprint := modalValue(nodes, func(n fleetNode) string { return n.PolicyFingerprint })
 
 	sigCount := map[string]int{}
@@ -1179,27 +1217,23 @@ func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext)
 		}
 	}
 	g.Fingerprints = len(distinctFingerprints)
+}
 
-	g.Facets = buildFacets(nodes, link)
-
-	// Anomaly-first by RARITY, never alphabetically. Sorting a deviation table
-	// by name is how the one quarantined Node ends up on page nine.
-	//
-	// Below legibleGroup every Node is a row and the rarity sort still applies,
-	// so the weird one is row one whether the table is the deviations or the
-	// whole fleet. That is what "nothing special-cased" means: one sort, one
-	// table, and the only thing that changes with size is how much of the group
-	// reaches it.
+// deviationTable returns the Nodes a group's table lists, most anomalous
+// first: the deviating Nodes, or every Node when listWhole is set.
+//
+// Anomaly-first by RARITY, never alphabetically. Sorting a deviation table
+// by name is how the one quarantined Node ends up on page nine.
+//
+// Below legibleGroup every Node is a row and the rarity sort still applies,
+// so the weird one is row one whether the table is the deviations or the
+// whole fleet. That is what "nothing special-cased" means: one sort, one
+// table, and the only thing that changes with size is how much of the group
+// reaches it.
+func deviationTable(nodes []fleetNode, listWhole bool) []fleetNode {
 	var dev []fleetNode
-	deviating := 0
 	for _, n := range nodes {
-		if n.signature != "" {
-			deviating++
-		}
-	}
-	g.ListsWholeFleet = listWhole
-	for _, n := range nodes {
-		if g.ListsWholeFleet || n.signature != "" {
+		if listWhole || n.signature != "" {
 			dev = append(dev, n)
 		}
 	}
@@ -1221,51 +1255,33 @@ func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext)
 		}
 		return dev[i].ID < dev[j].ID
 	})
-	g.Deviations = dev
-	if len(g.Deviations) > deviationRows {
-		g.Elided = len(g.Deviations) - deviationRows
-		g.Deviations = g.Deviations[:deviationRows]
-	}
-	for _, n := range g.Deviations {
-		if n.hasStateCell() {
-			g.ShowState = true
-			break
-		}
-	}
+	return dev
+}
 
-	normal := len(nodes) - deviating
+// groupModeLine is the sentence under a group's header saying what the
+// non-deviating Nodes have in common; empty when nothing deviates.
+func groupModeLine(deviating, normal, unreported int) string {
 	switch {
 	case deviating == 0:
 		// Nothing deviates, so there is no mode line to draw.
-		g.ModeLine = ""
-	case normal == 0 && g.Unreported > 0:
-		g.ModeLine = "no Node in this group can be called reachable, current and permitted: " +
-			countOf(g.Unreported, "Node has", "Nodes have") + " not reported a daemon version or Policy fingerprint."
+		return ""
+	case normal == 0 && unreported > 0:
+		return "no Node in this group can be called reachable, current and permitted: " +
+			countOf(unreported, "Node has", "Nodes have") + " not reported a daemon version or Policy fingerprint."
 	case normal == 0:
-		g.ModeLine = "every Node in this group carries at least one state label."
-	case g.Unreported > 0:
+		return "every Node in this group carries at least one state label."
+	case unreported > 0:
 		not := "so it is not counted as current or permitted."
-		if g.Unreported > 1 {
+		if unreported > 1 {
 			not = "so they are not counted as current or permitted."
 		}
-		g.ModeLine = countOf(normal, "other Node carries", "other Nodes carry") +
+		return countOf(normal, "other Node carries", "other Nodes carry") +
 			" no state label at all — reachable, current, permitted. " +
-			countOf(g.Unreported, "Node has", "Nodes have") + " not reported, " + not
+			countOf(unreported, "Node has", "Nodes have") + " not reported, " + not
 	default:
-		g.ModeLine = countOf(normal, "Node carries", "Nodes carry") +
+		return countOf(normal, "Node carries", "Nodes carry") +
 			" no state label at all — reachable, current, permitted."
 	}
-
-	// A group opens when it has something to show: a deviation, drift, or few
-	// enough Nodes that the fleet itself is the thing worth showing. Only a
-	// LARGE, uniformly healthy group compresses to one line — which is the case
-	// the compression was for.
-	g.Open = deviating > 0 || g.OffMode > 0 || g.ListsWholeFleet
-	// The state-derived header counts are all part of the signature, so
-	// deviating == 0 already excludes them; drift is the one header chip that
-	// is not.
-	g.NoDeviation = deviating == 0 && g.OffMode == 0
-	return g
 }
 
 // countOf renders a count AND its noun: "1 Node", "3 Nodes". It is the Go-side
