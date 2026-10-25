@@ -610,6 +610,7 @@ allowed_args = [["*"]]
 
     /// Reads stop at secrets: with wildcard reads allowed, only the identity
     /// private key and the environment file are findings.
+    // Proves DI-39.
     #[test]
     fn lint_read_probes_stop_at_secrets() {
         let findings = lint_at(&parse(WILDCARD_READS), &[], &packaged());
@@ -650,6 +651,7 @@ allowed_args = [["*"]]
 
     /// `file.checksum` is a read probe on every run, not only when `--templates`
     /// supplies it.
+    // Proves DI-39.
     #[test]
     fn checksum_is_probed_without_templates() {
         let policy = parse(
@@ -678,6 +680,7 @@ allowed_args = [["*"]]
 
     /// Writes cover the packaged trust root by exact path: one finding per
     /// target, every one a Raw Exec finding.
+    // Proves DI-39.
     #[test]
     fn lint_write_probes_cover_packaged_trust_root() {
         let findings = lint_at(&parse(SED_ALLOW), &[], &packaged());
@@ -727,6 +730,7 @@ allowed_args = [["*"]]
     }
 
     /// The running binary is a write probe only.
+    // Proves DI-39.
     #[test]
     fn current_exe_is_a_write_probe_only() {
         let reads = lint_at(&parse(WILDCARD_READS), &[], &packaged());
@@ -744,6 +748,7 @@ allowed_args = [["*"]]
     }
 
     /// An exe equal to a packaged path is one target, not two.
+    // Proves DI-39.
     #[test]
     fn exe_equal_to_a_packaged_path_is_not_duplicated() {
         let roots = Roots {

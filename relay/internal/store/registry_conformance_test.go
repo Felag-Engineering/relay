@@ -182,6 +182,7 @@ func TestRegistryNodeLabelConformance(t *testing.T) {
 // Relay-knowledge with no other source: a restart that lost it would turn
 // every Node's expiry into "not recorded" until its next renewal, blinding
 // state:cert-expiring for up to a leaf lifetime.
+// Proves EN-18.
 func TestSQLiteRegistry_ProvenanceSurvivesARestart(t *testing.T) {
 	st, path := openTestStore(t)
 	reg := st.Registry()

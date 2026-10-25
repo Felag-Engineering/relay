@@ -6,6 +6,11 @@ The GitHub milestone **v0.6.5 — Install Path: relay init, join string, package
 authority on what is in flight (AGENTS.md, "Work the current milestone"), and its
 [design plan](plans/v0.6.5-install-path-relay-init-join-string-packages.md) is the step list.
 
+**Joining changed since (ADR-0048, ADR-0050).** A person runs `sudo relay-daemon join` and pastes
+the join string at its prompt; no join string goes in an environment file, so the `RELAY_JOIN`
+items below (E5, E14) are history. An Enrollment Token's labels are initial tags, not `relay:`
+labels.
+
 **Nothing here authorizes work.** Every item touches a surface AGENTS.md requires escalating —
 `proto`-adjacent contract, mTLS/auth/CA code, Policy distribution, `GLOSSARY.md`, the
 `Makefile`, or CI.

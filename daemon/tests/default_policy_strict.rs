@@ -35,6 +35,7 @@ fn chmod(path: &Path, mode: u32) {
         .unwrap_or_else(|e| panic!("chmod {mode:o} {}: {e}", path.display()));
 }
 
+// Proves DI-28.
 #[test]
 fn default_policy_passes_strict_with_catalog() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

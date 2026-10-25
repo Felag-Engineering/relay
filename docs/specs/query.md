@@ -167,10 +167,9 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   three goes through the capability read lane; no adapter holds a reader of its own (QRY-28).
   An alias write is decided in the capability layer, and the Console only exposes it (QRY-29,
   QRY-35).
-- **Invariant 9 and ADR-0008** — an alias names a fingerprint and never records which Nodes
-  should carry it (QRY-32). That is the line against `policy-catalog.md`'s rule that the Relay
-  stores no cohort arrangement: an alias attaches to a fingerprint only, never to a Node, Label,
-  Selector or group, so it describes no desired state.
+- **Invariant 9 and ADR-0051** — an alias names a fingerprint and never records which Nodes
+  should carry it (QRY-32). The Relay stores no cohort arrangement: an alias attaches to a
+  fingerprint only, never to a Node, Label, Selector or group, so it describes no desired state.
 - **Invariant 12 and ADR-0011** — only the relay-daemon's live engine evaluates Policy. Displaying
   a snapshot never becomes a Relay-side verdict (QRY-9); a hypothetical is `policy-preflight.md`.
 - **ADR-0014** — `outdated` is a registry observation and a dispatch gate; a query neither
@@ -248,9 +247,9 @@ Claims with **no row**, and so nothing checking them:
 | Claim | Statement | Milestone |
 |---|---|---|
 | QRY-25 | `list_operations` takes a Selector and reports each Operation reachable across the matched Nodes — description, typed slots and allowed values, risk class, and which Nodes report it; a single Node ID is the one-Node case. Retires the Node-ID-only half of QRY-12 and the vocabulary row in *Performance*. | v0.8.1 — Read and Preflight Wire Contract |
-| QRY-29 | A human Account with the `admin` role can set, rename or clear the **Policy alias** of a well-formed Policy fingerprint through the capability layer. | v0.6.0 — Admin Console: Monitoring |
-| QRY-33 | Wherever an alias is rendered, the full fingerprint it names is rendered beside it; an alias is never shown in place of the fingerprint. | v0.6.0 — Admin Console: Monitoring |
-| QRY-35 | The Console's Fleet view, Node detail and Compare screen read aliases through the capability read lane, and the Console offers the write to a human `admin` only, from the Fleet view's fingerprint facet and Node detail's Fingerprints panel. | v0.6.0 — Admin Console: Monitoring |
+| QRY-29 | A human Account with the `admin` role can set, rename or clear the **Policy alias** of a well-formed Policy fingerprint through the capability layer. | MVP |
+| QRY-33 | Wherever an alias is rendered, the full fingerprint it names is rendered beside it; an alias is never shown in place of the fingerprint. | MVP |
+| QRY-35 | The Console's Fleet view, Node detail and Compare screen read aliases through the capability read lane, and the Console offers the write to a human `admin` only, from the Fleet view's fingerprint facet and Node detail's Fingerprints panel. | MVP |
 | QRY-39 | No query surface can set Labels, modify Policy, load Templates, refresh a daemon snapshot, issue a Policy verdict or dispatch an Operation: each adapter's structural guard forbids every write seam but the alias write (QRY-29), and every dispatch seam. Replaces QRY-24 when promoted. | v0.6.0 — Admin Console: Monitoring |
 
 ## Out of scope

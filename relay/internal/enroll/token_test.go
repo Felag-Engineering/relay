@@ -51,6 +51,8 @@ func newTestService(t *testing.T) (*Service, *fakeNow) {
 //   - Create returns a non-empty credential of form id.secret
 //   - Token.SecretHash equals sha256(secretPart)
 //   - Token.SecretHash is not equal to the raw plaintext bytes
+//
+// Proves EN-4.
 func TestCreate_StoresHashedReturnsPlaintextOnce(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
@@ -237,6 +239,7 @@ func TestValidate_SecretCheckedBeforeState(t *testing.T) {
 
 // TestReusable_ValidatesRepeatedly checks that a token with default options (MaxUses 0)
 // can be validated many times without error.
+// Proves EN-5.
 func TestReusable_ValidatesRepeatedly(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
@@ -288,6 +291,7 @@ func TestMaxUses_Enforced(t *testing.T) {
 
 // TestMaxUses_Concurrent checks that MaxUses is enforced atomically under concurrent
 // Validate calls: exactly MaxUses goroutines succeed; all others get ErrExhausted.
+// Proves EN-5.
 func TestMaxUses_Concurrent(t *testing.T) {
 	const k = 5
 	const goroutines = 50
@@ -339,6 +343,7 @@ func TestMaxUses_Concurrent(t *testing.T) {
 // malformed-but-correctly-prefixed rows below would then pass Create,
 // while the pre-existing prefix-only rows above them keep passing either
 // way, so the two rules stay separately pinned.
+// Proves EN-3.
 func TestCreate_InvalidScope(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
@@ -390,6 +395,7 @@ func TestCreate_InvalidScope(t *testing.T) {
 // running WellFormedLabel over the whole entry instead of the split halves
 // (the last would reject the ":" in "relay:" itself and is the most likely
 // implementation slip).
+// Proves EN-3.
 func TestCreate_WellFormedScopeAccepted(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()

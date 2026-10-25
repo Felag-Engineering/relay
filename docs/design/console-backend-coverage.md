@@ -5,6 +5,13 @@
 > (ADR-0023). What each Console screen needs and has is in [docs/design/console/](console/)
 > and the capability specs in [docs/specs/](../specs/). This file is kept for the sequencing
 > rationale.
+>
+> **Cut from the MVP (2026-10-23).** The Console watches and does not execute (ADR-0052): the
+> execution composer, its step-up apply and `console_execution` are gone, so the last step of
+> the build order below no longer exists. There is no approval queue (ADR-0047). Quarantine is
+> cut (roadmap: relay/quarantine); `tag:` grouping is built for the MVP, written by a human
+> Account at `operator` or above (ADR-0050). The configuration file is the one source of
+> settings for the MVP (roadmap: relay/settings-in-the-console).
 
 **Status:** planning-session output (owner + AI-agent, 2026-08-07), pre-ADR. It maps each
 Console surface to the backend it needs, so Console milestones are sequenced by real

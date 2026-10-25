@@ -22,7 +22,7 @@ the same problem as one restarting services.
 |---|---|
 | **Control API** | `POST /api/v1/freeze/engage`, `POST /api/v1/freeze/release` |
 | **Relay host** | `SIGUSR1` engages, `SIGUSR2` releases — the local lever, see below |
-| **Admin Console** | Future work — not in the first pass |
+| **Admin Console** | Not offered; engaging from the Console is future work (see *Future work*) |
 
 The host-side lever is **unreachable from any surface, by construction**: the Control API holds an
 interface carrying only the gated pair, so no route can reach the local path even by accident.
@@ -171,20 +171,15 @@ it.
 
 - **Job and Task cancellation** — `execution.md`. ADR-0013 siblings, not the same mechanism: a
   Freeze stops what has not started; a cancel acts on one Job that has.
-- **Quarantine and revocation** — the other rungs of the incident ladder, label- and
-  identity-shaped rather than dispatch-shaped: `quarantine-node.md` and `enrollment.md`.
+- **Revocation** — the other rung of the incident ladder, identity-shaped rather than
+  dispatch-shaped: `enrollment.md`. Quarantine is cut from the MVP (roadmap: relay/quarantine).
 - **Policy** — a Node refusing work locally is not a Freeze, and a Freeze is not a Policy change.
 - **Per-Account rate limits** — a decision still open, and a different control: rate limiting
   shapes normal traffic, Freeze stops abnormal traffic entirely.
 
 ## Future work
 
-Deliberately not in the first pass: the built capability should work end to end first.
-
-- **Engaging from the Console.**
-- **Approvals during a Freeze, stated as behaviour.** A pending request can still be decided while
-  frozen, nothing dispatches until release, and an approved request still expires on its own clock
-  and must be re-requested if the Freeze outlasts it. Settle once approvals are built.
+Future work is in the private roadmap: roadmap: relay/research/spec-future-work/freeze.
 
 ## Open questions
 

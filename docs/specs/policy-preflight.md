@@ -20,9 +20,8 @@ worse than useless once a caller trusts it, so the verdicts come from **the same
 will decide at execution time**, asked the same question, live.
 
 That makes preflight the mechanism behind two product promises: preflight-before-apply as a
-guardrail — opt-in on MCP and the Control API, mandatory before every apply where a surface
-makes it so (the Console, PF-21) — and denials that teach: an AI-agent told which rule says no
-does not need to discover Policy by tripping over it.
+guardrail, opt-in on MCP and the Control API, and denials that teach: an AI-agent told which
+rule says no does not need to discover Policy by tripping over it.
 
 ## Surfaces
 
@@ -30,7 +29,7 @@ does not need to discover Policy by tripping over it.
 |---|---|
 | **MCP** | `plan: true` on `run_operation` and `raw_exec`. The result carries the per-Node verdicts, the would-be fan-out, and any would-be rejection (frozen, over cap, no Nodes matched) as data. |
 | **Control API** | `"plan": true` on `POST /api/v1/operations` and `POST /api/v1/raw-exec`; same body, same result shape. |
-| **Admin Console** | Renders existing preflight audit records on the Agent activity screen. Does **not** perform a preflight today: the composer that preflights before every apply is **PF-21**, behind the `console_execution` flag (ADR-0026, #438). The Console's word for it is **Preflight** (#575). |
+| **Admin Console** | Renders existing preflight audit records on the Activity screen. Performs no preflight: the Console does not execute (ADR-0052). The Console's word for it is **Preflight** (#575). |
 
 The preview and the act are the same request with one flag (PF-1), so a caller cannot preflight
 one thing and apply another by reaching a different endpoint.
@@ -98,8 +97,8 @@ structurally unreachable rather than conditionally skipped.
 | `unknown` | The Relay could not ask — the Node is matched but disconnected, or the query itself failed |
 
 - **PF-10** A preflight yields exactly these four verdicts per Node, and `deny` carries the
-  deciding rule. (`quarantine-node.md` defines a fifth, `quarantined`, never queried; it lands with
-  that capability (#430), and these four are what a preflight yields today — see *Out of scope*.)
+  deciding rule. (Quarantine, cut from the MVP, would add a fifth, `quarantined`, never
+  queried; these four are what a preflight yields — see *Out of scope*.)
 - **PF-22** `unknown` is the zero value of the Relay's verdict — a verdict never obtained reads
   as "not known", never as a fabricated allow — and is never a wire value: the daemon only ever
   answers allow, deny or unsupported.
@@ -164,9 +163,9 @@ A preflight refuses in fewer cases than a dispatch, and the difference is the po
 - **Invariant 1** — a preflight carries the same typed Operation or verbatim argv as the dispatch
   would (PF-15); the three tiers are unchanged by previewing.
 - **Invariant 5** — the cap is computed the same way, then reported instead of enforced (PF-4).
-- **Invariant 10** — the Console reaches this capability through the capability layer like every
-  adapter; where it executes, it preflights before every apply, and a `mutate` apply is
-  additionally step-up-gated (PF-21, ADR-0026 decisions 2 and 3).
+- **Invariant 10** — every adapter reaches this capability through the capability layer. The
+  Console does not execute (ADR-0052); where a Console executes, it preflights before every
+  apply, and a `mutate` apply is additionally step-up-gated.
 - **Invariant 13** — the risk class is declared contract and selects which cap the preflight
   reports against (PF-16). *(Invariant 13 amended 2026-10-02, ADR-0042: a Template Operation's
   class is Node-reported, and a dispatch takes the most restrictive class the Nodes it reaches
@@ -234,7 +233,6 @@ sequential round trips as a dispatch — cheap enough that a caller should alway
 |---|---|---|
 | PF-19 | The request option is spelled `preflight` on MCP and the Control API; `plan` is no longer accepted; the audit kind and the test names follow. | v0.8.1 — Read and Preflight Wire Contract |
 | PF-20 | A `deny` verdict carries a reason kind beside the deciding rule: `no_allow` (nothing permitted it) or `denied` (a deny rule vetoed it), with the same two kinds a real dispatch reports (`policy.md`). | v0.8.1 — Read and Preflight Wire Contract |
-| PF-21 | The Admin Console performs a preflight before **every** apply and renders its verdicts before an apply is offered; applying is a separate, deliberate act, and a `mutate` apply is additionally step-up-gated (ADR-0026 decisions 2 and 3). | v0.7.0 — Admin Console: Administration & Execution |
 
 ## Out of scope
 
@@ -246,11 +244,10 @@ sequential round trips as a dispatch — cheap enough that a caller should alway
 - **The plan hash and approval binding** — `approval.md`. An approval commits to a content
   address for one gated dispatch (ADR-0027 decision 8), never over a preview; minting that address
   is not this capability.
-- **The Console's composer** — the surface's shape is ADR-0026's and the Console's per-screen
-  specification's; the verdicts it renders are this capability's (PF-21).
-- **Quarantine** — `quarantine-node.md`. It defines the quarantined Node's preflight conclusion
-  as `quarantined`, never queried; that lands with the capability (#430). Today there is no such
-  Node state on the preflight path, so PF-10's four verdicts are the whole set.
+- **Console execution** — cut (ADR-0052; roadmap: relay/console-execution-for-skills). The
+  Console renders preflight records and performs none.
+- **Quarantine** — cut from the MVP (roadmap: relay/quarantine). There is no quarantined Node
+  state on the preflight path, so PF-10's four verdicts are the whole set.
 - **Shadow mode** — a standing per-Account setting converting every mutate into a preflight is a
   candidate idea, not a commitment, and does not exist.
 
@@ -263,15 +260,12 @@ sequential round trips as a dispatch — cheap enough that a caller should alway
   itself passes Selector → Policy → blast cap live — a Node that joined since the preview can
   widen the fan-out, but never past the cap and never past its own Policy. The threat model's
   invariant-12 boundary row records the same property ("point-in-time and advisory — never a
-  reservation"). Revisit if a Console composer (PF-21) shows verdicts long enough for staleness
-  to mislead a human.
+  reservation"). Revisit if a surface ever shows verdicts to a human long enough for
+  staleness to mislead.
 
 ## Future work
 
-- **A compile-time guard against a Relay-computed verdict.** Invariant 12 holds today because no
-  such code path exists; a `no_verdicts` guard analogous to `no_dispatch` — forbidding the
-  capability package from importing the Policy view cache or the vocabulary cache — would make a
-  view-consulting shortcut structurally unreachable, and would give PF-7 its proof row.
+Future work is in the private roadmap: roadmap: relay/research/spec-future-work/policy-preflight.
 
 ## Open questions
 
@@ -285,4 +279,5 @@ Who answers `unsupported` for a Node that does not report a Template is settled 
 
 ## Retired
 
-None.
+- **PF-21** — `2026-10-23` — retired unbuilt: the Admin Console performing a preflight before
+  every apply. The Console does not execute (ADR-0052).

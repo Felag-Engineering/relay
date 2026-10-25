@@ -3,6 +3,16 @@
 Which dispatches must wait for a human before they run
 ([ADR-0027](../adr/0027-approval-callout-notify-via-mcp-decide-out-of-band.md)).
 
+> **Changing for the MVP ([ADR-0047](../adr/0047-approval-is-one-in-band-answer.md)).** This
+> runbook describes the code as it stands. ADR-0047 cuts approval to one answer per request: a
+> rule names only what it matches and how long a parked request lives (no `count`, `audience`,
+> `requester_allowed` or `channel`); `approve_request` and approval grants are retired; gate
+> rules become a section of `relay.toml` rather than a separate file named by
+> `approval.gate_rules_path`; and the inline `webhook_url` and `webhook_secret` keys go, leaving
+> only their `_file` forms. Gate rules stay in the configuration file: the Console has no
+> approval or settings screen (roadmap: relay/settings-in-the-console). This page is rewritten
+> when that code lands.
+
 ## Where the configuration lives
 
 A root-owned local file of gate rules, named by `approval.gate_rules_path` in `relay.toml`.

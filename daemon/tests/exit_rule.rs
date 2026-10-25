@@ -69,6 +69,7 @@ fn seed_identity(dir: &Path, only: Option<&[&str]>) {
     }
 }
 
+// Proves EN-28.
 #[test]
 fn unconfigured_node_exits_zero() {
     let state = TempDir::new("exit-unconfigured");
@@ -129,6 +130,7 @@ fn partial_identity_exits_nonzero() {
     );
 }
 
+// Proves DI-38.
 #[test]
 fn identity_without_address_exits_nonzero() {
     let state = TempDir::new("exit-no-address");

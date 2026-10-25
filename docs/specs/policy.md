@@ -1,14 +1,15 @@
 # Policy
 
-**Status:** aspirational — worked through with the owner on `2026-09-13`, awaiting their review
-of this draft. Describes intended behaviour, not the code (see the establishing phase in
-`README.md`).
+**Status:** aspirational — worked through with the owner on `2026-09-13`, brought in line with
+the owner's MVP decisions on `2026-10-23`, awaiting their review of this draft. Describes
+intended behaviour, not the code (see the establishing phase in `README.md`).
 
 ## Purpose
 
 Policy is a Node's own answer to *"what will I ever execute, no matter who asks?"* It defines
 everything that can run on a Node: which Native Operations are allowed and with what arguments,
-the Template Operations the Node offers, and whether Raw Exec is permitted at all.
+which Template Operations are allowed and with what slot values, and whether Raw Exec is
+permitted at all.
 
 It is the last line of defence. With the Relay fully compromised and the AI-agent fully
 jailbroken, a Node still refuses everything its Policy does not allow. Policy is written by
@@ -21,59 +22,56 @@ Policy allows. A Task can be allowed by Policy and refused by the Relay; never t
 
 ## Surfaces
 
-- **Daemon-local.** A predefined drop-in directory beside the relay-daemon's configuration,
-  holding Policy **fragments**: files the daemon composes into one evaluated Policy. The package
-  owns its shipped fragments; the operator owns every other file. `relay-daemon policy check`
-  validates a directory with the same engine that enforces.
-- **Reload.** An explicit reload, triggered by config management after writing fragments.
-- **Relay, read-only.** The daemon reports the whole evaluated Policy, its fingerprint, and its
-  validity to the Relay on connect and on every reload. MCP `describe_node`, the Control API's
-  node read and the Console display it; the display side belongs to `query.md`.
+- **Daemon-local.** The Policy file and, beside it, the Policy directory of Policy
+  **fragments**: files the daemon composes with the Policy file into one evaluated Policy. Every
+  file is the operator's; no package owns a fragment. `relay-daemon policy check` validates
+  Policy with the same engine that enforces.
+- **Restart.** A Policy change applies when the daemon restarts. Config management writes the
+  change, runs `relay-daemon policy check`, and restarts the daemon.
+- **Relay, read-only.** The daemon reports the whole evaluated Policy and its fingerprint to the
+  Relay on connect. MCP `describe_node`, the Control API's node read and the Console display it;
+  the display side belongs to `query.md`.
 - **Hypotheticals.** `PolicyQuery` asks the live engine what it *would* decide; that capability
   is `policy-preflight.md`.
 - **Enforcement.** Every Task the daemon receives is evaluated before an executor runs.
-- **No writing surface.** Nothing on any Relay surface writes, delivers or signs Policy, by
-  design (invariant 2).
+- **No writing surface.** No Relay surface writes, transmits or signs a Node's Policy, by
+  design (invariant 2; see *Refusals*).
 
 ## Behaviour
 
 ### What a Policy contains
 
-- A Policy has four kinds of entry, in any fragment:
+- A Policy has four kinds of entry, in the Policy file or any fragment:
   - **Native rules** — named allow and deny rules over the arguments of the four Native
     Operations.
-  - **Template definitions** — a name, a description, a risk class, a fixed command
-    structure, and typed parameter slots. A slot's allowed values are declared inline on the
-    definition. The Template language itself is `operations-and-templates.md`.
-    **Defining a Template is what permits it.**
-  - **The Raw Exec gate** — allow and deny patterns. Absent from every fragment, Raw Exec is off.
+  - **Template rules** — named allow and deny rules over Template Operations, by name and slot
+    value. A Template is defined in a root-owned file in the Node's template root, not in
+    Policy (ADR-0021); the Template language is `operations-and-templates.md`. A rule for a
+    Template the Node has not loaded is inert, and dispatch reports `unsupported`.
+  - **The Raw Exec gate** — allow and deny patterns. Absent from every file, Raw Exec is off.
   - **Deny rules** — vetoes over any Native Operation, Template or Raw Exec command.
 - Every argument and slot is matched **by name**, never by position.
-- A Template name means one command structure everywhere it is defined. The values it permits
-  may differ between Nodes, by a differently constrained definition in that Node's fragments.
+- The values a Template permits may differ between Nodes, by that Node's own Policy rules.
 
 ### Composition
 
-> **Not yet reconciled (`2026-09-19`).** The v0.7.0 first cut of the Policy directory is
-> `daemon-installation.md`'s, not this section's: a Policy file plus a directory of fragments,
-> applied by restart, a bad-mode fragment refusing start like the Policy file, and no
-> package-owned fragments (#648, `policy-catalog.md`). Explicit reload, Templates inside
-> fragments, package-owned fragments and a reported `invalid` state remain this spec's intent,
-> to be reconciled when it is migrated.
+Built today: one Policy file, applied when the daemon restarts. The MVP adds Policy fragments,
+in this first cut (`daemon-installation.md` DI-36):
 
 - The Policy directory is `/etc/relay-daemon/policy.d`, beside the Policy file
-  `/etc/relay-daemon/policy.toml` (owner decision, 2026-10-16; `daemon-installation.md` DI-36).
-- The daemon reads every fragment in the Policy directory and evaluates them as **one Policy
-  with one fingerprint**. Which fragment a rule came from affects only error messages.
-- A Template name defined in more than one fragment is a Policy error. There is no override and
-  no precedence by file order: to replace a shipped Template, deny it and define your own under
-  a different name.
+  `/etc/relay-daemon/policy.toml`.
+- The daemon reads the Policy file and every fragment in the Policy directory and evaluates them
+  as **one Policy with one fingerprint**. Which file a rule came from affects only error
+  messages.
+- Deny beats allow across all the files. There is no override and no precedence by file order:
+  one file narrows another only by a deny rule.
+- No package places or owns a fragment. Every fragment is the operator's.
 
 ### Evaluation
 
 - **Deny-by-default.** A Native Operation, Template or Raw Exec command that no entry permits is
   denied.
-- **Deny beats allow.** A matching deny rule from any fragment vetoes, whatever permitted it and
+- **Deny beats allow.** A matching deny rule from any file vetoes, whatever permitted it and
   wherever that was written.
 - A call naming an argument or slot the Operation does not have, or carrying a value that is not
   well-formed for its type, is **malformed** — rejected before Policy is consulted, with its own
@@ -105,45 +103,43 @@ canonical path:
 - Whether a Node's Policy enables Raw Exec is part of what the Node reports, so "which Nodes
   permit Raw Exec?" is one query at the Relay.
 
-### Load, reload and validity
+### Load and validity
 
-> **Not yet reconciled (`2026-09-19`)** — see *Composition*.
-
-- Policy is loaded at daemon start and on every explicit reload. There is no filesystem watching.
-- On reload the daemon reads and validates the whole directory, then swaps the evaluated Policy
-  atomically. Tasks already running finish under the Policy that admitted them; every later
-  Task is evaluated against the new one.
-- **Any Policy error rejects the whole Policy** — a fragment that fails to parse, a duplicate
-  Template name, a fragment with unacceptable ownership or permissions, an invalid slot type, an
-  unsupported pattern. A Template slot in a decidable code-running position makes the Template
-  set unloadable instead, and Native Operations keep running (ADR-0021, amended 2026-10-15;
-  `operations-and-templates.md`). The Node then denies every Task, stays connected, and reports
-  `invalid` with the error and the fragment at fault. This holds identically at start and on
-  reload: there is no last-known-good fallback, no partial load, and no built-in allowance.
-- A fragment that is a symlink, is not a regular file, or is group- or world-writable is a
-  Policy error. A fragment must be owned by root or by the daemon's own uid.
-- The new fingerprint or `invalid` state reaches the Relay on reload without a reconnect.
+- Policy is loaded once, at daemon start. A change applies when the daemon restarts. There is no
+  explicit reload and no filesystem watching.
+- **The change procedure:** write the fragment, run `relay-daemon policy check` against it, then
+  restart the daemon. Config management does all three, for example with a handler that
+  restarts the daemon when a fragment changes.
+- A fragment that is a symlink, is not a regular file, or is group- or world-writable refuses
+  start, as the Policy file does. A fragment must be owned by root or by the daemon's own uid.
+- **A fragment that cannot be read or parsed leaves the whole Policy deny-all**, as does any
+  other Policy error: an invalid rule or an unsupported pattern. The daemon keeps running and
+  denies every Task. There is no last-known-good fallback, no partial load, and no built-in
+  allowance. A Template slot in a decidable code-running position makes the template set
+  unloadable instead, and Native Operations keep running (ADR-0021;
+  `operations-and-templates.md`).
+- The restart reconnects the Node, and the new fingerprint reaches the Relay on connect.
 
 ### What the Relay sees
 
-- The whole evaluated Policy: every Native rule, every Template definition including its command
-  body, every deny rule, and the Raw Exec gate — readable by any Account permitted to read that
+- The whole evaluated Policy: every Native rule, every Template rule, every deny rule, and the
+  Raw Exec gate — readable by any Account permitted to read that
   Node. The deny-list is not treated as a secret.
 
 ### The shipped default
 
-> **Not yet reconciled** — see *Composition*. Until then the shipped default stays one
-> operator-owned Policy file (ADR-0022, ADR-0033 §4) and is not a catalog fragment. ADR-0033's
-> 2026-10-15 amendment keeps it that way under packaging: the daemon package places the default
-> only when no Policy file exists and never rewrites it, and the shipped read catalog arrives in
-> its own optional package rather than with the daemon (`daemon-installation.md`).
-
-- The package ships a read fragment: every first-party `read`-class Template (the shipped read
-  catalog), `system.facts`, and `file.read` of any path outside a curated confidentiality
-  deny-list. It permits no `mutate` Operation and does not enable Raw Exec.
-- The package replaces its own fragments on upgrade and never touches an operator's. An
-  operator narrows the shipped default with a deny fragment; widening a shipped Template means
-  defining a new one under a different name.
+- The shipped default is one Policy file, not a fragment. The daemon package places it only
+  when no Policy file exists and never rewrites it; from then on it is the operator's file
+  (ADR-0022, ADR-0033).
+- It allows the whole shipped read catalog, all seven `read` Templates with `log.tail` included,
+  which ships inside the `relay-daemon` package (ADR-0053). It also allows `system.facts`, and
+  `file.read` of any path outside a curated confidentiality deny-list. It permits no `mutate`
+  Operation and does not enable Raw Exec.
+- The confidentiality deny-list still applies to the catalog: deny beats allow, and every path
+  denied to `file.read` is denied to `file.checksum` too (ADR-0022).
+- An operator narrows the shipped default with a deny fragment, for example one that denies
+  `log.tail` for chosen units or outright, or by editing the Policy file, which is theirs
+  (ADR-0053). Widening a shipped Template means defining a new one under a different name.
 
 ## Refusals
 
@@ -155,9 +151,12 @@ canonical path:
     the Raw Exec and Operation paths alike.
 - **Malformed.** An unknown argument or slot name, or a value not well-formed for its type, gets
   its own outcome for Native and Template Operations alike, so a typo never reads as a denial.
-- **Invalid Policy.** Every Task on a Node whose Policy is `invalid` is denied, and the denial
-  says the Policy is invalid rather than naming a rule.
-- **From the wire.** No message can add, remove, edit, deliver or reload a rule.
+- **A Policy that failed to load.** Every Task on that Node is denied by the deny-all Policy.
+- **No Relay surface writes Policy.** MCP, the Control API and the Console never write,
+  transmit, sign or apply Policy content to a Node, and no message on the Node connection
+  carries Policy content towards the daemon (invariant 2).
+- **From the wire.** No message can add, remove, edit or deliver a rule, or make the daemon load
+  one.
 - **Approval is not Policy's to check.** Policy never permits anything "with approval": a Node
   cannot verify an approval claim without trusting the Relay, so Policy stays the floor that
   holds even against a forged approval. Gating is `approval.md`.
@@ -173,19 +172,20 @@ canonical path:
   Template's structure is fixed in a root-owned local file; Raw Exec is argv-only and gated here.
 - **Invariant 12 / ADR-0011** — only the daemon's live engine evaluates Policy, hypotheticals
   included.
-- **ADR-0021 — needs amending.** Templates are no longer a separate tier of files beside Policy;
-  they are definitions inside Policy fragments, and the separate template-set fingerprint
-  collapses into the Policy fingerprint. Its rejection of a daemon-side deny floor stands.
+- **ADR-0021** — Templates load from the template root beside Policy, with their own
+  template-set fingerprint, and Policy governs them by name. Its rejection of a daemon-side deny
+  floor stands.
+- **ADR-0053** — the read catalog ships inside the `relay-daemon` package and the shipped
+  default allows all of it, `log.tail` included; supersedes in part ADR-0021 decision 11.
 - **ADR-0018 — needs amending.** The deferred path matcher is resolved as the glob dialect above.
   Case and Unicode folding on a folding mount remains a recorded residual risk.
 - **ADR-0019 — amended `2026-09-16`.** Whitespace-bearing argv elements are denied outright, and
   allow patterns are full-match. Its choice to quote caller text into a Raw Exec denial, bounded,
   stands; removing that quoting (Future work) would need a further amendment for the Raw Exec path.
-- **ADR-0022** — the shipped read posture stands, now expressed as a package-owned fragment.
+- **ADR-0022** — the shipped read posture stands, as one Policy file placed only if absent
+  (ADR-0033).
 - **ADR-0025** — reads are audited and output is not retained; this is the present answer to
   secrets in read output.
-- **GLOSSARY.md — needs updating** for Template Operation, template pack and the template-set
-  fingerprint, and gains *Policy fragment*.
 
 ## Seams and proof
 
@@ -202,21 +202,23 @@ _Not yet written._ This spec's claims are the backlog of its testing issue.
   `approval.md`, `execution.md`, `freeze.md`. Policy never consults them.
 - **Getting fragments onto a Node and applying them**: `daemon-installation.md`, through the
   customer's config management.
-- **Pre-made fragments and the screen that arranges them**: `policy-catalog.md`.
+- **Pre-made fragments and a screen that arranges them**: later work, roadmap:
+  relay/policy-catalog-and-live-reload.
 - **Central Policy authorship.** Out of realm (AGENTS.md). A Template an AI-agent drafts ends as
   a proposal a human ships through config management.
 
 ## Accepted residual risk
 
 - **Self-modification is a deployment concern.** That nothing a Task runs can write the Policy
-  directory or trigger a reload rests on the shipped unit's filesystem sandbox, a documented
+  file or the Policy directory rests on the shipped unit's filesystem sandbox, a documented
   deployment requirement — which is why no Alpine package ships yet (`daemon-installation.md`):
   without systemd there is no such sandbox. The self-reference lint is a warning, not an error.
   Also carried: the `pkg.install` profile relaxes that sandbox; the daemon-uid ownership
-  exception stands; an agentless tier (ADR-0037) would have no unit; and explicit reload makes a
-  writable Policy directory a live escalation rather than one that waits for a restart.
+  exception stands; and an agentless tier (ADR-0037) would have no unit. A writable Policy
+  directory waits for a restart to take effect; explicit reload, if built, would make it live.
 - **Secrets in read output.** The confidentiality deny-list cannot know every file that holds a
   credential; read auditing records that such a file was read, not what it said.
+- **Logs reach the model provider by default:** threat model R46 (ADR-0053).
 - **Secrets in denial text reach the daemon log.** A denial's human-readable text quotes
   caller-supplied text — a deny pattern's matched text and a refused `argv[0]` on the Raw Exec
   path, the arguments on the Operation path — and so copies a secret passed as an argument into
@@ -240,7 +242,10 @@ Wanted, deliberately not in the first pass, and in no committed order.
 - **Shared Template definitions with separate allow rules** — one definition serving a fleet,
   with per-Node allowed values held apart from it.
 - **A daemon-verified guarantee against self-modification** — the daemon itself establishes that
-  nothing a Task runs can write the Policy directory or trigger a reload.
+  nothing a Task runs can write the Policy file or the Policy directory.
+- **Beyond the first cut of fragments** — explicit reload without a restart, Template
+  definitions inside fragments, package-owned fragments, and a reported `invalid` state:
+  roadmap: relay/policy-catalog-and-live-reload.
 - **Output rules** — what a result may contain, enforced on the Node, the only place that sees
   output before it leaves and so the only place such a rule holds against a compromised Relay.
 - **Distributing Policy through the Relay** — only if it adds no path by which the Relay can widen
@@ -248,5 +253,4 @@ Wanted, deliberately not in the first pass, and in no committed order.
 
 ## Open questions
 
-None open. Resolved elsewhere: `invalid` is targetable as `state:policy-invalid`
-(`selectors-and-labels.md`); how the Relay trusts a Template's risk class is ADR-0042.
+None open. Resolved elsewhere: how the Relay trusts a Template's risk class is ADR-0042.

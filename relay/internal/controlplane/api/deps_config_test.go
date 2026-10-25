@@ -13,6 +13,7 @@ import (
 // ADR-0010 forbids. This walks Deps's fields via reflection so the check
 // fails the moment such a field is added, without needing to import
 // cmd/relay.Config (which .golangci.yml's api-imports rule refuses).
+// Proves RC-11.
 func TestDeps_HasNoConfigField(t *testing.T) {
 	typ := reflect.TypeOf(Deps{})
 	for i := 0; i < typ.NumField(); i++ {

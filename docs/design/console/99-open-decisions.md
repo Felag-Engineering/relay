@@ -150,21 +150,17 @@ Activity already renders Job rows and filters to them, so a Jobs destination wou
 list. **Job detail remains its own page**, reached from any dispatch row in Activity and from a
 Node's recent Tasks.
 
-### D7. Policy as its own nav item — **RESOLVED 2026-08-24: keeps its slot**
+### D7. Policy as its own nav item — **RESOLVED 2026-08-24: keeps its slot; SUPERSEDED 2026-10-23 by D38**
 
 Policy authoring is recurring work and the deny-to-fix loop is central to the trust story;
 enrollment is mostly a one-off by comparison. Folding Policy under "Node setup" would bury the
 screen operators return to.
 
-### Resulting navigation — eight destinations, three groups
+### Resulting navigation — superseded by D38
 
-```
-Observe      Fleet · Activity
-Act          Run · Policy
-Administer   Add Nodes · Accounts · Access · Incident
-```
-
-Approvals left with D21; `00-foundations.md` carries the current list.
+The eight destinations in three groups recorded here lost Approvals with D21, and Run, Policy
+and Incident with D38. `00-foundations.md` carries the current list: five destinations, two
+groups.
 
 ### D15. CSP violation reporting — **DEFERRED (#460)**
 
@@ -291,12 +287,11 @@ Made moot: D10's Console half (the card's diff placement, the queue's fan-out ti
 queue's unaudited read (#779). Specs 08 and 14 are retired stubs; the screens are removed
 (`docs/specs/approval.md` AP-80).
 
-**Not settled by it — needs the owner:** whether "cut out of the UI completely" also reaches
-[19 — Approval rules](19-approval-rules.md), the page where an `admin` edits the gate rules
-(`approval.md` AP-72). ADR-0044 removed the *decision* surface only. If the rules page goes too,
-AP-72's "edited only in the Admin Console" leaves the rules with no writer at all, which is an
-invariant 11 question (reach-bounding settings change only by a human Account with step-up),
-not a screen change.
+**Settled since by ADR-0047 and D38:** whether "cut out of the UI completely" also reached
+19 — Approval rules, the page where an `admin` would have edited the gate rules. It did: gate
+rules are a section of the Relay configuration file (ADR-0047 decision 7), so they have a
+writer, the Relay's host administrator, and the page moved to the private roadmap
+(roadmap: relay/settings-in-the-console).
 
 ### D20. Hostname is the visual primary — **RESOLVED 2026-10-01 (owner)**
 
@@ -491,6 +486,29 @@ ADR-0045 settles the specifics (a generated value shown once, a 72-hour lifetime
 while unredeemed, the current password proved per act, other sessions ended on change); the PR
 that merged it named each as a proposal for the owner. Specs 11, 12, 15 and 20 carry the design.
 
+### D38. The MVP cuts — **RESOLVED 2026-10-23 (owner), ADR-0047, ADR-0050, ADR-0051, ADR-0052**
+
+The owner's MVP sweep. Seven screen specs left this directory for the private roadmap, copied
+verbatim there:
+
+1. **The Console watches; it does not execute** (ADR-0052). The composer and Preflight (05) is
+   cut, with the `console_execution` gate and the run placeholder. No Run destination, no
+   "Run here" or "Run against these". Later idea: roadmap: relay/console-execution-for-skills.
+2. **No Policy author.** The Policy Catalog screen (06) and the Policy fix from a deny (07) are
+   cut, with the Policy destination (D7 superseded). The Relay still never writes Policy
+   (invariant 2). Roadmap: relay/policy-catalog-and-live-reload. **Policy aliases stay** (D23),
+   edited where a fingerprint is shown.
+3. **No approval queue** (14), as D21 and ADR-0047 had already decided.
+4. **No quarantine and no Incident screen** (16). The incident ladder keeps revoking a Node and
+   Freeze. Roadmap: relay/quarantine.
+5. **No settings screens** (18, 19). The configuration file is the one source for the MVP; the
+   owner's direction is that settings eventually live in the Console.
+   Roadmap: relay/settings-in-the-console.
+6. **Tags are built** (ADR-0050). A human Account at `operator` or above edits them on Node
+   detail (02) and in bulk over a Selector's matched Nodes from the Fleet view (01), with a
+   confirmation listing the matched Nodes. No step-up; every change audited with old and new
+   values. An Enrollment Token's labels are initial tags (09).
+
 ## Prerequisites that already exist as issues
 
 ### D8. [#397](https://github.com/Felag-Engineering/relay/issues/397) — three route families have no role gate — **RESOLVED: gates landed**
@@ -506,8 +524,8 @@ bars `internal/enroll` and `internal/revocation`. Every refusal is audited as a 
 Account, and `TestEveryRouteIsRoleClassified` fails any route added without a declared floor.
 
 **Still owed:** ADR-0020 asks for `admin` **+ step-up re-authentication** on Node revoke, and the
-Control API has no step-up mechanism (`api/nodes.go`). Spec 16 may state the role requirement as
-enforced; it may not yet promise the step-up.
+Control API has no step-up mechanism (`api/nodes.go`). Spec 16 (cut by D38) could state the role
+requirement as enforced; it could not yet promise the step-up.
 
 ### D13. [#403](https://github.com/Felag-Engineering/relay/issues/403) — the Relay's server certificate never rotates — **RESOLVED: the leaf rotates in-process**
 
@@ -553,7 +571,9 @@ carry read *results*: ADR-0025's no-retention property is about the data, not ab
 an event bus that ships read output has leaked it just as surely as an audit row that stores it.
 Assert this structurally, the way `no_dispatch` is asserted.
 
-### D10. The approval record needs a shape key — **RESOLVED 2026-08-24, and it is a v0.5.0 decision**
+### D10. The approval record needs a shape key — **RESOLVED 2026-08-24, and it is a v0.5.0 decision; CUT 2026-10-22 by ADR-0047 decision 8**
+
+*(ADR-0047 cuts the shape key; the diff shown to approvers is a proposal. Kept for its history.)*
 
 *(Console half moot since D21: specs 08 and 14 are retired, so the diff placement and the fan-out
 tiebreak have no screen. The shape key stands in the approval domain; what renders its diff is an
@@ -643,9 +663,9 @@ pursued.
 
 **None.** Every screen named in earlier drafts has a spec.
 
-Two dimensions cut across every screen and are drawn nowhere: a `viewer` sees a **structurally
-smaller** Console, not a greyed-out one, and `console_execution = off` removes Run **entirely**.
-*Absent* beats *forbidden* (ADR-0026).
+One dimension cuts across every screen and is drawn nowhere: a `viewer` sees a **structurally
+smaller** Console, not a greyed-out one. *Absent* beats *forbidden* (ADR-0026). There is no Run
+for anyone (D38).
 
 ---
 
@@ -657,11 +677,11 @@ What still governs:
   deferred (D2, #443).
 - **v0.6.0 "zero mutating routes"** means *no Console route reaches the capability layer's write
   or dispatch path*. A session, a saved view or an audit query is not that. **Cancel is v0.7.0.**
-- **`console_execution`** lands with the composer (v0.7.0, spec 05), as file-only Relay
-  configuration. Until then the shell's property is that the nav is built from mounted routes.
+- ~~**`console_execution`** lands with the composer~~ — cut by D38 (ADR-0052). The shell's
+  property is that the nav is built from mounted routes.
 - **Backend seams:** audit/Job query seams live in the capability layer's read lane; saved views
   need a preference store (#442).
-- **A batch is a Grant** over a Scope (ADR-0027).
+- ~~**A batch is a Grant** over a Scope (ADR-0027).~~ Approval Grants are cut (ADR-0047).
 - **Day one** shows Relay-side enrollment rejections only; daemon-side fingerprint rejections are
   invisible to the Relay by design (#444 for a handshake-abort hook).
 - **Login throttling** carries its own defaults (spec 12), with progressive delay and no hard

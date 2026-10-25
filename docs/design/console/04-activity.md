@@ -48,15 +48,16 @@ step-up, Account changes and API Token mints and revokes are on [20 — Access](
 |---|---|
 | `dispatch` | Operation + args, risk badge, requester chips, Selector with resolved fan-out, plan hash, approver if it was parked, live outcome counts, Job link; while running, a running marker linking to its entry in [Running now](#running-now), which holds Cancel |
 | `plan` | a Preflight: the arguments, the grouped verdicts and `would_be_rejected`, and a line saying nothing executed and each Node's own engine answered. Its badge is distinct, because it is the trust-critical case |
-| `approval` | what is parked, quorum state, TTL — and no link to decide, because the Console decides no approval (ADR-0044); an in-band elicitation (ADR-0029) with the deciding identity as a verified chip once decided |
+| `approval` | what is parked and its TTL — and no link to decide, because the Console decides no approval (ADR-0044); an in-band elicitation (ADR-0029) with the deciding identity as a verified chip once decided |
 | `refusal` | the capability layer's refusal, rendered slate and informative, never as an error — the role gate refusing `raw_exec` to a non-`admin`, for one |
 | `read` | the arguments and a metadata-only result line; no output, and no per-row sentence saying the output is not retained (D34) |
 | `cancel` | which Job, by whom |
 
 A record kind no family above claims is not drawn here; it stays on the audit trail.
 
-The tool surface is eight tools: `list_nodes`, `describe_node`, `list_operations`, `get_job`,
-`run_operation`, `raw_exec`, `cancel_job`, `approve_request`. A Preflight is `plan: true` on
+The tool surface is seven tools: `list_nodes`, `describe_node`, `list_operations`, `get_job`,
+`run_operation`, `raw_exec`, `cancel_job`. `approve_request` is retired (ADR-0047): an approval
+is an elicited answer, recorded as an `approval` row. A Preflight is `plan: true` on
 `run_operation` / `raw_exec` (the wire keeps that spelling; GLOSSARY.md), not a separate tool.
 
 **A running Job before its dispatch is recorded.** A running Job with no dispatch audit row yet
@@ -120,7 +121,7 @@ cite this section.
 `Mcp-Session-Id` — a Job ID is the durable handle). Every tool call is an independent,
 authenticated request: no connect time, no idle state, nothing to disconnect. Stopping one actor
 is revoking its API Tokens ([15](15-accounts-and-tokens.md)) or Freeze
-([16](16-incident-ladder.md)); suspension is deferred (ADR-0035, not adopted; #443). There is no
+(`docs/specs/freeze.md`); suspension is deferred (ADR-0035, not adopted; #443). There is no
 list of active Accounts; `?account=` scopes the stream (Filtering and export).
 
 ## Reads
@@ -254,7 +255,7 @@ retroactive cancel, and the cancelled Task ID stays deduped so at-most-once stil
 (ADR-0013, invariant #4).
 
 Cancel sits in [Running now](#running-now), one per Job per page. Token revocation is
-[15](15-accounts-and-tokens.md); Freeze is [16](16-incident-ladder.md).
+[15](15-accounts-and-tokens.md); Freeze is `docs/specs/freeze.md`.
 
 ## Must not appear
 

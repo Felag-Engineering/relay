@@ -2,6 +2,9 @@
 
 **Status:** Accepted (owner decision 2026-10-22).
 
+ADR-0050 (2026-10-23) supersedes decision 4's scope of `relay:` labels: a mint names initial
+tags instead.
+
 Behaviour: `docs/specs/enrollment.md` and `docs/specs/daemon-installation.md`.
 
 This ADR supersedes in part ADR-0032, ADR-0030, ADR-0031 and ADR-0006, and amends ADR-0033:
@@ -48,7 +51,7 @@ than carry a token in user data.
 5. **`relay:enrollment-token` stays reserved and unwritten.** No action writes it and no scope may
    name it. A leaked token's Nodes are cut off together by revoking the token, which cascades to
    every Node it enrolled; fencing them off without revoking is an accepted gap (threat-model R44)
-   and waits in the roadmap (`roadmap: relay/quarantine-by-enrollment-token`).
+   and waits in the roadmap (`roadmap: relay/quarantine`).
 6. **No cloud-init path in the MVP.** A token in user data outlives the join, readable on the Node
    and from the metadata service. New cloud VMs join by platform attestation once it exists
    (`roadmap: relay/enrollment-is-an-approval`), which needs no secret at all.

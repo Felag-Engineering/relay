@@ -157,10 +157,9 @@ so what may be done, by whom, and how it is recorded is decided once.
   mTLS client cert issued at enrollment.
   ([ADR-0005](docs/adr/0005-grpc-bidi-over-mtls-transport.md),
   [ADR-0006](docs/adr/0006-node-enrollment-identity-and-label-authority.md))
-- **A System Model the AI maintains.** A git-backed graph links Labels into Services and
-  Dependencies, so the AI-agent sees the fleet as a connected system. It is advisory only, and
-  auditable and correctable by humans through git.
-  ([ADR-0008](docs/adr/0008-system-model-git-backed-semantic-graph.md))
+- **Tags people control** (designed for the MVP). Operators group Nodes with `tag:` labels, set
+  at enrollment or later in the Console. No AI-agent and no Node can write one.
+  ([ADR-0050](docs/adr/0050-tags-are-the-operators-labels.md))
 
 ## MCP tools
 

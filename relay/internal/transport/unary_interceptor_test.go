@@ -139,6 +139,7 @@ func TestUnaryInterceptor_RenewWithValidCert_InjectsCertCN(t *testing.T) {
 // certless: a TLS connection that presents no client certificate is admitted
 // by the handshake (VerifyClientCertIfGiven keeps Enroll reachable) and must be
 // refused by the interceptor before the handler runs.
+// Proves EN-9.
 func TestUnaryInterceptor_RenewWithoutPeerCert_Refused(t *testing.T) {
 	ts := newTestSetup(t)
 	rec := &recordingEnrollmentServer{}
@@ -160,6 +161,7 @@ func TestUnaryInterceptor_RenewWithoutPeerCert_Refused(t *testing.T) {
 // TestUnaryInterceptor_CertlessEnroll_PassesWithoutIdentity proves the other
 // side of the allowlist on the same server: Enroll is reachable with no client
 // cert, and its context carries no node_id.
+// Proves EN-9.
 func TestUnaryInterceptor_CertlessEnroll_PassesWithoutIdentity(t *testing.T) {
 	ts := newTestSetup(t)
 	rec := &recordingEnrollmentServer{}
@@ -191,6 +193,7 @@ func TestUnaryInterceptor_CertlessEnroll_PassesWithoutIdentity(t *testing.T) {
 // connection: had gRPC redialled, the handshake-level VerifyConnection check
 // would have refused it instead, and this test would not be exercising the
 // interceptor at all.
+// Proves EN-29.
 func TestUnaryInterceptor_RevokedAfterConnect_RenewRefused(t *testing.T) {
 	ts := newTestSetup(t)
 	rec := &recordingEnrollmentServer{}

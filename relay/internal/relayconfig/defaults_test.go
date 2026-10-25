@@ -13,6 +13,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/nodestate"
 )
 
+// Proves RC-22.
 func TestDefaults_EachReachValueWhenAbsent(t *testing.T) {
 	cfg := mustLoad(t, minimal)
 
@@ -69,6 +70,7 @@ func TestDefaults_ReadAndMutateCapsAreThePinnedValues(t *testing.T) {
 	}
 }
 
+// Proves RC-22.
 func TestApprovalGatePathAbsentMeansNoGate(t *testing.T) {
 	if got := mustLoad(t, minimal).Approval.GateRulesPath; got != "" {
 		t.Fatalf("GateRulesPath = %q, want none", got)
@@ -105,6 +107,7 @@ const (
 // TestEveryKeyReachesConfig proves build copies every schema key: setting any
 // one to a non-default value changes the Config, so a key the schema carries
 // and Config drops cannot hide.
+// Proves RC-22.
 func TestEveryKeyReachesConfig(t *testing.T) {
 	type variant struct{ base, doc string }
 	m := func(doc string) variant { return variant{minimal, minimal + doc} }

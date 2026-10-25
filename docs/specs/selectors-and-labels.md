@@ -1,8 +1,8 @@
 # Selectors and Labels
 
-**Status:** aspirational — worked through with the owner on `2026-09-13`, awaiting their review
-of this draft. Describes intended behaviour, not the code (see the establishing phase in
-`README.md`).
+**Status:** aspirational — worked through with the owner on `2026-09-13`, revised to the
+owner's MVP decisions of `2026-10-23` (ADR-0050). Describes intended behaviour, not the code
+(see the establishing phase in `README.md`).
 
 ## Purpose
 
@@ -12,13 +12,13 @@ vocabulary.
 
 There are four namespaces with one writer each. A Node describes itself in `node:`, and nothing
 remote can change that. The Relay applies `relay:` labels as a consequence of its own actions.
-Users organise the fleet with `tag:`. `state:` tracks a Node's current condition and is written
-by nobody.
+Operators organise the fleet with `tag:`. `state:` tracks a Node's current condition and is
+written by nobody.
 
 This is a security boundary. What a Selector resolves to sets the blast radius of everything
 downstream, and **who may write a Label decides whether a target can be forged.** A
-compromised Node that could write its own quarantine label could describe itself out of
-quarantine.
+compromised Node that could write a security-lane label could put itself into, or take itself
+out of, a remediation target.
 
 ## Surfaces
 
@@ -29,11 +29,13 @@ itself.
 
 Label **writes** are deliberately asymmetric:
 
-- `node:` — the Node's own declared-labels file and its daemon; no Relay surface.
+- `node:` — the Node's daemon, from its `RELAY_NODE_LABELS` setting and its Facts; no Relay
+  surface.
 - `relay:` — no surface writes one directly. Each is written by the Relay action that defines
-  it: enrollment, quarantine.
-- `tag:` — add and remove, singly or in bulk by Selector, on every surface: MCP, the Control API
-  and the Console.
+  it; today that is enrollment.
+- `tag:` — the Console and the Control API, by a human Account of `operator` or above. The
+  Console writes on a Node's page, and in bulk over the Nodes a Selector matches. No MCP tool
+  writes a tag. Designed for the MVP, not built.
 - `state:` — no writer anywhere.
 
 ## Behaviour
@@ -45,16 +47,17 @@ Every Label is namespaced, and a namespace is immutable from every side but its 
 
 | Namespace | Written by | Never written by | Purpose |
 |---|---|---|---|
-| `node:` | The Node: config management declares, the daemon fills in built-ins | The Relay, any user | Routine targeting; the Node's self-description |
-| `relay:` | The Relay, only as the side effect of a defined action | The Node, any user directly | The security lane |
-| `tag:` | An Account of `operator` or above, on any surface | The Node | Routine targeting; organising the fleet |
+| `node:` | The Node: config management declares, the daemon reports built-ins | The Relay, any Account | Routine targeting; the Node's self-description |
+| `relay:` | The Relay, only as the side effect of a defined action | The Node, any Account directly | The security lane |
+| `tag:` | A human Account of `operator` or above, on the Console or the Control API | The Node, a machine Account, MCP | Routine targeting; organising the fleet |
 | `state:` | **Nobody** — derived from the registry at resolution time | Anyone | Routine targeting on live condition |
 
-**Only `relay:` is a valid security-lane target — with one exception for engaging a
-quarantine.** Remediation targets `relay:` and only `relay:`. Engaging a quarantine may target
-`relay:` or `tag:`, because no Node can write either; lifting one targets `relay:` only
-(`quarantine-node.md`). `node:` and `state:` are routine targeting only, because a Node controls
-them (invariant 7, amended 2026-09-16; ADR-0006, ADR-0020).
+**Only `relay:` is a security-lane target.** Remediation and secret distribution target
+`relay:` and only `relay:`; today the one `relay:` key written is `relay:node-id`. Where a
+quarantine is engaged, it may target `relay:` or `tag:`, because no Node can write either;
+lifting one targets `relay:` only. Quarantine is not in the MVP (`roadmap: relay/quarantine`).
+`node:` and `state:` are routine targeting only, because a Node controls them (invariant 7;
+ADR-0006, ADR-0020, ADR-0050).
 
 The writers are structurally separated, not separated by permission: a report from a daemon
 cannot reach the `relay:` or `tag:` labels on its Node record, and a daemon can never revoke or
@@ -62,53 +65,61 @@ un-revoke itself.
 
 ### `relay:` — written only by Relay actions
 
-- **No user ever writes a `relay:` label directly.** Each `relay:` key is defined together with
-  the action that sets and clears it; roles, step-up and audit apply to that action.
-- The set of `relay:` keys is **closed, and grows only when an action is built.** Two kinds of
-  key are in it: keys an action defines or reserves, in the table, and the keys of an Enrollment
-  Token's scope, which the minting `admin` defines for the enrollment action (ADR-0006, amended
-  2026-10-22) and which may never name a key from the table. Defined or reserved by an action:
+- **No Account ever writes a `relay:` label directly.** Each `relay:` key is defined together
+  with the action that sets and clears it; roles, step-up and audit apply to that action.
+- The set of `relay:` keys is **closed, and grows only when an action is built.** Every key in
+  it is defined or reserved by a Relay action, and no Account chooses one. An Enrollment Token
+  names no `relay:` label; its labels are initial tags (below). Defined or reserved by an
+  action:
 
   | Key | Written by | Value |
   |---|---|---|
-  | `relay:enrollment-token` | Reserved, with no writer (ADR-0048): no scope may name it, and a mint naming it is refused as a reserved key | The ID of the Enrollment Token the Node joined through |
-  | `relay:node-id` | Enrollment, on every Node (designed: `enrollment.md` EN-38, ADR-0048) | The Relay-assigned Node ID, bound to the Node's certificate |
-  | `relay:quarantine` | Engaging a quarantine, by a `relay:` or `tag:` Selector resolved once to concrete Nodes; cleared only by lifting it (`quarantine-node.md`) | `on` while quarantined |
+  | `relay:enrollment-token` | Reserved, with no writer (ADR-0048) | The ID of the Enrollment Token the Node joined through |
+  | `relay:node-id` | Enrollment, on every Node (`enrollment.md` EN-38, ADR-0048) | The Relay-assigned Node ID, bound to the Node's certificate |
 
 - `relay:node-id` is how the security lane addresses one specific Node without trusting it
-  (`enrollment.md` EN-38). A value set would address a handful.
+  (`enrollment.md` EN-38).
 - `relay:enrollment-token` has no writer; a leaked token's Nodes are contained by revoking it
-  (`enrollment.md`).
-- An Enrollment Token carries an optional scope of `relay:` labels, chosen by the `admin` who
-  mints it and stamped on each Node that enrolls with it (ADR-0006, `enrollment.md` EN-12,
-  EN-37). The
-  2026-09-14 draft that carried `tag:` labels on a token in place of that scope was retired
-  unbuilt on 2026-10-21; whether a token may also carry `tag:` labels once `tag:` has storage is
-  an open question in `enrollment.md`.
+  (`enrollment.md`). Fencing them off without revoking waits in `roadmap: relay/quarantine`.
+- A quarantine, when it is built, defines its own key with the action that engages and lifts
+  it.
 
 ### `node:` — declared and built-in
 
-- **Declared labels** (`node:env=prod`, `node:role=web`) come from a root-owned file written by
-  the customer's config management. The daemon reads it at start and on the same explicit reload
-  as Policy, and reports the result to the Relay without a reconnect.
-- **Built-in labels** are filled in by the daemon from its Facts: `node:hostname`, `node:ip`,
-  `node:os`, `node:arch`. Their keys are reserved; a declared label cannot set one.
+- **Declared labels** (`node:env=prod`, `node:role=web`) come from the daemon's
+  `RELAY_NODE_LABELS` environment setting, written by the customer's config management. The
+  daemon reads it at start; changing it takes a restart of the daemon.
+- **Built-in labels** are filled from the Facts the daemon already reports: `node:hostname`,
+  `node:ip`, `node:os`, `node:arch`. Their keys are reserved; a declared label cannot set one.
+  Designed for the MVP, not built.
 - A multi-valued built-in (`node:ip`) matches when any of its values matches.
-- A declared-labels file that is malformed or over the limits contributes **no** declared
-  labels — never a partial load, which would silently drop the Node out of Selectors it should
-  match. Built-in labels still apply, and the Node reports `state:labels-invalid`.
 - Every `node:` label, declared or built-in, is forgeable by its own Node.
+
+A root-owned declared-labels file, reloaded with Policy and reported without a reconnect, waits
+in `roadmap: relay/policy-catalog-and-live-reload`, with the `state:labels-invalid` marker it
+would bring.
 
 ### `tag:` — organising the fleet
 
-- An Account of `operator` or above adds and removes tags on every surface, MCP included, so an
-  AI-agent can organise the fleet as it works. Standard authentication, no step-up.
+Designed for the MVP, not built (ADR-0050). Until it lands, a `tag:` term is refused at parse
+with a recognisable refusal, identically on every surface, rather than silently matching
+nothing.
+
+- **Only a human Account of `operator` or above writes a tag,** through the Console or the
+  Control API. Standard authentication, no step-up. No MCP tool writes a tag, a machine Account
+  writes none, and a Node never writes one.
+- On the Console, an operator writes tags on a Node's page, or in bulk over the Nodes a
+  Selector matches. A bulk write first lists the matched Nodes, and writes only once the
+  operator accepts that list.
 - A tag is `key=value`, the same shape as every other Label.
-- Bulk tagging takes a Selector and is audited as **one action naming every Node it touched.**
-  Every single write is audited.
+- **Every change is audited with its old and new values.** A bulk write is audited as one
+  action naming every Node it touched.
+- **An Enrollment Token's labels are initial tags.** The mint names zero or more `tag:` labels,
+  and enrollment writes them on each Node the token enrolls. Afterwards they are ordinary tags,
+  edited like any other (`enrollment.md`).
 - A tag grants no reach its writer did not already have: every dispatch still passes the blast
-  cap, Policy and approval. A tag is never a security-lane target, except that a quarantine may be
-  engaged by `tag:` (`quarantine-node.md`); once engaged, only the resulting `relay:` label matters.
+  cap, Policy and approval. A tag is never a remediation or secret-distribution target. Where a
+  quarantine is engaged by `tag:`, only the resulting `relay:` label matters once it is engaged.
 
 ### Limits
 
@@ -119,8 +130,8 @@ un-revoke itself.
 
 - It **can** forge its own `node:` labels, declared and built-in. Routine `node:` targeting
   trusts the Node exactly as much as the Node.
-- It **can** influence `state:` terms derived from its own reports — including hiding
-  `policy-invalid`, `raw-exec-enabled` and `labels-invalid`.
+- It **can** influence `state:` terms derived from its own reports, including hiding
+  `policy-invalid` and `raw-exec-enabled`.
 - It **cannot** touch `relay:` or `tag:`. That is what makes the security lane safe to target.
 
 Because a Node's reported facts feed `node:` built-ins and `state:`, values are gated at ingress
@@ -137,16 +148,16 @@ this spec.
 
 | Kind | Terms |
 |---|---|
-| Markers (boolean) | `offline`, `outdated`, `cert-expiring`, `policy-invalid`, `raw-exec-enabled`, `labels-invalid` |
+| Markers (boolean) | `offline`, `outdated`, `cert-expiring`, `raw-exec-enabled` |
 | Facts (key=value) | `daemon-version`, `policy-fingerprint` |
 
 - `outdated` means below the ADR-0014 dispatch minimum and nothing else.
-- `cert-expiring` fires within a configurable fraction of the certificate's lifetime, and stays
-  quiet when the provenance needed to compute it is unknown.
-- `policy-invalid` means the Node reports its Policy `invalid` (`policy.md`); `raw-exec-enabled`
-  means the Node's Policy enables Raw Exec; `labels-invalid` means its declared-labels file
-  contributed nothing.
-- `policy-fingerprint` covers the whole evaluated Policy, Template definitions included.
+- `cert-expiring` fires within the built-in fraction of the certificate's lifetime
+  (`relay-configuration.md`), and stays quiet when the provenance needed to compute it is unknown.
+- `raw-exec-enabled` means the Node's Policy enables Raw Exec. A `policy-invalid` marker waits with
+  a reported `invalid` Policy state (`roadmap: relay/policy-catalog-and-live-reload`).
+- `policy-fingerprint` covers the evaluated Policy; the Template set carries its own fingerprint
+  (ADR-0021).
 - **Terms derived from a Node's own report find Nodes; they guarantee nothing.** A compromised
   Node can hide any of them.
 - A marker written with a value, or a fact written bare, is a parse error rather than a silently
@@ -157,24 +168,26 @@ copy, needed recompute triggers on several separate events.
 
 ### The grammar
 
-A Selector is **an AND of terms**. There is no OR across keys and no parentheses, so a Selector's
-blast radius stays legible at a glance.
+A Selector is **an AND of exact terms**. There is no OR across keys and no parentheses, so a
+Selector's blast radius stays legible at a glance.
 
 - **Every term carries a namespace prefix.** An unprefixed term is a parse error, never a guess:
   a term read in the wrong namespace is a targeting error with a blast radius.
-- `node:key=value`, `relay:key=value`, `tag:key=value` — key and value both required.
+- `node:key=value`, `relay:key=value`, `tag:key=value` — key and value both required, and the
+  term matches that exact value.
 - `state:marker` or `state:fact=value` — from the closed vocabulary above.
-- **A value set** matches any listed value for one key: `node:role=web|api`.
-- **A value glob** matches within a value: `*` any run of characters, `?` exactly one
-  (`node:hostname=web-*`). Globs are allowed in every namespace, `relay:` included — there a glob
-  can only range over labels the Relay itself wrote.
-- **Negation** excludes: `!tag:canary=true`, `!state:offline`, `!node:env=dev`. It is valid for
-  `node:`, `tag:` and `state:` only.
-- **A negated `relay:` term is a parse error.** Otherwise a `relay:` label the store declined to
-  serve would make a quarantined Node match `!relay:quarantine=on`.
+- **Negation is refused at parse, permanently, in every namespace.** It has two faults. A label
+  the store declines to serve is invisible to resolution, so under negation it would add a Node
+  to a match rather than remove one. And "everything except" includes every Node that carries
+  no label at all, so a new or unlabelled Node falls into the target unasked.
 - **An empty Selector** matches every Node for reads and listing, and is **refused for
-  dispatch**. Targeting the whole fleet must be written deliberately (for example
-  `node:hostname=*`), so an AI-agent that forgets a Selector gets an error, not the fleet.
+  dispatch**. Targeting the whole fleet must be written deliberately, with a built-in label every
+  Node carries, such as `node:os=linux`, so an AI-agent that forgets a Selector gets an error, not
+  the fleet. There is no whole-fleet keyword (owner decision 2026-10-23); the blast cap and the
+  gate still apply to the result.
+
+Value sets (`node:role=web|api`) and value globs (`node:hostname=web-*`) wait in
+`roadmap: relay/selector-value-sets-and-globs`.
 
 ### Resolution
 
@@ -191,49 +204,50 @@ concatenated back together by a Console href or an AI-agent, so rendering is gat
 than parsing. A stored Label outside the allowlist is declined at read-back, never deleted or
 rewritten: *decline to serve, never write*.
 
-A declined label is invisible to resolution. For a positive term that can only remove a Node from
-a match. For a negated term it can **add** one (see *Accepted residual risk*) — which is why
-negation is refused on `relay:`, and why quarantine cannot be escaped through a declined label:
-its key and value are both inside the allowlist, and `relay:` cannot be negated. For `node:` the
-condition self-heals on the Node's next report; for `relay:` there is **no self-heal**, which is a
-disclosed residual (threat-model register R13) with operator-facing remediation.
+A declined label is invisible to resolution. Every term is positive, so that can only remove a
+Node from a match, never add one; it is one of the two reasons negation is refused. For `node:`
+the condition self-heals on the Node's next report; for `relay:` there is **no self-heal**,
+which is a disclosed residual (threat-model register R13) with operator-facing remediation.
 
 ## Refusals
 
 | Refusal | Cause |
 |---|---|
 | Unprefixed term | A term with no `node:`/`relay:`/`tag:`/`state:` prefix — a parse error, never a guess |
-| Negated `relay:` term | Negation is valid only for `node:`, `tag:` and `state:` |
+| Negated term | Refused at parse in every namespace, permanently: a declined label would add a Node to the match, and "everything except" includes every unlabelled Node |
 | Empty Selector on dispatch | The whole fleet must be targeted explicitly |
 | Unknown `state:` term | Outside the closed vocabulary |
 | Marker with a value, fact without one | The two `state:` shapes are not interchangeable |
+| `tag:` term, until tags land | Refused at parse with a recognisable refusal, identically on every surface |
 | Malformed label at ingress | A key or value that cannot render as one Selector term — refused, never sanitised |
 | Declared label on a reserved built-in key | `node:hostname`, `node:ip`, `node:os`, `node:arch` are the daemon's |
-| Over-limit or malformed declared-labels file | None of its labels apply; the Node reports `state:labels-invalid` |
 | Direct write of a `relay:` label | No surface offers one; `relay:` labels are written only by their defining action |
-| Tag write by a `viewer`, or by a Node | `tag:` is written by an Account of `operator` or above |
+| Enrollment Token naming a `relay:` label | A token's labels are initial tags; every `relay:` key is defined by a Relay action |
+| Tag write by a `viewer`, a machine Account or a Node, or over MCP | `tag:` is written only by a human Account of `operator` or above, on the Console or the Control API |
 | Tag over the per-Node limit | At most 64 tags per Node |
 
 ## Governing ADRs and invariants
 
-- **Invariant 7** (ADR-0006, ADR-0020, ADR-0034) — the whole of it, as written; its `tag:` clause
-  (an operator through the control plane) covers every surface, MCP included. This spec holds
-  the invariant's per-namespace mechanism.
+- **Invariant 7** (ADR-0006, ADR-0020, ADR-0034, ADR-0050) — the whole of it. Its `tag:` clause,
+  as ADR-0050 rewords it, names a human Account of `operator` or above, on the Console and the
+  Control API. This spec holds the invariant's per-namespace mechanism.
 - **Invariant 5** (ADR-0004) — the cap is checked against the *resolved* count.
 - **Invariant 10** — one parser and one resolver in the capability layer; no surface evaluates a
   Selector itself.
-- **ADR-0006, amended 2026-10-22, and ADR-0048.** Enrollment's key set is the token's optional
-  scope plus `relay:node-id`, and a mint refuses a key the table owns or reserves. Neither
-  `relay:node-id` nor `relay:enrollment-token` is written today.
-- **ADR-0020 — amended 2026-09-16.** Its direct post-enrollment `relay:` label management (`admin` +
-  step-up) is superseded: `relay:` labels are written only by defined actions. Its `tag:` design
-  stands, extended to MCP.
-- **ADR-0034 — needs amending.** The `state:` vocabulary gains `policy-invalid`,
-  `raw-exec-enabled` and `labels-invalid`, and retires `template-unloadable` and
-  `template-fingerprint`.
+- **ADR-0050 — tags are the operator's labels.** Who writes a tag and where, initial tags from
+  an Enrollment Token, and `relay:` holding only keys a Relay action defines. It supersedes in
+  part ADR-0006's amendment of 2026-10-22 and ADR-0048 decision 4, where a token's scope was
+  `relay:` labels.
+- **ADR-0048.** Every enrollment writes `relay:node-id`, and `relay:enrollment-token` stays
+  reserved and unwritten (decision 5).
+- **ADR-0020 — amended 2026-09-16, and by ADR-0050.** Its direct post-enrollment `relay:` label
+  management (`admin` + step-up) is superseded: `relay:` labels are written only by defined
+  actions. Its `tag:` design stands as ADR-0050 narrows it: human Accounts only, no MCP.
+- **ADR-0034 — needs amending** if `raw-exec-enabled` is added to the `state:` vocabulary. The
+  Template markers stand (ADR-0021).
 - **ADR-0017** — unchanged: `node:` labels are trusted exactly as much as the Node.
-- **GLOSSARY.md — needs updating** for Label (the `relay:` writing rule, `node:` built-ins) and
-  the `state:` vocabulary.
+- **GLOSSARY.md — needs updating** for Label (the `relay:` writing rule, the `tag:` writer,
+  `node:` built-ins) and the `state:` vocabulary.
 
 ## Seams and proof
 
@@ -261,12 +275,12 @@ not at a surface.
 
 Claims above with **no row**, and so nothing checking them:
 
-- **Everything decided on `2026-09-13`** has no test yet: `relay:` labels written only by their
-  defining action, declared versus built-in `node:` labels and reserved keys, the
-  declared-labels file's
-  all-or-nothing load and `labels-invalid`, `tag:` writes on every surface and bulk tagging
-  audited as one action, the per-Node limits, the new `state:` markers, value sets, value globs,
-  negation and the negated-`relay:` refusal, and the empty-Selector refusal on dispatch.
+- **Everything decided on `2026-09-13` and `2026-10-23`** has no test yet: `relay:` labels
+  written only by their defining action, declared versus built-in `node:` labels and reserved
+  keys, `tag:` writes by human `operator` Accounts on the Console and the Control API only,
+  their old-and-new audit and bulk tagging audited as one action, initial tags from an
+  Enrollment Token, the per-Node limits, the new `state:` markers, the refusal of a negated
+  term, and the empty-Selector refusal on dispatch.
 - That a zero-width space in a reported fact is accepted. It is;
   `TestFacts_ZeroWidthSpaceIsAcceptedKnownGap` documents it as a **known gap**, which is not
   coverage.
@@ -280,7 +294,6 @@ Claims above with **no row**, and so nothing checking them:
 |---|---|---|
 | Resolution | Walks the registry once per dispatch; the resolved count feeds the blast cap | *(none)* |
 | `state:` evaluation | At resolution time, not stored — so it costs per resolution rather than per state change | *(none)* |
-| Value globs and negation | Evaluated per Node per term during the same walk | *(none)* |
 | Declined labels | Reported once at startup (capped sample per namespace) and counted on `/metrics`; the counter is traffic-driven | *(none)* |
 
 There are no benchmarks in this repository. Resolution cost scales with fleet size and is on the
@@ -290,28 +303,21 @@ path of every dispatch, including a read at the 10,000-Node cap; nothing measure
 
 - **The blast-radius cap itself** — `execution.md`. This spec produces the count; that one
   enforces the limit.
-- **Enrollment mechanics** — `enrollment.md`: a token's `relay:` scope, what enrollment stamps,
+- **Enrollment mechanics** — `enrollment.md`: a token's initial tags, what enrollment writes,
   and provenance. This spec defines the namespaces and their writers; that one defines the
   enrollment action.
-- **What quarantine does, and who may quarantine** — `quarantine-node.md`. This spec defines only
-  that the action writes `relay:quarantine`.
-- **The incident ladder** (quarantine, revoke, Freeze) — `quarantine-node.md`, `freeze.md` and
-  `enrollment.md`.
+- **Quarantine** — not in the MVP (`roadmap: relay/quarantine`). This spec holds only the
+  namespace rule a quarantine must keep.
+- **The incident ladder** (revoke, Freeze) — `freeze.md` and `enrollment.md`.
 - **Policy** — a Node's Policy governs what may run on it, not which Nodes are addressed.
-- **Getting the declared-labels file onto a Node** — the customer's config management
-  (`daemon-installation.md`).
-- **Services and Dependencies** — the System Model (`system-model.md`).
+- **Setting a Node's declared labels** — the customer's config management writes
+  `RELAY_NODE_LABELS` (`daemon-installation.md`).
 
 ## Accepted residual risk
 
-- **Negation can over-include through a declined label.** A Node whose `node:`, `tag:` or `state:`
-  label the store declines to serve is invisible to a positive term and *matched* by a negated
-  one: `!tag:canary=true` would include a canary whose tag was declined. Routine targeting only;
-  every dispatch still passes the blast cap, Policy and approval, and `relay:` cannot be negated,
-  so quarantine cannot be escaped this way.
 - **Node-derived terms can lie.** `node:` labels and the `state:` terms derived from a Node's own
-  report — `policy-invalid`, `raw-exec-enabled`, `labels-invalid`, `daemon-version`,
-  `policy-fingerprint` — describe what the Node claims.
+  report — `policy-invalid`, `raw-exec-enabled`, `daemon-version`, `policy-fingerprint` —
+  describe what the Node claims.
 - **A zero-width space is accepted in a reported fact.** It cannot inject a term, but it can make
   two visually identical values distinct.
 
@@ -321,13 +327,14 @@ Wanted, deliberately not in the first pass.
 
 - **A structural guard for `relay:` writes** — an absence test asserting that no path other than a
   defining action writes a `relay:` label, the analogue of `no_dispatch`.
+- **Value sets and globs** — `roadmap: relay/selector-value-sets-and-globs`.
+- **A declared-labels file reloaded with Policy, and `state:labels-invalid`** —
+  `roadmap: relay/policy-catalog-and-live-reload`.
+- **Quarantine, and fencing off a token's Nodes without revoking it** —
+  `roadmap: relay/quarantine`.
 
 ## Open questions
 
-- **Where do a Node's declared Labels live?** This spec puts them in a root-owned declared-labels
-  file; `daemon-installation.md` currently puts them in the daemon's environment file beside the
-  join string. One home is chosen in both specs (raised 2026-10-15).
-
-No other question is open. Who may take the actions that write `relay:` labels is settled in
-`enrollment.md` and `quarantine-node.md`; a re-enrolled Node is a new record whose tags do not
-follow it (`enrollment.md`).
+No question is open. A Node's declared labels live in its `RELAY_NODE_LABELS` setting; who may
+take the actions that write `relay:` labels is settled in `enrollment.md`; a re-enrolled Node is
+a new record whose tags do not follow it (`enrollment.md`).

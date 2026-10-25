@@ -1,6 +1,7 @@
 # Approval is one in-band answer
 
-**Status:** Accepted (owner decision 2026-10-22).
+**Status:** Accepted (owner decision 2026-10-22); amended 2026-10-23 (answers on API-token
+sessions).
 
 Reasoning and objections: `docs/proposals/approval-answered-in-the-requesting-client.md`.
 Behaviour: `docs/specs/approval.md`. This ADR supersedes ADR-0027 decisions 4 (in part), 7 and
@@ -93,3 +94,25 @@ narrowed here by removing the tool.
   standard behind them.
 - **Make elicitation the only path and drop the Control API.** Not until an MCP answer can name
   a verified approver on every client, which is the identity work (ADR-0041).
+
+## Amendment (2026-10-23): an answer on an API-token session is that session's Account's
+
+Owner decision in the MVP review. The MVP needs Claude Code, ChatGPT and other ordinary clients to
+answer approvals without the customer first connecting an identity provider, so decision 3 widens.
+
+- **Any client that advertises elicitation is asked**, not only clients Relay recognises by name
+  (ADR-0029's client list). A client that cannot be asked still gets `pending_approval`.
+- **An elicited answer on an API-token session is accepted as that session's Account's decision**,
+  without the responder assertion decision 3 required. On a human Account's token the human is
+  recorded as the decider, marked as a token session, distinct from an OAuth session's verified
+  lane. On a machine Account's token the decision is recorded as machine self-confirmation, with
+  any responder assertion recorded as asserted, as Gleipnir sends it.
+- **A human Account's API token defaults to a short life**, seven days, so an interactive token
+  copied into a script stops working on its own.
+
+What this gives up, recorded in the threat model: an AI-agent that can read its session's API
+token can call Relay itself and answer its own question as that Account; and a machine Account's
+answer proves no person saw the question. The stronger paths wait in the private roadmap: an
+approval page the person signs in to, which the AI-agent cannot answer
+(`roadmap: relay/approval-by-link`), and OAuth tested against the common identity providers
+(`roadmap: relay/oauth-against-common-providers`).

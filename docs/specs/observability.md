@@ -20,19 +20,19 @@ arguments or a series per Node.
 
 | Surface | What it is |
 |---|---|
-| **Metrics listener** | A third listener, separate from the Node and control-plane listeners, serving Prometheus text and nothing else. Bound to loopback by default; its address is security floor (`relay-configuration.md`) |
-| **Health endpoint** | Unauthenticated, on the metrics listener: "serving" or "not serving" and nothing more |
+| **Metrics** | Prometheus text at `/metrics` on the control-plane listener, behind the same API-token authentication as every other control-plane route. There is no third listener. Built |
+| **Health endpoint** | Unauthenticated, on the control-plane listener: "serving" or "not serving" and nothing more. MVP work, not yet built |
 | **Relay logs** | Structured process logs to standard error, collected by the journal under the shipped unit. One routing-only line per audited decision |
 | **relay-daemon logs** | Structured logs on each Node, collected by that Node's journal. The daemon exposes no metrics |
 | **Control plane, MCP, Console** | Not observability surfaces. They answer questions about the fleet, which is `query.md` |
 
-The metrics listener carries **no execution path and no fleet contents** — counters only. Its
-access control is the bind address: whoever can reach the port may scrape, so loopback is the
-default, and binding it wider publishes aggregate numbers to that network.
+The metrics route carries **no execution path and no fleet contents**, only aggregate numbers.
+A scraper authenticates with an API Token like any other control-plane caller
+(`accounts-and-access.md`), so metrics answer only while the control plane is on. A separate
+listener that needs no token is later work (`roadmap: relay/opentelemetry`).
 
-Separating it from the control plane means a Prometheus scrape needs no API Token that could
-also list the fleet or dispatch, and metrics keep answering when the control plane is switched
-off.
+The health endpoint is the one unauthenticated route. It answers one bit, so a load balancer or
+an init system can probe it without a credential, and it reveals nothing else.
 
 ## Behaviour
 
@@ -42,14 +42,18 @@ Aggregate only. Every label is drawn from a small closed enum — dispatch outco
 reason, listener, label namespace — and the one free-form value is the build stamp, fixed for the
 process's lifetime.
 
-Today: build info, dispatches by outcome, refusals by reason, Nodes connected, enrolled and
-revoked, enrollments, Freeze engagement, server certificate rotations by listener, and Labels
-declined by namespace.
+Built, about a dozen metrics: build info, Nodes connected, enrolled and revoked, dispatches by
+outcome, refusals by reason, Freeze engagement, server certificate rotations by listener, protocol
+violations, Labels declined by namespace, and enrollments.
 
-Added, because an SRE pages on them: dispatch latency as a histogram, Task queue depth, pending
-approvals, reconnect churn, enrollment refusals by reason, store size, webhook delivery failures,
-and the count of connected Nodes below the minimum daemon version — a boolean bucket, never a
-series per version string, so release churn cannot inflate cardinality.
+Added for the MVP, because an SRE pages on them, and not yet built:
+
+- **Certificate expiry**, for the Relay CA and the server certificate.
+- **Failed authentications.**
+- **Approvals waiting** for an answer.
+
+Nothing in this set is a series per Node, per Account or per argument. A fuller metric set, such
+as dispatch latency, reconnect churn and store size, is later work (`roadmap: relay/opentelemetry`).
 
 ### Cardinality is a security property, not a performance one
 
@@ -71,9 +75,10 @@ never feeds Policy, Selector resolution or the blast cap.
 
 ### Logs
 
-Relay logs are structured, on standard error, collected by the journal. JSON output and the log
-level are the `[log]` table of `relay.toml`, applied on reload, and become operator settings in
-the store once `relay-configuration.md` RC-29 lands. The daemon's level follows `RUST_LOG`.
+Relay logs are structured JSON on standard error, collected by the journal. The format is fixed;
+the log level is set in the configuration file and applied on reload (`relay-configuration.md`).
+Store-backed settings are not in the MVP (`roadmap: relay/settings-in-the-console`). The daemon's
+level follows `RUST_LOG`.
 
 One routing-only line accompanies each audited decision, written by the same call that writes the
 audit record so the two cannot disagree about whether a decision happened. It never carries
@@ -87,33 +92,35 @@ denial's text can quote caller-supplied text, and so an argument, into the daemo
 
 ### The daemon stays dark
 
-relay-daemon has logs and no metrics, and grows no exporter: at a hundred thousand Nodes nobody
-reads per-Node journals, and per-Node scraping means a hundred thousand scrape targets.
+**Relay reports telemetry about itself and the fleet's relationship to it, and never collects or
+forwards host telemetry from Nodes** (owner decision, 2026-10-23). relay-daemon has logs and no
+metrics, and grows no exporter: at a hundred thousand Nodes nobody reads per-Node journals, and
+per-Node scraping means a hundred thousand scrape targets.
 
-What the Relay knows from `Hello` and heartbeats it exposes as fleet aggregates — connected
-counts, version-floor counts, reconnect churn. Per-Node health is `query.md`.
+What the Relay knows from `Hello` and heartbeats it exposes as fleet aggregates, such as the
+connected, enrolled and revoked counts. Per-Node health is `query.md`.
 
 ## Refusals
 
 | Refusal | Cause |
 |---|---|
-| Unreachable | A scrape from outside the metrics listener's bind address. The port is the access control |
+| Unauthenticated | A scrape of `/metrics` without a valid API Token, refused like any control-plane call |
 | Not serving | The health endpoint while the Relay is starting or shutting down. It reveals nothing else |
 | Series omitted | A gauge whose source failed to read |
-| No route exists | Any attempt to change configuration, dispatch, or read fleet contents through the metrics listener. There is nothing there to refuse |
+| No route exists | Any attempt to change configuration, dispatch, or read fleet contents through the metrics or health route. There is nothing there to refuse |
 
 ## Governing ADRs and invariants
 
 **No ADR governs observability as a capability.** Its constraints come from elsewhere:
 
-- **Invariant 10 / ADR-0009, ADR-0010** — the metrics listener is an adapter with no execution
-  path; it decides nothing.
+- **Invariant 10 / ADR-0009, ADR-0010** — the metrics and health routes are adapters with no
+  execution path; they decide nothing.
 - **Invariant 11** — observability reports configuration's consequences and offers no path to
   change them. The security floor itself is not exported: drift between hosts is real, but
   publishing the caps and gate count publishes the fleet's ceiling to anyone who can scrape.
 - **ADR-0025** — read output is audited and not retained, so it reaches neither logs nor metrics.
-- **ADR-0034** — `state:cert-expiring` is the Node-side certificate alarm; rotation counters are
-  its Relay-side counterpart.
+- **ADR-0034** — `state:cert-expiring` is the Node-side certificate alarm; the certificate expiry
+  metric and the rotation counters are its Relay-side counterpart.
 - **AGENTS.md security posture** — never log secrets.
 
 ## Seams and proof
@@ -132,7 +139,7 @@ never reads. Gauges are pulled from sources at scrape time, not maintained as st
 | Declined-Label series are per namespace, and absent when unwired | `TestHandler_LabelsDeclinedSeries`, `TestHandler_NilLabelsDeclinedOmitsSeries` | metrics |
 | Gauges render from their sources, and the build stamp is omitted when unset | `TestHandler_GaugesFromSources`, `TestHandler_BuildInfo`, `TestHandler_BuildInfoOmittedWhenUnset` | metrics |
 | The exposition is Prometheus text | `TestHandler_ContentType` | metrics |
-| Today's `/metrics` path requires a credential | `TestMetricsSurface_RequiresCredential` | e2e |
+| `/metrics` requires a credential | `TestMetricsSurface_RequiresCredential` | e2e |
 
 Claims above with **no row**, and so nothing checking them:
 
@@ -145,8 +152,11 @@ Claims above with **no row**, and so nothing checking them:
   for enrollment tokens only (`TestNoSecretInLogs`); nothing covers Operation arguments or Raw
   Exec argv.
 - That the per-decision log line and the audit record cannot disagree.
-- That the metrics listener exposes no execution path — the `no_dispatch` guard covers the other
-  adapters and this listener does not exist yet.
+- That the metrics and health routes expose no execution path.
+- That the health endpoint answers only serving or not serving, without a credential. It is not
+  built yet.
+- The three MVP metrics: certificate expiry, failed authentications, approvals waiting. Not built
+  yet.
 
 ### Performance
 
@@ -160,10 +170,15 @@ Claims above with **no row**, and so nothing checking them:
 - Audit records — what is recorded, who may read them, retention — `audit-and-read-lane.md`.
 - Fleet state: Node liveness, `state:` labels, `describe_node`, per-Node history — `query.md`
   and `selectors-and-labels.md`. **Metrics count; they never list.**
-- Approval notifications and webhooks — `approval.md`. Their *delivery failures* are counted here.
-- Where the listener binds and how logs are configured — `relay-configuration.md`.
-- Monitoring the customer's own services on their Nodes. Out of realm: that is their existing
-  monitoring, not Relay.
+- Approval notifications and webhooks — `approval.md`. Their delivery failures are not counted in
+  the MVP.
+- Where the control-plane listener binds and the log level — `relay-configuration.md`.
+- **Host telemetry from Nodes.** Relay reports telemetry about itself and the fleet's relationship
+  to it, and never collects or forwards host telemetry: no Node's CPU, memory, disk, services or
+  journal reach a metric, and the daemon exports no metrics. Monitoring the customer's hosts and
+  services is their existing monitoring, not Relay (owner decision, 2026-10-23).
+- **A separate metrics listener, traces, OTLP export and a fuller metric set** —
+  `roadmap: relay/opentelemetry`.
 
 ## Accepted residual risk
 
@@ -173,17 +188,11 @@ Claims above with **no row**, and so nothing checking them:
 
 ## Future work
 
-- **OpenTelemetry** — OTLP export and traces. Prometheus text is the committed format; OTel is an
-  option, not a promise, and adds a dependency and an export path to a security-critical binary.
-- **A structural cardinality guard**, so "no metric carries an identifier" is enforced by the
-  build rather than by review.
-- **Exporting the security floor for drift detection**, if running many Relays ever makes
-  per-host drift a real operational problem.
+Waits in the private roadmap: OpenTelemetry, the separate listener and the fuller metric set
+(`roadmap: relay/opentelemetry`); a structural cardinality guard and exporting the security floor
+(`roadmap: relay/research/spec-future-work/observability`).
 
 ## Open questions
 
-- **Does the health endpoint need to distinguish "starting" from "degraded"?** A load balancer
-  wants one bit; an operator debugging a stuck start wants more, which an unauthenticated
-  endpoint should not give.
-- **What is the retention and scrape interval assumption behind the latency histogram?** Bucket
-  boundaries are a contract once dashboards depend on them.
+None open. The health endpoint answers one bit, serving or not serving (owner, 2026-10-23). The
+latency histogram's bucket question moved to the roadmap with the histogram.

@@ -17,18 +17,23 @@ enough to hand the same keys to an AI-agent. Every rule below serves that.
 2. **The UI computes what is interesting; the human reads only exceptions.** Fleets run
    100–10,000 Nodes. A list is a bug. Render the *mode* as one compressed line and spend the
    pixels on deviations.
-3. **One decision per screen.** Decision surfaces (apply, and every privilege-granting act) carry
-   exactly one primary action with nothing competing.
-4. **Preflight before apply, everywhere.** Compose → see the truth → confirm identity → run.
-   The mutating path is deliberately slower than the reading path.
+3. **One decision per screen.** Decision surfaces (every privilege-granting act, and every
+   change to the fleet such as a bulk tag edit) carry exactly one primary action with nothing
+   competing.
+4. **See the change before you make it.** The Console watches; it does not execute
+   (ADR-0052). Its mutating acts (tags, Accounts, tokens, Enrollment Tokens) show what they will
+   change before they change it, then confirm identity where the act needs it. The mutating
+   path is deliberately slower than the reading path.
 5. **The customer's taxonomy is the organising axis.** Their label values (`prod`, `payments`,
    `web`) are the headline structure. Relay's own bookkeeping is "group by nothing".
 6. **Live but stable.** Counters and lists may update live. Anything a human is reading in order
-   to decide — a rendered Preflight, a confirm step — is pinned and never reflows. New
+   to decide — a rendered Plan, a confirm step — is pinned and never reflows. New
    events queue behind an explicit click rather than pushing in.
-7. **No settings pages, ever.** Relay configuration (blast caps, listeners, gate rules,
-   `console_execution`) appears only as *effects in context* — a cap inside a preflight line —
-   never as an inventory of editable values. Invariant #11.
+7. **No settings pages in the MVP.** The configuration file is the one source of Relay
+   configuration (blast caps, listeners, gate rules). The Console shows it only as *effects in
+   context*, a cap beside a fan-out count, never as an inventory of editable values. The
+   security floor never becomes an editable value (invariant #11). Settings in the Console are
+   later work: roadmap: relay/settings-in-the-console.
 
 ## The four questions
 
@@ -55,8 +60,8 @@ chart.
 | Namespace | Set by | Immutable to | Targetable | Security lane |
 |---|---|---|---|---|
 | `node:` | the machine, via config management | the Relay | yes | no |
-| `tag:` | operators, through the control plane | the Node | yes | no |
-| `relay:` | the Relay (enrollment stamp, or `admin` + step-up) | the Node | yes | **yes — only this** |
+| `tag:` | a human Account at `operator` or above: Node detail, bulk from the Fleet view, the Control API (ADR-0050) | the Node | yes | no |
+| `relay:` | the Relay, only as the side effect of a Relay action (`relay:node-id` at enrollment) | the Node | yes | **yes — only this** |
 | `state:` | **derived by the Relay; nobody sets it** | everyone | yes | no |
 
 `state:` is settled in `99-open-decisions.md` D1. Its vocabulary is **closed** and defined in the
@@ -170,16 +175,15 @@ what a given Node actually has.
 
 Build these once. They appear on three or more screens each.
 
-**Plan renderer** (composer, Job detail). Fan-out summary with the cap arithmetic visible,
+**Plan renderer** (Job detail). Fan-out summary with the cap arithmetic visible,
 risk-class badge, grouped per-Node verdicts with expansion, and the plan hash in mono — the hash
-is what an approval commits to. In the composer it renders the Preflight verdict; on Job detail,
-the Plan. Pinned once rendered.
+is what an approval commits to. Pinned once rendered.
 
-**Segmented outcome bar** (Job detail, composer, Activity). Minority segments carry a **floor
+**Segmented outcome bar** (Job detail, Activity). Minority segments carry a **floor
 width**: at 10,000 Nodes, 14 denies are 0.14% and would vanish, and they are why anyone is looking.
 
-**The deny block** (composer, Job detail, Policy fix). The rule verbatim, in mono, with file and
-line, plus two links: the Node's effective Policy, and drafting the rule that would allow it. An
+**The deny block** (Job detail, Activity). The rule verbatim, in mono, with file and
+line, plus a link to the Node's effective Policy. An
 operator gets from *denied* to *I know which file to change* without leaving the Console — and the
 Console is visibly unable to change it for them. The footer that says so is the capability layer's
 shared refusal text (the same bytes MCP and the Control API return in `refusal_explanation`),
@@ -216,10 +220,9 @@ carry the hash — and is never shown without the full fingerprint, so a mislead
 which Policy it is. Where an `admin` sees a fingerprint, an **Edit alias** control sits beside it;
 for every other role it is absent.
 
-**Step-up modal** (apply, every privilege-granting act). A session proves a human
+**Step-up modal** (every privilege-granting act). A session proves a human
 authorised the *session*; step-up proves a human intended *this action*. It carries a credential
-no agent session holds, and it is the reason ADR-0026 could give a browser an execution surface at
-all.
+no agent session holds.
 
 **Control-plane banner** (every screen, whenever a condition holds). Amber, in a slot above
 content. It is the Console's only surface for conditions about **the control plane itself**;
@@ -348,11 +351,12 @@ emergency brake that costs one is routed around).
 
 ## The incident ladder
 
-Three rungs, in ascending blast radius. Every screen that offers one makes its position legible.
+Two rungs, in ascending blast radius. Every screen that offers one makes its position legible.
+Quarantine, the rung that once sat below them, is cut from the MVP
+(roadmap: relay/quarantine), and so is the Incident screen that gathered the rungs.
 
 | Rung | Fences | Who | Reversible |
 |---|---|---|---|
-| `relay:quarantine` on a Node | one Node | `admin` + step-up | yes |
 | Revoke a Node | one Node | `admin` + step-up | no |
 | Freeze | the whole fleet | `operator`+ to engage, `admin` + reason to lift | yes |
 
@@ -365,14 +369,18 @@ stopping one actor is revoking its API Tokens (spec 15) or Freeze. Freeze engage
 
 ## Navigation
 
-Eight destinations in three groups. The grouping makes the model legible and the absence of a
-settings section visible.
+Five destinations in two groups. The grouping makes the model legible and the absence of a
+settings section, and of any execution surface, visible.
 
 ```
 Observe      Fleet · Activity
-Act          Run · Policy
-Administer   Add Nodes · Accounts · Access · Incident
+Administer   Add Nodes · Accounts · Access
 ```
+
+There is no `Run` destination: the Console watches and does not execute (ADR-0052). There is no
+`Policy` destination: the Policy author is cut (roadmap: relay/policy-catalog-and-live-reload),
+and Policy aliases are edited where fingerprints are shown, on the Fleet view and Node detail.
+There is no `Incident` destination (roadmap: relay/quarantine).
 
 There is no `Approvals` destination: the Console has no approval surface (ADR-0044, D21). A
 parked request is answered in-band through the requesting client, or on the Control API.
@@ -381,9 +389,8 @@ There is no `Jobs` destination (D6): Activity renders Job rows and filters to th
 its own page**, reached from any dispatch row in Activity and from a Node's recent Tasks. There is
 no Agents destination either: it is folded into Activity ([04](04-activity.md), D17).
 
-Role and configuration change the nav **structurally**. A `viewer` sees a smaller Console; with
-`console_execution = off`, Run is absent, not disabled. *Absent* beats *forbidden* (ADR-0026) —
-never ship a greyed-out execution surface.
+Role changes the nav **structurally**. A `viewer` sees a smaller Console: what it may not use
+is absent, not disabled. *Absent* beats *forbidden* (ADR-0026).
 
 ## Narrow width
 

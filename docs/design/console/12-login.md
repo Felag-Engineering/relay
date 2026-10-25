@@ -59,7 +59,7 @@ Issue the session per `11-console-shell.md`. **Rotate the session identifier on 
 identifier across the authentication boundary is session fixation.
 
 No "remember me" that survives the absolute lifetime, and no persistent token that bypasses
-**step-up**: step-up is the intent binding the entire execution surface rests on (ADR-0026), and a
+**step-up**: step-up is the intent binding every privilege-granting act rests on (ADR-0026), and a
 convenience that pre-satisfies it removes the control.
 
 ## OIDC

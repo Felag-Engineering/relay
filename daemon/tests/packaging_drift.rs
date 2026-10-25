@@ -122,6 +122,7 @@ fn source_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+// Proves DI-7.
 #[test]
 fn env_example_covers_the_config_surface() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -180,6 +181,7 @@ fn env_example_covers_the_config_surface() {
 /// Stops the exemption list from becoming the place drift hides: an exemption
 /// for a name the daemon no longer reads is stale, and the next person adding
 /// one has no way to tell.
+// Proves DI-7.
 #[test]
 fn exemptions_are_real() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

@@ -55,6 +55,7 @@ func TestValidate_EachRequiredSettingNamed(t *testing.T) {
 	})
 }
 
+// Proves RC-22.
 func TestValidate_InvalidValueRefusedNamingSetting(t *testing.T) {
 	cases := []struct{ section, key, value string }{
 		{"node_plane", "listen_address", `":0"`},
@@ -141,6 +142,7 @@ func TestValidate_CertExpiringFractionAcceptsIntegerOne(t *testing.T) {
 	}
 }
 
+// Proves RC-20.
 func TestValidate_ConsoleWithoutControlPlaneRefused(t *testing.T) {
 	got := loadErr(t, minimal+"[console]\nenabled = true\n")
 	if !strings.Contains(got, "console.enabled (line 8)") || !strings.Contains(got, "control_plane.enabled") {
@@ -154,6 +156,7 @@ func TestValidate_ConsoleWithoutControlPlaneRefused(t *testing.T) {
 
 const controlOn = "[control_plane]\nenabled = true\n"
 
+// Proves RC-20.
 func TestValidate_OAuthWithoutIssuerRefused(t *testing.T) {
 	for _, key := range []string{"audience", "account_claim", "required_scope", "public_url"} {
 		t.Run(key, func(t *testing.T) {
@@ -165,6 +168,7 @@ func TestValidate_OAuthWithoutIssuerRefused(t *testing.T) {
 	}
 }
 
+// Proves RC-10.
 func TestValidate_OAuthIssuerNeedsAudienceAndPublicURL(t *testing.T) {
 	const issuer = "[oauth]\nissuer = \"https://idp.example.com\"\n"
 	// Each missing key is refused on its own, and the error names only that key.
@@ -277,6 +281,7 @@ func TestValidate_WebhookSettingsWithoutURLRefused(t *testing.T) {
 	}
 }
 
+// Proves RC-20.
 func TestValidate_MutateCapAboveReadCapWarns(t *testing.T) {
 	_, warns, err := Load([]byte(minimal + "[reach]\nread_blast_cap = 10\nmutate_blast_cap = 20\n"))
 	if err != nil {

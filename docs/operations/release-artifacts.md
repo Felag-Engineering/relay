@@ -71,7 +71,7 @@ ARTIFACT="relay-daemon-${VERSION}-linux-amd64"
 BASE="https://github.com/Felag-Engineering/relay/releases/download/v${VERSION}"
 
 # 1. Fetch the binary, the checksum file and its signature into a staging dir (not the
-#    install path). The repository is private: add authentication to curl, or use `gh release download`.
+#    install path).
 curl -fsSLO "${BASE}/${ARTIFACT}"
 curl -fsSLO "${BASE}/SHA256SUMS"
 curl -fsSLO "${BASE}/SHA256SUMS.sigstore.json"
@@ -127,8 +127,7 @@ The same sequence applies to the `relay` binary on the Relay hosts.
 
 Signing is keyless, so there is no long-lived signing key to hold or rotate. The cost: each
 signature writes its metadata (organization, repository, workflow path, tag, commit, artifact
-digests) to the **public** Rekor transparency log, permanently, even though the repository is
-private.
+digests) to the **public** Rekor transparency log, permanently.
 
 ## Release-cutting discipline
 

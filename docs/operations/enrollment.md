@@ -48,6 +48,12 @@ $ curl --cacert ca-cert.pem \
   enrolls *provably* prod for that lane, with no per-Node labeling. Upgrading a Relay whose
   existing tokens or Nodes carry scopes outside this alphabet: see
   [Scopes from an earlier Relay](#scopes-from-an-earlier-relay).
+
+  **Changing in the MVP (ADR-0050).** A mint will name optional **initial tags** (`tag:`
+  labels) in place of a `relay:` scope. The enrollment writes them on each Node it enrolls,
+  and an `operator` can change them afterwards like any tag. A mint naming a `relay:` label
+  will be refused, naming it; every Node gets `relay:node-id` from the enrollment itself. This
+  runbook describes the release you run until then.
 - **`ttl_seconds`** — required, `> 0`, at most one year. Size it to the enrollment window: for
   a planned bulk run, hours or a day.
 - **`max_uses`** — optional; `<= 0` or absent means unlimited. For a planned run of N Nodes,
@@ -229,7 +235,9 @@ $ ansible-playbook -i inventory/prod site.yml --limit 'new_nodes'
 Each Node enrolls itself on first daemon start; already-enrolled Nodes are no-ops. The Relay
 rate-limits enrollment per IP and globally ([relay-install.md](relay-install.md)). For very
 large batches, raise `enrollment.global_rate_per_minute` in `relay.toml` for the window (a
-SIGHUP applies it), or let the daemons' retry and backoff spread the burst.
+SIGHUP applies it), or let the daemons' retry and backoff spread the burst. In the MVP both
+limits become fixed, with the per-IP limit raised to about 60 a minute, so some 200 Nodes
+behind one NAT address join in minutes with no setting to change.
 
 ## 4. Verify the rollout
 

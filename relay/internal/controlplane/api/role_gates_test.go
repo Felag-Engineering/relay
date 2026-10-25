@@ -96,6 +96,7 @@ func wantRefusal(t *testing.T, rec *httptest.ResponseRecorder, auditor *fakeAudi
 // becomes the enrolling Node's `relay:` labels, the namespace reserved for
 // the security-sensitive lane. A viewer minting one manufactures Nodes that
 // quarantine and secret distribution will treat as authoritative.
+// Proves EN-1, EN-23.
 func TestMintToken_RequiresAdmin(t *testing.T) {
 	body := mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: 3600}
 
@@ -140,6 +141,7 @@ func TestMintToken_RequiresAdmin(t *testing.T) {
 // found by the structural guard the issue asked for. Revoking a token
 // cascade-revokes every Node it enrolled, which is the same availability
 // blast radius as revoking those Nodes one at a time.
+// Proves EN-23.
 func TestRevokeToken_RequiresAdmin(t *testing.T) {
 	for _, role := range []accounts.Role{accounts.RoleViewer, accounts.RoleOperator} {
 		t.Run(string(role)+" is refused", func(t *testing.T) {

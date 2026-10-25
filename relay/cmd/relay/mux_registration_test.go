@@ -100,6 +100,7 @@ func sourceFiles(t *testing.T, dir string) (*token.FileSet, map[string]*ast.File
 
 var mutatingPattern = regexp.MustCompile(`^(POST|PUT|PATCH|DELETE) `)
 
+// Proves RC-11.
 func TestMuxRegistrationsAreTheKnownSites(t *testing.T) {
 	collect := func(dir string, handOffs bool) (sites, mutating []string) {
 		fset, files := sourceFiles(t, dir)

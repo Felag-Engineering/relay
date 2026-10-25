@@ -1,6 +1,9 @@
 # System Model: a Relay-maintained, git-backed semantic graph of the fleet
 
-**Status:** Accepted.
+**Status:** Superseded by ADR-0051 (2026-10-23).
+
+Withdrawn unbuilt: observed topology and declared meaning are Relay's later work, an AI-agent's
+beliefs are agent memory, and invariant 9 constrains any fleet model Relay keeps. Kept as history.
 
 The Relay maintains a **System Model** — a graph that links Nodes and Labels into
 higher-order **Services**, **Dependencies**, and **Annotations** — giving the AI-agent a

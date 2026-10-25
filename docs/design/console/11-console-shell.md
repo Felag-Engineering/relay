@@ -3,15 +3,17 @@
 **No artboard.** The skeleton every screen mounts into. **Build this first** — every other spec
 assumes it exists. **Milestone v0.6.0.**
 
-**Governing:** ADR-0009, ADR-0010, ADR-0026, invariants #10, #11.
+**Governing:** ADR-0009, ADR-0010, ADR-0026, ADR-0052, invariants #10, #11.
 **Backend:** the Account model (sessions, roles, step-up state); the SSE seam with its four
 publishers (D9, #416).
 
 ## Why this has its own spec
 
-ADR-0026 puts browser security **on the critical path**: CSP and CSRF are controls with a
-fleet-RCE blast radius, because a forged click would counterfeit the strongest credential in the
-system. This is the one part of the Console an implementer must not improvise.
+ADR-0026 puts browser security **on the critical path**: CSP and CSRF are controls on an
+administrative surface, because a forged click would counterfeit a human Account's own act:
+minting an Enrollment Token, granting a role, retagging Nodes. The Console runs no command
+(ADR-0052), but what it administers decides who can. This is the one part of the Console an
+implementer must not improvise.
 
 ## Layout template
 
@@ -24,14 +26,10 @@ One template, three regions.
 │ OBSERVE      │ content                                                    │
 │  Fleet       │                                                            │
 │  Activity    │                                                            │
-│ ACT          │                                                            │
-│  Run         │                                                            │
-│  Policy      │                                                            │
 │ ADMINISTER   │                                                            │
 │  Add Nodes   │                                                            │
 │  Accounts    │                                                            │
 │  Access      │                                                            │
-│  Incident    │                                                            │
 │              │                                                            │
 │ signed in as │                                                            │
 └──────────────┴────────────────────────────────────────────────────────────┘
@@ -55,14 +53,13 @@ admits no inline script.
 **Do not render a nav item and then refuse the route.** The nav is generated from the routes this
 process mounted for this Account's role:
 
-- A `viewer` gets a **structurally smaller** nav — Run, Policy, Add Nodes, Accounts, Access and
-  Incident simply are not there. Access is `admin`-only ([20](20-access.md)), so an `operator`
-  does not see it either.
-- With `console_execution = off` (spec 05), Run is absent because the route was never mounted.
-  The flag arrives with the composer; until then there is no execution route for it to gate.
+- A `viewer` gets a **structurally smaller** nav — Add Nodes, Accounts and Access simply are not
+  there. Access is `admin`-only ([20](20-access.md)), so an `operator` does not see it either.
+- There is no Run item for any role and no execution route to mount: the Console watches and
+  does not execute (ADR-0052), and the dormant `console_execution` gate and the run placeholder
+  are deleted.
 
-**Absent beats forbidden** (ADR-0026). A greyed-out composer gives the property away; spec 05's
-acceptance criterion exists to catch it.
+**Absent beats forbidden** (ADR-0026). A greyed-out control gives the property away.
 
 ## HTMX conventions
 
@@ -123,9 +120,10 @@ what happened.
 - **Step-up is a recent-auth window on the session**, not a separate credential. Re-authenticating
   stamps the session; actions requiring step-up check the stamp's age against a configured window
   and demand re-auth when it is stale.
-- The window is Relay configuration in `relay.toml` (file-only, invariant #11). No Account of any
-  role can extend it — an admin who could widen their own step-up window has removed the
-  control.
+- The window is a fixed constant, five minutes, and the absolute session lifetime is twelve
+  hours (`docs/specs/relay-configuration.md`). Neither is a setting, and no Account of any role
+  can extend either — an admin who could widen their own step-up window has removed the
+  control (invariant #11).
 - A step-up prompt must state **what it is authorising**, not merely ask for a password. "Confirm
   it is you" with no object is how people are trained to type passwords into anything.
 
@@ -146,7 +144,7 @@ what happened.
 
 Not internet-facing by default; served on an internal, VPN- or bastion-reachable interface.
 Enrolling Nodes never reach it. This is ADR-0009, kept by ADR-0026 as one of the stacked
-mitigations that made the execution surface acceptable.
+mitigations on a session-authenticated administrative surface.
 
 ## The structural guard
 
@@ -156,8 +154,9 @@ capability's internal dispatch **must fail to compile the test suite**.
 
 ## Acceptance
 
-- [ ] A `viewer` session's rendered nav contains no Run, Policy, Add Nodes, Accounts or Incident
-      item, and those routes are not mounted.
+- [ ] A `viewer` session's rendered nav contains no Add Nodes, Accounts or Access item, and those
+      routes are not mounted.
+- [ ] No session, at any role, has a Run item or a mounted execution route (ADR-0052).
 - [ ] No inline `<script>`, no `hx-on:` attribute, and no inline event handler survives in any
       rendered page — assert it in a test over the templates.
 - [ ] Every mutating route rejects a request with a missing or stale CSRF token.

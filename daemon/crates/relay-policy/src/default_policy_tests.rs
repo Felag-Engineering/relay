@@ -177,6 +177,7 @@ fn every_deny_listed_path_is_denied_with_attribution() {
     }
 }
 
+// Proves DI-28.
 #[test]
 fn deny_list_mirrors_adr_0022_exactly() {
     // Set equality both ways: a path added to the file without the
@@ -209,6 +210,7 @@ fn deny_list_mirrors_adr_0022_exactly() {
     );
 }
 
+// Proves DI-28.
 #[test]
 fn default_policy_denies_only_secret_bearing_own_files() {
     let policy = default_policy();

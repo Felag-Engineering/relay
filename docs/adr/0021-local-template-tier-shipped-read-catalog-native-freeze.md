@@ -80,12 +80,11 @@ protected by the filesystem and by a lint the operator runs, never by a hidden d
 
 **The shipped catalog**
 
-11. **A first-party read catalog ships as its own optional package**, depending on the daemon
-    package: process list, service status, disk and mount usage, listening ports, package
-    inventory, bounded log tail, file checksum, all `read`. Installing the daemon gives a Node
-    its engine and default Policy; offering the catalog is the operator's choice (ADR-0033).
-    Its files are package-owned: replaced on upgrade, removed with the package, never the
-    operator's to edit. A variant is the operator's own Template under another name.
+11. **A first-party read catalog ships** (superseded in part by ADR-0053, 2026-10-23: inside the
+    `relay-daemon` package, all of it allowed by default): process list, service status, disk
+    and mount usage, listening ports, package inventory, bounded log tail, file checksum, all
+    `read`. Its files are package-owned: replaced on upgrade, removed with the package, never
+    the operator's to edit. A variant is the operator's own Template under another name.
 12. **A released catalog name is bound to its body and risk class.** A change ships under a new
     name and CI refuses one that changes a released name, since the default Policy allows the
     catalog by name. Withdrawing a name is allowed: it only reduces what may run.

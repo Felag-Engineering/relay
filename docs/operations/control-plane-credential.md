@@ -13,9 +13,6 @@ Every token:
   next call;
 - can be revoked individually, without disturbing any other caller.
 
-> **Upgrading from a Relay that used the seeded credential?** See
-> [Migrating from the seeded credential](#migrating-from-the-seeded-credential).
-
 ## Bootstrapping the first credential
 
 Minting a token requires authenticating, and authenticating requires a token. `relay init`
@@ -227,18 +224,3 @@ that other shape and makes the other choice: an argon2id hash (`relay/internal/a
 verified by the Console's session layer (`relay/internal/consoleauth`), and set for the first
 admin by `relay init` ([relay-install.md](relay-install.md)). The two never substitute for one
 another: a password cannot call the API, and an API Token cannot sign in to the Console.
-
-## Migrating from the seeded credential
-
-1. Upgrade the Relay binary.
-2. Remove `-control-credential-hash-file` / `RELAY_CONTROL_CREDENTIAL_HASH_FILE` from your
-   unit file, IaC, and any wrapper scripts. The Relay will not start with the flag present.
-3. Start the Relay. A store from an earlier Relay keeps the `founding-admin` Account it seeded,
-   now an ordinary Account; a new store holds none until `relay init --admin`.
-4. Run `sudo -u relay relay init --recover founding-admin` (or `--admin <name>` on a new store)
-   and switch your callers to the printed credential.
-5. Create per-caller Accounts, mint their tokens, and revoke the bootstrap one.
-6. Delete the old credential-hash file and the plaintext from your vault. Nothing reads them.
-
-Do not skip step 5. Until each caller has its own identity, you have replaced one shared
-secret with another, and the audit trail still cannot tell you who did what.

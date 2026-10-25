@@ -51,7 +51,7 @@ same component**: the shape of the answer does not change, only how it is comput
 ## The denied group is the showpiece
 
 Expanding it shows **the Policy rule that fired, verbatim**, in mono, with a link to that Node's
-effective Policy and a link into the Policy fix screen (spec 07). When every denial in the group
+effective Policy. When every denial in the group
 shares a reason, show the rule once and say so; when they differ, group by rule.
 
 Styled informative-neutral — slate, never red. A deny is the product working.
@@ -75,8 +75,8 @@ shows its audited metadata only (ADR-0025).
 
 - A flat list of Tasks as the default render.
 - Retained read output presented as durable.
-- A re-run button that skips the Preflight. Re-running is composing again (spec 05), with a fresh
-  Preflight and a fresh plan hash.
+- A re-run button of any kind. The Console does not execute (ADR-0052); re-running is a new call
+  from an AI-agent or the Control API, with a fresh Preflight and a fresh plan hash.
 
 ## Acceptance
 
@@ -87,14 +87,14 @@ shows its audited metadata only (ADR-0025).
       `TestJob_TenThousandNodesRenderWithoutAList`.
 - [x] All eight outcomes render, with the three "did not run" kinds visually distinct.
 - [x] The denied group shows the rule verbatim and links to the Node's effective Policy.
-      The link lands on the Node page, without an anchor to its effective-Policy panel. The
-      link into the Policy fix screen (spec 07) is not rendered until spec 07 is built.
+      The link lands on the Node page, without an anchor to its effective-Policy panel. There is
+      no Policy fix screen: it is cut (roadmap: relay/policy-catalog-and-live-reload).
 - [x] Cancel (v0.7.0) is offered only while Tasks are in flight, and its effect is described
       accurately; in v0.6.0 no control on this page reaches the capability layer.
       **Built.** Cancel renders for `operator` and above while any Task is unresolved, decided
       by the capability layer's `AuthorizeControl(ControlCancelJob)`; this page only narrows
-      what is drawn. No step-up, and not behind `console_execution`: Cancel cannot run
-      anything. The result block reads the Job's `job_cancel` audit record — never a
+      what is drawn. No step-up: Cancel cannot run anything, so it stays in a Console
+      that does not execute (ADR-0052). The result block reads the Job's `job_cancel` audit record — never a
       query-string flash — says which cancelled Tasks never left the Relay and which were
       stopped after being sent, qualifies the still-in-flight count as best-effort ("if its
       Node is connected"), and leaves every already-resolved Task's real outcome untouched.
@@ -110,12 +110,12 @@ shows its audited metadata only (ADR-0025).
       At or below 50 Tasks every group lists everything, success included.
 
 **Attribution.** The header renders the approver chips in the lane their own Account attribution
-earns — never hard-coded verified — with each decision's time and channel, the gate rule that
-parked the Job, the quorum it met, the approval's own requester when it differs from the Job's,
+earns — never hard-coded verified — with the decision's time and surface, the gate rule that
+parked the Job, the approval's own requester when it differs from the Job's,
 and the stored Relay-authored summary the approver was shown. A visible lane key explains the
-verified/asserted distinction in text, not only in a hover title. A Grant-released Job shows the
-Grant's approvers with the window caveat ("these approvers approved a Grant... not this plan") and
-no plan hash, because the Grant's hash is over its Scope, not this Job's Plan. All of it comes
+verified/asserted distinction in text, not only in a hover title. An approval is one answer
+(ADR-0047): there is no quorum to show, and approval Grants are cut, so no Job is Grant-released.
+All of it comes
 from the one `Approval()` read the page already makes — no new read, no new audit record.
 
 ### Not delivered by this build
