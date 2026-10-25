@@ -156,9 +156,10 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   a daemon report, but no surface can write Policy or Template Operations over the wire (QRY-24).
   A Policy alias is a name the Relay holds for a fingerprint and never sends to a Node: setting
   one writes no Policy (QRY-31).
-- **Invariant 7, ADR-0006, ADR-0020 and ADR-0034** — Label namespaces stay separate: `node:` and
-  `relay:` are returned as separate maps, `state:` is derived, `tag:` is refused until it exists
-  (QRY-2, QRY-20). A query has no Label-write authority.
+- **Invariant 7, ADR-0006, ADR-0020, ADR-0034 and ADR-0050** — Label namespaces stay separate:
+  `node:` and `relay:` are returned as separate maps, `state:` is derived, and `tag:` is refused
+  until it has a writer (QRY-20); once it does, Tags are returned as their own map (QRY-40) and
+  Selectors resolve them (QRY-41). A query has no Label-write authority.
 - **Invariant 8 and ADR-0007** — wire-reported data follows the protocol contract; a query surface
   never invents a second wire vocabulary. Both *Future work* items change what the daemon
   reports and start in `/proto`.
@@ -251,6 +252,9 @@ Claims with **no row**, and so nothing checking them:
 | QRY-33 | Wherever an alias is rendered, the full fingerprint it names is rendered beside it; an alias is never shown in place of the fingerprint. | MVP |
 | QRY-35 | The Console's Fleet view, Node detail and Compare screen read aliases through the capability read lane, and the Console offers the write to a human `admin` only, from the Fleet view's fingerprint facet and Node detail's Fingerprints panel. | MVP |
 | QRY-39 | No query surface can set Labels, modify Policy, load Templates, refresh a daemon snapshot, issue a Policy verdict or dispatch an Operation: each adapter's structural guard forbids every write seam but the alias write (QRY-29), and every dispatch seam. Replaces QRY-24 when promoted. | After MVP |
+| QRY-40 | A Node read returns Relay's recorded registry state: Node ID; separate `node:`, `relay:` and `tag:` Label maps, the last holding the Node's Tags; self-reported Facts; connection and revocation state; the Policy fingerprint and the template-set fingerprint; daemon version and `outdated` (a field on the Control API, a `state:` Label on MCP); recorded certificate provenance when it exists; and `state:` Labels evaluated at Selector-resolution time, rendered in Selector syntax, never stored. Replaces QRY-2 when promoted. | MVP |
+| QRY-41 | `list_nodes` accepts an empty Selector or one in the `node:`, `relay:`, `tag:` and `state:` namespaces, resolves it against the registry at one evaluation instant, and returns the matches in Node-ID order with `state:` Labels from that same instant. Replaces QRY-3 when promoted. | MVP |
+| QRY-42 | A malformed Selector, a bare Label key, or a `state:` key outside the closed vocabulary is refused rather than treated as an empty match. Replaces QRY-20 when promoted: the `tag:` refusal goes, and QRY-20's proof of that refusal does not carry over. | MVP |
 
 ## Out of scope
 
@@ -259,7 +263,8 @@ Claims with **no row**, and so nothing checking them:
 - Live hypothetical Policy evaluation and preflight/apply parity — `policy-preflight.md`; this
   capability only displays what a Node already reported.
 - Any write but a Policy alias. Policy authoring, Template loading or distribution, Label
-  writes, Node enrollment and revocation, Account administration, and dispatch.
+  writes (a Tag is written through its own capability action, even where the Console offers it
+  beside a query view — `selectors-and-labels.md`, ADR-0050), Node enrollment and revocation, Account administration, and dispatch.
 - Fleet health monitoring, metrics, desired-state reconciliation, configuration management,
   daemon upgrades, and an unbounded remote shell.
 
