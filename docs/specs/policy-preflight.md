@@ -231,8 +231,8 @@ sequential round trips as a dispatch — cheap enough that a caller should alway
 
 | Claim | Statement | Milestone |
 |---|---|---|
-| PF-19 | The request option is spelled `preflight` on MCP and the Control API; `plan` is no longer accepted; the audit kind and the test names follow. | v0.8.1 — Read and Preflight Wire Contract |
-| PF-20 | A `deny` verdict carries a reason kind beside the deciding rule: `no_allow` (nothing permitted it) or `denied` (a deny rule vetoed it), with the same two kinds a real dispatch reports (`policy.md`). | v0.8.1 — Read and Preflight Wire Contract |
+| PF-19 | The request option is spelled `preflight` on MCP and the Control API; `plan` is no longer accepted; the audit kind and the test names follow. | After MVP |
+| PF-20 | A `deny` verdict carries a reason kind beside the deciding rule: `no_allow` (nothing permitted it) or `denied` (a deny rule vetoed it), with the same two kinds a real dispatch reports (`policy.md`). | After MVP |
 
 ## Out of scope
 
