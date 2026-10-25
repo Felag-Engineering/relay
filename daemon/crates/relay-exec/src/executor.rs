@@ -141,12 +141,11 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
-    // Isolate the child's environment. The daemon's own environment carries
-    // secrets — notably `RELAY_JOIN` (see enroll.rs), whose Enrollment Token is a
-    // fleet-bootstrap credential the enroll path promises is "never logged".
-    // Without this, every executed Operation and Raw Exec inherits that
-    // environment and could read the token straight out of `/proc/self/environ`
-    // (e.g. a Policy-allowed `env`/`printenv`). `env_clear()` also pins `PATH`
+    // Isolate the child's environment. The daemon holds no join string in its
+    // environment, but an operator can still put a secret there. Without this,
+    // every executed Operation and Raw Exec inherits that environment and could
+    // read it straight out of `/proc/self/environ` (e.g. a Policy-allowed
+    // `env`/`printenv`). `env_clear()` also pins `PATH`
     // so a bare-name `argv[0]` (e.g. `apt-get`, service_restart's `systemctl`)
     // resolves against a fixed, trusted search path rather than one the daemon
     // happened to be started with. Deny-closed by construction: the child sees
@@ -1306,7 +1305,7 @@ mod tests {
     }
 
     // The child must NOT inherit the daemon's environment. A secret set in the
-    // daemon's own process (here standing in for RELAY_JOIN) must be
+    // daemon's own process (here standing in for an operator's secret) must be
     // absent from the child's environment, and PATH must be the fixed safe path
     // — proving `env_clear()` closed the `/proc/self/environ` leak while still
     // letting a bare-name argv[0] resolve.

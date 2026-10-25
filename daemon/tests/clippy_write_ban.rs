@@ -1564,7 +1564,7 @@ fn pinned_test_suppressions() -> BTreeMap<&'static str, usize> {
     ])
 }
 
-// Proves DI-37.
+// Proves DI-42.
 #[test]
 fn production_and_test_suppressions_are_pinned_apart() {
     let mut production: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
@@ -2194,7 +2194,7 @@ fn is_probe_file(rel: &str) -> bool {
 /// `Command::new` ban and the pinned allows are the first line; this is the second, because an
 /// aliased `Command`, a brace-imported libc `fork`, or a `pre_exec` inside a
 /// module-level lint allow passes clippy. It reads every crate and the bin.
-// Proves DI-37.
+// Proves DI-42.
 #[test]
 fn spawn_family_appears_only_at_the_sanctioned_sites() {
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();

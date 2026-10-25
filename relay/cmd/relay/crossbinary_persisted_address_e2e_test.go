@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/pem"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,8 +28,9 @@ type joinedNode struct {
 }
 
 // enrollWithJoinStringOnly mints through the devharness create_token op and
-// starts a daemon whose environment carries only that join string: no CA
-// file, no Relay address, no separate token.
+// enrolls a Node with `relay-daemon join`, the join string on its standard input
+// and nowhere else: no CA file, no Relay address, no separate token, and no join
+// string in the daemon's environment.
 func enrollWithJoinStringOnly(t *testing.T, hostname string) *joinedNode {
 	t.Helper()
 	relayBin, daemonBin := skipUnlessFleetBins(t)
@@ -92,11 +95,13 @@ func pemDER(t *testing.T, path string) []byte {
 	return block.Bytes
 }
 
-// TestCrossBinary_JoinStringEnrolls proves a daemon given only the join string
-// from the mint response enrolls: it dials the join string's address, pins the
-// Relay's CA from its fingerprint, and writes that CA and the address into its
-// state directory, so no CA path is configured by hand (DI-22, DI-38). It runs
+// TestCrossBinary_JoinStringEnrolls proves `relay-daemon join`, given only the
+// join string from the mint response on standard input, enrolls: it dials the
+// join string's address, pins the Relay's CA from its fingerprint, and writes
+// that CA and the address into its state directory, so no CA path is configured
+// by hand, and neither the join string nor its token lands on disk. It runs
 // under make test-crossbinary with the real relay and relay-daemon binaries.
+// Proves DI-42, DI-43.
 func TestCrossBinary_JoinStringEnrolls(t *testing.T) {
 	n := enrollWithJoinStringOnly(t, "join-string-node")
 
@@ -118,22 +123,52 @@ func TestCrossBinary_JoinStringEnrolls(t *testing.T) {
 		t.Fatalf("persisted relay_addr = %q, want %q (the join string's address)", got, want)
 	}
 
+	// The join string is written nowhere: no file under the state directory holds
+	// the token or the glp_join_ prefix.
+	token := n.join.EnrollmentToken()
+	err = filepath.WalkDir(n.stateDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
+			return walkErr
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if bytes.Contains(data, []byte(token)) || bytes.Contains(data, []byte("glp_join_")) {
+			t.Errorf("%s holds the join string or its token", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk the state directory: %v", err)
+	}
+
 	n.dispatchFileRead(t, "join-string-file-read-1")
 }
 
-// TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState proves the join
-// string is inert once enrolled: a later start with RELAY_JOIN removed and no
-// RELAY_ADDRESS or --relay connects using the CA and address persisted at
-// enrollment (DI-38, ADR-0031 decision 4).
-// Proves EN-8.
+// TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState proves the daemon
+// reads no join string: a restart with no RELAY_JOIN anywhere in its
+// environment, and no RELAY_ADDRESS or --relay, connects using the CA and
+// address persisted at enrollment (ADR-0031 decision 4), and the running
+// daemon's environment holds neither RELAY_JOIN nor the token.
+// Proves DI-43, DI-44, EN-8, EN-30, EN-32.
 func TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState(t *testing.T) {
 	n := enrollWithJoinStringOnly(t, "persisted-state-node")
 
 	n.daemon.Kill()
 	waitForNodeConnected(t, n.fr.harness, n.nodeID, false)
 
-	n.daemon.RelaunchWithoutJoinOrAddress()
+	n.daemon.Relaunch()
 	waitForNodeConnected(t, n.fr.harness, n.nodeID, true)
+
+	// The process environment is what a file.read of /proc/<pid>/environ returns.
+	environ, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", n.daemon.Cmd().Process.Pid))
+	if err != nil {
+		t.Fatalf("read the daemon's environment: %v", err)
+	}
+	if bytes.Contains(environ, []byte("RELAY_JOIN=")) || bytes.Contains(environ, []byte(n.join.EnrollmentToken())) {
+		t.Error("the running daemon's environment holds the join string or its token")
+	}
 
 	n.dispatchFileRead(t, "persisted-state-file-read-1")
 }

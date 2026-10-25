@@ -110,13 +110,13 @@ func createFleetJoinString(t *testing.T, harness *harnessClient, labels ...strin
 	return join
 }
 
-// startDaemonSubprocess launches a relay-daemon enrolling with joinString
-// alone, using stateDir/policyPath/hostname. Its persisted identity, address
-// and dedup markers (daemon/src/dedup.rs) survive a Relaunch against the SAME
-// stateDir, which is what the crash-mid-Job test depends on. The daemon has
-// no reconnect loop of its own (daemon/src/main.rs): when the Relay's stream
-// drops, the process exits, so Relaunch is how a config-management restart is
-// modeled here.
+// startDaemonSubprocess enrolls a relay-daemon through `relay-daemon join` with
+// joinString on stdin, then launches it, using stateDir/policyPath/hostname.
+// Its persisted identity, address and dedup markers (daemon/src/dedup.rs)
+// survive a Relaunch against the SAME stateDir, which is what the crash-mid-Job
+// test depends on. The daemon has no reconnect loop of its own
+// (daemon/src/main.rs): when the Relay's stream drops, the process exits, so
+// Relaunch is how a config-management restart is modeled here.
 func startDaemonSubprocess(t *testing.T, daemonBin, joinString, stateDir, policyPath, hostname string) *relaytest.DaemonHandle {
 	t.Helper()
 	return relaytest.StartDaemon(t, relaytest.DaemonConfig{

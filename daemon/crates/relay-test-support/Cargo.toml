@@ -10,9 +10,22 @@ publish.workspace = true
 [dependencies]
 relay-log = { workspace = true }
 rustix = { workspace = true }
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["time", "net", "rt", "macros"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# fake_relay: a fake Relay Enrollment server over real TLS, for the enrollment and
+# join tests. tonic's server half and the prost codec its hand-written service
+# names are linked only into test binaries, because this crate is only ever a
+# dev-dependency; the daemon stays a gRPC client.
+relay-proto = { workspace = true }
+tonic = { workspace = true, features = ["codegen", "transport", "tls-ring"] }
+tonic-prost = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+# Parses and checks the CSR the fake Relay signs. The verify feature uses ring,
+# which is already in the tree, and is dev-only here.
+x509-parser = { workspace = true, features = ["verify"] }
 
 [lints]
 workspace = true

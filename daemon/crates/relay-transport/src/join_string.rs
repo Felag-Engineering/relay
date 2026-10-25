@@ -6,6 +6,7 @@ use std::fmt;
 
 use base64::Engine as _;
 use prost::Message as _;
+use zeroize::Zeroizing;
 
 use crate::gen::JoinString as WireJoinString;
 
@@ -33,11 +34,11 @@ pub enum JoinStringError {
 }
 
 /// A decoded join string. It has no `Clone`, `Serialize` or `Display`, and its
-/// `Debug` redacts the token.
+/// `Debug` redacts the token. The token is wiped when the value is dropped.
 pub struct JoinString {
     relay_address: String,
     ca_fingerprint: [u8; 32],
-    enrollment_token: String,
+    enrollment_token: Zeroizing<String>,
 }
 
 impl fmt::Debug for JoinString {
@@ -71,7 +72,7 @@ impl JoinString {
         Self {
             relay_address,
             ca_fingerprint,
-            enrollment_token,
+            enrollment_token: Zeroizing::new(enrollment_token),
         }
     }
 
@@ -102,7 +103,7 @@ impl JoinString {
             format_version: FORMAT_VERSION,
             relay_address: self.relay_address.clone(),
             ca_fingerprint_sha256: self.ca_fingerprint.to_vec(),
-            enrollment_token: self.enrollment_token.clone(),
+            enrollment_token: (*self.enrollment_token).clone(),
         }
         .encode_to_vec();
         Ok(format!(
@@ -119,17 +120,21 @@ impl JoinString {
         if !payload.bytes().all(is_base64url_byte) {
             return Err(JoinStringError::InvalidEncoding);
         }
-        let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(payload)
-            .map_err(|_| JoinStringError::InvalidEncoding)?;
+        // The decoded bytes and the re-encode below carry the token, so both are
+        // wiped on every exit.
+        let raw = Zeroizing::new(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(payload)
+                .map_err(|_| JoinStringError::InvalidEncoding)?,
+        );
         // prost refuses a known field with the wrong wire type here.
-        let msg =
+        let mut msg =
             WireJoinString::decode(raw.as_slice()).map_err(|_| JoinStringError::InvalidMessage)?;
         if msg.format_version != FORMAT_VERSION {
             return Err(JoinStringError::UnknownVersion);
         }
         // prost drops unknown fields, so its re-encode is a fresh four-field message.
-        if msg.encode_to_vec() != raw {
+        if *Zeroizing::new(msg.encode_to_vec()) != *raw {
             return Err(JoinStringError::InvalidMessage);
         }
         if msg.relay_address.is_empty() {
@@ -143,10 +148,12 @@ impl JoinString {
         }
         let ca_fingerprint = <[u8; 32]>::try_from(msg.ca_fingerprint_sha256.as_slice())
             .map_err(|_| JoinStringError::BadFingerprintLength)?;
+        // Moved, not cloned: the prost struct drops holding an empty string.
+        let enrollment_token = Zeroizing::new(std::mem::take(&mut msg.enrollment_token));
         Ok(Self {
-            relay_address: msg.relay_address,
+            relay_address: std::mem::take(&mut msg.relay_address),
             ca_fingerprint,
-            enrollment_token: msg.enrollment_token,
+            enrollment_token,
         })
     }
 }

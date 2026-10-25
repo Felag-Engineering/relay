@@ -137,8 +137,8 @@ fn targets_at(roots: &Roots) -> Vec<Target> {
         Target {
             path: PathBuf::from(ENV_FILE),
             read: Some(
-                "this daemon's environment file — it carries the Enrollment Token or join \
-                 string, a credential",
+                "this daemon's environment file — it configures the daemon; kept from the \
+                 wire as defence in depth",
             ),
             write: "this daemon's environment file — writing it injects configuration into \
                     the daemon's next start",

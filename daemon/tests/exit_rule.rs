@@ -1,9 +1,9 @@
-//! The daemon's exit rule (the daemon half of DI-25). It exits 0 with
-//! one log line only when the state directory holds no identity file at all and
-//! `RELAY_JOIN` is unset or empty. A malformed `RELAY_JOIN`, a partial identity,
-//! or an identity with no Relay address from either source exits non-zero, so a
-//! broken Node shows as failed and `Restart=on-failure` never mistakes it for an
-//! idle one.
+//! The daemon's exit rule (the daemon half of DI-25). The start has two
+//! outcomes: an identity connects, and no identity file at all exits 0 with one
+//! log line and dials nothing. A partial identity, an identity with no Relay
+//! address from either source, or a set `RELAY_JOIN` (it is not a setting and is
+//! refused by name) exits non-zero, so a broken Node shows as failed and
+//! `Restart=on-failure` never mistakes it for an idle one.
 //!
 //! Drives the compiled binary, like `shutdown_signal.rs`, with a cleared
 //! environment so nothing from the test runner reaches it.
@@ -69,51 +69,116 @@ fn seed_identity(dir: &Path, only: Option<&[&str]>) {
     }
 }
 
-// Proves EN-28.
+// Proves EN-33.
 #[test]
 fn unconfigured_node_exits_zero() {
     let state = TempDir::new("exit-unconfigured");
     std::fs::create_dir_all(state.path()).expect("create state dir");
 
-    for join in [None, Some("")] {
-        let extra: Vec<(&str, &str)> = join.into_iter().map(|j| ("RELAY_JOIN", j)).collect();
-        let out = run(state.path(), &extra);
-        assert!(
-            out.status.success(),
-            "an unconfigured Node exits 0 (RELAY_JOIN {join:?}), got {:?}; stderr: {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
-        assert_eq!(lines.len(), 1, "exactly one log line, got: {stdout}");
-        assert!(lines[0].contains("RELAY_JOIN"), "{}", lines[0]);
-    }
+    let out = run(state.path(), &[] as &[(&str, &str)]);
+    assert!(
+        out.status.success(),
+        "an unconfigured Node exits 0, got {:?}; stderr: {}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 1, "exactly one log line, got: {stdout}");
+    assert!(lines[0].contains("relay-daemon join"), "{}", lines[0]);
+    assert!(!lines[0].contains("RELAY_JOIN"), "{}", lines[0]);
     // Nothing was written: no identity, no address, no dedup store.
     let entries: Vec<_> = std::fs::read_dir(state.path()).unwrap().collect();
     assert!(entries.is_empty(), "an unconfigured start writes nothing");
 }
 
+/// The daemon never enrolls: pointed at addresses that are a listening socket,
+/// an unenrolled start still exits 0 without a single connection.
+// Proves EN-32, EN-33.
 #[test]
-fn malformed_join_exits_nonzero() {
-    let state = TempDir::new("exit-malformed-join");
+fn unenrolled_start_never_dials() {
+    let state = TempDir::new("exit-never-dials");
     std::fs::create_dir_all(state.path()).expect("create state dir");
-    let secret = "glp_join_not!valid tok-should-not-print";
-    let out = run(state.path(), &[("RELAY_JOIN", secret)]);
-    assert!(!out.status.success(), "got {:?}", out.status);
-    let all = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let addr = format!("https://{}", listener.local_addr().unwrap());
+
+    let out = run(
+        state.path(),
+        &[
+            ("RELAY_ADDRESS", addr.as_str()),
+            ("RELAY_ENROLL_ADDRESS", addr.as_str()),
+        ],
     );
+    assert!(out.status.success(), "got {:?}", out.status);
     assert!(
-        all.contains("RELAY_JOIN"),
-        "the refusal names RELAY_JOIN: {all}"
+        matches!(
+            listener.accept(),
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock
+        ),
+        "the daemon connected to the Relay address without an identity"
     );
-    assert!(
-        !all.contains("tok-should-not-print"),
-        "the input is never echoed: {all}"
-    );
+    assert!(std::fs::read_dir(state.path()).unwrap().next().is_none());
+}
+
+/// `RELAY_JOIN` is not a setting: any presence refuses the start by name, on an
+/// empty state directory and an enrolled one, and never prints its value.
+// Proves DI-43.
+#[test]
+fn relay_join_is_refused_by_name() {
+    let valid = valid_join();
+    let values: Vec<(&str, std::ffi::OsString)> = vec![
+        ("empty", "".into()),
+        ("valid", valid.clone().into()),
+        (
+            "malformed",
+            "glp_join_not!valid tok-should-not-print".into(),
+        ),
+        (
+            "non-utf8",
+            OsStr::from_bytes(b"glp_join_\xff\xfe").to_os_string(),
+        ),
+    ];
+    for enrolled in [false, true] {
+        for (label, value) in &values {
+            let state = TempDir::new("exit-relay-join");
+            if enrolled {
+                seed_identity(state.path(), None);
+            } else {
+                std::fs::create_dir_all(state.path()).expect("create state dir");
+            }
+            let before = names(state.path());
+            let out = run(state.path(), &[("RELAY_JOIN", value.as_os_str())]);
+            assert!(
+                !out.status.success(),
+                "{label} (enrolled: {enrolled}) must be refused, got {:?}",
+                out.status
+            );
+            let all = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(all.contains("RELAY_JOIN"), "{label}: names it: {all}");
+            for secret in ["tok-should-not-print", "tok-test", valid.as_str()] {
+                assert!(
+                    !all.contains(secret),
+                    "{label}: the value is printed: {all}"
+                );
+            }
+            assert_eq!(names(state.path()), before, "{label}: state changed");
+        }
+    }
+}
+
+/// The names in `dir`, for "the state directory is unchanged".
+fn names(dir: &Path) -> Vec<String> {
+    let mut out: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    out.sort();
+    out
 }
 
 #[test]
@@ -130,36 +195,18 @@ fn partial_identity_exits_nonzero() {
     );
 }
 
-// Proves DI-38.
+// Proves DI-44.
 #[test]
 fn identity_without_address_exits_nonzero() {
     let state = TempDir::new("exit-no-address");
     seed_identity(state.path(), None);
-    // Neither RELAY_ADDRESS nor a persisted address. A valid join string is set
-    // and must stay inert: its address is never a fallback once enrolled.
-    let join = valid_join();
-    let out = run(state.path(), &[("RELAY_JOIN", join.as_str())]);
+    // Neither RELAY_ADDRESS nor a persisted address.
+    let out = run(state.path(), &[] as &[(&str, &str)]);
     assert!(
         !out.status.success(),
         "an identity with no address must exit non-zero, got {:?}",
         out.status
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("RELAY_ADDRESS"), "stderr: {stderr}");
-}
-
-#[test]
-fn enrolled_node_never_reads_a_malformed_join() {
-    let state = TempDir::new("exit-enrolled-bad-join");
-    seed_identity(state.path(), None);
-    // Not even UTF-8. An enrolled Node does not read RELAY_JOIN, so the start
-    // proceeds to its normal address check rather than refusing the join string.
-    let bad = OsStr::from_bytes(b"glp_join_\xff\xfe");
-    let out = run(state.path(), &[("RELAY_JOIN", bad)]);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !stderr.contains("RELAY_JOIN"),
-        "the join string was read: {stderr}"
-    );
     assert!(stderr.contains("RELAY_ADDRESS"), "stderr: {stderr}");
 }

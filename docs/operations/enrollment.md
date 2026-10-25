@@ -66,8 +66,9 @@ $ curl --cacert ca-cert.pem \
   your secret store (e.g. Ansible Vault).
 - **`join_string`** — the token wrapped with the Relay's advertised node-plane address and the
   SHA-256 fingerprint of its CA certificate. A secret, returned once, here only. A Node
-  enrolls with it: the daemon reads it from `RELAY_JOIN`, pins the Relay's CA from the
-  fingerprint before sending the token, and needs no CA file configured by hand.
+  enrolls with it: `relay-daemon join` reads it from a prompt or standard input, pins the
+  Relay's CA from the fingerprint before sending the token, and needs no CA file configured by
+  hand. It is never written to the Node or placed in an environment file.
 
 Revoke a token at any time. This also cascade-revokes every Node it enrolled:
 
@@ -128,31 +129,34 @@ affected Node is the only fix.
 ## 2. Enroll one Node by hand
 
 Install the daemon per [relay-daemon-install.md](relay-daemon-install.md), with an env file
-carrying the join string from step 1. It holds the Relay's address, its CA fingerprint and the
-token, so no CA file is copied to the Node; the fingerprint is what stops a MITM from
-impersonating the Relay to a first-boot Node.
+that holds no join string, then give the join string from step 1 to `relay-daemon join`. The
+string holds the Relay's address, its CA fingerprint and the token, so no CA file is copied to
+the Node; the fingerprint is what stops a MITM from impersonating the Relay to a first-boot
+Node.
 
 ```sh
-# /etc/relay-daemon/relay-daemon.env   (0600 root:root)
-RELAY_JOIN=glp_join_…
+# /etc/relay-daemon/relay-daemon.env   (0600 root:root; no secret in it)
 RELAY_POLICY_PATH=/etc/relay-daemon/policy.toml
 RELAY_NODE_LABELS=env=prod,role=web,site=us-east-1
 ```
 
-A daemon with no identity and no `RELAY_JOIN` logs `no identity and no RELAY_JOIN: nothing to
-enroll with` and exits 0, so systemd shows a clean stop. If `systemctl status relay-daemon`
-says inactive after the first start, check the env file first.
-
 ```console
-$ sudo systemctl enable --now relay-daemon
+$ sudo relay-daemon join
+Paste the join string (input is hidden):
 $ journalctl -u relay-daemon | tail
-# first run: enrollment, identity persisted to /var/lib/relay-daemon,
-# then mTLS connect and "received Ping from Relay"
+# mTLS connect and "received Ping from Relay"
 ```
 
-Enrollment is idempotent: once an identity exists in the state dir, restarts skip enrollment
-and `RELAY_JOIN` is unused. It can be removed after the first success; the bulk playbook below
-leaves that to token expiry.
+`join` pins the Relay's CA, enrolls, persists the identity to `/var/lib/relay-daemon`, and
+starts the unit. It writes the join string nowhere and never touches the env file, whose
+labels it reads. A daemon with no identity logs `no identity: nothing to connect with;
+exiting until this Node is enrolled with relay-daemon join` and exits 0, so systemd shows a
+clean stop; if `systemctl status relay-daemon` says inactive, run `join`. A failed `join`
+leaves nothing on disk. `RELAY_JOIN` is not a setting: the daemon refuses to start while it is
+set, so do not put the join string in the env file.
+
+Enrollment is idempotent: once an identity exists in the state dir, `relay-daemon join` changes
+nothing and exits 0, so config management may rerun it, and restarts never enroll.
 
 Two Label namespaces are at work: `RELAY_NODE_LABELS` become node-space (`node:…`) Labels,
 node-rooted and for routine targeting, while the token's scope became relay-space (`relay:…`)
@@ -205,26 +209,38 @@ relay_join: "{{ vault_relay_join }}"   # the join_string from the mint
     mode: "0644"
   notify: restart relay-daemon
 
-- name: Write env file (carries the join string — 0600, from Vault)
+- name: Write env file (settings only — no secret, 0600)
   ansible.builtin.template:
     src: relay-daemon.env.j2
     dest: /etc/relay-daemon/relay-daemon.env
     owner: root
     group: root
     mode: "0600"
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Enroll and start relay-daemon (a no-op on an enrolled Node)
+  ansible.builtin.command:
+    cmd: /usr/bin/relay-daemon join
+    stdin: "{{ relay_join }}"
   no_log: true
 
-- name: Enable and start relay-daemon
+- name: Enable and start relay-daemon (converges if join's own start failed)
   ansible.builtin.systemd:
     name: relay-daemon
     enabled: true
     state: started
-    daemon_reload: true
 ```
+
+`ansible.cfg` must set `pipelining = True`. This is required, not a tuning note: without it
+Ansible stages the module arguments, the join string included, in a temporary file on the
+Node, which is where this design says it never lives (DI-45). The join string goes in on
+`stdin:` and never in `cmd:`, so it is in no argument and no environment variable either.
 
 ```jinja
 {# roles/relay_daemon/templates/relay-daemon.env.j2 #}
-RELAY_JOIN={{ relay_join }}
 RELAY_POLICY_PATH=/etc/relay-daemon/policy.toml
 RELAY_NODE_LABELS=env={{ relay_env }},role={{ relay_role }}
 ```
@@ -235,10 +251,10 @@ Run it across the fleet:
 $ ansible-playbook -i inventory/prod site.yml --limit 'new_nodes'
 ```
 
-Each Node enrolls itself on first daemon start; already-enrolled Nodes are no-ops. The Relay
+Each Node enrolls when `join` runs; already-enrolled Nodes are no-ops. The Relay
 rate-limits enrollment per IP and globally ([relay-install.md](relay-install.md)). For very
 large batches, raise `enrollment.global_rate_per_minute` in `relay.toml` for the window (a
-SIGHUP applies it), or let the daemons' retry and backoff spread the burst. In the MVP both
+SIGHUP applies it), or stagger the `join` runs across the batch. In the MVP both
 limits become fixed, with the per-IP limit raised to about 60 a minute, so some 200 Nodes
 behind one NAT address join in minutes with no setting to change.
 

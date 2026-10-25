@@ -5,10 +5,11 @@
 //! CA-pinned `build_channel` entry point used by both the enrollment bootstrap
 //! path (`enroll.rs`) and the mTLS tunnel (`tunnel.rs`).
 
-use std::fs::{self, OpenOptions};
+use std::collections::BTreeSet;
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-use std::path::Path;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
 
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
@@ -46,6 +47,10 @@ pub enum IdentityError {
     Channel(#[from] tonic::transport::Error),
     #[error("persisted Relay address in state dir is malformed: {reason}")]
     PersistedAddr { reason: &'static str },
+    #[error("state directory {}: {reason}", path.display())]
+    StateDir { path: PathBuf, reason: String },
+    #[error("another relay-daemon join is running against {}", path.display())]
+    JoinRunning { path: PathBuf },
 }
 
 /// File in the state directory holding the Node-plane Relay address persisted
@@ -258,6 +263,309 @@ pub(crate) fn persist_identity(dir: &Path, id: &Identity) -> Result<()> {
     Ok(())
 }
 
+/// Every file an enrollment writes into the state directory, and the `.tmp`
+/// sibling `write_atomic` stages each one through.
+const ENROLLMENT_PATHS: [&str; 10] = [
+    PERSISTED_ADDR_FILE,
+    "relay_addr.tmp",
+    "key.pem",
+    "key.pem.tmp",
+    "cert.pem",
+    "cert.pem.tmp",
+    "ca_bundle.pem",
+    "ca_bundle.pem.tmp",
+    "node_id",
+    "node_id.tmp",
+];
+
+/// A relative path ends in the empty ancestor, which names the current directory.
+fn ancestor_probe(candidate: &Path) -> &Path {
+    if candidate.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        candidate
+    }
+}
+
+/// Whether `dir` could be created and written, decided without writing anything:
+/// `dir` is a directory, or its nearest existing ancestor is one. Symlinks are
+/// followed, as the later create would follow them. The error names the path.
+pub fn check_state_dir_creatable(dir: &Path) -> Result<()> {
+    let refuse = |path: &Path, reason: String| IdentityError::StateDir {
+        path: path.to_path_buf(),
+        reason,
+    };
+    for candidate in dir.ancestors() {
+        match fs::metadata(ancestor_probe(candidate)) {
+            Ok(meta) if meta.is_dir() => return Ok(()),
+            Ok(_) => return Err(refuse(candidate, "is not a directory".to_string())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(refuse(candidate, e.to_string())),
+        }
+    }
+    Err(refuse(dir, "no ancestor of it exists".to_string()))
+}
+
+/// A state directory made ready for one enrollment by [`prepare_state_dir`]. It
+/// holds the exclusive lock that keeps a second `relay-daemon join` out, and it
+/// remembers what was there so [`PreparedStateDir::roll_back`] can put the
+/// directory back as found. A successful enrollment just drops it.
+pub struct PreparedStateDir {
+    dir: PathBuf,
+    /// The directories `prepare_state_dir` created, innermost first.
+    created: Vec<PathBuf>,
+    /// Which of [`ENROLLMENT_PATHS`] were present before.
+    existed: BTreeSet<&'static str>,
+    /// The bytes of a `relay_addr` that was present before; an address is not secret.
+    prior_relay_addr: Option<Vec<u8>>,
+    /// An exclusive `flock` on the directory itself, released when this drops, and
+    /// so held through the persist or the rollback.
+    _lock: File,
+}
+
+/// Why [`prepare_state_dir`] failed, and what it could not take back. `source`
+/// names the path that failed.
+#[derive(Debug)]
+pub struct PrepareError {
+    pub source: IdentityError,
+    /// Directories this call created and could not remove; empty when the
+    /// filesystem is as it was found.
+    pub leftovers: Vec<PathBuf>,
+}
+
+/// An I/O error at `path`, as an error that names it.
+fn state_dir_io(path: &Path, e: std::io::Error) -> IdentityError {
+    IdentityError::StateDir {
+        path: path.to_path_buf(),
+        reason: e.to_string(),
+    }
+}
+
+/// Removes `created` (innermost first), each only if empty. Returns the first
+/// directory that could not be removed, which also blocks every one outside it.
+fn remove_created(created: &[PathBuf]) -> Vec<PathBuf> {
+    for dir in created {
+        match fs::remove_dir(dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return vec![dir.clone()],
+        }
+    }
+    Vec::new()
+}
+
+/// How many times the create and the lock are tried when the directory is replaced
+/// between them.
+const LOCK_ATTEMPTS: usize = 3;
+
+/// Creates the missing directories of `dir` (mode 0700, umask-masked as
+/// `persist_identity` does, ADR-0036), outermost first, and returns the ones this
+/// call made, innermost first. A directory a concurrent run made first is not
+/// counted, so this call never removes it.
+fn create_missing(dir: &Path) -> Result<Vec<PathBuf>, PrepareError> {
+    let mut missing = Vec::new();
+    for candidate in dir.ancestors() {
+        match fs::symlink_metadata(ancestor_probe(candidate)) {
+            Ok(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(candidate.to_path_buf())
+            }
+            Err(e) => {
+                return Err(PrepareError {
+                    source: state_dir_io(candidate, e),
+                    leftovers: Vec::new(),
+                })
+            }
+        }
+    }
+
+    let mut made = Vec::new();
+    for candidate in missing.iter().rev() {
+        match fs::DirBuilder::new().mode(0o700).create(candidate) {
+            Ok(()) => made.insert(0, candidate.clone()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => {
+                return Err(PrepareError {
+                    source: state_dir_io(candidate, e),
+                    leftovers: remove_created(&made),
+                })
+            }
+        }
+    }
+    Ok(made)
+}
+
+/// Takes the exclusive lock on `dir` without waiting. `None` means the path no
+/// longer names the directory that was locked: a concurrent run removed it
+/// between the create and the lock, so the lock guards nothing.
+fn lock_state_dir(dir: &Path) -> Result<Option<File>, IdentityError> {
+    let file = File::open(dir).map_err(|e| state_dir_io(dir, e))?;
+    let held = file.metadata().map_err(|e| state_dir_io(dir, e))?;
+    if !held.is_dir() {
+        return Err(IdentityError::StateDir {
+            path: dir.to_path_buf(),
+            reason: "is not a directory".to_string(),
+        });
+    }
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            return Err(IdentityError::JoinRunning {
+                path: dir.to_path_buf(),
+            })
+        }
+        Err(TryLockError::Error(e)) => return Err(state_dir_io(dir, e)),
+    }
+    match fs::metadata(dir) {
+        Ok(now) if (now.dev(), now.ino()) == (held.dev(), held.ino()) => Ok(Some(file)),
+        Ok(_) => Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(state_dir_io(dir, e)),
+    }
+}
+
+/// Creates `dir` with any missing parents, takes an exclusive lock on it, and
+/// proves it writable. Records which directories it created and which enrollment
+/// files were already there, after the lock, so what it records is what no other
+/// `join` can be changing. A second `join` against the directory is refused while
+/// the lock is held. A failure removes what this call created before it returns,
+/// and an error that cannot be undone carries the directories left behind.
+///
+/// Only `relay-daemon join` calls this, immediately before it enrolls.
+pub fn prepare_state_dir(dir: &Path) -> Result<PreparedStateDir, PrepareError> {
+    let mut attempts = 0;
+    let (created, lock) = loop {
+        let created = create_missing(dir)?;
+        match lock_state_dir(dir) {
+            Ok(Some(lock)) => break (created, lock),
+            Ok(None) => {
+                attempts += 1;
+                let leftovers = remove_created(&created);
+                if attempts == LOCK_ATTEMPTS || !leftovers.is_empty() {
+                    return Err(PrepareError {
+                        source: IdentityError::StateDir {
+                            path: dir.to_path_buf(),
+                            reason: "was replaced while it was being locked".to_string(),
+                        },
+                        leftovers,
+                    });
+                }
+            }
+            Err(source) => {
+                return Err(PrepareError {
+                    source,
+                    leftovers: remove_created(&created),
+                })
+            }
+        }
+    };
+
+    // Present, or present but unreadable to us: either way it is not ours to remove.
+    let existed: BTreeSet<&'static str> = ENROLLMENT_PATHS
+        .into_iter()
+        .filter(|name| {
+            !matches!(
+                fs::symlink_metadata(dir.join(name)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound
+            )
+        })
+        .collect();
+    let prior_relay_addr = if existed.contains(PERSISTED_ADDR_FILE) {
+        let path = dir.join(PERSISTED_ADDR_FILE);
+        match fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            // An address that cannot be read cannot be put back after an overwrite.
+            Err(e) => {
+                return Err(PrepareError {
+                    source: state_dir_io(&path, e),
+                    leftovers: remove_created(&created),
+                })
+            }
+        }
+    } else {
+        None
+    };
+
+    // Only a probe this call created is removed: the name is this call's own only
+    // when `create_new` succeeded.
+    let probe = dir.join(format!(".join-probe-{}", std::process::id()));
+    let opened = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&probe)
+        .map(drop);
+    let mut leftovers = Vec::new();
+    let failure = match opened {
+        Err(e) => Some(e),
+        Ok(()) => match fs::remove_file(&probe) {
+            Ok(()) => None,
+            Err(e) => {
+                leftovers.push(probe.clone());
+                Some(e)
+            }
+        },
+    };
+    if let Some(e) = failure {
+        leftovers.extend(remove_created(&created));
+        return Err(PrepareError {
+            source: state_dir_io(&probe, e),
+            leftovers,
+        });
+    }
+
+    Ok(PreparedStateDir {
+        dir: dir.to_path_buf(),
+        created,
+        existed,
+        prior_relay_addr,
+        _lock: lock,
+    })
+}
+
+impl PreparedStateDir {
+    /// Puts the directory back as [`prepare_state_dir`] found it, and returns what
+    /// it could not put back; the vector is empty when the directory is as found.
+    ///
+    /// It removes the enrollment files that were absent before, restores a
+    /// `relay_addr` that existed before byte for byte, and removes the directories
+    /// `prepare_state_dir` created, innermost first, each only if empty. It never
+    /// touches any other file that existed before. A stale `.tmp` that existed
+    /// before can still be discarded by `write_atomic` during the enrollment
+    /// itself: it is a crash leftover that function already treats as disposable.
+    ///
+    /// The lock is released only after the rollback, when `self` drops.
+    ///
+    /// It is not called from `persist_identity`: renewal shares that function, and
+    /// a rollback there would delete a live identity.
+    pub fn roll_back(self) -> Vec<PathBuf> {
+        let mut left = Vec::new();
+        for name in ENROLLMENT_PATHS {
+            if self.existed.contains(name) {
+                continue;
+            }
+            let path = self.dir.join(name);
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => left.push(path),
+            }
+        }
+        if let Some(prior) = &self.prior_relay_addr {
+            let path = self.dir.join(PERSISTED_ADDR_FILE);
+            if fs::read(&path).ok().as_ref() != Some(prior) {
+                let restored = write_atomic(&self.dir, PERSISTED_ADDR_FILE, prior, 0o644)
+                    .and_then(|()| fsync_dir(&self.dir));
+                if restored.is_err() {
+                    left.push(path);
+                }
+            }
+        }
+        left.extend(remove_created(&self.created));
+        left
+    }
+}
+
 /// fsyncs a directory so that name changes within it (creations, renames) are
 /// durable. Opening a directory read-only and calling `sync_all` on the handle
 /// is the portable POSIX way to flush directory metadata.
@@ -401,16 +709,11 @@ pub mod mode_assert {
     }
 }
 
-/// Signs test CSRs the way rcgen's old CSR-parsing dev path did, without
-/// pulling rcgen's `x509-parser` dev feature (and with it a second ASN.1
-/// stack, x509-parser 0.16) into Cargo.lock. It signs a daemon CSR
-/// with the CSR's (empty) subject and no extensions, matching what
-/// `build_keypair_and_csr` produces.
+/// Test identities, and the CSR signer the fake Relay shares
+/// (`relay_test_support::fake_relay::sign_csr`).
 #[cfg(test)]
 pub(crate) mod test_ca {
-    use rustls_pki_types::pem::PemObject;
-    use rustls_pki_types::CertificateSigningRequestDer;
-    use x509_parser::prelude::FromDer;
+    pub(crate) use relay_test_support::fake_relay::sign_csr;
 
     /// A well-formed self-signed `Identity` for `node_id` (its own CA bundle),
     /// so that `load_identity`'s PEM validation passes.
@@ -427,85 +730,6 @@ pub(crate) mod test_ca {
             cert_pem: cert_pem.clone(),
             ca_bundle_pem: cert_pem,
         }
-    }
-
-    /// A CSR's SubjectPublicKeyInfo, adapted to rcgen's signing API.
-    struct CsrPublicKey(Vec<u8>);
-
-    impl rcgen::PublicKeyData for CsrPublicKey {
-        fn der_bytes(&self) -> &[u8] {
-            &self.0
-        }
-        fn algorithm(&self) -> &'static rcgen::SignatureAlgorithm {
-            &rcgen::PKCS_ECDSA_P256_SHA256
-        }
-    }
-
-    /// Parses and signs `csr_pem` as the CA self-signed from `ca_params`/`ca_kp`,
-    /// after checking its self-signature and that it carries the P-256/ecdsa-
-    /// with-SHA256, empty-subject shape `build_keypair_and_csr` produces.
-    pub(crate) fn sign_csr(
-        csr_pem: &str,
-        ca_params: &rcgen::CertificateParams,
-        ca_kp: &rcgen::KeyPair,
-    ) -> rcgen::Certificate {
-        let der =
-            CertificateSigningRequestDer::from_pem_slice(csr_pem.as_bytes()).expect("CSR PEM");
-        let (remainder, csr) =
-            x509_parser::certification_request::X509CertificationRequest::from_der(der.as_ref())
-                .expect("parse CSR");
-        assert!(remainder.is_empty(), "trailing bytes after CSR DER");
-
-        // Keeps the self-signature check that rcgen's old CSR-parsing dev
-        // path used to make.
-        csr.verify_signature().expect("CSR self-signature");
-
-        let subject_pki = &csr.certification_request_info.subject_pki;
-        assert_eq!(
-            subject_pki.algorithm.algorithm,
-            x509_parser::oid_registry::OID_KEY_TYPE_EC_PUBLIC_KEY,
-            "CSR public key is not an EC key"
-        );
-        // A future key-type or curve change should fail loudly here instead of
-        // being mis-signed as P-256.
-        let curve_oid = subject_pki
-            .algorithm
-            .parameters
-            .as_ref()
-            .expect("EC SPKI carries curve parameters")
-            .as_oid()
-            .expect("curve parameters are an OID");
-        assert_eq!(
-            curve_oid,
-            x509_parser::oid_registry::OID_EC_P256,
-            "CSR public key is not on the P-256 curve"
-        );
-        assert_eq!(
-            csr.signature_algorithm.algorithm,
-            x509_parser::oid_registry::OID_SIG_ECDSA_WITH_SHA256,
-            "CSR is not signed with ecdsa-with-SHA256"
-        );
-        assert!(
-            csr.certification_request_info
-                .subject
-                .iter_rdn()
-                .next()
-                .is_none(),
-            "CSR subject must be empty; the helper would otherwise drop it"
-        );
-
-        // CertificateParams::default() sets CN=rcgen self signed cert, which
-        // would give the leaf the same subject as its issuer. The old
-        // CSR-parsing dev path copied the CSR's empty subject.
-        let mut params = rcgen::CertificateParams::default();
-        params.distinguished_name = rcgen::DistinguishedName::new();
-
-        params
-            .signed_by(
-                &CsrPublicKey(subject_pki.subject_public_key.data.to_vec()),
-                &rcgen::Issuer::from_params(ca_params, ca_kp),
-            )
-            .expect("sign CSR")
     }
 }
 
@@ -607,6 +831,132 @@ mod tests {
             load_relay_addr(&dir.path().join("nonexistent")).expect("missing dir"),
             None
         );
+    }
+
+    #[test]
+    fn state_dir_check_follows_the_nearest_existing_ancestor_and_writes_nothing() {
+        let base = TempDir::created("state-dir-check");
+        check_state_dir_creatable(base.path()).expect("an existing directory");
+        let deep = base.path().join("a").join("b");
+        check_state_dir_creatable(&deep).expect("a missing path under a directory");
+        assert!(!base.path().join("a").exists(), "the check creates nothing");
+
+        let file = base.path().join("file");
+        fs::write(&file, "x").unwrap();
+        for bad in [file.clone(), file.join("under")] {
+            let err = check_state_dir_creatable(&bad).expect_err("a path through a file");
+            assert!(matches!(err, IdentityError::StateDir { .. }), "{err:?}");
+            assert!(err.to_string().contains(&file.display().to_string()));
+        }
+        // A relative path resolves against the current directory, which exists.
+        check_state_dir_creatable(Path::new("relative-state-dir")).expect("relative");
+    }
+
+    #[test]
+    fn prepare_state_dir_errors_name_the_path_that_failed() {
+        let base = TempDir::created("prepare-names-path");
+
+        // The ancestor walk meets a file in the way.
+        let file = base.path().join("file");
+        fs::write(&file, "x").unwrap();
+        let under = file.join("state");
+        let err = prepare_state_dir(&under)
+            .err()
+            .expect("a path through a file");
+        assert!(
+            matches!(&err.source, IdentityError::StateDir { path, .. } if path == &under),
+            "{err:?}"
+        );
+        assert!(err.leftovers.is_empty(), "{err:?}");
+
+        // The writability probe cannot be created: its name is taken.
+        let dir = base.path().join("state");
+        fs::create_dir(&dir).unwrap();
+        let probe = dir.join(format!(".join-probe-{}", std::process::id()));
+        fs::create_dir(&probe).unwrap();
+        let err = prepare_state_dir(&dir)
+            .err()
+            .expect("a probe that cannot be made");
+        assert!(
+            matches!(&err.source, IdentityError::StateDir { path, .. } if path == &probe),
+            "{err:?}"
+        );
+        assert!(err.leftovers.is_empty(), "{err:?}");
+        assert!(
+            probe.is_dir(),
+            "the thing in the probe's place is left alone"
+        );
+        assert!(dir.is_dir(), "a directory that was already there stays");
+    }
+
+    #[test]
+    fn a_second_prepare_is_refused_while_the_first_holds_the_dir() {
+        let base = TempDir::created("prepare-lock");
+        let dir = base.path().join("state");
+        let first = prepare_state_dir(&dir).expect("first prepare");
+
+        // The second finds the directory the first created, and neither removes
+        // it nor counts it as its own.
+        let err = prepare_state_dir(&dir).err().expect("the lock is held");
+        assert!(
+            matches!(&err.source, IdentityError::JoinRunning { path } if path == &dir),
+            "{err:?}"
+        );
+        assert!(err.leftovers.is_empty(), "{err:?}");
+        assert!(dir.is_dir(), "the first join's directory stays");
+
+        // The first persisted; the refused second changed nothing of it.
+        persist_relay_addr(&dir, "https://relay.test:7654").expect("persist");
+        assert!(first.roll_back().is_empty());
+        assert!(!dir.exists(), "the first rolled back what it created");
+
+        // Once the lock is released, the next prepare succeeds.
+        let again = prepare_state_dir(&dir).expect("lock released");
+        assert!(again.roll_back().is_empty());
+    }
+
+    #[test]
+    fn prepare_state_dir_removes_only_a_probe_it_created() {
+        let base = TempDir::created("prepare-probe");
+        let dir = base.path().join("state");
+        fs::create_dir(&dir).unwrap();
+
+        // A regular file under the probe's name belongs to someone else.
+        let probe = dir.join(format!(".join-probe-{}", std::process::id()));
+        fs::write(&probe, "not ours").unwrap();
+        let err = prepare_state_dir(&dir)
+            .err()
+            .expect("the probe name is taken");
+        assert!(
+            matches!(&err.source, IdentityError::StateDir { path, .. } if path == &probe),
+            "{err:?}"
+        );
+        assert_eq!(fs::read_to_string(&probe).unwrap(), "not ours");
+
+        // A probe this call creates is gone when it returns.
+        fs::remove_file(&probe).unwrap();
+        let prepared = prepare_state_dir(&dir).expect("prepare");
+        assert!(!probe.exists());
+        assert!(prepared.roll_back().is_empty());
+    }
+
+    #[test]
+    fn prepare_state_dir_refuses_a_relay_addr_it_cannot_read() {
+        let base = TempDir::created("prepare-unreadable-addr");
+        let dir = base.path().join("state");
+        fs::create_dir(&dir).unwrap();
+        // Present but not readable as a file.
+        let addr = dir.join(PERSISTED_ADDR_FILE);
+        fs::create_dir(&addr).unwrap();
+
+        let err = prepare_state_dir(&dir)
+            .err()
+            .expect("an address that cannot be restored");
+        assert!(
+            matches!(&err.source, IdentityError::StateDir { path, .. } if path == &addr),
+            "{err:?}"
+        );
+        assert!(err.leftovers.is_empty(), "{err:?}");
     }
 
     #[test]

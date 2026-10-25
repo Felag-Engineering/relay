@@ -1,18 +1,28 @@
 package relaytest
 
 import (
+	"bytes"
+	"context"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
+// joinTimeout bounds one `relay-daemon join`. The daemon gives its own
+// enrollment 60 seconds and prints the reason when that runs out, so this one is
+// longer: Go must not kill join just before it can say why.
+const joinTimeout = 90 * time.Second
+
 // DaemonConfig configures a real relay-daemon subprocess launched by
-// StartDaemon. JoinString, StateDir and PolicyPath map onto the daemon's env
-// (RELAY_JOIN/RELAY_STATE_DIR/RELAY_POLICY_PATH): the daemon gets its Relay
-// address and the CA fingerprint it pins from the join string alone, never a
-// CA file or a separate address. Hostname becomes HOSTNAME, so distinct calls
+// StartDaemon. JoinString reaches the daemon only on the standard input of
+// `relay-daemon join`; StateDir and PolicyPath map onto the daemon's env
+// (RELAY_STATE_DIR/RELAY_POLICY_PATH). The Node's Relay address and the CA
+// fingerprint it pins come from the join string alone, never a CA file or a
+// separate address, and never from the daemon's environment. Hostname becomes HOSTNAME, so distinct calls
 // model distinct fleet Nodes (never reusing on-disk identity unless the caller
 // deliberately reuses StateDir/Hostname, e.g. for a restart). LogWriter, if
 // non-nil, captures the subprocess's combined stdout/stderr; nil discards it.
@@ -38,10 +48,11 @@ type DaemonHandle struct {
 	cmd *exec.Cmd
 }
 
-// StartDaemon launches a real relay-daemon subprocess per cfg and blocks
-// until the process has started (not until it has enrolled/connected — that
-// sync point is the caller's own, e.g. polling a dispatcher or a devharness
-// socket). Skips the test if cfg.Bin is empty (RELAY_DAEMON_BIN unset — the
+// StartDaemon enrolls a Node with `relay-daemon join` (the join string on
+// standard input), then launches a real relay-daemon subprocess per cfg and
+// blocks until the process has started (not until it has connected — that sync
+// point is the caller's own, e.g. polling a dispatcher or a devharness socket).
+// It returns once the Node is enrolled. Skips the test if cfg.Bin is empty (RELAY_DAEMON_BIN unset — the
 // convention every e2e caller uses), or fails it under RELAY_E2E_REQUIRED=1
 // (SkipMissingBin). The subprocess is killed and reaped via
 // t.Cleanup.
@@ -52,7 +63,6 @@ func StartDaemon(t *testing.T, cfg DaemonConfig) *DaemonHandle {
 	}
 
 	env := append(withoutDaemonAddressing(os.Environ()),
-		"RELAY_JOIN="+cfg.JoinString,
 		"RELAY_STATE_DIR="+cfg.StateDir,
 		"RELAY_POLICY_PATH="+cfg.PolicyPath,
 		"RELAY_SERVER_NAME=localhost",
@@ -64,10 +74,42 @@ func StartDaemon(t *testing.T, cfg DaemonConfig) *DaemonHandle {
 		env = append(env, "RELAY_TEMPLATE_DIR="+cfg.TemplateDir)
 	}
 
+	JoinDaemon(t, cfg.Bin, env, cfg.StateDir, cfg.JoinString, cfg.LogWriter)
+
 	h := &DaemonHandle{t: t, cfg: cfg, env: env}
 	h.Launch()
 	t.Cleanup(h.Kill)
 	return h
+}
+
+// JoinDaemon runs `bin join` with env and joinString on its standard input, and
+// fails the test unless it exits 0 and leaves an identity in stateDir. The
+// string never reaches an argument or the environment. join's combined output is
+// also written to log when non-nil; it never contains the join string.
+func JoinDaemon(t *testing.T, bin string, env []string, stateDir, joinString string, log io.Writer) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), joinTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "join")
+	cmd.Env = env
+	cmd.Stdin = strings.NewReader(joinString + "\n")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+	if log != nil {
+		log.Write(out.Bytes())
+	}
+	if err != nil {
+		t.Fatalf("relay-daemon join: %v\n%s", err, out.String())
+	}
+	// Exit 0 is also what join says on a Node that already holds an identity, in
+	// which case the daemon would start unconfigured and the test would time out
+	// far from the cause.
+	if _, statErr := os.Stat(filepath.Join(stateDir, "node_id")); statErr != nil {
+		t.Fatalf("relay-daemon join exited 0 but left no identity in %s (%v); a host identity or environment file may be in the way:\n%s",
+			stateDir, statErr, out.String())
+	}
 }
 
 // Launch starts a fresh relay-daemon subprocess from h's env, replacing any
@@ -106,32 +148,17 @@ func (h *DaemonHandle) Kill() {
 
 // Relaunch kills the current daemon subprocess (if any) and starts a fresh
 // one against the SAME env — same StateDir, so the same persisted identity
-// and dedup markers — modeling a config-management restart.
+// and dedup markers — modeling a config-management restart. The env carries no
+// join string and no Relay address, so the daemon dials the address and trusts
+// the CA persisted at enrollment (ADR-0031 decision 4, DI-44).
 func (h *DaemonHandle) Relaunch() {
 	h.Kill()
 	h.Launch()
 }
 
-// RelaunchWithoutJoinOrAddress kills the current daemon subprocess and starts
-// a fresh one against the SAME StateDir with no RELAY_JOIN and no Relay address
-// in its argv or environment: a steady-state env file after the join string was
-// removed, so the daemon must dial the address and trust the CA it persisted at
-// enrollment (ADR-0031 decision 4, DI-38). It models a config-management
-// restart of an enrolled Node.
-func (h *DaemonHandle) RelaunchWithoutJoinOrAddress() {
-	h.Kill()
-	var env []string
-	for _, kv := range h.env {
-		if !strings.HasPrefix(kv, "RELAY_JOIN=") {
-			env = append(env, kv)
-		}
-	}
-	h.launch(nil, env)
-}
-
 // withoutDaemonAddressing drops every variable that could hand the daemon an
-// address, a CA or a credential other than the join string, so a test runner's
-// own environment cannot mask what the join string carries.
+// address, a CA or a credential, so a test runner's own environment cannot mask
+// what the join string carries.
 func withoutDaemonAddressing(env []string) []string {
 	strip := []string{
 		"RELAY_ADDRESS=", "RELAY_ENROLL_ADDRESS=", "RELAY_JOIN=",

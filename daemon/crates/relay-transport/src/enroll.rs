@@ -40,6 +40,23 @@ pub enum EnrollError {
     Pin(#[from] PinError),
     #[error("the Relay returned a CA bundle that is not the pinned CA; nothing was persisted")]
     CaBundleMismatch,
+    /// A failure after the Relay answered `Enroll`: it has issued a certificate and
+    /// spent the token's use, so a Node record may exist that this Node never holds.
+    #[error(transparent)]
+    AfterIssue(Box<EnrollError>),
+}
+
+impl EnrollError {
+    /// Whether the error arose after the Relay answered `Enroll`, so that a Node
+    /// record may exist.
+    pub fn relay_may_have_recorded(&self) -> bool {
+        matches!(self, EnrollError::AfterIssue(_))
+    }
+}
+
+/// Marks `e` as a failure after the Relay answered.
+fn after_issue(e: impl Into<EnrollError>) -> EnrollError {
+    EnrollError::AfterIssue(Box::new(e.into()))
 }
 
 // Manual From impl because #[from] on Box<tonic::Status> would generate
@@ -50,8 +67,8 @@ impl From<tonic::Status> for EnrollError {
     }
 }
 
-/// Configuration for the enrollment bootstrap step, constructed by the bin's
-/// `config::enroll_config` only when no identity exists and a join string is set.
+/// Configuration for the enrollment bootstrap step, constructed by `relay-daemon
+/// join` (the bin's `config::join_enroll_config`) from the join string it read.
 pub struct EnrollConfig {
     /// The decoded join string: the CA fingerprint pinned before anything is sent,
     /// and the Enrollment Token, never logged. Only the redacting type is held.
@@ -71,14 +88,20 @@ pub struct EnrollConfig {
     pub facts: Facts,
 }
 
-/// Returns the daemon's state directory: `RELAY_STATE_DIR` env var or the
-/// default `/var/lib/relay-daemon`. Called by `Config::from_env` so that
-/// enrollment bootstrap and the Tunnel identity load always agree on the
-/// state directory without a second env read.
+/// The unit's state directory (`StateDirectory=relay-daemon`), where the daemon
+/// keeps its identity unless `RELAY_STATE_DIR` names another.
+pub const DEFAULT_STATE_DIR: &str = "/var/lib/relay-daemon";
+
+/// Returns the daemon's state directory: `RELAY_STATE_DIR` env var or
+/// [`DEFAULT_STATE_DIR`]; an empty value counts as unset, as it does for
+/// `relay-daemon join`. Called by `Config::from_env` so that the startup plan
+/// and the Tunnel identity load always agree on the state directory without a
+/// second env read.
 pub fn state_dir_from_env() -> PathBuf {
-    PathBuf::from(
-        std::env::var("RELAY_STATE_DIR").unwrap_or_else(|_| "/var/lib/relay-daemon".to_string()),
-    )
+    match std::env::var("RELAY_STATE_DIR") {
+        Ok(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => PathBuf::from(DEFAULT_STATE_DIR),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +133,7 @@ pub fn node_labels_to_proto(labels: &[(String, String)]) -> Vec<Label> {
 /// Parses a comma-separated `key=value` label list into bare pairs, stripping
 /// any `node:` prefix that would otherwise be double-applied at send time.
 /// Malformed or empty entries are silently skipped.
-pub(crate) fn parse_node_labels(raw: &str) -> Vec<(String, String)> {
+pub fn parse_node_labels(raw: &str) -> Vec<(String, String)> {
     raw.split(',')
         .filter_map(|entry| {
             let entry = entry.trim();
@@ -140,7 +163,7 @@ pub(crate) fn parse_node_labels(raw: &str) -> Vec<(String, String)> {
 async fn call_enroll_owned(
     endpoint: String,
     pin: [u8; 32],
-    token: String,
+    mut token: zeroize::Zeroizing<String>,
     tls_server_name: Option<String>,
     node_labels: Vec<(String, String)>,
     facts: Facts,
@@ -156,7 +179,8 @@ async fn call_enroll_owned(
     let self_labels = node_labels_to_proto(&node_labels);
 
     let req = EnrollRequest {
-        enrollment_token: token,
+        // Moved out, not cloned: the wiped holder is left empty.
+        enrollment_token: std::mem::take(&mut *token),
         csr: csr_pem.into_bytes(),
         self_labels,
         facts: Some(facts),
@@ -169,9 +193,9 @@ async fn call_enroll_owned(
 
     // EnrollResponse.certificate and .ca_bundle are proto `bytes` (Vec<u8>).
     // Both should be UTF-8 PEM; propagate an error if they aren't.
-    let cert_pem = String::from_utf8(resp.certificate)?;
-    let ca_bundle_pem = String::from_utf8(resp.ca_bundle)?;
-    check_ca_bundle(&ca_bundle_pem, &ca_der)?;
+    let cert_pem = String::from_utf8(resp.certificate).map_err(after_issue)?;
+    let ca_bundle_pem = String::from_utf8(resp.ca_bundle).map_err(after_issue)?;
+    check_ca_bundle(&ca_bundle_pem, &ca_der).map_err(after_issue)?;
 
     Ok((resp.node_id, cert_pem, ca_bundle_pem))
 }
@@ -197,6 +221,10 @@ fn check_ca_bundle(ca_bundle_pem: &str, pinned: &[u8]) -> Result<()> {
 /// If a valid identity is already persisted in `state_dir`, returns it immediately
 /// without generating a CSR or contacting the Relay. Otherwise: generates a
 /// keypair + CSR, calls `enroller(csr_pem)`, persists the returned identity.
+///
+/// The only await is `enroller`, and persistence is synchronous after it, so
+/// dropping this future (a timeout, an interrupt) persists nothing: `relay-daemon
+/// join` relies on that.
 async fn ensure_enrolled_with<F, Fut>(
     state_dir: &Path,
     relay_addr: &str,
@@ -234,11 +262,11 @@ where
     // (renew.rs); a cert whose SPKI doesn't match our private key is unusable and
     // must never be written to disk (a misbehaving/compromised Relay otherwise
     // locks the Node out until the next boot's load-time check catches it).
-    cert_pubkey_matches_key(&identity.cert_pem, &identity.key_pem)?;
+    cert_pubkey_matches_key(&identity.cert_pem, &identity.key_pem).map_err(after_issue)?;
     // Address first, then identity: every identity this code persists has an
-    // address. The already-enrolled branch above never writes it (no backfill; DI-38).
-    persist_relay_addr(state_dir, relay_addr)?;
-    persist_identity(state_dir, &identity)?;
+    // address. The already-enrolled branch above never writes it (no backfill; DI-44).
+    persist_relay_addr(state_dir, relay_addr).map_err(after_issue)?;
+    persist_identity(state_dir, &identity).map_err(after_issue)?;
     info!(
         node_id = log_field::untrusted(&node_id),
         hostname, label_count, "enrollment complete"
@@ -256,7 +284,10 @@ pub async fn ensure_enrolled(cfg: &EnrollConfig) -> Result<Identity> {
     // owned data and avoids a lifetime tangle with &EnrollConfig.
     let endpoint = cfg.endpoint.clone();
     let pin = *cfg.join.ca_fingerprint();
-    let token = cfg.join.enrollment_token().to_string();
+    // Wiped if the call ends before the request is built (a pin mismatch). Once
+    // the string moves into the request, it and the tonic, h2 and rustls buffers
+    // it passes through hold the token unwiped.
+    let token = zeroize::Zeroizing::new(cfg.join.enrollment_token().to_string());
     let tls_server_name = cfg.tls_server_name.clone();
     let node_labels = cfg.node_labels.clone();
     let facts = cfg.facts.clone();
@@ -338,7 +369,7 @@ mod tests {
     // Idempotency: pre-written identity → enroller is NOT called
     // -----------------------------------------------------------------------
 
-    // Proves DI-38, EN-14.
+    // Proves EN-32.
     #[tokio::test]
     async fn idempotency_no_op_when_identity_present() {
         let dir = TempDir::new("idempotent");
@@ -368,7 +399,7 @@ mod tests {
     // Fresh enroll: empty dir + mock enroller → files persisted correctly
     // -----------------------------------------------------------------------
 
-    // Proves EN-14.
+    // Proves EN-32.
     #[tokio::test]
     async fn fresh_enroll_persists_identity() {
         let dir = TempDir::new("fresh");
@@ -422,7 +453,7 @@ mod tests {
         assert_eq!(loaded.node_id, canned_node_id);
     }
 
-    // Proves EN-8.
+    // Proves EN-8, DI-44.
     #[tokio::test]
     async fn persisted_address_written_at_enrollment() {
         let dir = TempDir::new("fresh-addr");
@@ -498,7 +529,7 @@ mod tests {
         assert_eq!(load_relay_addr(dir.path()).expect("load_relay_addr"), None);
     }
 
-    // Proves EN-28.
+    // Proves EN-33.
     #[tokio::test]
     async fn fresh_enroll_fails_closed_on_key_cert_mismatch() {
         let dir = TempDir::new("fresh-mismatch");
@@ -534,9 +565,11 @@ mod tests {
             Ok(_) => unreachable!(),
         };
         assert!(
-            matches!(&e, EnrollError::Identity(IdentityError::PubkeyMismatch)),
-            "expected Identity(PubkeyMismatch) variant"
+            matches!(&e, EnrollError::AfterIssue(inner)
+                if matches!(**inner, EnrollError::Identity(IdentityError::PubkeyMismatch))),
+            "expected AfterIssue(Identity(PubkeyMismatch)), got {e:?}"
         );
+        assert!(e.relay_may_have_recorded());
         // Nothing may be written to disk on a failed enrollment.
         assert!(
             !dir.path().join("key.pem").exists(),
@@ -554,6 +587,91 @@ mod tests {
                 .is_none(),
             "no identity may be persisted when enrollment fails closed"
         );
+    }
+
+    /// `prepare_state_dir` then `roll_back` leaves the directory as it was found,
+    /// whichever way the enrollment between them failed. No claim cites this: it
+    /// proves the helper the claims' tests rely on.
+    #[tokio::test]
+    async fn prepare_and_roll_back_restore_the_dir_as_found() {
+        use crate::identity::{persist_relay_addr, prepare_state_dir};
+
+        // A missing two-level directory: prepare creates both, roll_back removes both.
+        let base = TempDir::created("rollback-missing");
+        let dir = base.path().join("a").join("b");
+        let prepared = prepare_state_dir(&dir).expect("prepare");
+        assert!(dir.is_dir());
+        assert!(prepared.roll_back().is_empty());
+        assert!(!base.path().join("a").exists(), "both levels are gone");
+
+        // A directory that already holds an address and a stray file: the address
+        // is restored byte for byte and the stray file is never touched.
+        let dir = TempDir::created("rollback-seeded");
+        let relay_addr = dir.path().join(crate::identity::PERSISTED_ADDR_FILE);
+        std::fs::write(&relay_addr, "https://old.example:443").unwrap();
+        std::fs::write(dir.path().join("stray"), "keep").unwrap();
+        let prepared = prepare_state_dir(dir.path()).expect("prepare");
+        persist_relay_addr(dir.path(), "https://new.example:443").expect("persist");
+        assert!(prepared.roll_back().is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&relay_addr).unwrap(),
+            "https://old.example:443"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("stray")).unwrap(),
+            "keep"
+        );
+
+        // An enrollment that fails in the middle of persisting: key, cert and CA
+        // are renamed in before node_id fails, because node_id.tmp is a non-empty
+        // directory. roll_back removes what was written and leaves what was there.
+        let dir = TempDir::created("rollback-mid-persist");
+        let blocker = dir.path().join("node_id.tmp");
+        std::fs::create_dir(&blocker).unwrap();
+        std::fs::write(blocker.join("inside"), "keep").unwrap();
+        let prepared = prepare_state_dir(dir.path()).expect("prepare");
+        let result = ensure_enrolled_with(
+            dir.path(),
+            ADDR,
+            "test-host",
+            0,
+            move |csr_pem| async move {
+                let ca_kp = rcgen::KeyPair::generate().expect("ca keygen");
+                let ca_params = rcgen::CertificateParams::new(vec![]).expect("ca params");
+                let ca_cert = ca_params.self_signed(&ca_kp).expect("ca cert");
+                let issued = crate::identity::test_ca::sign_csr(&csr_pem, &ca_params, &ca_kp);
+                Ok(("node-mid".to_string(), issued.pem(), ca_cert.pem()))
+            },
+        )
+        .await;
+        assert!(result.is_err(), "node_id cannot be written");
+        assert!(
+            dir.path().join("key.pem").exists(),
+            "the persist got that far"
+        );
+        assert!(prepared.roll_back().is_empty());
+        for name in ["key.pem", "cert.pem", "ca_bundle.pem", "node_id"] {
+            assert!(
+                !dir.path().join(name).exists(),
+                "{name} must be rolled back"
+            );
+        }
+        assert!(!dir
+            .path()
+            .join(crate::identity::PERSISTED_ADDR_FILE)
+            .exists());
+        assert!(
+            blocker.join("inside").exists(),
+            "node_id.tmp existed before"
+        );
+
+        // Something it could not remove is reported, not hidden.
+        let base = TempDir::created("rollback-leftover");
+        let dir = base.path().join("x").join("y");
+        let prepared = prepare_state_dir(&dir).expect("prepare");
+        std::fs::write(dir.join("filled"), "x").unwrap();
+        assert_eq!(prepared.roll_back(), vec![dir.clone()]);
+        assert!(dir.join("filled").exists());
     }
 
     /// The `node_id` the Relay returns at enrollment is logged; a newline in it
@@ -617,141 +735,20 @@ mod no_debug_guard {
     }
 }
 
-/// The join-string enrollment path against a fake Relay over real TLS: the
-/// server presents `[leaf, CA]` the way the Relay's node plane does and counts
-/// the `Enroll` calls it receives (DI-22).
+/// The join-string enrollment path against a fake Relay over real TLS
+/// (`relay_test_support::fake_relay`): the server presents `[leaf, CA]` the way
+/// the Relay's node plane does and counts the `Enroll` calls it receives.
 #[cfg(test)]
 mod join_enroll {
     use super::*;
-    use crate::gen::EnrollResponse;
     use crate::identity::{load_identity, load_relay_addr};
     use crate::pin::sha256;
+    use crate::test_support::fake_relay::{pki, start_fake_relay};
     use crate::test_support::TempDir;
     use rustls_pki_types::pem::PemObject;
     use rustls_pki_types::CertificateDer;
-    use std::convert::Infallible;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
-    use tonic::codegen::{http, BoxFuture, Context, Poll, Service};
-    use tonic::transport::server::{ServerTlsConfig, TcpIncoming};
-    use tonic::transport::{Identity as TlsIdentity, Server};
-
-    struct Pki {
-        ca_pem: String,
-        ca_der: Vec<u8>,
-        ca_params: rcgen::CertificateParams,
-        ca_key: rcgen::KeyPair,
-        leaf_pem: String,
-        leaf_key_pem: String,
-    }
-
-    fn pki(leaf_name: &str) -> Pki {
-        let ca_key = rcgen::KeyPair::generate().expect("ca key");
-        let mut ca_params = rcgen::CertificateParams::new(vec![]).expect("ca params");
-        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-        let ca = ca_params.self_signed(&ca_key).expect("ca cert");
-        let leaf_key = rcgen::KeyPair::generate().expect("leaf key");
-        let leaf = rcgen::CertificateParams::new(vec![leaf_name.to_string()])
-            .expect("leaf params")
-            .signed_by(&leaf_key, &rcgen::Issuer::from_params(&ca_params, &ca_key))
-            .expect("leaf cert");
-        Pki {
-            ca_pem: ca.pem(),
-            ca_der: ca.der().to_vec(),
-            ca_params,
-            ca_key,
-            leaf_pem: leaf.pem(),
-            leaf_key_pem: leaf_key.serialize_pem(),
-        }
-    }
-
-    /// What the fake Relay saw.
-    #[derive(Default)]
-    struct Seen {
-        enroll_calls: AtomicUsize,
-        tokens: Mutex<Vec<String>>,
-    }
-
-    #[derive(Clone)]
-    struct FakeEnrollment {
-        seen: Arc<Seen>,
-        ca_params: Arc<rcgen::CertificateParams>,
-        ca_key: Arc<rcgen::KeyPair>,
-        ca_bundle_pem: Arc<String>,
-    }
-
-    impl tonic::server::UnaryService<EnrollRequest> for FakeEnrollment {
-        type Response = EnrollResponse;
-        type Future = BoxFuture<tonic::Response<EnrollResponse>, tonic::Status>;
-
-        fn call(&mut self, req: tonic::Request<EnrollRequest>) -> Self::Future {
-            let this = self.clone();
-            Box::pin(async move {
-                let req = req.into_inner();
-                this.seen.enroll_calls.fetch_add(1, Ordering::SeqCst);
-                this.seen
-                    .tokens
-                    .lock()
-                    .unwrap()
-                    .push(req.enrollment_token.clone());
-                let csr = String::from_utf8(req.csr).expect("csr utf8");
-                let cert = crate::identity::test_ca::sign_csr(&csr, &this.ca_params, &this.ca_key);
-                Ok(tonic::Response::new(EnrollResponse {
-                    node_id: "node-join-test".to_string(),
-                    certificate: cert.pem().into_bytes(),
-                    ca_bundle: this.ca_bundle_pem.as_bytes().to_vec(),
-                    ..Default::default()
-                }))
-            })
-        }
-    }
-
-    impl Service<http::Request<tonic::body::Body>> for FakeEnrollment {
-        type Response = http::Response<tonic::body::Body>;
-        type Error = Infallible;
-        type Future = BoxFuture<Self::Response, Infallible>;
-
-        fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Infallible>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn call(&mut self, req: http::Request<tonic::body::Body>) -> Self::Future {
-            let svc = self.clone();
-            Box::pin(async move {
-                if req.uri().path() != "/relay.v1.Enrollment/Enroll" {
-                    return Ok(tonic::Status::unimplemented("not Enroll").into_http());
-                }
-                let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
-                Ok(grpc.unary(svc, req).await)
-            })
-        }
-    }
-
-    /// Starts the fake Relay presenting `server`'s leaf and CA, answering Enroll
-    /// with `ca_bundle_pem` as the CA bundle. Returns its port and what it saw.
-    async fn start_fake_relay(server: &Pki, ca_bundle_pem: String) -> (u16, Arc<Seen>) {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let incoming = TcpIncoming::bind("127.0.0.1:0".parse().unwrap()).expect("bind");
-        let port = incoming.local_addr().expect("local_addr").port();
-        let seen = Arc::new(Seen::default());
-        let svc = FakeEnrollment {
-            seen: Arc::clone(&seen),
-            ca_params: Arc::new(server.ca_params.clone()),
-            ca_key: Arc::new(
-                rcgen::KeyPair::from_pem(&server.ca_key.serialize_pem()).expect("ca key"),
-            ),
-            ca_bundle_pem: Arc::new(ca_bundle_pem),
-        };
-        let chain = format!("{}{}", server.leaf_pem, server.ca_pem);
-        let tls =
-            ServerTlsConfig::new().identity(TlsIdentity::from_pem(chain, &server.leaf_key_pem));
-        let builder = Server::builder().tls_config(tls).expect("server tls");
-        tokio::spawn(async move {
-            let _ = builder.serve_with_incoming(svc, incoming).await;
-        });
-        (port, seen)
-    }
 
     fn enroll_cfg(port: u16, pin: [u8; 32], state_dir: &Path) -> EnrollConfig {
         let endpoint = format!("https://127.0.0.1:{port}");
@@ -779,7 +776,7 @@ mod join_enroll {
             .expect("enrollment did not finish within the timeout")
     }
 
-    // Proves DI-22, EN-7.
+    // Proves DI-43, EN-7.
     #[tokio::test]
     async fn pin_match_enrolls() {
         let server = pki("localhost");
@@ -806,7 +803,7 @@ mod join_enroll {
         );
     }
 
-    // Proves DI-22, EN-7, EN-27.
+    // Proves DI-43, EN-7, EN-27.
     #[tokio::test]
     async fn pin_mismatch_sends_no_token() {
         let server = pki("localhost");
@@ -848,7 +845,7 @@ mod join_enroll {
         assert_eq!(seen.enroll_calls.load(Ordering::SeqCst), 0);
     }
 
-    // Proves DI-22.
+    // Proves DI-43.
     #[tokio::test]
     async fn ca_bundle_mismatch_refused() {
         let server = pki("localhost");
@@ -864,9 +861,11 @@ mod join_enroll {
             .expect("a mismatched bundle must refuse");
 
         assert!(
-            matches!(err, EnrollError::CaBundleMismatch),
-            "want CaBundleMismatch, got {err:?}"
+            matches!(&err, EnrollError::AfterIssue(inner)
+                if matches!(**inner, EnrollError::CaBundleMismatch)),
+            "want AfterIssue(CaBundleMismatch), got {err:?}"
         );
+        assert!(err.relay_may_have_recorded());
         assert_eq!(seen.enroll_calls.load(Ordering::SeqCst), 1);
         assert!(load_identity(dir.path()).unwrap().is_none());
         for name in ["key.pem", "cert.pem", "ca_bundle.pem", "node_id"] {

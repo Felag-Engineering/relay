@@ -304,7 +304,6 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 	stateDir := t.TempDir()
 
 	env := append(os.Environ(),
-		"RELAY_JOIN="+joinString,
 		"RELAY_STATE_DIR="+stateDir,
 		"RELAY_POLICY_PATH="+policyPath,
 		"RELAY_TEMPLATE_DIR="+templateRoot,
@@ -314,6 +313,10 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 		// startDaemonNode in tunnel_dispatch_e2e_test.go).
 		"RUST_LOG=warn",
 	)
+
+	// The Node enrolls in the process that reads the join string; the daemon then
+	// starts with no join string anywhere in its environment.
+	relaytest.JoinDaemon(t, daemonBin, env, stateDir, joinString, daemonLog)
 
 	daemonCmd = exec.Command(daemonBin)
 	daemonCmd.Env = env

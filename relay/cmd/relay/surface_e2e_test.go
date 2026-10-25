@@ -18,9 +18,9 @@
 // #113 (compose dev-fleet) note: #113 is still OPEN as of this issue. A
 // future compose-based dev-fleet harness can reuse, wholesale: the
 // token-scope -> distinct relay: label pattern used here to stand up
-// alpha/beta/fresh Nodes; the launchDaemon env recipe (RELAY_JOIN/
-// RELAY_STATE_DIR/RELAY_POLICY_PATH, one HOSTNAME + one RELAY_STATE_DIR per
-// Node); the
+// alpha/beta/fresh Nodes; the launchDaemon recipe (the join string on
+// `relay-daemon join`'s stdin, RELAY_STATE_DIR/RELAY_POLICY_PATH, one HOSTNAME +
+// one RELAY_STATE_DIR per Node); the
 // waitForConnectedNodes(deps.dispatch.ConnectedNodes()) readiness poll; the
 // pollDescribeReported poll for the daemon's post-connect PolicySnapshot
 // (#151); and the public-surface (MCP + HTTPS) assertion shapes throughout.

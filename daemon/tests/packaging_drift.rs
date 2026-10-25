@@ -203,6 +203,34 @@ fn exemptions_are_real() {
     }
 }
 
+/// The shipped example carries no join line, live or commented out: the join
+/// string is never placed in the environment file, which holds no secret. The
+/// example may still name `RELAY_JOIN` in prose, as a setting the daemon refuses.
+// Proves DI-43.
+#[test]
+fn env_example_has_no_join_line() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging/relay-daemon.env.example");
+    let sample =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let offending: Vec<&str> = sample
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            let line = line.strip_prefix('#').unwrap_or(line).trim_start();
+            line.strip_prefix("RELAY_JOIN")
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+        })
+        .collect();
+    assert!(
+        offending.is_empty(),
+        "the example must carry no RELAY_JOIN assignment, live or commented out: {offending:?}"
+    );
+    assert!(
+        sample.contains("RELAY_JOIN"),
+        "the example names RELAY_JOIN in prose as a setting the daemon refuses"
+    );
+}
+
 /// The shipped unit starts the daemon from `/usr/bin` (DI-40), where the package
 /// installs it.
 #[test]

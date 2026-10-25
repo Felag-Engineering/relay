@@ -131,7 +131,7 @@ regex = "1"
 # (rustix 1.1.4); the `process` feature is added here. Using rustix instead
 # of libc keeps the code safe (no `unsafe` block needed). `termios` (no further
 # crate, neither `fs` nor `use-libc`) is the safe tcgetattr/tcsetattr that turns
-# echo off while `relay-daemon join` reads the join string (DI-37).
+# echo off while `relay-daemon join` reads the join string (DI-42).
 rustix = { version = "1", features = ["process", "termios"] }
 # Custom open(2) flags (O_NOFOLLOW/O_NONBLOCK on Policy/Template; O_NONBLOCK/
 # O_NOCTTY, deliberately NOT O_NOFOLLOW, on file_read — ADR-0018) and ELOOP
@@ -141,9 +141,9 @@ rustix = { version = "1", features = ["process", "termios"] }
 # fixture strings. Already present transitively via tokio ->
 # signal-hook-registry, so this adds zero new crates to the musl build.
 libc = "0.2"
-# Wipes the buffers that held the typed join string (DI-37). Already resolved
-# through rustls and rustls-pki-types with its default `alloc` feature, so this
-# adds no crate and no feature to the build.
+# Wipes the buffers that held the typed join string, and the token it carries
+# (DI-42). Already resolved through rustls and rustls-pki-types with its default
+# `alloc` feature, so this adds no crate and no feature to the build.
 zeroize = "1"
 # Test-only deps (see the dev-dependencies of the members that use them).
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }

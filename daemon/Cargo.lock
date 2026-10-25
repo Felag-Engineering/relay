@@ -1103,11 +1103,18 @@ dependencies = [
 name = "relay-test-support"
 version = "0.0.0"
 dependencies = [
+ "rcgen",
  "relay-log",
+ "relay-proto",
  "rustix",
+ "rustls",
+ "rustls-pki-types",
  "tokio",
+ "tonic",
+ "tonic-prost",
  "tracing",
  "tracing-subscriber",
+ "x509-parser",
 ]
 
 [[package]]
@@ -1128,9 +1135,9 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tonic",
- "tonic-prost",
  "tracing",
  "x509-parser",
+ "zeroize",
 ]
 
 [[package]]
