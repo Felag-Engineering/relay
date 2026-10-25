@@ -2,9 +2,11 @@
 #
 # Dependabot itself costs no Actions minutes; every PR it opens costs a full CI run. So
 # updates are batched — monthly, every update in an ecosystem in one PR — rather than one
-# PR per dependency per week. Security updates are separate: when GitHub's Dependabot
-# security updates are enabled for the repository, a fix for a known advisory still
-# arrives as soon as it exists, outside this schedule.
+# PR per dependency per week. Security updates are separate: with GitHub's Dependabot
+# security updates enabled for the repository, a fix for a known advisory arrives as soon
+# as it exists, outside this schedule and without the cooldown. Each entry's `*-security`
+# group batches them, so a burst of advisories in one ecosystem is one PR, not one per
+# dependency. GitHub cannot group across entries, so advisories in two ecosystems are two PRs.
 #
 # cooldown: a release must be a week old before it is proposed, so a compromised or
 # yanked-within-days version (the usual shape of a registry supply-chain attack) is
@@ -34,6 +36,9 @@ updates:
         dependency-type: all
     groups:
       relay-go:
+        patterns: ["*"]
+      relay-go-security:
+        applies-to: security-updates
         patterns: ["*"]
     commit-message:
       prefix: "deps(relay)"
@@ -69,6 +74,9 @@ updates:
     groups:
       go-tools:
         patterns: ["*"]
+      go-tools-security:
+        applies-to: security-updates
+        patterns: ["*"]
     commit-message:
       prefix: "deps(tools)"
 
@@ -84,6 +92,10 @@ updates:
     allow:
       - dependency-name: github.com/goreleaser/nfpm/v2
         dependency-type: all
+    groups:
+      nfpm-security:
+        applies-to: security-updates
+        patterns: ["*"]
     commit-message:
       prefix: "deps(release)"
 
@@ -98,6 +110,9 @@ updates:
     open-pull-requests-limit: 1
     groups:
       daemon-rust:
+        patterns: ["*"]
+      daemon-rust-security:
+        applies-to: security-updates
         patterns: ["*"]
     commit-message:
       prefix: "deps(daemon)"
@@ -117,6 +132,9 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
     commit-message:
       prefix: "deps(ci)"
 
@@ -132,5 +150,9 @@ updates:
     open-pull-requests-limit: 1
     allow:
       - dependency-name: alpine
+    groups:
+      image-security:
+        applies-to: security-updates
+        patterns: ["*"]
     commit-message:
       prefix: "deps(image)"
