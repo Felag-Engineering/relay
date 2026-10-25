@@ -48,9 +48,10 @@ The daemon is configured entirely by environment variables, read once at startup
 | `RELAY_TEMPLATE_DIR` | `/etc/relay-daemon/templates.d` | Root of this Node's Template Operation files, beside `policy.toml` and under the same root-owned trust root (ADR-0021). Absent = no templates installed. The shipped read catalog installs to `templates.d/relay-read/`. See [template-packs.md](template-packs.md). |
 | `RELAY_NODE_LABELS` | *(unset)* | Comma-separated bare `key=value` pairs reported as node-space Labels (the daemon adds the `node:` prefix; it can never emit `relay:` labels — ADR-0006). Example: `env=prod,role=web`. Each key and value must match `[A-Za-z0-9._-]+` (the empty value is accepted); anything else is refused at ingress, never sanitised. A malformed pair is REFUSED at enrollment — the Node does not join — and DROPPED at reconnect — the Node stays connected without that one label. |
 | `RELAY_ENROLL_ADDRESS` | *(falls back to `RELAY_ADDRESS`, then the join string's address)* | Optional distinct endpoint for the enrollment RPC. Must be `https://` — anything else is refused (fail closed). The CA pin applies to whichever endpoint is dialled. |
-| `RELAY_HEARTBEAT_INTERVAL_SECS` | `30` | Heartbeat base interval; each send is jittered ±20% so a bulk-restarted fleet spreads out. |
 | `RELAY_SHUTDOWN_GRACE_SECS` | `30` | Graceful-shutdown grace period: on SIGTERM/SIGINT the daemon stops accepting Tasks, drains in-flight ones up to this budget, then exits. |
 | `RUST_LOG` | `info` | Log filter (`tracing_subscriber` EnvFilter syntax). Keep Policy decision events on: see [section 6](#6-local-record-of-policy-decisions). |
+
+The heartbeat is built in, not a setting: the daemon sends one every 60 seconds, jittered ±20%, and the Relay marks a Node offline and closes its stream after three missed heartbeats (about three minutes). A daemon older than this one that still sets `RELAY_HEARTBEAT_INTERVAL_SECS` above about 150 would be marked offline between its own heartbeats, so remove that setting when upgrading. Upgrade the Relay before the daemons: a daemon of this version against an older Relay is disconnected repeatedly by the Relay's ping enforcement.
 
 Fail-closed behaviors to know about (all deliberate):
 

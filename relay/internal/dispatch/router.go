@@ -21,11 +21,17 @@ import (
 var ErrNotConnected = errors.New("dispatch: node not connected")
 
 // ErrNodeDisconnected is returned by Dispatch when the Node's Tunnel goes
-// away (unregister) while the call is still waiting for a Result. The Task
-// itself is left Dispatched by the caller (capability.jobEngine never
-// Resolves on this error), so it surfaces via TaskRepository.InFlight() for
-// restart/reconnect reconciliation (Reconciler).
+// away (unregister) while the call is still waiting for a Result. The Router
+// resolves nothing. When the ending registration was the Node's current one,
+// the offline hook (WithOnOffline) has already run, so the caller must read
+// the store before treating the Task as still in flight: it may be Resolved.
 var ErrNodeDisconnected = errors.New("dispatch: node disconnected while waiting for result")
+
+// errStreamReplaced is what Dispatch returns when the ending registration was
+// replaced by a newer Tunnel stream: it is an ErrNodeDisconnected, and also a
+// jobs.ErrStreamReplaced, so the capability layer knows the Node is not
+// offline and leaves the Task in flight.
+var errStreamReplaced = fmt.Errorf("%w: %w", ErrNodeDisconnected, jobs.ErrStreamReplaced)
 
 // conn is one Node's live registration. It is stored by pointer so a
 // registration has a unique identity beyond its nodeID: a rapid
@@ -38,9 +44,30 @@ var ErrNodeDisconnected = errors.New("dispatch: node disconnected while waiting 
 // can all send to the same Node at once. Every send goes through conn.send,
 // which holds sendMu for the call. sendMu is per Node and is never held with
 // Router.mu, so a slow write to one Node stalls only that Node's senders.
+//
+// delivered holds the task IDs whose TaskResult was delivered to a waiter on
+// this registration and whose result the caller has not yet settled
+// (Router.Settled). The offline hook is handed the IDs so a result that
+// arrived before the stream ended is never overwritten by the offline
+// resolution. An entry stays until its Task's result is persisted, with no
+// time horizon: a slow persistence, such as a degraded store, must not let the
+// sweep replace a result that arrived. The set is therefore bounded by the
+// Tasks whose results have arrived and are not yet persisted. superseded, when
+// set, reports at unregister that a newer stream has replaced this one.
+// delivered is guarded by Router.mu.
 type conn struct {
-	sendMu  sync.Mutex
-	rawSend func(*relayv1.RelayMessage) error
+	sendMu     sync.Mutex
+	rawSend    func(*relayv1.RelayMessage) error
+	delivered  map[string]struct{}
+	superseded func() bool
+}
+
+// markDelivered records taskID as delivered on c. The caller holds Router.mu.
+func (c *conn) markDelivered(taskID string) {
+	if c.delivered == nil {
+		c.delivered = make(map[string]struct{})
+	}
+	c.delivered[taskID] = struct{}{}
 }
 
 func (c *conn) send(msg *relayv1.RelayMessage) error {
@@ -68,10 +95,15 @@ func (c *conn) send(msg *relayv1.RelayMessage) error {
 // it owns, never a waiter a FRESH registration created after reusing the same
 // nodeID (and possibly the same task_id, once the old Task's ID space is
 // reused by a retry).
+//
+// err is set under Router.mu before unregister closes ch, and says why the
+// registration ended when a newer stream replaced it; nil means the Node went
+// offline.
 type waiter struct {
 	nodeID string
 	owner  *conn
 	ch     chan *relayv1.TaskResult
+	err    error
 }
 
 // verdictWaiter is waiter's sibling for a Plan's PolicyQuery
@@ -136,7 +168,7 @@ type sendSlot struct {
 // one place (ADR-0004).
 //
 // Router satisfies capability.Conduit structurally (Connected/Dispatch/
-// Cancel/Query on jobs.Task/jobs.Result/jobs.Verdict) without importing
+// Cancel/Query/Settled on jobs.Task/jobs.Result/jobs.Verdict) without importing
 // package capability, so there is no import cycle and capability's
 // proto-free import lock (.golangci.yml's capability-imports rule) stays
 // intact.
@@ -168,6 +200,15 @@ type Router struct {
 	// function — including reconnects. It is the restart-reconciliation hook:
 	// the composition root wires it to Reconciler.ReconcileNode.
 	onConnect func(nodeID string)
+
+	// onOffline, if non-nil, runs synchronously when a Node's current
+	// registration ends. See WithOnOffline.
+	onOffline func(nodeID string, delivered map[string]struct{})
+
+	// offlining holds, per Node, a channel closed when that Node's offline
+	// hook has finished and its registration's waiters have failed. Register
+	// waits on it. Guarded by mu.
+	offlining map[string]chan struct{}
 
 	// violations records a relay-daemon's protocol violation. See
 	// ViolationRecorder and NewRouter's doc comment.
@@ -201,6 +242,7 @@ func NewRouter(onConnect func(nodeID string), violations ViolationRecorder, opts
 		waiters:        make(map[string]*waiter),
 		verdictWaiters: make(map[string]*verdictWaiter),
 		sendSlots:      make(map[string]*sendSlot),
+		offlining:      make(map[string]chan struct{}),
 		onConnect:      onConnect,
 		violations:     violations,
 	}
@@ -223,6 +265,33 @@ func WithLogger(l *slog.Logger) RouterOption {
 	return func(r *Router) { r.log = l }
 }
 
+// WithOnOffline sets the hook that resolves the Tasks in flight to a Node
+// whose current registration has ended. It receives the IDs of the Tasks whose
+// TaskResult was delivered on that registration and not yet settled
+// (Settled): their callers are about to persist the real result, so the hook
+// must leave them alone.
+//
+// The hook runs synchronously on the unregistering goroutine, only when the
+// ending registration is still the Node's current one and no newer Tunnel
+// stream has claimed the Node (WithSupersededCheck), after the conn is removed
+// and before its waiters fail. It never runs for a replaced registration, nor
+// for one whose stream a newer one has claimed but not yet registered: the
+// Node is not offline then, and its Tasks follow the replaced-stream path,
+// where the new registration re-sends them for their result. mu is not held
+// across it.
+//
+// While it runs, Register for the same Node waits (see Register), so no new
+// registration exists until the offline resolution has committed. The hook
+// must bound its own work with a context: the wait is exactly as long as the
+// hook, and database/sql calls honour a context.
+//
+// A graceful server shutdown that closed every stream would run the hook for
+// every Node and resolve every in-flight Task, removing the re-send-for-result
+// a Relay restart relies on. Adding one is a decision to revisit this hook.
+func WithOnOffline(f func(nodeID string, delivered map[string]struct{})) RouterOption {
+	return func(r *Router) { r.onOffline = f }
+}
+
 func (r *Router) logger() *slog.Logger { return logctx.Or(r.log) }
 
 // Register records nodeID's live outbound send function and returns an
@@ -237,20 +306,49 @@ func (r *Router) logger() *slog.Logger { return logctx.Or(r.log) }
 // acts if conns[nodeID] still holds THAT *conn (identity compare, not a
 // nodeID compare) — a stale unregister racing a fresh Register is a no-op.
 //
-// unregister is also the disconnect-mid-dispatch correctness point: under mu,
-// it deletes the conn (if still current) AND fails every waiter it owns
-// (waiter.owner == this *conn) by deleting it from waiters and closing its
-// channel — and, identically, every verdictWaiter it owns (a blocked Query).
-// Scoping by owner rather than nodeID means a stale unregister can
-// never close a FRESH waiter that a newer registration created after reusing
-// the same nodeID (and potentially the same task_id/query_id). This
-// guarantees any Dispatch or Query call blocked in its select on a waiter it
-// truly owns unblocks (via the closed-channel case) rather than hanging
-// until ctx expiry or forever on a deadline-less ctx.
-func (r *Router) Register(nodeID string, send func(*relayv1.RelayMessage) error) (unregister func()) {
+// unregister is also the disconnect-mid-dispatch correctness point, in this
+// order. Under mu it deletes the conn (if still current). If it was current
+// and a hook is set (WithOnOffline), it then runs the hook with mu released.
+// Last, under mu, it fails every waiter it owns (waiter.owner == this *conn)
+// by deleting it from waiters and closing its channel — and, identically,
+// every verdictWaiter it owns (a blocked Query) — and releases any Register
+// waiting behind the hook. Scoping by owner rather than nodeID means a stale
+// unregister can never close a FRESH waiter that a newer registration created
+// after reusing the same nodeID (and potentially the same task_id/query_id).
+// This guarantees any Dispatch or Query call blocked in its select on a
+// waiter it truly owns unblocks (via the closed-channel case) rather than
+// hanging until ctx expiry or forever on a deadline-less ctx. The waiters
+// fail even if the hook panics.
+//
+// Register waits while the same Node's offline hook is running. Without the
+// wait, the hook could resolve a Task sent on the NEW registration, or the new
+// registration's onConnect could re-send a Task before the hook commits its
+// resolution. The wait is bounded by the hook's own context budget; the
+// caller's liveness timer starts after Register returns, so the wait never
+// counts against a stream's heartbeat deadline.
+//
+// A stream that a newer one has already claimed for the Node, but whose
+// replacement has not yet registered here, is still the Router's current
+// registration. WithSupersededCheck lets the caller say so at unregister: the
+// registration is then removed and its waiters failed with
+// jobs.ErrStreamReplaced, but the offline hook does not run, so a Task in
+// flight is not resolved offline for a Node that is reconnecting.
+func (r *Router) Register(nodeID string, send func(*relayv1.RelayMessage) error, opts ...RegisterOption) (unregister func()) {
 	c := &conn{rawSend: send}
+	for _, o := range opts {
+		o(c)
+	}
 
 	r.mu.Lock()
+	for {
+		ch := r.offlining[nodeID]
+		if ch == nil {
+			break
+		}
+		r.mu.Unlock()
+		<-ch
+		r.mu.Lock()
+	}
 	r.conns[nodeID] = c
 	r.mu.Unlock()
 
@@ -259,24 +357,67 @@ func (r *Router) Register(nodeID string, send func(*relayv1.RelayMessage) error)
 	}
 
 	return func() {
+		var (
+			barrier   chan struct{}
+			delivered map[string]struct{}
+		)
+		// Read before taking mu: the check belongs to the caller.
+		superseded := c.superseded != nil && c.superseded()
+		replaced := superseded
 		r.mu.Lock()
-		if r.conns[nodeID] == c {
+		if r.conns[nodeID] != c {
+			replaced = true
+		} else {
 			delete(r.conns, nodeID)
-		}
-		for taskID, w := range r.waiters {
-			if w.owner == c {
-				delete(r.waiters, taskID)
-				close(w.ch)
-			}
-		}
-		for queryID, w := range r.verdictWaiters {
-			if w.owner == c {
-				delete(r.verdictWaiters, queryID)
-				close(w.ch)
+			if r.onOffline != nil && !superseded {
+				barrier = make(chan struct{})
+				r.offlining[nodeID] = barrier
+				delivered = make(map[string]struct{}, len(c.delivered))
+				for id := range c.delivered {
+					delivered[id] = struct{}{}
+				}
 			}
 		}
 		r.mu.Unlock()
+
+		defer func() {
+			r.mu.Lock()
+			for taskID, w := range r.waiters {
+				if w.owner == c {
+					delete(r.waiters, taskID)
+					if replaced {
+						w.err = errStreamReplaced
+					}
+					close(w.ch)
+				}
+			}
+			for queryID, w := range r.verdictWaiters {
+				if w.owner == c {
+					delete(r.verdictWaiters, queryID)
+					close(w.ch)
+				}
+			}
+			if barrier != nil {
+				delete(r.offlining, nodeID)
+				close(barrier)
+			}
+			r.mu.Unlock()
+		}()
+
+		if barrier != nil {
+			r.onOffline(nodeID, delivered)
+		}
 	}
+}
+
+// RegisterOption configures one Register call.
+type RegisterOption func(*conn)
+
+// WithSupersededCheck sets a predicate the registration's unregister evaluates
+// to learn whether a newer Tunnel stream has claimed the Node since this one
+// registered. See Register.
+func WithSupersededCheck(superseded func() bool) RegisterOption {
+	return func(c *conn) { c.superseded = superseded }
 }
 
 // Connected reports whether nodeID currently has a live Tunnel registered.
@@ -359,8 +500,14 @@ func (r *Router) Dispatch(ctx context.Context, nodeID string, t jobs.Task) (jobs
 	case tr, ok := <-w.ch:
 		if !ok {
 			// Channel closed by unregister: the Node's Tunnel went away while
-			// we were waiting. The caller (jobEngine) leaves the Task
-			// Dispatched — it surfaces via InFlight() for reconciliation.
+			// we were waiting. The Router resolves nothing; the caller reads
+			// the store, where the offline hook may already have resolved the
+			// Task (ErrNodeDisconnected). When a newer stream replaced this
+			// one, w.err also carries jobs.ErrStreamReplaced; the close
+			// orders this read after unregister's write.
+			if w.err != nil {
+				return jobs.Result{}, w.err
+			}
 			return jobs.Result{}, ErrNodeDisconnected
 		}
 		res, v := result(tr)
@@ -472,11 +619,31 @@ func (r *Router) Deliver(nodeID string, tr *relayv1.TaskResult) {
 	w, ok := r.waiters[tr.GetTaskId()]
 	if ok && w.nodeID == nodeID {
 		delete(r.waiters, tr.GetTaskId())
+		w.owner.markDelivered(tr.GetTaskId())
+		// The result may arrive on a replacing stream; its skip set must
+		// hold the delivery too.
+		if cur, ok := r.conns[nodeID]; ok && cur != w.owner {
+			cur.markDelivered(tr.GetTaskId())
+		}
 	}
 	r.mu.Unlock()
 
 	if ok && w.nodeID == nodeID {
 		w.ch <- tr
+	}
+}
+
+// Settled tells the Router that the caller of Dispatch for taskID has finished
+// with the Task: whatever result it had to persist is persisted, or will never
+// be. The Router then drops taskID from nodeID's delivered set, ending the
+// protection it gave a delivered result against the offline resolution. The
+// caller invokes it only after its Resolve returns, so removing the entry can
+// never expose a Task whose result is still unwritten.
+func (r *Router) Settled(nodeID, taskID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if c, ok := r.conns[nodeID]; ok {
+		delete(c.delivered, taskID)
 	}
 }
 

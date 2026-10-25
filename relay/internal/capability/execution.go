@@ -100,6 +100,14 @@ type Conduit interface {
 	// matched-but-disconnected Node is never queried — it is a Relay-side
 	// unknown(offline) conclusion instead (invariant 12).
 	Query(ctx context.Context, nodeID string, act jobs.Action) (jobs.Verdict, error)
+
+	// Settled tells the Conduit that the caller of Dispatch for taskID has
+	// finished with the Task: its result is persisted, or the caller gave up
+	// on it. The Conduit protects a result it delivered from being replaced by
+	// the offline resolution until this call, because Dispatch returns the
+	// result before the caller has written it. The caller invokes it exactly
+	// when its Dispatch call is done, after its Resolve returns.
+	Settled(nodeID, taskID string)
 }
 
 // idGen mints a new unique ID. It is a seam so in-package tests can inject
@@ -633,10 +641,13 @@ func (e *jobEngine) dispatchOneRecovered(ctx context.Context, gate *jobGate, pt 
 // dispatch-state lifecycle: excluded from a Template dispatch ->
 // MarkUnsupported (terminal, never sent, ADR-0042); outdated ->
 // MarkVersionRefused (terminal, never sent, ADR-0014); offline -> MarkUnreachable (terminal, never sent);
-// connected -> MarkDispatched, then Conduit.Dispatch. A send error leaves the
-// Task Dispatched (never Resolved) so it surfaces via TaskRepository.InFlight()
-// for restart reconciliation, and is reported honestly as OutcomeFailure
-// rather than fabricated as success.
+// connected -> MarkDispatched, then Conduit.Dispatch. A Conduit error leaves
+// the Task Dispatched only while its Node is still connected and nobody has
+// resolved it: it then surfaces via TaskRepository.InFlight() for
+// restart reconciliation, and is reported honestly as OutcomeFailure rather
+// than fabricated as success. A Task in flight to a Node that went offline
+// resolves with jobs.NodeOfflineResult and is never re-sent (invariant 4,
+// ADR-0004).
 //
 // The version gate runs FIRST, before the Connected check: it is a Relay-side,
 // connectivity-independent refusal (ADR-0014's minimum-daemon-version gate),
@@ -668,7 +679,8 @@ func (e *jobEngine) dispatchOneRecovered(ctx context.Context, gate *jobGate, pt 
 // a withhold itself: Dispatched -> Resolved/Cancelled with DispatchedAt
 // cleared (MarkCancelledBeforeSend). jobs.ErrSendWithheld is the one Conduit
 // error that does not leave the Task Dispatched, and only when the gate
-// confirms the cancel.
+// confirms the cancel. The guard also withholds when the store no longer holds
+// the Task Dispatched, and then dispatchOne returns the stored resolution.
 func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTask) (jobs.Result, error) {
 	task := pt.task
 
@@ -745,14 +757,11 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 	// No early gate check here on purpose: a withhold must go through
 	// the Conduit's per-Task serialisation (the guard), or a Reconciler that
 	// already sent this Task would be contradicted by a "never sent" record.
-	sendCtx := ctx
 	var committed bool // written only by the guard, on Dispatch's goroutine
 	var commitErr error
-	if gate != nil {
-		sendCtx = jobs.WithSendGuard(ctx, func() bool {
-			if !gate.isCancelled() {
-				return false
-			}
+	var leftDispatched bool // written only by the guard, on Dispatch's goroutine
+	sendCtx := jobs.WithSendGuard(ctx, func() bool {
+		if gate.isCancelled() {
 			// A side effect on purpose: the commit must sit inside the
 			// Router's per-Task critical section, where a Reconciler resend
 			// of this Task is ordered against it. See withholdCancelled.
@@ -761,16 +770,42 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 				return e.tasksRepo.MarkCancelledBeforeSend(ctx, n.ID, n.ResolvedAt)
 			})
 			return true
-		})
-	}
+		}
+		// A Task the offline sweep resolved since MarkDispatched is never sent
+		// for its first time afterwards, mirroring the Reconciler's re-read.
+		// A failed read withholds too: the Task stays Dispatched for a
+		// reconcile, and a send is never made on an unknown state.
+		cur, err := e.tasksRepo.Get(ctx, task.ID)
+		if err != nil || cur.State != jobs.DispatchStateDispatched {
+			leftDispatched = true
+			return true
+		}
+		return false
+	})
+	// Deferred so it runs after the Resolve below: until then the Conduit
+	// keeps a delivered result safe from the offline resolution.
+	defer e.conduit.Settled(task.NodeID, task.ID)
 	result, dispatchErr := e.conduit.Dispatch(sendCtx, task.NodeID, task)
 	if dispatchErr != nil {
-		if errors.Is(dispatchErr, jobs.ErrSendWithheld) && gate.isCancelled() {
+		if errors.Is(dispatchErr, jobs.ErrSendWithheld) && !leftDispatched && gate.isCancelled() {
 			if committed {
 				return e.withheldOutcome(ctx, task, commitErr)
 			}
 			// A Conduit that withheld without consulting the guard.
 			return e.withholdCancelled(ctx, dispatched)
+		}
+		// The store comes first: the Router's offline hook may have resolved
+		// this Task already, and a reconnect may have made the Node Connected
+		// again before this worker woke.
+		if stored, ok := e.storedResolution(ctx, task.ID); ok {
+			return stored, nil
+		}
+		// The Node went offline with this Task in flight and nothing resolved
+		// it: resolve it here rather than leave it for a re-send. A stream a
+		// newer one replaced is not offline, even while the new one has not
+		// yet registered: the Task stays in flight for its reconnect.
+		if !errors.Is(dispatchErr, jobs.ErrStreamReplaced) && !e.conduit.Connected(task.NodeID) {
+			return e.resolveNodeOffline(ctx, dispatched)
 		}
 		// Connected but the send/exec did not complete: the Task stays
 		// Dispatched (no Resolve), so it is reconciled on restart via
@@ -781,9 +816,41 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 	if _, err := e.advance(dispatched, jobs.TaskEvent{Kind: jobs.TaskEventResolve, Result: result}, func(jobs.Task) error {
 		return e.tasksRepo.Resolve(ctx, task.ID, result)
 	}); err != nil {
+		// Another party resolved the Task first: report what the store holds.
+		if res, ok := e.resolvedByCancel(ctx, task.ID, err); ok {
+			return res, nil
+		}
 		return jobs.Result{Outcome: jobs.OutcomeFailure}, fmt.Errorf("capability: resolve task %q: %w", task.ID, err)
 	}
 	return result, nil
+}
+
+// storedResolution returns the Result of a Task the store already holds
+// Resolved. A read error returns false, so it never fabricates an outcome.
+func (e *jobEngine) storedResolution(ctx context.Context, taskID string) (jobs.Result, bool) {
+	cur, err := e.tasksRepo.Get(ctx, taskID)
+	if err != nil || cur.State != jobs.DispatchStateResolved {
+		return jobs.Result{}, false
+	}
+	return jobs.Result{Outcome: cur.Outcome, ExitCode: cur.ExitCode, Stdout: cur.Stdout, Stderr: cur.Stderr}, true
+}
+
+// resolveNodeOffline resolves a Dispatched Task whose Node went offline with
+// jobs.NodeOfflineResult. It covers a Task marked Dispatched just after its
+// Node's registration left the Router, which the offline hook's read of the
+// in-flight set missed. If the hook resolved the Task first, that stored
+// result is returned.
+func (e *jobEngine) resolveNodeOffline(ctx context.Context, task jobs.Task) (jobs.Result, error) {
+	res := jobs.NodeOfflineResult()
+	if _, err := e.advance(task, jobs.TaskEvent{Kind: jobs.TaskEventResolve, Result: res}, func(jobs.Task) error {
+		return e.tasksRepo.Resolve(ctx, task.ID, res)
+	}); err != nil {
+		if stored, ok := e.resolvedByCancel(ctx, task.ID, err); ok {
+			return stored, nil
+		}
+		return res, fmt.Errorf("capability: resolve task %q after its node %q went offline: %w", task.ID, task.NodeID, err)
+	}
+	return res, nil
 }
 
 // resolvedByCancel reports the truthful outcome of a Task that another party
@@ -793,11 +860,7 @@ func (e *jobEngine) resolvedByCancel(ctx context.Context, taskID string, err err
 	if !errors.Is(err, jobs.ErrInvalidTaskState) {
 		return jobs.Result{}, false
 	}
-	cur, getErr := e.tasksRepo.Get(ctx, taskID)
-	if getErr != nil || cur.State != jobs.DispatchStateResolved {
-		return jobs.Result{}, false
-	}
-	return jobs.Result{Outcome: cur.Outcome, Stdout: cur.Stdout, Stderr: cur.Stderr}, true
+	return e.storedResolution(ctx, taskID)
 }
 
 // withholdCancelled resolves a Task this worker MarkDispatched but will never

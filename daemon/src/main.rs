@@ -53,28 +53,13 @@ fn now_millis() -> i64 {
         .as_millis() as i64
 }
 
-/// Parses the heartbeat interval from an optional env-var string.
-///
-/// Returns `Duration::from_secs(secs)` for any positive integer; falls back to
-/// 30 seconds when the input is absent, unparsable, or zero. Minimum floor is
-/// 1 second (automatically satisfied because zero → 30).
-fn parse_interval_secs(raw: Option<&str>) -> Duration {
-    let secs = raw
-        .and_then(|s| s.parse::<u64>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(30);
-    Duration::from_secs(secs)
-}
+/// The heartbeat period. Built in, not a setting: the Relay marks a Node
+/// offline after three missed intervals, and `relay/cmd/relay` pins its copy of
+/// this value to this one.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Reads `RELAY_HEARTBEAT_INTERVAL_SECS` and returns the configured interval,
-/// defaulting to 30 seconds on absence or invalid input.
-fn heartbeat_interval() -> Duration {
-    parse_interval_secs(
-        std::env::var("RELAY_HEARTBEAT_INTERVAL_SECS")
-            .ok()
-            .as_deref(),
-    )
-}
+/// The fraction each heartbeat delay is jittered by (±20%).
+const HEARTBEAT_JITTER_FRACTION: f64 = 0.2;
 
 /// Applies symmetric jitter to `interval`.
 ///
@@ -233,7 +218,6 @@ async fn run_tunnel(
     identity: &crate::identity::Identity,
     facts: Facts,
     node_labels: Vec<(String, String)>,
-    interval: Duration,
     services: Arc<Services>,
     ctx: &ShutdownContext,
 ) -> TunnelExit {
@@ -300,15 +284,19 @@ async fn run_tunnel(
         return TunnelExit::NotEstablished("failed to buffer Hello/TemplateSnapshot".into());
     }
 
-    // Background task: emit a Heartbeat at a configurable, jittered interval.
+    // Background task: emit a Heartbeat every HEARTBEAT_INTERVAL, jittered.
     // Jitter spreads send times across a bulk-restarted fleet so daemons do not
-    // all arrive at the Relay simultaneously. RELAY_HEARTBEAT_INTERVAL_SECS
-    // configures the base interval (default 30 s); each iteration re-samples so
-    // the spread is maintained over the lifetime of the connection.
+    // all arrive at the Relay simultaneously; each iteration re-samples so the
+    // spread is maintained over the lifetime of the connection.
     let tx_hb = tx.clone();
     let hb_handle = tokio::spawn(async move {
         loop {
-            tokio::time::sleep(heartbeat_delay(interval, 0.2, rand_unit())).await;
+            tokio::time::sleep(heartbeat_delay(
+                HEARTBEAT_INTERVAL,
+                HEARTBEAT_JITTER_FRACTION,
+                rand_unit(),
+            ))
+            .await;
             if tx_hb
                 .send(DaemonMessage {
                     body: Some(daemon_message::Body::Heartbeat(Heartbeat {
@@ -578,7 +566,6 @@ async fn reconnect_loop(
     config: &Config,
     startup_identity: identity::Identity,
     services: Arc<Services>,
-    interval: Duration,
     ctx: ShutdownContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut backoff = Backoff::new(RECONNECT_BACKOFF_BASE, RECONNECT_BACKOFF_CAP);
@@ -633,7 +620,6 @@ async fn reconnect_loop(
                     &identity,
                     config.facts.clone(),
                     config.node_labels.clone(),
-                    interval,
                     Arc::clone(&services),
                     &ctx,
                 )
@@ -834,7 +820,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         dedup,
         scheduler,
     });
-    let interval = heartbeat_interval();
 
     // Graceful shutdown (issue #177): a signal listener triggers `shutdown`
     // on SIGTERM/SIGINT; `reconnect_loop`/`run_tunnel` react to it, draining
@@ -850,7 +835,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         registry: CancelRegistry::new(),
     };
 
-    reconnect_loop(&config, identity, services, interval, ctx).await?;
+    reconnect_loop(&config, identity, services, ctx).await?;
 
     Ok(())
 }
@@ -858,8 +843,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        gen::Facts, heartbeat_delay, now_millis, parse_interval_secs, policy_snapshot, ArgMatcher,
-        DenyRule,
+        gen::Facts, heartbeat_delay, now_millis, policy_snapshot, ArgMatcher, DenyRule,
+        HEARTBEAT_INTERVAL, HEARTBEAT_JITTER_FRACTION,
     };
     use crate::policy;
     use std::time::Duration;
@@ -954,27 +939,16 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // parse_interval_secs
+    // heartbeat constants
     // -----------------------------------------------------------------------
 
+    /// The Relay marks a Node offline after three missed intervals, so the
+    /// interval and its jitter are a contract with `relay/cmd/relay`, which
+    /// parses them from this file.
     #[test]
-    fn parse_interval_none_defaults_to_30s() {
-        assert_eq!(parse_interval_secs(None), Duration::from_secs(30));
-    }
-
-    #[test]
-    fn parse_interval_valid_value() {
-        assert_eq!(parse_interval_secs(Some("10")), Duration::from_secs(10));
-    }
-
-    #[test]
-    fn parse_interval_zero_defaults_to_30s() {
-        assert_eq!(parse_interval_secs(Some("0")), Duration::from_secs(30));
-    }
-
-    #[test]
-    fn parse_interval_unparsable_defaults_to_30s() {
-        assert_eq!(parse_interval_secs(Some("abc")), Duration::from_secs(30));
+    fn heartbeat_interval_is_sixty_seconds_jittered_twenty_percent() {
+        assert_eq!(HEARTBEAT_INTERVAL, Duration::from_secs(60));
+        assert_eq!(HEARTBEAT_JITTER_FRACTION, 0.2);
     }
 
     // -----------------------------------------------------------------------

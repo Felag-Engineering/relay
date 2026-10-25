@@ -326,6 +326,8 @@ fn write_atomic(dir: &Path, name: &str, content: &[u8], mode: u32) -> Result<()>
 /// Tunnel/renew path); when `None`, it is the certless enrollment bootstrap
 /// path (ADR-0006 §2). `connect()` is eager so a wrong-CA Relay is refused at
 /// handshake, not on first RPC. Fails closed on any non-`https://` endpoint.
+/// Every channel pings the Relay with HTTP/2 keepalive, idle or not
+/// ([`crate::tunnel::KEEPALIVE_INTERVAL`]).
 pub(crate) async fn build_channel(
     endpoint: String,
     domain: Option<String>,
@@ -341,6 +343,9 @@ pub(crate) async fn build_channel(
         tls = tls.domain_name(d);
     }
     Ok(Endpoint::from_shared(endpoint)?
+        .http2_keep_alive_interval(crate::tunnel::KEEPALIVE_INTERVAL)
+        .keep_alive_timeout(crate::tunnel::KEEPALIVE_TIMEOUT)
+        .keep_alive_while_idle(true)
         .tls_config(tls)?
         .connect()
         .await?)

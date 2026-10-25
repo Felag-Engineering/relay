@@ -182,6 +182,9 @@ func (f *fakeConduit) Query(_ context.Context, nodeID string, _ jobs.Action) (jo
 
 // queriedNodes returns a snapshot of every Node Query was called for, in
 // call order.
+// Settled is a no-op: this fake persists nothing.
+func (f *fakeConduit) Settled(string, string) {}
+
 func (f *fakeConduit) queriedNodes() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

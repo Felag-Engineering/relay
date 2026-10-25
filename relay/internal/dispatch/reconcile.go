@@ -20,8 +20,10 @@ import (
 const reconcileDispatchTimeout = 35 * time.Second
 
 // Reconciler recovers in-flight Tasks after a Relay restart or a Node
-// reconnect (ADR-0004's at-most-once-across-restart discipline). It is
-// separate from Router so Router stays transport-only.
+// reconnect (ADR-0004's at-most-once-across-restart discipline): it re-sends
+// them for their result on connect, and ResolveOffline resolves them when
+// their Node goes offline. It is separate from Router so Router stays
+// transport-only.
 //
 // Resend-for-result is safe ONLY because the relay-daemon dedups Task
 // execution by task_id (ADR-0004): on a duplicate task_id the daemon does
@@ -111,6 +113,54 @@ func (r *Reconciler) ReconcileNode(ctx context.Context, nodeID string) error {
 	return errors.Join(errs...)
 }
 
+// ResolveOffline resolves every in-flight (Dispatched, no Result) Task
+// belonging to nodeID with jobs.NodeOfflineResult: the Node's stream ended, no
+// result arrived, and whether the Task ran is unknown. It is ReconcileNode's
+// dual and sends nothing. A Task it resolves leaves InFlight(), so no later
+// ReconcileNode re-sends it: a Task the Node never received must not run for
+// the first time minutes or hours later (invariant 4, ADR-0004).
+//
+// skip holds the IDs of Tasks whose TaskResult was already delivered to a
+// waiting Dispatch call. Those Tasks are left for that call to resolve with
+// the real result, so the offline resolution never overwrites a result that
+// arrived.
+//
+// ErrInvalidTaskState and ErrTaskNotFound are tolerated, as in reconcileTask:
+// they mean a worker or a reconcile resolved the Task first. Any other error
+// is joined and returned; the Task then stays Dispatched and falls back to
+// re-send-for-result on the Node's next connect.
+func (r *Reconciler) ResolveOffline(ctx context.Context, nodeID string, skip map[string]struct{}) error {
+	inFlight, err := r.tasks.InFlight(ctx)
+	if err != nil {
+		return fmt.Errorf("dispatch: resolve offline node %q: list in-flight tasks: %w", nodeID, err)
+	}
+
+	var errs []error
+	for _, task := range inFlight {
+		if task.NodeID != nodeID {
+			continue
+		}
+		if _, delivered := skip[task.ID]; delivered {
+			continue
+		}
+		res := jobs.NodeOfflineResult()
+		if _, err := task.Transition(jobs.TaskEvent{Kind: jobs.TaskEventResolve, Result: res}, r.now()); err != nil {
+			if errors.Is(err, jobs.ErrInvalidTaskState) {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("dispatch: resolve offline task %q: %w", task.ID, err))
+			continue
+		}
+		if err := r.tasks.Resolve(ctx, task.ID, res); err != nil {
+			if errors.Is(err, jobs.ErrInvalidTaskState) || errors.Is(err, jobs.ErrTaskNotFound) {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("dispatch: resolve offline task %q: %w", task.ID, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // reconcileTask resends one in-flight Task for a Result and Resolves it.
 // ErrInvalidTaskState/ErrTaskNotFound are tolerated, not errors: they mean a
 // concurrent reconcile (or the original dispatch, if it actually completed
@@ -138,6 +188,10 @@ func (r *Reconciler) reconcileTask(ctx context.Context, nodeID string, task jobs
 		}
 		return cur.State != jobs.DispatchStateDispatched
 	}
+	// The deferred Settled runs after the Resolve below, so a result the Router
+	// delivered stays protected from the offline resolution until this
+	// reconcile has persisted it.
+	defer r.conduit.Settled(nodeID, task.ID)
 	res, err := r.conduit.Dispatch(jobs.WithSendGuard(dctx, guard), nodeID, task)
 	if errors.Is(err, jobs.ErrSendWithheld) {
 		if readErr != nil {
@@ -148,6 +202,12 @@ func (r *Reconciler) reconcileTask(ctx context.Context, nodeID string, task jobs
 		return nil
 	}
 	if err != nil {
+		// A Node that drops mid-reconcile has its in-flight Tasks resolved
+		// offline (ResolveOffline). A Task already out of Dispatched is done,
+		// not a reconcile failure.
+		if cur, getErr := r.tasks.Get(ctx, task.ID); getErr == nil && cur.State != jobs.DispatchStateDispatched {
+			return nil
+		}
 		return fmt.Errorf("dispatch: reconcile task %q on node %q: %w", task.ID, nodeID, err)
 	}
 

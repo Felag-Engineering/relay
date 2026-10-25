@@ -722,3 +722,204 @@ func TestReconcileTask_RefusedTransitionIsTolerated(t *testing.T) {
 		t.Errorf("Resolve reached the store %d time(s); a refused transition must not", tasks.resolveCalls)
 	}
 }
+
+func TestReconciler_ResolveOffline_ResolvesOnlyThatNodesInFlightTasks(t *testing.T) {
+	tasks := newFakeTaskRepository(
+		jobs.Task{ID: "a-dispatched", NodeID: "node-a", State: jobs.DispatchStateDispatched},
+		jobs.Task{ID: "b-dispatched", NodeID: "node-b", State: jobs.DispatchStateDispatched},
+		jobs.Task{ID: "a-pending", NodeID: "node-a", State: jobs.DispatchStatePending},
+	)
+	reconciler := NewReconciler(tasks, NewRouter(nil, nil))
+
+	if err := reconciler.ResolveOffline(context.Background(), "node-a", nil); err != nil {
+		t.Fatalf("ResolveOffline: %v", err)
+	}
+
+	got, _ := tasks.Get(context.Background(), "a-dispatched")
+	if got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeFailure || got.ExitCode != -1 ||
+		string(got.Stderr) != jobs.NodeOfflineMessage {
+		t.Errorf("a-dispatched = %+v, want Resolved failure, exit -1, the node-offline message", got)
+	}
+	if other, _ := tasks.Get(context.Background(), "b-dispatched"); other.State != jobs.DispatchStateDispatched {
+		t.Errorf("another Node's in-flight Task was touched: %+v", other)
+	}
+	if pending, _ := tasks.Get(context.Background(), "a-pending"); pending.State != jobs.DispatchStatePending {
+		t.Errorf("a Pending Task was touched: %+v", pending)
+	}
+}
+
+// A Task whose TaskResult was already delivered to its waiting Dispatch call
+// is that call's to resolve, with the real result.
+func TestReconciler_ResolveOffline_LeavesTasksWhoseResultAlreadyArrived(t *testing.T) {
+	tasks := newFakeTaskRepository(
+		jobs.Task{ID: "delivered", NodeID: "node-a", State: jobs.DispatchStateDispatched},
+		jobs.Task{ID: "silent", NodeID: "node-a", State: jobs.DispatchStateDispatched},
+	)
+	reconciler := NewReconciler(tasks, NewRouter(nil, nil))
+
+	skip := map[string]struct{}{"delivered": {}}
+	if err := reconciler.ResolveOffline(context.Background(), "node-a", skip); err != nil {
+		t.Fatalf("ResolveOffline: %v", err)
+	}
+
+	if got, _ := tasks.Get(context.Background(), "delivered"); got.State != jobs.DispatchStateDispatched {
+		t.Errorf("delivered = %+v, want it left Dispatched for its Dispatch call to resolve", got)
+	}
+	if got, _ := tasks.Get(context.Background(), "silent"); got.State != jobs.DispatchStateResolved {
+		t.Errorf("silent = %+v, want Resolved", got)
+	}
+}
+
+// Invariant 4: a Task resolved on offline leaves InFlight, so the next
+// connect of the Node sends nothing.
+func TestReconciler_TaskResolvedOnOfflineIsNeverResentOnReconnect(t *testing.T) {
+	tasks := newFakeTaskRepository(jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched})
+	router := NewRouter(nil, nil)
+	reconciler := NewReconciler(tasks, router)
+
+	if err := reconciler.ResolveOffline(context.Background(), "node-1", nil); err != nil {
+		t.Fatalf("ResolveOffline: %v", err)
+	}
+
+	send := &recordingSend{}
+	unregister := router.Register("node-1", send.send)
+	defer unregister()
+	if err := reconciler.ReconcileNode(context.Background(), "node-1"); err != nil {
+		t.Fatalf("ReconcileNode: %v", err)
+	}
+	if got := send.len(); got != 0 {
+		t.Fatalf("reconnect sent %d message(s) for a Task resolved on offline, want 0", got)
+	}
+}
+
+func TestReconciler_ResolveOffline_ToleratesAlreadyResolved(t *testing.T) {
+	stored := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	repo := newFakeTaskRepository(stored)
+	// The in-flight snapshot still says Dispatched, but a worker resolved the
+	// Task with its real result before the sweep's write.
+	tasks := &snapshotTasks{fakeTaskRepository: repo, snapshot: []jobs.Task{stored}}
+	if err := repo.Resolve(context.Background(), "task-1", jobs.Result{Outcome: jobs.OutcomeSuccess}); err != nil {
+		t.Fatalf("Resolve (setup): %v", err)
+	}
+	reconciler := NewReconciler(tasks, NewRouter(nil, nil))
+
+	if err := reconciler.ResolveOffline(context.Background(), "node-1", nil); err != nil {
+		t.Fatalf("ResolveOffline: %v, want nil for an already-resolved Task", err)
+	}
+	if got, _ := repo.Get(context.Background(), "task-1"); got.Outcome != jobs.OutcomeSuccess {
+		t.Errorf("the real result was overwritten: %+v", got)
+	}
+}
+
+// A Node that drops while the Reconciler is re-sending for a result has its
+// Task resolved offline; the reconcile that was waiting on it is not a failure.
+func TestReconcileTask_DispatchErrorAfterOfflineResolveIsNotAnError(t *testing.T) {
+	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	tasks := newFakeTaskRepository(task)
+	router := NewRouter(nil, nil)
+	reconciler := NewReconciler(tasks, router)
+
+	send := &recordingSend{}
+	unregister := router.Register("node-1", send.send)
+
+	done := make(chan error, 1)
+	go func() { done <- reconciler.reconcileTask(context.Background(), "node-1", task) }()
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	if err := reconciler.ResolveOffline(context.Background(), "node-1", nil); err != nil {
+		t.Fatalf("ResolveOffline: %v", err)
+	}
+	unregister()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("reconcileTask: %v, want nil for a Task resolved offline", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconcileTask did not return")
+	}
+}
+
+// holdRealResult wraps a fakeTaskRepository so the Resolve of a success result
+// (the real result, in these tests) blocks until released, as a degraded
+// store's write would. Any other result resolves at once.
+type holdRealResult struct {
+	*fakeTaskRepository
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (h *holdRealResult) Resolve(ctx context.Context, taskID string, r jobs.Result) error {
+	if r.Outcome == jobs.OutcomeSuccess {
+		h.entered <- struct{}{}
+		<-h.release
+	}
+	return h.fakeTaskRepository.Resolve(ctx, taskID, r)
+}
+
+// A result the Reconciler received stays protected from the offline resolution
+// for as long as its own Resolve has not committed. The Node's stream ends
+// while that write is held up, and the sweep leaves the Task for the write.
+func TestReconciler_DeliveredResultSurvivesTeardownWhileItsResolveIsPending(t *testing.T) {
+	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	tasks := &holdRealResult{
+		fakeTaskRepository: newFakeTaskRepository(task),
+		entered:            make(chan struct{}, 1),
+		release:            make(chan struct{}),
+	}
+	var reconciler *Reconciler
+	router := NewRouter(nil, nil, WithOnOffline(func(nodeID string, delivered map[string]struct{}) {
+		if err := reconciler.ResolveOffline(context.Background(), nodeID, delivered); err != nil {
+			t.Errorf("ResolveOffline: %v", err)
+		}
+	}))
+	reconciler = NewReconciler(tasks, router)
+
+	send := &recordingSend{}
+	unregister := router.Register("node-1", send.send)
+
+	done := make(chan error, 1)
+	go func() { done <- reconciler.reconcileTask(context.Background(), "node-1", task) }()
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+	router.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+	<-tasks.entered
+
+	unregister()
+
+	close(tasks.release)
+	if err := <-done; err != nil {
+		t.Fatalf("reconcileTask: %v", err)
+	}
+	got, _ := tasks.Get(context.Background(), "task-1")
+	if got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeSuccess {
+		t.Errorf("task-1 = %+v, want Resolved with the real success result, not the offline resolution", got)
+	}
+}
+
+// Once the Reconciler's Resolve has returned, the delivered entry is removed
+// from the live registration.
+func TestReconciler_SettlesADeliveredResultAfterItsResolve(t *testing.T) {
+	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	tasks := newFakeTaskRepository(task)
+	router := NewRouter(nil, nil)
+	reconciler := NewReconciler(tasks, router)
+
+	send := &recordingSend{}
+	unregister := router.Register("node-1", send.send)
+	defer unregister()
+
+	done := make(chan error, 1)
+	go func() { done <- reconciler.reconcileTask(context.Background(), "node-1", task) }()
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+	router.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
+	if err := <-done; err != nil {
+		t.Fatalf("reconcileTask: %v", err)
+	}
+
+	router.mu.Lock()
+	defer router.mu.Unlock()
+	if got := router.conns["node-1"].delivered; len(got) != 0 {
+		t.Errorf("delivered = %v, want it empty once the Task is resolved", got)
+	}
+}

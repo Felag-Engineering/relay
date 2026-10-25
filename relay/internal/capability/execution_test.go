@@ -35,6 +35,9 @@ type fakeConduit struct {
 	queryErrs map[string]error
 	log       *[]string
 
+	// settledTasks lists the task IDs Settled was called with.
+	settledTasks []string
+
 	// mu guards log and the maps' reads: dispatchOne runs on worker goroutines.
 	mu sync.Mutex
 }
@@ -92,6 +95,21 @@ func (f *fakeConduit) Query(_ context.Context, nodeID string, _ jobs.Action) (jo
 		return jobs.Verdict{}, err
 	}
 	return f.verdicts[nodeID], nil
+}
+
+// Settled records taskID in settledTasks, outside the shared log: the log's
+// order is asserted by tests that predate the call.
+func (f *fakeConduit) Settled(_, taskID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.settledTasks = append(f.settledTasks, taskID)
+}
+
+// settled returns the task IDs the engine has told the Conduit it is done with.
+func (f *fakeConduit) settled() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.settledTasks...)
 }
 
 // recordingTasks wraps a jobs.TaskRepository, appending "create:<nodeID>" to
@@ -2639,5 +2657,290 @@ func TestNewExecutionPanicsOnNonPositiveDispatchConcurrency(t *testing.T) {
 			}()
 			NewExecution(ctl, read, appr, &spyCapChecker{}, nil, jr, tr, newFakeConduit(nil), settings, nil, nil)
 		}()
+	}
+}
+
+// offlineConduit wraps fakeConduit so a test can run code inside
+// Conduit.Dispatch, the moment a Node's Tunnel would end under an in-flight
+// Task.
+type offlineConduit struct {
+	*fakeConduit
+	onDispatch func(ctx context.Context, task jobs.Task) (jobs.Result, error)
+}
+
+func (c *offlineConduit) Dispatch(ctx context.Context, nodeID string, task jobs.Task) (jobs.Result, error) {
+	return c.onDispatch(ctx, task)
+}
+
+// preemptingResolve wraps a jobs.TaskRepository so the first Resolve is
+// preceded by a competing offline resolution, as the Router's offline hook
+// racing the worker would produce.
+type preemptingResolve struct {
+	jobs.TaskRepository
+	once sync.Once
+}
+
+func (p *preemptingResolve) Resolve(ctx context.Context, taskID string, r jobs.Result) error {
+	p.once.Do(func() {
+		_ = p.TaskRepository.Resolve(ctx, taskID, jobs.NodeOfflineResult())
+	})
+	return p.TaskRepository.Resolve(ctx, taskID, r)
+}
+
+// runOneNodeEngine dispatches one system.facts Task to node-1 on an engine
+// over conduit and returns the run's results and error.
+func runOneNodeEngine(t *testing.T, tasksRepo jobs.TaskRepository, jobsRepo jobs.JobRepository, conduit Conduit) ([]NodeResult, error) {
+	t.Helper()
+	e := &jobEngine{
+		jobsRepo:  jobsRepo,
+		tasksRepo: tasksRepo,
+		intents:   &nonAtomicIntents{tr: tasksRepo},
+		conduit:   conduit,
+		newID:     sequentialIDs("id-"),
+		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
+	}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"}
+	d := newDispatch(Principal{Account: "alice"}, Selector{}, []registry.Node{testNode("node-1")}, act)
+	dr, err := e.run(context.Background(), d)
+	return dr.results, err
+}
+
+func onlyTask(t *testing.T, tasksRepo jobs.TaskRepository) jobs.Task {
+	t.Helper()
+	tasks, err := tasksRepo.ByJob(context.Background(), "job-id-1")
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("ByJob = %v, %v, want exactly one Task", tasks, err)
+	}
+	return tasks[0]
+}
+
+// A Task in flight to a Node that goes offline resolves failure with the
+// Relay-authored no-result message, and never stays in flight to be re-sent
+// on reconnect (invariant 4, ADR-0004).
+func TestEngine_TaskInFlightToANodeThatGoesOffline_ResolvesFailureNeverResent(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	fake := newFakeConduit(nil)
+	fake.connected["node-1"] = true
+	conduit := &offlineConduit{fakeConduit: fake, onDispatch: func(context.Context, jobs.Task) (jobs.Result, error) {
+		fake.mu.Lock()
+		fake.connected["node-1"] = false
+		fake.mu.Unlock()
+		return jobs.Result{}, errors.New("dispatch: node disconnected while waiting for result")
+	}}
+
+	results, err := runOneNodeEngine(t, tasksRepo, jobsRepo, conduit)
+	if err != nil {
+		t.Fatalf("run() error = %v, want nil: the Task has a defined outcome", err)
+	}
+	if len(results) != 1 || results[0].Outcome != jobs.OutcomeFailure || string(results[0].Stderr) != jobs.NodeOfflineMessage {
+		t.Fatalf("results = %+v, want one failure carrying jobs.NodeOfflineMessage", results)
+	}
+
+	task := onlyTask(t, tasksRepo)
+	if task.State != jobs.DispatchStateResolved || task.Outcome != jobs.OutcomeFailure || task.ExitCode != -1 {
+		t.Errorf("stored Task = %+v, want Resolved, failure, exit code -1", task)
+	}
+	inFlight, err := tasksRepo.InFlight(context.Background())
+	if err != nil {
+		t.Fatalf("InFlight: %v", err)
+	}
+	if len(inFlight) != 0 {
+		t.Errorf("InFlight = %v, want empty: a resolved Task is never re-sent", inFlight)
+	}
+}
+
+// The store comes first: when the Router's offline hook already resolved the
+// Task and the Node has since reconnected (so Connected reads true again), the
+// worker reports what the store holds and does not leave the Task Dispatched
+// or overwrite it.
+func TestEngine_OfflineResolutionAlreadyWrittenIsReturnedEvenIfReconnected(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	fake := newFakeConduit(nil)
+	fake.connected["node-1"] = true
+	conduit := &offlineConduit{fakeConduit: fake, onDispatch: func(ctx context.Context, task jobs.Task) (jobs.Result, error) {
+		if err := tasksRepo.Resolve(ctx, task.ID, jobs.NodeOfflineResult()); err != nil {
+			t.Errorf("Resolve (setup): %v", err)
+		}
+		return jobs.Result{}, errors.New("dispatch: node disconnected while waiting for result")
+	}}
+
+	results, err := runOneNodeEngine(t, tasksRepo, jobsRepo, conduit)
+	if err != nil {
+		t.Fatalf("run() error = %v, want nil", err)
+	}
+	if len(results) != 1 || results[0].Outcome != jobs.OutcomeFailure || string(results[0].Stderr) != jobs.NodeOfflineMessage {
+		t.Fatalf("results = %+v, want the stored offline resolution", results)
+	}
+	if task := onlyTask(t, tasksRepo); task.State != jobs.DispatchStateResolved || task.ExitCode != -1 {
+		t.Errorf("stored Task = %+v, want the offline resolution left unchanged", task)
+	}
+}
+
+// A Task the offline sweep resolved between MarkDispatched and the send is
+// never sent: the worker's send guard withholds, and the stored resolution is
+// the outcome, with no error.
+func TestEngine_TaskResolvedBySweepBeforeItsFirstSendIsNeverSent(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	fake := newFakeConduit(nil)
+	fake.connected["node-1"] = true
+	var sent bool
+	conduit := &offlineConduit{fakeConduit: fake, onDispatch: func(ctx context.Context, task jobs.Task) (jobs.Result, error) {
+		if err := tasksRepo.Resolve(ctx, task.ID, jobs.NodeOfflineResult()); err != nil {
+			t.Errorf("Resolve (setup): %v", err)
+		}
+		// Stands in for the Router's slot: a send happens only when the guard
+		// does not withhold.
+		if jobs.SendWithheld(ctx) {
+			return jobs.Result{}, jobs.ErrSendWithheld
+		}
+		sent = true
+		return jobs.Result{Outcome: jobs.OutcomeSuccess, Stdout: []byte("late")}, nil
+	}}
+
+	results, err := runOneNodeEngine(t, tasksRepo, jobsRepo, conduit)
+	if err != nil {
+		t.Fatalf("run() error = %v, want nil: the stored resolution is the outcome", err)
+	}
+	if sent {
+		t.Error("the Task was sent after the offline sweep resolved it")
+	}
+	if len(results) != 1 || results[0].Outcome != jobs.OutcomeFailure || string(results[0].Stderr) != jobs.NodeOfflineMessage {
+		t.Fatalf("results = %+v, want the stored NodeOfflineResult", results)
+	}
+	if task := onlyTask(t, tasksRepo); task.State != jobs.DispatchStateResolved || task.ExitCode != -1 {
+		t.Errorf("stored Task = %+v, want the offline resolution left unchanged", task)
+	}
+}
+
+// The worker's own offline write loses a race with the Router's hook: the
+// stored result is returned, with no error.
+func TestEngine_OfflineResolutionRaceReturnsStoredResult(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	fake := newFakeConduit(nil)
+	fake.connected["node-1"] = true
+	conduit := &offlineConduit{fakeConduit: fake, onDispatch: func(context.Context, jobs.Task) (jobs.Result, error) {
+		fake.mu.Lock()
+		fake.connected["node-1"] = false
+		fake.mu.Unlock()
+		return jobs.Result{}, errors.New("dispatch: node disconnected while waiting for result")
+	}}
+
+	results, err := runOneNodeEngine(t, &preemptingResolve{TaskRepository: tasksRepo}, jobsRepo, conduit)
+	if err != nil {
+		t.Fatalf("run() error = %v, want nil: the hook's stored resolution is the outcome", err)
+	}
+	if len(results) != 1 || results[0].Outcome != jobs.OutcomeFailure || string(results[0].Stderr) != jobs.NodeOfflineMessage {
+		t.Fatalf("results = %+v, want the stored offline resolution", results)
+	}
+}
+
+// A real TaskResult that reaches the worker after something else resolved the
+// Task is reported as what the store holds, never as failure plus an error.
+func TestEngine_ResultArrivingAfterAnotherResolutionReportsTheStoredOutcome(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	fake := newFakeConduit(nil)
+	fake.connected["node-1"] = true
+	conduit := &offlineConduit{fakeConduit: fake, onDispatch: func(ctx context.Context, task jobs.Task) (jobs.Result, error) {
+		if err := tasksRepo.Resolve(ctx, task.ID, jobs.NodeOfflineResult()); err != nil {
+			t.Errorf("Resolve (setup): %v", err)
+		}
+		return jobs.Result{Outcome: jobs.OutcomeSuccess, Stdout: []byte("late")}, nil
+	}}
+
+	results, err := runOneNodeEngine(t, tasksRepo, jobsRepo, conduit)
+	if err != nil {
+		t.Fatalf("run() error = %v, want nil: the Task is resolved, so there is nothing to fail", err)
+	}
+	if len(results) != 1 || results[0].Outcome != jobs.OutcomeFailure || string(results[0].Stderr) != jobs.NodeOfflineMessage {
+		t.Fatalf("results = %+v, want the stored resolution", results)
+	}
+}
+
+// A stream a newer one replaced is not an offline Node, even in the window
+// where the newer one has not registered and Connected still reads false: the
+// Task stays Dispatched for the reconnect's re-send-for-result, and is not
+// resolved offline.
+func TestEngine_TaskOnAReplacedStreamIsNotResolvedOfflineWhileTheReplacementRegisters(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	fake := newFakeConduit(nil)
+	fake.connected["node-1"] = true
+	replaced := fmt.Errorf("dispatch: node disconnected while waiting for result: %w", jobs.ErrStreamReplaced)
+	conduit := &offlineConduit{fakeConduit: fake, onDispatch: func(context.Context, jobs.Task) (jobs.Result, error) {
+		fake.mu.Lock()
+		fake.connected["node-1"] = false
+		fake.mu.Unlock()
+		return jobs.Result{}, replaced
+	}}
+
+	results, err := runOneNodeEngine(t, tasksRepo, jobsRepo, conduit)
+	if !errors.Is(err, jobs.ErrStreamReplaced) {
+		t.Fatalf("run() error = %v, want it to wrap jobs.ErrStreamReplaced", err)
+	}
+	if len(results) != 1 || results[0].Outcome != jobs.OutcomeFailure {
+		t.Errorf("results = %+v, want one failure", results)
+	}
+	if task := onlyTask(t, tasksRepo); task.State != jobs.DispatchStateDispatched {
+		t.Errorf("stored Task = %+v, want it left Dispatched for the reconnect", task)
+	}
+}
+
+// blockingResolve wraps a jobs.TaskRepository so Resolve blocks until released,
+// as a degraded store's write would, and says when it has been entered.
+type blockingResolve struct {
+	jobs.TaskRepository
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingResolve) Resolve(ctx context.Context, taskID string, r jobs.Result) error {
+	b.entered <- struct{}{}
+	<-b.release
+	return b.TaskRepository.Resolve(ctx, taskID, r)
+}
+
+// The engine tells the Conduit a Task is settled only after its Resolve has
+// returned: until then the Conduit must keep protecting the delivered result,
+// however long the write takes.
+func TestEngine_SettlesAfterTheResolveReturns(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	fake := newFakeConduit(nil)
+	fake.connected["node-1"] = true
+	fake.results["node-1"] = jobs.Result{Outcome: jobs.OutcomeSuccess, Stdout: []byte("ok")}
+	blocking := &blockingResolve{
+		TaskRepository: tasksRepo,
+		entered:        make(chan struct{}, 1),
+		release:        make(chan struct{}),
+	}
+
+	done := make(chan []NodeResult, 1)
+	go func() {
+		results, err := runOneNodeEngine(t, blocking, jobsRepo, fake)
+		if err != nil {
+			t.Errorf("run() error = %v, want nil", err)
+		}
+		done <- results
+	}()
+
+	select {
+	case <-blocking.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the engine never reached Resolve")
+	}
+	if got := fake.settled(); len(got) != 0 {
+		t.Fatalf("Settled called with %v while the Resolve was still pending", got)
+	}
+
+	close(blocking.release)
+	select {
+	case results := <-done:
+		if len(results) != 1 || results[0].Outcome != jobs.OutcomeSuccess {
+			t.Errorf("results = %+v, want one success", results)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run did not finish after the Resolve returned")
+	}
+	task := onlyTask(t, tasksRepo)
+	if got := fake.settled(); len(got) != 1 || got[0] != task.ID {
+		t.Errorf("Settled calls = %v, want exactly [%s]", got, task.ID)
 	}
 }
