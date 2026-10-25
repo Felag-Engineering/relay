@@ -40,8 +40,8 @@ fn write_file(path: PathBuf, content: &str, mode: u32) {
 /// Replicated here rather than reusing `identity::persist_identity` because
 /// that function is `pub(crate)` and this is a separate integration-test
 /// crate for a bin-only package with no lib target to share it. With this
-/// identity pre-seeded the startup plan is `Enrolled`: `RELAY_JOIN` is never read
-/// and no enrollment endpoint is dialled.
+/// identity pre-seeded the startup plan is `Enrolled`: no enrollment endpoint is
+/// dialled.
 fn seed_identity(dir: &Path) {
     std::fs::create_dir_all(dir).expect("create state dir");
 

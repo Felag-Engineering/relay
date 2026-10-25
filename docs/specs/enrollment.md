@@ -1,6 +1,6 @@
 # Enrollment
 
-**Status:** designed, not built, as of `2026-10-24`.
+**Status:** designed, not built, as of `2026-10-25`.
 **Claim prefix:** `EN`
 **Governed by:** ADR-0005, ADR-0006, ADR-0010, ADR-0017, ADR-0020, ADR-0030, ADR-0031,
 ADR-0022, ADR-0032, ADR-0033, ADR-0034, ADR-0048, ADR-0050; invariants 6, 7, 10, 11.
@@ -54,6 +54,13 @@ alone, it says so.
   fingerprint of the Relay's CA and the Enrollment Token (ADR-0031). The daemon takes no CA
   bundle path and no bare token by any other setting; a Relay address set in its environment
   overrides only the address, and the pin still applies to whatever it dials.
+- **EN-30** One join string carries everything first contact needs: the Relay address, the
+  fingerprint of the Relay's CA and the Enrollment Token (ADR-0031). It is read by `relay-daemon
+  join` from a prompt or standard input and consumed by the enrollment `join` performs in that
+  same process (`daemon-installation.md`); it is persisted nowhere on a Node, and the unit start
+  reads no join string. The daemon takes no CA bundle path and no bare token by any other setting;
+  a Relay address set in its environment overrides only the address, and the pin still applies to
+  whatever it dials. Replaces EN-6 when promoted.
 - **EN-7** On first contact the daemon pins the CA fingerprint: it proceeds only if the Relay
   presents a certificate chain rooting in a CA with that fingerprint, and sends nothing, token
   included, otherwise.
@@ -81,6 +88,9 @@ alone, it says so.
 - **EN-14** The daemon persists the returned key, certificate, CA bundle, Relay address and
   identity. With a valid persisted identity it does not enroll again on restart, so the join
   string is inert for that Node.
+- **EN-32** The daemon persists the key, certificate, CA bundle, Relay address and identity that
+  an enrollment returns, and the unit start never enrolls: with a persisted identity it connects,
+  and without one it exits as EN-33 says. Replaces EN-14 when promoted.
 - **EN-15** After recording an enrollment the Relay rechecks the token's revocation. If the
   token was revoked during enrollment it denylists the fresh Node and returns the same
   token-rejection result used for every other token failure.
@@ -132,6 +142,9 @@ alone, it says so.
 - **EN-28** A daemon with neither a persisted identity nor a join string exits cleanly with
   nothing written; it never opens a plaintext Node-plane connection. A failed enrollment
   persists no partial identity.
+- **EN-33** A unit start with no persisted identity exits cleanly with nothing written; the daemon
+  never opens a plaintext Node-plane connection. A failed enrollment in `relay-daemon join`
+  persists no partial identity and exits non-zero. Replaces EN-28 when promoted.
 - **EN-29** A revoked Node cannot reconnect or renew. Re-enrollment creates a new identity,
   which is why revoking a token revokes both the token and the Nodes it enrolled.
 
@@ -145,10 +158,7 @@ EN-43 fixes the rate limits.
 
 | Claim | Statement | Milestone |
 |---|---|---|
-| EN-30 | One join string carries everything first contact needs: the Relay address, the fingerprint of the Relay's CA and the Enrollment Token (ADR-0031). It is read by `relay-daemon join` from a prompt or standard input and consumed by the enrollment `join` performs in that same process (`daemon-installation.md`); it is persisted nowhere on a Node, and the unit start reads no join string. The daemon takes no CA bundle path and no bare token by any other setting; a Relay address set in its environment overrides only the address, and the pin still applies to whatever it dials. Replaces EN-6 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
 | EN-31 | A token has a positive TTL of at most one year. A mint request names a positive `max_uses` or asks explicitly for unlimited use; one that does neither is refused. A surface that offers a mint form asks how many Nodes the token is for, sets the use limit to that number and the TTL to two hours by default, so a used-up or expired token needs no revoke (ADR-0048); the Control API takes explicit values and has no default. Replaces EN-2 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
-| EN-32 | The daemon persists the key, certificate, CA bundle, Relay address and identity that an enrollment returns, and the unit start never enrolls: with a persisted identity it connects, and without one it exits as EN-33 says. Replaces EN-14 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
-| EN-33 | A unit start with no persisted identity exits cleanly with nothing written; the daemon never opens a plaintext Node-plane connection. A failed enrollment in `relay-daemon join` persists no partial identity and exits non-zero. Replaces EN-28 when promoted. | v0.6.5 — Install Path: relay init, join string, packages |
 | EN-35 | A mint that names any `relay:` label is refused, and the refusal names the label. A mint takes only initial tags (EN-40); `relay:node-id` is written by the enrollment itself (EN-38) and never named at mint (ADR-0050). Extends EN-42 when promoted. | MVP |
 | EN-36 | The Console mints an Enrollment Token through the same capability action and `admin` floor as the Control API, asking how many Nodes it is for (EN-31), and shows the join string once, apart from the command that consumes it (EN-39) (ADR-0048; #434). | MVP |
 | EN-38 | Every enrollment stamps `relay:node-id` with the Node's Relay-assigned ID on the Node it records. Only the enrollment action writes it, no mint may name it (EN-35), and the Node cannot change it. Becomes part of EN-41 when promoted (ADR-0048). | v0.6.5 — Install Path: relay init, join string, packages |
@@ -208,7 +218,6 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | EN-11 | `TestEnroll_EmptyTokenOrCSR`, `TestEnroll_NonNodeSelfLabel` | enroll |
 | EN-12 | `TestEnroll_IdentityNotFromCSR`, `TestEnroll_Success` | enroll |
 | EN-13 | `TestEnroll_InvalidToken`, `TestEnroll_Success` | enroll |
-| EN-14 | `fresh_enroll_persists_identity`, `idempotency_no_op_when_identity_present`, `plan_never_reads_the_join_once_enrolled` | daemon |
 | EN-15 | `TestEnroll_PostUpsertRevocationCheck_ClosesRaceWindow` | enroll |
 | EN-17 | `TestRenew_IgnoresCSRSubject`, `TestRenew_MissingNodeID` | enroll |
 | EN-18 | `TestSQLiteRegistry_ProvenanceSurvivesARestart` | store |
@@ -219,10 +228,12 @@ Generated by `make spec-proof` from the tests that name the claim they prove.
 | EN-25 | `TestEnroll_BadCSR`, `TestEnroll_EmptyTokenOrCSR`, `TestEnroll_NonNodeSelfLabel`, `TestEnroll_RegistryAtCapacity` | enroll |
 | EN-26 | `TestEnroll_ExhaustedToken`, `TestEnroll_ExpiredToken`, `TestEnroll_LegacyMalformedScopeIsRefusedBeforeAnySideEffect`, `TestEnroll_RevokedToken` | enroll |
 | EN-27 | `pin_mismatch_sends_no_token` | daemon |
-| EN-28 | `fresh_enroll_fails_closed_on_key_cert_mismatch`, `unconfigured_node_exits_zero` | daemon |
 | EN-29 | `TestUnaryInterceptor_RevokedAfterConnect_RenewRefused` | Node plane |
+| EN-30 | `TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState`, `join_enroll_config_never_reads_a_ca_path_or_a_bare_token`, `join_enrolls_in_process_and_persists_identity`, `join_pin_applies_to_an_overridden_address`, `join_takes_no_ca_bundle_path_and_no_bare_token` | Relay, daemon |
+| EN-32 | `TestCrossBinary_RestartWithoutJoinOrAddrUsesPersistedState`, `fresh_enroll_persists_identity`, `idempotency_no_op_when_identity_present`, `join_enrolls_in_process_and_persists_identity`, `plan_has_two_outcomes`, `unenrolled_start_never_dials` | Relay, daemon |
+| EN-33 | `a_failure_after_the_relay_answered_says_a_node_may_be_recorded`, `fresh_enroll_fails_closed_on_key_cert_mismatch`, `join_failed_persist_leaves_no_partial_identity`, `join_interrupted_during_enrollment_persists_nothing`, `join_pin_mismatch_sends_no_token_and_leaves_nothing_on_disk`, `join_token_rejected_leaves_nothing_on_disk`, `join_unreachable_relay_leaves_nothing_on_disk`, `unconfigured_node_exits_zero`, `unenrolled_start_never_dials` | daemon |
 
-Unproven: EN-2, EN-6, EN-16, EN-21, EN-22.
+Unproven: EN-2, EN-6, EN-14, EN-16, EN-21, EN-22, EN-28.
 Designed claims a test already cites: EN-31 (`TestHandleMintToken_InvalidScopeOrTTL`, `TestHandleMintToken_UseLimit`, `TestMinter_Mint_UseLimitMustBeNamed`).
 <!-- proof:end -->
 

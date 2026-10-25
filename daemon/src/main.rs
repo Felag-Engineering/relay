@@ -86,18 +86,6 @@ fn heartbeat_delay(interval: Duration, jitter_frac: f64, sample: f64) -> Duratio
     interval.mul_f64(scale)
 }
 
-/// Enrolls with `join`: builds the Config with the join string's address standing
-/// in for the persisted one, then pins the Relay's CA from the join string before
-/// the token is sent (ADR-0031, invariant 6).
-async fn enroll_with_join(
-    join: relay_transport::join_string::JoinString,
-) -> Result<(Config, crate::identity::Identity), Box<dyn std::error::Error>> {
-    let config = Config::from_env_for(Some(&join)).map_err(|e| e.to_string())?;
-    let cfg = config::enroll_config(&config, join)?;
-    let identity = enroll::ensure_enrolled(&cfg).await?;
-    Ok((config, identity))
-}
-
 /// Loads the persisted identity of an enrolled Node. It never re-enrolls: four
 /// identity files that do not load are an error, never a fresh enrollment, and
 /// there is no plaintext fallback (ADR-0005, invariant 6).
@@ -537,8 +525,8 @@ async fn run_tunnel(
 /// process survives Relay restarts and revocation instead of exiting
 /// (issue #176).
 ///
-/// `startup_identity` is the identity `acquire_identity` produced at process
-/// start (the ONLY enrollment path — never called again here). On every
+/// `startup_identity` is the identity `load_enrolled` loaded at process start
+/// (the daemon never enrolls; `relay-daemon join` does). On every
 /// iteration the identity is reloaded from disk to adopt any cert the renew
 /// task rotated in the meantime (ADR-0006 Amendment 3: "adopted on the next
 /// connect"), falling back to `startup_identity` if the reload finds nothing
@@ -742,11 +730,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(code);
     }
 
-    // `join` (DI-37) is offline too: it reads the join string from a prompt or
-    // stdin, never argv, writes the environment file and starts the unit, and
-    // contacts no Relay. Intercepted before tracing, so it prints to stderr.
+    // `join` (DI-42) enrolls in this process: it reads the join string from a
+    // prompt or stdin, never argv, then pins the Relay's CA, enrolls, persists the
+    // identity and starts the unit. Intercepted before tracing, so it prints to
+    // stderr.
     if args.get(1).map(String::as_str) == Some("join") {
-        let code = join::run(&args[2..]);
+        let code = join::run(&args[2..]).await;
         std::process::exit(code);
     }
 
@@ -762,22 +751,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .install_default()
         .expect("rustls CryptoProvider installation must succeed at startup");
 
+    // A retired setting is refused by name before anything is read or dialled, so
+    // a stale line in an existing environment file is noticed (DI-43).
+    config::refuse_retired_settings(|name| std::env::var_os(name)).map_err(|e| e.to_string())?;
+
     // The startup plan (DI-25's exit rule) is decided before any Config,
-    // network or Policy read: only a Node with no identity file and no
-    // RELAY_JOIN exits cleanly; a partial identity or a malformed join string
-    // exits non-zero.
-    let plan = config::plan_startup(&enroll::state_dir_from_env(), config::relay_join_from_env)
-        .map_err(|e| e.to_string())?;
+    // network or Policy read, and has two outcomes: a Node with no identity file
+    // exits cleanly, and one with an identity connects. A partial identity exits
+    // non-zero. The daemon never enrolls; `relay-daemon join` does (EN-32).
+    let plan = config::plan_startup(&enroll::state_dir_from_env()).map_err(|e| e.to_string())?;
     let (config, identity) = match plan {
         config::StartupPlan::Unconfigured => {
             // The one clean exit, with one log line. `Restart=on-failure` does
-            // not retry it, and nothing watches for the join string to appear.
+            // not retry it, and nothing watches for an identity to appear.
             info!(
-                "no identity and no RELAY_JOIN: nothing to enroll with; exiting until configured"
+                "no identity: nothing to connect with; exiting until this Node is enrolled \
+                 with relay-daemon join"
             );
             return Ok(());
         }
-        config::StartupPlan::Enroll(join) => enroll_with_join(join).await?,
         config::StartupPlan::Enrolled => load_enrolled()?,
     };
 

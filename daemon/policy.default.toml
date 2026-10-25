@@ -142,10 +142,10 @@ args = [[
     "/etc/pki/tls/private/localhost.key",
 ]]
 
-# The daemon's own secret-bearing files: the environment file (it carries the
-# Enrollment Token or join string) and the Node's identity private key. Its
-# Policy, CA bundle, identity certificate, binary, unit and Template files hold
-# no secret — most are public or already in the Relay's hands — and are not
+# The daemon's own files kept from the wire: the environment file (it holds no
+# secret, and is kept as defence in depth) and the Node's identity private key.
+# Its Policy, CA bundle, identity certificate, binary, unit and Template files
+# hold no secret — most are public or already in the Relay's hands — and are not
 # denied (ADR-0022).
 [[deny]]
 name = "file.read"

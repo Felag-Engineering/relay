@@ -64,9 +64,10 @@ Security-relevant choices, made explicit:
   file empties the Node's template vocabulary and reports the `unloadable` fingerprint.
 - **No CA material reaches a daemon.** `ca-key.pem` lives only on the `relay-data` volume,
   which the short-lived `init` helper mounts **read-write** (it writes the store) and no daemon
-  mounts. A daemon receives only the join string, as `RELAY_JOIN`: it pins the Relay's CA from
-  the join string's fingerprint before sending the token, and writes the CA to its own state
-  volume.
+  mounts. A daemon receives only the join string, piped by its entrypoint to
+  `relay-daemon join` (never an argument, never an environment variable): `join` pins the
+  Relay's CA from the join string's fingerprint before sending the token, and writes the CA to
+  the daemon's own state volume.
 - **The Enrollment Token is `relay:`-scoped.** It can only join Nodes, never call the API or
   run Operations. Enrollment stamps `relay:env=dev` and `relay:fleet=dev` onto each Node; these
   are the labels your Selectors target.

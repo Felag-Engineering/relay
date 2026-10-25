@@ -109,8 +109,8 @@ COPY --chmod=0755 docker/fixtures/systemctl-shim /usr/local/lib/dev-fleet-servic
 # dev fleet (docs/dev-fleet.md). DEV-ONLY fixture.
 COPY docker/fixtures/os-release /etc/os-release
 
-# The entrypoint lifts the bootstrap-minted Enrollment Token file into the env
-# var the daemon reads, then execs the daemon (see docker/daemon-entrypoint.sh).
+# The entrypoint pipes the bootstrap-minted join string file to `relay-daemon
+# join`, then execs the daemon (see docker/daemon-entrypoint.sh).
 # chmod so the exec-form ENTRYPOINT works regardless of the host file's mode.
 COPY docker/daemon-entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh

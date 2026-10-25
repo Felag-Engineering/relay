@@ -1,28 +1,51 @@
 //! The daemon's single environment/config surface, read once at startup and
-//! threaded down. Startup follows one plan (ADR-0031 decision 4; DI-25's exit
-//! rule): a complete identity is used and the join string is never read; no
-//! identity and no `RELAY_JOIN` is the one clean exit; anything in between
-//! refuses. The Relay address resolves from `RELAY_ADDRESS` or `--relay` first, then
-//! from the join string while enrolling, then from the address persisted at
-//! enrollment, with no default. Also centralizes RELAY_SERVER_NAME and the http→https
-//! scheme normalization.
+//! threaded down. Startup follows one plan with two outcomes (ADR-0031
+//! decision 4; DI-25's exit rule): a complete identity is used, and no identity
+//! is the one clean exit; anything in between refuses. The daemon reads no join
+//! string: `relay-daemon join` enrolls, in the process that read it (DI-42), and
+//! a set `RELAY_JOIN` is refused by name (DI-43). The Relay address resolves from
+//! `RELAY_ADDRESS` or `--relay` first, then from the address persisted at
+//! enrollment, with no default. Also centralizes RELAY_SERVER_NAME and the
+//! http→https scheme normalization.
 //!
-//! Also hosts daemon-local hard limits (e.g. [`MAX_OUTPUT_BYTES`]) that are
-//! compile-time constants, not env-derived — kept here as the daemon's single
-//! neutral config-adjacent home rather than scattered per call site.
-//! The spawned-child `setrlimit` bounds (`ResourceLimits`) live in relay-exec's
-//! `limits` module.
+//! Also hosts the one place `join`'s enrollment settings are named
+//! ([`JOIN_SETTINGS`], [`join_enroll_config`]), and daemon-local hard limits
+//! (e.g. [`MAX_OUTPUT_BYTES`]) that are compile-time constants, not env-derived
+//! — kept here as the daemon's single neutral config-adjacent home rather than
+//! scattered per call site. The spawned-child `setrlimit` bounds
+//! (`ResourceLimits`) live in relay-exec's `limits` module.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use crate::enroll::{node_labels_from_env, state_dir_from_env, EnrollConfig, EnrollError};
+use crate::enroll::{node_labels_from_env, parse_node_labels, state_dir_from_env};
+use crate::enroll::{EnrollConfig, EnrollError};
 use crate::gen::Facts;
 use crate::identity::{load_relay_addr, validate_endpoint_scheme, IdentityError};
 use relay_transport::join_string::{JoinString, JoinStringError};
 
-/// The longest `RELAY_JOIN` value read. A real join string is well under 1 KiB;
-/// the cap bounds what reaches the decoder.
+/// The longest join string `relay-daemon join` reads. A real join string is well
+/// under 1 KiB; the cap bounds what reaches the decoder.
 pub const MAX_JOIN_STRING_LEN: usize = 4096;
+
+/// Settings the daemon refuses to start with, each paired with what to do
+/// instead. A retired setting is refused by name, never silently ignored, so a
+/// stale line in an existing environment file is noticed.
+pub const RETIRED_SETTINGS: [(&str, &str); 1] = [(
+    "RELAY_JOIN",
+    "if this Node is not yet enrolled, give the join string to relay-daemon join on standard input",
+)];
+
+/// The only settings `relay-daemon join` reads: the state directory, the two
+/// addresses, the SNI name and the labels. `join` takes no CA bundle path and no
+/// bare token from any setting (EN-30).
+pub const JOIN_SETTINGS: [&str; 5] = [
+    "RELAY_STATE_DIR",
+    "RELAY_ADDRESS",
+    "RELAY_ENROLL_ADDRESS",
+    "RELAY_SERVER_NAME",
+    "RELAY_NODE_LABELS",
+];
 
 /// The four files a persisted identity is made of. `relay_addr` is not one of
 /// them: it is written before the identity and is optional for an enrolled Node.
@@ -40,14 +63,23 @@ pub enum ConfigError {
     NoRelayAddr { state_dir: PathBuf },
     #[error("cannot read the persisted Relay address: {0}")]
     PersistedAddr(#[from] IdentityError),
-    #[error("RELAY_JOIN is malformed: {0}")]
+    #[error("the join string is malformed: {0}")]
     MalformedJoin(JoinStringError),
-    #[error("RELAY_JOIN is malformed: not valid UTF-8")]
+    #[error("the join string is malformed: not valid UTF-8")]
     JoinNotUnicode,
-    #[error("RELAY_JOIN is malformed: longer than {MAX_JOIN_STRING_LEN} bytes")]
+    #[error("the join string is malformed: longer than {MAX_JOIN_STRING_LEN} bytes")]
     JoinTooLong,
-    #[error("RELAY_JOIN is malformed: its Relay address {0}")]
+    #[error("the join string is malformed: its Relay address {0}")]
     BadJoinAddress(&'static str),
+    /// A retired setting is present. Only its name is printed, never its value.
+    #[error(
+        "{name} is set in the daemon's environment; it is not a setting and the daemon \
+         refuses to start while it is set: remove it from the environment file; {instead}"
+    )]
+    RetiredSetting {
+        name: &'static str,
+        instead: &'static str,
+    },
     #[error(
         "partial identity in {}: missing {}; restore the files or empty the directory \
          and enroll again",
@@ -67,11 +99,9 @@ pub enum ConfigError {
 
 /// What a start does, decided before any network or Config read.
 pub enum StartupPlan {
-    /// No identity file and no join string: nothing to do (the one clean exit).
+    /// No identity file: nothing to connect with (the one clean exit).
     Unconfigured,
-    /// No identity file and a valid join string: enroll with it.
-    Enroll(JoinString),
-    /// A complete identity: use it. The join string is inert and not read.
+    /// A complete identity: use it.
     Enrolled,
 }
 
@@ -106,48 +136,35 @@ pub fn identity_state(state_dir: &Path) -> Result<IdentityState, ConfigError> {
     })
 }
 
-/// Reads `RELAY_JOIN` as the raw value [`plan_startup`] takes: unset is `None`,
-/// and a value that is not UTF-8 is an error rather than unset.
-pub fn relay_join_from_env() -> Result<Option<String>, ConfigError> {
-    match std::env::var("RELAY_JOIN") {
-        Ok(v) => Ok(Some(v)),
-        Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => Err(ConfigError::JoinNotUnicode),
+/// Refuses to start while a retired setting is present. Any presence refuses,
+/// an empty or non-UTF-8 value included, so a stale line cannot hide. The
+/// message names the setting and never its value.
+pub fn refuse_retired_settings(get: impl Fn(&str) -> Option<OsString>) -> Result<(), ConfigError> {
+    for (name, instead) in RETIRED_SETTINGS {
+        if get(name).is_some() {
+            return Err(ConfigError::RetiredSetting { name, instead });
+        }
     }
+    Ok(())
 }
 
-/// Decides what this start does (DI-25). Only a fully unconfigured Node —
-/// no identity file at all and `RELAY_JOIN` unset or empty — is `Unconfigured`;
-/// a partial identity or a malformed join string is an error, so a broken Node
+/// Decides what this start does (DI-25). Only a Node with no identity file at
+/// all is `Unconfigured`; a partial identity is an error, so a broken Node
 /// shows as failed rather than idle.
-///
-/// `read_join` is called only when no identity file exists, so an enrolled
-/// Node never reads its join string at all, however malformed (DI-38: inert).
-pub fn plan_startup(
-    state_dir: &Path,
-    read_join: impl FnOnce() -> Result<Option<String>, ConfigError>,
-) -> Result<StartupPlan, ConfigError> {
+pub fn plan_startup(state_dir: &Path) -> Result<StartupPlan, ConfigError> {
     match identity_state(state_dir)? {
         IdentityState::Complete => Ok(StartupPlan::Enrolled),
         IdentityState::Partial { missing } => Err(ConfigError::PartialIdentity {
             state_dir: state_dir.to_path_buf(),
             missing,
         }),
-        IdentityState::Absent => match decode_join(read_join()?)? {
-            None => Ok(StartupPlan::Unconfigured),
-            Some(join) => Ok(StartupPlan::Enroll(join)),
-        },
+        IdentityState::Absent => Ok(StartupPlan::Unconfigured),
     }
 }
 
-/// Decodes a `RELAY_JOIN` value: unset or empty is `None`; anything else must be
-/// at most [`MAX_JOIN_STRING_LEN`] bytes, decode, and carry a dialable address.
-pub fn decode_join(raw: Option<String>) -> Result<Option<JoinString>, ConfigError> {
-    decode_join_str(raw.as_deref().unwrap_or_default())
-}
-
-/// [`decode_join`] over a borrowed value, so a caller that wipes its own copy of
-/// the text (`relay-daemon join`) never hands an owned one away.
+/// Decodes a join string: empty is `None`; anything else must be at most
+/// [`MAX_JOIN_STRING_LEN`] bytes, decode, and carry a dialable address. Borrowed,
+/// so the caller wipes its own copy of the text.
 pub fn decode_join_str(raw: &str) -> Result<Option<JoinString>, ConfigError> {
     if raw.is_empty() {
         return Ok(None);
@@ -199,9 +216,8 @@ pub fn validate_join_address(addr: &str) -> Result<(), ConfigError> {
 /// CLI arg). Constructed exactly once in `main` and threaded down to callers. No
 /// env-var is read elsewhere for these fields.
 pub struct Config {
-    /// Resolved Relay address: `--relay`/`RELAY_ADDRESS` when set, else (enrolling)
-    /// the join string's, else the one persisted at enrollment (may be `http://`
-    /// when from the environment).
+    /// Resolved Relay address: `--relay`/`RELAY_ADDRESS` when set, else the one
+    /// persisted at enrollment (may be `http://` when from the environment).
     pub relay_addr: String,
     /// `relay_addr` normalized to `https://` — the gRPC dial target.
     pub endpoint: String,
@@ -239,25 +255,17 @@ pub struct Config {
 impl Config {
     /// Reads all shared daemon configuration from the environment for an
     /// enrolled Node: the address is the override, else the persisted one.
-    pub fn from_env() -> Result<Config, ConfigError> {
-        Self::from_env_for(None)
-    }
-
-    /// As [`Config::from_env`], with `join` the join string being enrolled with:
-    /// its address stands in for the persisted one, which a Node without an
-    /// identity does not have.
     ///
     /// Fails only when no Relay address source exists or the persisted address
     /// is unreadable or malformed. Defaults are applied for every other missing
-    /// or unparsable env var. Enroll endpoint scheme validation lives in
-    /// [`enroll_config`] and returns a typed `EnrollError`.
-    pub fn from_env_for(join: Option<&JoinString>) -> Result<Config, ConfigError> {
+    /// or unparsable env var; an empty `RELAY_SERVER_NAME` counts as unset.
+    pub fn from_env() -> Result<Config, ConfigError> {
         let state_dir = state_dir_from_env();
-        let join_addr = join.map(|j| format!("https://{}", j.relay_address()));
-        let relay_addr =
-            resolve_relay_addr(relay_addr_override_from_args_env(), join_addr, &state_dir)?;
+        let relay_addr = resolve_relay_addr(relay_addr_override_from_args_env(), &state_dir)?;
         let endpoint = normalize_scheme(&relay_addr);
-        let tls_server_name = std::env::var("RELAY_SERVER_NAME").ok();
+        let tls_server_name = std::env::var("RELAY_SERVER_NAME")
+            .ok()
+            .filter(|v| !v.is_empty());
         let node_labels = node_labels_from_env();
 
         // Facts.hostname is the human-readable descriptor, not the
@@ -302,22 +310,29 @@ pub fn template_dir_from_env() -> PathBuf {
 /// and `truncated` is set. Sane default; a Policy/env-tunable value is future work.
 pub const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB
 
-/// Builds enrollment configuration from the shared `Config`, the decoded join
-/// string, and the one enroll-only env var:
+/// Builds the enrollment configuration `relay-daemon join` enrolls with, from the
+/// decoded join string, the state directory it resolved, and `setting`, which
+/// answers for the names in [`JOIN_SETTINGS`] only (an empty value is unset):
 ///
-/// - `RELAY_ENROLL_ADDRESS` — overrides `cfg.endpoint` as the enrollment dial
-///   target only; the address persisted for the Tunnel is `cfg.endpoint`. The
-///   CA pin applies to whichever endpoint is dialled.
+/// - the Node-plane address persisted for the Tunnel is `RELAY_ADDRESS`, else the
+///   join string's, normalized to `https://`;
+/// - `RELAY_ENROLL_ADDRESS` overrides only the enrollment dial target. The CA
+///   pin applies to whichever endpoint is dialled;
+/// - `RELAY_SERVER_NAME` and `RELAY_NODE_LABELS` are the SNI name and the labels.
 ///
-/// All other values (`tls_server_name`, `state_dir`, `node_labels`, `facts`)
-/// are taken from `cfg` — they are not re-read from the environment.
-pub fn enroll_config(cfg: &Config, join: JoinString) -> Result<EnrollConfig, EnrollError> {
-    // cfg.endpoint is already normalized (http→https); the override is used
-    // raw so operators can specify a distinct enrollment endpoint if needed.
-    let endpoint = std::env::var("RELAY_ENROLL_ADDRESS")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| cfg.endpoint.clone());
+/// It reads no other setting: no CA bundle path and no bare token (EN-30), and
+/// no argv.
+pub fn join_enroll_config(
+    join: JoinString,
+    state_dir: PathBuf,
+    setting: &dyn Fn(&str) -> Option<String>,
+) -> Result<EnrollConfig, EnrollError> {
+    let relay_addr = normalize_scheme(
+        &setting("RELAY_ADDRESS").unwrap_or_else(|| format!("https://{}", join.relay_address())),
+    );
+    // The enroll override is used raw so operators can specify a distinct
+    // enrollment endpoint if needed.
+    let endpoint = setting("RELAY_ENROLL_ADDRESS").unwrap_or_else(|| relay_addr.clone());
 
     // Fail closed: an "http://" endpoint would skip TLS, and with it the CA
     // pin, exposing the Enrollment Token. `IdentityError` auto-converts into
@@ -327,11 +342,13 @@ pub fn enroll_config(cfg: &Config, join: JoinString) -> Result<EnrollConfig, Enr
     Ok(EnrollConfig {
         join,
         endpoint,
-        relay_addr: cfg.endpoint.clone(),
-        tls_server_name: cfg.tls_server_name.clone(),
-        state_dir: cfg.state_dir.clone(),
-        node_labels: cfg.node_labels.clone(),
-        facts: cfg.facts.clone(),
+        relay_addr,
+        tls_server_name: setting("RELAY_SERVER_NAME"),
+        state_dir,
+        node_labels: setting("RELAY_NODE_LABELS")
+            .map(|v| parse_node_labels(&v))
+            .unwrap_or_default(),
+        facts: crate::operations::system_facts::gather_facts(),
     })
 }
 
@@ -361,14 +378,12 @@ fn relay_addr_override_from_args_env() -> Option<String> {
 
 /// Resolves the Relay address: the override when set (without reading the
 /// persisted file, so config management can always repoint a Node), else the
-/// join string's address while enrolling, else the address persisted at
-/// enrollment. With none, refuses; there is no default.
+/// address persisted at enrollment. With none, refuses; there is no default.
 pub(crate) fn resolve_relay_addr(
     override_addr: Option<String>,
-    join_addr: Option<String>,
     state_dir: &Path,
 ) -> Result<String, ConfigError> {
-    if let Some(addr) = override_addr.or(join_addr) {
+    if let Some(addr) = override_addr {
         return Ok(addr);
     }
     load_relay_addr(state_dir)?.ok_or_else(|| ConfigError::NoRelayAddr {
@@ -383,6 +398,8 @@ pub(crate) fn resolve_relay_addr(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::collections::{BTreeSet, HashMap};
     use std::sync::Mutex;
 
     // Serialize all env-touching tests within this module so they don't race.
@@ -476,7 +493,7 @@ mod tests {
 
     // --- Relay address resolution -------------------------------------------
 
-    // Proves DI-38.
+    // Proves DI-44.
     #[test]
     fn relay_addr_overrides_persisted_address() {
         let _lock = ENV_LOCK.lock().unwrap();
@@ -519,7 +536,7 @@ mod tests {
     #[test]
     fn no_localhost_default_address() {
         let dir = crate::test_support::TempDir::created("cfg-no-default");
-        assert!(resolve_relay_addr(None, None, dir.path()).is_err());
+        assert!(resolve_relay_addr(None, dir.path()).is_err());
 
         // Guard against a reintroduced literal default in production code. The
         // test module below legitimately names addresses, so only the part of
@@ -590,28 +607,7 @@ mod tests {
         std::env::remove_var("RELAY_ADDRESS");
     }
 
-    // --- enroll_config ------------------------------------------------------
-
-    /// Constructs a minimal fake Config for use in enroll_config tests.
-    /// No env vars are read — fields are set directly.
-    fn fake_config() -> Config {
-        Config {
-            template_dir: std::path::PathBuf::from("/nonexistent/templates.d"),
-            relay_addr: "http://relay:7654".to_string(),
-            endpoint: "https://relay:7654".to_string(),
-            tls_server_name: None,
-            state_dir: PathBuf::from("/var/lib/relay-daemon"),
-            policy_path: PathBuf::from("/etc/relay-daemon/policy.toml"),
-            node_labels: vec![],
-            facts: Facts {
-                hostname: "test-node".to_string(),
-                os: "linux".to_string(),
-                arch: "x86_64".to_string(),
-                kernel: String::new(),
-                ip_addresses: vec![],
-            },
-        }
-    }
+    // --- join_enroll_config ---------------------------------------------------
 
     fn join_for(addr: &str) -> String {
         JoinString::new(addr.to_string(), [7u8; 32], "tok-test".to_string())
@@ -620,90 +616,208 @@ mod tests {
     }
 
     fn decoded(addr: &str) -> JoinString {
-        decode_join(Some(join_for(addr)))
+        decode_join_str(&join_for(addr))
             .expect("decode")
             .expect("some")
     }
 
-    #[test]
-    fn enroll_endpoint_override_does_not_change_persisted_address() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        std::env::set_var("RELAY_ENROLL_ADDRESS", "https://override:9000");
+    /// A setting lookup over a fixed table, with empty values counting as unset,
+    /// as `relay-daemon join`'s own lookup treats them.
+    fn lookup(pairs: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        let table: HashMap<&'static str, &'static str> = pairs.iter().copied().collect();
+        move |name| {
+            table
+                .get(name)
+                .filter(|v| !v.is_empty())
+                .map(|v| v.to_string())
+        }
+    }
 
-        let cfg = fake_config();
-        let ec = enroll_config(&cfg, decoded("relay:7654")).expect("enroll_config");
-
-        assert_eq!(
-            ec.endpoint, "https://override:9000",
-            "RELAY_ENROLL_ADDRESS must take precedence over cfg.endpoint"
-        );
-        // The persisted (Tunnel) address stays the Node-plane one.
-        assert_eq!(ec.relay_addr, cfg.endpoint);
-        assert_eq!(ec.join.enrollment_token(), "tok-test");
-
-        std::env::remove_var("RELAY_ENROLL_ADDRESS");
+    fn enroll_config(
+        join: JoinString,
+        pairs: &[(&'static str, &'static str)],
+    ) -> Result<EnrollConfig, EnrollError> {
+        join_enroll_config(join, PathBuf::from("/state"), &lookup(pairs))
     }
 
     #[test]
-    fn enroll_endpoint_defaults_to_config_endpoint() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("RELAY_ENROLL_ADDRESS");
-        let cfg = fake_config();
-        let ec = enroll_config(&cfg, decoded("relay:7654")).expect("enroll_config");
-        assert_eq!(ec.endpoint, cfg.endpoint);
+    fn join_address_is_the_enrollment_address_by_default() {
+        let ec = enroll_config(decoded("relay.example:7654"), &[]).expect("config");
+        assert_eq!(ec.relay_addr, "https://relay.example:7654");
+        assert_eq!(ec.endpoint, "https://relay.example:7654");
+        assert_eq!(ec.state_dir, PathBuf::from("/state"));
+        assert_eq!(ec.join.enrollment_token(), "tok-test");
+        assert_eq!(ec.tls_server_name, None);
+        assert!(ec.node_labels.is_empty());
+    }
+
+    #[test]
+    fn relay_address_overrides_the_join_address() {
+        let ec = enroll_config(
+            decoded("relay.example:7654"),
+            &[("RELAY_ADDRESS", "http://override:9000")],
+        )
+        .expect("config");
+        // Normalized to https, and both the persisted address and the dial target.
+        assert_eq!(ec.relay_addr, "https://override:9000");
+        assert_eq!(ec.endpoint, "https://override:9000");
+    }
+
+    #[test]
+    fn enroll_address_overrides_only_the_enrollment_endpoint() {
+        let ec = enroll_config(
+            decoded("relay:7654"),
+            &[("RELAY_ENROLL_ADDRESS", "https://override:9000")],
+        )
+        .expect("config");
+        assert_eq!(ec.endpoint, "https://override:9000");
+        // The persisted (Tunnel) address stays the Node-plane one.
+        assert_eq!(ec.relay_addr, "https://relay:7654");
     }
 
     #[test]
     fn http_enroll_endpoint_is_refused() {
+        let result = enroll_config(
+            decoded("relay:7654"),
+            &[("RELAY_ENROLL_ADDRESS", "http://relay:7654")],
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn labels_and_server_name_come_from_the_settings() {
+        let ec = enroll_config(
+            decoded("relay:7654"),
+            &[
+                ("RELAY_NODE_LABELS", "role=web,node:env=prod"),
+                ("RELAY_SERVER_NAME", "relay.internal"),
+            ],
+        )
+        .expect("config");
+        assert_eq!(
+            ec.node_labels,
+            vec![
+                ("role".to_string(), "web".to_string()),
+                ("env".to_string(), "prod".to_string())
+            ]
+        );
+        assert_eq!(ec.tls_server_name.as_deref(), Some("relay.internal"));
+        assert_eq!(ec.facts.hostname, gather_hostname());
+    }
+
+    fn gather_hostname() -> String {
+        crate::operations::system_facts::gather_facts().hostname
+    }
+
+    // Proves EN-30.
+    #[test]
+    fn join_enroll_config_never_reads_a_ca_path_or_a_bare_token() {
+        let asked = RefCell::new(BTreeSet::new());
+        let recording = |name: &str| {
+            asked.borrow_mut().insert(name.to_string());
+            None
+        };
+        join_enroll_config(decoded("relay:7654"), PathBuf::from("/state"), &recording)
+            .expect("config");
+        let asked = asked.into_inner();
+
+        for name in &asked {
+            assert!(
+                JOIN_SETTINGS.contains(&name.as_str()),
+                "join_enroll_config looked up {name}, which is not one of JOIN_SETTINGS"
+            );
+        }
+        // Spelled in two pieces so the packaging drift scan, which reads every
+        // whole RELAY_ name in the source, does not mistake these for settings.
+        for never in [
+            concat!("RELAY_", "CA_BUNDLE_PATH"),
+            concat!("RELAY_", "ENROLLMENT_TOKEN"),
+        ] {
+            assert!(!asked.contains(never), "{never} must never be consulted");
+        }
+    }
+
+    // --- refuse_retired_settings ----------------------------------------------
+
+    // Proves DI-43.
+    #[test]
+    fn retired_settings_refused_by_name() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let valid = join_for("relay:7654");
+        let values: Vec<OsString> = vec![
+            OsString::new(),
+            OsString::from(valid.clone()),
+            OsString::from("glp_join_not!valid tok-should-not-print"),
+            OsString::from_vec(b"glp_join_\xff\xfe".to_vec()),
+        ];
+        for value in values {
+            let shown = value.to_string_lossy().into_owned();
+            let err = refuse_retired_settings(|name| (name == "RELAY_JOIN").then(|| value.clone()))
+                .expect_err("a set RELAY_JOIN is refused, whatever it holds");
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::RetiredSetting {
+                        name: "RELAY_JOIN",
+                        ..
+                    }
+                ),
+                "{err:?}"
+            );
+            let text = format!("{err} {err:?}");
+            assert!(text.contains("RELAY_JOIN"), "{text}");
+            assert!(text.contains("relay-daemon join"), "{text}");
+            for secret in ["tok-should-not-print", "tok-test", valid.as_str()] {
+                assert!(!text.contains(secret), "{text}");
+            }
+            if !shown.is_empty() {
+                assert!(!text.contains(&shown), "the value is never printed: {text}");
+            }
+        }
+        assert!(refuse_retired_settings(|_| None).is_ok());
+    }
+
+    #[test]
+    fn empty_state_dir_and_server_name_count_as_unset() {
         let _lock = ENV_LOCK.lock().unwrap();
-        std::env::set_var("RELAY_ENROLL_ADDRESS", "http://relay:7654");
-        let cfg = fake_config();
-        assert!(enroll_config(&cfg, decoded("relay:7654")).is_err());
-        std::env::remove_var("RELAY_ENROLL_ADDRESS");
+        std::env::set_var("RELAY_STATE_DIR", "");
+        assert_eq!(state_dir_from_env(), PathBuf::from("/var/lib/relay-daemon"));
+        std::env::remove_var("RELAY_STATE_DIR");
+
+        let _dir = isolated_state_dir("cfg-empty-name");
+        std::env::set_var("RELAY_ADDRESS", "https://relay:7654");
+        std::env::set_var("RELAY_SERVER_NAME", "");
+        let cfg = Config::from_env().expect("from_env");
+        assert_eq!(cfg.tls_server_name, None);
+        std::env::remove_var("RELAY_SERVER_NAME");
+        std::env::remove_var("RELAY_ADDRESS");
     }
 
     // --- the join string and the address it carries ---------------------------
 
     #[test]
-    fn join_address_is_the_enrollment_address_unless_overridden() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        let _dir = isolated_state_dir("cfg-join-addr");
-        std::env::remove_var("RELAY_ADDRESS");
-        let join = decoded("relay.example:7654");
-
-        let cfg = Config::from_env_for(Some(&join)).expect("from_env_for");
-        assert_eq!(cfg.relay_addr, "https://relay.example:7654");
-        assert_eq!(cfg.endpoint, "https://relay.example:7654");
-
-        std::env::set_var("RELAY_ADDRESS", "https://override:9000");
-        let cfg = Config::from_env_for(Some(&join)).expect("from_env_for");
-        assert_eq!(cfg.relay_addr, "https://override:9000");
-        std::env::remove_var("RELAY_ADDRESS");
-    }
-
-    #[test]
-    fn unset_or_empty_join_is_none() {
-        assert!(decode_join(None).unwrap().is_none());
-        assert!(decode_join(Some(String::new())).unwrap().is_none());
+    fn empty_join_is_none() {
+        assert!(decode_join_str("").unwrap().is_none());
     }
 
     #[test]
     fn overlong_join_is_refused_before_decoding() {
         let long = format!("glp_join_{}", "A".repeat(MAX_JOIN_STRING_LEN));
         assert!(matches!(
-            decode_join(Some(long)),
+            decode_join_str(&long),
             Err(ConfigError::JoinTooLong)
         ));
     }
 
     #[test]
     fn malformed_join_is_refused_without_echoing_it() {
-        let input = "glp_join_not!base64 tok-secret".to_string();
-        let err = decode_join(Some(input.clone())).expect_err("refused");
+        let input = "glp_join_not!base64 tok-secret";
+        let err = decode_join_str(input).expect_err("refused");
         assert!(matches!(err, ConfigError::MalformedJoin(_)), "{err:?}");
         let text = format!("{err} {err:?}");
         assert!(!text.contains("tok-secret"), "{text}");
-        assert!(!text.contains(&input), "{text}");
+        assert!(!text.contains(input), "{text}");
     }
 
     #[test]
@@ -745,7 +859,7 @@ mod tests {
 
     #[test]
     fn join_with_bad_address_is_malformed() {
-        let err = decode_join(Some(join_for("https://relay:7654"))).expect_err("refused");
+        let err = decode_join_str(&join_for("https://relay:7654")).expect_err("refused");
         assert!(matches!(err, ConfigError::BadJoinAddress(_)), "{err:?}");
     }
 
@@ -758,37 +872,24 @@ mod tests {
         }
     }
 
+    // Proves EN-32.
     #[test]
-    fn plan_unconfigured_only_without_identity_or_join() {
-        let dir = crate::test_support::TempDir::created("plan-unconfigured");
+    fn plan_has_two_outcomes() {
+        let dir = crate::test_support::TempDir::created("plan-two-outcomes");
         assert!(matches!(
-            plan_startup(dir.path(), || Ok(None)),
-            Ok(StartupPlan::Unconfigured)
-        ));
-        assert!(matches!(
-            plan_startup(dir.path(), || Ok(Some(String::new()))),
+            plan_startup(dir.path()),
             Ok(StartupPlan::Unconfigured)
         ));
         // A state directory that does not exist yet holds no identity either.
         assert!(matches!(
-            plan_startup(&dir.path().join("absent"), || Ok(None)),
+            plan_startup(&dir.path().join("absent")),
             Ok(StartupPlan::Unconfigured)
         ));
-    }
-
-    #[test]
-    fn plan_enrolls_with_a_valid_join() {
-        let dir = crate::test_support::TempDir::created("plan-enroll");
-        match plan_startup(dir.path(), || Ok(Some(join_for("relay:7654")))) {
-            Ok(StartupPlan::Enroll(j)) => assert_eq!(j.relay_address(), "relay:7654"),
-            _ => panic!("want Enroll"),
-        }
-    }
-
-    #[test]
-    fn plan_refuses_a_malformed_join() {
-        let dir = crate::test_support::TempDir::created("plan-malformed");
-        assert!(plan_startup(dir.path(), || Ok(Some("not-a-join-string".into()))).is_err());
+        seed(dir.path(), &IDENTITY_FILES);
+        assert!(matches!(
+            plan_startup(dir.path()),
+            Ok(StartupPlan::Enrolled)
+        ));
     }
 
     #[test]
@@ -797,7 +898,7 @@ mod tests {
         for present in 1..IDENTITY_FILES.len() {
             let sub = dir.path().join(format!("p{present}"));
             seed(&sub, &IDENTITY_FILES[..present]);
-            let err = plan_startup(&sub, || Ok(Some(join_for("relay:7654"))))
+            let err = plan_startup(&sub)
                 .err()
                 .expect("partial identity must refuse");
             match err {
@@ -807,38 +908,5 @@ mod tests {
                 other => panic!("want PartialIdentity, got {other:?}"),
             }
         }
-    }
-
-    // Proves EN-14.
-    #[test]
-    fn plan_never_reads_the_join_once_enrolled() {
-        let dir = crate::test_support::TempDir::created("plan-enrolled-unread");
-        seed(dir.path(), &IDENTITY_FILES);
-        assert!(matches!(
-            plan_startup(dir.path(), || panic!(
-                "an enrolled Node must not read RELAY_JOIN"
-            )),
-            Ok(StartupPlan::Enrolled)
-        ));
-        // A join string that could not even be read (not UTF-8) does not matter.
-        assert!(matches!(
-            plan_startup(dir.path(), || Err(ConfigError::JoinNotUnicode)),
-            Ok(StartupPlan::Enrolled)
-        ));
-    }
-
-    #[test]
-    fn plan_ignores_the_join_once_enrolled() {
-        let dir = crate::test_support::TempDir::created("plan-enrolled");
-        seed(dir.path(), &IDENTITY_FILES);
-        // Inert: even a malformed join string is never read.
-        assert!(matches!(
-            plan_startup(dir.path(), || Ok(Some("not-a-join-string".into()))),
-            Ok(StartupPlan::Enrolled)
-        ));
-        assert!(matches!(
-            plan_startup(dir.path(), || Ok(None)),
-            Ok(StartupPlan::Enrolled)
-        ));
     }
 }
