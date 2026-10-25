@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"time"
 )
 
@@ -25,6 +26,39 @@ var (
 	ErrAdvertisedHostname   = errors.New("enroll: advertised address: no certificate hostname to advertise")
 	ErrMintJoinString       = errors.New("enroll: mint: could not encode the join string")
 )
+
+// Use-limit errors. ErrInvalidUseLimit is the parent every refusal wraps. Each
+// message is constant.
+var (
+	ErrInvalidUseLimit  = errors.New("enroll: invalid use limit")
+	ErrUseLimitMissing  = fmt.Errorf("%w: name a positive max_uses, or set unlimited to true", ErrInvalidUseLimit)
+	ErrUseLimitConflict = fmt.Errorf("%w: a positive max_uses and unlimited are exclusive; name one", ErrInvalidUseLimit)
+	ErrUseLimitNegative = fmt.Errorf("%w: max_uses must be positive", ErrInvalidUseLimit)
+)
+
+// UseLimit is how a mint names its use limit: a positive MaxUses, or Unlimited set
+// explicitly (EN-31, ADR-0031). The zero value names neither and is refused.
+type UseLimit struct {
+	MaxUses   int
+	Unlimited bool
+}
+
+// resolve returns the MaxUses to store: n for a limited token, 0 for an unlimited
+// one. A negative MaxUses is checked first so it is never read as unlimited.
+func (l UseLimit) resolve() (int, error) {
+	switch {
+	case l.MaxUses < 0:
+		return 0, ErrUseLimitNegative
+	case l.MaxUses > 0 && l.Unlimited:
+		return 0, ErrUseLimitConflict
+	case l.MaxUses > 0:
+		return l.MaxUses, nil
+	case l.Unlimited:
+		return 0, nil
+	default:
+		return 0, ErrUseLimitMissing
+	}
+}
 
 // FingerprintSource reports the SHA-256 over the Relay CA certificate's DER as
 // lowercase hex. *ca.CA satisfies it.
@@ -136,10 +170,16 @@ func NewMinter(tokens *Service, ca FingerprintSource, advertisedAddress string) 
 	return m, nil
 }
 
-// Mint creates an Enrollment Token and returns it with its join string. Token
-// errors (ErrInvalidScope, ErrInvalidTTL) pass through unchanged. Mint logs nothing.
-func (m *Minter) Mint(ctx context.Context, scope []string, ttl time.Duration, opts ...Option) (Minted, error) {
-	tok, plaintext, err := m.tokens.Create(ctx, scope, ttl, opts...)
+// Mint creates an Enrollment Token and returns it with its join string. The use
+// limit must be named (EN-31) and overrides any WithMaxUses in opts. Token errors
+// (ErrInvalidScope, ErrInvalidTTL) and use-limit errors (ErrInvalidUseLimit and its
+// children) pass through unchanged. A refused mint stores nothing. Mint logs nothing.
+func (m *Minter) Mint(ctx context.Context, scope []string, ttl time.Duration, limit UseLimit, opts ...Option) (Minted, error) {
+	maxUses, err := limit.resolve()
+	if err != nil {
+		return Minted{}, err
+	}
+	tok, plaintext, err := m.tokens.Create(ctx, scope, ttl, slices.Concat(opts, []Option{withUseLimit(maxUses)})...)
 	if err != nil {
 		return Minted{}, err
 	}

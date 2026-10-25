@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	relayv1 "github.com/Felag-Engineering/relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/relay/relay/internal/relaytest"
 )
@@ -96,7 +97,7 @@ func (n *e2eNode) verdictCh() chan *relayv1.PolicyVerdict {
 // mint response hands an operator, and the only thing a test daemon is given.
 func mintJoinString(t *testing.T, deps *appDeps, scope ...string) string {
 	t.Helper()
-	minted, err := deps.minter.Mint(context.Background(), scope, time.Hour)
+	minted, err := deps.minter.Mint(context.Background(), scope, time.Hour, enroll.UseLimit{Unlimited: true})
 	if err != nil {
 		t.Fatalf("mint Enrollment Token: %v", err)
 	}

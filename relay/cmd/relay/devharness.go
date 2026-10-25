@@ -55,6 +55,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/relay/relay/internal/dispatch"
+	"github.com/Felag-Engineering/relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 )
 
@@ -395,7 +396,8 @@ func harnessCreateToken(ctx context.Context, deps *appDeps, req harnessRequest) 
 	if ttl <= 0 {
 		ttl = time.Hour
 	}
-	minted, err := deps.minter.Mint(ctx, req.Labels, ttl)
+	// The harness asks for unlimited use so a cross-binary test can re-enroll with one token.
+	minted, err := deps.minter.Mint(ctx, req.Labels, ttl, enroll.UseLimit{Unlimited: true})
 	if err != nil {
 		slog.Warn("devharness: create_token failed", "err", err)
 		return harnessResponse{Error: err.Error()}

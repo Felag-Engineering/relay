@@ -171,7 +171,7 @@ if [ -n "${OAUTH_ACCOUNT_NAME}" ]; then
     ensure_account "${OAUTH_ACCOUNT_NAME}" operator >/dev/null
 fi
 
-# i. A reusable, relay:-scoped Enrollment Token (max_uses 0 = unlimited, so every
+# i. A reusable, relay:-scoped Enrollment Token (asks explicitly for unlimited use, so every
 # daemon and every restart of a not-yet-enrolled daemon can use it), minted
 # through the real Control API. Daemons get ONLY its join string, which carries
 # the Relay address and the CA fingerprint they pin; the 0600 file is read by
@@ -180,7 +180,7 @@ log "minting a relay:-scoped Enrollment Token..."
 rm -f /bootstrap/enrollment-token /bootstrap/ca-cert.pem
 ( umask 077
   api POST /api/v1/enrollment-tokens \
-      '{"scope":["relay:env=dev","relay:fleet=dev"],"ttl_seconds":86400,"max_uses":0}' \
+      '{"scope":["relay:env=dev","relay:fleet=dev"],"ttl_seconds":86400,"unlimited":true}' \
       | sed -n 's/.*"join_string":"\([^"]*\)".*/\1/p' > /bootstrap/join-string )
 test -s /bootstrap/join-string || die "the mint response carried no join string"
 

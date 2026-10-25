@@ -86,6 +86,9 @@ type Token struct {
 	CreatedBy  string // principal who minted the token
 }
 
+// Unlimited reports whether the token has no use limit (stored MaxUses <= 0).
+func (t *Token) Unlimited() bool { return t.MaxUses <= 0 }
+
 // LogValue implements slog.LogValuer. It returns a structured group that deliberately
 // omits SecretHash so that logging a Token via slog never emits the hash. The
 // plaintext secret is never stored on Token, so it is structurally unloggable.
@@ -123,13 +126,20 @@ type createOpts struct {
 type Option func(*createOpts)
 
 // WithMaxUses sets the maximum number of successful Validate calls allowed for the
-// token. Values <= 0 are treated as unlimited (the default: reusable forever).
+// token. Values <= 0 leave it unlimited, which is Create's storage default; a mint
+// has no default and names its limit through Minter.Mint (EN-31).
 func WithMaxUses(n int) Option {
 	return func(o *createOpts) {
 		if n > 0 {
 			o.maxUses = n
 		}
 	}
+}
+
+// withUseLimit sets the stored use limit unconditionally. Only Minter.Mint uses it,
+// after UseLimit.resolve has validated n.
+func withUseLimit(n int) Option {
+	return func(o *createOpts) { o.maxUses = n }
 }
 
 // WithCreatedBy records the principal who minted the token (audit trail).
@@ -208,6 +218,9 @@ func validateScope(scope []string) error {
 // given TTL. It returns the Token record (suitable for storage) and the plaintext
 // credential string, which is of the form id + secretSep + secret. The plaintext is
 // returned exactly once and is never persisted or stored on the Token.
+//
+// Create is the storage step and applies no use-limit rule; every mint goes through
+// Minter.Mint, which requires the limit to be named (EN-31).
 func (s *Service) Create(ctx context.Context, scope []string, ttl time.Duration, opts ...Option) (*Token, string, error) {
 	if ttl <= 0 {
 		return nil, "", ErrInvalidTTL
@@ -295,7 +308,7 @@ func (s *Service) Validate(ctx context.Context, presented string) ([]string, err
 	if s.now().After(t.ExpiresAt) {
 		return nil, ErrExpired
 	}
-	if t.MaxUses > 0 && t.Uses >= t.MaxUses {
+	if !t.Unlimited() && t.Uses >= t.MaxUses {
 		return nil, ErrExhausted
 	}
 

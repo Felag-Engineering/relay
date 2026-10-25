@@ -525,8 +525,12 @@ paths:
       operationId: mintEnrollmentToken
       summary: Mint a scoped Enrollment Token
       description: |
-        Mints a reusable, scoped, expiring Enrollment Token (ADR-0006). The
-        token's scope stamps the enrolling Node's `relay:` labels, which are
+        Mints a scoped, expiring Enrollment Token (ADR-0006). The mint must
+        name its use limit: either a positive `max_uses` or `unlimited: true`.
+        A mint naming neither, naming a positive `max_uses` together with
+        `unlimited: true`, or naming a negative `max_uses` is refused with
+        `400`. There is no default (ADR-0031). The token's scope
+        stamps the enrolling Node's `relay:` labels, which are
         Node-immutable and are the only namespace valid for security-lane
         targeting (ADR-0020).
 
@@ -1549,6 +1553,7 @@ components:
 
     MintEnrollmentTokenRequest:
       type: object
+      required: [scope, ttl_seconds]
       properties:
         scope:
           type: array
@@ -1563,14 +1568,26 @@ components:
             in `[A-Za-z0-9._-]`. A violating entry is refused with `400` and
             never sanitised (#555).
           examples: [["relay:env=prod"]]
-        ttl_seconds: { type: integer, format: int64 }
+        ttl_seconds:
+          type: integer
+          format: int64
+          description: Lifetime in seconds. Greater than 0 and at most one year (31536000).
         max_uses:
           type: integer
-          description: 0 means unlimited within the TTL.
+          description: |
+            The number of Nodes the token may enroll: a positive integer.
+            Required unless `unlimited` is `true`, and omitted or 0 when it is.
+            A negative value is refused with `400`.
+        unlimited:
+          type: boolean
+          description: |
+            Asks explicitly for unlimited use within the TTL. Exclusive with a
+            positive `max_uses`. A mint naming neither is refused with `400`;
+            `max_uses: 0` on its own does not mean unlimited.
 
     MintedEnrollmentToken:
       type: object
-      required: [id, token, join_string, scope, expires_at, max_uses]
+      required: [id, token, join_string, scope, expires_at, max_uses, unlimited]
       properties:
         id:
           type: string
@@ -1589,7 +1606,12 @@ components:
           type: array
           items: { type: string }
         expires_at: { type: string, format: date-time }
-        max_uses: { type: integer }
+        max_uses:
+          type: integer
+          description: The token's use limit; 0 when `unlimited` is `true`.
+        unlimited:
+          type: boolean
+          description: Whether the token has no use limit within its TTL.
 
     RevokeNodeRequest:
       type: object

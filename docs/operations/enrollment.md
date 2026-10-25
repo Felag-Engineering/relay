@@ -8,7 +8,7 @@ of the playbook in this document.
 
 ## How enrollment works (ADR-0006, in brief)
 
-A Node enrolls by presenting a **reusable, scoped, expiring, revocable Enrollment Token** and a
+A Node enrolls by presenting a **reusable-by-choice, scoped, expiring, revocable Enrollment Token** and a
 CSR over server-authenticated TLS (`Enroll` is the single certless RPC). The Relay validates
 the token, generates the `node_id` itself (the CSR subject is discarded, so a daemon can never
 choose its own identity), signs a ~14-day client certificate with `CN = node_id`, and stamps
@@ -36,7 +36,8 @@ $ curl --cacert ca-cert.pem \
   "join_string": "glp_join_…",
   "scope": ["relay:env=prod", "relay:cohort=web"],
   "expires_at": "2026-08-10T12:00:00Z",
-  "max_uses": 200
+  "max_uses": 200,
+  "unlimited": false
 }
 ```
 
@@ -56,8 +57,10 @@ $ curl --cacert ca-cert.pem \
   runbook describes the release you run until then.
 - **`ttl_seconds`** — required, `> 0`, at most one year. Size it to the enrollment window: for
   a planned bulk run, hours or a day.
-- **`max_uses`** — optional; `<= 0` or absent means unlimited. For a planned run of N Nodes,
-  set it a little above N.
+- **`max_uses`** — required unless `unlimited` is true; a positive number of Nodes. For a
+  planned run of N Nodes, set it a little above N.
+- **`unlimited`** — `true` asks explicitly for unlimited use within the TTL; exclusive with a
+  positive `max_uses`. A mint naming neither is refused with `400`.
 - **`token`** — the plaintext credential (`<id>.<secret>`), returned exactly once and never
   persisted or logged by the Relay, which stores only the secret's hash. Put it straight into
   your secret store (e.g. Ansible Vault).
