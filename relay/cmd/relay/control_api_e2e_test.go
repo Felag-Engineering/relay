@@ -99,6 +99,7 @@ type mintTokenAPIResponse struct {
 	Scope      []string `json:"scope"`
 	ExpiresAt  string   `json:"expires_at"`
 	MaxUses    int      `json:"max_uses"`
+	Unlimited  bool     `json:"unlimited"`
 }
 
 // TestControlAPI_MintEnrollmentToken_ReturnsJoinString: the mint response
@@ -117,7 +118,7 @@ func TestControlAPI_MintEnrollmentToken_ReturnsJoinString(t *testing.T) {
 	f := startRelay(t, WithControlPlane(), WithConfig(func(c *Config) { c.Addr = ":7654" }))
 
 	resp := controlAPIRequest(t, f.ClientFor(""), http.MethodPost, f.ControlBase+"/api/v1/enrollment-tokens",
-		f.Credential, map[string]any{"scope": []string{"relay:env=prod"}, "ttl_seconds": 3600})
+		f.Credential, map[string]any{"scope": []string{"relay:env=prod"}, "ttl_seconds": 3600, "max_uses": 1})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("mint status = %d, want %d", resp.StatusCode, http.StatusCreated)
@@ -201,6 +202,9 @@ func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 		credential, map[string]any{
 			"scope":       []string{"relay:env=prod"},
 			"ttl_seconds": 3600,
+			// The limit must exceed the enrollments made before the revoke, so the
+			// refusal below proves the revoke and not exhaustion.
+			"max_uses": 2,
 		})
 	defer mintResp.Body.Close()
 	if mintResp.StatusCode != http.StatusCreated {
@@ -1035,7 +1039,7 @@ func TestMintEnrollmentToken_JoinStringUsesAdvertisedAddress(t *testing.T) {
 				c.ControlAddr = "127.0.0.1:0"
 			}))
 			resp := controlAPIRequest(t, f.ClientFor(""), http.MethodPost, f.ControlBase+"/api/v1/enrollment-tokens",
-				f.Credential, map[string]any{"scope": []string{"relay:env=prod"}, "ttl_seconds": 3600})
+				f.Credential, map[string]any{"scope": []string{"relay:env=prod"}, "ttl_seconds": 3600, "max_uses": 1})
 			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusCreated {
 				t.Fatalf("mint status = %d, want %d", resp.StatusCode, http.StatusCreated)

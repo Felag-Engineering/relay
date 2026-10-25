@@ -567,6 +567,9 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			credential, map[string]any{
 				"scope":       []string{"relay:env=test", "relay:node=fresh"},
 				"ttl_seconds": 3600,
+				// The limit must exceed the enrollments made before the revoke, so the
+				// refusal below proves the revoke and not exhaustion.
+				"max_uses": 2,
 			})
 		defer mintResp.Body.Close() //nolint:errcheck
 		if mintResp.StatusCode != http.StatusCreated {

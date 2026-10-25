@@ -395,6 +395,7 @@ func TestHandleMintToken_Success(t *testing.T) {
 	rec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", mintTokenRequest{
 		Scope:      []string{"relay:env=prod", "relay:role=web"},
 		TTLSeconds: 3600,
+		MaxUses:    1,
 	})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusCreated, rec.Body.String())
@@ -463,24 +464,24 @@ func TestHandleMintToken_Success(t *testing.T) {
 	}
 }
 
-// Proves EN-2, EN-24.
+// Proves EN-24, EN-31.
 func TestHandleMintToken_InvalidScopeOrTTL(t *testing.T) {
 	cases := []struct {
 		name string
 		req  mintTokenRequest
 	}{
-		{"empty scope", mintTokenRequest{Scope: nil, TTLSeconds: 3600}},
-		{"non-relay scope", mintTokenRequest{Scope: []string{"env=prod"}, TTLSeconds: 3600}},
-		{"zero ttl", mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: 0}},
-		{"negative ttl", mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: -1}},
-		{"over-max ttl", mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: maxTTLSeconds + 1}},
+		{"empty scope", mintTokenRequest{Scope: nil, TTLSeconds: 3600, MaxUses: 1}},
+		{"non-relay scope", mintTokenRequest{Scope: []string{"env=prod"}, TTLSeconds: 3600, MaxUses: 1}},
+		{"zero ttl", mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: 0, MaxUses: 1}},
+		{"negative ttl", mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: -1, MaxUses: 1}},
+		{"over-max ttl", mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: maxTTLSeconds + 1, MaxUses: 1}},
 		// #555: the scope is relay:-prefixed but fails the well-formedness
 		// gate. This is an end-to-end status check through the REAL
 		// enroll.Service (tokenSvc below), so it also pins that a violation
 		// still maps to 400 and not 500 — RED ON introducing a second
 		// sentinel without adding it to tokens.go's errors.Is list.
-		{"comma-injected second term", mintTokenRequest{Scope: []string{"relay:env=prod,node:role=web"}, TTLSeconds: 3600}},
-		{"zero width space in key", mintTokenRequest{Scope: []string{"relay:quarantine\u200b=on"}, TTLSeconds: 3600}},
+		{"comma-injected second term", mintTokenRequest{Scope: []string{"relay:env=prod,node:role=web"}, TTLSeconds: 3600, MaxUses: 1}},
+		{"zero width space in key", mintTokenRequest{Scope: []string{"relay:quarantine\u200b=on"}, TTLSeconds: 3600, MaxUses: 1}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -495,6 +496,94 @@ func TestHandleMintToken_InvalidScopeOrTTL(t *testing.T) {
 			}
 			if len(auditor.all()) != 0 {
 				t.Errorf("audit records = %d, want 0 on a rejected mint", len(auditor.all()))
+			}
+		})
+	}
+}
+
+// countingTokenRepo counts the Create calls that reach storage.
+type countingTokenRepo struct {
+	enroll.Repository
+	creates int
+}
+
+func (r *countingTokenRepo) Create(ctx context.Context, t *enroll.Token) error {
+	r.creates++
+	return r.Repository.Create(ctx, t)
+}
+
+// Proves EN-31.
+func TestHandleMintToken_UseLimit(t *testing.T) {
+	cases := []struct {
+		name          string
+		body          string
+		wantStatus    int
+		wantMaxUses   int
+		wantUnlimited bool
+		namesBoth     bool // the refusal detail names both max_uses and unlimited
+	}{
+		{"neither field", `{"scope":["relay:env=prod"],"ttl_seconds":3600}`, http.StatusBadRequest, 0, false, true},
+		{"max_uses 0 alone", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"max_uses":0}`, http.StatusBadRequest, 0, false, true},
+		{"unlimited false alone", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"unlimited":false}`, http.StatusBadRequest, 0, false, true},
+		{"max_uses 1", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"max_uses":1}`, http.StatusCreated, 1, false, false},
+		{"unlimited true", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"unlimited":true}`, http.StatusCreated, 0, true, false},
+		{"max_uses 0 with unlimited true", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"max_uses":0,"unlimited":true}`, http.StatusCreated, 0, true, false},
+		{"max_uses 2 with unlimited true", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"max_uses":2,"unlimited":true}`, http.StatusBadRequest, 0, false, false},
+		{"negative max_uses", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"max_uses":-1}`, http.StatusBadRequest, 0, false, false},
+		{"negative max_uses with unlimited true", `{"scope":["relay:env=prod"],"ttl_seconds":3600,"max_uses":-1,"unlimited":true}`, http.StatusBadRequest, 0, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &countingTokenRepo{Repository: enroll.NewMemoryRepository()}
+			auditor := &fakeAuditor{}
+			d := Deps{Tokens: newTestMinter(t, enroll.NewService(repo)), Audit: auditor, Now: fixedNow}
+			h := newTestHandler(d)
+
+			rec := doRaw(t, h, http.MethodPost, "/api/v1/enrollment-tokens", tc.body)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body = %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+
+			if tc.wantStatus == http.StatusBadRequest {
+				if repo.creates != 0 {
+					t.Errorf("a refused mint stored %d token(s)", repo.creates)
+				}
+				if len(auditor.all()) != 0 {
+					t.Errorf("audit records = %d, want 0 on a rejected mint", len(auditor.all()))
+				}
+				if tc.namesBoth {
+					for _, option := range []string{"max_uses", "unlimited"} {
+						if !strings.Contains(rec.Body.String(), option) {
+							t.Errorf("refusal does not name %q: %s", option, rec.Body.String())
+						}
+					}
+				}
+				return
+			}
+
+			var raw map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if _, ok := raw["unlimited"]; !ok {
+				t.Error("response carries no unlimited field")
+			}
+			var resp mintTokenResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if resp.MaxUses != tc.wantMaxUses {
+				t.Errorf("response max_uses = %d, want %d", resp.MaxUses, tc.wantMaxUses)
+			}
+			if resp.Unlimited != tc.wantUnlimited {
+				t.Errorf("response unlimited = %v, want %v", resp.Unlimited, tc.wantUnlimited)
+			}
+			stored, err := repo.ByID(context.Background(), resp.ID)
+			if err != nil {
+				t.Fatalf("repo.ByID: %v", err)
+			}
+			if stored.MaxUses != tc.wantMaxUses {
+				t.Errorf("stored MaxUses = %d, want %d", stored.MaxUses, tc.wantMaxUses)
 			}
 		})
 	}
@@ -1298,6 +1387,7 @@ func TestMintThenRevokeToken_BothProduceAuditRows(t *testing.T) {
 	mintRec := do(t, h, http.MethodPost, "/api/v1/enrollment-tokens", mintTokenRequest{
 		Scope:      []string{"relay:env=prod"},
 		TTLSeconds: 3600,
+		MaxUses:    1,
 	})
 	if mintRec.Code != http.StatusCreated {
 		t.Fatalf("mint status = %d, want %d; body = %s", mintRec.Code, http.StatusCreated, mintRec.Body.String())

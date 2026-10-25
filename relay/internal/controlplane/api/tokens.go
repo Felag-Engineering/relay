@@ -23,12 +23,13 @@ const maxTTLSeconds = 365 * 24 * 60 * 60
 // bare key and a (possibly empty) value whose every byte is in
 // [A-Za-z0-9._-] (enforced by enroll.Service.Create -> enroll.validateScope,
 // registry.WellFormedLabel, ADR-0006) — this handler never
-// re-implements or loosens that check. MaxUses <= 0 means unlimited
-// (enroll.WithMaxUses's own convention).
+// re-implements or loosens that check. The use limit is required and decided by
+// enroll.UseLimit (EN-31); this handler only passes MaxUses and Unlimited through.
 type mintTokenRequest struct {
 	Scope      []string `json:"scope"`
 	TTLSeconds int64    `json:"ttl_seconds"`
 	MaxUses    int      `json:"max_uses"`
+	Unlimited  bool     `json:"unlimited"`
 }
 
 // mintTokenResponse is the POST /api/v1/enrollment-tokens response body.
@@ -44,11 +45,13 @@ type mintTokenResponse struct {
 	Scope      []string `json:"scope"`
 	ExpiresAt  string   `json:"expires_at"`
 	MaxUses    int      `json:"max_uses"`
+	Unlimited  bool     `json:"unlimited"`
 }
 
 // handleMintToken implements POST /api/v1/enrollment-tokens: mint a scoped
 // Enrollment Token via TokenMinter.Mint, audit the mint (KindTokenMint),
-// and return the plaintext credential exactly once (201).
+// and return the plaintext credential exactly once (201). The mint names its use
+// limit, a positive max_uses or unlimited (EN-31); an invalid one is a 400.
 //
 // **Requires `admin`** (ADR-0032 §5), checked before the body is even
 // decoded. A token's scope becomes the enrolling Node's relay: labels, and
@@ -78,13 +81,12 @@ func handleMintToken(d Deps) http.HandlerFunc {
 		}
 
 		opts := []enroll.Option{enroll.WithCreatedBy(p.Attribution())}
-		if req.MaxUses > 0 {
-			opts = append(opts, enroll.WithMaxUses(req.MaxUses))
-		}
+		limit := enroll.UseLimit{MaxUses: req.MaxUses, Unlimited: req.Unlimited}
 
-		minted, err := d.Tokens.Mint(r.Context(), req.Scope, time.Duration(req.TTLSeconds)*time.Second, opts...)
+		minted, err := d.Tokens.Mint(r.Context(), req.Scope, time.Duration(req.TTLSeconds)*time.Second, limit, opts...)
 		if err != nil {
-			if errors.Is(err, enroll.ErrInvalidScope) || errors.Is(err, enroll.ErrInvalidTTL) {
+			if errors.Is(err, enroll.ErrInvalidScope) || errors.Is(err, enroll.ErrInvalidTTL) ||
+				errors.Is(err, enroll.ErrInvalidUseLimit) {
 				writeProblem(w, http.StatusBadRequest, "invalid enrollment token request", err.Error())
 				return
 			}
@@ -102,6 +104,7 @@ func handleMintToken(d Deps) http.HandlerFunc {
 			Scope:      tok.Scope,
 			ExpiresAt:  tok.ExpiresAt.UTC().Format(time.RFC3339),
 			MaxUses:    tok.MaxUses,
+			Unlimited:  tok.Unlimited(),
 		})
 	}
 }

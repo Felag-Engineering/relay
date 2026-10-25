@@ -39,7 +39,7 @@ import (
 // string. *enroll.Minter satisfies this interface. The handler passes the result
 // through and never assembles enrollment material (invariant 10).
 type TokenMinter interface {
-	Mint(ctx context.Context, scope []string, ttl time.Duration, opts ...enroll.Option) (enroll.Minted, error)
+	Mint(ctx context.Context, scope []string, ttl time.Duration, limit enroll.UseLimit, opts ...enroll.Option) (enroll.Minted, error)
 }
 
 // TokenRevoker revokes an Enrollment Token by id. *revocation.Service

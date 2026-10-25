@@ -33,7 +33,7 @@ func TestEnroll_JoinStringCarriesFingerprintAddressAndToken(t *testing.T) {
 		t.Fatalf("NewMinter: %v", err)
 	}
 
-	m, err := minter.Mint(ctx, testScope, time.Hour)
+	m, err := minter.Mint(ctx, testScope, time.Hour, UseLimit{MaxUses: 1})
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
@@ -162,10 +162,111 @@ func TestMinter_Mint_PassesTokenErrorsThrough(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	if _, err := minter.Mint(ctx, testScope, 0); !errors.Is(err, ErrInvalidTTL) {
+	if _, err := minter.Mint(ctx, testScope, 0, UseLimit{MaxUses: 1}); !errors.Is(err, ErrInvalidTTL) {
 		t.Errorf("zero ttl: err = %v, want ErrInvalidTTL", err)
 	}
-	if _, err := minter.Mint(ctx, nil, time.Hour); !errors.Is(err, ErrInvalidScope) {
+	if _, err := minter.Mint(ctx, nil, time.Hour, UseLimit{MaxUses: 1}); !errors.Is(err, ErrInvalidScope) {
 		t.Errorf("empty scope: err = %v, want ErrInvalidScope", err)
 	}
+}
+
+// countingRepo counts the Create calls that reach storage.
+type countingRepo struct {
+	Repository
+	creates int
+}
+
+func (r *countingRepo) Create(ctx context.Context, t *Token) error {
+	r.creates++
+	return r.Repository.Create(ctx, t)
+}
+
+// Proves EN-31.
+func TestMinter_Mint_UseLimitMustBeNamed(t *testing.T) {
+	ctx := context.Background()
+	newMinter := func(t *testing.T) (*Minter, *countingRepo) {
+		t.Helper()
+		repo := &countingRepo{Repository: NewMemoryRepository()}
+		minter, err := NewMinter(NewService(repo), fixedFingerprint(strings.Repeat("ab", sha256.Size)), "relay.example.com:7654")
+		if err != nil {
+			t.Fatalf("NewMinter: %v", err)
+		}
+		return minter, repo
+	}
+
+	refused := []struct {
+		name  string
+		limit UseLimit
+		want  error
+	}{
+		{"neither named", UseLimit{}, ErrUseLimitMissing},
+		{"max_uses 0 alone", UseLimit{MaxUses: 0}, ErrUseLimitMissing},
+		{"both named", UseLimit{MaxUses: 3, Unlimited: true}, ErrUseLimitConflict},
+		{"negative", UseLimit{MaxUses: -1}, ErrUseLimitNegative},
+		{"negative and unlimited", UseLimit{MaxUses: -1, Unlimited: true}, ErrUseLimitNegative},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			minter, repo := newMinter(t)
+			m, err := minter.Mint(ctx, testScope, time.Hour, tc.limit)
+			if !errors.Is(err, tc.want) {
+				t.Errorf("err = %v, want %v", err, tc.want)
+			}
+			if !errors.Is(err, ErrInvalidUseLimit) {
+				t.Errorf("err = %v, want it to wrap ErrInvalidUseLimit", err)
+			}
+			if m.Token() != nil {
+				t.Errorf("a refused mint returned a token")
+			}
+			if repo.creates != 0 {
+				t.Errorf("a refused mint stored %d token(s)", repo.creates)
+			}
+		})
+	}
+
+	named := []struct {
+		name          string
+		limit         UseLimit
+		opts          []Option
+		wantMaxUses   int
+		wantUnlimited bool
+	}{
+		{"positive max_uses", UseLimit{MaxUses: 3}, nil, 3, false},
+		{"unlimited", UseLimit{Unlimited: true}, nil, 0, true},
+		{"max_uses 0 with unlimited", UseLimit{MaxUses: 0, Unlimited: true}, nil, 0, true},
+		{"the named limit overrides WithMaxUses", UseLimit{MaxUses: 1}, []Option{WithMaxUses(5)}, 1, false},
+	}
+	for _, tc := range named {
+		t.Run(tc.name, func(t *testing.T) {
+			minter, repo := newMinter(t)
+			m, err := minter.Mint(ctx, testScope, time.Hour, tc.limit, tc.opts...)
+			if err != nil {
+				t.Fatalf("Mint: %v", err)
+			}
+			if repo.creates != 1 {
+				t.Errorf("stored %d token(s), want 1", repo.creates)
+			}
+			stored, err := repo.ByID(ctx, m.Token().ID)
+			if err != nil {
+				t.Fatalf("ByID: %v", err)
+			}
+			if stored.MaxUses != tc.wantMaxUses {
+				t.Errorf("stored MaxUses = %d, want %d", stored.MaxUses, tc.wantMaxUses)
+			}
+			if got := m.Token().Unlimited(); got != tc.wantUnlimited {
+				t.Errorf("Unlimited() = %v, want %v", got, tc.wantUnlimited)
+			}
+		})
+	}
+	t.Run("the caller's options slice is not written", func(t *testing.T) {
+		minter, _ := newMinter(t)
+		opts := make([]Option, 1, 4)
+		opts[0] = WithCreatedBy("op")
+		if _, err := minter.Mint(ctx, testScope, time.Hour, UseLimit{Unlimited: true}, opts...); err != nil {
+			t.Fatalf("Mint: %v", err)
+		}
+		if opts[:2][1] != nil {
+			t.Error("Mint wrote into the caller's options backing array")
+		}
+	})
 }

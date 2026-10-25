@@ -40,9 +40,9 @@ func newRecordingMinter(t *testing.T) *recordingMinter {
 	return &recordingMinter{inner: newTestMinter(t, enroll.NewService(enroll.NewMemoryRepository()))}
 }
 
-func (m *recordingMinter) Mint(ctx context.Context, scope []string, ttl time.Duration, opts ...enroll.Option) (enroll.Minted, error) {
+func (m *recordingMinter) Mint(ctx context.Context, scope []string, ttl time.Duration, limit enroll.UseLimit, opts ...enroll.Option) (enroll.Minted, error) {
 	m.calls++
-	return m.inner.Mint(ctx, scope, ttl, opts...)
+	return m.inner.Mint(ctx, scope, ttl, limit, opts...)
 }
 
 // newRoleFixture mounts the full route table behind a real Authenticator that
@@ -98,7 +98,7 @@ func wantRefusal(t *testing.T, rec *httptest.ResponseRecorder, auditor *fakeAudi
 // quarantine and secret distribution will treat as authoritative.
 // Proves EN-1, EN-23.
 func TestMintToken_RequiresAdmin(t *testing.T) {
-	body := mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: 3600}
+	body := mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: 3600, MaxUses: 1}
 
 	for _, role := range []accounts.Role{accounts.RoleViewer, accounts.RoleOperator} {
 		t.Run(string(role)+" is refused", func(t *testing.T) {
@@ -334,7 +334,7 @@ func TestAdministrativeRoutes_RefuseWithoutAGate(t *testing.T) {
 		deps         Deps
 	}{
 		{http.MethodPost, "/api/v1/enrollment-tokens",
-			mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: 3600},
+			mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: 3600, MaxUses: 1},
 			Deps{Tokens: newTestMinter(t, enroll.NewService(enroll.NewMemoryRepository())), Audit: &fakeAuditor{}}},
 		{http.MethodDelete, "/api/v1/enrollment-tokens/tok-1", nil,
 			Deps{TokenRevoker: &fakeTokenRevoker{}, Audit: &fakeAuditor{}}},
