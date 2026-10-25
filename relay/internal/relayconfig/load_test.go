@@ -40,7 +40,9 @@ func TestLoad_UnknownKeyRefused(t *testing.T) {
 	}{
 		{"unknown key in a known section", minimal + "[reach]\nread_cap = 5\n", "line 8: an unrecognised key in [reach]"},
 		{"unknown section", minimal + "[listen]\naddr = 1\n", "line 7: an unrecognised key is"},
-		{"root key named like a retired one", "addr = \":7654\"\n" + minimal, "line 1"},
+		{"root key named like a retired one", "addr = \":7654\"\n" + minimal, "line 1: an unrecognised key"},
+		{"no Console execution key", minimal + "[console]\nexecution = true\n", "line 8: an unrecognised key in [console]"},
+		{"no root console_execution key", "console_execution = true\n" + minimal, "line 1: an unrecognised key"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

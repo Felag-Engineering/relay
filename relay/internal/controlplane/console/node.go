@@ -32,7 +32,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Felag-Engineering/relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/relay/relay/internal/audit"
 	"github.com/Felag-Engineering/relay/relay/internal/capability"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
@@ -150,17 +149,6 @@ type nodeView struct {
 	// offline, and the snapshot refreshes on (re)connect and at no other time.
 	PolicyStale bool
 
-	// RunHref is the composer (/console/run, spec 05), drawn only where the
-	// Relay has execution on AND the reader is an operator or above. Absent,
-	// never disabled (ADR-0026 decision 5): a greyed-out control gives away
-	// the property the console_execution flag exists to preserve.
-	//
-	// In v0.6.0 this is reachable in tests only. The composition root
-	// hard-codes Execution false (cmd/relay/control_surfaces.go) until the
-	// composer exists, so its absence in a running Relay is the design and not
-	// a bug.
-	RunHref string
-
 	// The revocation record, read from the trail. RevokedBy is who did it;
 	// RevocationRecorded distinguishes "the trail has no record" from "the
 	// record says nothing", because the registry retains RevokedAt whether or
@@ -261,7 +249,7 @@ func handleNode(d Deps) http.HandlerFunc {
 			readFailed(w, err, "the pinned Nodes' registry records")
 			return
 		}
-		v := buildNodeView(d, r, detail, p.Role, pins, resolve)
+		v := buildNodeView(d, r, detail, pins, resolve)
 		if refusedUnaudited(w, lane, "this Node's registry record") {
 			return
 		}
@@ -310,7 +298,7 @@ func pinsResolved(ctx context.Context, d Deps, caller capability.Principal, self
 	}, nil
 }
 
-func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role accounts.Role, pins []string, resolve pinResolver) nodeView {
+func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, pins []string, resolve pinResolver) nodeView {
 	n := detail.Node
 	in := nodestate.Input{Node: n, Now: d.now(), CertExpiringWithin: detail.Eval.CertExpiringWithin}
 
@@ -338,12 +326,6 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 	}
 	v.applyCertProvenance(d, n)
 	v.applyFingerprintLinks(in)
-
-	if role.AtLeast(accounts.RoleOperator) {
-		if d.Execution {
-			v.RunHref = "/console/run"
-		}
-	}
 
 	v.applyPins(n.NodeID, pins, resolve)
 
@@ -621,7 +603,6 @@ var nodeTmpl = newScreen("node", `
   {{if .Hostname}}<span class="dim">node id</span> <code class="nodeid" title="The identity this Node's certificate proves.">{{.ID}}</code>{{end}}
   <span class="seen" title="{{.LastSeenAbs}}">{{if .Connected}}connected{{else}}last seen {{.LastSeen}} ago{{end}}</span>
   {{if .Revoked}}<span class="chip outcome" data-outcome="cancelled">revoked {{.RevokedAt}}</span>{{end}}
-  {{with .RunHref}}<a class="act" href="{{.}}">Run here</a>{{end}}
   {{if .Pinned}}<span class="act dim">Pinned to compare</span>
   {{else}}{{with .PinHref}}<a class="act" href="{{.}}">Pin to compare</a>{{end}}{{end}}
 </div>

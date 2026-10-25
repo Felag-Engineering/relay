@@ -155,7 +155,7 @@ func TestNode_IsStructurallyReadOnly(t *testing.T) {
 		RawExecEnabled:    true,
 		AllowedOperations: []string{"service.restart"},
 	}, testNow.Add(-time.Minute))})
-	h := newTestHandler(withExecution(d, true), accounts.RoleAdmin)
+	h := newTestHandler(d, accounts.RoleAdmin)
 
 	for _, path := range []string{
 		"/console/nodes/node-web-1?pin=node-web-1,node-web-2",
@@ -193,7 +193,7 @@ func TestNode_IsStructurallyReadOnly(t *testing.T) {
 // TestNode_NoRouteUnderThisScreenMutates is the route half. It fails the day
 // someone adds a POST here, not the day someone notices one.
 func TestNode_NoRouteUnderThisScreenMutates(t *testing.T) {
-	for _, r := range Routes(withExecution(renderableDeps(), true)) {
+	for _, r := range Routes(renderableDeps()) {
 		if !strings.HasPrefix(r.Path, "/console/nodes/") && r.Path != "/console/compare" {
 			continue
 		}
@@ -288,28 +288,23 @@ func TestNode_LabelChipTooltipsNameEachNamespacesWriter(t *testing.T) {
 	}
 }
 
-// TestNode_RunHereFollowsTheExecutionFlagAndTheRole covers both of spec 02's
-// gating states at once: `viewer` gets no "Run here", and neither does anyone
-// when console_execution is off. Absent, never disabled — a greyed-out control
-// gives away the property the flag exists to preserve.
-func TestNode_RunHereFollowsTheExecutionFlagAndTheRole(t *testing.T) {
-	cases := []struct {
-		name      string
-		execution bool
-		role      accounts.Role
-		want      bool
-	}{
-		{"execution off, admin", false, accounts.RoleAdmin, false},
-		{"execution on, viewer", true, accounts.RoleViewer, false},
-		{"execution on, operator", true, accounts.RoleOperator, true},
-		{"execution on, admin", true, accounts.RoleAdmin, true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			h := newTestHandler(withExecution(fleetFixture(), c.execution), c.role)
-			content := contentOf(get(t, h, "/console/nodes/node-web-1").Body.String())
-			if got := strings.Contains(content, ">Run here</a>"); got != c.want {
-				t.Errorf("Run here present = %v, want %v", got, c.want)
+// TestNode_NoRunHereAtAnyRole is 02-node-detail.md: there is no "Run here" at
+// any role, because the Console runs no command (ADR-0052). The control is
+// absent, never disabled.
+func TestNode_NoRunHereAtAnyRole(t *testing.T) {
+	for _, role := range []accounts.Role{accounts.RoleViewer, accounts.RoleOperator, accounts.RoleAdmin} {
+		t.Run(string(role), func(t *testing.T) {
+			h := newTestHandler(fleetFixture(), role)
+			rec := get(t, h, "/console/nodes/node-web-1")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("node detail = %d, want 200", rec.Code)
+			}
+			content := contentOf(rec.Body.String())
+			if strings.Contains(content, ">Run here</a>") {
+				t.Error("the node detail renders a Run here control")
+			}
+			if strings.Contains(content, `href="/console/run`) {
+				t.Error("the node detail links to /console/run")
 			}
 		})
 	}

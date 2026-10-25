@@ -150,9 +150,10 @@ func renderScreen(w http.ResponseWriter, p Page, tmpl *template.Template, data a
 //
 // It echoes NOTHING caller-supplied — no request path, no query, no header —
 // so a refused, in-role route and a path that was never mounted at all render
-// the SAME bytes. That byte-identity is the property ADR-0026 decision 5
-// depends on: a viewer must not be able to tell "this route exists but I lack
-// the role" from "this route does not exist" by diffing two 404 pages.
+// the SAME bytes. That byte-identity is the property ADR-0009's
+// absent-beats-forbidden depends on: a viewer must not be able to tell "this
+// route exists but I lack the role" from "this route does not exist" by
+// diffing two 404 pages.
 var notFoundTmpl = newScreen("notfound", `
 <div class="placeholder">
   <p>Nothing in the Console lives at this address.</p>

@@ -277,9 +277,9 @@ func (metricsSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 }
 
 // consoleSurface mounts the Admin Console (ADR-0009) onto the same mux — no
-// new listener, no new auth (invariant 10). The Console is internal-only and
-// shares the control-plane listener's exposure posture, which is one of the
-// stacked mitigations that made ADR-0026's execution surface acceptable.
+// new listener, no new auth (invariant 10). The Console shares the
+// control-plane listener's exposure posture: internal-only, as ADR-0009
+// requires.
 //
 // It mounts the route table inside console.Secure (the content security
 // policy, the companion headers, CSRF on every unsafe method) and hands that
@@ -295,12 +295,8 @@ type consoleSurface struct{}
 func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	consoleMux := http.NewServeMux()
 	console.Register(consoleMux, console.Deps{
-		Auth:   d.consoleAuth,
-		Logger: d.logger,
-		// Execution is v0.7.0 (spec 05). Until it lands there is
-		// no execution route for console_execution to gate, and shipping the
-		// flag ahead of the surface would be a knob that turns nothing off.
-		Execution:       false,
+		Auth:            d.consoleAuth,
+		Logger:          d.logger,
 		OAuthConfigured: d.oauthConfigured,
 		// Every registry and Policy-view read is Deps.Queries (QRY-28) —
 		// there is no separate Fleet/Policy seam. There is
@@ -344,9 +340,8 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// MCP call — so no adapter is built for it; the role floor is
 		// operator, the scope beyond it differs by Account kind (human: any
 		// Job, machine: only a Job it requested), and both that and
-		// the audit row live in the capability layer, not here. Execution
-		// stays false, unchanged: Cancel cannot run anything, only ask
-		// something already running to stop.
+		// the audit row live in the capability layer, not here. Cancel
+		// cannot run anything; it only asks something already running to stop.
 		Cancel: d.execution,
 		// AccountAdmin: the Console's second write seam. d.accountAdmin
 		// already carries all five verbs — CreateAccount,
@@ -356,8 +351,7 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// audit rows are the capability layer's. d.consoleAuth is already
 		// wired above as Auth and d.accountAdmin as Accounts, so the per-action
 		// step-up and the role route's current-role read need no new wiring
-		// either. Execution stays false, unchanged: none of these five
-		// composes or dispatches anything.
+		// either. None of these five composes or dispatches anything.
 		AccountAdmin: d.accountAdmin,
 	})
 	mux.Handle("/console/", console.Secure(consoleMux, d.logger))

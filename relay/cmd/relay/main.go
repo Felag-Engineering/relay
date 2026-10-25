@@ -868,9 +868,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 		surfaces := defaultControlSurfaces()
 		if cfg.ConsoleEnabled {
 			// Appended only when enabled, so with the Console off there is no
-			// /console/ route on the listener at all. Absent, not refusing —
-			// the same posture ADR-0026 requires of console_execution, applied
-			// one level up.
+			// /console/ route on the listener at all. Absent, not refusing (ADR-0009).
 			surfaces = append(surfaces, consoleSurface{})
 		}
 		for _, s := range surfaces {

@@ -6,14 +6,10 @@ package console
 //
 // This was the Console's FIRST route to reach the capability layer's WRITE
 // path. Every OTHER route in this package (seams.go's header) only ever
-// reads. Cancel is not an execution route, so it is not behind
-// console_execution (see console.go's Routes and control_surfaces.go's
-// wiring): ADR-0026 decision 5 scopes that flag to the composer and to
-// dispatch, because its reason is the browser-borne fleet-RCE class, and
-// Cancel cannot run anything — it can only ask something already running to
-// stop. Cancel only ever asks: undispatched Tasks are marked cancelled,
-// in-flight ones are asked over their Tunnels, and the request itself
-// changes no outcome that is already true.
+// reads. Cancel is not an execution route: it cannot run anything — it can
+// only ask something already running to stop. Cancel only ever asks:
+// undispatched Tasks are marked cancelled, in-flight ones are asked over their
+// Tunnels, and the request itself changes no outcome that is already true.
 //
 // # Import-scope
 //

@@ -15,7 +15,7 @@ package console
 //
 // A viewer gets the byte-identical 404 [gated] gives every other constrained
 // route, never a 403: a 403 would confirm the screen exists, which is itself
-// the disclosure (ADR-0026 decision 5, ADR-0009's absent-beats-forbidden).
+// the disclosure (ADR-0009's absent-beats-forbidden).
 // Nothing in this file compares a role. If a read is refused, what renders is
 // the capability layer's own refusal text.
 //

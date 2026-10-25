@@ -7,17 +7,15 @@
 // Invariant 10 says there is one capability layer and three thin surfaces.
 // This package is the third. It holds no dispatch and no Relay configuration —
 // no_dispatch_test.go enforces the first structurally, in the same shape as
-// the Control API's and the MCP surface's guards, because a new execution
-// surface is exactly when the temptation to shortcut appears (ADR-0026
-// decision 1).
+// the Control API's and the MCP surface's guards, and covers this package with
+// no exception, because no Console route dispatches (ADR-0052 decision 1).
 //
 // This package does hold one role comparison: [Route.ReachableBy], applied at
 // mount time by [gated]. It is SUBTRACTIVE ONLY — it can refuse to mount a
 // route below a session's role, and it can never admit a request the
 // capability layer's RoleGate would refuse, because every admitted request
 // still reaches that RoleGate unchanged when its handler dispatches. It is
-// mount-time absence, the same lever console_execution already is (ADR-0026
-// decision 5), generalised from a config flag to a role; it is not
+// mount-time absence (ADR-0009's absent-beats-forbidden); it is not
 // authorization and not a second control path. See Route.MinRole.
 //
 // The absence has to hold for every METHOD, not only the one a route
@@ -28,10 +26,10 @@
 //
 // # Why this package's security middleware is not hygiene
 //
-// ADR-0026 gave the Console an execution surface, which moved browser security
-// onto the critical path: CSP and CSRF here are controls with a fleet-RCE
-// blast radius, because a forged click would counterfeit the strongest
-// per-action credential in the system (the step-up apply). See security.go.
+// CSP and CSRF here are controls, not hygiene, because the Console grants
+// roles and mints API Tokens, and a minted token reaches the Control API: a
+// forged click would counterfeit a human Account's own privilege-granting act
+// and the step-up that guards it (11-console-shell.md). See security.go.
 //
 // # Specification
 //
@@ -56,23 +54,14 @@ import (
 // Deps is everything the Console needs from the rest of the Relay.
 //
 // As with the Control API's Deps, every field here is a purpose-built seam over
-// runtime-object machinery — never Relay configuration. The two fields that
-// look like configuration, Execution and OAuthConfigured, are not settable
-// from here or from any API: each mirrors a startup value the composition
-// root sets, and this package can only be told what it is.
+// runtime-object machinery — never Relay configuration. The one field that
+// looks like configuration, OAuthConfigured, is not settable from here or
+// from any API: it mirrors a startup value the composition root sets, and this
+// package can only be told what it is.
 type Deps struct {
 	// Logger is where the Console's operational errors go; nil means
 	// slog.Default(). Wiring, not configuration.
 	Logger *slog.Logger
-
-	// Execution mirrors the console_execution floor setting (ADR-0026
-	// decision 5). When false the execution routes are NOT MOUNTED and the
-	// composer is not rendered — an absent capability, not an RBAC refusal.
-	//
-	// This is load-bearing and easy to get wrong: shipping a disabled or
-	// greyed-out composer gives away the exact property the flag exists to
-	// preserve. ADR-0009's insight was that absent beats forbidden.
-	Execution bool
 
 	// OAuthConfigured mirrors whether this Relay accepts OAuth bearer tokens
 	// (ADR-0024). It is presentation only: Access says OAuth sign-ins are not
@@ -225,9 +214,7 @@ type Route struct {
 	// MCP and the Control API (ADR-0026 decision 4): every route this field
 	// admits still passes RoleGate when its handler calls one. A surface that
 	// gated Raw Exec itself would be a second control path — this field never
-	// does that; it only decides whether the request arrives at all, the same
-	// mount-time-absence lever console_execution already is (ADR-0026 decision
-	// 5), generalised from a config flag to a role.
+	// does that; it only decides whether the request arrives at all.
 	MinRole accounts.Role
 
 	Handler func(Deps) http.HandlerFunc
@@ -259,21 +246,16 @@ func (r Route) constrainsReach() bool { return !r.ReachableBy(accounts.RoleViewe
 // any one SESSION can reach. [routesFor] narrows this slice to what a given
 // role may reach; that is what Nav and Register's per-request gate consume.
 //
-// With d.Execution false the execution routes are absent from the returned
-// slice entirely, so they are unmounted, unreachable and (because the
-// navigation is a projection of this slice) unadvertised, by construction
-// rather than by three separate pieces of discipline.
+// No field of d adds or removes a route: d is what every route's Handler is
+// bound to, and the table itself is fixed.
 func Routes(d Deps) []Route {
-	rs := []Route{
+	return []Route{
 		// "{$}" is an EXACT match. Without it, net/http's subtree rule makes
-		// "/console/" match every unclaimed path beneath it — which quietly
-		// undid the property console_execution exists to provide: with
-		// execution off, /console/run fell through to this handler and
-		// answered 200, so the composer was shadowed rather than absent.
-		// TestConsole_ExecutionOffMakesTheComposerAbsent caught it. Register
-		// mounts its own "/console/" catch-all (method-less) for every path
-		// this table does not claim; {$} is still required so an unclaimed
-		// path reaches THAT catch-all's styled 404 rather than this handler.
+		// "/console/" match every unclaimed path beneath it, so an unclaimed
+		// path would answer with the Fleet screen. Register mounts its own
+		// "/console/" catch-all (method-less) for every path this table does
+		// not claim; {$} is still required so an unclaimed path reaches THAT
+		// catch-all's styled 404 rather than this handler.
 		{"GET", "/console/{$}", NavEntry{Group: NavObserve, Label: "Fleet", Order: 10, Under: []string{"/console/nodes", "/console/compare"}}, accounts.RoleViewer, handleFleet},
 		{"GET", "/console/nodes/{node_id}", NavEntry{}, accounts.RoleViewer, handleNode},
 		{"GET", "/console/activity", NavEntry{Group: NavObserve, Label: "Activity", Order: 30, Under: []string{"/console/jobs"}}, accounts.RoleViewer, handleActivity},
@@ -289,8 +271,8 @@ func Routes(d Deps) []Route {
 		// menu, and marks Fleet current (Fleet's Under).
 		{"GET", "/console/compare", NavEntry{}, accounts.RoleViewer, handleCompare},
 
-		// Policy Author (spec 06), Add Nodes (spec 09) and Incident (spec 16)
-		// are v0.7.0 screens, not built yet. They do
+		// Add Nodes (spec 09) is not built; Policy Author and the Incident
+		// screen are cut from the MVP (docs/design/console/README.md). They do
 		// not get a placeholder row: a v0.6.0 nav must not advertise a route
 		// that answers "not built yet", and Register needs no
 		// mounted-but-refusing row to keep a session from reaching one — the
@@ -365,11 +347,6 @@ func Routes(d Deps) []Route {
 		// own floor and widens nothing. None is a navigation destination:
 		// they are form targets on the screen above.
 		//
-		// NOT gated behind d.Execution, for the reason cancel.go
-		// already makes: ADR-0026 decision 5 scopes that flag
-		// to the composer and to dispatch, and none of these five composes or
-		// dispatches anything.
-		//
 		// THESE FIVE PATHS ARE FORCED, and were driven through a real
 		// net/http.ServeMux — with the bare-path second registration Register
 		// mounts for every constrainsReach() route — rather than reasoned
@@ -432,37 +409,19 @@ func Routes(d Deps) []Route {
 		//
 		// Not navigation destinations: signing in is not somewhere an
 		// operator navigates to, and the sign-out control belongs beside the
-		// account chip rather than in the three groups, whose grouping is the
+		// account chip rather than in the two groups, whose grouping is the
 		// teaching (nav.go).
 		{"GET", LoginPath, NavEntry{}, accounts.RoleViewer, handleLoginForm},
 		{"POST", LoginPath, NavEntry{}, accounts.RoleViewer, handleLoginSubmit},
 		{"POST", LogoutPath, NavEntry{}, accounts.RoleViewer, handleLogout},
 
-		// Cancel: one of the Console's write routes. NOT
-		// gated behind d.Execution — ADR-0026 decision 5 scopes that flag to
-		// the composer and to dispatch, and Cancel cannot run anything, only
-		// ask something already running to stop. MinRole here is mount-time
-		// absence for a viewer (a 404, the same "absent beats forbidden"
-		// every other MinRole gives); the capability layer's RoleGate,
-		// reached inside handleCancelJob, is the authority.
+		// Cancel: one of the Console's write routes. Cancel cannot run
+		// anything, only ask something already running to stop. MinRole here
+		// is mount-time absence for a viewer (a 404, the same "absent beats
+		// forbidden" every other MinRole gives); the capability layer's
+		// RoleGate, reached inside handleCancelJob, is the authority.
 		{"POST", "/console/jobs/{job_id}/cancel", NavEntry{}, accounts.RoleOperator, handleCancelJob},
 	}
-
-	// This placeholder stays mounted: it is only ever appended when d.Execution is true, the
-	// composition root hard-codes Execution:false (control_surfaces.go), so it
-	// is not mounted in any shipped v0.6.0 configuration and is not in a
-	// v0.6.0 nav. It is also the ONLY fixture behind
-	// TestConsole_ExecutionOffMakesTheComposerAbsent, the ADR-0026 decision-5
-	// regression guard — removing it would leave that guard with nothing to
-	// guard.
-	if d.Execution {
-		rs = append(rs, Route{
-			"GET", "/console/run",
-			NavEntry{Group: NavAct, Label: "Run", Order: 10}, accounts.RoleOperator,
-			placeholder("Run", "05-composer-and-preflight.md"),
-		})
-	}
-	return rs
 }
 
 // SessionScope reports whether r targets the Console — the surface a Console
@@ -554,8 +513,9 @@ func routesFor(d Deps, role accounts.Role) []Route {
 // accounts.Role and resolveEventKinds (events.go) already rely on.
 //
 // gated alone only protects r's own method-specific pattern
-// ("GET /console/run"). It does not by itself make a gated route
-// method-proof — see [methodMismatch], which Register mounts alongside it.
+// ("POST /console/jobs/{job_id}/cancel"). It does not by itself make a gated
+// route method-proof — see [methodMismatch], which Register mounts alongside
+// it.
 func gated(r Route, h http.HandlerFunc, notFound http.HandlerFunc) http.HandlerFunc {
 	if !r.constrainsReach() {
 		return h

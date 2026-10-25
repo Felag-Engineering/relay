@@ -35,7 +35,7 @@ func TestRefresh_ActivityOffersAPlainRefresh(t *testing.T) {
 // TestRefresh_NoScreenReloadsItselfOnATimer: no rendered screen carries a
 // meta refresh, and the refresh parameter that used to turn one on is gone.
 func TestRefresh_NoScreenReloadsItselfOnATimer(t *testing.T) {
-	d := withExecution(sweepFixture(), true)
+	d := sweepFixture()
 	h := newTestHandler(d, accounts.RoleAdmin)
 	for _, path := range walkableScreens(routesFor(d, accounts.RoleAdmin), fixtureIDs) {
 		sep := "?"

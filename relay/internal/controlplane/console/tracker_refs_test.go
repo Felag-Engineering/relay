@@ -41,7 +41,7 @@ func assertNoTrackerRef(t *testing.T, path, body string) {
 }
 
 func TestConsole_NoRenderedScreenCarriesATrackerReference(t *testing.T) {
-	d := withExecution(sweepFixture(), true)
+	d := sweepFixture()
 	h := newTestHandler(d, accounts.RoleAdmin)
 
 	paths := walkableScreens(routesFor(d, accounts.RoleAdmin), fixtureIDs)

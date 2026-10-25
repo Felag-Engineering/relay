@@ -44,8 +44,7 @@ import (
 // screens that are least likely to be looked at on day one, which is exactly
 // why this is a sweep and not a per-screen assertion.
 func TestDayOne_NoScreenRendersAZeroedStatisticOnAFreshRelay(t *testing.T) {
-	// Execution on, so the sweep covers every route this process can mount.
-	d := withExecution(dayOneDeps(), true)
+	d := dayOneDeps()
 	h := newTestHandler(d, accounts.RoleAdmin)
 
 	// No substitutions: a parameterised route names one object, and an empty

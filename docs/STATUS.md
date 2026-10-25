@@ -33,7 +33,7 @@ A cell is also `partial` when a "Designed, not built" item on that surface is un
 
 | Capability | Spec | MCP | Control API | Admin Console | Notes |
 |---|---|---|---|---|---|
-| Execution | [execution.md](specs/execution.md) | partial | partial | partial | MCP `run_operation`, `raw_exec`, `get_job`, `cancel_job`. MCP dispatch returns the Job once its Tasks are persisted (`job_status` `running`; poll `get_job`, or pass `wait_seconds` up to 300 to block); the idempotency key is implemented on MCP (`idempotency_key`, 24h per Account) and not on the Control API, whose `Idempotency-Key` and non-blocking return are not built. Console has Job cancel and executes nothing: the Console watches and does not execute (ADR-0052). The dormant `/console/run` placeholder and its `console_execution` flag are still in the code, and ADR-0052 deletes them. |
+| Execution | [execution.md](specs/execution.md) | partial | partial | partial | MCP `run_operation`, `raw_exec`, `get_job`, `cancel_job`. MCP dispatch returns the Job once its Tasks are persisted (`job_status` `running`; poll `get_job`, or pass `wait_seconds` up to 300 to block); the idempotency key is implemented on MCP (`idempotency_key`, 24h per Account) and not on the Control API, whose `Idempotency-Key` and non-blocking return are not built. Console has Job cancel and executes nothing: the Console watches and does not execute (ADR-0052). |
 | Operations and Templates | [operations-and-templates.md](specs/operations-and-templates.md) | partial | built | n/a | MCP `list_operations` takes one optional `node_id`, not a Selector (QRY-25, designed), and `run_operation`; Control API dispatches by name and has no vocabulary-listing route. The Console dispatches nothing (ADR-0052). Daemon: Native executors, Template renderer, `relay-daemon policy check`. |
 | Selectors and Labels | [selectors-and-labels.md](specs/selectors-and-labels.md) | partial | partial | partial | Selectors resolve on MCP execution tools, the Control API execution routes and the Console fleet filter; Control API Node routes do not take a Selector. `tag:` writes are designed for the MVP (ADR-0050): a human Account at `operator` or above, on Console Node detail, in bulk from the Fleet view, and on the Control API; no MCP tool writes one. Today a `tag:` term is refused at parse (invariant 7 gap). |
 | Policy preflight | [policy-preflight.md](specs/policy-preflight.md) | built | built | partial | `plan: true` on `run_operation` and `raw_exec`; `"plan": true` on `POST /api/v1/operations` and `/raw-exec`. Console renders preflight audit records only; it sends no preflight of its own, because the Console does not execute (ADR-0052). |
@@ -66,13 +66,12 @@ everything here is proven by the automated suites and the Docker dev fleet only.
 
 ## Known deviations
 
-Mirrors AGENTS.md's gap table as read on 2026-10-19. ADR-0050 closes row 7's `tag:` half,
-and ADR-0052 row 10, once their code lands.
+Mirrors AGENTS.md's gap table as read on 2026-10-24. ADR-0050 closes row 7's `tag:` half
+once its code lands.
 
 | Invariant | Clause | Issue |
 |---|---|---|
 | 7 | `tag:`'s writer, and `relay:`'s | [#430](https://github.com/Felag-Engineering/relay/issues/430) |
-| 10 | Console execution | [#438](https://github.com/Felag-Engineering/relay/issues/438) |
 
 What each gap means is in
 [AGENTS.md — Known gaps between these invariants and the code](../AGENTS.md#known-gaps-between-these-invariants-and-the-code);

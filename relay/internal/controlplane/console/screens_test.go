@@ -602,7 +602,7 @@ func TestScreens_UnwiredSeamRefusesRatherThanRenderingEmpty(t *testing.T) {
 // so an `hx-on:` attribute — which IS script — would be silently dead rather
 // than merely non-conforming.
 func TestScreens_NoInlineScriptSurvivesAnywhere(t *testing.T) {
-	d := withExecution(sweepFixture(), true)
+	d := sweepFixture()
 	d.Approvals = &fakeApprovals{pending: []approval.Request{{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}}}}
 	d.Audit = fakeAudit{records: []audit.Record{{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow}}}
 	// Job detail reads through the capability layer's query lane and refuses

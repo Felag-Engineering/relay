@@ -49,10 +49,8 @@ var preflightDetectorRegex = regexp.MustCompile(`(?i)preflight|preview|dry.?run|
 // second registrar the way it sees every route inside Routes() itself.
 //
 // The Console is covered by its own mirror below
-// (TestConsoleServesNoSeparatePreflightRoute), not skipped: PF-21 previews
-// before an apply on the composer's own route, and a SEPARATE Console
-// preflight route is exactly the shape PF-1 forbids — so the guard
-// constrains what PF-21 may build rather than blocking it.
+// (TestConsoleServesNoSeparatePreflightRoute), not skipped: any Console route
+// added later lands under that guard.
 func TestNoSeparatePreflightRouteIsServed(t *testing.T) {
 	routes := Routes()
 	if len(routes) == 0 {
@@ -145,19 +143,16 @@ func TestRunOperationAndRawExecShareOnePlanFlag(t *testing.T) {
 
 // TestConsoleServesNoSeparatePreflightRoute is
 // TestNoSeparatePreflightRouteIsServed's mirror over the Console's own route
-// table (security review, cycle 2, SR3), built with Execution: true so the
-// composer route (/console/run, mounted only when console_execution is on)
-// is IN this guard's scope rather than absent from it — the placeholder it
-// serves today is what PF-21's real composer replaces, and a separate
-// Console preflight route would be exactly the shape PF-1 forbids. This is
-// a mirror, not a duplicate: package api's guard above cannot see this
-// table (the Console is a different package with its own Routes()), and
-// console.Routes(Deps{Execution: true}) is already a lightweight, no-fixture
-// call used the same way elsewhere in that package's own tests.
+// table (security review, cycle 2, SR3). A separate Console preflight route
+// would be exactly the shape PF-1 forbids, and any Console route added later
+// lands under this guard. This is a mirror, not a duplicate: package api's
+// guard above cannot see this table (the Console is a different package with
+// its own Routes()), and console.Routes(Deps{}) is already a lightweight,
+// no-fixture call used the same way elsewhere in that package's own tests.
 func TestConsoleServesNoSeparatePreflightRoute(t *testing.T) {
-	routes := console.Routes(console.Deps{Execution: true})
+	routes := console.Routes(console.Deps{})
 	if len(routes) == 0 {
-		t.Fatal("console.Routes(Deps{Execution: true}) returned zero routes — this guard has nothing to check")
+		t.Fatal("console.Routes(Deps{}) returned zero routes — this guard has nothing to check")
 	}
 
 	seen := make(map[string]bool, len(routes))
@@ -173,11 +168,9 @@ func TestConsoleServesNoSeparatePreflightRoute(t *testing.T) {
 		}
 	}
 
-	// The exact set of console.Route.Pattern() values served today with
-	// Execution on. Any addition must be named here and reviewed against
-	// PF-1 — exactly the discipline the Control API's route set above
-	// carries, so the composer PF-21 will build lands under this guard
-	// rather than beside it.
+	// The exact set of console.Route.Pattern() values served today. Any
+	// addition must be named here and reviewed against PF-1, so any Console
+	// route added later lands under this guard rather than beside it.
 	want := map[string]bool{
 		"GET /console/{$}":             true,
 		"GET /console/nodes/{node_id}": true,
@@ -214,15 +207,10 @@ func TestConsoleServesNoSeparatePreflightRoute(t *testing.T) {
 		"POST " + console.LoginPath:                                   true,
 		"POST " + console.LogoutPath:                                  true,
 		"POST /console/jobs/{job_id}/cancel":                          true,
-		// The one route this guard exists to constrain: the composer PF-21
-		// describes, mounted only with Execution on. It is a placeholder
-		// today (#438, the console-execution gap), not a preflight route —
-		// PF-21 previews and applies through THIS route, never a second one.
-		"GET /console/run": true,
 	}
 
 	if !reflect.DeepEqual(seen, want) {
-		t.Errorf("console.Routes(Deps{Execution: true}) pattern set changed:\n  got:  %v\n  want: %v\n"+
+		t.Errorf("console.Routes(Deps{}) pattern set changed:\n  got:  %v\n  want: %v\n"+
 			"any addition must be named here and reviewed against PF-1 before this set is updated", seen, want)
 	}
 }

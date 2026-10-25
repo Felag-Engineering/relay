@@ -22,11 +22,9 @@ import (
 // browser cookie is a Control API credential — which, on POST
 // /api/v1/raw-exec, is a fleet-wide arbitrary-command credential.
 
-// Every route this process can mount is inside the scope — including the ones
-// that only exist with execution enabled, which is what keeps v0.7.0's
-// composer (ADR-0026) reachable by a path-scoped cookie.
+// Every route this process can mount is inside the scope.
 func TestSessionScope_CoversEveryMountedRoute(t *testing.T) {
-	for _, r := range Routes(Deps{Execution: true}) {
+	for _, r := range Routes(Deps{}) {
 		// Link() strips ServeMux's exact-match marker; the remaining wildcard
 		// segments are literal enough for a prefix predicate.
 		target := r.Link()

@@ -362,7 +362,7 @@ func assertCSPClean(t *testing.T, where, body string) {
 // exemptions are spelled out as literals below instead, so this asserts the
 // skip list against the ROUTE TABLE.
 func TestConsole_EveryGetRouteIsSweptForCSP(t *testing.T) {
-	d := withExecution(sweepFixture(), true)
+	d := sweepFixture()
 	d.Events = newFakeEvents()
 	d.Trust = fakeTrust{ca: testCAFingerprint, server: testServerFingerprint}
 
@@ -436,7 +436,7 @@ func TestConsole_EveryGetRouteIsSweptForCSP(t *testing.T) {
 // Derived from the route table, so a screen added later is covered without
 // anyone remembering to add it — and so is any script it loads.
 func TestConsole_EveryScriptAScreenLoadsIsActuallyServed(t *testing.T) {
-	d := withExecution(fleetFixture(), true)
+	d := fleetFixture()
 	// Both live screens mount scripts only when the event seam is wired, so
 	// an unwired sweep would walk right past the thing this test is for.
 	d.Events = newFakeEvents()
