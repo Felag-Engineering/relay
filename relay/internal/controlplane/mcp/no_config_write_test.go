@@ -59,6 +59,26 @@ var toolWrites = map[string]string{
 	"approve_request": "approval Request",
 }
 
+// TestMCP_NoToolWritesATag is ADR-0050 decision 2 for MCP: only a human Account
+// writes a tag, so no tool does. No registered tool is named for a tag, and no
+// tool is filed as writing one.
+func TestMCP_NoToolWritesATag(t *testing.T) {
+	live := liveRegisteredToolNames(t)
+	if len(live) == 0 {
+		t.Fatal("liveRegisteredToolNames reported no tools; the check proved nothing")
+	}
+	for name := range live {
+		if strings.Contains(strings.ToLower(name), "tag") {
+			t.Errorf("a live tool is named %q; no MCP tool writes a tag (ADR-0050)", name)
+		}
+	}
+	for name, writes := range toolWrites {
+		if strings.Contains(strings.ToLower(writes), "tag") || strings.Contains(strings.ToLower(name), "tag") {
+			t.Errorf("toolWrites files %q under %q; no MCP tool writes a tag (ADR-0050)", name, writes)
+		}
+	}
+}
+
 // TestNoToolWritesConfiguration is RC-11 for MCP: no tool writes Relay
 // configuration. See the header above for how the absence is asserted.
 func TestNoToolWritesConfiguration(t *testing.T) {

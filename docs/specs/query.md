@@ -1,6 +1,6 @@
 # Query
 
-**Status:** designed, not built, as of `2026-10-18`.
+**Status:** designed, not built, as of `2026-10-25`.
 **Claim prefix:** `QRY`
 
 ## Purpose
@@ -59,6 +59,17 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
 - **QRY-6** `describe_node` and `list_operations(node_id)` distinguish an absent
   template-vocabulary report from an empty reported vocabulary: a missing report is not
   evidence that a Node has no Template Operations.
+
+- **QRY-40** A Node read returns Relay's recorded registry state: Node ID; separate `node:`,
+  `relay:` and `tag:` Label maps, the last holding the Node's Tags; self-reported Facts; connection
+  and revocation state; the Policy fingerprint and the template-set fingerprint; daemon version and
+  `outdated` (a field on the Control API, a `state:` Label on MCP); recorded certificate provenance
+  when it exists; and `state:` Labels evaluated at Selector-resolution time, rendered in Selector
+  syntax, never stored. Replaces QRY-2 when promoted.
+- **QRY-41** `list_nodes` accepts an empty Selector or one in the `node:`, `relay:`, `tag:` and
+  `state:` namespaces, resolves it against the registry at one evaluation instant, and returns the
+  matches in Node-ID order with `state:` Labels from that same instant. Replaces QRY-3 when
+  promoted.
 
 ### Policy view
 
@@ -126,6 +137,9 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   vocabulary is refused rather than treated as an empty match. A `tag:` term is refused with a
   recognisable sentinel, because a successful empty response would falsely assert that no Node
   matched (#430).
+- **QRY-42** A malformed Selector, a bare Label key, or a `state:` key outside the closed vocabulary
+  is refused rather than treated as an empty match. Replaces QRY-20 when promoted: the `tag:`
+  refusal goes, and QRY-20's proof of that refusal does not carry over.
 - **QRY-21** A well-formed Node ID that is not in the registry is refused as "no such Node" on
   `describe_node`, on `list_operations` and on the Control API, and the refused read is still
   recorded with the ID that was probed.
@@ -213,7 +227,7 @@ needs the proto gates.
 | QRY-16 | `TestListNodes_RecordsTheEnumeration`, `TestDescribeNode_RecordsTheNodeItWasAimedAt` | capability |
 | QRY-17 | `TestRegistryLane_FailsClosedWhenTheReadCannotBeAudited`, `TestRegistryLane_RefusesWithoutARealAuditSink`, `TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded` | capability, API |
 | QRY-19 | `TestMCP_RequiresCredential`, `TestConsole_UnauthenticatedIsRefused` | MCP, Console |
-| QRY-20 | `TestMCP_ListNodes_SelectorFilter`, `TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty` | MCP |
+| QRY-20 | `TestMCP_ListNodes_SelectorFilter` | MCP |
 | QRY-21 | `TestDescribeNode_RecordsAProbeForAMissingNode` | capability |
 | QRY-22 | `TestDescribeNode_BoundsTheNodeIdBeforeRecordingIt` | capability |
 | QRY-23 | `TestMCP_DescribeNode` | MCP |
@@ -228,6 +242,9 @@ needs the proto gates.
 | QRY-36 | `TestMCP_CarriesNoPolicyAlias`, `TestControlAPI_CarriesNoPolicyAlias`; write half structural: `TestDispatchViolations_Fixtures` (MCP, API: flags any selector naming a Policy alias) | MCP, API |
 | QRY-37 | `TestPolicyAliasAdmin_TakesNoStepUp`, `TestAuthorizeControl_PolicyAliasIsAdminAndHumanOnly` | capability, authz |
 | QRY-38 | `TestPolicyAliasAdmin_Refusals`, `TestAuthorizeControl_PolicyAliasIsAdminAndHumanOnly`, `TestSetPolicyAlias_StoresTheTrimmedValueAndAcceptsTheLengthBoundary`, `TestClearPolicyAlias_NotSetIsNotAnError`, `TestValidPolicyFingerprint`, `TestNormalizePolicyAlias`, `TestAppendWithPolicyAlias_RefusesAMalformedCall` | capability, authz, store |
+| QRY-40 | `TestMCP_ListNodes_All`, `TestMCP_ListNodes_StateLabels`, `TestHandleGetNode_StateLabels`; the `tag:` map as its own map, empty when a Node has none: `TestMCP_NodeReads_ReturnTagsAsTheirOwnMap`, `TestHandleGetNode_ReturnsTagsAsTheirOwnMap` | MCP, API |
+| QRY-41 | Ordering half, empty Selector only: `TestListNodes_ReturnsMatchesInNodeIdOrder` (lane) and `TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder` (MCP, seeded out of ID order). Rest of the claim: `TestMCP_ListNodes_SelectorFilter`, `TestMCP_ListNodes_All`. The `tag:` namespace, which resolves against tag-space alone: `TestListNodes_ResolvesATagSelector` (lane; also pins Node-ID order under a `tag:` Selector), `TestMCP_ListNodes_TagSelectorResolves`, `TestSelectorMatchesTagReadsOnlyTagLabels` | capability, MCP |
+| QRY-42 | `TestMCP_ListNodes_SelectorFilter` (bare key, unknown `state:` key), `TestMCP_ListNodes_RefusesMalformedBareAndUnknownStateTerms` (malformed, bare, unknown `state:` and unknown-namespace terms, each refused with no read record) | MCP |
 
 Claims with **no row**, and so nothing checking them:
 
@@ -252,9 +269,6 @@ Claims with **no row**, and so nothing checking them:
 | QRY-33 | Wherever an alias is rendered, the full fingerprint it names is rendered beside it; an alias is never shown in place of the fingerprint. | MVP |
 | QRY-35 | The Console's Fleet view, Node detail and Compare screen read aliases through the capability read lane, and the Console offers the write to a human `admin` only, from the Fleet view's fingerprint facet and Node detail's Fingerprints panel. | MVP |
 | QRY-39 | No query surface can set Labels, modify Policy, load Templates, refresh a daemon snapshot, issue a Policy verdict or dispatch an Operation: each adapter's structural guard forbids every write seam but the alias write (QRY-29), and every dispatch seam. Replaces QRY-24 when promoted. | After MVP |
-| QRY-40 | A Node read returns Relay's recorded registry state: Node ID; separate `node:`, `relay:` and `tag:` Label maps, the last holding the Node's Tags; self-reported Facts; connection and revocation state; the Policy fingerprint and the template-set fingerprint; daemon version and `outdated` (a field on the Control API, a `state:` Label on MCP); recorded certificate provenance when it exists; and `state:` Labels evaluated at Selector-resolution time, rendered in Selector syntax, never stored. Replaces QRY-2 when promoted. | MVP |
-| QRY-41 | `list_nodes` accepts an empty Selector or one in the `node:`, `relay:`, `tag:` and `state:` namespaces, resolves it against the registry at one evaluation instant, and returns the matches in Node-ID order with `state:` Labels from that same instant. Replaces QRY-3 when promoted. | MVP |
-| QRY-42 | A malformed Selector, a bare Label key, or a `state:` key outside the closed vocabulary is refused rather than treated as an empty match. Replaces QRY-20 when promoted: the `tag:` refusal goes, and QRY-20's proof of that refusal does not carry over. | MVP |
 
 ## Out of scope
 

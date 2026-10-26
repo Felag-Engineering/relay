@@ -80,7 +80,9 @@ type surfaceDeps struct {
 	readLane *capability.ReadLane
 	// accountAdmin backs api.AccountAdmin, console.Accounts and
 	// console.AccountAdmin.
-	accountAdmin     *capability.AccountAdmin
+	accountAdmin *capability.AccountAdmin
+	// tagWriter backs api.TagWriter; no other surface holds it.
+	tagWriter        *capability.TagWriter
 	jobs             jobs.JobRepository
 	tasks            jobs.TaskRepository
 	enrollmentMinter *enroll.Minter
@@ -230,6 +232,9 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// audit row as every other administrative act, rather than this
 		// surface re-deriving any of them (invariant 10).
 		AccountAdmin: d.accountAdmin,
+		// Tag writes: the capability layer's TagWriter, whose floor is a human
+		// Account at operator or above. No other surface is handed it.
+		Tags: d.tagWriter,
 		// The Node read route. The capability read lane — the
 		// same *capability.ReadLane every other surface holds — records the
 		// read before it answers and fails closed, rather than reading the

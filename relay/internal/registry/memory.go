@@ -1,6 +1,8 @@
 package registry
 
 import (
+	"errors"
+	"fmt"
 	"maps"
 	"sort"
 	"sync"
@@ -72,11 +74,11 @@ func NewInMemory(opts ...Option) *InMemory {
 // Upsert registers or updates a Node from a daemon's report.
 //
 // On insert: stores all report fields; EnrollingTokenID is set from the report
-// and RelayLabels is initialized to an empty map.
+// and RelayLabels and TagLabels are initialized to empty maps.
 //
 // On update: overwrites CertFingerprint, Facts, NodeLabels, PolicyFingerprint,
 // DaemonVersion, TemplateSetFingerprint, and LastSeen.
-// RelayLabels is never touched (the node side cannot reach it). EnrollingTokenID
+// RelayLabels and TagLabels are never touched (the node side cannot reach them). EnrollingTokenID
 // is preserved from the first enrollment — a reconnecting Hello cannot rewrite
 // provenance.
 //
@@ -102,6 +104,7 @@ func (r *InMemory) Upsert(rep Report) (Node, error) {
 	n := &Node{
 		NodeID:           rep.NodeID,
 		RelayLabels:      map[string]string{},
+		TagLabels:        map[string]string{},
 		EnrollingTokenID: rep.EnrollingTokenID,
 	}
 	r.updateFromReport(n, rep)
@@ -110,8 +113,8 @@ func (r *InMemory) Upsert(rep Report) (Node, error) {
 }
 
 // updateFromReport overwrites the node-rooted fields of n from rep. It never
-// touches RelayLabels (the node side cannot reach relay space) or
-// EnrollingTokenID (provenance is set once, at first enrollment). Callers hold
+// touches RelayLabels or TagLabels (the node side cannot reach relay or tag
+// space) or EnrollingTokenID (provenance is set once, at first enrollment). Callers hold
 // the write lock.
 func (r *InMemory) updateFromReport(n *Node, rep Report) {
 	n.CertFingerprint = rep.CertFingerprint
@@ -148,6 +151,73 @@ func (r *InMemory) UpdateLastSeen(nodeID string, at time.Time) error {
 // registry.
 func (r *InMemory) SetRelayLabels(nodeID string, labels map[string]string) error {
 	return r.withNode(nodeID, func(n *Node) { n.RelayLabels = cloneLabels(labels) })
+}
+
+// ApplyTagChanges is the in-memory analogue of the store's atomic tag write
+// (audit.TagWriteAppender), for tests that need tagged Nodes. It is deliberately
+// not on Repository, and no production code calls it. All or nothing: every
+// change is checked before any is applied. A change whose Before differs from
+// the stored raw value gives ErrTagChanged, an unknown Node ErrNotFound, and a
+// Node left over MaxTagsPerNode tags ErrTooManyTags.
+func (r *InMemory) ApplyTagChanges(changes []TagChange) error {
+	if len(changes) == 0 {
+		return errors.New("registry: no tag changes")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	type nodeKey struct{ nodeID, key string }
+	seen := make(map[nodeKey]struct{}, len(changes))
+	counts := make(map[string]int) // tags per Node after the batch
+	grew := make(map[string]bool)  // Nodes whose tag count rose
+	for _, c := range changes {
+		if err := c.Validate(); err != nil {
+			return err
+		}
+		k := nodeKey{c.NodeID, c.Key}
+		if _, dup := seen[k]; dup {
+			return fmt.Errorf("registry: tag %q changed twice on one Node", c.Key)
+		}
+		seen[k] = struct{}{}
+
+		n, ok := r.nodes[c.NodeID]
+		if !ok {
+			return ErrNotFound
+		}
+		stored, has := n.TagLabels[c.Key]
+		if has != c.Before.Set || (has && stored != c.Before.Value) {
+			return ErrTagChanged
+		}
+		if _, counted := counts[c.NodeID]; !counted {
+			counts[c.NodeID] = len(n.TagLabels)
+		}
+		switch {
+		case c.After.Set && !has:
+			counts[c.NodeID]++
+			grew[c.NodeID] = true
+		case !c.After.Set && has:
+			counts[c.NodeID]--
+		}
+	}
+	for nodeID := range grew {
+		if counts[nodeID] > MaxTagsPerNode {
+			return ErrTooManyTags
+		}
+	}
+
+	for _, c := range changes {
+		n := r.nodes[c.NodeID]
+		if n.TagLabels == nil {
+			n.TagLabels = map[string]string{}
+		}
+		if c.After.Set {
+			n.TagLabels[c.Key] = c.After.Value
+			continue
+		}
+		delete(n.TagLabels, c.Key)
+	}
+	return nil
 }
 
 // SetRevoked records that nodeID is revoked as of at. Returns ErrNotFound if
@@ -285,18 +355,20 @@ func (r *InMemory) ListChecked() ([]Node, error) {
 // configured minDaemonVersion (ADR-0014; derived on read, never stored).
 //
 // It is the single read-back path behind Upsert, Get and List, as getNode is
-// for the SQLite store, and like getNode it serves both label namespaces
-// through wellFormedLabels: a stored pair WellFormedLabel refuses is declined
+// for the SQLite store, and like getNode it serves all three stored label
+// namespaces through wellFormedLabels: a stored pair WellFormedLabel refuses is declined
 // on read.
 func (r *InMemory) copyNode(n *Node) Node {
 	nl := wellFormedLabels(n.NodeLabels)
 	rl := wellFormedLabels(n.RelayLabels)
+	tl := wellFormedLabels(n.TagLabels)
 	return Node{
 		NodeID:                 n.NodeID,
 		CertFingerprint:        n.CertFingerprint,
 		Facts:                  cloneFacts(n.Facts),
 		NodeLabels:             nl,
 		RelayLabels:            rl,
+		TagLabels:              tl,
 		LastSeen:               n.LastSeen,
 		EnrollingTokenID:       n.EnrollingTokenID,
 		PolicyFingerprint:      n.PolicyFingerprint,

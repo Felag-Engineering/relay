@@ -148,6 +148,7 @@ type nodeResponse struct {
 	NodeID      string            `json:"node_id"`
 	NodeLabels  map[string]string `json:"node_labels"`
 	RelayLabels map[string]string `json:"relay_labels"`
+	TagLabels   map[string]string `json:"tag_labels"`
 	Facts       nodeFacts         `json:"facts"`
 
 	LastSeen string `json:"last_seen,omitempty"`
@@ -260,6 +261,7 @@ func nodeResponseFrom(n registry.Node, ev capability.StateEval) nodeResponse {
 		NodeID:                 n.NodeID,
 		NodeLabels:             n.NodeLabels,
 		RelayLabels:            n.RelayLabels,
+		TagLabels:              n.TagLabels,
 		Facts:                  nodeFacts(controlplane.RenderFacts(n)),
 		Connected:              n.Connected,
 		EnrollingTokenID:       n.EnrollingTokenID,
@@ -276,6 +278,9 @@ func nodeResponseFrom(n registry.Node, ev capability.StateEval) nodeResponse {
 	}
 	if out.RelayLabels == nil {
 		out.RelayLabels = map[string]string{}
+	}
+	if out.TagLabels == nil {
+		out.TagLabels = map[string]string{}
 	}
 	out.LastSeen = controlplane.RFC3339(n.LastSeen)
 	out.RevokedAt = controlplane.RFC3339(n.RevokedAt)

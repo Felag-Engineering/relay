@@ -154,7 +154,44 @@ func dispatchViolations(fileName string, file *ast.File, strictCapabilityIdents 
 		return true
 	})
 
-	return append(violations, policyAliasViolations(fileName, file)...)
+	violations = append(violations, policyAliasViolations(fileName, file)...)
+	return append(violations, tagWriteViolations(fileName, file)...)
+}
+
+// tagWriteViolations is the tag rule of dispatchViolations, unconditional in
+// every file, relaxed or not: no MCP tool writes a tag (ADR-0050 decision 2),
+// so this surface may not select an identifier that names the tag write
+// (capability.TagWriter, capability.NewTagWriter, TagWriteRecorder,
+// audit.TagWriteAppender, AppendWithTagWrite, RecordTagWrite, WriteTag) or the
+// in-memory seeder ApplyTagChanges, whatever the receiver or package, nor
+// declare a seam method that does. Reading tags (TagLabels) is not a write.
+func tagWriteViolations(fileName string, file *ast.File) []string {
+	isTagWrite := func(name string) bool {
+		return strings.Contains(name, "TagWrite") || strings.Contains(name, "WriteTag") || name == "ApplyTagChanges"
+	}
+	var violations []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.SelectorExpr:
+			if isTagWrite(v.Sel.Name) {
+				violations = append(violations, fmt.Sprintf(
+					"%s references %s — a tag is written by a human Account through the Control API and no MCP tool writes one (ADR-0050)",
+					fileName, v.Sel.Name))
+			}
+		case *ast.InterfaceType:
+			for _, m := range v.Methods.List {
+				for _, name := range m.Names {
+					if isTagWrite(name.Name) {
+						violations = append(violations, fmt.Sprintf(
+							"%s declares a seam method %s — a tag is written by a human Account through the Control API and no MCP tool writes one (ADR-0050)",
+							fileName, name.Name))
+					}
+				}
+			}
+		}
+		return true
+	})
+	return violations
 }
 
 // policyAliasViolations is the Policy alias rule of dispatchViolations,
@@ -375,6 +412,72 @@ type AliasWriter interface {
 `,
 			strict:     false,
 			wantSubstr: "declares a seam method ClearPolicyAlias",
+		},
+		{
+			name: "the tag writer is refused",
+			src: `package mcp
+import ` + capImport + `
+var _ *capability.TagWriter
+`,
+			strict:     true,
+			wantSubstr: "references TagWriter",
+		},
+		{
+			name: "the tag writer is refused through an aliased capability import",
+			src: `package mcp
+import c2 ` + capImport + `
+var _ = c2.NewTagWriter
+`,
+			strict:     true,
+			wantSubstr: "references NewTagWriter",
+		},
+		{
+			name: "the tag writer is refused in an execFiles-relaxed file",
+			src: `package mcp
+import ` + capImport + `
+var _ capability.TagWriteRecorder
+`,
+			strict:     false,
+			wantSubstr: "references TagWriteRecorder",
+		},
+		{
+			name: "asserting an audit repository to the atomic tag write is refused",
+			src: `package mcp
+import "github.com/Felag-Engineering/relay/relay/internal/audit"
+func f(x audit.Repository) {
+	_ = x.(audit.TagWriteAppender)
+}
+`,
+			strict:     false,
+			wantSubstr: "references TagWriteAppender",
+		},
+		{
+			name: "the in-memory tag seeder is refused",
+			src: `package mcp
+func f(x interface{ ApplyTagChanges() }) { x.ApplyTagChanges() }
+`,
+			strict:     false,
+			wantSubstr: "references ApplyTagChanges",
+		},
+		{
+			name: "a seam declaring a tag write is refused",
+			src: `package mcp
+import "context"
+type TagSetter interface {
+	WriteTag(ctx context.Context, label string) error
+}
+`,
+			strict:     false,
+			wantSubstr: "declares a seam method WriteTag",
+		},
+		{
+			name: "reading a Node's tags is not a tag write",
+			src: `package mcp
+import ` + regImport + `
+func f(n registry.Node) map[string]string { return n.TagLabels }
+`,
+			strict:     true,
+			wantSubstr: "",
 		},
 		{
 			name: "the deleted NodeReader shape hands back a Node with no context",

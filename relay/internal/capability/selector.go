@@ -1,7 +1,6 @@
 package capability
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -57,46 +56,28 @@ type Selector struct {
 	Predicates []Predicate
 }
 
-// ParseSelector parses a comma-separated list of "node:key=value",
-// "relay:key=value" and "state:key[=value]" terms (e.g.
-// "node:role=web, relay:quarantine=on"). Every term MUST carry one of those
-// three prefixes — an unprefixed term is a parse error, and so is a tag: one
-// (see below). This is a fail-closed design: the parser never guesses which
-// namespace a bare key belongs to (mirrors protoconv.ParseNodeLabel's
-// prefix-stripping style, extended here to every namespace).
+// ParseSelector parses a comma-separated Selector such as
+// "node:role=web,relay:quarantine=on,tag:team=payments,state:online" into its
+// Predicates. Every term MUST carry one of the four prefixes node:, relay:,
+// tag: or state: — an unprefixed term is a parse error. This is a fail-closed
+// design: the parser never guesses which namespace a bare key belongs to
+// (mirrors protoconv.ParseNodeLabel's prefix-stripping style, extended here to
+// every namespace). Every surface parses through this one function, so what a
+// term means and which terms are refused is decided here and nowhere else
+// (invariant 10).
 //
-// node: and relay: keep the same "key=value, value required" grammar. tag: is
-// REFUSED outright (ErrSelectorTagUnsupported): the namespace exists in
-// the model (invariant 7) but has no storage yet, so parsing one would
-// hand the caller a Selector that matches nothing for a reason it cannot see.
-// state: is different because it is closed-vocabulary and typed (ADR-0034):
-// a boolean marker term carries no value ("state:offline") and a fact term
-// requires a non-empty one ("state:daemon-version=1.4.2"). Both directions
-// are parse errors rather than a silently-empty match: a marker written with
-// a value, a fact written without one, an empty fact value, or any key
-// outside the closed vocabulary (nodestate.KeyKind).
+// node:, relay: and tag: share one grammar: "key=value", the key non-empty,
+// the "=" required, the value possibly empty. state: is different because it is
+// closed-vocabulary and typed (ADR-0034): a boolean marker term carries no
+// value ("state:offline") and a fact term requires a non-empty one
+// ("state:daemon-version=1.4.2"). Both directions are parse errors rather than
+// a silently-empty match: a marker written with a value, a fact written
+// without one, an empty fact value, or any key outside the closed vocabulary
+// (nodestate.KeyKind).
 //
 // An empty (or all-whitespace) string parses to an empty Selector, which
-// Resolve treats as matching every Node (see Resolve).
-// ErrSelectorTagUnsupported is returned by ParseSelector for any tag: term.
-//
-// A sentinel rather than a bare error so a surface can RECOGNISE it and
-// render it in its own register without re-deciding the rule — the same
-// pattern writeFreezeError uses for capability.ErrFreezeReasonRequired. The
-// Console says "filter on node:, relay: or state: for now"; a tool surface
-// says something else; neither gets to disagree about whether the term is
-// allowed.
-var ErrSelectorTagUnsupported = errors.New(
-	"capability: tag: selectors are not resolvable yet — operator-set grouping lands with label management")
-
-// ParseSelector parses a comma-separated Selector such as
-// "node:role=web,state:online" into its Predicates. Every surface parses
-// through this one function, so what a term means and which terms are refused
-// is decided here and nowhere else (invariant 10).
-//
-// An empty (or all-whitespace) string is the empty Selector. A malformed term,
-// an unknown namespace prefix and any tag: term are errors rather than silently
-// dropped terms — see the tag: arm below for why a refusal beats an empty match.
+// Resolve treats as matching every Node (see Resolve). A malformed term and an
+// unknown namespace prefix are errors rather than silently dropped terms.
 func ParseSelector(s string) (Selector, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -121,25 +102,8 @@ func ParseSelector(s string) (Selector, error) {
 			ns = NamespaceRelay
 			rest = strings.TrimPrefix(term, "relay:")
 		case strings.HasPrefix(term, "tag:"):
-			// REFUSED, not parsed. tag-space has no storage on registry.Node
-			// until label management lands, so a tag: predicate would
-			// resolve to false for every Node and the caller would read
-			// "matched nothing" where the truth is "not implemented".
-			//
-			// The refusal lives HERE rather than on a surface because every
-			// surface parses through this function: MCP's list_nodes,
-			// run_operation, raw_exec and plan; the Control API's execution
-			// routes; the Console's fleet filter; and the devharness. A
-			// surface-local guard would let the same term be refused on one
-			// surface and answered 200-with-an-empty-list on another — one
-			// capability layer deciding one question is what invariant 10
-			// asks for.
-			//
-			// Deliberately a parse error rather than a silent drop: an
-			// AI-agent handed an empty Node list cannot tell it from a real
-			// empty match, and that is the caller least equipped to notice.
-			// This arm is deleted once tag-space has storage.
-			return Selector{}, fmt.Errorf("%w: %q", ErrSelectorTagUnsupported, term)
+			ns = NamespaceTag
+			rest = strings.TrimPrefix(term, "tag:")
 		case strings.HasPrefix(term, "state:"):
 			p, err := parseStateTerm(term, strings.TrimPrefix(term, "state:"))
 			if err != nil {
@@ -148,15 +112,12 @@ func ParseSelector(s string) (Selector, error) {
 			predicates = append(predicates, p)
 			continue
 		default:
-			// tag: is deliberately NOT offered here even though it is a real
-			// namespace: every tag: term is refused, so listing it
-			// as a way out of a typo would advertise the one prefix that
-			// cannot work. Surfaces render this string verbatim (the Console's
-			// fleet filter, sentence-cased, MCP's "invalid selector" wrap, the
-			// Control API's problem detail), so a stale list here reaches an
-			// operator and an AI-agent alike.
+			// Surfaces render this string verbatim (the Console's fleet filter,
+			// sentence-cased, MCP's "invalid selector" wrap, the Control API's
+			// problem detail), so the list of prefixes here reaches an operator and
+			// an AI-agent alike.
 			return Selector{}, fmt.Errorf(
-				"capability: selector term %q has no node:, relay:, or state: prefix", term)
+				"capability: selector term %q has no node:, relay:, tag: or state: prefix", term)
 		}
 
 		key, value, ok := strings.Cut(rest, "=")
@@ -205,8 +166,9 @@ func parseStateTerm(term, rest string) (Predicate, error) {
 
 // Matches reports whether n satisfies every Predicate in sel, evaluated at
 // ev. Each Predicate's lookup reads exactly one namespace's map — NamespaceNode
-// reads only NodeLabels, NamespaceRelay reads only RelayLabels, NamespaceState
-// reads a nodestate.LabelSet computed for n — so a predicate in one namespace
+// reads only NodeLabels, NamespaceRelay reads only RelayLabels, NamespaceTag
+// reads only TagLabels, NamespaceState reads a nodestate.LabelSet computed for
+// n — so a predicate in one namespace
 // can never be satisfied by another namespace's labels. This mirrors the
 // registry's structural disjoint-maps invariant (registry.go): a forged
 // NodeLabels["offline"]="true" can never satisfy state:offline, because
@@ -237,13 +199,7 @@ func (sel Selector) Matches(n registry.Node, ev StateEval) bool {
 		case NamespaceState:
 			labels = states
 		case NamespaceTag:
-			// Unreachable through ParseSelector, which refuses a
-			// tag: term outright rather than letting it resolve to nothing.
-			// Kept because a Selector can also be built as a struct literal
-			// (tests, and any future in-process caller), and for those this
-			// is still the true answer: tag-space has no storage on
-			// registry.Node yet, so no Node carries one.
-			return false
+			labels = n.TagLabels
 		default:
 			return false
 		}

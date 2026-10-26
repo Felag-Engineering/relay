@@ -85,6 +85,15 @@ func TestParseNodeLabel(t *testing.T) {
 			wantOK:   false,
 		},
 		{
+			// A Node cannot report a tag: label (invariant 7, ADR-0050): the
+			// Hello ingress drops it, as it drops relay:.
+			name:     "tag: prefix is rejected",
+			key:      "tag:env",
+			value:    "prod",
+			wantBare: "",
+			wantOK:   false,
+		},
+		{
 			name:     "node: with empty bare key is rejected",
 			key:      "node:",
 			value:    "x",

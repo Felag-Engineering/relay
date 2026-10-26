@@ -253,7 +253,7 @@ func TestNode_FingerprintLinksTargetTheSameValueAsASelector(t *testing.T) {
 // TestNode_LabelChipTooltipsNameEachNamespacesWriter: invariant 7's grammar is
 // four namespaces with four different writers. Each chip's title names its
 // namespace's writer, and relay: says it is never the Node's to write; there is
-// no legend. tag: is not described, because no tag: label can exist yet (02,
+// no legend. tag: is not described, because this screen renders no tag chip (02,
 // "Labels").
 func TestNode_LabelChipTooltipsNameEachNamespacesWriter(t *testing.T) {
 	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/nodes/node-db-1").Body.String()

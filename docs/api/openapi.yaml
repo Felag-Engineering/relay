@@ -68,6 +68,10 @@ tags:
     description: Mint and revoke scoped Enrollment Tokens; revoke Nodes.
   - name: Freeze
     description: The Relay-wide emergency stop (ADR-0013).
+  - name: Tags
+    description: |
+      Add or remove `tag:` labels on Nodes (ADR-0050). A human Account at
+      `operator` or above; machine Accounts are refused.
   - name: Identity
     description: Accounts and API Tokens (ADR-0010). Admin-only.
   - name: Approvals
@@ -686,6 +690,120 @@ paths:
         "403": { $ref: '#/components/responses/Forbidden' }
         "500": { $ref: '#/components/responses/InternalError' }
 
+  /api/v1/nodes/{node_id}/tags:
+    parameters:
+      - name: node_id
+        in: path
+        required: true
+        description: The Node's id (its client-certificate CN).
+        schema: { type: string }
+    post:
+      tags: [Tags]
+      operationId: writeNodeTag
+      summary: Add or remove a tag on one Node
+      description: |
+        Adds a `tag:key=value` label (replacing the value if the Node already
+        carries the key) or removes a `tag:key` label.
+
+        **Requires the `operator` role or above, and a human Account.** A
+        machine Account is refused at every role, `admin` included, and a
+        `viewer` is refused (ADR-0050). No step-up re-authentication is
+        needed, because a tag gates nothing. No MCP tool writes a tag.
+
+        Only `tag:` labels are written on request: a `node:`, `relay:` or
+        `state:` label is refused with 400, and the `tag:` prefix is mandatory.
+        A tag's key and value follow the stored-Label allowlist exactly: the key
+        non-empty, and every byte of key and value one of `A-Z a-z 0-9 . _ -`
+        (an empty value is allowed). A Node carries at most 64 tags.
+
+        Each Node that changes gets one audit record naming the Account, the
+        Node and the old and new values, committed in the same transaction as the
+        change. A Node already in the requested state is reported in `unchanged`
+        and records nothing. If anything cannot be written, nothing is: the whole
+        write is all or nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TagWriteRequest' }
+      responses:
+        "200":
+          description: The write was applied, or every Node already held the requested state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TagWriteResult' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404":
+          description: The Node is not in the registry. Nothing was changed.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "409":
+          description: |
+            A tag changed while the write was being made (reload and retry), or
+            the write would leave a Node over 64 tags. Nothing was changed.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/tags:
+    post:
+      tags: [Tags]
+      operationId: writeTags
+      summary: Add or remove a tag on a list of Nodes
+      description: |
+        The same write as `writeNodeTag`, over a list of Node ids the caller
+        has already resolved. A Selector is not accepted here: resolve it with
+        `list_nodes` or the Console first, so the Nodes written are the Nodes
+        the caller saw.
+
+        **Requires the `operator` role or above, and a human Account.** A
+        machine Account is refused at every role, `admin` included, and a
+        `viewer` is refused (ADR-0050). No step-up re-authentication is
+        needed, because a tag gates nothing. No MCP tool writes a tag.
+
+        Only `tag:` labels are written on request: a `node:`, `relay:` or
+        `state:` label is refused with 400, and the `tag:` prefix is mandatory.
+        A tag's key and value follow the stored-Label allowlist exactly: the key
+        non-empty, and every byte of key and value one of `A-Z a-z 0-9 . _ -`
+        (an empty value is allowed). A Node carries at most 64 tags.
+
+        Each Node that changes gets one audit record naming the Account, the
+        Node and the old and new values, committed in the same transaction as the
+        change. A Node already in the requested state is reported in `unchanged`
+        and records nothing. If anything cannot be written, nothing is: the whole
+        write is all or nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BulkTagWriteRequest' }
+      responses:
+        "200":
+          description: The write was applied, or every Node already held the requested state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TagWriteResult' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404":
+          description: A named Node is not in the registry. Nothing was changed.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "409":
+          description: |
+            A tag changed while the write was being made (reload and retry), or
+            the write would leave a Node over 64 tags. Nothing was changed.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
   # ---------------------------------------------------------------------------
   # Freeze
   # ---------------------------------------------------------------------------
@@ -1173,6 +1291,13 @@ components:
           description: |
             The `relay:` namespace: Relay-set and immutable to the Node. The only
             namespace the security lane may target.
+        tag_labels:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            The `tag:` namespace: written by a human Account at `operator` or
+            above, never by the Node or an AI-agent (ADR-0050). `{}` when a Node
+            carries none.
         facts:
           type: object
           description: |
@@ -1314,10 +1439,7 @@ components:
           type: string
           description: |
             Selector filter, e.g. `node:role=web` or `relay:env=prod`. Every term
-            must carry a `node:`, `relay:`, or `state:` prefix. `tag:` is a valid
-            namespace in the model but is **not resolvable yet** — it has no
-            storage until label management lands (#430) — so a `tag:` term is
-            refused with 400 rather than matching nothing. `state:`
+            must carry a `node:`, `relay:`, `tag:` or `state:` prefix. `state:`
             is a closed, Relay-derived vocabulary (ADR-0034): the boolean
             markers `state:offline`, `state:outdated`, `state:template-unloadable`,
             `state:cert-expiring`, and the facts `state:daemon-version=`,
@@ -1612,6 +1734,73 @@ components:
         unlimited:
           type: boolean
           description: Whether the token has no use limit within its TTL.
+
+    TagWriteRequest:
+      type: object
+      required: [op, label]
+      properties:
+        op:
+          type: string
+          enum: [add, remove]
+          description: '`add` sets the tag; `remove` removes it.'
+        label:
+          type: string
+          description: |
+            The tag in written form, with the mandatory `tag:` prefix:
+            `tag:key=value` to add, `tag:key` (no value) to remove.
+          examples: ["tag:team=payments"]
+
+    BulkTagWriteRequest:
+      type: object
+      required: [node_ids, op, label]
+      properties:
+        node_ids:
+          type: array
+          minItems: 1
+          items: { type: string }
+          description: |
+            The Node ids to write, already resolved by the caller. Duplicates
+            are written once.
+        op:
+          type: string
+          enum: [add, remove]
+          description: '`add` sets the tag; `remove` removes it.'
+        label:
+          type: string
+          description: |
+            The tag in written form, with the mandatory `tag:` prefix:
+            `tag:key=value` to add, `tag:key` (no value) to remove.
+          examples: ["tag:team=payments"]
+
+    TagWriteResult:
+      type: object
+      required: [changed, unchanged]
+      properties:
+        changed:
+          type: array
+          items: { $ref: '#/components/schemas/TagChange' }
+          description: One entry per Node whose tag changed. `[]` when none did.
+        unchanged:
+          type: array
+          items: { type: string }
+          description: |
+            Ids of Nodes that already held the requested state, which recorded
+            nothing. `[]` when none did.
+
+    TagChange:
+      type: object
+      required: [node_id, label, old, new]
+      properties:
+        node_id: { type: string }
+        label:
+          type: string
+          description: The tag's key with the `tag:` prefix.
+        old:
+          type: [string, "null"]
+          description: The value before, or null when the Node did not carry the tag.
+        new:
+          type: [string, "null"]
+          description: The value after, or null when the tag was removed.
 
     RevokeNodeRequest:
       type: object

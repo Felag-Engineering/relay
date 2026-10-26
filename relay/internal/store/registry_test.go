@@ -984,6 +984,18 @@ func TestLabelNamespaceTable(t *testing.T) {
 	if got := nsRelay.table(); got != "relay_labels" {
 		t.Errorf("nsRelay.table() = %q, want %q", got, "relay_labels")
 	}
+	if got := nsTag.table(); got != "tag_labels" {
+		t.Errorf("nsTag.table() = %q, want %q — tags must never reach node_labels or relay_labels", got, "tag_labels")
+	}
+
+	// An unknown namespace panics: it must never fall through to node_labels,
+	// which only the Node's own report may write.
+	defer func() {
+		if recover() == nil {
+			t.Error("labelNamespace(99).table() did not panic")
+		}
+	}()
+	_ = labelNamespace(99).table()
 }
 
 func TestRegistry_MaxNodesAndMinVersionReadPerCall(t *testing.T) {

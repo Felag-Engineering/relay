@@ -595,6 +595,11 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	// shares its Authorizer and trail.
 	accountAdmin := capability.NewAccountAdmin(freezeControl, st.Accounts(), apiTokenSvc)
 
+	// The tag write (ADR-0050): the one writer of tag: labels, over the same
+	// Control and so the same Recorder, RoleGate and trail. The Control API is
+	// its only holder; no other surface is handed it.
+	tagWriter := capability.NewTagWriter(freezeControl, reg)
+
 	// The read lane: filtered, paginated queries over the audit trail
 	// and over Jobs/Tasks — one seam, shared by every surface (invariant 10).
 	// live supplies state:cert-expiring's warning window (ADR-0034), read per
@@ -801,6 +806,7 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 			freezeControl:    freezeControl,
 			readLane:         readLane,
 			accountAdmin:     accountAdmin,
+			tagWriter:        tagWriter,
 			approvals:        approvals,
 			jobs:             st.Jobs(),
 			tasks:            st.Tasks(),

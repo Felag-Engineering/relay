@@ -135,6 +135,46 @@ func TestListNodes_ResolvesTheSelectorAndRecordsItsCanonicalForm(t *testing.T) {
 	}
 }
 
+// TestListNodes_ResolvesATagSelector is QRY-41's tag half at the lane: a tag:
+// term resolves the tagged Nodes, in Node-ID order under a filtered Selector,
+// and the canonical Selector is recorded.
+func TestListNodes_ResolvesATagSelector(t *testing.T) {
+	reg := registry.NewInMemory()
+	for _, id := range []string{"node-c", "node-a", "node-b"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("Upsert(%s): %v", id, err)
+		}
+	}
+	// Seeded out of ID order, and node-b is left untagged.
+	for _, id := range []string{"node-c", "node-a"} {
+		if err := reg.ApplyTagChanges([]registry.TagChange{
+			{NodeID: id, Key: "team", After: registry.TagValue{Set: true, Value: "payments"}},
+		}); err != nil {
+			t.Fatalf("ApplyTagChanges(%s): %v", id, err)
+		}
+	}
+	sink := &spyAuditSink{}
+	svc := build(t, seams{reg: reg, auditQ: &spyAuditQuery{}, jobQ: &spyJobQuery{}, audit: sink})
+
+	listing, err := svc.ListNodes(context.Background(), testPrincipal, "  tag:team=payments ")
+	if err != nil {
+		t.Fatalf("ListNodes: %v", err)
+	}
+	var ids []string
+	for _, n := range listing.Nodes {
+		ids = append(ids, n.NodeID)
+	}
+	if strings.Join(ids, ",") != "node-a,node-c" {
+		t.Errorf("ListNodes(tag:team=payments) = %v, want [node-a node-c] in Node-ID order", ids)
+	}
+	if listing.Selector != "tag:team=payments" {
+		t.Errorf("NodeListing.Selector = %q, want the canonical form", listing.Selector)
+	}
+	if len(sink.readCalls) != 1 || sink.readCalls[0].Selector != "tag:team=payments" {
+		t.Errorf("readCalls = %+v, want one record with the canonical Selector", sink.readCalls)
+	}
+}
+
 // TestListNodes_RefusesAMalformedSelectorBeforeRecordingAnything mirrors
 // DescribeNode's existing Node-ID bound: a malformed Selector must not be
 // able to use the trail as storage.

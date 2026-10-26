@@ -256,8 +256,7 @@ type NodeListing struct {
 // same order DescribeNode uses for a Node ID: a malformed Selector must not
 // be able to use the trail as storage. The recorded selector is the
 // CANONICAL form (sel.String()), not the caller's bytes — the same
-// precedent NoNodesMatchedError sets — which keeps the tag: sentinel and its
-// issue pointer legible on every surface (QRY-20).
+// precedent NoNodesMatchedError sets.
 //
 // Node-ID ordering within Nodes (QRY-3) comes from registry.InMemory.List
 // and is preserved by Selector.Resolve, so no surface needs to sort again.

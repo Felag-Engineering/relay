@@ -563,7 +563,7 @@ func TestComponents_ContainNoInlineScript(t *testing.T) {
 
 // TestLabel_TooltipNamesTheNamespacesWriter: a chip's title is its term plus the
 // one writer its namespace has, so a Node's labels need no legend. tag: is the
-// bare term because no tag: label can exist yet (02-node-detail.md "Labels").
+// bare term because this screen renders no tag chip (02-node-detail.md "Labels").
 func TestLabel_TooltipNamesTheNamespacesWriter(t *testing.T) {
 	for ns, want := range map[Namespace]string{
 		NamespaceNode:  "node:k=v · set by the Node's own config management",

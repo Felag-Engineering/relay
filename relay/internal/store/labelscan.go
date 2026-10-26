@@ -21,10 +21,11 @@ import (
 // It is EXACT, not approximate, because both write ingresses are gated:
 // protoconv.ParseNodeLabel refuses a malformed node-space value at Hello/
 // Enroll, and enroll.validateScope refuses a malformed relay-space value at
-// both Service.Create and Service.Validate (label.go's five seams). So the
-// population this scan finds — rows written before whichever gate now
-// applies to that namespace — IS the entire affected set; there is no
-// unaudited third path a scan could miss.
+// both Service.Create and Service.Validate (label.go's node and relay seams).
+// No tag row can predate its gate, so tags are not scanned. The population
+// this scan finds — rows written before whichever gate now applies to that
+// namespace — IS the entire affected set; there is no unaudited third path a
+// scan could miss.
 //
 // It READS ONLY. Nothing here repairs, deletes, or rewrites a row: "decline
 // to serve, never write" is settled, and a scan that "fixed"
@@ -235,7 +236,7 @@ func scanDeclinedNamespace(ctx context.Context, q queryer, ns labelNamespace) (D
 
 // declinedPart identifies which half of (key, value) registry.WellFormedLabel
 // refused, using the ONE existing predicate rather than a second copy of its
-// rule — label.go documents exactly five seams for this predicate, and a
+// rule — label.go documents every seam for this predicate, and a
 // second predicate written just to answer "which half" would be the drift
 // that one predicate exists to prevent.
 //

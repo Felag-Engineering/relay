@@ -1,6 +1,6 @@
 // Package api is the REST/JSON Control API (ADR-0010): Enrollment Token
 // mint/revoke, Node revoke, Freeze engage/release, Account and API-Token
-// management, and execution (run an Operation, Raw Exec, and
+// management, tag writes, and execution (run an Operation, Raw Exec, and
 // plan mode), all mounted under /api/v1 on the control-plane's existing *http.ServeMux
 // (relay/internal/controlplane.Server.Mux()) behind the single
 // Authenticator.Middleware already wired there — no new listener, no new
@@ -168,6 +168,9 @@ type Deps struct {
 	// capability layer. Nil refuses every identity route with a
 	// 500, on the same unwired-gate posture Authz above documents.
 	AccountAdmin AccountAdmin
+	// Tags is the capability layer's tag write, behind both tag routes. Nil
+	// answers them with a 500, on the same unwired-gate posture as AccountAdmin.
+	Tags TagWriter
 	// NodeReader is the capability read lane behind GET
 	// /api/v1/nodes/{node_id}: it is not a registry narrowing
 	// any more — it is the one door to the registry, which records the read
@@ -243,6 +246,12 @@ func Routes() []Route {
 		{"POST", "/api/v1/nodes/{node_id}/revoke", handleRevokeNode},
 		{"POST", "/api/v1/freeze/engage", handleFreezeEngage},
 		{"POST", "/api/v1/freeze/release", handleFreezeRelease},
+
+		// Tag writes (ADR-0050). The floor, a human Account at operator or
+		// above, lives in the capability layer behind TagWriter; these handlers
+		// decode and render and call no authorizeControl.
+		{"POST", "/api/v1/nodes/{node_id}/tags", handleWriteNodeTag},
+		{"POST", "/api/v1/tags", handleWriteTags},
 
 		// Identity management (the floor lives in capability.Control
 		// behind AuthorizeControl). Every route here is

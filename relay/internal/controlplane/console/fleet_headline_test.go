@@ -159,9 +159,9 @@ func TestFleet_HeadlineCountsTheMatchedSetNotTheDrawnCards(t *testing.T) {
 // whole fleet (spec 01, D26).
 func TestFleet_HeadlineCountsTheWholeFleetUnderARefusedFilter(t *testing.T) {
 	d := fleetFixture()
-	v := buildFleetView(d, fleetNodes(d), 0, "tag:x", "-")
+	v := buildFleetView(d, fleetNodes(d), 0, "bogus", "-")
 	if v.FilterOK {
-		t.Fatal("tag:x was accepted; this test needs a refused filter")
+		t.Fatal("bogus was accepted; this test needs a refused filter")
 	}
 	if v.Reachable != 3 || v.Matched != 4 || v.PolicyFingerprintCount != 3 {
 		t.Errorf("headline = %d of %d reachable, %d fingerprints; want 3 of 4, 3", v.Reachable, v.Matched, v.PolicyFingerprintCount)

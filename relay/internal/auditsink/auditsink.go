@@ -26,7 +26,10 @@
 // Node IDs (intentReason); it never carries output. RecordProtocolViolation copies only Relay-authored fields and never any
 // Node-produced bytes, on any risk class. RecordPolicyAlias copies only the
 // fingerprint and the old and new name, and records nothing unless the
-// repository can commit the change and the record together.
+// repository can commit the change and the record together. RecordTagWrite
+// copies only the Node ID, the tag key and the old and new values, which a
+// human Account wrote and the allowlist has already bounded, and has the same
+// atomicity condition.
 //
 // Logging: Record additionally emits exactly one structured slog Info
 // "audit decision" line per call, for each of the three Kinds it persists
@@ -62,6 +65,7 @@ import (
 	"github.com/Felag-Engineering/relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/relay/relay/internal/policyalias"
+	"github.com/Felag-Engineering/relay/relay/internal/registry"
 )
 
 // idGen mints a new unique audit Record ID. A seam so tests can inject
@@ -81,6 +85,7 @@ var (
 	_ capability.IntentRecorder = (*Sink)(nil)
 
 	_ capability.PolicyAliasRecorder = (*Sink)(nil)
+	_ capability.TagWriteRecorder    = (*Sink)(nil)
 )
 
 // Option configures a Sink built by New.
@@ -558,6 +563,71 @@ func (s *Sink) RecordPolicyAlias(ctx context.Context, e capability.PolicyAliasEv
 		return capability.ErrPolicyAliasChanged
 	default:
 		return fmt.Errorf("auditsink: record policy alias: %w", err)
+	}
+}
+
+// tagWriteReason renders a tag_write record's Reason. A set value is quoted and
+// an absent one is the literal (none), so an empty value and an absent one never
+// read alike.
+//
+//	tag:<key> old="<value>" new="<value>"
+//	tag:<key> old=(none) new="<value>"
+func tagWriteReason(c registry.TagChange) string {
+	render := func(v registry.TagValue) string {
+		if !v.Set {
+			return "(none)"
+		}
+		return strconv.Quote(v.Value)
+	}
+	return fmt.Sprintf("tag:%s old=%s new=%s", c.Key, render(c.Before), render(c.After))
+}
+
+// RecordTagWrite implements capability.TagWriteRecorder: the tag changes and
+// their tag_write records, one per change, commit in one transaction, so a
+// change whose record cannot be written does not happen.
+//
+// A repository that cannot make the two atomic (it does not offer
+// audit.TagWriteAppender) refuses before an id is minted or the store is
+// touched. The store's sentinels map onto the capability layer's, so the
+// capability layer handles only its own.
+func (s *Sink) RecordTagWrite(ctx context.Context, e capability.TagWriteEvent) error {
+	app, ok := s.repo.(audit.TagWriteAppender)
+	if !ok {
+		return fmt.Errorf("auditsink: the audit repository cannot record a tag write atomically: %w", capability.ErrTagsUnavailable)
+	}
+	if len(e.Changes) == 0 {
+		return errors.New("auditsink: a tag write must change at least one tag")
+	}
+	now := s.now()
+	recs := make([]audit.Record, len(e.Changes))
+	for i, c := range e.Changes {
+		id, err := s.newID()
+		if err != nil {
+			return fmt.Errorf("auditsink: record tag write: generate audit record id: %w", err)
+		}
+		recs[i] = audit.Record{
+			ID:          id,
+			Timestamp:   now,
+			Kind:        audit.KindTagWrite,
+			NodeID:      c.NodeID,
+			Principal:   e.Principal.Attribution(),
+			Attribution: attribution(e.Principal, e.Asserted),
+			Reason:      tagWriteReason(c),
+		}
+	}
+	err := app.AppendWithTagWrite(ctx, recs, e.Changes)
+	switch {
+	case err == nil:
+		s.log.Info("tags written", "principal", recs[0].Principal, "key", e.Changes[0].Key, "nodes", len(e.Changes))
+		return nil
+	case errors.Is(err, registry.ErrTagChanged):
+		return capability.ErrTagChanged
+	case errors.Is(err, registry.ErrTooManyTags):
+		return capability.ErrTooManyTags
+	case errors.Is(err, registry.ErrNotFound):
+		return capability.ErrTagNodeNotFound
+	default:
+		return fmt.Errorf("auditsink: record tag write: %w", err)
 	}
 }
 

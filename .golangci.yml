@@ -92,7 +92,7 @@ linters:
         # values that share a prefix (ControlAction, AccountAdminEvent,
         # IntentRecorder, ...) stay usable. Service and New are the retired monolith's
         # names and stay banned so that neither can come back.
-        - pattern: ^capability\.(Service|New|Execution|NewExecution|Recorder|NewRecorder|Control|NewControl|AccountAdmin|NewAccountAdmin|PolicyAliasAdmin|NewPolicyAliasAdmin|ReadLane|NewReadLane|Approvals|NewApprovals|OperatorSettings|OperatorSettingsSource|StaticOperatorSettings)$
+        - pattern: ^capability\.(Service|New|Execution|NewExecution|Recorder|NewRecorder|Control|NewControl|AccountAdmin|NewAccountAdmin|PolicyAliasAdmin|NewPolicyAliasAdmin|TagWriter|NewTagWriter|TagWriteRecorder|ReadLane|NewReadLane|Approvals|NewApprovals|OperatorSettings|OperatorSettingsSource|StaticOperatorSettings)$
           pkg: ^github\.com/Felag-Engineering/relay/relay/internal/capability$
           msg: "adapter boundary (invariant 10): a concrete capability service or its constructor belongs to the composition root; hold the narrowed seam this package declares"
         # The display-only caches carry Set. An adapter reads a Policy view or a
@@ -114,6 +114,12 @@ linters:
         - pattern: ^audit\.PolicyAliasAppender$
           pkg: ^github\.com/Felag-Engineering/relay/relay/internal/audit$
           msg: "adapter boundary (invariant 10): never name the audit repository's Policy alias write; an alias is changed only through the capability layer"
+        # The same repository also offers the atomic tag write. A tag is written only
+        # through the capability layer's TagWriter, which holds the human-only floor
+        # (invariant 7, invariant 10, ADR-0050).
+        - pattern: ^audit\.TagWriteAppender$
+          pkg: ^github\.com/Felag-Engineering/relay/relay/internal/audit$
+          msg: "adapter boundary (invariant 10): never name the audit repository's tag write; a tag is written only through the capability layer"
 
     depguard:
       rules:

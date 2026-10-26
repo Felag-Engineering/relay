@@ -288,7 +288,9 @@ func (s *Store) Registry() registry.Repository {
 // LabelsDeclined returns the read-back label filter's live counters:
 // the number of stored pairs getNode's wellFormedLabels has declined to
 // serve so far this process, by namespace. This is the read side of
-// relay_labels_declined_total.
+// relay_labels_declined_total. The tag namespace is counted on the same filter
+// but not exported: no tag row can predate its gate, so a decline there means
+// a row written around the store.
 //
 // The atomics live in internal/store, on sqliteRegistry, because the
 // increment site is the SQLite read-back filter itself; internal/metrics

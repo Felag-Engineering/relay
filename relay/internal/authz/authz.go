@@ -245,6 +245,7 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 //	revoke an API Token          admin      accounts-and-access.md
 //	set, rename or clear a
 //	  Policy alias               admin      query.md (+ human-only)
+//	write a tag                  operator   ADR-0050 (+ human-only)
 //
 // The eight Account/API-Token rows are humanOnly: false — STATUS-QUO
 // PRESERVATION, not a claim that admin is already the strongest role (that
@@ -304,6 +305,8 @@ func requiredControlRole(act capability.ControlAction) (role accounts.Role, labe
 		return accounts.RoleAdmin, "revoking an API Token", false, true
 	case capability.ControlPolicyAlias:
 		return accounts.RoleAdmin, "setting, renaming or clearing a Policy alias", true, true
+	case capability.ControlTagWrite:
+		return accounts.RoleOperator, "writing a tag", true, true
 	default:
 		return "", "", false, false
 	}

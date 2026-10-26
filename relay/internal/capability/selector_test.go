@@ -1,7 +1,6 @@
 package capability
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -67,19 +66,17 @@ func TestParseSelector(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			// #560: tag: is refused, not parsed. The namespace is in the model
-			// (invariant 7) but has no storage until #430, so parsing one would
-			// hand back a Selector that matches nothing for an invisible
-			// reason. TestParseSelectorTagRefusalIsASentinel pins the error
-			// IDENTITY; these two cases only pin that it is refused at all.
-			name:    "single tag term is refused until #430",
-			input:   "tag:team=payments",
-			wantErr: true,
+			name:  "single tag term",
+			input: "tag:team=payments",
+			want:  Selector{Predicates: []Predicate{{Namespace: NamespaceTag, Key: "team", Value: "payments"}}},
 		},
 		{
-			name:    "a tag term poisons an otherwise valid selector",
-			input:   "node:role=web, tag:team=payments",
-			wantErr: true,
+			name:  "a tag term beside a node term",
+			input: "node:role=web, tag:team=payments",
+			want: Selector{Predicates: []Predicate{
+				{Namespace: NamespaceNode, Key: "role", Value: "web"},
+				{Namespace: NamespaceTag, Key: "team", Value: "payments"},
+			}},
 		},
 		{
 			name:  "state marker term",
@@ -139,62 +136,35 @@ func TestParseSelector(t *testing.T) {
 	}
 }
 
-// TestParseSelectorTagRefusalIsASentinel pins the error's IDENTITY, not just
-// its existence.
-//
-// It matters because surfaces RECOGNISE this error rather than re-deciding the
-// rule: the Console's parseFleetFilter renders its own sentence for it and the
-// capability's own detail for everything else. If
-// the refusal stopped wrapping the sentinel, that errors.Is would silently
-// fall through and the fleet filter would tell an operator their prefixed term
-// has no prefix.
-func TestParseSelectorTagRefusalIsASentinel(t *testing.T) {
-	for _, in := range []string{
-		"tag:team=payments",
-		"node:role=web, tag:team=payments",
-		"tag:team=payments, node:role=web",
-	} {
-		_, err := ParseSelector(in)
-		if !errors.Is(err, ErrSelectorTagUnsupported) {
-			t.Errorf("ParseSelector(%q) error = %v, want it to wrap ErrSelectorTagUnsupported", in, err)
+// TestParseSelector_TagTermParsesLikeNodeAndRelay: tag: shares node: and
+// relay:'s grammar. The "=" is required and the key non-empty, and an empty
+// value is a real term.
+func TestParseSelector_TagTermParsesLikeNodeAndRelay(t *testing.T) {
+	for _, in := range []string{"tag:k=v", "tag:k="} {
+		sel, err := ParseSelector(in)
+		if err != nil {
+			t.Errorf("ParseSelector(%q): %v", in, err)
+			continue
 		}
-		// The offending term is named, so an operator can see WHICH term was
-		// refused in a multi-term filter.
-		if err != nil && !strings.Contains(err.Error(), "tag:team=payments") {
-			t.Errorf("ParseSelector(%q) error does not name the offending term: %v", in, err)
+		if len(sel.Predicates) != 1 || sel.Predicates[0].Namespace != NamespaceTag {
+			t.Errorf("ParseSelector(%q) = %+v, want one NamespaceTag predicate", in, sel)
 		}
 	}
-
-	// A selector with no tag: term must NOT wrap it — otherwise the Console
-	// would render the tag: sentence for an ordinary typo.
-	_, err := ParseSelector("node:role")
-	if err == nil {
-		t.Fatal("ParseSelector(\"node:role\") = nil error, want a parse error")
-	}
-	if errors.Is(err, ErrSelectorTagUnsupported) {
-		t.Errorf("a malformed node: term wrapped ErrSelectorTagUnsupported: %v", err)
+	for _, in := range []string{"tag:k", "tag:=v", "tag:"} {
+		if _, err := ParseSelector(in); err == nil {
+			t.Errorf("ParseSelector(%q) succeeded, want a malformed-term error", in)
+		}
 	}
 }
 
-// TestParseSelectorUnprefixedErrorDoesNotOfferTag guards the OTHER half of
-// #560, which the tag:-prefixed tests cannot see.
-//
-// Every surface renders this string verbatim -- the Console's fallback lead,
-// MCP's "invalid selector" wrap, the Control API's problem detail -- so a
-// stale namespace list here advertises tag: to the operator and the AI-agent for
-// any ordinary typo, which is the exact false advertisement this issue exists
-// to remove. It was stale in the first version of this change and no test saw
-// it, because they all exercised the tag:-prefixed path.
-func TestParseSelectorUnprefixedErrorDoesNotOfferTag(t *testing.T) {
+// TestParseSelectorUnprefixedErrorNamesAllFourNamespaces: every surface renders
+// this string verbatim, so it must list the four prefixes that work.
+func TestParseSelectorUnprefixedErrorNamesAllFourNamespaces(t *testing.T) {
 	_, err := ParseSelector("bogus")
 	if err == nil {
 		t.Fatal("ParseSelector(\"bogus\") = nil error, want a parse error")
 	}
-	if strings.Contains(err.Error(), "tag:") {
-		t.Errorf("the unprefixed-term error offers tag:, which is never accepted: %v", err)
-	}
-	// And it still names the three that DO work, so the message stays useful.
-	for _, ns := range []string{"node:", "relay:", "state:"} {
+	for _, ns := range []string{"node:", "relay:", "tag:", "state:"} {
 		if !strings.Contains(err.Error(), ns) {
 			t.Errorf("the unprefixed-term error does not name %s: %v", ns, err)
 		}
@@ -310,17 +280,83 @@ func TestSelectorMatchesStateNeverReadsForgedLabels(t *testing.T) {
 	}
 }
 
-// TestSelectorMatchesTagAlwaysFalse: tag-space has no storage on
-// registry.Node until #430, so a tag: predicate must never match, even
-// against a Node with no labels at all — "matches nothing" is the honest
-// answer today, not a placeholder that happens to return false.
-func TestSelectorMatchesTagAlwaysFalse(t *testing.T) {
-	reg := seedRegistry(t)
-	node1, _ := reg.Get("node-1")
+// tagRegistry is seedRegistry plus a tag team=payments on node-2, and the
+// same key and value in the other namespaces on the other Nodes.
+func tagRegistry(t *testing.T) *registry.InMemory {
+	t.Helper()
+	reg := registry.NewInMemory()
+	for _, id := range []string{"node-1", "node-2", "node-3"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("Upsert(%s): %v", id, err)
+		}
+	}
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-1"}.WithNodeLabels(map[string]string{"team": "payments"})); err != nil {
+		t.Fatalf("Upsert(node-1): %v", err)
+	}
+	if err := reg.SetRelayLabels("node-3", map[string]string{"team": "payments"}); err != nil {
+		t.Fatalf("SetRelayLabels(node-3): %v", err)
+	}
+	if err := reg.ApplyTagChanges([]registry.TagChange{
+		{NodeID: "node-2", Key: "team", After: registry.TagValue{Set: true, Value: "payments"}},
+	}); err != nil {
+		t.Fatalf("ApplyTagChanges: %v", err)
+	}
+	return reg
+}
 
-	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceTag, Key: "team", Value: "payments"}}}
-	if sel.Matches(node1, StateEval{}) {
-		t.Error("a tag: predicate matched — tag-space has no storage until #430")
+// TestSelectorMatchesTagReadsOnlyTagLabels is QRY-41's guarantee that
+// tag: resolves against tag-space alone: the same key and value in NodeLabels
+// or RelayLabels never satisfies tag:, and TagLabels never satisfies node:,
+// relay: or state:.
+func TestSelectorMatchesTagReadsOnlyTagLabels(t *testing.T) {
+	reg := tagRegistry(t)
+	node1, _ := reg.Get("node-1")
+	node2, _ := reg.Get("node-2")
+	node3, _ := reg.Get("node-3")
+
+	tag := Selector{Predicates: []Predicate{{Namespace: NamespaceTag, Key: "team", Value: "payments"}}}
+	if !tag.Matches(node2, StateEval{}) {
+		t.Error("tag:team=payments should match node-2, which carries the tag")
+	}
+	if tag.Matches(node1, StateEval{}) {
+		t.Error("tag:team=payments matched node-1, which only has node:team=payments")
+	}
+	if tag.Matches(node3, StateEval{}) {
+		t.Error("tag:team=payments matched node-3, which only has relay:team=payments")
+	}
+
+	for _, ns := range []Namespace{NamespaceNode, NamespaceRelay} {
+		other := Selector{Predicates: []Predicate{{Namespace: ns, Key: "team", Value: "payments"}}}
+		if other.Matches(node2, StateEval{Now: time.Now()}) {
+			t.Errorf("a %v predicate matched node-2, which only has the tag", ns)
+		}
+	}
+
+	// state: is closed-vocabulary, so the arm needs an in-vocabulary key; a
+	// tag spelled like one must not satisfy it.
+	if err := reg.ApplyTagChanges([]registry.TagChange{
+		{NodeID: "node-2", Key: "policy-fingerprint", After: registry.TagValue{Set: true, Value: "4b18"}},
+	}); err != nil {
+		t.Fatalf("ApplyTagChanges: %v", err)
+	}
+	tagged, _ := reg.Get("node-2")
+	state := Selector{Predicates: []Predicate{{Namespace: NamespaceState, Key: "policy-fingerprint", Value: "4b18"}}}
+	if state.Matches(tagged, StateEval{Now: time.Now()}) {
+		t.Error("state:policy-fingerprint=4b18 matched node-2, which only has a tag of that name")
+	}
+}
+
+// TestSelectorResolve_TagTermResolvesStoredTags: a parsed tag: Selector
+// resolves the tagged Nodes through Resolve, as every surface does.
+func TestSelectorResolve_TagTermResolvesStoredTags(t *testing.T) {
+	reg := tagRegistry(t)
+	sel, err := ParseSelector("tag:team=payments")
+	if err != nil {
+		t.Fatalf("ParseSelector: %v", err)
+	}
+	got := sel.Resolve(reg, StateEval{})
+	if len(got) != 1 || got[0].NodeID != "node-2" {
+		t.Errorf("Resolve = %+v, want exactly node-2", got)
 	}
 }
 
@@ -458,29 +494,6 @@ func shapeKeyFor(t *testing.T, selector string) string {
 	}, shape)
 }
 
-// shapeKeyForSelector is shapeKeyFor for a Selector built as a STRUCT rather
-// than parsed from a string.
-//
-// It exists because #560 made tag: unparseable, and the distinct-shapes table
-// below needs tag: to stay covered: invariant 7's point is that the four
-// namespaces target different Nodes, so a tag: predicate must not collide with
-// a node: one carrying the same key and value. Losing that assertion because
-// the parser stopped accepting the spelling would quietly narrow what this
-// test proves.
-func shapeKeyForSelector(t *testing.T, sel Selector) string {
-	t.Helper()
-	shape, err := sel.Shape()
-	if err != nil {
-		t.Fatalf("Shape(%+v): %v", sel, err)
-	}
-	return approval.HashPlanShape(jobs.Action{
-		Kind:          jobs.ActionOperation,
-		OperationName: "service.restart",
-		OperationArgs: map[string]string{"unit": "nginx"},
-		RiskClass:     jobs.RiskClassMutate,
-	}, shape)
-}
-
 // TestShapeKey_SelectorNormalisation is the acceptance's table: which Selector
 // spellings are the SAME shape, and which are emphatically not.
 func TestShapeKey_SelectorNormalisation(t *testing.T) {
@@ -508,6 +521,7 @@ func TestShapeKey_SelectorNormalisation(t *testing.T) {
 	distinct := map[string]string{
 		"node":  "node:role=web",
 		"relay": "relay:role=web",
+		"tag":   "tag:role=web",
 
 		"state marker": "state:offline",
 		"state fact":   "state:daemon-version=1.4.2",
@@ -526,18 +540,6 @@ func TestShapeKey_SelectorNormalisation(t *testing.T) {
 			t.Errorf("%s (%q) and %s share a shape key", name, selector, other)
 		}
 		seen[key] = name
-	}
-
-	// tag: cannot be spelled any more (#560 refuses it at the parser), so it is
-	// built as a struct to keep invariant 7's namespace separation asserted: a
-	// tag: predicate must not share a shape key with the node: or relay: one
-	// carrying the same key and value.
-	tagKey := shapeKeyForSelector(t, Selector{Predicates: []Predicate{
-		{Namespace: NamespaceTag, Key: "role", Value: "web"},
-	}})
-	if other, dup := seen[tagKey]; dup {
-		t.Errorf("a tag: predicate shares a shape key with %s — the namespace "+
-			"is not part of the shape", other)
 	}
 
 	// "Canonicalising namespace prefixes" must NOT have been implemented by

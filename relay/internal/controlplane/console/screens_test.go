@@ -46,6 +46,7 @@ func fleetFixture() Deps {
 		{
 			NodeID:            "node-web-1",
 			NodeLabels:        map[string]string{"role": "web", "env": "prod"},
+			TagLabels:         map[string]string{"pci": "yes"},
 			PolicyFingerprint: "aaaa111122223333",
 			DaemonVersion:     "0.6.0",
 			Facts:             registry.Facts{Hostname: "web-1", OS: "debian", Kernel: "6.1.0", Arch: "x86_64"},
@@ -54,7 +55,7 @@ func fleetFixture() Deps {
 		},
 		{
 			NodeID:            "node-web-2",
-			NodeLabels:        map[string]string{"role": "web", "env": "prod"},
+			NodeLabels:        map[string]string{"role": "web", "env": "prod", "pci": "yes"},
 			PolicyFingerprint: "aaaa111122223333",
 			DaemonVersion:     "0.6.0",
 			Facts:             registry.Facts{Hostname: "web-2", OS: "debian"},
@@ -257,33 +258,27 @@ func TestFleet_FilterUsesTheRealSelectorParser(t *testing.T) {
 	}
 }
 
-// TestFleet_UnresolvableNamespacesAreRefusedByName covers the honesty rule: a
-// filter on `tag:` would match nothing today (no storage until #430), and a
-// filter box that silently returns zero rows for a valid-looking term teaches
-// an operator that the box is unreliable.
-func TestFleet_UnresolvableNamespacesAreRefusedByName(t *testing.T) {
+// TestFleet_TagFilterNarrowsTheFleet: a tag: term resolves through the same
+// capability.ParseSelector and Matches every surface uses, against tag-space
+// alone. The fixture carries pci=yes as a tag on one Node, and the same key as
+// a node: label on another, which the tag: filter must not match.
+func TestFleet_TagFilterNarrowsTheFleet(t *testing.T) {
 	d := fleetFixture()
-	term := "tag:pci"
-	v := buildFleetView(d, fleetNodes(d), 0, term, "-")
-	if v.FilterOK {
-		t.Errorf("%s was accepted as a filter, but nothing can resolve it yet", term)
+	v := buildFleetView(d, fleetNodes(d), 0, "tag:pci=yes", "-")
+	if !v.FilterOK {
+		t.Fatalf("tag:pci=yes was refused: %q", v.FilterError)
 	}
-	if v.Matched != len(fleetNodes(d)) {
-		t.Errorf("%s blanked the fleet — a rejected filter must leave the fleet on screen", term)
+	if v.Matched != 1 {
+		t.Errorf("tag:pci=yes matched %d Nodes, want exactly the tagged one", v.Matched)
 	}
-	if trackerRef.MatchString(v.FilterError) {
-		t.Errorf("the refusal for %q carries a tracker reference: %q", term, v.FilterError)
+
+	nodeLabelled := buildFleetView(d, fleetNodes(d), 0, "node:pci=yes", "-")
+	if !nodeLabelled.FilterOK || nodeLabelled.Matched != 1 {
+		t.Fatalf("node:pci=yes matched %d Nodes (ok=%v), want the one node-labelled Node", nodeLabelled.Matched, nodeLabelled.FilterOK)
 	}
-	if !strings.HasPrefix(v.FilterError, "This Relay cannot filter on tag: labels yet") {
-		t.Errorf("the refusal for %q does not say why: %q", term, v.FilterError)
-	}
-	// The refusal must NOT carry the generic lead sentence. Since #560 the rule
-	// lives in capability.ParseSelector and this screen only RECOGNISES the
-	// sentinel; if that recognition is lost, the term falls through to the
-	// generic arm, which reports the capability error as a missing prefix on a
-	// term that plainly has one.
-	if strings.Contains(v.FilterError, "prefix") {
-		t.Errorf("the refusal for %q names the wrong problem — the term HAS a prefix: %q", term, v.FilterError)
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), fleetPath+"?filter=tag%3Apci%3Dyes&group=-").Body.String()
+	if !strings.Contains(body, "node-web-1") || strings.Contains(body, "node-web-2") {
+		t.Error("the page for tag:pci=yes does not show the tagged Node alone")
 	}
 }
 
@@ -318,7 +313,7 @@ func TestFleet_RefusedFilterIsSaidUnderTheField(t *testing.T) {
 
 	for _, tc := range []struct{ name, term string }{
 		{"unprefixed term", "role=web"},
-		{"tag: term", "tag:team=ops"},
+		{"unknown state: term", "state:nonesuch"},
 		{"malformed term", "node:role"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

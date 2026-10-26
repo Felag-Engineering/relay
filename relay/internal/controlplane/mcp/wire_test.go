@@ -21,6 +21,7 @@ func TestDescribeNodeOutput_JSONShapeIsFlattened(t *testing.T) {
 			NodeID:      "node-a",
 			NodeLabels:  map[string]string{"role": "web"},
 			RelayLabels: map[string]string{"quarantine": "on"},
+			TagLabels:   map[string]string{"team": "payments"},
 			Facts: FactsOutput{
 				Hostname:    "web-1",
 				OS:          "linux",
@@ -70,6 +71,7 @@ func TestDescribeNodeOutput_JSONShapeIsFlattened(t *testing.T) {
 	}
 
 	want := `{"node_id":"node-a","node_labels":{"role":"web"},"relay_labels":{"quarantine":"on"},` +
+		`"tag_labels":{"team":"payments"},` +
 		`"facts":{"hostname":"web-1","os":"linux","kernel":"6.1.0","arch":"amd64","ip_addresses":["10.0.0.1"]},` +
 		`"last_seen":"2024-01-01T00:00:00Z","policy_fingerprint":"sha256:node-a-fingerprint",` +
 		`"template_set_fingerprint":"sha256:node-a-template-set","revoked":false,` +

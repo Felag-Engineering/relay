@@ -23,7 +23,7 @@ import (
 // The Relay minted the certificate. A daemon that could report its own expiry
 // could claim an identity that never lapses.
 func TestReport_CannotCarryRelayKnowledge(t *testing.T) {
-	forbidden := []string{"CertNotAfter", "EnrolledAt", "RenewalCount", "LastRenewedAt", "Connected", "RevokedAt", "RelayLabels"}
+	forbidden := []string{"CertNotAfter", "EnrolledAt", "RenewalCount", "LastRenewedAt", "Connected", "RevokedAt", "RelayLabels", "TagLabels"}
 	rt := reflect.TypeOf(registry.Report{})
 	for i := 0; i < rt.NumField(); i++ {
 		name := rt.Field(i).Name

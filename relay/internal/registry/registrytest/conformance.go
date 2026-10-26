@@ -935,6 +935,7 @@ func factsEqual(a, b registry.Facts) bool {
 func nodesEqual(a, b registry.Node) bool {
 	return a.NodeID == b.NodeID && a.CertFingerprint == b.CertFingerprint && factsEqual(a.Facts, b.Facts) &&
 		maps.Equal(a.NodeLabels, b.NodeLabels) && maps.Equal(a.RelayLabels, b.RelayLabels) &&
+		maps.Equal(a.TagLabels, b.TagLabels) &&
 		a.LastSeen.Equal(b.LastSeen) && a.EnrollingTokenID == b.EnrollingTokenID &&
 		a.PolicyFingerprint == b.PolicyFingerprint && a.DaemonVersion == b.DaemonVersion &&
 		a.TemplateSetFingerprint == b.TemplateSetFingerprint && a.RevokedAt.Equal(b.RevokedAt) &&

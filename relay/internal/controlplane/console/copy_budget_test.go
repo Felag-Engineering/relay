@@ -1282,7 +1282,6 @@ func TestCopyBudget_GoStringNotesAreShort(t *testing.T) {
 		limit      int
 	}{
 		{"facetRefusalHint", facetRefusalHint, maxGoNoteWords},
-		{"tagFilterRefusal", tagFilterRefusal, maxGoNoteWords},
 		{"filterTermExample", filterTermExample, maxGoNoteWords},
 		{"selfPanelNote", selfPanelNote, maxGoNoteWords},
 		{"doneSentence(role)", doneSentence(string(doneRole)), maxGoNoteWords},

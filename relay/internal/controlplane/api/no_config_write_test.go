@@ -36,6 +36,7 @@ const (
 var runtimeObjects = map[string]bool{
 	"Enrollment Token": true, "Node revocation": true, "Freeze": true, "Account": true,
 	"API Token": true, "Job": true, "approval Request": true, "Approval grant": true,
+	"Tag": true,
 }
 
 // routeWrites files every route under what it writes; "" is a read. The
@@ -48,6 +49,8 @@ var routeWrites = map[string]string{
 	"POST /api/v1/nodes/{node_id}/revoke":      "Node revocation",
 	"POST /api/v1/freeze/engage":               "Freeze",
 	"POST /api/v1/freeze/release":              "Freeze",
+	"POST /api/v1/nodes/{node_id}/tags":        "Tag",
+	"POST /api/v1/tags":                        "Tag",
 	"POST /api/v1/accounts":                    "Account",
 	"GET /api/v1/accounts":                     "",
 	"GET /api/v1/accounts/{id}":                "",
