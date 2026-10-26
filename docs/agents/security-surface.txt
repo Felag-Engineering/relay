@@ -74,6 +74,7 @@ relay/cmd/relay/console_password.go
 relay/cmd/relay/control_surfaces.go
 relay/cmd/relay/dispatch_wiring.go
 relay/cmd/relay/host_audit.go
+relay/cmd/relay/servercert.go
 relay/cmd/relay/tunnel.go
 daemon/src/scheduler.rs
 daemon/src/shutdown.rs

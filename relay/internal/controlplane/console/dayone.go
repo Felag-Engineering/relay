@@ -55,10 +55,10 @@ package console
 // proto/ carries a CA fingerprint today), so this screen says what the value is
 // for without claiming a mechanism the tree does not have.
 //
-// The control-plane server leaf is rendered beside it, labelled honestly as
-// re-issued about daily and explicitly not a thing to pin — presenting a leaf
-// as a comparison ritual is what ADR-0031 rejects, because a browser exception
-// pinned to it breaks at every rotation.
+// The server leaf, the one both listeners present, is rendered beside it,
+// labelled honestly as re-issued about daily and explicitly not a thing to pin
+// — presenting a leaf as a comparison ritual is what ADR-0031 rejects, because
+// a browser exception pinned to it breaks at every rotation.
 //
 // There is NO reachable address on this screen. Contents item 4 of spec 10 asks
 // for one; acceptance criterion 5 forbids exposing "any Relay configuration

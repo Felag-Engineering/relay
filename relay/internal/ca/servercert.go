@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,8 +18,7 @@ import (
 // ServerLeafValidity still remaining when the leaf is re-issued. The lead time
 // is drawn uniformly from that range once per issuance — the "jittered
 // fraction of expiry" ADR-0031 §5 asks for — so re-issuance never lands on a
-// round multiple of the process start time and the two listeners' certificates
-// do not rotate in lockstep.
+// round multiple of the process start time.
 //
 // The lower bound is what matters for safety: at one third of the lifetime
 // remaining (8h at ServerLeafValidity), there is a wide window in which any
@@ -125,8 +125,8 @@ func WithRotationObserver(fn func(Rotation)) ServerCertOption {
 func (c *CA) NewServerCertificate(dnsNames []string, ipAddresses []net.IP, opts ...ServerCertOption) (*ServerCertificate, error) {
 	s := &ServerCertificate{
 		ca:          c,
-		dnsNames:    dnsNames,
-		ipAddresses: ipAddresses,
+		dnsNames:    slices.Clone(dnsNames),
+		ipAddresses: slices.Clone(ipAddresses),
 		validity:    ServerLeafValidity,
 		now:         time.Now,
 	}
@@ -144,7 +144,7 @@ func (c *CA) NewServerCertificate(dnsNames []string, ipAddresses []net.IP, opts 
 // re-issuing first if the current leaf has reached its renewal instant. It has
 // the signature of tls.Config.GetCertificate and is meant to be installed
 // there; the argument is unused because the Relay presents one certificate to
-// every caller on a listener.
+// every caller on every listener.
 func (s *ServerCertificate) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	if cur := s.current.Load(); cur != nil && s.now().Before(cur.renewAt) {
 		return &cur.cert, nil

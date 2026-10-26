@@ -98,8 +98,12 @@ path = "/var/lib/relay/relay.db"
 # ---------------------------------------------------------------------------
 [tls]
 
-# Hostname placed in both listeners' server certificates. It MUST match the host
-# the daemons dial, or their TLS verification fails.
+# The name on the Relay's one server certificate, which both listeners present.
+# A join string tells daemons to dial it. The certificate also names 127.0.0.1,
+# ::1 and up to 64 of this host's addresses as they are when the Relay starts,
+# so a daemon may instead dial one of this host's IPv4 addresses (RELAY_ADDRESS
+# in its environment). Any other name a daemon or a browser dials must be this
+# one.
 hostname = "relay.example.internal"
 
 # ---------------------------------------------------------------------------

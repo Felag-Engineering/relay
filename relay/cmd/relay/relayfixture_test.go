@@ -208,9 +208,9 @@ func startRelay(t *testing.T, opts ...FixtureOption) *relayFixture {
 
 // TLSConfig returns a client TLS config trusting the Relay's CA.
 //
-// ServerName is pinned to "localhost" because that is the SAN the composition
-// root issues the control-plane certificate for (baseTestConfig's Hostname),
-// even though tests dial 127.0.0.1.
+// ServerName stays "localhost" because it is the certificate hostname from
+// baseTestConfig and the name a daemon is given; dialling 127.0.0.1 would also
+// verify, through the loopback IP SAN.
 func (f *relayFixture) TLSConfig() *tls.Config {
 	return &tls.Config{RootCAs: f.CertPool, ServerName: "localhost"}
 }
