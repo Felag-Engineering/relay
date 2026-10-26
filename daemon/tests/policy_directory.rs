@@ -479,6 +479,39 @@ fn check_refuses_a_symlinked_or_non_directory_policy_dir() {
     }
 }
 
+/// A Policy file that is a symlink to a valid Policy is refused by the loader,
+/// which runs deny-all on it, so `policy check` refuses it too, with the
+/// loader's own error, with or without the Policy directory.
+#[test]
+fn check_refuses_a_symlinked_policy_file() {
+    let node = Node::without_policy_file("policy-dir-symlinked-file");
+    let real = node.root.path().join("real-policy.toml");
+    node.write(&real, ALLOW_NGINX);
+    std::os::unix::fs::symlink(&real, node.policy()).unwrap();
+    node.fragment("10-sshd.toml", ALLOW_SSHD);
+
+    let (exited, all) = run_daemon(&node, DENY_ALL_LINE);
+    assert!(exited.is_none(), "deny-all, not a refusal: {all}");
+    assert!(all.contains(DENY_ALL_LINE), "journal: {all}");
+
+    let refusal = relay_policy::PolicyError::SymlinkPath.to_string();
+    for extra in [&[][..], &["--strict"][..]] {
+        for with_dir in [false, true] {
+            let (code, stdout, stderr) = if with_dir {
+                check_dir(&node, extra)
+            } else {
+                check_output(&node, extra)
+            };
+            assert_eq!(code, Some(1), "dir {with_dir} {extra:?}: stderr: {stderr}");
+            assert_eq!(printed_fingerprint(&stdout), None, "stdout: {stdout}");
+            assert!(
+                stderr.contains(&refusal),
+                "the loader's own error; stderr: {stderr}"
+            );
+        }
+    }
+}
+
 /// A mistyped table in a deny-only fragment is a parse error, not a silent
 /// no-op that leaves the allow standing.
 #[test]
