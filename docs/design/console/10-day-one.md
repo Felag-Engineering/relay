@@ -76,10 +76,10 @@ over the prose.
 **The server certificate is labelled as rotating, not as a boot-time constant.** Criterion 2 asks
 for "the same values the Relay printed at first boot", but ADR-0031 has the leaf re-issued about
 daily, so an exception pinned to it breaks at every rotation. The CA fingerprint is rendered first
-as the value to compare; the control-plane leaf beside it says in words that it is not what you
+as the value to compare; the server leaf beside it says in words that it is not what you
 pin. The Relay logs the CA fingerprint at startup (`relay certificate authority`), which makes the
-criterion checkable. ADR-0031 decision 1 (one certificate for both listeners) is not implemented,
-so the screen names which listener's certificate it shows.
+criterion checkable. One certificate serves both listeners (ADR-0031 decision 1), so the leaf
+shown is the one the browser is talking to.
 
 **The quickstart is named, not linked.** `docs/quickstart.md` does not exist (#402), so the screen
 renders its path in mono, as a placeholder screen names its specification. A link that 404s on the

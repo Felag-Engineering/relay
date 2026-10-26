@@ -101,8 +101,13 @@ SystemCallArchitectures=native
 # AF_UNIX is not listed: unlike the daemon, the Relay spawns no child that
 # needs D-Bus. AF_INET/AF_INET6 are the two listeners (Node-plane gRPC and,
 # when enabled, the control plane) plus outbound calls to an OAuth issuer's
-# JWKS endpoint and the approval webhook.
-RestrictAddressFamilies=AF_INET AF_INET6
+# JWKS endpoint and the approval webhook. AF_NETLINK is how the Relay lists
+# this host's addresses once at start, to name them on its server certificate
+# (ADR-0031 §2); the same family permits reading the socket table (sock_diag).
+# With no capability it reads the kernel's network state and can change none of
+# it. Without it the Relay still starts, warns, and its
+# certificate names only tls.hostname and loopback.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK
 
 # --- resource containment ---
 #

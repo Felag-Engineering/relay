@@ -86,7 +86,8 @@ type CA struct{ Dir string }
 // Store holds the path of the SQLite store.
 type Store struct{ Path string }
 
-// TLS holds the hostname both listeners' server certificates carry.
+// TLS holds the certificate hostname: a name on the one server certificate
+// both listeners present, and the host a join string carries by default.
 type TLS struct{ Hostname string }
 
 // OAuth is the human sign-in through an external identity provider; an empty

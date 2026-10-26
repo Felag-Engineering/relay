@@ -22,7 +22,8 @@ const joinTimeout = 90 * time.Second
 // `relay-daemon join`; StateDir and PolicyPath map onto the daemon's env
 // (RELAY_STATE_DIR/RELAY_POLICY_PATH). The Node's Relay address and the CA
 // fingerprint it pins come from the join string alone, never a CA file or a
-// separate address, and never from the daemon's environment. Hostname becomes HOSTNAME, so distinct calls
+// separate address, and never from the daemon's environment unless Address
+// overrides the address. Hostname becomes HOSTNAME, so distinct calls
 // model distinct fleet Nodes (never reusing on-disk identity unless the caller
 // deliberately reuses StateDir/Hostname, e.g. for a restart). LogWriter, if
 // non-nil, captures the subprocess's combined stdout/stderr; nil discards it.
@@ -37,6 +38,14 @@ type DaemonConfig struct {
 	// TemplateDir, when set, is the daemon's RELAY_TEMPLATE_DIR: the root it
 	// loads Template Operations from (WriteTemplatePack returns one).
 	TemplateDir string
+	// OmitServerName, when true, gives the daemon no RELAY_SERVER_NAME, so it
+	// verifies the Relay by the host it dials. False keeps
+	// RELAY_SERVER_NAME=localhost.
+	OmitServerName bool
+	// Address, when set, is the daemon's RELAY_ADDRESS in both the join and the
+	// run environment. It overrides only where the daemon dials (EN-30) and is
+	// what the daemon persists.
+	Address string
 }
 
 // DaemonHandle is a launched relay-daemon subprocess. Kill is registered as
@@ -65,11 +74,16 @@ func StartDaemon(t *testing.T, cfg DaemonConfig) *DaemonHandle {
 	env := append(withoutDaemonAddressing(os.Environ()),
 		"RELAY_STATE_DIR="+cfg.StateDir,
 		"RELAY_POLICY_PATH="+cfg.PolicyPath,
-		"RELAY_SERVER_NAME=localhost",
 		"HOSTNAME="+cfg.Hostname,
 		// Disable rustls provider conflict on some environments.
 		"RUST_LOG=warn",
 	)
+	if !cfg.OmitServerName {
+		env = append(env, "RELAY_SERVER_NAME=localhost")
+	}
+	if cfg.Address != "" {
+		env = append(env, "RELAY_ADDRESS="+cfg.Address)
+	}
 	if cfg.TemplateDir != "" {
 		env = append(env, "RELAY_TEMPLATE_DIR="+cfg.TemplateDir)
 	}
@@ -157,12 +171,12 @@ func (h *DaemonHandle) Relaunch() {
 }
 
 // withoutDaemonAddressing drops every variable that could hand the daemon an
-// address, a CA or a credential, so a test runner's own environment cannot mask
-// what the join string carries.
+// address, the name it verifies, a CA or a credential, so a test runner's own
+// environment cannot mask what the join string carries.
 func withoutDaemonAddressing(env []string) []string {
 	strip := []string{
 		"RELAY_ADDRESS=", "RELAY_ENROLL_ADDRESS=", "RELAY_JOIN=",
-		"RELAY_ENROLLMENT_TOKEN=", "RELAY_CA_BUNDLE_PATH=",
+		"RELAY_ENROLLMENT_TOKEN=", "RELAY_CA_BUNDLE_PATH=", "RELAY_SERVER_NAME=",
 	}
 	var out []string
 	for _, kv := range env {

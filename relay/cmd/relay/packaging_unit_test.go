@@ -1,6 +1,7 @@
 package main
 
 import (
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -44,6 +45,16 @@ func unitDirectives(t *testing.T, file string) map[string]map[string][]string {
 	return out
 }
 
+// relayUnitPath is the shipped relay.service.
+func relayUnitPath(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	return filepath.Join(filepath.Dir(thisFile), "..", "..", "packaging", "relay.service")
+}
+
 // TestRelayUnit_UnprivilegedNoCapsReadOnly is RC-6: the shipped relay.service
 // runs as an unprivileged account with an empty capability set and a read-only
 // filesystem outside its state directory.
@@ -53,11 +64,7 @@ func unitDirectives(t *testing.T, file string) map[string]map[string][]string {
 // would add privilege back (a second CapabilityBoundingSet, a "+" Exec prefix,
 // a ReadWritePaths) fails rather than being modelled.
 func TestRelayUnit_UnprivilegedNoCapsReadOnly(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	unit := filepath.Join(filepath.Dir(thisFile), "..", "..", "packaging", "relay.service")
+	unit := relayUnitPath(t)
 	svc := unitDirectives(t, unit)["Service"]
 	if len(svc) == 0 {
 		t.Fatalf("%s has no [Service] directives (RC-6)", unit)
@@ -130,5 +137,30 @@ func TestRelayUnit_UnprivilegedNoCapsReadOnly(t *testing.T) {
 		"RuntimeDirectory", "CacheDirectory", "LogsDirectory", "ConfigurationDirectory")
 	for _, key := range []string{"ProtectHome", "PrivateTmp", "PrivateDevices", "ProtectKernelTunables", "ProtectControlGroups"} {
 		equals(key, "yes")
+	}
+}
+
+// TestRelayUnit_AddressFamiliesAreTheListenersAndAddressListing pins the
+// unit's address families to the three it has a reason for. AF_INET and
+// AF_INET6 are the listeners and the outbound OAuth and webhook calls;
+// AF_NETLINK is the address listing behind the server certificate's detected
+// addresses (ADR-0031 §2). Any further family widens the sandbox and needs its
+// reason written in the unit first.
+func TestRelayUnit_AddressFamiliesAreTheListenersAndAddressListing(t *testing.T) {
+	unit := relayUnitPath(t)
+	values := unitDirectives(t, unit)["Service"]["RestrictAddressFamilies"]
+	if len(values) != 1 {
+		t.Fatalf("RestrictAddressFamilies= occurs %d times in %s, want exactly once", len(values), unit)
+	}
+	got := map[string]bool{}
+	for _, family := range strings.Fields(values[0]) {
+		if strings.HasPrefix(family, "~") {
+			t.Errorf("RestrictAddressFamilies=%q is the deny-list form; the unit allows a closed set", values[0])
+		}
+		got[family] = true
+	}
+	want := map[string]bool{"AF_INET": true, "AF_INET6": true, "AF_NETLINK": true}
+	if !maps.Equal(got, want) {
+		t.Errorf("RestrictAddressFamilies=%q, want exactly AF_INET AF_INET6 AF_NETLINK", values[0])
 	}
 }
