@@ -141,8 +141,6 @@ func (c *cancelOnDispatchConduit) Query(context.Context, string, jobs.Action) (j
 	return jobs.Verdict{}, nil
 }
 
-func (c *cancelOnDispatchConduit) Settled(string, string) {}
-
 // TestRun_ReservedDispatchIsAuditedAndBoundWhenTheClientDropsMidDispatch is
 // the fix pass's central proof (#713 follow-up, Codex run 2 HIGH): a client
 // that drops mid-dispatch on the RESERVED (approval-released) path must not

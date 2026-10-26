@@ -84,8 +84,6 @@ func (c *probeConduit) Query(context.Context, string, jobs.Action) (jobs.Verdict
 	return jobs.Verdict{}, nil
 }
 
-func (c *probeConduit) Settled(string, string) {}
-
 // TestRun_RequesterIsReadableAndEnforcedWhileEveryTaskIsPending (#616, AC4)
 // is the capability read lane's end-to-end proof: the requester recorded on
 // a Job is durable and enforced WHILE every one of its Tasks is still

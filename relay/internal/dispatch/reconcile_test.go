@@ -313,11 +313,14 @@ func TestReconciler_ResendBeforeTheWorkersGuardIsNotRecordedNeverSent(t *testing
 	if o.err != nil {
 		t.Fatalf("worker Dispatch: %v", o.err)
 	}
-	if err := fake.Resolve(context.Background(), "task-1", o.res); err != nil {
+	// The resend was woken by the same Result and resolves the Task; the
+	// worker's own write then finds it resolved, as the engine tolerates.
+	if err := <-reconcileDone; err != nil {
+		t.Fatalf("ReconcileNode: %v", err)
+	}
+	if err := fake.Resolve(context.Background(), "task-1", o.res); err != nil && !errors.Is(err, jobs.ErrInvalidTaskState) {
 		t.Fatalf("Resolve: %v", err)
 	}
-	stopReconcile() // its waiter was overwritten by the worker's; see ReconcileNode's doc
-	<-reconcileDone
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -897,8 +900,8 @@ func TestReconciler_DeliveredResultSurvivesTeardownWhileItsResolveIsPending(t *t
 	}
 }
 
-// Once the Reconciler's Resolve has returned, the delivered entry is removed
-// from the live registration.
+// Once the Reconciler's Resolve has returned, the protection its delivered
+// result was held under is released.
 func TestReconciler_SettlesADeliveredResultAfterItsResolve(t *testing.T) {
 	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
 	tasks := newFakeTaskRepository(task)
@@ -919,7 +922,7 @@ func TestReconciler_SettlesADeliveredResultAfterItsResolve(t *testing.T) {
 
 	router.mu.Lock()
 	defer router.mu.Unlock()
-	if got := router.conns["node-1"].delivered; len(got) != 0 {
-		t.Errorf("delivered = %v, want it empty once the Task is resolved", got)
+	if len(router.held) != 0 {
+		t.Errorf("held = %v, want it empty once the Task is resolved", router.held)
 	}
 }

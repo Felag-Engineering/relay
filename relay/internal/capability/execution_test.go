@@ -35,7 +35,8 @@ type fakeConduit struct {
 	queryErrs map[string]error
 	log       *[]string
 
-	// settledTasks lists the task IDs Settled was called with.
+	// settledTasks lists the task IDs whose delivered result the engine has
+	// settled (jobs.Settlement).
 	settledTasks []string
 
 	// mu guards log and the maps' reads: dispatchOne runs on worker goroutines.
@@ -60,7 +61,7 @@ func (f *fakeConduit) Connected(nodeID string) bool {
 	return f.connected[nodeID]
 }
 
-func (f *fakeConduit) Dispatch(_ context.Context, nodeID string, _ jobs.Task) (jobs.Result, error) {
+func (f *fakeConduit) Dispatch(ctx context.Context, nodeID string, task jobs.Task) (jobs.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.log != nil {
@@ -68,6 +69,16 @@ func (f *fakeConduit) Dispatch(_ context.Context, nodeID string, _ jobs.Task) (j
 	}
 	if err, ok := f.errs[nodeID]; ok && err != nil {
 		return jobs.Result{}, err
+	}
+	// A delivered result is held under the caller's Settlement, as the Router
+	// holds it; the release records the settle outside the shared log, whose
+	// order is asserted by tests that predate it.
+	if s := jobs.SettlementFrom(ctx); s != nil {
+		s.Hold(func() {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.settledTasks = append(f.settledTasks, task.ID)
+		})
 	}
 	return f.results[nodeID], nil
 }
@@ -97,15 +108,7 @@ func (f *fakeConduit) Query(_ context.Context, nodeID string, _ jobs.Action) (jo
 	return f.verdicts[nodeID], nil
 }
 
-// Settled records taskID in settledTasks, outside the shared log: the log's
-// order is asserted by tests that predate the call.
-func (f *fakeConduit) Settled(_, taskID string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.settledTasks = append(f.settledTasks, taskID)
-}
-
-// settled returns the task IDs the engine has told the Conduit it is done with.
+// settled returns the task IDs whose delivered result the engine has settled.
 func (f *fakeConduit) settled() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -2898,9 +2901,9 @@ func (b *blockingResolve) Resolve(ctx context.Context, taskID string, r jobs.Res
 	return b.TaskRepository.Resolve(ctx, taskID, r)
 }
 
-// The engine tells the Conduit a Task is settled only after its Resolve has
-// returned: until then the Conduit must keep protecting the delivered result,
-// however long the write takes.
+// The engine settles a delivered result only after its Resolve has returned:
+// until then the Conduit must keep protecting it, however long the write
+// takes.
 func TestEngine_SettlesAfterTheResolveReturns(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	fake := newFakeConduit(nil)
@@ -2927,7 +2930,7 @@ func TestEngine_SettlesAfterTheResolveReturns(t *testing.T) {
 		t.Fatal("the engine never reached Resolve")
 	}
 	if got := fake.settled(); len(got) != 0 {
-		t.Fatalf("Settled called with %v while the Resolve was still pending", got)
+		t.Fatalf("settled %v while the Resolve was still pending", got)
 	}
 
 	close(blocking.release)
@@ -2941,6 +2944,6 @@ func TestEngine_SettlesAfterTheResolveReturns(t *testing.T) {
 	}
 	task := onlyTask(t, tasksRepo)
 	if got := fake.settled(); len(got) != 1 || got[0] != task.ID {
-		t.Errorf("Settled calls = %v, want exactly [%s]", got, task.ID)
+		t.Errorf("settled = %v, want exactly [%s]", got, task.ID)
 	}
 }

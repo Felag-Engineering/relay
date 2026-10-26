@@ -100,14 +100,6 @@ type Conduit interface {
 	// matched-but-disconnected Node is never queried — it is a Relay-side
 	// unknown(offline) conclusion instead (invariant 12).
 	Query(ctx context.Context, nodeID string, act jobs.Action) (jobs.Verdict, error)
-
-	// Settled tells the Conduit that the caller of Dispatch for taskID has
-	// finished with the Task: its result is persisted, or the caller gave up
-	// on it. The Conduit protects a result it delivered from being replaced by
-	// the offline resolution until this call, because Dispatch returns the
-	// result before the caller has written it. The caller invokes it exactly
-	// when its Dispatch call is done, after its Resolve returns.
-	Settled(nodeID, taskID string)
 }
 
 // idGen mints a new unique ID. It is a seam so in-package tests can inject
@@ -782,9 +774,11 @@ func (e *jobEngine) dispatchOne(ctx context.Context, gate *jobGate, pt pendingTa
 		}
 		return false
 	})
-	// Deferred so it runs after the Resolve below: until then the Conduit
-	// keeps a delivered result safe from the offline resolution.
-	defer e.conduit.Settled(task.NodeID, task.ID)
+	// Settled after the Resolve below, by the defer: until then the Conduit
+	// keeps a result it delivered to this call safe from the offline
+	// resolution (jobs.Settlement).
+	sendCtx, settlement := jobs.WithSettlement(sendCtx)
+	defer settlement.Settle()
 	result, dispatchErr := e.conduit.Dispatch(sendCtx, task.NodeID, task)
 	if dispatchErr != nil {
 		if errors.Is(dispatchErr, jobs.ErrSendWithheld) && !leftDispatched && gate.isCancelled() {

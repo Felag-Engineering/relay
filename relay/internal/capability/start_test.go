@@ -77,8 +77,6 @@ func (c *gateConduit) Query(context.Context, string, jobs.Action) (jobs.Verdict,
 	return jobs.Verdict{}, nil
 }
 
-func (c *gateConduit) Settled(string, string) {}
-
 // hookIntents wraps nonAtomicIntents so a test can hold a Job inside
 // RecordIntent (after its key is claimed, before its Tasks exist) or fail it.
 type hookIntents struct {

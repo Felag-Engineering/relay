@@ -58,6 +58,9 @@ func (d *dispatcher) register(nodeID string, send func(*relayv1.RelayMessage) er
 	}
 }
 
+// streamEnded implements taskSink: this fake resolves nothing.
+func (d *dispatcher) streamEnded(string, func() bool) {}
+
 // deliver implements taskSink. Called by tunnelServer.Open when a TaskResult
 // arrives on the inbound stream. Buffered channel (32) avoids blocking the
 // stream goroutine while the test goroutine reads.

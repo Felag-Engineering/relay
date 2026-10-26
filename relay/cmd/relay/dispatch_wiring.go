@@ -80,6 +80,10 @@ func (s routerSink) register(nodeID string, send func(*relayv1.RelayMessage) err
 	return s.r.Register(nodeID, send, opts...)
 }
 
+func (s routerSink) streamEnded(nodeID string, live func() bool) {
+	s.r.StreamEnded(nodeID, live)
+}
+
 func (s routerSink) deliver(nodeID string, result *relayv1.TaskResult) {
 	s.r.Deliver(nodeID, result)
 }

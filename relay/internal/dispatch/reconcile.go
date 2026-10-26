@@ -15,8 +15,8 @@ import (
 // TimeoutSeconds <= 0) so a resend for a Task that is genuinely still running
 // on the daemon has time to return its real (or benign already-processed,
 // per dedup.rs) Result before the bound trips — while still guaranteeing
-// that an orphaned waiter (see the concurrent-reconnect race below) always
-// returns rather than leaking forever.
+// that a resend whose Result never comes always returns rather than leaking
+// forever.
 const reconcileDispatchTimeout = 35 * time.Second
 
 // Reconciler recovers in-flight Tasks after a Relay restart or a Node
@@ -71,17 +71,16 @@ func NewReconciler(tasks jobs.TaskRepository, conduit *Router) *Reconciler {
 // firing on every registration including reconnects.
 //
 // Concurrent-reconnect guard: onConnect fires on every Register call, so a
-// flapping nodeID can trigger two overlapping ReconcileNode goroutines. Both
-// resending the same task_id would register two waiters for one task_id in
-// Router's flat waiters map — the second overwrites the first, orphaning the
-// first Dispatch call (it can never receive a Result; it can only time out).
-// This cannot cause double-EXECUTION (the daemon's dedup still holds), but it
-// would leak a goroutine and skip a Resolve. Two mitigations: (a) every
-// Dispatch call here runs under a bounded ctx (reconcileDispatchTimeout), so
-// an orphaned call is guaranteed to return rather than hang; (b) this guard
-// (inProgress, keyed by nodeID) makes a second concurrent ReconcileNode call
-// for the same nodeID a no-op, so only one reconcile drives that nodeID's
-// Dispatch calls at a time.
+// flapping nodeID can trigger two overlapping ReconcileNode goroutines, each
+// resending the same task_id. The Router keeps every caller waiting on a task
+// ID, so neither is orphaned, but the duplicate resends are wasted work. Two
+// bounds: (a) every Dispatch call here runs under a bounded ctx
+// (reconcileDispatchTimeout), so a call whose Result never comes returns
+// rather than hangs; (b) this guard (inProgress, keyed by nodeID) makes a
+// second concurrent ReconcileNode call for the same nodeID a no-op, so only
+// one reconcile drives that nodeID's Dispatch calls at a time. A live
+// worker's Dispatch of the same Task can still wait beside a resend, and both
+// are woken by the one Result.
 func (r *Reconciler) ReconcileNode(ctx context.Context, nodeID string) error {
 	r.mu.Lock()
 	if r.inProgress[nodeID] {
@@ -121,9 +120,9 @@ func (r *Reconciler) ReconcileNode(ctx context.Context, nodeID string) error {
 // the first time minutes or hours later (invariant 4, ADR-0004).
 //
 // skip holds the IDs of Tasks whose TaskResult was already delivered to a
-// waiting Dispatch call. Those Tasks are left for that call to resolve with
-// the real result, so the offline resolution never overwrites a result that
-// arrived.
+// waiting Dispatch call that has not yet settled it (jobs.Settlement). Those
+// Tasks are left for that call to resolve with the real result, so the
+// offline resolution never overwrites a result that arrived.
 //
 // ErrInvalidTaskState and ErrTaskNotFound are tolerated, as in reconcileTask:
 // they mean a worker or a reconcile resolved the Task first. Any other error
@@ -188,11 +187,12 @@ func (r *Reconciler) reconcileTask(ctx context.Context, nodeID string, task jobs
 		}
 		return cur.State != jobs.DispatchStateDispatched
 	}
-	// The deferred Settled runs after the Resolve below, so a result the Router
-	// delivered stays protected from the offline resolution until this
-	// reconcile has persisted it.
-	defer r.conduit.Settled(nodeID, task.ID)
-	res, err := r.conduit.Dispatch(jobs.WithSendGuard(dctx, guard), nodeID, task)
+	// The deferred Settle runs after the Resolve below, so a result the Router
+	// delivered to this reconcile stays protected from the offline resolution
+	// until this reconcile has persisted it.
+	sendCtx, settlement := jobs.WithSettlement(jobs.WithSendGuard(dctx, guard))
+	defer settlement.Settle()
+	res, err := r.conduit.Dispatch(sendCtx, nodeID, task)
 	if errors.Is(err, jobs.ErrSendWithheld) {
 		if readErr != nil {
 			return fmt.Errorf("dispatch: reconcile task %q on node %q: re-read before resend: %w", task.ID, nodeID, readErr)
