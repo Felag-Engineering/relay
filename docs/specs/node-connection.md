@@ -97,14 +97,14 @@ later work (`roadmap: relay/fast-failure-and-fleet-admission`).
 - **A Policy or declared-label change takes effect when the relay-daemon restarts**, and the new
   self-report arrives in that connection's `Hello`. A fresh self-report without reconnecting
   comes with live reload (`roadmap: relay/policy-catalog-and-live-reload`).
-- **Each self-reported field is bounded at ingest:** the Policy fingerprint is 64 lowercase hex
+- **Each field `Hello` reports is bounded at ingest:** the Policy fingerprint is 64 lowercase hex
   characters, and the template-set fingerprint the same or `unloadable`; the daemon version is
   semver of at most 253 bytes; hostname, OS, kernel and architecture are at most 253 bytes of
   visible ASCII; an IP address is a plain address with no zone; a `node:` label's key is at most
   63 characters and its value at most 255 (`selectors-and-labels.md`). A value that fails is
   recorded as not reported, or the entry dropped, and never truncated or rewritten. The
   connection stays up. A value stored before these bounds existed is dropped the same way when
-  it is read back.
+  it is read back. The fingerprints a Policy or Template snapshot carries are not yet bounded.
 - **Clock skew** is measured from heartbeats and recorded as a Fact. It never blocks anything.
 - **Nothing a Node reports can write `relay:` or `tag:` labels, Policy, or anything on the Relay
   beyond the Node's own self-report.** A self-report is trusted exactly as much as the Node
