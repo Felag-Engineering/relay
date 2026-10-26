@@ -356,26 +356,33 @@ func (r *InMemory) ListChecked() ([]Node, error) {
 //
 // It is the single read-back path behind Upsert, Get and List, as getNode is
 // for the SQLite store, and like getNode it serves all three stored label
-// namespaces through wellFormedLabels: a stored pair WellFormedLabel refuses is declined
-// on read.
+// namespaces through wellFormedLabels, and the self-reported fields through
+// DeclineMalformedSelfReport: a stored value its bound refuses is declined on
+// read.
 func (r *InMemory) copyNode(n *Node) Node {
-	nl := wellFormedLabels(n.NodeLabels)
-	rl := wellFormedLabels(n.RelayLabels)
-	tl := wellFormedLabels(n.TagLabels)
+	nl := wellFormedLabels(n.NodeLabels, WellFormedNodeLabel)
+	rl := wellFormedLabels(n.RelayLabels, WellFormedLabel)
+	tl := wellFormedLabels(n.TagLabels, WellFormedLabel)
+	self, _ := DeclineMalformedSelfReport(SelfReport{
+		Facts:                  cloneFacts(n.Facts),
+		PolicyFingerprint:      n.PolicyFingerprint,
+		TemplateSetFingerprint: n.TemplateSetFingerprint,
+		DaemonVersion:          n.DaemonVersion,
+	})
 	return Node{
 		NodeID:                 n.NodeID,
 		CertFingerprint:        n.CertFingerprint,
-		Facts:                  cloneFacts(n.Facts),
+		Facts:                  self.Facts,
 		NodeLabels:             nl,
 		RelayLabels:            rl,
 		TagLabels:              tl,
 		LastSeen:               n.LastSeen,
 		EnrollingTokenID:       n.EnrollingTokenID,
-		PolicyFingerprint:      n.PolicyFingerprint,
-		DaemonVersion:          n.DaemonVersion,
+		PolicyFingerprint:      self.PolicyFingerprint,
+		DaemonVersion:          self.DaemonVersion,
 		RevokedAt:              n.RevokedAt,
-		Outdated:               Outdated(n.DaemonVersion, r.minDaemonVersion),
-		TemplateSetFingerprint: n.TemplateSetFingerprint,
+		Outdated:               Outdated(self.DaemonVersion, r.minDaemonVersion),
+		TemplateSetFingerprint: self.TemplateSetFingerprint,
 		CertNotAfter:           n.CertNotAfter,
 		EnrolledAt:             n.EnrolledAt,
 		RenewalCount:           n.RenewalCount,
@@ -388,17 +395,18 @@ func (r *InMemory) copyNode(n *Node) Node {
 }
 
 // wellFormedLabels returns a new, non-nil map holding only the pairs of
-// labels that WellFormedLabel accepts. It mirrors the SQLite store's
+// labels that wellFormed accepts (WellFormedNodeLabel for node:,
+// WellFormedLabel otherwise). It mirrors the SQLite store's
 // read-back filter of the same name pair for pair, so the fake declines
 // exactly what production declines: "decline to serve, never write". The
 // stored map is never modified. Each namespace's own writer
 // owns its storage (invariant 7, ADR-0006): the Relay declining to serve a
 // value is not the same act as rewriting it. The store's filter also counts
 // what it declines for /metrics. The fake has no metrics, so it only filters.
-func wellFormedLabels(labels map[string]string) map[string]string {
+func wellFormedLabels(labels map[string]string, wellFormed func(key, value string) bool) map[string]string {
 	out := make(map[string]string, len(labels))
 	for k, v := range labels {
-		if WellFormedLabel(k, v) {
+		if wellFormed(k, v) {
 			out[k] = v
 		}
 	}

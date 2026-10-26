@@ -513,6 +513,35 @@ func TestEnroll_NonNodeSelfLabel(t *testing.T) {
 	}
 }
 
+// TestEnroll_SelfLabelAtTheLengthBoundsIsAccepted is the accepting side of
+// EN-11's length limits: a key of exactly 63 characters with a value of
+// exactly 255 enrolls, and is recorded as declared. TestEnroll_NonNodeSelfLabel
+// is the refusing side, one character over either bound.
+// Proves EN-11.
+func TestEnroll_SelfLabelAtTheLengthBoundsIsAccepted(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	srv, reg, _ := newEnrollServer(t, svc)
+	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+
+	key := strings.Repeat("k", registry.MaxLabelKeyLen)
+	value := strings.Repeat("v", registry.MaxLabelValueLen)
+	resp, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "cn"),
+		SelfLabels:      []*relayv1.Label{{Key: "node:" + key, Value: value}},
+	})
+	if err != nil {
+		t.Fatalf("Enroll with a Label at the bounds: %v", err)
+	}
+	n, ok := reg.Get(resp.NodeId)
+	if !ok {
+		t.Fatalf("Get %s: not found", resp.NodeId)
+	}
+	if n.NodeLabels[key] != value {
+		t.Errorf("NodeLabels = %d entries, want the declared Label at the bounds recorded", len(n.NodeLabels))
+	}
+}
+
 // fakeDenylister implements NodeDenylister and records every RevokeNode call for
 // assertion in tests. It does not interact with any real denylist.
 type fakeDenylister struct{ revoked []string }

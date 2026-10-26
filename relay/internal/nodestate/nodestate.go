@@ -118,7 +118,7 @@ const (
 
 // TemplateUnloadable is the literal the daemon reports in place of a
 // template-set fingerprint when its local set failed to load (ADR-0021).
-const TemplateUnloadable = "unloadable"
+const TemplateUnloadable = registry.TemplateUnloadable
 
 // Label is one derived `state:` term.
 type Label struct {

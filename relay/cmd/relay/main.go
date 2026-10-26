@@ -398,6 +398,11 @@ func newServerWithHooks(cfg Config, files startup.Files, hooks serverHooks) (*gr
 	if _, err := st.ScanDeclinedLabels(scanCtx); err != nil {
 		slog.Warn("declined-label startup scan failed", "err", err)
 	}
+	// The same signal for the self-reported fields getNode declines on read
+	// (the Policy fingerprint, Facts, and the rest), on the same terms.
+	if _, err := st.ScanDeclinedSelfReports(scanCtx); err != nil {
+		slog.Warn("declined self-report startup scan failed", "err", err)
+	}
 
 	// denylist and conns implement immediate Node revocation (ADR-0006).
 	// denylist.Add is reached at runtime by revocationSvc.RevokeNode (the

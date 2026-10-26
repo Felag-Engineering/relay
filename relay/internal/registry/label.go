@@ -126,12 +126,11 @@ import "unicode/utf8"
 // them later is backwards-compatible while excluding them later is not (an
 // already-enrolled Node's label, or an already-minted token's scope, would
 // start being refused). This predicate has no length cap: the hazard here is
-// GRAMMAR, what a value can be misread as, not size. A Label a Node or a human
-// Account writes is bounded in length at its own ingress by MaxLabelKeyLen and
-// MaxLabelValueLen, and not here, because this predicate also runs on
-// read-back of every stored namespace and a length check here would newly
-// decline rows already stored. A relay: scope Label minted by a human is not
-// held to those bounds.
+// GRAMMAR, what a value can be misread as, not size. Length is a separate
+// bound, MaxLabelKeyLen and MaxLabelValueLen, held per namespace by its own
+// writer: WellFormedNodeLabel applies it to node: at the ingress and on
+// read-back, and the tag: write applies it to tag:. A relay: scope Label
+// minted by a human is not held to it, so it is not in this predicate.
 //
 // # Two write seams, one namespace (relay-space)
 //
@@ -181,13 +180,23 @@ func wellFormedLabelBytes(s string) bool {
 // MaxLabelKeyLen and MaxLabelValueLen bound a Label's bare key and value in
 // bytes (selectors-and-labels "Limits"). Within the safe alphabet a byte is a
 // character, so bytes and the spec's characters agree. They are applied where a
-// writer other than the Relay supplies a Label: the node: ingress
-// (protoconv.ParseNodeLabel) and the tag: write. WellFormedLabel does not apply
+// writer other than the Relay supplies a Label: node: through
+// WellFormedNodeLabel, and the tag: write. WellFormedLabel does not apply
 // them; see the length-cap note on its doc.
 const (
 	MaxLabelKeyLen   = 63
 	MaxLabelValueLen = 255
 )
+
+// WellFormedNodeLabel reports whether a bare node: key and its value may be
+// recorded or served: WellFormedLabel, with the key at most MaxLabelKeyLen and
+// the value at most MaxLabelValueLen bytes. The node: ingress
+// (protoconv.ParseNodeLabel) refuses a pair that fails, and the read-back of a
+// stored node: Label declines one stored before the length bound existed.
+func WellFormedNodeLabel(key, value string) bool {
+	return len(key) <= MaxLabelKeyLen && len(value) <= MaxLabelValueLen &&
+		WellFormedLabel(key, value)
+}
 
 // MaxLoggedLabelKeyBytes bounds a refused label key before it reaches a log or
 // a report.

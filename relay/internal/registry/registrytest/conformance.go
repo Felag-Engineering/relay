@@ -32,6 +32,7 @@ import (
 	"errors"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +112,116 @@ func RunRepositoryConformance(t *testing.T, newRepo Factory) {
 		}
 	})
 
+	// A self-reported field stored before its ingress bound existed reads
+	// back without that field, on every read and in every surface's view,
+	// while the record's well-formed fields are untouched. Upsert applies no
+	// bound itself (the ingress does), so it seeds exactly the row an older
+	// Relay would have stored.
+	t.Run("ReadBack_DeclinesMalformedSelfReportedFields", func(t *testing.T) {
+		cases := []struct {
+			name string
+			seed func(*registry.Report)
+			want func(*registry.Report)
+		}{
+			{
+				name: "policy fingerprint over-long",
+				seed: func(r *registry.Report) { r.PolicyFingerprint = strings.Repeat("a", 65) },
+				want: func(r *registry.Report) { r.PolicyFingerprint = "" },
+			},
+			{
+				name: "policy fingerprint malformed",
+				seed: func(r *registry.Report) { r.PolicyFingerprint = "sha256:" + policyFP1 },
+				want: func(r *registry.Report) { r.PolicyFingerprint = "" },
+			},
+			{
+				name: "template fingerprint malformed",
+				seed: func(r *registry.Report) { r.TemplateSetFingerprint = "tmpl-1" },
+				want: func(r *registry.Report) { r.TemplateSetFingerprint = "" },
+			},
+			{
+				name: "template fingerprint unloadable is kept",
+				seed: func(r *registry.Report) { r.TemplateSetFingerprint = registry.TemplateUnloadable },
+				want: func(r *registry.Report) { r.TemplateSetFingerprint = registry.TemplateUnloadable },
+			},
+			{
+				name: "daemon version malformed",
+				seed: func(r *registry.Report) { r.DaemonVersion = "1.0.0, tag:x=y" },
+				want: func(r *registry.Report) { r.DaemonVersion = "" },
+			},
+			{
+				name: "daemon version over-long",
+				seed: func(r *registry.Report) { r.DaemonVersion = "1.0.0-" + strings.Repeat("a", 253) },
+				want: func(r *registry.Report) { r.DaemonVersion = "" },
+			},
+			{
+				name: "hostname over-long",
+				seed: func(r *registry.Report) { r.Facts.Hostname = strings.Repeat("h", 254) },
+				want: func(r *registry.Report) { r.Facts.Hostname = "" },
+			},
+			{
+				name: "hostname at the bound is kept",
+				seed: func(r *registry.Report) { r.Facts.Hostname = strings.Repeat("h", 253) },
+				want: func(r *registry.Report) { r.Facts.Hostname = strings.Repeat("h", 253) },
+			},
+			{
+				name: "hostname with U+202E",
+				seed: func(r *registry.Report) { r.Facts.Hostname = "web‮10" },
+				want: func(r *registry.Report) { r.Facts.Hostname = "" },
+			},
+			{
+				name: "os with a space",
+				seed: func(r *registry.Report) { r.Facts.OS = "linux (verified)" },
+				want: func(r *registry.Report) { r.Facts.OS = "" },
+			},
+			{
+				name: "kernel with a control byte",
+				seed: func(r *registry.Report) { r.Facts.Kernel = "6.1\x00" },
+				want: func(r *registry.Report) { r.Facts.Kernel = "" },
+			},
+			{
+				name: "arch over-long",
+				seed: func(r *registry.Report) { r.Facts.Arch = strings.Repeat("x", 1<<16) },
+				want: func(r *registry.Report) { r.Facts.Arch = "" },
+			},
+			{
+				name: "ip addresses: the malformed ones dropped",
+				seed: func(r *registry.Report) {
+					r.Facts.IPAddresses = []string{"10.0.0.1", "not-an-ip", "fe80::1%eth0", "fd00::1"}
+				},
+				want: func(r *registry.Report) { r.Facts.IPAddresses = []string{"10.0.0.1", "fd00::1"} },
+			},
+			{
+				name: "ip addresses: all dropped is none",
+				seed: func(r *registry.Report) { r.Facts.IPAddresses = []string{"10.0.0.1/24"} },
+				want: func(r *registry.Report) { r.Facts.IPAddresses = nil },
+			},
+		}
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				r := fresh(t)
+				seed := fullReport("node-a")
+				c.seed(&seed)
+				up := mustUpsert(t, r, seed)
+				want := fullReport("node-a")
+				c.want(&want)
+				listed := r.List()
+				if len(listed) != 1 {
+					t.Fatalf("List = %d Nodes, want 1", len(listed))
+				}
+				for what, got := range map[string]registry.Node{"Upsert": up, "Get": mustGet(t, r, "node-a"), "List": listed[0]} {
+					if got.PolicyFingerprint != want.PolicyFingerprint || got.TemplateSetFingerprint != want.TemplateSetFingerprint ||
+						got.DaemonVersion != want.DaemonVersion || !factsEqual(got.Facts, want.Facts) ||
+						got.CertFingerprint != want.CertFingerprint || got.EnrollingTokenID != want.EnrollingTokenID {
+						t.Errorf("%s read back policy=%.70q template=%.70q version=%.70q facts=%.70v; "+
+							"want policy=%.70q template=%.70q version=%.70q facts=%.70v, the seeded record with only the malformed field omitted",
+							what, got.PolicyFingerprint, got.TemplateSetFingerprint, got.DaemonVersion, got.Facts,
+							want.PolicyFingerprint, want.TemplateSetFingerprint, want.DaemonVersion, want.Facts)
+					}
+				}
+			})
+		}
+	})
+
 	t.Run("Upsert_UpdateOverwritesNodeRootedFields", func(t *testing.T) {
 		r := fresh(t)
 		mustUpsert(t, r, fullReport("node-a"))
@@ -120,16 +231,16 @@ func RunRepositoryConformance(t *testing.T, newRepo Factory) {
 			CertFingerprint:        "fp-new",
 			Facts:                  registry.Facts{Hostname: "host-new", OS: "linux", Kernel: "6.9", Arch: "arm64"},
 			EnrollingTokenID:       "tok-ignored",
-			PolicyFingerprint:      "policy-new",
+			PolicyFingerprint:      policyFPNew,
 			DaemonVersion:          "2.0.0",
-			TemplateSetFingerprint: "tmpl-new",
+			TemplateSetFingerprint: templateFPNew,
 		})
 		if err != nil {
 			t.Fatalf("update Upsert: %v", err)
 		}
 		for _, got := range []registry.Node{n, mustGet(t, r, "node-a")} {
-			if got.CertFingerprint != "fp-new" || got.PolicyFingerprint != "policy-new" ||
-				got.DaemonVersion != "2.0.0" || got.TemplateSetFingerprint != "tmpl-new" {
+			if got.CertFingerprint != "fp-new" || got.PolicyFingerprint != policyFPNew ||
+				got.DaemonVersion != "2.0.0" || got.TemplateSetFingerprint != templateFPNew {
 				t.Errorf("update did not refresh the reported fields: %+v", got)
 			}
 			wantFacts := registry.Facts{Hostname: "host-new", OS: "linux", Kernel: "6.9", Arch: "arm64"}
@@ -885,6 +996,15 @@ func RunRepositoryConformance(t *testing.T, newRepo Factory) {
 	})
 }
 
+// Well-formed fingerprints: 64 lowercase hex, the only shape the read-back
+// serves (registry.DeclineMalformedSelfReport).
+var (
+	policyFP1     = strings.Repeat("a", 64)
+	policyFPNew   = strings.Repeat("b", 64)
+	templateFP1   = strings.Repeat("c", 64)
+	templateFPNew = strings.Repeat("d", 64)
+)
+
 // fullReport returns a Report with every field this package may populate, so
 // a test can tell a field that was preserved from one that was dropped. It
 // carries no node-space labels: see the package doc for why those cases live
@@ -901,9 +1021,9 @@ func fullReport(nodeID string) registry.Report {
 			IPAddresses: []string{"10.0.0.1", "fd00::1"},
 		},
 		EnrollingTokenID:       "tok-1",
-		PolicyFingerprint:      "policy-1",
+		PolicyFingerprint:      policyFP1,
 		DaemonVersion:          "1.0.0",
-		TemplateSetFingerprint: "tmpl-1",
+		TemplateSetFingerprint: templateFP1,
 	}
 }
 

@@ -119,7 +119,7 @@ func TestUpsert_WaitsOutAnotherProcessesWriteLock(t *testing.T) {
 	start := time.Now()
 	done := make(chan error, 1)
 	go func() {
-		_, err := reg.Upsert(registry.Report{NodeID: "node-a", DaemonVersion: "1.0.0", PolicyFingerprint: "fp"})
+		_, err := reg.Upsert(registry.Report{NodeID: "node-a", DaemonVersion: "1.0.0", PolicyFingerprint: "f000000000000000000000000000000000000000000000000000000000000000"})
 		done <- err
 	}()
 	time.Sleep(200 * time.Millisecond)
@@ -137,7 +137,7 @@ func TestUpsert_WaitsOutAnotherProcessesWriteLock(t *testing.T) {
 		t.Errorf("Upsert took %v, want under the busy timeout", elapsed)
 	}
 	n, ok := reg.Get("node-a")
-	if !ok || n.DaemonVersion != "1.0.0" || n.PolicyFingerprint != "fp" {
+	if !ok || n.DaemonVersion != "1.0.0" || n.PolicyFingerprint != "f000000000000000000000000000000000000000000000000000000000000000" {
 		t.Errorf("Get = %+v, %v; want the upserted version and fingerprint", n, ok)
 	}
 }
@@ -182,7 +182,7 @@ func TestUpsert_DeferredTxFailsFastUnderAnotherWriter(t *testing.T) {
 	assertLockHeld(t, path)
 
 	start := time.Now()
-	_, err = reg.Upsert(registry.Report{NodeID: "node-a", DaemonVersion: "1.0.0", PolicyFingerprint: "fp"})
+	_, err = reg.Upsert(registry.Report{NodeID: "node-a", DaemonVersion: "1.0.0", PolicyFingerprint: "f000000000000000000000000000000000000000000000000000000000000000"})
 	if err == nil {
 		t.Fatal("deferred Upsert succeeded under another writer; the premise of _txlock is gone")
 	}
