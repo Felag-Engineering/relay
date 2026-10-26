@@ -85,7 +85,7 @@ dead weight for a human to decide. It reports and never fails.
 |---|---|---|
 | An invariant, an ADR, `GLOSSARY.md` | You, co-authored in `/spec-author` | Never touch; escalate |
 | A proposal (private roadmap; decided ones copied to `docs/proposals/`) | You, co-authored in `/propose` | Read as context; never cite as authority, never edit |
-| Spec: Purpose, Surfaces, Behaviour, Refusals, Designed, Out of scope, Retired | You, co-authored in `/spec-author` | Never edit claim text; promote a claim from Designed to Behaviour when its PR lands |
+| Spec: Purpose, Surfaces, Behaviour, Refusals, Designed, Out of scope, Retired | You, co-authored in `/spec-author` | Never edit claim text; promote a claim from Designed to Behaviour when its PR lands; retire exactly the claims its issue's `Retires:` line names |
 | Spec: the Proof block, the Status line | The loop, in the implementing PR | Regenerate the block with `make spec-proof`; move the Status date. In a spec still in the earlier shape, add proof rows and never delete one |
 | Design doc (`docs/design/plans/`) | `/design`, by PR | Read; `/milestone-close` deletes it |
 | Issue | `/decompose`; bugs by hand | Comment, label, branch |
@@ -95,6 +95,13 @@ dead weight for a human to decide. It reports and never fails.
 "Co-authored, human-driven" means what the spec README says: an agent may draft, argue, and
 revise, in an interactive session with you present and deciding. An unattended run never
 writes any artifact in the first two rows, and stops rather than guessing.
+
+**Retirement decided in advance.** A Designed claim that replaces a Behaviour claim leaves the
+old one untrue the moment it is promoted, so the retirement is decided before the work starts:
+the issue carries `Retires: <IDs>`, which you approve when you flip it to `loop:ready`. The PR
+that promotes the replacement retires exactly those claims, in the same change, and drops the
+replacement's "Replaces X when promoted". A replaced claim the line does not name is still an
+escalation.
 
 ## Reviewers
 

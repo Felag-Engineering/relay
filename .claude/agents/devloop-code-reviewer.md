@@ -74,7 +74,8 @@ Do not assume constraints from other projects. Derive them from this repo.
 If the plan's `Binding:` line says yes, read the governing spec's claims. For each ID on the
 plan's `Claims:` line, find the test in the diff that asserts it; a named claim with no test
 is a blocking issue. Any change that makes a Behaviour or Refusals claim of a migrated spec
-untrue is a blocking issue and an escalation — say `ESCALATE` in the verdict line. Never
+untrue is a blocking issue and an escalation — say `ESCALATE` in the verdict line — unless the
+issue's `Retires:` line names that claim and the diff retires it as that line directs. Never
 suggest editing the spec to match the code.
 
 ## Plan compliance

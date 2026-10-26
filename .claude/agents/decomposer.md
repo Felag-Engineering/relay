@@ -25,6 +25,9 @@ the code to size each step honestly.
 - **Body**, in this order:
   - `Spec: docs/specs/<capability>.md — claims <IDs>` — the Designed claims this issue promotes.
     An issue that promotes no claim is a bug or a chore and says which.
+  - `Retires: <IDs>` — every Behaviour or Refusals claim that a promoted claim says it
+    replaces ("Replaces X when promoted"), or `Retires: none`. The human approves the line with
+    the issue (`docs/agents/workflow.md` § Authority).
   - `Design: docs/design/plans/<milestone>.md §Sequence step <n>`
   - **Acceptance criteria** as checkboxes, one per claim plus any the plan adds; each is a
     sentence a test can be pointed at and names the seam.
