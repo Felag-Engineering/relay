@@ -34,6 +34,12 @@ shapes, and the spec in full.
    the Designed row, and (earlier shape only) add a proof row `| ID | \`TestName\` | <seam> |`;
    in the two-layer shape, run `make spec-proof` again so the block moves it. If the diff has
    no test for it, do **not** promote it; report it under *not promoted*.
+   **Retire what the issue says it retires.** If the issue body has a `Retires:` line, then for
+   each ID on it whose replacement you just promoted: delete the claim from Behaviour or
+   Refusals, add `- **ID** — \`<today>\` — <what it said, in a few words>; replaced by <new ID>.`
+   at the top of *Retired*, delete the words "Replaces <ID> when promoted." from the promoted
+   claim, and run `make spec-proof` again. Retire nothing the line does not name. A promoted
+   claim that says it replaces an ID the line omits is a finding: leave both and report it.
 4. **Claims the diff proves that the issue did not name** — a test that plainly asserts an
    existing Behaviour claim with no row: add the proof row (earlier shape) or confirm the
    generated block shows it. Do not promote anything unnamed. Earlier shape only: if the diff
@@ -46,7 +52,8 @@ shapes, and the spec in full.
 ## Never
 
 - Reword a claim, renumber a claim, delete a claim, add a claim, delete a proof row, hand-edit
-  a generated Proof block, or edit *Retired*. Any of those is the human's.
+  a generated Proof block, or edit *Retired*, except as the issue's `Retires:` line directs in
+  step 3. Any of those is the human's.
 - Promote a claim the diff does not test. "Implemented" is not "proven".
 - Touch Purpose, Surfaces, Out of scope, or (earlier shape) Accepted residual risk, Future
   work, Open questions.

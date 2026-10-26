@@ -102,4 +102,6 @@ governing spec, plan work that satisfies it, and say so plainly if the issue can
 implemented without making one of a *migrated* spec's claims untrue. That is an escalation and it
 is never "outside the issue's scope" — escalating a conflict with a bound spec claim, an ADR, or
 an invariant is the one thing you must always do. Put it under "Constraints and risks" with the
-claim ID, and begin the plan with `ESCALATE:` so the coordinator stops.
+claim ID, and begin the plan with `ESCALATE:` so the coordinator stops. A claim the issue's
+`Retires:` line names is the exception: its retirement is already decided, so the plan retires
+it with the claim that replaces it (`docs/agents/workflow.md` § Authority).
