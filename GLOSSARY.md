@@ -289,8 +289,9 @@ after revocation, never for renewal
 The Relay *re-issuing* its own TLS server certificate from the in-process CA once the leaf
 passes a jittered fraction of its lifetime, on the next handshake, with no restart, operator or
 network. Unlike *Certificate renewal* (a Node refreshing its identity over the wire), rotation
-never leaves the Relay process, and each listener rotates independently. The server leaf's
-lifetime is its own constant, never the Node identity one (ADR-0031 §5).
+never leaves the Relay process. There is one server certificate, presented by both listeners,
+so it rotates once for both (ADR-0031 §1). The server leaf's lifetime is its own constant,
+never the Node identity one (ADR-0031 §5).
 _Avoid_: server cert renewal, cert refresh
 
 **Quarantine**:
